@@ -13,6 +13,7 @@ dependencies = [
     "alembic>=1.14,<2",
     "celery>=5.4,<6",
     "redis>=5.2,<6",
+    "pwdlib[argon2]>=0.2,<1",
 ]
 
 [project.optional-dependencies]
