@@ -37,6 +37,7 @@ from app.infrastructure.web.dependencies import (
     get_logout,
     get_register_user,
 )
+from app.infrastructure.web.rate_limit import rate_limit_auth
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -75,7 +76,7 @@ class MeResponse(UserSummary):
 @router.post(
     "/register",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(enforce_origin)],
+    dependencies=[Depends(rate_limit_auth), Depends(enforce_origin)],
 )
 def register(
     body: Credentials,
@@ -89,7 +90,10 @@ def register(
     return UserSummary.from_entity(result.user)
 
 
-@router.post("/login", dependencies=[Depends(enforce_origin)])
+@router.post(
+    "/login",
+    dependencies=[Depends(rate_limit_auth), Depends(enforce_origin)],
+)
 def login(
     body: Credentials,
     response: Response,

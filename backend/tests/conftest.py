@@ -73,11 +73,21 @@ def auth_client(db_conn: Connection, monkeypatch: pytest.MonkeyPatch):  # noqa: 
 
     from app.core.config import get_settings
     from app.infrastructure.web.dependencies import get_db_connection
+    from app.infrastructure.web.rate_limit import (
+        InMemoryFixedWindowRateLimiter,
+        get_rate_limiter,
+        set_rate_limiter,
+    )
     from app.main import create_app
 
     monkeypatch.setenv("LEARNY_SESSION_COOKIE_SECURE", "false")
     monkeypatch.setenv("LEARNY_CSRF_TRUSTED_ORIGINS", TEST_ORIGIN)
     get_settings.cache_clear()
+
+    # Fresh, generous limiter per test so the shared module singleton does not
+    # leak counts across tests (dedicated rate-limit tests install their own).
+    previous_limiter = get_rate_limiter()
+    set_rate_limiter(InMemoryFixedWindowRateLimiter(max_attempts=1000))
 
     app = create_app()
 
@@ -88,4 +98,5 @@ def auth_client(db_conn: Connection, monkeypatch: pytest.MonkeyPatch):  # noqa: 
     with TestClient(app, headers={"Origin": TEST_ORIGIN}) as c:
         yield c
     app.dependency_overrides.clear()
+    set_rate_limiter(previous_limiter)
     get_settings.cache_clear()
