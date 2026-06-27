@@ -52,6 +52,19 @@ class Settings(BaseSettings):
     session_cookie_samesite: str = "lax"
     session_cookie_path: str = "/"
 
+    # CSRF (AD-007) — comma-separated list of trusted browser origins for the
+    # Origin/Referer check on state-changing requests. Empty disables the host
+    # check (header-token validation still applies); set explicitly in prod.
+    csrf_trusted_origins: str = "http://localhost:3000"
+
+    def trusted_origins(self) -> tuple[str, ...]:
+        """Parsed, normalized tuple of trusted origins (scheme://host[:port])."""
+        return tuple(
+            o.strip().rstrip("/")
+            for o in self.csrf_trusted_origins.split(",")
+            if o.strip()
+        )
+
 
 @lru_cache
 def get_settings() -> Settings:

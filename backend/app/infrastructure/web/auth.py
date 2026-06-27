@@ -28,6 +28,7 @@ from pydantic import BaseModel
 from app.application.identity import AuthenticateUser, Logout, RegisterUser
 from app.domain.entities import Session, User
 from app.infrastructure.web.cookies import clear_session_cookie, set_session_cookie
+from app.infrastructure.web.csrf import enforce_csrf, enforce_origin
 from app.infrastructure.web.dependencies import (
     AppSettings,
     CurrentPrincipal,
@@ -71,7 +72,11 @@ class MeResponse(UserSummary):
     csrf_token: str
 
 
-@router.post("/register", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/register",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(enforce_origin)],
+)
 def register(
     body: Credentials,
     response: Response,
@@ -84,7 +89,7 @@ def register(
     return UserSummary.from_entity(result.user)
 
 
-@router.post("/login")
+@router.post("/login", dependencies=[Depends(enforce_origin)])
 def login(
     body: Credentials,
     response: Response,
@@ -97,14 +102,18 @@ def login(
     return UserSummary.from_entity(result.user)
 
 
-@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+@router.post(
+    "/logout",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(enforce_csrf)],
+)
 def logout(
     response: Response,
     settings: AppSettings,
     session: Annotated[Session, Depends(get_current_session)],
     service: Annotated[Logout, Depends(get_logout)],
 ) -> Response:
-    """End the session and clear the cookie (FR-AUTH-003). Auth required."""
+    """End the session and clear the cookie (FR-AUTH-003). Auth + CSRF required."""
     service(session_id=session.id)
     clear_session_cookie(response, settings=settings)
     response.status_code = status.HTTP_204_NO_CONTENT
