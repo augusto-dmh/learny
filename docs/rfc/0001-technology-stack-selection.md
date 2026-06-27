@@ -1,6 +1,6 @@
 # RFC-001: Select The Technology Stack For Learny
 
-- **Status**: Draft
+- **Status**: Accepted by [ADR-004](../adr/0004-python-fastapi-react-nextjs-postgresql-stack.md)
 - **Date**: 2026-06-27
 - **Driver**: Augusto
 - **Approvers**: Augusto
@@ -13,7 +13,7 @@ Learny is planned as a robust application that starts with book teaching and may
 
 The current research supports a hybrid architecture: canonical structured corpus, RAG as the default answering path, and long-context fallback for broad synthesis.
 
-The technology stack is not decided yet. This RFC exists to compare stack options before recording the final choice as an ADR.
+The technology stack is decided by [ADR-004](../adr/0004-python-fastapi-react-nextjs-postgresql-stack.md). This RFC records the options and trade-offs that led to that decision.
 
 ## Assumptions
 
@@ -61,9 +61,7 @@ Start as a local Markdown/SQLite/desktop-first knowledge tool and later add host
 
 ## Recommended Direction
 
-Pending deeper stack research.
-
-Current leaning: **Option A**, because it preserves product velocity with Laravel/Vue/PostgreSQL while allowing Python to handle the parts where the document AI ecosystem is clearly stronger.
+Accepted direction: **Option B**, because Learny's hardest early problems are document ingestion, retrieval, evaluation, and AI orchestration. Keeping the backend in Python reduces cross-language friction for those capabilities while still allowing a polished React/Next.js frontend.
 
 ## Pros and Cons
 
@@ -138,15 +136,17 @@ Cons:
 
 ## Action Items
 
-- [ ] Configure Context7 MCP or equivalent docs tooling for implementation-time library documentation lookup.
-- [ ] Research current Laravel AI SDK / Laravel MCP / queue ecosystem fit.
-- [ ] Research Python document worker options: LlamaIndex, LangGraph/LangChain, Haystack, Docling, Unstructured.
-- [ ] Research PostgreSQL/pgvector vs dedicated vector stores for initial and later scale.
-- [ ] Research OpenAI and Anthropic integration boundaries for citations and fallback long-context mode.
-- [ ] Decide whether the first deploy target should be Docker Compose VPS, Laravel Cloud, Fly.io, Railway, Render, or AWS.
-- [ ] Convert final decision into ADR-004.
-- [ ] Create the first Technical Design Document after the stack ADR is accepted.
+- [x] Configure Context7 MCP or equivalent docs tooling for implementation-time library documentation lookup.
+- [x] Decide between Laravel-first and Python-first stack.
+- [x] Decide Python document/RAG/evaluation library adoption strategy.
+- [x] Decide initial PostgreSQL/pgvector vs dedicated vector/search store direction.
+- [x] Decide OpenAI and Anthropic integration boundary for citations and fallback long-context mode.
+- [x] Decide whether the first deploy target should be Docker Compose VPS, Laravel Cloud, Fly.io, Railway, Render, or AWS.
+- [x] Convert final decision into ADR-004.
+- [x] Create the first Technical Design Document after the stack ADR is accepted: [TDD-001](../tdd/0001-mvp-architecture.md).
 
 ## Outcome
 
-Pending.
+Accepted by [ADR-004](../adr/0004-python-fastapi-react-nextjs-postgresql-stack.md): **Python/FastAPI + React/Next.js + PostgreSQL/pgvector**.
+
+Project-local implementation skills should be created from official or first-party sources where practical, including official FastAPI, React, Next.js, PostgreSQL, pgvector, OpenAI, and Anthropic documentation.

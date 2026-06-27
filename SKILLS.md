@@ -33,8 +33,12 @@ RESEARCH -> RFC / ADR -> TDD or tlc-spec-driven feature cycle -> IMPLEMENT -> FI
 - TDDs and `tlc-spec-driven` artifacts hold implementation plans.
 - Publishing conventions live in `learny-finalize`.
 
-## Deferred Skills
+## Stack-Specific Skills
 
-Do not add stack-specific Laravel, Inertia, Vue, React, Pest, Tailwind, Python, LangGraph, or RAG framework skills until the stack ADR is accepted. This keeps the repository neutral while RFC-001 is still open.
+The stack ADR is accepted in `docs/adr/0004-python-fastapi-react-nextjs-postgresql-stack.md`.
+
+Stack-specific skills may now be added for Python, FastAPI, React, Next.js, PostgreSQL, pgvector, and selected AI/provider tooling. These skills should be project-local and should be based on official or first-party framework/provider documentation where practical.
+
+Do not treat third-party blog posts, unofficial best-practice repositories, or community opinion guides as authoritative project skills unless they are explicitly reviewed and accepted.
 
 Add review, manual QA, and triage skills only after Learny has app behavior and PRs that need validation.
