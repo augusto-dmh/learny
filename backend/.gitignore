@@ -1,0 +1,9 @@
+# Python / uv
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# Local env (secrets) — never commit; .env.example is the contract
+.env
