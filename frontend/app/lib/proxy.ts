@@ -6,14 +6,33 @@
  * query, headers (notably `cookie` and `x-csrf-token`), and body UNCHANGED.
  * It owns NO auth or domain logic — FastAPI remains authoritative.
  *
- * This cycle's stub: A2 ships the forwarding contract; D1 mounts it on the
- * live round-trip. Keeping the translation pure makes it unit-testable without
- * a running server.
+ * A2 shipped the forwarding contract; D1 mounts it on the live browser→proxy→
+ * FastAPI round-trip. Keeping the translation pure makes it unit-testable
+ * without a running server.
+ *
+ * Origin (AD-007): FastAPI's register/login/logout endpoints reject any
+ * state-changing request whose Origin/Referer host is not in its trusted set
+ * (`LEARNY_CSRF_TRUSTED_ORIGINS`). On a real same-origin browser POST the
+ * browser already sends `Origin: <app origin>`, which we forward unchanged. We
+ * additionally guarantee an acceptable Origin reaches the backend even when the
+ * browser omits it, by falling back to the configured app origin
+ * (`LEARNY_APP_ORIGIN`). This is a pure transport concern — no auth/domain
+ * logic; FastAPI remains authoritative for the actual CSRF/Origin decision.
  */
 
 /** Resolve the FastAPI base URL from the (server-side) environment. */
 export function getApiBase(): string {
   return process.env.LEARNY_API_BASE_URL ?? "http://localhost:8000";
+}
+
+/**
+ * Resolve the public origin this app is served from (server-side). Used as the
+ * fallback `Origin` forwarded to FastAPI so its Origin/Referer CSRF gate passes
+ * even when a browser omits the header. Must be a member of the backend's
+ * `LEARNY_CSRF_TRUSTED_ORIGINS` for state-changing auth calls to succeed.
+ */
+export function getAppOrigin(): string {
+  return process.env.LEARNY_APP_ORIGIN ?? "http://localhost:3000";
 }
 
 /**
@@ -41,6 +60,7 @@ export function buildProxyRequest(
   req: Request,
   segments: string[],
   apiBase: string = getApiBase(),
+  appOrigin: string = getAppOrigin(),
 ): Request {
   const incomingUrl = new URL(req.url);
   const upstreamPath = segments.map(encodeURIComponent).join("/");
@@ -54,6 +74,13 @@ export function buildProxyRequest(
     }
   });
 
+  // Guarantee FastAPI's Origin/Referer CSRF gate sees a trusted origin (AD-007):
+  // forward the browser's Origin when present (already copied above), otherwise
+  // fall back to the configured app origin. No domain logic — pure transport.
+  if (!headers.has("origin")) {
+    headers.set("origin", appOrigin);
+  }
+
   const hasBody = req.method !== "GET" && req.method !== "HEAD";
 
   return new Request(target.toString(), {
@@ -64,4 +91,31 @@ export function buildProxyRequest(
     ...(hasBody ? { duplex: "half" } : {}),
     redirect: "manual",
   } as RequestInit);
+}
+
+/**
+ * Relay a FastAPI response back to the browser unchanged: status, body, and all
+ * headers — including every `Set-Cookie` verbatim so the `HttpOnly`, `Secure`,
+ * `SameSite`, and `Path` attributes FastAPI set survive end-to-end (NFR-SEC-002,
+ * AC-2). `Set-Cookie` is relayed via `getSetCookie()` so multiple cookies are
+ * preserved as distinct headers rather than collapsed into one comma-joined value.
+ */
+export function relayResponse(upstream: Response): Response {
+  const headers = new Headers(upstream.headers);
+
+  // Re-emit Set-Cookie as discrete headers (a comma-join would corrupt
+  // attributes like Expires). `getSetCookie` is available on undici/Node ≥18.5.
+  const setCookies = upstream.headers.getSetCookie?.() ?? [];
+  if (setCookies.length > 0) {
+    headers.delete("set-cookie");
+    for (const cookie of setCookies) {
+      headers.append("set-cookie", cookie);
+    }
+  }
+
+  return new Response(upstream.body, {
+    status: upstream.status,
+    statusText: upstream.statusText,
+    headers,
+  });
 }

@@ -4,9 +4,13 @@
  * Forwards every `/api/*` browser request to FastAPI server-side, passing the
  * session cookie and `X-CSRF-Token` header through unchanged. No domain logic
  * lives here; FastAPI is authoritative for auth/authorization/product logic.
+ *
+ * The session cookie is `HttpOnly` end-to-end: FastAPI sets it with `HttpOnly`,
+ * we relay the `Set-Cookie` header verbatim, and the browser stores it where
+ * JS cannot read it. The proxy never copies the token into a JS-readable form.
  */
 
-import { buildProxyRequest } from "@/app/lib/proxy";
+import { buildProxyRequest, relayResponse } from "@/app/lib/proxy";
 
 export const dynamic = "force-dynamic";
 
@@ -16,14 +20,7 @@ async function handle(req: Request, ctx: RouteContext): Promise<Response> {
   const { path } = await ctx.params;
   const upstreamReq = buildProxyRequest(req, path ?? []);
   const upstreamRes = await fetch(upstreamReq);
-
-  // Pass the upstream response through unchanged (incl. Set-Cookie).
-  const headers = new Headers(upstreamRes.headers);
-  return new Response(upstreamRes.body, {
-    status: upstreamRes.status,
-    statusText: upstreamRes.statusText,
-    headers,
-  });
+  return relayResponse(upstreamRes);
 }
 
 export const GET = handle;
