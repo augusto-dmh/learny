@@ -1,0 +1,29 @@
+{
+  "version": 2,
+  "skills": {
+    "tlc-spec-driven": {
+      "name": "tlc-spec-driven",
+      "source": "local",
+      "contentHash": "76e50c2dc0ec574d959e54cd084c725eb8b2faaf7638d432dc95045e3d4eec5f",
+      "installedAt": "2026-06-27T16:28:33.921Z",
+      "updatedAt": "2026-06-27T16:28:33.921Z",
+      "agents": [
+        "codex"
+      ],
+      "method": "copy",
+      "global": false
+    },
+    "skill-architect": {
+      "name": "skill-architect",
+      "source": "local",
+      "contentHash": "349b256153447631c3ed356996c3a62fec52493d07ba75e37b12c458f9fbf6bb",
+      "installedAt": "2026-06-27T16:28:33.949Z",
+      "updatedAt": "2026-06-27T16:28:33.949Z",
+      "agents": [
+        "codex"
+      ],
+      "method": "copy",
+      "global": false
+    }
+  }
+}
