@@ -36,6 +36,23 @@ LOCKED defaults for the repo unless a follow-up decision changes them.
 - **Proxy boundary (ADR-017):** `frontend/app/api/*` thin same-origin proxy to
   FastAPI; no domain logic in the proxy.
 
+## Local stack (`docker compose`)
+
+`docker-compose.yml` (repo root) brings up six services: `db`
+(postgres+pgvector), `redis`, `minio`, `api` (FastAPI, runs `alembic upgrade
+head` then uvicorn), `worker` (Celery), `web` (Next.js). Start: `docker compose
+up -d --build`.
+
+Smoke check (AC-1), all verified in this environment:
+- `curl localhost:8000/healthz` → `{"status":"ok"}`
+- `curl localhost:8000/readyz` → `{"status":"ready","database":"ok"}`
+- `curl localhost:3000/` → HTTP 200; proxy round-trip `localhost:3000/api/...`
+  reaches FastAPI (`server: uvicorn`).
+- `docker exec learny-worker-1 celery -A app.worker.celery_app:celery_app inspect ping` → pong.
+- db/redis/minio/api/worker report `(healthy)`. `web` has no compose healthcheck
+  (node:slim has no curl; Next dev has no health route) — liveness is proven by
+  the HTTP 200 + proxy round-trip instead.
+
 ## Cross-cutting
 
 - **Commits:** Conventional Commits; one atomic commit per spec task.

@@ -33,6 +33,19 @@ class Settings(BaseSettings):
     # Database (used by /readyz and, later, repositories + migrations)
     database_url: str = "postgresql+psycopg://learny:learny@localhost:5432/learny"
 
+    # Redis / Celery (worker wiring; ingestion tasks land in a later cycle)
+    redis_url: str = "redis://localhost:6379/0"
+    celery_broker_url: str = ""
+    celery_result_backend: str = ""
+
+    def broker_url(self) -> str:
+        """Effective Celery broker URL (falls back to ``redis_url``)."""
+        return self.celery_broker_url or self.redis_url
+
+    def result_backend(self) -> str:
+        """Effective Celery result backend URL (falls back to ``redis_url``)."""
+        return self.celery_result_backend or self.redis_url
+
     # Session cookie attributes (NFR-SEC-002) — wired fully in Phase C.
     session_cookie_name: str = "learny_session"
     session_cookie_secure: bool = True
