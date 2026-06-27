@@ -21,6 +21,7 @@ from app.domain.ports import (
     PasswordHasher,
     SessionRepository,
     StoragePort,
+    TokenGenerator,
     UserRepository,
 )
 
@@ -33,6 +34,7 @@ __all__ = [
     "Session",
     "SessionRepository",
     "StoragePort",
+    "TokenGenerator",
     "User",
     "UserRepository",
 ]

@@ -25,3 +25,10 @@ def generate_token() -> str:
 def hash_token(raw_token: str) -> str:
     """Return the hex SHA-256 of ``raw_token`` for storage/lookup."""
     return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+
+
+class SecretsTokenGenerator:
+    """``TokenGenerator`` port adapter backed by :func:`generate_token`."""
+
+    def generate(self) -> str:
+        return generate_token()

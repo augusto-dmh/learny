@@ -32,6 +32,19 @@ class Clock(Protocol):
 
 
 @runtime_checkable
+class TokenGenerator(Protocol):
+    """Source of high-entropy opaque tokens (session + CSRF).
+
+    Injected so application services stay free of the token-generation adapter
+    and so tests can supply deterministic tokens.
+    """
+
+    def generate(self) -> str:
+        """Return a new high-entropy URL-safe token."""
+        ...
+
+
+@runtime_checkable
 class PasswordHasher(Protocol):
     """Password hashing/verification port (AD-006 — Argon2id adapter in B2)."""
 
