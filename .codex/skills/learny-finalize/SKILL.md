@@ -1,0 +1,161 @@
+---
+name: learny-finalize
+description: Finalizes and publishes Learny changes with consistent Git branch names, Conventional Commit messages, verification notes, and structured pull requests. Use when the user asks to finalize work, prepare a commit, commit changes, push a branch, open a pull request, write a PR description, or publish completed Learny work. Do not use for implementing features, reviewing code, or debugging CI unless the user also asks to publish the resulting changes.
+license: CC-BY-4.0
+metadata:
+  author: Learny contributors
+  version: 1.0.0
+---
+
+# Learny Finalize
+
+Apply Learny's repository conventions when preparing or publishing completed work. Treat a request to finalize completed work as authorization to inspect the diff, choose metadata, stage intended files, commit, push, and create an open ready-for-review PR. Keep narrower requests proportional: generate names and text when that is all the user requests, and stop after committing when the user asks only for a commit.
+
+## Conventions
+
+Use Conventional Commits for commit messages and PR titles:
+
+```text
+<type>(<optional-scope>)<optional-!>: <imperative summary>
+```
+
+Use one of these types: `feat`, `fix`, `docs`, `refactor`, `test`, `chore`, `build`, `ci`, `perf`, `style`, `revert`.
+
+Use branch names in this format:
+
+```text
+<type>/<optional-issue-number-><short-kebab-summary>
+```
+
+Keep the branch type aligned with the primary change. Keep summaries concise, specific, and lowercase. Examples:
+
+```text
+docs/stack-decision
+chore/workflow-conventions
+feat/book-ingestion-foundation
+```
+
+PR titles follow the same Conventional Commit format as commits and summarize the whole PR.
+
+## Commit And PR Hygiene
+
+Never add authorship or tooling attribution to commits or pull requests. Commit messages and PR bodies must not contain `Co-Authored-By` trailers, "Generated with" lines, model names, or any other identification of an AI assistant or the tool used to produce the change.
+
+## Workflow
+
+### Step 1: Inspect The Repository
+
+1. Run `git status --short`, `git branch --show-current`, and `git diff --stat`.
+2. Read the relevant diff before proposing metadata.
+3. Identify unrelated working-tree changes and leave them unstaged.
+4. If the task is only to suggest names or draft a PR description, stop before mutating Git state.
+
+### Step 2: Choose The Metadata
+
+1. Select the primary Conventional Commit type.
+2. Add a scope only when it improves clarity, such as `workflow`, `stack`, `research`, `docs`, or a future domain name.
+3. Write an imperative summary that describes the outcome, not implementation mechanics.
+4. Derive the branch name from the same primary change.
+5. Run:
+
+```bash
+python .codex/skills/learny-finalize/scripts/validate_metadata.py \
+  --branch '<branch-name>' \
+  --commit '<commit-message>' \
+  --pr-title '<pr-title>'
+```
+
+Fix validation errors before continuing.
+
+### Step 3: Verify The Change
+
+1. Run the narrowest relevant checks for the changed files.
+2. For docs-only or skill-only changes, run `git diff --check` and any relevant helper script validation.
+3. For future app code, run the project-specific test, lint, type, formatting, and build commands documented in `CLAUDE.md`.
+4. Report any verification that could not run.
+5. Do not publish changes with known failing verification unless the user explicitly accepts that risk.
+
+### Step 4: Commit Intentionally
+
+1. Stage only files that belong to the requested change.
+2. Prefer one atomic commit per logical concern.
+3. When changes span unrelated concerns, present the proposed commit breakdown and wait for user approval before committing.
+4. Review `git diff --cached --stat` and `git diff --cached` before each commit.
+5. Validate the commit message with the metadata validator.
+6. Run `git status --short` after committing and report remaining unstaged or untracked files.
+
+### Step 5: Push And Open The PR
+
+1. Run `gh auth status` before publishing. If authentication is unavailable, report the blocker.
+2. Push the branch with an upstream automatically when the user asks to finalize or publish completed work.
+3. Draft concise Markdown for Summary, Changes, and Verification from the diff and verification output.
+4. Run `scripts/render_pr_body.py` to assemble the PR body. Pass screenshots only when the PR contains visible UI changes. Pass related issues only when applicable.
+
+```bash
+python .codex/skills/learny-finalize/scripts/render_pr_body.py \
+  --summary-file /tmp/learny-pr-summary.md \
+  --changes-file /tmp/learny-pr-changes.md \
+  --verification-file /tmp/learny-pr-verification.md \
+  --output /tmp/learny-pr-body.md
+```
+
+5. Read [assets/pull_request_template.md](assets/pull_request_template.md) only when the renderer cannot be used or the user explicitly asks to inspect the template.
+6. Create an open ready-for-review PR with `gh pr create --base <base-branch> --head <branch-name> --title '<pr-title>' --body-file <pr-body-file>`. Do not create draft PRs unless the user asks for one.
+7. When a PR already exists, update its title or body with `gh pr edit`.
+
+## Examples
+
+### Workflow Change
+
+User says: "Finalize the workflow convention docs."
+
+Use:
+
+```text
+Branch: chore/workflow-conventions
+Commit: chore(workflow): document project workflow conventions
+PR title: chore(workflow): document project workflow conventions
+```
+
+### Research Or Decision Change
+
+User says: "Commit the stack ADR."
+
+Use:
+
+```text
+Branch: docs/stack-decision
+Commit: docs(stack): record initial application stack decision
+PR title: docs(stack): record initial application stack decision
+```
+
+### Naming Only
+
+User says: "Suggest a branch name and commit message for the ingestion RFC."
+
+Return:
+
+```text
+Branch: docs/ingestion-rfc
+Commit: docs(ingestion): propose book ingestion architecture
+```
+
+Do not modify Git state.
+
+## Troubleshooting
+
+### Validation Rejects The Metadata
+
+Keep the type lowercase, use kebab-case after the branch slash, and format commits and PR titles as `<type>(<optional-scope>): <summary>`.
+
+### The Working Tree Contains Unrelated Changes
+
+Stage only the files that belong to the requested change. Report the remaining files without reverting or including them.
+
+### GitHub PR Creation Is Unavailable
+
+Run `gh auth status` and report the authentication or repository-access blocker. Return the validated PR title and populated Markdown body.
+
+### The PR Body Renderer Cannot Run
+
+Read [assets/pull_request_template.md](assets/pull_request_template.md), populate the applicable sections manually, and remove optional sections that do not apply.
