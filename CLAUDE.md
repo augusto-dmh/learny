@@ -4,9 +4,9 @@ Learny is a learning application that starts as robust book teaching and may exp
 
 ## Current Status
 
-- The repository currently contains research and decision artifacts only. There is no runtime application scaffold yet.
-- The stack is not accepted yet. RFC-001 currently compares Laravel/Inertia/Vue/PostgreSQL with Python document workers against Python-first, TypeScript-first, managed AI platform, and local-first alternatives.
-- Do not assume Laravel, Vue, Python, LangGraph, OpenAI, Anthropic, or any vector database is final until an ADR accepts the stack.
+- The repository currently contains research, decision, and design artifacts only. There is no runtime application scaffold yet.
+- The initial stack is accepted in ADR-004: Python/FastAPI backend, React/Next.js frontend, PostgreSQL primary storage, and pgvector as the initial vector storage/search capability.
+- Do not assume specific parsing library, auth library/session store, concrete object-storage provider, concrete provider/model defaults, or dedicated vector database choices until follow-up ADRs or technical designs accept them.
 
 ## Durable Decisions
 
@@ -19,9 +19,23 @@ Learny is a learning application that starts as robust book teaching and may exp
 ## Established Direction
 
 - Book intelligence should use a hybrid architecture: structured canonical corpus first, RAG as the default answer path, and long-context fallback for broad synthesis.
+- The first MVP scope is document ingestion, cited Q&A, and structured teaching sessions. Quizzes, notes, memory, and second-brain workflows are deferred.
+- The MVP should support email/password user accounts from the start, with user ownership and authorization for sources, corpus records, and teaching sessions.
+- Browser authentication should be backend-owned by FastAPI and use secure HTTP-only cookies, not browser-accessible bearer token storage.
+- Browser-facing API calls should go through a thin same-origin Next.js route/proxy boundary to FastAPI. FastAPI remains authoritative for auth, authorization, product logic, and user-owned resources.
+- Initial ingestion should support EPUB first. PDF and other formats are deferred until the EPUB-based corpus and tutor path are working.
+- Uploaded source files should be stored in S3-compatible object storage from the start; PostgreSQL stores metadata, ownership, ingestion status, corpus links, and object keys.
 - Canonical document processing should preserve headings, sections, page/location anchors, metadata, and citations instead of treating the book as flat chunks only.
 - Citations, evaluation, and traceability are core requirements, not late polish.
+- MVP evaluation should use golden fixtures for ingestion, retrieval, and citations before adding Ragas or an evaluation dashboard.
+- Long-running document ingestion, corpus generation, embedding, indexing, and evaluation work should run in separate worker processes from the same codebase, not inside HTTP request handlers.
+- Worker queues should use Redis plus Celery. PostgreSQL remains the source of truth for durable job, ingestion, corpus, and progress state.
+- Initial retrieval should use PostgreSQL hybrid search: pgvector for semantic search plus PostgreSQL full-text search for lexical/exact lookup.
+- The first production-like deployment target should be Docker Compose on a VPS, with local Docker Compose kept aligned where practical.
 - Prefer provider-independent domain boundaries where practical; provider SDKs should sit behind ports/adapters once implementation begins.
+- AI provider integration should use Learny-owned ports with thin provider adapters; OpenAI, Anthropic, model names, SDK objects, and provider citation formats should not leak into core domain logic.
+- AI/RAG orchestration should be Learny-owned. Specialized libraries such as Docling or Ragas may be used at edges when they solve concrete parsing or evaluation problems; broad frameworks such as LlamaIndex or LangGraph should not become the core architecture without a follow-up decision.
+- Stack-specific implementation guidance and project-local skills should come from official or first-party framework/provider sources where practical.
 
 ## Workflow
 
@@ -45,5 +59,6 @@ Only read documents relevant to the current task. Do not load all project docume
 
 ## Current Constraints
 
-- Do not add stack-specific application code or skills until Learny's stack is accepted.
+- Stack-specific application code is now allowed only when it follows ADR-004 and an implementation plan or feature cycle.
+- Do not add unofficial third-party best-practice skills as authoritative project guidance unless explicitly reviewed and accepted.
 - Do not install global-only skills when the intent is to preserve project-local workflow.
