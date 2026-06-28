@@ -1,1 +1,5 @@
 .agents/.skill-lock.json.backup
+
+# OMC orchestration state (local tooling, not project artifacts)
+.omc/
+**/.omc/
