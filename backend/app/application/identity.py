@@ -157,8 +157,14 @@ class AuthenticateUser:
         )
 
         # Always verify against *some* hash to keep timing uniform and avoid
-        # leaking whether the email exists. A dummy hash is used when absent.
-        stored_hash = credential.password_hash if credential is not None else _DUMMY_HASH
+        # leaking whether the email exists. When the credential is absent, use a
+        # dummy hash sourced from the hasher port so it always matches the active
+        # adapter's format (the encoding never leaks into this layer).
+        stored_hash = (
+            credential.password_hash
+            if credential is not None
+            else self._hasher.dummy_hash()
+        )
         if not self._hasher.verify(password, stored_hash) or user is None:
             raise InvalidCredentials("Invalid email or password.")
 
@@ -181,16 +187,6 @@ class AuthenticateUser:
             session_ttl=self._session_ttl,
         )
         return AuthResult(user=user, issued=issued)
-
-
-# A precomputed Argon2id hash of a random throwaway value, used so login verifies
-# a real hash even when the email is unknown (constant work → no user
-# enumeration via timing or code path). It never matches any user password.
-_DUMMY_HASH = (
-    "$argon2id$v=19$m=65536,t=3,p=4$"
-    "2cY4aXds1SwxMa6FpU2jsQ$"
-    "QE0/tqeZu3lB0mPVJXSCtBpqRFC2uAvjsA/pnPLMWGk"
-)
 
 
 class Logout:

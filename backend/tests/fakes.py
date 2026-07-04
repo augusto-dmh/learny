@@ -50,6 +50,11 @@ class FakePasswordHasher:
     def needs_rehash(self, encoded_hash: str) -> bool:
         return self._needs_rehash
 
+    def dummy_hash(self) -> str:
+        # A hash in this fake's own ``hash::<x>`` format that no real password
+        # produces, so ``verify`` does a genuine (failing) comparison.
+        return "hash::__no_such_user__"
+
 
 class FakeUserRepository:
     def __init__(self) -> None:

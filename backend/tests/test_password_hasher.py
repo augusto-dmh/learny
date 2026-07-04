@@ -51,6 +51,18 @@ def test_needs_rehash_false_for_current_params(hasher: Argon2PasswordHasher) -> 
     assert hasher.needs_rehash(encoded) is False
 
 
+def test_dummy_hash_is_adapter_format_and_never_matches(
+    hasher: Argon2PasswordHasher,
+) -> None:
+    """The dummy hash is a real Argon2id hash (so ``verify`` does real work) that
+    matches no password — the login no-enumeration guarantee depends on both."""
+    dummy = hasher.dummy_hash()
+    assert dummy.startswith("$argon2id$")
+    assert hasher.verify("any-password", dummy) is False
+    # Precomputed once, so it is stable within an adapter instance.
+    assert hasher.dummy_hash() == dummy
+
+
 def test_needs_rehash_true_for_outdated_params() -> None:
     """A hash made with weaker parameters is flagged for rehash."""
     weak = Argon2PasswordHasher(

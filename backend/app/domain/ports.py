@@ -60,6 +60,17 @@ class PasswordHasher(Protocol):
         """Return whether ``encoded_hash`` was produced with outdated parameters."""
         ...
 
+    def dummy_hash(self) -> str:
+        """Return a valid encoded hash in this adapter's own format.
+
+        Login verifies against this on the unknown-email path so the code path
+        and work stay uniform (no user enumeration). Sourcing it from the port
+        keeps the concrete hash encoding out of the application layer and
+        guarantees it matches the active adapter, so ``verify`` does real work
+        rather than failing fast on a foreign format if the adapter is swapped.
+        """
+        ...
+
 
 @runtime_checkable
 class UserRepository(Protocol):

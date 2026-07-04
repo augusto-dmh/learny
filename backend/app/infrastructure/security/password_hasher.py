@@ -13,6 +13,8 @@ Security:
 
 from __future__ import annotations
 
+import secrets
+
 from pwdlib import PasswordHash
 from pwdlib.exceptions import UnknownHashError
 from pwdlib.hashers.argon2 import Argon2Hasher
@@ -31,6 +33,11 @@ class Argon2PasswordHasher:
     def __init__(self, *, argon2_hasher: Argon2Hasher | None = None) -> None:
         self._argon2 = argon2_hasher or Argon2Hasher()
         self._password_hash = PasswordHash((self._argon2,))
+        # Precompute once: a hash of a random throwaway value in *this* adapter's
+        # format, so login can verify against it on the unknown-email path with
+        # the same work and code path as a real credential (no enumeration). It
+        # never matches any user password.
+        self._dummy_hash = self._password_hash.hash(secrets.token_urlsafe(32))
 
     def hash(self, password: str) -> str:
         """Return an Argon2id-encoded hash of ``password``."""
@@ -51,3 +58,7 @@ class Argon2PasswordHasher:
     def needs_rehash(self, encoded_hash: str) -> bool:
         """Return whether ``encoded_hash`` should be re-hashed with current params."""
         return self._argon2.check_needs_rehash(encoded_hash)
+
+    def dummy_hash(self) -> str:
+        """Return the precomputed Argon2id dummy hash (see the port docstring)."""
+        return self._dummy_hash
