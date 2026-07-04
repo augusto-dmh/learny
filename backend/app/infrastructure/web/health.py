@@ -9,10 +9,10 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Response, status
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.core.config import get_settings
+from app.infrastructure.db.engine import get_engine
 
 router = APIRouter(tags=["health"])
 
@@ -30,14 +30,13 @@ def readyz(response: Response) -> dict[str, str]:
     Returns 503 with ``{"status": "not-ready"}`` when the DB check fails, which
     is the expected state before a database is provisioned.
     """
-    settings = get_settings()
     try:
-        engine = create_engine(settings.database_url, pool_pre_ping=True)
-        try:
-            with engine.connect() as conn:
-                conn.execute(text("SELECT 1"))
-        finally:
-            engine.dispose()
+        # Reuse the shared, pooled Engine (built once per process) rather than
+        # constructing and disposing a new one on every probe. ``pool_pre_ping``
+        # validates the connection on checkout, so this stays a real readiness
+        # check while avoiding per-probe connection setup/teardown.
+        with get_engine().connect() as conn:
+            conn.execute(text("SELECT 1"))
     except SQLAlchemyError:
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
         return {"status": "not-ready", "database": "unreachable"}

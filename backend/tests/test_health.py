@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from app.core.config import Settings, get_settings
+from app.infrastructure.db.engine import get_engine
 from app.main import create_app
 
 
@@ -32,8 +33,12 @@ def test_readyz_reports_not_ready_without_db(monkeypatch) -> None:
     # Point at an unreachable DB so the readiness check fails fast.
     monkeypatch.setenv("LEARNY_DATABASE_URL", "postgresql+psycopg://x:x@127.0.0.1:1/none")
     get_settings.cache_clear()
+    # readyz now uses the shared cached engine; rebuild it against the
+    # unreachable URL (its cache is independent of get_settings').
+    get_engine.cache_clear()
     client = TestClient(create_app())
     resp = client.get("/readyz")
     assert resp.status_code == 503
     assert resp.json()["status"] == "not-ready"
     get_settings.cache_clear()
+    get_engine.cache_clear()
