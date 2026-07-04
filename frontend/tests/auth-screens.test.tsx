@@ -41,6 +41,24 @@ describe("AuthForm (D2)", () => {
     await waitFor(() => expect(onAuthenticated).toHaveBeenCalledTimes(1));
     expect(fetchMock.mock.calls[0][0]).toBe("/api/auth/login");
   });
+
+  it("renders the backend error and does not authenticate on failure", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse(401, { detail: "Invalid email or password." }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const onAuthenticated = vi.fn();
+    render(<AuthForm mode="login" onAuthenticated={onAuthenticated} />);
+
+    fireEvent.change(screen.getByLabelText("Email"), { target: { value: "a@b.c" } });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "bad" } });
+    fireEvent.click(screen.getByRole("button", { name: "Log in" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe("Invalid email or password.");
+    expect(onAuthenticated).not.toHaveBeenCalled();
+  });
 });
 
 describe("AccountPanel (D2)", () => {
