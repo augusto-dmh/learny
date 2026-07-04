@@ -34,6 +34,11 @@ from app.domain.ports import (
 
 DEFAULT_SESSION_TTL = timedelta(days=14)
 
+# How stale ``last_seen_at`` may become before an authenticated read refreshes it.
+# Collapses bursts of reads (e.g. the SPA polling ``/me``) into at most one
+# session write per interval, instead of a write on every request.
+SESSION_TOUCH_INTERVAL = timedelta(seconds=60)
+
 
 @dataclass(frozen=True)
 class AuthResult:
@@ -230,7 +235,11 @@ class CurrentUser:
         if user is None:
             raise NotAuthenticated("Session user no longer exists.")
 
-        self._sessions.touch(session.id, now)
+        # Refresh ``last_seen_at`` at most once per interval so authenticated
+        # reads don't turn every request into a session-table write (a
+        # write-on-read hotspot that contends under concurrency).
+        if now - session.last_seen_at > SESSION_TOUCH_INTERVAL:
+            self._sessions.touch(session.id, now)
         return user, session
 
 

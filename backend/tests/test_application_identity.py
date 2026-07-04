@@ -20,6 +20,7 @@ from app.application.errors import (
     ValidationError,
 )
 from app.application.identity import (
+    SESSION_TOUCH_INTERVAL,
     AuthenticateUser,
     AuthorizeOwnership,
     CurrentUser,
@@ -149,6 +150,29 @@ def test_current_user_resolves_token(ports) -> None:
     )(raw_token=result.issued.raw_token)
     assert user.id == result.user.id
     assert session.id == result.issued.session.id
+
+
+def test_current_user_skips_touch_within_interval(ports) -> None:
+    result = _register(ports)
+    original_last_seen = result.issued.session.last_seen_at
+    # Advance less than the touch interval: the read must NOT write last_seen_at.
+    ports["clock"].advance(SESSION_TOUCH_INTERVAL - timedelta(seconds=1))
+    CurrentUser(
+        users=ports["users"], sessions=ports["sessions"], clock=ports["clock"]
+    )(raw_token=result.issued.raw_token)
+    stored = ports["sessions"].get_by_raw_token(result.issued.raw_token)
+    assert stored.last_seen_at == original_last_seen
+
+
+def test_current_user_touches_once_interval_elapsed(ports) -> None:
+    result = _register(ports)
+    # Advance past the touch interval: the read refreshes last_seen_at to now.
+    ports["clock"].advance(SESSION_TOUCH_INTERVAL + timedelta(seconds=1))
+    CurrentUser(
+        users=ports["users"], sessions=ports["sessions"], clock=ports["clock"]
+    )(raw_token=result.issued.raw_token)
+    stored = ports["sessions"].get_by_raw_token(result.issued.raw_token)
+    assert stored.last_seen_at == ports["clock"].now()
 
 
 def test_current_user_no_token_is_unauthenticated(ports) -> None:
