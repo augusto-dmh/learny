@@ -37,9 +37,9 @@ RESEARCH -> RFC / ADR -> TDD or tlc-spec-driven feature cycle -> IMPLEMENT -> FI
 ## Stack-Specific Skills
 
 The stack ADR is accepted in `docs/adr/0004-python-fastapi-react-nextjs-postgresql-stack.md`.
-Stack-specific skills are project-local under `.codex/skills` and must come from
+Stack-specific skills are project-local under `.claude/skills` and must come from
 official or first-party sources, or be Learny-authored from official docs + ADRs.
-See `.codex/skills/README.md` for provenance, `skills-lock.json` for pinned
+See `.claude/skills/README.md` for provenance, `skills-lock.json` for pinned
 sources, and `docs/research/2026-07-04/official-agent-skills-for-stack.md` for the
 survey that selected them.
 

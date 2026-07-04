@@ -39,7 +39,7 @@ Learny is a learning application that starts as robust book teaching and may exp
 
 ## Workflow
 
-- Use project-local skills from `.codex/skills` where available.
+- Use project-local skills from `.claude/skills` where available.
 - Use `tlc-spec-driven` for feature planning or implementation cycles when work is large enough to need specs/tasks.
 - Use ADR/RFC/TDD skills for architecture and design artifacts.
 - Use `learny-finalize` for commit metadata, PR body generation, and publishing conventions.
