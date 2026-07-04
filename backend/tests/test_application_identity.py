@@ -113,13 +113,21 @@ def test_login_unknown_email_is_invalid_credentials(ports) -> None:
 
 
 def test_login_rehashes_when_params_outdated(ports) -> None:
-    _register(ports)
+    registered = _register(ports)
+    registration_time = registered.user.created_at
+    # Advance time so a rehash writes a distinguishable ``updated_at``.
+    ports["clock"].advance(timedelta(minutes=5))
     ports["hasher"] = FakePasswordHasher(needs_rehash=True)
+
     AuthenticateUser(**ports)(email="user@example.com", password=VALID_PASSWORD)
-    cred = ports["credentials"].get_by_user_id(
-        ports["users"].get_by_email("user@example.com").id
-    )
-    assert cred is not None  # credential still present and updated path exercised
+
+    cred = ports["credentials"].get_by_user_id(registered.user.id)
+    # The upgrade branch actually ran: ``updated_at`` moved to "now", which only
+    # happens when ``credentials.update()`` is invoked on the rehash path. A
+    # bare "credential still present" assertion would pass even if it never ran.
+    assert cred is not None
+    assert cred.updated_at == ports["clock"].now()
+    assert cred.updated_at != registration_time
 
 
 # ---- Logout ---------------------------------------------------------------
