@@ -4,7 +4,21 @@
 from __future__ import annotations
 
 import argparse
+import re
+import sys
 from pathlib import Path
+
+# Internal references that usually should not appear in a PR body. This is a soft
+# warning (not a hard failure) because naming a document is legitimate when the
+# PR actually adds or edits it. See the "Self-Contained History" section of
+# SKILL.md.
+INTERNAL_REF_PATTERNS = (
+    ("task/phase id", re.compile(r"\b[A-D][0-9]{1,2}\b")),
+    ("decision/requirement id", re.compile(r"\b(?:ADR|AD|RFC|TDD|FR|NFR|AC|Gap)-[A-Za-z0-9]")),
+    ("cycle label", re.compile(r"\bcycle\s+\d+", re.IGNORECASE)),
+    ("phase label", re.compile(r"\bphase\s+\d+", re.IGNORECASE)),
+    ("internal spec path", re.compile(r"\.specs/")),
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -39,6 +53,24 @@ def render_section(title: str, content: str) -> str:
     return f"## {title}\n\n{content}"
 
 
+def warn_internal_refs(body: str) -> None:
+    hits = [
+        (name, match.group(0))
+        for name, pattern in INTERNAL_REF_PATTERNS
+        for match in pattern.finditer(body)
+    ]
+    if not hits:
+        return
+
+    print("WARN: PR body may contain internal references (keep it self-contained):", file=sys.stderr)
+    for name, token in sorted(set(hits)):
+        print(f"  - {name}: {token!r}", file=sys.stderr)
+    print(
+        "  Rephrase in plain terms; name a doc only if this PR adds or edits it.",
+        file=sys.stderr,
+    )
+
+
 def main() -> int:
     args = parse_args()
     sections = [
@@ -56,6 +88,7 @@ def main() -> int:
         sections.append(render_section("Related Issues", related_issues))
 
     body = "\n\n".join(sections) + "\n"
+    warn_internal_refs(body)
 
     if args.output is None:
         print(body, end="")

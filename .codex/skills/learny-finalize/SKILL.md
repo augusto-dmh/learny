@@ -41,6 +41,19 @@ PR titles follow the same Conventional Commit format as commits and summarize th
 
 Never add authorship or tooling attribution to commits or pull requests. Commit messages and PR bodies must not contain `Co-Authored-By` trailers, "Generated with" lines, model names, or any other identification of an AI assistant or the tool used to produce the change.
 
+## Self-Contained History
+
+Commit messages, PR titles, and PR bodies must be understandable by an outside reader with no access to Learny's internal planning. They must NOT contain internal references:
+
+- task or phase IDs from `tlc-spec-driven` (`A1`, `B2`, `C1`, `D2`, `Phase 3`);
+- decision or requirement IDs (`ADR-004`, `AD-006`, `RFC-001`, `TDD-001`, `FR-AUTH-009`, `NFR-SEC-002`, `AC-2`);
+- `Gap-N`, `cycle N`, `Gate:` labels, `SPEC_DEVIATION`, `design §N`;
+- paths into internal working state (`.specs/…`).
+
+Explain each change in plain terms instead. Internal traceability lives in `.specs/` (STATE.md, tasks.md), never in the permanent git history or on the PR. Name a document (for example an ADR) only when the change actually adds or edits that file — not as a cross-reference the reader must look up. The merged PRs #1–#3 model the register: a short Summary, bulleted Changes, bulleted Verification, no lookups.
+
+`validate_metadata.py` fails on these tokens in a commit subject/body or PR title; `render_pr_body.py` warns when the assembled body contains them. Clear both before publishing, and do not mirror the internal-reference style of surrounding commits — that style is the problem being corrected.
+
 ## Workflow
 
 ### Step 1: Inspect The Repository
