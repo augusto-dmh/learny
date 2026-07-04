@@ -40,7 +40,11 @@ export function AccountPanel({
   }, [refresh]);
 
   async function handleLogout() {
-    await logout();
+    // Reuse the CSRF token already fetched on mount so logout is a single
+    // round-trip (no extra /api/auth/me probe just to read the token).
+    const csrfToken =
+      state && state.authenticated ? state.user.csrf_token : undefined;
+    await logout(csrfToken);
     setState({ authenticated: false });
     onLoggedOut?.();
   }

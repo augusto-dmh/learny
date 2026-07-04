@@ -86,18 +86,29 @@ export async function login(
 
 /**
  * Log out. Logout is a state-changing request, so it must carry the
- * session-bound CSRF token in `X-CSRF-Token` (AD-007). We obtain the token from
- * `/api/auth/me` first; the HttpOnly session cookie rides along automatically.
+ * session-bound CSRF token in `X-CSRF-Token` (AD-007).
+ *
+ * Pass `csrfToken` when the caller already holds it (the account UI reads it
+ * from `/api/auth/me` on mount) to log out in a single round-trip. When it is
+ * omitted, we fall back to fetching `/api/auth/me` to obtain the token. The
+ * HttpOnly session cookie rides along automatically in both cases.
  */
-export async function logout(fetchImpl: typeof fetch = fetch): Promise<void> {
-  const state = await fetchAuthState(fetchImpl);
-  if (!state.authenticated) {
-    return; // already signed out — nothing to revoke
+export async function logout(
+  csrfToken?: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<void> {
+  let token = csrfToken;
+  if (!token) {
+    const state = await fetchAuthState(fetchImpl);
+    if (!state.authenticated) {
+      return; // already signed out — nothing to revoke
+    }
+    token = state.user.csrf_token;
   }
   const res = await fetchImpl("/api/auth/logout", {
     method: "POST",
     credentials: "same-origin",
-    headers: { "X-CSRF-Token": state.user.csrf_token },
+    headers: { "X-CSRF-Token": token },
   });
   if (!res.ok && res.status !== 401) {
     throw await toAuthError(res, "Logout failed.");

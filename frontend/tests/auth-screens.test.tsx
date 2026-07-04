@@ -56,16 +56,8 @@ describe("AccountPanel (D2)", () => {
           csrf_token: "csrf-xyz",
         }),
       )
-      // logout's /me probe — still authenticated
-      .mockResolvedValueOnce(
-        jsonResponse(200, {
-          id: "u1",
-          email: "a@b.c",
-          created_at: "now",
-          csrf_token: "csrf-xyz",
-        }),
-      )
-      // the logout POST itself
+      // the logout POST itself — the token from mount is reused, so there is no
+      // second /me probe.
       .mockResolvedValueOnce(new Response(null, { status: 204 }));
     vi.stubGlobal("fetch", fetchMock);
 
@@ -81,6 +73,9 @@ describe("AccountPanel (D2)", () => {
     expect(logoutCall).toBeDefined();
     const headers = new Headers(logoutCall![1].headers);
     expect(headers.get("X-CSRF-Token")).toBe("csrf-xyz");
+    // The mount token is reused: exactly one /me call, no extra logout probe.
+    const meCalls = fetchMock.mock.calls.filter((c) => c[0] === "/api/auth/me");
+    expect(meCalls).toHaveLength(1);
   });
 
   it("fires the UX-only redirect callback when unauthenticated (not a security boundary)", async () => {

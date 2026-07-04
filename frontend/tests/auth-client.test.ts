@@ -71,7 +71,20 @@ describe("auth client (D2)", () => {
     });
   });
 
-  it("logout fetches /api/auth/me then sends the CSRF token in X-CSRF-Token", async () => {
+  it("logout with a provided CSRF token skips the /api/auth/me round-trip", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+
+    await logout("csrf-provided", fetchMock as unknown as typeof fetch);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1); // no /me probe
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/auth/logout");
+    expect(init.method).toBe("POST");
+    const headers = new Headers(init.headers);
+    expect(headers.get("X-CSRF-Token")).toBe("csrf-provided");
+  });
+
+  it("logout without a token fetches /api/auth/me then sends X-CSRF-Token", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
@@ -84,7 +97,7 @@ describe("auth client (D2)", () => {
       )
       .mockResolvedValueOnce(new Response(null, { status: 204 }));
 
-    await logout(fetchMock as unknown as typeof fetch);
+    await logout(undefined, fetchMock as unknown as typeof fetch);
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock.mock.calls[0][0]).toBe("/api/auth/me");
@@ -96,9 +109,9 @@ describe("auth client (D2)", () => {
     expect(headers.get("X-CSRF-Token")).toBe("csrf-xyz");
   });
 
-  it("logout is a no-op when already unauthenticated (no CSRF token to send)", async () => {
+  it("logout without a token is a no-op when already unauthenticated", async () => {
     const fetchMock = vi.fn(async () => new Response(null, { status: 401 }));
-    await logout(fetchMock as unknown as typeof fetch);
+    await logout(undefined, fetchMock as unknown as typeof fetch);
     expect(fetchMock).toHaveBeenCalledTimes(1); // only the /me probe
   });
 });
