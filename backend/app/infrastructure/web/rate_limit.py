@@ -81,7 +81,19 @@ def get_rate_limiter() -> RateLimiter:
 
 
 def _client_key(request: Request) -> str:
-    """Build a limiter key from client IP + route path (per-endpoint throttle)."""
+    """Build a limiter key from client IP + route path (per-endpoint throttle).
+
+    KNOWN LIMITATION (FR-AUTH-009): browser auth traffic reaches FastAPI through
+    the same-origin Next.js proxy (ADR-017), so ``request.client.host`` is the
+    proxy's IP for *every* user, not the real client. The per-IP key therefore
+    collapses to a single shared bucket per route: it cannot isolate individual
+    attackers, and one actor sending ``max_attempts`` requests can exhaust the
+    window for everyone (a cheap global lockout). This is acceptable only for
+    the single-process MVP boot. Before running behind the real proxy topology,
+    derive the client IP from a forwarded-client header the trusted proxy sets
+    (e.g. ``X-Real-IP``) -- reading only the hop the proxy appends, never the raw
+    client-supplied chain -- and configure the backend to trust that proxy.
+    """
     client = request.client.host if request.client else "unknown"
     return f"{client}:{request.url.path}"
 
