@@ -10,6 +10,9 @@ Tables:
 - ``user_credentials`` — user_id (fk), password_hash, algo_params, updated_at
 - ``sessions``         — id (uuid pk), user_id (fk), token_hash (unique), csrf_token,
                           expires_at, created_at, last_seen_at
+- ``sources``          — id (uuid pk), user_id (fk, indexed), title, filename,
+                          content_type, byte_size, checksum, object_key (unique),
+                          status, created_at, updated_at
 
 The session cookie carries the raw opaque token; only its hash (``token_hash``)
 is persisted (design §4 / AD-006).
@@ -18,6 +21,7 @@ is persisted (design §4 / AD-006).
 from __future__ import annotations
 
 from sqlalchemy import (
+    BigInteger,
     Column,
     DateTime,
     ForeignKey,
@@ -79,4 +83,28 @@ sessions = Table(
     Column("expires_at", DateTime(timezone=True), nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     Column("last_seen_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+)
+
+sources = Table(
+    "sources",
+    metadata,
+    Column("id", UUID(as_uuid=True), primary_key=True),
+    Column(
+        "user_id",
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    Column("title", Text, nullable=False),
+    Column("filename", Text, nullable=False),
+    Column("content_type", Text, nullable=False),
+    Column("byte_size", BigInteger, nullable=False),
+    # sha256 hex of the stored bytes; kept for future integrity/dedup (not unique).
+    Column("checksum", Text, nullable=False),
+    # Opaque owner-partitioned key (sources/{user_id}/{uuid}.epub); no PII.
+    Column("object_key", Text, nullable=False, unique=True),
+    Column("status", Text, nullable=False, server_default="uploaded"),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
 )
