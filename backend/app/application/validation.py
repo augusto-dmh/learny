@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 
-from app.application.errors import ValidationError
+from app.application.errors import InvalidSourceUpload, ValidationError
 
 # Pragmatic email shape check: non-empty local part, "@", domain with a dot.
 # Not a full RFC 5322 validator — the DB citext column is authoritative.
@@ -44,3 +44,40 @@ def validate_password(password: str) -> str:
             f"Password must be at most {MAX_PASSWORD_LENGTH} characters."
         )
     return password
+
+
+EPUB_EXTENSION = ".epub"
+EPUB_CONTENT_TYPE = "application/epub+zip"
+MAX_TITLE_LENGTH = 500
+
+
+def validate_source_upload(
+    *,
+    title: str,
+    filename: str,
+    content_type: str,
+    byte_size: int,
+    max_bytes: int,
+) -> None:
+    """Guard an EPUB upload before any bytes are stored or a row persisted.
+
+    Raises :class:`~app.application.errors.InvalidSourceUpload` carrying a
+    ``kind`` the web layer maps to a status (design §Validation). EPUB structural
+    validation is ingestion's job (Phase 5); here the content-type is
+    client-asserted and only shape-checked.
+    """
+    if not filename.lower().endswith(EPUB_EXTENSION):
+        raise InvalidSourceUpload("extension", "Only EPUB files are supported.")
+    if content_type != EPUB_CONTENT_TYPE:
+        raise InvalidSourceUpload("content_type", "Only EPUB files are supported.")
+    if byte_size <= 0:
+        raise InvalidSourceUpload("empty", "The uploaded file is empty.")
+    if byte_size > max_bytes:
+        raise InvalidSourceUpload("size", "File exceeds the maximum size.")
+    stripped = title.strip()
+    if not stripped:
+        raise InvalidSourceUpload("title", "A title is required.")
+    if len(stripped) > MAX_TITLE_LENGTH:
+        raise InvalidSourceUpload(
+            "title", f"Title must be at most {MAX_TITLE_LENGTH} characters."
+        )
