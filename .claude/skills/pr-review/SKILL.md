@@ -56,7 +56,7 @@ Send **one message** with **six Task tool calls** — all launched simultaneousl
 
 ## Structural Compliance Checklist
 
-For the full boundary rules, see `.codex/skills/modular-design-principles/SKILL.md` and `references/principles.md`. For repo tooling and layering conventions, see `.specs/codebase/CONVENTIONS.md`. Ground each item in ADR-004/007/009 and the CLAUDE.md durable direction.
+For the full boundary rules, see `.claude/skills/modular-design-principles/SKILL.md` and `references/principles.md`. For repo tooling and layering conventions, see `.specs/codebase/CONVENTIONS.md`. Ground each item in ADR-004/007/009 and the CLAUDE.md durable direction.
 
 - [ ] **Layering (ADR-007/009)** — backend code respects `domain / application / infrastructure / core`. `domain` imports nothing from `infrastructure`, FastAPI, SQLAlchemy, Celery, or provider SDKs; adapters depend inward only.
 - [ ] **Composition root** — FastAPI wiring lives in the `infrastructure/web` (HTTP) composition root; route handlers stay thin and delegate to application/domain.
@@ -163,8 +163,8 @@ Review the PR diff for: new or changed FastAPI endpoints, application services, 
 Load every document below before touching the diff. Do not skip any.
 
 1. `.specs/codebase/CONVENTIONS.md`
-2. `.codex/skills/modular-design-principles/SKILL.md`
-3. `.codex/skills/modular-design-principles/references/principles.md`
+2. `.claude/skills/modular-design-principles/SKILL.md`
+3. `.claude/skills/modular-design-principles/references/principles.md`
 4. `docs/adr/0004-python-fastapi-react-nextjs-postgresql-stack.md`
 5. `docs/adr/0007-use-learny-owned-ports-for-ai-provider-integration.md`
 6. `docs/adr/0009-use-learny-owned-orchestration-with-specialized-edge-libraries.md`
@@ -261,7 +261,7 @@ After all 6 subagents complete, spawn one more subagent via Task tool to consoli
 | | |
 |---|---|
 | **Subagents invoked** | {N} of 6 (Security · Requirements (Spec + ADR) · Test Coverage · Architecture · Regression · Performance) |
-| **Skills loaded** | `.codex/skills/pr-review/SKILL.md`, `.codex/skills/modular-design-principles/SKILL.md` |
+| **Skills loaded** | `.claude/skills/pr-review/SKILL.md`, `.claude/skills/modular-design-principles/SKILL.md` |
 | **Docs loaded** | `.specs/codebase/CONVENTIONS.md`, `.specs/features/{slug}/*`, `docs/adr/*`, `docs/tdd/0001-mvp-architecture.md` |
 | **Findings** | {N} across {M} files |
 

@@ -72,7 +72,7 @@ Explain each change in plain terms instead. Internal traceability lives in `.spe
 5. Run:
 
 ```bash
-python .codex/skills/learny-finalize/scripts/validate_metadata.py \
+python .claude/skills/learny-finalize/scripts/validate_metadata.py \
   --branch '<branch-name>' \
   --commit '<commit-message>' \
   --pr-title '<pr-title>'
@@ -105,7 +105,7 @@ Fix validation errors before continuing.
 4. Run `scripts/render_pr_body.py` to assemble the PR body. Pass screenshots only when the PR contains visible UI changes. Pass related issues only when applicable.
 
 ```bash
-python .codex/skills/learny-finalize/scripts/render_pr_body.py \
+python .claude/skills/learny-finalize/scripts/render_pr_body.py \
   --summary-file /tmp/learny-pr-summary.md \
   --changes-file /tmp/learny-pr-changes.md \
   --verification-file /tmp/learny-pr-verification.md \

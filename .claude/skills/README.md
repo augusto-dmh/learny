@@ -31,8 +31,8 @@ Leads Club installs used during the first research pass; `tlc-spec-driven` and
 Added 2026-07-04 after the official-agent-skills survey
 (`docs/research/2026-07-04/official-agent-skills-for-stack.md`). These are
 framework/vendor-authored skills, installed with the Vercel `skills` CLI using
-`--copy` (real committed files, not symlinks) into `.codex/skills/` (reached via
-the `.claude/skills -> ../.codex/skills` symlink). Each passed the CLI's Snyk +
+`--copy` (real committed files, not symlinks) into `.claude/skills/`. Each
+passed the CLI's Snyk +
 Socket security scan. Provenance and content hashes are pinned in the repo-root
 `skills-lock.json`; refresh with `npx skills update`.
 
