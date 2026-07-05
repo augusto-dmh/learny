@@ -19,7 +19,7 @@ from datetime import datetime
 from typing import Protocol, runtime_checkable
 from uuid import UUID
 
-from app.domain.entities import PasswordCredential, Session, User
+from app.domain.entities import PasswordCredential, Session, Source, User
 
 
 @runtime_checkable
@@ -135,6 +135,23 @@ class SessionRepository(Protocol):
 
     def delete(self, session_id: UUID) -> None:
         """Remove a session (instant revocation / logout)."""
+        ...
+
+
+@runtime_checkable
+class SourceRepository(Protocol):
+    """Persistence port for :class:`~app.domain.entities.Source`, owner-scoped."""
+
+    def add(self, source: Source) -> Source:
+        """Insert a source. Raises on unique ``object_key`` violation."""
+        ...
+
+    def list_by_user(self, user_id: UUID) -> list[Source]:
+        """Return ``user_id``'s sources, newest first (owner-scoped)."""
+        ...
+
+    def get_by_id(self, source_id: UUID) -> Source | None:
+        """Return the source with ``source_id``, or ``None`` if absent."""
         ...
 
 
