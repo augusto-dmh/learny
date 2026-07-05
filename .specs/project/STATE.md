@@ -17,17 +17,30 @@ Accepted architecture (locked — sourced from ADRs/TDD, not re-decided here):
 | AD-006 | Argon2id hashing (pwdlib/argon2-cffi) + opaque server-side session tokens in PostgreSQL. | Discuss → context.md (TDD OQ #1) |
 | AD-007 | SameSite=Lax+Secure+HttpOnly cookie + Origin check + session-bound (synchronizer) CSRF token. | Discuss → context.md (TDD OQ #2) |
 | AD-008 | Self-hosted MinIO in Docker Compose for local and first VPS; swappable via storage port. | Discuss → context.md (TDD OQ #3) |
+| AD-009 | Source upload transport = direct multipart through FastAPI (bytes stream through the API to storage). Presigned direct-to-storage upload deferred. | ADR-018 / Cycle 2 context.md (D-1) |
+| AD-010 | Cycles ship as full vertical slices (backend + frontend) per feature, matching Cycle 1 cadence. | Cycle 2 context.md (D-2) |
+| AD-011 | S3-compatible storage adapter uses boto3 (S3 API) behind `StoragePort`, keeping MinIO/S3/R2 swappable. | Cycle 2 context.md (D-3) |
 
 ## Blockers
 
 - None. AD-006/007/008 resolved.
 
+## Known Gaps (non-blocking)
+
+- `backend/pyproject.toml` pins `ruff>=0.9,<1`; the resolved `ruff` (0.15.20) formats
+  10 Cycle-1 files differently than whatever ~0.9.x originally formatted them
+  (`uv run ruff format --check .` fails on those 10, confirmed pre-existing on
+  `main` prior to Cycle 2). `ruff check .` (lint) and all test gates are
+  unaffected. Deliberately not fixed during Cycle 2 (source-storage) to avoid
+  scope creep — user chose to defer. Follow-up: pin ruff to an exact version or
+  do one dedicated repo-wide reformat commit.
+
 ## Handoff
 
-- Cycle 1 `scaffold-and-identity` **Execute complete + Verifier PASS** (validation.md). 13 commits 07cc25d..15bf93f on `feat/scaffold-and-identity`. Backend 69 tests / frontend 19 tests green; ruff clean; full compose stack verified; 6/6 mutants killed.
-- Gap-1 ✅ closed (commit 7acbb3e): `web` healthcheck added; all 6 services verified `(healthy)`.
-- Gap-2 (informational, deferred): wire `AuthorizeOwnership` to an endpoint when first user-owned resource (sources, TDD Phase 3) lands.
-- Pending: commit `.specs/` artifacts; open PR via `learny-finalize`. Test DB: `postgresql+psycopg://learny:learny@localhost:5432/learny`.
+- Cycle 1 `scaffold-and-identity` **Execute complete + Verifier PASS** (validation.md). Merged to `main` (PR #4). Backend 69 tests / frontend 19 tests green; ruff clean; full compose stack verified; 6/6 mutants killed.
+- Gap-1 ✅ closed: `web` healthcheck added; all 6 services verified `(healthy)`.
+- **Cycle 2 `source-storage` (TDD Phase 3) — Execute complete + Verifier PASS + 2 fix-tasks landed.** Not yet merged; branch `feat/source-storage` (10 commits: 4b641bd, 566385e, 52a1536, 1c8b69f, 8aead7e, 2ad5cb0, 1a109c6, d7223b8, 2a1f890 fix-tasks, + planning-artifact commit still pending at finalize). Backend 123 passed / frontend 32 passed, both ruff/tsc clean. Verifier: 18/18 ACs, 2/3 sensor mutations killed live (1 surviving mutant + 1 uncovered edge case both closed by the follow-up fix commit `2a1f890` — re-verified via manual mutation re-run, not a second full Verifier pass). `validation.md` + spec.md traceability (SRC-01..12, all ✅ Verified) updated. Gap-2 ✅ closed: `GetSource`/`ListSources` wire `AuthorizeOwnership`, non-owner/missing → 404. T7 shipped with an accepted `SPEC_DEVIATION` (no new proxy routes — reused Cycle 1's generic catch-all proxy instead of design.md's dedicated route files; see tasks.md T7). Next action: `learny-finalize` for the PR (planning artifacts `.specs/features/source-storage/*`, `docs/adr/0018-*`, this STATE.md still need to land in a commit too).
+- Test DB: integration tests read `LEARNY_TEST_DATABASE_URL` (see `backend/tests/conftest.py`; tests using it skip if unset) — set to `postgresql+psycopg://learny:learny@localhost:5432/learny_test` (a dedicated `learny_test` database, created during Cycle 2 Phase 3; distinct from the app's `learny` DB). MinIO local: `http://localhost:9000` (learny/learny-dev-secret). `db`/`minio` containers started via `docker.exe compose up -d db minio` — the bare `docker` CLI is unavailable in this WSL distro; use `docker.exe compose ...`. `uv` is not on the default shell PATH — it's at `/home/augusto/myenv/bin/uv`.
 
 ## Deviations (Cycle 1)
 

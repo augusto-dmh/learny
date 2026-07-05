@@ -1,0 +1,63 @@
+{
+  "schema": 1,
+  "promote_threshold": 2,
+  "window_days": 45,
+  "quarantine_threshold": 2,
+  "next_id": 4,
+  "lessons": [
+    {
+      "id": "L-001",
+      "key": "surviving_mutant::for every threshold comparison add a test at the exact boundary value not only past it so a vs regression is caught",
+      "text": "For every threshold comparison, add a test at the exact boundary value, not only past it, so a > vs >= regression is caught.",
+      "signal": "surviving_mutant",
+      "scope": "validation",
+      "status": "candidate",
+      "features": [
+        "source-storage"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "backend/app/application/validation.py:75 (validation)"
+      ],
+      "created": "2026-07-05T02:09:04Z",
+      "last_seen": "2026-07-05T02:09:04Z"
+    },
+    {
+      "id": "L-002",
+      "key": "ac_gap::when a store then persist flow has a rollback edge case test the persist failure path directly not just the store failure path",
+      "text": "When a store-then-persist flow has a rollback edge case, test the persist-failure path directly, not just the store-failure path.",
+      "signal": "ac_gap",
+      "scope": "web",
+      "status": "candidate",
+      "features": [
+        "source-storage"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "backend/tests/test_web_sources.py (INSERT-fail edge, spec Edge Cases / SRC-09) (web)"
+      ],
+      "created": "2026-07-05T02:09:04Z",
+      "last_seen": "2026-07-05T02:09:04Z"
+    },
+    {
+      "id": "L-003",
+      "key": "spec_deviation::before designing resource specific proxy adapter routes check for an existing generic catch all that already covers them to avoid speculative duplication",
+      "text": "Before designing resource-specific proxy/adapter routes, check for an existing generic catch-all that already covers them to avoid speculative duplication.",
+      "signal": "spec_deviation",
+      "scope": "frontend",
+      "status": "candidate",
+      "features": [
+        "source-storage"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        ".specs/features/source-storage/tasks.md T7 SPEC_DEVIATION (frontend)"
+      ],
+      "created": "2026-07-05T02:09:04Z",
+      "last_seen": "2026-07-05T02:09:04Z"
+    }
+  ]
+}
