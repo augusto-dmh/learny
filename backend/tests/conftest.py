@@ -100,3 +100,49 @@ def auth_client(db_conn: Connection, monkeypatch: pytest.MonkeyPatch):  # noqa: 
     app.dependency_overrides.clear()
     set_rate_limiter(previous_limiter)
     get_settings.cache_clear()
+
+
+# A small EPUB byte-cap so the oversize-upload path is exercised cheaply (the
+# real 50 MiB default would force allocating a 50 MiB body in-process).
+SOURCES_MAX_BYTES = 1024
+
+
+@pytest.fixture
+def sources_client(db_conn: Connection, monkeypatch: pytest.MonkeyPatch):  # noqa: ANN201
+    """A ``TestClient`` for the sources routers, isolated to a rolled-back txn.
+
+    Mirrors ``auth_client`` (same DB override, non-Secure cookie, trusted Origin,
+    generous limiter) but pins ``epub_max_bytes`` to :data:`SOURCES_MAX_BYTES` so
+    the oversize-reject test stays cheap while remaining a real end-to-end run
+    against Postgres + MinIO.
+    """
+    from fastapi.testclient import TestClient
+
+    from app.core.config import get_settings
+    from app.infrastructure.web.dependencies import get_db_connection
+    from app.infrastructure.web.rate_limit import (
+        InMemoryFixedWindowRateLimiter,
+        get_rate_limiter,
+        set_rate_limiter,
+    )
+    from app.main import create_app
+
+    monkeypatch.setenv("LEARNY_SESSION_COOKIE_SECURE", "false")
+    monkeypatch.setenv("LEARNY_CSRF_TRUSTED_ORIGINS", TEST_ORIGIN)
+    monkeypatch.setenv("LEARNY_EPUB_MAX_BYTES", str(SOURCES_MAX_BYTES))
+    get_settings.cache_clear()
+
+    previous_limiter = get_rate_limiter()
+    set_rate_limiter(InMemoryFixedWindowRateLimiter(max_attempts=1000))
+
+    app = create_app()
+
+    def _override() -> Iterator[Connection]:
+        yield db_conn
+
+    app.dependency_overrides[get_db_connection] = _override
+    with TestClient(app, headers={"Origin": TEST_ORIGIN}) as c:
+        yield c
+    app.dependency_overrides.clear()
+    set_rate_limiter(previous_limiter)
+    get_settings.cache_clear()

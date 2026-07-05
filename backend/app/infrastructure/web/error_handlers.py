@@ -23,8 +23,11 @@ from fastapi.responses import JSONResponse
 from app.application.errors import (
     EmailAlreadyExists,
     InvalidCredentials,
+    InvalidSourceUpload,
     NotAuthenticated,
     NotAuthorized,
+    SourceNotFound,
+    StorageUnavailable,
     ValidationError,
 )
 
@@ -37,12 +40,29 @@ _HTTP_422 = getattr(
     None,
 ) or getattr(status, "HTTP_422_UNPROCESSABLE_ENTITY", 422)
 
+# 413 was likewise renamed (REQUEST_ENTITY_TOO_LARGE → CONTENT_TOO_LARGE).
+_HTTP_413 = getattr(status, "HTTP_413_CONTENT_TOO_LARGE", None) or getattr(
+    status, "HTTP_413_REQUEST_ENTITY_TOO_LARGE", 413
+)
+
 _STATUS_BY_ERROR = {
     ValidationError: _HTTP_422,
     EmailAlreadyExists: status.HTTP_409_CONFLICT,
     InvalidCredentials: status.HTTP_401_UNAUTHORIZED,
     NotAuthenticated: status.HTTP_401_UNAUTHORIZED,
     NotAuthorized: status.HTTP_403_FORBIDDEN,
+    SourceNotFound: status.HTTP_404_NOT_FOUND,
+    StorageUnavailable: status.HTTP_503_SERVICE_UNAVAILABLE,
+}
+
+# An invalid upload maps to a status keyed by its ``kind`` (design §Error Handling):
+# type/extension → 415, size → 413, empty/title → 422.
+_STATUS_BY_UPLOAD_KIND = {
+    "extension": status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+    "content_type": status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+    "size": _HTTP_413,
+    "empty": _HTTP_422,
+    "title": _HTTP_422,
 }
 
 
@@ -55,7 +75,15 @@ def _make_handler(status_code: int):
     return handler
 
 
+async def _invalid_source_upload_handler(
+    _request: Request, exc: InvalidSourceUpload
+) -> JSONResponse:
+    status_code = _STATUS_BY_UPLOAD_KIND.get(exc.kind, _HTTP_422)
+    return JSONResponse(status_code=status_code, content={"detail": str(exc)})
+
+
 def register_error_handlers(app: FastAPI) -> None:
-    """Attach the identity exception handlers to the FastAPI app."""
+    """Attach the identity + source-storage exception handlers to the FastAPI app."""
     for error_type, status_code in _STATUS_BY_ERROR.items():
         app.add_exception_handler(error_type, _make_handler(status_code))
+    app.add_exception_handler(InvalidSourceUpload, _invalid_source_upload_handler)
