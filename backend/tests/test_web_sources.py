@@ -17,10 +17,21 @@ from uuid import uuid4
 from fastapi.testclient import TestClient
 from sqlalchemy import Connection, select
 
+from app.application.sources import CreateSource
 from app.infrastructure.db.metadata import sources
-from app.infrastructure.web.dependencies import _storage, get_storage
+from app.infrastructure.db.repositories import SqlAlchemySourceRepository
+from app.infrastructure.web.dependencies import (
+    AppSettings,
+    DbConnection,
+    Storage,
+    _clock,
+    _storage,
+    get_create_source,
+    get_storage,
+)
 from tests.conftest import (
     SOURCES_MAX_BYTES,
+    TEST_ORIGIN,
     TEST_PASSWORD,
     requires_db,
 )
@@ -273,6 +284,61 @@ def test_upload_storage_unavailable_returns_503_and_logs(
     # No secrets in the log line (no object key or checksum material).
     logged = failures[0].getMessage()
     assert "sources/" not in logged and "checksum" not in logged
+
+
+class _AddFailsRepository:
+    """Real repo for reads, but ``add`` always fails (simulates the INSERT
+    step failing after the object was already stored)."""
+
+    def __init__(self, inner: SqlAlchemySourceRepository) -> None:
+        self._inner = inner
+
+    def add(self, source):
+        raise RuntimeError("insert failed")
+
+    def list_by_user(self, user_id):
+        return self._inner.list_by_user(user_id)
+
+    def get_by_id(self, source_id):
+        return self._inner.get_by_id(source_id)
+
+
+def test_upload_insert_failure_after_store_returns_5xx_and_persists_nothing(
+    sources_client: TestClient, db_conn: Connection
+) -> None:
+    # SRC-09 edge case: bytes already landed in storage, but the row INSERT
+    # fails — the response must be a server error and no row may be committed.
+    user_id = _register(sources_client, "insertfail@example.com")
+    csrf = _csrf(sources_client)
+    fixed_id = uuid4()
+
+    def _create_source_with_failing_insert(
+        conn: DbConnection, storage: Storage, settings: AppSettings
+    ) -> CreateSource:
+        return CreateSource(
+            sources=_AddFailsRepository(SqlAlchemySourceRepository(conn)),
+            storage=storage,
+            clock=_clock,
+            ids=lambda: fixed_id,
+            max_bytes=settings.epub_max_bytes,
+        )
+
+    sources_client.app.dependency_overrides[get_create_source] = (
+        _create_source_with_failing_insert
+    )
+    lenient_client = TestClient(
+        sources_client.app,
+        cookies=sources_client.cookies,
+        headers={"Origin": TEST_ORIGIN},
+        raise_server_exceptions=False,
+    )
+
+    resp = _upload(lenient_client, csrf=csrf)
+
+    assert resp.status_code >= 500, resp.text
+    assert _source_rows(db_conn) == []
+    # The bytes reached storage even though the row never committed.
+    assert _storage.get_object(f"sources/{user_id}/{fixed_id}.epub") == EPUB_BYTES
 
 
 def test_upload_logs_source_created_with_ids(sources_client: TestClient) -> None:

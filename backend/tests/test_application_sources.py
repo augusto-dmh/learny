@@ -77,6 +77,11 @@ def test_validate_rejects_oversize_file() -> None:
     assert exc.value.kind == "size"
 
 
+def test_validate_accepts_file_at_exact_max_bytes() -> None:
+    # A file exactly at the cap is accepted; only bytes exceeding it reject.
+    assert validate_source_upload(**_valid_upload(byte_size=MAX_BYTES)) is None
+
+
 def test_validate_rejects_zero_byte_file() -> None:
     with pytest.raises(InvalidSourceUpload) as exc:
         validate_source_upload(**_valid_upload(byte_size=0))
