@@ -65,6 +65,16 @@ class Settings(BaseSettings):
             if o.strip()
         )
 
+    # Object storage (S3-compatible; MinIO locally, AD-011). Secrets env-only.
+    storage_endpoint: str = "http://localhost:9000"
+    storage_access_key: str = "learny"
+    storage_secret_key: str = "learny-dev-secret"
+    storage_bucket: str = "learny-sources"
+    storage_region: str = "us-east-1"
+
+    # Upload limits (AD-009) — cap the EPUB bytes buffered through the request.
+    epub_max_bytes: int = 52428800  # 50 MiB
+
 
 @lru_cache
 def get_settings() -> Settings:
