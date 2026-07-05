@@ -229,6 +229,8 @@ Each task gets its own commit immediately after verification. Never batch multip
 [optional footer(s)]
 ```
 
+**No AI attribution:** Do not add `Co-Authored-By`, "Generated with", a model name, or any other AI/tooling-attribution trailer to the commit message — even though this is a common default when committing via an agent's git tooling. Many projects explicitly forbid these trailers in permanent history. If the active project has a stated commit-hygiene convention, follow it; otherwise default to no attribution trailer.
+
 **Types:**
 
 | Type       | When to use                                             |
