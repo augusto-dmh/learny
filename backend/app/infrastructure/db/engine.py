@@ -9,12 +9,15 @@ adapters.
 
 from __future__ import annotations
 
+import logging
 from functools import lru_cache
 
 from pgvector.psycopg import register_vector
 from sqlalchemy import Engine, create_engine, event
 
 from app.core.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 @lru_cache
@@ -36,7 +39,9 @@ def get_engine() -> Engine:
     def _register_vector(dbapi_conn, _record):  # noqa: ANN001, ANN202
         try:
             register_vector(dbapi_conn)
-        except Exception:  # noqa: BLE001 — vector type absent pre-migration; open anyway
-            pass
+        except Exception as exc:  # noqa: BLE001 — vector type absent pre-migration; open anyway
+            # Expected before the migration installs the extension; logged at debug
+            # so a genuine registration failure is still observable rather than silent.
+            logger.debug("pgvector register_vector skipped on connect: %s", exc)
 
     return engine
