@@ -144,9 +144,7 @@ class FakeSessionRepository:
         if session is not None:
             import dataclasses
 
-            self._by_id[session_id] = dataclasses.replace(
-                session, last_seen_at=last_seen_at
-            )
+            self._by_id[session_id] = dataclasses.replace(session, last_seen_at=last_seen_at)
 
     def delete(self, session_id: UUID) -> None:
         session = self._by_id.pop(session_id, None)
@@ -180,9 +178,7 @@ class FakeSourceRepository:
     def set_status(self, source_id: UUID, status: str, updated_at: datetime) -> None:
         source = self._by_id.get(source_id)
         if source is not None:
-            self._by_id[source_id] = replace(
-                source, status=status, updated_at=updated_at
-            )
+            self._by_id[source_id] = replace(source, status=status, updated_at=updated_at)
 
 
 class FakeStorage:
@@ -303,9 +299,7 @@ class FakeEpubParser:
     the terminal-failure branch (a raise propagates unwrapped).
     """
 
-    def __init__(
-        self, *, book: ParsedBook | None = None, error: Exception | None = None
-    ) -> None:
+    def __init__(self, *, book: ParsedBook | None = None, error: Exception | None = None) -> None:
         self._book = book
         self._error = error
         self.calls: list[tuple[bytes, str]] = []

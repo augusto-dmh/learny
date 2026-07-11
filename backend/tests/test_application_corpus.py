@@ -97,9 +97,7 @@ def _book() -> ParsedBook:
     )
 
 
-def _build(
-    *, storage, parser, corpus, events, chunk_max_chars: int = 2000
-) -> BuildCorpus:  # noqa: ANN001 — port doubles
+def _build(*, storage, parser, corpus, events, chunk_max_chars: int = 2000) -> BuildCorpus:  # noqa: ANN001 — port doubles
     ids = count(1)
     return BuildCorpus(
         storage=storage,
@@ -123,9 +121,7 @@ def test_build_corpus_persists_full_aggregate() -> None:
     corpus = FakeCorpusRepository()
     events = FakeIngestionEventRepository()
 
-    _build(storage=storage, parser=parser, corpus=corpus, events=events)(
-        source=source, job=job
-    )
+    _build(storage=storage, parser=parser, corpus=corpus, events=events)(source=source, job=job)
 
     # The stored bytes flow through to the parser with the source filename.
     assert parser.calls == [(b"epub-bytes", "a-book.epub")]

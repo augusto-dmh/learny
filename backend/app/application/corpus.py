@@ -81,8 +81,7 @@ class BuildCorpus:
         total_chunks = 0
         for section in book.sections:
             block_texts = [
-                self._markup.to_markdown(block.html_fragment)
-                for block in section.blocks
+                self._markup.to_markdown(block.html_fragment) for block in section.blocks
             ]
             chunks = pack_chunks(
                 block_texts,
@@ -115,8 +114,7 @@ class BuildCorpus:
                 job_id=job.id,
                 type=_CORPUS_BUILT_EVENT,
                 message=(
-                    f"sections={len(book.sections)} "
-                    f"blocks={total_blocks} chunks={total_chunks}"
+                    f"sections={len(book.sections)} blocks={total_blocks} chunks={total_chunks}"
                 ),
                 created_at=self._clock.now(),
             )
