@@ -38,6 +38,7 @@ from app.infrastructure.db.metadata import (
 from app.infrastructure.db.repositories import (
     SqlAlchemyCorpusRepository,
     SqlAlchemyCredentialRepository,
+    SqlAlchemyEmbeddingIndexRepository,
     SqlAlchemyIngestionEventRepository,
     SqlAlchemyIngestionJobRepository,
     SqlAlchemySessionRepository,
@@ -764,3 +765,171 @@ def test_get_structure_returns_ordered_flat_sections(db_conn: Connection) -> Non
         (0, "One", 0, ("One",), "c.xhtml"),
         (1, "Two", 1, ("One", "Two"), "c.xhtml#two"),
     ]
+
+
+# ---- Embedding-index repository (RET-09/11) -------------------------------
+
+
+def _seed_two_chunk_corpus(db_conn: Connection, source_id: UUID) -> None:
+    """Persist a 2-section corpus for embedding tests.
+
+    Section 0 (position 0) carries chunks ``alpha``/``beta``; section 1
+    (position 1) carries ``gamma`` — so reading-order is ``alpha, beta, gamma``
+    across the section boundary.
+    """
+    SqlAlchemyCorpusRepository(db_conn).replace(
+        source_id,
+        title="Bk",
+        authors=("Author",),
+        language="en",
+        schema_version=1,
+        sections=(
+            _section_record(
+                position=0,
+                title="One",
+                section_path=("One",),
+                anchor="one.xhtml",
+                markdown="a\n\nb",
+                chunks=(
+                    SectionChunk(
+                        index=0,
+                        text="alpha text",
+                        section_path=("One",),
+                        anchor="one.xhtml",
+                        page_span=None,
+                    ),
+                    SectionChunk(
+                        index=1,
+                        text="beta text",
+                        section_path=("One",),
+                        anchor="one.xhtml",
+                        page_span=None,
+                    ),
+                ),
+            ),
+            _section_record(
+                position=1,
+                title="Two",
+                section_path=("Two",),
+                anchor="two.xhtml",
+                markdown="c",
+                chunks=(
+                    SectionChunk(
+                        index=0,
+                        text="gamma text",
+                        section_path=("Two",),
+                        anchor="two.xhtml",
+                        page_span=None,
+                    ),
+                ),
+            ),
+        ),
+    )
+
+
+def _unit_vector(index: int, value: float) -> list[float]:
+    """A 1536-dim vector, all zeros except ``index`` = ``value``.
+
+    Values are exactly representable in ``float4`` so a persist→read round-trip
+    is bit-exact and equality assertions are stable.
+    """
+    vec = [0.0] * 1536
+    vec[index] = value
+    return vec
+
+
+def test_embedding_index_chunks_for_source_returns_stable_order(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "embed-order@example.com")
+    _seed_two_chunk_corpus(db_conn, source.id)
+
+    chunks = SqlAlchemyEmbeddingIndexRepository(db_conn).chunks_for_source(source.id)
+
+    # Ordered by section position then chunk_index (reading order across sections).
+    assert [c.text for c in chunks] == ["alpha text", "beta text", "gamma text"]
+    # Each ChunkToEmbed carries the persisted chunk id (distinct, for the write-back).
+    assert len({c.id for c in chunks}) == 3
+
+
+def test_embedding_index_chunks_for_source_is_source_scoped(db_conn: Connection) -> None:
+    source_a = _persisted_source(db_conn, "embed-a@example.com")
+    source_b = _persisted_source(db_conn, "embed-b@example.com")
+    _seed_two_chunk_corpus(db_conn, source_a.id)
+    SqlAlchemyCorpusRepository(db_conn).replace(
+        source_b.id,
+        title="Other",
+        authors=(),
+        language=None,
+        schema_version=1,
+        sections=(
+            _section_record(
+                position=0,
+                title="X",
+                section_path=("X",),
+                anchor="x.xhtml",
+                markdown="x",
+                chunks=(
+                    SectionChunk(
+                        index=0,
+                        text="other-source text",
+                        section_path=("X",),
+                        anchor="x.xhtml",
+                        page_span=None,
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    repo = SqlAlchemyEmbeddingIndexRepository(db_conn)
+    a_texts = [c.text for c in repo.chunks_for_source(source_a.id)]
+
+    # Only source A's chunks are read — no cross-source leakage.
+    assert a_texts == ["alpha text", "beta text", "gamma text"]
+    assert "other-source text" not in a_texts
+    assert [c.text for c in repo.chunks_for_source(source_b.id)] == ["other-source text"]
+
+
+def test_embedding_index_set_embeddings_persists_vectors(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "embed-write@example.com")
+    _seed_two_chunk_corpus(db_conn, source.id)
+    repo = SqlAlchemyEmbeddingIndexRepository(db_conn)
+    chunks = repo.chunks_for_source(source.id)
+
+    # A distinct exactly-representable vector per chunk, paired by chunk id.
+    items = [(chunk.id, _unit_vector(i, float(i + 1))) for i, chunk in enumerate(chunks)]
+    repo.set_embeddings(items)
+
+    # Every chunk of the source now has a non-NULL embedding (RET-09 support).
+    non_null = db_conn.execute(
+        select(func.count())
+        .select_from(corpus_chunks)
+        .join(corpus_sections, corpus_chunks.c.section_id == corpus_sections.c.id)
+        .join(corpus_documents, corpus_sections.c.document_id == corpus_documents.c.id)
+        .where(corpus_documents.c.source_id == source.id)
+        .where(corpus_chunks.c.embedding.isnot(None))
+    ).scalar_one()
+    assert non_null == 3
+
+    # Each id reads back the exact vector written (paired correctly).
+    for chunk_id, expected in items:
+        stored = db_conn.execute(
+            select(corpus_chunks.c.embedding).where(corpus_chunks.c.id == chunk_id)
+        ).scalar_one()
+        assert stored is not None
+        assert stored.tolist() == expected
+
+
+def test_embedding_index_set_embeddings_replaces_existing(db_conn: Connection) -> None:
+    # RET-11 support: a second write overwrites the prior vector (no stale value).
+    source = _persisted_source(db_conn, "embed-replace@example.com")
+    _seed_two_chunk_corpus(db_conn, source.id)
+    repo = SqlAlchemyEmbeddingIndexRepository(db_conn)
+    chunk_id = repo.chunks_for_source(source.id)[0].id
+
+    repo.set_embeddings([(chunk_id, _unit_vector(0, 1.0))])
+    repo.set_embeddings([(chunk_id, _unit_vector(0, 0.5))])
+
+    stored = db_conn.execute(
+        select(corpus_chunks.c.embedding).where(corpus_chunks.c.id == chunk_id)
+    ).scalar_one()
+    assert stored.tolist() == _unit_vector(0, 0.5)
