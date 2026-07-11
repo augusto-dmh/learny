@@ -48,7 +48,7 @@ SOURCE_STATUS_READY = "ready"
 SOURCE_STATUS_FAILED = "failed"
 
 
-def _authorized_source(
+def authorized_source(
     *,
     user: User,
     source_id: UUID,
@@ -99,7 +99,7 @@ class StartIngestion:
     def __call__(
         self, *, user: User, source_id: UUID
     ) -> tuple[IngestionJob, list[IngestionEvent]]:
-        _authorized_source(
+        authorized_source(
             user=user,
             source_id=source_id,
             sources=self._sources,
@@ -259,7 +259,7 @@ class ReadIngestion:
     def __call__(
         self, *, user: User, source_id: UUID
     ) -> tuple[IngestionJob, list[IngestionEvent]]:
-        _authorized_source(
+        authorized_source(
             user=user,
             source_id=source_id,
             sources=self._sources,

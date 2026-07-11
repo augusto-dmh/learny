@@ -18,7 +18,7 @@ from uuid import UUID
 from app.application.chunking import pack_chunks
 from app.application.errors import CorpusNotFound
 from app.application.identity import AuthorizeOwnership
-from app.application.ingestion import _authorized_source
+from app.application.ingestion import authorized_source
 from app.domain.entities import (
     CorpusSectionRecord,
     CorpusStructure,
@@ -130,7 +130,7 @@ class BuildCorpus:
 class ReadSourceStructure:
     """Return the owner's book structure for a source, or a not-found (CORP-11).
 
-    Ownership is enforced first via ``_authorized_source`` (reused from the
+    Ownership is enforced first via ``authorized_source`` (reused from the
     ingestion services): a missing source and a non-owner collapse to
     ``SourceNotFound`` so a source's existence is never disclosed. An owned source
     that has no corpus yet raises ``CorpusNotFound`` (A-7); the web layer maps both
@@ -150,7 +150,7 @@ class ReadSourceStructure:
         self._authorize = authorize
 
     def __call__(self, *, user: User, source_id: UUID) -> CorpusStructure:
-        _authorized_source(
+        authorized_source(
             user=user,
             source_id=source_id,
             sources=self._sources,
