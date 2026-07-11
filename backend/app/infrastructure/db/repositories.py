@@ -396,8 +396,16 @@ class SqlAlchemyCorpusRepository:
         if document is None:
             return None
 
+        # Project only the read-model columns: ``markdown`` is the section's full
+        # derived text and would make this TOC read O(book size) if selected.
         rows = self._conn.execute(
-            select(corpus_sections)
+            select(
+                corpus_sections.c.position,
+                corpus_sections.c.title,
+                corpus_sections.c.depth,
+                corpus_sections.c.section_path,
+                corpus_sections.c.anchor,
+            )
             .where(corpus_sections.c.document_id == document.id)
             .order_by(corpus_sections.c.position)
         ).all()
