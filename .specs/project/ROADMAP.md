@@ -9,7 +9,7 @@ This file only tracks how those phases map onto tlc cycles. Do not duplicate TDD
 | `source-storage` | 3 (Source storage) | Done (PR #7, #8) |
 | `worker-foundation` | 4 (Worker foundation) | Done (PR #9) |
 | `epub-corpus-pipeline` | 5 (EPUB corpus pipeline) | Done (PR #10) |
-| `retrieval-indexes` | 6 (Retrieval indexes) | Execute complete + Verifier PASS (branch `feat/retrieval-indexes`, PR pending) |
+| `retrieval-indexes` | 6 (Retrieval indexes) | Done (PR #12) |
 | _next_ | 7 (Cited Q&A) | Not started |
 | _next_ | 8 (Teaching sessions) | Not started |
 | _next_ | 9 (Golden fixtures) | Not started |
