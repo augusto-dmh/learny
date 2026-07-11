@@ -425,5 +425,3 @@ def test_migration_0005_downgrade_removes_retrieval_columns_indexes(monkeypatch)
         engine.dispose()
 
     command.downgrade(cfg, "base")
-
-    command.downgrade(cfg, "base")
