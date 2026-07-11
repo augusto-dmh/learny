@@ -21,8 +21,22 @@ from uuid import UUID, uuid4
 from sqlalchemy import Connection, insert, select, update
 from sqlalchemy import delete as sa_delete
 
-from app.domain.entities import PasswordCredential, Session, Source, User
-from app.infrastructure.db.metadata import sessions, sources, user_credentials, users
+from app.domain.entities import (
+    IngestionEvent,
+    IngestionJob,
+    PasswordCredential,
+    Session,
+    Source,
+    User,
+)
+from app.infrastructure.db.metadata import (
+    ingestion_events,
+    ingestion_jobs,
+    sessions,
+    sources,
+    user_credentials,
+    users,
+)
 from app.infrastructure.security.tokens import hash_token
 
 
@@ -186,6 +200,97 @@ class SqlAlchemySourceRepository:
         ).one_or_none()
         return _to_source(row) if row is not None else None
 
+    def set_status(self, source_id: UUID, status: str, updated_at: datetime) -> None:
+        """Update the ``source.status`` projection alongside a job transition."""
+        self._conn.execute(
+            update(sources)
+            .where(sources.c.id == source_id)
+            .values(status=status, updated_at=updated_at)
+        )
+
+
+class SqlAlchemyIngestionJobRepository:
+    """``IngestionJobRepository`` backed by the ``ingestion_jobs`` table.
+
+    ``add`` propagates ``IntegrityError`` when a second active (``queued``/
+    ``running``) job for the same source hits the partial unique index — the
+    race-proof concurrency guard (ING-03).
+    """
+
+    def __init__(self, connection: Connection) -> None:
+        self._conn = connection
+
+    def add(self, job: IngestionJob) -> IngestionJob:
+        """Insert a job. Propagates ``IntegrityError`` on the active guard (ING-03)."""
+        self._conn.execute(
+            insert(ingestion_jobs).values(
+                id=job.id,
+                source_id=job.source_id,
+                status=job.status,
+                attempts=job.attempts,
+                last_error=job.last_error,
+                created_at=job.created_at,
+                updated_at=job.updated_at,
+            )
+        )
+        return job
+
+    def get_by_id(self, job_id: UUID) -> IngestionJob | None:
+        row = self._conn.execute(
+            select(ingestion_jobs).where(ingestion_jobs.c.id == job_id)
+        ).one_or_none()
+        return _to_ingestion_job(row) if row is not None else None
+
+    def get_latest_for_source(self, source_id: UUID) -> IngestionJob | None:
+        row = self._conn.execute(
+            select(ingestion_jobs)
+            .where(ingestion_jobs.c.source_id == source_id)
+            .order_by(ingestion_jobs.c.created_at.desc())
+            .limit(1)
+        ).one_or_none()
+        return _to_ingestion_job(row) if row is not None else None
+
+    def update(self, job: IngestionJob) -> IngestionJob:
+        """Persist ``status``/``attempts``/``last_error``/``updated_at``."""
+        self._conn.execute(
+            update(ingestion_jobs)
+            .where(ingestion_jobs.c.id == job.id)
+            .values(
+                status=job.status,
+                attempts=job.attempts,
+                last_error=job.last_error,
+                updated_at=job.updated_at,
+            )
+        )
+        return job
+
+
+class SqlAlchemyIngestionEventRepository:
+    """``IngestionEventRepository`` backed by the ``ingestion_events`` table."""
+
+    def __init__(self, connection: Connection) -> None:
+        self._conn = connection
+
+    def append(self, event: IngestionEvent) -> IngestionEvent:
+        self._conn.execute(
+            insert(ingestion_events).values(
+                id=event.id,
+                job_id=event.job_id,
+                type=event.type,
+                message=event.message,
+                created_at=event.created_at,
+            )
+        )
+        return event
+
+    def list_for_job(self, job_id: UUID) -> list[IngestionEvent]:
+        rows = self._conn.execute(
+            select(ingestion_events)
+            .where(ingestion_events.c.job_id == job_id)
+            .order_by(ingestion_events.c.created_at)
+        ).all()
+        return [_to_ingestion_event(row) for row in rows]
+
 
 def _to_user(row) -> User:  # noqa: ANN001 — Row is an internal SQLAlchemy type
     return User(id=row.id, email=row.email, created_at=row.created_at)
@@ -225,4 +330,26 @@ def _to_source(row) -> Source:  # noqa: ANN001
         status=row.status,
         created_at=row.created_at,
         updated_at=row.updated_at,
+    )
+
+
+def _to_ingestion_job(row) -> IngestionJob:  # noqa: ANN001
+    return IngestionJob(
+        id=row.id,
+        source_id=row.source_id,
+        status=row.status,
+        attempts=row.attempts,
+        last_error=row.last_error,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+def _to_ingestion_event(row) -> IngestionEvent:  # noqa: ANN001
+    return IngestionEvent(
+        id=row.id,
+        job_id=row.job_id,
+        type=row.type,
+        message=row.message,
+        created_at=row.created_at,
     )

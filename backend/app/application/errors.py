@@ -55,3 +55,28 @@ class SourceNotFound(Exception):
 
 class StorageUnavailable(Exception):
     """Object storage could not be written; no source row was persisted (SRC-09)."""
+
+
+class ActiveIngestionExists(Exception):
+    """A start was attempted while an active job already exists for the source.
+
+    Enforces "at most one active ingestion job per source" (ING-03); the web
+    layer maps this to 409 and enqueues nothing.
+    """
+
+
+class IngestionNotFound(Exception):
+    """No ingestion job exists yet for the source (ING-12).
+
+    Raised by the read path when ``get_latest_for_source`` finds nothing; the web
+    layer maps it to 404 (the sources list conveys the pre-start ``uploaded``
+    state instead).
+    """
+
+
+class EnqueueFailed(Exception):
+    """The broker/enqueue call failed after the queued job was committed (ING-11).
+
+    The start handler compensates the job to terminal ``failed`` before raising;
+    the web layer maps this to 502 and no phantom active job is left behind.
+    """

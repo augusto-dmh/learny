@@ -14,9 +14,19 @@ import pytest
 from sqlalchemy import Connection
 from sqlalchemy.exc import IntegrityError
 
-from app.domain.entities import PasswordCredential, Source, User
+from app.domain.entities import (
+    IngestionEvent,
+    IngestionEventType,
+    IngestionJob,
+    IngestionStatus,
+    PasswordCredential,
+    Source,
+    User,
+)
 from app.infrastructure.db.repositories import (
     SqlAlchemyCredentialRepository,
+    SqlAlchemyIngestionEventRepository,
+    SqlAlchemyIngestionJobRepository,
     SqlAlchemySessionRepository,
     SqlAlchemySourceRepository,
     SqlAlchemyUserRepository,
@@ -246,3 +256,162 @@ def test_source_object_key_is_unique(db_conn: Connection) -> None:
     sources.add(_new_source(user.id, object_key=key))
     with pytest.raises(IntegrityError):
         sources.add(_new_source(user.id, object_key=key))
+
+
+# ---- Ingestion job / event repositories -----------------------------------
+
+
+def _persisted_source(db_conn: Connection, email: str) -> Source:
+    users = SqlAlchemyUserRepository(db_conn)
+    sources = SqlAlchemySourceRepository(db_conn)
+    user = _new_user(email)
+    users.add(user)
+    source = _new_source(user.id, object_key=f"sources/{user.id}/{uuid4()}.epub")
+    return sources.add(source)
+
+
+def _new_job(
+    source_id: UUID,
+    *,
+    status: str = IngestionStatus.QUEUED,
+    attempts: int = 0,
+    last_error: str | None = None,
+    created_at: datetime | None = None,
+) -> IngestionJob:
+    now = created_at or datetime.now(UTC)
+    return IngestionJob(
+        id=uuid4(),
+        source_id=source_id,
+        status=status,
+        attempts=attempts,
+        last_error=last_error,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+def test_ingestion_job_add_and_get_by_id(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "job-add@example.com")
+    jobs = SqlAlchemyIngestionJobRepository(db_conn)
+
+    job = _new_job(source.id)
+    returned = jobs.add(job)
+    assert returned.id == job.id
+
+    fetched = jobs.get_by_id(job.id)
+    assert fetched is not None
+    assert fetched.source_id == source.id
+    assert fetched.status == IngestionStatus.QUEUED
+    assert fetched.attempts == 0
+    assert fetched.last_error is None
+    assert jobs.get_by_id(uuid4()) is None
+
+
+def test_ingestion_job_get_latest_returns_newest(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "job-latest@example.com")
+    jobs = SqlAlchemyIngestionJobRepository(db_conn)
+
+    base = datetime.now(UTC)
+    older = _new_job(source.id, status=IngestionStatus.SUCCEEDED, created_at=base)
+    newer = _new_job(
+        source.id,
+        status=IngestionStatus.QUEUED,
+        created_at=base + timedelta(minutes=1),
+    )
+    jobs.add(older)
+    jobs.add(newer)
+
+    latest = jobs.get_latest_for_source(source.id)
+    assert latest is not None and latest.id == newer.id
+    assert jobs.get_latest_for_source(uuid4()) is None
+
+
+def test_ingestion_job_update_persists_transition(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "job-update@example.com")
+    jobs = SqlAlchemyIngestionJobRepository(db_conn)
+    job = jobs.add(_new_job(source.id))
+
+    later = job.created_at + timedelta(seconds=5)
+    jobs.update(job.started(later))
+    running = jobs.get_by_id(job.id)
+    assert running is not None
+    assert running.status == IngestionStatus.RUNNING
+    assert running.attempts == 1
+    assert running.updated_at == later
+
+    later2 = later + timedelta(seconds=5)
+    jobs.update(running.failed(later2, "permanent boom"))
+    failed = jobs.get_by_id(job.id)
+    assert failed is not None
+    assert failed.status == IngestionStatus.FAILED
+    assert failed.last_error == "permanent boom"
+    assert failed.updated_at == later2
+
+
+def test_ingestion_job_second_active_is_rejected(db_conn: Connection) -> None:
+    # ING-03: the partial unique index rejects a 2nd active job for one source.
+    source = _persisted_source(db_conn, "job-active@example.com")
+    jobs = SqlAlchemyIngestionJobRepository(db_conn)
+    jobs.add(_new_job(source.id, status=IngestionStatus.QUEUED))
+
+    with pytest.raises(IntegrityError):
+        jobs.add(_new_job(source.id, status=IngestionStatus.RUNNING))
+
+
+def test_ingestion_events_append_and_list_chronological(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "events@example.com")
+    jobs = SqlAlchemyIngestionJobRepository(db_conn)
+    events = SqlAlchemyIngestionEventRepository(db_conn)
+    job = jobs.add(_new_job(source.id))
+
+    base = datetime.now(UTC)
+    events.append(
+        IngestionEvent(
+            id=uuid4(),
+            job_id=job.id,
+            type=IngestionEventType.QUEUED,
+            message=None,
+            created_at=base,
+        )
+    )
+    events.append(
+        IngestionEvent(
+            id=uuid4(),
+            job_id=job.id,
+            type=IngestionEventType.STARTED,
+            message=None,
+            created_at=base + timedelta(seconds=1),
+        )
+    )
+    events.append(
+        IngestionEvent(
+            id=uuid4(),
+            job_id=job.id,
+            type=IngestionEventType.FAILED,
+            message="boom",
+            created_at=base + timedelta(seconds=2),
+        )
+    )
+
+    listed = events.list_for_job(job.id)
+    assert [e.type for e in listed] == [
+        IngestionEventType.QUEUED,
+        IngestionEventType.STARTED,
+        IngestionEventType.FAILED,
+    ]
+    assert listed[-1].message == "boom"
+    assert events.list_for_job(uuid4()) == []
+
+
+def test_source_set_status_updates_projection(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "set-status@example.com")
+    sources = SqlAlchemySourceRepository(db_conn)
+    assert source.status == "uploaded"
+
+    later = source.updated_at + timedelta(seconds=5)
+    sources.set_status(source.id, "processing", later)
+
+    updated = sources.get_by_id(source.id)
+    assert updated is not None
+    assert updated.status == "processing"
+    assert updated.updated_at == later

@@ -14,7 +14,7 @@ Security invariants encoded here:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from uuid import UUID
 
@@ -104,3 +104,96 @@ class Source:
     status: str
     created_at: datetime
     updated_at: datetime
+
+
+class IngestionStatus:
+    """Ingestion job status vocabulary (spec §Assumptions).
+
+    ``queued`` and ``running`` are the two *active* states; ``succeeded`` and
+    ``failed`` are terminal. String constants (not an enum) because the DB column
+    is free-text ``Text`` and ``source.status`` is a plain string projection.
+    """
+
+    QUEUED = "queued"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+
+
+# At most one job in these states may exist per source (ING-03 concurrency guard,
+# enforced by a partial unique index at the persistence layer).
+ACTIVE_STATUSES = frozenset({IngestionStatus.QUEUED, IngestionStatus.RUNNING})
+
+
+class IngestionEventType:
+    """Ordered lifecycle-event vocabulary for the ingestion progress log.
+
+    A successful run appends ``[queued, started, succeeded]``; a failing run
+    appends ``[queued, started, retrying..., failed]`` (spec P1 Observe / Retry).
+    """
+
+    QUEUED = "queued"
+    STARTED = "started"
+    RETRYING = "retrying"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+
+
+@dataclass(frozen=True)
+class IngestionJob:
+    """A durable ingestion job driving one source through its lifecycle.
+
+    Immutable record: the transition helpers return *new* instances so state
+    changes are explicit and the persisted row is updated by the caller's
+    unit of work. Ownership is reachable only via the parent ``source`` (which
+    holds ``user_id``); the job carries no ``user_id`` (AD-014).
+    """
+
+    id: UUID
+    source_id: UUID
+    status: str
+    attempts: int
+    last_error: str | None
+    created_at: datetime
+    updated_at: datetime
+
+    def started(self, now: datetime) -> IngestionJob:
+        """Begin an attempt: → ``running`` and increment ``attempts`` (ING-02)."""
+        return replace(
+            self,
+            status=IngestionStatus.RUNNING,
+            attempts=self.attempts + 1,
+            updated_at=now,
+        )
+
+    def succeeded(self, now: datetime) -> IngestionJob:
+        """Terminal success: → ``succeeded`` (ING-02)."""
+        return replace(self, status=IngestionStatus.SUCCEEDED, updated_at=now)
+
+    def retrying(self, now: datetime, error: str) -> IngestionJob:
+        """Record a retryable failure: set ``last_error``, stay ``running`` (ING-07)."""
+        return replace(self, last_error=error, updated_at=now)
+
+    def failed(self, now: datetime, error: str) -> IngestionJob:
+        """Terminal failure: → ``failed`` with a durable ``last_error`` (ING-08)."""
+        return replace(
+            self,
+            status=IngestionStatus.FAILED,
+            last_error=error,
+            updated_at=now,
+        )
+
+
+@dataclass(frozen=True)
+class IngestionEvent:
+    """An append-only progress-log entry for an ingestion job (ING-06).
+
+    ``message`` carries a redacted, non-secret summary (e.g. the error text on
+    ``retrying``/``failed``); it is ``None`` for plain lifecycle transitions.
+    """
+
+    id: UUID
+    job_id: UUID
+    type: str
+    message: str | None
+    created_at: datetime

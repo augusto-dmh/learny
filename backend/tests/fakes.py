@@ -7,11 +7,20 @@ is involved, so service rules can be tested in isolation and deterministically.
 from __future__ import annotations
 
 import hashlib
+from dataclasses import replace
 from datetime import UTC, datetime
 from itertools import count
 from uuid import UUID, uuid4
 
-from app.domain.entities import PasswordCredential, Session, Source, User
+from app.domain.entities import (
+    ACTIVE_STATUSES,
+    IngestionEvent,
+    IngestionJob,
+    PasswordCredential,
+    Session,
+    Source,
+    User,
+)
 
 
 class FakeClock:
@@ -163,6 +172,13 @@ class FakeSourceRepository:
     def get_by_id(self, source_id: UUID) -> Source | None:
         return self._by_id.get(source_id)
 
+    def set_status(self, source_id: UUID, status: str, updated_at: datetime) -> None:
+        source = self._by_id.get(source_id)
+        if source is not None:
+            self._by_id[source_id] = replace(
+                source, status=status, updated_at=updated_at
+            )
+
 
 class FakeStorage:
     """In-memory ``StoragePort``: records puts so tests can assert key/bytes."""
@@ -187,3 +203,88 @@ class FailingStorage:
 
     def get_object(self, key: str) -> bytes:
         raise RuntimeError("storage down")
+
+
+class FakeIngestionJobRepository:
+    """In-memory ``IngestionJobRepository`` that emulates the active-job guard.
+
+    ``add`` raises (like the partial unique index) when an active
+    (``queued``/``running``) job already exists for the same source, so the
+    persistence-layer invariant (ING-03) is modelled in unit tests. Insertion
+    order breaks ``created_at`` ties so ``get_latest_for_source`` is deterministic
+    under a fixed test clock.
+    """
+
+    def __init__(self) -> None:
+        self._by_id: dict[UUID, IngestionJob] = {}
+        self._order: list[UUID] = []
+        self.add_calls = 0
+
+    def add(self, job: IngestionJob) -> IngestionJob:
+        self.add_calls += 1
+        if any(
+            j.source_id == job.source_id and j.status in ACTIVE_STATUSES
+            for j in self._by_id.values()
+        ):
+            raise ValueError("active ingestion job already exists")
+        self._by_id[job.id] = job
+        self._order.append(job.id)
+        return job
+
+    def get_by_id(self, job_id: UUID) -> IngestionJob | None:
+        return self._by_id.get(job_id)
+
+    def get_latest_for_source(self, source_id: UUID) -> IngestionJob | None:
+        for job_id in reversed(self._order):
+            job = self._by_id[job_id]
+            if job.source_id == source_id:
+                return job
+        return None
+
+    def update(self, job: IngestionJob) -> IngestionJob:
+        self._by_id[job.id] = job
+        return job
+
+
+class FakeIngestionEventRepository:
+    """In-memory ``IngestionEventRepository``: append-only, chronological list."""
+
+    def __init__(self) -> None:
+        self._events: list[IngestionEvent] = []
+
+    def append(self, event: IngestionEvent) -> IngestionEvent:
+        self._events.append(event)
+        return event
+
+    def list_for_job(self, job_id: UUID) -> list[IngestionEvent]:
+        return [e for e in self._events if e.job_id == job_id]
+
+
+class FakeIngestionStep:
+    """``IngestionStep`` double: no-op by default, or raises a configured error.
+
+    Records its calls so tests can assert the source/job passed to the Phase-5
+    seam; the ``error`` seam drives the retry/terminal branches.
+    """
+
+    def __init__(self, *, error: Exception | None = None) -> None:
+        self._error = error
+        self.calls: list[tuple[Source | None, IngestionJob]] = []
+
+    def run(self, *, source: Source | None, job: IngestionJob) -> None:
+        self.calls.append((source, job))
+        if self._error is not None:
+            raise self._error
+
+
+class FakeIngestionEnqueuer:
+    """``IngestionEnqueuer`` double: records enqueue calls, or raises if configured."""
+
+    def __init__(self, *, error: Exception | None = None) -> None:
+        self._error = error
+        self.calls: list[tuple[UUID, UUID]] = []
+
+    def enqueue_ingestion(self, *, source_id: UUID, job_id: UUID) -> None:
+        self.calls.append((source_id, job_id))
+        if self._error is not None:
+            raise self._error

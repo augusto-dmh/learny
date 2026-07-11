@@ -3,7 +3,7 @@
   "promote_threshold": 2,
   "window_days": 45,
   "quarantine_threshold": 2,
-  "next_id": 4,
+  "next_id": 5,
   "lessons": [
     {
       "id": "L-001",
@@ -58,6 +58,24 @@
       ],
       "created": "2026-07-05T02:09:04Z",
       "last_seen": "2026-07-05T02:09:04Z"
+    },
+    {
+      "id": "L-004",
+      "key": "spec_deviation::when a ui control renders conditionally on a status flip that status on success post await rather than optimistically pre await or the optimistic flip unmounts the control and makes its in flight disabled state unobservable untestable",
+      "text": "When a UI control renders conditionally on a status, flip that status on success (post-await) rather than optimistically pre-await, or the optimistic flip unmounts the control and makes its in-flight disabled state unobservable/untestable.",
+      "signal": "spec_deviation",
+      "scope": "frontend/react",
+      "status": "candidate",
+      "features": [
+        "worker-foundation"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "frontend/app/components/SourcesPanel.tsx SPEC_DEVIATION (frontend/react)"
+      ],
+      "created": "2026-07-11T14:37:59Z",
+      "last_seen": "2026-07-11T14:37:59Z"
     }
   ]
 }

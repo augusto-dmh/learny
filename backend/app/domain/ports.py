@@ -19,7 +19,14 @@ from datetime import datetime
 from typing import Protocol, runtime_checkable
 from uuid import UUID
 
-from app.domain.entities import PasswordCredential, Session, Source, User
+from app.domain.entities import (
+    IngestionEvent,
+    IngestionJob,
+    PasswordCredential,
+    Session,
+    Source,
+    User,
+)
 
 
 @runtime_checkable
@@ -152,6 +159,75 @@ class SourceRepository(Protocol):
 
     def get_by_id(self, source_id: UUID) -> Source | None:
         """Return the source with ``source_id``, or ``None`` if absent."""
+        ...
+
+    def set_status(self, source_id: UUID, status: str, updated_at: datetime) -> None:
+        """Update the ``source.status`` projection alongside a job transition.
+
+        Keeps the sources-list badge (``uploaded``/``processing``/``ready``/
+        ``failed``) correct without joining the ingestion tables (design fork).
+        """
+        ...
+
+
+@runtime_checkable
+class IngestionJobRepository(Protocol):
+    """Persistence port for :class:`~app.domain.entities.IngestionJob`."""
+
+    def add(self, job: IngestionJob) -> IngestionJob:
+        """Insert a job. Raises on the active partial-unique violation (ING-03)."""
+        ...
+
+    def get_by_id(self, job_id: UUID) -> IngestionJob | None:
+        """Return the job with ``job_id``, or ``None`` if absent."""
+        ...
+
+    def get_latest_for_source(self, source_id: UUID) -> IngestionJob | None:
+        """Return the newest job for ``source_id`` (by ``created_at``), or ``None``."""
+        ...
+
+    def update(self, job: IngestionJob) -> IngestionJob:
+        """Persist ``status``/``attempts``/``last_error``/``updated_at``."""
+        ...
+
+
+@runtime_checkable
+class IngestionEventRepository(Protocol):
+    """Persistence port for :class:`~app.domain.entities.IngestionEvent`."""
+
+    def append(self, event: IngestionEvent) -> IngestionEvent:
+        """Append a progress-log entry for a job."""
+        ...
+
+    def list_for_job(self, job_id: UUID) -> list[IngestionEvent]:
+        """Return a job's events in chronological order (ING-06)."""
+        ...
+
+
+@runtime_checkable
+class IngestionStep(Protocol):
+    """The Phase-5 seam run inside the ingestion task (design §Components).
+
+    The default adapter is a no-op this cycle (``# TODO(Phase 5): parse EPUB``).
+    Contract: raise a retryable error for transient failures and any other
+    exception for terminal failures, so the task can classify retries.
+    """
+
+    def run(self, *, source: Source, job: IngestionJob) -> None:
+        """Perform the ingestion work for ``source`` under ``job``."""
+        ...
+
+
+@runtime_checkable
+class IngestionEnqueuer(Protocol):
+    """The Celery boundary — keeps ``apply_async`` out of application code.
+
+    Called *after* the queued job is committed so the worker always sees a
+    durable row; the queue message carries only ids (AD-014).
+    """
+
+    def enqueue_ingestion(self, *, source_id: UUID, job_id: UUID) -> None:
+        """Enqueue the background ingestion task for ``job_id`` / ``source_id``."""
         ...
 
 

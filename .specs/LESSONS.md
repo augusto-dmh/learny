@@ -32,6 +32,12 @@ Seen once or not yet corroborated. Tracked, not trusted.
 - evidence: .specs/features/source-storage/tasks.md T7 SPEC_DEVIATION (frontend)
 - last seen: 2026-07-05T02:09:04Z
 
+### L-004 — When a UI control renders conditionally on a status, flip that status on success (post-await) rather than optimistically pre-await, or the optimistic flip unmounts the control and makes its in-flight disabled state unobservable/untestable.
+- signal: `spec_deviation` · recurrence: 1 feature(s) · scope: `frontend/react` · harmful: 0
+- features: worker-foundation
+- evidence: frontend/app/components/SourcesPanel.tsx SPEC_DEVIATION (frontend/react)
+- last seen: 2026-07-11T14:37:59Z
+
 ## Quarantined (failed when applied — ignore)
 
 A confirmed lesson that recurred alongside failure. Kept for the maintainer to review.

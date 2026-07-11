@@ -16,7 +16,12 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { fetchAuthState, type AuthState } from "@/app/lib/auth";
-import { listSources, uploadSource, type SourceSummary } from "@/app/lib/sources";
+import {
+  listSources,
+  startIngestion,
+  uploadSource,
+  type SourceSummary,
+} from "@/app/lib/sources";
 
 export function SourcesPanel({
   onRequireAuth,
@@ -29,6 +34,9 @@ export function SourcesPanel({
   const [title, setTitle] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // Id of the source whose ingestion start is currently in flight (one at a
+  // time), so we can disable just that row's button and block a double-start.
+  const [startingId, setStartingId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const next = await fetchAuthState();
@@ -65,6 +73,33 @@ export function SourcesPanel({
       setError(err instanceof Error ? err.message : "Upload failed.");
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function handleStart(source: SourceSummary) {
+    setError(null);
+    if (!state?.authenticated) {
+      return;
+    }
+    // SPEC_DEVIATION: the design says "optimistically set the row to processing";
+    // we flip to processing only on success and keep the row `uploaded` (button
+    // mounted + disabled) during the request. Reason: the "Start ingestion"
+    // button renders only for `uploaded` rows, so a pre-await optimistic flip
+    // would unmount the button, making the required "button disabled while
+    // submitting" state unobservable. End states match spec AC3 exactly
+    // (processing on success; error surfaced + not processing on failure).
+    setStartingId(source.id);
+    try {
+      await startIngestion(source.id, state.user.csrf_token);
+      setSources((prev) =>
+        (prev ?? []).map((s) =>
+          s.id === source.id ? { ...s, status: "processing" } : s,
+        ),
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not start ingestion.");
+    } finally {
+      setStartingId(null);
     }
   }
 
@@ -109,7 +144,19 @@ export function SourcesPanel({
       ) : (
         <ul>
           {sources.map((source) => (
-            <li key={source.id}>{source.title}</li>
+            <li key={source.id}>
+              <span>{source.title}</span>
+              <span data-testid={`status-${source.id}`}>{source.status}</span>
+              {source.status === "uploaded" ? (
+                <button
+                  type="button"
+                  onClick={() => void handleStart(source)}
+                  disabled={startingId === source.id}
+                >
+                  {startingId === source.id ? "Starting…" : "Start ingestion"}
+                </button>
+              ) : null}
+            </li>
           ))}
         </ul>
       )}
