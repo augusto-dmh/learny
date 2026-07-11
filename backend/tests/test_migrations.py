@@ -259,9 +259,11 @@ def test_migration_0004_creates_corpus_tables(monkeypatch) -> None:
         ]
         assert ["document_id", "position"] in section_uniques
 
-        # Child tables are indexed on their parent FK for the ordered structure read.
+        # Sections carry no standalone document_id index — the (document_id,
+        # position) unique above covers the FK lookup and ordered structure read.
         section_indexes = [ix["column_names"] for ix in inspector.get_indexes("corpus_sections")]
-        assert ["document_id"] in section_indexes
+        assert ["document_id"] not in section_indexes
+        # Blocks/chunks are indexed on their parent FK for the ordered reads.
         block_indexes = [ix["column_names"] for ix in inspector.get_indexes("corpus_blocks")]
         assert ["section_id"] in block_indexes
         chunk_indexes = [ix["column_names"] for ix in inspector.get_indexes("corpus_chunks")]

@@ -88,7 +88,8 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id", name="pk_corpus_sections"),
         sa.UniqueConstraint("document_id", "position", name="uq_corpus_sections_document_id"),
     )
-    op.create_index("ix_corpus_sections_document_id", "corpus_sections", ["document_id"])
+    # No standalone document_id index: the unique constraint's btree leads on
+    # document_id and covers the FK lookup + position-ordered structure read.
 
     op.create_table(
         "corpus_blocks",
@@ -144,6 +145,5 @@ def downgrade() -> None:
     op.drop_table("corpus_chunks")
     op.drop_index("ix_corpus_blocks_section_id", table_name="corpus_blocks")
     op.drop_table("corpus_blocks")
-    op.drop_index("ix_corpus_sections_document_id", table_name="corpus_sections")
     op.drop_table("corpus_sections")
     op.drop_table("corpus_documents")

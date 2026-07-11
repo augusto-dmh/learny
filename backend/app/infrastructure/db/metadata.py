@@ -206,7 +206,8 @@ corpus_sections = Table(
         UUID(as_uuid=True),
         ForeignKey("corpus_documents.id", ondelete="CASCADE"),
         nullable=False,
-        index=True,
+        # No standalone index: the (document_id, position) unique below leads on
+        # document_id and already serves the FK lookup + ordered structure read.
     ),
     # Spine/TOC reading order (CORP-02) and TOC nesting depth (root = 0).
     Column("position", Integer, nullable=False),
