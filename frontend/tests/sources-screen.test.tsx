@@ -6,7 +6,14 @@
  * adding a row, and does a UX-only redirect when unauthenticated (SRC-11).
  */
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { SourcesPanel } from "../app/components/SourcesPanel";
@@ -76,6 +83,37 @@ const ingestionQueued = {
   created_at: "now",
   updated_at: "now",
   events: [{ type: "queued", message: null, created_at: "now" }],
+};
+
+/** The parsed structure the backend returns for the ready fixture source. */
+const readyStructure = {
+  title: "Ready Book",
+  authors: ["Ada Lovelace"],
+  language: "en",
+  sections: [
+    {
+      title: "Chapter 1",
+      depth: 0,
+      section_path: ["Chapter 1"],
+      anchor: "c1.xhtml",
+      children: [
+        {
+          title: "Section 1.1",
+          depth: 1,
+          section_path: ["Chapter 1", "Section 1.1"],
+          anchor: "c1.xhtml#s1",
+          children: [],
+        },
+      ],
+    },
+    {
+      title: "Chapter 2",
+      depth: 0,
+      section_path: ["Chapter 2"],
+      anchor: "c2.xhtml",
+      children: [],
+    },
+  ],
 };
 
 function selectFileAndTitle(title: string) {
@@ -211,11 +249,13 @@ describe("SourcesPanel (T8)", () => {
         ?.textContent,
     ).toBe("Start ingestion");
 
-    // Active/terminal rows offer no start action.
+    // Active/terminal rows offer no start action. (The ready row carries its
+    // own "View structure" control (T13), so assert specifically that no row
+    // but the uploaded one offers "Start ingestion".)
     for (const id of ["s-proc", "s-ready", "s-fail"]) {
       expect(
-        screen.getByTestId(`status-${id}`).closest("li")?.querySelector("button"),
-      ).toBeNull();
+        screen.getByTestId(`status-${id}`).closest("li")?.textContent,
+      ).not.toContain("Start ingestion");
     }
   });
 
@@ -307,6 +347,187 @@ describe("SourcesPanel (T8)", () => {
     expect(screen.getByTestId("status-s-up").textContent).toBe("uploaded");
     expect(
       screen.getByRole("button", { name: "Start ingestion" }),
+    ).toBeTruthy();
+  });
+});
+
+describe("SourcesPanel structure view (T13)", () => {
+  it("offers View structure only on ready rows", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        "GET /api/sources": () => jsonResponse(200, mixed),
+      }),
+    );
+
+    render(<SourcesPanel />);
+    await screen.findByText("Ready Book");
+
+    // Exactly one View-structure control — on the sole ready row.
+    const viewButtons = screen.getAllByRole("button", {
+      name: "View structure",
+    });
+    expect(viewButtons).toHaveLength(1);
+    expect(
+      screen.getByTestId("status-s-ready").closest("li")?.textContent,
+    ).toContain("View structure");
+
+    // Uploaded/processing/failed rows offer no structure control.
+    for (const id of ["s-up", "s-proc", "s-fail"]) {
+      expect(
+        screen.getByTestId(`status-${id}`).closest("li")?.textContent,
+      ).not.toContain("View structure");
+    }
+  });
+
+  it("renders the metadata line and nested section tree under the row", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        "GET /api/sources": () => jsonResponse(200, [mixed[2]]),
+        "GET /api/sources/s-ready/structure": () =>
+          jsonResponse(200, readyStructure),
+      }),
+    );
+
+    render(<SourcesPanel />);
+    await screen.findByText("Ready Book");
+
+    fireEvent.click(screen.getByRole("button", { name: "View structure" }));
+
+    // All section titles render.
+    expect(await screen.findByText("Section 1.1")).toBeTruthy();
+    expect(screen.getByText("Chapter 1")).toBeTruthy();
+    expect(screen.getByText("Chapter 2")).toBeTruthy();
+
+    // Nesting: the child sits inside its parent's <li> subtree, not at the root.
+    const chapter1Li = screen.getByText("Chapter 1").closest("li");
+    expect(chapter1Li).toBeTruthy();
+    expect(within(chapter1Li!).getByText("Section 1.1")).toBeTruthy();
+    // Its sibling root chapter is NOT inside Chapter 1's subtree.
+    expect(within(chapter1Li!).queryByText("Chapter 2")).toBeNull();
+    expect(chapter1Li!.querySelector("ul")).toBeTruthy();
+
+    // Metadata line carries title/authors/language.
+    const panel = screen.getByTestId("structure-s-ready");
+    expect(panel.textContent).toContain("Ada Lovelace");
+    expect(panel.textContent).toContain("en");
+  });
+
+  it("renders null metadata gracefully", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        "GET /api/sources": () => jsonResponse(200, [mixed[2]]),
+        "GET /api/sources/s-ready/structure": () =>
+          jsonResponse(200, {
+            title: null,
+            authors: [],
+            language: null,
+            sections: [],
+          }),
+      }),
+    );
+
+    render(<SourcesPanel />);
+    await screen.findByText("Ready Book");
+
+    fireEvent.click(screen.getByRole("button", { name: "View structure" }));
+
+    // The panel opens without crashing on the missing metadata.
+    const panel = await screen.findByTestId("structure-s-ready");
+    expect(panel).toBeTruthy();
+    expect(panel.textContent).toContain("Untitled");
+    expect(panel.textContent).toContain("Unknown author");
+  });
+
+  it("disables View structure while the structure fetch is in flight", async () => {
+    let resolveGet!: (r: Response) => void;
+    const pending = new Promise<Response>((resolve) => {
+      resolveGet = resolve;
+    });
+    const fetchMock = routedFetch({
+      "GET /api/auth/me": () => authedMe.clone(),
+      "GET /api/sources": () => jsonResponse(200, [mixed[2]]),
+      "GET /api/sources/s-ready/structure": () => pending,
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<SourcesPanel />);
+    await screen.findByText("Ready Book");
+
+    fireEvent.click(screen.getByRole("button", { name: "View structure" }));
+
+    // In flight: label flips to "Loading…" and the button is disabled.
+    const loading = (await screen.findByRole("button", {
+      name: "Loading…",
+    })) as HTMLButtonElement;
+    expect(loading.disabled).toBe(true);
+
+    // Clicking the disabled button issues no second structure GET.
+    fireEvent.click(loading);
+    const structureGets = fetchMock.mock.calls.filter(
+      ([url]) => url === "/api/sources/s-ready/structure",
+    );
+    expect(structureGets).toHaveLength(1);
+
+    // Resolving the request opens the panel.
+    resolveGet(jsonResponse(200, readyStructure));
+    expect(await screen.findByText("Chapter 1")).toBeTruthy();
+  });
+
+  it("shows an alert and re-enables the control when the fetch fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        "GET /api/sources": () => jsonResponse(200, [mixed[2]]),
+        "GET /api/sources/s-ready/structure": () =>
+          jsonResponse(404, { detail: "That source has no structure yet." }),
+      }),
+    );
+
+    render(<SourcesPanel />);
+    await screen.findByText("Ready Book");
+
+    fireEvent.click(screen.getByRole("button", { name: "View structure" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe("That source has no structure yet.");
+    // No panel, and the control is back to "View structure" and enabled.
+    expect(screen.queryByTestId("structure-s-ready")).toBeNull();
+    const btn = screen.getByRole("button", {
+      name: "View structure",
+    }) as HTMLButtonElement;
+    expect(btn.disabled).toBe(false);
+  });
+
+  it("collapses the panel and drops its content when toggled again", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        "GET /api/sources": () => jsonResponse(200, [mixed[2]]),
+        "GET /api/sources/s-ready/structure": () =>
+          jsonResponse(200, readyStructure),
+      }),
+    );
+
+    render(<SourcesPanel />);
+    await screen.findByText("Ready Book");
+
+    fireEvent.click(screen.getByRole("button", { name: "View structure" }));
+    expect(await screen.findByText("Chapter 1")).toBeTruthy();
+
+    // Toggle again → the panel and its section titles are removed.
+    fireEvent.click(screen.getByRole("button", { name: "Hide structure" }));
+    expect(screen.queryByText("Chapter 1")).toBeNull();
+    expect(screen.queryByTestId("structure-s-ready")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "View structure" }),
     ).toBeTruthy();
   });
 });

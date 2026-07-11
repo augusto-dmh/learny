@@ -17,11 +17,41 @@ import { useCallback, useEffect, useState } from "react";
 
 import { fetchAuthState, type AuthState } from "@/app/lib/auth";
 import {
+  fetchSourceStructure,
   listSources,
   startIngestion,
   uploadSource,
+  type SourceStructure,
+  type StructureSection,
   type SourceSummary,
 } from "@/app/lib/sources";
+
+/** Book metadata as one line, filling in readable placeholders for nulls. */
+function metadataLine(structure: SourceStructure): string {
+  const title = structure.title ?? "Untitled";
+  const authors =
+    structure.authors.length > 0
+      ? structure.authors.join(", ")
+      : "Unknown author";
+  const language = structure.language ?? "Unknown language";
+  return `${title} · ${authors} · ${language}`;
+}
+
+/** Recursive TOC tree: one nested <ul> level per depth, titles as leaves. */
+function SectionTree({ sections }: { sections: StructureSection[] }) {
+  return (
+    <ul>
+      {sections.map((section, index) => (
+        <li key={`${section.anchor}-${index}`}>
+          <span>{section.title}</span>
+          {section.children.length > 0 ? (
+            <SectionTree sections={section.children} />
+          ) : null}
+        </li>
+      ))}
+    </ul>
+  );
+}
 
 export function SourcesPanel({
   onRequireAuth,
@@ -37,6 +67,15 @@ export function SourcesPanel({
   // Id of the source whose ingestion start is currently in flight (one at a
   // time), so we can disable just that row's button and block a double-start.
   const [startingId, setStartingId] = useState<string | null>(null);
+  // Id of the source whose structure fetch is in flight, so we disable just
+  // that row's toggle; and the loaded structures keyed by source id — a present
+  // entry means the row's panel is expanded (CORP-12/13).
+  const [structureLoadingId, setStructureLoadingId] = useState<string | null>(
+    null,
+  );
+  const [structures, setStructures] = useState<Record<string, SourceStructure>>(
+    {},
+  );
 
   const load = useCallback(async () => {
     const next = await fetchAuthState();
@@ -103,6 +142,30 @@ export function SourcesPanel({
     }
   }
 
+  async function handleStructure(source: SourceSummary) {
+    setError(null);
+    // Toggle: an already-open panel collapses, dropping its content.
+    if (structures[source.id]) {
+      setStructures((prev) => {
+        const next = { ...prev };
+        delete next[source.id];
+        return next;
+      });
+      return;
+    }
+    setStructureLoadingId(source.id);
+    try {
+      const structure = await fetchSourceStructure(source.id);
+      setStructures((prev) => ({ ...prev, [source.id]: structure }));
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Could not load the book structure.",
+      );
+    } finally {
+      setStructureLoadingId(null);
+    }
+  }
+
   if (state === null) {
     return <p>Loading…</p>;
   }
@@ -155,6 +218,25 @@ export function SourcesPanel({
                 >
                   {startingId === source.id ? "Starting…" : "Start ingestion"}
                 </button>
+              ) : null}
+              {source.status === "ready" ? (
+                <button
+                  type="button"
+                  onClick={() => void handleStructure(source)}
+                  disabled={structureLoadingId === source.id}
+                >
+                  {structureLoadingId === source.id
+                    ? "Loading…"
+                    : structures[source.id]
+                      ? "Hide structure"
+                      : "View structure"}
+                </button>
+              ) : null}
+              {structures[source.id] ? (
+                <div data-testid={`structure-${source.id}`}>
+                  <p>{metadataLine(structures[source.id])}</p>
+                  <SectionTree sections={structures[source.id].sections} />
+                </div>
               ) : null}
             </li>
           ))}
