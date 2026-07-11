@@ -362,6 +362,27 @@ def test_upload_logs_source_created_with_ids(sources_client: TestClient) -> None
     assert "sources/" not in logged and "checksum" not in logged
 
 
+def test_upload_repeated_hits_rate_limit_returns_429(
+    throttled_sources_client: TestClient, db_conn: Connection
+) -> None:
+    # SRC-05 rate-limit half: the tight fixture allows 3 uploads per window, so
+    # the 4th POST /api/sources trips ``rate_limit_upload`` before the handler.
+    client = throttled_sources_client
+    _register(client, "flood@example.com")
+    csrf = _csrf(client)
+
+    for _ in range(3):
+        resp = _upload(client, csrf=csrf)
+        assert resp.status_code == 201, resp.text
+
+    throttled = _upload(client, csrf=csrf)
+    assert throttled.status_code == 429, throttled.text
+    assert "retry-after" in {k.lower() for k in throttled.headers}
+    # The throttled request short-circuits before the service, so no extra row
+    # is persisted — only the 3 that passed the limiter exist.
+    assert len(_source_rows(db_conn)) == 3
+
+
 def test_same_file_uploaded_twice_creates_two_sources(
     sources_client: TestClient, db_conn: Connection
 ) -> None:
