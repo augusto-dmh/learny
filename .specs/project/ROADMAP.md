@@ -5,9 +5,9 @@ This file only tracks how those phases map onto tlc cycles. Do not duplicate TDD
 
 | tlc Cycle | TDD Phases | Status |
 |---|---|---|
-| `scaffold-and-identity` | 1 (Repository scaffold) + 2 (Identity foundation) | In progress |
-| _next_ | 3 (Source storage) | Not started |
-| _next_ | 4 (Worker foundation) | Not started |
+| `scaffold-and-identity` | 1 (Repository scaffold) + 2 (Identity foundation) | Done (PR #4) |
+| `source-storage` | 3 (Source storage) | Done (PR #7, #8) |
+| `worker-foundation` | 4 (Worker foundation) | Specify (in progress) |
 | _next_ | 5 (EPUB corpus pipeline) | Not started |
 | _next_ | 6 (Retrieval indexes) | Not started |
 | _next_ | 7 (Cited Q&A) | Not started |
