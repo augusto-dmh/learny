@@ -84,6 +84,24 @@ class Settings(BaseSettings):
     # starts a new one; oversized single blocks split at sentence boundaries.
     chunk_max_chars: int = 2000
 
+    # Embeddings (ADR-0007) — the provider/model lives only in the adapter; these
+    # knobs stay LEARNY_-prefixed and never hard-coded in query/repository code.
+    # ``embedding_dim`` is informational; the migration's vector(1536) literal is
+    # authoritative (A-1).
+    embedding_dim: int = 1536
+    embedding_model: str = "local-deterministic"
+    embedding_batch_size: int = 128
+
+    # Hybrid retrieval tuning (ADR-0006) — candidate limits, RRF constant, default
+    # and max top-k, and the pgvector HNSW query-time recall knob. All infrastructure
+    # tuning, not domain concepts (A-9).
+    retrieval_semantic_limit: int = 50
+    retrieval_lexical_limit: int = 50
+    retrieval_rrf_k: int = 60
+    retrieval_top_k: int = 10
+    retrieval_max_top_k: int = 50
+    hnsw_ef_search: int = 100
+
 
 @lru_cache
 def get_settings() -> Settings:
