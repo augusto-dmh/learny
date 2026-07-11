@@ -23,6 +23,28 @@ export type SourceSummary = {
   created_at: string;
 };
 
+/** One progress-log entry, as returned in an `IngestionSummary`. */
+export type IngestionEventView = {
+  type: string;
+  message: string | null;
+  created_at: string;
+};
+
+/**
+ * Secret-free ingestion job view as returned by `/api/sources/{id}/ingestion`.
+ * Mirrors the backend `IngestionSummary`: job lifecycle state only, never the
+ * source's `object_key`/`checksum`.
+ */
+export type IngestionSummary = {
+  id: string;
+  status: string;
+  attempts: number;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+  events: IngestionEventView[];
+};
+
 /** List the caller's sources (newest-first), or `[]` when they have none. */
 export async function listSources(
   fetchImpl: typeof fetch = fetch,
@@ -78,6 +100,30 @@ export async function uploadSource(
     throw await toSourceError(res, "Upload failed.");
   }
   return (await res.json()) as SourceSummary;
+}
+
+/**
+ * Start ingestion for an uploaded source. This is a state-changing request, so
+ * it carries the session-bound CSRF token in `X-CSRF-Token` (AD-007), same as
+ * `uploadSource`; the caller passes it in (read from `/api/auth/me`). The
+ * HttpOnly session cookie rides along automatically (`credentials:
+ * "same-origin"`). On a non-OK response (e.g. 409 "already in progress", 502),
+ * the backend `detail` is surfaced via `toSourceError`.
+ */
+export async function startIngestion(
+  sourceId: string,
+  csrfToken: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<IngestionSummary> {
+  const res = await fetchImpl(`/api/sources/${sourceId}/ingestion`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrfToken },
+  });
+  if (!res.ok) {
+    throw await toSourceError(res, "Could not start ingestion.");
+  }
+  return (await res.json()) as IngestionSummary;
 }
 
 /** Build an Error from a non-OK response, preferring the backend's detail. */
