@@ -80,3 +80,27 @@ class IssuedSession:
 
     session: Session
     raw_token: str
+
+
+@dataclass(frozen=True)
+class Source:
+    """An uploaded source file owned by a user (Cycle 2, design §Components).
+
+    Immutable record: the original bytes live in object storage under
+    ``object_key``; this entity holds only the metadata PostgreSQL owns.
+    ``object_key`` and ``checksum`` are internal — the web summary path never
+    surfaces them (spec P1-Upload AC1). One EPUB file per source this cycle, so
+    file attributes are inline rather than in a separate table.
+    """
+
+    id: UUID
+    user_id: UUID
+    title: str
+    filename: str
+    content_type: str
+    byte_size: int
+    checksum: str
+    object_key: str
+    status: str
+    created_at: datetime
+    updated_at: datetime

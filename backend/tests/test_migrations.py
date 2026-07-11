@@ -25,10 +25,10 @@ def _alembic_config(db_url: str) -> Config:
 
 
 def test_migration_metadata_compiles() -> None:
-    """The shared metadata defines the three identity tables with constraints."""
-    from app.infrastructure.db.metadata import metadata, sessions, users
+    """The shared metadata defines the identity + sources tables with constraints."""
+    from app.infrastructure.db.metadata import metadata, sessions, sources, users
 
-    assert set(metadata.tables) == {"users", "user_credentials", "sessions"}
+    assert set(metadata.tables) == {"users", "user_credentials", "sessions", "sources"}
     # Unique email + unique session token_hash are the security-critical constraints.
     user_uniques = {c.name for c in users.constraints if c.__class__.__name__ == "UniqueConstraint"}
     assert any("email" in name for name in user_uniques)
@@ -36,6 +36,11 @@ def test_migration_metadata_compiles() -> None:
         c.name for c in sessions.constraints if c.__class__.__name__ == "UniqueConstraint"
     }
     assert any("token_hash" in name for name in session_uniques)
+    # Opaque object_key is unique so a stored blob maps to at most one source row.
+    source_uniques = {
+        c.name for c in sources.constraints if c.__class__.__name__ == "UniqueConstraint"
+    }
+    assert any("object_key" in name for name in source_uniques)
 
 
 @pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
@@ -56,5 +61,38 @@ def test_migration_up_creates_identity_tables(monkeypatch) -> None:
     try:
         tables = set(inspect(engine).get_table_names())
         assert "users" not in tables
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
+def test_migration_0002_creates_sources_table(monkeypatch) -> None:
+    """0002 creates ``sources`` with the FK, user_id index, and unique object_key."""
+    monkeypatch.setenv("LEARNY_DATABASE_URL", TEST_DB_URL)
+    cfg = _alembic_config(TEST_DB_URL)
+
+    command.upgrade(cfg, "head")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        inspector = inspect(engine)
+        assert "sources" in set(inspector.get_table_names())
+
+        fks = inspector.get_foreign_keys("sources")
+        user_fk = next(fk for fk in fks if fk["constrained_columns"] == ["user_id"])
+        assert user_fk["referred_table"] == "users"
+        assert user_fk["options"].get("ondelete") == "CASCADE"
+
+        index_columns = [ix["column_names"] for ix in inspector.get_indexes("sources")]
+        assert ["user_id"] in index_columns
+
+        unique_columns = [uc["column_names"] for uc in inspector.get_unique_constraints("sources")]
+        assert ["object_key"] in unique_columns
+    finally:
+        engine.dispose()
+
+    command.downgrade(cfg, "base")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        assert "sources" not in set(inspect(engine).get_table_names())
     finally:
         engine.dispose()

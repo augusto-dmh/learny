@@ -30,3 +30,28 @@ class NotAuthenticated(IdentityError):
 
 class NotAuthorized(IdentityError):
     """An authenticated user attempted to act on a resource they do not own."""
+
+
+class InvalidSourceUpload(Exception):
+    """An uploaded source failed validation before anything was persisted.
+
+    ``kind`` distinguishes the failure so the web layer can map it to the right
+    status (``extension``/``content_type`` → 415, ``size`` → 413,
+    ``empty``/``title`` → 422).
+    """
+
+    def __init__(self, kind: str, message: str) -> None:
+        super().__init__(message)
+        self.kind = kind
+
+
+class SourceNotFound(Exception):
+    """A source does not exist or is not the caller's.
+
+    Non-owner and missing reads collapse to this single error so the web layer
+    returns 404 either way (no existence disclosure — spec P1-View AC2).
+    """
+
+
+class StorageUnavailable(Exception):
+    """Object storage could not be written; no source row was persisted (SRC-09)."""

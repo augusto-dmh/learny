@@ -8,16 +8,17 @@ security-critical constraints: case-insensitive unique email, unique session
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import Connection
 from sqlalchemy.exc import IntegrityError
 
-from app.domain.entities import PasswordCredential, User
+from app.domain.entities import PasswordCredential, Source, User
 from app.infrastructure.db.repositories import (
     SqlAlchemyCredentialRepository,
     SqlAlchemySessionRepository,
+    SqlAlchemySourceRepository,
     SqlAlchemyUserRepository,
 )
 from app.infrastructure.security.tokens import generate_token, hash_token
@@ -28,6 +29,23 @@ pytestmark = requires_db
 
 def _new_user(email: str) -> User:
     return User(id=uuid4(), email=email, created_at=datetime.now(UTC))
+
+
+def _new_source(user_id: UUID, *, object_key: str, created_at: datetime | None = None) -> Source:
+    now = created_at or datetime.now(UTC)
+    return Source(
+        id=uuid4(),
+        user_id=user_id,
+        title="A Book",
+        filename="a-book.epub",
+        content_type="application/epub+zip",
+        byte_size=1024,
+        checksum="d" * 64,
+        object_key=object_key,
+        status="uploaded",
+        created_at=now,
+        updated_at=now,
+    )
 
 
 def test_user_create_and_fetch(db_conn: Connection) -> None:
@@ -152,3 +170,79 @@ def test_session_touch_and_delete(db_conn: Connection) -> None:
 
     sessions.delete(created.id)
     assert sessions.get_by_raw_token(raw) is None
+
+
+def test_source_add_and_get_by_id(db_conn: Connection) -> None:
+    users = SqlAlchemyUserRepository(db_conn)
+    sources = SqlAlchemySourceRepository(db_conn)
+    user = _new_user("grace@example.com")
+    users.add(user)
+
+    source = _new_source(user.id, object_key=f"sources/{user.id}/{uuid4()}.epub")
+    returned = sources.add(source)
+    assert returned.id == source.id
+
+    fetched = sources.get_by_id(source.id)
+    assert fetched is not None
+    assert fetched.object_key == source.object_key
+    assert fetched.user_id == user.id
+    assert fetched.byte_size == 1024
+    assert fetched.checksum == "d" * 64
+    assert fetched.status == "uploaded"
+
+
+def test_source_get_missing_returns_none(db_conn: Connection) -> None:
+    sources = SqlAlchemySourceRepository(db_conn)
+    assert sources.get_by_id(uuid4()) is None
+
+
+def test_source_list_by_user_is_newest_first(db_conn: Connection) -> None:
+    users = SqlAlchemyUserRepository(db_conn)
+    sources = SqlAlchemySourceRepository(db_conn)
+    user = _new_user("heidi@example.com")
+    users.add(user)
+
+    base = datetime.now(UTC)
+    older = _new_source(user.id, object_key=f"sources/{user.id}/{uuid4()}.epub", created_at=base)
+    newer = _new_source(
+        user.id,
+        object_key=f"sources/{user.id}/{uuid4()}.epub",
+        created_at=base + timedelta(minutes=1),
+    )
+    sources.add(older)
+    sources.add(newer)
+
+    listed = sources.list_by_user(user.id)
+    assert [s.id for s in listed] == [newer.id, older.id]
+
+
+def test_source_list_is_owner_scoped(db_conn: Connection) -> None:
+    users = SqlAlchemyUserRepository(db_conn)
+    sources = SqlAlchemySourceRepository(db_conn)
+    alice = _new_user("ivan@example.com")
+    bob = _new_user("judy@example.com")
+    users.add(alice)
+    users.add(bob)
+
+    a1 = _new_source(alice.id, object_key=f"sources/{alice.id}/{uuid4()}.epub")
+    a2 = _new_source(alice.id, object_key=f"sources/{alice.id}/{uuid4()}.epub")
+    b1 = _new_source(bob.id, object_key=f"sources/{bob.id}/{uuid4()}.epub")
+    for source in (a1, a2, b1):
+        sources.add(source)
+
+    alice_ids = {s.id for s in sources.list_by_user(alice.id)}
+    assert alice_ids == {a1.id, a2.id}
+    assert b1.id not in alice_ids
+    assert [s.id for s in sources.list_by_user(bob.id)] == [b1.id]
+
+
+def test_source_object_key_is_unique(db_conn: Connection) -> None:
+    users = SqlAlchemyUserRepository(db_conn)
+    sources = SqlAlchemySourceRepository(db_conn)
+    user = _new_user("mallory@example.com")
+    users.add(user)
+
+    key = f"sources/{user.id}/{uuid4()}.epub"
+    sources.add(_new_source(user.id, object_key=key))
+    with pytest.raises(IntegrityError):
+        sources.add(_new_source(user.id, object_key=key))

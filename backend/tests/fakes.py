@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from itertools import count
 from uuid import UUID, uuid4
 
-from app.domain.entities import PasswordCredential, Session, User
+from app.domain.entities import PasswordCredential, Session, Source, User
 
 
 class FakeClock:
@@ -138,3 +138,52 @@ class FakeSessionRepository:
         session = self._by_id.pop(session_id, None)
         if session is not None:
             self._hash_to_id.pop(session.token_hash, None)
+
+
+class FakeSourceRepository:
+    """In-memory ``SourceRepository``: newest-first list, unique ``object_key``."""
+
+    def __init__(self) -> None:
+        self._by_id: dict[UUID, Source] = {}
+        self._object_keys: set[str] = set()
+        self.add_calls = 0
+
+    def add(self, source: Source) -> Source:
+        self.add_calls += 1
+        if source.object_key in self._object_keys:
+            raise ValueError("duplicate object_key")
+        self._object_keys.add(source.object_key)
+        self._by_id[source.id] = source
+        return source
+
+    def list_by_user(self, user_id: UUID) -> list[Source]:
+        owned = [s for s in self._by_id.values() if s.user_id == user_id]
+        return sorted(owned, key=lambda s: s.created_at, reverse=True)
+
+    def get_by_id(self, source_id: UUID) -> Source | None:
+        return self._by_id.get(source_id)
+
+
+class FakeStorage:
+    """In-memory ``StoragePort``: records puts so tests can assert key/bytes."""
+
+    def __init__(self) -> None:
+        self.objects: dict[str, bytes] = {}
+        self.put_calls: list[tuple[str, str]] = []
+
+    def put_object(self, key: str, data: bytes, *, content_type: str) -> None:
+        self.put_calls.append((key, content_type))
+        self.objects[key] = data
+
+    def get_object(self, key: str) -> bytes:
+        return self.objects[key]
+
+
+class FailingStorage:
+    """``StoragePort`` whose ``put_object`` always fails (storage-down path)."""
+
+    def put_object(self, key: str, data: bytes, *, content_type: str) -> None:
+        raise RuntimeError("storage down")
+
+    def get_object(self, key: str) -> bytes:
+        raise RuntimeError("storage down")

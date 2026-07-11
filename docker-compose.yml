@@ -55,6 +55,11 @@ services:
       LEARNY_DATABASE_URL: postgresql+psycopg://learny:learny@db:5432/learny
       LEARNY_REDIS_URL: redis://redis:6379/0
       LEARNY_SESSION_COOKIE_SECURE: "false"
+      LEARNY_STORAGE_ENDPOINT: http://minio:9000
+      LEARNY_STORAGE_ACCESS_KEY: learny
+      LEARNY_STORAGE_SECRET_KEY: learny-dev-secret
+      LEARNY_STORAGE_BUCKET: learny-sources
+      LEARNY_STORAGE_REGION: us-east-1
     # Apply migrations, then serve. (Phase C wires the auth routers onto this app.)
     command: >-
       sh -c "alembic upgrade head &&
@@ -65,6 +70,8 @@ services:
       db:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      minio:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8000/healthz"]

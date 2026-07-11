@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from typing import Annotated
+from uuid import uuid4
 
 from fastapi import Depends, Request
 from sqlalchemy import Connection
@@ -28,23 +29,43 @@ from app.application.identity import (
     Logout,
     RegisterUser,
 )
+from app.application.sources import CreateSource, GetSource, ListSources
 from app.core.config import Settings, get_settings
 from app.domain.entities import Session, User
+from app.domain.ports import StoragePort
 from app.infrastructure.clock import SystemClock
 from app.infrastructure.db.engine import get_engine
 from app.infrastructure.db.repositories import (
     SqlAlchemyCredentialRepository,
     SqlAlchemySessionRepository,
+    SqlAlchemySourceRepository,
     SqlAlchemyUserRepository,
 )
 from app.infrastructure.security.password_hasher import Argon2PasswordHasher
 from app.infrastructure.security.tokens import SecretsTokenGenerator
+from app.infrastructure.storage.s3 import S3StorageAdapter
 
 # Process-wide singletons for the stateless adapters. The hasher in particular is
 # expensive to construct (Argon2 parameter setup), so it is built once.
 _hasher = Argon2PasswordHasher()
 _tokens = SecretsTokenGenerator()
 _clock = SystemClock()
+
+
+def _build_storage() -> S3StorageAdapter:
+    settings = get_settings()
+    return S3StorageAdapter(
+        endpoint=settings.storage_endpoint,
+        access_key=settings.storage_access_key,
+        secret_key=settings.storage_secret_key,
+        bucket=settings.storage_bucket,
+        region=settings.storage_region,
+    )
+
+
+# Process-wide storage adapter (holds a boto3 client; built once, ensures its
+# bucket on first use). Overridable in tests via ``get_storage``.
+_storage: StoragePort = _build_storage()
 
 
 def get_db_connection(request: Request) -> Iterator[Connection]:
@@ -137,3 +158,34 @@ def get_current_session(principal: CurrentPrincipal) -> Session:
 def get_authenticated_user(principal: CurrentPrincipal) -> User:
     """FastAPI dependency: the authenticated user (401 if absent)."""
     return principal[0]
+
+
+def get_storage() -> StoragePort:
+    """FastAPI dependency: the process-wide storage adapter (overridable in tests)."""
+    return _storage
+
+
+Storage = Annotated[StoragePort, Depends(get_storage)]
+
+
+def get_create_source(
+    conn: DbConnection, storage: Storage, settings: AppSettings
+) -> CreateSource:
+    return CreateSource(
+        sources=SqlAlchemySourceRepository(conn),
+        storage=storage,
+        clock=_clock,
+        ids=uuid4,
+        max_bytes=settings.epub_max_bytes,
+    )
+
+
+def get_list_sources(conn: DbConnection) -> ListSources:
+    return ListSources(sources=SqlAlchemySourceRepository(conn))
+
+
+def get_get_source(conn: DbConnection) -> GetSource:
+    return GetSource(
+        sources=SqlAlchemySourceRepository(conn),
+        authorize=AuthorizeOwnership(),
+    )
