@@ -19,6 +19,7 @@ from app.domain.entities import (
     CorpusStructure,
     IngestionEvent,
     IngestionJob,
+    ParsedBook,
     PasswordCredential,
     Session,
     Source,
@@ -292,6 +293,41 @@ class FakeIngestionEnqueuer:
         self.calls.append((source_id, job_id))
         if self._error is not None:
             raise self._error
+
+
+class FakeEpubParser:
+    """``EpubParserPort`` double: returns a preset ``ParsedBook`` or raises.
+
+    Records the (bytes, filename) it was called with so ``BuildCorpus`` tests can
+    assert the storage bytes flow through to the parser; the ``error`` seam drives
+    the terminal-failure branch (a raise propagates unwrapped).
+    """
+
+    def __init__(
+        self, *, book: ParsedBook | None = None, error: Exception | None = None
+    ) -> None:
+        self._book = book
+        self._error = error
+        self.calls: list[tuple[bytes, str]] = []
+
+    def parse(self, source_bytes: bytes, *, filename: str) -> ParsedBook:
+        self.calls.append((source_bytes, filename))
+        if self._error is not None:
+            raise self._error
+        assert self._book is not None
+        return self._book
+
+
+class FakeMarkupConverter:
+    """``MarkupConverterPort`` double: a deterministic ``md:<html>`` rendering.
+
+    The prefix makes each block's derived text traceable to its HTML fragment, so
+    tests can assert the section Markdown is the join of the converter's per-block
+    output and that chunks are packed from those block texts (not re-parsed).
+    """
+
+    def to_markdown(self, html: str) -> str:
+        return f"md:{html}"
 
 
 class FakeCorpusRepository:
