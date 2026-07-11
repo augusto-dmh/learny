@@ -249,14 +249,18 @@ describe("SourcesPanel (T8)", () => {
         ?.textContent,
     ).toBe("Start ingestion");
 
-    // Active/terminal rows offer no start action. (The ready row carries its
-    // own "View structure" control (T13), so assert specifically that no row
-    // but the uploaded one offers "Start ingestion".)
-    for (const id of ["s-proc", "s-ready", "s-fail"]) {
+    // Processing/failed rows render no controls at all — keep the strict
+    // no-button invariant so any stray control regressions are caught.
+    for (const id of ["s-proc", "s-fail"]) {
       expect(
-        screen.getByTestId(`status-${id}`).closest("li")?.textContent,
-      ).not.toContain("Start ingestion");
+        screen.getByTestId(`status-${id}`).closest("li")?.querySelector("button"),
+      ).toBeNull();
     }
+    // The ready row legitimately carries its own "View structure" control
+    // (T13), so for it assert only that no start action is offered.
+    expect(
+      screen.getByTestId("status-s-ready").closest("li")?.textContent,
+    ).not.toContain("Start ingestion");
   });
 
   it("starts ingestion through the proxy and reflects processing on success", async () => {
