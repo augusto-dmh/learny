@@ -146,3 +146,48 @@ def sources_client(db_conn: Connection, monkeypatch: pytest.MonkeyPatch):  # noq
     app.dependency_overrides.clear()
     set_rate_limiter(previous_limiter)
     get_settings.cache_clear()
+
+
+@pytest.fixture
+def throttled_sources_client(  # noqa: ANN201
+    db_conn: Connection, monkeypatch: pytest.MonkeyPatch
+):
+    """Like ``sources_client`` but with a deliberately tight upload limiter.
+
+    Mirrors ``throttled_client`` in ``test_web_rate_limit_validation`` (auth
+    suite): 3 attempts per long window so the 4th ``POST /api/sources`` trips the
+    ``rate_limit_upload`` 429 branch deterministically (spec SRC-05).
+    """
+    from fastapi.testclient import TestClient
+
+    from app.core.config import get_settings
+    from app.infrastructure.web.dependencies import get_db_connection
+    from app.infrastructure.web.rate_limit import (
+        InMemoryFixedWindowRateLimiter,
+        get_rate_limiter,
+        set_rate_limiter,
+    )
+    from app.main import create_app
+
+    monkeypatch.setenv("LEARNY_SESSION_COOKIE_SECURE", "false")
+    monkeypatch.setenv("LEARNY_CSRF_TRUSTED_ORIGINS", TEST_ORIGIN)
+    monkeypatch.setenv("LEARNY_EPUB_MAX_BYTES", str(SOURCES_MAX_BYTES))
+    get_settings.cache_clear()
+
+    previous_limiter = get_rate_limiter()
+    # Allow 3 attempts per long window so the 4th trips deterministically. The
+    # limiter key is per-IP+route, so the auth register/csrf setup calls consume
+    # separate buckets and never eat into the upload budget.
+    set_rate_limiter(InMemoryFixedWindowRateLimiter(max_attempts=3, window_seconds=300))
+
+    app = create_app()
+
+    def _override() -> Iterator[Connection]:
+        yield db_conn
+
+    app.dependency_overrides[get_db_connection] = _override
+    with TestClient(app, headers={"Origin": TEST_ORIGIN}) as c:
+        yield c
+    app.dependency_overrides.clear()
+    set_rate_limiter(previous_limiter)
+    get_settings.cache_clear()
