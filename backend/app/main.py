@@ -15,6 +15,7 @@ from app.infrastructure.web.auth import router as auth_router
 from app.infrastructure.web.error_handlers import register_error_handlers
 from app.infrastructure.web.health import router as health_router
 from app.infrastructure.web.ingestion import router as ingestion_router
+from app.infrastructure.web.retrieval import router as retrieval_router
 from app.infrastructure.web.sources import router as sources_router
 
 
@@ -28,6 +29,7 @@ def create_app() -> FastAPI:
     app.include_router(auth_router)
     app.include_router(sources_router)
     app.include_router(ingestion_router)
+    app.include_router(retrieval_router)
     return app
 
 

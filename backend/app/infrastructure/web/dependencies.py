@@ -32,6 +32,7 @@ from app.application.identity import (
     RegisterUser,
 )
 from app.application.ingestion import ReadIngestion, RunIngestion, StartIngestion
+from app.application.retrieval import RetrieveEvidence
 from app.application.sources import CreateSource, GetSource, ListSources
 from app.core.config import Settings, get_settings
 from app.domain.entities import Session, User
@@ -47,6 +48,8 @@ from app.infrastructure.db.repositories import (
     SqlAlchemySourceRepository,
     SqlAlchemyUserRepository,
 )
+from app.infrastructure.db.retrieval import SqlAlchemyRetrievalRepository
+from app.infrastructure.embeddings import DeterministicEmbeddingAdapter
 from app.infrastructure.security.password_hasher import Argon2PasswordHasher
 from app.infrastructure.security.tokens import SecretsTokenGenerator
 from app.infrastructure.storage.s3 import S3StorageAdapter
@@ -176,9 +179,7 @@ def get_storage() -> StoragePort:
 Storage = Annotated[StoragePort, Depends(get_storage)]
 
 
-def get_create_source(
-    conn: DbConnection, storage: Storage, settings: AppSettings
-) -> CreateSource:
+def get_create_source(conn: DbConnection, storage: Storage, settings: AppSettings) -> CreateSource:
     return CreateSource(
         sources=SqlAlchemySourceRepository(conn),
         storage=storage,
@@ -216,9 +217,7 @@ def _default_ingestion_uow() -> AbstractContextManager[Connection]:
     return get_engine().begin()
 
 
-_ingestion_uow: Callable[[], AbstractContextManager[Connection]] = (
-    _default_ingestion_uow
-)
+_ingestion_uow: Callable[[], AbstractContextManager[Connection]] = _default_ingestion_uow
 
 
 def get_ingestion_uow() -> Callable[[], AbstractContextManager[Connection]]:
@@ -276,4 +275,26 @@ def get_read_source_structure(conn: DbConnection) -> ReadSourceStructure:
         sources=SqlAlchemySourceRepository(conn),
         corpus=SqlAlchemyCorpusRepository(conn),
         authorize=AuthorizeOwnership(),
+    )
+
+
+def get_retrieve_evidence(conn: DbConnection) -> RetrieveEvidence:
+    """Wire ``RetrieveEvidence`` on the request-scoped connection (RET-13/20).
+
+    Mirrors ``get_read_source_structure``: the source repo enforces ownership, the
+    hybrid retrieval repo and the deterministic embedding adapter drive the query,
+    and the per-arm limits / RRF ``k`` / HNSW ``ef_search`` / default ``top_k`` are
+    all sourced from ``LEARNY_``-prefixed settings (never hard-coded).
+    """
+    settings = get_settings()
+    return RetrieveEvidence(
+        sources=SqlAlchemySourceRepository(conn),
+        retrieval=SqlAlchemyRetrievalRepository(conn),
+        embeddings=DeterministicEmbeddingAdapter(),
+        authorize=AuthorizeOwnership(),
+        semantic_limit=settings.retrieval_semantic_limit,
+        lexical_limit=settings.retrieval_lexical_limit,
+        rrf_k=settings.retrieval_rrf_k,
+        ef_search=settings.hnsw_ef_search,
+        default_top_k=settings.retrieval_top_k,
     )
