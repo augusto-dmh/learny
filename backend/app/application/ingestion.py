@@ -96,7 +96,9 @@ class StartIngestion:
         self._clock = clock
         self._ids = ids
 
-    def __call__(self, *, user: User, source_id: UUID) -> IngestionJob:
+    def __call__(
+        self, *, user: User, source_id: UUID
+    ) -> tuple[IngestionJob, list[IngestionEvent]]:
         _authorized_source(
             user=user,
             source_id=source_id,
@@ -123,21 +125,23 @@ class StartIngestion:
             )
         )
         self._sources.set_status(source_id, SOURCE_STATUS_PROCESSING, now)
-        self._append_event(job.id, IngestionEventType.QUEUED, None, now)
-        return job
+        # Return the ``queued`` event so the web handler builds its response without
+        # reaching into a persistence adapter (keeps storage access in this layer).
+        queued = self._append_event(job.id, IngestionEventType.QUEUED, None, now)
+        return job, [queued]
 
     def _append_event(
         self, job_id: UUID, event_type: str, message: str | None, now
-    ) -> None:  # noqa: ANN001 — ``now`` is the injected clock's datetime
-        self._events.append(
-            IngestionEvent(
-                id=self._ids(),
-                job_id=job_id,
-                type=event_type,
-                message=message,
-                created_at=now,
-            )
+    ) -> IngestionEvent:  # noqa: ANN001 — ``now`` is the injected clock's datetime
+        event = IngestionEvent(
+            id=self._ids(),
+            job_id=job_id,
+            type=event_type,
+            message=message,
+            created_at=now,
         )
+        self._events.append(event)
+        return event
 
 
 class RunIngestion:

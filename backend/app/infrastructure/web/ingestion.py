@@ -32,7 +32,6 @@ from app.application.errors import ActiveIngestionExists, EnqueueFailed
 from app.application.ingestion import ReadIngestion
 from app.domain.entities import IngestionEvent, IngestionJob, User
 from app.domain.ports import IngestionEnqueuer
-from app.infrastructure.db.repositories import SqlAlchemyIngestionEventRepository
 from app.infrastructure.web.csrf import enforce_csrf, enforce_origin
 from app.infrastructure.web.dependencies import (
     build_compensate,
@@ -118,12 +117,13 @@ def start_ingestion(
     the true-race loser whose INSERT hits the partial unique index (ING-03).
     """
     # UoW1: create the queued job, mark the source processing, append ``queued``.
+    # ``StartIngestion`` returns the job with its ``queued`` event so the response
+    # is composed without the handler touching a persistence adapter.
     with uow_factory() as conn:
         try:
-            job = build_start_ingestion(conn)(user=user, source_id=source_id)
+            job, events = build_start_ingestion(conn)(user=user, source_id=source_id)
         except IntegrityError as exc:
             raise ActiveIngestionExists("Ingestion is already in progress.") from exc
-        events = SqlAlchemyIngestionEventRepository(conn).list_for_job(job.id)
 
     # Enqueue only after the job is durably committed (AD-016), so no worker can
     # dequeue a row that does not yet exist.

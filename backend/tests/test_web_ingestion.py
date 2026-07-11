@@ -17,8 +17,10 @@ from __future__ import annotations
 from datetime import timedelta
 from uuid import UUID, uuid4
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import Connection, func, select
+from sqlalchemy.exc import IntegrityError
 
 from app.application.identity import AuthorizeOwnership
 from app.application.ingestion import RunIngestion, StartIngestion
@@ -143,6 +145,35 @@ def test_duplicate_active_start_returns_409_and_no_second_job(
     assert _job_count(db_conn, source_id) == 1  # no second job created
     # Only the first enqueue happened; the duplicate did not enqueue.
     assert len(ingestion_client.app.state.ingestion_enqueuer.calls) == 1
+
+
+def test_start_true_race_integrity_error_returns_409(
+    ingestion_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # ING-03 persistence-layer guard: two starts both pass the application
+    # pre-check and the loser's INSERT hits the partial unique index. The handler
+    # maps that ``IntegrityError`` to 409 (not a raw 500). Force the create to raise
+    # the way a true-race INSERT would, so the web-layer backstop is pinned by a
+    # committed test (the duplicate-active test above trips the pre-check first).
+    _register(ingestion_client, "race@example.com")
+    csrf = _csrf(ingestion_client)
+    source_id = _create_source(ingestion_client, csrf)
+
+    def _raising_start(_conn):  # noqa: ANN202 — mirrors build_start_ingestion(conn)
+        def _call(**_kwargs):  # noqa: ANN202 — mirrors StartIngestion.__call__
+            raise IntegrityError("INSERT", {}, Exception("duplicate active job"))
+
+        return _call
+
+    monkeypatch.setattr(
+        "app.infrastructure.web.ingestion.build_start_ingestion", _raising_start
+    )
+
+    resp = _start(ingestion_client, source_id, csrf=csrf)
+
+    assert resp.status_code == 409, resp.text
+    # The compensation/enqueue paths were never reached — nothing was enqueued.
+    assert ingestion_client.app.state.ingestion_enqueuer.calls == []
 
 
 def test_start_non_owner_source_returns_404(
@@ -298,7 +329,7 @@ def _drive_to_succeeded(conn: Connection, user, source_id: str) -> None:
     start = StartIngestion(
         **common, authorize=AuthorizeOwnership(), clock=clock, ids=uuid4
     )
-    job = start(user=user, source_id=UUID(source_id))
+    job, _ = start(user=user, source_id=UUID(source_id))
     run = RunIngestion(**common, step=NoOpIngestionStep(), clock=clock, ids=uuid4)
     clock.advance(timedelta(seconds=1))
     run.begin_run(job.id)
