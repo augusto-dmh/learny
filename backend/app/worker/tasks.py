@@ -38,6 +38,12 @@ _clock = SystemClock()
 _RETRY_BASE_COUNTDOWN = 10
 _RETRY_MAX_COUNTDOWN = 600
 
+# Durable failure text is a fixed, non-secret summary (ING-08 "redacted, non-secret").
+# A step exception — in Phase 5 potentially carrying object keys, storage URLs, or
+# filesystem paths — is written only to the server log (``exc_info``), never to the
+# owner-readable ``last_error`` / event ``message``.
+_STEP_FAILURE_ERROR = "Ingestion processing failed."
+
 
 def _retry_countdown(retries: int) -> int:
     """Return the backoff (seconds) before the next retry given prior ``retries``."""
@@ -84,22 +90,25 @@ def run_ingestion(self, source_id: str, job_id: str) -> None:  # noqa: ANN001 �
         with get_engine().connect() as conn:
             _build_run_ingestion(conn).run_step(job)
     except RetryableIngestionError as exc:
-        error = str(exc)
+        # Persist only the fixed, non-secret summary (ING-08); the raw exception
+        # goes to the server log via ``exc_info``, never the durable field.
         if self.request.retries < self.max_retries:
             with get_engine().begin() as conn:
-                _build_run_ingestion(conn).record_retry(jid, error)
-            logger.info("ingestion.run: retrying", extra=log)
+                _build_run_ingestion(conn).record_retry(jid, _STEP_FAILURE_ERROR)
+            logger.info("ingestion.run: retrying", extra=log, exc_info=exc)
             raise self.retry(
                 exc=exc, countdown=_retry_countdown(self.request.retries)
             ) from exc
         with get_engine().begin() as conn:
-            _build_run_ingestion(conn).fail(jid, error)
-        logger.info("ingestion.run: failed (retries exhausted)", extra=log)
+            _build_run_ingestion(conn).fail(jid, _STEP_FAILURE_ERROR)
+        logger.info(
+            "ingestion.run: failed (retries exhausted)", extra=log, exc_info=exc
+        )
         return
     except Exception as exc:  # noqa: BLE001 — any non-retryable error is terminal
         with get_engine().begin() as conn:
-            _build_run_ingestion(conn).fail(jid, str(exc))
-        logger.info("ingestion.run: failed", extra=log)
+            _build_run_ingestion(conn).fail(jid, _STEP_FAILURE_ERROR)
+        logger.info("ingestion.run: failed", extra=log, exc_info=exc)
         return
 
     # 3. Terminal success: succeeded + source ready + ``succeeded`` event.

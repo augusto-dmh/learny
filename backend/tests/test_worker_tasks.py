@@ -144,10 +144,17 @@ def _read_source_status(engine: Engine, source_id: UUID) -> str:
         return SqlAlchemySourceRepository(conn).get_by_id(source_id).status
 
 
-def _read_event_types(engine: Engine, job_id: UUID) -> list[str]:
+def _read_events(engine: Engine, job_id: UUID) -> list[IngestionEvent]:
     with engine.connect() as conn:
-        events = SqlAlchemyIngestionEventRepository(conn).list_for_job(job_id)
-    return [e.type for e in events]
+        return SqlAlchemyIngestionEventRepository(conn).list_for_job(job_id)
+
+
+def _read_event_types(engine: Engine, job_id: UUID) -> list[str]:
+    return [e.type for e in _read_events(engine, job_id)]
+
+
+# Fixed, non-secret durable failure text the task persists (ING-08 redaction).
+_REDACTED = "Ingestion processing failed."
 
 
 def test_run_ingestion_success_drives_job_to_succeeded(seed, db_engine: Engine) -> None:
@@ -169,16 +176,25 @@ def test_run_ingestion_success_drives_job_to_succeeded(seed, db_engine: Engine) 
 
 def test_run_ingestion_plain_error_is_terminal_failure(seed, db_engine: Engine) -> None:
     ctx = seed(IngestionStatus.QUEUED)
+    # A secret-bearing raw error must never reach the owner-readable durable field
+    # (ING-08 "redacted, non-secret"): it is stored as a fixed summary, logged raw.
+    secret = "s3://learny-sources/u1/private-key.epub could not be read"
 
     with patch(
         "app.worker.tasks.NoOpIngestionStep",
-        lambda: RaisingStep(RuntimeError("corrupt epub")),
+        lambda: RaisingStep(RuntimeError(secret)),
     ):
         _run(FakeSelf(), str(ctx.source.id), str(ctx.job.id))
 
     job = _read_job(db_engine, ctx.job.id)
     assert job.status == IngestionStatus.FAILED
-    assert job.last_error == "corrupt epub"
+    # Redacted: fixed summary persisted, raw secret absent from last_error.
+    assert job.last_error == _REDACTED
+    assert "s3://" not in (job.last_error or "")
+    # The failed event message is user-readable via GET too — redact it as well.
+    failed_event = _read_events(db_engine, ctx.job.id)[-1]
+    assert failed_event.type == IngestionEventType.FAILED
+    assert failed_event.message == _REDACTED
     assert _read_source_status(db_engine, ctx.source.id) == "failed"
     assert _read_event_types(db_engine, ctx.job.id) == [
         IngestionEventType.QUEUED,
@@ -195,7 +211,9 @@ def test_run_ingestion_retryable_records_retry_and_retries(
 
     with patch(
         "app.worker.tasks.NoOpIngestionStep",
-        lambda: RaisingStep(RetryableIngestionError("provider timeout")),
+        lambda: RaisingStep(
+            RetryableIngestionError("timeout calling https://internal/api?token=abc")
+        ),
     ):
         with pytest.raises(FakeSelf.RetrySignal):
             _run(fake_self, str(ctx.source.id), str(ctx.job.id))
@@ -203,11 +221,14 @@ def test_run_ingestion_retryable_records_retry_and_retries(
     # self.retry was invoked once with a positive backoff (ING-07 "with backoff").
     assert len(fake_self.retry_calls) == 1
     assert fake_self.retry_calls[0]["countdown"] > 0
-    # record_retry persisted: attempts climbed, last_error set, job stays active.
+    # record_retry persisted: attempts climbed, job stays active, error redacted.
     job = _read_job(db_engine, ctx.job.id)
     assert job.status == IngestionStatus.RUNNING
     assert job.attempts == 1
-    assert job.last_error == "provider timeout"
+    assert job.last_error == _REDACTED
+    assert "token=" not in (job.last_error or "")
+    # The retrying event message is redacted too.
+    assert _read_events(db_engine, ctx.job.id)[-1].message == _REDACTED
     assert _read_event_types(db_engine, ctx.job.id) == [
         IngestionEventType.QUEUED,
         IngestionEventType.STARTED,
@@ -228,7 +249,7 @@ def test_run_ingestion_retryable_exhausted_fails(seed, db_engine: Engine) -> Non
     assert fake_self.retry_calls == []  # no further retry once exhausted
     job = _read_job(db_engine, ctx.job.id)
     assert job.status == IngestionStatus.FAILED
-    assert job.last_error == "still unreachable"
+    assert job.last_error == _REDACTED
     assert _read_source_status(db_engine, ctx.source.id) == "failed"
     assert IngestionEventType.FAILED in _read_event_types(db_engine, ctx.job.id)
 
