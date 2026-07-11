@@ -21,6 +21,7 @@ Learny uses skills as project-local playbooks for repeatable research, design, i
 - `skill-architect` creates future repository-specific skills after discovery and architecture.
 - `pr-review` runs a multi-agent pull-request review (security, requirements, tests, architecture, regression, performance) and posts inline + summary comments via `gh`. Use only when explicitly asked to review a PR.
 - `learny-finalize` applies Learny's branch, commit, verification, and PR conventions.
+- `learny-ship-cycle` orchestrates one full roadmap PR end-to-end: next cycle → `tlc-spec-driven` (auto-selecting recommended options) → `learny-finalize` → fresh-context `pr-review` → finding triage (persisted to `review-triage.md`) → fixes → comment cleanup → user-gated merge.
 
 ## Workflow Shape
 

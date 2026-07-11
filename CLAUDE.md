@@ -44,6 +44,7 @@ Learny is a learning application that starts as robust book teaching and may exp
 - Use `tlc-spec-driven` for feature planning or implementation cycles when work is large enough to need specs/tasks.
 - Use ADR/RFC/TDD skills for architecture and design artifacts.
 - Use `learny-finalize` for commit metadata, PR body generation, and publishing conventions.
+- Use `learny-ship-cycle` to run one roadmap cycle end-to-end (plan → build → PR → review → triage → fix → cleanup → gated merge).
 - Keep PRs small and reviewable; load `learny-finalize` for the exact publishing convention.
 
 ## Progressive Documentation Loading
