@@ -6,7 +6,7 @@ Learny is a learning application that starts as robust book teaching and may exp
 
 - The repository currently contains research, decision, and design artifacts only. There is no runtime application scaffold yet.
 - The initial stack is accepted in ADR-004: Python/FastAPI backend, React/Next.js frontend, PostgreSQL primary storage, and pgvector as the initial vector storage/search capability.
-- Do not assume specific parsing library, auth library/session store, concrete object-storage provider, concrete provider/model defaults, or dedicated vector database choices until follow-up ADRs or technical designs accept them.
+- Do not assume auth library/session store, concrete object-storage provider, concrete provider/model defaults, or dedicated vector database choices until follow-up ADRs or technical designs accept them.
 
 ## Durable Decisions
 
@@ -24,6 +24,7 @@ Learny is a learning application that starts as robust book teaching and may exp
 - Browser authentication should be backend-owned by FastAPI and use secure HTTP-only cookies, not browser-accessible bearer token storage.
 - Browser-facing API calls should go through a thin same-origin Next.js route/proxy boundary to FastAPI. FastAPI remains authoritative for auth, authorization, product logic, and user-owned resources.
 - Initial ingestion should support EPUB first. PDF and other formats are deferred until the EPUB-based corpus and tutor path are working.
+- EPUB parsing uses ebooklib behind a Learny-owned ingestion port (accepted in the EPUB corpus pipeline design); Docling remains a candidate second adapter when PDF support arrives.
 - Uploaded source files should be stored in S3-compatible object storage from the start; PostgreSQL stores metadata, ownership, ingestion status, corpus links, and object keys.
 - Canonical document processing should preserve headings, sections, page/location anchors, metadata, and citations instead of treating the book as flat chunks only.
 - Citations, evaluation, and traceability are core requirements, not late polish.
