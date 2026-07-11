@@ -309,3 +309,35 @@ class CorpusStructure:
     authors: tuple[str, ...]
     language: str | None
     sections: tuple[StructureSection, ...]
+
+
+@dataclass(frozen=True)
+class ChunkToEmbed:
+    """The embed step's read DTO: one chunk's id and text to embed (design §4).
+
+    Carried from the embedding-index repository to the ``EmbedCorpus`` service so
+    the embedding path depends on no persistence types — only the chunk's stable
+    ``id`` (for the write-back) and its ``text`` (the embedding input).
+    """
+
+    id: UUID
+    text: str
+
+
+@dataclass(frozen=True)
+class Evidence:
+    """A citation-ready retrieval result projecting a ``corpus_chunks`` row (ADR-0003).
+
+    The fused hybrid query returns these ordered by descending RRF ``score``. Each
+    carries the stable citation anchors (``chunk_id``, ``section_path``, ``anchor``,
+    ``page_span``) so Q&A and teaching cite exact passages. ``page_span`` is ``None``
+    for EPUB (A-9); ``snippet`` is the chunk ``text`` (no ``ts_headline`` this cycle).
+    """
+
+    chunk_id: UUID
+    source_id: UUID
+    section_path: tuple[str, ...]
+    anchor: str
+    page_span: dict | None
+    snippet: str
+    score: float
