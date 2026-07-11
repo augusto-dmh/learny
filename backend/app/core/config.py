@@ -75,6 +75,10 @@ class Settings(BaseSettings):
     # Upload limits (AD-009) — cap the EPUB bytes buffered through the request.
     epub_max_bytes: int = 52428800  # 50 MiB
 
+    # Corpus chunking (A-5) — max characters per retrieval chunk before packing
+    # starts a new one; oversized single blocks split at sentence boundaries.
+    chunk_max_chars: int = 2000
+
 
 @lru_cache
 def get_settings() -> Settings:
