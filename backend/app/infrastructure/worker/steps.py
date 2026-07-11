@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from app.application.corpus import BuildCorpus
 from app.application.errors import StorageUnavailable
+from app.application.retrieval import EmbedCorpus
 from app.domain.entities import IngestionJob, Source
 
 
@@ -51,5 +52,29 @@ class EpubCorpusIngestionStep:
     def run(self, *, source: Source, job: IngestionJob) -> None:
         try:
             self._build(source=source, job=job)
+        except StorageUnavailable as exc:
+            raise RetryableIngestionError from exc
+
+
+class EmbedCorpusIngestionStep:
+    """Run the corpus-embedding step under the task's retry contract (RET-10/12).
+
+    Delegates to :class:`~app.application.retrieval.EmbedCorpus`, which runs inside
+    the embed step's own transaction (opened after the corpus-build commit). A
+    transient provider/storage fault surfaces as the Learny-owned
+    ``StorageUnavailable`` (ADR-007/009 — no vendor exception types cross the port)
+    and maps to ``RetryableIngestionError`` so the existing backoff retry applies.
+    Everything else propagates untouched and is terminal; the surrounding embed
+    transaction then rolls back with no partially-embedded chunks (RET-12). The
+    default deterministic adapter raises nothing transient — the mapping is the
+    contract seam a future cloud embedding adapter reuses (A-5).
+    """
+
+    def __init__(self, embed: EmbedCorpus) -> None:
+        self._embed = embed
+
+    def run(self, *, source: Source, job: IngestionJob) -> None:
+        try:
+            self._embed(source=source, job=job)
         except StorageUnavailable as exc:
             raise RetryableIngestionError from exc

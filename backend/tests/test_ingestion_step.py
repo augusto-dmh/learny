@@ -19,6 +19,7 @@ from app.application.errors import InvalidEpubError, StorageUnavailable
 from app.domain.entities import IngestionJob, Source
 from app.infrastructure.storage.s3 import ObjectNotFound
 from app.infrastructure.worker.steps import (
+    EmbedCorpusIngestionStep,
     EpubCorpusIngestionStep,
     RetryableIngestionError,
 )
@@ -102,3 +103,37 @@ def test_invalid_epub_error_propagates_terminal() -> None:
 def test_object_not_found_propagates_terminal() -> None:
     with pytest.raises(ObjectNotFound):
         _run(_RaisingBuild(ObjectNotFound("sources/a-book.epub")))
+
+
+# --- EmbedCorpusIngestionStep classification (RET-10/12) ------------------------
+#
+# The embed step binds ``EmbedCorpus`` to the same retry contract: a transient
+# provider/storage fault (the Learny-owned ``StorageUnavailable``) becomes
+# ``RetryableIngestionError`` so the backoff retry applies; any other raise
+# propagates untouched and is terminal (the embed transaction then rolls back).
+
+
+def _run_embed(embed) -> None:  # noqa: ANN001
+    source = _source()
+    EmbedCorpusIngestionStep(embed).run(source=source, job=_job(source.id))
+
+
+def test_embed_run_delegates_to_embed_on_success() -> None:
+    embed = _RecordingBuild()
+    source = _source()
+    job = _job(source.id)
+
+    EmbedCorpusIngestionStep(embed).run(source=source, job=job)
+
+    assert embed.calls == [(source, job)]
+
+
+def test_embed_transient_storage_unavailable_becomes_retryable() -> None:
+    with pytest.raises(RetryableIngestionError):
+        _run_embed(_RaisingBuild(StorageUnavailable("embedding provider unavailable")))
+
+
+def test_embed_plain_error_propagates_terminal() -> None:
+    # A non-transient fault is terminal — it propagates unchanged (no wrapping).
+    with pytest.raises(RuntimeError):
+        _run_embed(_RaisingBuild(RuntimeError("boom")))
