@@ -14,12 +14,16 @@ from __future__ import annotations
 from collections.abc import Callable
 from uuid import UUID
 
-from app.domain.entities import IngestionEvent, IngestionJob, Source
+from app.application.identity import AuthorizeOwnership
+from app.application.ingestion import authorized_source
+from app.domain.entities import Evidence, IngestionEvent, IngestionJob, Source, User
 from app.domain.ports import (
     Clock,
     EmbeddingIndexRepository,
     EmbeddingPort,
     IngestionEventRepository,
+    RetrievalPort,
+    SourceRepository,
 )
 
 # Progress-log event appended once a source's chunks are embedded; its message
@@ -81,4 +85,68 @@ class EmbedCorpus:
                 message=f"chunks={count}",
                 created_at=self._clock.now(),
             )
+        )
+
+
+class RetrieveEvidence:
+    """Return owner-scoped, citation-ready evidence for a source (RET-13/20).
+
+    Ownership is enforced first via ``authorized_source`` (reused from the
+    ingestion services): a missing source and a non-owner collapse to
+    ``SourceNotFound`` so a source's existence is never disclosed, exactly like
+    ``ReadSourceStructure``. It then embeds the (already-validated) query through
+    the :class:`~app.domain.ports.EmbeddingPort` and runs the hybrid
+    :class:`~app.domain.ports.RetrievalPort` with the settings-sourced per-arm
+    limits, RRF ``k``, and HNSW ``ef_search``, returning the fused
+    :class:`~app.domain.entities.Evidence` list (possibly empty).
+
+    Query-string validation is not done here — the web layer owns 422 for an
+    empty query and out-of-range ``top_k``; this service assumes a validated
+    query. When ``top_k`` is omitted it falls back to ``default_top_k``
+    (``LEARNY_RETRIEVAL_TOP_K``). Framework-free (no SQLAlchemy/FastAPI/SDK type
+    crosses this boundary, ADR-0007/0009).
+    """
+
+    def __init__(
+        self,
+        *,
+        sources: SourceRepository,
+        retrieval: RetrievalPort,
+        embeddings: EmbeddingPort,
+        authorize: AuthorizeOwnership,
+        semantic_limit: int,
+        lexical_limit: int,
+        rrf_k: int,
+        ef_search: int,
+        default_top_k: int,
+    ) -> None:
+        self._sources = sources
+        self._retrieval = retrieval
+        self._embeddings = embeddings
+        self._authorize = authorize
+        self._semantic_limit = semantic_limit
+        self._lexical_limit = lexical_limit
+        self._rrf_k = rrf_k
+        self._ef_search = ef_search
+        self._default_top_k = default_top_k
+
+    def __call__(
+        self, *, user: User, source_id: UUID, query: str, top_k: int | None = None
+    ) -> list[Evidence]:
+        authorized_source(
+            user=user,
+            source_id=source_id,
+            sources=self._sources,
+            authorize=self._authorize,
+        )
+        query_vec = self._embeddings.embed_query(query)
+        return self._retrieval.search(
+            source_id=source_id,
+            query_text=query,
+            query_vec=query_vec,
+            top_k=top_k if top_k is not None else self._default_top_k,
+            semantic_limit=self._semantic_limit,
+            lexical_limit=self._lexical_limit,
+            rrf_k=self._rrf_k,
+            ef_search=self._ef_search,
         )

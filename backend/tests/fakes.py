@@ -18,6 +18,7 @@ from app.domain.entities import (
     ChunkToEmbed,
     CorpusSectionRecord,
     CorpusStructure,
+    Evidence,
     IngestionEvent,
     IngestionJob,
     ParsedBook,
@@ -428,3 +429,43 @@ class FakeEmbeddingIndexRepository:
         self.set_calls.append(recorded)
         for chunk_id, vector in recorded:
             self.persisted[chunk_id] = vector
+
+
+class FakeRetrievalPort:
+    """``RetrievalPort`` double: records each ``search`` call's kwargs, returns preset.
+
+    Returns the exact preset ``results`` list object (not a copy) so a test can
+    assert the service passes the port's return through unchanged, and records the
+    full keyword arguments so tests assert the forwarded query vector and the
+    settings-sourced limits/k/ef by value, not just that ``search`` was called.
+    """
+
+    def __init__(self, results: list[Evidence] | None = None) -> None:
+        self.results: list[Evidence] = results if results is not None else []
+        self.calls: list[dict[str, object]] = []
+
+    def search(
+        self,
+        *,
+        source_id: UUID,
+        query_text: str,
+        query_vec: list[float],
+        top_k: int,
+        semantic_limit: int,
+        lexical_limit: int,
+        rrf_k: int,
+        ef_search: int,
+    ) -> list[Evidence]:
+        self.calls.append(
+            {
+                "source_id": source_id,
+                "query_text": query_text,
+                "query_vec": query_vec,
+                "top_k": top_k,
+                "semantic_limit": semantic_limit,
+                "lexical_limit": lexical_limit,
+                "rrf_k": rrf_k,
+                "ef_search": ef_search,
+            }
+        )
+        return self.results
