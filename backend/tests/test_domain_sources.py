@@ -64,6 +64,9 @@ def test_source_repository_is_runtime_checkable_protocol() -> None:
         def get_by_id(self, source_id):  # noqa: ANN001, ANN201
             return None
 
+        def set_status(self, source_id, status, updated_at):  # noqa: ANN001, ANN201
+            return None
+
     class MissingMethodRepo:
         def add(self, source):  # noqa: ANN001, ANN201
             return source
