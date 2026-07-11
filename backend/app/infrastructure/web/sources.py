@@ -14,6 +14,7 @@ Contract (also consumed by the Next.js proxy in Phase 4):
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Annotated
 from uuid import UUID
@@ -21,9 +22,10 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, File, Form, UploadFile, status
 from pydantic import BaseModel
 
+from app.application.corpus import ReadSourceStructure
 from app.application.errors import StorageUnavailable
 from app.application.sources import CreateSource, GetSource, ListSources
-from app.domain.entities import Source, User
+from app.domain.entities import CorpusStructure, Source, StructureSection, User
 from app.infrastructure.web.csrf import enforce_csrf, enforce_origin
 from app.infrastructure.web.dependencies import (
     AppSettings,
@@ -31,6 +33,7 @@ from app.infrastructure.web.dependencies import (
     get_create_source,
     get_get_source,
     get_list_sources,
+    get_read_source_structure,
 )
 from app.infrastructure.web.rate_limit import rate_limit_upload
 
@@ -125,3 +128,76 @@ def get_source(
 ) -> SourceSummary:
     """Return one owned source (200); 404 if missing or owned by another user."""
     return SourceSummary.from_entity(service(user=user, source_id=source_id))
+
+
+class StructureSectionView(BaseModel):
+    """One node in the nested section tree (CORP-11).
+
+    ``children`` holds the sections nested beneath this one per the TOC hierarchy;
+    the tree is built in this web layer from the flat depth-ordered read model, so
+    the domain and repository stay flat (design §Tech Decisions).
+    """
+
+    title: str
+    depth: int
+    section_path: list[str]
+    anchor: str
+    children: list[StructureSectionView]
+
+
+class BookStructureView(BaseModel):
+    """Public view of a source's parsed book structure (CORP-11).
+
+    Book metadata plus the nested section tree. ``title``/``language`` are null and
+    ``authors`` empty when the OPF omitted them (CORP-01).
+    """
+
+    title: str | None
+    authors: list[str]
+    language: str | None
+    sections: list[StructureSectionView]
+
+    @classmethod
+    def from_structure(cls, structure: CorpusStructure) -> BookStructureView:
+        return cls(
+            title=structure.title,
+            authors=list(structure.authors),
+            language=structure.language,
+            sections=_nest_sections(structure.sections),
+        )
+
+
+def _nest_sections(sections: Sequence[StructureSection]) -> list[StructureSectionView]:
+    """Fold the flat, depth/position-ordered sections into a TOC tree.
+
+    Each section nests under the most recent preceding section with a smaller
+    depth (its parent); sections with no such ancestor are roots.
+    """
+    roots: list[StructureSectionView] = []
+    stack: list[StructureSectionView] = []
+    for section in sections:
+        node = StructureSectionView(
+            title=section.title,
+            depth=section.depth,
+            section_path=list(section.section_path),
+            anchor=section.anchor,
+            children=[],
+        )
+        while stack and stack[-1].depth >= section.depth:
+            stack.pop()
+        if stack:
+            stack[-1].children.append(node)
+        else:
+            roots.append(node)
+        stack.append(node)
+    return roots
+
+
+@router.get("/{source_id}/structure")
+def get_source_structure(
+    source_id: UUID,
+    user: Annotated[User, Depends(get_authenticated_user)],
+    service: Annotated[ReadSourceStructure, Depends(get_read_source_structure)],
+) -> BookStructureView:
+    """Return the owner's parsed book structure (200); 404 missing/non-owner/no-corpus."""
+    return BookStructureView.from_structure(service(user=user, source_id=source_id))
