@@ -16,9 +16,8 @@ application error module depending on the worker layer.
 
 from __future__ import annotations
 
-from botocore.exceptions import BotoCoreError, ClientError
-
 from app.application.corpus import BuildCorpus
+from app.application.errors import StorageUnavailable
 from app.domain.entities import IngestionJob, Source
 
 
@@ -37,13 +36,13 @@ class EpubCorpusIngestionStep:
     """Run the EPUB corpus build under the task's retry contract (CORP-06/07/08).
 
     Delegates to :class:`~app.application.corpus.BuildCorpus`, which runs inside the
-    task's single transaction. Transient object-storage faults surface from the S3
-    adapter as ``ClientError``/``BotoCoreError`` and map to
-    ``RetryableIngestionError`` so the existing backoff retry applies (CORP-07).
-    Everything else — ``ObjectNotFound`` (missing object), ``InvalidEpubError``
-    (unparseable EPUB), any other raise — propagates untouched and is terminal
-    (CORP-06); the surrounding transaction then rolls back with no partial corpus
-    (CORP-08).
+    task's single transaction. Transient object-storage faults surface from the
+    storage adapter as the Learny-owned ``StorageUnavailable`` (ADR-007/009 — no
+    vendor exception types cross the port) and map to ``RetryableIngestionError``
+    so the existing backoff retry applies (CORP-07). Everything else —
+    ``ObjectNotFound`` (missing object), ``InvalidEpubError`` (unparseable EPUB),
+    any other raise — propagates untouched and is terminal (CORP-06); the
+    surrounding transaction then rolls back with no partial corpus (CORP-08).
     """
 
     def __init__(self, build: BuildCorpus) -> None:
@@ -52,5 +51,5 @@ class EpubCorpusIngestionStep:
     def run(self, *, source: Source, job: IngestionJob) -> None:
         try:
             self._build(source=source, job=job)
-        except (ClientError, BotoCoreError) as exc:
+        except StorageUnavailable as exc:
             raise RetryableIngestionError from exc

@@ -1,10 +1,11 @@
 """T9 gate (unit) — EpubCorpusIngestionStep error classification (CORP-06/07).
 
-The step binds ``BuildCorpus`` to the task's retry contract: transient S3 faults
-(``ClientError``/``BotoCoreError``) become ``RetryableIngestionError`` so the
-backoff retry applies (CORP-07); ``ObjectNotFound``, ``InvalidEpubError``, and any
-other raise propagate untouched and are terminal (CORP-06). A clean build simply
-delegates. Driven with a stub ``build`` so classification is asserted in isolation.
+The step binds ``BuildCorpus`` to the task's retry contract: transient storage
+faults (the Learny-owned ``StorageUnavailable``) become ``RetryableIngestionError``
+so the backoff retry applies (CORP-07); ``ObjectNotFound``, ``InvalidEpubError``,
+and any other raise propagate untouched and are terminal (CORP-06). A clean build
+simply delegates. Driven with a stub ``build`` so classification is asserted in
+isolation.
 """
 
 from __future__ import annotations
@@ -13,9 +14,8 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
-from botocore.exceptions import BotoCoreError, ClientError
 
-from app.application.errors import InvalidEpubError
+from app.application.errors import InvalidEpubError, StorageUnavailable
 from app.domain.entities import IngestionJob, Source
 from app.infrastructure.storage.s3 import ObjectNotFound
 from app.infrastructure.worker.steps import (
@@ -89,15 +89,9 @@ def test_run_delegates_to_build_on_success() -> None:
     assert build.calls == [(source, job)]
 
 
-def test_transient_client_error_becomes_retryable() -> None:
-    error = ClientError({"Error": {"Code": "SlowDown", "Message": "slow"}}, "GetObject")
+def test_transient_storage_unavailable_becomes_retryable() -> None:
     with pytest.raises(RetryableIngestionError):
-        _run(_RaisingBuild(error))
-
-
-def test_transient_botocore_error_becomes_retryable() -> None:
-    with pytest.raises(RetryableIngestionError):
-        _run(_RaisingBuild(BotoCoreError()))
+        _run(_RaisingBuild(StorageUnavailable("sources/a-book.epub")))
 
 
 def test_invalid_epub_error_propagates_terminal() -> None:

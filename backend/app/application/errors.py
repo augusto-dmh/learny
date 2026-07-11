@@ -54,7 +54,13 @@ class SourceNotFound(Exception):
 
 
 class StorageUnavailable(Exception):
-    """Object storage could not be written; no source row was persisted (SRC-09)."""
+    """Object storage could not complete an operation for a transient reason.
+
+    Raised on the upload path when the file could not be written (SRC-09; no
+    source row is persisted) and by the storage adapter's read path for any
+    non-missing-object fault, so callers classify retries on a Learny-owned
+    signal instead of vendor exception types (ADR-007/009).
+    """
 
 
 class ActiveIngestionExists(Exception):

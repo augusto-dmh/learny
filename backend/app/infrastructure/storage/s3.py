@@ -3,16 +3,20 @@
 Points at MinIO locally and unchanged at AWS S3 / Cloudflare R2 (AD-011): the
 S3 API is the provider-neutral contract. boto3 client and ``ClientError`` objects
 are kept inside this module — the port only ever raises the Learny-owned
-:class:`ObjectNotFound`, so provider details never cross into domain/application
-(ADR-007/009). The bucket is created on first use so local boot needs no manual
-setup.
+:class:`ObjectNotFound` (missing object) or
+:class:`~app.application.errors.StorageUnavailable` (any other storage fault),
+so provider details never cross into domain/application (ADR-007/009) and
+callers classify retries without naming botocore. The bucket is created on
+first use so local boot needs no manual setup.
 """
 
 from __future__ import annotations
 
 import boto3
 from botocore.client import Config as BotoConfig
-from botocore.exceptions import ClientError
+from botocore.exceptions import BotoCoreError, ClientError
+
+from app.application.errors import StorageUnavailable
 
 # S3 error codes that mean "the object (or its bucket) is not there".
 _NOT_FOUND_CODES = frozenset({"NoSuchKey", "NoSuchBucket", "404"})
@@ -73,5 +77,7 @@ class S3StorageAdapter:
             code = exc.response.get("Error", {}).get("Code")
             if code in _NOT_FOUND_CODES:
                 raise ObjectNotFound(key) from exc
-            raise
+            raise StorageUnavailable(key) from exc
+        except BotoCoreError as exc:
+            raise StorageUnavailable(key) from exc
         return response["Body"].read()
