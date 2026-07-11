@@ -260,3 +260,41 @@ def test_archive_under_uncompressed_cap_parses() -> None:
     book = roomy.parse(fx.valid_book(), filename="book.epub")
 
     assert book.title == fx.EXPECTED_VALID_TITLE
+
+
+# --- descendant fragment anchors (A-1/A-4) -----------------------------------
+
+
+def test_descendant_fragment_id_switches_section_at_wrapper_block() -> None:
+    """A TOC fragment id on a descendant splits the section at the wrapper block.
+
+    Wrapped heading ids (e.g. ``<div><h3 id=...>``) are common in real EPUBs;
+    the switch must happen before the wrapper is assigned, so the wrapper and
+    everything after it belong to the fragment's section with the
+    ``href#fragment`` anchor intact.
+    """
+    book = _parse(fx.nested_fragment_book())
+
+    assert [_as_expected(s) for s in book.sections] == list(fx.EXPECTED_NESTED_SECTIONS)
+
+
+# --- EPUB2 / NCX table of contents (A-1) -------------------------------------
+
+
+def test_ncx_only_toc_yields_nested_section_paths() -> None:
+    """An EPUB2 book with only an NCX navMap still yields nested TOC paths.
+
+    ebooklib feeds ``book.toc`` from ``toc.ncx`` here — a different input shape
+    than the EPUB3 nav fixtures; section paths, depths, and anchors must come
+    out equivalent.
+    """
+    book = _parse(fx.ncx_book())
+
+    assert book.title == "The NCX Book"
+    assert [s.title for s in book.sections] == ["Part I", "Chapter 1"]
+    assert [s.depth for s in book.sections] == [0, 1]
+    assert [s.section_path for s in book.sections] == [
+        ("Part I",),
+        ("Part I", "Chapter 1"),
+    ]
+    assert [s.anchor for s in book.sections] == ["part1.xhtml", "chap1.xhtml"]
