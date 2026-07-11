@@ -19,7 +19,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import Connection, insert, select, update
+from sqlalchemy import Connection, bindparam, insert, select, update
 from sqlalchemy import delete as sa_delete
 
 from app.domain.entities import (
@@ -461,15 +461,22 @@ class SqlAlchemyEmbeddingIndexRepository:
     def set_embeddings(self, items: Sequence[tuple[UUID, list[float]]]) -> None:
         """Write each ``(chunk_id, vector)`` to ``corpus_chunks.embedding``.
 
-        Per-row ``update`` keyed on the chunk id; the ``VECTOR`` type serializes the
-        list on bind, so this write path needs no global vector registration.
+        One ``executemany`` ``update`` keyed on the chunk id, so a whole source is
+        written in a single round trip instead of one statement per chunk; the
+        ``VECTOR`` type serializes each list on bind, so this write path needs no
+        global vector registration.
         """
-        for chunk_id, vector in items:
-            self._conn.execute(
-                update(corpus_chunks)
-                .where(corpus_chunks.c.id == chunk_id)
-                .values(embedding=vector)
-            )
+        if not items:
+            return
+        stmt = (
+            update(corpus_chunks)
+            .where(corpus_chunks.c.id == bindparam("chunk_id"))
+            .values(embedding=bindparam("embedding"))
+        )
+        self._conn.execute(
+            stmt,
+            [{"chunk_id": chunk_id, "embedding": vector} for chunk_id, vector in items],
+        )
 
 
 def _to_user(row) -> User:  # noqa: ANN001 — Row is an internal SQLAlchemy type
