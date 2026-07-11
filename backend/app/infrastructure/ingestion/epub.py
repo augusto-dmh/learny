@@ -12,6 +12,7 @@ corrupt archive, an unresolvable spine idref — becomes a terminal
 
 from __future__ import annotations
 
+import zipfile
 from dataclasses import dataclass, replace
 from io import BytesIO
 
@@ -55,10 +56,28 @@ class _TocEntry:
     section_path: tuple[str, ...]
 
 
+# Default summed-uncompressed cap; production wiring injects the configured
+# ``epub_max_uncompressed_bytes`` setting (see ``app.worker.tasks._build_step``).
+_DEFAULT_MAX_UNCOMPRESSED_BYTES = 524288000  # 500 MiB
+
+
 class EbooklibEpubParser:
-    """``EpubParserPort`` backed by ebooklib + BeautifulSoup."""
+    """``EpubParserPort`` backed by ebooklib + BeautifulSoup.
+
+    ``max_uncompressed_bytes`` caps the archive's *declared* summed uncompressed
+    size before any inflation happens: the upload limit only bounds compressed
+    bytes, and ``read_epub`` eagerly inflates every manifest item into memory,
+    so an unchecked crafted archive could balloon a small upload into gigabytes
+    inside the worker. Violations are terminal ``InvalidEpubError`` (CORP-06).
+    """
+
+    def __init__(
+        self, *, max_uncompressed_bytes: int = _DEFAULT_MAX_UNCOMPRESSED_BYTES
+    ) -> None:
+        self._max_uncompressed_bytes = max_uncompressed_bytes
 
     def parse(self, source_bytes: bytes, *, filename: str) -> ParsedBook:
+        self._reject_oversized_archive(source_bytes, filename)
         try:
             book = epub.read_epub(BytesIO(source_bytes))
         except Exception as exc:  # noqa: BLE001 — any read failure is a bad EPUB
@@ -106,6 +125,20 @@ class EbooklibEpubParser:
             language=language,
             sections=tuple(sections),
         )
+
+
+    def _reject_oversized_archive(self, source_bytes: bytes, filename: str) -> None:
+        """Fail terminally when the archive declares more than the inflation cap."""
+        try:
+            with zipfile.ZipFile(BytesIO(source_bytes)) as archive:
+                declared = sum(info.file_size for info in archive.infolist())
+        except (zipfile.BadZipFile, zipfile.LargeZipFile) as exc:
+            raise InvalidEpubError(f"could not read EPUB {filename!r}") from exc
+        if declared > self._max_uncompressed_bytes:
+            raise InvalidEpubError(
+                f"EPUB {filename!r} declares {declared} uncompressed bytes, "
+                f"over the {self._max_uncompressed_bytes} byte cap"
+            )
 
 
 def _metadata_values(book: epub.EpubBook, name: str) -> list[str]:

@@ -235,3 +235,28 @@ def test_returns_only_library_free_domain_types() -> None:
         for block in section.blocks:
             assert isinstance(block, ParsedBlock)
             assert isinstance(block.html_fragment, str)
+
+
+# --- inflation cap (decompression-bomb guard) --------------------------------
+
+
+def test_archive_over_uncompressed_cap_raises_invalid_epub_error() -> None:
+    """An archive declaring more uncompressed bytes than the cap fails terminally.
+
+    The upload limit bounds only compressed bytes; the parser must refuse to
+    inflate an archive whose declared uncompressed total exceeds the configured
+    cap, before any item is read into memory (CORP-06 terminal path).
+    """
+    capped = EbooklibEpubParser(max_uncompressed_bytes=1024)
+
+    with pytest.raises(InvalidEpubError):
+        capped.parse(fx.valid_book(), filename="book.epub")
+
+
+def test_archive_under_uncompressed_cap_parses() -> None:
+    """The same book parses when its declared size fits the configured cap."""
+    roomy = EbooklibEpubParser(max_uncompressed_bytes=10 * 1024 * 1024)
+
+    book = roomy.parse(fx.valid_book(), filename="book.epub")
+
+    assert book.title == fx.EXPECTED_VALID_TITLE

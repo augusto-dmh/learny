@@ -83,7 +83,9 @@ def _build_step(conn: Connection) -> IngestionStep:
     return EpubCorpusIngestionStep(
         BuildCorpus(
             storage=_build_storage(),
-            parser=EbooklibEpubParser(),
+            parser=EbooklibEpubParser(
+                max_uncompressed_bytes=get_settings().epub_max_uncompressed_bytes
+            ),
             markup=Bs4MarkupConverter(),
             corpus=SqlAlchemyCorpusRepository(conn),
             events=SqlAlchemyIngestionEventRepository(conn),
