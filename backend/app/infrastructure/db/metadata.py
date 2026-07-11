@@ -13,6 +13,10 @@ Tables:
 - ``sources``          — id (uuid pk), user_id (fk, indexed), title, filename,
                           content_type, byte_size, checksum, object_key (unique),
                           status, created_at, updated_at
+- ``ingestion_jobs``   — id (uuid pk), source_id (fk, indexed), status, attempts,
+                          last_error, created_at, updated_at; partial unique index
+                          allows at most one active (queued/running) job per source
+- ``ingestion_events`` — id (uuid pk), job_id (fk, indexed), type, message, created_at
 
 The session cookie carries the raw opaque token; only its hash (``token_hash``)
 is persisted (design §4 / AD-006).
@@ -25,11 +29,14 @@ from sqlalchemy import (
     Column,
     DateTime,
     ForeignKey,
+    Index,
+    Integer,
     MetaData,
     String,
     Table,
     Text,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import CITEXT, JSONB, UUID
 
@@ -107,4 +114,50 @@ sources = Table(
     Column("status", Text, nullable=False, server_default="uploaded"),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+)
+
+ingestion_jobs = Table(
+    "ingestion_jobs",
+    metadata,
+    Column("id", UUID(as_uuid=True), primary_key=True),
+    Column(
+        "source_id",
+        UUID(as_uuid=True),
+        ForeignKey("sources.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    # Free-text lifecycle status: queued | running | succeeded | failed.
+    Column("status", Text, nullable=False),
+    Column("attempts", Integer, nullable=False, server_default="0"),
+    # Redacted, non-secret; set on retry/failure.
+    Column("last_error", Text, nullable=True),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    # Concurrency guard (ING-03): at most one active job per source. Partial so a
+    # terminal job never blocks a restart.
+    Index(
+        "uq_ingestion_jobs_active_source",
+        "source_id",
+        unique=True,
+        postgresql_where=text("status IN ('queued', 'running')"),
+    ),
+)
+
+ingestion_events = Table(
+    "ingestion_events",
+    metadata,
+    Column("id", UUID(as_uuid=True), primary_key=True),
+    Column(
+        "job_id",
+        UUID(as_uuid=True),
+        ForeignKey("ingestion_jobs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    # Progress-log entry type: queued | started | retrying | succeeded | failed.
+    Column("type", Text, nullable=False),
+    # Redacted summary (e.g. error text on retrying/failed); null for plain transitions.
+    Column("message", Text, nullable=True),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
 )

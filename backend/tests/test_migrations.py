@@ -13,7 +13,7 @@ import os
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import create_engine, inspect, text
 
 TEST_DB_URL = os.environ.get("LEARNY_TEST_DATABASE_URL")
 
@@ -25,10 +25,23 @@ def _alembic_config(db_url: str) -> Config:
 
 
 def test_migration_metadata_compiles() -> None:
-    """The shared metadata defines the identity + sources tables with constraints."""
-    from app.infrastructure.db.metadata import metadata, sessions, sources, users
+    """The shared metadata defines the identity + sources + ingestion tables."""
+    from app.infrastructure.db.metadata import (
+        ingestion_jobs,
+        metadata,
+        sessions,
+        sources,
+        users,
+    )
 
-    assert set(metadata.tables) == {"users", "user_credentials", "sessions", "sources"}
+    assert set(metadata.tables) == {
+        "users",
+        "user_credentials",
+        "sessions",
+        "sources",
+        "ingestion_jobs",
+        "ingestion_events",
+    }
     # Unique email + unique session token_hash are the security-critical constraints.
     user_uniques = {c.name for c in users.constraints if c.__class__.__name__ == "UniqueConstraint"}
     assert any("email" in name for name in user_uniques)
@@ -41,6 +54,10 @@ def test_migration_metadata_compiles() -> None:
         c.name for c in sources.constraints if c.__class__.__name__ == "UniqueConstraint"
     }
     assert any("object_key" in name for name in source_uniques)
+    # The active-source guard is a *partial* unique index on source_id (ING-03).
+    active_index = {ix.name: ix for ix in ingestion_jobs.indexes}["uq_ingestion_jobs_active_source"]
+    assert active_index.unique
+    assert [c.name for c in active_index.columns] == ["source_id"]
 
 
 @pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
@@ -94,5 +111,66 @@ def test_migration_0002_creates_sources_table(monkeypatch) -> None:
     engine = create_engine(TEST_DB_URL)
     try:
         assert "sources" not in set(inspect(engine).get_table_names())
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
+def test_migration_0003_creates_ingestion_tables(monkeypatch) -> None:
+    """0003 creates ingestion_jobs/ingestion_events with cascade FKs and indexes."""
+    monkeypatch.setenv("LEARNY_DATABASE_URL", TEST_DB_URL)
+    cfg = _alembic_config(TEST_DB_URL)
+
+    command.upgrade(cfg, "head")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        inspector = inspect(engine)
+        tables = set(inspector.get_table_names())
+        assert {"ingestion_jobs", "ingestion_events"} <= tables
+
+        job_fk = next(
+            fk
+            for fk in inspector.get_foreign_keys("ingestion_jobs")
+            if fk["constrained_columns"] == ["source_id"]
+        )
+        assert job_fk["referred_table"] == "sources"
+        assert job_fk["options"].get("ondelete") == "CASCADE"
+
+        event_fk = next(
+            fk
+            for fk in inspector.get_foreign_keys("ingestion_events")
+            if fk["constrained_columns"] == ["job_id"]
+        )
+        assert event_fk["referred_table"] == "ingestion_jobs"
+        assert event_fk["options"].get("ondelete") == "CASCADE"
+
+        job_index_columns = [ix["column_names"] for ix in inspector.get_indexes("ingestion_jobs")]
+        assert ["source_id"] in job_index_columns
+        event_index_columns = [
+            ix["column_names"] for ix in inspector.get_indexes("ingestion_events")
+        ]
+        assert ["job_id"] in event_index_columns
+
+        # The active-job guard must be a *partial* unique index (WHERE status IN
+        # (...)) — a plain unique on source_id would wrongly block restart (ING-05).
+        with engine.connect() as conn:
+            indexdef = conn.execute(
+                text(
+                    "SELECT indexdef FROM pg_indexes "
+                    "WHERE indexname = 'uq_ingestion_jobs_active_source'"
+                )
+            ).scalar_one()
+        assert "UNIQUE" in indexdef
+        assert "source_id" in indexdef
+        assert "queued" in indexdef and "running" in indexdef
+    finally:
+        engine.dispose()
+
+    command.downgrade(cfg, "base")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        remaining = set(inspect(engine).get_table_names())
+        assert "ingestion_jobs" not in remaining
+        assert "ingestion_events" not in remaining
     finally:
         engine.dispose()
