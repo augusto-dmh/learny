@@ -18,6 +18,7 @@ dependencies = [
     "python-multipart>=0.0.9",
     "ebooklib>=0.20",
     "beautifulsoup4>=4.15.0",
+    "pgvector>=0.3,<0.5",
 ]
 
 [project.optional-dependencies]

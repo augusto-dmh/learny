@@ -9,6 +9,7 @@ import/compile by ``test_migration_metadata_compiles``.
 from __future__ import annotations
 
 import os
+import uuid
 
 import pytest
 from alembic import command
@@ -281,3 +282,148 @@ def test_migration_0004_creates_corpus_tables(monkeypatch) -> None:
         assert "corpus_chunks" not in remaining
     finally:
         engine.dispose()
+
+
+def _seed_chunk(engine, *, text_body: str, section_title: str) -> uuid.UUID:
+    """Insert a minimal users→source→document→section→chunk chain; return the chunk id."""
+    user_id = uuid.uuid4()
+    source_id = uuid.uuid4()
+    document_id = uuid.uuid4()
+    section_id = uuid.uuid4()
+    chunk_id = uuid.uuid4()
+    with engine.begin() as conn:
+        conn.execute(
+            text("INSERT INTO users (id, email) VALUES (:id, :email)"),
+            {"id": user_id, "email": f"{user_id}@example.test"},
+        )
+        conn.execute(
+            text(
+                "INSERT INTO sources "
+                "(id, user_id, title, filename, content_type, byte_size, checksum, object_key) "
+                "VALUES (:id, :uid, 't', 'f.epub', 'application/epub+zip', 1, 'c', :key)"
+            ),
+            {"id": source_id, "uid": user_id, "key": f"sources/{source_id}.epub"},
+        )
+        conn.execute(
+            text("INSERT INTO corpus_documents (id, source_id) VALUES (:id, :sid)"),
+            {"id": document_id, "sid": source_id},
+        )
+        conn.execute(
+            text(
+                "INSERT INTO corpus_sections "
+                "(id, document_id, position, depth, title, section_path, anchor, markdown) "
+                "VALUES (:id, :did, 0, 0, :title, :path, 'a.xhtml', 'md')"
+            ),
+            {
+                "id": section_id,
+                "did": document_id,
+                "title": section_title,
+                "path": f'["{section_title}"]',
+            },
+        )
+        conn.execute(
+            text(
+                "INSERT INTO corpus_chunks "
+                "(id, section_id, chunk_index, text, section_path, anchor) "
+                "VALUES (:id, :sid, 0, :body, :path, 'a.xhtml')"
+            ),
+            {
+                "id": chunk_id,
+                "sid": section_id,
+                "body": text_body,
+                "path": f'["{section_title}"]',
+            },
+        )
+    return chunk_id
+
+
+@pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
+def test_migration_0005_upgrade_adds_retrieval_columns_indexes(monkeypatch) -> None:
+    """0005 up: the vector extension + a nullable embedding and a generated
+    search_vector column on corpus_chunks, backed by HNSW + GIN indexes; a seeded
+    chunk's search_vector is auto-populated from title ('A') and body ('D')
+    (RET-01, RET-02, RET-03)."""
+    monkeypatch.setenv("LEARNY_DATABASE_URL", TEST_DB_URL)
+    cfg = _alembic_config(TEST_DB_URL)
+
+    command.upgrade(cfg, "head")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        # RET-01: the vector extension exists after the migration.
+        with engine.connect() as conn:
+            ext = conn.execute(text("SELECT 1 FROM pg_extension WHERE extname = 'vector'")).scalar()
+        assert ext == 1
+
+        # RET-01: corpus_chunks gains nullable embedding + generated search_vector.
+        columns = {c["name"]: c for c in inspect(engine).get_columns("corpus_chunks")}
+        assert "embedding" in columns
+        assert columns["embedding"]["nullable"] is True
+        assert "search_vector" in columns
+
+        # RET-02: HNSW index on embedding (vector_cosine_ops, m=16, ef_construction=64)
+        # and GIN index on search_vector both exist.
+        with engine.connect() as conn:
+            hnsw_def = conn.execute(
+                text(
+                    "SELECT indexdef FROM pg_indexes "
+                    "WHERE indexname = 'ix_corpus_chunks_embedding_hnsw'"
+                )
+            ).scalar_one()
+            gin_def = conn.execute(
+                text(
+                    "SELECT indexdef FROM pg_indexes "
+                    "WHERE indexname = 'ix_corpus_chunks_search_vector'"
+                )
+            ).scalar_one()
+        assert "hnsw" in hnsw_def and "vector_cosine_ops" in hnsw_def
+        assert "m='16'" in hnsw_def.replace(" ", "") or "m=16" in hnsw_def.replace(" ", "")
+        assert "ef_construction" in hnsw_def
+        assert "gin" in gin_def.lower() and "search_vector" in gin_def
+
+        # RET-03: the generated search_vector is populated automatically (no app write).
+        chunk_id = _seed_chunk(engine, text_body="the quick brown fox", section_title="Intro")
+        with engine.connect() as conn:
+            sv = conn.execute(
+                text("SELECT search_vector::text FROM corpus_chunks WHERE id = :id"),
+                {"id": chunk_id},
+            ).scalar_one()
+        assert sv and sv.strip() != ""
+        assert "brown" in sv  # body lexeme present
+        assert "intro" in sv  # title lexeme present (weighted 'A')
+    finally:
+        engine.dispose()
+
+    command.downgrade(cfg, "base")
+
+
+@pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
+def test_migration_0005_downgrade_removes_retrieval_columns_indexes(monkeypatch) -> None:
+    """0005 down (one step to 0004): drops both indexes, both columns, and the vector
+    extension while leaving the Phase-5 corpus_chunks shape intact (RET-04)."""
+    monkeypatch.setenv("LEARNY_DATABASE_URL", TEST_DB_URL)
+    cfg = _alembic_config(TEST_DB_URL)
+
+    command.upgrade(cfg, "head")
+    command.downgrade(cfg, "0004_corpus_schema")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        assert "corpus_chunks" in set(inspect(engine).get_table_names())
+        columns = {c["name"] for c in inspect(engine).get_columns("corpus_chunks")}
+        assert "embedding" not in columns
+        assert "search_vector" not in columns
+        with engine.connect() as conn:
+            remaining_ix = conn.execute(
+                text(
+                    "SELECT indexname FROM pg_indexes WHERE indexname IN "
+                    "('ix_corpus_chunks_embedding_hnsw', 'ix_corpus_chunks_search_vector')"
+                )
+            ).fetchall()
+            ext = conn.execute(text("SELECT 1 FROM pg_extension WHERE extname = 'vector'")).scalar()
+        assert remaining_ix == []
+        assert ext is None  # the vector extension is dropped on downgrade (AC4)
+    finally:
+        engine.dispose()
+
+    command.downgrade(cfg, "base")
+
+    command.downgrade(cfg, "base")
