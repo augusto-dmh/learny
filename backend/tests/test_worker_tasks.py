@@ -186,6 +186,20 @@ def _count_for_source(engine: Engine, table, source_id: UUID) -> int:  # noqa: A
         return conn.execute(stmt).scalar_one()
 
 
+def _count_embedded(engine: Engine, source_id: UUID) -> int:
+    """Count the source's chunks whose ``embedding`` is non-NULL (via FK joins)."""
+    stmt = (
+        select(func.count())
+        .select_from(corpus_chunks)
+        .join(corpus_sections, corpus_chunks.c.section_id == corpus_sections.c.id)
+        .join(corpus_documents, corpus_sections.c.document_id == corpus_documents.c.id)
+        .where(corpus_documents.c.source_id == source_id)
+        .where(corpus_chunks.c.embedding.isnot(None))
+    )
+    with engine.connect() as conn:
+        return conn.execute(stmt).scalar_one()
+
+
 def _serve_bytes(monkeypatch, object_key: str, data: bytes) -> None:  # noqa: ANN001
     """Point the task's storage factory at a fake serving ``data`` for ``object_key``.
 
@@ -233,9 +247,12 @@ def test_run_ingestion_success_drives_job_to_succeeded(seed, db_engine: Engine) 
     assert job.attempts == 1
     assert job.last_error is None
     assert _read_source_status(db_engine, ctx.source.id) == "ready"
+    # The embed step runs after the (no-op) corpus step: with no corpus it embeds
+    # zero chunks and still appends an ``embeddings_built`` (count 0) event.
     assert _read_event_types(db_engine, ctx.job.id) == [
         IngestionEventType.QUEUED,
         IngestionEventType.STARTED,
+        "embeddings_built",
         IngestionEventType.SUCCEEDED,
     ]
 
@@ -385,8 +402,8 @@ def test_run_ingestion_builds_corpus_from_valid_epub(
     assert _count_for_source(db_engine, corpus_blocks, ctx.source.id) == 12
     assert _count_for_source(db_engine, corpus_chunks, ctx.source.id) == 5
 
-    # The corpus_built event records the exact counts (CORP-10), between started
-    # and succeeded in the durable progress log.
+    # The corpus_built event records the exact counts (CORP-10); the embed step
+    # then appends embeddings_built, both between started and succeeded in the log.
     built = [e for e in _read_events(db_engine, ctx.job.id) if e.type == "corpus_built"]
     assert len(built) == 1
     assert built[0].message == "sections=5 blocks=12 chunks=5"
@@ -394,6 +411,7 @@ def test_run_ingestion_builds_corpus_from_valid_epub(
         IngestionEventType.QUEUED,
         IngestionEventType.STARTED,
         "corpus_built",
+        "embeddings_built",
         IngestionEventType.SUCCEEDED,
     ]
 
@@ -472,3 +490,117 @@ def test_reingestion_failure_keeps_prior_corpus(
     assert [s.title for s in structure.sections] == _VALID_SECTION_TITLES
     assert _count_for_source(db_engine, corpus_documents, ctx.source.id) == 1
     assert _count_for_source(db_engine, corpus_sections, ctx.source.id) == 5
+
+
+# --- Chunk embedding through the real embed step (T7 integration) ----------------
+#
+# These drive the full task with the REAL corpus + embed steps (only object storage
+# faked), so the fixture EPUB is parsed, chunked, and embedded end-to-end: after a
+# successful run every chunk carries a non-NULL embedding (RET-09), the embed step
+# runs in its own transaction after the corpus commit (RET-10), re-ingestion
+# re-embeds exactly the rebuilt chunk set (RET-11), and a mid-embed failure rolls
+# back with no partial vectors (RET-12).
+
+
+def test_run_ingestion_embeds_every_chunk_of_the_source(
+    seed, db_engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = seed(IngestionStatus.QUEUED)
+    _serve_bytes(monkeypatch, ctx.source.object_key, valid_book())
+
+    _run(FakeSelf(), str(ctx.source.id), str(ctx.job.id))
+
+    assert _read_job(db_engine, ctx.job.id).status == IngestionStatus.SUCCEEDED
+    # Every one of the source's 5 chunks now has a non-NULL embedding (RET-09).
+    assert _count_for_source(db_engine, corpus_chunks, ctx.source.id) == 5
+    assert _count_embedded(db_engine, ctx.source.id) == 5
+    # The embeddings_built event records the exact embedded-chunk count.
+    embedded = [e for e in _read_events(db_engine, ctx.job.id) if e.type == "embeddings_built"]
+    assert len(embedded) == 1
+    assert embedded[0].message == "chunks=5"
+
+
+def test_reingestion_reembeds_exactly_the_rebuilt_chunk_set(
+    seed, db_engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = seed(IngestionStatus.QUEUED)
+    _serve_bytes(monkeypatch, ctx.source.object_key, valid_book())
+    _run(FakeSelf(), str(ctx.source.id), str(ctx.job.id))
+    assert _count_embedded(db_engine, ctx.source.id) == 5
+
+    # Re-ingest a DIFFERENT (2-chunk) book: the atomic corpus replace drops the old
+    # 5 chunks and their vectors, and the embed step embeds exactly the rebuilt set
+    # — 2 chunks, all embedded, no stale/orphan vectors from the prior corpus (RET-11).
+    _serve_bytes(monkeypatch, ctx.source.object_key, no_toc_book())
+    job2 = _add_queued_job(db_engine, ctx.source.id)
+    _run(FakeSelf(), str(ctx.source.id), str(job2.id))
+
+    assert _read_job(db_engine, job2.id).status == IngestionStatus.SUCCEEDED
+    assert _count_for_source(db_engine, corpus_chunks, ctx.source.id) == 2
+    assert _count_embedded(db_engine, ctx.source.id) == 2
+
+
+def test_run_ingestion_retryable_embed_fault_records_retry(seed, db_engine: Engine) -> None:
+    ctx = seed(IngestionStatus.QUEUED)
+    fake_self = FakeSelf(retries=0, max_retries=3)
+
+    # No-op corpus step (so the corpus step succeeds), then a transient embed fault:
+    # the task records a retry and re-raises, exactly like a retryable corpus fault.
+    with (
+        patch("app.worker.tasks._build_step", lambda conn: NoOpIngestionStep()),
+        patch(
+            "app.worker.tasks._build_embed_step",
+            lambda conn: RaisingStep(RetryableIngestionError("embedding provider timeout")),
+        ),
+    ):
+        with pytest.raises(FakeSelf.RetrySignal):
+            _run(fake_self, str(ctx.source.id), str(ctx.job.id))
+
+    assert len(fake_self.retry_calls) == 1
+    assert fake_self.retry_calls[0]["countdown"] > 0
+    job = _read_job(db_engine, ctx.job.id)
+    assert job.status == IngestionStatus.RUNNING
+    assert job.attempts == 1
+    assert job.last_error == _REDACTED
+    assert _read_event_types(db_engine, ctx.job.id) == [
+        IngestionEventType.QUEUED,
+        IngestionEventType.STARTED,
+        IngestionEventType.RETRYING,
+    ]
+
+
+def test_embed_failure_is_terminal_and_leaves_no_partial_vectors(
+    seed, db_engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = seed(IngestionStatus.QUEUED)
+    _serve_bytes(monkeypatch, ctx.source.object_key, valid_book())
+
+    # Let the corpus step commit and the embed step's set_embeddings write the
+    # vectors, but fail the embeddings_built append AFTER the write. The embed
+    # transaction must roll back the vector writes, so a non-retryable embed error
+    # ends the job ``failed`` with no chunk left partially embedded (RET-12).
+    original_append = SqlAlchemyIngestionEventRepository.append
+
+    def _failing_append(self, event: IngestionEvent) -> IngestionEvent:  # noqa: ANN001
+        if event.type == "embeddings_built":
+            raise RuntimeError("boom after set_embeddings")
+        return original_append(self, event)
+
+    monkeypatch.setattr(SqlAlchemyIngestionEventRepository, "append", _failing_append)
+
+    _run(FakeSelf(), str(ctx.source.id), str(ctx.job.id))
+
+    job = _read_job(db_engine, ctx.job.id)
+    assert job.status == IngestionStatus.FAILED
+    assert job.last_error == _REDACTED
+    assert _read_source_status(db_engine, ctx.source.id) == "failed"
+    # Corpus survives (its step committed), but the embed txn rolled back: the 5
+    # chunks exist with NO embedding persisted for this run (no partial vectors).
+    assert _count_for_source(db_engine, corpus_chunks, ctx.source.id) == 5
+    assert _count_embedded(db_engine, ctx.source.id) == 0
+    assert _read_event_types(db_engine, ctx.job.id) == [
+        IngestionEventType.QUEUED,
+        IngestionEventType.STARTED,
+        "corpus_built",
+        IngestionEventType.FAILED,
+    ]

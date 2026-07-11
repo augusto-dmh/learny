@@ -19,10 +19,11 @@ from collections.abc import Sequence
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import Connection, insert, select, update
+from sqlalchemy import Connection, bindparam, insert, select, update
 from sqlalchemy import delete as sa_delete
 
 from app.domain.entities import (
+    ChunkToEmbed,
     CorpusSectionRecord,
     CorpusStructure,
     IngestionEvent,
@@ -424,6 +425,57 @@ class SqlAlchemyCorpusRepository:
             authors=tuple(document.authors),
             language=document.language,
             sections=sections,
+        )
+
+
+class SqlAlchemyEmbeddingIndexRepository:
+    """``EmbeddingIndexRepository`` backed by ``corpus_chunks`` (RET-09/11).
+
+    Reads a source's chunks to embed by joining chunks → sections → documents on
+    ``source_id`` (ownership is reachable only via the parent source, AD-014) and
+    writes each chunk's vector back to ``corpus_chunks.embedding``. The write goes
+    through the ``VECTOR`` column type, which serializes the ``list[float]`` — so it
+    does not depend on the engine-level ``register_vector`` adaptation. Operates on
+    the caller's ``Connection`` so the embed transaction boundary lives in the task.
+    """
+
+    def __init__(self, connection: Connection) -> None:
+        self._conn = connection
+
+    def chunks_for_source(self, source_id: UUID) -> list[ChunkToEmbed]:
+        """Return ``source_id``'s chunks (id + text), stably ordered.
+
+        Ordered by section ``position`` then ``chunk_index`` so re-embedding a
+        rebuilt corpus pairs vectors to the same reading-order chunks each run.
+        """
+        rows = self._conn.execute(
+            select(corpus_chunks.c.id, corpus_chunks.c.text)
+            .select_from(corpus_chunks)
+            .join(corpus_sections, corpus_chunks.c.section_id == corpus_sections.c.id)
+            .join(corpus_documents, corpus_sections.c.document_id == corpus_documents.c.id)
+            .where(corpus_documents.c.source_id == source_id)
+            .order_by(corpus_sections.c.position, corpus_chunks.c.chunk_index)
+        ).all()
+        return [ChunkToEmbed(id=row.id, text=row.text) for row in rows]
+
+    def set_embeddings(self, items: Sequence[tuple[UUID, list[float]]]) -> None:
+        """Write each ``(chunk_id, vector)`` to ``corpus_chunks.embedding``.
+
+        One ``executemany`` ``update`` keyed on the chunk id, so a whole source is
+        written in a single round trip instead of one statement per chunk; the
+        ``VECTOR`` type serializes each list on bind, so this write path needs no
+        global vector registration.
+        """
+        if not items:
+            return
+        stmt = (
+            update(corpus_chunks)
+            .where(corpus_chunks.c.id == bindparam("chunk_id"))
+            .values(embedding=bindparam("embedding"))
+        )
+        self._conn.execute(
+            stmt,
+            [{"chunk_id": chunk_id, "embedding": vector} for chunk_id, vector in items],
         )
 
 

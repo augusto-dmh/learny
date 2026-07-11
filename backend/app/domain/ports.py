@@ -21,8 +21,10 @@ from typing import Protocol, runtime_checkable
 from uuid import UUID
 
 from app.domain.entities import (
+    ChunkToEmbed,
     CorpusSectionRecord,
     CorpusStructure,
+    Evidence,
     IngestionEvent,
     IngestionJob,
     ParsedBook,
@@ -318,4 +320,65 @@ class CorpusRepository(Protocol):
 
     def get_structure(self, source_id: UUID) -> CorpusStructure | None:
         """Return the book structure for ``source_id``, or ``None`` if no corpus."""
+        ...
+
+
+@runtime_checkable
+class EmbeddingPort(Protocol):
+    """Text → vector port (ADR-0007 — provider behind a Learny seam).
+
+    The provider SDK and model name live only in the adapter; callers receive
+    plain ``list[float]`` vectors, so no query/repository code imports a provider
+    SDK. The default adapter is deterministic and network-free (D-1).
+    """
+
+    def embed_query(self, text: str) -> list[float]:
+        """Embed a single search query into one vector."""
+        ...
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        """Embed a batch of chunk texts, returning one vector per input in order."""
+        ...
+
+
+@runtime_checkable
+class EmbeddingIndexRepository(Protocol):
+    """Persistence port for reading chunks to embed and writing their vectors.
+
+    Ownership is reachable only via the parent source (AD-014) — both methods key
+    on ``source_id`` (via the chunks→sections→documents join).
+    """
+
+    def chunks_for_source(self, source_id: UUID) -> list[ChunkToEmbed]:
+        """Return ``source_id``'s chunks (id + text) to embed, stably ordered."""
+        ...
+
+    def set_embeddings(self, items: Sequence[tuple[UUID, list[float]]]) -> None:
+        """Write each ``(chunk_id, vector)`` to ``corpus_chunks.embedding``."""
+        ...
+
+
+@runtime_checkable
+class RetrievalPort(Protocol):
+    """Hybrid retrieval port returning citation-ready evidence (ADR-0006).
+
+    One statement runs the semantic (pgvector) and lexical (Postgres FTS) arms,
+    fuses them with Reciprocal Rank Fusion, and projects citation anchors into
+    frozen :class:`~app.domain.entities.Evidence`. Scoped to one ``source_id`` so
+    there is no cross-source leakage (RET-17). Tuning knobs come from settings.
+    """
+
+    def search(
+        self,
+        *,
+        source_id: UUID,
+        query_text: str,
+        query_vec: list[float],
+        top_k: int,
+        semantic_limit: int,
+        lexical_limit: int,
+        rrf_k: int,
+        ef_search: int,
+    ) -> list[Evidence]:
+        """Return up to ``top_k`` fused ``Evidence`` for ``source_id``, RRF-ordered."""
         ...

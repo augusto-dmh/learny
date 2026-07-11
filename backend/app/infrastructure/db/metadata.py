@@ -25,14 +25,22 @@ Tables:
 - ``corpus_blocks``    — id (uuid pk), section_id (fk, indexed), position, block_type,
                           html_fragment, created_at
 - ``corpus_chunks``    — id (uuid pk), section_id (fk, indexed), chunk_index, text,
-                          section_path (jsonb), anchor, page_span (jsonb, null), created_at
+                          section_path (jsonb), anchor, page_span (jsonb, null),
+                          embedding (vector(1536), null), created_at
 
 The session cookie carries the raw opaque token; only its hash (``token_hash``)
 is persisted (design §4 / AD-006).
+
+``corpus_chunks.search_vector`` (a ``STORED`` generated ``tsvector``) and the HNSW/GIN
+retrieval indexes are added by migration ``0005_retrieval_indexes`` via raw SQL only —
+they are intentionally *not* modeled on the ``corpus_chunks`` Table below. Alembic does
+not reliably render ``GENERATED ALWAYS … STORED`` columns, HNSW ``WITH (...)`` params, or
+operator classes, and the raw retrieval query does not need them in metadata (ADR-0006).
 """
 
 from __future__ import annotations
 
+from pgvector.sqlalchemy import VECTOR
 from sqlalchemy import (
     BigInteger,
     Column,
@@ -261,5 +269,9 @@ corpus_chunks = Table(
     Column("anchor", Text, nullable=False),
     # NULL for EPUB; reserved for PDF page citations (A-9).
     Column("page_span", JSONB, nullable=True),
+    # Async-populated semantic vector for the retrieval semantic arm (RET-01); the
+    # deterministic local adapter emits 1536-dim vectors. NULL until (re-)ingestion
+    # embeds the chunk. The matching HNSW index is created in 0005 via raw SQL.
+    Column("embedding", VECTOR(1536), nullable=True),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
 )

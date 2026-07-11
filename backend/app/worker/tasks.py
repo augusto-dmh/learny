@@ -22,20 +22,24 @@ from sqlalchemy import Connection
 
 from app.application.corpus import BuildCorpus
 from app.application.ingestion import RunIngestion
+from app.application.retrieval import EmbedCorpus
 from app.core.config import get_settings
 from app.domain.ports import IngestionStep, StoragePort
 from app.infrastructure.clock import SystemClock
 from app.infrastructure.db.engine import get_engine
 from app.infrastructure.db.repositories import (
     SqlAlchemyCorpusRepository,
+    SqlAlchemyEmbeddingIndexRepository,
     SqlAlchemyIngestionEventRepository,
     SqlAlchemyIngestionJobRepository,
     SqlAlchemySourceRepository,
 )
+from app.infrastructure.embeddings import DeterministicEmbeddingAdapter
 from app.infrastructure.ingestion.epub import EbooklibEpubParser
 from app.infrastructure.ingestion.markup import Bs4MarkupConverter
 from app.infrastructure.storage.s3 import S3StorageAdapter
 from app.infrastructure.worker.steps import (
+    EmbedCorpusIngestionStep,
     EpubCorpusIngestionStep,
     RetryableIngestionError,
 )
@@ -108,6 +112,37 @@ def _build_run_ingestion(conn: Connection) -> RunIngestion:
     )
 
 
+def _build_embed_step(conn: Connection) -> IngestionStep:
+    """Wire the corpus-embedding step on ``conn`` (the injectable embed seam).
+
+    Composes ``EmbedCorpus`` with the deterministic local adapter (no network, no
+    provider SDK) so the semantic arm is populated during ingestion. Factored out
+    like ``_build_step`` so lifecycle tests can inject a failing double.
+    """
+    return EmbedCorpusIngestionStep(
+        EmbedCorpus(
+            embeddings=DeterministicEmbeddingAdapter(),
+            index=SqlAlchemyEmbeddingIndexRepository(conn),
+            events=SqlAlchemyIngestionEventRepository(conn),
+            clock=_clock,
+            ids=uuid4,
+            batch_size=get_settings().embedding_batch_size,
+        )
+    )
+
+
+def _build_embed_ingestion(conn: Connection) -> RunIngestion:
+    """Wire a second ``RunIngestion`` whose step embeds the source's chunks."""
+    return RunIngestion(
+        sources=SqlAlchemySourceRepository(conn),
+        jobs=SqlAlchemyIngestionJobRepository(conn),
+        events=SqlAlchemyIngestionEventRepository(conn),
+        step=_build_embed_step(conn),
+        clock=_clock,
+        ids=uuid4,
+    )
+
+
 @celery_app.task(bind=True, name="ingestion.run", max_retries=3)
 def run_ingestion(self, source_id: str, job_id: str) -> None:  # noqa: ANN001 — bound task ``self``
     """Drive a source's ingestion job through its durable lifecycle (ING-02/07/08).
@@ -130,13 +165,22 @@ def run_ingestion(self, source_id: str, job_id: str) -> None:  # noqa: ANN001 �
         return
     logger.info("ingestion.run: started", extra=log)
 
-    # 2. Run the corpus-build step in its OWN committed transaction, separate from
-    #    the lifecycle transitions: the durable ``running`` state is already
-    #    committed, and the whole build (parse → replace → counts event) commits
-    #    atomically or rolls back with no partial corpus on any raise (CORP-08).
+    # 2. Run the corpus-build step, then the embed step, each in its OWN committed
+    #    transaction, separate from the lifecycle transitions and from each other:
+    #    the durable ``running`` state is already committed; the whole build
+    #    (parse → replace → counts event) commits atomically or rolls back with no
+    #    partial corpus on any raise (CORP-08); then the embed step (embed →
+    #    set_embeddings → counts event) runs after the corpus commit — so the
+    #    embedding-provider call is outside the corpus-write transaction (RET-10) —
+    #    and commits atomically or rolls back with no partial vectors (RET-12).
+    #    Both share the retry/terminal classification below: a retryable embed
+    #    fault retries the whole task (corpus replace is atomic + re-embed is
+    #    idempotent → RET-11), any other embed error is terminal.
     try:
         with get_engine().begin() as conn:
             _build_run_ingestion(conn).run_step(job)
+        with get_engine().begin() as conn:
+            _build_embed_ingestion(conn).run_step(job)
     except RetryableIngestionError as exc:
         # Persist only the fixed, non-secret summary (ING-08); the raw exception
         # goes to the server log via ``exc_info``, never the durable field.
