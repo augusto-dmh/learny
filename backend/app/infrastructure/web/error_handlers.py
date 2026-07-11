@@ -21,7 +21,10 @@ from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 
 from app.application.errors import (
+    ActiveIngestionExists,
     EmailAlreadyExists,
+    EnqueueFailed,
+    IngestionNotFound,
     InvalidCredentials,
     InvalidSourceUpload,
     NotAuthenticated,
@@ -53,6 +56,9 @@ _STATUS_BY_ERROR = {
     NotAuthorized: status.HTTP_403_FORBIDDEN,
     SourceNotFound: status.HTTP_404_NOT_FOUND,
     StorageUnavailable: status.HTTP_503_SERVICE_UNAVAILABLE,
+    ActiveIngestionExists: status.HTTP_409_CONFLICT,
+    IngestionNotFound: status.HTTP_404_NOT_FOUND,
+    EnqueueFailed: status.HTTP_502_BAD_GATEWAY,
 }
 
 # An invalid upload maps to a status keyed by its ``kind`` (design §Error Handling):

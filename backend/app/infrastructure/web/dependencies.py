@@ -15,7 +15,8 @@ unit of work (the repositories themselves are transaction-agnostic, per B3).
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager
 from typing import Annotated
 from uuid import uuid4
 
@@ -29,14 +30,17 @@ from app.application.identity import (
     Logout,
     RegisterUser,
 )
+from app.application.ingestion import ReadIngestion, RunIngestion, StartIngestion
 from app.application.sources import CreateSource, GetSource, ListSources
 from app.core.config import Settings, get_settings
 from app.domain.entities import Session, User
-from app.domain.ports import StoragePort
+from app.domain.ports import IngestionEnqueuer, StoragePort
 from app.infrastructure.clock import SystemClock
 from app.infrastructure.db.engine import get_engine
 from app.infrastructure.db.repositories import (
     SqlAlchemyCredentialRepository,
+    SqlAlchemyIngestionEventRepository,
+    SqlAlchemyIngestionJobRepository,
     SqlAlchemySessionRepository,
     SqlAlchemySourceRepository,
     SqlAlchemyUserRepository,
@@ -44,6 +48,8 @@ from app.infrastructure.db.repositories import (
 from app.infrastructure.security.password_hasher import Argon2PasswordHasher
 from app.infrastructure.security.tokens import SecretsTokenGenerator
 from app.infrastructure.storage.s3 import S3StorageAdapter
+from app.infrastructure.worker.enqueuer import CeleryIngestionEnqueuer
+from app.infrastructure.worker.steps import NoOpIngestionStep
 
 # Process-wide singletons for the stateless adapters. The hasher in particular is
 # expensive to construct (Argon2 parameter setup), so it is built once.
@@ -187,5 +193,77 @@ def get_list_sources(conn: DbConnection) -> ListSources:
 def get_get_source(conn: DbConnection) -> GetSource:
     return GetSource(
         sources=SqlAlchemySourceRepository(conn),
+        authorize=AuthorizeOwnership(),
+    )
+
+
+# --- Ingestion (worker-foundation) ---------------------------------------------
+#
+# The start path cannot use the request-scoped auto-commit ``get_db_connection``:
+# ING-11 requires the queued job to be *committed* before a synchronous enqueue
+# that may fail with 502, and (on failure) a second UoW to compensate the job to
+# terminal ``failed``. So the two write UoWs go through an injectable factory
+# (``get_ingestion_uow``) returning a fresh committing transaction in production;
+# web tests override it to share the rolled-back ``db_conn`` without committing,
+# exactly as ``get_storage``/``get_db_connection`` are overridden today. The GET
+# read path keeps the ordinary request-scoped connection.
+
+
+def _default_ingestion_uow() -> AbstractContextManager[Connection]:
+    """Production start-path UoW: a fresh ``engine.begin()`` (commit on clean exit)."""
+    return get_engine().begin()
+
+
+_ingestion_uow: Callable[[], AbstractContextManager[Connection]] = (
+    _default_ingestion_uow
+)
+
+
+def get_ingestion_uow() -> Callable[[], AbstractContextManager[Connection]]:
+    """FastAPI dependency: the start-path UoW factory (overridable in tests)."""
+    return _ingestion_uow
+
+
+_enqueuer: IngestionEnqueuer = CeleryIngestionEnqueuer()
+
+
+def get_ingestion_enqueuer() -> IngestionEnqueuer:
+    """FastAPI dependency: the process-wide ingestion enqueuer (overridable in tests)."""
+    return _enqueuer
+
+
+def build_start_ingestion(conn: Connection) -> StartIngestion:
+    """Wire ``StartIngestion`` on a start-path UoW connection (not request-scoped)."""
+    return StartIngestion(
+        sources=SqlAlchemySourceRepository(conn),
+        jobs=SqlAlchemyIngestionJobRepository(conn),
+        events=SqlAlchemyIngestionEventRepository(conn),
+        authorize=AuthorizeOwnership(),
+        clock=_clock,
+        ids=uuid4,
+    )
+
+
+def build_compensate(conn: Connection) -> RunIngestion:
+    """Wire the enqueue-failure compensation driver on a start-path UoW connection.
+
+    Only ``RunIngestion.fail`` is used (it never invokes the step), so the no-op
+    step keeps the Phase-5 boundary intact — no parsing happens on this path.
+    """
+    return RunIngestion(
+        sources=SqlAlchemySourceRepository(conn),
+        jobs=SqlAlchemyIngestionJobRepository(conn),
+        events=SqlAlchemyIngestionEventRepository(conn),
+        step=NoOpIngestionStep(),
+        clock=_clock,
+        ids=uuid4,
+    )
+
+
+def get_read_ingestion(conn: DbConnection) -> ReadIngestion:
+    return ReadIngestion(
+        sources=SqlAlchemySourceRepository(conn),
+        jobs=SqlAlchemyIngestionJobRepository(conn),
+        events=SqlAlchemyIngestionEventRepository(conn),
         authorize=AuthorizeOwnership(),
     )
