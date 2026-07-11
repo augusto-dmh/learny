@@ -80,3 +80,23 @@ class EnqueueFailed(Exception):
     The start handler compensates the job to terminal ``failed`` before raising;
     the web layer maps this to 502 and no phantom active job is left behind.
     """
+
+
+class InvalidEpubError(Exception):
+    """The source bytes are not a parseable EPUB (CORP-06).
+
+    Raised by the EPUB parser adapter for non-EPUB bytes, a corrupt archive, or
+    an unresolvable spine. It lives here (not in ``infrastructure``) so the
+    adapter raises a transport-agnostic error without importing worker modules,
+    and it is terminal by the existing task rule that any non-retryable raise
+    fails the job (no retry).
+    """
+
+
+class CorpusNotFound(Exception):
+    """A source exists and is owned by the caller but has no corpus yet (A-7).
+
+    Raised by the structure read path when ``get_structure`` returns ``None``;
+    the web layer maps it to 404, matching the ownership-as-404 behavior so the
+    control is only offered on ``ready`` sources.
+    """

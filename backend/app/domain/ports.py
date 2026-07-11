@@ -15,13 +15,17 @@ Conventions:
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Protocol, runtime_checkable
 from uuid import UUID
 
 from app.domain.entities import (
+    CorpusSectionRecord,
+    CorpusStructure,
     IngestionEvent,
     IngestionJob,
+    ParsedBook,
     PasswordCredential,
     Session,
     Source,
@@ -246,4 +250,72 @@ class StoragePort(Protocol):
 
     def get_object(self, key: str) -> bytes:
         """Return the bytes stored under ``key``. Raises if absent."""
+        ...
+
+
+@runtime_checkable
+class EpubParserPort(Protocol):
+    """Structure-preserving EPUB parse port (ADR-0002, ADR-0011 — EPUB only).
+
+    The only seam the ebooklib/BeautifulSoup adapter sits behind (ADR-0009);
+    application code depends on this protocol and the library-free
+    :class:`~app.domain.entities.ParsedBook` DTO, never on parsing libraries.
+    """
+
+    def parse(self, source_bytes: bytes, *, filename: str) -> ParsedBook:
+        """Parse EPUB bytes into a :class:`ParsedBook`.
+
+        Raises :class:`~app.application.errors.InvalidEpubError` for anything
+        that is not a parseable EPUB (non-EPUB bytes, corrupt archive,
+        unresolvable spine) so the ingestion step can treat it as terminal
+        (CORP-06).
+        """
+        ...
+
+
+@runtime_checkable
+class MarkupConverterPort(Protocol):
+    """Preserved-HTML → Markdown derivation port (CORP-04, A-6).
+
+    Kept behind a port so the concrete BeautifulSoup walker stays in
+    ``app.infrastructure`` (ADR-0009). The input is the stored HTML fragment,
+    never the EPUB, so the Markdown view is a derived projection of the
+    canonical corpus (ADR-0002).
+    """
+
+    def to_markdown(self, html: str) -> str:
+        """Return the Markdown rendering of an HTML fragment (A-6 element set)."""
+        ...
+
+
+@runtime_checkable
+class CorpusRepository(Protocol):
+    """Persistence port for the canonical corpus aggregate (ADR-0002).
+
+    ``replace`` is delete-then-insert inside the caller's transaction so a
+    re-ingestion atomically rebuilds the corpus (CORP-09) and a mid-build failure
+    rolls back with no partial data (CORP-08). Ownership is reachable only via the
+    parent source (AD-014) — these methods key on ``source_id``.
+    """
+
+    def replace(
+        self,
+        source_id: UUID,
+        *,
+        title: str | None,
+        authors: Sequence[str],
+        language: str | None,
+        schema_version: int,
+        sections: Sequence[CorpusSectionRecord],
+    ) -> None:
+        """Replace ``source_id``'s corpus with the given aggregate (CORP-09).
+
+        Deletes any existing corpus document for the source (cascade clears its
+        sections/blocks/chunks) and inserts the new document/sections/blocks/
+        chunks. Runs inside the caller's transaction.
+        """
+        ...
+
+    def get_structure(self, source_id: UUID) -> CorpusStructure | None:
+        """Return the book structure for ``source_id``, or ``None`` if no corpus."""
         ...
