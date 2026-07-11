@@ -7,6 +7,7 @@ is involved, so service rules can be tested in isolation and deterministically.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
 from itertools import count
@@ -14,11 +15,14 @@ from uuid import UUID, uuid4
 
 from app.domain.entities import (
     ACTIVE_STATUSES,
+    CorpusSectionRecord,
+    CorpusStructure,
     IngestionEvent,
     IngestionJob,
     PasswordCredential,
     Session,
     Source,
+    StructureSection,
     User,
 )
 
@@ -288,3 +292,57 @@ class FakeIngestionEnqueuer:
         self.calls.append((source_id, job_id))
         if self._error is not None:
             raise self._error
+
+
+class FakeCorpusRepository:
+    """In-memory ``CorpusRepository``: atomic replace by source_id, flat read.
+
+    ``replace`` overwrites any existing corpus for the source (mirroring the
+    delete-then-insert semantics), records each call's full aggregate so service
+    tests can assert what was persisted (schema_version, per-section markdown and
+    chunks, zero-block sections), and exposes the flat structure via
+    ``get_structure``.
+    """
+
+    def __init__(self) -> None:
+        self._by_source: dict[UUID, CorpusStructure] = {}
+        self.replace_calls: list[dict[str, object]] = []
+
+    def replace(
+        self,
+        source_id: UUID,
+        *,
+        title: str | None,
+        authors: Sequence[str],
+        language: str | None,
+        schema_version: int,
+        sections: Sequence[CorpusSectionRecord],
+    ) -> None:
+        self.replace_calls.append(
+            {
+                "source_id": source_id,
+                "title": title,
+                "authors": tuple(authors),
+                "language": language,
+                "schema_version": schema_version,
+                "sections": tuple(sections),
+            }
+        )
+        self._by_source[source_id] = CorpusStructure(
+            title=title,
+            authors=tuple(authors),
+            language=language,
+            sections=tuple(
+                StructureSection(
+                    position=record.section.position,
+                    title=record.section.title,
+                    depth=record.section.depth,
+                    section_path=tuple(record.section.section_path),
+                    anchor=record.section.anchor,
+                )
+                for record in sections
+            ),
+        )
+
+    def get_structure(self, source_id: UUID) -> CorpusStructure | None:
+        return self._by_source.get(source_id)
