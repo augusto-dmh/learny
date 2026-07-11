@@ -1,4 +1,4 @@
-"""T8 gate — BuildCorpus application service (unit, in-memory fakes).
+"""T8/T10 gate — corpus application services (unit, in-memory fakes).
 
 Drives ``BuildCorpus`` over fake ports (storage/parser/markup/corpus/events) so
 the orchestration is asserted in isolation (CORP-01/04/05/08/10): the stored bytes
@@ -7,6 +7,11 @@ converter's per-block output, chunks are packed from those block texts, the whol
 aggregate — including zero-block sections — is persisted with ``schema_version=1``,
 the ``corpus_built`` event carries the exact section/block/chunk counts, and a
 storage or parser fault propagates unwrapped with nothing persisted (CORP-08).
+
+Also drives ``ReadSourceStructure`` (CORP-11): the owner reads the persisted
+structure value; a missing source and a non-owner both collapse to
+``SourceNotFound`` (no existence disclosure); an owned source with no corpus
+raises ``CorpusNotFound`` (A-7 → 404).
 """
 
 from __future__ import annotations
@@ -17,14 +22,17 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from app.application.corpus import BuildCorpus
-from app.application.errors import InvalidEpubError
+from app.application.corpus import BuildCorpus, ReadSourceStructure
+from app.application.errors import CorpusNotFound, InvalidEpubError, SourceNotFound
+from app.application.identity import AuthorizeOwnership
 from app.domain.entities import (
+    CorpusSectionRecord,
     IngestionJob,
     ParsedBlock,
     ParsedBook,
     ParsedSection,
     Source,
+    User,
 )
 from tests.fakes import (
     FailingStorage,
@@ -33,6 +41,7 @@ from tests.fakes import (
     FakeEpubParser,
     FakeIngestionEventRepository,
     FakeMarkupConverter,
+    FakeSourceRepository,
     FakeStorage,
 )
 
@@ -242,3 +251,116 @@ def test_build_corpus_propagates_parser_error_without_persisting() -> None:
 
     assert corpus.replace_calls == []
     assert events.list_for_job(job.id) == []
+
+
+# --- ReadSourceStructure (CORP-11) ---------------------------------------------
+
+
+def _user() -> User:
+    return User(id=uuid4(), email="owner@example.com", created_at=_NOW)
+
+
+def _owned_source(user: User) -> Source:
+    return Source(
+        id=uuid4(),
+        user_id=user.id,
+        title="A Book",
+        filename="a-book.epub",
+        content_type="application/epub+zip",
+        byte_size=10,
+        checksum="d" * 64,
+        object_key="sources/a-book.epub",
+        status="ready",
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+
+
+def _seed_corpus(corpus: FakeCorpusRepository, source_id: UUID) -> None:
+    """Persist a one-section corpus for ``source_id`` via the fake's replace."""
+    corpus.replace(
+        source_id,
+        title="The Test Book",
+        authors=("Ada", "Alan"),
+        language="en",
+        schema_version=1,
+        sections=(
+            CorpusSectionRecord(
+                section=ParsedSection(
+                    position=0,
+                    title="One",
+                    depth=0,
+                    section_path=("One",),
+                    anchor="one.xhtml",
+                    blocks=(),
+                ),
+                markdown="",
+                chunks=(),
+            ),
+        ),
+    )
+
+
+def _read_structure(
+    sources: FakeSourceRepository, corpus: FakeCorpusRepository
+) -> ReadSourceStructure:
+    return ReadSourceStructure(
+        sources=sources,
+        corpus=corpus,
+        authorize=AuthorizeOwnership(),
+    )
+
+
+def test_read_structure_returns_owner_structure_value() -> None:
+    user = _user()
+    source = _owned_source(user)
+    sources = FakeSourceRepository()
+    sources.add(source)
+    corpus = FakeCorpusRepository()
+    _seed_corpus(corpus, source.id)
+
+    structure = _read_structure(sources, corpus)(user=user, source_id=source.id)
+
+    # The persisted structure value is returned verbatim (== the repo's read model).
+    assert structure == corpus.get_structure(source.id)
+    assert structure.title == "The Test Book"
+    assert structure.authors == ("Ada", "Alan")
+    assert structure.language == "en"
+    assert [
+        (s.position, s.title, s.depth, s.section_path, s.anchor) for s in structure.sections
+    ] == [(0, "One", 0, ("One",), "one.xhtml")]
+
+
+def test_read_structure_missing_source_raises_source_not_found() -> None:
+    user = _user()
+    sources = FakeSourceRepository()
+    corpus = FakeCorpusRepository()
+
+    with pytest.raises(SourceNotFound):
+        _read_structure(sources, corpus)(user=user, source_id=uuid4())
+
+
+def test_read_structure_non_owner_collapses_to_source_not_found() -> None:
+    owner = _user()
+    source = _owned_source(owner)
+    sources = FakeSourceRepository()
+    sources.add(source)
+    corpus = FakeCorpusRepository()
+    _seed_corpus(corpus, source.id)
+
+    intruder = User(id=uuid4(), email="intruder@example.com", created_at=_NOW)
+    # Non-owner collapses to the same not-found as a missing source (no disclosure),
+    # even though the corpus exists.
+    with pytest.raises(SourceNotFound):
+        _read_structure(sources, corpus)(user=intruder, source_id=source.id)
+
+
+def test_read_structure_owned_source_without_corpus_raises_corpus_not_found() -> None:
+    user = _user()
+    source = _owned_source(user)
+    sources = FakeSourceRepository()
+    sources.add(source)
+    corpus = FakeCorpusRepository()  # no corpus persisted for this source
+
+    with pytest.raises(CorpusNotFound):
+        _read_structure(sources, corpus)(user=user, source_id=source.id)
