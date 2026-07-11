@@ -15,6 +15,7 @@ from uuid import UUID, uuid4
 
 from app.domain.entities import (
     ACTIVE_STATUSES,
+    ChunkToEmbed,
     CorpusSectionRecord,
     CorpusStructure,
     IngestionEvent,
@@ -376,3 +377,54 @@ class FakeCorpusRepository:
 
     def get_structure(self, source_id: UUID) -> CorpusStructure | None:
         return self._by_source.get(source_id)
+
+
+class FakeEmbeddingPort:
+    """``EmbeddingPort`` double: records each ``embed_documents`` batch call.
+
+    Returns a distinct 1-D vector per text — the running call index across all
+    batches — so a test can assert both order preservation (vector value == the
+    chunk's overall position) and correct chunk-id↔vector pairing, and can read
+    ``document_batches`` to assert batch boundaries. No network, no provider SDK.
+    """
+
+    def __init__(self) -> None:
+        self.document_batches: list[list[str]] = []
+        self.query_calls: list[str] = []
+        self._counter = 0
+
+    def embed_query(self, text: str) -> list[float]:
+        self.query_calls.append(text)
+        return [0.0]
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        self.document_batches.append(list(texts))
+        vectors: list[list[float]] = []
+        for _ in texts:
+            vectors.append([float(self._counter)])
+            self._counter += 1
+        return vectors
+
+
+class FakeEmbeddingIndexRepository:
+    """In-memory ``EmbeddingIndexRepository``: preset chunks, records writes.
+
+    ``chunks_for_source`` returns the chunks seeded for a source (stably ordered
+    as given); ``set_embeddings`` records each call's ordered ``(chunk_id, vector)``
+    items and exposes the resulting ``persisted`` chunk_id→vector map so service
+    tests assert the persisted pairs, not just call counts.
+    """
+
+    def __init__(self, chunks_by_source: dict[UUID, list[ChunkToEmbed]] | None = None) -> None:
+        self._chunks: dict[UUID, list[ChunkToEmbed]] = chunks_by_source or {}
+        self.set_calls: list[list[tuple[UUID, list[float]]]] = []
+        self.persisted: dict[UUID, list[float]] = {}
+
+    def chunks_for_source(self, source_id: UUID) -> list[ChunkToEmbed]:
+        return list(self._chunks.get(source_id, []))
+
+    def set_embeddings(self, items: Sequence[tuple[UUID, list[float]]]) -> None:
+        recorded = [(chunk_id, vector) for chunk_id, vector in items]
+        self.set_calls.append(recorded)
+        for chunk_id, vector in recorded:
+            self.persisted[chunk_id] = vector
