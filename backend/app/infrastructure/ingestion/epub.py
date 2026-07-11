@@ -13,6 +13,7 @@ corrupt archive, an unresolvable spine idref — becomes a terminal
 from __future__ import annotations
 
 import zipfile
+from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from io import BytesIO
 
@@ -154,10 +155,12 @@ def _first(values: list[str]) -> str | None:
     return values[0] if values else None
 
 
-def _flatten_toc(toc: object, depth: int = 0, prefix: tuple[str, ...] = ()) -> list[_TocEntry]:
+def _flatten_toc(
+    toc: Iterable[object], depth: int = 0, prefix: tuple[str, ...] = ()
+) -> list[_TocEntry]:
     """Depth-first flatten of ``book.toc`` into entries carrying their path."""
     entries: list[_TocEntry] = []
-    for node in toc:  # type: ignore[attr-defined]
+    for node in toc:
         if isinstance(node, tuple):
             section, children = node
             path = prefix + (section.title,)
