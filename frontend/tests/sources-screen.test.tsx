@@ -47,6 +47,37 @@ const created = {
   created_at: "now",
 };
 
+function sourceRow(id: string, title: string, status: string) {
+  return {
+    id,
+    title,
+    filename: `${id}.epub`,
+    byte_size: 3,
+    content_type: "application/epub+zip",
+    status,
+    created_at: "now",
+  };
+}
+
+/** One source in each of the four projection states. */
+const mixed = [
+  sourceRow("s-up", "Uploaded Book", "uploaded"),
+  sourceRow("s-proc", "Processing Book", "processing"),
+  sourceRow("s-ready", "Ready Book", "ready"),
+  sourceRow("s-fail", "Failed Book", "failed"),
+];
+
+/** The queued job the backend returns from POST .../ingestion. */
+const ingestionQueued = {
+  id: "j1",
+  status: "queued",
+  attempts: 0,
+  error: null,
+  created_at: "now",
+  updated_at: "now",
+  events: [{ type: "queued", message: null, created_at: "now" }],
+};
+
 function selectFileAndTitle(title: string) {
   const file = new File([new Uint8Array([1, 2, 3])], "book.epub", {
     type: "application/epub+zip",
@@ -138,5 +169,105 @@ describe("SourcesPanel (T8)", () => {
 
     await waitFor(() => expect(onRequireAuth).toHaveBeenCalledTimes(1));
     expect(await screen.findByText("You are signed out.")).toBeTruthy();
+  });
+
+  it("shows each source's ingestion status badge per row", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        "GET /api/sources": () => jsonResponse(200, mixed),
+      }),
+    );
+
+    render(<SourcesPanel />);
+    await screen.findByText("Uploaded Book");
+
+    expect(screen.getByTestId("status-s-up").textContent).toBe("uploaded");
+    expect(screen.getByTestId("status-s-proc").textContent).toBe("processing");
+    expect(screen.getByTestId("status-s-ready").textContent).toBe("ready");
+    expect(screen.getByTestId("status-s-fail").textContent).toBe("failed");
+  });
+
+  it("offers Start ingestion only for uploaded sources", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        "GET /api/sources": () => jsonResponse(200, mixed),
+      }),
+    );
+
+    render(<SourcesPanel />);
+    await screen.findByText("Uploaded Book");
+
+    // Exactly one Start control — on the sole uploaded row.
+    const startButtons = screen.getAllByRole("button", {
+      name: "Start ingestion",
+    });
+    expect(startButtons).toHaveLength(1);
+    expect(
+      screen.getByTestId("status-s-up").closest("li")?.querySelector("button")
+        ?.textContent,
+    ).toBe("Start ingestion");
+
+    // Active/terminal rows offer no start action.
+    for (const id of ["s-proc", "s-ready", "s-fail"]) {
+      expect(
+        screen.getByTestId(`status-${id}`).closest("li")?.querySelector("button"),
+      ).toBeNull();
+    }
+  });
+
+  it("starts ingestion through the proxy and reflects processing on success", async () => {
+    const fetchMock = routedFetch({
+      "GET /api/auth/me": () => authedMe.clone(),
+      "GET /api/sources": () => jsonResponse(200, [mixed[0]]),
+      "POST /api/sources/s-up/ingestion": () =>
+        jsonResponse(202, ingestionQueued),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<SourcesPanel />);
+    await screen.findByText("Uploaded Book");
+
+    fireEvent.click(screen.getByRole("button", { name: "Start ingestion" }));
+
+    // Row reflects processing and the start control is gone (no double-start).
+    await waitFor(() =>
+      expect(screen.getByTestId("status-s-up").textContent).toBe("processing"),
+    );
+    expect(
+      screen.queryByRole("button", { name: "Start ingestion" }),
+    ).toBeNull();
+
+    // The proxy POST was issued to the same-origin ingestion path.
+    const posted = fetchMock.mock.calls.find(([, init]) => init?.method === "POST");
+    expect(posted?.[0]).toBe("/api/sources/s-up/ingestion");
+  });
+
+  it("surfaces the error and keeps the row uploaded when the start is rejected", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        "GET /api/sources": () => jsonResponse(200, [mixed[0]]),
+        "POST /api/sources/s-up/ingestion": () =>
+          jsonResponse(409, { detail: "Ingestion is already in progress." }),
+      }),
+    );
+
+    render(<SourcesPanel />);
+    await screen.findByText("Uploaded Book");
+
+    fireEvent.click(screen.getByRole("button", { name: "Start ingestion" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe("Ingestion is already in progress.");
+    // Row did NOT flip to processing; the start control remains.
+    expect(screen.getByTestId("status-s-up").textContent).toBe("uploaded");
+    expect(
+      screen.getByRole("button", { name: "Start ingestion" }),
+    ).toBeTruthy();
   });
 });
