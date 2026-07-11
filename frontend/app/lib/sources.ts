@@ -45,6 +45,30 @@ export type IngestionSummary = {
   events: IngestionEventView[];
 };
 
+/**
+ * One node in a source's parsed section tree (CORP-11), nested per the TOC
+ * hierarchy. Mirrors the backend `StructureSectionView`.
+ */
+export type StructureSection = {
+  title: string;
+  depth: number;
+  section_path: string[];
+  anchor: string;
+  children: StructureSection[];
+};
+
+/**
+ * A source's parsed book structure as returned by
+ * `/api/sources/{id}/structure`. Mirrors the backend `BookStructureView`:
+ * `title`/`language` are null and `authors` empty when the OPF omitted them.
+ */
+export type SourceStructure = {
+  title: string | null;
+  authors: string[];
+  language: string | null;
+  sections: StructureSection[];
+};
+
 /** List the caller's sources (newest-first), or `[]` when they have none. */
 export async function listSources(
   fetchImpl: typeof fetch = fetch,
@@ -124,6 +148,27 @@ export async function startIngestion(
     throw await toSourceError(res, "Could not start ingestion.");
   }
   return (await res.json()) as IngestionSummary;
+}
+
+/**
+ * Fetch a source's parsed book structure (metadata + nested section tree)
+ * through the same-origin proxy. Read-only GET, so no CSRF token; the HttpOnly
+ * session cookie rides along automatically. Non-OK responses (e.g. 404 when the
+ * source has no corpus yet) surface the backend `detail` via `toSourceError`,
+ * mirroring `listSources`.
+ */
+export async function fetchSourceStructure(
+  id: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<SourceStructure> {
+  const res = await fetchImpl(`/api/sources/${id}/structure`, {
+    method: "GET",
+    credentials: "same-origin",
+  });
+  if (!res.ok) {
+    throw await toSourceError(res, "Could not load the book structure.");
+  }
+  return (await res.json()) as SourceStructure;
 }
 
 /** Build an Error from a non-OK response, preferring the backend's detail. */

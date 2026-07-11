@@ -7,6 +7,7 @@ is involved, so service rules can be tested in isolation and deterministically.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
 from itertools import count
@@ -14,11 +15,15 @@ from uuid import UUID, uuid4
 
 from app.domain.entities import (
     ACTIVE_STATUSES,
+    CorpusSectionRecord,
+    CorpusStructure,
     IngestionEvent,
     IngestionJob,
+    ParsedBook,
     PasswordCredential,
     Session,
     Source,
+    StructureSection,
     User,
 )
 
@@ -139,9 +144,7 @@ class FakeSessionRepository:
         if session is not None:
             import dataclasses
 
-            self._by_id[session_id] = dataclasses.replace(
-                session, last_seen_at=last_seen_at
-            )
+            self._by_id[session_id] = dataclasses.replace(session, last_seen_at=last_seen_at)
 
     def delete(self, session_id: UUID) -> None:
         session = self._by_id.pop(session_id, None)
@@ -175,9 +178,7 @@ class FakeSourceRepository:
     def set_status(self, source_id: UUID, status: str, updated_at: datetime) -> None:
         source = self._by_id.get(source_id)
         if source is not None:
-            self._by_id[source_id] = replace(
-                source, status=status, updated_at=updated_at
-            )
+            self._by_id[source_id] = replace(source, status=status, updated_at=updated_at)
 
 
 class FakeStorage:
@@ -288,3 +289,90 @@ class FakeIngestionEnqueuer:
         self.calls.append((source_id, job_id))
         if self._error is not None:
             raise self._error
+
+
+class FakeEpubParser:
+    """``EpubParserPort`` double: returns a preset ``ParsedBook`` or raises.
+
+    Records the (bytes, filename) it was called with so ``BuildCorpus`` tests can
+    assert the storage bytes flow through to the parser; the ``error`` seam drives
+    the terminal-failure branch (a raise propagates unwrapped).
+    """
+
+    def __init__(self, *, book: ParsedBook | None = None, error: Exception | None = None) -> None:
+        self._book = book
+        self._error = error
+        self.calls: list[tuple[bytes, str]] = []
+
+    def parse(self, source_bytes: bytes, *, filename: str) -> ParsedBook:
+        self.calls.append((source_bytes, filename))
+        if self._error is not None:
+            raise self._error
+        assert self._book is not None
+        return self._book
+
+
+class FakeMarkupConverter:
+    """``MarkupConverterPort`` double: a deterministic ``md:<html>`` rendering.
+
+    The prefix makes each block's derived text traceable to its HTML fragment, so
+    tests can assert the section Markdown is the join of the converter's per-block
+    output and that chunks are packed from those block texts (not re-parsed).
+    """
+
+    def to_markdown(self, html: str) -> str:
+        return f"md:{html}"
+
+
+class FakeCorpusRepository:
+    """In-memory ``CorpusRepository``: atomic replace by source_id, flat read.
+
+    ``replace`` overwrites any existing corpus for the source (mirroring the
+    delete-then-insert semantics), records each call's full aggregate so service
+    tests can assert what was persisted (schema_version, per-section markdown and
+    chunks, zero-block sections), and exposes the flat structure via
+    ``get_structure``.
+    """
+
+    def __init__(self) -> None:
+        self._by_source: dict[UUID, CorpusStructure] = {}
+        self.replace_calls: list[dict[str, object]] = []
+
+    def replace(
+        self,
+        source_id: UUID,
+        *,
+        title: str | None,
+        authors: Sequence[str],
+        language: str | None,
+        schema_version: int,
+        sections: Sequence[CorpusSectionRecord],
+    ) -> None:
+        self.replace_calls.append(
+            {
+                "source_id": source_id,
+                "title": title,
+                "authors": tuple(authors),
+                "language": language,
+                "schema_version": schema_version,
+                "sections": tuple(sections),
+            }
+        )
+        self._by_source[source_id] = CorpusStructure(
+            title=title,
+            authors=tuple(authors),
+            language=language,
+            sections=tuple(
+                StructureSection(
+                    position=record.section.position,
+                    title=record.section.title,
+                    depth=record.section.depth,
+                    section_path=tuple(record.section.section_path),
+                    anchor=record.section.anchor,
+                )
+                for record in sections
+            ),
+        )
+
+    def get_structure(self, source_id: UUID) -> CorpusStructure | None:
+        return self._by_source.get(source_id)

@@ -23,6 +23,7 @@ from uuid import uuid4
 from fastapi import Depends, Request
 from sqlalchemy import Connection
 
+from app.application.corpus import ReadSourceStructure
 from app.application.identity import (
     AuthenticateUser,
     AuthorizeOwnership,
@@ -38,6 +39,7 @@ from app.domain.ports import IngestionEnqueuer, StoragePort
 from app.infrastructure.clock import SystemClock
 from app.infrastructure.db.engine import get_engine
 from app.infrastructure.db.repositories import (
+    SqlAlchemyCorpusRepository,
     SqlAlchemyCredentialRepository,
     SqlAlchemyIngestionEventRepository,
     SqlAlchemyIngestionJobRepository,
@@ -265,5 +267,13 @@ def get_read_ingestion(conn: DbConnection) -> ReadIngestion:
         sources=SqlAlchemySourceRepository(conn),
         jobs=SqlAlchemyIngestionJobRepository(conn),
         events=SqlAlchemyIngestionEventRepository(conn),
+        authorize=AuthorizeOwnership(),
+    )
+
+
+def get_read_source_structure(conn: DbConnection) -> ReadSourceStructure:
+    return ReadSourceStructure(
+        sources=SqlAlchemySourceRepository(conn),
+        corpus=SqlAlchemyCorpusRepository(conn),
         authorize=AuthorizeOwnership(),
     )

@@ -25,8 +25,10 @@ def _alembic_config(db_url: str) -> Config:
 
 
 def test_migration_metadata_compiles() -> None:
-    """The shared metadata defines the identity + sources + ingestion tables."""
+    """The shared metadata defines the identity + sources + ingestion + corpus tables."""
     from app.infrastructure.db.metadata import (
+        corpus_documents,
+        corpus_sections,
         ingestion_jobs,
         metadata,
         sessions,
@@ -41,6 +43,10 @@ def test_migration_metadata_compiles() -> None:
         "sources",
         "ingestion_jobs",
         "ingestion_events",
+        "corpus_documents",
+        "corpus_sections",
+        "corpus_blocks",
+        "corpus_chunks",
     }
     # Unique email + unique session token_hash are the security-critical constraints.
     user_uniques = {c.name for c in users.constraints if c.__class__.__name__ == "UniqueConstraint"}
@@ -58,6 +64,20 @@ def test_migration_metadata_compiles() -> None:
     active_index = {ix.name: ix for ix in ingestion_jobs.indexes}["uq_ingestion_jobs_active_source"]
     assert active_index.unique
     assert [c.name for c in active_index.columns] == ["source_id"]
+    # One corpus per source: UNIQUE(source_id) backstops CORP-09 at the schema layer.
+    document_uniques = {
+        tuple(c.name for c in uc.columns)
+        for uc in corpus_documents.constraints
+        if uc.__class__.__name__ == "UniqueConstraint"
+    }
+    assert ("source_id",) in document_uniques
+    # Sections are position-unique within a document (stable spine/TOC ordering).
+    section_uniques = {
+        tuple(c.name for c in uc.columns)
+        for uc in corpus_sections.constraints
+        if uc.__class__.__name__ == "UniqueConstraint"
+    }
+    assert ("document_id", "position") in section_uniques
 
 
 @pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
@@ -172,5 +192,92 @@ def test_migration_0003_creates_ingestion_tables(monkeypatch) -> None:
         remaining = set(inspect(engine).get_table_names())
         assert "ingestion_jobs" not in remaining
         assert "ingestion_events" not in remaining
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
+def test_migration_0004_creates_corpus_tables(monkeypatch) -> None:
+    """0004 creates the corpus aggregate with cascade FKs, uniques, and FK indexes."""
+    monkeypatch.setenv("LEARNY_DATABASE_URL", TEST_DB_URL)
+    cfg = _alembic_config(TEST_DB_URL)
+
+    command.upgrade(cfg, "head")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        inspector = inspect(engine)
+        tables = set(inspector.get_table_names())
+        assert {
+            "corpus_documents",
+            "corpus_sections",
+            "corpus_blocks",
+            "corpus_chunks",
+        } <= tables
+
+        # The whole aggregate cascades from its parent so a source delete leaves
+        # no orphaned corpus rows (CORP-14): document→source, section→document,
+        # block/chunk→section, every FK ondelete=CASCADE.
+        doc_fk = next(
+            fk
+            for fk in inspector.get_foreign_keys("corpus_documents")
+            if fk["constrained_columns"] == ["source_id"]
+        )
+        assert doc_fk["referred_table"] == "sources"
+        assert doc_fk["options"].get("ondelete") == "CASCADE"
+
+        section_fk = next(
+            fk
+            for fk in inspector.get_foreign_keys("corpus_sections")
+            if fk["constrained_columns"] == ["document_id"]
+        )
+        assert section_fk["referred_table"] == "corpus_documents"
+        assert section_fk["options"].get("ondelete") == "CASCADE"
+
+        block_fk = next(
+            fk
+            for fk in inspector.get_foreign_keys("corpus_blocks")
+            if fk["constrained_columns"] == ["section_id"]
+        )
+        assert block_fk["referred_table"] == "corpus_sections"
+        assert block_fk["options"].get("ondelete") == "CASCADE"
+
+        chunk_fk = next(
+            fk
+            for fk in inspector.get_foreign_keys("corpus_chunks")
+            if fk["constrained_columns"] == ["section_id"]
+        )
+        assert chunk_fk["referred_table"] == "corpus_sections"
+        assert chunk_fk["options"].get("ondelete") == "CASCADE"
+
+        # One corpus per source (CORP-09) and position-unique sections (CORP-02).
+        doc_uniques = [
+            uc["column_names"] for uc in inspector.get_unique_constraints("corpus_documents")
+        ]
+        assert ["source_id"] in doc_uniques
+        section_uniques = [
+            uc["column_names"] for uc in inspector.get_unique_constraints("corpus_sections")
+        ]
+        assert ["document_id", "position"] in section_uniques
+
+        # Sections carry no standalone document_id index — the (document_id,
+        # position) unique above covers the FK lookup and ordered structure read.
+        section_indexes = [ix["column_names"] for ix in inspector.get_indexes("corpus_sections")]
+        assert ["document_id"] not in section_indexes
+        # Blocks/chunks are indexed on their parent FK for the ordered reads.
+        block_indexes = [ix["column_names"] for ix in inspector.get_indexes("corpus_blocks")]
+        assert ["section_id"] in block_indexes
+        chunk_indexes = [ix["column_names"] for ix in inspector.get_indexes("corpus_chunks")]
+        assert ["section_id"] in chunk_indexes
+    finally:
+        engine.dispose()
+
+    command.downgrade(cfg, "base")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        remaining = set(inspect(engine).get_table_names())
+        assert "corpus_documents" not in remaining
+        assert "corpus_sections" not in remaining
+        assert "corpus_blocks" not in remaining
+        assert "corpus_chunks" not in remaining
     finally:
         engine.dispose()

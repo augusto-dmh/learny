@@ -15,6 +15,7 @@ Mapping notes:
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
 from uuid import UUID, uuid4
 
@@ -22,14 +23,21 @@ from sqlalchemy import Connection, insert, select, update
 from sqlalchemy import delete as sa_delete
 
 from app.domain.entities import (
+    CorpusSectionRecord,
+    CorpusStructure,
     IngestionEvent,
     IngestionJob,
     PasswordCredential,
     Session,
     Source,
+    StructureSection,
     User,
 )
 from app.infrastructure.db.metadata import (
+    corpus_blocks,
+    corpus_chunks,
+    corpus_documents,
+    corpus_sections,
     ingestion_events,
     ingestion_jobs,
     sessions,
@@ -290,6 +298,133 @@ class SqlAlchemyIngestionEventRepository:
             .order_by(ingestion_events.c.created_at)
         ).all()
         return [_to_ingestion_event(row) for row in rows]
+
+
+class SqlAlchemyCorpusRepository:
+    """``CorpusRepository`` backed by the corpus_* tables (ADR-0002).
+
+    ``replace`` is delete-then-insert inside the caller's transaction: deleting the
+    source's ``corpus_documents`` row cascades its sections/blocks/chunks away, then
+    the new aggregate is bulk-inserted. So a re-ingestion atomically rebuilds the
+    corpus (CORP-09) and a mid-build rollback leaves the prior corpus intact
+    (CORP-08). ``get_structure`` returns the flat, position-ordered section read
+    model; the web layer nests it (CORP-11).
+    """
+
+    def __init__(self, connection: Connection) -> None:
+        self._conn = connection
+
+    def replace(
+        self,
+        source_id: UUID,
+        *,
+        title: str | None,
+        authors: Sequence[str],
+        language: str | None,
+        schema_version: int,
+        sections: Sequence[CorpusSectionRecord],
+    ) -> None:
+        # Cascade clears any existing sections/blocks/chunks for this source.
+        self._conn.execute(
+            sa_delete(corpus_documents).where(corpus_documents.c.source_id == source_id)
+        )
+
+        document_id = uuid4()
+        self._conn.execute(
+            insert(corpus_documents).values(
+                id=document_id,
+                source_id=source_id,
+                title=title,
+                authors=list(authors),
+                language=language,
+                schema_version=schema_version,
+            )
+        )
+
+        section_rows: list[dict[str, object]] = []
+        block_rows: list[dict[str, object]] = []
+        chunk_rows: list[dict[str, object]] = []
+        for record in sections:
+            section = record.section
+            section_id = uuid4()
+            section_rows.append(
+                {
+                    "id": section_id,
+                    "document_id": document_id,
+                    "position": section.position,
+                    "depth": section.depth,
+                    "title": section.title,
+                    "section_path": list(section.section_path),
+                    "anchor": section.anchor,
+                    "markdown": record.markdown,
+                }
+            )
+            for block in section.blocks:
+                block_rows.append(
+                    {
+                        "id": uuid4(),
+                        "section_id": section_id,
+                        "position": block.position,
+                        "block_type": block.block_type,
+                        "html_fragment": block.html_fragment,
+                    }
+                )
+            for chunk in record.chunks:
+                chunk_rows.append(
+                    {
+                        "id": uuid4(),
+                        "section_id": section_id,
+                        "chunk_index": chunk.index,
+                        "text": chunk.text,
+                        "section_path": list(chunk.section_path),
+                        "anchor": chunk.anchor,
+                        "page_span": chunk.page_span,
+                    }
+                )
+
+        if section_rows:
+            self._conn.execute(insert(corpus_sections), section_rows)
+        if block_rows:
+            self._conn.execute(insert(corpus_blocks), block_rows)
+        if chunk_rows:
+            self._conn.execute(insert(corpus_chunks), chunk_rows)
+
+    def get_structure(self, source_id: UUID) -> CorpusStructure | None:
+        document = self._conn.execute(
+            select(corpus_documents).where(corpus_documents.c.source_id == source_id)
+        ).one_or_none()
+        if document is None:
+            return None
+
+        # Project only the read-model columns: ``markdown`` is the section's full
+        # derived text and would make this TOC read O(book size) if selected.
+        rows = self._conn.execute(
+            select(
+                corpus_sections.c.position,
+                corpus_sections.c.title,
+                corpus_sections.c.depth,
+                corpus_sections.c.section_path,
+                corpus_sections.c.anchor,
+            )
+            .where(corpus_sections.c.document_id == document.id)
+            .order_by(corpus_sections.c.position)
+        ).all()
+        sections = tuple(
+            StructureSection(
+                position=row.position,
+                title=row.title,
+                depth=row.depth,
+                section_path=tuple(row.section_path),
+                anchor=row.anchor,
+            )
+            for row in rows
+        )
+        return CorpusStructure(
+            title=document.title,
+            authors=tuple(document.authors),
+            language=document.language,
+            sections=sections,
+        )
 
 
 def _to_user(row) -> User:  # noqa: ANN001 — Row is an internal SQLAlchemy type

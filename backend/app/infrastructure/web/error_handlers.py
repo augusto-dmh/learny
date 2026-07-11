@@ -22,6 +22,7 @@ from fastapi.responses import JSONResponse
 
 from app.application.errors import (
     ActiveIngestionExists,
+    CorpusNotFound,
     EmailAlreadyExists,
     EnqueueFailed,
     IngestionNotFound,
@@ -59,6 +60,7 @@ _STATUS_BY_ERROR = {
     ActiveIngestionExists: status.HTTP_409_CONFLICT,
     IngestionNotFound: status.HTTP_404_NOT_FOUND,
     EnqueueFailed: status.HTTP_502_BAD_GATEWAY,
+    CorpusNotFound: status.HTTP_404_NOT_FOUND,
 }
 
 # An invalid upload maps to a status keyed by its ``kind`` (design §Error Handling):

@@ -10,9 +10,11 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  fetchSourceStructure,
   getSource,
   listSources,
   uploadSource,
+  type SourceStructure,
   type SourceSummary,
 } from "../app/lib/sources";
 
@@ -102,6 +104,55 @@ describe("sources client (T7)", () => {
     const sent = body.get("file") as File;
     expect(sent).toBeInstanceOf(File);
     expect(sent.name).toBe("book.epub");
+  });
+
+  it("fetchSourceStructure GETs /api/sources/{id}/structure and parses the nested tree", async () => {
+    const structure: SourceStructure = {
+      title: "My Book",
+      authors: ["Ada Lovelace"],
+      language: "en",
+      sections: [
+        {
+          title: "Chapter 1",
+          depth: 0,
+          section_path: ["Chapter 1"],
+          anchor: "chapter01.xhtml",
+          children: [
+            {
+              title: "Section 1.1",
+              depth: 1,
+              section_path: ["Chapter 1", "Section 1.1"],
+              anchor: "chapter01.xhtml#sec-1",
+              children: [],
+            },
+          ],
+        },
+      ],
+    };
+    const fetchMock = fetchMockFn(async () => jsonResponse(200, structure));
+
+    const result = await fetchSourceStructure(
+      "s1",
+      fetchMock as unknown as typeof fetch,
+    );
+
+    expect(result).toEqual(structure);
+    // The nested child value survives the parse (not just the top-level shape).
+    expect(result.sections[0].children[0].title).toBe("Section 1.1");
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/sources/s1/structure");
+    expect(init.method).toBe("GET");
+    expect(init.credentials).toBe("same-origin");
+  });
+
+  it("fetchSourceStructure surfaces the backend error detail on a non-OK response", async () => {
+    const fetchMock = fetchMockFn(async () =>
+      jsonResponse(404, { detail: "That source has no structure yet." }),
+    );
+
+    await expect(
+      fetchSourceStructure("s1", fetchMock as unknown as typeof fetch),
+    ).rejects.toThrow("That source has no structure yet.");
   });
 
   it("uploadSource surfaces the backend error detail on a rejected upload", async () => {

@@ -17,10 +17,11 @@ from unittest.mock import patch
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import Engine
+from sqlalchemy import Engine, func, select
 from sqlalchemy import delete as sa_delete
 
 from app.domain.entities import (
+    CorpusStructure,
     IngestionEvent,
     IngestionEventType,
     IngestionJob,
@@ -28,17 +29,31 @@ from app.domain.entities import (
     Source,
     User,
 )
-from app.infrastructure.db.metadata import users
+from app.infrastructure.db.metadata import (
+    corpus_blocks,
+    corpus_chunks,
+    corpus_documents,
+    corpus_sections,
+    users,
+)
 from app.infrastructure.db.repositories import (
+    SqlAlchemyCorpusRepository,
     SqlAlchemyIngestionEventRepository,
     SqlAlchemyIngestionJobRepository,
     SqlAlchemySourceRepository,
     SqlAlchemyUserRepository,
 )
 from app.infrastructure.worker.enqueuer import CeleryIngestionEnqueuer
-from app.infrastructure.worker.steps import RetryableIngestionError
+from app.infrastructure.worker.steps import NoOpIngestionStep, RetryableIngestionError
 from app.worker.tasks import run_ingestion
 from tests.conftest import requires_db
+from tests.fakes import FakeStorage
+from tests.fixtures_epub import (
+    EXPECTED_VALID_TITLE,
+    no_toc_book,
+    not_an_epub,
+    valid_book,
+)
 
 pytestmark = requires_db
 
@@ -153,6 +168,54 @@ def _read_event_types(engine: Engine, job_id: UUID) -> list[str]:
     return [e.type for e in _read_events(engine, job_id)]
 
 
+def _read_structure(engine: Engine, source_id: UUID) -> CorpusStructure | None:
+    with engine.connect() as conn:
+        return SqlAlchemyCorpusRepository(conn).get_structure(source_id)
+
+
+def _count_for_source(engine: Engine, table, source_id: UUID) -> int:  # noqa: ANN001
+    """Count rows of a corpus table reachable from ``source_id`` via FK joins."""
+    stmt = select(func.count()).select_from(table)
+    if table in (corpus_blocks, corpus_chunks):
+        stmt = stmt.join(corpus_sections, table.c.section_id == corpus_sections.c.id)
+        stmt = stmt.join(corpus_documents, corpus_sections.c.document_id == corpus_documents.c.id)
+    elif table is corpus_sections:
+        stmt = stmt.join(corpus_documents, corpus_sections.c.document_id == corpus_documents.c.id)
+    stmt = stmt.where(corpus_documents.c.source_id == source_id)
+    with engine.connect() as conn:
+        return conn.execute(stmt).scalar_one()
+
+
+def _serve_bytes(monkeypatch, object_key: str, data: bytes) -> None:  # noqa: ANN001
+    """Point the task's storage factory at a fake serving ``data`` for ``object_key``.
+
+    Keeps the REAL parser/converter/repository/engine; only object storage is faked
+    so a committed source's bytes come from the fixture, not a live object store.
+    """
+    storage = FakeStorage()
+    storage.objects[object_key] = data
+    monkeypatch.setattr("app.worker.tasks._build_storage", lambda: storage)
+
+
+def _add_queued_job(engine: Engine, source_id: UUID) -> IngestionJob:
+    """Commit a fresh queued job for a source whose prior job is already terminal."""
+    now = datetime.now(UTC)
+    job = IngestionJob(
+        id=uuid4(),
+        source_id=source_id,
+        status=IngestionStatus.QUEUED,
+        attempts=0,
+        last_error=None,
+        created_at=now,
+        updated_at=now,
+    )
+    with engine.begin() as conn:
+        SqlAlchemyIngestionJobRepository(conn).add(job)
+    return job
+
+
+_VALID_SECTION_TITLES = ["Cover", "Part I", "Chapter 1", "Section 2", "Chapter 2"]
+
 # Fixed, non-secret durable failure text the task persists (ING-08 redaction).
 _REDACTED = "Ingestion processing failed."
 
@@ -160,7 +223,10 @@ _REDACTED = "Ingestion processing failed."
 def test_run_ingestion_success_drives_job_to_succeeded(seed, db_engine: Engine) -> None:
     ctx = seed(IngestionStatus.QUEUED)
 
-    _run(FakeSelf(), str(ctx.source.id), str(ctx.job.id))
+    # Lifecycle-only assertion: inject the no-op step so no parsing/storage runs
+    # (the real corpus-build path is covered by the fixture-EPUB tests below).
+    with patch("app.worker.tasks._build_step", lambda conn: NoOpIngestionStep()):
+        _run(FakeSelf(), str(ctx.source.id), str(ctx.job.id))
 
     job = _read_job(db_engine, ctx.job.id)
     assert job.status == IngestionStatus.SUCCEEDED
@@ -181,8 +247,8 @@ def test_run_ingestion_plain_error_is_terminal_failure(seed, db_engine: Engine) 
     secret = "s3://learny-sources/u1/private-key.epub could not be read"
 
     with patch(
-        "app.worker.tasks.NoOpIngestionStep",
-        lambda: RaisingStep(RuntimeError(secret)),
+        "app.worker.tasks._build_step",
+        lambda conn: RaisingStep(RuntimeError(secret)),
     ):
         _run(FakeSelf(), str(ctx.source.id), str(ctx.job.id))
 
@@ -203,15 +269,13 @@ def test_run_ingestion_plain_error_is_terminal_failure(seed, db_engine: Engine) 
     ]
 
 
-def test_run_ingestion_retryable_records_retry_and_retries(
-    seed, db_engine: Engine
-) -> None:
+def test_run_ingestion_retryable_records_retry_and_retries(seed, db_engine: Engine) -> None:
     ctx = seed(IngestionStatus.QUEUED)
     fake_self = FakeSelf(retries=0, max_retries=3)
 
     with patch(
-        "app.worker.tasks.NoOpIngestionStep",
-        lambda: RaisingStep(
+        "app.worker.tasks._build_step",
+        lambda conn: RaisingStep(
             RetryableIngestionError("timeout calling https://internal/api?token=abc")
         ),
     ):
@@ -241,8 +305,8 @@ def test_run_ingestion_retryable_exhausted_fails(seed, db_engine: Engine) -> Non
     fake_self = FakeSelf(retries=3, max_retries=3)  # retries == max ⇒ exhausted
 
     with patch(
-        "app.worker.tasks.NoOpIngestionStep",
-        lambda: RaisingStep(RetryableIngestionError("still unreachable")),
+        "app.worker.tasks._build_step",
+        lambda conn: RaisingStep(RetryableIngestionError("still unreachable")),
     ):
         _run(fake_self, str(ctx.source.id), str(ctx.job.id))
 
@@ -286,3 +350,125 @@ def test_celery_enqueuer_applies_async_with_ids_only() -> None:
         CeleryIngestionEnqueuer().enqueue_ingestion(source_id=source_id, job_id=job_id)
 
     apply_async.assert_called_once_with(args=[str(source_id), str(job_id)])
+
+
+# --- Corpus build through the real step (T9 integration) ------------------------
+#
+# These drive the full task with the REAL parser/converter/repository/engine and
+# only fake object storage (serving fixture bytes), so the fixture EPUB becomes a
+# durable corpus end-to-end (CORP-01..10) and malformed/replace paths are exercised
+# against Postgres exactly as production runs them.
+
+
+def test_run_ingestion_builds_corpus_from_valid_epub(
+    seed, db_engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = seed(IngestionStatus.QUEUED)
+    _serve_bytes(monkeypatch, ctx.source.object_key, valid_book())
+
+    _run(FakeSelf(), str(ctx.source.id), str(ctx.job.id))
+
+    job = _read_job(db_engine, ctx.job.id)
+    assert job.status == IngestionStatus.SUCCEEDED
+    assert _read_source_status(db_engine, ctx.source.id) == "ready"
+
+    # The canonical corpus is persisted with the fixture's structure (CORP-01/02).
+    structure = _read_structure(db_engine, ctx.source.id)
+    assert structure is not None
+    assert structure.title == EXPECTED_VALID_TITLE
+    assert structure.authors == ("Ada Lovelace", "Alan Turing")
+    assert structure.language == "en"
+    assert [s.title for s in structure.sections] == _VALID_SECTION_TITLES
+
+    # Block and chunk rows exist with the fixture's counts (CORP-03/05).
+    assert _count_for_source(db_engine, corpus_sections, ctx.source.id) == 5
+    assert _count_for_source(db_engine, corpus_blocks, ctx.source.id) == 12
+    assert _count_for_source(db_engine, corpus_chunks, ctx.source.id) == 5
+
+    # The corpus_built event records the exact counts (CORP-10), between started
+    # and succeeded in the durable progress log.
+    built = [e for e in _read_events(db_engine, ctx.job.id) if e.type == "corpus_built"]
+    assert len(built) == 1
+    assert built[0].message == "sections=5 blocks=12 chunks=5"
+    assert _read_event_types(db_engine, ctx.job.id) == [
+        IngestionEventType.QUEUED,
+        IngestionEventType.STARTED,
+        "corpus_built",
+        IngestionEventType.SUCCEEDED,
+    ]
+
+
+def test_run_ingestion_invalid_epub_fails_with_no_corpus(
+    seed, db_engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = seed(IngestionStatus.QUEUED)
+    _serve_bytes(monkeypatch, ctx.source.object_key, not_an_epub())
+
+    _run(FakeSelf(), str(ctx.source.id), str(ctx.job.id))
+
+    job = _read_job(db_engine, ctx.job.id)
+    assert job.status == IngestionStatus.FAILED
+    assert job.last_error == _REDACTED
+    assert _read_source_status(db_engine, ctx.source.id) == "failed"
+
+    # Terminal parse failure leaves zero corpus rows (CORP-06); no corpus_built.
+    assert _read_structure(db_engine, ctx.source.id) is None
+    assert _count_for_source(db_engine, corpus_documents, ctx.source.id) == 0
+    assert _read_event_types(db_engine, ctx.job.id) == [
+        IngestionEventType.QUEUED,
+        IngestionEventType.STARTED,
+        IngestionEventType.FAILED,
+    ]
+
+
+def test_reingestion_success_leaves_exactly_one_corpus(
+    seed, db_engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = seed(IngestionStatus.QUEUED)
+    _serve_bytes(monkeypatch, ctx.source.object_key, valid_book())
+    _run(FakeSelf(), str(ctx.source.id), str(ctx.job.id))
+
+    # A second successful run on a fresh queued job with the same bytes (CORP-09).
+    job2 = _add_queued_job(db_engine, ctx.source.id)
+    _run(FakeSelf(), str(ctx.source.id), str(job2.id))
+
+    assert _read_job(db_engine, job2.id).status == IngestionStatus.SUCCEEDED
+    # Exactly one corpus for the source; sections/blocks not duplicated (CORP-09).
+    assert _count_for_source(db_engine, corpus_documents, ctx.source.id) == 1
+    assert _count_for_source(db_engine, corpus_sections, ctx.source.id) == 5
+    assert _count_for_source(db_engine, corpus_blocks, ctx.source.id) == 12
+
+
+def test_reingestion_failure_keeps_prior_corpus(
+    seed, db_engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = seed(IngestionStatus.QUEUED)
+    _serve_bytes(monkeypatch, ctx.source.object_key, valid_book())
+    _run(FakeSelf(), str(ctx.source.id), str(ctx.job.id))
+    assert _count_for_source(db_engine, corpus_sections, ctx.source.id) == 5
+
+    # Second run: serve a DIFFERENT (2-section) book, but force the corpus_built
+    # append to raise AFTER replace has run. The step transaction must roll back the
+    # delete+insert, so the prior 5-section corpus survives intact (CORP-08).
+    _serve_bytes(monkeypatch, ctx.source.object_key, no_toc_book())
+    original_append = SqlAlchemyIngestionEventRepository.append
+
+    def _failing_append(self, event: IngestionEvent) -> IngestionEvent:  # noqa: ANN001
+        if event.type == "corpus_built":
+            raise RuntimeError("boom after replace")
+        return original_append(self, event)
+
+    monkeypatch.setattr(SqlAlchemyIngestionEventRepository, "append", _failing_append)
+
+    job2 = _add_queued_job(db_engine, ctx.source.id)
+    _run(FakeSelf(), str(ctx.source.id), str(job2.id))
+
+    assert _read_job(db_engine, job2.id).status == IngestionStatus.FAILED
+    assert _read_source_status(db_engine, ctx.source.id) == "failed"
+
+    # Prior corpus intact and readable: still the original valid book (CORP-08).
+    structure = _read_structure(db_engine, ctx.source.id)
+    assert structure is not None
+    assert [s.title for s in structure.sections] == _VALID_SECTION_TITLES
+    assert _count_for_source(db_engine, corpus_documents, ctx.source.id) == 1
+    assert _count_for_source(db_engine, corpus_sections, ctx.source.id) == 5

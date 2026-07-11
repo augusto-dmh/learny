@@ -7,8 +7,8 @@ This file only tracks how those phases map onto tlc cycles. Do not duplicate TDD
 |---|---|---|
 | `scaffold-and-identity` | 1 (Repository scaffold) + 2 (Identity foundation) | Done (PR #4) |
 | `source-storage` | 3 (Source storage) | Done (PR #7, #8) |
-| `worker-foundation` | 4 (Worker foundation) | Specify (in progress) |
-| _next_ | 5 (EPUB corpus pipeline) | Not started |
+| `worker-foundation` | 4 (Worker foundation) | Done (PR #9) |
+| `epub-corpus-pipeline` | 5 (EPUB corpus pipeline) | Execute complete + Verifier PASS (branch `feat/epub-corpus-pipeline`, PR pending) |
 | _next_ | 6 (Retrieval indexes) | Not started |
 | _next_ | 7 (Cited Q&A) | Not started |
 | _next_ | 8 (Teaching sessions) | Not started |

@@ -14,6 +14,7 @@ from uuid import uuid4
 import pytest
 from botocore.exceptions import BotoCoreError, ClientError
 
+from app.application.errors import StorageUnavailable
 from app.infrastructure.storage.s3 import ObjectNotFound, S3StorageAdapter
 
 ENDPOINT = os.environ.get("LEARNY_STORAGE_ENDPOINT", "http://localhost:9000")
@@ -73,3 +74,52 @@ def test_ensure_bucket_is_idempotent(storage: S3StorageAdapter) -> None:
 def test_get_missing_key_raises_object_not_found(storage: S3StorageAdapter) -> None:
     with pytest.raises(ObjectNotFound):
         storage.get_object("sources/user/does-not-exist.epub")
+
+
+class _FaultingClient:
+    """boto3-client stub: bucket exists, get_object raises the configured error."""
+
+    def __init__(self, error: Exception) -> None:
+        self._error = error
+
+    def head_bucket(self, **_kwargs) -> dict:  # noqa: ANN003
+        return {}
+
+    def get_object(self, **_kwargs) -> dict:  # noqa: ANN003
+        raise self._error
+
+
+def _adapter_with(error: Exception) -> S3StorageAdapter:
+    adapter = S3StorageAdapter(
+        endpoint=ENDPOINT,
+        access_key=ACCESS_KEY,
+        secret_key=SECRET_KEY,
+        bucket="learny-test-faults",
+        region=REGION,
+    )
+    adapter._client = _FaultingClient(error)  # noqa: SLF001 — unit-level stub
+    return adapter
+
+
+def test_get_transient_client_error_raises_storage_unavailable() -> None:
+    """Non-missing-object S3 faults surface as the Learny-owned error.
+
+    The port contract keeps vendor exception types inside this adapter, so
+    callers (the ingestion step's retry classification) never import botocore.
+    """
+    error = ClientError({"Error": {"Code": "SlowDown", "Message": "slow"}}, "GetObject")
+
+    with pytest.raises(StorageUnavailable):
+        _adapter_with(error).get_object("sources/a-book.epub")
+
+
+def test_get_botocore_error_raises_storage_unavailable() -> None:
+    with pytest.raises(StorageUnavailable):
+        _adapter_with(BotoCoreError()).get_object("sources/a-book.epub")
+
+
+def test_get_missing_key_still_raises_object_not_found() -> None:
+    error = ClientError({"Error": {"Code": "NoSuchKey", "Message": "gone"}}, "GetObject")
+
+    with pytest.raises(ObjectNotFound):
+        _adapter_with(error).get_object("sources/a-book.epub")
