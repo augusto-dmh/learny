@@ -246,6 +246,45 @@ describe("SourcesPanel (T8)", () => {
     expect(posted?.[0]).toBe("/api/sources/s-up/ingestion");
   });
 
+  it("shows Starting… + disables the button in flight and blocks a double-start", async () => {
+    // The whole point of the SPEC_DEVIATION / lesson L-004 (keep the button
+    // mounted + disabled rather than an optimistic flip) is that the in-flight
+    // state is observable/testable. Drive it with a POST that resolves only when
+    // we say so, so the intermediate frame is actually asserted.
+    let resolvePost!: (r: Response) => void;
+    const pending = new Promise<Response>((resolve) => {
+      resolvePost = resolve;
+    });
+    const fetchMock = routedFetch({
+      "GET /api/auth/me": () => authedMe.clone(),
+      "GET /api/sources": () => jsonResponse(200, [mixed[0]]),
+      "POST /api/sources/s-up/ingestion": () => pending,
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<SourcesPanel />);
+    await screen.findByText("Uploaded Book");
+
+    fireEvent.click(screen.getByRole("button", { name: "Start ingestion" }));
+
+    // In flight: label flips to "Starting…" and the button is disabled.
+    const starting = (await screen.findByRole("button", {
+      name: "Starting…",
+    })) as HTMLButtonElement;
+    expect(starting.disabled).toBe(true);
+
+    // Clicking the disabled button issues no second POST (no double-start).
+    fireEvent.click(starting);
+    const posts = fetchMock.mock.calls.filter(([, init]) => init?.method === "POST");
+    expect(posts).toHaveLength(1);
+
+    // Resolve the request → the row reaches processing and the control is gone.
+    resolvePost(jsonResponse(202, ingestionQueued));
+    await waitFor(() =>
+      expect(screen.getByTestId("status-s-up").textContent).toBe("processing"),
+    );
+  });
+
   it("surfaces the error and keeps the row uploaded when the start is rejected", async () => {
     vi.stubGlobal(
       "fetch",
