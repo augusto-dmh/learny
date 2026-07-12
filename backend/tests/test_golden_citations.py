@@ -45,6 +45,11 @@ def test_answer_cites_target_and_only_source_passages(db_conn: Connection, case)
     assert result.citations, "an answered result must carry citations"
     cited_anchors = {citation.anchor for citation in result.citations}
     assert case.expected_anchor in cited_anchors
+    # NOTE: this bound is structurally satisfied today — retrieval is source-scoped
+    # and the deterministic extractive adapter can only cite retrieved (in-source)
+    # evidence, so it cannot yet catch a grounding-filter regression. It becomes a
+    # discriminating "no citation outside the source" guard once a generative
+    # adapter that can cite freely replaces the extractive one; revisit then.
     assert cited_anchors <= GOLDEN_SECTION_ANCHORS
 
 
