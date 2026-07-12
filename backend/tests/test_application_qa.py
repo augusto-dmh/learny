@@ -380,6 +380,35 @@ def test_ask_emits_one_content_free_completion_log(
     assert "the secret answer body" not in message
 
 
+def test_ask_emits_one_content_free_completion_log_on_not_found(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # QA-12 covers "answered or not found": the not-found completion also logs
+    # exactly once, content-free, with the not-found outcome.
+    owner = _user()
+    sources = FakeSourceRepository()
+    source = _owned_source(owner.id)
+    sources.add(source)
+    generation = FakeAnswerGeneration()
+    service = _ask(
+        sources=sources,
+        retrieve=FakeRetrieveEvidence(results=[]),
+        generation=generation,
+    )
+
+    with caplog.at_level(logging.INFO, logger="app.application.qa"):
+        service(user=owner, source_id=source.id, question="my private question text")
+
+    records = [r for r in caplog.records if r.name == "app.application.qa"]
+    assert len(records) == 1
+    message = records[0].getMessage()
+    assert "outcome=not_found_in_source" in message
+    assert f"source_id={source.id}" in message
+    assert "evidence_count=0" in message
+    assert f"model={_MODEL}" in message
+    assert "my private question text" not in message
+
+
 def test_qa_module_imports_no_web_or_provider_sdk() -> None:
     # Done-when / ADR-0007/0009: no FastAPI/SQLAlchemy/SDK type crosses this layer.
     tree = ast.parse(inspect.getsource(qa_module))
