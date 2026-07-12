@@ -35,6 +35,11 @@ from app.application.ingestion import ReadIngestion, RunIngestion, StartIngestio
 from app.application.qa import AskQuestion
 from app.application.retrieval import RetrieveEvidence
 from app.application.sources import CreateSource, GetSource, ListSources
+from app.application.teaching import (
+    ListTeachingSessions,
+    ReadTeachingSession,
+    StartTeachingSession,
+)
 from app.core.config import Settings, get_settings
 from app.domain.entities import Session, User
 from app.domain.ports import AnswerGenerationPort, IngestionEnqueuer, StoragePort
@@ -48,6 +53,8 @@ from app.infrastructure.db.repositories import (
     SqlAlchemyIngestionJobRepository,
     SqlAlchemySessionRepository,
     SqlAlchemySourceRepository,
+    SqlAlchemyTeachingSessionRepository,
+    SqlAlchemyTeachingTurnRepository,
     SqlAlchemyUserRepository,
 )
 from app.infrastructure.db.retrieval import SqlAlchemyRetrievalRepository
@@ -330,4 +337,43 @@ def get_ask_question(conn: DbConnection, generation: AnswerGeneration) -> AskQue
         retrieve=get_retrieve_evidence(conn),
         generation=generation,
         evidence_top_k=get_settings().qa_evidence_top_k,
+    )
+
+
+# --- Teaching sessions (Phase 8) -----------------------------------------------
+#
+# The session start/read/list services are wired on the request-scoped connection,
+# exactly like the Q&A path: the source repo enforces ownership, the corpus repo
+# resolves the target section, and the teaching repos persist/read the aggregate.
+# The turn service adds the scoped retrieval product and the teaching generator.
+
+
+def get_start_teaching_session(conn: DbConnection) -> StartTeachingSession:
+    """Wire ``StartTeachingSession`` on the request-scoped connection (TEACH-01..04)."""
+    return StartTeachingSession(
+        sources=SqlAlchemySourceRepository(conn),
+        corpus=SqlAlchemyCorpusRepository(conn),
+        sessions=SqlAlchemyTeachingSessionRepository(conn),
+        authorize=AuthorizeOwnership(),
+        clock=_clock,
+        ids=uuid4,
+    )
+
+
+def get_read_teaching_session(conn: DbConnection) -> ReadTeachingSession:
+    """Wire ``ReadTeachingSession`` on the request-scoped connection (TEACH-05/06/20)."""
+    return ReadTeachingSession(
+        sessions=SqlAlchemyTeachingSessionRepository(conn),
+        turns=SqlAlchemyTeachingTurnRepository(conn),
+        sources=SqlAlchemySourceRepository(conn),
+        authorize=AuthorizeOwnership(),
+    )
+
+
+def get_list_teaching_sessions(conn: DbConnection) -> ListTeachingSessions:
+    """Wire ``ListTeachingSessions`` on the request-scoped connection (TEACH-21)."""
+    return ListTeachingSessions(
+        sources=SqlAlchemySourceRepository(conn),
+        sessions=SqlAlchemyTeachingSessionRepository(conn),
+        authorize=AuthorizeOwnership(),
     )
