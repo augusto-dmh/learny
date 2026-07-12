@@ -123,3 +123,19 @@ def rate_limit_upload(request: Request) -> None:
             detail="Too many attempts. Please try again later.",
             headers={"Retry-After": str(retry_after)},
         )
+
+
+def rate_limit_questions(request: Request) -> None:
+    """FastAPI dependency: throttle questions; 429 when the window is exceeded.
+
+    Shares the same swappable limiter and per-IP+route key as ``rate_limit_auth``
+    (same ``KNOWN LIMITATION`` under the proxy topology), applied to the questions
+    endpoint so a client cannot flood retrieval/generation (QA-22).
+    """
+    allowed, retry_after = get_rate_limiter().hit(_client_key(request))
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many attempts. Please try again later.",
+            headers={"Retry-After": str(retry_after)},
+        )

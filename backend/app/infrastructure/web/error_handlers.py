@@ -22,6 +22,7 @@ from fastapi.responses import JSONResponse
 
 from app.application.errors import (
     ActiveIngestionExists,
+    AnswerGenerationFailed,
     CorpusNotFound,
     EmailAlreadyExists,
     EnqueueFailed,
@@ -31,6 +32,7 @@ from app.application.errors import (
     NotAuthenticated,
     NotAuthorized,
     SourceNotFound,
+    SourceNotReady,
     StorageUnavailable,
     ValidationError,
 )
@@ -61,6 +63,7 @@ _STATUS_BY_ERROR = {
     IngestionNotFound: status.HTTP_404_NOT_FOUND,
     EnqueueFailed: status.HTTP_502_BAD_GATEWAY,
     CorpusNotFound: status.HTTP_404_NOT_FOUND,
+    SourceNotReady: status.HTTP_409_CONFLICT,
 }
 
 # An invalid upload maps to a status keyed by its ``kind`` (design §Error Handling):
@@ -90,8 +93,20 @@ async def _invalid_source_upload_handler(
     return JSONResponse(status_code=status_code, content={"detail": str(exc)})
 
 
+async def _answer_generation_failed_handler(
+    _request: Request, _exc: AnswerGenerationFailed
+) -> JSONResponse:
+    # 502 with a fixed, generic body: the wrapped exception may carry provider or
+    # internal detail, so the message is never echoed (QA-17).
+    return JSONResponse(
+        status_code=status.HTTP_502_BAD_GATEWAY,
+        content={"detail": "Answer generation failed. Please try again."},
+    )
+
+
 def register_error_handlers(app: FastAPI) -> None:
     """Attach the identity + source-storage exception handlers to the FastAPI app."""
     for error_type, status_code in _STATUS_BY_ERROR.items():
         app.add_exception_handler(error_type, _make_handler(status_code))
     app.add_exception_handler(InvalidSourceUpload, _invalid_source_upload_handler)
+    app.add_exception_handler(AnswerGenerationFailed, _answer_generation_failed_handler)
