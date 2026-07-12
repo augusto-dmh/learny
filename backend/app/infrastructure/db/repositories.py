@@ -29,6 +29,7 @@ from app.domain.entities import (
     CorpusSectionRecord,
     CorpusStructure,
     Evidence,
+    HistoryTurn,
     IngestionEvent,
     IngestionJob,
     PasswordCredential,
@@ -650,6 +651,29 @@ class SqlAlchemyTeachingTurnRepository:
             seen.add(row.id)
             result.append(_to_teaching_turn(row, tuple(turns[row.id])))
         return result
+
+    def recent_history(
+        self, session_id: UUID, limit: int
+    ) -> tuple[int, list[HistoryTurn]]:
+        # Two cheap statements, no citation join: the turn path needs only the
+        # count (the next turn_index) and the bounded (message, answer_text)
+        # pairs, oldest first.
+        total = self._conn.execute(
+            select(func.count())
+            .select_from(teaching_turns)
+            .where(teaching_turns.c.session_id == session_id)
+        ).scalar_one()
+        rows = self._conn.execute(
+            select(teaching_turns.c.message, teaching_turns.c.answer_text)
+            .where(teaching_turns.c.session_id == session_id)
+            .order_by(teaching_turns.c.turn_index.desc())
+            .limit(limit)
+        ).all()
+        history = [
+            HistoryTurn(message=row.message, response_text=row.answer_text)
+            for row in reversed(rows)
+        ]
+        return total, history
 
 
 def _to_user(row) -> User:  # noqa: ANN001 — Row is an internal SQLAlchemy type

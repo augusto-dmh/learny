@@ -234,6 +234,16 @@ class FakeTeachingTurnRepository:
             key=lambda t: t.turn_index,
         )
 
+    def recent_history(
+        self, session_id: UUID, limit: int
+    ) -> tuple[int, list[HistoryTurn]]:
+        turns = self.list_for_session(session_id)
+        history = [
+            HistoryTurn(message=t.message, response_text=t.answer_text)
+            for t in turns[-limit:]
+        ]
+        return len(turns), history
+
 
 class FakeScopedRetrieveEvidence:
     """``RetrieveEvidence`` double that records the ``anchors`` scope per call.

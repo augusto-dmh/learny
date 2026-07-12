@@ -29,7 +29,6 @@ from app.application.identity import AuthorizeOwnership
 from app.application.ingestion import SOURCE_STATUS_READY, authorized_source
 from app.application.retrieval import RetrieveEvidence
 from app.domain.entities import (
-    HistoryTurn,
     Source,
     TeachingSession,
     TeachingSessionSummary,
@@ -295,14 +294,13 @@ class PostTeachingTurn:
             s.anchor for s in sections if s.section_path[:depth] == target.section_path
         ]
 
-        prior = self._turns.list_for_session(session_id)
         # Bounded conversation context: the last ``history_turns`` message/response
         # pairs (response empty for a not-found turn), all of them when fewer exist
-        # (TEACH-12).
-        history = [
-            HistoryTurn(message=t.message, response_text=t.answer_text)
-            for t in prior[-self._history_turns :]
-        ]
+        # (TEACH-12). ``recent_history`` skips the citation payloads that
+        # ``list_for_session`` loads — the turn path never uses them.
+        total_turns, history = self._turns.recent_history(
+            session_id, self._history_turns
+        )
 
         evidence = self._retrieve(
             user=user,
@@ -312,7 +310,7 @@ class PostTeachingTurn:
             anchors=subtree_anchors,
         )
 
-        turn_index = len(prior)
+        turn_index = total_turns
         if not evidence:
             # No scoped evidence → not-found; the port is never invoked, and the
             # model identity comes from the port attribute (TEACH-11 / TEACH-24).

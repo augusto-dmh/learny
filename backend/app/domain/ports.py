@@ -462,6 +462,18 @@ class TeachingTurnRepository(Protocol):
         """Return a session's turns by ``turn_index`` ascending, citations loaded."""
         ...
 
+    def recent_history(
+        self, session_id: UUID, limit: int
+    ) -> tuple[int, list[HistoryTurn]]:
+        """Return the turn count and the last ``limit`` history pairs, oldest first.
+
+        The turn path needs only the total (the next ``turn_index``) and the
+        bounded ``(message, response_text)`` context — never the citation
+        payloads — so this read skips the citation join that
+        ``list_for_session`` pays for.
+        """
+        ...
+
 
 @runtime_checkable
 class TeachingGenerationPort(Protocol):

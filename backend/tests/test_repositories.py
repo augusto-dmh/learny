@@ -19,6 +19,7 @@ from app.application.errors import TeachingTurnConflict
 from app.domain.entities import (
     CorpusSectionRecord,
     Evidence,
+    HistoryTurn,
     IngestionEvent,
     IngestionEventType,
     IngestionJob,
@@ -1171,6 +1172,50 @@ def test_teaching_turn_list_orders_by_turn_index_and_persists_not_found(
     assert listed[0].citations == ()
     assert listed[0].evidence_count == 0
     assert [c.anchor for c in listed[1].citations] == ["ch.xhtml#a"]
+
+
+def test_teaching_turn_recent_history_counts_and_bounds(db_conn: Connection) -> None:
+    # The turn path's read: total turn count plus the last N (message,
+    # answer_text) pairs oldest-first, without loading citation payloads.
+    source = _persisted_source(db_conn, "teach-turn-history@example.com")
+    session = _persisted_session(db_conn, source.id)
+    repo = SqlAlchemyTeachingTurnRepository(db_conn)
+
+    repo.add(
+        _new_turn(
+            session.id,
+            turn_index=0,
+            message="message 0",
+            answer_text="answer 0",
+            citations=(
+                _citation(source.id, anchor="ch.xhtml#a", snippet="alpha", score=0.5),
+            ),
+        )
+    )
+    repo.add(
+        _new_turn(
+            session.id,
+            turn_index=1,
+            message="message 1",
+            answer_status="not_found_in_source",
+            answer_text="",
+        )
+    )
+    repo.add(
+        _new_turn(session.id, turn_index=2, message="message 2", answer_text="answer 2")
+    )
+
+    total, history = repo.recent_history(session.id, 2)
+    assert total == 3
+    assert history == [
+        HistoryTurn(message="message 1", response_text=""),
+        HistoryTurn(message="message 2", response_text="answer 2"),
+    ]
+
+    # A limit beyond the stored turns returns everything, still oldest-first.
+    total_all, history_all = repo.recent_history(session.id, 10)
+    assert total_all == 3
+    assert [h.message for h in history_all] == ["message 0", "message 1", "message 2"]
 
 
 def test_teaching_turn_duplicate_index_raises_conflict(db_conn: Connection) -> None:
