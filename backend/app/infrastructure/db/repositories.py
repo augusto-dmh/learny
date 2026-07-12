@@ -19,7 +19,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import Connection, bindparam, insert, select, update
+from sqlalchemy import Connection, bindparam, func, insert, select, update
 from sqlalchemy import delete as sa_delete
 
 from app.domain.entities import (
@@ -32,6 +32,8 @@ from app.domain.entities import (
     Session,
     Source,
     StructureSection,
+    TeachingSession,
+    TeachingSessionSummary,
     User,
 )
 from app.infrastructure.db.metadata import (
@@ -43,6 +45,8 @@ from app.infrastructure.db.metadata import (
     ingestion_jobs,
     sessions,
     sources,
+    teaching_sessions,
+    teaching_turns,
     user_credentials,
     users,
 )
@@ -479,6 +483,58 @@ class SqlAlchemyEmbeddingIndexRepository:
         )
 
 
+class SqlAlchemyTeachingSessionRepository:
+    """``TeachingSessionRepository`` backed by the ``teaching_sessions`` table.
+
+    Source-keyed: authorization (ownership) is the application service's job
+    (AD-014). ``list_for_source`` returns newest first with each session's turn
+    count (TEACH-21) via a correlated count over ``teaching_turns``.
+    """
+
+    def __init__(self, connection: Connection) -> None:
+        self._conn = connection
+
+    def add(self, session: TeachingSession) -> TeachingSession:
+        self._conn.execute(
+            insert(teaching_sessions).values(
+                id=session.id,
+                source_id=session.source_id,
+                target_anchor=session.target_anchor,
+                target_section_path=list(session.target_section_path),
+                target_title=session.target_title,
+                created_at=session.created_at,
+                updated_at=session.updated_at,
+            )
+        )
+        return session
+
+    def get_by_id(self, session_id: UUID) -> TeachingSession | None:
+        row = self._conn.execute(
+            select(teaching_sessions).where(teaching_sessions.c.id == session_id)
+        ).one_or_none()
+        return _to_teaching_session(row) if row is not None else None
+
+    def list_for_source(self, source_id: UUID) -> list[TeachingSessionSummary]:
+        turn_count = (
+            select(func.count())
+            .select_from(teaching_turns)
+            .where(teaching_turns.c.session_id == teaching_sessions.c.id)
+            .scalar_subquery()
+            .label("turn_count")
+        )
+        rows = self._conn.execute(
+            select(teaching_sessions, turn_count)
+            .where(teaching_sessions.c.source_id == source_id)
+            .order_by(teaching_sessions.c.created_at.desc())
+        ).all()
+        return [
+            TeachingSessionSummary(
+                session=_to_teaching_session(row), turn_count=row.turn_count
+            )
+            for row in rows
+        ]
+
+
 def _to_user(row) -> User:  # noqa: ANN001 — Row is an internal SQLAlchemy type
     return User(id=row.id, email=row.email, created_at=row.created_at)
 
@@ -539,4 +595,16 @@ def _to_ingestion_event(row) -> IngestionEvent:  # noqa: ANN001
         type=row.type,
         message=row.message,
         created_at=row.created_at,
+    )
+
+
+def _to_teaching_session(row) -> TeachingSession:  # noqa: ANN001
+    return TeachingSession(
+        id=row.id,
+        source_id=row.source_id,
+        target_anchor=row.target_anchor,
+        target_section_path=tuple(row.target_section_path),
+        target_title=row.target_title,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
     )

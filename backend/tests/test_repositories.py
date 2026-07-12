@@ -26,6 +26,7 @@ from app.domain.entities import (
     PasswordCredential,
     SectionChunk,
     Source,
+    TeachingSession,
     User,
 )
 from app.infrastructure.db.metadata import (
@@ -34,6 +35,7 @@ from app.infrastructure.db.metadata import (
     corpus_documents,
     corpus_sections,
     sources,
+    teaching_turns,
 )
 from app.infrastructure.db.repositories import (
     SqlAlchemyCorpusRepository,
@@ -43,6 +45,7 @@ from app.infrastructure.db.repositories import (
     SqlAlchemyIngestionJobRepository,
     SqlAlchemySessionRepository,
     SqlAlchemySourceRepository,
+    SqlAlchemyTeachingSessionRepository,
     SqlAlchemyUserRepository,
 )
 from app.infrastructure.security.tokens import generate_token, hash_token
@@ -933,3 +936,115 @@ def test_embedding_index_set_embeddings_replaces_existing(db_conn: Connection) -
         select(corpus_chunks.c.embedding).where(corpus_chunks.c.id == chunk_id)
     ).scalar_one()
     assert stored.tolist() == _unit_vector(0, 0.5)
+
+
+# ---- Teaching session repository (TEACH-01/05/21) -------------------------
+
+
+def _new_teaching_session(
+    source_id: UUID,
+    *,
+    anchor: str = "chapter01.xhtml#sec-1",
+    section_path: tuple[str, ...] = ("Chapter 1",),
+    title: str = "Chapter 1",
+    created_at: datetime | None = None,
+) -> TeachingSession:
+    now = created_at or datetime.now(UTC)
+    return TeachingSession(
+        id=uuid4(),
+        source_id=source_id,
+        target_anchor=anchor,
+        target_section_path=section_path,
+        target_title=title,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+def _insert_turn(db_conn: Connection, session_id: UUID, turn_index: int) -> None:
+    """Insert a minimal turn row so a session's turn_count is non-zero (B2 owns
+    the turn repository; this exercises only the count in ``list_for_source``)."""
+    db_conn.execute(
+        insert(teaching_turns).values(
+            id=uuid4(),
+            session_id=session_id,
+            turn_index=turn_index,
+            message="m",
+            answer_status="answered",
+            answer_text="a",
+            model="local-extractive",
+            evidence_count=0,
+            created_at=datetime.now(UTC),
+        )
+    )
+
+
+def test_teaching_session_add_and_get_by_id(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "teach-session-add@example.com")
+    repo = SqlAlchemyTeachingSessionRepository(db_conn)
+
+    session = _new_teaching_session(
+        source.id,
+        anchor="chapter02.xhtml#s3",
+        section_path=("Part I", "Chapter 2"),
+        title="Chapter 2",
+    )
+    returned = repo.add(session)
+    assert returned.id == session.id
+
+    fetched = repo.get_by_id(session.id)
+    assert fetched is not None
+    assert fetched.source_id == source.id
+    assert fetched.target_anchor == "chapter02.xhtml#s3"
+    # section_path round-trips through JSONB back to a tuple (not a list).
+    assert fetched.target_section_path == ("Part I", "Chapter 2")
+    assert fetched.target_title == "Chapter 2"
+    assert repo.get_by_id(uuid4()) is None
+
+
+def test_teaching_session_list_for_source_is_newest_first(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "teach-session-order@example.com")
+    repo = SqlAlchemyTeachingSessionRepository(db_conn)
+
+    base = datetime.now(UTC)
+    older = _new_teaching_session(source.id, created_at=base)
+    newer = _new_teaching_session(source.id, created_at=base + timedelta(minutes=1))
+    repo.add(older)
+    repo.add(newer)
+
+    listed = repo.list_for_source(source.id)
+    assert [s.session.id for s in listed] == [newer.id, older.id]
+
+
+def test_teaching_session_list_includes_turn_count(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "teach-session-count@example.com")
+    repo = SqlAlchemyTeachingSessionRepository(db_conn)
+
+    base = datetime.now(UTC)
+    with_turns = _new_teaching_session(source.id, created_at=base + timedelta(minutes=1))
+    without_turns = _new_teaching_session(source.id, created_at=base)
+    repo.add(with_turns)
+    repo.add(without_turns)
+    _insert_turn(db_conn, with_turns.id, 0)
+    _insert_turn(db_conn, with_turns.id, 1)
+
+    summaries = {s.session.id: s.turn_count for s in repo.list_for_source(source.id)}
+    assert summaries[with_turns.id] == 2
+    assert summaries[without_turns.id] == 0
+
+
+def test_teaching_session_list_is_source_scoped(db_conn: Connection) -> None:
+    source_a = _persisted_source(db_conn, "teach-session-a@example.com")
+    source_b = _persisted_source(db_conn, "teach-session-b@example.com")
+    repo = SqlAlchemyTeachingSessionRepository(db_conn)
+
+    a1 = _new_teaching_session(source_a.id)
+    a2 = _new_teaching_session(source_a.id)
+    b1 = _new_teaching_session(source_b.id)
+    for session in (a1, a2, b1):
+        repo.add(session)
+
+    a_ids = {s.session.id for s in repo.list_for_source(source_a.id)}
+    assert a_ids == {a1.id, a2.id}
+    assert b1.id not in a_ids
+    assert [s.session.id for s in repo.list_for_source(source_b.id)] == [b1.id]
