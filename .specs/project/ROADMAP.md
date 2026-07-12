@@ -13,8 +13,8 @@ This file only tracks how those phases map onto tlc cycles. Do not duplicate TDD
 | `cited-qa` | 7 (Cited Q&A) | Done (PR #13) |
 | `teaching-sessions` | 8 (Teaching sessions) | Done (PR #14) |
 | `golden-fixtures` | 9 (Golden fixtures) | Done (PR #15) |
-| `production-readiness` | 10 (Production-like readiness) | In review |
+| `production-readiness` | 10 (Production-like readiness) | Done (PR #16) |
 
-All 10 TDD-001 phases are now planned/built. The MVP roadmap is complete pending
-this cycle's merge; further work starts from new ADRs/TDDs (see the open follow-ups
-in STATE.md: TDD open question #10 + the cloud LLM/embedding provider ADR).
+All 10 TDD-001 phases are now shipped — the MVP roadmap is complete. Further work
+starts from new ADRs/TDDs (see the open follow-ups in STATE.md: TDD open question
+#10 + the cloud LLM/embedding provider ADR).
