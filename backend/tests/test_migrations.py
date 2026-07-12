@@ -8,6 +8,7 @@ import/compile by ``test_migration_metadata_compiles``.
 
 from __future__ import annotations
 
+import logging
 import os
 import uuid
 
@@ -15,6 +16,8 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, inspect, text
+
+from app.core.logging import SensitiveDataFilter
 
 TEST_DB_URL = os.environ.get("LEARNY_TEST_DATABASE_URL")
 
@@ -530,3 +533,36 @@ def test_migration_0006_creates_teaching_tables(monkeypatch) -> None:
         assert "teaching_turn_citations" not in remaining
     finally:
         engine.dispose()
+
+
+@pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
+def test_in_process_migration_preserves_app_root_logging(monkeypatch) -> None:
+    """An in-process migration must not reconfigure the app-owned root logger.
+
+    ``env.py`` deliberately does NOT call alembic's ``fileConfig`` — that boilerplate
+    resets the root logger from ``alembic.ini`` on load, replacing its handlers and
+    dropping the app's sensitive-data redaction filter (NFR-SEC-004). This pins the
+    behaviour: attach a redaction filter to the root handlers, run an upgrade
+    in-process, and confirm the handlers (and the filter on them) survive.
+    Re-introducing ``fileConfig`` replaces the root handlers and fails this. The
+    original logging config is restored so no shared state leaks to other tests.
+    """
+    monkeypatch.setenv("LEARNY_DATABASE_URL", TEST_DB_URL)
+    root = logging.getLogger()
+    saved_handlers = list(root.handlers)
+    marker = SensitiveDataFilter()
+    for handler in saved_handlers:
+        handler.addFilter(marker)
+    try:
+        command.upgrade(_alembic_config(TEST_DB_URL), "head")
+
+        assert root.handlers == saved_handlers, (
+            "in-process migration replaced the root logger's handlers"
+        )
+        assert all(marker in handler.filters for handler in root.handlers), (
+            "in-process migration dropped the app redaction filter from root handlers"
+        )
+    finally:
+        root.handlers[:] = saved_handlers
+        for handler in saved_handlers:
+            handler.removeFilter(marker)
