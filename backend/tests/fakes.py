@@ -514,6 +514,7 @@ class FakeRetrievalPort:
         lexical_limit: int,
         rrf_k: int,
         ef_search: int,
+        anchors: Sequence[str] | None = None,
     ) -> list[Evidence]:
         self.calls.append(
             {
@@ -525,6 +526,7 @@ class FakeRetrievalPort:
                 "lexical_limit": lexical_limit,
                 "rrf_k": rrf_k,
                 "ef_search": ef_search,
+                "anchors": anchors,
             }
         )
         return self.results

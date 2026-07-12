@@ -306,7 +306,26 @@ def test_retrieve_evidence_forwards_vector_and_settings_and_returns_results() ->
         "lexical_limit": _LEXICAL_LIMIT,
         "rrf_k": _RRF_K,
         "ef_search": _EF_SEARCH,
+        # Whole-source retrieval passes no anchor scope (the teaching turn path
+        # supplies one; the Q&A path does not).
+        "anchors": None,
     }
+
+
+def test_retrieve_evidence_forwards_anchors_to_port() -> None:
+    # AD-031: a caller-supplied anchor scope reaches the retrieval port verbatim,
+    # so the target-subtree filter is applied by the SQL adapter (TEACH-09).
+    owner = _user()
+    sources = FakeSourceRepository()
+    source = _owned_source(owner.id)
+    sources.add(source)
+    retrieval = FakeRetrievalPort(results=[])
+    service = _retrieve(sources=sources, retrieval=retrieval, embeddings=_StubEmbeddings())
+
+    anchors = ["ch1.xhtml", "ch1.xhtml#s1"]
+    service(user=owner, source_id=source.id, query="anything", anchors=anchors)
+
+    assert retrieval.calls[0]["anchors"] == anchors
 
 
 def test_retrieve_evidence_passes_empty_through_and_defaults_top_k() -> None:

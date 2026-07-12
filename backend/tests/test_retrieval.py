@@ -14,6 +14,8 @@ reproducible. Assertions target spec outcomes:
   does not error (RET-15).
 - empty: a no-match query returns ``[]`` (RET-16).
 - scoping: a query scoped to source A returns no source-B chunk (RET-17).
+- anchor scope: an anchor filter restricts both arms to the target subtree and
+  never bypasses the source scope (TEACH-09, AD-031).
 """
 
 from __future__ import annotations
@@ -129,7 +131,14 @@ def _chunk_id_by_text(db_conn: Connection, source_id: UUID, text: str) -> UUID:
     raise AssertionError(f"no chunk with text {text!r}")
 
 
-def _search(db_conn: Connection, source_id: UUID, query: str, *, top_k: int = _TOP_K):
+def _search(
+    db_conn: Connection,
+    source_id: UUID,
+    query: str,
+    *,
+    top_k: int = _TOP_K,
+    anchors: list[str] | None = None,
+):
     query_vec = DeterministicEmbeddingAdapter().embed_query(query)
     return SqlAlchemyRetrievalRepository(db_conn).search(
         source_id=source_id,
@@ -140,6 +149,7 @@ def _search(db_conn: Connection, source_id: UUID, query: str, *, top_k: int = _T
         lexical_limit=_LEXICAL_LIMIT,
         rrf_k=_K,
         ef_search=_EF_SEARCH,
+        anchors=anchors,
     )
 
 
@@ -148,6 +158,9 @@ def _search(db_conn: Connection, source_id: UUID, query: str, *, top_k: int = _T
 _PHOTO = "photosynthesis converts sunlight into chemical energy in green plants"
 _OCEAN = "ocean currents redistribute heat across the planet over time"
 _QUANTUM = "quantum entanglement links distant particles instantly"
+# A second passage that also matches the photosynthesis query, planted in another
+# section/source to prove the anchor scope (and source scope) excludes it.
+_PHOTO2 = "photosynthesis in leaves turns sunlight and water into energy and sugar"
 
 
 def _seed_three_topic_corpus(db_conn: Connection, source_id: UUID) -> None:
@@ -279,3 +292,72 @@ def test_search_is_source_scoped(db_conn: Connection) -> None:
     result_ids = {e.chunk_id for e in results}
     assert result_ids.isdisjoint(b_ids)
     assert all(e.source_id == source_a.id for e in results)
+
+
+def test_anchor_scope_filters_both_arms_to_subtree(db_conn: Connection) -> None:
+    # TEACH-09 (AD-031): with an anchor scope, retrieval returns only chunks whose
+    # section anchor is in the set. Both sections' chunks match the query on both
+    # arms (embeddings populated + lexical match), so the out-of-scope chunk being
+    # excluded proves the filter constrains the shared scoped CTE, not one arm.
+    source = _persisted_source(db_conn, "anchor-scope@example.com")
+    _seed_corpus(
+        db_conn,
+        source.id,
+        (
+            _section(
+                0,
+                "Chapter One",
+                "ch1.xhtml",
+                (_chunk(0, _PHOTO, title="Chapter One", anchor="ch1.xhtml"),),
+            ),
+            _section(
+                1,
+                "Chapter Two",
+                "ch2.xhtml",
+                (_chunk(0, _PHOTO2, title="Chapter Two", anchor="ch2.xhtml"),),
+            ),
+        ),
+    )
+    _embed_all(db_conn, source.id)
+
+    # Unfiltered: the query matches chunks in BOTH sections (baseline).
+    unscoped = _search(db_conn, source.id, "photosynthesis sunlight energy")
+    assert {"ch1.xhtml", "ch2.xhtml"} <= {e.anchor for e in unscoped}
+
+    # Scoped to Chapter One only: the Chapter Two chunk is excluded despite matching.
+    scoped = _search(db_conn, source.id, "photosynthesis sunlight energy", anchors=["ch1.xhtml"])
+    assert scoped, "expected the in-scope chunk to still be returned"
+    assert {e.anchor for e in scoped} == {"ch1.xhtml"}
+
+
+def test_anchor_scope_does_not_bypass_source_scope(db_conn: Connection) -> None:
+    # AD-031 + RET-17: the anchor filter never widens the source scope — a chunk in
+    # another source that shares the same anchor value is not returned.
+    source_a = _persisted_source(db_conn, "anchor-src-a@example.com")
+    source_b = _persisted_source(db_conn, "anchor-src-b@example.com")
+    for source_id in (source_a.id, source_b.id):
+        _seed_corpus(
+            db_conn,
+            source_id,
+            (
+                _section(
+                    0,
+                    "Chapter One",
+                    "ch1.xhtml",
+                    (_chunk(0, _PHOTO, title="Chapter One", anchor="ch1.xhtml"),),
+                ),
+            ),
+        )
+    _embed_all(db_conn, source_a.id)
+    _embed_all(db_conn, source_b.id)
+    b_ids = {
+        c.id for c in SqlAlchemyEmbeddingIndexRepository(db_conn).chunks_for_source(source_b.id)
+    }
+
+    results = _search(
+        db_conn, source_a.id, "photosynthesis sunlight energy", anchors=["ch1.xhtml"]
+    )
+
+    assert results, "expected the in-scope source-A chunk"
+    assert all(e.source_id == source_a.id for e in results)
+    assert {e.chunk_id for e in results}.isdisjoint(b_ids)

@@ -11,7 +11,7 @@ and the transaction rolls back with no partially-embedded chunks (RET-12).
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from uuid import UUID
 
 from app.application.identity import AuthorizeOwnership
@@ -131,7 +131,13 @@ class RetrieveEvidence:
         self._default_top_k = default_top_k
 
     def __call__(
-        self, *, user: User, source_id: UUID, query: str, top_k: int | None = None
+        self,
+        *,
+        user: User,
+        source_id: UUID,
+        query: str,
+        top_k: int | None = None,
+        anchors: Sequence[str] | None = None,
     ) -> list[Evidence]:
         authorized_source(
             user=user,
@@ -149,4 +155,5 @@ class RetrieveEvidence:
             lexical_limit=self._lexical_limit,
             rrf_k=self._rrf_k,
             ef_search=self._ef_search,
+            anchors=anchors,
         )
