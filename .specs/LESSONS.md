@@ -38,6 +38,18 @@ Seen once or not yet corroborated. Tracked, not trusted.
 - evidence: frontend/app/components/SourcesPanel.tsx SPEC_DEVIATION (frontend/react)
 - last seen: 2026-07-11T14:37:59Z
 
+### L-005 — A new DB-using test whose filename sorts before test_migrations becomes the first db_conn consumer, so the session-scoped db_engine upgrade runs before test_migrations downgrades to base — leaving later modules with no schema; and alembic env.py's fileConfig clobbers app-owned root logging. Guard: env.py must not call fileConfig, and test_migrations must restore head on teardown.
+- signal: `spec_deviation` · recurrence: 1 feature(s) · scope: `backend/tests` · harmful: 0
+- features: golden-fixtures
+- evidence: backend/migrations/env.py:20 + tests/test_migrations.py (backend/tests)
+- last seen: 2026-07-12T21:31:04Z
+
+### L-006 — A 'citations bounded to source anchors' assertion is structurally trivial while the answer adapter is the deterministic extractive one (it can only cite retrieved, source-scoped evidence); it becomes a real guard only once a generative adapter that can cite freely lands — revisit the golden then.
+- signal: `spec_precision_gap` · recurrence: 1 feature(s) · scope: `backend/tests/evaluation` · harmful: 0
+- features: golden-fixtures
+- evidence: EVAL-07 / test_golden_citations.py (backend/tests/evaluation)
+- last seen: 2026-07-12T21:31:04Z
+
 ## Quarantined (failed when applied — ignore)
 
 A confirmed lesson that recurred alongside failure. Kept for the maintainer to review.

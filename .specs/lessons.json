@@ -3,7 +3,7 @@
   "promote_threshold": 2,
   "window_days": 45,
   "quarantine_threshold": 2,
-  "next_id": 5,
+  "next_id": 7,
   "lessons": [
     {
       "id": "L-001",
@@ -76,6 +76,42 @@
       ],
       "created": "2026-07-11T14:37:59Z",
       "last_seen": "2026-07-11T14:37:59Z"
+    },
+    {
+      "id": "L-005",
+      "key": "spec_deviation::a new db using test whose filename sorts before test migrations becomes the first db conn consumer so the session scoped db engine upgrade runs before test migrations downgrades to base leaving later modules with no schema and alembic env py s fileconfig clobbers app owned root logging guard env py must not call fileconfig and test migrations must restore head on teardown",
+      "text": "A new DB-using test whose filename sorts before test_migrations becomes the first db_conn consumer, so the session-scoped db_engine upgrade runs before test_migrations downgrades to base — leaving later modules with no schema; and alembic env.py's fileConfig clobbers app-owned root logging. Guard: env.py must not call fileConfig, and test_migrations must restore head on teardown.",
+      "signal": "spec_deviation",
+      "scope": "backend/tests",
+      "status": "candidate",
+      "features": [
+        "golden-fixtures"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "backend/migrations/env.py:20 + tests/test_migrations.py (backend/tests)"
+      ],
+      "created": "2026-07-12T21:31:04Z",
+      "last_seen": "2026-07-12T21:31:04Z"
+    },
+    {
+      "id": "L-006",
+      "key": "spec_precision_gap::a citations bounded to source anchors assertion is structurally trivial while the answer adapter is the deterministic extractive one it can only cite retrieved source scoped evidence it becomes a real guard only once a generative adapter that can cite freely lands revisit the golden then",
+      "text": "A 'citations bounded to source anchors' assertion is structurally trivial while the answer adapter is the deterministic extractive one (it can only cite retrieved, source-scoped evidence); it becomes a real guard only once a generative adapter that can cite freely lands — revisit the golden then.",
+      "signal": "spec_precision_gap",
+      "scope": "backend/tests/evaluation",
+      "status": "candidate",
+      "features": [
+        "golden-fixtures"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "EVAL-07 / test_golden_citations.py (backend/tests/evaluation)"
+      ],
+      "created": "2026-07-12T21:31:04Z",
+      "last_seen": "2026-07-12T21:31:04Z"
     }
   ]
 }
