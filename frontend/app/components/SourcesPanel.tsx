@@ -236,6 +236,9 @@ export function SourcesPanel({
               {source.status === "ready" ? (
                 <Link href={`/sources/${source.id}/ask`}>Ask</Link>
               ) : null}
+              {source.status === "ready" ? (
+                <Link href={`/sources/${source.id}/teach`}>Teach</Link>
+              ) : null}
               {structures[source.id] ? (
                 <div data-testid={`structure-${source.id}`}>
                   <p>{metadataLine(structures[source.id])}</p>
