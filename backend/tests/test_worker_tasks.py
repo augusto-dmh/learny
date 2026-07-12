@@ -325,11 +325,12 @@ def test_run_ingestion_retryable_exhausted_fails(seed, db_engine: Engine) -> Non
     ctx = seed(IngestionStatus.QUEUED)
     fake_self = FakeSelf(retries=3, max_retries=3)  # retries == max ⇒ exhausted
 
-    with patch(
-        "app.worker.tasks._build_step",
-        lambda conn: RaisingStep(RetryableIngestionError("still unreachable")),
-    ):
-        _run(fake_self, str(ctx.source.id), str(ctx.job.id))
+    with _capture_worker_logs() as handler:
+        with patch(
+            "app.worker.tasks._build_step",
+            lambda conn: RaisingStep(RetryableIngestionError("still unreachable")),
+        ):
+            _run(fake_self, str(ctx.source.id), str(ctx.job.id))
 
     assert fake_self.retry_calls == []  # no further retry once exhausted
     job = _read_job(db_engine, ctx.job.id)
@@ -337,6 +338,12 @@ def test_run_ingestion_retryable_exhausted_fails(seed, db_engine: Engine) -> Non
     assert job.last_error == _REDACTED
     assert _read_source_status(db_engine, ctx.source.id) == "failed"
     assert IngestionEventType.FAILED in _read_event_types(db_engine, ctx.job.id)
+    # This third terminal branch also carries trace fields + a duration (PROD-14).
+    rec = _record_for(handler, "ingestion.run: failed (retries exhausted)")
+    assert rec.job_id == str(ctx.job.id)
+    assert rec.source_id == str(ctx.source.id)
+    assert isinstance(rec.duration_ms, float)
+    assert rec.duration_ms >= 0.0
 
 
 def test_run_ingestion_missing_job_is_noop(seed, db_engine: Engine) -> None:
