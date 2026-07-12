@@ -10,6 +10,7 @@ from __future__ import annotations
 from celery import Celery
 
 from app.core.config import get_settings
+from app.core.logging import configure_logging
 
 _settings = get_settings()
 
@@ -31,4 +32,10 @@ celery_app.conf.update(
     task_soft_time_limit=1500,
     task_track_started=True,
     broker_transport_options={"visibility_timeout": 3600},
+    # Keep the app-owned root logging (redaction + trace-field correlation, AD-041);
+    # Celery otherwise replaces the root handlers on worker boot and drops our
+    # filters. ``configure_logging`` then installs our handler in this process.
+    worker_hijack_root_logger=False,
 )
+
+configure_logging()

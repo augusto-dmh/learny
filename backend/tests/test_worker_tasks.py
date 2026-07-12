@@ -11,6 +11,8 @@ ids on the queue (ING-09) without a broker.
 
 from __future__ import annotations
 
+import logging
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -20,6 +22,7 @@ import pytest
 from sqlalchemy import Engine, func, select
 from sqlalchemy import delete as sa_delete
 
+from app.core.tracing import TraceContextFilter
 from app.domain.entities import (
     CorpusStructure,
     IngestionEvent,
@@ -604,3 +607,74 @@ def test_embed_failure_is_terminal_and_leaves_no_partial_vectors(
         "corpus_built",
         IngestionEventType.FAILED,
     ]
+
+
+# --- Observability: worker trace fields + duration (PROD-14) --------------------
+
+
+class _TraceRecordingHandler(logging.Handler):
+    """Capture records off the worker logger, self-stamping bound trace fields."""
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.NOTSET)
+        self.addFilter(TraceContextFilter())
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
+
+
+@contextmanager
+def _capture_worker_logs():
+    """Attach a recording handler to the worker task logger, forced enabled."""
+    handler = _TraceRecordingHandler()
+    logger = logging.getLogger("app.worker.tasks")
+    previous_level, previous_disabled = logger.level, logger.disabled
+    logger.setLevel(logging.INFO)
+    logger.disabled = False
+    logger.addHandler(handler)
+    try:
+        yield handler
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(previous_level)
+        logger.disabled = previous_disabled
+
+
+def _record_for(handler: _TraceRecordingHandler, message: str) -> logging.LogRecord:
+    hits = [r for r in handler.records if r.getMessage() == message]
+    assert len(hits) == 1, f"expected one {message!r} record, got {len(hits)}"
+    return hits[0]
+
+
+def test_run_ingestion_success_logs_trace_fields_and_duration(
+    seed, db_engine: Engine
+) -> None:
+    ctx = seed(IngestionStatus.QUEUED)
+    with _capture_worker_logs() as handler:
+        with patch("app.worker.tasks._build_step", lambda conn: NoOpIngestionStep()):
+            _run(FakeSelf(), str(ctx.source.id), str(ctx.job.id))
+
+    rec = _record_for(handler, "ingestion.run: succeeded")
+    assert rec.job_id == str(ctx.job.id)
+    assert rec.source_id == str(ctx.source.id)
+    assert isinstance(rec.duration_ms, float)
+    assert rec.duration_ms >= 0.0
+
+
+def test_run_ingestion_failure_logs_trace_fields_and_duration(
+    seed, db_engine: Engine
+) -> None:
+    ctx = seed(IngestionStatus.QUEUED)
+    with _capture_worker_logs() as handler:
+        with patch(
+            "app.worker.tasks._build_step",
+            lambda conn: RaisingStep(RuntimeError("boom")),
+        ):
+            _run(FakeSelf(), str(ctx.source.id), str(ctx.job.id))
+
+    rec = _record_for(handler, "ingestion.run: failed")
+    assert rec.job_id == str(ctx.job.id)
+    assert rec.source_id == str(ctx.source.id)
+    assert isinstance(rec.duration_ms, float)
+    assert rec.duration_ms >= 0.0

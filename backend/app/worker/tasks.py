@@ -16,6 +16,7 @@ No FastAPI import crosses into this module; Celery/SQLAlchemy never enter
 from __future__ import annotations
 
 import logging
+import time
 from uuid import UUID, uuid4
 
 from sqlalchemy import Connection
@@ -24,6 +25,7 @@ from app.application.corpus import BuildCorpus
 from app.application.ingestion import RunIngestion
 from app.application.retrieval import EmbedCorpus
 from app.core.config import get_settings
+from app.core.tracing import bind_trace, new_trace_scope, reset_trace
 from app.domain.ports import IngestionStep, StoragePort
 from app.infrastructure.clock import SystemClock
 from app.infrastructure.db.engine import get_engine
@@ -64,6 +66,11 @@ _STEP_FAILURE_ERROR = "Ingestion processing failed."
 def _retry_countdown(retries: int) -> int:
     """Return the backoff (seconds) before the next retry given prior ``retries``."""
     return min(_RETRY_BASE_COUNTDOWN * (2**retries), _RETRY_MAX_COUNTDOWN)
+
+
+def _elapsed_ms(start: float) -> float:
+    """Milliseconds elapsed since ``start`` (a ``time.perf_counter`` reading)."""
+    return round((time.perf_counter() - start) * 1000, 3)
 
 
 def _build_storage() -> StoragePort:
@@ -155,7 +162,21 @@ def run_ingestion(self, source_id: str, job_id: str) -> None:  # noqa: ANN001 �
     """
     jid = UUID(job_id)
     log = {"job_id": job_id, "source_id": source_id}
+    # Bind the job/source trace fields so every record emitted during this task —
+    # here and in the services it calls — is correlated (PROD-14). Reset on exit so
+    # nothing leaks to the next task the worker picks up.
+    token = new_trace_scope()
+    bind_trace(job_id=job_id, source_id=source_id)
+    start = time.perf_counter()
+    try:
+        return _run_ingestion_body(self, jid, job_id, source_id, log, start)
+    finally:
+        reset_trace(token)
 
+
+def _run_ingestion_body(  # noqa: ANN001, ANN202 — mirrors the bound task ``self``
+    self, jid: UUID, job_id: str, source_id: str, log: dict[str, str], start: float
+):
     # 1. Claim the job: queued/running → running (attempts+1). None ⇒ missing row
     #    (ING-08 AC3) or already terminal (redelivery) ⇒ idempotent no-op.
     with get_engine().begin() as conn:
@@ -191,15 +212,25 @@ def run_ingestion(self, source_id: str, job_id: str) -> None:  # noqa: ANN001 �
             raise self.retry(exc=exc, countdown=_retry_countdown(self.request.retries)) from exc
         with get_engine().begin() as conn:
             _build_run_ingestion(conn).fail(jid, _STEP_FAILURE_ERROR)
-        logger.info("ingestion.run: failed (retries exhausted)", extra=log, exc_info=exc)
+        logger.info(
+            "ingestion.run: failed (retries exhausted)",
+            extra={**log, "duration_ms": _elapsed_ms(start)},
+            exc_info=exc,
+        )
         return
     except Exception as exc:  # noqa: BLE001 — any non-retryable error is terminal
         with get_engine().begin() as conn:
             _build_run_ingestion(conn).fail(jid, _STEP_FAILURE_ERROR)
-        logger.info("ingestion.run: failed", extra=log, exc_info=exc)
+        logger.info(
+            "ingestion.run: failed",
+            extra={**log, "duration_ms": _elapsed_ms(start)},
+            exc_info=exc,
+        )
         return
 
     # 3. Terminal success: succeeded + source ready + ``succeeded`` event.
     with get_engine().begin() as conn:
         _build_run_ingestion(conn).complete(jid)
-    logger.info("ingestion.run: succeeded", extra=log)
+    logger.info(
+        "ingestion.run: succeeded", extra={**log, "duration_ms": _elapsed_ms(start)}
+    )
