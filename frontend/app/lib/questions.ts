@@ -66,11 +66,16 @@ export async function askQuestion(
   return (await res.json()) as AnswerView;
 }
 
-/** Build an Error from a non-OK response, preferring the backend's detail. */
+/**
+ * Build an Error from a non-OK response, preferring the backend's detail.
+ * FastAPI validation errors (422) carry `detail` as a list of error objects, not
+ * a string — those fall back to the readable message instead of rendering a
+ * stringified list (QA-20).
+ */
 async function toQuestionError(res: Response, fallback: string): Promise<Error> {
   try {
-    const body = (await res.json()) as { detail?: string };
-    return new Error(body.detail ?? fallback);
+    const body = (await res.json()) as { detail?: unknown };
+    return new Error(typeof body.detail === "string" ? body.detail : fallback);
   } catch {
     return new Error(fallback);
   }

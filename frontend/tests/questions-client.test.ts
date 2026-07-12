@@ -143,6 +143,18 @@ describe("questions client (D1)", () => {
     ).rejects.toThrow("Answer generation failed. Please try again.");
   });
 
+  it("falls back to a readable message when a 422 detail is a list, not a string", async () => {
+    const fetchMock = fetchMockFn(async () =>
+      jsonResponse(422, {
+        detail: [{ type: "string_too_long", loc: ["body", "question"], msg: "too long" }],
+      }),
+    );
+
+    await expect(
+      askQuestion("s1", "q", "csrf-xyz", fetchMock as unknown as typeof fetch),
+    ).rejects.toThrow("Could not get an answer.");
+  });
+
   it("falls back to a readable message when the error body is not parseable", async () => {
     const fetchMock = fetchMockFn(
       async () => new Response("<html>gateway</html>", { status: 502 }),
