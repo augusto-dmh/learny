@@ -22,7 +22,8 @@ import pytest
 from sqlalchemy import Engine, func, select
 from sqlalchemy import delete as sa_delete
 
-from app.core.tracing import TraceContextFilter
+import app.worker.tasks as tasks_module
+from app.core.tracing import TraceContextFilter, current_trace
 from app.domain.entities import (
     CorpusStructure,
     IngestionEvent,
@@ -678,3 +679,28 @@ def test_run_ingestion_failure_logs_trace_fields_and_duration(
     assert rec.source_id == str(ctx.source.id)
     assert isinstance(rec.duration_ms, float)
     assert rec.duration_ms >= 0.0
+
+
+def test_run_ingestion_populates_trace_context_during_the_task(
+    seed, db_engine: Engine
+) -> None:
+    """The task binds job/source into the trace context that the filter stamps
+    onto *every* downstream log record — not just the ones passing ``extra=``
+    (PROD-14 correlation seam). A no-op ``bind_trace`` leaves this empty."""
+    ctx = seed(IngestionStatus.QUEUED)
+    seen: dict[str, str] = {}
+    orig = tasks_module._build_run_ingestion
+
+    def spy(conn):  # noqa: ANN001, ANN202
+        # Snapshot the trace context while the task body executes — this is what
+        # TraceContextFilter injects into downstream records with no explicit extra.
+        seen.update(current_trace())
+        return orig(conn)
+
+    with (
+        patch("app.worker.tasks._build_step", lambda conn: NoOpIngestionStep()),
+        patch("app.worker.tasks._build_run_ingestion", spy),
+    ):
+        _run(FakeSelf(), str(ctx.source.id), str(ctx.job.id))
+
+    assert seen == {"job_id": str(ctx.job.id), "source_id": str(ctx.source.id)}
