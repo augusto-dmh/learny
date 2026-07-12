@@ -3,7 +3,7 @@
   "promote_threshold": 2,
   "window_days": 45,
   "quarantine_threshold": 2,
-  "next_id": 7,
+  "next_id": 8,
   "lessons": [
     {
       "id": "L-001",
@@ -112,6 +112,24 @@
       ],
       "created": "2026-07-12T21:31:04Z",
       "last_seen": "2026-07-12T21:31:04Z"
+    },
+    {
+      "id": "L-007",
+      "key": "surviving_mutant::when trace context fields are auto injected by a logging filter assert them on a record emitted without explicit extra so a broken binding is detectable not on a record that also passes the fields via extra",
+      "text": "When trace/context fields are auto-injected by a logging filter, assert them on a record emitted WITHOUT explicit extra= so a broken binding is detectable, not on a record that also passes the fields via extra=",
+      "signal": "surviving_mutant",
+      "scope": "observability",
+      "status": "candidate",
+      "features": [
+        "production-readiness"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "M4 worker arm — test_worker_tasks.py:650 (observability)"
+      ],
+      "created": "2026-07-12T23:06:52Z",
+      "last_seen": "2026-07-12T23:06:52Z"
     }
   ]
 }
