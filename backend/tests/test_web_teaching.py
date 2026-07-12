@@ -21,7 +21,7 @@ the teaching repositories on the shared rolled-back ``db_conn``.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -32,6 +32,8 @@ from sqlalchemy import Connection
 from app.domain.entities import (
     CorpusSectionRecord,
     Evidence,
+    GeneratedAnswer,
+    HistoryTurn,
     ParsedSection,
     SectionChunk,
     Source,
@@ -40,10 +42,12 @@ from app.domain.entities import (
 )
 from app.infrastructure.db.repositories import (
     SqlAlchemyCorpusRepository,
+    SqlAlchemyEmbeddingIndexRepository,
     SqlAlchemySourceRepository,
     SqlAlchemyTeachingSessionRepository,
     SqlAlchemyTeachingTurnRepository,
 )
+from app.infrastructure.embeddings import DeterministicEmbeddingAdapter
 from tests.conftest import TEST_ORIGIN, TEST_PASSWORD, requires_db
 
 pytestmark = requires_db
@@ -147,19 +151,46 @@ def _seed_session(
     db_conn: Connection,
     source_id: UUID,
     *,
+    anchor: str = _ANCHOR,
     created_at: datetime | None = None,
 ) -> TeachingSession:
     now = created_at or datetime.now(UTC)
     session = TeachingSession(
         id=uuid4(),
         source_id=source_id,
-        target_anchor=_ANCHOR,
+        target_anchor=anchor,
         target_section_path=_SECTION_PATH,
         target_title=_TITLE,
         created_at=now,
         updated_at=now,
     )
     return SqlAlchemyTeachingSessionRepository(db_conn).add(session)
+
+
+def _embed_all(db_conn: Connection, source_id: UUID) -> None:
+    index = SqlAlchemyEmbeddingIndexRepository(db_conn)
+    adapter = DeterministicEmbeddingAdapter()
+    chunks = index.chunks_for_source(source_id)
+    vectors = adapter.embed_documents([c.text for c in chunks])
+    index.set_embeddings(list(zip((c.id for c in chunks), vectors, strict=True)))
+
+
+def _post_turn(
+    client: TestClient,
+    session_id: object,
+    body: dict,
+    *,
+    csrf: str | None,
+    origin: str | None = None,
+):
+    headers: dict[str, str] = {}
+    if csrf is not None:
+        headers["X-CSRF-Token"] = csrf
+    if origin is not None:
+        headers["Origin"] = origin
+    return client.post(
+        f"/api/teaching-sessions/{session_id}/turns", json=body, headers=headers
+    )
 
 
 def _seed_turn(
@@ -533,3 +564,261 @@ def test_start_rate_limit_returns_429_with_retry_after(
     )
     assert throttled.status_code == 429, throttled.text
     assert "retry-after" in {k.lower() for k in throttled.headers}
+
+
+# --- POST turns: 201 answered (TEACH-07/24) ------------------------------------
+
+
+def test_post_turn_answered_returns_201_with_citations_and_model(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # TEACH-07/24: a message the target subtree supports → 201 answered, with the
+    # turn_index, grounded citations scoped to the target anchor, evidence_count,
+    # and the adapter's model identity.
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "turn-ok@example.com")
+    _embed_all(db_conn, UUID(source_id))
+    session = _seed_session(db_conn, UUID(source_id))
+
+    resp = _post_turn(
+        auth_client,
+        session.id,
+        {"message": "photosynthesis sunlight energy"},
+        csrf=csrf,
+    )
+
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert set(body) == {
+        "turn_index",
+        "message",
+        "answer_status",
+        "text",
+        "citations",
+        "evidence_count",
+        "model",
+        "created_at",
+    }
+    assert body["turn_index"] == 0
+    assert body["answer_status"] == "answered"
+    assert body["text"] == _PHOTO
+    assert body["model"] == _MODEL
+    assert body["evidence_count"] == 1
+    assert len(body["citations"]) == 1
+    citation = body["citations"][0]
+    assert citation["anchor"] == _ANCHOR
+    assert citation["source_id"] == source_id
+    assert citation["snippet"] == _PHOTO
+
+
+def test_post_turn_answered_is_persisted_and_read_back(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # TEACH-07: the answered turn is persisted — reading the session back returns it.
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "turn-persist@example.com")
+    _embed_all(db_conn, UUID(source_id))
+    session = _seed_session(db_conn, UUID(source_id))
+
+    posted = _post_turn(
+        auth_client, session.id, {"message": "photosynthesis sunlight"}, csrf=csrf
+    )
+    assert posted.status_code == 201, posted.text
+
+    read = auth_client.get(f"/api/teaching-sessions/{session.id}")
+    assert read.status_code == 200, read.text
+    turns = read.json()["turns"]
+    assert len(turns) == 1
+    assert turns[0]["answer_status"] == "answered"
+    assert turns[0]["turn_index"] == 0
+
+
+# --- POST turns: 201 not-found (TEACH-11/14) -----------------------------------
+
+
+def test_post_turn_no_evidence_returns_201_not_found(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # TEACH-11/14: scoped retrieval finds nothing (corpus present, NOT embedded, an
+    # unmatchable message) → 201 not_found_in_source, empty text and citations,
+    # still persisted with the model identity.
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "turn-nf@example.com")
+    session = _seed_session(db_conn, UUID(source_id))
+
+    resp = _post_turn(
+        auth_client,
+        session.id,
+        {"message": "zzzqqq nonsensical unmatchable token"},
+        csrf=csrf,
+    )
+
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["answer_status"] == "not_found_in_source"
+    assert body["text"] == ""
+    assert body["citations"] == []
+    assert body["evidence_count"] == 0
+    assert body["model"] == _MODEL
+
+
+# --- POST turns: 422 bounds (TEACH-08) -----------------------------------------
+
+
+def test_post_turn_blank_message_returns_422(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # TEACH-08: an empty message is rejected with 422 before the service runs.
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "turn-blank@example.com")
+    session = _seed_session(db_conn, UUID(source_id))
+    resp = _post_turn(auth_client, session.id, {"message": ""}, csrf=csrf)
+    assert resp.status_code == 422, resp.text
+
+
+def test_post_turn_whitespace_message_returns_422(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # TEACH-08: a whitespace-only message is rejected with 422 (trimmed → empty).
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "turn-ws@example.com")
+    session = _seed_session(db_conn, UUID(source_id))
+    resp = _post_turn(auth_client, session.id, {"message": "   "}, csrf=csrf)
+    assert resp.status_code == 422, resp.text
+
+
+def test_post_turn_over_long_message_returns_422(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # TEACH-08: a trimmed message longer than LEARNY_TEACHING_MESSAGE_MAX_CHARS → 422.
+    from app.core.config import get_settings
+
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "turn-long@example.com")
+    session = _seed_session(db_conn, UUID(source_id))
+    over = "a" * (get_settings().teaching_message_max_chars + 1)
+    resp = _post_turn(auth_client, session.id, {"message": over}, csrf=csrf)
+    assert resp.status_code == 422, resp.text
+
+
+# --- POST turns: 404 ownership (TEACH-06) --------------------------------------
+
+
+def test_post_turn_missing_and_non_owned_session_return_404(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # TEACH-06: a missing session and another user's session both → 404.
+    source_id, _ = _seed_ready_source(auth_client, db_conn, "turn-owner@example.com")
+    session = _seed_session(db_conn, UUID(source_id))
+
+    _register(auth_client, "turn-intruder@example.com")  # become a different user
+    csrf = _csrf(auth_client)
+
+    non_owned = _post_turn(auth_client, session.id, {"message": "hi"}, csrf=csrf)
+    missing = _post_turn(auth_client, uuid4(), {"message": "hi"}, csrf=csrf)
+
+    assert non_owned.status_code == 404, non_owned.text
+    assert missing.status_code == 404, missing.text
+
+
+# --- POST turns: 409 readiness / target-gone (TEACH-15/16) ---------------------
+
+
+def test_post_turn_not_ready_source_returns_409(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # TEACH-15: a session whose source is no longer ready → 409.
+    user_id = _register(auth_client, "turn-notready@example.com")
+    csrf = _csrf(auth_client)
+    source_id = _persist_source(db_conn, user_id, status="uploaded")
+    session = _seed_session(db_conn, source_id)
+
+    resp = _post_turn(auth_client, session.id, {"message": "hi"}, csrf=csrf)
+    assert resp.status_code == 409, resp.text
+
+
+def test_post_turn_target_gone_returns_409(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # TEACH-16: a session whose target anchor no longer resolves in the current
+    # corpus → 409 with a readable detail.
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "turn-gone@example.com")
+    session = _seed_session(db_conn, UUID(source_id), anchor="vanished.xhtml")
+
+    resp = _post_turn(auth_client, session.id, {"message": "hi"}, csrf=csrf)
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"]
+
+
+# --- POST turns: 502 generation failure, no persist (TEACH-13) -----------------
+
+
+def test_post_turn_generation_failure_returns_502_and_persists_nothing(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # TEACH-13: the generation port raising → 502 with a generic body that leaks no
+    # internal detail, and NO turn row is persisted (reading the session back shows
+    # an empty conversation).
+    from app.infrastructure.web.dependencies import get_teaching_generation
+
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "turn-boom@example.com")
+    _embed_all(db_conn, UUID(source_id))
+    session = _seed_session(db_conn, UUID(source_id))
+
+    class _RaisingTeachingAdapter:
+        model = _MODEL
+
+        def generate(
+            self,
+            *,
+            message: str,
+            target_section_path: tuple[str, ...],
+            history: Sequence[HistoryTurn],
+            evidence: Sequence[Evidence],
+        ) -> GeneratedAnswer:
+            raise RuntimeError("provider-secret-internal-detail")
+
+    auth_client.app.dependency_overrides[get_teaching_generation] = (
+        lambda: _RaisingTeachingAdapter()
+    )
+    try:
+        resp = _post_turn(
+            auth_client, session.id, {"message": "photosynthesis sunlight"}, csrf=csrf
+        )
+    finally:
+        auth_client.app.dependency_overrides.pop(get_teaching_generation, None)
+
+    assert resp.status_code == 502, resp.text
+    assert "provider-secret-internal-detail" not in resp.text
+
+    # No turn was persisted — the conversation is still empty.
+    read = auth_client.get(f"/api/teaching-sessions/{session.id}")
+    assert read.status_code == 200, read.text
+    assert read.json()["turns"] == []
+
+
+# --- POST turns: 403 CSRF / 429 rate limit (TEACH-18/23) -----------------------
+
+
+def test_post_turn_missing_csrf_returns_403(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # TEACH-23: a state-changing turn POST without the CSRF token → 403.
+    source_id, _ = _seed_ready_source(auth_client, db_conn, "turn-csrf@example.com")
+    session = _seed_session(db_conn, UUID(source_id))
+    resp = _post_turn(auth_client, session.id, {"message": "hi"}, csrf=None)
+    assert resp.status_code == 403, resp.text
+
+
+def test_post_turn_rate_limit_returns_429(
+    throttled_teaching_client: TestClient, db_conn: Connection
+) -> None:
+    # TEACH-18: once the window is exceeded, the turn endpoint returns 429. Corpus
+    # is not embedded, so each accepted turn is a 201 not-found (turn_index 0..2).
+    source_id, csrf = _seed_ready_source(
+        throttled_teaching_client, db_conn, "turn-rl@example.com"
+    )
+    session = _seed_session(db_conn, UUID(source_id))
+    for _ in range(3):
+        resp = _post_turn(
+            throttled_teaching_client, session.id, {"message": "zzzqqq unmatchable"}, csrf=csrf
+        )
+        assert resp.status_code == 201, resp.text
+    throttled = _post_turn(
+        throttled_teaching_client, session.id, {"message": "zzzqqq unmatchable"}, csrf=csrf
+    )
+    assert throttled.status_code == 429, throttled.text

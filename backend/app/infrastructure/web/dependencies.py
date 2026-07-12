@@ -37,13 +37,22 @@ from app.application.retrieval import RetrieveEvidence
 from app.application.sources import CreateSource, GetSource, ListSources
 from app.application.teaching import (
     ListTeachingSessions,
+    PostTeachingTurn,
     ReadTeachingSession,
     StartTeachingSession,
 )
 from app.core.config import Settings, get_settings
 from app.domain.entities import Session, User
-from app.domain.ports import AnswerGenerationPort, IngestionEnqueuer, StoragePort
-from app.infrastructure.answering import DeterministicAnswerAdapter
+from app.domain.ports import (
+    AnswerGenerationPort,
+    IngestionEnqueuer,
+    StoragePort,
+    TeachingGenerationPort,
+)
+from app.infrastructure.answering import (
+    DeterministicAnswerAdapter,
+    DeterministicTeachingAdapter,
+)
 from app.infrastructure.clock import SystemClock
 from app.infrastructure.db.engine import get_engine
 from app.infrastructure.db.repositories import (
@@ -376,4 +385,45 @@ def get_list_teaching_sessions(conn: DbConnection) -> ListTeachingSessions:
         sources=SqlAlchemySourceRepository(conn),
         sessions=SqlAlchemyTeachingSessionRepository(conn),
         authorize=AuthorizeOwnership(),
+    )
+
+
+# Process-wide default teaching generator (deterministic, network-free — AD-032).
+# Overridable in tests via ``get_teaching_generation``, exactly like the answer
+# generator; swapping in a provider adapter later is a one-line change here.
+_teaching: TeachingGenerationPort = DeterministicTeachingAdapter()
+
+
+def get_teaching_generation() -> TeachingGenerationPort:
+    """FastAPI dependency: the process-wide teaching generator (overridable in tests)."""
+    return _teaching
+
+
+TeachingGeneration = Annotated[TeachingGenerationPort, Depends(get_teaching_generation)]
+
+
+def get_post_teaching_turn(
+    conn: DbConnection, generation: TeachingGeneration
+) -> PostTeachingTurn:
+    """Wire ``PostTeachingTurn`` on the request-scoped connection (TEACH-07..17, 19, 24).
+
+    Composes the teaching repos, the source repo (ownership + readiness), the
+    corpus repo (target re-resolution + subtree), the Phase-6 retrieval product
+    (scoped by the target subtree anchors), the process-wide teaching generator,
+    and the server-controlled evidence-budget / history-turns settings. Injecting
+    ``generation`` via ``Depends`` keeps it test-overridable.
+    """
+    settings = get_settings()
+    return PostTeachingTurn(
+        sessions=SqlAlchemyTeachingSessionRepository(conn),
+        turns=SqlAlchemyTeachingTurnRepository(conn),
+        sources=SqlAlchemySourceRepository(conn),
+        corpus=SqlAlchemyCorpusRepository(conn),
+        retrieve=get_retrieve_evidence(conn),
+        generation=generation,
+        authorize=AuthorizeOwnership(),
+        clock=_clock,
+        ids=uuid4,
+        evidence_top_k=settings.teaching_evidence_top_k,
+        history_turns=settings.teaching_history_turns,
     )

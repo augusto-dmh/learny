@@ -2,10 +2,12 @@
 
 Thin FastAPI adapter over the framework-free teaching services (assembled in
 ``dependencies``). A signed-in owner starts a session anchored to a section of one
-of their ready sources, reads a session's full cited conversation, and lists a
-source's sessions. The handlers own input validation (422) and let application
-errors propagate to the global handlers (``TeachingSessionNotFound`` → 404,
-``SourceNotReady`` → 409, ``InvalidTeachingTarget`` → 422), mirroring the
+of their ready sources, reads a session's full cited conversation, lists a
+source's sessions, and posts cited turns. The handlers own input validation (422)
+and let application errors propagate to the global handlers
+(``TeachingSessionNotFound`` → 404, ``SourceNotReady`` → 409,
+``InvalidTeachingTarget`` → 422, ``TeachingTargetGone`` → 409,
+``TeachingTurnConflict`` → 409, ``AnswerGenerationFailed`` → 502), mirroring the
 questions endpoint.
 
 Contract (also consumed by the Next.js proxy):
@@ -13,11 +15,11 @@ Contract (also consumed by the Next.js proxy):
   auth + CSRF/Origin + rate limit (TEACH-01..04, 18, 23).
 - ``GET  /api/teaching-sessions/{id}`` → 200 session + ordered cited turns; auth
   (TEACH-05, 06, 20).
+- ``POST /api/teaching-sessions/{id}/turns`` ``{message}`` → 201 cited turn; auth
+  + CSRF/Origin + rate limit. ``message`` is trimmed and validated 1..
+  ``LEARNY_TEACHING_MESSAGE_MAX_CHARS`` chars → 422 otherwise (TEACH-07, 08, 18).
 - ``GET  /api/sources/{source_id}/teaching-sessions`` → 200 per-source session
   summaries, newest first; auth (TEACH-21).
-
-The turn endpoint (``POST /api/teaching-sessions/{id}/turns``) is added alongside
-the ``TurnView`` reused here for the read path.
 """
 
 from __future__ import annotations
@@ -27,13 +29,15 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.application.teaching import (
     ListTeachingSessions,
+    PostTeachingTurn,
     ReadTeachingSession,
     StartTeachingSession,
 )
+from app.core.config import get_settings
 from app.domain.entities import (
     TeachingSession,
     TeachingSessionSummary,
@@ -44,6 +48,7 @@ from app.infrastructure.web.csrf import enforce_csrf, enforce_origin
 from app.infrastructure.web.dependencies import (
     get_authenticated_user,
     get_list_teaching_sessions,
+    get_post_teaching_turn,
     get_read_teaching_session,
     get_start_teaching_session,
 )
@@ -67,6 +72,29 @@ class StartSessionRequest(BaseModel):
 
     source_id: UUID
     target_anchor: str = Field(min_length=1)
+
+
+class TurnRequest(BaseModel):
+    """Turn request body (TEACH-07/08).
+
+    ``message`` must be non-blank after stripping and, once trimmed, at most
+    ``LEARNY_TEACHING_MESSAGE_MAX_CHARS`` chars (inclusive). Both raise a Pydantic
+    validation error → 422 before the service runs; the validator returns the
+    **trimmed** value, so the service receives a normalized message.
+    """
+
+    message: str = Field(min_length=1)
+
+    @field_validator("message")
+    @classmethod
+    def _message_bounds(cls, value: str) -> str:
+        trimmed = value.strip()
+        if not trimmed:
+            raise ValueError("message must not be empty or whitespace-only")
+        max_chars = get_settings().teaching_message_max_chars
+        if len(trimmed) > max_chars:
+            raise ValueError(f"message must be at most {max_chars} characters")
+        return trimmed
 
 
 # --- Response views ------------------------------------------------------------
@@ -219,6 +247,35 @@ def read_teaching_session(
     """Return an owned session with its ordered cited conversation (200; 404)."""
     session, turns = service(user=user, session_id=session_id)
     return SessionDetailView.from_session(session, turns)
+
+
+@router.post(
+    "/api/teaching-sessions/{session_id}/turns",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[
+        Depends(rate_limit_teaching),
+        Depends(enforce_origin),
+        Depends(enforce_csrf),
+    ],
+)
+def post_teaching_turn(
+    session_id: UUID,
+    user: Annotated[User, Depends(get_authenticated_user)],
+    service: Annotated[PostTeachingTurn, Depends(get_post_teaching_turn)],
+    body: TurnRequest,
+) -> TurnView:
+    """Run and persist one cited teaching turn (201); 422/404/409/429/502 per ACs.
+
+    ``PostTeachingTurn`` resolves the session + owner (missing/non-owner →
+    ``TeachingSessionNotFound`` → 404), enforces readiness (``SourceNotReady`` →
+    409) and the target's continued existence (``TeachingTargetGone`` → 409),
+    retrieves target-scoped evidence, and either composes a grounded answer or the
+    explicit not-found outcome; a generation failure surfaces as
+    ``AnswerGenerationFailed`` → 502 with nothing persisted, and a turn-index race
+    loses with ``TeachingTurnConflict`` → 409.
+    """
+    turn = service(user=user, session_id=session_id, message=body.message)
+    return TurnView.from_turn(turn)
 
 
 @router.get("/api/sources/{source_id}/teaching-sessions")
