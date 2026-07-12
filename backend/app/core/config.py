@@ -30,6 +30,11 @@ class Settings(BaseSettings):
     environment: str = "local"
     debug: bool = False
 
+    # NOTE: the log format is intentionally NOT a Settings field. It is read
+    # directly from ``LEARNY_LOG_FORMAT`` in ``app.core.logging.configure_logging``
+    # (single source of truth) so bootstrap logging setup does not prime the
+    # ``get_settings`` lru-cache, which Alembic's ``env.py`` later reads.
+
     # Database (used by /readyz and, later, repositories + migrations)
     database_url: str = "postgresql+psycopg://learny:learny@localhost:5432/learny"
 

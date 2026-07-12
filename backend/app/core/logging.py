@@ -19,8 +19,10 @@ secret-free ``User`` summary is what auth flows log.
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Mapping
+from datetime import UTC, datetime
 
 REDACTED = "***REDACTED***"
 
@@ -91,27 +93,86 @@ class SensitiveDataFilter(logging.Filter):
         return True
 
 
-_CONFIGURED = False
+_HUMAN_FORMAT = "%(asctime)s %(levelname)s %(name)s %(message)s"
 
 
-def configure_logging(level: int = logging.INFO) -> None:
-    """Configure root logging once and attach the redaction filter.
+class JsonFormatter(logging.Formatter):
+    """Serialize a record as one line of JSON (AD-041).
 
-    Safe to call multiple times. The filter is attached to every root handler so
-    all log output passes through redaction (NFR-SEC-004).
+    Emits the standard fields (``timestamp``/``level``/``logger``/``message``)
+    plus every non-reserved record attribute — the trace fields stamped by
+    ``TraceContextFilter`` and any ``extra=`` the call site passed. Redaction runs
+    as a filter *before* the handler formats, so secret-bearing attributes are
+    already masked by the time they are serialized here (NFR-SEC-004 preserved).
     """
-    global _CONFIGURED
-    if _CONFIGURED:
-        return
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    )
-    redaction = SensitiveDataFilter()
-    root = logging.getLogger()
+
+    def format(self, record: logging.LogRecord) -> str:
+        payload: dict[str, object] = {
+            "timestamp": datetime.fromtimestamp(record.created, tz=UTC).isoformat(),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        # Trace fields + structured ``extra=`` live as non-reserved attributes.
+        for key, value in record.__dict__.items():
+            if key in _RESERVED_RECORD_ATTRS or key == "message" or key.startswith("_"):
+                continue
+            payload[key] = value
+        if record.exc_info:
+            payload["exc_info"] = self.formatException(record.exc_info)
+        if record.stack_info:
+            payload["stack_info"] = self.formatStack(record.stack_info)
+        return json.dumps(payload, default=str, ensure_ascii=False)
+
+
+def _learny_handler(root: logging.Logger) -> logging.StreamHandler:
+    """Return our tagged root handler, creating and attaching it once."""
     for handler in root.handlers:
-        handler.addFilter(redaction)
-    # Also attach to the root logger so records created on child loggers without
-    # their own handlers are still filtered when they propagate.
-    root.addFilter(redaction)
-    _CONFIGURED = True
+        if getattr(handler, "_learny", False):
+            return handler  # type: ignore[return-value]
+    handler = logging.StreamHandler()
+    handler._learny = True  # type: ignore[attr-defined]
+    root.addHandler(handler)
+    return handler
+
+
+def _ensure_filter(target: logging.Logger | logging.Handler, filter_cls: type) -> None:
+    """Attach a single instance of ``filter_cls`` to ``target`` (idempotent)."""
+    if not any(isinstance(f, filter_cls) for f in target.filters):
+        target.addFilter(filter_cls())
+
+
+def configure_logging(level: int = logging.INFO, log_format: str | None = None) -> None:
+    """Configure root logging: format toggle + redaction + trace-field correlation.
+
+    Idempotent and re-entrant: repeated calls do not duplicate handlers or filters,
+    and a later call may switch the format (the worker configures ``json``). The
+    redaction and trace-context filters are attached to our handler so every line
+    it emits is both correlated and secret-masked (NFR-SEC-004 / AD-041). Deferred
+    import of ``TraceContextFilter`` avoids an import cycle with ``config``.
+
+    ``LEARNY_LOG_FORMAT`` is the single source of truth for the format and is read
+    straight from the environment (not a ``Settings`` field) on purpose:
+    ``configure_logging`` runs at import/startup, and priming the ``get_settings``
+    lru-cache here would pin a stale DB URL that Alembic's ``env.py`` later reads (a
+    real test-isolation hazard).
+    """
+    import os
+
+    from app.core.tracing import TraceContextFilter
+
+    resolved = log_format or os.environ.get("LEARNY_LOG_FORMAT", "human")
+    root = logging.getLogger()
+    root.setLevel(level)
+
+    handler = _learny_handler(root)
+    handler.setFormatter(
+        JsonFormatter() if resolved == "json" else logging.Formatter(_HUMAN_FORMAT)
+    )
+    # Redaction must run before trace enrichment cannot re-introduce secrets — both
+    # are on the emitting handler so JSON/human output is masked + correlated.
+    _ensure_filter(handler, SensitiveDataFilter)
+    _ensure_filter(handler, TraceContextFilter)
+    # Also on the root logger for records emitted directly on it (parity w/ prior).
+    _ensure_filter(root, SensitiveDataFilter)
+    _ensure_filter(root, TraceContextFilter)

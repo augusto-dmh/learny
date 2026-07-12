@@ -11,6 +11,8 @@ ids on the queue (ING-09) without a broker.
 
 from __future__ import annotations
 
+import logging
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -20,6 +22,8 @@ import pytest
 from sqlalchemy import Engine, func, select
 from sqlalchemy import delete as sa_delete
 
+import app.worker.tasks as tasks_module
+from app.core.tracing import TraceContextFilter, current_trace
 from app.domain.entities import (
     CorpusStructure,
     IngestionEvent,
@@ -321,11 +325,12 @@ def test_run_ingestion_retryable_exhausted_fails(seed, db_engine: Engine) -> Non
     ctx = seed(IngestionStatus.QUEUED)
     fake_self = FakeSelf(retries=3, max_retries=3)  # retries == max ⇒ exhausted
 
-    with patch(
-        "app.worker.tasks._build_step",
-        lambda conn: RaisingStep(RetryableIngestionError("still unreachable")),
-    ):
-        _run(fake_self, str(ctx.source.id), str(ctx.job.id))
+    with _capture_worker_logs() as handler:
+        with patch(
+            "app.worker.tasks._build_step",
+            lambda conn: RaisingStep(RetryableIngestionError("still unreachable")),
+        ):
+            _run(fake_self, str(ctx.source.id), str(ctx.job.id))
 
     assert fake_self.retry_calls == []  # no further retry once exhausted
     job = _read_job(db_engine, ctx.job.id)
@@ -333,6 +338,12 @@ def test_run_ingestion_retryable_exhausted_fails(seed, db_engine: Engine) -> Non
     assert job.last_error == _REDACTED
     assert _read_source_status(db_engine, ctx.source.id) == "failed"
     assert IngestionEventType.FAILED in _read_event_types(db_engine, ctx.job.id)
+    # This third terminal branch also carries trace fields + a duration (PROD-14).
+    rec = _record_for(handler, "ingestion.run: failed (retries exhausted)")
+    assert rec.job_id == str(ctx.job.id)
+    assert rec.source_id == str(ctx.source.id)
+    assert isinstance(rec.duration_ms, float)
+    assert rec.duration_ms >= 0.0
 
 
 def test_run_ingestion_missing_job_is_noop(seed, db_engine: Engine) -> None:
@@ -604,3 +615,99 @@ def test_embed_failure_is_terminal_and_leaves_no_partial_vectors(
         "corpus_built",
         IngestionEventType.FAILED,
     ]
+
+
+# --- Observability: worker trace fields + duration (PROD-14) --------------------
+
+
+class _TraceRecordingHandler(logging.Handler):
+    """Capture records off the worker logger, self-stamping bound trace fields."""
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.NOTSET)
+        self.addFilter(TraceContextFilter())
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
+
+
+@contextmanager
+def _capture_worker_logs():
+    """Attach a recording handler to the worker task logger, forced enabled."""
+    handler = _TraceRecordingHandler()
+    logger = logging.getLogger("app.worker.tasks")
+    previous_level, previous_disabled = logger.level, logger.disabled
+    logger.setLevel(logging.INFO)
+    logger.disabled = False
+    logger.addHandler(handler)
+    try:
+        yield handler
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(previous_level)
+        logger.disabled = previous_disabled
+
+
+def _record_for(handler: _TraceRecordingHandler, message: str) -> logging.LogRecord:
+    hits = [r for r in handler.records if r.getMessage() == message]
+    assert len(hits) == 1, f"expected one {message!r} record, got {len(hits)}"
+    return hits[0]
+
+
+def test_run_ingestion_success_logs_trace_fields_and_duration(
+    seed, db_engine: Engine
+) -> None:
+    ctx = seed(IngestionStatus.QUEUED)
+    with _capture_worker_logs() as handler:
+        with patch("app.worker.tasks._build_step", lambda conn: NoOpIngestionStep()):
+            _run(FakeSelf(), str(ctx.source.id), str(ctx.job.id))
+
+    rec = _record_for(handler, "ingestion.run: succeeded")
+    assert rec.job_id == str(ctx.job.id)
+    assert rec.source_id == str(ctx.source.id)
+    assert isinstance(rec.duration_ms, float)
+    assert rec.duration_ms >= 0.0
+
+
+def test_run_ingestion_failure_logs_trace_fields_and_duration(
+    seed, db_engine: Engine
+) -> None:
+    ctx = seed(IngestionStatus.QUEUED)
+    with _capture_worker_logs() as handler:
+        with patch(
+            "app.worker.tasks._build_step",
+            lambda conn: RaisingStep(RuntimeError("boom")),
+        ):
+            _run(FakeSelf(), str(ctx.source.id), str(ctx.job.id))
+
+    rec = _record_for(handler, "ingestion.run: failed")
+    assert rec.job_id == str(ctx.job.id)
+    assert rec.source_id == str(ctx.source.id)
+    assert isinstance(rec.duration_ms, float)
+    assert rec.duration_ms >= 0.0
+
+
+def test_run_ingestion_populates_trace_context_during_the_task(
+    seed, db_engine: Engine
+) -> None:
+    """The task binds job/source into the trace context that the filter stamps
+    onto *every* downstream log record — not just the ones passing ``extra=``
+    (PROD-14 correlation seam). A no-op ``bind_trace`` leaves this empty."""
+    ctx = seed(IngestionStatus.QUEUED)
+    seen: dict[str, str] = {}
+    orig = tasks_module._build_run_ingestion
+
+    def spy(conn):  # noqa: ANN001, ANN202
+        # Snapshot the trace context while the task body executes — this is what
+        # TraceContextFilter injects into downstream records with no explicit extra.
+        seen.update(current_trace())
+        return orig(conn)
+
+    with (
+        patch("app.worker.tasks._build_step", lambda conn: NoOpIngestionStep()),
+        patch("app.worker.tasks._build_run_ingestion", spy),
+    ):
+        _run(FakeSelf(), str(ctx.source.id), str(ctx.job.id))
+
+    assert seen == {"job_id": str(ctx.job.id), "source_id": str(ctx.source.id)}

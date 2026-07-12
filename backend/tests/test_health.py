@@ -16,6 +16,14 @@ def test_healthz_returns_ok() -> None:
     assert resp.json() == {"status": "ok"}
 
 
+def test_assembled_app_wires_request_context_middleware() -> None:
+    """The real create_app() installs the request-context middleware, so every
+    response carries an X-Request-ID (not just the isolated-middleware tests)."""
+    client = TestClient(create_app())
+    resp = client.get("/healthz")
+    assert resp.headers.get("X-Request-ID")
+
+
 def test_config_loads_from_env(monkeypatch) -> None:
     monkeypatch.setenv("LEARNY_ENVIRONMENT", "test-env")
     monkeypatch.setenv("LEARNY_DATABASE_URL", "postgresql+psycopg://u:p@h:5432/d")

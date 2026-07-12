@@ -50,6 +50,12 @@ Seen once or not yet corroborated. Tracked, not trusted.
 - evidence: EVAL-07 / test_golden_citations.py (backend/tests/evaluation)
 - last seen: 2026-07-12T21:31:04Z
 
+### L-007 — When trace/context fields are auto-injected by a logging filter, assert them on a record emitted WITHOUT explicit extra= so a broken binding is detectable, not on a record that also passes the fields via extra=
+- signal: `surviving_mutant` · recurrence: 1 feature(s) · scope: `observability` · harmful: 0
+- features: production-readiness
+- evidence: M4 worker arm — test_worker_tasks.py:650 (observability)
+- last seen: 2026-07-12T23:06:52Z
+
 ## Quarantined (failed when applied — ignore)
 
 A confirmed lesson that recurred alongside failure. Kept for the maintainer to review.

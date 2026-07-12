@@ -3,3 +3,8 @@
 # OMC orchestration state (local tooling, not project artifacts)
 .omc/
 **/.omc/
+
+# Production secret env files injected into the prod compose overlay (never
+# committed — created from the *.env.production.example templates, AD-042/AD-043).
+secrets/
+*.env.production

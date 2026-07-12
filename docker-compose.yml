@@ -1,17 +1,23 @@
-# Learny local topology (FR-SCAF-001, AD-008).
+# Learny service topology (FR-SCAF-001, AD-008/AD-042).
 # Six services: api, web, db (postgres+pgvector), redis, worker (Celery), minio.
 # Health: db/redis/minio via native checks; api via /healthz; worker via celery ping.
-# Secrets are placeholders for local only — production injects via env (NFR-SEC-003).
+#
+# This base file is the single source of topology truth and is deliberately kept
+# free of host-published infra ports and of secrets:
+#   - Local dev: `docker-compose.override.yml` (auto-loaded) adds db/redis/minio
+#     host ports and dev credentials.
+#   - Production: `docker-compose.prod.yml` (explicit `-f`) adds restart policies,
+#     pinned images, prod env, and env_file-injected secrets (NFR-SEC-003).
+# So `docker compose up` stays a local dev run; `docker compose -f docker-compose.yml
+# -f docker-compose.prod.yml up -d` is the production-like run.
 
 services:
   db:
     image: pgvector/pgvector:pg16
     environment:
       POSTGRES_USER: learny
-      POSTGRES_PASSWORD: learny
       POSTGRES_DB: learny
-    ports:
-      - "5432:5432"
+      # POSTGRES_PASSWORD comes from the override (local) or env_file (prod).
     volumes:
       - db_data:/var/lib/postgresql/data
     healthcheck:
@@ -22,8 +28,6 @@ services:
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -33,12 +37,7 @@ services:
   minio:
     image: minio/minio:latest
     command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: learny
-      MINIO_ROOT_PASSWORD: learny-dev-secret
-    ports:
-      - "9000:9000"
-      - "9001:9001"
+    # MINIO_ROOT_USER/PASSWORD come from the override (local) or env_file (prod).
     volumes:
       - minio_data:/data
     healthcheck:
@@ -52,15 +51,14 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     environment:
-      LEARNY_DATABASE_URL: postgresql+psycopg://learny:learny@db:5432/learny
       LEARNY_REDIS_URL: redis://redis:6379/0
       LEARNY_SESSION_COOKIE_SECURE: "false"
       LEARNY_STORAGE_ENDPOINT: http://minio:9000
-      LEARNY_STORAGE_ACCESS_KEY: learny
-      LEARNY_STORAGE_SECRET_KEY: learny-dev-secret
       LEARNY_STORAGE_BUCKET: learny-sources
       LEARNY_STORAGE_REGION: us-east-1
-    # Apply migrations, then serve. (Phase C wires the auth routers onto this app.)
+      # LEARNY_DATABASE_URL + storage access/secret keys come from the override
+      # (local) or env_file (prod) — never inline in this base (NFR-SEC-003).
+    # Apply migrations, then serve.
     command: >-
       sh -c "alembic upgrade head &&
              uvicorn app.main:app --host 0.0.0.0 --port 8000"
@@ -85,8 +83,8 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     environment:
-      LEARNY_DATABASE_URL: postgresql+psycopg://learny:learny@db:5432/learny
       LEARNY_REDIS_URL: redis://redis:6379/0
+      # LEARNY_DATABASE_URL comes from the override (local) or env_file (prod).
     command: celery -A app.worker.celery_app:celery_app worker --loglevel=info
     depends_on:
       redis:
