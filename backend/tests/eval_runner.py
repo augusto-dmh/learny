@@ -24,8 +24,19 @@ from uuid import UUID, uuid4
 from sqlalchemy import Connection
 
 from app.application.corpus import BuildCorpus
+from app.application.identity import AuthorizeOwnership
+from app.application.qa import AskQuestion
+from app.application.retrieval import RetrieveEvidence
 from app.core.config import get_settings
-from app.domain.entities import CorpusSectionRecord, Evidence, IngestionJob, Source, User
+from app.domain.entities import (
+    CorpusSectionRecord,
+    Evidence,
+    IngestionJob,
+    QuestionAnswer,
+    Source,
+    User,
+)
+from app.infrastructure.answering.local import DeterministicAnswerAdapter
 from app.infrastructure.db.repositories import (
     SqlAlchemyCorpusRepository,
     SqlAlchemyEmbeddingIndexRepository,
@@ -189,6 +200,37 @@ def retrieve(
         rrf_k=settings.retrieval_rrf_k,
         ef_search=settings.hnsw_ef_search,
     )
+
+
+def answer(db_conn: Connection, user: User, source: Source, question: str) -> QuestionAnswer:
+    """Answer ``question`` over ``source`` through the real cited-answer path.
+
+    Wires ``AskQuestion`` exactly as the request handler does — real source repo
+    (ownership + readiness), real ``RetrieveEvidence`` over the hybrid retrieval +
+    deterministic embeddings, the deterministic extractive answer adapter, and the
+    settings-sourced evidence budget — so the golden citation check exercises the
+    shared grounding guard, not a fake.
+    """
+    settings = get_settings()
+    retrieve_evidence = RetrieveEvidence(
+        sources=SqlAlchemySourceRepository(db_conn),
+        retrieval=SqlAlchemyRetrievalRepository(db_conn),
+        embeddings=DeterministicEmbeddingAdapter(),
+        authorize=AuthorizeOwnership(),
+        semantic_limit=settings.retrieval_semantic_limit,
+        lexical_limit=settings.retrieval_lexical_limit,
+        rrf_k=settings.retrieval_rrf_k,
+        ef_search=settings.hnsw_ef_search,
+        default_top_k=settings.retrieval_top_k,
+    )
+    ask = AskQuestion(
+        sources=SqlAlchemySourceRepository(db_conn),
+        authorize=AuthorizeOwnership(),
+        retrieve=retrieve_evidence,
+        generation=DeterministicAnswerAdapter(),
+        evidence_top_k=settings.qa_evidence_top_k,
+    )
+    return ask(user=user, source_id=source.id, question=question)
 
 
 def _throwaway_source() -> Source:
