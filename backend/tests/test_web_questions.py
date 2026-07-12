@@ -341,6 +341,17 @@ def test_ask_blank_question_returns_422(auth_client: TestClient, db_conn: Connec
     assert "answer_status" not in resp.json()
 
 
+def test_ask_missing_question_field_returns_422(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # QA-09: a body without the question key is rejected with 422 before the
+    # service runs.
+    source_id, csrf = _seed_owned_embedded_source(auth_client, db_conn, "missing@example.com")
+    resp = _ask(auth_client, source_id, {}, csrf=csrf)
+    assert resp.status_code == 422, resp.text
+    assert "answer_status" not in resp.json()
+
+
 def test_ask_whitespace_question_returns_422(
     auth_client: TestClient, db_conn: Connection
 ) -> None:
