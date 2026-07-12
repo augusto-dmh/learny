@@ -108,6 +108,14 @@ class Settings(BaseSettings):
     qa_question_max_chars: int = 2000
     qa_evidence_top_k: int = 8
 
+    # Teaching sessions (Phase 8) — message length bound enforced by the web
+    # validator, the server-controlled evidence budget handed to scoped retrieval
+    # (keep ≤ ``retrieval_max_top_k``), and the number of prior turns passed to the
+    # generation port as bounded context (TEACH-12).
+    teaching_message_max_chars: int = 2000
+    teaching_evidence_top_k: int = 8
+    teaching_history_turns: int = 6
+
 
 @lru_cache
 def get_settings() -> Settings:

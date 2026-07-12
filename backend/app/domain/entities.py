@@ -376,3 +376,70 @@ class QuestionAnswer:
     citations: tuple[Evidence, ...]
     evidence_count: int
     model: str
+
+
+# --- Teaching sessions aggregate (Cycle 7, design §Components) -------------------
+# A session anchors a bounded conversation to one corpus section of a source; its
+# turns pair a user message with a generated response and carry citation snapshots
+# so history survives corpus re-ingestion (AD-033).
+
+
+@dataclass(frozen=True)
+class TeachingSession:
+    """A teaching conversation anchored to one corpus section (TEACH-01).
+
+    The target is captured as a snapshot — the stable citation ``target_anchor``
+    plus its ``target_section_path`` and ``target_title`` — so the session renders
+    without re-reading the corpus (the anchor is re-resolved per turn, TEACH-16).
+    """
+
+    id: UUID
+    source_id: UUID
+    target_anchor: str
+    target_section_path: tuple[str, ...]
+    target_title: str
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
+class TeachingTurn:
+    """One user message paired with its generated response (TEACH-07).
+
+    ``answer_status`` is ``"answered"`` or ``"not_found_in_source"``; a not-found
+    turn is still persisted with empty ``answer_text`` and no ``citations``
+    (TEACH-14). ``citations`` are grounded :class:`Evidence` snapshots whose rank
+    is their tuple position (``page_span`` is ``None`` for EPUB, A-9).
+    """
+
+    id: UUID
+    session_id: UUID
+    turn_index: int
+    message: str
+    answer_status: str
+    answer_text: str
+    model: str
+    evidence_count: int
+    citations: tuple[Evidence, ...]
+    created_at: datetime
+
+
+@dataclass(frozen=True)
+class HistoryTurn:
+    """A prior turn reduced to the pair a generation port needs (design §Components).
+
+    Bounded conversation context (TEACH-12): the user ``message`` and the
+    ``response_text`` (empty for a not-found turn). Statuses and citations are not
+    needed for prompting, so they are omitted from this port DTO.
+    """
+
+    message: str
+    response_text: str
+
+
+@dataclass(frozen=True)
+class TeachingSessionSummary:
+    """A session plus its turn count for the per-source list read model (TEACH-21)."""
+
+    session: TeachingSession
+    turn_count: int

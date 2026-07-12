@@ -26,12 +26,16 @@ from app.domain.entities import (
     CorpusStructure,
     Evidence,
     GeneratedAnswer,
+    HistoryTurn,
     IngestionEvent,
     IngestionJob,
     ParsedBook,
     PasswordCredential,
     Session,
     Source,
+    TeachingSession,
+    TeachingSessionSummary,
+    TeachingTurn,
     User,
 )
 
@@ -380,8 +384,14 @@ class RetrievalPort(Protocol):
         lexical_limit: int,
         rrf_k: int,
         ef_search: int,
+        anchors: Sequence[str] | None = None,
     ) -> list[Evidence]:
-        """Return up to ``top_k`` fused ``Evidence`` for ``source_id``, RRF-ordered."""
+        """Return up to ``top_k`` fused ``Evidence`` for ``source_id``, RRF-ordered.
+
+        When ``anchors`` is given, both arms are restricted to chunks whose section
+        ``anchor`` is in the set — the target-subtree scope for teaching (TEACH-09,
+        AD-031). ``None`` (the default) keeps the whole-source behaviour unchanged.
+        """
         ...
 
 
@@ -410,5 +420,78 @@ class AnswerGenerationPort(Protocol):
         Returns ``found=False`` when the evidence cannot support an answer;
         raises for operational failure (the application service maps any raise
         to :class:`~app.application.errors.AnswerGenerationFailed`, QA-17).
+        """
+        ...
+
+
+@runtime_checkable
+class TeachingSessionRepository(Protocol):
+    """Persistence port for :class:`~app.domain.entities.TeachingSession`.
+
+    Ownership is reachable only via the parent source (AD-014) — the application
+    service does the authorization; these methods key on ids.
+    """
+
+    def add(self, session: TeachingSession) -> TeachingSession:
+        """Persist a new teaching session."""
+        ...
+
+    def get_by_id(self, session_id: UUID) -> TeachingSession | None:
+        """Return the session with ``session_id``, or ``None`` if absent."""
+        ...
+
+    def list_for_source(self, source_id: UUID) -> list[TeachingSessionSummary]:
+        """Return ``source_id``'s sessions with turn counts, newest first (TEACH-21)."""
+        ...
+
+
+@runtime_checkable
+class TeachingTurnRepository(Protocol):
+    """Persistence port for :class:`~app.domain.entities.TeachingTurn`."""
+
+    def add(self, turn: TeachingTurn) -> TeachingTurn:
+        """Persist a turn and its citation snapshots (rank = tuple position).
+
+        Raises :class:`~app.application.errors.TeachingTurnConflict` when the
+        ``(session_id, turn_index)`` unique is violated — the turn-index race
+        loser (TEACH-17).
+        """
+        ...
+
+    def list_for_session(self, session_id: UUID) -> list[TeachingTurn]:
+        """Return a session's turns by ``turn_index`` ascending, citations loaded."""
+        ...
+
+
+@runtime_checkable
+class TeachingGenerationPort(Protocol):
+    """Teaching-response generation port — the seam for the turn path (AD-032).
+
+    Mirrors :class:`AnswerGenerationPort`: provider SDKs, model names, and citation
+    formats live only in the adapter (ADR-0007/0009); callers pass the message, the
+    target section path, bounded prior ``history`` (TEACH-12), and the retrieved
+    :class:`~app.domain.entities.Evidence`, and receive a Learny-owned
+    :class:`~app.domain.entities.GeneratedAnswer`. The default adapter is
+    deterministic and network-free (D-1).
+
+    ``model`` is the adapter's stable model identity, readable without calling
+    ``generate`` so the not-found short-circuit can report it (TEACH-11 + TEACH-24).
+    """
+
+    model: str
+
+    def generate(
+        self,
+        *,
+        message: str,
+        target_section_path: tuple[str, ...],
+        history: Sequence[HistoryTurn],
+        evidence: Sequence[Evidence],
+    ) -> GeneratedAnswer:
+        """Generate a teaching response grounded in ``evidence``.
+
+        Returns ``found=False`` when the evidence cannot support a response;
+        raises for operational failure (the application service maps any raise
+        to :class:`~app.application.errors.AnswerGenerationFailed`, TEACH-13).
         """
         ...
