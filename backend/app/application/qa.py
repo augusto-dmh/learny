@@ -14,6 +14,7 @@ import logging
 from uuid import UUID
 
 from app.application.errors import AnswerGenerationFailed, SourceNotReady
+from app.application.grounding import ground
 from app.application.identity import AuthorizeOwnership
 from app.application.ingestion import SOURCE_STATUS_READY, authorized_source
 from app.application.retrieval import RetrieveEvidence
@@ -110,20 +111,19 @@ class AskQuestion:
             # body that leaks no provider/internal detail (QA-17).
             raise AnswerGenerationFailed("Answer generation failed.") from exc
 
-        # Grounding filter: keep only citations that reference retrieved evidence,
-        # in evidence-rank order. Evidence chunk ids are unique, so this dedupes
-        # and grounds in one step (QA-02/03/15).
-        cited = set(generated.cited_chunk_ids)
-        grounded = [e for e in evidence if e.chunk_id in cited]
-        if not generated.found or not generated.text.strip() or not grounded:
-            # found == false (QA-14), blank text (QA-16), or no citation survives
-            # grounding (QA-15) → the explicit not-found outcome.
+        # Grounding guard (AD-027), shared with the teaching turn path: keeps only
+        # citations referencing retrieved evidence, in evidence-rank order and
+        # deduped, or None when found == false (QA-14), text is blank (QA-16), or
+        # no citation survives grounding (QA-15) → the explicit not-found outcome.
+        grounded = ground(generated, evidence)
+        if grounded is None:
             return self._not_found(evidence_count, generated.model)
 
+        text, citations = grounded
         return QuestionAnswer(
             status=_ANSWERED,
-            text=generated.text,
-            citations=tuple(grounded),
+            text=text,
+            citations=tuple(citations),
             evidence_count=evidence_count,
             model=generated.model,
         )
