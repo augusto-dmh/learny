@@ -394,7 +394,13 @@ class AnswerGenerationPort(Protocol):
     :class:`~app.domain.entities.Evidence`, and receive a Learny-owned
     :class:`~app.domain.entities.GeneratedAnswer`. No SQL/HTTP/SDK type crosses
     this boundary. The default adapter is deterministic and network-free (D-1).
+
+    ``model`` is the adapter's stable model identity. It must be readable
+    without calling ``generate`` because the not-found short-circuit reports a
+    model identity while never invoking generation (QA-04 + QA-13).
     """
+
+    model: str
 
     def generate(
         self, *, question: str, evidence: Sequence[Evidence]
