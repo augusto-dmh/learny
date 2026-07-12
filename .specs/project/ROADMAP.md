@@ -12,5 +12,5 @@ This file only tracks how those phases map onto tlc cycles. Do not duplicate TDD
 | `retrieval-indexes` | 6 (Retrieval indexes) | Done (PR #12) |
 | `cited-qa` | 7 (Cited Q&A) | Done (PR #13) |
 | `teaching-sessions` | 8 (Teaching sessions) | Done (PR #14) |
-| _next_ | 9 (Golden fixtures) | Not started |
+| `golden-fixtures` | 9 (Golden fixtures) | Done (PR #15) |
 | _next_ | 10 (Production-like readiness) | Not started |

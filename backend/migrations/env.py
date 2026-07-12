@@ -7,8 +7,6 @@ autogeneration and ``--sql`` offline mode stay in sync with the schema.
 
 from __future__ import annotations
 
-from logging.config import fileConfig
-
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
@@ -17,8 +15,15 @@ from app.infrastructure.db.metadata import metadata
 
 config = context.config
 
-if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+# Deliberately NOT calling ``logging.config.fileConfig(config.config_file_name)``
+# here (the alembic boilerplate default). The application owns logging via
+# ``app.core.logging.configure_logging`` (including the sensitive-data redaction
+# filter, NFR-SEC-004); ``fileConfig`` reconfigures the root logger from
+# ``alembic.ini`` — replacing handlers and dropping that filter — whenever
+# ``env.py`` loads (every in-process ``command.upgrade``/``downgrade``). Letting
+# it run would strip redaction if migrations ever run after startup, and it
+# resets pytest's log-capture handlers under test. Alembic's own INFO output is
+# not needed programmatically.
 
 # Inject the runtime DB URL (never hard-coded in alembic.ini).
 config.set_main_option("sqlalchemy.url", get_settings().database_url)
