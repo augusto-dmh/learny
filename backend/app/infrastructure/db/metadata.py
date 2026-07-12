@@ -45,6 +45,7 @@ from sqlalchemy import (
     BigInteger,
     Column,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -274,4 +275,78 @@ corpus_chunks = Table(
     # embeds the chunk. The matching HNSW index is created in 0005 via raw SQL.
     Column("embedding", VECTOR(1536), nullable=True),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+)
+
+# --- Teaching sessions aggregate (Cycle 7 design §Data Models) -------------------
+# A session anchors a bounded conversation to one corpus section of a ready source;
+# its turns pair a user message with a generated response, and each turn's citations
+# are denormalized snapshots (no chunk FK) so history survives corpus re-ingestion
+# (AD-033/AD-018). Turn and citation ranks are position-unique within their parent.
+
+teaching_sessions = Table(
+    "teaching_sessions",
+    metadata,
+    Column("id", UUID(as_uuid=True), primary_key=True),
+    Column(
+        "source_id",
+        UUID(as_uuid=True),
+        ForeignKey("sources.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    # Target snapshot: the stable citation anchor plus its section path + title, so
+    # the target renders without re-reading the corpus (target resolve is per-turn).
+    Column("target_anchor", Text, nullable=False),
+    Column("target_section_path", JSONB, nullable=False),
+    Column("target_title", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+)
+
+teaching_turns = Table(
+    "teaching_turns",
+    metadata,
+    Column("id", UUID(as_uuid=True), primary_key=True),
+    Column(
+        "session_id",
+        UUID(as_uuid=True),
+        ForeignKey("teaching_sessions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    # Zero-based position within the session; the unique below is the turn-index
+    # race arbiter (TEACH-17).
+    Column("turn_index", Integer, nullable=False),
+    Column("message", Text, nullable=False),
+    # answered | not_found_in_source (TEACH-07).
+    Column("answer_status", Text, nullable=False),
+    # Empty for not-found turns, which are still persisted (TEACH-14).
+    Column("answer_text", Text, nullable=False, server_default=""),
+    Column("model", Text, nullable=False),
+    Column("evidence_count", Integer, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    UniqueConstraint("session_id", "turn_index"),
+)
+
+teaching_turn_citations = Table(
+    "teaching_turn_citations",
+    metadata,
+    Column("id", UUID(as_uuid=True), primary_key=True),
+    Column(
+        "turn_id",
+        UUID(as_uuid=True),
+        ForeignKey("teaching_turns.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    # Rank = citation position within the turn (TEACH-20).
+    Column("rank", Integer, nullable=False),
+    # Snapshot reference only — no FK, so a corpus replace can delete the live chunk
+    # without breaking stored history (AD-033).
+    Column("chunk_id", UUID(as_uuid=True), nullable=False),
+    Column("section_path", JSONB, nullable=False),
+    Column("anchor", Text, nullable=False),
+    Column("snippet", Text, nullable=False),
+    Column("score", Float, nullable=False),
+    UniqueConstraint("turn_id", "rank"),
 )
