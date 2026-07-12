@@ -30,6 +30,11 @@ class Settings(BaseSettings):
     environment: str = "local"
     debug: bool = False
 
+    # Observability (AD-041) — log record format. "human" keeps readable local
+    # logs; "json" emits single-line structured records for production log stacks.
+    # Trace-field correlation and secret redaction apply under both formats.
+    log_format: str = "human"
+
     # Database (used by /readyz and, later, repositories + migrations)
     database_url: str = "postgresql+psycopg://learny:learny@localhost:5432/learny"
 
