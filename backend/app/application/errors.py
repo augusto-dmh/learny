@@ -106,3 +106,22 @@ class CorpusNotFound(Exception):
     the web layer maps it to 404, matching the ownership-as-404 behavior so the
     control is only offered on ``ready`` sources.
     """
+
+
+class SourceNotReady(Exception):
+    """A question was asked against a source whose ``status != "ready"`` (QA-08).
+
+    Raised by the Q&A service after the ownership check and before retrieval, so
+    neither retrieval nor generation runs; the web layer maps it to 409 naming
+    the not-ready state.
+    """
+
+
+class AnswerGenerationFailed(Exception):
+    """The answer-generation port raised an operational failure (QA-17).
+
+    The Q&A service wraps any exception from
+    :meth:`~app.domain.ports.AnswerGenerationPort.generate` in this error; the
+    web layer maps it to 502 with a generic body that leaks no provider or
+    internal detail. Nothing is persisted, so there is no state to roll back.
+    """
