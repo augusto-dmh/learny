@@ -13,6 +13,7 @@
  * call regardless of client-side routing (FR-AUTH-007, ADR-017).
  */
 
+import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 import { fetchAuthState, type AuthState } from "@/app/lib/auth";
@@ -231,6 +232,9 @@ export function SourcesPanel({
                       ? "Hide structure"
                       : "View structure"}
                 </button>
+              ) : null}
+              {source.status === "ready" ? (
+                <Link href={`/sources/${source.id}/ask`}>Ask</Link>
               ) : null}
               {structures[source.id] ? (
                 <div data-testid={`structure-${source.id}`}>

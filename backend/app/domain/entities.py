@@ -341,3 +341,38 @@ class Evidence:
     page_span: dict | None
     snippet: str
     score: float
+
+
+@dataclass(frozen=True)
+class GeneratedAnswer:
+    """The raw output of the answer-generation port (QA-05, ADR-0007 §4).
+
+    A Learny-owned result so no provider response shape crosses the
+    :class:`~app.domain.ports.AnswerGenerationPort` boundary. ``cited_chunk_ids``
+    are the chunk ids the adapter drew on; the application service grounds them
+    against the retrieved evidence. ``found`` is ``False`` when the evidence
+    cannot support an answer (``text`` empty, ``cited_chunk_ids`` empty).
+    """
+
+    text: str
+    cited_chunk_ids: tuple[UUID, ...]
+    model: str
+    found: bool
+
+
+@dataclass(frozen=True)
+class QuestionAnswer:
+    """The application service's cited-answer result (QA-01..04, 13..16).
+
+    ``status`` is one of ``"answered"`` or ``"not_found_in_source"``. Citations
+    are grounded :class:`Evidence` items (no separate citation entity). The
+    not-found contract is exact: ``status == "not_found_in_source"`` implies
+    ``text == ""`` and ``citations == ()``. ``evidence_count`` and ``model`` are
+    diagnostics carried on both outcomes (QA-04).
+    """
+
+    status: str
+    text: str
+    citations: tuple[Evidence, ...]
+    evidence_count: int
+    model: str

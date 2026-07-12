@@ -102,6 +102,12 @@ class Settings(BaseSettings):
     retrieval_max_top_k: int = 50
     hnsw_ef_search: int = 100
 
+    # Cited Q&A (Phase 7) — question length bound enforced by the web validator
+    # and the server-controlled evidence budget. ``qa_evidence_top_k`` is the
+    # ``top_k`` handed to Phase-6 retrieval; keep it ≤ ``retrieval_max_top_k``.
+    qa_question_max_chars: int = 2000
+    qa_evidence_top_k: int = 8
+
 
 @lru_cache
 def get_settings() -> Settings:

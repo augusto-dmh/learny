@@ -32,11 +32,13 @@ from app.application.identity import (
     RegisterUser,
 )
 from app.application.ingestion import ReadIngestion, RunIngestion, StartIngestion
+from app.application.qa import AskQuestion
 from app.application.retrieval import RetrieveEvidence
 from app.application.sources import CreateSource, GetSource, ListSources
 from app.core.config import Settings, get_settings
 from app.domain.entities import Session, User
-from app.domain.ports import IngestionEnqueuer, StoragePort
+from app.domain.ports import AnswerGenerationPort, IngestionEnqueuer, StoragePort
+from app.infrastructure.answering import DeterministicAnswerAdapter
 from app.infrastructure.clock import SystemClock
 from app.infrastructure.db.engine import get_engine
 from app.infrastructure.db.repositories import (
@@ -297,4 +299,35 @@ def get_retrieve_evidence(conn: DbConnection) -> RetrieveEvidence:
         rrf_k=settings.retrieval_rrf_k,
         ef_search=settings.hnsw_ef_search,
         default_top_k=settings.retrieval_top_k,
+    )
+
+
+# Process-wide default answer generator (deterministic, network-free — AD-024).
+# Overridable in tests via ``get_answer_generation``, exactly like ``get_storage``;
+# swapping in a provider adapter later is a one-line change here (ADR-0007/0009).
+_answering: AnswerGenerationPort = DeterministicAnswerAdapter()
+
+
+def get_answer_generation() -> AnswerGenerationPort:
+    """FastAPI dependency: the process-wide answer generator (overridable in tests)."""
+    return _answering
+
+
+AnswerGeneration = Annotated[AnswerGenerationPort, Depends(get_answer_generation)]
+
+
+def get_ask_question(conn: DbConnection, generation: AnswerGeneration) -> AskQuestion:
+    """Wire ``AskQuestion`` on the request-scoped connection (QA-01..04, 07..08).
+
+    Composes the source repo (ownership + readiness), the existing
+    ``get_retrieve_evidence`` product (Phase-6 retrieval consumed whole), the
+    process-wide answer generator, and the server-controlled ``qa_evidence_top_k``
+    budget. Injecting ``generation`` via ``Depends`` keeps it test-overridable.
+    """
+    return AskQuestion(
+        sources=SqlAlchemySourceRepository(conn),
+        authorize=AuthorizeOwnership(),
+        retrieve=get_retrieve_evidence(conn),
+        generation=generation,
+        evidence_top_k=get_settings().qa_evidence_top_k,
     )
