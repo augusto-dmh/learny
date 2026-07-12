@@ -13,7 +13,7 @@ third-party text (AD-037 resolves TDD open question #9).
 
 from __future__ import annotations
 
-from tests.fixtures_epub import _CONTAINER, _doc, _zip
+from tests.epub_builder import CONTAINER, build_doc, zip_epub
 
 # Each chapter's TOC label == its <h1> so the section title and heading block read
 # the same; the prose vocabularies are pairwise disjoint (tides / volcanoes /
@@ -72,7 +72,7 @@ _OPF = (
     "</package>\n"
 )
 
-_NAV = _doc(
+_NAV = build_doc(
     "Contents",
     '<nav xmlns:epub="http://www.idpf.org/2007/ops" epub:type="toc">\n'
     "  <ol>\n"
@@ -85,13 +85,13 @@ _NAV = _doc(
 def golden_book() -> bytes:
     """The golden evaluation EPUB: three chapters of lexically disjoint prose."""
     members: dict[str, str | bytes] = {
-        "META-INF/container.xml": _CONTAINER,
+        "META-INF/container.xml": CONTAINER,
         "content.opf": _OPF,
         "nav.xhtml": _NAV,
     }
     for href, title, prose in _CHAPTERS:
-        members[href] = _doc(title, f"<h1>{title}</h1>\n<p>{prose}</p>")
-    return _zip(members)
+        members[href] = build_doc(title, f"<h1>{title}</h1>\n<p>{prose}</p>")
+    return zip_epub(members)
 
 
 # The single chunk each chapter packs to: the heading Markdown ("# <title>") and

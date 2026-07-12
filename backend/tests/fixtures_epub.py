@@ -13,9 +13,11 @@ HTML (CORP-01..03). They are the golden targets the parser asserts against.
 
 from __future__ import annotations
 
-import zipfile
 from dataclasses import dataclass
-from io import BytesIO
+
+from tests.epub_builder import CONTAINER as _CONTAINER
+from tests.epub_builder import build_doc as _doc
+from tests.epub_builder import zip_epub as _zip
 
 
 @dataclass(frozen=True)
@@ -37,46 +39,6 @@ class ExpectedSection:
     section_path: tuple[str, ...]
     anchor: str
     blocks: tuple[ExpectedBlock, ...]
-
-
-_XHTML = (
-    '<?xml version="1.0" encoding="UTF-8"?>\n'
-    "<!DOCTYPE html>\n"
-    '<html xmlns="http://www.w3.org/1999/xhtml">\n'
-    "<head><title>{title}</title></head>\n"
-    "<body>\n{body}\n</body>\n</html>\n"
-)
-
-
-def _doc(title: str, body: str) -> str:
-    return _XHTML.format(title=title, body=body)
-
-
-def _zip(members: dict[str, str | bytes]) -> bytes:
-    """Pack ``members`` into an EPUB ZIP with an uncompressed leading mimetype."""
-    buffer = BytesIO()
-    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr(
-            zipfile.ZipInfo("mimetype"),
-            "application/epub+zip",
-            compress_type=zipfile.ZIP_STORED,
-        )
-        for name, content in members.items():
-            data = content.encode("utf-8") if isinstance(content, str) else content
-            archive.writestr(name, data)
-    return buffer.getvalue()
-
-
-_CONTAINER = (
-    '<?xml version="1.0" encoding="UTF-8"?>\n'
-    '<container version="1.0" '
-    'xmlns="urn:oasis:names:tc:opendocument:xmlns:container">\n'
-    "  <rootfiles>\n"
-    '    <rootfile full-path="content.opf" '
-    'media-type="application/oebps-package+xml"/>\n'
-    "  </rootfiles>\n"
-    "</container>\n"
-)
 
 
 # --- valid_book -------------------------------------------------------------
@@ -120,16 +82,16 @@ _VALID_OPF = (
 
 _VALID_NAV = _doc(
     "Contents",
-    "<nav xmlns:epub=\"http://www.idpf.org/2007/ops\" epub:type=\"toc\">\n"
+    '<nav xmlns:epub="http://www.idpf.org/2007/ops" epub:type="toc">\n'
     "  <ol>\n"
-    "    <li><a href=\"part1.xhtml\">Part I</a>\n"
+    '    <li><a href="part1.xhtml">Part I</a>\n'
     "      <ol>\n"
-    "        <li><a href=\"chap1.xhtml\">Chapter 1</a></li>\n"
-    "        <li><a href=\"chap1.xhtml#sec-2\">Section 2</a></li>\n"
+    '        <li><a href="chap1.xhtml">Chapter 1</a></li>\n'
+    '        <li><a href="chap1.xhtml#sec-2">Section 2</a></li>\n'
     "      </ol>\n"
     "    </li>\n"
-    "    <li><a href=\"chap2.xhtml\">Chapter 2</a></li>\n"
-    "    <li><a href=\"missing.xhtml\">Ghost Chapter</a></li>\n"
+    '    <li><a href="chap2.xhtml">Chapter 2</a></li>\n'
+    '    <li><a href="missing.xhtml">Ghost Chapter</a></li>\n'
     "  </ol>\n"
     "</nav>",
 )
@@ -429,11 +391,11 @@ _NESTED_OPF = (
 
 _NESTED_NAV = _doc(
     "Contents",
-    "<nav xmlns:epub=\"http://www.idpf.org/2007/ops\" epub:type=\"toc\">\n"
+    '<nav xmlns:epub="http://www.idpf.org/2007/ops" epub:type="toc">\n'
     "  <ol>\n"
-    "    <li><a href=\"chap.xhtml\">Chapter 1</a>\n"
+    '    <li><a href="chap.xhtml">Chapter 1</a>\n'
     "      <ol>\n"
-    "        <li><a href=\"chap.xhtml#sec-3\">Section 3</a></li>\n"
+    '        <li><a href="chap.xhtml#sec-3">Section 3</a></li>\n'
     "      </ol>\n"
     "    </li>\n"
     "  </ol>\n"
