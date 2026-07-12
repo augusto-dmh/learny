@@ -30,6 +30,7 @@ from app.application.ingestion import SOURCE_STATUS_READY, authorized_source
 from app.application.retrieval import RetrieveEvidence
 from app.domain.entities import (
     HistoryTurn,
+    Source,
     TeachingSession,
     TeachingSessionSummary,
     TeachingTurn,
@@ -51,6 +52,34 @@ logger = logging.getLogger(__name__)
 # explicit "the target cannot support this" outcome, still persisted (TEACH-14).
 _ANSWERED = "answered"
 _NOT_FOUND_IN_SOURCE = "not_found_in_source"
+
+
+def authorized_session(
+    *,
+    user: User,
+    session_id: UUID,
+    sessions: TeachingSessionRepository,
+    sources: SourceRepository,
+    authorize: AuthorizeOwnership,
+) -> tuple[TeachingSession, Source]:
+    """Resolve a session the caller owns, or raise ``TeachingSessionNotFound``.
+
+    Mirrors ``authorized_source`` for the session-rooted services: a missing
+    session, a missing parent source, and a non-owner all collapse to the same
+    error so a session's existence is never disclosed (TEACH-06). This is the
+    single home of that rule — services never re-implement the collapse.
+    """
+    session = sessions.get_by_id(session_id)
+    if session is None:
+        raise TeachingSessionNotFound("Teaching session not found.")
+    source = sources.get_by_id(session.source_id)
+    if source is None:
+        raise TeachingSessionNotFound("Teaching session not found.")
+    try:
+        authorize(user=user, owner_id=source.user_id)
+    except NotAuthorized as exc:
+        raise TeachingSessionNotFound("Teaching session not found.") from exc
+    return session, source
 
 
 class StartTeachingSession:
@@ -142,16 +171,13 @@ class ReadTeachingSession:
     def __call__(
         self, *, user: User, session_id: UUID
     ) -> tuple[TeachingSession, list[TeachingTurn]]:
-        session = self._sessions.get_by_id(session_id)
-        if session is None:
-            raise TeachingSessionNotFound("Teaching session not found.")
-        source = self._sources.get_by_id(session.source_id)
-        if source is None:
-            raise TeachingSessionNotFound("Teaching session not found.")
-        try:
-            self._authorize(user=user, owner_id=source.user_id)
-        except NotAuthorized as exc:
-            raise TeachingSessionNotFound("Teaching session not found.") from exc
+        session, _ = authorized_session(
+            user=user,
+            session_id=session_id,
+            sessions=self._sessions,
+            sources=self._sources,
+            authorize=self._authorize,
+        )
         return session, self._turns.list_for_session(session_id)
 
 
@@ -240,16 +266,13 @@ class PostTeachingTurn:
     def __call__(
         self, *, user: User, session_id: UUID, message: str
     ) -> TeachingTurn:
-        session = self._sessions.get_by_id(session_id)
-        if session is None:
-            raise TeachingSessionNotFound("Teaching session not found.")
-        source = self._sources.get_by_id(session.source_id)
-        if source is None:
-            raise TeachingSessionNotFound("Teaching session not found.")
-        try:
-            self._authorize(user=user, owner_id=source.user_id)
-        except NotAuthorized as exc:
-            raise TeachingSessionNotFound("Teaching session not found.") from exc
+        session, source = authorized_session(
+            user=user,
+            session_id=session_id,
+            sessions=self._sessions,
+            sources=self._sources,
+            authorize=self._authorize,
+        )
         if source.status != SOURCE_STATUS_READY:
             # A stale-ready race resolves here on the next turn (TEACH-15).
             raise SourceNotReady("Source is not ready for teaching.")
