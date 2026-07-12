@@ -81,7 +81,13 @@ def test_api_runs_with_production_hardened_env(prod: dict) -> None:
 def test_secrets_come_from_env_file_not_inline(prod: dict) -> None:
     # Credentials must arrive via env_file, never as inline environment literals.
     for svc in ("api", "worker", "db", "minio"):
-        assert prod[svc].get("env_file"), f"{svc} must source secrets via env_file"
+        env_file = prod[svc].get("env_file")
+        assert env_file, f"{svc} must source secrets via env_file"
+        # Fail fast: a missing secrets file must abort startup, not silently fall
+        # back to the in-code dev defaults (required: true, Compose's default).
+        for entry in env_file:
+            assert isinstance(entry, dict), f"{svc} env_file must use long-form"
+            assert entry.get("required") is True, f"{svc} env_file must be required"
 
     for svc in ("api", "worker"):
         env = prod[svc].get("environment", {})
