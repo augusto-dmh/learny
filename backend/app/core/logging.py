@@ -151,10 +151,11 @@ def configure_logging(level: int = logging.INFO, log_format: str | None = None) 
     it emits is both correlated and secret-masked (NFR-SEC-004 / AD-041). Deferred
     import of ``TraceContextFilter`` avoids an import cycle with ``config``.
 
-    The format is read straight from ``LEARNY_LOG_FORMAT`` rather than the cached
-    ``Settings`` on purpose: ``configure_logging`` runs at import/startup, and
-    priming the ``get_settings`` lru-cache here would pin a stale DB URL that
-    Alembic's ``env.py`` later reads (a real test-isolation hazard).
+    ``LEARNY_LOG_FORMAT`` is the single source of truth for the format and is read
+    straight from the environment (not a ``Settings`` field) on purpose:
+    ``configure_logging`` runs at import/startup, and priming the ``get_settings``
+    lru-cache here would pin a stale DB URL that Alembic's ``env.py`` later reads (a
+    real test-isolation hazard).
     """
     import os
 
