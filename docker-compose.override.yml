@@ -1,0 +1,38 @@
+# Local development overlay (AD-042). Docker Compose auto-loads this file for a
+# plain `docker compose up`, so local dev keeps the same behaviour as before the
+# base/prod split: db/redis/minio are published on the host, and dev-only
+# credentials are supplied here (never committed as real secrets — these are
+# throwaway local values). The production run (`-f docker-compose.yml -f
+# docker-compose.prod.yml`) does NOT load this file, so prod publishes no infra
+# ports and injects secrets via env_file instead (NFR-SEC-003).
+
+services:
+  db:
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_PASSWORD: learny
+
+  redis:
+    ports:
+      - "6379:6379"
+
+  minio:
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: learny
+      MINIO_ROOT_PASSWORD: learny-dev-secret
+
+  api:
+    environment:
+      LEARNY_DATABASE_URL: postgresql+psycopg://learny:learny@db:5432/learny
+      LEARNY_STORAGE_ACCESS_KEY: learny
+      LEARNY_STORAGE_SECRET_KEY: learny-dev-secret
+
+  worker:
+    environment:
+      LEARNY_DATABASE_URL: postgresql+psycopg://learny:learny@db:5432/learny
+      LEARNY_STORAGE_ACCESS_KEY: learny
+      LEARNY_STORAGE_SECRET_KEY: learny-dev-secret

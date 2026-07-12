@@ -1,0 +1,68 @@
+# Production-like overlay (AD-042, TDD Phase 10). Apply explicitly over the base:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# It does NOT auto-load (so it never affects local dev) and it overrides only the
+# prod-specific keys: restart policies, pinned images (no floating :latest), prod
+# env, env_file-injected secrets (NFR-SEC-003), and production run commands. TLS
+# termination and a reverse proxy sit in FRONT of `web`/`api` and are an external
+# concern (TDD open question #10) — deliberately not embedded here.
+#
+# Secrets: create the referenced files under ./secrets/ (git-ignored) from the
+# *.env.production.example templates. `environment:` here holds only non-secret
+# config; every credential arrives via env_file.
+
+services:
+  db:
+    restart: unless-stopped
+    # pgvector/pgvector:pg16 (from base) is an explicit tag; operators may re-pin
+    # to a digest for full reproducibility.
+    env_file:
+      - path: ./secrets/db.env
+        required: false
+
+  redis:
+    restart: unless-stopped
+    image: redis:7.4-alpine
+
+  minio:
+    restart: unless-stopped
+    # Pin to a vetted MinIO release (never :latest). Operators bump this tag
+    # deliberately after testing.
+    image: minio/minio:RELEASE.2024-10-13T13-34-11Z
+    env_file:
+      - path: ./secrets/minio.env
+        required: false
+
+  api:
+    restart: unless-stopped
+    environment:
+      LEARNY_ENVIRONMENT: production
+      LEARNY_DEBUG: "false"
+      LEARNY_SESSION_COOKIE_SECURE: "true"
+      LEARNY_LOG_FORMAT: json
+    env_file:
+      - path: ./secrets/api.env
+        required: false
+    command: >-
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers ${LEARNY_API_WORKERS:-2}"
+
+  worker:
+    restart: unless-stopped
+    environment:
+      LEARNY_ENVIRONMENT: production
+      LEARNY_LOG_FORMAT: json
+    env_file:
+      - path: ./secrets/worker.env
+        required: false
+
+  web:
+    restart: unless-stopped
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: prod
+    # The prod image serves the built Next.js standalone server (see the prod
+    # stage in frontend/Dockerfile), never `next dev`.
+    command: ["node", "server.js"]
