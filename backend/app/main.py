@@ -15,6 +15,7 @@ from app.infrastructure.web.auth import router as auth_router
 from app.infrastructure.web.error_handlers import register_error_handlers
 from app.infrastructure.web.health import router as health_router
 from app.infrastructure.web.ingestion import router as ingestion_router
+from app.infrastructure.web.middleware import RequestContextMiddleware
 from app.infrastructure.web.questions import router as questions_router
 from app.infrastructure.web.retrieval import router as retrieval_router
 from app.infrastructure.web.sources import router as sources_router
@@ -26,6 +27,9 @@ def create_app() -> FastAPI:
     configure_logging()
     settings = get_settings()
     app = FastAPI(title=settings.app_name)
+    # Outermost user middleware: wraps routing + exception handling so handled
+    # responses carry the request id and every request is access-logged.
+    app.add_middleware(RequestContextMiddleware)
     register_error_handlers(app)
     app.include_router(health_router)
     app.include_router(auth_router)

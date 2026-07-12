@@ -42,6 +42,7 @@ from app.application.teaching import (
     StartTeachingSession,
 )
 from app.core.config import Settings, get_settings
+from app.core.tracing import bind_trace
 from app.domain.entities import Session, User
 from app.domain.ports import (
     AnswerGenerationPort,
@@ -173,6 +174,10 @@ def resolve_current(
     """
     session_token = request.cookies.get(settings.session_cookie_name)
     user, session = current_user(raw_token=session_token)
+    # Enrich the request's trace context so downstream handler logs carry the
+    # authenticated user id (PROD-10). Bound only on success — anonymous/failed
+    # requests carry no user_id.
+    bind_trace(user_id=str(user.id))
     return user, session
 
 
