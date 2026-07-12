@@ -19,19 +19,26 @@ from collections.abc import Sequence
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import Connection, bindparam, insert, select, update
+from sqlalchemy import Connection, bindparam, func, insert, select, update
 from sqlalchemy import delete as sa_delete
+from sqlalchemy.exc import IntegrityError
 
+from app.application.errors import TeachingTurnConflict
 from app.domain.entities import (
     ChunkToEmbed,
     CorpusSectionRecord,
     CorpusStructure,
+    Evidence,
+    HistoryTurn,
     IngestionEvent,
     IngestionJob,
     PasswordCredential,
     Session,
     Source,
     StructureSection,
+    TeachingSession,
+    TeachingSessionSummary,
+    TeachingTurn,
     User,
 )
 from app.infrastructure.db.metadata import (
@@ -43,6 +50,9 @@ from app.infrastructure.db.metadata import (
     ingestion_jobs,
     sessions,
     sources,
+    teaching_sessions,
+    teaching_turn_citations,
+    teaching_turns,
     user_credentials,
     users,
 )
@@ -479,6 +489,193 @@ class SqlAlchemyEmbeddingIndexRepository:
         )
 
 
+class SqlAlchemyTeachingSessionRepository:
+    """``TeachingSessionRepository`` backed by the ``teaching_sessions`` table.
+
+    Source-keyed: authorization (ownership) is the application service's job
+    (AD-014). ``list_for_source`` returns newest first with each session's turn
+    count (TEACH-21) via a correlated count over ``teaching_turns``.
+    """
+
+    def __init__(self, connection: Connection) -> None:
+        self._conn = connection
+
+    def add(self, session: TeachingSession) -> TeachingSession:
+        self._conn.execute(
+            insert(teaching_sessions).values(
+                id=session.id,
+                source_id=session.source_id,
+                target_anchor=session.target_anchor,
+                target_section_path=list(session.target_section_path),
+                target_title=session.target_title,
+                created_at=session.created_at,
+                updated_at=session.updated_at,
+            )
+        )
+        return session
+
+    def get_by_id(self, session_id: UUID) -> TeachingSession | None:
+        row = self._conn.execute(
+            select(teaching_sessions).where(teaching_sessions.c.id == session_id)
+        ).one_or_none()
+        return _to_teaching_session(row) if row is not None else None
+
+    def list_for_source(self, source_id: UUID) -> list[TeachingSessionSummary]:
+        turn_count = (
+            select(func.count())
+            .select_from(teaching_turns)
+            .where(teaching_turns.c.session_id == teaching_sessions.c.id)
+            .scalar_subquery()
+            .label("turn_count")
+        )
+        rows = self._conn.execute(
+            select(teaching_sessions, turn_count)
+            .where(teaching_sessions.c.source_id == source_id)
+            .order_by(teaching_sessions.c.created_at.desc())
+        ).all()
+        return [
+            TeachingSessionSummary(
+                session=_to_teaching_session(row), turn_count=row.turn_count
+            )
+            for row in rows
+        ]
+
+
+class SqlAlchemyTeachingTurnRepository:
+    """``TeachingTurnRepository`` backed by ``teaching_turns`` + citations.
+
+    ``add`` inserts the turn then its citation snapshot rows (rank = tuple
+    position), translating the ``(session_id, turn_index)`` unique violation to
+    :class:`~app.application.errors.TeachingTurnConflict` — the turn-index race
+    loser (TEACH-17). Citations are denormalized snapshots with no chunk FK, so
+    they survive a corpus replace (AD-033); ``chunk_id.page_span`` and the source
+    are recovered on read from the parent session (retrieval is source-scoped, so
+    every citation's source is the session's — ``page_span`` is ``None`` for EPUB).
+    """
+
+    def __init__(self, connection: Connection) -> None:
+        self._conn = connection
+
+    def add(self, turn: TeachingTurn) -> TeachingTurn:
+        try:
+            self._conn.execute(
+                insert(teaching_turns).values(
+                    id=turn.id,
+                    session_id=turn.session_id,
+                    turn_index=turn.turn_index,
+                    message=turn.message,
+                    answer_status=turn.answer_status,
+                    answer_text=turn.answer_text,
+                    model=turn.model,
+                    evidence_count=turn.evidence_count,
+                    created_at=turn.created_at,
+                )
+            )
+        except IntegrityError as exc:
+            # The only unique on this insert is (session_id, turn_index): a racing
+            # writer already claimed this index (TEACH-17).
+            raise TeachingTurnConflict(
+                "another turn already claimed this turn index"
+            ) from exc
+
+        citation_rows = [
+            {
+                "id": uuid4(),
+                "turn_id": turn.id,
+                "rank": rank,
+                "chunk_id": citation.chunk_id,
+                "section_path": list(citation.section_path),
+                "anchor": citation.anchor,
+                "snippet": citation.snippet,
+                "score": citation.score,
+            }
+            for rank, citation in enumerate(turn.citations)
+        ]
+        if citation_rows:
+            self._conn.execute(insert(teaching_turn_citations), citation_rows)
+        return turn
+
+    def list_for_session(self, session_id: UUID) -> list[TeachingTurn]:
+        # All turns share the session's source, so one lookup recovers the source
+        # for every citation's Evidence (not stored per-citation).
+        source_id = self._conn.execute(
+            select(teaching_sessions.c.source_id).where(
+                teaching_sessions.c.id == session_id
+            )
+        ).scalar_one_or_none()
+        if source_id is None:
+            return []
+
+        rows = self._conn.execute(
+            select(
+                teaching_turns,
+                teaching_turn_citations.c.rank,
+                teaching_turn_citations.c.chunk_id,
+                teaching_turn_citations.c.section_path,
+                teaching_turn_citations.c.anchor,
+                teaching_turn_citations.c.snippet,
+                teaching_turn_citations.c.score,
+            )
+            .select_from(
+                teaching_turns.outerjoin(
+                    teaching_turn_citations,
+                    teaching_turns.c.id == teaching_turn_citations.c.turn_id,
+                )
+            )
+            .where(teaching_turns.c.session_id == session_id)
+            .order_by(teaching_turns.c.turn_index, teaching_turn_citations.c.rank)
+        ).all()
+
+        # Group the flat join back into turns (turn_index asc) with their
+        # rank-ordered citations; a turn with no citations yields NULL cite cols.
+        turns: dict[UUID, list] = {}
+        for row in rows:
+            citations = turns.setdefault(row.id, [])
+            if row.rank is not None:
+                citations.append(
+                    Evidence(
+                        chunk_id=row.chunk_id,
+                        source_id=source_id,
+                        section_path=tuple(row.section_path),
+                        anchor=row.anchor,
+                        page_span=None,
+                        snippet=row.snippet,
+                        score=row.score,
+                    )
+                )
+        seen: set[UUID] = set()
+        result: list[TeachingTurn] = []
+        for row in rows:
+            if row.id in seen:
+                continue
+            seen.add(row.id)
+            result.append(_to_teaching_turn(row, tuple(turns[row.id])))
+        return result
+
+    def recent_history(
+        self, session_id: UUID, limit: int
+    ) -> tuple[int, list[HistoryTurn]]:
+        # Two cheap statements, no citation join: the turn path needs only the
+        # count (the next turn_index) and the bounded (message, answer_text)
+        # pairs, oldest first.
+        total = self._conn.execute(
+            select(func.count())
+            .select_from(teaching_turns)
+            .where(teaching_turns.c.session_id == session_id)
+        ).scalar_one()
+        rows = self._conn.execute(
+            select(teaching_turns.c.message, teaching_turns.c.answer_text)
+            .where(teaching_turns.c.session_id == session_id)
+            .order_by(teaching_turns.c.turn_index.desc())
+            .limit(limit)
+        ).all()
+        history = [
+            HistoryTurn(message=row.message, response_text=row.answer_text)
+            for row in reversed(rows)
+        ]
+        return total, history
+
+
 def _to_user(row) -> User:  # noqa: ANN001 — Row is an internal SQLAlchemy type
     return User(id=row.id, email=row.email, created_at=row.created_at)
 
@@ -538,5 +735,32 @@ def _to_ingestion_event(row) -> IngestionEvent:  # noqa: ANN001
         job_id=row.job_id,
         type=row.type,
         message=row.message,
+        created_at=row.created_at,
+    )
+
+
+def _to_teaching_session(row) -> TeachingSession:  # noqa: ANN001
+    return TeachingSession(
+        id=row.id,
+        source_id=row.source_id,
+        target_anchor=row.target_anchor,
+        target_section_path=tuple(row.target_section_path),
+        target_title=row.target_title,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+def _to_teaching_turn(row, citations: tuple[Evidence, ...]) -> TeachingTurn:  # noqa: ANN001
+    return TeachingTurn(
+        id=row.id,
+        session_id=row.session_id,
+        turn_index=row.turn_index,
+        message=row.message,
+        answer_status=row.answer_status,
+        answer_text=row.answer_text,
+        model=row.model,
+        evidence_count=row.evidence_count,
+        citations=citations,
         created_at=row.created_at,
     )

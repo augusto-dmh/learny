@@ -6,6 +6,9 @@ adapters; callers depend on ``AnswerGenerationPort`` and receive a Learny-owned
 adapter (AD-024) that makes the answer path testable offline.
 """
 
-from app.infrastructure.answering.local import DeterministicAnswerAdapter
+from app.infrastructure.answering.local import (
+    DeterministicAnswerAdapter,
+    DeterministicTeachingAdapter,
+)
 
-__all__ = ["DeterministicAnswerAdapter"]
+__all__ = ["DeterministicAnswerAdapter", "DeterministicTeachingAdapter"]

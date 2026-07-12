@@ -18,6 +18,7 @@ from app.infrastructure.web.ingestion import router as ingestion_router
 from app.infrastructure.web.questions import router as questions_router
 from app.infrastructure.web.retrieval import router as retrieval_router
 from app.infrastructure.web.sources import router as sources_router
+from app.infrastructure.web.teaching import router as teaching_router
 
 
 def create_app() -> FastAPI:
@@ -32,6 +33,7 @@ def create_app() -> FastAPI:
     app.include_router(ingestion_router)
     app.include_router(retrieval_router)
     app.include_router(questions_router)
+    app.include_router(teaching_router)
     return app
 
 

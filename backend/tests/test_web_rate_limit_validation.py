@@ -21,6 +21,7 @@ from app.infrastructure.web.rate_limit import (
     InMemoryFixedWindowRateLimiter,
     get_rate_limiter,
     rate_limit_questions,
+    rate_limit_teaching,
     set_rate_limiter,
 )
 from tests.conftest import TEST_ORIGIN, TEST_PASSWORD, requires_db
@@ -144,3 +145,86 @@ def test_rate_limit_questions_throttles_after_window() -> None:
         assert int(exc_info.value.headers["Retry-After"]) >= 1
     finally:
         set_rate_limiter(previous)
+
+
+def _teaching_request() -> Request:
+    """Minimal ASGI request scope for the teaching route (client IP + path key)."""
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/teaching-sessions",
+            "headers": [],
+            "query_string": b"",
+            "client": ("1.2.3.4", 12345),
+        }
+    )
+
+
+def test_rate_limit_teaching_throttles_after_window() -> None:
+    # TEACH-18: once the window is exceeded, the teaching dependency rejects with
+    # 429 + a Retry-After header, via the shared swappable limiter keyed by
+    # client IP + route path. The endpoints themselves are wired in D2/D3; here
+    # the dependency is exercised directly against a deliberately tight limiter.
+    previous = get_rate_limiter()
+    set_rate_limiter(InMemoryFixedWindowRateLimiter(max_attempts=3, window_seconds=300))
+    try:
+        request = _teaching_request()
+        # First 3 attempts pass the limiter (return None, no raise).
+        for _ in range(3):
+            assert rate_limit_teaching(request) is None
+        # The 4th attempt trips the limit.
+        with pytest.raises(HTTPException) as exc_info:
+            rate_limit_teaching(request)
+        assert exc_info.value.status_code == 429
+        assert "Retry-After" in exc_info.value.headers
+        assert int(exc_info.value.headers["Retry-After"]) >= 1
+    finally:
+        set_rate_limiter(previous)
+
+
+def test_teaching_errors_map_to_expected_status_codes() -> None:
+    # TEACH error contract: the four teaching errors added this cycle translate to
+    # their documented HTTP status codes through ``register_error_handlers`` — no
+    # disclosure (404), unknown target (422), target gone / turn race (409). The
+    # readable service message is surfaced as the body ``detail`` (no leak).
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.application.errors import (
+        InvalidTeachingTarget,
+        TeachingSessionNotFound,
+        TeachingTargetGone,
+        TeachingTurnConflict,
+    )
+    from app.infrastructure.web.error_handlers import register_error_handlers
+
+    app = FastAPI()
+    register_error_handlers(app)
+
+    @app.get("/session-not-found")
+    def _session_not_found() -> None:
+        raise TeachingSessionNotFound("Teaching session not found.")
+
+    @app.get("/invalid-target")
+    def _invalid_target() -> None:
+        raise InvalidTeachingTarget("Target does not exist in this source.")
+
+    @app.get("/target-gone")
+    def _target_gone() -> None:
+        raise TeachingTargetGone("The teaching target no longer exists.")
+
+    @app.get("/turn-conflict")
+    def _turn_conflict() -> None:
+        raise TeachingTurnConflict("another turn already claimed this turn index")
+
+    client = TestClient(app, raise_server_exceptions=False)
+
+    assert client.get("/session-not-found").status_code == 404
+    assert client.get("/invalid-target").status_code == 422
+
+    gone = client.get("/target-gone")
+    assert gone.status_code == 409
+    assert gone.json() == {"detail": "The teaching target no longer exists."}
+
+    assert client.get("/turn-conflict").status_code == 409

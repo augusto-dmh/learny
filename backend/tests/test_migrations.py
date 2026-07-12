@@ -48,6 +48,9 @@ def test_migration_metadata_compiles() -> None:
         "corpus_sections",
         "corpus_blocks",
         "corpus_chunks",
+        "teaching_sessions",
+        "teaching_turns",
+        "teaching_turn_citations",
     }
     # Unique email + unique session token_hash are the security-critical constraints.
     user_uniques = {c.name for c in users.constraints if c.__class__.__name__ == "UniqueConstraint"}
@@ -425,3 +428,89 @@ def test_migration_0005_downgrade_removes_retrieval_columns_indexes(monkeypatch)
         engine.dispose()
 
     command.downgrade(cfg, "base")
+
+
+@pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
+def test_migration_0006_creates_teaching_tables(monkeypatch) -> None:
+    """0006 creates the teaching aggregate with cascade FKs, a no-FK snapshot
+    chunk_id, the turn-index/citation-rank uniques, and FK indexes."""
+    monkeypatch.setenv("LEARNY_DATABASE_URL", TEST_DB_URL)
+    cfg = _alembic_config(TEST_DB_URL)
+
+    command.upgrade(cfg, "head")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        inspector = inspect(engine)
+        tables = set(inspector.get_table_names())
+        assert {
+            "teaching_sessions",
+            "teaching_turns",
+            "teaching_turn_citations",
+        } <= tables
+
+        # Session→source, turn→session, citation→turn all cascade so a source delete
+        # removes the whole aggregate with no orphans.
+        session_fk = next(
+            fk
+            for fk in inspector.get_foreign_keys("teaching_sessions")
+            if fk["constrained_columns"] == ["source_id"]
+        )
+        assert session_fk["referred_table"] == "sources"
+        assert session_fk["options"].get("ondelete") == "CASCADE"
+
+        turn_fk = next(
+            fk
+            for fk in inspector.get_foreign_keys("teaching_turns")
+            if fk["constrained_columns"] == ["session_id"]
+        )
+        assert turn_fk["referred_table"] == "teaching_sessions"
+        assert turn_fk["options"].get("ondelete") == "CASCADE"
+
+        citation_fk = next(
+            fk
+            for fk in inspector.get_foreign_keys("teaching_turn_citations")
+            if fk["constrained_columns"] == ["turn_id"]
+        )
+        assert citation_fk["referred_table"] == "teaching_turns"
+        assert citation_fk["options"].get("ondelete") == "CASCADE"
+
+        # chunk_id is a snapshot reference — deliberately NOT a foreign key (AD-033),
+        # so a corpus replace can delete the live chunk without breaking history.
+        citation_fk_columns = [
+            fk["constrained_columns"]
+            for fk in inspector.get_foreign_keys("teaching_turn_citations")
+        ]
+        assert ["chunk_id"] not in citation_fk_columns
+
+        # Position uniques: one turn per (session, turn_index) is the race arbiter
+        # (TEACH-17); one citation per (turn, rank) fixes citation order (TEACH-20).
+        turn_uniques = [
+            uc["column_names"] for uc in inspector.get_unique_constraints("teaching_turns")
+        ]
+        assert ["session_id", "turn_index"] in turn_uniques
+        citation_uniques = [
+            uc["column_names"] for uc in inspector.get_unique_constraints("teaching_turn_citations")
+        ]
+        assert ["turn_id", "rank"] in citation_uniques
+
+        # Each child is indexed on its parent FK for the ordered reads.
+        session_indexes = [ix["column_names"] for ix in inspector.get_indexes("teaching_sessions")]
+        assert ["source_id"] in session_indexes
+        turn_indexes = [ix["column_names"] for ix in inspector.get_indexes("teaching_turns")]
+        assert ["session_id"] in turn_indexes
+        citation_indexes = [
+            ix["column_names"] for ix in inspector.get_indexes("teaching_turn_citations")
+        ]
+        assert ["turn_id"] in citation_indexes
+    finally:
+        engine.dispose()
+
+    command.downgrade(cfg, "base")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        remaining = set(inspect(engine).get_table_names())
+        assert "teaching_sessions" not in remaining
+        assert "teaching_turns" not in remaining
+        assert "teaching_turn_citations" not in remaining
+    finally:
+        engine.dispose()

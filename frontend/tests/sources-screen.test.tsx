@@ -535,3 +535,31 @@ describe("SourcesPanel structure view (T13)", () => {
     ).toBeTruthy();
   });
 });
+
+describe("SourcesPanel teach link (E3)", () => {
+  it("links only ready rows to their teach view", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        "GET /api/sources": () => jsonResponse(200, mixed),
+      }),
+    );
+
+    render(<SourcesPanel />);
+    await screen.findByText("Ready Book");
+
+    // Exactly one Teach link — on the sole ready row, pointing at its teach view.
+    const teachLinks = screen.getAllByRole("link", { name: "Teach" });
+    expect(teachLinks).toHaveLength(1);
+    expect(teachLinks[0].getAttribute("href")).toBe("/sources/s-ready/teach");
+    const readyLi = screen.getByTestId("status-s-ready").closest("li");
+    expect(within(readyLi!).getByRole("link", { name: "Teach" })).toBeTruthy();
+
+    // Non-ready rows offer no teach link.
+    for (const id of ["s-up", "s-proc", "s-fail"]) {
+      const li = screen.getByTestId(`status-${id}`).closest("li");
+      expect(within(li!).queryByRole("link", { name: "Teach" })).toBeNull();
+    }
+  });
+});

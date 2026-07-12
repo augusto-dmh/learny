@@ -23,6 +23,7 @@ int — ``SET`` takes no bind parameter, so the value is interpolated as a guard
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from uuid import UUID
 
 from sqlalchemy import Connection, text
@@ -32,8 +33,10 @@ from app.domain.entities import Evidence
 # One statement: scoped CTE (source-scoped anchor rows) → semantic arm (cosine
 # distance, NULL embeddings skipped) → lexical arm (websearch FTS, cover-density
 # rank) → fused (FULL OUTER JOIN summing per-arm RRF terms) → anchors, RRF-ordered.
-_HYBRID_SQL = text(
-    """
+# The ``{anchor_filter}`` slot is empty for whole-source search and carries the
+# target-subtree predicate when scoped (AD-031); because the filter lives in the
+# shared ``scoped`` CTE, it constrains both arms at once (TEACH-09).
+_HYBRID_SQL_TEMPLATE = """
     WITH scoped AS (
         SELECT
             cc.id AS chunk_id,
@@ -47,7 +50,7 @@ _HYBRID_SQL = text(
         FROM corpus_chunks cc
         JOIN corpus_sections cs ON cc.section_id = cs.id
         JOIN corpus_documents cd ON cs.document_id = cd.id
-        WHERE cd.source_id = :source_id
+        WHERE cd.source_id = :source_id{anchor_filter}
     ),
     semantic AS (
         SELECT
@@ -92,6 +95,13 @@ _HYBRID_SQL = text(
     ORDER BY f.rrf_score DESC
     LIMIT :top_k
     """
+
+# The whole-source statement (no anchor scope) and the target-subtree variant. The
+# unfiltered statement stays byte-identical to the pre-scoping query, so the default
+# retrieval path is provably unchanged (AD-031).
+_HYBRID_SQL = text(_HYBRID_SQL_TEMPLATE.format(anchor_filter=""))
+_HYBRID_SQL_ANCHORED = text(
+    _HYBRID_SQL_TEMPLATE.format(anchor_filter="\n            AND cc.anchor = ANY(:anchors)")
 )
 
 
@@ -117,22 +127,27 @@ class SqlAlchemyRetrievalRepository:
         lexical_limit: int,
         rrf_k: int,
         ef_search: int,
+        anchors: Sequence[str] | None = None,
     ) -> list[Evidence]:
         # SET takes no bind parameter; interpolate a guarded int (from settings),
         # never raw input, so there is no injection surface.
         self._conn.execute(text(f"SET LOCAL hnsw.ef_search = {int(ef_search)}"))
-        rows = self._conn.execute(
-            _HYBRID_SQL,
-            {
-                "source_id": source_id,
-                "query_vec": query_vec,
-                "q": query_text,
-                "semantic_limit": semantic_limit,
-                "lexical_limit": lexical_limit,
-                "k": rrf_k,
-                "top_k": top_k,
-            },
-        ).all()
+        params: dict[str, object] = {
+            "source_id": source_id,
+            "query_vec": query_vec,
+            "q": query_text,
+            "semantic_limit": semantic_limit,
+            "lexical_limit": lexical_limit,
+            "k": rrf_k,
+            "top_k": top_k,
+        }
+        if anchors is None:
+            statement = _HYBRID_SQL
+        else:
+            # Bound as a list — psycopg adapts it to a Postgres array for = ANY(...).
+            statement = _HYBRID_SQL_ANCHORED
+            params["anchors"] = list(anchors)
+        rows = self._conn.execute(statement, params).all()
         return [_to_evidence(row) for row in rows]
 
 
