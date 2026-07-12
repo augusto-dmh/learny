@@ -21,11 +21,14 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import Connection, bindparam, func, insert, select, update
 from sqlalchemy import delete as sa_delete
+from sqlalchemy.exc import IntegrityError
 
+from app.application.errors import TeachingTurnConflict
 from app.domain.entities import (
     ChunkToEmbed,
     CorpusSectionRecord,
     CorpusStructure,
+    Evidence,
     IngestionEvent,
     IngestionJob,
     PasswordCredential,
@@ -34,6 +37,7 @@ from app.domain.entities import (
     StructureSection,
     TeachingSession,
     TeachingSessionSummary,
+    TeachingTurn,
     User,
 )
 from app.infrastructure.db.metadata import (
@@ -46,6 +50,7 @@ from app.infrastructure.db.metadata import (
     sessions,
     sources,
     teaching_sessions,
+    teaching_turn_citations,
     teaching_turns,
     user_credentials,
     users,
@@ -535,6 +540,118 @@ class SqlAlchemyTeachingSessionRepository:
         ]
 
 
+class SqlAlchemyTeachingTurnRepository:
+    """``TeachingTurnRepository`` backed by ``teaching_turns`` + citations.
+
+    ``add`` inserts the turn then its citation snapshot rows (rank = tuple
+    position), translating the ``(session_id, turn_index)`` unique violation to
+    :class:`~app.application.errors.TeachingTurnConflict` — the turn-index race
+    loser (TEACH-17). Citations are denormalized snapshots with no chunk FK, so
+    they survive a corpus replace (AD-033); ``chunk_id.page_span`` and the source
+    are recovered on read from the parent session (retrieval is source-scoped, so
+    every citation's source is the session's — ``page_span`` is ``None`` for EPUB).
+    """
+
+    def __init__(self, connection: Connection) -> None:
+        self._conn = connection
+
+    def add(self, turn: TeachingTurn) -> TeachingTurn:
+        try:
+            self._conn.execute(
+                insert(teaching_turns).values(
+                    id=turn.id,
+                    session_id=turn.session_id,
+                    turn_index=turn.turn_index,
+                    message=turn.message,
+                    answer_status=turn.answer_status,
+                    answer_text=turn.answer_text,
+                    model=turn.model,
+                    evidence_count=turn.evidence_count,
+                    created_at=turn.created_at,
+                )
+            )
+        except IntegrityError as exc:
+            # The only unique on this insert is (session_id, turn_index): a racing
+            # writer already claimed this index (TEACH-17).
+            raise TeachingTurnConflict(
+                "another turn already claimed this turn index"
+            ) from exc
+
+        citation_rows = [
+            {
+                "id": uuid4(),
+                "turn_id": turn.id,
+                "rank": rank,
+                "chunk_id": citation.chunk_id,
+                "section_path": list(citation.section_path),
+                "anchor": citation.anchor,
+                "snippet": citation.snippet,
+                "score": citation.score,
+            }
+            for rank, citation in enumerate(turn.citations)
+        ]
+        if citation_rows:
+            self._conn.execute(insert(teaching_turn_citations), citation_rows)
+        return turn
+
+    def list_for_session(self, session_id: UUID) -> list[TeachingTurn]:
+        # All turns share the session's source, so one lookup recovers the source
+        # for every citation's Evidence (not stored per-citation).
+        source_id = self._conn.execute(
+            select(teaching_sessions.c.source_id).where(
+                teaching_sessions.c.id == session_id
+            )
+        ).scalar_one_or_none()
+        if source_id is None:
+            return []
+
+        rows = self._conn.execute(
+            select(
+                teaching_turns,
+                teaching_turn_citations.c.rank,
+                teaching_turn_citations.c.chunk_id,
+                teaching_turn_citations.c.section_path,
+                teaching_turn_citations.c.anchor,
+                teaching_turn_citations.c.snippet,
+                teaching_turn_citations.c.score,
+            )
+            .select_from(
+                teaching_turns.outerjoin(
+                    teaching_turn_citations,
+                    teaching_turns.c.id == teaching_turn_citations.c.turn_id,
+                )
+            )
+            .where(teaching_turns.c.session_id == session_id)
+            .order_by(teaching_turns.c.turn_index, teaching_turn_citations.c.rank)
+        ).all()
+
+        # Group the flat join back into turns (turn_index asc) with their
+        # rank-ordered citations; a turn with no citations yields NULL cite cols.
+        turns: dict[UUID, list] = {}
+        for row in rows:
+            citations = turns.setdefault(row.id, [])
+            if row.rank is not None:
+                citations.append(
+                    Evidence(
+                        chunk_id=row.chunk_id,
+                        source_id=source_id,
+                        section_path=tuple(row.section_path),
+                        anchor=row.anchor,
+                        page_span=None,
+                        snippet=row.snippet,
+                        score=row.score,
+                    )
+                )
+        seen: set[UUID] = set()
+        result: list[TeachingTurn] = []
+        for row in rows:
+            if row.id in seen:
+                continue
+            seen.add(row.id)
+            result.append(_to_teaching_turn(row, tuple(turns[row.id])))
+        return result
+
+
 def _to_user(row) -> User:  # noqa: ANN001 — Row is an internal SQLAlchemy type
     return User(id=row.id, email=row.email, created_at=row.created_at)
 
@@ -607,4 +724,19 @@ def _to_teaching_session(row) -> TeachingSession:  # noqa: ANN001
         target_title=row.target_title,
         created_at=row.created_at,
         updated_at=row.updated_at,
+    )
+
+
+def _to_teaching_turn(row, citations: tuple[Evidence, ...]) -> TeachingTurn:  # noqa: ANN001
+    return TeachingTurn(
+        id=row.id,
+        session_id=row.session_id,
+        turn_index=row.turn_index,
+        message=row.message,
+        answer_status=row.answer_status,
+        answer_text=row.answer_text,
+        model=row.model,
+        evidence_count=row.evidence_count,
+        citations=citations,
+        created_at=row.created_at,
     )

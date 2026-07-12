@@ -15,8 +15,10 @@ from sqlalchemy import Connection, func, insert, select
 from sqlalchemy import delete as sa_delete
 from sqlalchemy.exc import IntegrityError
 
+from app.application.errors import TeachingTurnConflict
 from app.domain.entities import (
     CorpusSectionRecord,
+    Evidence,
     IngestionEvent,
     IngestionEventType,
     IngestionJob,
@@ -27,6 +29,7 @@ from app.domain.entities import (
     SectionChunk,
     Source,
     TeachingSession,
+    TeachingTurn,
     User,
 )
 from app.infrastructure.db.metadata import (
@@ -46,6 +49,7 @@ from app.infrastructure.db.repositories import (
     SqlAlchemySessionRepository,
     SqlAlchemySourceRepository,
     SqlAlchemyTeachingSessionRepository,
+    SqlAlchemyTeachingTurnRepository,
     SqlAlchemyUserRepository,
 )
 from app.infrastructure.security.tokens import generate_token, hash_token
@@ -1048,3 +1052,188 @@ def test_teaching_session_list_is_source_scoped(db_conn: Connection) -> None:
     assert a_ids == {a1.id, a2.id}
     assert b1.id not in a_ids
     assert [s.session.id for s in repo.list_for_source(source_b.id)] == [b1.id]
+
+
+# ---- Teaching turn repository (TEACH-07/14/17/20) -------------------------
+
+
+def _persisted_session(db_conn: Connection, source_id: UUID) -> TeachingSession:
+    session = _new_teaching_session(source_id)
+    return SqlAlchemyTeachingSessionRepository(db_conn).add(session)
+
+
+def _citation(
+    source_id: UUID,
+    *,
+    anchor: str,
+    snippet: str,
+    score: float,
+    section_path: tuple[str, ...] = ("Chapter 1",),
+    chunk_id: UUID | None = None,
+) -> Evidence:
+    return Evidence(
+        chunk_id=chunk_id or uuid4(),
+        source_id=source_id,
+        section_path=section_path,
+        anchor=anchor,
+        page_span=None,
+        snippet=snippet,
+        score=score,
+    )
+
+
+def _new_turn(
+    session_id: UUID,
+    *,
+    turn_index: int,
+    message: str = "explain this",
+    answer_status: str = "answered",
+    answer_text: str = "an answer",
+    model: str = "local-extractive",
+    citations: tuple[Evidence, ...] = (),
+) -> TeachingTurn:
+    return TeachingTurn(
+        id=uuid4(),
+        session_id=session_id,
+        turn_index=turn_index,
+        message=message,
+        answer_status=answer_status,
+        answer_text=answer_text,
+        model=model,
+        evidence_count=len(citations),
+        citations=citations,
+        created_at=datetime.now(UTC),
+    )
+
+
+def test_teaching_turn_add_and_list_with_ranked_citations(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "teach-turn-cites@example.com")
+    session = _persisted_session(db_conn, source.id)
+    repo = SqlAlchemyTeachingTurnRepository(db_conn)
+
+    # Two citations in a deliberate order — rank is their tuple position.
+    first = _citation(source.id, anchor="ch.xhtml#a", snippet="alpha", score=0.5)
+    second = _citation(
+        source.id,
+        anchor="ch.xhtml#b",
+        snippet="beta",
+        score=0.25,
+        section_path=("Chapter 1", "Section B"),
+    )
+    turn = _new_turn(session.id, turn_index=0, citations=(first, second))
+    repo.add(turn)
+
+    listed = repo.list_for_session(session.id)
+    assert len(listed) == 1
+    got = listed[0]
+    assert got.id == turn.id
+    assert got.turn_index == 0
+    assert got.message == "explain this"
+    assert got.answer_status == "answered"
+    assert got.answer_text == "an answer"
+    assert got.model == "local-extractive"
+    assert got.evidence_count == 2
+    # Citations round-trip in rank order, each field intact (source + page_span
+    # are recovered from the session, not stored per-citation).
+    assert [c.anchor for c in got.citations] == ["ch.xhtml#a", "ch.xhtml#b"]
+    assert got.citations[0] == first
+    assert got.citations[1] == second
+
+
+def test_teaching_turn_list_orders_by_turn_index_and_persists_not_found(
+    db_conn: Connection,
+) -> None:
+    source = _persisted_source(db_conn, "teach-turn-order@example.com")
+    session = _persisted_session(db_conn, source.id)
+    repo = SqlAlchemyTeachingTurnRepository(db_conn)
+
+    answered = _new_turn(
+        session.id,
+        turn_index=1,
+        citations=(_citation(source.id, anchor="ch.xhtml#a", snippet="alpha", score=0.5),),
+    )
+    # A not-found turn is still persisted with empty text and no citations (TEACH-14).
+    not_found = _new_turn(
+        session.id,
+        turn_index=0,
+        answer_status="not_found_in_source",
+        answer_text="",
+        citations=(),
+    )
+    # Add out of order to prove the list orders by turn_index ascending.
+    repo.add(answered)
+    repo.add(not_found)
+
+    listed = repo.list_for_session(session.id)
+    assert [t.turn_index for t in listed] == [0, 1]
+    assert listed[0].answer_status == "not_found_in_source"
+    assert listed[0].answer_text == ""
+    assert listed[0].citations == ()
+    assert listed[0].evidence_count == 0
+    assert [c.anchor for c in listed[1].citations] == ["ch.xhtml#a"]
+
+
+def test_teaching_turn_duplicate_index_raises_conflict(db_conn: Connection) -> None:
+    # TEACH-17: the (session_id, turn_index) unique makes the racing loser 409.
+    source = _persisted_source(db_conn, "teach-turn-race@example.com")
+    session = _persisted_session(db_conn, source.id)
+    repo = SqlAlchemyTeachingTurnRepository(db_conn)
+
+    repo.add(_new_turn(session.id, turn_index=0))
+    with pytest.raises(TeachingTurnConflict):
+        repo.add(_new_turn(session.id, turn_index=0))
+
+
+def test_teaching_turn_citations_survive_corpus_deletion(db_conn: Connection) -> None:
+    # TEACH-20/AD-033: citations are snapshots (no chunk FK), so a corpus replace
+    # (delete-then-insert) never breaks stored history.
+    source = _persisted_source(db_conn, "teach-turn-snapshot@example.com")
+    SqlAlchemyCorpusRepository(db_conn).replace(
+        source.id,
+        title="Bk",
+        authors=(),
+        language=None,
+        schema_version=1,
+        sections=(
+            _section_record(
+                position=0,
+                title="Ch",
+                section_path=("Ch",),
+                anchor="ch.xhtml",
+                markdown="body",
+                chunks=(
+                    SectionChunk(
+                        index=0,
+                        text="chunk text",
+                        section_path=("Ch",),
+                        anchor="ch.xhtml",
+                        page_span=None,
+                    ),
+                ),
+            ),
+        ),
+    )
+    live_chunk_id = db_conn.execute(select(corpus_chunks.c.id)).scalar_one()
+
+    session = _persisted_session(db_conn, source.id)
+    repo = SqlAlchemyTeachingTurnRepository(db_conn)
+    citation = _citation(
+        source.id,
+        anchor="ch.xhtml",
+        snippet="chunk text",
+        score=0.5,
+        section_path=("Ch",),
+        chunk_id=live_chunk_id,
+    )
+    repo.add(_new_turn(session.id, turn_index=0, citations=(citation,)))
+
+    # Simulate re-ingestion: deleting the corpus document cascades its chunks away.
+    db_conn.execute(sa_delete(corpus_documents).where(corpus_documents.c.source_id == source.id))
+    assert db_conn.execute(
+        select(func.count()).select_from(corpus_chunks).where(corpus_chunks.c.id == live_chunk_id)
+    ).scalar_one() == 0
+
+    # The citation snapshot is intact even though the live chunk is gone.
+    listed = repo.list_for_session(session.id)
+    assert len(listed) == 1
+    assert listed[0].citations == (citation,)

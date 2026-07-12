@@ -125,3 +125,13 @@ class AnswerGenerationFailed(Exception):
     web layer maps it to 502 with a generic body that leaks no provider or
     internal detail. Nothing is persisted, so there is no state to roll back.
     """
+
+
+class TeachingTurnConflict(Exception):
+    """Two turns raced for one ``(session_id, turn_index)`` (TEACH-17).
+
+    The turn repository translates the unique-index violation into this error;
+    the web layer maps it to 409 so the losing writer can retry against the next
+    index. It lives here (not in ``infrastructure``) so the adapter raises a
+    transport-agnostic error, matching :class:`InvalidEpubError`.
+    """
