@@ -127,6 +127,33 @@ class AnswerGenerationFailed(Exception):
     """
 
 
+class TeachingSessionNotFound(Exception):
+    """A teaching session does not exist or is not the caller's (TEACH-06).
+
+    Mirrors :class:`SourceNotFound`: a missing session and a non-owner (reached
+    via the parent source's ownership) collapse to this single error so the web
+    layer returns 404 either way and existence is never disclosed (TEACH-02).
+    """
+
+
+class InvalidTeachingTarget(Exception):
+    """The requested ``target_anchor`` matches no section of the corpus (TEACH-04).
+
+    Raised by ``StartTeachingSession`` after ownership and readiness pass but the
+    anchor resolves to no section; the web layer maps it to 422.
+    """
+
+
+class TeachingTargetGone(Exception):
+    """A session's ``target_anchor`` no longer resolves in the current corpus.
+
+    Re-ingestion (AD-018) can replace the corpus and drop the section the session
+    was anchored to; a new turn then has no target subtree to scope. Raised by
+    ``PostTeachingTurn``; the web layer maps it to 409 with a readable detail so
+    the reader starts a new session (TEACH-16).
+    """
+
+
 class TeachingTurnConflict(Exception):
     """Two turns raced for one ``(session_id, turn_index)`` (TEACH-17).
 
