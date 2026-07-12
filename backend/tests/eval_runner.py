@@ -21,9 +21,19 @@ from datetime import UTC, datetime
 from itertools import count
 from uuid import UUID, uuid4
 
+from sqlalchemy import Connection
+
 from app.application.corpus import BuildCorpus
 from app.core.config import get_settings
-from app.domain.entities import CorpusSectionRecord, IngestionJob, Source
+from app.domain.entities import CorpusSectionRecord, Evidence, IngestionJob, Source, User
+from app.infrastructure.db.repositories import (
+    SqlAlchemyCorpusRepository,
+    SqlAlchemyEmbeddingIndexRepository,
+    SqlAlchemySourceRepository,
+    SqlAlchemyUserRepository,
+)
+from app.infrastructure.db.retrieval import SqlAlchemyRetrievalRepository
+from app.infrastructure.embeddings import DeterministicEmbeddingAdapter
 from app.infrastructure.ingestion.epub import EbooklibEpubParser
 from app.infrastructure.ingestion.markup import Bs4MarkupConverter
 from tests.fakes import (
@@ -96,6 +106,88 @@ def run_ingestion(epub: bytes) -> BuiltCorpus:
         sections=sections,
         block_count=sum(len(record.section.blocks) for record in sections),
         chunk_count=sum(len(record.chunks) for record in sections),
+    )
+
+
+# --- DB pipeline (integration — real repositories over the pgvector test DB) -----
+
+
+def seed_source(db_conn: Connection, *, email: str) -> tuple[User, Source]:
+    """Persist an owner + a ready source so a corpus can be built under it.
+
+    Mirrors ``test_retrieval._persisted_source`` but returns the owner too, since
+    the citation golden drives ``AskQuestion`` (which authorizes by user).
+    """
+    user = User(id=uuid4(), email=email, created_at=_EPOCH)
+    SqlAlchemyUserRepository(db_conn).add(user)
+    source = Source(
+        id=uuid4(),
+        user_id=user.id,
+        title="Golden",
+        filename="golden.epub",
+        content_type="application/epub+zip",
+        byte_size=1024,
+        checksum="d" * 64,
+        object_key=f"sources/{user.id}/{uuid4()}.epub",
+        status="ready",
+        created_at=_EPOCH,
+        updated_at=_EPOCH,
+    )
+    SqlAlchemySourceRepository(db_conn).add(source)
+    return user, source
+
+
+def build_corpus_in_db(db_conn: Connection, source: Source, epub: bytes) -> None:
+    """Ingest ``epub`` into the live corpus tables under an already-persisted source.
+
+    Same real parser/markup/chunker as ``run_ingestion`` but persists through the
+    real ``SqlAlchemyCorpusRepository``. Events are not under test, so a fake event
+    repository stands in (avoids needing an ``ingestion_jobs`` row for the FK).
+    """
+    settings = get_settings()
+    storage = FakeStorage()
+    storage.objects[source.object_key] = epub
+    build = BuildCorpus(
+        storage=storage,
+        parser=EbooklibEpubParser(max_uncompressed_bytes=settings.epub_max_uncompressed_bytes),
+        markup=Bs4MarkupConverter(),
+        corpus=SqlAlchemyCorpusRepository(db_conn),
+        events=FakeIngestionEventRepository(),
+        clock=FakeClock(_EPOCH),
+        ids=_uuid_seq(),
+        chunk_max_chars=settings.chunk_max_chars,
+    )
+    build(source=source, job=_throwaway_job())
+
+
+def embed_source(db_conn: Connection, source_id: UUID) -> None:
+    """Embed every chunk of ``source_id`` with the deterministic adapter."""
+    index = SqlAlchemyEmbeddingIndexRepository(db_conn)
+    adapter = DeterministicEmbeddingAdapter()
+    chunks = index.chunks_for_source(source_id)
+    vectors = adapter.embed_documents([chunk.text for chunk in chunks])
+    index.set_embeddings(list(zip((chunk.id for chunk in chunks), vectors, strict=True)))
+
+
+def retrieve(
+    db_conn: Connection, source_id: UUID, query: str, *, top_k: int | None = None
+) -> list[Evidence]:
+    """Run the real hybrid RRF retrieval for ``query`` over ``source_id``.
+
+    The same deterministic adapter embeds the query so the fused ordering is
+    reproducible; per-arm limits / RRF k / HNSW ef come from ``LEARNY_`` settings.
+    """
+    settings = get_settings()
+    query_vec = DeterministicEmbeddingAdapter().embed_query(query)
+    return SqlAlchemyRetrievalRepository(db_conn).search(
+        source_id=source_id,
+        query_text=query,
+        query_vec=query_vec,
+        top_k=top_k if top_k is not None else settings.retrieval_top_k,
+        semantic_limit=settings.retrieval_semantic_limit,
+        lexical_limit=settings.retrieval_lexical_limit,
+        rrf_k=settings.retrieval_rrf_k,
+        ef_search=settings.hnsw_ef_search,
     )
 
 
