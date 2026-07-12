@@ -29,11 +29,15 @@ from app.application.errors import (
     IngestionNotFound,
     InvalidCredentials,
     InvalidSourceUpload,
+    InvalidTeachingTarget,
     NotAuthenticated,
     NotAuthorized,
     SourceNotFound,
     SourceNotReady,
     StorageUnavailable,
+    TeachingSessionNotFound,
+    TeachingTargetGone,
+    TeachingTurnConflict,
     ValidationError,
 )
 
@@ -64,6 +68,10 @@ _STATUS_BY_ERROR = {
     EnqueueFailed: status.HTTP_502_BAD_GATEWAY,
     CorpusNotFound: status.HTTP_404_NOT_FOUND,
     SourceNotReady: status.HTTP_409_CONFLICT,
+    TeachingSessionNotFound: status.HTTP_404_NOT_FOUND,
+    InvalidTeachingTarget: _HTTP_422,
+    TeachingTargetGone: status.HTTP_409_CONFLICT,
+    TeachingTurnConflict: status.HTTP_409_CONFLICT,
 }
 
 # An invalid upload maps to a status keyed by its ``kind`` (design §Error Handling):
