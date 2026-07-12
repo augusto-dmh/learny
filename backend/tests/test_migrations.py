@@ -25,6 +25,22 @@ def _alembic_config(db_url: str) -> Config:
     return cfg
 
 
+@pytest.fixture(autouse=True, scope="module")
+def _restore_schema_to_head() -> None:
+    """Leave the shared test DB migrated to ``head`` after this module.
+
+    These tests deliberately ``downgrade(..., "base")`` and commit the dropped
+    schema. The session-scoped ``db_engine`` fixture (conftest) runs its
+    upgrade-to-head only once — the first time any test requests ``db_conn`` — so
+    if a DB-using module runs *after* this one (which depends on test ordering),
+    it would otherwise find no schema. Restoring head on teardown makes the shared
+    database consistent regardless of which module first touches it.
+    """
+    yield
+    if TEST_DB_URL is not None:
+        command.upgrade(_alembic_config(TEST_DB_URL), "head")
+
+
 def test_migration_metadata_compiles() -> None:
     """The shared metadata defines the identity + sources + ingestion + corpus tables."""
     from app.infrastructure.db.metadata import (
