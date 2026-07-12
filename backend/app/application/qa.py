@@ -113,7 +113,8 @@ class AskQuestion:
         # Grounding filter: keep only citations that reference retrieved evidence,
         # in evidence-rank order. Evidence chunk ids are unique, so this dedupes
         # and grounds in one step (QA-02/03/15).
-        grounded = [e for e in evidence if e.chunk_id in set(generated.cited_chunk_ids)]
+        cited = set(generated.cited_chunk_ids)
+        grounded = [e for e in evidence if e.chunk_id in cited]
         if not generated.found or not generated.text.strip() or not grounded:
             # found == false (QA-14), blank text (QA-16), or no citation survives
             # grounding (QA-15) → the explicit not-found outcome.
