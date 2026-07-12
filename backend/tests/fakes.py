@@ -19,6 +19,7 @@ from app.domain.entities import (
     CorpusSectionRecord,
     CorpusStructure,
     Evidence,
+    GeneratedAnswer,
     IngestionEvent,
     IngestionJob,
     ParsedBook,
@@ -429,6 +430,64 @@ class FakeEmbeddingIndexRepository:
         self.set_calls.append(recorded)
         for chunk_id, vector in recorded:
             self.persisted[chunk_id] = vector
+
+
+class FakeRetrieveEvidence:
+    """``RetrieveEvidence`` double: records calls, returns preset evidence or raises.
+
+    Lets ``AskQuestion`` tests assert the readiness/ownership guards short-circuit
+    before retrieval (``calls == []``) and that the trimmed question plus the
+    settings-sourced ``top_k`` reach retrieval, without wiring the real
+    embedding/retrieval ports.
+    """
+
+    def __init__(
+        self, results: list[Evidence] | None = None, *, error: Exception | None = None
+    ) -> None:
+        self.results: list[Evidence] = results if results is not None else []
+        self._error = error
+        self.calls: list[dict[str, object]] = []
+
+    def __call__(
+        self, *, user: User, source_id: UUID, query: str, top_k: int | None = None
+    ) -> list[Evidence]:
+        self.calls.append(
+            {"user": user, "source_id": source_id, "query": query, "top_k": top_k}
+        )
+        if self._error is not None:
+            raise self._error
+        return self.results
+
+
+class FakeAnswerGeneration:
+    """``AnswerGenerationPort`` double: returns a preset answer or raises.
+
+    Records each ``generate`` call so tests assert the port was (not) invoked and
+    that the trimmed question plus the retrieved evidence reached it. ``model`` is
+    the stable adapter identity the service reads on the not-found-on-empty path
+    (where ``generate`` is deliberately not called).
+    """
+
+    def __init__(
+        self,
+        *,
+        answer: GeneratedAnswer | None = None,
+        error: Exception | None = None,
+        model: str = "local-extractive",
+    ) -> None:
+        self._answer = answer
+        self._error = error
+        self.model = model
+        self.calls: list[dict[str, object]] = []
+
+    def generate(
+        self, *, question: str, evidence: Sequence[Evidence]
+    ) -> GeneratedAnswer:
+        self.calls.append({"question": question, "evidence": list(evidence)})
+        if self._error is not None:
+            raise self._error
+        assert self._answer is not None, "no preset answer configured"
+        return self._answer
 
 
 class FakeRetrievalPort:
