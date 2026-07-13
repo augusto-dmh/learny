@@ -1,0 +1,20 @@
+# Security updates only — a solo-maintained repo doesn't need weekly
+# version-bump noise. `open-pull-requests-limit: 0` disables version updates
+# while leaving Dependabot security PRs enabled for each ecosystem.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /backend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
