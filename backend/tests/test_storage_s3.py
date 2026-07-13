@@ -12,7 +12,7 @@ from collections.abc import Iterator
 from uuid import uuid4
 
 import pytest
-from botocore.exceptions import BotoCoreError, ClientError
+from botocore.exceptions import BotoCoreError, ClientError, EndpointConnectionError
 
 from app.application.errors import StorageUnavailable
 from app.infrastructure.storage.s3 import ObjectNotFound, S3StorageAdapter
@@ -35,7 +35,7 @@ def storage() -> Iterator[S3StorageAdapter]:
     )
     try:
         adapter._ensure_bucket()
-    except (ClientError, BotoCoreError) as exc:
+    except (ClientError, BotoCoreError, StorageUnavailable) as exc:
         pytest.skip(f"S3-compatible storage not reachable at {ENDPOINT}: {exc}")
 
     try:
@@ -77,19 +77,43 @@ def test_get_missing_key_raises_object_not_found(storage: S3StorageAdapter) -> N
 
 
 class _FaultingClient:
-    """boto3-client stub: bucket exists, get_object raises the configured error."""
+    """boto3-client stub raising a configured error from selected operations."""
 
-    def __init__(self, error: Exception) -> None:
-        self._error = error
+    def __init__(
+        self,
+        *,
+        head_bucket: Exception | None = None,
+        create_bucket: Exception | None = None,
+        get_object: Exception | None = None,
+        put_object: Exception | None = None,
+    ) -> None:
+        self._faults = {
+            "head_bucket": head_bucket,
+            "create_bucket": create_bucket,
+            "get_object": get_object,
+            "put_object": put_object,
+        }
 
-    def head_bucket(self, **_kwargs) -> dict:  # noqa: ANN003
+    def _op(self, name: str) -> dict:
+        error = self._faults[name]
+        if error is not None:
+            raise error
         return {}
 
+    def head_bucket(self, **_kwargs) -> dict:  # noqa: ANN003
+        return self._op("head_bucket")
+
+    def create_bucket(self, **_kwargs) -> dict:  # noqa: ANN003
+        return self._op("create_bucket")
+
     def get_object(self, **_kwargs) -> dict:  # noqa: ANN003
-        raise self._error
+        return self._op("get_object")
+
+    def put_object(self, **_kwargs) -> dict:  # noqa: ANN003
+        return self._op("put_object")
 
 
-def _adapter_with(error: Exception) -> S3StorageAdapter:
+def _adapter_with(**faults: Exception) -> S3StorageAdapter:
     adapter = S3StorageAdapter(
         endpoint=ENDPOINT,
         access_key=ACCESS_KEY,
@@ -97,8 +121,13 @@ def _adapter_with(error: Exception) -> S3StorageAdapter:
         bucket="learny-test-faults",
         region=REGION,
     )
-    adapter._client = _FaultingClient(error)  # noqa: SLF001 — unit-level stub
+    adapter._client = _FaultingClient(**faults)  # noqa: SLF001 — unit-level stub
     return adapter
+
+
+def _unreachable_endpoint_error() -> EndpointConnectionError:
+    # The exact fault the first containerized ingestion hit (QA finding F2).
+    return EndpointConnectionError(endpoint_url=ENDPOINT)
 
 
 def test_get_transient_client_error_raises_storage_unavailable() -> None:
@@ -110,16 +139,58 @@ def test_get_transient_client_error_raises_storage_unavailable() -> None:
     error = ClientError({"Error": {"Code": "SlowDown", "Message": "slow"}}, "GetObject")
 
     with pytest.raises(StorageUnavailable):
-        _adapter_with(error).get_object("sources/a-book.epub")
+        _adapter_with(get_object=error).get_object("sources/a-book.epub")
 
 
 def test_get_botocore_error_raises_storage_unavailable() -> None:
     with pytest.raises(StorageUnavailable):
-        _adapter_with(BotoCoreError()).get_object("sources/a-book.epub")
+        _adapter_with(get_object=BotoCoreError()).get_object("sources/a-book.epub")
 
 
 def test_get_missing_key_still_raises_object_not_found() -> None:
     error = ClientError({"Error": {"Code": "NoSuchKey", "Message": "gone"}}, "GetObject")
 
     with pytest.raises(ObjectNotFound):
-        _adapter_with(error).get_object("sources/a-book.epub")
+        _adapter_with(get_object=error).get_object("sources/a-book.epub")
+
+
+def test_get_with_unreachable_endpoint_raises_storage_unavailable() -> None:
+    # FND-03: the fault escapes from bucket-ensure, before get_object itself runs.
+    with pytest.raises(StorageUnavailable):
+        _adapter_with(head_bucket=_unreachable_endpoint_error()).get_object(
+            "sources/a-book.epub"
+        )
+
+
+def test_put_with_unreachable_endpoint_raises_storage_unavailable() -> None:
+    # FND-04: bucket-ensure fault during upload.
+    with pytest.raises(StorageUnavailable):
+        _adapter_with(head_bucket=_unreachable_endpoint_error()).put_object(
+            "sources/a-book.epub", b"bytes", content_type="application/epub+zip"
+        )
+
+
+def test_put_botocore_error_raises_storage_unavailable() -> None:
+    with pytest.raises(StorageUnavailable):
+        _adapter_with(put_object=BotoCoreError()).put_object(
+            "sources/a-book.epub", b"bytes", content_type="application/epub+zip"
+        )
+
+
+def test_put_transient_client_error_raises_storage_unavailable() -> None:
+    error = ClientError({"Error": {"Code": "SlowDown", "Message": "slow"}}, "PutObject")
+
+    with pytest.raises(StorageUnavailable):
+        _adapter_with(put_object=error).put_object(
+            "sources/a-book.epub", b"bytes", content_type="application/epub+zip"
+        )
+
+
+def test_bucket_create_failure_raises_storage_unavailable() -> None:
+    # head_bucket says "missing" (ClientError), then create_bucket itself fails.
+    missing = ClientError({"Error": {"Code": "404", "Message": "no bucket"}}, "HeadBucket")
+
+    with pytest.raises(StorageUnavailable):
+        _adapter_with(
+            head_bucket=missing, create_bucket=_unreachable_endpoint_error()
+        ).get_object("sources/a-book.epub")

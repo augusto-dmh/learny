@@ -51,23 +51,37 @@ class S3StorageAdapter:
         self._bucket_ready = False
 
     def _ensure_bucket(self) -> None:
-        """Create the bucket if missing; idempotent and cached per instance."""
+        """Create the bucket if missing; idempotent and cached per instance.
+
+        Any fault here — an unreachable endpoint (``BotoCoreError``, e.g.
+        connection refused) or a failed create — is a transient storage outage
+        from the caller's point of view, so it surfaces as ``StorageUnavailable``
+        and the ingestion retry path engages instead of terminally failing.
+        """
         if self._bucket_ready:
             return
         try:
             self._client.head_bucket(Bucket=self._bucket)
         except ClientError:
-            self._client.create_bucket(Bucket=self._bucket)
+            try:
+                self._client.create_bucket(Bucket=self._bucket)
+            except (ClientError, BotoCoreError) as exc:
+                raise StorageUnavailable(self._bucket) from exc
+        except BotoCoreError as exc:
+            raise StorageUnavailable(self._bucket) from exc
         self._bucket_ready = True
 
     def put_object(self, key: str, data: bytes, *, content_type: str) -> None:
         self._ensure_bucket()
-        self._client.put_object(
-            Bucket=self._bucket,
-            Key=key,
-            Body=data,
-            ContentType=content_type,
-        )
+        try:
+            self._client.put_object(
+                Bucket=self._bucket,
+                Key=key,
+                Body=data,
+                ContentType=content_type,
+            )
+        except (ClientError, BotoCoreError) as exc:
+            raise StorageUnavailable(key) from exc
 
     def get_object(self, key: str) -> bytes:
         self._ensure_bucket()
