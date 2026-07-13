@@ -108,3 +108,13 @@ def test_local_override_restores_infra_ports() -> None:
     local = _services(_BASE, _OVERRIDE)
     for svc in _INFRA:
         assert local[svc].get("ports"), f"{svc} must publish host ports for local dev"
+
+
+def test_worker_receives_object_storage_configuration() -> None:
+    # The ingestion pipeline fetches source bytes from object storage inside the
+    # worker; without these base-file vars the worker falls back to localhost:9000
+    # and every Docker ingestion fails (QA finding F1).
+    env = _services(_BASE)["worker"]["environment"]
+    assert env["LEARNY_STORAGE_ENDPOINT"] == "http://minio:9000"
+    assert env["LEARNY_STORAGE_BUCKET"] == "learny-sources"
+    assert env["LEARNY_STORAGE_REGION"] == "us-east-1"

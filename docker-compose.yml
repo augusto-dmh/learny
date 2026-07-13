@@ -84,7 +84,11 @@ services:
       dockerfile: Dockerfile
     environment:
       LEARNY_REDIS_URL: redis://redis:6379/0
-      # LEARNY_DATABASE_URL comes from the override (local) or env_file (prod).
+      LEARNY_STORAGE_ENDPOINT: http://minio:9000
+      LEARNY_STORAGE_BUCKET: learny-sources
+      LEARNY_STORAGE_REGION: us-east-1
+      # LEARNY_DATABASE_URL + storage access/secret keys come from the override
+      # (local) or env_file (prod) — never inline in this base (NFR-SEC-003).
     command: celery -A app.worker.celery_app:celery_app worker --loglevel=info
     depends_on:
       redis:
