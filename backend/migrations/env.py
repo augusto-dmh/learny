@@ -25,8 +25,13 @@ config = context.config
 # resets pytest's log-capture handlers under test. Alembic's own INFO output is
 # not needed programmatically.
 
-# Inject the runtime DB URL (never hard-coded in alembic.ini).
-config.set_main_option("sqlalchemy.url", get_settings().database_url)
+# Inject the runtime DB URL (never hard-coded in alembic.ini) — unless the
+# caller already configured one programmatically. The test bootstrap points a
+# Config at the test database via ``set_main_option``; clobbering it here sent
+# those migrations to the settings-resolved (dev) database and left the test
+# database schemaless on its first-ever run (QA finding F4).
+if not config.get_main_option("sqlalchemy.url"):
+    config.set_main_option("sqlalchemy.url", get_settings().database_url)
 
 target_metadata = metadata
 
