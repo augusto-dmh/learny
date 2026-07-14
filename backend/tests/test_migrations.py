@@ -127,6 +127,24 @@ def test_upgrade_honors_caller_provided_url(monkeypatch) -> None:
 
 
 @pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
+def test_upgrade_falls_back_to_settings_url(monkeypatch) -> None:
+    """Without a caller-provided URL, env.py resolves the settings URL.
+
+    This is the CLI/container path (`alembic upgrade head` with no programmatic
+    Config): the settings-resolved ``LEARNY_DATABASE_URL`` must be injected when
+    the caller set nothing, or containers stop migrating on boot.
+    """
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("LEARNY_DATABASE_URL", TEST_DB_URL)
+    get_settings.cache_clear()
+    try:
+        command.upgrade(Config("alembic.ini"), "head")  # no set_main_option
+    finally:
+        get_settings.cache_clear()
+
+
+@pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
 def test_migration_up_creates_identity_tables(monkeypatch) -> None:
     monkeypatch.setenv("LEARNY_DATABASE_URL", TEST_DB_URL)
     cfg = _alembic_config(TEST_DB_URL)
