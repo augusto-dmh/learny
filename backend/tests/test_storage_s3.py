@@ -7,6 +7,7 @@ dropped on teardown so runs don't accumulate state.
 
 from __future__ import annotations
 
+import io
 import os
 from collections.abc import Iterator
 from uuid import uuid4
@@ -93,11 +94,15 @@ class _FaultingClient:
             "get_object": get_object,
             "put_object": put_object,
         }
+        self.calls: list[str] = []
 
     def _op(self, name: str) -> dict:
+        self.calls.append(name)
         error = self._faults[name]
         if error is not None:
             raise error
+        if name == "get_object":
+            return {"Body": io.BytesIO(b"stub-object-bytes")}
         return {}
 
     def head_bucket(self, **_kwargs) -> dict:  # noqa: ANN003
@@ -194,3 +199,13 @@ def test_bucket_create_failure_raises_storage_unavailable() -> None:
         _adapter_with(
             head_bucket=missing, create_bucket=_unreachable_endpoint_error()
         ).get_object("sources/a-book.epub")
+
+
+def test_missing_bucket_is_created_and_the_operation_proceeds() -> None:
+    # head_bucket says "missing", create_bucket succeeds → the original
+    # operation completes against the freshly created bucket.
+    missing = ClientError({"Error": {"Code": "404", "Message": "no bucket"}}, "HeadBucket")
+    adapter = _adapter_with(head_bucket=missing)
+
+    assert adapter.get_object("sources/a-book.epub") == b"stub-object-bytes"
+    assert "create_bucket" in adapter._client.calls  # noqa: SLF001 — unit-level stub
