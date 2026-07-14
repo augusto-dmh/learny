@@ -1,6 +1,9 @@
-# Security updates only — a solo-maintained repo doesn't need weekly
-# version-bump noise. `open-pull-requests-limit: 0` disables version updates
-# while leaving Dependabot security PRs enabled for each ecosystem.
+# pip/npm: security updates only — a solo-maintained repo doesn't need weekly
+# version-bump noise (`open-pull-requests-limit: 0` disables version updates
+# while leaving Dependabot security PRs enabled).
+# github-actions: full version updates stay ON — the CI workflow references
+# actions by mutable major tags, and these bumps are the mechanism that keeps
+# those references current and infrequent.
 version: 2
 updates:
   - package-ecosystem: pip
@@ -17,4 +20,3 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 0
