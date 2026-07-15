@@ -50,7 +50,19 @@ const STRIPPED_HEADERS = new Set([
   "transfer-encoding",
   "upgrade",
   "content-length",
+  // undici's fetch rejects requests carrying `Expect` (UND_ERR_NOT_SUPPORTED);
+  // curl sends `Expect: 100-continue` on large multipart bodies, so forwarding
+  // it turned non-browser uploads into 500s (QA finding F3).
+  "expect",
 ]);
+
+/**
+ * Response headers describing the upstream wire encoding, not the body we
+ * relay: undici has already decompressed the payload, so the original
+ * `Content-Encoding`/`Content-Length` would describe bytes the browser never
+ * receives.
+ */
+const STRIPPED_RESPONSE_HEADERS = ["content-encoding", "content-length"] as const;
 
 /**
  * Build the upstream request for a given incoming request and captured path
@@ -102,6 +114,9 @@ export function buildProxyRequest(
  */
 export function relayResponse(upstream: Response): Response {
   const headers = new Headers(upstream.headers);
+  for (const name of STRIPPED_RESPONSE_HEADERS) {
+    headers.delete(name);
+  }
 
   // Re-emit Set-Cookie as discrete headers (a comma-join would corrupt
   // attributes like Expires). `getSetCookie` is available on undici/Node ≥18.5.

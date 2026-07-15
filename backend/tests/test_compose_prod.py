@@ -108,3 +108,16 @@ def test_local_override_restores_infra_ports() -> None:
     local = _services(_BASE, _OVERRIDE)
     for svc in _INFRA:
         assert local[svc].get("ports"), f"{svc} must publish host ports for local dev"
+
+
+def test_api_and_worker_receive_object_storage_configuration() -> None:
+    # Both services talk to object storage (api stores uploads, the worker
+    # fetches them during ingestion); without these base-file vars a service
+    # falls back to localhost:9000 inside its own container and every storage
+    # call fails (QA finding F1 hit the worker).
+    services = _services(_BASE)
+    for svc in ("api", "worker"):
+        env = services[svc]["environment"]
+        assert env["LEARNY_STORAGE_ENDPOINT"] == "http://minio:9000", svc
+        assert env["LEARNY_STORAGE_BUCKET"] == "learny-sources", svc
+        assert env["LEARNY_STORAGE_REGION"] == "us-east-1", svc

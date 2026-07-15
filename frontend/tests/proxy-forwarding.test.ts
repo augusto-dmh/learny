@@ -101,4 +101,24 @@ describe("relayResponse — upstream response relay (D1, AC-2)", () => {
     expect(relayed.status).toBe(204);
     expect(relayed.headers.getSetCookie()).toHaveLength(2);
   });
+
+  it("drops content-encoding and content-length from the relayed response", () => {
+    // undici's fetch has already decompressed the upstream body; relaying the
+    // original encoding/length headers would describe bytes the browser never
+    // receives and corrupts the response once upstream compression is enabled.
+    const upstream = new Response('{"ok":true}', {
+      status: 200,
+      headers: {
+        "content-type": "application/json",
+        "content-encoding": "gzip",
+        "content-length": "999",
+      },
+    });
+
+    const relayed = relayResponse(upstream);
+
+    expect(relayed.headers.get("content-encoding")).toBeNull();
+    expect(relayed.headers.get("content-length")).toBeNull();
+    expect(relayed.headers.get("content-type")).toBe("application/json");
+  });
 });

@@ -1,0 +1,124 @@
+# CI gates for every PR and main push (RFC-002 Cycle A).
+#
+# Four parallel jobs mirroring the local gates:
+#   backend-test — pytest against real Postgres(pgvector)+Redis service containers;
+#                  the suite's own bootstrap applies Alembic migrations, so every
+#                  run also proves migrations work from an empty database.
+#   lint         — ruff check (the project's lint gate; formatting is not enforced).
+#   frontend     — vitest, tsc, and the production Next.js build.
+#   compose-smoke— builds the compose topology and boots it to a healthy API.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Every job only reads the repository; keep the workflow token least-privilege.
+permissions:
+  contents: read
+
+jobs:
+  backend-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: learny
+          POSTGRES_PASSWORD: learny
+          POSTGRES_DB: learny_test
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - "6379:6379"
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      # The web-layer upload tests and the storage adapter integration tests run
+      # end-to-end against a real S3 endpoint. GitHub service containers cannot
+      # pass an image command (which minio/minio requires), so start the official
+      # image — same pinned tag as the production overlay — as a plain container.
+      - name: Start MinIO
+        run: |
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=learny -e MINIO_ROOT_PASSWORD=learny-dev-secret \
+            minio/minio:RELEASE.2024-10-13T13-34-11Z server /data
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: "backend/uv.lock"
+      - run: uv python install
+      - run: uv sync --locked --all-extras
+      - name: Wait for MinIO to accept requests
+        run: timeout 60 bash -c 'until curl -fsS http://localhost:9000/minio/health/live; do sleep 2; done'
+      - run: uv run pytest -q
+        env:
+          LEARNY_TEST_DATABASE_URL: postgresql+psycopg://learny:learny@localhost:5432/learny_test
+          LEARNY_REDIS_URL: redis://localhost:6379/0
+          LEARNY_STORAGE_ENDPOINT: http://localhost:9000
+          LEARNY_STORAGE_ACCESS_KEY: learny
+          LEARNY_STORAGE_SECRET_KEY: learny-dev-secret
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/ruff-action@v3
+        with:
+          src: backend
+          # Lint with the exact ruff the lockfile pins, not a floating latest.
+          version-file: backend/uv.lock
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npx vitest run
+      - run: npx tsc --noEmit
+      - run: npm run build
+
+  compose-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # One build-and-boot step: `--wait` blocks until EVERY service healthcheck
+      # passes (api /healthz, worker celery ping, web fetch probe, db/redis/minio)
+      # and fails the job otherwise — a strictly stronger gate than polling one
+      # endpoint. Plain compose build (no bake): api and worker share an identical
+      # build definition, which bake dedupes into a single tag, leaving the
+      # worker's expected image name missing at `up` time.
+      - name: Build and boot the full topology
+        run: docker compose up -d --build --wait --wait-timeout 300
+      - name: Teardown (with logs on failure)
+        if: always()
+        run: |
+          docker compose logs --tail 50
+          docker compose down -v

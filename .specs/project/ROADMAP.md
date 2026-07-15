@@ -15,6 +15,20 @@ This file only tracks how those phases map onto tlc cycles. Do not duplicate TDD
 | `golden-fixtures` | 9 (Golden fixtures) | Done (PR #15) |
 | `production-readiness` | 10 (Production-like readiness) | Done (PR #16) |
 
-All 10 TDD-001 phases are now shipped — the MVP roadmap is complete. Further work
-starts from new ADRs/TDDs (see the open follow-ups in STATE.md: TDD open question
-#10 + the cloud LLM/embedding provider ADR).
+All 10 TDD-001 phases are now shipped — the MVP roadmap is complete.
+
+## v2 (RFC-002)
+
+v2 is driven by the accepted [RFC-002 roadmap](../../docs/rfc/0002-learny-v2-roadmap.md)
+(cycles A–G); it resolves the MVP's open follow-ups (cloud LLM/embedding provider ADR,
+TDD open question #10 lands in Cycle G). Research evidence: `docs/research/2026-07-12/`.
+
+| tlc Cycle | RFC-002 Cycle | Scope | Status |
+|---|---|---|---|
+| `v2-foundation` | A | QA artifacts + F2/F3/F4 fixes + CI + OSS hygiene | In progress |
+| — | B | Real embeddings (OpenAI 3-large@1536) + language-aware FTS | Not started |
+| — | C | Claude generation: cited answers + teaching + eval harness | Not started |
+| — | D | Frontend v2: product UI + streaming | Not started |
+| — | E | Active recall: quizzes + FSRS | Not started |
+| — | F | PDF (Docling) + EPUB hardening | Not started |
+| — | G | Deploy (GHCR→VPS, Caddy) + presentation | Not started |

@@ -4,9 +4,10 @@ Learny is a learning application that starts as robust book teaching and may exp
 
 ## Current Status
 
-- The repository currently contains research, decision, and design artifacts only. There is no runtime application scaffold yet.
-- The initial stack is accepted in ADR-004: Python/FastAPI backend, React/Next.js frontend, PostgreSQL primary storage, and pgvector as the initial vector storage/search capability.
-- Do not assume auth library/session store, concrete object-storage provider, concrete provider/model defaults, or dedicated vector database choices until follow-up ADRs or technical designs accept them.
+- The MVP is fully implemented and shipped (TDD-001 phases 1–10, PRs #4–#16): EPUB ingestion with preserved structure, PostgreSQL hybrid retrieval, cited Q&A, teaching sessions, worker pipeline, and a production-like Compose deployment. See `README.md` for the architecture overview.
+- The MVP's AI adapters are deterministic and network-free (extractive answers, hash-based embeddings) behind Learny-owned ports; no provider keys are required to run or test it.
+- v2 work is driven by [RFC-002](docs/rfc/0002-learny-v2-roadmap.md) (Accepted 2026-07-13): cycles A–G covering foundation/CI, real embeddings (OpenAI), Claude generation with citations, a real frontend, active-recall quizzes + FSRS spaced repetition, PDF ingestion via Docling, and VPS deployment. Research evidence lives in `docs/research/2026-07-12/`.
+- RFC-002 sets the provider direction (Anthropic Claude for generation, OpenAI `text-embedding-3-large@1536` for embeddings); each becomes binding through its cycle's ADR when implemented. Do not introduce provider SDKs outside those cycles.
 
 ## Durable Decisions
 
@@ -23,7 +24,7 @@ Learny is a learning application that starts as robust book teaching and may exp
 - The MVP should support email/password user accounts from the start, with user ownership and authorization for sources, corpus records, and teaching sessions.
 - Browser authentication should be backend-owned by FastAPI and use secure HTTP-only cookies, not browser-accessible bearer token storage.
 - Browser-facing API calls should go through a thin same-origin Next.js route/proxy boundary to FastAPI. FastAPI remains authoritative for auth, authorization, product logic, and user-owned resources.
-- Initial ingestion should support EPUB first. PDF and other formats are deferred until the EPUB-based corpus and tutor path are working.
+- Ingestion supports EPUB first; PDF arrives via a Docling adapter behind the same ingestion port in RFC-002 Cycle F, after the EPUB corpus hardening it bundles.
 - EPUB parsing uses ebooklib behind a Learny-owned ingestion port (accepted in the EPUB corpus pipeline design); Docling remains a candidate second adapter when PDF support arrives.
 - Uploaded source files should be stored in S3-compatible object storage from the start; PostgreSQL stores metadata, ownership, ingestion status, corpus links, and object keys.
 - Canonical document processing should preserve headings, sections, page/location anchors, metadata, and citations instead of treating the book as flat chunks only.
@@ -61,6 +62,6 @@ Only read documents relevant to the current task. Do not load all project docume
 
 ## Current Constraints
 
-- Stack-specific application code is now allowed only when it follows ADR-004 and an implementation plan or feature cycle.
+- Stack-specific application code is allowed when it follows ADR-004 and an RFC-002 cycle (or another accepted plan/feature cycle).
 - Do not add unofficial third-party best-practice skills as authoritative project guidance unless explicitly reviewed and accepted.
 - Do not install global-only skills when the intent is to preserve project-local workflow.
