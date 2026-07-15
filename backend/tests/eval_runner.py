@@ -44,7 +44,7 @@ from app.infrastructure.db.repositories import (
     SqlAlchemyUserRepository,
 )
 from app.infrastructure.db.retrieval import SqlAlchemyRetrievalRepository
-from app.infrastructure.embeddings import DeterministicEmbeddingAdapter
+from app.infrastructure.embeddings import build_embedding_adapter
 from app.infrastructure.ingestion.epub import EbooklibEpubParser
 from app.infrastructure.ingestion.markup import Bs4MarkupConverter
 from tests.fakes import (
@@ -174,7 +174,7 @@ def build_corpus_in_db(db_conn: Connection, source: Source, epub: bytes) -> None
 def embed_source(db_conn: Connection, source_id: UUID) -> None:
     """Embed every chunk of ``source_id`` with the deterministic adapter."""
     index = SqlAlchemyEmbeddingIndexRepository(db_conn)
-    adapter = DeterministicEmbeddingAdapter()
+    adapter = build_embedding_adapter(get_settings())
     chunks = index.chunks_for_source(source_id)
     vectors = adapter.embed_documents([chunk.text for chunk in chunks])
     index.set_embeddings(list(zip((chunk.id for chunk in chunks), vectors, strict=True)))
@@ -189,7 +189,7 @@ def retrieve(
     reproducible; per-arm limits / RRF k / HNSW ef come from ``LEARNY_`` settings.
     """
     settings = get_settings()
-    query_vec = DeterministicEmbeddingAdapter().embed_query(query)
+    query_vec = build_embedding_adapter(settings).embed_query(query)
     return SqlAlchemyRetrievalRepository(db_conn).search(
         source_id=source_id,
         query_text=query,
@@ -215,7 +215,7 @@ def answer(db_conn: Connection, user: User, source: Source, question: str) -> Qu
     retrieve_evidence = RetrieveEvidence(
         sources=SqlAlchemySourceRepository(db_conn),
         retrieval=SqlAlchemyRetrievalRepository(db_conn),
-        embeddings=DeterministicEmbeddingAdapter(),
+        embeddings=build_embedding_adapter(settings),
         authorize=AuthorizeOwnership(),
         semantic_limit=settings.retrieval_semantic_limit,
         lexical_limit=settings.retrieval_lexical_limit,

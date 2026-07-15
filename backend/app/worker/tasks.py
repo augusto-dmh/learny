@@ -36,7 +36,7 @@ from app.infrastructure.db.repositories import (
     SqlAlchemyIngestionJobRepository,
     SqlAlchemySourceRepository,
 )
-from app.infrastructure.embeddings import DeterministicEmbeddingAdapter
+from app.infrastructure.embeddings import build_embedding_adapter
 from app.infrastructure.ingestion.epub import EbooklibEpubParser
 from app.infrastructure.ingestion.markup import Bs4MarkupConverter
 from app.infrastructure.storage.s3 import S3StorageAdapter
@@ -122,13 +122,14 @@ def _build_run_ingestion(conn: Connection) -> RunIngestion:
 def _build_embed_step(conn: Connection) -> IngestionStep:
     """Wire the corpus-embedding step on ``conn`` (the injectable embed seam).
 
-    Composes ``EmbedCorpus`` with the deterministic local adapter (no network, no
-    provider SDK) so the semantic arm is populated during ingestion. Factored out
-    like ``_build_step`` so lifecycle tests can inject a failing double.
+    Composes ``EmbedCorpus`` with the settings-selected embedding adapter (the
+    deterministic local adapter by default — no network, no provider SDK) so the
+    semantic arm is populated during ingestion. Factored out like ``_build_step``
+    so lifecycle tests can inject a failing double.
     """
     return EmbedCorpusIngestionStep(
         EmbedCorpus(
-            embeddings=DeterministicEmbeddingAdapter(),
+            embeddings=build_embedding_adapter(get_settings()),
             index=SqlAlchemyEmbeddingIndexRepository(conn),
             events=SqlAlchemyIngestionEventRepository(conn),
             clock=_clock,

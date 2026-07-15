@@ -68,7 +68,7 @@ from app.infrastructure.db.repositories import (
     SqlAlchemyUserRepository,
 )
 from app.infrastructure.db.retrieval import SqlAlchemyRetrievalRepository
-from app.infrastructure.embeddings import DeterministicEmbeddingAdapter
+from app.infrastructure.embeddings import build_embedding_adapter
 from app.infrastructure.security.password_hasher import Argon2PasswordHasher
 from app.infrastructure.security.tokens import SecretsTokenGenerator
 from app.infrastructure.storage.s3 import S3StorageAdapter
@@ -305,15 +305,16 @@ def get_retrieve_evidence(conn: DbConnection) -> RetrieveEvidence:
     """Wire ``RetrieveEvidence`` on the request-scoped connection (RET-13/20).
 
     Mirrors ``get_read_source_structure``: the source repo enforces ownership, the
-    hybrid retrieval repo and the deterministic embedding adapter drive the query,
-    and the per-arm limits / RRF ``k`` / HNSW ``ef_search`` / default ``top_k`` are
-    all sourced from ``LEARNY_``-prefixed settings (never hard-coded).
+    hybrid retrieval repo and the settings-selected embedding adapter drive the
+    query (so the query embedding matches the document embedding), and the per-arm
+    limits / RRF ``k`` / HNSW ``ef_search`` / default ``top_k`` are all sourced from
+    ``LEARNY_``-prefixed settings (never hard-coded).
     """
     settings = get_settings()
     return RetrieveEvidence(
         sources=SqlAlchemySourceRepository(conn),
         retrieval=SqlAlchemyRetrievalRepository(conn),
-        embeddings=DeterministicEmbeddingAdapter(),
+        embeddings=build_embedding_adapter(settings),
         authorize=AuthorizeOwnership(),
         semantic_limit=settings.retrieval_semantic_limit,
         lexical_limit=settings.retrieval_lexical_limit,
