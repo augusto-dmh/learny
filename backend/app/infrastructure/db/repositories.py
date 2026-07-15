@@ -24,6 +24,7 @@ from sqlalchemy import delete as sa_delete
 from sqlalchemy.exc import IntegrityError
 
 from app.application.errors import TeachingTurnConflict
+from app.application.text_search import resolve_text_search_config
 from app.domain.entities import (
     ChunkToEmbed,
     CorpusSectionRecord,
@@ -352,6 +353,11 @@ class SqlAlchemyCorpusRepository:
             )
         )
 
+        # One regconfig per document: the chunk's lexical arm stems in the book's
+        # own language (EMB-11). The 0007 trigger builds ``search_vector`` from it;
+        # the app never writes ``search_vector`` directly.
+        search_config = resolve_text_search_config(language)
+
         section_rows: list[dict[str, object]] = []
         block_rows: list[dict[str, object]] = []
         chunk_rows: list[dict[str, object]] = []
@@ -390,6 +396,7 @@ class SqlAlchemyCorpusRepository:
                         "section_path": list(chunk.section_path),
                         "anchor": chunk.anchor,
                         "page_span": chunk.page_span,
+                        "search_config": search_config,
                     }
                 )
 

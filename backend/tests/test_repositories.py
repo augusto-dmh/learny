@@ -539,6 +539,60 @@ def test_corpus_replace_persists_full_aggregate(db_conn: Connection) -> None:
     assert chunk.page_span is None
 
 
+@pytest.mark.parametrize(
+    ("language", "expected_config"),
+    [("pt", "portuguese"), ("en", "english"), (None, "simple"), ("xx", "simple")],
+)
+def test_corpus_replace_sets_language_search_config(
+    db_conn: Connection, language: str | None, expected_config: str
+) -> None:
+    # EMB-11: every chunk row carries the regconfig resolved from the document
+    # language — a Portuguese book's chunks get 'portuguese', an English book's
+    # 'english', an unknown/absent language 'simple'.
+    source = _persisted_source(db_conn, f"corpus-lang-{language}@example.com")
+    repo = SqlAlchemyCorpusRepository(db_conn)
+    record = _section_record(
+        position=0,
+        title="Capitulo",
+        section_path=("Capitulo",),
+        anchor="c1.xhtml",
+        markdown="corpo",
+        chunks=(
+            SectionChunk(
+                index=0,
+                text="as criancas estavam correndo",
+                section_path=("Capitulo",),
+                anchor="c1.xhtml",
+                page_span=None,
+            ),
+            SectionChunk(
+                index=1,
+                text="mais texto",
+                section_path=("Capitulo",),
+                anchor="c1.xhtml",
+                page_span=None,
+            ),
+        ),
+    )
+    repo.replace(
+        source.id,
+        title="Livro",
+        authors=(),
+        language=language,
+        schema_version=1,
+        sections=(record,),
+    )
+
+    configs = db_conn.execute(
+        select(corpus_chunks.c.search_config)
+        .select_from(corpus_chunks)
+        .join(corpus_sections, corpus_chunks.c.section_id == corpus_sections.c.id)
+        .join(corpus_documents, corpus_sections.c.document_id == corpus_documents.c.id)
+        .where(corpus_documents.c.source_id == source.id)
+    ).scalars().all()
+    assert configs == [expected_config, expected_config]
+
+
 def test_corpus_replace_persists_zero_block_section(db_conn: Connection) -> None:
     # An empty-body spine doc yields a section with no blocks and no chunks; the
     # aggregate still persists the section row (edge case; CORP-04 markdown may be "").
