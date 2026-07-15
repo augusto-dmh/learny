@@ -335,7 +335,14 @@ class EmbeddingPort(Protocol):
     The provider SDK and model name live only in the adapter; callers receive
     plain ``list[float]`` vectors, so no query/repository code imports a provider
     SDK. The default adapter is deterministic and network-free (D-1).
+
+    ``model`` is the adapter's stable model identity (model **and** dims, since
+    ``large@1536`` ≠ ``large@3072``). It must be readable without a network call so
+    the embed step can stamp each chunk's ``embedding_model`` for per-chunk model
+    versioning (ADR-0019).
     """
+
+    model: str
 
     def embed_query(self, text: str) -> list[float]:
         """Embed a single search query into one vector."""
