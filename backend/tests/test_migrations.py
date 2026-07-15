@@ -577,6 +577,123 @@ def test_migration_0006_creates_teaching_tables(monkeypatch) -> None:
 
 
 @pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
+def test_migration_0007_upgrade_language_aware_search_vector(monkeypatch) -> None:
+    """0007 up: replaces the generated search_vector with a trigger-fed plain
+    tsvector keyed on each chunk's own search_config, and adds embedding_model +
+    search_config columns (EMB-07/08/09). A seeded chunk is auto-populated under
+    its default 'simple' config; switching a row's config to 'portuguese' recomputes
+    the tsvector with that language's stemmer — proving the per-row regconfig."""
+    monkeypatch.setenv("LEARNY_DATABASE_URL", TEST_DB_URL)
+    cfg = _alembic_config(TEST_DB_URL)
+
+    command.upgrade(cfg, "head")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        columns = {c["name"]: c for c in inspect(engine).get_columns("corpus_chunks")}
+        # EMB-07: nullable embedding_model.
+        assert "embedding_model" in columns
+        assert columns["embedding_model"]["nullable"] is True
+        # EMB-08: NOT NULL search_config defaulting to 'simple'.
+        assert "search_config" in columns
+        assert columns["search_config"]["nullable"] is False
+        assert "search_vector" in columns
+
+        # EMB-09: the GIN index is rebuilt over the (now plain) search_vector.
+        with engine.connect() as conn:
+            gin_def = conn.execute(
+                text(
+                    "SELECT indexdef FROM pg_indexes "
+                    "WHERE indexname = 'ix_corpus_chunks_search_vector'"
+                )
+            ).scalar_one()
+        assert "gin" in gin_def.lower() and "search_vector" in gin_def
+
+        # The trigger populates search_vector on insert under the default 'simple'
+        # config: 'simple' does not stem, so the raw body/title lexemes appear.
+        chunk_id = _seed_chunk(engine, text_body="the quick brown fox", section_title="Intro")
+        with engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT search_config, search_vector::text AS sv "
+                    "FROM corpus_chunks WHERE id = :id"
+                ),
+                {"id": chunk_id},
+            ).one()
+        assert row.search_config == "simple"
+        assert row.sv and "brown" in row.sv and "intro" in row.sv
+
+        # Per-row regconfig: updating search_config (and a Portuguese body) fires the
+        # BEFORE UPDATE OF trigger and re-stems under 'portuguese' — the gerund
+        # 'correndo' collapses to the lemma 'corr', which 'simple' would never do.
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "UPDATE corpus_chunks "
+                    "SET text = 'as criancas estavam correndo', search_config = 'portuguese' "
+                    "WHERE id = :id"
+                ),
+                {"id": chunk_id},
+            )
+            pt_sv = conn.execute(
+                text("SELECT search_vector::text FROM corpus_chunks WHERE id = :id"),
+                {"id": chunk_id},
+            ).scalar_one()
+        assert "corr" in pt_sv
+        assert "correndo" not in pt_sv
+    finally:
+        engine.dispose()
+
+    command.downgrade(cfg, "base")
+
+
+@pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
+def test_migration_0007_downgrade_restores_generated_search_vector(monkeypatch) -> None:
+    """0007 down (one step to 0006): drops the trigger/function, the plain
+    search_vector, search_config, and embedding_model, and restores the generated
+    (english) search_vector + its GIN index (EMB-07/09 reversibility)."""
+    monkeypatch.setenv("LEARNY_DATABASE_URL", TEST_DB_URL)
+    cfg = _alembic_config(TEST_DB_URL)
+
+    command.upgrade(cfg, "head")
+    command.downgrade(cfg, "0006_teaching_schema")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        columns = {c["name"] for c in inspect(engine).get_columns("corpus_chunks")}
+        assert "search_config" not in columns
+        assert "embedding_model" not in columns
+        assert "search_vector" in columns
+
+        with engine.connect() as conn:
+            # search_vector is a generated column again (RET-03 shape restored).
+            is_generated = conn.execute(
+                text(
+                    "SELECT is_generated FROM information_schema.columns "
+                    "WHERE table_name = 'corpus_chunks' AND column_name = 'search_vector'"
+                )
+            ).scalar_one()
+            # The trigger is gone.
+            trigger = conn.execute(
+                text(
+                    "SELECT 1 FROM pg_trigger "
+                    "WHERE tgname = 'trg_corpus_chunks_search_vector'"
+                )
+            ).scalar()
+            gin_def = conn.execute(
+                text(
+                    "SELECT indexdef FROM pg_indexes "
+                    "WHERE indexname = 'ix_corpus_chunks_search_vector'"
+                )
+            ).scalar_one()
+        assert is_generated == "ALWAYS"
+        assert trigger is None
+        assert "gin" in gin_def.lower()
+    finally:
+        engine.dispose()
+
+    command.downgrade(cfg, "base")
+
+
+@pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
 def test_in_process_migration_preserves_app_root_logging(monkeypatch) -> None:
     """An in-process migration must not reconfigure the app-owned root logger.
 
