@@ -89,12 +89,19 @@ class Settings(BaseSettings):
     # starts a new one; oversized single blocks split at sentence boundaries.
     chunk_max_chars: int = 2000
 
-    # Embeddings (ADR-0007) — the provider/model lives only in the adapter; these
-    # knobs stay LEARNY_-prefixed and never hard-coded in query/repository code.
-    # ``embedding_dim`` is informational; the migration's vector(1536) literal is
-    # authoritative (A-1).
+    # Embeddings (ADR-0007/0019) — the provider/model lives only in the adapter;
+    # these knobs stay LEARNY_-prefixed and never hard-coded in query/repository
+    # code. ``embedding_dim`` is informational; the migration's vector(1536) literal
+    # is authoritative (A-1). ``embedding_provider`` selects the adapter at the
+    # composition root (``local`` default → deterministic, network-free; ``openai``
+    # → the OpenAI adapter built from the key/model/dims below). ``embedding_model``
+    # names the *provider* model — the deterministic adapter ignores it and reports
+    # its own ``local-deterministic@{dim}`` identity, so the default is unaffected.
     embedding_dim: int = 1536
-    embedding_model: str = "local-deterministic"
+    embedding_provider: str = "local"
+    openai_api_key: str = ""
+    embedding_model: str = "text-embedding-3-large"
+    embedding_dimensions: int = 1536
     embedding_batch_size: int = 128
 
     # Hybrid retrieval tuning (ADR-0006) — candidate limits, RRF constant, default

@@ -20,6 +20,7 @@ dependencies = [
     "ebooklib>=0.20",
     "beautifulsoup4>=4.15.0",
     "pgvector>=0.3,<0.5",
+    "openai>=1.40,<2",
 ]
 
 [project.optional-dependencies]
