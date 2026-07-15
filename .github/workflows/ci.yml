@@ -51,19 +51,17 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-      # The web-layer upload tests and the storage adapter integration tests run
-      # end-to-end against a real S3 endpoint. GitHub service containers cannot
-      # override an image's command (which minio/minio requires), so use the
-      # bitnami image, which configures itself from environment variables.
-      minio:
-        image: bitnami/minio:2025
-        env:
-          MINIO_ROOT_USER: learny
-          MINIO_ROOT_PASSWORD: learny-dev-secret
-        ports:
-          - "9000:9000"
     steps:
       - uses: actions/checkout@v4
+      # The web-layer upload tests and the storage adapter integration tests run
+      # end-to-end against a real S3 endpoint. GitHub service containers cannot
+      # pass an image command (which minio/minio requires), so start the official
+      # image — same pinned tag as the production overlay — as a plain container.
+      - name: Start MinIO
+        run: |
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=learny -e MINIO_ROOT_PASSWORD=learny-dev-secret \
+            minio/minio:RELEASE.2024-10-13T13-34-11Z server /data
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
