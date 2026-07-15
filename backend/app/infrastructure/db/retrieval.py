@@ -46,7 +46,8 @@ _HYBRID_SQL_TEMPLATE = """
             cc.page_span AS page_span,
             cc.text AS snippet,
             cc.embedding AS embedding,
-            cc.search_vector AS search_vector
+            cc.search_vector AS search_vector,
+            cc.search_config AS search_config
         FROM corpus_chunks cc
         JOIN corpus_sections cs ON cc.section_id = cs.id
         JOIN corpus_documents cd ON cs.document_id = cd.id
@@ -66,12 +67,14 @@ _HYBRID_SQL_TEMPLATE = """
             chunk_id,
             ROW_NUMBER() OVER (
                 ORDER BY ts_rank_cd(
-                    search_vector, websearch_to_tsquery('english', :q), 32
+                    search_vector, websearch_to_tsquery(search_config::regconfig, :q), 32
                 ) DESC
             ) AS rank
         FROM scoped
-        WHERE search_vector @@ websearch_to_tsquery('english', :q)
-        ORDER BY ts_rank_cd(search_vector, websearch_to_tsquery('english', :q), 32) DESC
+        WHERE search_vector @@ websearch_to_tsquery(search_config::regconfig, :q)
+        ORDER BY ts_rank_cd(
+            search_vector, websearch_to_tsquery(search_config::regconfig, :q), 32
+        ) DESC
         LIMIT :lexical_limit
     ),
     fused AS (
