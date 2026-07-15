@@ -43,6 +43,7 @@ testpaths = ["tests"]
 pythonpath = ["."]
 asyncio_mode = "auto"
 addopts = "-ra"
+markers = ["live: exercises a real external provider (skipped without credentials)"]
 
 [tool.ruff]
 line-length = 100
