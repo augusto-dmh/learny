@@ -19,10 +19,17 @@ import json
 from uuid import uuid4
 
 from app.application.grounding import ground
-from app.domain.entities import Evidence
+from app.domain.entities import Evidence, HistoryTurn
 from app.infrastructure.answering import anthropic as anthropic_module
-from app.infrastructure.answering.anthropic import AnthropicAnswerAdapter
-from app.infrastructure.answering.prompts import ANSWER_SYSTEM_PROMPT, SENTINEL
+from app.infrastructure.answering.anthropic import (
+    AnthropicAnswerAdapter,
+    AnthropicTeachingAdapter,
+)
+from app.infrastructure.answering.prompts import (
+    ANSWER_SYSTEM_PROMPT,
+    SENTINEL,
+    TEACHING_SYSTEM_PROMPT,
+)
 
 _MODEL = "claude-sonnet-4-6"
 _MAX_TOKENS = 1024
@@ -273,3 +280,195 @@ def test_out_of_range_index_yields_no_citation_and_grounds_to_not_found() -> Non
 
     assert result.cited_chunk_ids == ()
     assert ground(result, list(evidence)) is None
+
+
+# --- Teaching adapter: layout + prompt caching (GEN-10, GEN-11) -----------------
+#
+# Derived from the P1-teaching ACs: the frozen teaching system prompt carries a
+# 1-hour cache breakpoint, bounded history renders as alternating user/assistant
+# messages with the second breakpoint on the latest history block, this turn's
+# evidence and the target section + learner message sit after the cached prefix,
+# the system prompt has no per-session/per-turn interpolation, the sentinel yields
+# the not-found turn, and citations map by document_index through the shared parser.
+
+_CACHE_1H = {"type": "ephemeral", "ttl": "1h"}
+
+
+def _teaching_adapter(
+    message: _FakeMessage,
+) -> tuple[AnthropicTeachingAdapter, _FakeClient]:
+    client = _FakeClient(message)
+    adapter = AnthropicTeachingAdapter(
+        api_key="unused-fake", model=_MODEL, max_tokens=_MAX_TOKENS, client=client
+    )
+    return adapter, client
+
+
+def test_teaching_request_layout_history_evidence_and_final_turn() -> None:
+    evidence = [_evidence("alpha"), _evidence("beta")]
+    history = [
+        HistoryTurn(message="Hi", response_text="Hello, let's begin."),
+        HistoryTurn(message="Go on", response_text="Here is more."),
+    ]
+    adapter, client = _teaching_adapter(_FakeMessage([_FakeTextBlock("ok")]))
+
+    adapter.generate(
+        message="What is X?",
+        target_section_path=("Chapter 1", "Section A"),
+        history=history,
+        evidence=evidence,
+    )
+
+    call = client.messages.calls[0]
+    assert call["model"] == _MODEL
+    assert call["max_tokens"] == _MAX_TOKENS
+    assert call["system"] == [
+        {"type": "text", "text": TEACHING_SYSTEM_PROMPT, "cache_control": _CACHE_1H}
+    ]
+    messages = call["messages"]
+    # Alternating history: plain-text user turn, block-list assistant turn.
+    assert messages[0] == {"role": "user", "content": "Hi"}
+    assert messages[1]["role"] == "assistant"
+    assert messages[1]["content"][0]["type"] == "text"
+    assert messages[1]["content"][0]["text"] == "Hello, let's begin."
+    assert messages[2] == {"role": "user", "content": "Go on"}
+    assert messages[3]["role"] == "assistant"
+    assert messages[3]["content"][0]["text"] == "Here is more."
+    # Final user turn: this turn's evidence documents (citations-enabled, in order),
+    # then the section + message text — all volatile content, after the cached prefix.
+    final = messages[4]
+    assert final["role"] == "user"
+    documents = final["content"][:-1]
+    assert len(documents) == len(evidence)
+    for doc, item in zip(documents, evidence, strict=True):
+        assert doc["type"] == "document"
+        assert doc["source"]["data"] == item.snippet
+        assert doc["citations"] == {"enabled": True}
+    assert final["content"][-1]["type"] == "text"
+
+
+def test_teaching_system_prompt_is_frozen_and_byte_stable_across_calls() -> None:
+    adapter, client = _teaching_adapter(_FakeMessage([_FakeTextBlock("ok")]))
+
+    adapter.generate(
+        message="first",
+        target_section_path=("Ch 1", "A"),
+        history=[HistoryTurn(message="q1", response_text="a1")],
+        evidence=[_evidence("alpha")],
+    )
+    adapter.generate(
+        message="second",
+        target_section_path=("Ch 9", "Z"),
+        history=[
+            HistoryTurn(message="q1", response_text="a1"),
+            HistoryTurn(message="q2", response_text="a2"),
+        ],
+        evidence=[_evidence("beta")],
+    )
+
+    first_system = client.messages.calls[0]["system"]
+    second_system = client.messages.calls[1]["system"]
+    # No per-session/per-turn interpolation → byte-identical across calls/sessions.
+    assert first_system == second_system
+    assert first_system[0]["text"] == TEACHING_SYSTEM_PROMPT
+    assert first_system[0]["cache_control"] == _CACHE_1H
+
+
+def test_only_latest_history_block_carries_second_breakpoint() -> None:
+    history = [
+        HistoryTurn(message="q1", response_text="a1"),
+        HistoryTurn(message="q2", response_text="a2"),
+    ]
+    adapter, client = _teaching_adapter(_FakeMessage([_FakeTextBlock("ok")]))
+
+    adapter.generate(
+        message="now",
+        target_section_path=("Ch", "A"),
+        history=history,
+        evidence=[_evidence("alpha")],
+    )
+
+    messages = client.messages.calls[0]["messages"]
+    # Assistant history turns are messages[1] and messages[3]; only the latest one
+    # carries the second cache breakpoint. User turns never carry a breakpoint.
+    assert "cache_control" not in messages[1]["content"][0]
+    assert messages[3]["content"][0]["cache_control"] == _CACHE_1H
+    assert isinstance(messages[0]["content"], str)
+    assert isinstance(messages[2]["content"], str)
+
+
+def test_empty_history_has_only_the_system_breakpoint() -> None:
+    adapter, client = _teaching_adapter(_FakeMessage([_FakeTextBlock("ok")]))
+
+    adapter.generate(
+        message="hello",
+        target_section_path=("Ch", "A"),
+        history=[],
+        evidence=[_evidence("alpha")],
+    )
+
+    call = client.messages.calls[0]
+    messages = call["messages"]
+    # Only the final user turn; no cache_control anywhere in the message list.
+    assert len(messages) == 1
+    assert messages[0]["role"] == "user"
+    for block in messages[0]["content"]:
+        assert "cache_control" not in block
+    # The system prompt still carries its breakpoint.
+    assert call["system"][0]["cache_control"] == _CACHE_1H
+
+
+def test_target_section_rendered_with_arrow_separator_and_message() -> None:
+    adapter, client = _teaching_adapter(_FakeMessage([_FakeTextBlock("ok")]))
+
+    adapter.generate(
+        message="Please explain the loci method.",
+        target_section_path=("Part I", "Chapter 3", "The Method of Loci"),
+        history=[],
+        evidence=[_evidence("alpha")],
+    )
+
+    text_block = client.messages.calls[0]["messages"][0]["content"][-1]
+    assert text_block["type"] == "text"
+    assert "Part I > Chapter 3 > The Method of Loci" in text_block["text"]
+    assert "Please explain the loci method." in text_block["text"]
+
+
+def test_teaching_whole_reply_sentinel_is_not_found() -> None:
+    adapter, _ = _teaching_adapter(_FakeMessage([_FakeTextBlock(SENTINEL)]))
+
+    result = adapter.generate(
+        message="unrelated question",
+        target_section_path=("Ch", "A"),
+        history=[],
+        evidence=[_evidence("alpha")],
+    )
+
+    assert result.found is False
+    assert result.text == ""
+    assert result.cited_chunk_ids == ()
+    assert result.model == _MODEL
+
+
+def test_teaching_citations_map_by_document_index() -> None:
+    evidence = [_evidence("alpha"), _evidence("beta")]
+    message = _FakeMessage(
+        [
+            _FakeTextBlock(
+                "Here is the teaching.",
+                [_FakeCitation(1, document_title="WRONG")],
+            )
+        ]
+    )
+    adapter, _ = _teaching_adapter(message)
+
+    result = adapter.generate(
+        message="teach me",
+        target_section_path=("Ch", "A"),
+        history=[],
+        evidence=evidence,
+    )
+
+    assert result.found is True
+    assert result.text == "Here is the teaching."
+    assert result.cited_chunk_ids == (evidence[1].chunk_id,)
