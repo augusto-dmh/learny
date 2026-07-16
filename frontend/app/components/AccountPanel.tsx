@@ -16,6 +16,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { fetchAuthState, logout, type AuthState } from "@/app/lib/auth";
+import { Button } from "@/components/ui/button";
 
 export function AccountPanel({
   onRequireAuth,
@@ -50,20 +51,20 @@ export function AccountPanel({
   }
 
   if (state === null) {
-    return <p>Loading…</p>;
+    return <p className="text-muted-foreground">Loading…</p>;
   }
   if (!state.authenticated) {
-    return <p>You are signed out.</p>;
+    return <p className="text-muted-foreground">You are signed out.</p>;
   }
 
   return (
-    <section aria-label="account">
-      <p>
-        Signed in as <strong>{state.user.email}</strong>
+    <section aria-label="account" className="space-y-4">
+      <p className="text-sm">
+        Signed in as <strong className="font-medium">{state.user.email}</strong>
       </p>
-      <button type="button" onClick={handleLogout}>
+      <Button type="button" variant="outline" onClick={handleLogout}>
         Log out
-      </button>
+      </Button>
     </section>
   );
 }

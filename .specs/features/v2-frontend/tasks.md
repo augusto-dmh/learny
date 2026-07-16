@@ -11,7 +11,7 @@ cycle, sub-agent delegation, adequacy review, Verifier, and discrimination senso
 ---
 
 **Design**: `.specs/features/v2-frontend/design.md`
-**Status**: In Progress — Phase A ✅ (A1 `7504e45`, A2 `203bf3d`, A3 `741007b`, A4 `fb1f52c`; 97 vitest passed, tsc+build green; deviations in context.md — Phases D/E consume `MessageResponse`/`Spinner`/`Shimmer`, not `Response`/`Loader`)
+**Status**: In Progress — Phase A ✅ (A1 `7504e45`, A2 `203bf3d`, A3 `741007b`, A4 `fb1f52c`; 97 vitest, tsc+build green; deviations in context.md — Phases D/E consume `MessageResponse`/`Spinner`/`Shimmer`, not `Response`/`Loader`) · Phase B ✅ (B1 `dd6e202`, B2 `98eac28`, B3 `2163af9`, B4 `0d2d313`, B5 `804a264`; backend 656 passed + ruff clean, frontend 104 passed; deviations in context.md)
 
 ---
 

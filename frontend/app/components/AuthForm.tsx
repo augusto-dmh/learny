@@ -11,6 +11,8 @@
 import { useState } from "react";
 
 import { login, register, type UserSummary } from "@/app/lib/auth";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 
 export type AuthMode = "login" | "register";
 
@@ -44,10 +46,17 @@ export function AuthForm({
   }
 
   return (
-    <form onSubmit={handleSubmit} aria-label={`${mode} form`}>
-      <label>
-        Email
-        <input
+    <form
+      onSubmit={handleSubmit}
+      aria-label={`${mode} form`}
+      className="space-y-4"
+    >
+      <div className="space-y-1.5">
+        <label htmlFor="auth-email" className="text-sm font-medium">
+          Email
+        </label>
+        <Input
+          id="auth-email"
           type="email"
           name="email"
           autoComplete="email"
@@ -55,10 +64,13 @@ export function AuthForm({
           onChange={(e) => setEmail(e.target.value)}
           required
         />
-      </label>
-      <label>
-        Password
-        <input
+      </div>
+      <div className="space-y-1.5">
+        <label htmlFor="auth-password" className="text-sm font-medium">
+          Password
+        </label>
+        <Input
+          id="auth-password"
           type="password"
           name="password"
           autoComplete={mode === "register" ? "new-password" : "current-password"}
@@ -66,11 +78,15 @@ export function AuthForm({
           onChange={(e) => setPassword(e.target.value)}
           required
         />
-      </label>
-      {error ? <p role="alert">{error}</p> : null}
-      <button type="submit" disabled={pending}>
+      </div>
+      {error ? (
+        <p role="alert" className="text-sm text-destructive">
+          {error}
+        </p>
+      ) : null}
+      <Button type="submit" disabled={pending} className="w-full">
         {pending ? "Working…" : submitLabel}
-      </button>
+      </Button>
     </form>
   );
 }
