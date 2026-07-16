@@ -34,6 +34,7 @@ from app.domain.entities import (
     IngestionEvent,
     IngestionJob,
     PasswordCredential,
+    SectionContent,
     Session,
     Source,
     StructureSection,
@@ -442,6 +443,34 @@ class SqlAlchemyCorpusRepository:
             authors=tuple(document.authors),
             language=document.language,
             sections=sections,
+        )
+
+    def get_section(self, source_id: UUID, anchor: str) -> SectionContent | None:
+        # Owner-agnostic read: ownership is enforced one layer up via the source
+        # lookup (AD-014), so this keys on ``source_id`` alone. Ordered by
+        # ``position`` and bounded to one row so a duplicate anchor resolves to the
+        # first section in reading order — matching how teaching resolves a target
+        # anchor (``teaching.py`` picks the first position-ordered match).
+        row = self._conn.execute(
+            select(
+                corpus_sections.c.title,
+                corpus_sections.c.section_path,
+                corpus_sections.c.anchor,
+                corpus_sections.c.markdown,
+            )
+            .join(corpus_documents, corpus_sections.c.document_id == corpus_documents.c.id)
+            .where(corpus_documents.c.source_id == source_id)
+            .where(corpus_sections.c.anchor == anchor)
+            .order_by(corpus_sections.c.position)
+            .limit(1)
+        ).first()
+        if row is None:
+            return None
+        return SectionContent(
+            anchor=row.anchor,
+            title=row.title,
+            section_path=tuple(row.section_path),
+            markdown=row.markdown,
         )
 
 

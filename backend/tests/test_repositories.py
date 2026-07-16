@@ -829,6 +829,84 @@ def test_get_structure_returns_ordered_flat_sections(db_conn: Connection) -> Non
     ]
 
 
+def test_get_section_returns_content_at_anchor(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "corpus-section-hit@example.com")
+    repo = SqlAlchemyCorpusRepository(db_conn)
+    repo.replace(
+        source.id,
+        title="Bk",
+        authors=("Author",),
+        language="en",
+        schema_version=1,
+        sections=(
+            _section_record(
+                position=0, title="One", section_path=("One",), anchor="c.xhtml", markdown="one"
+            ),
+            _section_record(
+                position=1,
+                title="Two",
+                depth=1,
+                section_path=("One", "Two"),
+                anchor="c.xhtml#two",
+                markdown="two body",
+            ),
+        ),
+    )
+
+    section = repo.get_section(source.id, "c.xhtml#two")
+
+    assert section is not None
+    assert section.anchor == "c.xhtml#two"
+    assert section.title == "Two"
+    assert section.section_path == ("One", "Two")
+    assert section.markdown == "two body"
+
+
+def test_get_section_unknown_anchor_returns_none(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "corpus-section-miss@example.com")
+    repo = SqlAlchemyCorpusRepository(db_conn)
+    repo.replace(
+        source.id,
+        title="Bk",
+        authors=(),
+        language=None,
+        schema_version=1,
+        sections=(
+            _section_record(
+                position=0, title="One", section_path=("One",), anchor="c.xhtml", markdown="one"
+            ),
+        ),
+    )
+
+    assert repo.get_section(source.id, "nope.xhtml#missing") is None
+
+
+def test_get_section_of_different_source_returns_none(db_conn: Connection) -> None:
+    # Cross-source isolation: an anchor that exists in one source's corpus must
+    # not resolve when queried under a different source_id.
+    owned = _persisted_source(db_conn, "corpus-section-a@example.com")
+    other = _persisted_source(db_conn, "corpus-section-b@example.com")
+    repo = SqlAlchemyCorpusRepository(db_conn)
+    repo.replace(
+        other.id,
+        title="Other",
+        authors=(),
+        language=None,
+        schema_version=1,
+        sections=(
+            _section_record(
+                position=0,
+                title="Shared",
+                section_path=("Shared",),
+                anchor="shared.xhtml",
+                markdown="other body",
+            ),
+        ),
+    )
+
+    assert repo.get_section(owned.id, "shared.xhtml") is None
+
+
 # ---- Embedding-index repository (RET-09/11) -------------------------------
 
 

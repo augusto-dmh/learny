@@ -312,6 +312,22 @@ class CorpusStructure:
 
 
 @dataclass(frozen=True)
+class SectionContent:
+    """One section's readable content, addressed by its anchor (A-4).
+
+    The single-section read model behind the reader: the section's derived
+    Markdown plus the citation metadata (``section_path``, ``title``) needed to
+    render it in context. Keyed by the same ``anchor`` the structure read model
+    and citations expose, so a citation round-trips to exactly this section.
+    """
+
+    anchor: str
+    title: str
+    section_path: tuple[str, ...]
+    markdown: str
+
+
+@dataclass(frozen=True)
 class ChunkToEmbed:
     """The embed step's read DTO: one chunk's id and text to embed (design §4).
 
