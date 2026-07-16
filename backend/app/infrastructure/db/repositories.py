@@ -476,16 +476,17 @@ class SqlAlchemyEmbeddingIndexRepository:
         return [ChunkToEmbed(id=row.id, text=row.text) for row in rows]
 
     def stale_chunks_for_source(
-        self, source_id: UUID, model: str
+        self, source_id: UUID, model: str, limit: int
     ) -> list[ChunkToEmbed]:
-        """Return ``source_id``'s chunks needing (re)embedding for ``model``.
+        """Return up to ``limit`` of ``source_id``'s chunks needing (re)embedding.
 
         Selects chunks whose ``embedding IS NULL`` or whose ``embedding_model`` is
         distinct from ``model`` — the not-yet-embedded and the stale-model rows —
         ordered by section ``position`` then ``chunk_index`` (the same stable order
-        as :meth:`chunks_for_source`). Committing per batch then re-querying shrinks
-        this set as progress lands, so ``reembed_document`` is idempotent and
-        resumable (EMB-17).
+        as :meth:`chunks_for_source`) and bounded to ``limit`` rows in SQL.
+        ``reembed_document`` re-queries per committed batch, so committed progress
+        shrinks this set as it lands (idempotent + resumable); the SQL ``LIMIT`` keeps
+        each pass O(limit) rather than fetching the whole remaining stale set.
         """
         rows = self._conn.execute(
             select(corpus_chunks.c.id, corpus_chunks.c.text)
@@ -498,6 +499,7 @@ class SqlAlchemyEmbeddingIndexRepository:
                 | corpus_chunks.c.embedding_model.is_distinct_from(model)
             )
             .order_by(corpus_sections.c.position, corpus_chunks.c.chunk_index)
+            .limit(limit)
         ).all()
         return [ChunkToEmbed(id=row.id, text=row.text) for row in rows]
 

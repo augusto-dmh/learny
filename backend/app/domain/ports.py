@@ -366,14 +366,16 @@ class EmbeddingIndexRepository(Protocol):
         ...
 
     def stale_chunks_for_source(
-        self, source_id: UUID, model: str
+        self, source_id: UUID, model: str, limit: int
     ) -> list[ChunkToEmbed]:
-        """Return ``source_id``'s chunks needing (re)embedding for ``model``.
+        """Return up to ``limit`` of ``source_id``'s chunks needing (re)embedding.
 
         Selects the not-yet-embedded (``embedding IS NULL``) and stale-model
         (``embedding_model`` distinct from ``model``) chunks, stably ordered like
-        :meth:`chunks_for_source`. Committing per batch then re-querying shrinks this
-        set as progress lands, so reembedding is idempotent and resumable (ADR-0019).
+        :meth:`chunks_for_source`, bounded to ``limit`` rows in SQL. The caller
+        re-queries per committed batch, so committed progress shrinks this set as it
+        lands (idempotent + resumable, ADR-0019); pushing the batch bound into the
+        query keeps each pass O(limit) instead of scanning the whole remaining set.
         """
         ...
 

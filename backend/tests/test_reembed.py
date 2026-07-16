@@ -102,7 +102,9 @@ def _chunk_rows(engine: Engine, source_id):  # noqa: ANN001, ANN202
 def _stale_count(engine: Engine, source_id, model: str) -> int:  # noqa: ANN001
     with engine.connect() as conn:
         return len(
-            SqlAlchemyEmbeddingIndexRepository(conn).stale_chunks_for_source(source_id, model)
+            SqlAlchemyEmbeddingIndexRepository(conn).stale_chunks_for_source(
+                source_id, model, 10_000
+            )
         )
 
 

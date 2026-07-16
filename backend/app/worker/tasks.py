@@ -291,7 +291,7 @@ def _reembed_document_body(source_id: str) -> None:
     while True:
         with get_engine().begin() as conn:
             index = SqlAlchemyEmbeddingIndexRepository(conn)
-            batch = index.stale_chunks_for_source(sid, target)[:batch_size]
+            batch = index.stale_chunks_for_source(sid, target, batch_size)
             if not batch:
                 break
             vectors = adapter.embed_documents([chunk.text for chunk in batch])

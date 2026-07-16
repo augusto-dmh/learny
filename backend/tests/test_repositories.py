@@ -1011,15 +1011,18 @@ def test_stale_chunks_for_source_selects_null_or_differing_model(db_conn: Connec
     model_x = "text-embedding-3-large@1536"
 
     # All embeddings NULL → every chunk is stale for any target model.
-    assert [c.id for c in repo.stale_chunks_for_source(source.id, model_x)] == ordered_ids
+    assert [c.id for c in repo.stale_chunks_for_source(source.id, model_x, 100)] == ordered_ids
+
+    # ``limit`` bounds the batch in SQL: only the first ordered chunk comes back.
+    assert [c.id for c in repo.stale_chunks_for_source(source.id, model_x, 1)] == ordered_ids[:1]
 
     # Embed every chunk at model X → none stale for X, all stale for another model.
     repo.set_embeddings(
         [(c.id, _unit_vector(i, float(i + 1))) for i, c in enumerate(chunks)],
         model=model_x,
     )
-    assert repo.stale_chunks_for_source(source.id, model_x) == []
-    assert [c.id for c in repo.stale_chunks_for_source(source.id, "other@1")] == ordered_ids
+    assert repo.stale_chunks_for_source(source.id, model_x, 100) == []
+    assert [c.id for c in repo.stale_chunks_for_source(source.id, "other@1", 100)] == ordered_ids
 
     # Now blank one chunk's embedding back to NULL: exactly that chunk is stale for X.
     db_conn.execute(
@@ -1027,7 +1030,7 @@ def test_stale_chunks_for_source_selects_null_or_differing_model(db_conn: Connec
         .where(corpus_chunks.c.id == ordered_ids[1])
         .values(embedding=None, embedding_model=None)
     )
-    assert [c.id for c in repo.stale_chunks_for_source(source.id, model_x)] == [ordered_ids[1]]
+    assert [c.id for c in repo.stale_chunks_for_source(source.id, model_x, 100)] == [ordered_ids[1]]
 
 
 # ---- Teaching session repository (TEACH-01/05/21) -------------------------
