@@ -16,7 +16,10 @@ from __future__ import annotations
 import ast
 import inspect
 import json
+import os
 from uuid import uuid4
+
+import pytest
 
 from app.application.grounding import ground
 from app.domain.entities import (
@@ -654,3 +657,87 @@ def test_anthropic_adapters_conform_to_their_port_protocols() -> None:
     teaching = AnthropicTeachingAdapter(api_key="x", model=_MODEL, max_tokens=_MAX_TOKENS)
     assert isinstance(answer, AnswerGenerationPort)
     assert isinstance(teaching, TeachingGenerationPort)
+
+
+# --- Live smoke (GEN-20) — real provider, skipped offline / without a key -------
+#
+# Derived from the P2-eval AC4 and F5: one real answer call returns cited prose
+# grounded in the inline evidence; one real teaching turn does the same; and an
+# irrelevant-evidence question returns the sentinel not-found (found=False) — the
+# live proof that the relevance-aware decline (F5) works end to end. Marked
+# `live` + `eval` so the nightly `pytest -m "live and eval"` runs them; skipped
+# whenever `LEARNY_ANTHROPIC_API_KEY` is unset, so CI stays offline.
+
+_LIVE_SKIP = pytest.mark.skipif(
+    not os.getenv("LEARNY_ANTHROPIC_API_KEY"),
+    reason="LEARNY_ANTHROPIC_API_KEY unset — live Anthropic smoke skipped (CI stays offline)",
+)
+
+# Inline evidence drawn from the golden book's chapters (tides / volcanoes /
+# printing), so a real call has a single unambiguous passage to cite.
+_TIDES = "Ocean tides rise and fall because the moon's gravity pulls seawater across the planet."
+_VOLCANO = "A volcano erupts when molten magma escapes upward through a vent in the crust."
+_PRINTING = "The printing press let a workshop reproduce a page from movable metal type."
+
+
+def _live_answer_adapter() -> AnthropicAnswerAdapter:
+    return AnthropicAnswerAdapter(
+        api_key=os.environ["LEARNY_ANTHROPIC_API_KEY"], model=_MODEL, max_tokens=_MAX_TOKENS
+    )
+
+
+@pytest.mark.live
+@pytest.mark.eval
+@_LIVE_SKIP
+def test_live_answer_returns_cited_prose() -> None:
+    evidence = [_evidence(_TIDES)]
+
+    result = _live_answer_adapter().generate(
+        question="Why do ocean tides rise and fall?", evidence=evidence
+    )
+
+    assert result.found is True
+    assert result.text.strip(), "expected synthesized prose"
+    assert result.cited_chunk_ids, "expected at least one citation"
+    assert set(result.cited_chunk_ids) <= {item.chunk_id for item in evidence}
+    assert result.model == _MODEL
+
+
+@pytest.mark.live
+@pytest.mark.eval
+@_LIVE_SKIP
+def test_live_teaching_turn_returns_cited_prose() -> None:
+    evidence = [_evidence(_VOLCANO)]
+    adapter = AnthropicTeachingAdapter(
+        api_key=os.environ["LEARNY_ANTHROPIC_API_KEY"], model=_MODEL, max_tokens=_MAX_TOKENS
+    )
+
+    result = adapter.generate(
+        message="How does a volcano erupt?",
+        target_section_path=("How Volcanoes Erupt",),
+        history=[],
+        evidence=evidence,
+    )
+
+    assert result.found is True
+    assert result.text.strip(), "expected synthesized teaching prose"
+    assert result.cited_chunk_ids, "expected at least one citation"
+    assert set(result.cited_chunk_ids) <= {item.chunk_id for item in evidence}
+
+
+@pytest.mark.live
+@pytest.mark.eval
+@_LIVE_SKIP
+def test_live_irrelevant_evidence_returns_sentinel_not_found() -> None:
+    # F5 live proof: the evidence cannot answer the question, so the model must
+    # reply with the sentinel and the adapter maps it to found=False.
+    evidence = [_evidence(_PRINTING)]
+
+    result = _live_answer_adapter().generate(
+        question="How does photosynthesis convert sunlight inside plant leaves?",
+        evidence=evidence,
+    )
+
+    assert result.found is False
+    assert result.text == ""
+    assert result.cited_chunk_ids == ()
