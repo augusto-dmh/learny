@@ -18,11 +18,18 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from typing import Any, Protocol
 from uuid import UUID
 
-from app.domain.entities import Evidence, GeneratedAnswer, HistoryTurn
+from app.domain.entities import (
+    AnswerCompleted,
+    AnswerStreamEvent,
+    AnswerTextDelta,
+    Evidence,
+    GeneratedAnswer,
+    HistoryTurn,
+)
 from app.infrastructure.answering.prompts import (
     ANSWER_SYSTEM_PROMPT,
     SENTINEL,
@@ -196,6 +203,38 @@ class _AnthropicAdapter:
             self._client = anthropic.Anthropic(api_key=self._api_key)
         return self._client
 
+    def _run_stream(
+        self,
+        *,
+        system: list[dict[str, Any]],
+        messages: list[dict[str, Any]],
+        chunk_ids: Sequence[UUID],
+    ) -> Iterator[AnswerStreamEvent]:
+        """Stream generation events, closing the SDK stream on early cancellation.
+
+        Opens ``messages.stream(...)`` (the SDK context manager), mapping each
+        text-delta event to an :class:`~app.domain.entities.AnswerTextDelta`; once
+        the stream is exhausted, ``get_final_message()`` is parsed with the **same**
+        parser as the buffered path into the authoritative
+        :class:`~app.domain.entities.AnswerCompleted`. The ``with`` block guarantees
+        the SDK stream is closed when the consumer closes this generator early
+        (``GeneratorExit`` unwinds through it), so a client disconnect never leaks a
+        provider stream. Shared by both adapters — only ``system``/``messages`` differ.
+        """
+        with self._get_client().messages.stream(
+            model=self._model,
+            max_tokens=self._max_tokens,
+            system=system,
+            messages=messages,
+        ) as stream:
+            for event in stream:
+                if getattr(event, "type", None) == "text":
+                    yield AnswerTextDelta(text=event.text)
+            final = stream.get_final_message()
+        answer = _parse_message(final, chunk_ids, model=self._model)
+        _log_call(final, model=self._model, found=answer.found)
+        yield AnswerCompleted(answer=answer)
+
 
 class AnthropicAnswerAdapter(_AnthropicAdapter):
     """``AnswerGenerationPort`` implementation over Claude's Citations API.
@@ -225,6 +264,22 @@ class AnthropicAnswerAdapter(_AnthropicAdapter):
         _log_call(message, model=self._model, found=answer.found)
         return answer
 
+    def generate_stream(
+        self, *, question: str, evidence: Sequence[Evidence]
+    ) -> Iterator[AnswerStreamEvent]:
+        """Stream a cited answer: text deltas, then the authoritative completed event."""
+        documents, chunk_ids = _build_documents(evidence)
+        return self._run_stream(
+            system=[{"type": "text", "text": ANSWER_SYSTEM_PROMPT}],
+            messages=[
+                {
+                    "role": "user",
+                    "content": [*documents, {"type": "text", "text": question}],
+                }
+            ],
+            chunk_ids=chunk_ids,
+        )
+
 
 class AnthropicTeachingAdapter(_AnthropicAdapter):
     """``TeachingGenerationPort`` implementation with prompt caching (AD-032).
@@ -239,15 +294,22 @@ class AnthropicTeachingAdapter(_AnthropicAdapter):
     strictly *after* the prefix in the final user message (research §5).
     """
 
-    def generate(
+    def _build_request(
         self,
         *,
         message: str,
         target_section_path: tuple[str, ...],
         history: Sequence[HistoryTurn],
         evidence: Sequence[Evidence],
-    ) -> GeneratedAnswer:
-        """Generate a grounded teaching turn, caching the system + history prefix."""
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[UUID]]:
+        """Assemble the cached system prompt, the message list, and the chunk map.
+
+        Shared by the buffered and streaming paths so both send the byte-identical
+        request: the frozen ``TEACHING_SYSTEM_PROMPT`` with its 1-hour cache
+        breakpoint, the alternating history (second breakpoint on the latest block),
+        and a final user turn carrying this turn's evidence documents plus the target
+        section and learner message — all volatile content strictly after the prefix.
+        """
         documents, chunk_ids = _build_documents(evidence)
         messages = _build_history_messages(history)
         section = " > ".join(target_section_path)
@@ -260,18 +322,53 @@ class AnthropicTeachingAdapter(_AnthropicAdapter):
                 "content": [*documents, {"type": "text", "text": turn_text}],
             }
         )
+        system = [
+            {
+                "type": "text",
+                "text": TEACHING_SYSTEM_PROMPT,
+                "cache_control": _CACHE_CONTROL,
+            }
+        ]
+        return system, messages, chunk_ids
+
+    def generate(
+        self,
+        *,
+        message: str,
+        target_section_path: tuple[str, ...],
+        history: Sequence[HistoryTurn],
+        evidence: Sequence[Evidence],
+    ) -> GeneratedAnswer:
+        """Generate a grounded teaching turn, caching the system + history prefix."""
+        system, messages, chunk_ids = self._build_request(
+            message=message,
+            target_section_path=target_section_path,
+            history=history,
+            evidence=evidence,
+        )
         response = self._get_client().messages.create(
             model=self._model,
             max_tokens=self._max_tokens,
-            system=[
-                {
-                    "type": "text",
-                    "text": TEACHING_SYSTEM_PROMPT,
-                    "cache_control": _CACHE_CONTROL,
-                }
-            ],
+            system=system,
             messages=messages,
         )
         answer = _parse_message(response, chunk_ids, model=self._model)
         _log_call(response, model=self._model, found=answer.found)
         return answer
+
+    def generate_stream(
+        self,
+        *,
+        message: str,
+        target_section_path: tuple[str, ...],
+        history: Sequence[HistoryTurn],
+        evidence: Sequence[Evidence],
+    ) -> Iterator[AnswerStreamEvent]:
+        """Stream a grounded teaching turn: text deltas, then the completed event."""
+        system, messages, chunk_ids = self._build_request(
+            message=message,
+            target_section_path=target_section_path,
+            history=history,
+            evidence=evidence,
+        )
+        return self._run_stream(system=system, messages=messages, chunk_ids=chunk_ids)

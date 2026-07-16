@@ -19,7 +19,13 @@ import json
 from uuid import uuid4
 
 from app.application.grounding import ground
-from app.domain.entities import Evidence, HistoryTurn
+from app.domain.entities import (
+    AnswerCompleted,
+    AnswerTextDelta,
+    Evidence,
+    HistoryTurn,
+)
+from app.domain.ports import AnswerGenerationPort, TeachingGenerationPort
 from app.infrastructure.answering import anthropic as anthropic_module
 from app.infrastructure.answering.anthropic import (
     AnthropicAnswerAdapter,
@@ -472,3 +478,179 @@ def test_teaching_citations_map_by_document_index() -> None:
     assert result.found is True
     assert result.text == "Here is the teaching."
     assert result.cited_chunk_ids == (evidence[1].chunk_id,)
+
+
+# --- Streaming (GEN-12) --------------------------------------------------------
+#
+# Derived from the C2 Done-when: text-delta events map to AnswerTextDelta in order;
+# the completed event parses the final message with the SAME parser as the buffered
+# path (equal result); and closing the consumer generator early closes the SDK
+# stream (no leaked provider stream on client disconnect).
+
+
+class _FakeTextStreamEvent:
+    """The SDK's synthetic ``text`` event: a text delta plus running snapshot."""
+
+    def __init__(self, text: str) -> None:
+        self.type = "text"
+        self.text = text
+
+
+class _FakeStream:
+    """Fake ``MessageStream``: iterates text events, exposes the final message, closes."""
+
+    def __init__(self, deltas: list[str], final_message: _FakeMessage) -> None:
+        self._deltas = deltas
+        self._final = final_message
+        self.closed = False
+
+    def __iter__(self):  # noqa: ANN204 — yields fake text events
+        for text in self._deltas:
+            yield _FakeTextStreamEvent(text)
+
+    def get_final_message(self) -> _FakeMessage:
+        return self._final
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _FakeStreamManager:
+    """Fake ``MessageStreamManager`` context manager: records the call, closes on exit."""
+
+    def __init__(
+        self, stream: _FakeStream, calls: list[dict[str, object]], kwargs: dict[str, object]
+    ) -> None:
+        self._stream = stream
+        self._calls = calls
+        self._kwargs = kwargs
+
+    def __enter__(self) -> _FakeStream:
+        self._calls.append(self._kwargs)
+        return self._stream
+
+    def __exit__(self, *exc: object) -> bool:
+        self._stream.close()
+        return False
+
+
+class _FakeStreamingMessagesResource:
+    def __init__(self, stream: _FakeStream) -> None:
+        self._stream = stream
+        self.stream_calls: list[dict[str, object]] = []
+
+    def stream(self, **kwargs: object) -> _FakeStreamManager:
+        return _FakeStreamManager(self._stream, self.stream_calls, kwargs)
+
+
+class _FakeStreamingClient:
+    def __init__(self, stream: _FakeStream) -> None:
+        self.messages = _FakeStreamingMessagesResource(stream)
+
+
+def _streaming_answer_adapter(
+    stream: _FakeStream,
+) -> tuple[AnthropicAnswerAdapter, _FakeStreamingClient]:
+    client = _FakeStreamingClient(stream)
+    adapter = AnthropicAnswerAdapter(
+        api_key="unused-fake", model=_MODEL, max_tokens=_MAX_TOKENS, client=client
+    )
+    return adapter, client
+
+
+def test_answer_stream_maps_text_events_to_deltas_then_one_completed() -> None:
+    evidence = [_evidence("alpha")]
+    stream = _FakeStream(
+        deltas=["Hello ", "world"], final_message=_FakeMessage([_FakeTextBlock("Hello world")])
+    )
+    adapter, client = _streaming_answer_adapter(stream)
+
+    events = list(adapter.generate_stream(question="q", evidence=evidence))
+
+    deltas = [e for e in events if isinstance(e, AnswerTextDelta)]
+    assert deltas == [AnswerTextDelta(text="Hello "), AnswerTextDelta(text="world")]
+    assert isinstance(events[-1], AnswerCompleted)
+    assert len([e for e in events if isinstance(e, AnswerCompleted)]) == 1
+    # The streaming request carries the same citations-enabled documents + question.
+    call = client.messages.stream_calls[0]
+    assert call["model"] == _MODEL
+    assert call["system"] == [{"type": "text", "text": ANSWER_SYSTEM_PROMPT}]
+    content = call["messages"][0]["content"]
+    assert content[0]["type"] == "document"
+    assert content[0]["citations"] == {"enabled": True}
+    assert content[-1] == {"type": "text", "text": "q"}
+
+
+def test_answer_stream_completed_parse_equals_buffered_parse() -> None:
+    # The completed event parses the final message with the SAME parser as the
+    # buffered path → identical GeneratedAnswer (document_index mapping included).
+    evidence = [_evidence("alpha"), _evidence("beta")]
+    final = _FakeMessage([_FakeTextBlock("answer", [_FakeCitation(1, document_title="WRONG")])])
+
+    stream_adapter, _ = _streaming_answer_adapter(
+        _FakeStream(deltas=["answer"], final_message=final)
+    )
+    completed = list(stream_adapter.generate_stream(question="q", evidence=evidence))[-1]
+
+    buffered_adapter, _ = _adapter(final)
+    buffered = buffered_adapter.generate(question="q", evidence=evidence)
+
+    assert isinstance(completed, AnswerCompleted)
+    assert completed.answer == buffered
+    assert completed.answer.cited_chunk_ids == (evidence[1].chunk_id,)
+
+
+def test_answer_stream_close_closes_the_sdk_stream() -> None:
+    # Consumer cancellation (generator close) must close the SDK stream so no
+    # provider generation leaks on client disconnect.
+    stream = _FakeStream(
+        deltas=["one ", "two"], final_message=_FakeMessage([_FakeTextBlock("one two")])
+    )
+    adapter, _ = _streaming_answer_adapter(stream)
+
+    gen = adapter.generate_stream(question="q", evidence=[_evidence("alpha")])
+    first = next(gen)
+    assert first == AnswerTextDelta(text="one ")
+    assert stream.closed is False  # still open mid-stream
+
+    gen.close()
+
+    assert stream.closed is True  # closing the consumer closed the SDK stream
+
+
+def test_teaching_stream_maps_deltas_and_carries_cached_system() -> None:
+    evidence = [_evidence("alpha")]
+    stream = _FakeStream(
+        deltas=["Teach ", "this"], final_message=_FakeMessage([_FakeTextBlock("Teach this")])
+    )
+    client = _FakeStreamingClient(stream)
+    adapter = AnthropicTeachingAdapter(
+        api_key="unused-fake", model=_MODEL, max_tokens=_MAX_TOKENS, client=client
+    )
+
+    events = list(
+        adapter.generate_stream(
+            message="explain",
+            target_section_path=("Ch", "A"),
+            history=[HistoryTurn(message="hi", response_text="hello")],
+            evidence=evidence,
+        )
+    )
+
+    deltas = [e for e in events if isinstance(e, AnswerTextDelta)]
+    assert deltas == [AnswerTextDelta(text="Teach "), AnswerTextDelta(text="this")]
+    assert isinstance(events[-1], AnswerCompleted)
+    # The streaming teaching request carries the frozen, cache-broken system prompt.
+    call = client.messages.stream_calls[0]
+    assert call["system"] == [
+        {"type": "text", "text": TEACHING_SYSTEM_PROMPT, "cache_control": _CACHE_1H}
+    ]
+
+
+def test_anthropic_adapters_conform_to_their_port_protocols() -> None:
+    # GEN-12: with generate_stream added, the Anthropic adapters satisfy the
+    # runtime-checkable generation ports structurally.
+    answer = AnthropicAnswerAdapter(api_key="x", model=_MODEL, max_tokens=_MAX_TOKENS)
+    teaching = AnthropicTeachingAdapter(api_key="x", model=_MODEL, max_tokens=_MAX_TOKENS)
+    assert isinstance(answer, AnswerGenerationPort)
+    assert isinstance(teaching, TeachingGenerationPort)
