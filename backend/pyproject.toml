@@ -44,7 +44,10 @@ testpaths = ["tests"]
 pythonpath = ["."]
 asyncio_mode = "auto"
 addopts = "-ra"
-markers = ["live: exercises a real external provider (skipped without credentials)"]
+markers = [
+    "live: exercises a real external provider (skipped without credentials)",
+    "eval: generation evaluation harness — live judge/smoke run nightly (skipped without credentials)",
+]
 
 [tool.ruff]
 line-length = 100
