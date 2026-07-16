@@ -122,3 +122,58 @@ describe("relayResponse — upstream response relay (D1, AC-2)", () => {
     expect(relayed.headers.get("content-type")).toBe("application/json");
   });
 });
+
+describe("relayResponse — SSE stream relay (FE-22)", () => {
+  it("relays a streamed SSE body unbuffered while keeping streaming headers and stripping encoding/length", async () => {
+    const encoder = new TextEncoder();
+    const decoder = new TextDecoder();
+
+    // A body we drive by hand so we can observe the first chunk on the relayed
+    // side *before* the upstream stream is closed — proving relayResponse hands
+    // the stream through rather than buffering it to completion.
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    const body = new ReadableStream<Uint8Array>({
+      start(c) {
+        controller = c;
+      },
+    });
+    const upstream = new Response(body, {
+      status: 200,
+      headers: {
+        "content-type": "text/event-stream",
+        "x-vercel-ai-ui-message-stream": "v1",
+        "cache-control": "no-cache",
+        "x-accel-buffering": "no",
+        "content-encoding": "gzip",
+        "content-length": "999",
+      },
+    });
+
+    const relayed = relayResponse(upstream);
+
+    // The three streaming headers survive; the wire-encoding headers are stripped.
+    expect(relayed.headers.get("content-type")).toBe("text/event-stream");
+    expect(relayed.headers.get("x-vercel-ai-ui-message-stream")).toBe("v1");
+    expect(relayed.headers.get("cache-control")).toBe("no-cache");
+    expect(relayed.headers.get("x-accel-buffering")).toBe("no");
+    expect(relayed.headers.get("content-encoding")).toBeNull();
+    expect(relayed.headers.get("content-length")).toBeNull();
+
+    const reader = relayed.body!.getReader();
+
+    // Enqueue only the first chunk, then read it off the relayed body while the
+    // upstream stream is still open — if relayResponse buffered, this would hang.
+    controller.enqueue(encoder.encode("data: chunk-1\n\n"));
+    const first = await reader.read();
+    expect(first.done).toBe(false);
+    expect(decoder.decode(first.value)).toContain("chunk-1");
+
+    // Now enqueue the second chunk and close — the reader keeps draining in order.
+    controller.enqueue(encoder.encode("data: chunk-2\n\n"));
+    controller.close();
+    const second = await reader.read();
+    expect(decoder.decode(second.value)).toContain("chunk-2");
+    const end = await reader.read();
+    expect(end.done).toBe(true);
+  });
+});
