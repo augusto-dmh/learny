@@ -21,8 +21,7 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Response
-from fastapi.sse import EventSourceResponse
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field, field_validator
 
 from app.application.qa import AskQuestion
@@ -36,9 +35,7 @@ from app.infrastructure.web.dependencies import (
 from app.infrastructure.web.rate_limit import rate_limit_questions
 from app.infrastructure.web.retrieval import EvidenceView
 from app.infrastructure.web.ui_message_stream import (
-    UI_MESSAGE_STREAM_HEADER_NAME,
-    UI_MESSAGE_STREAM_PROTOCOL,
-    to_ui_message_stream,
+    to_sse_response,
 )
 
 router = APIRouter(prefix="/api/sources", tags=["questions"])
@@ -130,7 +127,6 @@ def ask_question(
 
 @router.post(
     "/{source_id}/questions/stream",
-    response_class=EventSourceResponse,
     dependencies=[
         Depends(rate_limit_questions),
         Depends(enforce_origin),
@@ -142,7 +138,6 @@ def ask_question_stream(
     user: Annotated[User, Depends(get_authenticated_user)],
     service: Annotated[AskQuestion, Depends(get_ask_question)],
     body: QuestionRequest,
-    response: Response,
 ):
     """Stream a grounded cited answer as UI Message Stream v1 SSE frames (GEN-14).
 
@@ -155,5 +150,4 @@ def ask_question_stream(
     the presenter as a protocol ``error`` part (headers are already sent).
     """
     events = service.stream(user=user, source_id=source_id, question=body.question)
-    response.headers[UI_MESSAGE_STREAM_HEADER_NAME] = UI_MESSAGE_STREAM_PROTOCOL
-    return to_ui_message_stream(events)
+    return to_sse_response(events)

@@ -18,10 +18,12 @@ carrying the same generic message as the buffered 502, then the stream terminate
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from uuid import uuid4
 
-from fastapi.sse import ServerSentEvent
+from fastapi.encoders import jsonable_encoder
+from fastapi.sse import EventSourceResponse, ServerSentEvent, format_sse_event
 
 from app.application.errors import AnswerGenerationFailed
 from app.application.streaming import (
@@ -97,3 +99,45 @@ def to_ui_message_stream(
     )
     yield ServerSentEvent(data={"type": "finish"})
     yield ServerSentEvent(raw_data="[DONE]")
+
+
+def _to_wire(frame: ServerSentEvent) -> bytes:
+    """Serialize one frame to the same wire bytes FastAPI's SSE dispatch produces."""
+    if frame.raw_data is not None:
+        data_str: str | None = frame.raw_data
+    elif frame.data is not None:
+        data_str = json.dumps(jsonable_encoder(frame.data))
+    else:
+        data_str = None
+    return format_sse_event(
+        data_str=data_str,
+        event=frame.event,
+        id=frame.id,
+        retry=frame.retry,
+        comment=frame.comment,
+    )
+
+
+def to_sse_response(
+    events: Iterator[AskStreamEvent | TurnStreamEvent],
+) -> EventSourceResponse:
+    """Wrap the frame stream in a directly-returned ``EventSourceResponse``.
+
+    Returning the response instance — instead of declaring
+    ``response_class=EventSourceResponse`` on the route — matters: the declared-class
+    form switches FastAPI to its SSE dispatch, which invokes the handler body directly
+    on the event loop (only the *returned generator* is iterated in the threadpool), so
+    the eager ownership/readiness guards, query embedding, and hybrid retrieval would
+    block every concurrent request. On the regular path a sync handler body runs in the
+    threadpool, and Starlette also iterates this sync frame generator in the threadpool.
+    Trade-off: no idle keep-alive pings — acceptable because generation frames flow
+    continuously once the stream starts.
+    """
+    return EventSourceResponse(
+        (_to_wire(frame) for frame in to_ui_message_stream(events)),
+        headers={
+            UI_MESSAGE_STREAM_HEADER_NAME: UI_MESSAGE_STREAM_PROTOCOL,
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )

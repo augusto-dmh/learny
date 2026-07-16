@@ -28,8 +28,7 @@ from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Response, status
-from fastapi.sse import EventSourceResponse
+from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel, Field, field_validator
 
 from app.application.teaching import (
@@ -56,9 +55,7 @@ from app.infrastructure.web.dependencies import (
 from app.infrastructure.web.rate_limit import rate_limit_teaching
 from app.infrastructure.web.retrieval import EvidenceView
 from app.infrastructure.web.ui_message_stream import (
-    UI_MESSAGE_STREAM_HEADER_NAME,
-    UI_MESSAGE_STREAM_PROTOCOL,
-    to_ui_message_stream,
+    to_sse_response,
 )
 
 router = APIRouter(tags=["teaching"])
@@ -286,7 +283,6 @@ def post_teaching_turn(
 
 @router.post(
     "/api/teaching-sessions/{session_id}/turns/stream",
-    response_class=EventSourceResponse,
     dependencies=[
         Depends(rate_limit_teaching),
         Depends(enforce_origin),
@@ -298,7 +294,6 @@ def post_teaching_turn_stream(
     user: Annotated[User, Depends(get_authenticated_user)],
     service: Annotated[PostTeachingTurn, Depends(get_post_teaching_turn)],
     body: TurnRequest,
-    response: Response,
 ):
     """Stream one cited teaching turn as UI Message Stream v1 SSE frames (GEN-14).
 
@@ -311,8 +306,7 @@ def post_teaching_turn_stream(
     part) or a client disconnect persists nothing (TEACH-13/17).
     """
     events = service.stream(user=user, session_id=session_id, message=body.message)
-    response.headers[UI_MESSAGE_STREAM_HEADER_NAME] = UI_MESSAGE_STREAM_PROTOCOL
-    return to_ui_message_stream(events)
+    return to_sse_response(events)
 
 
 @router.get("/api/sources/{source_id}/teaching-sessions")
