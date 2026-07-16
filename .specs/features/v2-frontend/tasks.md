@@ -11,7 +11,7 @@ cycle, sub-agent delegation, adequacy review, Verifier, and discrimination senso
 ---
 
 **Design**: `.specs/features/v2-frontend/design.md`
-**Status**: In Progress — Phase A ✅ (A1 `7504e45`, A2 `203bf3d`, A3 `741007b`, A4 `fb1f52c`; 97 vitest, tsc+build green; deviations in context.md — Phases D/E consume `MessageResponse`/`Spinner`/`Shimmer`, not `Response`/`Loader`) · Phase B ✅ (B1 `dd6e202`, B2 `98eac28`, B3 `2163af9`, B4 `0d2d313`, B5 `804a264`; backend 656 passed + ruff clean, frontend 104 passed; deviations in context.md)
+**Status**: In Progress — Phase A ✅ (A1 `7504e45`, A2 `203bf3d`, A3 `741007b`, A4 `fb1f52c`; 97 vitest, tsc+build green; deviations in context.md — Phases D/E consume `MessageResponse`/`Spinner`/`Shimmer`, not `Response`/`Loader`) · Phase B ✅ (B1 `dd6e202`, B2 `98eac28`, B3 `2163af9`, B4 `0d2d313`, B5 `804a264`; backend 656 passed + ruff clean, frontend 104 passed; deviations in context.md) · Phase C ✅ (C1 `3e14ebc`, C2 `ff02e21`, C3 `b90d0a8`, C4 `030c11a`, C5 `4de4c94`; 118 vitest, tsc+build green; deviations in context.md — SourcesPanel removal deferred to Phase D) · Phase D ✅ (D1 `e7a6bd4`, D2 `367a885`, D3 `e85cfa9`, D4 `e2551a3`; 123 vitest, tsc+build green; SPEC_DEVIATION on citations composition + deviations in context.md) · Phase E ✅ (E1 `8e4098b`, E2 `0c68f33`; frontend 130 passed/22 files + tsc + build, backend 656 passed + ruff clean; raw-HTML inertness proven). All 20 tasks done — **Verifier PASS** (22/22 ACs matched, 6/6 sensor mutants killed, 0 gaps; two non-blocking edge-case notes in `validation.md`).
 
 ---
 

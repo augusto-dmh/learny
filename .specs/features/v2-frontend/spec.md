@@ -172,15 +172,15 @@ five backend-only cycles.
 
 | Requirement ID | Story | Phase | Status |
 | --- | --- | --- | --- |
-| FE-01..FE-05 | P1 Shell & navigation | Design | Pending |
-| FE-06..FE-10 | P1 Streaming Ask | Design | Pending |
-| FE-11..FE-13 | P1 Streaming Teach | Design | Pending |
-| FE-14..FE-17 | P1 Citations → reader | Design | Pending |
-| FE-18..FE-20 | P1 Ingestion progress | Design | Pending |
-| FE-21 | P2 Upload UX | Design | Pending |
-| FE-22 | P2 SSE relay test | Design | Pending |
+| FE-01..FE-05 | P1 Shell & navigation | A (A1–A4), C (C1–C3) | Implemented — verification pending |
+| FE-06..FE-10 | P1 Streaming Ask | D (D1–D3) | Implemented — verification pending |
+| FE-11..FE-13 | P1 Streaming Teach | D (D1, D2, D4) | Implemented — verification pending |
+| FE-14..FE-17 | P1 Citations → reader | B (B1, B2, B4), D (D2), E (E1, E2) | Implemented — verification pending |
+| FE-18..FE-20 | P1 Ingestion progress | B (B3), C (C4, C5) | Implemented — verification pending |
+| FE-21 | P2 Upload UX | C (C4) | Implemented — verification pending |
+| FE-22 | P2 SSE relay test | B (B5) | Implemented — verification pending |
 
-**Coverage:** 22 total, 0 mapped to tasks (pending Tasks phase), 0 unmapped.
+**Coverage:** 22 total, 22 mapped to tasks, 0 unmapped.
 
 ## Success Criteria
 
