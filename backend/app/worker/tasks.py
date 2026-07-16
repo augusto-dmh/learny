@@ -19,7 +19,7 @@ import logging
 import time
 from uuid import UUID, uuid4
 
-from sqlalchemy import Connection
+from sqlalchemy import Connection, text
 
 from app.application.corpus import BuildCorpus
 from app.application.ingestion import RunIngestion
@@ -234,4 +234,76 @@ def _run_ingestion_body(  # noqa: ANN001, ANN202 — mirrors the bound task ``se
         _build_run_ingestion(conn).complete(jid)
     logger.info(
         "ingestion.run: succeeded", extra={**log, "duration_ms": _elapsed_ms(start)}
+    )
+
+
+# HNSW index over the semantic arm's ``embedding`` column. The bulk reembed drops
+# it first (a bulk write into an HNSW index is far slower than a rebuild) and
+# recreates it after with the SAME params as migration 0005 so the semantic arm is
+# served identically afterward (EMB-18). ``IF EXISTS``/``IF NOT EXISTS`` keep both
+# statements idempotent under redelivery.
+_DROP_HNSW_INDEX = "DROP INDEX IF EXISTS ix_corpus_chunks_embedding_hnsw"
+_CREATE_HNSW_INDEX = (
+    "CREATE INDEX IF NOT EXISTS ix_corpus_chunks_embedding_hnsw "
+    "ON corpus_chunks USING hnsw (embedding vector_cosine_ops) "
+    "WITH (m = 16, ef_construction = 64)"
+)
+
+
+@celery_app.task(bind=True, name="reembed.document")
+def reembed_document(self, source_id: str) -> None:  # noqa: ANN001 — bound task ``self``
+    """Re-embed a source's chunks through the settings-selected provider (EMB-16).
+
+    Ops-invoked (no HTTP endpoint): re-embeds only the chunks whose stored vector is
+    missing or was produced by a different model, committing per batch, so the pass
+    is idempotent and resumable — a re-run after a partial completion finishes the
+    remainder and a fully-current source rewrites nothing (EMB-17). The HNSW index is
+    dropped before the bulk write and recreated after (EMB-18). A raise fails the
+    task and it is re-invoked by ops (no autoretry).
+    """
+    token = new_trace_scope()
+    bind_trace(source_id=source_id)
+    try:
+        return _reembed_document_body(source_id)
+    finally:
+        reset_trace(token)
+
+
+def _reembed_document_body(source_id: str) -> None:
+    sid = UUID(source_id)
+    log = {"source_id": source_id}
+    start = time.perf_counter()
+    settings = get_settings()
+    adapter = build_embedding_adapter(settings)
+    target = adapter.model
+    batch_size = settings.embedding_batch_size
+
+    logger.info("reembed.document: started", extra={**log, "model": target})
+
+    # 1. Drop the HNSW index in its own committed txn before the bulk write.
+    with get_engine().begin() as conn:
+        conn.execute(text(_DROP_HNSW_INDEX))
+
+    # 2. Re-embed the stale set in batches, each in its OWN committed txn: re-query
+    #    ``stale_chunks_for_source`` each pass so committed progress shrinks the
+    #    remaining set (resumable). A current source loops zero batches.
+    embedded = 0
+    while True:
+        with get_engine().begin() as conn:
+            index = SqlAlchemyEmbeddingIndexRepository(conn)
+            batch = index.stale_chunks_for_source(sid, target)[:batch_size]
+            if not batch:
+                break
+            vectors = adapter.embed_documents([chunk.text for chunk in batch])
+            items = list(zip((chunk.id for chunk in batch), vectors, strict=True))
+            index.set_embeddings(items, model=target)
+            embedded += len(items)
+
+    # 3. Recreate the HNSW index (same params as 0005) in its own committed txn.
+    with get_engine().begin() as conn:
+        conn.execute(text(_CREATE_HNSW_INDEX))
+
+    logger.info(
+        "reembed.document: completed",
+        extra={**log, "chunks": embedded, "duration_ms": _elapsed_ms(start)},
     )
