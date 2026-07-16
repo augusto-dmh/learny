@@ -128,29 +128,29 @@ All gray areas auto-decided per the ship-cycle rule; full option analysis in `co
 
 | Requirement ID | Story | Phase | Status |
 | --- | --- | --- | --- |
-| GEN-01 settings fields (`generation_provider`, `anthropic_api_key`, `generation_model`, `generation_max_tokens`, `judge_model`, eval caps) | P1 answers | A | Pending |
-| GEN-02 generation factories mirror embeddings factory; DI composition-root switch; unknown → ValueError; empty key with anthropic → fail fast | P1 answers | A | Pending |
-| GEN-03 `anthropic` SDK dep, imported lazily only in adapter/judge modules | P1 answers | A | Pending |
-| GEN-04 `AnthropicAnswerAdapter`: per-chunk plain-text citations-enabled docs, evidence order, `model` property, SDK streaming internally + `get_final_message` | P1 answers | A | Pending |
-| GEN-05 citation mapping by `document_index` only; first-citation order; dedup | P1 answers | A | Pending |
-| GEN-06 frozen answer system prompt + exact sentinel ⇒ `found=False` (F5) | P1 answers | A | Pending |
-| GEN-07 provider error propagation → existing 502 mapping; no detail leak; partial `max_tokens` output returned not raised | P1 answers | A | Pending |
-| GEN-08 grounding AD-027 verified against adapter-shaped malformed outputs | P1 answers | A | Pending |
-| GEN-09 ADR-0020 (Anthropic generation provider) authored, Accepted | P1 answers | A | Pending |
-| GEN-10 `AnthropicTeachingAdapter`: history as alternating turns, per-turn evidence docs, sentinel, citations mapping shared with answer adapter | P1 teaching | B | Pending |
-| GEN-11 prompt caching: frozen system prompt + `ttl:"1h"` breakpoints (system, latest history turn); volatile content after prefix | P1 teaching | B | Pending |
-| GEN-12 domain streaming contract: Learny-owned stream events + port streaming method; deterministic adapters implement | P2 SSE | C | Pending |
-| GEN-13 streaming service paths reuse all guards + grounding; teaching persists turn only on completion | P2 SSE | C | Pending |
-| GEN-14 SSE endpoints `/questions/stream` + `/turns/stream`: UI Message Stream v1 frames + header; same deps (auth/CSRF/origin/rate limit); JSON endpoints untouched | P2 SSE | C | Pending |
-| GEN-15 edge presenter module owns the protocol; domain/application protocol-free | P2 SSE | C | Pending |
-| GEN-16 pre-stream errors are plain HTTP; mid-stream failure → protocol `error` part, generic message | P2 SSE | C | Pending |
-| GEN-17 disconnect cancels provider stream; nothing persisted | P2 SSE | C | Pending |
-| GEN-18 replay harness: snapshot format + loader + `--record` flag; skip-when-absent | P2 eval | D | Pending |
-| GEN-19 citation-validity invariants exact, every PR, deterministic + snapshot inputs | P2 eval | D | Pending |
-| GEN-20 live smoke per adapter behind `live` marker + key gate | P2 eval | D | Pending |
-| GEN-21 judge harness: faithfulness + relevancy, structured outputs, versioned prompts, JSONL results, calibration-then-gate thresholds | P2 eval | D | Pending |
-| GEN-22 nightly eval workflow (cron + dispatch), secret-gated, cost-capped, artifact upload | P2 eval | D | Pending |
-| GEN-23 suite stays green offline; no schema changes; frontend untouched | all | A–D | Pending |
+| GEN-01 settings fields (`generation_provider`, `anthropic_api_key`, `generation_model`, `generation_max_tokens`, `judge_model`, eval caps) | P1 answers | A | Verified |
+| GEN-02 generation factories mirror embeddings factory; DI composition-root switch; unknown → ValueError; empty key with anthropic → fail fast | P1 answers | A | Verified |
+| GEN-03 `anthropic` SDK dep, imported lazily only in adapter/judge modules | P1 answers | A | Verified |
+| GEN-04 `AnthropicAnswerAdapter`: per-chunk plain-text citations-enabled docs, evidence order, `model` property, SDK streaming internally + `get_final_message` | P1 answers | A | Verified |
+| GEN-05 citation mapping by `document_index` only; first-citation order; dedup | P1 answers | A | Verified |
+| GEN-06 frozen answer system prompt + exact sentinel ⇒ `found=False` (F5) | P1 answers | A | Verified |
+| GEN-07 provider error propagation → existing 502 mapping; no detail leak; partial `max_tokens` output returned not raised | P1 answers | A | Verified |
+| GEN-08 grounding AD-027 verified against adapter-shaped malformed outputs | P1 answers | A | Verified |
+| GEN-09 ADR-0020 (Anthropic generation provider) authored, Accepted | P1 answers | A | Verified |
+| GEN-10 `AnthropicTeachingAdapter`: history as alternating turns, per-turn evidence docs, sentinel, citations mapping shared with answer adapter | P1 teaching | B | Verified |
+| GEN-11 prompt caching: frozen system prompt + `ttl:"1h"` breakpoints (system, latest history turn); volatile content after prefix | P1 teaching | B | Verified |
+| GEN-12 domain streaming contract: Learny-owned stream events + port streaming method; deterministic adapters implement | P2 SSE | C | Verified |
+| GEN-13 streaming service paths reuse all guards + grounding; teaching persists turn only on completion | P2 SSE | C | Verified |
+| GEN-14 SSE endpoints `/questions/stream` + `/turns/stream`: UI Message Stream v1 frames + header; same deps (auth/CSRF/origin/rate limit); JSON endpoints untouched | P2 SSE | C | Verified |
+| GEN-15 edge presenter module owns the protocol; domain/application protocol-free | P2 SSE | C | Verified |
+| GEN-16 pre-stream errors are plain HTTP; mid-stream failure → protocol `error` part, generic message | P2 SSE | C | Verified |
+| GEN-17 disconnect cancels provider stream; nothing persisted | P2 SSE | C | Verified |
+| GEN-18 replay harness: snapshot format + loader + `--record` flag; skip-when-absent | P2 eval | D | Verified |
+| GEN-19 citation-validity invariants exact, every PR, deterministic + snapshot inputs | P2 eval | D | Verified |
+| GEN-20 live smoke per adapter behind `live` marker + key gate | P2 eval | D | Verified |
+| GEN-21 judge harness: faithfulness + relevancy, structured outputs, versioned prompts, JSONL results, calibration-then-gate thresholds | P2 eval | D | Verified |
+| GEN-22 nightly eval workflow (cron + dispatch), secret-gated, cost-capped, artifact upload | P2 eval | D | Verified |
+| GEN-23 suite stays green offline; no schema changes; frontend untouched | all | A–D | Verified |
 
 **Coverage:** 23 total, mapped to phases A–D; 0 unmapped.
 

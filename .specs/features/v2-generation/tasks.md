@@ -5,7 +5,7 @@
 Implement these tasks with the `tlc-spec-driven` skill: activate it by name and follow its Execute flow and Critical Rules. If the skill cannot be activated, STOP.
 
 **Design**: `.specs/features/v2-generation/design.md`
-**Status**: Approved (auto-approved per ship-cycle rule)
+**Status**: Done (Verifier PASS)
 
 ---
 
