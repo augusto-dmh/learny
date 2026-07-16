@@ -598,7 +598,7 @@ requires-dist = [
     { name = "boto3", specifier = ">=1.35,<2" },
     { name = "celery", specifier = ">=5.4,<6" },
     { name = "ebooklib", specifier = ">=0.20" },
-    { name = "fastapi", specifier = ">=0.118,<0.200" },
+    { name = "fastapi", specifier = ">=0.135,<0.200" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.28,<1" },
     { name = "openai", specifier = ">=1.40,<2" },
     { name = "pgvector", specifier = ">=0.3,<0.5" },

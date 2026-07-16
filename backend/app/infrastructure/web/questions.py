@@ -21,7 +21,8 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
+from fastapi.sse import EventSourceResponse
 from pydantic import BaseModel, Field, field_validator
 
 from app.application.qa import AskQuestion
@@ -34,6 +35,11 @@ from app.infrastructure.web.dependencies import (
 )
 from app.infrastructure.web.rate_limit import rate_limit_questions
 from app.infrastructure.web.retrieval import EvidenceView
+from app.infrastructure.web.ui_message_stream import (
+    UI_MESSAGE_STREAM_HEADER_NAME,
+    UI_MESSAGE_STREAM_PROTOCOL,
+    to_ui_message_stream,
+)
 
 router = APIRouter(prefix="/api/sources", tags=["questions"])
 
@@ -120,3 +126,34 @@ def ask_question(
     """
     result = service(user=user, source_id=source_id, question=body.question)
     return AnswerResponse.from_question_answer(result)
+
+
+@router.post(
+    "/{source_id}/questions/stream",
+    response_class=EventSourceResponse,
+    dependencies=[
+        Depends(rate_limit_questions),
+        Depends(enforce_origin),
+        Depends(enforce_csrf),
+    ],
+)
+def ask_question_stream(
+    source_id: UUID,
+    user: Annotated[User, Depends(get_authenticated_user)],
+    service: Annotated[AskQuestion, Depends(get_ask_question)],
+    body: QuestionRequest,
+    response: Response,
+):
+    """Stream a grounded cited answer as UI Message Stream v1 SSE frames (GEN-14).
+
+    The SSE sibling of :func:`ask_question`: identical request schema and
+    auth/CSRF/Origin/rate-limit dependencies. ``AskQuestion.stream`` runs all guards
+    **eagerly** here in the handler body, so ownership (404), readiness (409),
+    validation (422) and rate-limit (429) surface as the same plain HTTP errors as
+    the JSON endpoint *before* any SSE byte is sent; only then is the presenter's
+    frame generator returned. A generation failure after that point is rendered by
+    the presenter as a protocol ``error`` part (headers are already sent).
+    """
+    events = service.stream(user=user, source_id=source_id, question=body.question)
+    response.headers[UI_MESSAGE_STREAM_HEADER_NAME] = UI_MESSAGE_STREAM_PROTOCOL
+    return to_ui_message_stream(events)
