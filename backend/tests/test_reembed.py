@@ -108,17 +108,25 @@ def _stale_count(engine: Engine, source_id, model: str) -> int:  # noqa: ANN001
         )
 
 
-def _index_exists(engine: Engine) -> bool:
+def _assert_hnsw_index_rebuilt(engine: Engine) -> None:
+    """Assert the recreated index is an HNSW index built with the migration params.
+
+    The name persisting is not enough (EMB-18 requires "the same params as migration
+    0005"): a rebuild with a wrong type/opclass/params — under which retrieval would
+    still "serve" via a sequential scan — would keep the name. Assert the stored
+    ``indexdef`` so the drop-and-recreate is verified, not inferred.
+    """
     with engine.connect() as conn:
-        return (
-            conn.execute(
-                text(
-                    "SELECT 1 FROM pg_indexes "
-                    "WHERE indexname = 'ix_corpus_chunks_embedding_hnsw'"
-                )
-            ).first()
-            is not None
-        )
+        indexdef = conn.execute(
+            text(
+                "SELECT indexdef FROM pg_indexes "
+                "WHERE indexname = 'ix_corpus_chunks_embedding_hnsw'"
+            )
+        ).scalar_one_or_none()
+    assert indexdef is not None, "HNSW index missing after reembed"
+    assert "USING hnsw" in indexdef
+    assert "vector_cosine_ops" in indexdef
+    assert "m='16'" in indexdef and "ef_construction='64'" in indexdef
 
 
 def test_reembed_populates_vectors_and_model_and_returns_target(
@@ -166,7 +174,7 @@ def test_reembed_is_idempotent_second_run_writes_nothing(
 
     assert writes == []  # no batch written — a fully-current source is a no-op
     # The index is still present after the (write-free) drop+recreate cycle.
-    assert _index_exists(db_engine)
+    _assert_hnsw_index_rebuilt(db_engine)
 
 
 def test_reembed_rescues_a_stale_model_corpus(reembed_env, db_engine: Engine) -> None:
@@ -243,7 +251,7 @@ def test_reembed_resumes_after_a_partial_completion(
     for row in _chunk_rows(db_engine, source.id):
         assert row.embedding is not None
         assert row.embedding_model == target
-    assert _index_exists(db_engine)
+    _assert_hnsw_index_rebuilt(db_engine)
 
 
 def test_reembed_recreates_hnsw_index_and_retrieval_serves(
@@ -255,7 +263,7 @@ def test_reembed_recreates_hnsw_index_and_retrieval_serves(
 
     _reembed(None, str(source.id))
 
-    assert _index_exists(db_engine)
+    _assert_hnsw_index_rebuilt(db_engine)
     with db_engine.connect() as conn:
         results = retrieve(conn, source.id, "Introduction to part one")
     assert results  # retrieval succeeds against the rebuilt index

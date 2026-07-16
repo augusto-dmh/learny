@@ -36,8 +36,15 @@ _log = logging.getLogger(__name__)
 
 # Fixed regression thresholds — set just under the deterministic adapter's measured
 # recall/MRR on the labeled set (observed recall@1=1.0, recall@5=1.0, mrr=1.0). Kept
-# below the observed values so the gate is meaningful without being flaky; a genuine
-# retrieval regression drops a target out of rank 1 and trips these.
+# below the observed values so the gate is meaningful without being flaky.
+# NOTE on the division of labour: recall@1 and MRR guard *ranking* — a regression
+# that drops a target out of rank 1 trips them. recall@5 guards only *total retrieval
+# failure*: the shared golden book packs to 3 chunks (one per chapter), so with
+# top_k=5 every target is always within the returned set unless retrieval returns
+# nothing — recall@5 cannot detect a ranking regression on this fixture and is not a
+# ranking metric. It is kept because EMB-21 mandates recall@k for k in {1,5} and it
+# still catches an empty/short result set; growing the book would disturb the tier-1
+# golden fixtures.
 _MIN_RECALL_AT_1 = 0.9
 _MIN_RECALL_AT_5 = 1.0
 _MIN_MRR = 0.93
