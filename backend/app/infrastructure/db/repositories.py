@@ -475,6 +475,32 @@ class SqlAlchemyEmbeddingIndexRepository:
         ).all()
         return [ChunkToEmbed(id=row.id, text=row.text) for row in rows]
 
+    def stale_chunks_for_source(
+        self, source_id: UUID, model: str
+    ) -> list[ChunkToEmbed]:
+        """Return ``source_id``'s chunks needing (re)embedding for ``model``.
+
+        Selects chunks whose ``embedding IS NULL`` or whose ``embedding_model`` is
+        distinct from ``model`` — the not-yet-embedded and the stale-model rows —
+        ordered by section ``position`` then ``chunk_index`` (the same stable order
+        as :meth:`chunks_for_source`). Committing per batch then re-querying shrinks
+        this set as progress lands, so ``reembed_document`` is idempotent and
+        resumable (EMB-17).
+        """
+        rows = self._conn.execute(
+            select(corpus_chunks.c.id, corpus_chunks.c.text)
+            .select_from(corpus_chunks)
+            .join(corpus_sections, corpus_chunks.c.section_id == corpus_sections.c.id)
+            .join(corpus_documents, corpus_sections.c.document_id == corpus_documents.c.id)
+            .where(corpus_documents.c.source_id == source_id)
+            .where(
+                corpus_chunks.c.embedding.is_(None)
+                | corpus_chunks.c.embedding_model.is_distinct_from(model)
+            )
+            .order_by(corpus_sections.c.position, corpus_chunks.c.chunk_index)
+        ).all()
+        return [ChunkToEmbed(id=row.id, text=row.text) for row in rows]
+
     def set_embeddings(
         self, items: Sequence[tuple[UUID, list[float]]], *, model: str
     ) -> None:

@@ -365,6 +365,18 @@ class EmbeddingIndexRepository(Protocol):
         """Return ``source_id``'s chunks (id + text) to embed, stably ordered."""
         ...
 
+    def stale_chunks_for_source(
+        self, source_id: UUID, model: str
+    ) -> list[ChunkToEmbed]:
+        """Return ``source_id``'s chunks needing (re)embedding for ``model``.
+
+        Selects the not-yet-embedded (``embedding IS NULL``) and stale-model
+        (``embedding_model`` distinct from ``model``) chunks, stably ordered like
+        :meth:`chunks_for_source`. Committing per batch then re-querying shrinks this
+        set as progress lands, so reembedding is idempotent and resumable (ADR-0019).
+        """
+        ...
+
     def set_embeddings(
         self, items: Sequence[tuple[UUID, list[float]]], *, model: str
     ) -> None:

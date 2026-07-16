@@ -11,7 +11,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import Connection, func, insert, select
+from sqlalchemy import Connection, func, insert, select, update
 from sqlalchemy import delete as sa_delete
 from sqlalchemy.exc import IntegrityError
 
@@ -998,6 +998,36 @@ def test_embedding_index_set_embeddings_replaces_existing(db_conn: Connection) -
         select(corpus_chunks.c.embedding).where(corpus_chunks.c.id == chunk_id)
     ).scalar_one()
     assert stored.tolist() == _unit_vector(0, 0.5)
+
+
+def test_stale_chunks_for_source_selects_null_or_differing_model(db_conn: Connection) -> None:
+    # EMB-17 selection: only NULL-embedding or stale-model chunks are returned, in
+    # the same stable reading order as ``chunks_for_source`` (alpha, beta, gamma).
+    source = _persisted_source(db_conn, "embed-stale@example.com")
+    _seed_two_chunk_corpus(db_conn, source.id)
+    repo = SqlAlchemyEmbeddingIndexRepository(db_conn)
+    chunks = repo.chunks_for_source(source.id)
+    ordered_ids = [c.id for c in chunks]
+    model_x = "text-embedding-3-large@1536"
+
+    # All embeddings NULL → every chunk is stale for any target model.
+    assert [c.id for c in repo.stale_chunks_for_source(source.id, model_x)] == ordered_ids
+
+    # Embed every chunk at model X → none stale for X, all stale for another model.
+    repo.set_embeddings(
+        [(c.id, _unit_vector(i, float(i + 1))) for i, c in enumerate(chunks)],
+        model=model_x,
+    )
+    assert repo.stale_chunks_for_source(source.id, model_x) == []
+    assert [c.id for c in repo.stale_chunks_for_source(source.id, "other@1")] == ordered_ids
+
+    # Now blank one chunk's embedding back to NULL: exactly that chunk is stale for X.
+    db_conn.execute(
+        update(corpus_chunks)
+        .where(corpus_chunks.c.id == ordered_ids[1])
+        .values(embedding=None, embedding_model=None)
+    )
+    assert [c.id for c in repo.stale_chunks_for_source(source.id, model_x)] == [ordered_ids[1]]
 
 
 # ---- Teaching session repository (TEACH-01/05/21) -------------------------
