@@ -12,14 +12,14 @@
 
 import { useRouter } from "next/navigation";
 
-import { SourcesPanel } from "@/app/components/SourcesPanel";
+import { LibraryScreen } from "@/app/components/library-screen";
 
 export default function SourcesPage() {
   const router = useRouter();
   return (
-    <main>
-      <h1>Your sources</h1>
-      <SourcesPanel onRequireAuth={() => router.replace("/login")} />
+    <main className="flex-1 p-6">
+      <h1 className="mb-6 text-2xl font-semibold">Your library</h1>
+      <LibraryScreen onRequireAuth={() => router.replace("/login")} />
     </main>
   );
 }
