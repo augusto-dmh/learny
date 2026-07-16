@@ -130,6 +130,21 @@ class Settings(BaseSettings):
     teaching_evidence_top_k: int = 8
     teaching_history_turns: int = 6
 
+    # Generation (ADR-0020) — the provider SDK and model names live only in the
+    # answer/teaching adapters; these knobs stay LEARNY_-prefixed and never
+    # hard-coded in application/domain code. ``generation_provider`` selects the
+    # adapter at the composition root (``local`` default → deterministic,
+    # network-free; ``anthropic`` → the Claude adapters built from the key/model/
+    # max-tokens below), so CI and local development stay offline and key-free.
+    # ``anthropic_api_key`` is an env-only secret. ``judge_model`` and
+    # ``eval_max_cases`` bound the offline-optional evaluation harness.
+    generation_provider: str = "local"
+    anthropic_api_key: str = ""
+    generation_model: str = "claude-sonnet-4-6"
+    generation_max_tokens: int = 1024
+    judge_model: str = "claude-haiku-4-5"
+    eval_max_cases: int = 50
+
 
 @lru_cache
 def get_settings() -> Settings:

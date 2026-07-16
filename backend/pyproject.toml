@@ -21,6 +21,7 @@ dependencies = [
     "beautifulsoup4>=4.15.0",
     "pgvector>=0.3,<0.5",
     "openai>=1.40,<2",
+    "anthropic>=0.116,<1",
 ]
 
 [project.optional-dependencies]
