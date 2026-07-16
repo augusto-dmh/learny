@@ -4,7 +4,7 @@ description: 'End-to-end orchestrator for one Learny roadmap PR: pick the next c
 license: CC-BY-4.0
 metadata:
   author: Learny contributors
-  version: 1.0.0
+  version: 1.1.0
 ---
 
 # Learny Ship Cycle — Orchestration Protocol
@@ -50,6 +50,8 @@ Invoke `tlc-spec-driven` for the cycle (Specify → Design → Tasks → Execute
 
 Execute honors the full tlc contract (tests from acceptance criteria, gate per task, atomic commits, mandatory fresh Verifier). A Verifier FAIL stops the pipeline with the report — do not continue to Stage 2.
 
+When Execute runs one worker per phase, set each worker's model per the **Cost discipline** section (Opus for any phase with a design decision or correctness invariant; Haiku only for a chore dispatched as its own unit; Verifier always Opus), and give each worker scoped gate commands (affected module per commit, full suite at phase boundary).
+
 ## Stage 2 — Publish (learny-finalize)
 
 Invoke `learny-finalize` for branch, commit hygiene, verification notes, and the PR. Include the cycle's planning artifacts (`.specs/features/<cycle>/*`, STATE.md, ROADMAP.md row update) in the PR as in previous cycles. Capture the PR number for all later stages.
@@ -88,6 +90,36 @@ On approval: `gh pr merge {N} --merge` (merge commit, matching PRs #4–#9), the
 ## Stage 8 — Wrap
 
 Confirm the merged ROADMAP row shows the cycle done (it shipped inside the PR; fix on `main` only if it was missed, as a tiny follow-up). Report the cycle closed and name the next roadmap phase. Do not start it automatically — the next run of this skill picks it up.
+
+## Cost discipline — model selection, gates, context (applies across stages)
+
+Default model is **Opus**. Downshift a delegated unit to **Haiku only** — never Sonnet (its per-task output is far larger, erasing the price gap for this pipeline's work). A wrong cheap worker is not free: it costs the bad output *plus* the Verifier catching it *plus* a fix task *plus* re-verification, which can exceed the Opus baseline. So Haiku is a bet on **low slip-probability**, taken only when the task guarantees it.
+
+**Haiku-safe test — downshift a unit only when ALL four hold:**
+1. **Fully specified** — exact files, signatures, and steps already in spec/design; no design decision or trade-off left to the worker (it transcribes, it does not invent).
+2. **No correctness-critical invariant** — nothing touching idempotency, transaction boundaries, migrations, concurrency, ordering, injection/auth. A weak model fails *quietly* there: passes a thin gate, caught only by the Verifier — or not at all.
+3. **A fast local gate catches a slip** — a failing `pytest`/`ruff`/`tsc` surfaces the mistake immediately, so an error is a retry, not a silent defect.
+4. **Small blast radius** — few files, no ripple into shared schema/state.
+
+Fail any one → **Opus**. **When unsure → Opus.**
+
+**Per-stage default:**
+
+| Unit | Model |
+|---|---|
+| Stage 0 preflight · Stage 6 comment cleanup · Stage 8 wrap (pure git/gh/file ops) | Haiku |
+| Stage 1 doc-only chores dispatched as their own unit — ADR prose, `.env.example`, settings/deps scaffolding | Haiku |
+| Stage 1 phase workers carrying any design decision or correctness invariant (schema/migrations, retrieval, workers, auth, idempotency, ordering) | Opus |
+| Stage 1 Verifier | Opus — **never downshift**; it is the confidence backbone, and a weak verifier that misses a surviving mutant defeats the pipeline |
+| Stage 3 review | governed by `pr-review` — do not override its models |
+| Stage 4 triage (real-vs-false against the code) | Opus — adversarial reasoning |
+| Stage 5 fixes | Opus by default; Haiku only for a truly local, fully-specified fix that passes the four-condition test |
+
+A ship-cycle **phase is one worker** even when it mixes scaffolding with a hard kernel (e.g. env+settings alongside a batching algorithm or a sub-batch-ordering edge): the kernel sets the model, so keep the whole phase on Opus. Split a chore to Haiku only when it is dispatched as its own unit. Do **not** treat the Verifier as license to Haiku-ify hard work — its sensor only catches faults it mutates; sensor-blind gaps slip.
+
+**Gate scoping (no quality risk):** run the affected test module/subset per intermediate task commit; run the full suite once per phase boundary and once before pushing fixes. The Verifier's discrimination mutations run only the target test file, not the whole suite per mutation.
+
+**Context hygiene (no quality risk):** delegate the opening codebase survey to an `Explore` agent that returns seams — signatures + `file:line` refs, not bodies — instead of reading many full files into the orchestrator context; scope search globs to `app/**` / `tests/**` and never dump `.venv`.
 
 ## Hygiene (applies to every stage)
 
