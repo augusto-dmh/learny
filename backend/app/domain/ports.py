@@ -365,8 +365,15 @@ class EmbeddingIndexRepository(Protocol):
         """Return ``source_id``'s chunks (id + text) to embed, stably ordered."""
         ...
 
-    def set_embeddings(self, items: Sequence[tuple[UUID, list[float]]]) -> None:
-        """Write each ``(chunk_id, vector)`` to ``corpus_chunks.embedding``."""
+    def set_embeddings(
+        self, items: Sequence[tuple[UUID, list[float]]], *, model: str
+    ) -> None:
+        """Write each ``(chunk_id, vector)`` plus ``model`` to ``corpus_chunks``.
+
+        Persists the vector and the active adapter's stable ``model`` identity into
+        ``embedding`` and ``embedding_model`` in the one write, so every embedded
+        chunk records which model produced it (per-chunk model versioning, ADR-0019).
+        """
         ...
 
 

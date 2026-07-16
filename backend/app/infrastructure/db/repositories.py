@@ -475,20 +475,25 @@ class SqlAlchemyEmbeddingIndexRepository:
         ).all()
         return [ChunkToEmbed(id=row.id, text=row.text) for row in rows]
 
-    def set_embeddings(self, items: Sequence[tuple[UUID, list[float]]]) -> None:
-        """Write each ``(chunk_id, vector)`` to ``corpus_chunks.embedding``.
+    def set_embeddings(
+        self, items: Sequence[tuple[UUID, list[float]]], *, model: str
+    ) -> None:
+        """Write each ``(chunk_id, vector)`` plus ``model`` to ``corpus_chunks``.
 
-        One ``executemany`` ``update`` keyed on the chunk id, so a whole source is
-        written in a single round trip instead of one statement per chunk; the
-        ``VECTOR`` type serializes each list on bind, so this write path needs no
-        global vector registration.
+        One ``executemany`` ``update`` keyed on the chunk id sets ``embedding`` and
+        ``embedding_model`` together, so a whole source is written in a single round
+        trip instead of one statement per chunk and every embedded chunk records the
+        producing model (ADR-0019). ``model`` is constant across the batch, so it is
+        bound once into the statement rather than repeated per row; the ``VECTOR``
+        type serializes each list on bind, so this write path needs no global vector
+        registration.
         """
         if not items:
             return
         stmt = (
             update(corpus_chunks)
             .where(corpus_chunks.c.id == bindparam("chunk_id"))
-            .values(embedding=bindparam("embedding"))
+            .values(embedding=bindparam("embedding"), embedding_model=model)
         )
         self._conn.execute(
             stmt,

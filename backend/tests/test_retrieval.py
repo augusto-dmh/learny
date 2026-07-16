@@ -120,7 +120,9 @@ def _embed_all(db_conn: Connection, source_id: UUID) -> None:
     adapter = DeterministicEmbeddingAdapter()
     chunks = index.chunks_for_source(source_id)
     vectors = adapter.embed_documents([c.text for c in chunks])
-    index.set_embeddings(list(zip((c.id for c in chunks), vectors, strict=True)))
+    index.set_embeddings(
+        list(zip((c.id for c in chunks), vectors, strict=True)), model=adapter.model
+    )
 
 
 def _chunk_id_by_text(db_conn: Connection, source_id: UUID, text: str) -> UUID:

@@ -177,7 +177,10 @@ def embed_source(db_conn: Connection, source_id: UUID) -> None:
     adapter = build_embedding_adapter(get_settings())
     chunks = index.chunks_for_source(source_id)
     vectors = adapter.embed_documents([chunk.text for chunk in chunks])
-    index.set_embeddings(list(zip((chunk.id for chunk in chunks), vectors, strict=True)))
+    index.set_embeddings(
+        list(zip((chunk.id for chunk in chunks), vectors, strict=True)),
+        model=adapter.model,
+    )
 
 
 def retrieve(

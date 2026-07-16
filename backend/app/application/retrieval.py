@@ -73,7 +73,7 @@ class EmbedCorpus:
             for chunk, vector in zip(batch, vectors, strict=True):
                 items.append((chunk.id, vector))
 
-        self._index.set_embeddings(items)
+        self._index.set_embeddings(items, model=self._embeddings.model)
         self._append_built_event(job, len(items))
 
     def _append_built_event(self, job: IngestionJob, count: int) -> None:

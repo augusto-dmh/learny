@@ -959,7 +959,7 @@ def test_embedding_index_set_embeddings_persists_vectors(db_conn: Connection) ->
 
     # A distinct exactly-representable vector per chunk, paired by chunk id.
     items = [(chunk.id, _unit_vector(i, float(i + 1))) for i, chunk in enumerate(chunks)]
-    repo.set_embeddings(items)
+    repo.set_embeddings(items, model="local-deterministic@1536")
 
     # Every chunk of the source now has a non-NULL embedding (RET-09 support).
     non_null = db_conn.execute(
@@ -972,13 +972,16 @@ def test_embedding_index_set_embeddings_persists_vectors(db_conn: Connection) ->
     ).scalar_one()
     assert non_null == 3
 
-    # Each id reads back the exact vector written (paired correctly).
+    # Each id reads back the exact vector AND the model string written (EMB-15).
     for chunk_id, expected in items:
         stored = db_conn.execute(
-            select(corpus_chunks.c.embedding).where(corpus_chunks.c.id == chunk_id)
-        ).scalar_one()
-        assert stored is not None
-        assert stored.tolist() == expected
+            select(corpus_chunks.c.embedding, corpus_chunks.c.embedding_model).where(
+                corpus_chunks.c.id == chunk_id
+            )
+        ).one()
+        assert stored.embedding is not None
+        assert stored.embedding.tolist() == expected
+        assert stored.embedding_model == "local-deterministic@1536"
 
 
 def test_embedding_index_set_embeddings_replaces_existing(db_conn: Connection) -> None:
@@ -988,8 +991,8 @@ def test_embedding_index_set_embeddings_replaces_existing(db_conn: Connection) -
     repo = SqlAlchemyEmbeddingIndexRepository(db_conn)
     chunk_id = repo.chunks_for_source(source.id)[0].id
 
-    repo.set_embeddings([(chunk_id, _unit_vector(0, 1.0))])
-    repo.set_embeddings([(chunk_id, _unit_vector(0, 0.5))])
+    repo.set_embeddings([(chunk_id, _unit_vector(0, 1.0))], model="local-deterministic@1536")
+    repo.set_embeddings([(chunk_id, _unit_vector(0, 0.5))], model="local-deterministic@1536")
 
     stored = db_conn.execute(
         select(corpus_chunks.c.embedding).where(corpus_chunks.c.id == chunk_id)

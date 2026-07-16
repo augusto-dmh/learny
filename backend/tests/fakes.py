@@ -390,6 +390,8 @@ class FakeEmbeddingPort:
     ``document_batches`` to assert batch boundaries. No network, no provider SDK.
     """
 
+    model = "fake-embedding@1"
+
     def __init__(self) -> None:
         self.document_batches: list[list[str]] = []
         self.query_calls: list[str] = []
@@ -420,14 +422,18 @@ class FakeEmbeddingIndexRepository:
     def __init__(self, chunks_by_source: dict[UUID, list[ChunkToEmbed]] | None = None) -> None:
         self._chunks: dict[UUID, list[ChunkToEmbed]] = chunks_by_source or {}
         self.set_calls: list[list[tuple[UUID, list[float]]]] = []
+        self.set_models: list[str] = []
         self.persisted: dict[UUID, list[float]] = {}
 
     def chunks_for_source(self, source_id: UUID) -> list[ChunkToEmbed]:
         return list(self._chunks.get(source_id, []))
 
-    def set_embeddings(self, items: Sequence[tuple[UUID, list[float]]]) -> None:
+    def set_embeddings(
+        self, items: Sequence[tuple[UUID, list[float]]], *, model: str
+    ) -> None:
         recorded = [(chunk_id, vector) for chunk_id, vector in items]
         self.set_calls.append(recorded)
+        self.set_models.append(model)
         for chunk_id, vector in recorded:
             self.persisted[chunk_id] = vector
 
