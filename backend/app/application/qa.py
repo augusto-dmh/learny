@@ -11,6 +11,7 @@ SQLAlchemy / provider-SDK type crosses this boundary (ADR-0007/0009).
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
 from uuid import UUID
 
 from app.application.errors import AnswerGenerationFailed, SourceNotReady
@@ -18,6 +19,11 @@ from app.application.grounding import ground
 from app.application.identity import AuthorizeOwnership
 from app.application.ingestion import SOURCE_STATUS_READY, authorized_source
 from app.application.retrieval import RetrieveEvidence
+from app.application.streaming import (
+    AskStreamEvent,
+    StreamAnswer,
+    hold_back_deltas,
+)
 from app.domain.entities import Evidence, QuestionAnswer, User
 from app.domain.ports import AnswerGenerationPort, SourceRepository
 
@@ -92,6 +98,68 @@ class AskQuestion:
             result.model,
         )
         return result
+
+    def stream(
+        self, *, user: User, source_id: UUID, question: str
+    ) -> Iterator[AskStreamEvent]:
+        """Answer incrementally: the same guards + grounding as ``__call__``, streamed.
+
+        The ownership, readiness, retrieval and empty-evidence checks run **eagerly**
+        (before this returns), so the four HTTP error outcomes (404/409, plus the
+        empty short-circuit) surface as plain HTTP before any SSE bytes are sent — the
+        returned iterator yields only stream events. Non-empty evidence drives the
+        generation port's stream through the sentinel hold-back and the shared
+        grounding guard; the terminal :class:`~app.application.streaming.StreamAnswer`
+        carries the identical :class:`QuestionAnswer` the buffered path returns. A port
+        failure surfaces as ``AnswerGenerationFailed`` from within the stream (QA-17).
+        """
+        source = authorized_source(
+            user=user,
+            source_id=source_id,
+            sources=self._sources,
+            authorize=self._authorize,
+        )
+        if source.status != SOURCE_STATUS_READY:
+            raise SourceNotReady("Source is not ready for questions.")
+
+        evidence = self._retrieve(
+            user=user,
+            source_id=source_id,
+            query=question,
+            top_k=self._evidence_top_k,
+        )
+        return self._answer_stream(question=question, evidence=evidence)
+
+    def _answer_stream(
+        self, *, question: str, evidence: list[Evidence]
+    ) -> Iterator[AskStreamEvent]:
+        evidence_count = len(evidence)
+        if not evidence:
+            # No supporting evidence → not found; the port is never invoked (QA-13).
+            yield StreamAnswer(
+                self._not_found(evidence_count, self._generation.model)
+            )
+            return
+
+        stream = self._generation.generate_stream(
+            question=question, evidence=evidence
+        )
+        # Hold-back yields presentable deltas and returns the authoritative answer.
+        answer = yield from hold_back_deltas(stream)
+
+        grounded = ground(answer, evidence)
+        if grounded is None:
+            result = self._not_found(evidence_count, answer.model)
+        else:
+            text, citations = grounded
+            result = QuestionAnswer(
+                status=_ANSWERED,
+                text=text,
+                citations=tuple(citations),
+                evidence_count=evidence_count,
+                model=answer.model,
+            )
+        yield StreamAnswer(result)
 
     def _answer(
         self, *, question: str, evidence: list[Evidence]
