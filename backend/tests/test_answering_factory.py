@@ -16,8 +16,11 @@ import pytest
 from app.core.config import Settings
 from app.infrastructure.answering import (
     AnthropicAnswerAdapter,
+    AnthropicTeachingAdapter,
     DeterministicAnswerAdapter,
+    DeterministicTeachingAdapter,
     build_answer_adapter,
+    build_teaching_adapter,
 )
 
 
@@ -59,3 +62,46 @@ def test_unknown_provider_raises_value_error() -> None:
 
     with pytest.raises(ValueError, match="unknown generation provider: gemini"):
         build_answer_adapter(settings)
+
+
+# --- Teaching factory (same provider switch, D-2) ------------------------------
+
+
+def test_local_provider_builds_deterministic_teaching_adapter() -> None:
+    settings = Settings(_env_file=None, generation_provider="local")
+
+    adapter = build_teaching_adapter(settings)
+
+    assert isinstance(adapter, DeterministicTeachingAdapter)
+
+
+def test_anthropic_provider_builds_claude_teaching_adapter_from_settings() -> None:
+    settings = Settings(
+        _env_file=None,
+        generation_provider="anthropic",
+        anthropic_api_key="sk-ant-test",
+        generation_model="claude-sonnet-4-6",
+        generation_max_tokens=1024,
+    )
+
+    adapter = build_teaching_adapter(settings)
+
+    assert isinstance(adapter, AnthropicTeachingAdapter)
+    # Identity reflects the settings-supplied model id (no network call).
+    assert adapter.model == "claude-sonnet-4-6"
+
+
+def test_anthropic_teaching_provider_with_empty_key_fails_fast() -> None:
+    settings = Settings(
+        _env_file=None, generation_provider="anthropic", anthropic_api_key=""
+    )
+
+    with pytest.raises(ValueError, match="LEARNY_ANTHROPIC_API_KEY is required"):
+        build_teaching_adapter(settings)
+
+
+def test_unknown_provider_raises_value_error_for_teaching() -> None:
+    settings = Settings(_env_file=None, generation_provider="gemini")
+
+    with pytest.raises(ValueError, match="unknown generation provider: gemini"):
+        build_teaching_adapter(settings)
