@@ -37,6 +37,8 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 
+import { useIngestionPolling } from "./use-ingestion-polling";
+
 /** Map a source's projected status to a badge variant. */
 function statusVariant(
   status: string,
@@ -89,6 +91,15 @@ export function LibraryScreen({
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Patch one source's projected status in place (FE-19 badge update).
+  const patchStatus = useCallback((sourceId: string, status: string) => {
+    setSources((prev) =>
+      (prev ?? []).map((s) => (s.id === sourceId ? { ...s, status } : s)),
+    );
+  }, []);
+
+  useIngestionPolling(sources, patchStatus);
 
   // For each failed source (on load or after a poll flips one to failed), fetch
   // its ingestion once and cache the latest event message for display.

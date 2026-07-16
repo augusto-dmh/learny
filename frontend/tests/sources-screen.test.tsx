@@ -104,12 +104,24 @@ const failedIngestion = {
   ],
 };
 
-/** Handler map for a `mixed` render: sources list plus the failed job read. */
+/** A still-running job for the processing source's 3s poll (FE-19). */
+const runningIngestion = {
+  id: "j-proc",
+  status: "running",
+  attempts: 1,
+  error: null,
+  created_at: "now",
+  updated_at: "now",
+  events: [{ type: "running", message: null, created_at: "t0" }],
+};
+
+/** Handler map for a `mixed` render: sources list plus the ingestion reads. */
 function mixedHandlers(extra: Record<string, Handler> = {}) {
   return {
     "GET /api/auth/me": () => authedMe.clone(),
     "GET /api/sources": () => jsonResponse(200, mixed),
     "GET /api/sources/s-fail/ingestion": () => jsonResponse(200, failedIngestion),
+    "GET /api/sources/s-proc/ingestion": () => jsonResponse(200, runningIngestion),
     ...extra,
   };
 }
