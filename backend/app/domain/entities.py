@@ -360,6 +360,44 @@ class GeneratedAnswer:
     found: bool
 
 
+# The exact reply a generation adapter instructs the model to return, alone, when
+# the evidence cannot support an answer — the Learny-owned not-found signal an
+# adapter maps to ``GeneratedAnswer(found=False)`` (F5). Defined here (not in an
+# adapter) because it is a cross-layer contract: the streaming answer path buffers
+# text deltas while they remain a prefix of this string so the sentinel is never
+# streamed to a client, independent of which provider produced it.
+SENTINEL = "NOT_FOUND_IN_SOURCE"
+
+
+@dataclass(frozen=True)
+class AnswerTextDelta:
+    """One incremental chunk of generated answer text (streaming path, §5).
+
+    Carries the raw model text as it arrives; the streaming service assembles and,
+    where needed, holds these back (sentinel guard) before presenting them.
+    """
+
+    text: str
+
+
+@dataclass(frozen=True)
+class AnswerCompleted:
+    """The terminal, authoritative result of a generation stream (streaming path, §5).
+
+    Emitted exactly once, always last. Its :class:`GeneratedAnswer` is the parsed,
+    authoritative outcome (text, citations, ``found``) — the accumulated deltas are
+    presentation only; grounding and the not-found decision use this ``answer``.
+    """
+
+    answer: GeneratedAnswer
+
+
+# A generation stream yields zero or more :class:`AnswerTextDelta` then exactly one
+# :class:`AnswerCompleted` (always last, authoritative). Shared by both generation
+# ports' ``generate_stream`` so one capability has two consumption modes.
+AnswerStreamEvent = AnswerTextDelta | AnswerCompleted
+
+
 @dataclass(frozen=True)
 class QuestionAnswer:
     """The application service's cited-answer result (QA-01..04, 13..16).

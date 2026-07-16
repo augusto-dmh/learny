@@ -14,7 +14,7 @@ from __future__ import annotations
 import ast
 import inspect
 import logging
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -38,6 +38,9 @@ from app.application.teaching import (
     StartTeachingSession,
 )
 from app.domain.entities import (
+    AnswerCompleted,
+    AnswerStreamEvent,
+    AnswerTextDelta,
     CorpusStructure,
     Evidence,
     GeneratedAnswer,
@@ -49,6 +52,7 @@ from app.domain.entities import (
     TeachingTurn,
     User,
 )
+from app.domain.ports import TeachingGenerationPort
 from tests.fakes import FakeClock, FakeSourceRepository
 
 _NOW = datetime(2026, 7, 11, 12, 0, 0, tzinfo=UTC)
@@ -284,19 +288,29 @@ class FakeScopedRetrieveEvidence:
 
 
 class FakeTeachingGeneration:
-    """``TeachingGenerationPort`` double: preset answer or raise, records calls."""
+    """``TeachingGenerationPort`` double: preset answer or raise, records calls.
+
+    ``generate_stream`` mirrors ``generate`` and yields the text deltas (``deltas``
+    when given, else the preset answer's text as one delta) then exactly one
+    ``AnswerCompleted``; a configured ``error`` raises on first iteration and the
+    ``try/finally`` sets ``stream_closed`` so cancellation is observable.
+    """
 
     def __init__(
         self,
         *,
         answer: GeneratedAnswer | None = None,
         error: Exception | None = None,
+        deltas: Sequence[str] | None = None,
         model: str = _MODEL,
     ) -> None:
         self._answer = answer
         self._error = error
+        self._deltas = deltas
         self.model = model
         self.calls: list[dict[str, object]] = []
+        self.stream_calls: list[dict[str, object]] = []
+        self.stream_closed = False
 
     def generate(
         self,
@@ -318,6 +332,37 @@ class FakeTeachingGeneration:
             raise self._error
         assert self._answer is not None, "no preset answer configured"
         return self._answer
+
+    def generate_stream(
+        self,
+        *,
+        message: str,
+        target_section_path: tuple[str, ...],
+        history: Sequence[HistoryTurn],
+        evidence: Sequence[Evidence],
+    ) -> Iterator[AnswerStreamEvent]:
+        self.stream_calls.append(
+            {
+                "message": message,
+                "target_section_path": target_section_path,
+                "history": list(history),
+                "evidence": list(evidence),
+            }
+        )
+        if self._error is not None:
+            raise self._error
+        assert self._answer is not None, "no preset answer configured"
+        texts = (
+            list(self._deltas)
+            if self._deltas is not None
+            else ([self._answer.text] if self._answer.text else [])
+        )
+        try:
+            for text in texts:
+                yield AnswerTextDelta(text=text)
+            yield AnswerCompleted(answer=self._answer)
+        finally:
+            self.stream_closed = True
 
 
 # --- service builders ----------------------------------------------------------
@@ -1039,6 +1084,12 @@ def test_turn_emits_one_content_free_completion_log(
     assert f"model={_MODEL}" in message
     assert "my private message text" not in message
     assert "the secret answer body" not in message
+
+
+def test_teaching_fake_conforms_to_the_teaching_port_protocol() -> None:
+    # GEN-12: the runtime-checkable teaching port now includes ``generate_stream``;
+    # the local teaching fake satisfies it structurally.
+    assert isinstance(FakeTeachingGeneration(), TeachingGenerationPort)
 
 
 def test_teaching_module_imports_no_web_or_provider_sdk() -> None:

@@ -15,10 +15,14 @@ is judged — the adapter maps a whole-reply sentinel to ``found=False`` (F5).
 
 from __future__ import annotations
 
-# Exact string the model must return, alone, when the documents cannot answer the
-# question. Whole-reply match only — the adapter never treats an embedded
-# occurrence as not-found (guards against sentinel leakage in prose).
-SENTINEL = "NOT_FOUND_IN_SOURCE"
+# Re-exported from the domain so the prompt text and the streaming hold-back guard
+# (application layer) share one source of truth. Exact string the model must
+# return, alone, when the documents cannot answer the question. Whole-reply match
+# only — the adapter never treats an embedded occurrence as not-found (guards
+# against sentinel leakage in prose).
+from app.domain.entities import SENTINEL
+
+__all__ = ["ANSWER_SYSTEM_PROMPT", "SENTINEL", "TEACHING_SYSTEM_PROMPT"]
 
 ANSWER_SYSTEM_PROMPT = (
     "You are Learny's book-grounded answering assistant. Answer the reader's "
