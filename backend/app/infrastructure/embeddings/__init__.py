@@ -40,6 +40,6 @@ def build_embedding_adapter(settings: Settings) -> EmbeddingPort:
         return OpenAIEmbeddingAdapter(
             api_key=settings.openai_api_key,
             model=settings.embedding_model,
-            dimensions=settings.embedding_dimensions,
+            dimensions=settings.embedding_dim,
         )
     raise ValueError(f"unknown embedding provider: {provider}")

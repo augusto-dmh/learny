@@ -18,7 +18,6 @@ def test_embedding_settings_defaults() -> None:
     assert settings.embedding_provider == "local"
     assert settings.openai_api_key == ""
     assert settings.embedding_model == "text-embedding-3-large"
-    assert settings.embedding_dimensions == 1536
     assert settings.embedding_dim == 1536
 
 
@@ -27,11 +26,11 @@ def test_embedding_settings_env_override(monkeypatch) -> None:
     monkeypatch.setenv("LEARNY_EMBEDDING_PROVIDER", "openai")
     monkeypatch.setenv("LEARNY_OPENAI_API_KEY", "sk-test-123")
     monkeypatch.setenv("LEARNY_EMBEDDING_MODEL", "text-embedding-3-small")
-    monkeypatch.setenv("LEARNY_EMBEDDING_DIMENSIONS", "512")
+    monkeypatch.setenv("LEARNY_EMBEDDING_DIM", "512")
 
     settings = Settings(_env_file=None)
 
     assert settings.embedding_provider == "openai"
     assert settings.openai_api_key == "sk-test-123"
     assert settings.embedding_model == "text-embedding-3-small"
-    assert settings.embedding_dimensions == 512
+    assert settings.embedding_dim == 512

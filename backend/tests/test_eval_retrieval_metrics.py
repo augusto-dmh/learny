@@ -96,14 +96,14 @@ class TestDeterministicRetrievalMetrics:
             golden_conn,
             source_id,
             model=DeterministicEmbeddingAdapter().model,
-            dimensions=settings.embedding_dimensions,
+            dimensions=settings.embedding_dim,
         )
         _log.info("tier-2 retrieval snapshot (deterministic): %s", snapshot)
         print(f"\ntier-2 retrieval snapshot (deterministic): {snapshot}")
 
         # Snapshot is pinned to the deterministic model + configured dims.
         assert snapshot["model"] == DeterministicEmbeddingAdapter().model
-        assert snapshot["dimensions"] == settings.embedding_dimensions
+        assert snapshot["dimensions"] == settings.embedding_dim
         assert snapshot["n"] == len(LABELED_PAIRS)
         # Regression gate.
         assert snapshot["recall@1"] >= _MIN_RECALL_AT_1
@@ -145,13 +145,13 @@ class TestOpenAIRetrievalMetrics:
         settings = get_settings()
         adapter = build_embedding_adapter(settings)
         snapshot = _snapshot(
-            conn, source_id, model=adapter.model, dimensions=settings.embedding_dimensions
+            conn, source_id, model=adapter.model, dimensions=settings.embedding_dim
         )
         _log.info("tier-2 retrieval snapshot (openai): %s", snapshot)
         print(f"\ntier-2 retrieval snapshot (openai): {snapshot}")
 
         assert snapshot["model"] == adapter.model
-        assert snapshot["dimensions"] == settings.embedding_dimensions
+        assert snapshot["dimensions"] == settings.embedding_dim
         assert snapshot["n"] == len(LABELED_PAIRS)
         assert snapshot["recall@1"] >= _MIN_RECALL_AT_1
         assert snapshot["recall@5"] >= _MIN_RECALL_AT_5

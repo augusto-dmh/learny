@@ -33,7 +33,7 @@ def test_openai_provider_builds_openai_adapter_from_settings() -> None:
         embedding_provider="openai",
         openai_api_key="sk-test",
         embedding_model="text-embedding-3-large",
-        embedding_dimensions=1536,
+        embedding_dim=1536,
     )
 
     adapter = build_embedding_adapter(settings)
