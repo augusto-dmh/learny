@@ -16,6 +16,7 @@ from __future__ import annotations
 import ast
 import inspect
 import logging
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
@@ -30,7 +31,15 @@ from app.application.errors import (
 from app.application.identity import AuthorizeOwnership
 from app.application.qa import AskQuestion
 from app.application.streaming import StreamAnswer, StreamDelta
-from app.domain.entities import Evidence, GeneratedAnswer, QuestionAnswer, Source, User
+from app.domain.entities import (
+    AnswerStreamEvent,
+    AnswerTextDelta,
+    Evidence,
+    GeneratedAnswer,
+    QuestionAnswer,
+    Source,
+    User,
+)
 from tests.fakes import FakeAnswerGeneration, FakeRetrieveEvidence, FakeSourceRepository
 
 _NOW = datetime(2026, 7, 11, 12, 0, 0, tzinfo=UTC)
@@ -626,6 +635,32 @@ def test_stream_port_failure_wraps_answer_generation_failed() -> None:
         list(service.stream(user=owner, source_id=source.id, question="q"))
 
     assert excinfo.value.__cause__ is boom
+
+
+def test_stream_ending_without_completed_event_raises() -> None:
+    # Contract violation: a port stream must end with exactly one AnswerCompleted.
+    # A stream that yields only deltas and ends surfaces as a generation failure,
+    # never as a silently empty answer.
+    owner = _user()
+    sources = FakeSourceRepository()
+    source = _owned_source(owner.id)
+    sources.add(source)
+    e0 = _evidence(source.id, "passage", score=0.9)
+
+    class _CompletedlessGeneration(FakeAnswerGeneration):
+        def generate_stream(
+            self, *, question: str, evidence: object
+        ) -> Iterator[AnswerStreamEvent]:
+            yield AnswerTextDelta(text="partial ")
+            yield AnswerTextDelta(text="answer")
+
+    generation = _CompletedlessGeneration(model=_MODEL)
+    service = _ask(
+        sources=sources, retrieve=FakeRetrieveEvidence(results=[e0]), generation=generation
+    )
+
+    with pytest.raises(AnswerGenerationFailed):
+        list(service.stream(user=owner, source_id=source.id, question="q"))
 
 
 def test_stream_consumer_close_closes_the_port_stream() -> None:
