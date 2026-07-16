@@ -56,6 +56,18 @@ Seen once or not yet corroborated. Tracked, not trusted.
 - evidence: M4 worker arm — test_worker_tasks.py:650 (observability)
 - last seen: 2026-07-12T23:06:52Z
 
+### L-008 — A recall@k retrieval-gate threshold is vacuous when k is greater than or equal to the eval corpus size; size the corpus or set top_k below the item count so recall@k measures ranking, not mere presence.
+- signal: `spec_precision_gap` · recurrence: 1 feature(s) · scope: `eval` · harmful: 0
+- features: v2-embeddings
+- evidence: validation.md EMB-22 / sensor mutation 5 / test_eval_retrieval_metrics.py:41-43 (eval)
+- last seen: 2026-07-16T00:25:51Z
+
+### L-009 — Test a per-batch-committed resumable task with more rows than one batch (or a tiny batch size) and a mid-pass interruption, so partial-progress resume is exercised rather than inferred from unit selection alone.
+- signal: `spec_precision_gap` · recurrence: 1 feature(s) · scope: `worker` · harmful: 0
+- features: v2-embeddings
+- evidence: validation.md EMB-17 / test_reembed.py:144-187 / tasks.py:291-300 (worker)
+- last seen: 2026-07-16T00:25:51Z
+
 ## Quarantined (failed when applied — ignore)
 
 A confirmed lesson that recurred alongside failure. Kept for the maintainer to review.

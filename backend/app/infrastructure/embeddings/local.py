@@ -34,6 +34,16 @@ class DeterministicEmbeddingAdapter:
     def __init__(self) -> None:
         self._dim = get_settings().embedding_dim
 
+    @property
+    def model(self) -> str:
+        """Stable identity — ``local-deterministic@{dim}`` (never a network call).
+
+        Ignores ``LEARNY_EMBEDDING_MODEL`` (the provider model name) and reports its
+        own hashing-adapter identity encoding the dimension, so a stamped chunk is
+        never mistaken for a real provider's output (ADR-0019).
+        """
+        return f"local-deterministic@{self._dim}"
+
     def embed_query(self, text: str) -> list[float]:
         """Embed a single search query into one ``embedding_dim``-length vector."""
         return self._embed(text)

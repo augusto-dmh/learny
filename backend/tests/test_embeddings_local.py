@@ -83,6 +83,13 @@ def test_adapter_module_imports_no_provider_sdk() -> None:
     assert "anthropic" not in imported
 
 
+def test_model_identity_encodes_dim() -> None:
+    # EMB-04: stable identity readable without a network call — model and dims.
+    adapter = DeterministicEmbeddingAdapter()
+
+    assert adapter.model == f"local-deterministic@{_DIM}"
+
+
 def test_adapter_needs_no_client_argument() -> None:
     # RET-06: pure/network-free — constructs with no provider client dependency.
     adapter = DeterministicEmbeddingAdapter()

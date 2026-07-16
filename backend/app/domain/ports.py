@@ -335,7 +335,14 @@ class EmbeddingPort(Protocol):
     The provider SDK and model name live only in the adapter; callers receive
     plain ``list[float]`` vectors, so no query/repository code imports a provider
     SDK. The default adapter is deterministic and network-free (D-1).
+
+    ``model`` is the adapter's stable model identity (model **and** dims, since
+    ``large@1536`` ≠ ``large@3072``). It must be readable without a network call so
+    the embed step can stamp each chunk's ``embedding_model`` for per-chunk model
+    versioning (ADR-0019).
     """
+
+    model: str
 
     def embed_query(self, text: str) -> list[float]:
         """Embed a single search query into one vector."""
@@ -358,8 +365,29 @@ class EmbeddingIndexRepository(Protocol):
         """Return ``source_id``'s chunks (id + text) to embed, stably ordered."""
         ...
 
-    def set_embeddings(self, items: Sequence[tuple[UUID, list[float]]]) -> None:
-        """Write each ``(chunk_id, vector)`` to ``corpus_chunks.embedding``."""
+    def stale_chunks_for_source(
+        self, source_id: UUID, model: str, limit: int
+    ) -> list[ChunkToEmbed]:
+        """Return up to ``limit`` of ``source_id``'s chunks needing (re)embedding.
+
+        Selects the not-yet-embedded (``embedding IS NULL``) and stale-model
+        (``embedding_model`` distinct from ``model``) chunks, stably ordered like
+        :meth:`chunks_for_source`, bounded to ``limit`` rows in SQL. The caller
+        re-queries per committed batch, so committed progress shrinks this set as it
+        lands (idempotent + resumable, ADR-0019); pushing the batch bound into the
+        query keeps each pass O(limit) instead of scanning the whole remaining set.
+        """
+        ...
+
+    def set_embeddings(
+        self, items: Sequence[tuple[UUID, list[float]]], *, model: str
+    ) -> None:
+        """Write each ``(chunk_id, vector)`` plus ``model`` to ``corpus_chunks``.
+
+        Persists the vector and the active adapter's stable ``model`` identity into
+        ``embedding`` and ``embedding_model`` in the one write, so every embedded
+        chunk records which model produced it (per-chunk model versioning, ADR-0019).
+        """
         ...
 
 

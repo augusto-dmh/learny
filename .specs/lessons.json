@@ -3,7 +3,7 @@
   "promote_threshold": 2,
   "window_days": 45,
   "quarantine_threshold": 2,
-  "next_id": 8,
+  "next_id": 10,
   "lessons": [
     {
       "id": "L-001",
@@ -130,6 +130,42 @@
       ],
       "created": "2026-07-12T23:06:52Z",
       "last_seen": "2026-07-12T23:06:52Z"
+    },
+    {
+      "id": "L-008",
+      "key": "spec_precision_gap::a recall k retrieval gate threshold is vacuous when k is greater than or equal to the eval corpus size size the corpus or set top k below the item count so recall k measures ranking not mere presence",
+      "text": "A recall@k retrieval-gate threshold is vacuous when k is greater than or equal to the eval corpus size; size the corpus or set top_k below the item count so recall@k measures ranking, not mere presence.",
+      "signal": "spec_precision_gap",
+      "scope": "eval",
+      "status": "candidate",
+      "features": [
+        "v2-embeddings"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "validation.md EMB-22 / sensor mutation 5 / test_eval_retrieval_metrics.py:41-43 (eval)"
+      ],
+      "created": "2026-07-16T00:25:51Z",
+      "last_seen": "2026-07-16T00:25:51Z"
+    },
+    {
+      "id": "L-009",
+      "key": "spec_precision_gap::test a per batch committed resumable task with more rows than one batch or a tiny batch size and a mid pass interruption so partial progress resume is exercised rather than inferred from unit selection alone",
+      "text": "Test a per-batch-committed resumable task with more rows than one batch (or a tiny batch size) and a mid-pass interruption, so partial-progress resume is exercised rather than inferred from unit selection alone.",
+      "signal": "spec_precision_gap",
+      "scope": "worker",
+      "status": "candidate",
+      "features": [
+        "v2-embeddings"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "validation.md EMB-17 / test_reembed.py:144-187 / tasks.py:291-300 (worker)"
+      ],
+      "created": "2026-07-16T00:25:51Z",
+      "last_seen": "2026-07-16T00:25:51Z"
     }
   ]
 }

@@ -26,16 +26,19 @@ Tables:
                           html_fragment, created_at
 - ``corpus_chunks``    — id (uuid pk), section_id (fk, indexed), chunk_index, text,
                           section_path (jsonb), anchor, page_span (jsonb, null),
-                          embedding (vector(1536), null), created_at
+                          embedding (vector(1536), null), embedding_model (text, null),
+                          search_config (text, not null), created_at
 
 The session cookie carries the raw opaque token; only its hash (``token_hash``)
 is persisted (design §4 / AD-006).
 
-``corpus_chunks.search_vector`` (a ``STORED`` generated ``tsvector``) and the HNSW/GIN
-retrieval indexes are added by migration ``0005_retrieval_indexes`` via raw SQL only —
-they are intentionally *not* modeled on the ``corpus_chunks`` Table below. Alembic does
-not reliably render ``GENERATED ALWAYS … STORED`` columns, HNSW ``WITH (...)`` params, or
+``corpus_chunks.search_vector`` (a plain ``tsvector`` maintained by a ``BEFORE INSERT OR
+UPDATE`` trigger, migration ``0007_language_aware_fts``; originally a ``STORED`` generated
+column in ``0005_retrieval_indexes``) and the HNSW/GIN retrieval indexes are added via raw
+SQL only — they are intentionally *not* modeled on the ``corpus_chunks`` Table below.
+Alembic does not reliably render trigger-fed columns, HNSW ``WITH (...)`` params, or
 operator classes, and the raw retrieval query does not need them in metadata (ADR-0006).
+The trigger owns ``search_vector``, so the app never writes it directly.
 """
 
 from __future__ import annotations
@@ -274,6 +277,12 @@ corpus_chunks = Table(
     # deterministic local adapter emits 1536-dim vectors. NULL until (re-)ingestion
     # embeds the chunk. The matching HNSW index is created in 0005 via raw SQL.
     Column("embedding", VECTOR(1536), nullable=True),
+    # Provider@dims identity written alongside each vector (EMB-14); NULL until the
+    # chunk is embedded. Enables idempotent re-embedding when the model changes.
+    Column("embedding_model", Text, nullable=True),
+    # Resolved Postgres text-search regconfig for the chunk's language (EMB-08); the
+    # 0007 trigger builds ``search_vector`` from it. DB default 'simple' fills it.
+    Column("search_config", Text, nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
 )
 

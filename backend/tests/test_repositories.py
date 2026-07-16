@@ -11,7 +11,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import Connection, func, insert, select
+from sqlalchemy import Connection, func, insert, select, update
 from sqlalchemy import delete as sa_delete
 from sqlalchemy.exc import IntegrityError
 
@@ -539,6 +539,60 @@ def test_corpus_replace_persists_full_aggregate(db_conn: Connection) -> None:
     assert chunk.page_span is None
 
 
+@pytest.mark.parametrize(
+    ("language", "expected_config"),
+    [("pt", "portuguese"), ("en", "english"), (None, "simple"), ("xx", "simple")],
+)
+def test_corpus_replace_sets_language_search_config(
+    db_conn: Connection, language: str | None, expected_config: str
+) -> None:
+    # EMB-11: every chunk row carries the regconfig resolved from the document
+    # language — a Portuguese book's chunks get 'portuguese', an English book's
+    # 'english', an unknown/absent language 'simple'.
+    source = _persisted_source(db_conn, f"corpus-lang-{language}@example.com")
+    repo = SqlAlchemyCorpusRepository(db_conn)
+    record = _section_record(
+        position=0,
+        title="Capitulo",
+        section_path=("Capitulo",),
+        anchor="c1.xhtml",
+        markdown="corpo",
+        chunks=(
+            SectionChunk(
+                index=0,
+                text="as criancas estavam correndo",
+                section_path=("Capitulo",),
+                anchor="c1.xhtml",
+                page_span=None,
+            ),
+            SectionChunk(
+                index=1,
+                text="mais texto",
+                section_path=("Capitulo",),
+                anchor="c1.xhtml",
+                page_span=None,
+            ),
+        ),
+    )
+    repo.replace(
+        source.id,
+        title="Livro",
+        authors=(),
+        language=language,
+        schema_version=1,
+        sections=(record,),
+    )
+
+    configs = db_conn.execute(
+        select(corpus_chunks.c.search_config)
+        .select_from(corpus_chunks)
+        .join(corpus_sections, corpus_chunks.c.section_id == corpus_sections.c.id)
+        .join(corpus_documents, corpus_sections.c.document_id == corpus_documents.c.id)
+        .where(corpus_documents.c.source_id == source.id)
+    ).scalars().all()
+    assert configs == [expected_config, expected_config]
+
+
 def test_corpus_replace_persists_zero_block_section(db_conn: Connection) -> None:
     # An empty-body spine doc yields a section with no blocks and no chunks; the
     # aggregate still persists the section row (edge case; CORP-04 markdown may be "").
@@ -905,7 +959,7 @@ def test_embedding_index_set_embeddings_persists_vectors(db_conn: Connection) ->
 
     # A distinct exactly-representable vector per chunk, paired by chunk id.
     items = [(chunk.id, _unit_vector(i, float(i + 1))) for i, chunk in enumerate(chunks)]
-    repo.set_embeddings(items)
+    repo.set_embeddings(items, model="local-deterministic@1536")
 
     # Every chunk of the source now has a non-NULL embedding (RET-09 support).
     non_null = db_conn.execute(
@@ -918,13 +972,16 @@ def test_embedding_index_set_embeddings_persists_vectors(db_conn: Connection) ->
     ).scalar_one()
     assert non_null == 3
 
-    # Each id reads back the exact vector written (paired correctly).
+    # Each id reads back the exact vector AND the model string written (EMB-15).
     for chunk_id, expected in items:
         stored = db_conn.execute(
-            select(corpus_chunks.c.embedding).where(corpus_chunks.c.id == chunk_id)
-        ).scalar_one()
-        assert stored is not None
-        assert stored.tolist() == expected
+            select(corpus_chunks.c.embedding, corpus_chunks.c.embedding_model).where(
+                corpus_chunks.c.id == chunk_id
+            )
+        ).one()
+        assert stored.embedding is not None
+        assert stored.embedding.tolist() == expected
+        assert stored.embedding_model == "local-deterministic@1536"
 
 
 def test_embedding_index_set_embeddings_replaces_existing(db_conn: Connection) -> None:
@@ -934,13 +991,46 @@ def test_embedding_index_set_embeddings_replaces_existing(db_conn: Connection) -
     repo = SqlAlchemyEmbeddingIndexRepository(db_conn)
     chunk_id = repo.chunks_for_source(source.id)[0].id
 
-    repo.set_embeddings([(chunk_id, _unit_vector(0, 1.0))])
-    repo.set_embeddings([(chunk_id, _unit_vector(0, 0.5))])
+    repo.set_embeddings([(chunk_id, _unit_vector(0, 1.0))], model="local-deterministic@1536")
+    repo.set_embeddings([(chunk_id, _unit_vector(0, 0.5))], model="local-deterministic@1536")
 
     stored = db_conn.execute(
         select(corpus_chunks.c.embedding).where(corpus_chunks.c.id == chunk_id)
     ).scalar_one()
     assert stored.tolist() == _unit_vector(0, 0.5)
+
+
+def test_stale_chunks_for_source_selects_null_or_differing_model(db_conn: Connection) -> None:
+    # EMB-17 selection: only NULL-embedding or stale-model chunks are returned, in
+    # the same stable reading order as ``chunks_for_source`` (alpha, beta, gamma).
+    source = _persisted_source(db_conn, "embed-stale@example.com")
+    _seed_two_chunk_corpus(db_conn, source.id)
+    repo = SqlAlchemyEmbeddingIndexRepository(db_conn)
+    chunks = repo.chunks_for_source(source.id)
+    ordered_ids = [c.id for c in chunks]
+    model_x = "text-embedding-3-large@1536"
+
+    # All embeddings NULL → every chunk is stale for any target model.
+    assert [c.id for c in repo.stale_chunks_for_source(source.id, model_x, 100)] == ordered_ids
+
+    # ``limit`` bounds the batch in SQL: only the first ordered chunk comes back.
+    assert [c.id for c in repo.stale_chunks_for_source(source.id, model_x, 1)] == ordered_ids[:1]
+
+    # Embed every chunk at model X → none stale for X, all stale for another model.
+    repo.set_embeddings(
+        [(c.id, _unit_vector(i, float(i + 1))) for i, c in enumerate(chunks)],
+        model=model_x,
+    )
+    assert repo.stale_chunks_for_source(source.id, model_x, 100) == []
+    assert [c.id for c in repo.stale_chunks_for_source(source.id, "other@1", 100)] == ordered_ids
+
+    # Now blank one chunk's embedding back to NULL: exactly that chunk is stale for X.
+    db_conn.execute(
+        update(corpus_chunks)
+        .where(corpus_chunks.c.id == ordered_ids[1])
+        .values(embedding=None, embedding_model=None)
+    )
+    assert [c.id for c in repo.stale_chunks_for_source(source.id, model_x, 100)] == [ordered_ids[1]]
 
 
 # ---- Teaching session repository (TEACH-01/05/21) -------------------------

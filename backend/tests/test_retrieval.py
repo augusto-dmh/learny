@@ -120,7 +120,9 @@ def _embed_all(db_conn: Connection, source_id: UUID) -> None:
     adapter = DeterministicEmbeddingAdapter()
     chunks = index.chunks_for_source(source_id)
     vectors = adapter.embed_documents([c.text for c in chunks])
-    index.set_embeddings(list(zip((c.id for c in chunks), vectors, strict=True)))
+    index.set_embeddings(
+        list(zip((c.id for c in chunks), vectors, strict=True)), model=adapter.model
+    )
 
 
 def _chunk_id_by_text(db_conn: Connection, source_id: UUID, text: str) -> UUID:
@@ -328,6 +330,56 @@ def test_anchor_scope_filters_both_arms_to_subtree(db_conn: Connection) -> None:
     scoped = _search(db_conn, source.id, "photosynthesis sunlight energy", anchors=["ch1.xhtml"])
     assert scoped, "expected the in-scope chunk to still be returned"
     assert {e.anchor for e in scoped} == {"ch1.xhtml"}
+
+
+# A Portuguese sentence with a gerund ('correndo') whose lemma is the infinitive
+# 'correr': the Portuguese stemmer collapses both to 'corr', the English stemmer
+# does not — the F8 discriminator.
+_PT_INFLECTED = "As crianças estavam correndo pelas montanhas"
+
+
+def _seed_single_chunk(
+    db_conn: Connection, source_id: UUID, *, language: str | None, body: str
+) -> None:
+    SqlAlchemyCorpusRepository(db_conn).replace(
+        source_id,
+        title="Livro",
+        authors=("Autor",),
+        language=language,
+        schema_version=1,
+        sections=(
+            _section(
+                0,
+                "Capitulo",
+                "cap.xhtml",
+                (_chunk(0, body, title="Capitulo", anchor="cap.xhtml#p"),),
+            ),
+        ),
+    )
+
+
+def test_lexical_arm_uses_document_language_regconfig(db_conn: Connection) -> None:
+    # EMB-13 (F8 proof): a Portuguese corpus matches an inflected-form query via the
+    # book's own 'portuguese' regconfig — the infinitive 'correr' finds the stored
+    # gerund 'correndo'. The identical text stored under 'english' does not match,
+    # proving the per-chunk regconfig is what makes the difference. Embeddings are
+    # left NULL so only the language-aware lexical arm decides.
+    pt_source = _persisted_source(db_conn, "f8-pt@example.com")
+    _seed_single_chunk(db_conn, pt_source.id, language="pt", body=_PT_INFLECTED)
+    target_id = _chunk_id_by_text(db_conn, pt_source.id, _PT_INFLECTED)
+
+    pt_results = _search(db_conn, pt_source.id, "correr")
+
+    assert target_id in {e.chunk_id for e in pt_results}
+
+    # Same text, English regconfig: the English stemmer does not relate 'correr' to
+    # 'correndo', so the lexical arm finds nothing and (NULL embeddings) it returns [].
+    en_source = _persisted_source(db_conn, "f8-en@example.com")
+    _seed_single_chunk(db_conn, en_source.id, language="en", body=_PT_INFLECTED)
+
+    en_results = _search(db_conn, en_source.id, "correr")
+
+    assert en_results == []
 
 
 def test_anchor_scope_does_not_bypass_source_scope(db_conn: Connection) -> None:

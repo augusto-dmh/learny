@@ -204,6 +204,20 @@ def _count_embedded(engine: Engine, source_id: UUID) -> int:
         return conn.execute(stmt).scalar_one()
 
 
+def _count_embedded_with_model(engine: Engine, source_id: UUID, model: str) -> int:
+    """Count the source's chunks stamped with ``embedding_model = model`` (EMB-14)."""
+    stmt = (
+        select(func.count())
+        .select_from(corpus_chunks)
+        .join(corpus_sections, corpus_chunks.c.section_id == corpus_sections.c.id)
+        .join(corpus_documents, corpus_sections.c.document_id == corpus_documents.c.id)
+        .where(corpus_documents.c.source_id == source_id)
+        .where(corpus_chunks.c.embedding_model == model)
+    )
+    with engine.connect() as conn:
+        return conn.execute(stmt).scalar_one()
+
+
 def _serve_bytes(monkeypatch, object_key: str, data: bytes) -> None:  # noqa: ANN001
     """Point the task's storage factory at a fake serving ``data`` for ``object_key``.
 
@@ -525,6 +539,9 @@ def test_run_ingestion_embeds_every_chunk_of_the_source(
     # Every one of the source's 5 chunks now has a non-NULL embedding (RET-09).
     assert _count_for_source(db_engine, corpus_chunks, ctx.source.id) == 5
     assert _count_embedded(db_engine, ctx.source.id) == 5
+    # Each embedded chunk is stamped with the active adapter's model identity so a
+    # stamped chunk records which model produced it (EMB-14, per-chunk versioning).
+    assert _count_embedded_with_model(db_engine, ctx.source.id, "local-deterministic@1536") == 5
     # The embeddings_built event records the exact embedded-chunk count.
     embedded = [e for e in _read_events(db_engine, ctx.job.id) if e.type == "embeddings_built"]
     assert len(embedded) == 1

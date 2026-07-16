@@ -20,6 +20,7 @@ dependencies = [
     "ebooklib>=0.20",
     "beautifulsoup4>=4.15.0",
     "pgvector>=0.3,<0.5",
+    "openai>=1.40,<2",
 ]
 
 [project.optional-dependencies]
@@ -42,6 +43,7 @@ testpaths = ["tests"]
 pythonpath = ["."]
 asyncio_mode = "auto"
 addopts = "-ra"
+markers = ["live: exercises a real external provider (skipped without credentials)"]
 
 [tool.ruff]
 line-length = 100

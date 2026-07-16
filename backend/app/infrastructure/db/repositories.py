@@ -24,6 +24,7 @@ from sqlalchemy import delete as sa_delete
 from sqlalchemy.exc import IntegrityError
 
 from app.application.errors import TeachingTurnConflict
+from app.application.text_search import resolve_text_search_config
 from app.domain.entities import (
     ChunkToEmbed,
     CorpusSectionRecord,
@@ -352,6 +353,11 @@ class SqlAlchemyCorpusRepository:
             )
         )
 
+        # One regconfig per document: the chunk's lexical arm stems in the book's
+        # own language (EMB-11). The 0007 trigger builds ``search_vector`` from it;
+        # the app never writes ``search_vector`` directly.
+        search_config = resolve_text_search_config(language)
+
         section_rows: list[dict[str, object]] = []
         block_rows: list[dict[str, object]] = []
         chunk_rows: list[dict[str, object]] = []
@@ -390,6 +396,7 @@ class SqlAlchemyCorpusRepository:
                         "section_path": list(chunk.section_path),
                         "anchor": chunk.anchor,
                         "page_span": chunk.page_span,
+                        "search_config": search_config,
                     }
                 )
 
@@ -468,20 +475,53 @@ class SqlAlchemyEmbeddingIndexRepository:
         ).all()
         return [ChunkToEmbed(id=row.id, text=row.text) for row in rows]
 
-    def set_embeddings(self, items: Sequence[tuple[UUID, list[float]]]) -> None:
-        """Write each ``(chunk_id, vector)`` to ``corpus_chunks.embedding``.
+    def stale_chunks_for_source(
+        self, source_id: UUID, model: str, limit: int
+    ) -> list[ChunkToEmbed]:
+        """Return up to ``limit`` of ``source_id``'s chunks needing (re)embedding.
 
-        One ``executemany`` ``update`` keyed on the chunk id, so a whole source is
-        written in a single round trip instead of one statement per chunk; the
-        ``VECTOR`` type serializes each list on bind, so this write path needs no
-        global vector registration.
+        Selects chunks whose ``embedding IS NULL`` or whose ``embedding_model`` is
+        distinct from ``model`` — the not-yet-embedded and the stale-model rows —
+        ordered by section ``position`` then ``chunk_index`` (the same stable order
+        as :meth:`chunks_for_source`) and bounded to ``limit`` rows in SQL.
+        ``reembed_document`` re-queries per committed batch, so committed progress
+        shrinks this set as it lands (idempotent + resumable); the SQL ``LIMIT`` keeps
+        each pass O(limit) rather than fetching the whole remaining stale set.
+        """
+        rows = self._conn.execute(
+            select(corpus_chunks.c.id, corpus_chunks.c.text)
+            .select_from(corpus_chunks)
+            .join(corpus_sections, corpus_chunks.c.section_id == corpus_sections.c.id)
+            .join(corpus_documents, corpus_sections.c.document_id == corpus_documents.c.id)
+            .where(corpus_documents.c.source_id == source_id)
+            .where(
+                corpus_chunks.c.embedding.is_(None)
+                | corpus_chunks.c.embedding_model.is_distinct_from(model)
+            )
+            .order_by(corpus_sections.c.position, corpus_chunks.c.chunk_index)
+            .limit(limit)
+        ).all()
+        return [ChunkToEmbed(id=row.id, text=row.text) for row in rows]
+
+    def set_embeddings(
+        self, items: Sequence[tuple[UUID, list[float]]], *, model: str
+    ) -> None:
+        """Write each ``(chunk_id, vector)`` plus ``model`` to ``corpus_chunks``.
+
+        One ``executemany`` ``update`` keyed on the chunk id sets ``embedding`` and
+        ``embedding_model`` together, so a whole source is written in a single round
+        trip instead of one statement per chunk and every embedded chunk records the
+        producing model (ADR-0019). ``model`` is constant across the batch, so it is
+        bound once into the statement rather than repeated per row; the ``VECTOR``
+        type serializes each list on bind, so this write path needs no global vector
+        registration.
         """
         if not items:
             return
         stmt = (
             update(corpus_chunks)
             .where(corpus_chunks.c.id == bindparam("chunk_id"))
-            .values(embedding=bindparam("embedding"))
+            .values(embedding=bindparam("embedding"), embedding_model=model)
         )
         self._conn.execute(
             stmt,
