@@ -25,6 +25,21 @@ requires_db = pytest.mark.skipif(
 )
 
 
+def pytest_addoption(parser: pytest.Parser) -> None:
+    """Register ``--record-generation`` for the generation replay harness (design §8).
+
+    Off by default so the offline PR suite never calls a provider; passing it
+    (with ``LEARNY_ANTHROPIC_API_KEY`` set) opts the recording test into running
+    the live adapter over each eval case and rewriting the committed snapshots.
+    """
+    parser.addoption(
+        "--record-generation",
+        action="store_true",
+        default=False,
+        help="run the live generation adapter over the eval cases and rewrite snapshots",
+    )
+
+
 @pytest.fixture(scope="session")
 def db_engine() -> Iterator[Engine]:
     if TEST_DB_URL is None:
