@@ -186,6 +186,64 @@ def test_reembed_rescues_a_stale_model_corpus(reembed_env, db_engine: Engine) ->
         assert row.embedding_model == target
 
 
+def test_reembed_resumes_after_a_partial_completion(
+    reembed_env, db_engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # EMB-17 (resumability): per-batch commits mean a pass that dies partway leaves
+    # the already-committed batches durable, and a re-run finishes only the
+    # remainder. Force one chunk per committed batch and make the first pass raise
+    # after its first batch; the committed chunk survives and the second pass
+    # completes the rest.
+    source = reembed_env(valid_book())
+    target = build_embedding_adapter(get_settings()).model
+
+    # One chunk per committed batch so partial progress spans multiple commits.
+    small = get_settings().model_copy(update={"embedding_batch_size": 1})
+    monkeypatch.setattr("app.worker.tasks.get_settings", lambda: small)
+
+    total = len(_chunk_rows(db_engine, source.id))
+    assert total >= 2  # need multiple batches for a meaningful partial run
+
+    real = build_embedding_adapter(get_settings())
+
+    class _FailAfterFirstBatch:
+        """Delegates to the real adapter but raises on the second batch."""
+
+        model = real.model
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def embed_query(self, text):  # noqa: ANN001, ANN202
+            return real.embed_query(text)
+
+        def embed_documents(self, texts):  # noqa: ANN001, ANN202
+            self.calls += 1
+            if self.calls > 1:
+                raise RuntimeError("provider outage mid-reembed")
+            return real.embed_documents(texts)
+
+    monkeypatch.setattr(
+        "app.worker.tasks.build_embedding_adapter", lambda settings: _FailAfterFirstBatch()
+    )
+
+    with pytest.raises(RuntimeError):
+        _reembed(None, str(source.id))
+
+    # Exactly one batch committed before the outage — partial progress is durable.
+    assert _stale_count(db_engine, source.id, target) == total - 1
+
+    # A re-run with a healthy adapter resumes and finishes only the remainder.
+    monkeypatch.setattr("app.worker.tasks.build_embedding_adapter", lambda settings: real)
+    _reembed(None, str(source.id))
+
+    assert _stale_count(db_engine, source.id, target) == 0
+    for row in _chunk_rows(db_engine, source.id):
+        assert row.embedding is not None
+        assert row.embedding_model == target
+    assert _index_exists(db_engine)
+
+
 def test_reembed_recreates_hnsw_index_and_retrieval_serves(
     reembed_env, db_engine: Engine
 ) -> None:
