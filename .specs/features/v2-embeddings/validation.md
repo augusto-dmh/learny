@@ -11,6 +11,18 @@
 
 **Overall**: ✅ PASS (ready) — 2 spec-precision notes flagged for hardening, no blockers.
 
+> **Orchestrator follow-up (post-verify).** Of the two hardening notes: (1) EMB-17
+> resumability is now integration-tested — `test_reembed_resumes_after_a_partial_completion`
+> forces one chunk per committed batch, fails the first pass after its first batch,
+> asserts exactly one chunk stayed committed (durable partial progress), and proves a
+> re-run finishes only the remainder (discriminating: dropping per-batch commits rolls
+> the partial run back to zero and trips the `total-1` assertion). (2) EMB-22 recall@5
+> is left as-is by design: the golden book is a shared 3-chunk fixture (AD-037) that
+> can't grow without disturbing the tier-1 goldens, and `recall@5 >= 1.0` still bites
+> total-retrieval-failure (missing results) while `recall@1`/`MRR` bite ranking
+> regressions — the combined gate is discriminating for both failure modes. Suite
+> after hardening: 554 passed, 2 skipped, ruff clean.
+
 - **Spec-anchored check**: 22/22 ACs COVERED, 0 PARTIAL, 0 GAP. 2 ⚠️ spec-precision notes (EMB-17 resumability depth, EMB-22 recall@5 discrimination).
 - **Sensor**: 5 mutations injected, 5 killed, 0 survived.
 - **Gate**: 553 passed, 2 skipped (both live-marked, justified), ruff clean.
