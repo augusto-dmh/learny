@@ -16,6 +16,7 @@ from __future__ import annotations
 import ast
 import inspect
 import logging
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
@@ -29,7 +30,16 @@ from app.application.errors import (
 )
 from app.application.identity import AuthorizeOwnership
 from app.application.qa import AskQuestion
-from app.domain.entities import Evidence, GeneratedAnswer, Source, User
+from app.application.streaming import StreamAnswer, StreamDelta
+from app.domain.entities import (
+    AnswerStreamEvent,
+    AnswerTextDelta,
+    Evidence,
+    GeneratedAnswer,
+    QuestionAnswer,
+    Source,
+    User,
+)
 from tests.fakes import FakeAnswerGeneration, FakeRetrieveEvidence, FakeSourceRepository
 
 _NOW = datetime(2026, 7, 11, 12, 0, 0, tzinfo=UTC)
@@ -407,6 +417,278 @@ def test_ask_emits_one_content_free_completion_log_on_not_found(
     assert "evidence_count=0" in message
     assert f"model={_MODEL}" in message
     assert "my private question text" not in message
+
+
+# --- AskQuestion.stream (GEN-13, streaming half) -------------------------------
+#
+# Derived from the C3 Done-when: guards raise before any yield; the sentinel
+# hold-back suppresses a whole-reply sentinel and flushes a divergent (or genuine
+# short) prefix; not-found surfaces via the sentinel and via grounding; a port
+# failure wraps to AnswerGenerationFailed; and closing the consumer closes the
+# port stream.
+
+
+def test_stream_missing_source_raises_before_any_yield() -> None:
+    # Guards run eagerly: .stream() raises before returning an iterator; retrieval
+    # and the generation stream are never touched.
+    sources = FakeSourceRepository()
+    retrieve = FakeRetrieveEvidence()
+    generation = FakeAnswerGeneration()
+    service = _ask(sources=sources, retrieve=retrieve, generation=generation)
+
+    with pytest.raises(SourceNotFound):
+        service.stream(user=_user(), source_id=uuid4(), question="anything")
+
+    assert retrieve.calls == []
+    assert generation.stream_calls == []
+
+
+def test_stream_not_ready_raises_before_any_yield() -> None:
+    owner = _user()
+    sources = FakeSourceRepository()
+    source = _owned_source(owner.id, status="processing")
+    sources.add(source)
+    retrieve = FakeRetrieveEvidence()
+    generation = FakeAnswerGeneration()
+    service = _ask(sources=sources, retrieve=retrieve, generation=generation)
+
+    with pytest.raises(SourceNotReady):
+        service.stream(user=owner, source_id=source.id, question="anything")
+
+    assert retrieve.calls == []
+    assert generation.stream_calls == []
+
+
+def test_stream_answered_streams_deltas_and_yields_grounded_terminal() -> None:
+    owner = _user()
+    sources = FakeSourceRepository()
+    source = _owned_source(owner.id)
+    sources.add(source)
+    e0 = _evidence(source.id, "passage", score=0.9)
+    generation = FakeAnswerGeneration(
+        answer=GeneratedAnswer(
+            text="the answer", cited_chunk_ids=(e0.chunk_id,), model=_MODEL, found=True
+        ),
+        deltas=["the ", "answer"],
+    )
+    service = _ask(
+        sources=sources, retrieve=FakeRetrieveEvidence(results=[e0]), generation=generation
+    )
+
+    events = list(service.stream(user=owner, source_id=source.id, question="q"))
+
+    deltas = [e for e in events if isinstance(e, StreamDelta)]
+    assert [d.text for d in deltas] == ["the ", "answer"]
+    terminal = events[-1]
+    assert isinstance(terminal, StreamAnswer)
+    assert terminal.result.status == "answered"
+    assert terminal.result.text == "the answer"
+    assert terminal.result.citations == (e0,)
+    assert terminal.result.evidence_count == 1
+    assert terminal.result.model == _MODEL
+
+
+def test_stream_empty_evidence_is_not_found_without_invoking_port() -> None:
+    owner = _user()
+    sources = FakeSourceRepository()
+    source = _owned_source(owner.id)
+    sources.add(source)
+    generation = FakeAnswerGeneration(model=_MODEL)
+    service = _ask(
+        sources=sources, retrieve=FakeRetrieveEvidence(results=[]), generation=generation
+    )
+
+    events = list(service.stream(user=owner, source_id=source.id, question="q"))
+
+    assert generation.stream_calls == []
+    assert [e for e in events if isinstance(e, StreamDelta)] == []
+    assert events == [
+        StreamAnswer(
+            QuestionAnswer(
+                status="not_found_in_source",
+                text="",
+                citations=(),
+                evidence_count=0,
+                model=_MODEL,
+            )
+        )
+    ]
+
+
+def test_stream_whole_reply_sentinel_suppresses_deltas_and_is_not_found() -> None:
+    # Hold-back: the sentinel is streamed split across deltas but never presented;
+    # the completed found=False collapses to the not-found terminal.
+    owner = _user()
+    sources = FakeSourceRepository()
+    source = _owned_source(owner.id)
+    sources.add(source)
+    e0 = _evidence(source.id, "passage", score=0.9)
+    generation = FakeAnswerGeneration(
+        answer=GeneratedAnswer(text="", cited_chunk_ids=(), model=_MODEL, found=False),
+        deltas=["NOT_FOUND", "_IN_SOURCE"],
+    )
+    service = _ask(
+        sources=sources, retrieve=FakeRetrieveEvidence(results=[e0]), generation=generation
+    )
+
+    events = list(service.stream(user=owner, source_id=source.id, question="q"))
+
+    assert [e for e in events if isinstance(e, StreamDelta)] == []
+    terminal = events[-1]
+    assert isinstance(terminal, StreamAnswer)
+    assert terminal.result.status == "not_found_in_source"
+    assert terminal.result.text == ""
+    assert terminal.result.citations == ()
+
+
+def test_stream_flushes_a_divergent_prefix_as_one_delta() -> None:
+    # A run that starts as a sentinel prefix but diverges is flushed (buffered
+    # prefix + the diverging text) as a single delta, then passes through.
+    owner = _user()
+    sources = FakeSourceRepository()
+    source = _owned_source(owner.id)
+    sources.add(source)
+    e0 = _evidence(source.id, "passage", score=0.9)
+    generation = FakeAnswerGeneration(
+        answer=GeneratedAnswer(
+            text="NOT_FOUNDX real answer", cited_chunk_ids=(e0.chunk_id,), model=_MODEL, found=True
+        ),
+        deltas=["NOT_FOUND", "X real answer"],
+    )
+    service = _ask(
+        sources=sources, retrieve=FakeRetrieveEvidence(results=[e0]), generation=generation
+    )
+
+    events = list(service.stream(user=owner, source_id=source.id, question="q"))
+
+    deltas = [e for e in events if isinstance(e, StreamDelta)]
+    assert [d.text for d in deltas] == ["NOT_FOUNDX real answer"]
+    assert events[-1].result.status == "answered"
+
+
+def test_stream_flushes_short_answer_that_looked_like_a_sentinel_prefix() -> None:
+    # A genuine short answer whose text is a strict prefix of the sentinel is held
+    # through completion, then flushed once (so the client sees the answer text).
+    owner = _user()
+    sources = FakeSourceRepository()
+    source = _owned_source(owner.id)
+    sources.add(source)
+    e0 = _evidence(source.id, "passage", score=0.9)
+    generation = FakeAnswerGeneration(
+        answer=GeneratedAnswer(
+            text="NOT", cited_chunk_ids=(e0.chunk_id,), model=_MODEL, found=True
+        ),
+        deltas=["NOT"],
+    )
+    service = _ask(
+        sources=sources, retrieve=FakeRetrieveEvidence(results=[e0]), generation=generation
+    )
+
+    events = list(service.stream(user=owner, source_id=source.id, question="q"))
+
+    deltas = [e for e in events if isinstance(e, StreamDelta)]
+    assert [d.text for d in deltas] == ["NOT"]
+    assert events[-1].result.status == "answered"
+    assert events[-1].result.text == "NOT"
+
+
+def test_stream_zero_grounded_citations_is_not_found_via_grounding() -> None:
+    # found=true prose whose citations are all outside the evidence → grounding
+    # collapses to not-found even though the prose already streamed.
+    owner = _user()
+    sources = FakeSourceRepository()
+    source = _owned_source(owner.id)
+    sources.add(source)
+    e0 = _evidence(source.id, "passage", score=0.9)
+    generation = FakeAnswerGeneration(
+        answer=GeneratedAnswer(
+            text="ungrounded prose", cited_chunk_ids=(uuid4(),), model=_MODEL, found=True
+        ),
+        deltas=["ungrounded prose"],
+    )
+    service = _ask(
+        sources=sources, retrieve=FakeRetrieveEvidence(results=[e0]), generation=generation
+    )
+
+    events = list(service.stream(user=owner, source_id=source.id, question="q"))
+
+    assert [d.text for d in events if isinstance(d, StreamDelta)] == ["ungrounded prose"]
+    terminal = events[-1]
+    assert terminal.result.status == "not_found_in_source"
+    assert terminal.result.text == ""
+    assert terminal.result.citations == ()
+
+
+def test_stream_port_failure_wraps_answer_generation_failed() -> None:
+    owner = _user()
+    sources = FakeSourceRepository()
+    source = _owned_source(owner.id)
+    sources.add(source)
+    e0 = _evidence(source.id, "passage", score=0.9)
+    boom = RuntimeError("provider exploded")
+    generation = FakeAnswerGeneration(error=boom)
+    service = _ask(
+        sources=sources, retrieve=FakeRetrieveEvidence(results=[e0]), generation=generation
+    )
+
+    with pytest.raises(AnswerGenerationFailed) as excinfo:
+        list(service.stream(user=owner, source_id=source.id, question="q"))
+
+    assert excinfo.value.__cause__ is boom
+
+
+def test_stream_ending_without_completed_event_raises() -> None:
+    # Contract violation: a port stream must end with exactly one AnswerCompleted.
+    # A stream that yields only deltas and ends surfaces as a generation failure,
+    # never as a silently empty answer.
+    owner = _user()
+    sources = FakeSourceRepository()
+    source = _owned_source(owner.id)
+    sources.add(source)
+    e0 = _evidence(source.id, "passage", score=0.9)
+
+    class _CompletedlessGeneration(FakeAnswerGeneration):
+        def generate_stream(
+            self, *, question: str, evidence: object
+        ) -> Iterator[AnswerStreamEvent]:
+            yield AnswerTextDelta(text="partial ")
+            yield AnswerTextDelta(text="answer")
+
+    generation = _CompletedlessGeneration(model=_MODEL)
+    service = _ask(
+        sources=sources, retrieve=FakeRetrieveEvidence(results=[e0]), generation=generation
+    )
+
+    with pytest.raises(AnswerGenerationFailed):
+        list(service.stream(user=owner, source_id=source.id, question="q"))
+
+
+def test_stream_consumer_close_closes_the_port_stream() -> None:
+    # Closing the consumer generator mid-stream closes the underlying port stream
+    # (no leaked provider generation on client disconnect).
+    owner = _user()
+    sources = FakeSourceRepository()
+    source = _owned_source(owner.id)
+    sources.add(source)
+    e0 = _evidence(source.id, "passage", score=0.9)
+    generation = FakeAnswerGeneration(
+        answer=GeneratedAnswer(
+            text="hello world", cited_chunk_ids=(e0.chunk_id,), model=_MODEL, found=True
+        ),
+        deltas=["hello world"],
+    )
+    service = _ask(
+        sources=sources, retrieve=FakeRetrieveEvidence(results=[e0]), generation=generation
+    )
+
+    gen = service.stream(user=owner, source_id=source.id, question="q")
+    first = next(gen)
+    assert isinstance(first, StreamDelta)
+    assert generation.stream_closed is False
+
+    gen.close()
+
+    assert generation.stream_closed is True
 
 
 def test_qa_module_imports_no_web_or_provider_sdk() -> None:

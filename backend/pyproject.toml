@@ -5,7 +5,7 @@ description = "Learny backend — FastAPI API for book intelligence (ADR-004)"
 requires-python = ">=3.13"
 license = "Apache-2.0"
 dependencies = [
-    "fastapi>=0.118,<0.200",
+    "fastapi>=0.135,<0.200",
     "uvicorn[standard]>=0.34,<0.40",
     "pydantic>=2.10,<3",
     "pydantic-settings>=2.7,<3",
@@ -21,6 +21,7 @@ dependencies = [
     "beautifulsoup4>=4.15.0",
     "pgvector>=0.3,<0.5",
     "openai>=1.40,<2",
+    "anthropic>=0.116,<1",
 ]
 
 [project.optional-dependencies]
@@ -43,7 +44,10 @@ testpaths = ["tests"]
 pythonpath = ["."]
 asyncio_mode = "auto"
 addopts = "-ra"
-markers = ["live: exercises a real external provider (skipped without credentials)"]
+markers = [
+    "live: exercises a real external provider (skipped without credentials)",
+    "eval: generation evaluation harness — live judge/smoke run nightly (skipped without credentials)",
+]
 
 [tool.ruff]
 line-length = 100

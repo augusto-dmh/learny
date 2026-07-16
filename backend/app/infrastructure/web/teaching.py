@@ -54,6 +54,9 @@ from app.infrastructure.web.dependencies import (
 )
 from app.infrastructure.web.rate_limit import rate_limit_teaching
 from app.infrastructure.web.retrieval import EvidenceView
+from app.infrastructure.web.ui_message_stream import (
+    to_sse_response,
+)
 
 router = APIRouter(tags=["teaching"])
 
@@ -276,6 +279,34 @@ def post_teaching_turn(
     """
     turn = service(user=user, session_id=session_id, message=body.message)
     return TurnView.from_turn(turn)
+
+
+@router.post(
+    "/api/teaching-sessions/{session_id}/turns/stream",
+    dependencies=[
+        Depends(rate_limit_teaching),
+        Depends(enforce_origin),
+        Depends(enforce_csrf),
+    ],
+)
+def post_teaching_turn_stream(
+    session_id: UUID,
+    user: Annotated[User, Depends(get_authenticated_user)],
+    service: Annotated[PostTeachingTurn, Depends(get_post_teaching_turn)],
+    body: TurnRequest,
+):
+    """Stream one cited teaching turn as UI Message Stream v1 SSE frames (GEN-14).
+
+    The SSE sibling of :func:`post_teaching_turn`: identical request schema and
+    auth/CSRF/Origin/rate-limit dependencies. ``PostTeachingTurn.stream`` runs all
+    guards **eagerly** here, so ownership (404), readiness / target-gone (409),
+    validation (422) and rate-limit (429) surface as the same plain HTTP errors as
+    the JSON endpoint before any SSE byte is sent. The turn is persisted only on
+    stream completion, so a mid-stream failure (rendered as a protocol ``error``
+    part) or a client disconnect persists nothing (TEACH-13/17).
+    """
+    events = service.stream(user=user, session_id=session_id, message=body.message)
+    return to_sse_response(events)
 
 
 @router.get("/api/sources/{source_id}/teaching-sessions")

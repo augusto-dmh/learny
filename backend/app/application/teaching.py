@@ -13,7 +13,7 @@ this boundary (ADR-0007/0009).
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from uuid import UUID
 
 from app.application.errors import (
@@ -28,8 +28,16 @@ from app.application.grounding import ground
 from app.application.identity import AuthorizeOwnership
 from app.application.ingestion import SOURCE_STATUS_READY, authorized_source
 from app.application.retrieval import RetrieveEvidence
+from app.application.streaming import (
+    StreamTurn,
+    TurnStreamEvent,
+    hold_back_deltas,
+)
 from app.domain.entities import (
+    Evidence,
+    HistoryTurn,
     Source,
+    StructureSection,
     TeachingSession,
     TeachingSessionSummary,
     TeachingTurn,
@@ -262,9 +270,19 @@ class PostTeachingTurn:
         self._evidence_top_k = evidence_top_k
         self._history_turns = history_turns
 
-    def __call__(
+    def _preflight(
         self, *, user: User, session_id: UUID, message: str
-    ) -> TeachingTurn:
+    ) -> tuple[StructureSection, list[HistoryTurn], list[Evidence], int]:
+        """Run the shared turn guards and scoped retrieval (buffered + streaming).
+
+        Resolves the owned session (missing/non-owner → 404), enforces readiness
+        (409, TEACH-15) and the target's continued existence (409, TEACH-16),
+        gathers the bounded prior history (TEACH-12), and runs target-subtree-scoped
+        retrieval (TEACH-09). Returns the resolved target, that history, the scoped
+        evidence, and the next ``turn_index``. Both the buffered ``__call__`` and the
+        streaming ``stream`` run this identically before any generation, so the same
+        HTTP error outcomes surface (for the stream path, before any SSE bytes).
+        """
         session, source = authorized_session(
             user=user,
             session_id=session_id,
@@ -309,8 +327,15 @@ class PostTeachingTurn:
             top_k=self._evidence_top_k,
             anchors=subtree_anchors,
         )
+        return target, history, evidence, total_turns
 
-        turn_index = total_turns
+    def __call__(
+        self, *, user: User, session_id: UUID, message: str
+    ) -> TeachingTurn:
+        target, history, evidence, turn_index = self._preflight(
+            user=user, session_id=session_id, message=message
+        )
+
         if not evidence:
             # No scoped evidence → not-found; the port is never invoked, and the
             # model identity comes from the port attribute (TEACH-11 / TEACH-24).
@@ -364,6 +389,84 @@ class PostTeachingTurn:
             persisted.model,
         )
         return persisted
+
+    def stream(
+        self, *, user: User, session_id: UUID, message: str
+    ) -> Iterator[TurnStreamEvent]:
+        """Run one cited turn incrementally, persisting only on stream completion.
+
+        The shared guards + scoped retrieval run **eagerly** (before this returns),
+        so the turn's HTTP error outcomes (404/409) surface before any SSE bytes.
+        Non-empty evidence drives the generation port's stream through the sentinel
+        hold-back and the shared grounding guard; the turn (either outcome) is
+        persisted and yielded as the terminal
+        :class:`~app.application.streaming.StreamTurn` **only after grounding
+        completes**, so a consumer disconnect mid-stream (``GeneratorExit`` closing
+        the port stream) persists nothing (TEACH-13/17 streaming analog). A port
+        failure surfaces as ``AnswerGenerationFailed`` from within the stream.
+        """
+        target, history, evidence, turn_index = self._preflight(
+            user=user, session_id=session_id, message=message
+        )
+        return self._turn_stream(
+            session_id=session_id,
+            target=target,
+            message=message,
+            history=history,
+            evidence=evidence,
+            turn_index=turn_index,
+        )
+
+    def _turn_stream(
+        self,
+        *,
+        session_id: UUID,
+        target: StructureSection,
+        message: str,
+        history: list[HistoryTurn],
+        evidence: list[Evidence],
+        turn_index: int,
+    ) -> Iterator[TurnStreamEvent]:
+        if not evidence:
+            # No scoped evidence → not-found, persisted with empty text/citations;
+            # the port is never invoked (TEACH-11 / TEACH-14).
+            turn = self._not_found_turn(
+                session_id, turn_index, message, 0, self._generation.model
+            )
+            yield StreamTurn(self._turns.add(turn))
+            return
+
+        stream = self._generation.generate_stream(
+            message=message,
+            target_section_path=target.section_path,
+            history=history,
+            evidence=evidence,
+        )
+        # Hold-back yields presentable deltas and returns the authoritative answer;
+        # nothing is persisted until it completes (so cancellation persists nothing).
+        answer = yield from hold_back_deltas(stream)
+
+        grounded = ground(answer, evidence)
+        if grounded is None:
+            turn = self._not_found_turn(
+                session_id, turn_index, message, len(evidence), answer.model
+            )
+        else:
+            text, citations = grounded
+            turn = TeachingTurn(
+                id=self._ids(),
+                session_id=session_id,
+                turn_index=turn_index,
+                message=message,
+                answer_status=_ANSWERED,
+                answer_text=text,
+                model=answer.model,
+                evidence_count=len(evidence),
+                citations=tuple(citations),
+                created_at=self._clock.now(),
+            )
+        # The DB unique remains the turn-index race arbiter (TEACH-17).
+        yield StreamTurn(self._turns.add(turn))
 
     def _not_found_turn(
         self,

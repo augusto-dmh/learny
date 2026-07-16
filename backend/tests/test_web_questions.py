@@ -23,6 +23,7 @@ arm is reproducible on the shared rolled-back ``db_conn``.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator, Sequence
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
@@ -32,6 +33,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import Connection
 
 from app.domain.entities import (
+    AnswerTextDelta,
     CorpusSectionRecord,
     Evidence,
     GeneratedAnswer,
@@ -479,3 +481,244 @@ def test_ask_rate_limit_returns_429_with_retry_after(
     )
     assert throttled.status_code == 429, throttled.text
     assert "retry-after" in {k.lower() for k in throttled.headers}
+
+
+# --- POST /questions/stream (SSE, GEN-14..17) ----------------------------------
+#
+# Derived from the P2 SSE ACs (GEN-14..17) at the route level: the deterministic
+# provider streams the UI Message Stream v1 frame sequence with its header; the
+# pre-stream guards surface as the same plain HTTP errors as the JSON sibling
+# (404/409/422/429, plus the CSRF 403 dependency); a mid-stream provider failure is
+# rendered as a protocol ``error`` part (headers already sent); and the not-found
+# outcome emits the status part with no text.
+
+
+def _ask_stream(
+    client: TestClient,
+    source_id: str,
+    body: dict,
+    *,
+    csrf: str | None,
+    origin: str | None = None,
+):
+    headers: dict[str, str] = {}
+    if csrf is not None:
+        headers["X-CSRF-Token"] = csrf
+    if origin is not None:
+        headers["Origin"] = origin
+    return client.post(
+        f"/api/sources/{source_id}/questions/stream", json=body, headers=headers
+    )
+
+
+def _parse_ui_stream(text: str) -> list:
+    """Parse an SSE ``text/event-stream`` body into its UI Message Stream parts.
+
+    Each part is the JSON of a ``data:`` line (comment/keepalive lines ignored); the
+    terminal ``data: [DONE]`` marker is kept verbatim as the string ``"[DONE]"``.
+    """
+    parts: list = []
+    for line in text.splitlines():
+        if line.startswith("data: "):
+            payload = line[len("data: ") :]
+            parts.append(payload if payload == "[DONE]" else json.loads(payload))
+    return parts
+
+
+def _part_types(parts: list) -> list[str]:
+    return [p["type"] if isinstance(p, dict) else p for p in parts]
+
+
+def test_ask_stream_emits_full_frame_sequence_and_header(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # GEN-14: the answered stream emits start → text-start → text-delta → text-end →
+    # data-citations → data-answer-status → finish → [DONE] under the header.
+    source_id, csrf = _seed_owned_embedded_source(auth_client, db_conn, "sstream@example.com")
+
+    resp = _ask_stream(
+        auth_client, source_id, {"question": "photosynthesis sunlight energy"}, csrf=csrf
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["x-vercel-ai-ui-message-stream"] == "v1"
+    assert resp.headers["content-type"].startswith("text/event-stream")
+
+    parts = _parse_ui_stream(resp.text)
+    assert _part_types(parts) == [
+        "start",
+        "text-start",
+        "text-delta",
+        "text-end",
+        "data-citations",
+        "data-answer-status",
+        "finish",
+        "[DONE]",
+    ]
+    delta = next(p for p in parts if p["type"] == "text-delta" if isinstance(p, dict))
+    assert delta["delta"] == _PHOTO
+    citations = next(p for p in parts if isinstance(p, dict) and p["type"] == "data-citations")
+    assert len(citations["data"]) == 1
+    citation = citations["data"][0]
+    assert set(citation) == {
+        "chunk_id",
+        "source_id",
+        "section_path",
+        "anchor",
+        "page_span",
+        "snippet",
+        "score",
+    }
+    assert citation["source_id"] == source_id
+    assert citation["anchor"] == "bio.xhtml#p"
+    assert citation["snippet"] == _PHOTO
+    UUID(citation["chunk_id"])
+    status = next(p for p in parts if isinstance(p, dict) and p["type"] == "data-answer-status")
+    assert status["data"] == {"status": "answered"}
+
+
+def test_ask_stream_not_found_emits_status_part_without_text(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # GEN-16 (not-found stream): no supporting evidence → no text-delta, empty
+    # data-citations, and a not_found_in_source status part.
+    user_id = _register(auth_client, "sstream-nf@example.com")
+    csrf = _csrf(auth_client)
+    source_id = _persist_source(db_conn, user_id)
+    _seed_photosynthesis_corpus(db_conn, source_id)  # corpus present, NOT embedded
+
+    resp = _ask_stream(
+        auth_client, str(source_id), {"question": "zzzqqq unmatchable token"}, csrf=csrf
+    )
+
+    assert resp.status_code == 200, resp.text
+    parts = _parse_ui_stream(resp.text)
+    assert _part_types(parts) == [
+        "start",
+        "text-start",
+        "text-end",
+        "data-citations",
+        "data-answer-status",
+        "finish",
+        "[DONE]",
+    ]
+    citations = next(p for p in parts if isinstance(p, dict) and p["type"] == "data-citations")
+    assert citations["data"] == []
+    status = next(p for p in parts if isinstance(p, dict) and p["type"] == "data-answer-status")
+    assert status["data"] == {"status": "not_found_in_source"}
+
+
+def test_ask_stream_missing_and_non_owned_source_return_plain_404(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # GEN-16: pre-stream ownership failure is a plain HTTP 404 (not SSE), identical
+    # for a missing and a non-owned source.
+    owned_id, _ = _seed_owned_embedded_source(auth_client, db_conn, "s404-owner@example.com")
+    _register(auth_client, "s404-intruder@example.com")
+    csrf = _csrf(auth_client)
+
+    non_owned = _ask_stream(auth_client, owned_id, {"question": "photosynthesis"}, csrf=csrf)
+    missing = _ask_stream(auth_client, str(uuid4()), {"question": "photosynthesis"}, csrf=csrf)
+
+    assert non_owned.status_code == 404, non_owned.text
+    assert missing.status_code == 404, missing.text
+    assert non_owned.json() == missing.json()  # plain JSON body, never SSE
+
+
+def test_ask_stream_not_ready_returns_plain_409(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # GEN-16: pre-stream readiness failure is a plain HTTP 409.
+    user_id = _register(auth_client, "s409@example.com")
+    csrf = _csrf(auth_client)
+    source_id = _persist_source(db_conn, user_id, status="uploaded")
+
+    resp = _ask_stream(auth_client, str(source_id), {"question": "photosynthesis"}, csrf=csrf)
+
+    assert resp.status_code == 409, resp.text
+    assert resp.json() == {"detail": "Source is not ready for questions."}
+
+
+def test_ask_stream_blank_question_returns_plain_422(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # GEN-16: pre-stream validation failure is a plain HTTP 422.
+    source_id, csrf = _seed_owned_embedded_source(auth_client, db_conn, "s422@example.com")
+    resp = _ask_stream(auth_client, source_id, {"question": "   "}, csrf=csrf)
+    assert resp.status_code == 422, resp.text
+    assert "start" not in resp.text
+
+
+def test_ask_stream_missing_csrf_returns_403(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # GEN-14: the stream endpoint carries the same CSRF/Origin dependencies — a
+    # state-changing POST without the token → 403 before any SSE byte.
+    source_id, _ = _seed_owned_embedded_source(auth_client, db_conn, "s403@example.com")
+    resp = _ask_stream(auth_client, source_id, {"question": "photosynthesis"}, csrf=None)
+    assert resp.status_code == 403, resp.text
+
+
+def test_ask_stream_rate_limit_returns_429(
+    throttled_questions_client: TestClient, db_conn: Connection
+) -> None:
+    # GEN-14: the stream endpoint shares the questions rate limiter — the 4th call
+    # in the window is throttled with 429 before streaming.
+    source_id, csrf = _seed_owned_embedded_source(
+        throttled_questions_client, db_conn, "s429@example.com"
+    )
+    for _ in range(3):
+        resp = _ask_stream(
+            throttled_questions_client, source_id, {"question": "photosynthesis"}, csrf=csrf
+        )
+        assert resp.status_code == 200, resp.text
+    throttled = _ask_stream(
+        throttled_questions_client, source_id, {"question": "photosynthesis"}, csrf=csrf
+    )
+    assert throttled.status_code == 429, throttled.text
+
+
+def test_ask_stream_mid_stream_failure_emits_error_part(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # GEN-16: a provider failure after the first delta (headers already sent) is
+    # rendered as a protocol error part with the generic message, then terminates —
+    # no data-citations/finish, and no internal detail leaks.
+    from app.infrastructure.web.dependencies import get_answer_generation
+
+    source_id, csrf = _seed_owned_embedded_source(auth_client, db_conn, "s-mid@example.com")
+
+    class _MidStreamRaisingAdapter:
+        model = _MODEL
+
+        def generate(self, *, question: str, evidence: Sequence[Evidence]) -> GeneratedAnswer:
+            raise AssertionError("stream path must not call generate")
+
+        def generate_stream(self, *, question: str, evidence: Sequence[Evidence]):
+            yield AnswerTextDelta(text="partial ")
+            raise RuntimeError("provider-secret-internal-detail")
+
+    auth_client.app.dependency_overrides[get_answer_generation] = (
+        lambda: _MidStreamRaisingAdapter()
+    )
+    try:
+        resp = _ask_stream(
+            auth_client, source_id, {"question": "photosynthesis sunlight"}, csrf=csrf
+        )
+    finally:
+        auth_client.app.dependency_overrides.pop(get_answer_generation, None)
+
+    assert resp.status_code == 200, resp.text
+    parts = _parse_ui_stream(resp.text)
+    types = _part_types(parts)
+    assert "error" in types
+    assert "data-citations" not in types
+    assert "finish" not in types
+    error_part = next(p for p in parts if isinstance(p, dict) and p["type"] == "error")
+    assert error_part["errorText"] == "Answer generation failed. Please try again."
+    assert "provider-secret-internal-detail" not in resp.text
+    # The partial delta that streamed before the failure is present.
+    assert any(
+        isinstance(p, dict) and p["type"] == "text-delta" and p["delta"] == "partial "
+        for p in parts
+    )

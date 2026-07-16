@@ -14,7 +14,7 @@ from __future__ import annotations
 import ast
 import inspect
 import logging
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -31,6 +31,7 @@ from app.application.errors import (
     TeachingTurnConflict,
 )
 from app.application.identity import AuthorizeOwnership
+from app.application.streaming import StreamDelta, StreamTurn
 from app.application.teaching import (
     ListTeachingSessions,
     PostTeachingTurn,
@@ -38,6 +39,9 @@ from app.application.teaching import (
     StartTeachingSession,
 )
 from app.domain.entities import (
+    AnswerCompleted,
+    AnswerStreamEvent,
+    AnswerTextDelta,
     CorpusStructure,
     Evidence,
     GeneratedAnswer,
@@ -49,6 +53,7 @@ from app.domain.entities import (
     TeachingTurn,
     User,
 )
+from app.domain.ports import TeachingGenerationPort
 from tests.fakes import FakeClock, FakeSourceRepository
 
 _NOW = datetime(2026, 7, 11, 12, 0, 0, tzinfo=UTC)
@@ -284,19 +289,29 @@ class FakeScopedRetrieveEvidence:
 
 
 class FakeTeachingGeneration:
-    """``TeachingGenerationPort`` double: preset answer or raise, records calls."""
+    """``TeachingGenerationPort`` double: preset answer or raise, records calls.
+
+    ``generate_stream`` mirrors ``generate`` and yields the text deltas (``deltas``
+    when given, else the preset answer's text as one delta) then exactly one
+    ``AnswerCompleted``; a configured ``error`` raises on first iteration and the
+    ``try/finally`` sets ``stream_closed`` so cancellation is observable.
+    """
 
     def __init__(
         self,
         *,
         answer: GeneratedAnswer | None = None,
         error: Exception | None = None,
+        deltas: Sequence[str] | None = None,
         model: str = _MODEL,
     ) -> None:
         self._answer = answer
         self._error = error
+        self._deltas = deltas
         self.model = model
         self.calls: list[dict[str, object]] = []
+        self.stream_calls: list[dict[str, object]] = []
+        self.stream_closed = False
 
     def generate(
         self,
@@ -318,6 +333,37 @@ class FakeTeachingGeneration:
             raise self._error
         assert self._answer is not None, "no preset answer configured"
         return self._answer
+
+    def generate_stream(
+        self,
+        *,
+        message: str,
+        target_section_path: tuple[str, ...],
+        history: Sequence[HistoryTurn],
+        evidence: Sequence[Evidence],
+    ) -> Iterator[AnswerStreamEvent]:
+        self.stream_calls.append(
+            {
+                "message": message,
+                "target_section_path": target_section_path,
+                "history": list(history),
+                "evidence": list(evidence),
+            }
+        )
+        if self._error is not None:
+            raise self._error
+        assert self._answer is not None, "no preset answer configured"
+        texts = (
+            list(self._deltas)
+            if self._deltas is not None
+            else ([self._answer.text] if self._answer.text else [])
+        )
+        try:
+            for text in texts:
+                yield AnswerTextDelta(text=text)
+            yield AnswerCompleted(answer=self._answer)
+        finally:
+            self.stream_closed = True
 
 
 # --- service builders ----------------------------------------------------------
@@ -1039,6 +1085,254 @@ def test_turn_emits_one_content_free_completion_log(
     assert f"model={_MODEL}" in message
     assert "my private message text" not in message
     assert "the secret answer body" not in message
+
+
+# --- PostTeachingTurn.stream (GEN-13, streaming half) --------------------------
+#
+# Derived from the C3 Done-when: guards raise before any yield; the sentinel
+# hold-back suppresses a whole-reply sentinel; not-found surfaces via sentinel and
+# via grounding; the turn is persisted only after the stream completes (so a
+# consumer disconnect persists nothing and closes the port stream); a port failure
+# wraps to AnswerGenerationFailed with nothing persisted.
+
+
+def test_stream_missing_session_raises_before_any_yield() -> None:
+    retrieve = FakeScopedRetrieveEvidence([])
+    service = _post(
+        sessions=FakeTeachingSessionRepository(),
+        turns=FakeTeachingTurnRepository(),
+        sources=FakeSourceRepository(),
+        corpus=FakeCorpus(_structure()),
+        retrieve=retrieve,
+        generation=FakeTeachingGeneration(),
+    )
+
+    with pytest.raises(TeachingSessionNotFound):
+        service.stream(user=_user(), session_id=uuid4(), message="q")
+
+    assert retrieve.calls == []
+
+
+def test_stream_not_ready_raises_before_any_yield() -> None:
+    target = _section("ch1.xhtml#core", ("Chapter 1",))
+    owner, source, session, sessions, sources = _seeded(target=target, status="processing")
+    retrieve = FakeScopedRetrieveEvidence([])
+    service = _post(
+        sessions=sessions,
+        turns=FakeTeachingTurnRepository(),
+        sources=sources,
+        corpus=FakeCorpus(_structure(target)),
+        retrieve=retrieve,
+        generation=FakeTeachingGeneration(),
+    )
+
+    with pytest.raises(SourceNotReady):
+        service.stream(user=owner, session_id=session.id, message="q")
+
+    assert retrieve.calls == []
+
+
+def test_stream_target_gone_raises_before_any_yield() -> None:
+    target = _section("ch1.xhtml#core", ("Chapter 1",))
+    owner, source, session, sessions, sources = _seeded(target=target)
+    retrieve = FakeScopedRetrieveEvidence([])
+    service = _post(
+        sessions=sessions,
+        turns=FakeTeachingTurnRepository(),
+        sources=sources,
+        corpus=FakeCorpus(_structure(_section("ch9.xhtml", ("Chapter 9",)))),
+        retrieve=retrieve,
+        generation=FakeTeachingGeneration(),
+    )
+
+    with pytest.raises(TeachingTargetGone):
+        service.stream(user=owner, session_id=session.id, message="q")
+
+    assert retrieve.calls == []
+
+
+def test_stream_answered_streams_deltas_and_persists_grounded_turn() -> None:
+    target = _section("ch1.xhtml#core", ("Chapter 1",))
+    owner, source, session, sessions, sources = _seeded(target=target)
+    e0 = _evidence(source.id, "first", anchor="ch1.xhtml#core", score=0.9)
+    e1 = _evidence(source.id, "second", anchor="ch1.xhtml#core", score=0.5)
+    generation = FakeTeachingGeneration(
+        answer=GeneratedAnswer(
+            text="the answer", cited_chunk_ids=(e0.chunk_id,), model=_MODEL, found=True
+        ),
+        deltas=["the ", "answer"],
+    )
+    turns = FakeTeachingTurnRepository()
+    turn_id = uuid4()
+    service = _post(
+        sessions=sessions,
+        turns=turns,
+        sources=sources,
+        corpus=FakeCorpus(_structure(target)),
+        retrieve=FakeScopedRetrieveEvidence([e0, e1]),
+        generation=generation,
+        ids=lambda: turn_id,
+    )
+
+    events = list(service.stream(user=owner, session_id=session.id, message="explain"))
+
+    deltas = [e for e in events if isinstance(e, StreamDelta)]
+    assert [d.text for d in deltas] == ["the ", "answer"]
+    terminal = events[-1]
+    assert isinstance(terminal, StreamTurn)
+    assert terminal.turn.id == turn_id
+    assert terminal.turn.turn_index == 0
+    assert terminal.turn.answer_status == "answered"
+    assert terminal.turn.answer_text == "the answer"
+    assert terminal.turn.citations == (e0,)  # e1 uncited → dropped by grounding
+    assert terminal.turn.evidence_count == 2
+    assert terminal.turn.model == _MODEL
+    # Persisted exactly once, on completion.
+    assert turns.list_for_session(session.id) == [terminal.turn]
+
+
+def test_stream_empty_evidence_persists_not_found_without_invoking_port() -> None:
+    target = _section("ch1.xhtml#core", ("Chapter 1",))
+    owner, source, session, sessions, sources = _seeded(target=target)
+    generation = FakeTeachingGeneration(model=_MODEL)
+    turns = FakeTeachingTurnRepository()
+    service = _post(
+        sessions=sessions,
+        turns=turns,
+        sources=sources,
+        corpus=FakeCorpus(_structure(target)),
+        retrieve=FakeScopedRetrieveEvidence([]),
+        generation=generation,
+    )
+
+    events = list(service.stream(user=owner, session_id=session.id, message="q"))
+
+    assert generation.stream_calls == []
+    assert [e for e in events if isinstance(e, StreamDelta)] == []
+    terminal = events[-1]
+    assert isinstance(terminal, StreamTurn)
+    assert terminal.turn.answer_status == "not_found_in_source"
+    assert terminal.turn.answer_text == ""
+    assert terminal.turn.citations == ()
+    assert terminal.turn.evidence_count == 0
+    assert turns.list_for_session(session.id) == [terminal.turn]
+
+
+def test_stream_whole_reply_sentinel_persists_not_found() -> None:
+    target = _section("ch1.xhtml#core", ("Chapter 1",))
+    owner, source, session, sessions, sources = _seeded(target=target)
+    e0 = _evidence(source.id, "s", anchor="ch1.xhtml#core", score=0.9)
+    generation = FakeTeachingGeneration(
+        answer=GeneratedAnswer(text="", cited_chunk_ids=(), model=_MODEL, found=False),
+        deltas=["NOT_FOUND", "_IN_SOURCE"],
+    )
+    turns = FakeTeachingTurnRepository()
+    service = _post(
+        sessions=sessions,
+        turns=turns,
+        sources=sources,
+        corpus=FakeCorpus(_structure(target)),
+        retrieve=FakeScopedRetrieveEvidence([e0]),
+        generation=generation,
+    )
+
+    events = list(service.stream(user=owner, session_id=session.id, message="q"))
+
+    assert [e for e in events if isinstance(e, StreamDelta)] == []
+    terminal = events[-1]
+    assert terminal.turn.answer_status == "not_found_in_source"
+    assert terminal.turn.citations == ()
+    assert turns.list_for_session(session.id)[0].answer_status == "not_found_in_source"
+
+
+def test_stream_ungrounded_citations_persist_not_found() -> None:
+    target = _section("ch1.xhtml#core", ("Chapter 1",))
+    owner, source, session, sessions, sources = _seeded(target=target)
+    e0 = _evidence(source.id, "s", anchor="ch1.xhtml#core", score=0.9)
+    generation = FakeTeachingGeneration(
+        answer=GeneratedAnswer(
+            text="ungrounded prose", cited_chunk_ids=(uuid4(),), model=_MODEL, found=True
+        ),
+        deltas=["ungrounded prose"],
+    )
+    turns = FakeTeachingTurnRepository()
+    service = _post(
+        sessions=sessions,
+        turns=turns,
+        sources=sources,
+        corpus=FakeCorpus(_structure(target)),
+        retrieve=FakeScopedRetrieveEvidence([e0]),
+        generation=generation,
+    )
+
+    events = list(service.stream(user=owner, session_id=session.id, message="q"))
+
+    assert [d.text for d in events if isinstance(d, StreamDelta)] == ["ungrounded prose"]
+    terminal = events[-1]
+    assert terminal.turn.answer_status == "not_found_in_source"
+    assert terminal.turn.answer_text == ""
+    assert terminal.turn.citations == ()
+    assert terminal.turn.evidence_count == 1
+
+
+def test_stream_consumer_close_persists_nothing_and_closes_port_stream() -> None:
+    target = _section("ch1.xhtml#core", ("Chapter 1",))
+    owner, source, session, sessions, sources = _seeded(target=target)
+    e0 = _evidence(source.id, "s", anchor="ch1.xhtml#core", score=0.9)
+    generation = FakeTeachingGeneration(
+        answer=GeneratedAnswer(
+            text="hello world", cited_chunk_ids=(e0.chunk_id,), model=_MODEL, found=True
+        ),
+        deltas=["hello world"],
+    )
+    turns = FakeTeachingTurnRepository()
+    service = _post(
+        sessions=sessions,
+        turns=turns,
+        sources=sources,
+        corpus=FakeCorpus(_structure(target)),
+        retrieve=FakeScopedRetrieveEvidence([e0]),
+        generation=generation,
+    )
+
+    gen = service.stream(user=owner, session_id=session.id, message="q")
+    first = next(gen)
+    assert isinstance(first, StreamDelta)
+
+    gen.close()
+
+    assert generation.stream_closed is True
+    assert turns.add_calls == 0  # nothing persisted on mid-stream cancellation
+    assert turns.list_for_session(session.id) == []
+
+
+def test_stream_port_failure_wraps_and_persists_nothing() -> None:
+    target = _section("ch1.xhtml#core", ("Chapter 1",))
+    owner, source, session, sessions, sources = _seeded(target=target)
+    e0 = _evidence(source.id, "s", anchor="ch1.xhtml#core", score=0.9)
+    boom = RuntimeError("provider exploded")
+    turns = FakeTeachingTurnRepository()
+    service = _post(
+        sessions=sessions,
+        turns=turns,
+        sources=sources,
+        corpus=FakeCorpus(_structure(target)),
+        retrieve=FakeScopedRetrieveEvidence([e0]),
+        generation=FakeTeachingGeneration(error=boom),
+    )
+
+    with pytest.raises(AnswerGenerationFailed) as excinfo:
+        list(service.stream(user=owner, session_id=session.id, message="q"))
+
+    assert excinfo.value.__cause__ is boom
+    assert turns.add_calls == 0
+    assert turns.list_for_session(session.id) == []
+
+
+def test_teaching_fake_conforms_to_the_teaching_port_protocol() -> None:
+    # GEN-12: the runtime-checkable teaching port now includes ``generate_stream``;
+    # the local teaching fake satisfies it structurally.
+    assert isinstance(FakeTeachingGeneration(), TeachingGenerationPort)
 
 
 def test_teaching_module_imports_no_web_or_provider_sdk() -> None:

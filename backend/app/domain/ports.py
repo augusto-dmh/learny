@@ -15,12 +15,13 @@ Conventions:
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from datetime import datetime
 from typing import Protocol, runtime_checkable
 from uuid import UUID
 
 from app.domain.entities import (
+    AnswerStreamEvent,
     ChunkToEmbed,
     CorpusSectionRecord,
     CorpusStructure,
@@ -451,6 +452,19 @@ class AnswerGenerationPort(Protocol):
         """
         ...
 
+    def generate_stream(
+        self, *, question: str, evidence: Sequence[Evidence]
+    ) -> Iterator[AnswerStreamEvent]:
+        """Stream the same answer as :meth:`generate`, incrementally (GEN-12).
+
+        Yields zero or more :class:`~app.domain.entities.AnswerTextDelta` then
+        exactly one :class:`~app.domain.entities.AnswerCompleted` (always last),
+        whose ``answer`` is authoritative. Closing the iterator early cancels the
+        underlying generation; raises for operational failure like
+        :meth:`generate`.
+        """
+        ...
+
 
 @runtime_checkable
 class TeachingSessionRepository(Protocol):
@@ -533,5 +547,23 @@ class TeachingGenerationPort(Protocol):
         Returns ``found=False`` when the evidence cannot support a response;
         raises for operational failure (the application service maps any raise
         to :class:`~app.application.errors.AnswerGenerationFailed`, TEACH-13).
+        """
+        ...
+
+    def generate_stream(
+        self,
+        *,
+        message: str,
+        target_section_path: tuple[str, ...],
+        history: Sequence[HistoryTurn],
+        evidence: Sequence[Evidence],
+    ) -> Iterator[AnswerStreamEvent]:
+        """Stream the same teaching response as :meth:`generate`, incrementally (GEN-12).
+
+        Yields zero or more :class:`~app.domain.entities.AnswerTextDelta` then
+        exactly one :class:`~app.domain.entities.AnswerCompleted` (always last),
+        whose ``answer`` is authoritative. Closing the iterator early cancels the
+        underlying generation; raises for operational failure like
+        :meth:`generate`.
         """
         ...

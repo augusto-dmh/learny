@@ -1,0 +1,47 @@
+# Hand-authored generation eval cases against the golden book (tests/golden_corpus.py).
+#
+# The golden book has three lexically-disjoint chapters — tides (ch1),
+# volcanoes (ch2), and the printing press (ch3). Each answerable case draws its
+# vocabulary from a single chapter so retrieval selects that chapter; each
+# not-found case is topically disjoint from all three so a relevance-aware
+# generator declines it (the F5 outcome). ``expected_status`` is a hint for the
+# live/snapshot path — the deterministic adapter cannot judge relevance, so the
+# every-PR invariants (tests/test_generation_invariants.py) assert citation
+# validity, not this status. Keep additions grounded in the golden book only.
+cases:
+  - case_id: tides-moon-gravity
+    question: How do the moon's gravity and seawater cause tides?
+    expected_status: answered
+  - case_id: tides-spring-alignment
+    question: Why do spring tides swell the highest water along the coastline?
+    expected_status: answered
+  - case_id: tides-rise-and-fall
+    question: What makes ocean tides rise and fall across the planet?
+    expected_status: answered
+  - case_id: volcano-magma-vent
+    question: How does molten magma escape upward through a vent in the crust?
+    expected_status: answered
+  - case_id: volcano-eruption
+    question: What happens when magma escapes and a volcano erupts?
+    expected_status: answered
+  - case_id: volcano-lava-ash
+    question: How do basalt lava and ash behave during an eruption?
+    expected_status: answered
+  - case_id: printing-movable-type
+    question: How did movable metal type on the printing press reproduce a page?
+    expected_status: answered
+  - case_id: printing-spread-books
+    question: How did the printing press carry pamphlets and books outward?
+    expected_status: answered
+  - case_id: printing-workshop
+    question: How could a workshop reproduce printed pages faster than a scribe?
+    expected_status: answered
+  - case_id: notfound-photosynthesis
+    question: How does photosynthesis convert sunlight inside plant leaves?
+    expected_status: not_found_in_source
+  - case_id: notfound-black-holes
+    question: How do black holes bend light near their event horizon?
+    expected_status: not_found_in_source
+  - case_id: notfound-inflation
+    question: What drives inflation in a modern market economy?
+    expected_status: not_found_in_source

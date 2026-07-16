@@ -21,6 +21,7 @@ the teaching repositories on the shared rolled-back ``db_conn``.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator, Sequence
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
@@ -30,6 +31,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import Connection
 
 from app.domain.entities import (
+    AnswerTextDelta,
     CorpusSectionRecord,
     Evidence,
     GeneratedAnswer,
@@ -824,3 +826,227 @@ def test_post_turn_rate_limit_returns_429(
         throttled_teaching_client, session.id, {"message": "zzzqqq unmatchable"}, csrf=csrf
     )
     assert throttled.status_code == 429, throttled.text
+
+
+# --- POST /turns/stream (SSE, GEN-14..17) --------------------------------------
+#
+# Derived from the P2 SSE ACs at the route level: the deterministic provider streams
+# the UI Message Stream v1 frames with its header and persists the turn on
+# completion; pre-stream guards surface as plain HTTP (404/409/422/429, plus the
+# CSRF 403 dependency); a mid-stream provider failure is rendered as a protocol
+# error part and persists nothing; the not-found outcome emits the status part.
+
+
+def _turn_stream(
+    client: TestClient,
+    session_id: object,
+    body: dict,
+    *,
+    csrf: str | None,
+    origin: str | None = None,
+):
+    headers: dict[str, str] = {}
+    if csrf is not None:
+        headers["X-CSRF-Token"] = csrf
+    if origin is not None:
+        headers["Origin"] = origin
+    return client.post(
+        f"/api/teaching-sessions/{session_id}/turns/stream", json=body, headers=headers
+    )
+
+
+def _parse_ui_stream(text: str) -> list:
+    parts: list = []
+    for line in text.splitlines():
+        if line.startswith("data: "):
+            payload = line[len("data: ") :]
+            parts.append(payload if payload == "[DONE]" else json.loads(payload))
+    return parts
+
+
+def _part_types(parts: list) -> list[str]:
+    return [p["type"] if isinstance(p, dict) else p for p in parts]
+
+
+def test_turn_stream_emits_full_frame_sequence_and_persists_turn(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # GEN-14: the answered turn stream emits the full frame sequence with the header,
+    # and the turn is persisted on completion (GEN-13) — readable back afterwards.
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "tstream@example.com")
+    _embed_all(db_conn, UUID(source_id))
+    session = _seed_session(db_conn, UUID(source_id))
+
+    resp = _turn_stream(
+        auth_client, session.id, {"message": "photosynthesis sunlight energy"}, csrf=csrf
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["x-vercel-ai-ui-message-stream"] == "v1"
+    parts = _parse_ui_stream(resp.text)
+    assert _part_types(parts) == [
+        "start",
+        "text-start",
+        "text-delta",
+        "text-end",
+        "data-citations",
+        "data-answer-status",
+        "finish",
+        "[DONE]",
+    ]
+    delta = next(p for p in parts if isinstance(p, dict) and p["type"] == "text-delta")
+    assert delta["delta"] == _PHOTO
+    citations = next(p for p in parts if isinstance(p, dict) and p["type"] == "data-citations")
+    assert len(citations["data"]) == 1
+    assert citations["data"][0]["anchor"] == _ANCHOR
+    assert citations["data"][0]["source_id"] == source_id
+    status = next(p for p in parts if isinstance(p, dict) and p["type"] == "data-answer-status")
+    assert status["data"] == {"status": "answered"}
+
+    # Persisted on completion — the conversation reads back one answered turn.
+    read = auth_client.get(f"/api/teaching-sessions/{session.id}")
+    assert read.status_code == 200, read.text
+    turns = read.json()["turns"]
+    assert len(turns) == 1
+    assert turns[0]["answer_status"] == "answered"
+    assert turns[0]["turn_index"] == 0
+
+
+def test_turn_stream_not_found_emits_status_and_persists_not_found(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # GEN-16 (not-found stream): scoped retrieval finds nothing → no text-delta, a
+    # not_found_in_source status part, and a persisted not-found turn.
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "tstream-nf@example.com")
+    session = _seed_session(db_conn, UUID(source_id))  # corpus present, NOT embedded
+
+    resp = _turn_stream(
+        auth_client, session.id, {"message": "zzzqqq unmatchable token"}, csrf=csrf
+    )
+
+    assert resp.status_code == 200, resp.text
+    parts = _parse_ui_stream(resp.text)
+    assert "text-delta" not in _part_types(parts)
+    status = next(p for p in parts if isinstance(p, dict) and p["type"] == "data-answer-status")
+    assert status["data"] == {"status": "not_found_in_source"}
+
+    read = auth_client.get(f"/api/teaching-sessions/{session.id}")
+    assert read.json()["turns"][0]["answer_status"] == "not_found_in_source"
+
+
+def test_turn_stream_missing_session_returns_plain_404(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    _register(auth_client, "tstream-404@example.com")
+    csrf = _csrf(auth_client)
+    resp = _turn_stream(auth_client, uuid4(), {"message": "hi"}, csrf=csrf)
+    assert resp.status_code == 404, resp.text
+    assert "start" not in resp.text
+
+
+def test_turn_stream_not_ready_returns_plain_409(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    user_id = _register(auth_client, "tstream-409@example.com")
+    csrf = _csrf(auth_client)
+    source_id = _persist_source(db_conn, user_id, status="uploaded")
+    _seed_section_corpus(db_conn, source_id)
+    session = _seed_session(db_conn, source_id)
+    resp = _turn_stream(auth_client, session.id, {"message": "hi"}, csrf=csrf)
+    assert resp.status_code == 409, resp.text
+
+
+def test_turn_stream_blank_message_returns_plain_422(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "tstream-422@example.com")
+    session = _seed_session(db_conn, UUID(source_id))
+    resp = _turn_stream(auth_client, session.id, {"message": "   "}, csrf=csrf)
+    assert resp.status_code == 422, resp.text
+    assert "start" not in resp.text
+
+
+def test_turn_stream_missing_csrf_returns_403(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    source_id, _ = _seed_ready_source(auth_client, db_conn, "tstream-403@example.com")
+    session = _seed_session(db_conn, UUID(source_id))
+    resp = _turn_stream(auth_client, session.id, {"message": "hi"}, csrf=None)
+    assert resp.status_code == 403, resp.text
+
+
+def test_turn_stream_rate_limit_returns_429(
+    throttled_teaching_client: TestClient, db_conn: Connection
+) -> None:
+    source_id, csrf = _seed_ready_source(
+        throttled_teaching_client, db_conn, "tstream-429@example.com"
+    )
+    session = _seed_session(db_conn, UUID(source_id))
+    for _ in range(3):
+        resp = _turn_stream(
+            throttled_teaching_client, session.id, {"message": "zzzqqq unmatchable"}, csrf=csrf
+        )
+        assert resp.status_code == 200, resp.text
+    throttled = _turn_stream(
+        throttled_teaching_client, session.id, {"message": "zzzqqq unmatchable"}, csrf=csrf
+    )
+    assert throttled.status_code == 429, throttled.text
+
+
+def test_turn_stream_mid_stream_failure_emits_error_part_and_persists_nothing(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # GEN-16/17: a provider failure after the first delta is rendered as a protocol
+    # error part; the turn is persisted only on completion, so nothing is persisted.
+    from app.infrastructure.web.dependencies import get_teaching_generation
+
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "tstream-mid@example.com")
+    _embed_all(db_conn, UUID(source_id))
+    session = _seed_session(db_conn, UUID(source_id))
+
+    class _MidStreamRaisingTeachingAdapter:
+        model = _MODEL
+
+        def generate(
+            self,
+            *,
+            message: str,
+            target_section_path: tuple[str, ...],
+            history: Sequence[HistoryTurn],
+            evidence: Sequence[Evidence],
+        ) -> GeneratedAnswer:
+            raise AssertionError("stream path must not call generate")
+
+        def generate_stream(
+            self,
+            *,
+            message: str,
+            target_section_path: tuple[str, ...],
+            history: Sequence[HistoryTurn],
+            evidence: Sequence[Evidence],
+        ):
+            yield AnswerTextDelta(text="partial ")
+            raise RuntimeError("provider-secret-internal-detail")
+
+    auth_client.app.dependency_overrides[get_teaching_generation] = (
+        lambda: _MidStreamRaisingTeachingAdapter()
+    )
+    try:
+        resp = _turn_stream(
+            auth_client, session.id, {"message": "photosynthesis sunlight"}, csrf=csrf
+        )
+    finally:
+        auth_client.app.dependency_overrides.pop(get_teaching_generation, None)
+
+    assert resp.status_code == 200, resp.text
+    parts = _parse_ui_stream(resp.text)
+    types = _part_types(parts)
+    assert "error" in types
+    assert "finish" not in types
+    error_part = next(p for p in parts if isinstance(p, dict) and p["type"] == "error")
+    assert error_part["errorText"] == "Answer generation failed. Please try again."
+    assert "provider-secret-internal-detail" not in resp.text
+
+    # Nothing persisted — the conversation is still empty.
+    read = auth_client.get(f"/api/teaching-sessions/{session.id}")
+    assert read.json()["turns"] == []

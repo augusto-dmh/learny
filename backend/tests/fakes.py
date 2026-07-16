@@ -7,7 +7,7 @@ is involved, so service rules can be tested in isolation and deterministically.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
 from itertools import count
@@ -15,6 +15,9 @@ from uuid import UUID, uuid4
 
 from app.domain.entities import (
     ACTIVE_STATUSES,
+    AnswerCompleted,
+    AnswerStreamEvent,
+    AnswerTextDelta,
     ChunkToEmbed,
     CorpusSectionRecord,
     CorpusStructure,
@@ -468,10 +471,16 @@ class FakeRetrieveEvidence:
 class FakeAnswerGeneration:
     """``AnswerGenerationPort`` double: returns a preset answer or raises.
 
-    Records each ``generate`` call so tests assert the port was (not) invoked and
-    that the trimmed question plus the retrieved evidence reached it. ``model`` is
-    the stable adapter identity the service reads on the not-found-on-empty path
-    (where ``generate`` is deliberately not called).
+    Records each ``generate`` / ``generate_stream`` call so tests assert the port
+    was (not) invoked and that the trimmed question plus the retrieved evidence
+    reached it. ``model`` is the stable adapter identity the service reads on the
+    not-found-on-empty path (where the port is deliberately not called).
+
+    ``generate_stream`` yields the text deltas (``deltas`` when given, else the
+    preset answer's text as one delta) then exactly one ``AnswerCompleted``; a
+    configured ``error`` raises on first iteration (a provider failure surfacing
+    during the stream). Its ``try/finally`` sets ``stream_closed`` so cancellation
+    (consumer ``close()``) is observable.
     """
 
     def __init__(
@@ -479,12 +488,16 @@ class FakeAnswerGeneration:
         *,
         answer: GeneratedAnswer | None = None,
         error: Exception | None = None,
+        deltas: Sequence[str] | None = None,
         model: str = "local-extractive",
     ) -> None:
         self._answer = answer
         self._error = error
+        self._deltas = deltas
         self.model = model
         self.calls: list[dict[str, object]] = []
+        self.stream_calls: list[dict[str, object]] = []
+        self.stream_closed = False
 
     def generate(
         self, *, question: str, evidence: Sequence[Evidence]
@@ -494,6 +507,25 @@ class FakeAnswerGeneration:
             raise self._error
         assert self._answer is not None, "no preset answer configured"
         return self._answer
+
+    def generate_stream(
+        self, *, question: str, evidence: Sequence[Evidence]
+    ) -> Iterator[AnswerStreamEvent]:
+        self.stream_calls.append({"question": question, "evidence": list(evidence)})
+        if self._error is not None:
+            raise self._error
+        assert self._answer is not None, "no preset answer configured"
+        texts = (
+            list(self._deltas)
+            if self._deltas is not None
+            else ([self._answer.text] if self._answer.text else [])
+        )
+        try:
+            for text in texts:
+                yield AnswerTextDelta(text=text)
+            yield AnswerCompleted(answer=self._answer)
+        finally:
+            self.stream_closed = True
 
 
 class FakeRetrievalPort:

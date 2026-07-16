@@ -16,9 +16,16 @@ port, never a domain change (ADR-0007/0009).
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 
-from app.domain.entities import Evidence, GeneratedAnswer, HistoryTurn
+from app.domain.entities import (
+    AnswerCompleted,
+    AnswerStreamEvent,
+    AnswerTextDelta,
+    Evidence,
+    GeneratedAnswer,
+    HistoryTurn,
+)
 
 # Model identity surfaced on every result's diagnostics (QA-04/TEACH-24);
 # distinguishes this extractive default from a future provider adapter.
@@ -53,6 +60,24 @@ def _extractive_answer(
     )
 
 
+def _extractive_stream(
+    evidence: Sequence[Evidence], *, model: str
+) -> Iterator[AnswerStreamEvent]:
+    """Stream the extractive answer as one full-text delta then the completed event.
+
+    Trivially chunked (the whole extractive text in a single delta) so the
+    streaming surface is provider-independent: the deterministic path drives the
+    same event contract the Anthropic adapter does (design §5). The completed event
+    carries the authoritative :class:`GeneratedAnswer`. An empty/not-found answer
+    (no evidence — the services short-circuit before this runs) yields no text
+    delta, only the completed event.
+    """
+    answer = _extractive_answer(evidence, model=model)
+    if answer.text:
+        yield AnswerTextDelta(text=answer.text)
+    yield AnswerCompleted(answer=answer)
+
+
 class DeterministicAnswerAdapter:
     """``AnswerGenerationPort`` implementation — extractive, evidence-only.
 
@@ -70,6 +95,12 @@ class DeterministicAnswerAdapter:
     ) -> GeneratedAnswer:
         """Compose an answer from the top evidence snippets, citing those chunks."""
         return _extractive_answer(evidence, model=self.model)
+
+    def generate_stream(
+        self, *, question: str, evidence: Sequence[Evidence]
+    ) -> Iterator[AnswerStreamEvent]:
+        """Stream the extractive answer (one full-text delta, then completed)."""
+        return _extractive_stream(evidence, model=self.model)
 
 
 class DeterministicTeachingAdapter:
@@ -98,3 +129,14 @@ class DeterministicTeachingAdapter:
     ) -> GeneratedAnswer:
         """Compose a teaching response from the top scoped evidence snippets."""
         return _extractive_answer(evidence, model=self.model)
+
+    def generate_stream(
+        self,
+        *,
+        message: str,
+        target_section_path: tuple[str, ...],
+        history: Sequence[HistoryTurn],
+        evidence: Sequence[Evidence],
+    ) -> Iterator[AnswerStreamEvent]:
+        """Stream the extractive teaching response (one full-text delta, then completed)."""
+        return _extractive_stream(evidence, model=self.model)

@@ -41,6 +41,11 @@ from app.application.errors import (
     ValidationError,
 )
 
+# The fixed, generic body for a failed generation — shared by the buffered 502
+# handler and the streaming presenter's protocol ``error`` part, so both surface the
+# identical message and never echo the wrapped provider/internal detail (QA-17).
+ANSWER_GENERATION_FAILED_DETAIL = "Answer generation failed. Please try again."
+
 # 422 for validation; tolerate either spelling across Starlette versions
 # (HTTP_422_UNPROCESSABLE_ENTITY was renamed to ..._CONTENT). Avoid evaluating
 # the deprecated name unless the new one is absent (its access warns).
@@ -108,7 +113,7 @@ async def _answer_generation_failed_handler(
     # internal detail, so the message is never echoed (QA-17).
     return JSONResponse(
         status_code=status.HTTP_502_BAD_GATEWAY,
-        content={"detail": "Answer generation failed. Please try again."},
+        content={"detail": ANSWER_GENERATION_FAILED_DETAIL},
     )
 
 

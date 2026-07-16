@@ -14,7 +14,13 @@ import ast
 import inspect
 from uuid import uuid4
 
-from app.domain.entities import Evidence, HistoryTurn
+from app.domain.entities import (
+    AnswerCompleted,
+    AnswerTextDelta,
+    Evidence,
+    HistoryTurn,
+)
+from app.domain.ports import AnswerGenerationPort, TeachingGenerationPort
 from app.infrastructure.answering import DeterministicAnswerAdapter
 from app.infrastructure.answering import local as local_module
 from app.infrastructure.answering.local import DeterministicTeachingAdapter
@@ -210,3 +216,80 @@ def test_teaching_model_identity_readable_without_a_generate_call() -> None:
     # TEACH-11/TEACH-24: the turn service reads this stable identity on the
     # empty-evidence not-found path, where the port is never invoked.
     assert DeterministicTeachingAdapter().model == _MODEL
+
+
+# --- Streaming contract (GEN-12) -----------------------------------------------
+#
+# Derived from the domain stream contract (design §5) and C1 Done-when: the
+# deterministic adapters implement ``generate_stream`` as one full-text delta then
+# exactly one AnswerCompleted (always last, authoritative — equal to the buffered
+# ``generate`` result); the stream is deterministic; and both deterministic
+# adapters plus the answer fake structurally satisfy their port Protocols.
+
+
+def test_answer_stream_yields_full_text_delta_then_one_authoritative_completed() -> None:
+    adapter = DeterministicAnswerAdapter()
+    evidence = [_evidence("alpha"), _evidence("beta")]
+
+    events = list(adapter.generate_stream(question="q", evidence=evidence))
+
+    # The full extractive text arrives as a single delta, then exactly one
+    # AnswerCompleted, always last.
+    deltas = [e for e in events if isinstance(e, AnswerTextDelta)]
+    completed = [e for e in events if isinstance(e, AnswerCompleted)]
+    assert deltas == [AnswerTextDelta(text="alpha\n\nbeta")]
+    assert len(completed) == 1
+    assert isinstance(events[-1], AnswerCompleted)
+    # The completed event's answer is authoritative — identical to the buffered path.
+    assert events[-1].answer == adapter.generate(question="q", evidence=evidence)
+    assert events[-1].answer.text == "alpha\n\nbeta"
+    assert events[-1].answer.found is True
+
+
+def test_answer_stream_is_deterministic() -> None:
+    adapter = DeterministicAnswerAdapter()
+    evidence = [_evidence("alpha")]
+
+    first = list(adapter.generate_stream(question="q", evidence=evidence))
+    second = list(adapter.generate_stream(question="q", evidence=evidence))
+
+    assert first == second
+
+
+def test_teaching_stream_yields_full_text_delta_then_one_authoritative_completed() -> None:
+    adapter = DeterministicTeachingAdapter()
+    evidence = [_evidence("alpha"), _evidence("beta")]
+
+    events = list(
+        adapter.generate_stream(
+            message="explain",
+            target_section_path=("Chapter 1",),
+            history=[HistoryTurn(message="earlier", response_text="prior")],
+            evidence=evidence,
+        )
+    )
+
+    deltas = [e for e in events if isinstance(e, AnswerTextDelta)]
+    completed = [e for e in events if isinstance(e, AnswerCompleted)]
+    assert deltas == [AnswerTextDelta(text="alpha\n\nbeta")]
+    assert len(completed) == 1
+    assert isinstance(events[-1], AnswerCompleted)
+    assert events[-1].answer == adapter.generate(
+        message="explain",
+        target_section_path=("Chapter 1",),
+        history=[HistoryTurn(message="earlier", response_text="prior")],
+        evidence=evidence,
+    )
+
+
+def test_deterministic_adapters_conform_to_their_port_protocols() -> None:
+    # GEN-12: the runtime-checkable ports now include ``generate_stream``; the
+    # deterministic adapters satisfy them structurally.
+    assert isinstance(DeterministicAnswerAdapter(), AnswerGenerationPort)
+    assert isinstance(DeterministicTeachingAdapter(), TeachingGenerationPort)
+
+
+def test_answer_fake_conforms_to_the_answer_port_protocol() -> None:
+    from tests.fakes import FakeAnswerGeneration
+
+    assert isinstance(FakeAnswerGeneration(), AnswerGenerationPort)

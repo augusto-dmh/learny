@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager
+from functools import lru_cache
 from typing import Annotated
 from uuid import uuid4
 
@@ -51,8 +52,8 @@ from app.domain.ports import (
     TeachingGenerationPort,
 )
 from app.infrastructure.answering import (
-    DeterministicAnswerAdapter,
-    DeterministicTeachingAdapter,
+    build_answer_adapter,
+    build_teaching_adapter,
 )
 from app.infrastructure.clock import SystemClock
 from app.infrastructure.db.engine import get_engine
@@ -324,15 +325,15 @@ def get_retrieve_evidence(conn: DbConnection) -> RetrieveEvidence:
     )
 
 
-# Process-wide default answer generator (deterministic, network-free — AD-024).
-# Overridable in tests via ``get_answer_generation``, exactly like ``get_storage``;
-# swapping in a provider adapter later is a one-line change here (ADR-0007/0009).
-_answering: AnswerGenerationPort = DeterministicAnswerAdapter()
-
-
+# Process-wide answer generator, selected from settings at first use (ADR-0020).
+# ``local`` (default) stays deterministic and network-free; ``anthropic`` builds the
+# Claude adapter. Cached like ``get_settings`` so the provider is resolved once per
+# process, and overridable in tests via ``dependency_overrides[get_answer_generation]``
+# exactly like before.
+@lru_cache
 def get_answer_generation() -> AnswerGenerationPort:
-    """FastAPI dependency: the process-wide answer generator (overridable in tests)."""
-    return _answering
+    """FastAPI dependency: the settings-selected answer generator (overridable in tests)."""
+    return build_answer_adapter(get_settings())
 
 
 AnswerGeneration = Annotated[AnswerGenerationPort, Depends(get_answer_generation)]
@@ -394,15 +395,16 @@ def get_list_teaching_sessions(conn: DbConnection) -> ListTeachingSessions:
     )
 
 
-# Process-wide default teaching generator (deterministic, network-free — AD-032).
-# Overridable in tests via ``get_teaching_generation``, exactly like the answer
-# generator; swapping in a provider adapter later is a one-line change here.
-_teaching: TeachingGenerationPort = DeterministicTeachingAdapter()
-
-
+# Process-wide teaching generator, selected from settings at first use (ADR-0020),
+# governed by the same ``LEARNY_GENERATION_PROVIDER`` switch as the answer path (D-2):
+# ``local`` (default) stays deterministic and network-free; ``anthropic`` builds the
+# Claude teaching adapter. Cached like ``get_answer_generation`` so the provider is
+# resolved once per process, and overridable in tests via
+# ``dependency_overrides[get_teaching_generation]`` exactly as before.
+@lru_cache
 def get_teaching_generation() -> TeachingGenerationPort:
-    """FastAPI dependency: the process-wide teaching generator (overridable in tests)."""
-    return _teaching
+    """FastAPI dependency: the settings-selected teaching generator (overridable in tests)."""
+    return build_teaching_adapter(get_settings())
 
 
 TeachingGeneration = Annotated[TeachingGenerationPort, Depends(get_teaching_generation)]
