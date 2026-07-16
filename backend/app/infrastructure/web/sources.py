@@ -19,13 +19,19 @@ from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile, status
 from pydantic import BaseModel
 
-from app.application.corpus import ReadSourceStructure
+from app.application.corpus import ReadSection, ReadSourceStructure
 from app.application.errors import StorageUnavailable
 from app.application.sources import CreateSource, GetSource, ListSources
-from app.domain.entities import CorpusStructure, Source, StructureSection, User
+from app.domain.entities import (
+    CorpusStructure,
+    SectionContent,
+    Source,
+    StructureSection,
+    User,
+)
 from app.infrastructure.web.csrf import enforce_csrf, enforce_origin
 from app.infrastructure.web.dependencies import (
     AppSettings,
@@ -33,6 +39,7 @@ from app.infrastructure.web.dependencies import (
     get_create_source,
     get_get_source,
     get_list_sources,
+    get_read_section,
     get_read_source_structure,
 )
 from app.infrastructure.web.rate_limit import rate_limit_upload
@@ -201,3 +208,39 @@ def get_source_structure(
 ) -> BookStructureView:
     """Return the owner's parsed book structure (200); 404 missing/non-owner/no-corpus."""
     return BookStructureView.from_structure(service(user=user, source_id=source_id))
+
+
+class SectionContentView(BaseModel):
+    """Public view of one section's readable content (FE-14).
+
+    ``anchor`` echoes the requested location so a citation round-trips to exactly
+    this section; ``section_path`` is the root-to-node breadcrumb and ``markdown``
+    is the section's derived text for the reader.
+    """
+
+    anchor: str
+    title: str
+    section_path: list[str]
+    markdown: str
+
+    @classmethod
+    def from_content(cls, section: SectionContent) -> SectionContentView:
+        return cls(
+            anchor=section.anchor,
+            title=section.title,
+            section_path=list(section.section_path),
+            markdown=section.markdown,
+        )
+
+
+@router.get("/{source_id}/section")
+def get_source_section(
+    source_id: UUID,
+    anchor: Annotated[str, Query(min_length=1)],
+    user: Annotated[User, Depends(get_authenticated_user)],
+    service: Annotated[ReadSection, Depends(get_read_section)],
+) -> SectionContentView:
+    """Return one owned section by anchor (200); 404 missing/non-owner/no-corpus/unknown-anchor."""
+    return SectionContentView.from_content(
+        service(user=user, source_id=source_id, anchor=anchor)
+    )

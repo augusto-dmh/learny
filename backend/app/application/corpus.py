@@ -24,6 +24,7 @@ from app.domain.entities import (
     CorpusStructure,
     IngestionEvent,
     IngestionJob,
+    SectionContent,
     Source,
     User,
 )
@@ -160,3 +161,38 @@ class ReadSourceStructure:
         if structure is None:
             raise CorpusNotFound("No corpus for this source.")
         return structure
+
+
+class ReadSection:
+    """Return one section's content for the owner, or a not-found (FE-14).
+
+    Mirrors ``ReadSourceStructure``: ownership is enforced first via
+    ``authorized_source`` so a missing source and a non-owner collapse to
+    ``SourceNotFound`` (no existence disclosure). An owned source whose corpus is
+    absent and an anchor that matches no section both surface as ``get_section``
+    returning ``None`` → ``CorpusNotFound``; the web layer maps both to 404, so a
+    valid anchor is indistinguishable from an unknown one to a non-owner.
+    """
+
+    def __init__(
+        self,
+        *,
+        sources: SourceRepository,
+        corpus: CorpusRepository,
+        authorize: AuthorizeOwnership,
+    ) -> None:
+        self._sources = sources
+        self._corpus = corpus
+        self._authorize = authorize
+
+    def __call__(self, *, user: User, source_id: UUID, anchor: str) -> SectionContent:
+        authorized_source(
+            user=user,
+            source_id=source_id,
+            sources=self._sources,
+            authorize=self._authorize,
+        )
+        section = self._corpus.get_section(source_id, anchor)
+        if section is None:
+            raise CorpusNotFound("No section for this anchor.")
+        return section
