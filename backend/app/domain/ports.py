@@ -349,8 +349,23 @@ class CorpusRepository(Protocol):
 
         The corpus text index quiz reconciliation reads after a corpus replace: each
         :class:`~app.domain.entities.ReconcileSection` carries the section's concatenated
-        chunk text so a snapshotted ``source_excerpt`` can be re-checked for presence. All
-        sections (leaf or not) are returned so a relocated quote can be found anywhere.
+        chunk text so a snapshotted ``source_excerpt`` can be re-checked for presence, plus
+        its ``anchor_aliases`` so an item snapshotted against a merged-away anchor reconciles
+        to the surviving section (AD-085). All sections (leaf or not) are returned so a
+        relocated quote can be found anywhere.
+        """
+        ...
+
+    def expand_anchors(
+        self, source_id: UUID, anchors: Sequence[str]
+    ) -> tuple[str, ...]:
+        """Grow ``anchors`` to include the aliases of the sections they resolve to (AD-085).
+
+        Returns the input anchors plus, for every section whose canonical anchor is in
+        ``anchors`` or that carries one of ``anchors`` as an alias, that section's canonical
+        anchor and all its aliases (deduplicated, input order preserved). Teaching-scoped
+        retrieval expands its target subtree through this so evidence from a section that
+        normalization merged away is still reachable (ING-23). An empty input returns empty.
         """
         ...
 

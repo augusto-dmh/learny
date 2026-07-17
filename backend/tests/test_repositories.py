@@ -452,6 +452,7 @@ def _section_record(
     markdown: str,
     blocks: tuple[ParsedBlock, ...] = (),
     chunks: tuple[SectionChunk, ...] = (),
+    anchor_aliases: tuple[str, ...] = (),
 ) -> CorpusSectionRecord:
     return CorpusSectionRecord(
         section=ParsedSection(
@@ -461,6 +462,7 @@ def _section_record(
             section_path=section_path,
             anchor=anchor,
             blocks=blocks,
+            anchor_aliases=anchor_aliases,
         ),
         markdown=markdown,
         chunks=chunks,
@@ -942,6 +944,175 @@ def test_get_section_of_different_source_returns_none(db_conn: Connection) -> No
     )
 
     assert repo.get_section(owned.id, "shared.xhtml") is None
+
+
+def test_replace_persists_and_reads_back_anchor_aliases(db_conn: Connection) -> None:
+    # AD-085: a section's anchor_aliases round-trip through replace → section_texts.
+    source = _persisted_source(db_conn, "corpus-alias-persist@example.com")
+    repo = SqlAlchemyCorpusRepository(db_conn)
+    repo.replace(
+        source.id,
+        title="Bk",
+        authors=(),
+        language=None,
+        schema_version=1,
+        sections=(
+            _section_record(
+                position=0,
+                title="Survivor",
+                section_path=("Survivor",),
+                anchor="survivor.xhtml",
+                markdown="body",
+                anchor_aliases=("merged-a.xhtml", "merged-b.xhtml"),
+            ),
+        ),
+    )
+
+    sections = repo.section_texts(source.id)
+    assert len(sections) == 1
+    assert sections[0].anchor == "survivor.xhtml"
+    assert sections[0].anchor_aliases == ("merged-a.xhtml", "merged-b.xhtml")
+
+
+def test_section_texts_empty_aliases_when_none(db_conn: Connection) -> None:
+    # A clean book's sections carry no aliases (empty tuple, not None).
+    source = _persisted_source(db_conn, "corpus-alias-empty@example.com")
+    repo = SqlAlchemyCorpusRepository(db_conn)
+    repo.replace(
+        source.id,
+        title="Bk",
+        authors=(),
+        language=None,
+        schema_version=1,
+        sections=(
+            _section_record(
+                position=0,
+                title="Clean",
+                section_path=("Clean",),
+                anchor="clean.xhtml",
+                markdown="body",
+            ),
+        ),
+    )
+
+    assert repo.section_texts(source.id)[0].anchor_aliases == ()
+
+
+def test_get_section_resolves_an_alias_to_the_surviving_section(db_conn: Connection) -> None:
+    # ING-21: a merged-away anchor kept as an alias resolves to its survivor (200).
+    source = _persisted_source(db_conn, "corpus-alias-lookup@example.com")
+    repo = SqlAlchemyCorpusRepository(db_conn)
+    repo.replace(
+        source.id,
+        title="Bk",
+        authors=(),
+        language=None,
+        schema_version=1,
+        sections=(
+            _section_record(
+                position=0,
+                title="Survivor",
+                section_path=("Survivor",),
+                anchor="survivor.xhtml",
+                markdown="survivor body",
+                anchor_aliases=("merged.xhtml",),
+            ),
+        ),
+    )
+
+    # The alias resolves to the surviving section...
+    aliased = repo.get_section(source.id, "merged.xhtml")
+    assert aliased is not None
+    assert aliased.anchor == "survivor.xhtml"
+    assert aliased.title == "Survivor"
+    assert aliased.markdown == "survivor body"
+    # ...and the canonical anchor keeps resolving exactly as before.
+    canonical = repo.get_section(source.id, "survivor.xhtml")
+    assert canonical is not None
+    assert canonical.anchor == "survivor.xhtml"
+
+
+def test_get_section_canonical_wins_when_an_alias_collides(db_conn: Connection) -> None:
+    # Edge case: an alias string equal to another section's canonical anchor must
+    # not shadow it — the canonical section wins the lookup.
+    source = _persisted_source(db_conn, "corpus-alias-collide@example.com")
+    repo = SqlAlchemyCorpusRepository(db_conn)
+    repo.replace(
+        source.id,
+        title="Bk",
+        authors=(),
+        language=None,
+        schema_version=1,
+        sections=(
+            _section_record(
+                position=0,
+                title="Owner",
+                section_path=("Owner",),
+                anchor="shared.xhtml",
+                markdown="owner body",
+            ),
+            _section_record(
+                position=1,
+                title="Aliaser",
+                section_path=("Aliaser",),
+                anchor="aliaser.xhtml",
+                markdown="aliaser body",
+                anchor_aliases=("shared.xhtml",),
+            ),
+        ),
+    )
+
+    section = repo.get_section(source.id, "shared.xhtml")
+    assert section is not None
+    assert section.anchor == "shared.xhtml"
+    assert section.title == "Owner"
+
+
+def test_expand_anchors_adds_aliases_of_matched_sections(db_conn: Connection) -> None:
+    # AD-085: expand grows an input anchor to include the aliases of the section it
+    # names, and resolves an input alias back to its canonical anchor + siblings.
+    source = _persisted_source(db_conn, "corpus-expand@example.com")
+    repo = SqlAlchemyCorpusRepository(db_conn)
+    repo.replace(
+        source.id,
+        title="Bk",
+        authors=(),
+        language=None,
+        schema_version=1,
+        sections=(
+            _section_record(
+                position=0,
+                title="Target",
+                section_path=("Target",),
+                anchor="target.xhtml",
+                markdown="body",
+                anchor_aliases=("merged-1.xhtml", "merged-2.xhtml"),
+            ),
+            _section_record(
+                position=1,
+                title="Other",
+                section_path=("Other",),
+                anchor="other.xhtml",
+                markdown="body",
+            ),
+        ),
+    )
+
+    # Canonical input → its aliases join the set; an unrelated section stays out.
+    forward = repo.expand_anchors(source.id, ["target.xhtml"])
+    assert set(forward) == {"target.xhtml", "merged-1.xhtml", "merged-2.xhtml"}
+    assert forward[0] == "target.xhtml"  # input order preserved first
+    assert "other.xhtml" not in forward
+
+    # Alias input → the canonical anchor and its sibling aliases join the set.
+    backward = repo.expand_anchors(source.id, ["merged-1.xhtml"])
+    assert set(backward) == {"merged-1.xhtml", "target.xhtml", "merged-2.xhtml"}
+
+
+def test_expand_anchors_empty_input_returns_empty(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "corpus-expand-empty@example.com")
+    repo = SqlAlchemyCorpusRepository(db_conn)
+    assert repo.expand_anchors(source.id, []) == ()
 
 
 # ---- Embedding-index repository (RET-09/11) -------------------------------

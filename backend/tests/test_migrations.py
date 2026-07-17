@@ -819,6 +819,52 @@ def test_migration_0008_creates_quiz_tables(monkeypatch) -> None:
 
 
 @pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
+def test_migration_0009_adds_anchor_aliases_column(monkeypatch) -> None:
+    """0009 up: corpus_sections gains a NOT NULL anchor_aliases TEXT[] defaulting to
+    the empty array; down one step to 0008 drops it, and a re-up restores it
+    (upgrade→downgrade→upgrade round-trip, AD-085)."""
+    monkeypatch.setenv("LEARNY_DATABASE_URL", TEST_DB_URL)
+    cfg = _alembic_config(TEST_DB_URL)
+
+    command.upgrade(cfg, "head")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        columns = {c["name"]: c for c in inspect(engine).get_columns("corpus_sections")}
+        assert "anchor_aliases" in columns
+        assert columns["anchor_aliases"]["nullable"] is False
+        # A section inserted without a value defaults to the empty array (not NULL).
+        with engine.connect() as conn:
+            coltype = conn.execute(
+                text(
+                    "SELECT data_type FROM information_schema.columns "
+                    "WHERE table_name = 'corpus_sections' AND column_name = 'anchor_aliases'"
+                )
+            ).scalar_one()
+        assert coltype == "ARRAY"
+    finally:
+        engine.dispose()
+
+    # Down one step to 0008: the column is dropped, the table survives.
+    command.downgrade(cfg, "0008_quiz_schema")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        assert "corpus_sections" in set(inspect(engine).get_table_names())
+        columns = {c["name"] for c in inspect(engine).get_columns("corpus_sections")}
+        assert "anchor_aliases" not in columns
+    finally:
+        engine.dispose()
+
+    # Re-upgrade restores the column — the schema round-trips.
+    command.upgrade(cfg, "head")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        columns = {c["name"] for c in inspect(engine).get_columns("corpus_sections")}
+        assert "anchor_aliases" in columns
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
 def test_in_process_migration_preserves_app_root_logging(monkeypatch) -> None:
     """An in-process migration must not reconfigure the app-owned root logger.
 

@@ -20,8 +20,8 @@ Tables:
 - ``corpus_documents`` — id (uuid pk), source_id (fk, unique), title, authors (jsonb),
                           language, schema_version, created_at
 - ``corpus_sections``  — id (uuid pk), document_id (fk, indexed), position, depth, title,
-                          section_path (jsonb), anchor, markdown, created_at;
-                          unique (document_id, position)
+                          section_path (jsonb), anchor, anchor_aliases (text[]), markdown,
+                          created_at; unique (document_id, position)
 - ``corpus_blocks``    — id (uuid pk), section_id (fk, indexed), position, block_type,
                           html_fragment, created_at
 - ``corpus_chunks``    — id (uuid pk), section_id (fk, indexed), chunk_index, text,
@@ -62,7 +62,7 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import CITEXT, JSONB, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, CITEXT, JSONB, UUID
 
 # Consistent constraint naming so migrations are deterministic and reversible.
 NAMING_CONVENTION = {
@@ -231,6 +231,14 @@ corpus_sections = Table(
     Column("section_path", JSONB, nullable=False),
     # href[#fragment] location anchor (A-4).
     Column("anchor", Text, nullable=False),
+    # Anchors normalization merged into this section, kept resolvable as aliases so
+    # no saved citation dangles after a re-ingest (AD-085); empty for clean books.
+    Column(
+        "anchor_aliases",
+        ARRAY(Text),
+        nullable=False,
+        server_default=text("'{}'"),
+    ),
     # Derived Markdown view of this section's blocks (CORP-04).
     Column("markdown", Text, nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
