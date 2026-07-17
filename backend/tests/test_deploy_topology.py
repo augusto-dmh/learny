@@ -192,3 +192,11 @@ def test_caddyfile_proxies_only_the_web_upstream() -> None:
     assert "reverse_proxy web:3000" in text
     assert "api:8000" not in text
     assert "reverse_proxy api" not in text
+
+
+def test_caddyfile_site_address_pins_the_tls_domain() -> None:
+    # The `{$LEARNY_DOMAIN}` site address is what makes Caddy request an automatic
+    # Let's Encrypt certificate for the operator's domain. A regression to a plain
+    # `:80` block would silently drop TLS while every other assertion still passed.
+    text = _CADDYFILE.read_text()
+    assert "{$LEARNY_DOMAIN}" in text
