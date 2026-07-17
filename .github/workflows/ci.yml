@@ -126,6 +126,64 @@ jobs:
       # building it is deferred to deploy.
       - name: Build and boot the full topology
         run: docker compose up -d --build --wait --wait-timeout 300 db redis minio api worker web
+      # Prove the shipped backup image end-to-end (OPS-10) against the db/minio just
+      # booted above: seed a marker row, back it up, destroy it, restore from the
+      # latest dump, and assert the row returns. The backup service is profile-gated,
+      # so it never joined the `up` set; `run --rm` drives it on demand. No offsite
+      # vars are set, so this also asserts the local-only "offsite not configured"
+      # notice.
+      - name: Build the backup image
+        run: docker compose --profile backup build backup
+      - name: Seed a backup marker row
+        run: |
+          docker compose exec -T db psql -U learny -d learny -v ON_ERROR_STOP=1 \
+            -c "CREATE TABLE backup_marker (id int PRIMARY KEY, note text);" \
+            -c "INSERT INTO backup_marker (id, note) VALUES (1, 'roundtrip');"
+      - name: Back up now (local-only, asserts the offsite notice)
+        run: |
+          out="$(docker compose --profile backup run --rm backup backup-now 2>&1)"
+          echo "$out"
+          echo "$out" | grep -qF "offsite not configured"
+      - name: Destroy the seeded data
+        run: |
+          docker compose exec -T db psql -U learny -d learny -v ON_ERROR_STOP=1 \
+            -c "DROP TABLE backup_marker;"
+      - name: Restore from the latest dump
+        run: docker compose --profile backup run --rm backup restore.sh --latest --yes
+      - name: Assert the seeded row is back
+        run: |
+          docker compose exec -T db psql -U learny -d learny -tAc \
+            "SELECT note FROM backup_marker WHERE id = 1;" | grep -qF roundtrip
+      # The roundtrip above exercised the default (local-only) path. Now prove the
+      # offsite branch (mc cp of the dump + mc mirror of the source bucket) actually
+      # runs, by pointing the four LEARNY_BACKUP_REMOTE_* vars at the same MinIO and a
+      # scratch offsite bucket. Seed one source object first so the mirror has something
+      # to copy; the backup image ships mc, so drive it through that image.
+      - name: Seed a source object for the offsite mirror
+        run: |
+          docker compose --profile backup run --rm --no-deps backup sh -c '
+            mc alias set m http://minio:9000 learny learny-dev-secret &&
+            mc mb --ignore-existing m/learny-sources &&
+            echo offsite-mirror-probe | mc pipe m/learny-sources/offsite-probe.txt'
+      - name: Back up now (offsite mode, asserts the branch runs)
+        run: |
+          out="$(docker compose --profile backup run --rm \
+            -e LEARNY_BACKUP_REMOTE_ENDPOINT=http://minio:9000 \
+            -e LEARNY_BACKUP_REMOTE_ACCESS_KEY=learny \
+            -e LEARNY_BACKUP_REMOTE_SECRET_KEY=learny-dev-secret \
+            -e LEARNY_BACKUP_REMOTE_BUCKET=learny-offsite-ci \
+            backup backup-now 2>&1)"
+          echo "$out"
+          echo "$out" | grep -qF "offsite configured; copying dump and mirroring objects"
+          if echo "$out" | grep -qF "offsite not configured"; then
+            echo "offsite branch did not run (saw the local-only notice)"; exit 1
+          fi
+      - name: Assert the dump and mirrored objects landed offsite
+        run: |
+          docker compose --profile backup run --rm --no-deps backup sh -c '
+            mc alias set m http://minio:9000 learny learny-dev-secret &&
+            mc ls --recursive m/learny-offsite-ci/db/ | grep -qF .dump &&
+            mc ls --recursive m/learny-offsite-ci/objects/ | grep -qF offsite-probe.txt'
       - name: Teardown (with logs on failure)
         if: always()
         run: |

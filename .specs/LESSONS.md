@@ -68,6 +68,12 @@ Seen once or not yet corroborated. Tracked, not trusted.
 - evidence: validation.md EMB-17 / test_reembed.py:144-187 / tasks.py:291-300 (worker)
 - last seen: 2026-07-16T00:25:51Z
 
+### L-010 — When pinning a script's safety-critical flag as text, assert it on the extracted command line, not as a whole-file substring that doc-comments or dry-run echoes also satisfy
+- signal: `surviving_mutant` · recurrence: 1 feature(s) · scope: `backend/tests, shell-script-pins` · harmful: 0
+- features: v3-ops-maturity
+- evidence: backend/tests/test_backup_stack.py:228 (mutant #1, restore.sh:71 --if-exists) (backend/tests, shell-script-pins)
+- last seen: 2026-07-17T21:45:05Z
+
 ## Quarantined (failed when applied — ignore)
 
 A confirmed lesson that recurred alongside failure. Kept for the maintainer to review.

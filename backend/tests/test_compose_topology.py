@@ -66,6 +66,16 @@ def _flag_value(tokens: list[str], flag: str) -> str | None:
     return None
 
 
+def _dockerfile_stage(name: str) -> str:
+    """The text of the ``FROM ... AS <name>`` stage, up to the next stage or EOF."""
+    text = _DOCKERFILE.read_text()
+    marker = f"AS {name}\n"
+    start = text.index(marker) + len(marker)
+    rest = text[start:]
+    next_from = rest.find("\nFROM ")
+    return rest if next_from == -1 else rest[:next_from]
+
+
 @pytest.fixture
 def base() -> dict:
     return _services(_BASE)
@@ -146,6 +156,24 @@ def test_pdf_worker_target_installs_the_pdf_extra_and_bakes_models() -> None:
     text = _DOCKERFILE.read_text()
     assert "--extra pdf" in text
     assert "download_models" in text
+
+
+# --- runtime image ships without dev deps and runs as non-root (OPS-16/17) ------
+
+
+def test_runtime_stage_installs_no_dev_extra() -> None:
+    assert "--extra dev" not in _dockerfile_stage("runtime")
+
+
+def test_runtime_stage_runs_as_a_non_root_user() -> None:
+    stage = _dockerfile_stage("runtime")
+    users = [
+        line.split(maxsplit=1)[1].strip()
+        for line in stage.splitlines()
+        if line.startswith("USER ")
+    ]
+    assert users, "runtime stage must set a USER"
+    assert users[-1] not in {"root", "0"}
 
 
 # --- CI never installs the pdf extra (AD-089 / CI parity) -----------------------

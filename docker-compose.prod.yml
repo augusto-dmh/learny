@@ -69,6 +69,69 @@ services:
       - path: ./secrets/worker.env
         required: true
 
+  # Scheduled backups (RFC-003 Cycle A): a crond sidecar that dumps PostgreSQL and
+  # (when offsite is configured) mirrors the source bucket. No host port — it only
+  # reaches db/minio over the compose network. Credentials reuse db.env/minio.env
+  # and add backup.env (offsite + heartbeat); dumps persist in backup_data. See
+  # docs/ops/backups.md.
+  backup:
+    restart: unless-stopped
+    image: ghcr.io/augusto-dmh/learny-backup:${LEARNY_IMAGE_TAG:-latest}
+    env_file:
+      - path: ./secrets/db.env
+        required: true
+      - path: ./secrets/minio.env
+        required: true
+      - path: ./secrets/backup.env
+        required: true
+    volumes:
+      - backup_data:/backups
+    depends_on:
+      db:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
+  # Self-hosted host + per-container metrics (RFC-003 Cycle A, OPS-13/14). Netdata
+  # is pinned to a registry-verified tag and published ONLY on loopback — the UI is
+  # reached over an SSH tunnel (docs/ops/monitoring.md), never through Caddy, so the
+  # single public surface (ADR-0017/0023) stays caddy alone. Host metrics come from
+  # read-only bind mounts, per-container metrics from the docker socket (ro). This is
+  # netdata's official compose recipe with one deliberate change: it publishes
+  # 127.0.0.1:19999 instead of `network_mode: host`, which would bind the UI on every
+  # host interface and violate the loopback-only contract.
+  monitoring:
+    restart: unless-stopped
+    # netdata/netdata:v2.10.4 verified present on Docker Hub before pinning (never
+    # :latest). Operators bump this tag deliberately after testing.
+    image: netdata/netdata:v2.10.4
+    environment:
+      # Disable netdata's anonymous statistics — the agent must not phone home
+      # (netdata's documented Docker opt-out env var). No data leaves the VPS.
+      DISABLE_TELEMETRY: "1"
+    pid: host
+    cap_add:
+      - SYS_PTRACE
+      - SYS_ADMIN
+    security_opt:
+      - apparmor:unconfined
+    mem_limit: 512m
+    ports:
+      - "127.0.0.1:19999:19999"
+    volumes:
+      - netdata_config:/etc/netdata
+      - netdata_lib:/var/lib/netdata
+      - netdata_cache:/var/cache/netdata
+      - /:/host/root:ro,rslave
+      - /etc/passwd:/host/etc/passwd:ro
+      - /etc/group:/host/etc/group:ro
+      - /etc/localtime:/etc/localtime:ro
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /etc/os-release:/host/etc/os-release:ro
+      - /var/log:/host/var/log:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
   web:
     restart: unless-stopped
     image: ghcr.io/augusto-dmh/learny-web:${LEARNY_IMAGE_TAG:-latest}
@@ -103,3 +166,7 @@ services:
 volumes:
   caddy_data:
   caddy_config:
+  backup_data:
+  netdata_config:
+  netdata_lib:
+  netdata_cache:

@@ -66,7 +66,8 @@ After the first deploy, the structure will be:
 │   ├── db.env                   (you create; PostgreSQL credentials)
 │   ├── minio.env                (you create; object storage credentials)
 │   ├── api.env                  (you create; FastAPI secrets)
-│   └── worker.env               (you create; Celery/worker secrets)
+│   ├── worker.env               (you create; Celery/worker secrets)
+│   └── backup.env               (you create; backup schedule/retention/offsite)
 ├── .env                         (you create; holds LEARNY_DOMAIN)
 └── (docker volumes: db_data, minio_data, redis_data, caddy_data, caddy_config)
 ```
@@ -149,6 +150,30 @@ LEARNY_OPENAI_API_KEY=<your-openai-api-key>
 
 Changing the embedding provider or model requires re-embedding existing books — see the embedding
 notes in the repo before switching a populated deployment.
+
+### backup.env
+
+Tunables for the nightly `backup` service (RFC-003 Cycle A). It reuses `POSTGRES_PASSWORD` from
+`db.env` and `MINIO_ROOT_USER`/`MINIO_ROOT_PASSWORD` from `minio.env` (do not duplicate them here).
+Every value is optional and shown at its default in the backup section of
+`backend/.env.production.example`; copy that section into `/opt/learny/secrets/backup.env`. Leave the
+four `LEARNY_BACKUP_REMOTE_*` values blank to keep backups local-only. Create
+`/opt/learny/secrets/backup.env`:
+
+```bash
+# Nightly dump schedule (crond format) and how many days of dumps to keep.
+LEARNY_BACKUP_CRON=30 3 * * *
+LEARNY_BACKUP_KEEP_DAYS=14
+# Offsite S3-compatible target — set ALL FOUR to enable offsite copy + object mirror.
+LEARNY_BACKUP_REMOTE_ENDPOINT=
+LEARNY_BACKUP_REMOTE_ACCESS_KEY=
+LEARNY_BACKUP_REMOTE_SECRET_KEY=
+LEARNY_BACKUP_REMOTE_BUCKET=
+# Optional dead-man's-switch URL, pinged only after a fully successful run.
+LEARNY_BACKUP_HEARTBEAT_URL=
+```
+
+See [backups.md](backups.md) for the full backup/restore runbook.
 
 ## .env: Set the domain
 

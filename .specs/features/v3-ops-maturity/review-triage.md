@@ -1,0 +1,28 @@
+# PR #28 Review Triage — v3-ops-maturity
+
+Review: 9 inline + 2 PR-level comments (requirements + summary), 6 lanes, no blocking findings. Comments are deleted after fixes land; this file is the surviving record.
+
+| # | Source (comment id) | Location | Finding | Verdict | Action | Rationale |
+|---|---|---|---|---|---|---|
+| F1 | 3606383787 | `backend/tests/test_backup_stack.py:159` | `flock -n` pinned by whole-file substring; doc-comment satisfies it, so dropping `-n` from the real guard ships green | **Real** | **Fix** | Exactly the L-010 anti-pattern fixed for `--if-exists` in 157c431; isolate the executed `if ! flock` line and assert `-n` on it |
+| F2 | 3606384286 | `backend/tests/test_backup_stack.py:181` | Offsite gate test asserts the four `LEARNY_BACKUP_REMOTE_*` names exist, not that they are `&&`-joined; `&&`→`||` survives | **Real** | **Fix** | The all-four-required contract (OPS-05) is undiscriminated; assert the conditional's structure on the extracted guard line |
+| F3 | 3606384332 | `backend/tests/test_backup_stack.py:255` | `crond)` entrypoint branch (crontab render + `/etc/backup.env` persistence) substring-pinned, never executed | **Real** (coverage boundary) | **Fix (partial)** | Strengthen the text asserts to pin the crontab target path and the env-filter pattern on the executed lines. Won't add a CI crond execution: running a live cron daemon to trigger a schedule in CI is disproportionate; the job body `backup.sh` itself IS executed by the roundtrip — the delta is only the bare-env sourcing, now pinned structurally |
+| F4 | 3606385973 | `deploy/backup/backup.sh:64` | MinIO/offsite creds passed to `mc alias set` as argv and persisted to mc's config | Real (marginal) | **Won't fix** | Exposure delta ≈ nil: the container is single-purpose, isolated PID namespace, root-only — anything able to read `/proc/*/cmdline` can equally read the same secrets from the environment/env_file; mc's config lives in the ephemeral container FS. The `MC_HOST_<alias>` env form requires URL-encoding credentials into a URL — a real breakage footgun for secrets with reserved characters — for no practical exposure reduction here |
+| F5 | 3606386041 | `deploy/backup/entrypoint.sh:22` | `/etc/backup.env` credential snapshot written world-readable (0644) | **Real** | **Fix** | One-line defense-in-depth (`umask 077` before the redirect); cheap insurance against any future non-root process in the image |
+| F6 | 3606386101 | `docker-compose.prod.yml:121` | Netdata mounts the full rootfs (incl. `secrets/`) + docker.sock + SYS_ADMIN + pid:host behind an unauthenticated UI; loopback bind is the sole boundary | **Real** (accepted-by-design core) | **Fix (partial)** | The mounts/caps follow netdata's official recipe and stay (scoping them breaks host metrics; loopback-only publish is the designed boundary, AD-100). Actionable parts adopted: disable netdata telemetry/cloud phoning, and make the trust boundary an explicit documented invariant in monitoring.md + ADR-0024 rather than an incidental one |
+| F7 | 3606386160 | `deploy/backup/Dockerfile:19` | mc checksum fetched same-origin as the binary (TOFU) — upstream re-cut silently accepted | **Real** | **Fix** | Pin the known-good digest as a hardcoded build ARG and verify against that constant; reproducible supply chain, trivially cheap |
+| F8 | 3606397424 | `deploy/backup/restore.sh:71` | `pg_restore` without `--single-transaction`/`--exit-on-error` can exit 0 on a partially failed restore | **Real** | **Fix** | For a DR tool a silent partial success is the worst failure mode; `--single-transaction` makes restores all-or-nothing (fine at author-scale dump sizes; lock duration acceptable) |
+| F9 | 3606397474 | `deploy/backup/backup.sh:58` | Entire offsite branch (alias/cp/mirror/prune) has no executable coverage — CI runs local-only mode | **Real** | **Fix** | Adopt the reviewer's stand-in suggestion: second CI backup run with the four remote vars pointed at the same MinIO and a scratch offsite bucket; assert the dump copy and mirrored objects land. Converts the whole branch from text-pinned to executed |
+| F10 | 5007814068 (note) | `docs/adr/0024-*.md` H1 | H1 `# ADR-024:` vs four-digit `ADR-0024` references | **False** | — | Three-digit H1 with four-digit filename/references is the established house convention (ADR-017, ADR-023 identical); "normalizing" would break consistency with every prior ADR |
+| F11 | 5007814068 (note) | `backend/.env.production.example` | `LEARNY_BACKUP_SOURCE_ENDPOINT` consumed but undocumented | Real (trivial) | **Won't fix** | Deliberate: it is an internal compose-network default (`http://minio:9000`) that must not be operator-tuned; documenting it in the operator template invites misconfiguration. The spec's documented var set (OPS-11) intentionally excludes it |
+| F12 | 5007814068 (note) | `deploy/backup/backup.sh` | OPS-08 heartbeat-unset branch and failure edges structural-only | Real (recorded) | **Won't fix** | Already an acknowledged coverage boundary in validation.md; consistent with house style for `set -e` edges; the success path is CI-executed |
+
+**Counts:** 12 findings — 10 real (7 fix, incl. 2 partial; 3 won't-fix with rationale), 1 false, 1 already-recorded boundary.
+
+**Fix plan (atomic commits):**
+1. `test(backup): discriminate the lock and offsite guards on executed lines` — F1, F2, F3
+2. `fix(backup): restrict the cron environment file to owner access` — F5
+3. `build(backup): pin the mc binary digest at build time` — F7
+4. `fix(backup): make restores all-or-nothing` — F8
+5. `test(backup): prove the offsite path in ci with a stand-in bucket` — F9
+6. `feat(monitoring): disable telemetry and document the trust boundary` — F6
