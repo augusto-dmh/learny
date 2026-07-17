@@ -24,17 +24,21 @@ RUN apt-get update \
 # Dependency manifests first (cached layer) using the committed lockfile.
 COPY pyproject.toml uv.lock ./
 
-# PDF ingestion worker (ING-18/19). Installs the `pdf` extra (docling) — no dev
-# extra — and bakes the layout + table-structure models into the image so
-# conversion needs no network egress at task time. HOME is pinned so the bake and
-# the runtime celery worker read/write the same docling model cache ($HOME/.cache/
-# docling); OCR and the other optional models stay out (the parser runs
-# do_ocr=False with table structure on).
+# PDF ingestion worker (ING-18/19, ADR-0025). Installs the `pdf` extra (docling +
+# easyocr) — no dev extra — and bakes the layout, table-structure, and EasyOCR
+# models into the image so conversion needs no network egress at task time. HOME
+# is pinned so the bake and the runtime celery worker read/write the same docling
+# model cache ($HOME/.cache/docling). EasyOCR's opencv-python-headless wheel
+# links libxcb/glib, which the slim base lacks — installed after the dependency
+# sync so the heavy wheel layers stay cacheable.
 FROM base AS pdf-worker
 ENV HOME=/root
 RUN uv sync --frozen --no-install-project --extra pdf
 COPY . .
 RUN uv sync --frozen --extra pdf
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libgl1 libglib2.0-0 libxcb1 \
+    && rm -rf /var/lib/apt/lists/*
 RUN python -c "from docling.utils.model_downloader import download_models; download_models(with_layout=True, with_tableformer=True, with_rapidocr=False, with_code_formula=False, with_picture_classifier=False, with_easyocr=True)"
 CMD ["celery", "-A", "app.worker.celery_app:celery_app", "worker", \
      "--loglevel=info", "--queues", "ingest-pdf", \
