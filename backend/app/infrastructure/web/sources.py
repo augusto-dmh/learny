@@ -93,12 +93,14 @@ def create_source(
     file: Annotated[UploadFile, File()],
     title: Annotated[str, Form()],
 ) -> SourceSummary:
-    """Store an uploaded EPUB and persist an owned source row (201 + summary).
+    """Store an uploaded EPUB or PDF and persist an owned source row (201 + summary).
 
-    The read is bounded to ``epub_max_bytes + 1`` so an oversize upload is
-    detected (→ 413) without buffering more than the cap in the request worker.
+    The read is bounded to ``max(epub_max_bytes, pdf_max_bytes) + 1`` so an oversize
+    upload is detected (→ 413) without buffering more than the largest cap in the
+    request worker; validation then enforces the exact per-format cap.
     """
-    data = file.file.read(settings.epub_max_bytes + 1)
+    read_bound = max(settings.epub_max_bytes, settings.pdf_max_bytes) + 1
+    data = file.file.read(read_bound)
     try:
         source = service(
             user=user,

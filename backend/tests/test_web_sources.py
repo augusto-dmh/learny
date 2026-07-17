@@ -41,6 +41,8 @@ pytestmark = requires_db
 
 EPUB_BYTES = b"PK\x03\x04-fake-but-nonempty-epub-payload"
 EPUB_TYPE = "application/epub+zip"
+PDF_BYTES = b"%PDF-1.7-fake-but-nonempty-pdf-payload"
+PDF_TYPE = "application/pdf"
 
 
 class _RecordingHandler(logging.Handler):
@@ -158,6 +160,49 @@ def test_upload_valid_epub_persists_row_and_object(
 
     # Bytes actually landed in object storage under that key.
     assert _storage.get_object(row.object_key) == EPUB_BYTES
+
+
+def test_upload_valid_pdf_persists_row_and_object(
+    sources_client: TestClient, db_conn: Connection
+) -> None:
+    user_id = _register(sources_client, "pdf@example.com")
+    resp = _upload(
+        sources_client,
+        csrf=_csrf(sources_client),
+        filename="report.pdf",
+        content_type=PDF_TYPE,
+        title="Annual Report",
+        data=PDF_BYTES,
+    )
+
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["filename"] == "report.pdf"
+    assert body["content_type"] == PDF_TYPE
+    assert body["status"] == "uploaded"
+
+    row = db_conn.execute(
+        select(sources).where(sources.c.id == body["id"])
+    ).one()
+    # The object key carries the .pdf extension (parser dispatch depends on it).
+    assert row.object_key == f"sources/{user_id}/{body['id']}.pdf"
+    assert _storage.get_object(row.object_key) == PDF_BYTES
+
+
+def test_upload_pdf_extension_with_epub_content_type_returns_415(
+    sources_client: TestClient, db_conn: Connection
+) -> None:
+    # Spec edge case: a .pdf file declared as application/epub+zip is a mismatch.
+    _register(sources_client, "pdfmismatch@example.com")
+    resp = _upload(
+        sources_client,
+        csrf=_csrf(sources_client),
+        filename="report.pdf",
+        content_type=EPUB_TYPE,
+        data=PDF_BYTES,
+    )
+    assert resp.status_code == 415, resp.text
+    assert _source_rows(db_conn) == []
 
 
 def test_upload_non_epub_extension_returns_415(

@@ -77,8 +77,12 @@ class Settings(BaseSettings):
     storage_bucket: str = "learny-sources"
     storage_region: str = "us-east-1"
 
-    # Upload limits (AD-009) — cap the EPUB bytes buffered through the request.
+    # Upload limits (AD-009) — cap the bytes buffered through the request, per
+    # format. The web handler reads at most ``max(caps) + 1`` and validation
+    # enforces the per-format cap (ING-09/ING-20): EPUB stays at 50 MiB; PDFs are
+    # larger on average (born-digital books with images), so the PDF cap is 100 MiB.
     epub_max_bytes: int = 52428800  # 50 MiB
+    pdf_max_bytes: int = 104857600  # 100 MiB
 
     # Ingestion safety — cap the summed *uncompressed* size an EPUB archive may
     # declare before parsing; the upload cap above only bounds compressed bytes,

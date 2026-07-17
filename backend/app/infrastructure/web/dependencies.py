@@ -225,6 +225,7 @@ def get_create_source(conn: DbConnection, storage: Storage, settings: AppSetting
         clock=_clock,
         ids=uuid4,
         max_bytes=settings.epub_max_bytes,
+        pdf_max_bytes=settings.pdf_max_bytes,
     )
 
 
