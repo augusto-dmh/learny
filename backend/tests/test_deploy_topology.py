@@ -62,6 +62,31 @@ def _host_ports(service: dict) -> list[str]:
     return hosts
 
 
+_LOOPBACK_IPS = {"127.0.0.1", "::1", "localhost"}
+
+
+def _port_bindings(service: dict) -> list[tuple[str | None, str]]:
+    """(host_ip, host_port) for each published port of a compose service.
+
+    ``host_ip`` is ``None`` when the short syntax omits it — which binds the port
+    on *every* host interface (the public case the exposure contract guards).
+    """
+    bindings: list[tuple[str | None, str]] = []
+    for entry in service.get("ports") or []:
+        spec = str(entry).split("/", 1)[0]  # drop an optional "/proto" suffix
+        parts = spec.split(":")
+        if len(parts) == 3:  # "ip:host:container"
+            bindings.append((parts[0], parts[1]))
+        elif len(parts) == 2:  # "host:container" — no IP, so all interfaces
+            bindings.append((None, parts[0]))
+    return bindings
+
+
+def _publishes_non_loopback(service: dict) -> bool:
+    """True if the service publishes any port on a non-loopback host interface."""
+    return any(ip not in _LOOPBACK_IPS for ip, _port in _port_bindings(service))
+
+
 @pytest.fixture
 def base() -> dict:
     return _services(_BASE)
@@ -138,12 +163,18 @@ def _prod_volumes() -> dict:
     return merged
 
 
-def test_prod_publishes_host_ports_only_on_caddy(prod: dict) -> None:
+def test_prod_publishes_non_loopback_ports_only_on_caddy(prod: dict) -> None:
+    # OPS-14: adding the loopback-only monitoring UI must not widen the public
+    # surface. Caddy stays the ONLY service publishing a non-loopback host port;
+    # every other service (monitoring included, backup with none) publishes nothing
+    # reachable off-host.
     for name, svc in prod.items():
         if name == "caddy":
-            assert svc.get("ports"), "caddy must publish host ports in prod"
+            assert _publishes_non_loopback(svc), "caddy must publish public host ports in prod"
         else:
-            assert not svc.get("ports"), f"{name} must not publish host ports in prod"
+            assert not _publishes_non_loopback(svc), (
+                f"{name} must not publish non-loopback host ports in prod"
+            )
 
 
 def test_caddy_publishes_only_80_443_and_quic(prod: dict) -> None:
@@ -200,3 +231,54 @@ def test_caddyfile_site_address_pins_the_tls_domain() -> None:
     # `:80` block would silently drop TLS while every other assertion still passed.
     text = _CADDYFILE.read_text()
     assert "{$LEARNY_DOMAIN}" in text
+
+
+# --- prod overlay adds a loopback-only netdata monitor (OPS-13, OPS-14) ----------
+
+
+def test_monitoring_publishes_only_the_loopback_ui_port(prod: dict) -> None:
+    # The UI is reached over an SSH tunnel, never off-host (docs/ops/monitoring.md).
+    assert prod["monitoring"]["ports"] == ["127.0.0.1:19999:19999"]
+    assert not _publishes_non_loopback(prod["monitoring"])
+
+
+def test_monitoring_pins_a_non_floating_netdata_image(prod: dict) -> None:
+    image = prod["monitoring"]["image"]
+    assert image.startswith("netdata/netdata:")
+    assert not image.endswith(":latest"), "netdata image must be pinned"
+    assert image != "netdata/netdata:", "netdata image must carry an explicit tag"
+
+
+def test_monitoring_restarts_unless_stopped(prod: dict) -> None:
+    assert prod["monitoring"].get("restart") == "unless-stopped"
+
+
+def test_monitoring_caps_its_memory(prod: dict) -> None:
+    # A runaway agent must not compete with worker-pdf for host RAM (OPS-13).
+    assert prod["monitoring"].get("mem_limit") == "512m"
+
+
+def test_monitoring_mounts_the_docker_socket_read_only(prod: dict) -> None:
+    # Per-container metrics come from the docker socket; read-only, never rw.
+    assert "/var/run/docker.sock:/var/run/docker.sock:ro" in prod["monitoring"]["volumes"]
+
+
+def test_monitoring_mounts_the_host_metric_sources_read_only(prod: dict) -> None:
+    volumes = prod["monitoring"]["volumes"]
+    for mount in (
+        "/proc:/host/proc:ro",
+        "/sys:/host/sys:ro",
+        "/etc/os-release:/host/etc/os-release:ro",
+    ):
+        assert mount in volumes, f"monitoring must mount {mount}"
+
+
+def test_monitoring_declares_the_netdata_named_volumes() -> None:
+    volumes = _prod_volumes()
+    for vol in ("netdata_config", "netdata_lib", "netdata_cache"):
+        assert vol in volumes, f"{vol} must be declared for netdata persistence"
+
+
+def test_monitoring_is_absent_from_base_and_override(base: dict, override: dict) -> None:
+    assert "monitoring" not in base
+    assert "monitoring" not in override

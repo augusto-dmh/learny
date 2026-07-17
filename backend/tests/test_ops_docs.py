@@ -15,6 +15,7 @@ _OPS = Path(__file__).resolve().parents[2] / "docs" / "ops"
 _BACKUPS = _OPS / "backups.md"
 _ROLLBACK = _OPS / "rollback.md"
 _DEPLOY = _OPS / "deploy.md"
+_MONITORING = _OPS / "monitoring.md"
 
 
 @pytest.fixture
@@ -30,6 +31,11 @@ def rollback() -> str:
 @pytest.fixture
 def deploy() -> str:
     return _DEPLOY.read_text()
+
+
+@pytest.fixture
+def monitoring() -> str:
+    return _MONITORING.read_text()
 
 
 def test_runbooks_exist() -> None:
@@ -109,6 +115,47 @@ def test_deploy_lists_the_backup_secrets_file(deploy: str) -> None:
     assert "backup.env" in deploy
     # Points operators at the single source of truth for the values.
     assert "backend/.env.production.example" in deploy
+
+
+# --- monitoring runbook (OPS-15) ------------------------------------------------
+# The netdata runbook must keep the loopback-tunnel access, the panels to watch,
+# and backup-log inspection documented; pin the key strings so it cannot rot back
+# into an empty stub or lose the security-relevant access instructions.
+
+
+def test_monitoring_runbook_exists() -> None:
+    assert _MONITORING.is_file()
+
+
+def test_monitoring_documents_the_loopback_tunnel(monitoring: str) -> None:
+    # Exact SSH local-forward of the loopback UI port — the only documented access.
+    assert "ssh -L 19999:127.0.0.1:19999" in monitoring
+    assert "http://localhost:19999" in monitoring
+
+
+def test_monitoring_documents_the_loopback_only_exposure(monitoring: str) -> None:
+    # Why the UI is not public: single public surface via Caddy.
+    assert "127.0.0.1:19999:19999" in monitoring
+    assert "single public surface" in monitoring.lower()
+
+
+def test_monitoring_documents_the_panels_to_watch(monitoring: str) -> None:
+    lowered = monitoring.lower()
+    assert "mem_limit: 4g" in monitoring  # worker-pdf cap referenced by the memory panel
+    assert "oom" in lowered
+    assert "disk" in lowered
+
+
+def test_monitoring_documents_backup_log_inspection(monitoring: str) -> None:
+    assert "logs backup" in monitoring
+    # The three run outcomes an operator distinguishes in those logs.
+    assert "offsite not configured" in monitoring
+
+
+def test_monitoring_documents_where_alert_hooks_attach(monitoring: str) -> None:
+    lowered = monitoring.lower()
+    assert "alert" in lowered
+    assert "health" in lowered  # netdata's built-in health engine is the hook
 
 
 def test_rollback_documents_independent_image_revert(rollback: str) -> None:
