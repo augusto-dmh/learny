@@ -832,7 +832,14 @@ def test_migration_0009_adds_anchor_aliases_column(monkeypatch) -> None:
         columns = {c["name"]: c for c in inspect(engine).get_columns("corpus_sections")}
         assert "anchor_aliases" in columns
         assert columns["anchor_aliases"]["nullable"] is False
-        # A section inserted without a value defaults to the empty array (not NULL).
+        # Exercise the NOT NULL DEFAULT '{}' server default: insert a section via
+        # raw SQL WITHOUT anchor_aliases (through a minimal users→source→document→
+        # section chain) so the column falls to its default, then read it back. The
+        # whole chain is rolled back so no committed row leaks into the shared DB.
+        user_id = uuid.uuid4()
+        source_id = uuid.uuid4()
+        document_id = uuid.uuid4()
+        section_id = uuid.uuid4()
         with engine.connect() as conn:
             coltype = conn.execute(
                 text(
@@ -840,7 +847,38 @@ def test_migration_0009_adds_anchor_aliases_column(monkeypatch) -> None:
                     "WHERE table_name = 'corpus_sections' AND column_name = 'anchor_aliases'"
                 )
             ).scalar_one()
+            conn.execute(
+                text("INSERT INTO users (id, email) VALUES (:id, :email)"),
+                {"id": user_id, "email": f"{user_id}@example.test"},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO sources "
+                    "(id, user_id, title, filename, content_type, byte_size, checksum, object_key) "
+                    "VALUES (:id, :uid, 't', 'f.epub', 'application/epub+zip', 1, 'c', :key)"
+                ),
+                {"id": source_id, "uid": user_id, "key": f"sources/{source_id}.epub"},
+            )
+            conn.execute(
+                text("INSERT INTO corpus_documents (id, source_id) VALUES (:id, :sid)"),
+                {"id": document_id, "sid": source_id},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO corpus_sections "
+                    "(id, document_id, position, depth, title, section_path, anchor, markdown) "
+                    "VALUES (:id, :did, 0, 0, 't', '[]', 'a.xhtml', 'md')"
+                ),
+                {"id": section_id, "did": document_id},
+            )
+            stored_aliases = conn.execute(
+                text("SELECT anchor_aliases FROM corpus_sections WHERE id = :id"),
+                {"id": section_id},
+            ).scalar_one()
+            conn.rollback()
         assert coltype == "ARRAY"
+        # The omitted value read back as the empty array from the server default, not NULL.
+        assert stored_aliases == []
     finally:
         engine.dispose()
 
