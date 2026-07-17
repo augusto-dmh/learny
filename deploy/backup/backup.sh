@@ -10,7 +10,8 @@
 #   * local (and, when configured, offsite) dumps older than KEEP_DAYS are pruned only
 #     after a successful dump, with the newest archive always exempt
 #   * the heartbeat is requested last and only on a fully successful run
-set -eu
+# Runs under the image's busybox ash (alpine), which supports `pipefail`.
+set -euo pipefail
 
 # Cron runs jobs with a bare environment; the entrypoint persists the container env here.
 [ -f /etc/backup.env ] && . /etc/backup.env
