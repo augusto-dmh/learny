@@ -52,8 +52,8 @@ from app.infrastructure.quiz import build_quiz_adapter
 from app.infrastructure.scheduling import build_scheduling_adapter
 from app.infrastructure.storage.s3 import S3StorageAdapter
 from app.infrastructure.worker.steps import (
+    CorpusIngestionStep,
     EmbedCorpusIngestionStep,
-    EpubCorpusIngestionStep,
     RetryableIngestionError,
 )
 from app.worker.celery_app import celery_app
@@ -129,7 +129,7 @@ def _build_step(conn: Connection) -> IngestionStep:
     without a live object store or a real document, exactly as prior cycles
     patched the step.
     """
-    return EpubCorpusIngestionStep(
+    return CorpusIngestionStep(
         BuildCorpus(
             storage=_build_storage(),
             parser=_ContentTypeDispatchParser(),

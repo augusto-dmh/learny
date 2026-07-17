@@ -1,4 +1,4 @@
-"""T9 gate (unit) — EpubCorpusIngestionStep error classification (CORP-06/07).
+"""T9 gate (unit) — CorpusIngestionStep error classification (CORP-06/07).
 
 The step binds ``BuildCorpus`` to the task's retry contract: transient storage
 faults (the Learny-owned ``StorageUnavailable``) become ``RetryableIngestionError``
@@ -26,8 +26,8 @@ from app.infrastructure.ingestion.factory import (
 )
 from app.infrastructure.storage.s3 import ObjectNotFound
 from app.infrastructure.worker.steps import (
+    CorpusIngestionStep,
     EmbedCorpusIngestionStep,
-    EpubCorpusIngestionStep,
     RetryableIngestionError,
 )
 from app.worker.tasks import _ContentTypeDispatchParser
@@ -85,7 +85,7 @@ class _RecordingBuild:
 
 def _run(build) -> None:  # noqa: ANN001
     source = _source()
-    EpubCorpusIngestionStep(build).run(source=source, job=_job(source.id))
+    CorpusIngestionStep(build).run(source=source, job=_job(source.id))
 
 
 def test_run_delegates_to_build_on_success() -> None:
@@ -93,7 +93,7 @@ def test_run_delegates_to_build_on_success() -> None:
     source = _source()
     job = _job(source.id)
 
-    EpubCorpusIngestionStep(build).run(source=source, job=job)
+    CorpusIngestionStep(build).run(source=source, job=job)
 
     assert build.calls == [(source, job)]
 
