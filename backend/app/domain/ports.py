@@ -25,6 +25,7 @@ from app.domain.entities import (
     ChunkToEmbed,
     CorpusSectionRecord,
     CorpusStructure,
+    DueReviewItem,
     Evidence,
     GeneratedAnswer,
     HistoryTurn,
@@ -32,6 +33,13 @@ from app.domain.entities import (
     IngestionJob,
     ParsedBook,
     PasswordCredential,
+    QuizDeckHandle,
+    QuizDeckResult,
+    QuizGenerationJob,
+    QuizItem,
+    QuizSection,
+    ReviewLogEntry,
+    SchedulingSnapshot,
     SectionContent,
     Session,
     Source,
@@ -570,5 +578,212 @@ class TeachingGenerationPort(Protocol):
         whose ``answer`` is authoritative. Closing the iterator early cancels the
         underlying generation; raises for operational failure like
         :meth:`generate`.
+        """
+        ...
+
+
+# --- Active recall ports (Cycle E, RFC-002; design §Domain) ----------------------
+
+
+@runtime_checkable
+class QuizGenerationPort(Protocol):
+    """Deck-generation port — the single seam for quiz item candidates (QUIZ-05).
+
+    Provider SDKs, model names, and structured-output shapes live only in the concrete
+    adapter (ADR-0007/0009); callers pass eligible :class:`~app.domain.entities.QuizSection`
+    and receive Learny-owned candidates. The default adapter is deterministic and
+    network-free; the Anthropic adapter drives the Message Batches API, so generation is
+    asynchronous: :meth:`begin_deck` starts a pass and returns a
+    :class:`~app.domain.entities.QuizDeckHandle`, and :meth:`collect_deck` is polled
+    until it returns a result (``None`` while still pending).
+
+    ``model`` is the adapter's stable model identity, readable without a network call so
+    the job can record which model produced the deck.
+    """
+
+    model: str
+
+    def begin_deck(self, sections: Sequence[QuizSection]) -> QuizDeckHandle:
+        """Start a generation pass over ``sections``; return a handle to collect from.
+
+        The local adapter computes results inline and carries them on the handle; the
+        Anthropic adapter submits one batch request per section and carries the batch id.
+        """
+        ...
+
+    def collect_deck(self, handle: QuizDeckHandle) -> QuizDeckResult | None:
+        """Return the pass's :class:`~app.domain.entities.QuizDeckResult`, or ``None``.
+
+        ``None`` means the underlying batch is still in progress and the caller should
+        poll again later; a result means the pass finished (per-request failures are
+        surfaced as the result's ``errors``).
+        """
+        ...
+
+
+@runtime_checkable
+class SchedulingPort(Protocol):
+    """FSRS-6 spaced-repetition port (QUIZ-11 — py-fsrs adapter in Phase D).
+
+    The scheduling library lives only in the adapter; callers work with the Learny-owned
+    :class:`~app.domain.entities.SchedulingSnapshot`. All datetimes are UTC.
+    """
+
+    def initial(self) -> SchedulingSnapshot:
+        """Return the initial scheduling state for a new item (``due`` now, Learning)."""
+        ...
+
+    def review(
+        self, snapshot: SchedulingSnapshot, rating: int, reviewed_at: datetime
+    ) -> tuple[SchedulingSnapshot, ReviewLogEntry]:
+        """Apply a grade to ``snapshot`` at ``reviewed_at``.
+
+        Returns the advanced snapshot and the review-log entry to append (rating +
+        ``reviewed_at``; the service attaches any client-supplied duration). ``rating``
+        is FSRS's Again(1)/Hard(2)/Good(3)/Easy(4).
+        """
+        ...
+
+
+@runtime_checkable
+class QuizDeckEnqueuer(Protocol):
+    """The Celery boundary for deck generation (mirrors :class:`IngestionEnqueuer`).
+
+    Called *after* the queued job is committed so the worker always sees a durable row;
+    the queue message carries only ids (AD-014).
+    """
+
+    def enqueue_quiz_deck(self, *, source_id: UUID, job_id: UUID) -> None:
+        """Enqueue the background deck-generation task for ``job_id`` / ``source_id``."""
+        ...
+
+
+@runtime_checkable
+class QuizJobRepository(Protocol):
+    """Persistence port for :class:`~app.domain.entities.QuizGenerationJob`.
+
+    Mirrors :class:`IngestionJobRepository`; the active-job guard (QUIZ-04) is a query
+    (:meth:`get_active_for_source`) rather than a partial unique index.
+    """
+
+    def add(self, job: QuizGenerationJob) -> QuizGenerationJob:
+        """Insert a new deck-generation job."""
+        ...
+
+    def get_by_id(self, job_id: UUID) -> QuizGenerationJob | None:
+        """Return the job with ``job_id``, or ``None`` if absent."""
+        ...
+
+    def get_active_for_source(self, source_id: UUID) -> QuizGenerationJob | None:
+        """Return the source's queued/running job if one exists (QUIZ-04), else ``None``."""
+        ...
+
+    def get_latest_for_source(self, source_id: UUID) -> QuizGenerationJob | None:
+        """Return the newest job for ``source_id`` (by ``created_at``), or ``None``."""
+        ...
+
+    def update(self, job: QuizGenerationJob) -> QuizGenerationJob:
+        """Persist ``status``/``attempts``/counts/``last_error``/``updated_at``."""
+        ...
+
+
+@runtime_checkable
+class QuizItemRepository(Protocol):
+    """Persistence port for the quiz-item aggregate (design §Repositories).
+
+    Ownership is reachable only via the parent source (AD-014) — read/due methods key on
+    ``source_id``/``user_id`` through the sources join. Upsert never touches an existing
+    item's scheduling or review log (QUIZ-02).
+    """
+
+    def sections_for_generation(self, source_id: UUID, *, min_chars: int) -> list[QuizSection]:
+        """Return ``source_id``'s eligible leaf sections (≥ ``min_chars`` of text, A-3).
+
+        Each carries the section's citation anchors and its ``(chunk_id, text)`` chunks
+        for candidate grounding.
+        """
+        ...
+
+    def existing_embeddings(self, source_id: UUID) -> list[tuple[UUID, list[float]]]:
+        """Return ``(item_id, embedding)`` for the source's already-embedded items.
+
+        The dedup back-catalog a new pass compares candidates against (QUIZ-08); items
+        without a stored embedding are omitted.
+        """
+        ...
+
+    def upsert(self, item: QuizItem, *, embedding: Sequence[float] | None) -> bool:
+        """Upsert on ``(source_id, content_key)``; update content fields only on conflict.
+
+        Returns ``True`` when a new row was inserted (the caller creates its initial
+        scheduling row) and ``False`` when an existing row's content was updated — in
+        which case its scheduling and review-log rows are left untouched (QUIZ-02).
+        """
+        ...
+
+    def create_scheduling(self, quiz_item_id: UUID, snapshot: SchedulingSnapshot) -> None:
+        """Insert the initial scheduling row for a newly created item (QUIZ-09)."""
+        ...
+
+    def get_scheduling(self, quiz_item_id: UUID) -> SchedulingSnapshot | None:
+        """Return the item's current scheduling snapshot, or ``None`` if absent."""
+        ...
+
+    def update_scheduling(self, quiz_item_id: UUID, snapshot: SchedulingSnapshot) -> None:
+        """Replace the item's scheduling snapshot after a review (QUIZ-12)."""
+        ...
+
+    def append_log(self, quiz_item_id: UUID, entry: ReviewLogEntry) -> None:
+        """Append an immutable review-log entry for the item (QUIZ-12)."""
+        ...
+
+    def list_for_source(self, source_id: UUID) -> list[QuizItem]:
+        """Return all of ``source_id``'s items (any status), for the overview (QUIZ-14)."""
+        ...
+
+    def due_map(self, source_id: UUID) -> dict[UUID, datetime]:
+        """Return ``item_id → due`` for ``source_id``'s items — the overview's due column."""
+        ...
+
+    def counts_by_status(self, source_id: UUID) -> dict[str, int]:
+        """Return ``status → count`` for ``source_id``'s items (QUIZ-14)."""
+        ...
+
+    def due_for_user(
+        self,
+        user_id: UUID,
+        *,
+        now: datetime,
+        limit: int,
+        source_id: UUID | None = None,
+    ) -> tuple[int, list[DueReviewItem]]:
+        """Return the caller's due queue: total due count and up to ``limit`` items.
+
+        Active items with ``due <= now`` across the user's sources (optionally filtered
+        to one ``source_id``), ordered ``due ASC, id ASC`` (A-6). Stale/orphaned items
+        are excluded (QUIZ-17). The count is the full due total before the limit.
+        """
+        ...
+
+    def get_by_id(self, item_id: UUID) -> QuizItem | None:
+        """Return the item with ``item_id``, or ``None`` if absent."""
+        ...
+
+    def items_for_reconcile(self, source_id: UUID) -> list[QuizItem]:
+        """Return ``source_id``'s items for post-re-ingestion reconciliation (QUIZ-16)."""
+        ...
+
+    def update_reconciliation(
+        self,
+        item_id: UUID,
+        *,
+        anchor: str,
+        section_path: Sequence[str],
+        status: str,
+    ) -> None:
+        """Update only an item's ``anchor``/``section_path``/``status`` (QUIZ-16).
+
+        Reconciliation touches these three fields only — scheduling and review-log rows
+        are never modified or deleted.
         """
         ...

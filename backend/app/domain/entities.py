@@ -14,7 +14,7 @@ Security invariants encoded here:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from uuid import UUID
 
@@ -497,3 +497,261 @@ class TeachingSessionSummary:
 
     session: TeachingSession
     turn_count: int
+
+
+# --- Active recall aggregate (Cycle E, RFC-002; design §Domain) ------------------
+# Citation-grounded quiz items per book section, scheduled by FSRS-6. Items snapshot
+# their citation (no chunk FK) so they survive corpus re-ingestion (AD-078); scheduling
+# and the append-only review log are never destroyed by generation or reconciliation.
+
+
+class QuizItemType:
+    """Quiz item kinds (QUIZ-10). Only these two — no MCQ anywhere (locked v2 decision).
+
+    String constants (not an enum) mirroring the codebase's free-text status columns.
+    ``free_recall`` is a question/answer pair; ``cloze`` masks a span of a passage
+    sentence with ``____`` (A-5).
+    """
+
+    FREE_RECALL = "free_recall"
+    CLOZE = "cloze"
+
+
+class QuizItemStatus:
+    """Quiz item lifecycle vocabulary (QUIZ-16).
+
+    ``active`` items are reviewable; ``stale`` (anchor kept, quote gone) and
+    ``orphaned`` (neither) are excluded from the due queue but still listed with their
+    status (QUIZ-17). Reconciliation moves items between these on re-ingestion.
+    """
+
+    ACTIVE = "active"
+    STALE = "stale"
+    ORPHANED = "orphaned"
+
+
+class QuizJobStatus:
+    """Deck-generation job status vocabulary (mirrors :class:`IngestionStatus`).
+
+    ``queued``/``running`` are the two *active* states; ``succeeded``/``failed`` are
+    terminal.
+    """
+
+    QUEUED = "queued"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+
+
+# At most one deck job in these states may exist per source at a time (QUIZ-04 single
+# in-flight guard, enforced by a repository query — there is no partial unique index).
+ACTIVE_QUIZ_JOB_STATUSES = frozenset({QuizJobStatus.QUEUED, QuizJobStatus.RUNNING})
+
+
+@dataclass(frozen=True)
+class QuizSection:
+    """One eligible book section handed to deck generation (design §Domain).
+
+    A leaf section with enough text (A-3); carries its citation anchors and the
+    section's retrieval chunks as ``(chunk_id, text)`` pairs so a candidate's
+    ``source_chunk_id`` can be constrained to this section's chunks and its quote
+    verified against the chunk text.
+    """
+
+    section_path: tuple[str, ...]
+    anchor: str
+    title: str
+    chunks: tuple[tuple[UUID, str], ...]
+
+
+@dataclass(frozen=True)
+class QuizCandidate:
+    """A raw generated item before quality control (design §Domain).
+
+    Produced by a :class:`~app.domain.ports.QuizGenerationPort`; not yet grounded.
+    ``anchor_quote`` is the verbatim passage the item claims to come from and
+    ``source_chunk_id`` the chunk it cites — both re-verified by the QC pipeline
+    (QUIZ-06/07) before an item is persisted.
+    """
+
+    item_type: str
+    question: str
+    answer: str
+    source_chunk_id: UUID
+    anchor_quote: str
+
+
+@dataclass(frozen=True)
+class QuizDeckResult:
+    """A generation pass's outcome: accepted candidates plus per-section errors.
+
+    ``candidates`` are all sections' candidates flattened (the QC pipeline grounds and
+    dedups them); ``errors`` are per-section failure messages (schema/batch errors)
+    counted into the job's ``failed_sections`` (partial-success edge case).
+    """
+
+    candidates: tuple[QuizCandidate, ...]
+    errors: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class QuizDeckHandle:
+    """A provider-agnostic handle to an in-flight (or inline) generation pass.
+
+    Round-trips through Celery JSON between ``begin_deck`` and the polling task
+    (:meth:`to_payload` / :meth:`from_payload`). ``batch_id`` identifies an Anthropic
+    Message Batch (``None`` for the local adapter); ``payload`` is a provider-owned
+    JSON-safe blob (the local adapter carries its inline result there; the Anthropic
+    adapter carries per-section metadata for mapping batch results by ``custom_id``).
+    """
+
+    provider: str
+    batch_id: str | None = None
+    payload: dict = field(default_factory=dict)
+
+    def to_payload(self) -> dict:
+        """Serialize to a JSON-safe dict for the Celery poll task hand-off."""
+        return {
+            "provider": self.provider,
+            "batch_id": self.batch_id,
+            "payload": self.payload,
+        }
+
+    @classmethod
+    def from_payload(cls, data: dict) -> QuizDeckHandle:
+        """Reconstruct a handle from :meth:`to_payload` output."""
+        return cls(
+            provider=data["provider"],
+            batch_id=data.get("batch_id"),
+            payload=data.get("payload", {}),
+        )
+
+
+@dataclass(frozen=True)
+class QuizItem:
+    """A citation-grounded quiz card owned (via its source) by a user (QUIZ-06).
+
+    Snapshots its citation (``section_path``, ``anchor``, ``source_excerpt``) and the
+    ``chunk_hash`` of the chunk it was generated from, so it survives a corpus replace
+    with no FK to the corpus (AD-078). ``content_key`` is the ``(source_id, content_key)``
+    upsert identity (QUIZ-02). ``embedding`` is a persistence-only dedup detail and is
+    not carried on this entity.
+    """
+
+    id: UUID
+    source_id: UUID
+    item_type: str
+    question: str
+    answer: str
+    section_path: tuple[str, ...]
+    anchor: str
+    source_excerpt: str
+    chunk_hash: str
+    content_key: str
+    status: str
+    generation_meta: dict
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
+class SchedulingSnapshot:
+    """An FSRS-6 scheduling state persisted as real columns (QUIZ-11).
+
+    Maps 1:1 to ``quiz_item_scheduling``: FSRS card ``state`` (enum int) and learning
+    ``step``, ``stability``/``difficulty`` memory parameters, the ``due`` review time,
+    and ``last_review`` (``None`` until first reviewed). All datetimes are UTC.
+    """
+
+    state: int
+    step: int | None
+    stability: float | None
+    difficulty: float | None
+    due: datetime
+    last_review: datetime | None
+
+
+@dataclass(frozen=True)
+class ReviewLogEntry:
+    """An append-only grade-history entry (QUIZ-12).
+
+    ``rating`` is FSRS's Again(1)/Hard(2)/Good(3)/Easy(4); ``reviewed_at`` is when the
+    review happened; ``review_duration_ms`` is the optional client-supplied timing. The
+    scheduling port produces the rating/time pair; the review service attaches the
+    duration before it is appended.
+    """
+
+    rating: int
+    reviewed_at: datetime
+    review_duration_ms: int | None = None
+
+
+@dataclass(frozen=True)
+class DueReviewItem:
+    """A due quiz card plus the join fields the review queue needs (QUIZ-13/15).
+
+    Bundles the reviewable :class:`QuizItem` with its owning source's ``source_title``
+    (the queue spans all the caller's sources) and its scheduled ``due`` time.
+    """
+
+    item: QuizItem
+    source_title: str
+    due: datetime
+
+
+@dataclass(frozen=True)
+class QuizGenerationJob:
+    """A durable deck-generation job driving one source's deck (mirrors :class:`IngestionJob`).
+
+    Immutable record whose transition helpers return new instances; ownership is
+    reachable only via the parent source (no ``user_id``, AD-014). ``generated_count``/
+    ``discarded_count``/``failed_sections`` are the terminal-success counts (QUIZ-09);
+    ``last_error`` is the terminal-failure reason.
+    """
+
+    id: UUID
+    source_id: UUID
+    status: str
+    attempts: int
+    generated_count: int
+    discarded_count: int
+    failed_sections: int
+    last_error: str | None
+    created_at: datetime
+    updated_at: datetime
+
+    def started(self, now: datetime) -> QuizGenerationJob:
+        """Begin an attempt: → ``running`` and increment ``attempts``."""
+        return replace(
+            self,
+            status=QuizJobStatus.RUNNING,
+            attempts=self.attempts + 1,
+            updated_at=now,
+        )
+
+    def succeeded(
+        self,
+        now: datetime,
+        *,
+        generated_count: int,
+        discarded_count: int,
+        failed_sections: int,
+    ) -> QuizGenerationJob:
+        """Terminal success: → ``succeeded`` with the generation counts (QUIZ-09)."""
+        return replace(
+            self,
+            status=QuizJobStatus.SUCCEEDED,
+            generated_count=generated_count,
+            discarded_count=discarded_count,
+            failed_sections=failed_sections,
+            updated_at=now,
+        )
+
+    def failed(self, now: datetime, error: str) -> QuizGenerationJob:
+        """Terminal failure: → ``failed`` with a durable ``last_error`` (QUIZ-09)."""
+        return replace(
+            self,
+            status=QuizJobStatus.FAILED,
+            last_error=error,
+            updated_at=now,
+        )
