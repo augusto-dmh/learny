@@ -35,7 +35,7 @@ ENV HOME=/root
 RUN uv sync --frozen --no-install-project --extra pdf
 COPY . .
 RUN uv sync --frozen --extra pdf
-RUN python -c "from docling.utils.model_downloader import download_models; download_models(with_layout=True, with_tableformer=True, with_rapidocr=False, with_code_formula=False, with_picture_classifier=False, with_easyocr=False)"
+RUN python -c "from docling.utils.model_downloader import download_models; download_models(with_layout=True, with_tableformer=True, with_rapidocr=False, with_code_formula=False, with_picture_classifier=False, with_easyocr=True)"
 CMD ["celery", "-A", "app.worker.celery_app:celery_app", "worker", \
      "--loglevel=info", "--queues", "ingest-pdf", \
      "--concurrency", "1", "--max-tasks-per-child", "1"]
