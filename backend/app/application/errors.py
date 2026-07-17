@@ -172,3 +172,21 @@ class QuizDeckConflict(Exception):
     queued/running job); the web layer maps this to 409 so a second POST does not
     start a competing deck job for the same source.
     """
+
+
+class QuizItemNotFound(Exception):
+    """A quiz item does not exist or is not the caller's (QUIZ-12/18).
+
+    Mirrors :class:`SourceNotFound`: a missing item and a non-owner (reached via
+    the parent source's ownership) collapse to this single error so the web layer
+    returns 404 either way and an item's existence is never disclosed.
+    """
+
+
+class QuizItemNotReviewable(Exception):
+    """A review was submitted for a non-``active`` quiz item (QUIZ-12).
+
+    ``SubmitReview`` rejects items reconciliation left ``stale`` or ``orphaned``
+    (their citation no longer resolves), so a suspended card is not scheduled; the
+    web layer maps this to 409.
+    """
