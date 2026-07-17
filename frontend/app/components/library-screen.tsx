@@ -22,6 +22,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchAuthState, type AuthState } from "@/app/lib/auth";
 import { getIngestion } from "@/app/lib/ingestion";
 import {
+  generateDeck,
+  getQuizOverview,
+  quizExportUrl,
+  type QuizOverview,
+} from "@/app/lib/quiz";
+import {
   listSources,
   startIngestion,
   uploadSource,
@@ -37,8 +43,164 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Spinner } from "@/components/ui/spinner";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 import { useIngestionPolling } from "./use-ingestion-polling";
+import { useQuizDeckPolling } from "./use-quiz-deck-polling";
+
+/**
+ * Quiz-deck controls for one ready source (QUIZ-20). Loads the source's quiz
+ * overview once; a load failure leaves the row's reading actions intact and
+ * simply shows no quiz controls. Generating a deck starts a job and polls the
+ * overview every 3s until the job goes terminal (stopping on unmount). A failed
+ * job surfaces its error with the generate button as a retry; a finished deck
+ * shows item + due counts, a "source changed" badge when items went stale or
+ * orphaned after a re-ingest, a per-source Review link when anything is due, and
+ * an Anki export link.
+ */
+function QuizDeckControls({
+  sourceId,
+  csrfToken,
+}: {
+  sourceId: string;
+  csrfToken: string;
+}) {
+  const [overview, setOverview] = useState<QuizOverview | null>(null);
+  const [generating, setGenerating] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  // Load the overview once; on failure the controls stay hidden (the card
+  // degrades to its reading actions rather than crashing).
+  useEffect(() => {
+    let active = true;
+    getQuizOverview(sourceId)
+      .then((next) => {
+        if (active) setOverview(next);
+      })
+      .catch(() => {
+        // No quiz controls until the overview is known.
+      });
+    return () => {
+      active = false;
+    };
+  }, [sourceId]);
+
+  const job = overview?.latest_job ?? null;
+  const jobActive = job?.status === "queued" || job?.status === "running";
+
+  // While a deck job is in flight, poll the overview every 3s (stopping when it
+  // goes terminal or this row unmounts, AD-070).
+  useQuizDeckPolling(sourceId, jobActive, setOverview);
+
+  async function handleGenerate() {
+    setActionError(null);
+    setGenerating(true);
+    try {
+      const next = await generateDeck(sourceId, csrfToken);
+      // Reflect the queued job at once so polling starts on this render.
+      setOverview((prev) => ({
+        items: prev?.items ?? [],
+        counts_by_status: prev?.counts_by_status ?? {},
+        due_count: prev?.due_count ?? 0,
+        latest_job: next,
+      }));
+    } catch (err) {
+      setActionError(
+        err instanceof Error
+          ? err.message
+          : "Could not start quiz deck generation.",
+      );
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  if (overview === null) {
+    return null;
+  }
+
+  const { items, due_count: due, counts_by_status: counts } = overview;
+  const changed = (counts.stale ?? 0) + (counts.orphaned ?? 0);
+
+  return (
+    <div className="space-y-2 border-t pt-3" data-testid={`quiz-${sourceId}`}>
+      {jobActive ? (
+        <Button type="button" size="sm" variant="outline" disabled>
+          <Spinner /> Generating deck…
+        </Button>
+      ) : (
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          onClick={() => void handleGenerate()}
+          disabled={generating}
+        >
+          Generate quiz deck
+        </Button>
+      )}
+
+      {job?.status === "failed" && job.error ? (
+        <p
+          role="alert"
+          data-testid={`quiz-error-${sourceId}`}
+          className="text-sm text-destructive"
+        >
+          {job.error}
+        </p>
+      ) : null}
+      {actionError ? (
+        <p role="alert" className="text-sm text-destructive">
+          {actionError}
+        </p>
+      ) : null}
+
+      {items.length > 0 ? (
+        <div className="flex flex-wrap items-center gap-3 text-sm">
+          <span
+            data-testid={`quiz-counts-${sourceId}`}
+            className="text-muted-foreground"
+          >
+            {items.length} {items.length === 1 ? "item" : "items"} · {due} due
+          </span>
+          {changed > 0 ? (
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Badge variant="outline">source changed</Badge>
+                </TooltipTrigger>
+                <TooltipContent>
+                  Some items no longer match the book after re-ingestion and are
+                  paused until you review them.
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          ) : null}
+          {due > 0 ? (
+            <Link
+              href={`/review?source_id=${sourceId}`}
+              className="text-primary underline-offset-4 hover:underline"
+            >
+              Review
+            </Link>
+          ) : null}
+          <a
+            href={quizExportUrl(sourceId)}
+            className="text-primary underline-offset-4 hover:underline"
+          >
+            Export to Anki
+          </a>
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 export function LibraryScreen({
   onRequireAuth,
@@ -234,26 +396,32 @@ export function LibraryScreen({
                 </CardHeader>
                 <CardContent className="space-y-3">
                   {source.status === "ready" ? (
-                    <div className="flex gap-4 text-sm">
-                      <Link
-                        href={`/sources/${source.id}/ask`}
-                        className="text-primary underline-offset-4 hover:underline"
-                      >
-                        Ask
-                      </Link>
-                      <Link
-                        href={`/sources/${source.id}/teach`}
-                        className="text-primary underline-offset-4 hover:underline"
-                      >
-                        Teach
-                      </Link>
-                      <Link
-                        href={`/sources/${source.id}/read`}
-                        className="text-primary underline-offset-4 hover:underline"
-                      >
-                        Read
-                      </Link>
-                    </div>
+                    <>
+                      <div className="flex gap-4 text-sm">
+                        <Link
+                          href={`/sources/${source.id}/ask`}
+                          className="text-primary underline-offset-4 hover:underline"
+                        >
+                          Ask
+                        </Link>
+                        <Link
+                          href={`/sources/${source.id}/teach`}
+                          className="text-primary underline-offset-4 hover:underline"
+                        >
+                          Teach
+                        </Link>
+                        <Link
+                          href={`/sources/${source.id}/read`}
+                          className="text-primary underline-offset-4 hover:underline"
+                        >
+                          Read
+                        </Link>
+                      </div>
+                      <QuizDeckControls
+                        sourceId={source.id}
+                        csrfToken={state.user.csrf_token}
+                      />
+                    </>
                   ) : null}
                   {source.status === "uploaded" ? (
                     <Button
