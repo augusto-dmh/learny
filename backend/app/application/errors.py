@@ -162,3 +162,13 @@ class TeachingTurnConflict(Exception):
     index. It lives here (not in ``infrastructure``) so the adapter raises a
     transport-agnostic error, matching :class:`InvalidEpubError`.
     """
+
+
+class QuizDeckConflict(Exception):
+    """A deck generation was requested while one is already in flight (QUIZ-04).
+
+    ``PlanDeckGeneration`` guards the single-in-flight invariant with an
+    application pre-check (``QuizJobRepository.get_active_for_source`` returns a
+    queued/running job); the web layer maps this to 409 so a second POST does not
+    start a competing deck job for the same source.
+    """
