@@ -32,6 +32,8 @@ _RESTORE_SH = (_BACKUP_DIR / "restore.sh").read_text()
 _ENTRYPOINT_SH = (_BACKUP_DIR / "entrypoint.sh").read_text()
 _DOCKERFILE = (_BACKUP_DIR / "Dockerfile").read_text()
 
+_CI = _REPO_ROOT / ".github" / "workflows" / "ci.yml"
+
 _IMAGE_TAG = "${LEARNY_IMAGE_TAG:-latest}"
 
 
@@ -247,3 +249,51 @@ def test_backup_image_pins_alpine_and_verifies_mc_checksum() -> None:
 def test_entrypoint_defaults_the_schedule_and_runs_crond() -> None:
     assert "LEARNY_BACKUP_CRON:=30 3 * * *" in _ENTRYPOINT_SH
     assert "crond -f" in _ENTRYPOINT_SH
+
+
+# --- CI restore roundtrip (OPS-10) ----------------------------------------------
+#
+# The end-to-end proof lives in ci.yml's compose-smoke job; these asserts pin the
+# step sequence and the safety-critical strings so a reorder that would silently
+# skip the proof (e.g. restoring before dropping, or dropping the offsite-notice
+# assertion) fails here rather than passing a hollow CI run.
+
+
+def _compose_smoke_scripts() -> str:
+    """The compose-smoke job's ``run:`` bodies, concatenated in step order."""
+    workflow = yaml.safe_load(_CI.read_text())
+    steps = workflow["jobs"]["compose-smoke"]["steps"]
+    return "\n".join(step.get("run", "") for step in steps)
+
+
+def test_ci_seeds_the_marker_before_backing_up() -> None:
+    scripts = _compose_smoke_scripts()
+    assert scripts.index("CREATE TABLE backup_marker") < scripts.index("backup-now")
+
+
+def test_ci_backup_run_asserts_the_offsite_notice() -> None:
+    # The local-only run (no LEARNY_BACKUP_REMOTE_* set) must be asserted to emit the
+    # exact notice backup.sh logs (OPS-05, OPS-10).
+    scripts = _compose_smoke_scripts()
+    assert "backup-now" in scripts
+    assert "offsite not configured" in scripts
+
+
+def test_ci_drops_the_marker_before_restoring() -> None:
+    scripts = _compose_smoke_scripts()
+    assert scripts.index("DROP TABLE backup_marker") < scripts.index(
+        "restore.sh --latest --yes"
+    )
+
+
+def test_ci_restores_from_the_latest_dump_with_yes() -> None:
+    # Matches the shipped restore invocation (deploy/backup/restore.sh, run directly
+    # through the image entrypoint — there is no bare `restore` binary).
+    assert "restore.sh --latest --yes" in _compose_smoke_scripts()
+
+
+def test_ci_asserts_the_seeded_row_returns_after_restore() -> None:
+    scripts = _compose_smoke_scripts()
+    restore_at = scripts.index("restore.sh --latest --yes")
+    assert_at = scripts.index("SELECT note FROM backup_marker")
+    assert restore_at < assert_at, "the marker assertion must run after the restore"
