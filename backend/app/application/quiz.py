@@ -28,6 +28,7 @@ from app.application.identity import AuthorizeOwnership
 from app.application.ingestion import SOURCE_STATUS_READY, authorized_source
 from app.application.quiz_qc import cloze_is_valid, content_key, quote_in_text
 from app.domain.entities import (
+    QuizCandidate,
     QuizDeckHandle,
     QuizDeckResult,
     QuizGenerationJob,
@@ -239,22 +240,34 @@ class RunDeckGeneration:
         generated = 0
         discarded = 0
 
+        # Ground first, then embed every surviving candidate in ONE batch call: under a
+        # real provider, per-candidate embed_query would be N sequential round-trips.
+        grounded: list[tuple[QuizCandidate, tuple[tuple[str, ...], str, str], str]] = []
         for candidate in result.candidates:
             located = self._ground(candidate, chunk_index)
             if located is None:
                 discarded += 1
                 continue
-            section_path, anchor, chunk_text = located
-
             key = content_key(candidate.item_type, candidate.question, candidate.answer)
             if key in accepted_keys:
                 # Exact duplicate candidate within this pass — the same item once.
                 discarded += 1
                 continue
+            accepted_keys.add(key)
+            grounded.append((candidate, located, key))
+        accepted_keys.clear()
 
-            embedding = list(
-                self._embeddings.embed_query(f"{candidate.question}\n{candidate.answer}")
+        embeddings = (
+            self._embeddings.embed_documents(
+                [f"{candidate.question}\n{candidate.answer}" for candidate, _, _ in grounded]
             )
+            if grounded
+            else []
+        )
+
+        for (candidate, located, key), embedding in zip(grounded, embeddings, strict=True):
+            section_path, anchor, chunk_text = located
+            embedding = list(embedding)
             is_regeneration = key in existing_keys
             if not is_regeneration and self._is_duplicate(
                 embedding, accepted_embeddings + persisted_embeddings
