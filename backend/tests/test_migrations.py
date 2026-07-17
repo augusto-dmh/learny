@@ -694,6 +694,127 @@ def test_migration_0007_downgrade_restores_generated_search_vector(monkeypatch) 
 
 
 @pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
+def test_migration_0008_creates_quiz_tables(monkeypatch) -> None:
+    """0008 up: the four quiz tables with cascade FKs (source→sources for items/jobs,
+    quiz_item_id→quiz_items for scheduling/log), the (source_id, content_key) upsert
+    unique, a nullable embedding column, the rating 1..4 CHECK, no FK into the corpus
+    tables (snapshot survives a corpus replace), and the due/source_id/quiz_item_id
+    indexes. Down one step to 0007 removes all four cleanly, re-up restores them
+    (upgrade→downgrade→upgrade round-trip, QUIZ-01)."""
+    monkeypatch.setenv("LEARNY_DATABASE_URL", TEST_DB_URL)
+    cfg = _alembic_config(TEST_DB_URL)
+
+    command.upgrade(cfg, "head")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        inspector = inspect(engine)
+        tables = set(inspector.get_table_names())
+        assert {
+            "quiz_items",
+            "quiz_item_scheduling",
+            "review_log",
+            "quiz_generation_jobs",
+        } <= tables
+
+        # Items/jobs cascade from their source; scheduling/log cascade from their item,
+        # so deleting a source removes the whole aggregate with no orphans.
+        item_fk = next(
+            fk
+            for fk in inspector.get_foreign_keys("quiz_items")
+            if fk["constrained_columns"] == ["source_id"]
+        )
+        assert item_fk["referred_table"] == "sources"
+        assert item_fk["options"].get("ondelete") == "CASCADE"
+
+        job_fk = next(
+            fk
+            for fk in inspector.get_foreign_keys("quiz_generation_jobs")
+            if fk["constrained_columns"] == ["source_id"]
+        )
+        assert job_fk["referred_table"] == "sources"
+        assert job_fk["options"].get("ondelete") == "CASCADE"
+
+        sched_fk = next(
+            fk
+            for fk in inspector.get_foreign_keys("quiz_item_scheduling")
+            if fk["constrained_columns"] == ["quiz_item_id"]
+        )
+        assert sched_fk["referred_table"] == "quiz_items"
+        assert sched_fk["options"].get("ondelete") == "CASCADE"
+
+        log_fk = next(
+            fk
+            for fk in inspector.get_foreign_keys("review_log")
+            if fk["constrained_columns"] == ["quiz_item_id"]
+        )
+        assert log_fk["referred_table"] == "quiz_items"
+        assert log_fk["options"].get("ondelete") == "CASCADE"
+
+        # No FK into the corpus tables — quiz_items snapshot their citation so they
+        # survive a corpus replace (which regenerates chunk ids). Design invariant.
+        item_referred = {fk["referred_table"] for fk in inspector.get_foreign_keys("quiz_items")}
+        assert "corpus_chunks" not in item_referred
+        assert "corpus_sections" not in item_referred
+
+        # Upsert identity: unique (source_id, content_key) (QUIZ-02).
+        item_uniques = [uc["column_names"] for uc in inspector.get_unique_constraints("quiz_items")]
+        assert ["source_id", "content_key"] in item_uniques
+
+        # Near-duplicate embedding column present and nullable (dedup identity, QUIZ-08).
+        item_columns = {c["name"]: c for c in inspector.get_columns("quiz_items")}
+        assert "embedding" in item_columns
+        assert item_columns["embedding"]["nullable"] is True
+
+        # The rating column is bounded to FSRS's 1..4 by a CHECK (QUIZ-12).
+        with engine.connect() as conn:
+            check_def = conn.execute(
+                text(
+                    "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+                    "WHERE conrelid = 'review_log'::regclass AND contype = 'c'"
+                )
+            ).scalar_one()
+        assert "1" in check_def and "4" in check_def
+
+        # Due index drives the due-queue read; source_id/quiz_item_id index the FKs.
+        item_idx = [ix["column_names"] for ix in inspector.get_indexes("quiz_items")]
+        assert ["source_id"] in item_idx
+        sched_idx = [ix["column_names"] for ix in inspector.get_indexes("quiz_item_scheduling")]
+        assert ["due"] in sched_idx
+        job_idx = [ix["column_names"] for ix in inspector.get_indexes("quiz_generation_jobs")]
+        assert ["source_id"] in job_idx
+        log_idx = [ix["column_names"] for ix in inspector.get_indexes("review_log")]
+        assert ["quiz_item_id"] in log_idx
+    finally:
+        engine.dispose()
+
+    # Down one step to 0007: all four quiz tables are dropped cleanly.
+    command.downgrade(cfg, "0007_language_aware_fts")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        remaining = set(inspect(engine).get_table_names())
+        assert "quiz_items" not in remaining
+        assert "quiz_item_scheduling" not in remaining
+        assert "review_log" not in remaining
+        assert "quiz_generation_jobs" not in remaining
+    finally:
+        engine.dispose()
+
+    # Re-upgrade restores them — the schema round-trips.
+    command.upgrade(cfg, "head")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        restored = set(inspect(engine).get_table_names())
+        assert {
+            "quiz_items",
+            "quiz_item_scheduling",
+            "review_log",
+            "quiz_generation_jobs",
+        } <= restored
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
 def test_in_process_migration_preserves_app_root_logging(monkeypatch) -> None:
     """An in-process migration must not reconfigure the app-owned root logger.
 
