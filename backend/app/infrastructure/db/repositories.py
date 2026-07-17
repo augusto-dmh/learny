@@ -1005,7 +1005,7 @@ class SqlAlchemyQuizItemRepository:
     def list_for_source(self, source_id: UUID) -> list[QuizItem]:
         """Return all of ``source_id``'s items (any status), oldest first (QUIZ-14)."""
         rows = self._conn.execute(
-            select(quiz_items)
+            select(*_QUIZ_ITEM_READ_COLUMNS)
             .where(quiz_items.c.source_id == source_id)
             .order_by(quiz_items.c.created_at, quiz_items.c.id)
         ).all()
@@ -1069,7 +1069,7 @@ class SqlAlchemyQuizItemRepository:
 
         rows = self._conn.execute(
             select(
-                quiz_items,
+                *_QUIZ_ITEM_READ_COLUMNS,
                 sources.c.title.label("source_title"),
                 quiz_item_scheduling.c.due.label("due"),
             )
@@ -1089,14 +1089,14 @@ class SqlAlchemyQuizItemRepository:
     def get_by_id(self, item_id: UUID) -> QuizItem | None:
         """Return the item with ``item_id``, or ``None`` if absent."""
         row = self._conn.execute(
-            select(quiz_items).where(quiz_items.c.id == item_id)
+            select(*_QUIZ_ITEM_READ_COLUMNS).where(quiz_items.c.id == item_id)
         ).one_or_none()
         return _to_quiz_item(row) if row is not None else None
 
     def items_for_reconcile(self, source_id: UUID) -> list[QuizItem]:
         """Return ``source_id``'s items for post-re-ingestion reconciliation (QUIZ-16)."""
         rows = self._conn.execute(
-            select(quiz_items)
+            select(*_QUIZ_ITEM_READ_COLUMNS)
             .where(quiz_items.c.source_id == source_id)
             .order_by(quiz_items.c.created_at, quiz_items.c.id)
         ).all()
@@ -1283,6 +1283,12 @@ def _to_teaching_turn(row, citations: tuple[Evidence, ...]) -> TeachingTurn:  # 
         citations=citations,
         created_at=row.created_at,
     )
+
+
+# Every quiz_items column except ``embedding``: the 1536-dim vector exists only for
+# generation-time dedup, so read models must not drag it across the wire (the overview
+# is a 3 s polling target and the due queue returns up to 100 rows per request).
+_QUIZ_ITEM_READ_COLUMNS = tuple(c for c in quiz_items.c if c.name != "embedding")
 
 
 def _to_quiz_item(row) -> QuizItem:  # noqa: ANN001
