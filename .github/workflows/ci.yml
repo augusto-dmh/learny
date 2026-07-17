@@ -52,7 +52,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # The web-layer upload tests and the storage adapter integration tests run
       # end-to-end against a real S3 endpoint. GitHub service containers cannot
       # pass an image command (which minio/minio requires), so start the official
@@ -85,7 +85,7 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: astral-sh/ruff-action@v3
         with:
           src: backend
@@ -98,7 +98,7 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -112,7 +112,7 @@ jobs:
   compose-smoke:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # One build-and-boot step: `--wait` blocks until EVERY named service's
       # healthcheck passes (api /healthz, worker celery ping, web fetch probe,
       # db/redis/minio) and fails the job otherwise — a strictly stronger gate
