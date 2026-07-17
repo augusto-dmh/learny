@@ -69,6 +69,29 @@ services:
       - path: ./secrets/worker.env
         required: true
 
+  # Scheduled backups (RFC-003 Cycle A): a crond sidecar that dumps PostgreSQL and
+  # (when offsite is configured) mirrors the source bucket. No host port — it only
+  # reaches db/minio over the compose network. Credentials reuse db.env/minio.env
+  # and add backup.env (offsite + heartbeat); dumps persist in backup_data. See
+  # docs/ops/backups.md.
+  backup:
+    restart: unless-stopped
+    image: ghcr.io/augusto-dmh/learny-backup:${LEARNY_IMAGE_TAG:-latest}
+    env_file:
+      - path: ./secrets/db.env
+        required: true
+      - path: ./secrets/minio.env
+        required: true
+      - path: ./secrets/backup.env
+        required: true
+    volumes:
+      - backup_data:/backups
+    depends_on:
+      db:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
   web:
     restart: unless-stopped
     image: ghcr.io/augusto-dmh/learny-web:${LEARNY_IMAGE_TAG:-latest}
@@ -103,3 +126,4 @@ services:
 volumes:
   caddy_data:
   caddy_config:
+  backup_data:

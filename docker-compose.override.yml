@@ -48,3 +48,20 @@ services:
       LEARNY_DATABASE_URL: postgresql+psycopg://learny:learny@db:5432/learny
       LEARNY_STORAGE_ACCESS_KEY: learny
       LEARNY_STORAGE_SECRET_KEY: learny-dev-secret
+
+  # Opt-in backup sidecar for local/CI use only (RFC-003 Cycle A). Behind the
+  # `backup` profile so a plain `docker compose up` never starts it; drive it with
+  # `docker compose --profile backup run --rm backup backup-now` (or `restore ...`).
+  # Dev credentials match the db/minio values above so it can reach both locally.
+  backup:
+    profiles: ["backup"]
+    build: ./deploy/backup
+    environment:
+      POSTGRES_PASSWORD: learny
+      MINIO_ROOT_USER: learny
+      MINIO_ROOT_PASSWORD: learny-dev-secret
+    volumes:
+      - backup_data:/backups
+
+volumes:
+  backup_data:
