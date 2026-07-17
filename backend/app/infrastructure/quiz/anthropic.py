@@ -1,0 +1,198 @@
+"""Anthropic Message Batches quiz adapter (QUIZ-05 batched path, behind the Learny port).
+
+The ``anthropic`` SDK, the model id, and the batch/structured-output request shapes live
+only in this module — callers depend on ``QuizGenerationPort`` and receive Learny-owned
+candidates (ADR-0007/0009). Generation is asynchronous: ``begin_deck`` submits **one**
+Message Batches request per eligible section (each a single structured-output message
+whose ``source_chunk_id`` enum is constrained to that section's chunk ids), and returns a
+handle carrying the batch id plus the per-section chunk-id map; ``collect_deck`` polls the
+batch and returns ``None`` while it is still processing, mapping each ended result back to
+its section by ``custom_id`` once it ends (per-request failures become section errors, a
+partial-success deck). The QC pipeline downstream re-verifies every candidate, so the
+adapter parses leniently and never trusts the model's grounding on its own.
+
+SDK note (verified at install, ``anthropic==0.116``): ``messages.batches.create`` accepts
+``params`` as a full ``MessageCreateParams`` including ``output_config``, so structured
+outputs are legal inside a batch — no prompt-JSON fallback is needed. ``batches.retrieve``
+exposes ``processing_status`` (``in_progress``/``canceling``/``ended``) and
+``batches.results`` yields ``(custom_id, result)`` where ``result.type`` is
+``succeeded``/``errored``/``canceled``/``expired``.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from collections.abc import Sequence
+from typing import Any
+from uuid import UUID
+
+from app.domain.entities import (
+    QuizCandidate,
+    QuizDeckHandle,
+    QuizDeckResult,
+    QuizItemType,
+    QuizSection,
+)
+from app.infrastructure.answering.anthropic import _AnthropicAdapter
+
+
+def _custom_id(index: int, anchor: str) -> str:
+    """Return a batch-legal, section-unique custom id derived from the anchor.
+
+    Batch custom ids must match ``[a-zA-Z0-9_-]{1,64}``, which raw anchors
+    (``ch01.xhtml#sec``) violate; the positional prefix guarantees uniqueness even when
+    two sections share an anchor, and the anchor hash ties the id back to the section.
+    """
+    digest = hashlib.sha256(anchor.encode("utf-8")).hexdigest()[:12]
+    return f"section-{index}-{digest}"
+
+
+def _items_schema(chunk_ids: Sequence[str]) -> dict[str, Any]:
+    """Per-section json_schema: an ``items`` array constrained to this section's chunks."""
+    return {
+        "type": "object",
+        "properties": {
+            "items": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "item_type": {
+                            "type": "string",
+                            "enum": [QuizItemType.FREE_RECALL, QuizItemType.CLOZE],
+                        },
+                        "question": {"type": "string"},
+                        "answer": {"type": "string"},
+                        # Constrain the citation to the section's own chunks (QUIZ-05).
+                        "source_chunk_id": {"type": "string", "enum": list(chunk_ids)},
+                        "anchor_quote": {"type": "string"},
+                    },
+                    "required": [
+                        "item_type",
+                        "question",
+                        "answer",
+                        "source_chunk_id",
+                        "anchor_quote",
+                    ],
+                    "additionalProperties": False,
+                },
+            }
+        },
+        "required": ["items"],
+        "additionalProperties": False,
+    }
+
+
+def _section_prompt(section: QuizSection) -> str:
+    """Render the section's text (chunks labeled by id) plus the item-writing instruction."""
+    path = " > ".join(section.section_path)
+    chunks_text = "\n\n".join(
+        f"[chunk {chunk_id}]\n{text}" for chunk_id, text in section.chunks
+    )
+    return (
+        "You are writing active-recall study items for one section of a book.\n"
+        f"Section: {path}\n\n"
+        f"Source text (each chunk is labeled with its id):\n{chunks_text}\n\n"
+        "Write 3 to 6 items grounded strictly in the source text above. Each item must set "
+        "source_chunk_id to the id of the chunk it is drawn from and anchor_quote to a "
+        "sentence copied verbatim from that chunk. Use item_type 'free_recall' for a "
+        "question/answer pair, or 'cloze' for a fill-in-the-blank where the question is a "
+        "sentence from the chunk with the key term replaced by ____ and answer is that term."
+    )
+
+
+def _first_text(message: Any) -> str:
+    """Return the first ``text`` block's text from a Claude message."""
+    for block in message.content:
+        if getattr(block, "type", None) == "text":
+            return block.text
+    raise ValueError("batch response contained no text block")
+
+
+def _parse_items(message: Any) -> list[QuizCandidate]:
+    """Parse a section's structured-output message into candidates (QC re-verifies)."""
+    data = json.loads(_first_text(message))
+    return [
+        QuizCandidate(
+            item_type=item["item_type"],
+            question=item["question"],
+            answer=item["answer"],
+            source_chunk_id=UUID(item["source_chunk_id"]),
+            anchor_quote=item["anchor_quote"],
+        )
+        for item in data["items"]
+    ]
+
+
+class AnthropicQuizAdapter(_AnthropicAdapter):
+    """``QuizGenerationPort`` over Claude's Message Batches + structured outputs.
+
+    Reuses the shared lazy-client base (``model`` identity, injected fake client) so tests
+    stay offline. One batch request per section keeps ``source_chunk_id`` constrained to
+    that section's chunks; the handle carries the batch id and the section map for polling.
+    """
+
+    def begin_deck(self, sections: Sequence[QuizSection]) -> QuizDeckHandle:
+        """Submit one structured-output batch request per section; return a poll handle.
+
+        With no sections there is nothing to submit, so no batch is created and the handle
+        carries no batch id (``collect_deck`` then returns an empty result immediately).
+        """
+        requests: list[dict[str, Any]] = []
+        section_meta: dict[str, dict[str, Any]] = {}
+        for index, section in enumerate(sections):
+            custom_id = _custom_id(index, section.anchor)
+            chunk_ids = [str(chunk_id) for chunk_id, _ in section.chunks]
+            requests.append(
+                {
+                    "custom_id": custom_id,
+                    "params": {
+                        "model": self._model,
+                        "max_tokens": self._max_tokens,
+                        "messages": [
+                            {"role": "user", "content": _section_prompt(section)}
+                        ],
+                        "output_config": {
+                            "format": {
+                                "type": "json_schema",
+                                "schema": _items_schema(chunk_ids),
+                            }
+                        },
+                    },
+                }
+            )
+            section_meta[custom_id] = {"chunk_ids": chunk_ids}
+
+        if not requests:
+            return QuizDeckHandle(provider="anthropic", batch_id=None, payload={"sections": {}})
+
+        batch = self._get_client().messages.batches.create(requests=requests)
+        return QuizDeckHandle(
+            provider="anthropic",
+            batch_id=batch.id,
+            payload={"sections": section_meta},
+        )
+
+    def collect_deck(self, handle: QuizDeckHandle) -> QuizDeckResult | None:
+        """Poll the batch; ``None`` while processing, else the mapped result (QUIZ-05)."""
+        if handle.batch_id is None:
+            return QuizDeckResult(candidates=(), errors=())
+
+        client = self._get_client()
+        batch = client.messages.batches.retrieve(handle.batch_id)
+        if batch.processing_status != "ended":
+            return None
+
+        candidates: list[QuizCandidate] = []
+        errors: list[str] = []
+        for response in client.messages.batches.results(handle.batch_id):
+            result = response.result
+            if result.type != "succeeded":
+                errors.append(f"{response.custom_id}: {result.type}")
+                continue
+            try:
+                candidates.extend(_parse_items(result.message))
+            except (ValueError, KeyError, json.JSONDecodeError) as exc:
+                errors.append(f"{response.custom_id}: {exc}")
+        return QuizDeckResult(candidates=tuple(candidates), errors=tuple(errors))
