@@ -1,17 +1,24 @@
-"""Docling document → ParsedBook mapping (design §Components 4, AD-086/089).
+"""Docling-backed PDF parser adapter (design §Components 4, AD-086/089).
 
-The pure half of the PDF parser adapter: :func:`_to_parsed_book` maps a
-``docling_core`` ``DoclingDocument`` to the library-free
-:class:`~app.domain.entities.ParsedBook` DTO. It imports only ``docling_core`` (a
-pydantic model library carried in the dev group), never ``docling`` itself, so it
-is unit-testable in CI where the heavy ``pdf`` extra is absent (AD-089). The
-conversion half (running Docling to produce the document) is the parser adapter
-added alongside it.
+Implements :class:`~app.domain.ports.DocumentParserPort` for PDF sources. The
+adapter is split so the pure mapping is unit-testable without the heavy
+``docling`` runtime (AD-089):
+
+* :func:`_to_parsed_book` maps a ``docling_core`` ``DoclingDocument`` to the
+  library-free :class:`~app.domain.entities.ParsedBook` DTO. It imports only
+  ``docling_core`` (a pydantic model library carried in the dev group), so its
+  tests run in CI where the heavy ``pdf`` extra is absent.
+* :meth:`DoclingPdfParser._convert` runs the real conversion; ``docling`` is
+  imported *inside* that method so this module still loads on a worker without
+  the ``pdf`` extra (the dispatch factory guards that case before any PDF reaches
+  here).
 
 The mapping mirrors the EPUB adapter's contract: sections carry titles, depths,
 section paths, typed HTML blocks, and per-block page spans. It keeps its output
 close to Docling's reading order and leaves generic-title and hierarchy cleanup
-to the format-agnostic normalization pass that ``BuildCorpus`` runs next.
+to the format-agnostic normalization pass that ``BuildCorpus`` runs next. Every
+unparseable input — corrupt, encrypted, or text-free — becomes a terminal
+:class:`~app.application.errors.InvalidDocumentError` (ING-14).
 """
 
 from __future__ import annotations
@@ -20,6 +27,7 @@ import hashlib
 import html
 import re
 from dataclasses import dataclass, field
+from io import BytesIO
 
 from docling_core.types.doc import (
     DoclingDocument,
@@ -29,6 +37,7 @@ from docling_core.types.doc import (
     TitleItem,
 )
 
+from app.application.errors import InvalidDocumentError
 from app.domain.entities import ParsedBlock, ParsedBook, ParsedSection
 
 # Labels whose text is running furniture, not body content, and is dropped even
@@ -52,6 +61,51 @@ class _RawSection:
     section_path: tuple[str, ...]
     ordinal: int
     blocks: list[ParsedBlock] = field(default_factory=list)
+
+
+class DoclingPdfParser:
+    """``DocumentParserPort`` backed by Docling for born-digital PDF (ING-10/14).
+
+    The constructor takes nothing settings-dependent: in the baked ``pdf-worker``
+    image Docling reads its model artifacts from its own environment, so the
+    adapter stays a plain composition-root object. OCR is disabled and table
+    structure enabled per RFC-002; tables are exported as HTML so the existing
+    Markdown path renders them as text.
+    """
+
+    def parse(self, source_bytes: bytes, *, filename: str) -> ParsedBook:
+        document = self._convert(source_bytes, filename=filename)
+        return _to_parsed_book(document, filename=filename)
+
+    def _convert(self, source_bytes: bytes, *, filename: str) -> DoclingDocument:
+        """Run Docling conversion, mapping any failure to a terminal error (ING-14).
+
+        ``docling`` is imported here (not at module load) so this module can be
+        imported on a worker without the ``pdf`` extra. Corrupt, encrypted, and
+        otherwise unreadable PDFs raise from ``convert`` under ``raises_on_error``
+        and become :class:`InvalidDocumentError`; a converted document with no
+        non-empty text block is likewise terminal (a scanned/text-free PDF this
+        OCR-disabled pipeline cannot use).
+        """
+        from docling.datamodel.base_models import InputFormat
+        from docling.datamodel.pipeline_options import PdfPipelineOptions
+        from docling.document_converter import DocumentConverter, PdfFormatOption
+        from docling_core.types.io import DocumentStream
+
+        options = PdfPipelineOptions(do_ocr=False, do_table_structure=True)
+        converter = DocumentConverter(
+            format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=options)}
+        )
+        stream = DocumentStream(name=filename, stream=BytesIO(source_bytes))
+        try:
+            result = converter.convert(stream, raises_on_error=True)
+        except Exception as exc:  # noqa: BLE001 — any conversion failure is terminal
+            raise InvalidDocumentError(f"could not read PDF {filename!r}") from exc
+
+        document = result.document
+        if not _has_text(document):
+            raise InvalidDocumentError(f"PDF {filename!r} has no extractable text")
+        return document
 
 
 def _to_parsed_book(document: DoclingDocument, *, filename: str) -> ParsedBook:
@@ -193,6 +247,18 @@ def _page_span(item: object) -> tuple[int, int] | None:
     if not pages:
         return None
     return (min(pages), max(pages))
+
+
+def _has_text(document: DoclingDocument) -> bool:
+    """True when at least one body item carries non-empty text or a table (ING-14)."""
+    for item, _level in document.iterate_items():
+        if _is_dropped(item):
+            continue
+        if isinstance(item, TableItem):
+            return True
+        if _collapse(getattr(item, "text", "") or ""):
+            return True
+    return False
 
 
 def _book_title(document: DoclingDocument) -> str | None:
