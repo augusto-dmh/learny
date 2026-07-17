@@ -104,3 +104,25 @@ def test_dev_merge_still_publishes_todays_infra_ports(local: dict) -> None:
     minio_ports = _host_ports(local["minio"])
     assert "9000" in minio_ports
     assert "9001" in minio_ports
+
+
+# --- prod overlay resolves the app services to GHCR image refs (DEP-05) ---------
+
+_IMAGE_TAG = "${LEARNY_IMAGE_TAG:-latest}"
+_GHCR_REFS = {
+    "api": f"ghcr.io/augusto-dmh/learny-backend:{_IMAGE_TAG}",
+    "worker": f"ghcr.io/augusto-dmh/learny-backend:{_IMAGE_TAG}",
+    "worker-pdf": f"ghcr.io/augusto-dmh/learny-pdf-worker:{_IMAGE_TAG}",
+    "web": f"ghcr.io/augusto-dmh/learny-web:{_IMAGE_TAG}",
+}
+
+
+@pytest.mark.parametrize(("service", "ref"), sorted(_GHCR_REFS.items()))
+def test_prod_app_services_use_the_ghcr_image_ref(prod: dict, service: str, ref: str) -> None:
+    assert prod[service].get("image") == ref
+
+
+def test_base_app_services_still_build_from_source(base: dict) -> None:
+    for service in _GHCR_REFS:
+        assert base[service].get("build"), f"{service} must keep its build block in base"
+        assert base[service].get("image") is None, f"{service} must not pin an image in base"
