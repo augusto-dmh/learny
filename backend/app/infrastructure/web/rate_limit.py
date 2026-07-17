@@ -156,3 +156,20 @@ def rate_limit_teaching(request: Request) -> None:
             detail="Too many attempts. Please try again later.",
             headers={"Retry-After": str(retry_after)},
         )
+
+
+def rate_limit_quiz(request: Request) -> None:
+    """FastAPI dependency: throttle deck generation + review submits; 429 when exceeded.
+
+    Shares the same swappable limiter and per-IP+route key as ``rate_limit_auth``
+    (same ``KNOWN LIMITATION`` under the proxy topology), applied to the
+    state-changing quiz endpoints (deck POST + review POST) so a client cannot flood
+    batch generation or the scheduling writes (QUIZ-18).
+    """
+    allowed, retry_after = get_rate_limiter().hit(_client_key(request))
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many attempts. Please try again later.",
+            headers={"Retry-After": str(retry_after)},
+        )
