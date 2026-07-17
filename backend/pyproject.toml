@@ -22,6 +22,8 @@ dependencies = [
     "pgvector>=0.3,<0.5",
     "openai>=1.40,<2",
     "anthropic>=0.116,<1",
+    "fsrs>=6,<7",
+    "genanki>=0.13,<0.14",
 ]
 
 [project.optional-dependencies]
