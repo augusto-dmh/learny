@@ -245,11 +245,18 @@ class IngestionEnqueuer(Protocol):
     """The Celery boundary — keeps ``apply_async`` out of application code.
 
     Called *after* the queued job is committed so the worker always sees a
-    durable row; the queue message carries only ids (AD-014).
+    durable row; the queue message carries only ids (AD-014). ``content_type``
+    selects the destination queue so a heavy PDF parse never lands on the default
+    worker (ING-17); the queue message itself still carries only ids.
     """
 
-    def enqueue_ingestion(self, *, source_id: UUID, job_id: UUID) -> None:
-        """Enqueue the background ingestion task for ``job_id`` / ``source_id``."""
+    def enqueue_ingestion(
+        self, *, source_id: UUID, job_id: UUID, content_type: str
+    ) -> None:
+        """Enqueue the background ingestion task for ``job_id`` / ``source_id``.
+
+        ``content_type`` is the source's stored type, used only to pick the queue.
+        """
         ...
 
 
@@ -272,21 +279,23 @@ class StoragePort(Protocol):
 
 
 @runtime_checkable
-class EpubParserPort(Protocol):
-    """Structure-preserving EPUB parse port (ADR-0002, ADR-0011 — EPUB only).
+class DocumentParserPort(Protocol):
+    """Structure-preserving document parse port (ADR-0002, AD-083).
 
-    The only seam the ebooklib/BeautifulSoup adapter sits behind (ADR-0009);
-    application code depends on this protocol and the library-free
-    :class:`~app.domain.entities.ParsedBook` DTO, never on parsing libraries.
+    The single format-agnostic seam each concrete parser adapter sits behind
+    (ADR-0009); application code depends on this protocol and the library-free
+    :class:`~app.domain.entities.ParsedBook` DTO, never on parsing libraries. A
+    format-dispatch factory picks the adapter (ebooklib for EPUB, Docling for
+    PDF) from the source's content type at the worker composition root.
     """
 
     def parse(self, source_bytes: bytes, *, filename: str) -> ParsedBook:
-        """Parse EPUB bytes into a :class:`ParsedBook`.
+        """Parse document bytes into a :class:`ParsedBook`.
 
-        Raises :class:`~app.application.errors.InvalidEpubError` for anything
-        that is not a parseable EPUB (non-EPUB bytes, corrupt archive,
-        unresolvable spine) so the ingestion step can treat it as terminal
-        (CORP-06).
+        Raises :class:`~app.application.errors.InvalidDocumentError` for anything
+        that is not a parseable document of the adapter's format (bad bytes,
+        corrupt archive, unresolvable structure) so the ingestion step can treat
+        it as terminal (CORP-06).
         """
         ...
 
@@ -347,8 +356,23 @@ class CorpusRepository(Protocol):
 
         The corpus text index quiz reconciliation reads after a corpus replace: each
         :class:`~app.domain.entities.ReconcileSection` carries the section's concatenated
-        chunk text so a snapshotted ``source_excerpt`` can be re-checked for presence. All
-        sections (leaf or not) are returned so a relocated quote can be found anywhere.
+        chunk text so a snapshotted ``source_excerpt`` can be re-checked for presence, plus
+        its ``anchor_aliases`` so an item snapshotted against a merged-away anchor reconciles
+        to the surviving section (AD-085). All sections (leaf or not) are returned so a
+        relocated quote can be found anywhere.
+        """
+        ...
+
+    def expand_anchors(
+        self, source_id: UUID, anchors: Sequence[str]
+    ) -> tuple[str, ...]:
+        """Grow ``anchors`` to include the aliases of the sections they resolve to (AD-085).
+
+        Returns the input anchors plus, for every section whose canonical anchor is in
+        ``anchors`` or that carries one of ``anchors`` as an alias, that section's canonical
+        anchor and all its aliases (deduplicated, input order preserved). Teaching-scoped
+        retrieval expands its target subtree through this so evidence from a section that
+        normalization merged away is still reachable (ING-23). An empty input returns empty.
         """
         ...
 

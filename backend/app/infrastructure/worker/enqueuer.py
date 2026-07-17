@@ -10,17 +10,33 @@ from __future__ import annotations
 
 from uuid import UUID
 
+# The dedicated queue for PDF ingestion (ING-17). Its consumer is the isolated
+# ``worker-pdf`` compose service; the default worker never drains it. Kept here as
+# the single source of truth the compose command mirrors.
+PDF_INGEST_QUEUE = "ingest-pdf"
+
 
 class CeleryIngestionEnqueuer:
-    """``IngestionEnqueuer`` backed by the Celery ``run_ingestion`` task."""
+    """``IngestionEnqueuer`` backed by the Celery ``run_ingestion`` task.
 
-    def enqueue_ingestion(self, *, source_id: UUID, job_id: UUID) -> None:
+    Routes PDF sources to the dedicated ``ingest-pdf`` queue and leaves every other
+    source (EPUB today) on the default queue (ING-17); the decision is made here in
+    the adapter so ``apply_async`` never leaks into application code (AD-016).
+    """
+
+    def enqueue_ingestion(
+        self, *, source_id: UUID, job_id: UUID, content_type: str
+    ) -> None:
         # Imported locally so the module import graph stays acyclic: the task
         # module wires this cycle's adapters, and the web composition root imports
         # this enqueuer.
+        from app.infrastructure.ingestion.factory import PDF_CONTENT_TYPE
         from app.worker.tasks import run_ingestion
 
-        run_ingestion.apply_async(args=[str(source_id), str(job_id)])
+        options: dict[str, object] = {"args": [str(source_id), str(job_id)]}
+        if content_type == PDF_CONTENT_TYPE:
+            options["queue"] = PDF_INGEST_QUEUE
+        run_ingestion.apply_async(**options)
 
 
 class CeleryQuizDeckEnqueuer:

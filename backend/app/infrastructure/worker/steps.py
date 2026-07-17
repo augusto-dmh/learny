@@ -1,9 +1,9 @@
 """Ingestion step adapters + their transient-failure signal (design §Components).
 
-``EpubCorpusIngestionStep`` is Phase 5's real ``IngestionStep``: it binds
+``CorpusIngestionStep`` is Phase 5's real ``IngestionStep``: it binds
 ``BuildCorpus`` to the task's retry contract, mapping transient object-storage
 faults to ``RetryableIngestionError`` (CORP-07) while letting terminal failures
-(``ObjectNotFound``, ``InvalidEpubError``, and any other raise) propagate so the
+(``ObjectNotFound``, ``InvalidDocumentError``, and any other raise) propagate so the
 task fails the job (CORP-06). ``NoOpIngestionStep`` stays exported: it drives the
 lifecycle without parsing and remains the double the lifecycle tests inject.
 
@@ -33,16 +33,16 @@ class NoOpIngestionStep:
         return None
 
 
-class EpubCorpusIngestionStep:
-    """Run the EPUB corpus build under the task's retry contract (CORP-06/07/08).
+class CorpusIngestionStep:
+    """Run the corpus build (EPUB or PDF) under the task's retry contract (CORP-06/07/08).
 
     Delegates to :class:`~app.application.corpus.BuildCorpus`, which runs inside the
     task's single transaction. Transient object-storage faults surface from the
     storage adapter as the Learny-owned ``StorageUnavailable`` (ADR-007/009 — no
     vendor exception types cross the port) and map to ``RetryableIngestionError``
     so the existing backoff retry applies (CORP-07). Everything else —
-    ``ObjectNotFound`` (missing object), ``InvalidEpubError`` (unparseable EPUB),
-    any other raise — propagates untouched and is terminal (CORP-06); the
+    ``ObjectNotFound`` (missing object), ``InvalidDocumentError`` (unparseable
+    document), any other raise — propagates untouched and is terminal (CORP-06); the
     surrounding transaction then rolls back with no partial corpus (CORP-08).
     """
 

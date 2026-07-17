@@ -208,12 +208,14 @@ class ParsedBlock:
     re-ingesting (ADR-0002). ``position`` is the block's index in global reading
     order; ``block_type`` is the coarse element kind (``heading``/``paragraph``/
     ``list``/``table``/...). Library-free (ADR-0009): no ebooklib/bs4 type leaks
-    across this boundary.
+    across this boundary. ``page_span`` is the block's source page range
+    ``(start, end)`` for paged formats (PDF) and ``None`` for EPUB.
     """
 
     position: int
     block_type: str
     html_fragment: str
+    page_span: tuple[int, int] | None = None
 
 
 @dataclass(frozen=True)
@@ -224,6 +226,8 @@ class ParsedSection:
     spine document the TOC omits). ``section_path`` is the root-to-node tuple of
     TOC titles used for citations; ``anchor`` is ``href[#fragment]`` (A-4).
     ``blocks`` are this section's content blocks in reading order (ADR-0002).
+    ``anchor_aliases`` are anchors that normalization merged into this section
+    (AD-085); they keep resolving to it so no saved citation dangles.
     """
 
     position: int
@@ -232,6 +236,7 @@ class ParsedSection:
     section_path: tuple[str, ...]
     anchor: str
     blocks: tuple[ParsedBlock, ...]
+    anchor_aliases: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -256,16 +261,16 @@ class SectionChunk:
 
     A chunk never crosses a section boundary; it carries the section's
     ``section_path`` and ``anchor`` so retrieval results cite exact passages
-    (ADR-0003). ``page_span`` is always ``None`` for EPUB (A-9) — the field is
-    reserved for future PDF citations. ``index`` is the chunk's order within its
-    section.
+    (ADR-0003). ``page_span`` is the ``(start, end)`` page range rolled up from the
+    chunk's source blocks for paged formats (PDF) and ``None`` for EPUB (A-9).
+    ``index`` is the chunk's order within its section.
     """
 
     index: int
     text: str
     section_path: tuple[str, ...]
     anchor: str
-    page_span: None
+    page_span: tuple[int, int] | None
 
 
 @dataclass(frozen=True)
@@ -334,12 +339,15 @@ class ReconcileSection:
     The post-re-ingestion read model: ``text`` is the section's chunk text concatenated in
     reading order, so a quiz item's snapshotted ``source_excerpt`` (verified against a
     chunk at generation) can be re-checked for verbatim presence in the new corpus. Carries
-    the ``anchor`` and ``section_path`` a relocated item adopts.
+    the ``anchor`` and ``section_path`` a relocated item adopts. ``anchor_aliases`` are the
+    anchors normalization merged into this section, so an item snapshotted against a
+    merged-away anchor reconciles to this surviving section (AD-085).
     """
 
     anchor: str
     section_path: tuple[str, ...]
     text: str
+    anchor_aliases: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

@@ -126,9 +126,10 @@ def test_start_returns_202_queues_job_and_enqueues_once(
     assert row.status == IngestionStatus.QUEUED
     assert _source_status(db_conn, source_id) == "processing"
 
-    # Exactly one enqueue, carrying the source + job ids only.
+    # Exactly one enqueue, carrying the source + job ids and the EPUB content type
+    # the adapter routes on (the real queue message still carries only ids).
     calls = ingestion_client.app.state.ingestion_enqueuer.calls
-    assert calls == [(UUID(source_id), UUID(body["id"]))]
+    assert calls == [(UUID(source_id), UUID(body["id"]), EPUB_TYPE)]
 
 
 def test_duplicate_active_start_returns_409_and_no_second_job(
@@ -329,7 +330,7 @@ def _drive_to_succeeded(conn: Connection, user, source_id: str) -> None:
     start = StartIngestion(
         **common, authorize=AuthorizeOwnership(), clock=clock, ids=uuid4
     )
-    job, _ = start(user=user, source_id=UUID(source_id))
+    job, _, _ = start(user=user, source_id=UUID(source_id))
     run = RunIngestion(**common, step=NoOpIngestionStep(), clock=clock, ids=uuid4)
     clock.advance(timedelta(seconds=1))
     run.begin_run(job.id)

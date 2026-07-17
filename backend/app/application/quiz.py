@@ -444,6 +444,9 @@ class ReconcileQuizItems:
 
     - anchor still present ∧ excerpt still in that section's text → keep ``active``;
     - anchor present ∧ excerpt gone → ``stale``;
+    - anchor now an alias of a section normalization merged it into ∧ excerpt in that
+      survivor → relocate to the survivor's canonical anchor + ``section_path``,
+      ``active`` (AD-085); a canonical anchor always wins a collision with an alias;
     - anchor gone ∧ excerpt found verbatim elsewhere → relocate (adopt that section's
       anchor + ``section_path``, keep ``active``);
     - otherwise → ``orphaned``.
@@ -470,9 +473,19 @@ class ReconcileQuizItems:
         first_by_anchor: dict[str, ReconcileSection] = {}
         for section in sections:
             first_by_anchor.setdefault(section.anchor, section)
+        # An anchor normalization merged away resolves to its surviving section
+        # (AD-085); a canonical anchor always wins a collision, so aliases that shadow
+        # a live anchor are ignored (that live anchor is already in first_by_anchor).
+        alias_to_section: dict[str, ReconcileSection] = {}
+        for section in sections:
+            for alias in section.anchor_aliases:
+                if alias not in first_by_anchor:
+                    alias_to_section.setdefault(alias, section)
 
         for item in items:
-            anchor, section_path, status = self._resolve(item, sections, first_by_anchor)
+            anchor, section_path, status = self._resolve(
+                item, sections, first_by_anchor, alias_to_section
+            )
             if (anchor, section_path, status) != (item.anchor, item.section_path, item.status):
                 self._items.update_reconciliation(
                     item.id, anchor=anchor, section_path=section_path, status=status
@@ -483,6 +496,7 @@ class ReconcileQuizItems:
         item: QuizItem,
         sections: list[ReconcileSection],
         first_by_anchor: dict[str, ReconcileSection],
+        alias_to_section: dict[str, ReconcileSection],
     ) -> tuple[str, tuple[str, ...], str]:
         """Return the item's reconciled ``(anchor, section_path, status)`` (QUIZ-16)."""
         current = first_by_anchor.get(item.anchor)
@@ -490,6 +504,13 @@ class ReconcileQuizItems:
             if quote_in_text(item.source_excerpt, current.text):
                 return item.anchor, item.section_path, QuizItemStatus.ACTIVE
             return item.anchor, item.section_path, QuizItemStatus.STALE
+
+        # The item's anchor is no longer a live section but was merged into a survivor:
+        # if its excerpt is in that survivor, relocate to the survivor's canonical
+        # anchor + path and stay active (ING-22), leaving scheduling/log untouched.
+        survivor = alias_to_section.get(item.anchor)
+        if survivor is not None and quote_in_text(item.source_excerpt, survivor.text):
+            return survivor.anchor, survivor.section_path, QuizItemStatus.ACTIVE
 
         for section in sections:
             if quote_in_text(item.source_excerpt, section.text):

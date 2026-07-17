@@ -62,7 +62,12 @@ def _source(db_conn: Connection) -> Source:
 
 
 def _section(
-    position: int, section_path: tuple[str, ...], anchor: str, text: str
+    position: int,
+    section_path: tuple[str, ...],
+    anchor: str,
+    text: str,
+    *,
+    anchor_aliases: tuple[str, ...] = (),
 ) -> CorpusSectionRecord:
     return CorpusSectionRecord(
         section=ParsedSection(
@@ -72,6 +77,7 @@ def _section(
             section_path=section_path,
             anchor=anchor,
             blocks=(ParsedBlock(position=0, block_type="paragraph", html_fragment="<p/>"),),
+            anchor_aliases=anchor_aliases,
         ),
         markdown=text,
         chunks=(
@@ -276,6 +282,97 @@ def test_reconcile_reactivates_stale_item_when_quote_returns(db_conn: Connection
     _reconcile(db_conn, source.id)
 
     assert repo.get_by_id(revived.id).status == QuizItemStatus.ACTIVE
+
+
+def test_reconcile_relocates_item_whose_anchor_was_merged_into_a_survivor(
+    db_conn: Connection,
+) -> None:
+    # ING-22: an item snapshotted against an anchor that normalization merged away
+    # reconciles to the surviving section's canonical anchor (relocate, active) — not
+    # orphaned — because the survivor carries the merged-away anchor as an alias.
+    source = _source(db_conn)
+    SqlAlchemyCorpusRepository(db_conn).replace(
+        source.id,
+        title="Book",
+        authors=["A"],
+        language="en",
+        schema_version=1,
+        sections=[
+            _section(
+                1,
+                ("Survivor",),
+                "survivor",
+                "The alpha beta section explains the core idea here.",
+                anchor_aliases=("gone",),
+            ),
+        ],
+    )
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    item = _item(
+        source.id,
+        question="Q merged?",
+        anchor="gone",
+        section_path=("Gone",),
+        excerpt="alpha beta",
+    )
+    _seed_item(repo, item)
+    before_sched = dict(_scheduling_row(db_conn, item.id))
+    before_log = [dict(row) for row in _log_rows(db_conn, item.id)]
+
+    _reconcile(db_conn, source.id)
+
+    reconciled = repo.get_by_id(item.id)
+    assert (reconciled.status, reconciled.anchor, reconciled.section_path) == (
+        QuizItemStatus.ACTIVE,
+        "survivor",
+        ("Survivor",),
+    )
+    # AD-078 invariant: scheduling + review history are never touched by reconcile.
+    assert dict(_scheduling_row(db_conn, item.id)) == before_sched
+    assert [dict(row) for row in _log_rows(db_conn, item.id)] == before_log
+
+
+def test_reconcile_prefers_a_live_canonical_anchor_over_an_alias_collision(
+    db_conn: Connection,
+) -> None:
+    # Canonical wins: an item anchor that is a live canonical anchor of one section
+    # AND an alias of another resolves against the canonical section, staying put.
+    source = _source(db_conn)
+    SqlAlchemyCorpusRepository(db_conn).replace(
+        source.id,
+        title="Book",
+        authors=["A"],
+        language="en",
+        schema_version=1,
+        sections=[
+            _section(1, ("Owner",), "shared", "The alpha beta owner text lives here."),
+            _section(
+                2,
+                ("Aliaser",),
+                "aliaser",
+                "Unrelated survivor content entirely.",
+                anchor_aliases=("shared",),
+            ),
+        ],
+    )
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    item = _item(
+        source.id,
+        question="Q shared?",
+        anchor="shared",
+        section_path=("Owner",),
+        excerpt="alpha beta",
+    )
+    _seed_item(repo, item)
+
+    _reconcile(db_conn, source.id)
+
+    reconciled = repo.get_by_id(item.id)
+    assert (reconciled.status, reconciled.anchor, reconciled.section_path) == (
+        QuizItemStatus.ACTIVE,
+        "shared",
+        ("Owner",),
+    )
 
 
 def test_reconcile_noop_when_source_has_no_items(db_conn: Connection) -> None:

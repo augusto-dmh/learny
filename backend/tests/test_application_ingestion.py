@@ -117,7 +117,7 @@ def test_start_creates_queued_job_sets_processing_and_appends_queued_event() -> 
     source = _stored_source(sources, owner)
     start = _start_service(sources, jobs, events, FakeClock(_NOW))
 
-    job, returned_events = start(user=owner, source_id=source.id)
+    job, returned_events, content_type = start(user=owner, source_id=source.id)
 
     assert job.status == IngestionStatus.QUEUED
     assert job.attempts == 0
@@ -131,6 +131,8 @@ def test_start_creates_queued_job_sets_processing_and_appends_queued_event() -> 
     assert logged[0].message is None
     # The service returns that same queued event so the web layer needs no repo.
     assert [e.id for e in returned_events] == [e.id for e in logged]
+    # It also returns the source's content type so the handler routes the enqueue.
+    assert content_type == source.content_type
 
 
 def test_start_with_active_job_raises_active_ingestion_exists() -> None:
@@ -196,11 +198,11 @@ def test_start_after_terminal_job_creates_new_queued_job() -> None:
     start = _start_service(sources, jobs, events, clock)
     run = _run_service(sources, jobs, events, clock)
 
-    first, _ = start(user=owner, source_id=source.id)
+    first, _, _ = start(user=owner, source_id=source.id)
     run.begin_run(first.id)
     run.fail(first.id, "permanent")  # first job now terminal (failed)
 
-    restarted, _ = start(user=owner, source_id=source.id)
+    restarted, _, _ = start(user=owner, source_id=source.id)
 
     assert restarted.id != first.id
     assert restarted.status == IngestionStatus.QUEUED
@@ -234,7 +236,7 @@ def test_begin_run_terminal_job_returns_none() -> None:
     clock = FakeClock(_NOW)
     start = _start_service(sources, jobs, events, clock)
     run = _run_service(sources, jobs, events, clock)
-    job, _ = start(user=owner, source_id=source.id)
+    job, _, _ = start(user=owner, source_id=source.id)
     run.begin_run(job.id)
     run.complete(job.id)  # job is now terminal (succeeded)
 
@@ -256,7 +258,7 @@ def test_begin_run_transitions_running_increments_attempts_and_logs_started() ->
     clock = FakeClock(_NOW)
     start = _start_service(sources, jobs, events, clock)
     run = _run_service(sources, jobs, events, clock)
-    job, _ = start(user=owner, source_id=source.id)
+    job, _, _ = start(user=owner, source_id=source.id)
 
     started = run.begin_run(job.id)
 
@@ -285,7 +287,7 @@ def test_complete_sets_succeeded_source_ready_and_succeeded_event() -> None:
     clock = FakeClock(_NOW)
     start = _start_service(sources, jobs, events, clock)
     run = _run_service(sources, jobs, events, clock)
-    job, _ = start(user=owner, source_id=source.id)
+    job, _, _ = start(user=owner, source_id=source.id)
     run.begin_run(job.id)
 
     done = run.complete(job.id)
@@ -308,7 +310,7 @@ def test_record_retry_sets_last_error_stays_running_and_logs_retrying() -> None:
     clock = FakeClock(_NOW)
     start = _start_service(sources, jobs, events, clock)
     run = _run_service(sources, jobs, events, clock)
-    job, _ = start(user=owner, source_id=source.id)
+    job, _, _ = start(user=owner, source_id=source.id)
     started = run.begin_run(job.id)
 
     retried = run.record_retry(job.id, "transient boom")
@@ -334,7 +336,7 @@ def test_fail_sets_failed_source_failed_and_logs_failed() -> None:
     clock = FakeClock(_NOW)
     start = _start_service(sources, jobs, events, clock)
     run = _run_service(sources, jobs, events, clock)
-    job, _ = start(user=owner, source_id=source.id)
+    job, _, _ = start(user=owner, source_id=source.id)
     run.begin_run(job.id)
 
     failed = run.fail(job.id, "permanent boom")
@@ -363,7 +365,7 @@ def test_run_step_invokes_step_with_source_and_job() -> None:
     start = _start_service(sources, jobs, events, clock)
     step = FakeIngestionStep()
     run = _run_service(sources, jobs, events, clock, step=step)
-    job, _ = start(user=owner, source_id=source.id)
+    job, _, _ = start(user=owner, source_id=source.id)
 
     run.run_step(job)
 
@@ -386,7 +388,7 @@ def test_run_step_propagates_step_error() -> None:
     start = _start_service(sources, jobs, events, clock)
     boom = RuntimeError("step failed")
     run = _run_service(sources, jobs, events, clock, step=FakeIngestionStep(error=boom))
-    job, _ = start(user=owner, source_id=source.id)
+    job, _, _ = start(user=owner, source_id=source.id)
 
     with pytest.raises(RuntimeError, match="step failed"):
         run.run_step(job)
@@ -407,7 +409,7 @@ def test_read_returns_latest_job_with_ordered_events() -> None:
     clock = FakeClock(_NOW)
     start = _start_service(sources, jobs, events, clock)
     run = _run_service(sources, jobs, events, clock)
-    job, _ = start(user=owner, source_id=source.id)
+    job, _, _ = start(user=owner, source_id=source.id)
     run.begin_run(job.id)
     run.complete(job.id)
     read = ReadIngestion(

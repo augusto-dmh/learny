@@ -18,17 +18,18 @@ from app.application.errors import (
     StorageUnavailable,
 )
 from app.application.identity import AuthorizeOwnership
-from app.application.validation import validate_source_upload
+from app.application.validation import extension_of, validate_source_upload
 from app.domain.entities import Source, User
 from app.domain.ports import Clock, SourceRepository, StoragePort
 
 
 class CreateSource:
-    """Validate an EPUB upload, store its bytes, then persist an owned source row.
+    """Validate an upload, store its bytes, then persist an owned source row.
 
     Ordering is store-then-persist (design §Architecture): a failed ``put_object``
     leaves nothing (SRC-09), and validation runs first so no invalid upload ever
-    reaches storage.
+    reaches storage. ``max_bytes`` caps EPUB uploads and ``pdf_max_bytes`` caps PDF
+    uploads (ING-09); when a PDF cap is not supplied it falls back to ``max_bytes``.
     """
 
     def __init__(
@@ -39,12 +40,14 @@ class CreateSource:
         clock: Clock,
         ids: Callable[[], UUID],
         max_bytes: int,
+        pdf_max_bytes: int | None = None,
     ) -> None:
         self._sources = sources
         self._storage = storage
         self._clock = clock
         self._ids = ids
         self._max_bytes = max_bytes
+        self._pdf_max_bytes = max_bytes if pdf_max_bytes is None else pdf_max_bytes
 
     def __call__(
         self,
@@ -62,11 +65,15 @@ class CreateSource:
             content_type=content_type,
             byte_size=byte_size,
             max_bytes=self._max_bytes,
+            pdf_max_bytes=self._pdf_max_bytes,
         )
 
         source_id = self._ids()
-        # Opaque, owner-partitioned key — no email or title (SRC-06 / data protection).
-        object_key = f"sources/{user.id}/{source_id}.epub"
+        # Opaque, owner-partitioned key — no email or title (SRC-06 / data
+        # protection). The extension mirrors the validated format so downstream
+        # parser dispatch and content-type inference stay consistent (ING-09).
+        extension = extension_of(filename)
+        object_key = f"sources/{user.id}/{source_id}{extension}"
 
         try:
             self._storage.put_object(object_key, data, content_type=content_type)

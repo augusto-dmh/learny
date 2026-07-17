@@ -11,9 +11,11 @@ left in MinIO (accepted orphan behaviour, SRC-09).
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
 from contextlib import contextmanager
 from uuid import uuid4
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import Connection, select
 
@@ -41,6 +43,53 @@ pytestmark = requires_db
 
 EPUB_BYTES = b"PK\x03\x04-fake-but-nonempty-epub-payload"
 EPUB_TYPE = "application/epub+zip"
+PDF_BYTES = b"%PDF-1.7-fake-but-nonempty-pdf-payload"
+PDF_TYPE = "application/pdf"
+
+# Distinct, tiny caps (pdf > epub) for the read-bound test below. The absolute
+# sizes are irrelevant; only the ordering matters, so payloads stay minuscule.
+PDF_CAP_EPUB_MAX = 2048
+PDF_CAP_PDF_MAX = 8192
+
+
+@pytest.fixture
+def pdf_caps_client(db_conn: Connection, monkeypatch: pytest.MonkeyPatch):  # noqa: ANN201
+    """A sources ``TestClient`` with distinct EPUB/PDF caps (``pdf > epub``).
+
+    Mirrors :func:`sources_client` but overrides both size caps so the handler's
+    ``max(epub_max_bytes, pdf_max_bytes) + 1`` read bound is exercised at the HTTP
+    boundary: a PDF sized between the caps must be read whole (not truncated to the
+    smaller EPUB cap) and stored intact, while one past the PDF cap is rejected 413.
+    """
+    from app.core.config import get_settings
+    from app.infrastructure.web.dependencies import get_db_connection
+    from app.infrastructure.web.rate_limit import (
+        InMemoryFixedWindowRateLimiter,
+        get_rate_limiter,
+        set_rate_limiter,
+    )
+    from app.main import create_app
+
+    monkeypatch.setenv("LEARNY_SESSION_COOKIE_SECURE", "false")
+    monkeypatch.setenv("LEARNY_CSRF_TRUSTED_ORIGINS", TEST_ORIGIN)
+    monkeypatch.setenv("LEARNY_EPUB_MAX_BYTES", str(PDF_CAP_EPUB_MAX))
+    monkeypatch.setenv("LEARNY_PDF_MAX_BYTES", str(PDF_CAP_PDF_MAX))
+    get_settings.cache_clear()
+
+    previous_limiter = get_rate_limiter()
+    set_rate_limiter(InMemoryFixedWindowRateLimiter(max_attempts=1000))
+
+    app = create_app()
+
+    def _override() -> Iterator[Connection]:
+        yield db_conn
+
+    app.dependency_overrides[get_db_connection] = _override
+    with TestClient(app, headers={"Origin": TEST_ORIGIN}) as c:
+        yield c
+    app.dependency_overrides.clear()
+    set_rate_limiter(previous_limiter)
+    get_settings.cache_clear()
 
 
 class _RecordingHandler(logging.Handler):
@@ -158,6 +207,100 @@ def test_upload_valid_epub_persists_row_and_object(
 
     # Bytes actually landed in object storage under that key.
     assert _storage.get_object(row.object_key) == EPUB_BYTES
+
+
+def test_upload_valid_pdf_persists_row_and_object(
+    sources_client: TestClient, db_conn: Connection
+) -> None:
+    user_id = _register(sources_client, "pdf@example.com")
+    resp = _upload(
+        sources_client,
+        csrf=_csrf(sources_client),
+        filename="report.pdf",
+        content_type=PDF_TYPE,
+        title="Annual Report",
+        data=PDF_BYTES,
+    )
+
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["filename"] == "report.pdf"
+    assert body["content_type"] == PDF_TYPE
+    assert body["status"] == "uploaded"
+
+    row = db_conn.execute(
+        select(sources).where(sources.c.id == body["id"])
+    ).one()
+    # The object key carries the .pdf extension (parser dispatch depends on it).
+    assert row.object_key == f"sources/{user_id}/{body['id']}.pdf"
+    assert _storage.get_object(row.object_key) == PDF_BYTES
+
+
+def test_upload_pdf_between_caps_persists_untruncated(
+    pdf_caps_client: TestClient, db_conn: Connection
+) -> None:
+    # Read-bound guard: with pdf_max_bytes > epub_max_bytes, a PDF sized strictly
+    # between the two caps must be read in full (the handler reads max(epub, pdf)+1,
+    # not epub+1) so validation sees its true size and stores every byte. A revert
+    # to an epub-only read bound would truncate this payload to epub_max+1, that
+    # smaller size would still pass the PDF cap, and a corrupt object would land.
+    user_id = _register(pdf_caps_client, "between@example.com")
+    payload = PDF_BYTES + b"x" * (PDF_CAP_EPUB_MAX + 1 - len(PDF_BYTES))
+    assert PDF_CAP_EPUB_MAX < len(payload) < PDF_CAP_PDF_MAX
+
+    resp = _upload(
+        pdf_caps_client,
+        csrf=_csrf(pdf_caps_client),
+        filename="report.pdf",
+        content_type=PDF_TYPE,
+        title="Big Report",
+        data=payload,
+    )
+
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["byte_size"] == len(payload)
+
+    row = db_conn.execute(select(sources).where(sources.c.id == body["id"])).one()
+    assert row.object_key == f"sources/{user_id}/{body['id']}.pdf"
+    # The full, untruncated payload reached storage — byte-for-byte identical.
+    assert _storage.get_object(row.object_key) == payload
+
+
+def test_upload_pdf_over_pdf_cap_returns_413(
+    pdf_caps_client: TestClient, db_conn: Connection
+) -> None:
+    # The upper edge of the same read bound: a PDF larger than pdf_max_bytes is
+    # detected as oversize and rejected, persisting nothing.
+    _register(pdf_caps_client, "toobig@example.com")
+    payload = PDF_BYTES + b"x" * (PDF_CAP_PDF_MAX + 1 - len(PDF_BYTES))
+    assert len(payload) > PDF_CAP_PDF_MAX
+
+    resp = _upload(
+        pdf_caps_client,
+        csrf=_csrf(pdf_caps_client),
+        filename="report.pdf",
+        content_type=PDF_TYPE,
+        data=payload,
+    )
+    assert resp.status_code == 413, resp.text
+    assert _source_rows(db_conn) == []
+
+
+def test_upload_pdf_extension_with_epub_content_type_returns_415(
+    sources_client: TestClient, db_conn: Connection
+) -> None:
+    # Spec edge case: a .pdf file declared as application/epub+zip is a mismatch.
+    _register(sources_client, "pdfmismatch@example.com")
+    resp = _upload(
+        sources_client,
+        csrf=_csrf(sources_client),
+        filename="report.pdf",
+        content_type=EPUB_TYPE,
+        data=PDF_BYTES,
+    )
+    assert resp.status_code == 415, resp.text
+    assert _source_rows(db_conn) == []
 
 
 def test_upload_non_epub_extension_returns_415(

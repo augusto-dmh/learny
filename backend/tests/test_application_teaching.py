@@ -173,15 +173,41 @@ def _turn(
 
 
 class FakeCorpus:
-    """``CorpusRepository`` read double: returns a preset structure, records reads."""
+    """``CorpusRepository`` read double: returns a preset structure, records reads.
 
-    def __init__(self, structure: CorpusStructure | None = None) -> None:
+    ``expand_anchors`` defaults to the identity (input returned unchanged, order
+    preserved). ``alias_expansions`` maps an input anchor to the extra anchors that
+    normalization merged into its section, so the turn path can be driven to prove
+    the scope reaches retrieval through those aliases (ING-23).
+    """
+
+    def __init__(
+        self,
+        structure: CorpusStructure | None = None,
+        *,
+        alias_expansions: dict[str, tuple[str, ...]] | None = None,
+    ) -> None:
         self._structure = structure
+        self._alias_expansions = alias_expansions or {}
         self.get_structure_calls = 0
+        self.expand_anchors_calls: list[list[str]] = []
 
     def get_structure(self, source_id: UUID) -> CorpusStructure | None:
         self.get_structure_calls += 1
         return self._structure
+
+    def expand_anchors(
+        self, source_id: UUID, anchors: Sequence[str]
+    ) -> tuple[str, ...]:
+        self.expand_anchors_calls.append(list(anchors))
+        expanded = list(anchors)
+        seen = set(expanded)
+        for anchor in anchors:
+            for extra in self._alias_expansions.get(anchor, ()):
+                if extra not in seen:
+                    seen.add(extra)
+                    expanded.append(extra)
+        return tuple(expanded)
 
 
 class FakeTeachingSessionRepository:
@@ -742,6 +768,42 @@ def test_turn_scopes_retrieval_to_target_and_descendants() -> None:
     assert call["source_id"] == source.id
     assert call["query"] == "q"
     assert call["top_k"] == _TOP_K
+
+
+def test_turn_expands_subtree_retrieval_through_anchor_aliases() -> None:
+    # ING-23: a section normalization merged into the target subtree stays reachable —
+    # its merged-away (alias) anchor joins the retrieval scope, so its evidence is in
+    # scope and can be cited. Without the alias expansion, that anchor is absent.
+    target = _section("ch1.xhtml", ("Chapter 1",), position=0, depth=0)
+    owner, source, session, sessions, sources = _seeded(target=target)
+    corpus = FakeCorpus(
+        _structure(target),
+        alias_expansions={"ch1.xhtml": ("merged.xhtml",)},
+    )
+    e0 = _evidence(source.id, "from the merged section", anchor="merged.xhtml", score=0.9)
+    retrieve = FakeScopedRetrieveEvidence([e0])
+    generation = FakeTeachingGeneration(
+        answer=GeneratedAnswer(
+            text="a", cited_chunk_ids=(e0.chunk_id,), model=_MODEL, found=True
+        )
+    )
+    service = _post(
+        sessions=sessions,
+        turns=FakeTeachingTurnRepository(),
+        sources=sources,
+        corpus=corpus,
+        retrieve=retrieve,
+        generation=generation,
+    )
+
+    result = service(user=owner, session_id=session.id, message="q")
+
+    # The subtree anchors were expanded through the corpus before retrieval...
+    assert corpus.expand_anchors_calls == [["ch1.xhtml"]]
+    # ...and the merged-away anchor reached the retrieval scope.
+    assert retrieve.calls[0]["anchors"] == ["ch1.xhtml", "merged.xhtml"]
+    # The evidence from the merged section is in scope and cited.
+    assert result.citations == (e0,)
 
 
 def test_turn_passes_bounded_history_last_n() -> None:

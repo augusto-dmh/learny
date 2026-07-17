@@ -281,7 +281,7 @@ EXPECTED_NO_TOC_SECTIONS = (
 # --- broken_spine_book ------------------------------------------------------
 #
 # A well-formed ZIP whose spine references an idref with no manifest item; the
-# parser must raise InvalidEpubError on the unresolvable spine entry (CORP-06).
+# parser must raise InvalidDocumentError on the unresolvable spine entry (CORP-06).
 
 _BROKEN_OPF = (
     '<?xml version="1.0" encoding="UTF-8"?>\n'

@@ -100,6 +100,85 @@ def test_validate_rejects_too_long_title() -> None:
     assert exc.value.kind == "title"
 
 
+# ---- validate_source_upload: PDF (ING-09) --------------------------------
+
+
+PDF_TYPE = "application/pdf"
+
+
+def test_validate_accepts_valid_pdf() -> None:
+    # A well-formed PDF upload (extension + content type agree, within the PDF cap)
+    # returns without raising.
+    assert (
+        validate_source_upload(
+            title="Report",
+            filename="report.pdf",
+            content_type=PDF_TYPE,
+            byte_size=len(DATA),
+            max_bytes=1,
+            pdf_max_bytes=MAX_BYTES,
+        )
+        is None
+    )
+
+
+def test_validate_rejects_pdf_extension_with_epub_content_type() -> None:
+    # Spec edge case: a .pdf file uploaded as application/epub+zip is a mismatch.
+    with pytest.raises(InvalidSourceUpload) as exc:
+        validate_source_upload(
+            title="Report",
+            filename="report.pdf",
+            content_type=EPUB_TYPE,
+            byte_size=len(DATA),
+            max_bytes=MAX_BYTES,
+            pdf_max_bytes=MAX_BYTES,
+        )
+    assert exc.value.kind == "content_type"
+
+
+def test_validate_rejects_epub_extension_with_pdf_content_type() -> None:
+    # The mirror direction: an .epub file uploaded as application/pdf is a mismatch.
+    with pytest.raises(InvalidSourceUpload) as exc:
+        validate_source_upload(
+            title="Meditations",
+            filename="meditations.epub",
+            content_type=PDF_TYPE,
+            byte_size=len(DATA),
+            max_bytes=MAX_BYTES,
+            pdf_max_bytes=MAX_BYTES,
+        )
+    assert exc.value.kind == "content_type"
+
+
+def test_validate_rejects_oversize_pdf_against_pdf_cap() -> None:
+    with pytest.raises(InvalidSourceUpload) as exc:
+        validate_source_upload(
+            title="Report",
+            filename="report.pdf",
+            content_type=PDF_TYPE,
+            byte_size=MAX_BYTES + 1,
+            max_bytes=10 * MAX_BYTES,  # a large EPUB cap must not admit an oversize PDF
+            pdf_max_bytes=MAX_BYTES,
+        )
+    assert exc.value.kind == "size"
+
+
+def test_validate_pdf_uses_pdf_cap_not_epub_cap() -> None:
+    # A PDF larger than the EPUB cap but within the PDF cap is accepted — proving
+    # the size check keys off the format, not a single shared limit.
+    assert (
+        validate_source_upload(
+            title="Report",
+            filename="report.pdf",
+            content_type=PDF_TYPE,
+            byte_size=MAX_BYTES // 2,
+            max_bytes=MAX_BYTES // 4,  # would reject if the EPUB cap were applied
+            pdf_max_bytes=MAX_BYTES,
+        )
+        is None
+    )
+
+
 # ---- CreateSource ---------------------------------------------------------
 
 
@@ -161,6 +240,85 @@ def test_create_object_key_is_opaque_owner_partitioned() -> None:
     assert "My Private Book" not in result.object_key
 
 
+def test_create_pdf_stores_bytes_under_pdf_key() -> None:
+    sources, storage = FakeSourceRepository(), FakeStorage()
+    user = _user()
+    source_id = uuid4()
+    create = CreateSource(
+        sources=sources,
+        storage=storage,
+        clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0, tzinfo=UTC)),
+        ids=lambda: source_id,
+        max_bytes=MAX_BYTES,
+        pdf_max_bytes=MAX_BYTES,
+    )
+
+    pdf_data = b"%PDF-1.7 fake but nonempty payload"
+    result = create(
+        user=user,
+        title="Report",
+        filename="report.pdf",
+        content_type="application/pdf",
+        data=pdf_data,
+    )
+
+    # The object key mirrors the PDF extension so parser dispatch stays consistent.
+    assert result.object_key == f"sources/{user.id}/{source_id}.pdf"
+    assert result.content_type == "application/pdf"
+    assert storage.objects[result.object_key] == pdf_data
+    assert storage.put_calls == [(result.object_key, "application/pdf")]
+
+
+def test_create_pdf_uses_pdf_cap_not_epub_cap() -> None:
+    # A PDF larger than the EPUB cap but within the PDF cap is stored (per-format
+    # cap selection reaches storage, not just the pure validator).
+    sources, storage = FakeSourceRepository(), FakeStorage()
+    create = CreateSource(
+        sources=sources,
+        storage=storage,
+        clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0, tzinfo=UTC)),
+        ids=uuid4,
+        max_bytes=8,  # tiny EPUB cap
+        pdf_max_bytes=64,  # roomier PDF cap
+    )
+
+    result = create(
+        user=_user(),
+        title="Report",
+        filename="report.pdf",
+        content_type="application/pdf",
+        data=b"x" * 32,  # over the EPUB cap, under the PDF cap
+    )
+
+    assert result.byte_size == 32
+    assert sources.add_calls == 1
+
+
+def test_create_rejects_oversize_pdf_before_storage() -> None:
+    sources, storage = FakeSourceRepository(), FakeStorage()
+    create = CreateSource(
+        sources=sources,
+        storage=storage,
+        clock=FakeClock(datetime(2026, 7, 4, 12, 0, 0, tzinfo=UTC)),
+        ids=uuid4,
+        max_bytes=8,
+        pdf_max_bytes=16,
+    )
+
+    with pytest.raises(InvalidSourceUpload) as exc:
+        create(
+            user=_user(),
+            title="Report",
+            filename="report.pdf",
+            content_type="application/pdf",
+            data=b"x" * 17,  # over the PDF cap
+        )
+
+    assert exc.value.kind == "size"
+    assert storage.put_calls == []
+    assert sources.add_calls == 0
+
+
 def test_create_rejects_invalid_before_touching_storage_or_repo() -> None:
     sources, storage = FakeSourceRepository(), FakeStorage()
     create = _create_source(sources, storage)
@@ -169,7 +327,7 @@ def test_create_rejects_invalid_before_touching_storage_or_repo() -> None:
         create(
             user=_user(),
             title="Meditations",
-            filename="book.pdf",
+            filename="book.txt",
             content_type=EPUB_TYPE,
             data=DATA,
         )

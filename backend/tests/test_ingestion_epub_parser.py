@@ -5,14 +5,14 @@ golden structures the synthetic fixtures (T5) declare. Metadata, spine order,
 TOC-derived section paths/anchors/depths (A-1..A-4), the global block sequence
 with preserved HTML, in-document fragment section switching, the A-2 fallback,
 A-3 non-linear exclusion, dropped dangling TOC entries, empty-body sections, and
-terminal InvalidEpubError classification are each pinned here.
+terminal InvalidDocumentError classification are each pinned here.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from app.application.errors import InvalidEpubError
+from app.application.errors import InvalidDocumentError
 from app.domain.entities import ParsedBlock, ParsedBook, ParsedSection
 from app.infrastructure.ingestion.epub import EbooklibEpubParser
 from tests import fixtures_epub as fx
@@ -214,12 +214,12 @@ def test_empty_body_yields_a_zero_block_section() -> None:
 
 
 def test_non_epub_bytes_raise_invalid_epub_error() -> None:
-    with pytest.raises(InvalidEpubError):
+    with pytest.raises(InvalidDocumentError):
         _parse(fx.not_an_epub())
 
 
 def test_unresolvable_spine_raises_invalid_epub_error() -> None:
-    with pytest.raises(InvalidEpubError):
+    with pytest.raises(InvalidDocumentError):
         _parse(fx.broken_spine_book())
 
 
@@ -249,7 +249,7 @@ def test_archive_over_uncompressed_cap_raises_invalid_epub_error() -> None:
     """
     capped = EbooklibEpubParser(max_uncompressed_bytes=1024)
 
-    with pytest.raises(InvalidEpubError):
+    with pytest.raises(InvalidDocumentError):
         capped.parse(fx.valid_book(), filename="book.epub")
 
 

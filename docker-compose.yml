@@ -89,7 +89,42 @@ services:
       LEARNY_STORAGE_REGION: us-east-1
       # LEARNY_DATABASE_URL + storage access/secret keys come from the override
       # (local) or env_file (prod) — never inline in this base (NFR-SEC-003).
-    command: celery -A app.worker.celery_app:celery_app worker --loglevel=info
+    # Explicit `--queues celery` (the default queue) so this worker never drains
+    # ingest-pdf — that queue belongs to worker-pdf alone (ING-18).
+    command: celery -A app.worker.celery_app:celery_app worker --loglevel=info --queues celery
+    depends_on:
+      redis:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+    healthcheck:
+      test:
+        ["CMD", "celery", "-A", "app.worker.celery_app:celery_app", "inspect", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 6
+      start_period: 20s
+
+  # Isolated PDF ingestion worker (ING-18). Docling parsing is CPU/memory heavy
+  # (minutes per book), so it consumes only the dedicated ingest-pdf queue with a
+  # single concurrent task, a memory cap, and one task per child process — a
+  # pathological PDF cannot starve or crash EPUB ingestion, embedding, or the API.
+  # Built from the pdf-worker image target (docling + baked models); the default
+  # worker image stays docling-free.
+  worker-pdf:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: pdf-worker
+    environment:
+      LEARNY_REDIS_URL: redis://redis:6379/0
+      LEARNY_STORAGE_ENDPOINT: http://minio:9000
+      LEARNY_STORAGE_BUCKET: learny-sources
+      LEARNY_STORAGE_REGION: us-east-1
+      # LEARNY_DATABASE_URL + storage access/secret keys come from the override
+      # (local) or env_file (prod) — never inline in this base (NFR-SEC-003).
+    command: celery -A app.worker.celery_app:celery_app worker --loglevel=info --queues ingest-pdf --concurrency 1 --max-tasks-per-child 1
+    mem_limit: 4g
     depends_on:
       redis:
         condition: service_healthy

@@ -28,7 +28,7 @@ from app.application.quiz import ReconcileQuizItems, RunDeckGeneration
 from app.application.retrieval import EmbedCorpus
 from app.core.config import get_settings
 from app.core.tracing import bind_trace, new_trace_scope, reset_trace
-from app.domain.entities import QuizDeckHandle
+from app.domain.entities import ParsedBook, QuizDeckHandle
 from app.domain.ports import IngestionStep, StoragePort
 from app.infrastructure.clock import SystemClock
 from app.infrastructure.db.engine import get_engine
@@ -42,14 +42,18 @@ from app.infrastructure.db.repositories import (
     SqlAlchemySourceRepository,
 )
 from app.infrastructure.embeddings import build_embedding_adapter
-from app.infrastructure.ingestion.epub import EbooklibEpubParser
+from app.infrastructure.ingestion.factory import (
+    EPUB_CONTENT_TYPE,
+    PDF_CONTENT_TYPE,
+    build_parser,
+)
 from app.infrastructure.ingestion.markup import Bs4MarkupConverter
 from app.infrastructure.quiz import build_quiz_adapter
 from app.infrastructure.scheduling import build_scheduling_adapter
 from app.infrastructure.storage.s3 import S3StorageAdapter
 from app.infrastructure.worker.steps import (
+    CorpusIngestionStep,
     EmbedCorpusIngestionStep,
-    EpubCorpusIngestionStep,
     RetryableIngestionError,
 )
 from app.worker.celery_app import celery_app
@@ -92,18 +96,43 @@ def _build_storage() -> StoragePort:
     )
 
 
-def _build_step(conn: Connection) -> IngestionStep:
-    """Wire the real EPUB corpus step on ``conn`` (the injectable Phase-5 seam).
+# SPEC_DEVIATION: design §5 wires the factory in `_build_step` from the job's
+# source content type; here the content type is recovered inside the parser from
+# the source filename instead.
+# Reason: content type is not carried across the `DocumentParserPort.parse(bytes,
+# *, filename)` seam, and `_build_step(conn)` must stay a one-argument seam the
+# existing worker lifecycle tests patch. Upload validation keeps the filename
+# extension and the stored content type in agreement, so the selected parser is
+# the same one the content type would select.
+class _ContentTypeDispatchParser:
+    """Select the concrete parser per source at parse time (ING-15).
 
-    Factored out so lifecycle tests can inject a lifecycle-only double without a
-    live object store or a real EPUB, exactly as prior cycles patched the step.
+    Maps the source's filename extension to its content type and delegates to the
+    format-dispatch factory, so EPUB routes to ebooklib and PDF to Docling behind
+    one ``DocumentParserPort``. An unknown extension falls through to the factory's
+    terminal ``InvalidDocumentError`` (no registered parser).
     """
-    return EpubCorpusIngestionStep(
+
+    _EXTENSIONS = {"epub": EPUB_CONTENT_TYPE, "pdf": PDF_CONTENT_TYPE}
+
+    def parse(self, source_bytes: bytes, *, filename: str) -> ParsedBook:
+        extension = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+        content_type = self._EXTENSIONS.get(extension, extension)
+        return build_parser(content_type).parse(source_bytes, filename=filename)
+
+
+def _build_step(conn: Connection) -> IngestionStep:
+    """Wire the real corpus-build step on ``conn`` (the injectable Phase-5 seam).
+
+    The parser is a format dispatcher that picks ebooklib or Docling per source
+    (ING-15). Factored out so lifecycle tests can inject a lifecycle-only double
+    without a live object store or a real document, exactly as prior cycles
+    patched the step.
+    """
+    return CorpusIngestionStep(
         BuildCorpus(
             storage=_build_storage(),
-            parser=EbooklibEpubParser(
-                max_uncompressed_bytes=get_settings().epub_max_uncompressed_bytes
-            ),
+            parser=_ContentTypeDispatchParser(),
             markup=Bs4MarkupConverter(),
             corpus=SqlAlchemyCorpusRepository(conn),
             events=SqlAlchemyIngestionEventRepository(conn),

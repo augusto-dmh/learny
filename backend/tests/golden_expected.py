@@ -98,9 +98,13 @@ _GOLDEN_EXPECTED = ExpectedCorpus(
     chunk_count=EXPECTED_GOLDEN_CHUNK_COUNT,
 )
 
-# The A-2 fallback fixture: no TOC, minimal OPF metadata. Section titles come from
-# the first heading ("Introduction") else the href stem ("body"); title/language
-# are None and authors empty (CORP-01). One chunk per non-empty section.
+# The A-2 fallback fixture: no TOC, minimal OPF metadata. The parser recovers two
+# sections ("Introduction" from its <h1>, "body" from its href stem), but the "body"
+# section owns only a 3-word, heading-less paragraph — trivial by ING-05 — so
+# normalization merges it into "Introduction" and keeps "body.xhtml" resolvable as
+# an alias. The end-to-end corpus is therefore one section carrying both paragraphs;
+# the parser's href-stem fallback stays covered by the parser-level golden. Title/
+# language are None and authors empty (CORP-01).
 _NO_TOC_EXPECTED = ExpectedCorpus(
     title=None,
     authors=(),
@@ -110,17 +114,11 @@ _NO_TOC_EXPECTED = ExpectedCorpus(
             section_path=("Introduction",),
             anchor="intro.xhtml",
             depth=0,
-            chunk_texts=("# Introduction\n\nOpening remarks.",),
-        ),
-        ExpectedCorpusSection(
-            section_path=("body",),
-            anchor="body.xhtml",
-            depth=0,
-            chunk_texts=("No heading here.",),
+            chunk_texts=("# Introduction\n\nOpening remarks.\n\nNo heading here.",),
         ),
     ),
     block_count=3,
-    chunk_count=2,
+    chunk_count=1,
 )
 
 GOLDEN_FIXTURES = (

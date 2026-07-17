@@ -19,6 +19,7 @@ from app.application.chunking import pack_chunks
 from app.application.errors import CorpusNotFound
 from app.application.identity import AuthorizeOwnership
 from app.application.ingestion import authorized_source
+from app.application.normalization import normalize_book
 from app.domain.entities import (
     CorpusSectionRecord,
     CorpusStructure,
@@ -31,7 +32,7 @@ from app.domain.entities import (
 from app.domain.ports import (
     Clock,
     CorpusRepository,
-    EpubParserPort,
+    DocumentParserPort,
     IngestionEventRepository,
     MarkupConverterPort,
     SourceRepository,
@@ -46,23 +47,28 @@ _CORPUS_SCHEMA_VERSION = 1
 # (CORP-10).
 _CORPUS_BUILT_EVENT = "corpus_built"
 
+# Progress-log event appended after the structure-normalization pass; its message
+# carries what the pass changed (titles/merges/depths/stripped noise, ING-07).
+_CORPUS_NORMALIZED_EVENT = "corpus_normalized"
+
 
 class BuildCorpus:
     """Build and persist a source's canonical corpus in one call (CORP-01..05, 08..10).
 
-    Reads the stored EPUB bytes, parses them into a library-free ``ParsedBook``,
+    Reads the stored source bytes, parses them into a library-free ``ParsedBook``,
+    runs the format-agnostic normalization pass (F7 structure cleanup, ING-01),
     derives each section's Markdown from its preserved HTML blocks via the
     converter, packs structure-first chunks (never crossing a section boundary),
-    replaces the corpus aggregate atomically, and appends the ``corpus_built``
-    counts event. Zero-block sections are persisted too (empty Markdown, no
-    chunks). Reuses the event-append shape of ``RunIngestion._append_event``.
+    replaces the corpus aggregate atomically, and appends the ``corpus_normalized``
+    and ``corpus_built`` counts events. Zero-block sections are persisted too (empty
+    Markdown, no chunks). Reuses the event-append shape of ``RunIngestion._append_event``.
     """
 
     def __init__(
         self,
         *,
         storage: StoragePort,
-        parser: EpubParserPort,
+        parser: DocumentParserPort,
         markup: MarkupConverterPort,
         corpus: CorpusRepository,
         events: IngestionEventRepository,
@@ -81,7 +87,12 @@ class BuildCorpus:
 
     def __call__(self, *, source: Source, job: IngestionJob) -> None:
         source_bytes = self._storage.get_object(source.object_key)
-        book = self._parser.parse(source_bytes, filename=source.filename)
+        parsed = self._parser.parse(source_bytes, filename=source.filename)
+        # Format-agnostic structure cleanup (F7) between parse and record building:
+        # titles/hierarchy/boilerplate are fixed once, so EPUB and PDF corpora share
+        # it and merged-away anchors survive as aliases (ING-01, AD-084).
+        normalized = normalize_book(parsed)
+        book = normalized.book
 
         records: list[CorpusSectionRecord] = []
         total_blocks = 0
@@ -95,6 +106,7 @@ class BuildCorpus:
                 max_chars=self._chunk_max_chars,
                 section_path=section.section_path,
                 anchor=section.anchor,
+                page_spans=[block.page_span for block in section.blocks],
             )
             records.append(
                 CorpusSectionRecord(
@@ -115,6 +127,21 @@ class BuildCorpus:
             sections=records,
         )
 
+        counts = normalized.counts
+        self._events.append(
+            IngestionEvent(
+                id=self._ids(),
+                job_id=job.id,
+                type=_CORPUS_NORMALIZED_EVENT,
+                message=(
+                    f"titles_replaced={counts.titles_replaced} "
+                    f"sections_merged={counts.sections_merged} "
+                    f"depths_adjusted={counts.depths_adjusted} "
+                    f"noise_blocks_stripped={counts.noise_blocks_stripped}"
+                ),
+                created_at=self._clock.now(),
+            )
+        )
         self._events.append(
             IngestionEvent(
                 id=self._ids(),

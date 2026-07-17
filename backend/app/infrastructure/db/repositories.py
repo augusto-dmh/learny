@@ -25,6 +25,7 @@ from sqlalchemy import (
     func,
     insert,
     literal_column,
+    or_,
     select,
     update,
 )
@@ -396,6 +397,7 @@ class SqlAlchemyCorpusRepository:
                     "title": section.title,
                     "section_path": list(section.section_path),
                     "anchor": section.anchor,
+                    "anchor_aliases": list(section.anchor_aliases),
                     "markdown": record.markdown,
                 }
             )
@@ -469,10 +471,13 @@ class SqlAlchemyCorpusRepository:
 
     def get_section(self, source_id: UUID, anchor: str) -> SectionContent | None:
         # Owner-agnostic read: ownership is enforced one layer up via the source
-        # lookup (AD-014), so this keys on ``source_id`` alone. Ordered by
-        # ``position`` and bounded to one row so a duplicate anchor resolves to the
-        # first section in reading order — matching how teaching resolves a target
-        # anchor (``teaching.py`` picks the first position-ordered match).
+        # lookup (AD-014), so this keys on ``source_id`` alone. Matches the canonical
+        # anchor OR any section that carries ``anchor`` as an alias (normalization
+        # merged that section away, AD-085). A canonical hit is ordered first so it
+        # wins a collision with another section's alias; ``position`` then breaks
+        # ties, so a duplicate anchor resolves to the first section in reading order —
+        # matching how teaching resolves a target anchor.
+        canonical_first = (corpus_sections.c.anchor == anchor).desc()
         row = self._conn.execute(
             select(
                 corpus_sections.c.title,
@@ -482,8 +487,13 @@ class SqlAlchemyCorpusRepository:
             )
             .join(corpus_documents, corpus_sections.c.document_id == corpus_documents.c.id)
             .where(corpus_documents.c.source_id == source_id)
-            .where(corpus_sections.c.anchor == anchor)
-            .order_by(corpus_sections.c.position)
+            .where(
+                or_(
+                    corpus_sections.c.anchor == anchor,
+                    corpus_sections.c.anchor_aliases.any(anchor),
+                )
+            )
+            .order_by(canonical_first, corpus_sections.c.position)
             .limit(1)
         ).first()
         if row is None:
@@ -505,6 +515,7 @@ class SqlAlchemyCorpusRepository:
             select(
                 corpus_sections.c.position,
                 corpus_sections.c.anchor,
+                corpus_sections.c.anchor_aliases,
                 corpus_sections.c.section_path,
                 corpus_chunks.c.chunk_index,
                 corpus_chunks.c.text,
@@ -523,12 +534,16 @@ class SqlAlchemyCorpusRepository:
         ).all()
 
         ordered_positions: list[int] = []
-        anchors: dict[int, tuple[str, tuple[str, ...]]] = {}
+        anchors: dict[int, tuple[str, tuple[str, ...], tuple[str, ...]]] = {}
         chunks: dict[int, list[str]] = {}
         for row in rows:
             if row.position not in anchors:
                 ordered_positions.append(row.position)
-                anchors[row.position] = (row.anchor, tuple(row.section_path))
+                anchors[row.position] = (
+                    row.anchor,
+                    tuple(row.section_path),
+                    tuple(row.anchor_aliases),
+                )
                 chunks[row.position] = []
             if row.text is not None:
                 chunks[row.position].append(row.text)
@@ -537,9 +552,48 @@ class SqlAlchemyCorpusRepository:
                 anchor=anchors[pos][0],
                 section_path=anchors[pos][1],
                 text=" ".join(chunks[pos]),
+                anchor_aliases=anchors[pos][2],
             )
             for pos in ordered_positions
         ]
+
+    def expand_anchors(
+        self, source_id: UUID, anchors: Sequence[str]
+    ) -> tuple[str, ...]:
+        # Grow a set of section anchors to include every alias that resolves to the
+        # same sections (AD-085), so teaching-scoped retrieval filtered by a target
+        # anchor still reaches evidence after normalization merged a section away.
+        # A section is in scope when its canonical anchor is in ``anchors`` OR any of
+        # its aliases is; the result is the input plus those sections' canonical
+        # anchors and aliases. Order is deterministic: the input order first (deduped),
+        # then any newly reached anchors in section reading order.
+        requested = list(anchors)
+        if not requested:
+            return ()
+        rows = self._conn.execute(
+            select(
+                corpus_sections.c.anchor,
+                corpus_sections.c.anchor_aliases,
+            )
+            .join(corpus_documents, corpus_sections.c.document_id == corpus_documents.c.id)
+            .where(corpus_documents.c.source_id == source_id)
+            .where(
+                or_(
+                    corpus_sections.c.anchor.in_(requested),
+                    corpus_sections.c.anchor_aliases.overlap(requested),
+                )
+            )
+            .order_by(corpus_sections.c.position)
+        ).all()
+
+        expanded: list[str] = list(dict.fromkeys(requested))
+        seen = set(expanded)
+        for row in rows:
+            for anchor in (row.anchor, *row.anchor_aliases):
+                if anchor not in seen:
+                    seen.add(anchor)
+                    expanded.append(anchor)
+        return tuple(expanded)
 
 
 class SqlAlchemyEmbeddingIndexRepository:

@@ -88,14 +88,14 @@ class EnqueueFailed(Exception):
     """
 
 
-class InvalidEpubError(Exception):
-    """The source bytes are not a parseable EPUB (CORP-06).
+class InvalidDocumentError(Exception):
+    """The source bytes are not a parseable document of the parser's format (CORP-06).
 
-    Raised by the EPUB parser adapter for non-EPUB bytes, a corrupt archive, or
-    an unresolvable spine. It lives here (not in ``infrastructure``) so the
-    adapter raises a transport-agnostic error without importing worker modules,
-    and it is terminal by the existing task rule that any non-retryable raise
-    fails the job (no retry).
+    Raised by a parser adapter for bad bytes, a corrupt archive, an unresolvable
+    structure, or (for PDF) an encrypted/text-free file. It lives here (not in
+    ``infrastructure``) so the adapter raises a transport-agnostic error without
+    importing worker modules, and it is terminal by the existing task rule that
+    any non-retryable raise fails the job (no retry).
     """
 
 
@@ -160,7 +160,7 @@ class TeachingTurnConflict(Exception):
     The turn repository translates the unique-index violation into this error;
     the web layer maps it to 409 so the losing writer can retry against the next
     index. It lives here (not in ``infrastructure``) so the adapter raises a
-    transport-agnostic error, matching :class:`InvalidEpubError`.
+    transport-agnostic error, matching :class:`InvalidDocumentError`.
     """
 
 
