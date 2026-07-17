@@ -19,6 +19,10 @@ permissions:
 jobs:
   generation-eval:
     runs-on: ubuntu-latest
+    # The publish step commits nightly results to the dedicated `eval-results`
+    # branch, so this job needs write access; the workflow default stays read.
+    permissions:
+      contents: write
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -79,3 +83,34 @@ jobs:
           name: eval-results
           path: evals/results/*.jsonl
           if-no-files-found: warn
+      # Persist the produced results to the dedicated `eval-results` branch so the
+      # eval history outlives the 90-day artifact retention. Runs only when the key
+      # is present (the suite ran) AND results actually exist; it never touches main
+      # and never force-pushes over history. Runs from the repo root because the
+      # judge writes to repo-root evals/results/, not backend/.
+      - name: Publish eval results to the eval-results branch
+        if: steps.secret.outputs.present == 'true'
+        working-directory: .
+        run: |
+          if ! ls evals/results/*.jsonl >/dev/null 2>&1; then
+            echo "::notice::No eval results to publish."
+            exit 0
+          fi
+          mkdir -p /tmp/evalpub && cp evals/results/*.jsonl /tmp/evalpub/
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin eval-results || true
+          if git show-ref --verify --quiet refs/remotes/origin/eval-results; then
+            git worktree add /tmp/eval-branch origin/eval-results
+            cd /tmp/eval-branch && (git switch -c eval-results || git switch eval-results)
+          else
+            git worktree add --detach /tmp/eval-branch
+            cd /tmp/eval-branch && git switch --orphan eval-results && (git rm -rf . >/dev/null 2>&1 || true)
+          fi
+          DEST="results/$(date -u +%Y-%m-%d)-${{ github.run_id }}"
+          mkdir -p "$DEST" && cp /tmp/evalpub/*.jsonl "$DEST/"
+          git add "$DEST"
+          git commit -m "eval: nightly results ${{ github.run_id }}"
+          # On a rejected push, rebase on the concurrent history and retry once;
+          # a second failure fails the job. Never force-push.
+          git push origin eval-results || (git pull --rebase origin eval-results && git push origin eval-results)
