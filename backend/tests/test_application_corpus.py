@@ -23,7 +23,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.application.corpus import BuildCorpus, ReadSourceStructure
-from app.application.errors import CorpusNotFound, InvalidEpubError, SourceNotFound
+from app.application.errors import CorpusNotFound, InvalidDocumentError, SourceNotFound
 from app.application.identity import AuthorizeOwnership
 from app.domain.entities import (
     CorpusSectionRecord,
@@ -242,11 +242,11 @@ def test_build_corpus_propagates_parser_error_without_persisting() -> None:
 
     build = _build(
         storage=storage,
-        parser=FakeEpubParser(error=InvalidEpubError("bad epub")),
+        parser=FakeEpubParser(error=InvalidDocumentError("bad epub")),
         corpus=corpus,
         events=events,
     )
-    with pytest.raises(InvalidEpubError):
+    with pytest.raises(InvalidDocumentError):
         build(source=source, job=job)
 
     assert corpus.replace_calls == []

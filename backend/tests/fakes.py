@@ -312,7 +312,7 @@ class FakeQuizDeckEnqueuer:
 
 
 class FakeEpubParser:
-    """``EpubParserPort`` double: returns a preset ``ParsedBook`` or raises.
+    """``DocumentParserPort`` double: returns a preset ``ParsedBook`` or raises.
 
     Records the (bytes, filename) it was called with so ``BuildCorpus`` tests can
     assert the storage bytes flow through to the parser; the ``error`` seam drives

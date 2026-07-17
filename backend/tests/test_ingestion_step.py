@@ -2,7 +2,7 @@
 
 The step binds ``BuildCorpus`` to the task's retry contract: transient storage
 faults (the Learny-owned ``StorageUnavailable``) become ``RetryableIngestionError``
-so the backoff retry applies (CORP-07); ``ObjectNotFound``, ``InvalidEpubError``,
+so the backoff retry applies (CORP-07); ``ObjectNotFound``, ``InvalidDocumentError``,
 and any other raise propagate untouched and are terminal (CORP-06). A clean build
 simply delegates. Driven with a stub ``build`` so classification is asserted in
 isolation.
@@ -15,7 +15,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.application.errors import InvalidEpubError, StorageUnavailable
+from app.application.errors import InvalidDocumentError, StorageUnavailable
 from app.domain.entities import IngestionJob, Source
 from app.infrastructure.storage.s3 import ObjectNotFound
 from app.infrastructure.worker.steps import (
@@ -96,8 +96,8 @@ def test_transient_storage_unavailable_becomes_retryable() -> None:
 
 
 def test_invalid_epub_error_propagates_terminal() -> None:
-    with pytest.raises(InvalidEpubError):
-        _run(_RaisingBuild(InvalidEpubError("bad epub")))
+    with pytest.raises(InvalidDocumentError):
+        _run(_RaisingBuild(InvalidDocumentError("bad epub")))
 
 
 def test_object_not_found_propagates_terminal() -> None:

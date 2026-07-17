@@ -1,13 +1,13 @@
 """Structure-preserving EPUB parser adapter (design §Components, A-1..A-4).
 
-Implements :class:`~app.domain.ports.EpubParserPort` with ebooklib for package
+Implements :class:`~app.domain.ports.DocumentParserPort` with ebooklib for package
 structure (spine order, OPF metadata, nav TOC) and BeautifulSoup for splitting
 each spine document into preserved-HTML content blocks. This module is the only
 one importing those libraries for parsing (ADR-0009); it returns the library-free
 :class:`~app.domain.entities.ParsedBook` DTO so no ebooklib/bs4 type ever crosses
 into ``domain`` or ``application``. Every unparseable input — non-EPUB bytes, a
 corrupt archive, an unresolvable spine idref — becomes a terminal
-:class:`~app.application.errors.InvalidEpubError` (CORP-06).
+:class:`~app.application.errors.InvalidDocumentError` (CORP-06).
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ import ebooklib
 from bs4 import BeautifulSoup, Tag
 from ebooklib import epub
 
-from app.application.errors import InvalidEpubError
+from app.application.errors import InvalidDocumentError
 from app.domain.entities import ParsedBlock, ParsedBook, ParsedSection
 
 # Coarse block-type vocabulary for the top-level elements a spine body contains
@@ -63,13 +63,13 @@ _DEFAULT_MAX_UNCOMPRESSED_BYTES = 524288000  # 500 MiB
 
 
 class EbooklibEpubParser:
-    """``EpubParserPort`` backed by ebooklib + BeautifulSoup.
+    """``DocumentParserPort`` backed by ebooklib + BeautifulSoup.
 
     ``max_uncompressed_bytes`` caps the archive's *declared* summed uncompressed
     size before any inflation happens: the upload limit only bounds compressed
     bytes, and ``read_epub`` eagerly inflates every manifest item into memory,
     so an unchecked crafted archive could balloon a small upload into gigabytes
-    inside the worker. Violations are terminal ``InvalidEpubError`` (CORP-06).
+    inside the worker. Violations are terminal ``InvalidDocumentError`` (CORP-06).
     """
 
     def __init__(
@@ -82,7 +82,7 @@ class EbooklibEpubParser:
         try:
             book = epub.read_epub(BytesIO(source_bytes))
         except Exception as exc:  # noqa: BLE001 — any read failure is a bad EPUB
-            raise InvalidEpubError(f"could not read EPUB {filename!r}") from exc
+            raise InvalidDocumentError(f"could not read EPUB {filename!r}") from exc
 
         title = _first(_metadata_values(book, "title"))
         authors = tuple(_metadata_values(book, "creator"))
@@ -97,7 +97,7 @@ class EbooklibEpubParser:
                 continue
             item = book.get_item_with_id(idref)
             if item is None:
-                raise InvalidEpubError(f"unresolvable spine idref: {idref!r}")
+                raise InvalidDocumentError(f"unresolvable spine idref: {idref!r}")
             if item.get_type() != ebooklib.ITEM_DOCUMENT:
                 continue
 
@@ -134,9 +134,9 @@ class EbooklibEpubParser:
             with zipfile.ZipFile(BytesIO(source_bytes)) as archive:
                 declared = sum(info.file_size for info in archive.infolist())
         except (zipfile.BadZipFile, zipfile.LargeZipFile) as exc:
-            raise InvalidEpubError(f"could not read EPUB {filename!r}") from exc
+            raise InvalidDocumentError(f"could not read EPUB {filename!r}") from exc
         if declared > self._max_uncompressed_bytes:
-            raise InvalidEpubError(
+            raise InvalidDocumentError(
                 f"EPUB {filename!r} declares {declared} uncompressed bytes, "
                 f"over the {self._max_uncompressed_bytes} byte cap"
             )

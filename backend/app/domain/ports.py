@@ -272,21 +272,23 @@ class StoragePort(Protocol):
 
 
 @runtime_checkable
-class EpubParserPort(Protocol):
-    """Structure-preserving EPUB parse port (ADR-0002, ADR-0011 — EPUB only).
+class DocumentParserPort(Protocol):
+    """Structure-preserving document parse port (ADR-0002, AD-083).
 
-    The only seam the ebooklib/BeautifulSoup adapter sits behind (ADR-0009);
-    application code depends on this protocol and the library-free
-    :class:`~app.domain.entities.ParsedBook` DTO, never on parsing libraries.
+    The single format-agnostic seam each concrete parser adapter sits behind
+    (ADR-0009); application code depends on this protocol and the library-free
+    :class:`~app.domain.entities.ParsedBook` DTO, never on parsing libraries. A
+    format-dispatch factory picks the adapter (ebooklib for EPUB, Docling for
+    PDF) from the source's content type at the worker composition root.
     """
 
     def parse(self, source_bytes: bytes, *, filename: str) -> ParsedBook:
-        """Parse EPUB bytes into a :class:`ParsedBook`.
+        """Parse document bytes into a :class:`ParsedBook`.
 
-        Raises :class:`~app.application.errors.InvalidEpubError` for anything
-        that is not a parseable EPUB (non-EPUB bytes, corrupt archive,
-        unresolvable spine) so the ingestion step can treat it as terminal
-        (CORP-06).
+        Raises :class:`~app.application.errors.InvalidDocumentError` for anything
+        that is not a parseable document of the adapter's format (bad bytes,
+        corrupt archive, unresolvable structure) so the ingestion step can treat
+        it as terminal (CORP-06).
         """
         ...
 

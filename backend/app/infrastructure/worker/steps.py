@@ -3,7 +3,7 @@
 ``EpubCorpusIngestionStep`` is Phase 5's real ``IngestionStep``: it binds
 ``BuildCorpus`` to the task's retry contract, mapping transient object-storage
 faults to ``RetryableIngestionError`` (CORP-07) while letting terminal failures
-(``ObjectNotFound``, ``InvalidEpubError``, and any other raise) propagate so the
+(``ObjectNotFound``, ``InvalidDocumentError``, and any other raise) propagate so the
 task fails the job (CORP-06). ``NoOpIngestionStep`` stays exported: it drives the
 lifecycle without parsing and remains the double the lifecycle tests inject.
 
@@ -41,7 +41,7 @@ class EpubCorpusIngestionStep:
     storage adapter as the Learny-owned ``StorageUnavailable`` (ADR-007/009 — no
     vendor exception types cross the port) and map to ``RetryableIngestionError``
     so the existing backoff retry applies (CORP-07). Everything else —
-    ``ObjectNotFound`` (missing object), ``InvalidEpubError`` (unparseable EPUB),
+    ``ObjectNotFound`` (missing object), ``InvalidDocumentError`` (unparseable EPUB),
     any other raise — propagates untouched and is terminal (CORP-06); the
     surrounding transaction then rolls back with no partial corpus (CORP-08).
     """

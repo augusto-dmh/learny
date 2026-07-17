@@ -31,7 +31,7 @@ from app.domain.entities import (
 from app.domain.ports import (
     Clock,
     CorpusRepository,
-    EpubParserPort,
+    DocumentParserPort,
     IngestionEventRepository,
     MarkupConverterPort,
     SourceRepository,
@@ -62,7 +62,7 @@ class BuildCorpus:
         self,
         *,
         storage: StoragePort,
-        parser: EpubParserPort,
+        parser: DocumentParserPort,
         markup: MarkupConverterPort,
         corpus: CorpusRepository,
         events: IngestionEventRepository,
