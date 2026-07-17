@@ -253,6 +253,12 @@ def test_monitoring_restarts_unless_stopped(prod: dict) -> None:
     assert prod["monitoring"].get("restart") == "unless-stopped"
 
 
+def test_monitoring_disables_anonymous_telemetry(prod: dict) -> None:
+    # The host-privileged agent must not phone home; disable netdata's anonymous
+    # statistics via its documented Docker opt-out env (ADR-0024).
+    assert prod["monitoring"]["environment"]["DISABLE_TELEMETRY"] == "1"
+
+
 def test_monitoring_caps_its_memory(prod: dict) -> None:
     # A runaway agent must not compete with worker-pdf for host RAM (OPS-13).
     assert prod["monitoring"].get("mem_limit") == "512m"

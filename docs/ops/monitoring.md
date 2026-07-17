@@ -24,6 +24,31 @@ This is a deliberate change from Netdata's stock compose recipe, which uses
 `network_mode: host` (binding 19999 on every interface). We publish a single
 loopback port instead to keep the public surface to Caddy alone.
 
+## Trust boundary
+
+Treat the netdata container as fully host-privileged and its dashboard as
+unauthenticated. This is an accepted, deliberate design (ADR-0024), and the
+security of the whole arrangement rests on a single invariant:
+
+- **The dashboard has no authentication.** Anyone who can reach port 19999 sees
+  every host and per-container metric. There is no login in front of it.
+- **The container can read the entire host.** To collect host metrics it mounts
+  the root filesystem read-only at `/host/root` (which includes this repo's
+  `secrets/` directory) and mounts the Docker socket (`/var/run/docker.sock`),
+  i.e. it can enumerate and inspect every container via the Docker API. These
+  mounts follow netdata's official recipe and are required for host metrics; they
+  are not scoped down.
+- **The loopback bind + SSH tunnel is the sole boundary.** The only thing keeping
+  this unauthenticated, host-reading agent off the internet is that it publishes
+  `127.0.0.1:19999:19999` and Caddy has no route to it. You reach it exclusively
+  over `ssh -L` (below), authenticated by the same key that gets you onto the box.
+
+**Invariant:** the monitoring port must never be published on a non-loopback
+interface, and any future exposure (e.g. a real UI URL) must put authentication in
+front of it first. `test_deploy_topology.py` enforces the topology half of this —
+across the base+prod merge, Caddy is the only service publishing a non-loopback
+port — so a regression that widens the surface fails CI, not production.
+
 ## Access the UI over an SSH tunnel
 
 Forward the loopback UI port from the VPS to your workstation, then open it

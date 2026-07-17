@@ -158,6 +158,15 @@ def test_monitoring_documents_where_alert_hooks_attach(monitoring: str) -> None:
     assert "health" in lowered  # netdata's built-in health engine is the hook
 
 
+def test_monitoring_documents_the_trust_boundary(monitoring: str) -> None:
+    # The unauthenticated, host-privileged agent's sole boundary must be a documented
+    # invariant (ADR-0024), not incidental — including the Docker-socket/API access.
+    assert "Trust boundary" in monitoring
+    lowered = monitoring.lower()
+    assert "unauthenticated" in lowered
+    assert "docker" in lowered
+
+
 def test_rollback_documents_independent_image_revert(rollback: str) -> None:
     lowered = rollback.lower()
     assert "up -d api" in lowered

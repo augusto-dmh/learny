@@ -105,6 +105,10 @@ services:
     # netdata/netdata:v2.10.4 verified present on Docker Hub before pinning (never
     # :latest). Operators bump this tag deliberately after testing.
     image: netdata/netdata:v2.10.4
+    environment:
+      # Disable netdata's anonymous statistics — the agent must not phone home
+      # (netdata's documented Docker opt-out env var). No data leaves the VPS.
+      DISABLE_TELEMETRY: "1"
     pid: host
     cap_add:
       - SYS_PTRACE

@@ -108,6 +108,16 @@ invariant. A topology test enforces the stronger contract: across the base+prod
 merge, caddy is the only service publishing non-loopback ports. Access, routine
 checks, and future alert hooks are documented in `docs/ops/monitoring.md`.
 
+The trust assumption is explicit and accepted: the netdata container is
+host-privileged (read-only mount of the whole host filesystem — `secrets/`
+included — plus the Docker socket) and its dashboard is unauthenticated, so the
+loopback bind and SSH tunnel are the *sole* boundary keeping it off the internet.
+The port must never be published non-loopback, and any future exposure requires
+authentication in front of it (documented as an invariant in
+`docs/ops/monitoring.md`, enforced by the topology test). Netdata's anonymous
+telemetry is disabled (`DISABLE_TELEMETRY=1`) so the agent phones home to no one —
+consistent with the no-monitoring-SaaS driver above.
+
 ### Image hygiene
 
 The `runtime` image now installs only main dependencies (`uv sync --frozen`, no
