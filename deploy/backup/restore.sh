@@ -4,7 +4,8 @@
 # Usage: restore <archive|--latest> --yes
 #   * without --yes: print the plan and exit non-zero (never touches the database)
 #   * unknown archive: exit non-zero, listing the available archives
-#   * with --yes: `pg_restore --clean --if-exists` the archive into the configured db
+#   * with --yes: `pg_restore --single-transaction --clean --if-exists` the archive
+#     into the configured db (single transaction => a partial failure rolls back whole)
 set -eu
 
 # Cron runs jobs with a bare environment; the entrypoint persists the container env here.
@@ -61,13 +62,15 @@ fi
 
 # Without --yes, print the plan and refuse to touch the database (OPS-09).
 if [ "$confirm" -ne 1 ]; then
-  echo "PLAN: pg_restore --clean --if-exists '$archive' into database '$POSTGRES_DB' on host '$POSTGRES_HOST'"
+  echo "PLAN: pg_restore --single-transaction --clean --if-exists '$archive' into database '$POSTGRES_DB' on host '$POSTGRES_HOST'"
   echo "re-run with --yes to execute (nothing was changed)"
   exit 1
 fi
 
 export PGPASSWORD="${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}"
 echo "[restore] restoring $archive into $POSTGRES_DB@$POSTGRES_HOST"
-pg_restore --clean --if-exists --no-owner \
+# --single-transaction makes the restore all-or-nothing (it implies --exit-on-error),
+# so a partial failure rolls back instead of exiting 0 on a half-restored database.
+pg_restore --single-transaction --clean --if-exists --no-owner \
   -h "$POSTGRES_HOST" -U "$POSTGRES_USER" -d "$POSTGRES_DB" "$archive"
 echo "[restore] restore complete"

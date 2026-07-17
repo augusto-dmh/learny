@@ -104,10 +104,13 @@ Restore into a running (empty or existing) database:
 ```bash
 cat backups/learny-YYYY-MM-DD-HHMM.dump | \
   docker compose -f docker-compose.yml -f docker-compose.prod.yml exec -T db \
-  pg_restore -U learny -d learny --clean --if-exists --no-owner
+  pg_restore --single-transaction --clean --if-exists --no-owner -U learny -d learny
 ```
 
-`--clean --if-exists` drops and recreates objects so the restore is idempotent.
+`--clean --if-exists` drops and recreates objects so the restore is idempotent, and
+`--single-transaction` makes it all-or-nothing (it implies `--exit-on-error`): a
+partial failure rolls the whole restore back instead of leaving a half-restored
+database that exited 0.
 The database schema is managed by Alembic; a restored dump already carries the
 schema at its captured revision (see `alembic_version`). After a restore, confirm
 the app's expected head with `alembic upgrade head` (a no-op when already at head).
@@ -134,8 +137,9 @@ equivalent restore/backup with the AWS CLI) — the bucket is plain S3.
 ## Restore with the shipped script
 
 The `backup` service ships a `restore.sh` that restores a `pg_dump -Fc` archive from
-the `backup_data` volume with `pg_restore --clean --if-exists` (idempotent). It is a
-deliberate, manual operation — it is never triggered automatically.
+the `backup_data` volume with `pg_restore --single-transaction --clean --if-exists`
+(idempotent, and all-or-nothing — a partial failure rolls back). It is a deliberate,
+manual operation — it is never triggered automatically.
 
 ```bash
 # Restore the most recent dump. --yes is mandatory to touch the database.
