@@ -48,6 +48,9 @@ jobs:
           - name: learny-web
             context: ./frontend
             target: prod
+          # Single-stage image (deploy/backup/Dockerfile) — no build target.
+          - name: learny-backup
+            context: ./deploy/backup
     steps:
       # Build the exact commit CI validated (head_sha on workflow_run), or the
       # dispatched ref's sha. Same expression drives the image tags below.

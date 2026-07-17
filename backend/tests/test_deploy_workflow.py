@@ -115,13 +115,15 @@ def test_build_job_uses_only_the_github_token_secret() -> None:
 # --- DEP-01: three-image build matrix with correct context + target -------------
 
 
-def test_build_matrix_covers_the_three_images() -> None:
+def test_build_matrix_covers_the_four_images() -> None:
     include = _job("build")["strategy"]["matrix"]["include"]
-    by_name = {entry["name"]: (entry["context"], entry["target"]) for entry in include}
+    # learny-backup builds a single-stage Dockerfile, so it carries no `target`.
+    by_name = {entry["name"]: (entry["context"], entry.get("target")) for entry in include}
     assert by_name == {
         "learny-backend": ("./backend", "runtime"),
         "learny-pdf-worker": ("./backend", "pdf-worker"),
         "learny-web": ("./frontend", "prod"),
+        "learny-backup": ("./deploy/backup", None),
     }
 
 
