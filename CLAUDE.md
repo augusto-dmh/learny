@@ -6,8 +6,9 @@ Learny is a learning application that starts as robust book teaching and may exp
 
 - The MVP is fully implemented and shipped (TDD-001 phases 1–10, PRs #4–#16): EPUB ingestion with preserved structure, PostgreSQL hybrid retrieval, cited Q&A, teaching sessions, worker pipeline, and a production-like Compose deployment. See `README.md` for the architecture overview.
 - The MVP's AI adapters are deterministic and network-free (extractive answers, hash-based embeddings) behind Learny-owned ports; no provider keys are required to run or test it.
-- v2 work is driven by [RFC-002](docs/rfc/0002-learny-v2-roadmap.md) (Accepted 2026-07-13): cycles A–G covering foundation/CI, real embeddings (OpenAI), Claude generation with citations, a real frontend, active-recall quizzes + FSRS spaced repetition, PDF ingestion via Docling, and VPS deployment. Research evidence lives in `docs/research/2026-07-12/`.
-- RFC-002 sets the provider direction (Anthropic Claude for generation, OpenAI `text-embedding-3-large@1536` for embeddings); each becomes binding through its cycle's ADR when implemented. Do not introduce provider SDKs outside those cycles.
+- v2 is fully shipped ([RFC-002](docs/rfc/0002-learny-v2-roadmap.md) cycles A–G, PRs #17–#27, v0.2.0): CI/OSS hygiene, OpenAI embeddings, Claude generation with citations and streaming, product UI, active-recall quizzes + FSRS, PDF ingestion via Docling, and GHCR→VPS deploy behind Caddy. Retrospective: `docs/retrospectives/2026-07-learny-v2.md`.
+- v3 work is driven by [RFC-003](docs/rfc/0003-learny-v3-roadmap.md) (Accepted 2026-07-17): cycles A–F covering ops maturity (backups/monitoring), eval maturity (real baselines + judge gate), scanned-PDF OCR, and the research-gated flagship — notes & second-brain workflows on the canonical corpus.
+- Provider direction is locked by ADR-0019 (OpenAI `text-embedding-3-large@1536`) and ADR-0020 (Anthropic Claude for generation). Do not introduce new provider SDKs outside an accepted cycle.
 
 ## Durable Decisions
 

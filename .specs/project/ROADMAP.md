@@ -32,3 +32,21 @@ TDD open question #10 lands in Cycle G). Research evidence: `docs/research/2026-
 | `v2-active-recall` | E | Active recall: quizzes + FSRS | Done (PR #25) |
 | `v2-ingestion-breadth` | F | PDF (Docling) + EPUB hardening | Done (PR #26) |
 | `v2-deploy` | G | Deploy (GHCR→VPS, Caddy) + presentation | Done (PR #27) |
+
+RFC-002 is complete — all seven v2 cycles shipped (v0.2.0).
+
+## v3 (RFC-003)
+
+v3 is driven by the accepted [RFC-003 roadmap](../../docs/rfc/0003-learny-v3-roadmap.md)
+(cycles A–F): notes & second-brain as the research-gated flagship, plus eval maturity,
+ops maturity, and scanned-PDF OCR. Cycles E–F scopes are provisional until the Cycle D
+notes-domain ADR is accepted.
+
+| tlc Cycle | RFC-003 Cycle | Scope | Status |
+|---|---|---|---|
+| `v3-ops-maturity` | A | Backups + monitoring (TDD OQ #10) + image hygiene | Not started |
+| `v3-eval-maturity` | B | Real-provider baselines + judge threshold gate | Not started |
+| `v3-ocr` | C | Scanned-PDF OCR + localized normalization | Not started |
+| `v3-notes-research` | D | Second-brain research + notes-domain ADR (gate for E–F) | Not started |
+| `v3-notes-foundation` | E | Capture + organize: highlights, notes, links (provisional) | Not started |
+| `v3-notes-loop` | F | Retrieve + reinforce: notes in RAG + quiz, export (provisional) | Not started |
