@@ -26,10 +26,13 @@ jobs:
   build:
     runs-on: ubuntu-latest
     # Build/deploy only for a manual dispatch on main, or a CI run that concluded
-    # successfully on main. Any other event (failed CI, non-main branch) skips.
+    # successfully on main AND originated from this repository — not a fork. Without
+    # the head_repository check, a fork PR whose branch is literally named `main`
+    # would satisfy head_branch == 'main' and drive untrusted code through image
+    # publishing and the SSH deploy (the classic workflow_run escalation).
     if: >-
       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
-      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main')
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.head_repository.full_name == github.repository)
     permissions:
       contents: read
       packages: write
@@ -72,11 +75,11 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     needs: build
-    # Same green-CI-@-main guard as the build job — a manual dispatch on main or a
-    # successful CI run on main.
+    # Same guard as the build job — a manual dispatch on main, or a successful CI
+    # run on main that originated from this repository (never a fork).
     if: >-
       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
-      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main')
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.head_repository.full_name == github.repository)
     permissions:
       contents: read
     steps:
