@@ -226,8 +226,12 @@ def test_restore_requires_explicit_yes_before_touching_the_db() -> None:
 
 
 def test_restore_uses_clean_if_exists() -> None:
-    assert "pg_restore" in _RESTORE_SH
-    assert "--clean --if-exists" in _RESTORE_SH
+    # Assert on the actual command (last occurrence — earlier ones are the doc
+    # header and the dry-run PLAN echo), so dropping the flags from the executed
+    # pg_restore line fails here, not in production.
+    command_at = _RESTORE_SH.rindex("pg_restore")
+    command_line = _RESTORE_SH[command_at:].splitlines()[0]
+    assert "--clean --if-exists" in command_line
 
 
 def test_restore_lists_archives_for_an_unknown_name() -> None:
