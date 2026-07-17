@@ -1,0 +1,21 @@
+# v2-deploy — Review Triage (PR #27)
+
+**Reviewer**: pr-review (fresh context, author ≠ reviewer). 5 findings (1 security, 2 critical, 2 warning) + 2 non-actionable summary comments.
+**Triage**: each judged against the actual code, not the reviewer's authority. Verdict → action.
+
+| # | Source comment | File:line | Verdict | Action | Rationale |
+|---|---|---|---|---|---|
+| 1 | `<!-- learny-review:security -->` High: `workflow_run` deploy gate has no same-repository check | `.github/workflows/deploy.yml:32,79` | **REAL** | **fix** | Confirmed classic `workflow_run` escalation. `ci.yml` triggers on unfiltered `pull_request:`, so a fork PR's CI run fires this `workflow_run` in the base-repo context with full secret access. `workflow_run.head_branch` is the fork-controlled head branch name — an attacker names their fork branch `main`, passes the `head_branch == 'main'` guard, and the workflow checks out `head_sha` (fork code), pushes it to GHCR as `:latest`, and SSH-deploys it to the VPS. Guard has no `head_repository`/repo-identity check. Add `github.event.workflow_run.head_repository.full_name == github.repository` to both job guards. |
+| 2 | `<!-- learny-review:tests -->` Deploy job's `workflow_dispatch` main-ref guard not asserted | `backend/tests/test_deploy_workflow.py:160` | **REAL** | **fix** | `test_deploy_shares_the_build_guard` asserts only the `workflow_run` half for the deploy job; the build job's dispatch-main-ref clause is pinned (line 83) but the deploy job's is not. A regression dropping the deploy-job ref pin (manual deploy from any branch) would pass. The security fix (F1) changes the guard string anyway, so both jobs' full guards get asserted together. |
+| 3 | `<!-- learny-review:tests -->` Caddyfile site address `{$LEARNY_DOMAIN}` untested | `backend/tests/test_deploy_topology.py:194` | **REAL** | **fix** | Topology test pins the reverse-proxy upstream and absence of an api route but never asserts the `{$LEARNY_DOMAIN}` site address — the directive that drives automatic Let's Encrypt TLS (DEP-07). A regression to a plain-`:80` block would keep every assertion green while TLS silently vanished. Add `assert "{$LEARNY_DOMAIN}" in text`. |
+| 4 | `<!-- learny-review:regression -->` Runbook cites nonexistent secrets template path | `docs/ops/deploy.md:80` | **REAL** | **fix** | Verified: no `backend/secrets/` dir and no `*.env.production.example` glob exists. The real template is the single file `backend/.env.production.example`. DEP-16's stated goal is deploy "following docs/ops/deploy.md alone" — a dead reference on the first secrets step breaks that. Fix the path. |
+| 5 | `<!-- learny-review:regression -->` Runbook secret files use wrong env-var names and omit required ones | `docs/ops/deploy.md:95-123` | **REAL** | **fix** | Verified against `backend/.env.production.example` + `backend/app/core/config.py` (`env_prefix="LEARNY_"`): `SECRET_KEY` is not a Learny setting (fabricated); `ANTHROPIC_API_KEY`/`STORAGE_ENDPOINT`/`STORAGE_ACCESS_KEY`/`STORAGE_SECRET_KEY` are read only with the `LEARNY_` prefix; storage keys belong in api.env/worker.env not minio.env; api.env omits the required `LEARNY_DATABASE_URL` and `LEARNY_CSRF_TRUSTED_ORIGINS`; and "workers inherit ANTHROPIC_API_KEY from api.env" is false (`env_file` is per-service). A runbook-only deploy would not boot. Regenerate the secrets section verbatim from `backend/.env.production.example`. Root cause: this runbook was authored by the cheaper (Haiku) doc worker, which fabricated env details — the exact failure mode the model-cost discipline warns about; caught here by review. |
+
+**Summary comments (not findings, no action):** `<!-- learny-review:requirements -->` (verdict ✅ Complete, 20/20 ACs) and `<!-- learny-review:summary -->` (consolidated summary). Both deleted with all other comments in the comment-cleanup step.
+
+## Outcome
+
+All 5 findings real, all fixed. Grouped into 3 atomic commits:
+- `fix(ci): require a same-repository origin for the deploy pipeline` — deploy.yml both-job guards + test_deploy_workflow.py guard assertions (F1 + F2).
+- `test(deploy): pin the caddy site address to the tls domain` — test_deploy_topology.py (F3).
+- `docs(ops): correct the runtime secrets setup in the deploy runbook` — deploy.md secrets section (F4 + F5).
