@@ -99,6 +99,40 @@ def test_quiz_settings_env_override(monkeypatch) -> None:
     assert settings.quiz_batch_poll_interval_s == 15
 
 
+def test_pdf_ocr_settings_defaults() -> None:
+    # OCR on by default with the author-corpus language pair (spec: enabled=true,
+    # langs "en,pt"); the parsed list mirrors the raw value.
+    settings = Settings(_env_file=None)
+
+    assert settings.pdf_ocr_enabled is True
+    assert settings.pdf_ocr_langs == "en,pt"
+    assert settings.pdf_ocr_lang_list() == ("en", "pt")
+
+
+def test_pdf_ocr_settings_env_override(monkeypatch) -> None:
+    monkeypatch.setenv("LEARNY_PDF_OCR_ENABLED", "false")
+    monkeypatch.setenv("LEARNY_PDF_OCR_LANGS", "pt")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.pdf_ocr_enabled is False
+    assert settings.pdf_ocr_lang_list() == ("pt",)
+
+
+def test_pdf_ocr_langs_are_trimmed_and_empties_dropped() -> None:
+    # Malformed entries (spaces, empty items) are normalized away.
+    settings = Settings(_env_file=None, pdf_ocr_langs=" en , ,pt, ")
+
+    assert settings.pdf_ocr_lang_list() == ("en", "pt")
+
+
+def test_pdf_ocr_langs_fall_back_to_the_default_pair_when_empty() -> None:
+    # A value with no usable entries must not configure OCR with zero languages.
+    settings = Settings(_env_file=None, pdf_ocr_langs=" , ,")
+
+    assert settings.pdf_ocr_lang_list() == ("en", "pt")
+
+
 def test_fsrs_settings_defaults() -> None:
     # FSRS-6 population defaults; fuzzing on by default (tests disable it explicitly).
     settings = Settings(_env_file=None)
