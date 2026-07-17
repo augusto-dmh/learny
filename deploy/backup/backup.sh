@@ -63,6 +63,8 @@ if [ -n "${LEARNY_BACKUP_REMOTE_ENDPOINT:-}" ] \
   log "offsite configured; copying dump and mirroring objects"
   mc alias set learny_offsite "$LEARNY_BACKUP_REMOTE_ENDPOINT" \
     "$LEARNY_BACKUP_REMOTE_ACCESS_KEY" "$LEARNY_BACKUP_REMOTE_SECRET_KEY"
+  # Create the offsite bucket if absent (idempotent) so a fresh S3 target works.
+  mc mb --ignore-existing "learny_offsite/$LEARNY_BACKUP_REMOTE_BUCKET"
   mc cp "$archive" "learny_offsite/$LEARNY_BACKUP_REMOTE_BUCKET/db/"
   # Mirror the source bucket WITHOUT --remove: objects deleted in the app persist
   # offsite (favors recoverability; documented in docs/ops/backups.md).

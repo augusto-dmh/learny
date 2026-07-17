@@ -72,9 +72,9 @@ only when **all four** of these are set in `secrets/backup.env`:
 - `LEARNY_BACKUP_REMOTE_SECRET_KEY`
 - `LEARNY_BACKUP_REMOTE_BUCKET`
 
-With all four set, the job copies each new dump to `<bucket>/db/` and mirrors the
-source object bucket (`LEARNY_BACKUP_SOURCE_BUCKET`, default `learny-sources`) to
-`<bucket>/objects/`. Leave any of them blank to keep backups **local-only**: the job
+With all four set, the job creates `<bucket>` if it does not exist (idempotent),
+copies each new dump to `<bucket>/db/`, and mirrors the source object bucket
+(`LEARNY_BACKUP_SOURCE_BUCKET`, default `learny-sources`) to `<bucket>/objects/`. Leave any of them blank to keep backups **local-only**: the job
 completes the local dump, logs `offsite not configured`, and exits 0.
 
 Object mirroring uses `mc mirror` **without `--remove`**: objects deleted in the app

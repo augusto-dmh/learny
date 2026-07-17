@@ -367,3 +367,27 @@ def test_ci_asserts_the_seeded_row_returns_after_restore() -> None:
     restore_at = scripts.index("restore.sh --latest --yes")
     assert_at = scripts.index("SELECT note FROM backup_marker")
     assert restore_at < assert_at, "the marker assertion must run after the restore"
+
+
+def test_ci_proves_the_offsite_branch_after_the_local_roundtrip() -> None:
+    # F9: the offsite branch was text-pinned only. CI now executes it against a scratch
+    # bucket on the same MinIO — after the local-only roundtrip, so both paths run.
+    scripts = _compose_smoke_scripts()
+    assert scripts.index("offsite not configured") < scripts.index(
+        "LEARNY_BACKUP_REMOTE_ENDPOINT=http://minio:9000"
+    ), "the offsite proof must follow the local-only roundtrip"
+    for var in (
+        "LEARNY_BACKUP_REMOTE_ENDPOINT",
+        "LEARNY_BACKUP_REMOTE_ACCESS_KEY",
+        "LEARNY_BACKUP_REMOTE_SECRET_KEY",
+        "LEARNY_BACKUP_REMOTE_BUCKET",
+    ):
+        assert f"{var}=" in scripts, f"the offsite CI run must set {var}"
+
+
+def test_ci_asserts_offsite_dump_and_mirror_landed() -> None:
+    # A follow-up mc listing proves the branch executed: the dump copy lands under db/
+    # and the seeded source object is mirrored under objects/ in the offsite bucket.
+    scripts = _compose_smoke_scripts()
+    assert "mc ls --recursive m/learny-offsite-ci/db/" in scripts
+    assert "mc ls --recursive m/learny-offsite-ci/objects/" in scripts
