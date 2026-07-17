@@ -245,11 +245,18 @@ class IngestionEnqueuer(Protocol):
     """The Celery boundary — keeps ``apply_async`` out of application code.
 
     Called *after* the queued job is committed so the worker always sees a
-    durable row; the queue message carries only ids (AD-014).
+    durable row; the queue message carries only ids (AD-014). ``content_type``
+    selects the destination queue so a heavy PDF parse never lands on the default
+    worker (ING-17); the queue message itself still carries only ids.
     """
 
-    def enqueue_ingestion(self, *, source_id: UUID, job_id: UUID) -> None:
-        """Enqueue the background ingestion task for ``job_id`` / ``source_id``."""
+    def enqueue_ingestion(
+        self, *, source_id: UUID, job_id: UUID, content_type: str
+    ) -> None:
+        """Enqueue the background ingestion task for ``job_id`` / ``source_id``.
+
+        ``content_type`` is the source's stored type, used only to pick the queue.
+        """
         ...
 
 

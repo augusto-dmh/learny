@@ -98,8 +98,8 @@ class StartIngestion:
 
     def __call__(
         self, *, user: User, source_id: UUID
-    ) -> tuple[IngestionJob, list[IngestionEvent]]:
-        authorized_source(
+    ) -> tuple[IngestionJob, list[IngestionEvent], str]:
+        source = authorized_source(
             user=user,
             source_id=source_id,
             sources=self._sources,
@@ -126,9 +126,11 @@ class StartIngestion:
         )
         self._sources.set_status(source_id, SOURCE_STATUS_PROCESSING, now)
         # Return the ``queued`` event so the web handler builds its response without
-        # reaching into a persistence adapter (keeps storage access in this layer).
+        # reaching into a persistence adapter (keeps storage access in this layer),
+        # plus the source's content type so the handler routes the enqueue to the
+        # right queue without re-reading the source (ING-17).
         queued = self._append_event(job.id, IngestionEventType.QUEUED, None, now)
-        return job, [queued]
+        return job, [queued], source.content_type
 
     def _append_event(
         self, job_id: UUID, event_type: str, message: str | None, now

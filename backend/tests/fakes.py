@@ -290,10 +290,12 @@ class FakeIngestionEnqueuer:
 
     def __init__(self, *, error: Exception | None = None) -> None:
         self._error = error
-        self.calls: list[tuple[UUID, UUID]] = []
+        self.calls: list[tuple[UUID, UUID, str]] = []
 
-    def enqueue_ingestion(self, *, source_id: UUID, job_id: UUID) -> None:
-        self.calls.append((source_id, job_id))
+    def enqueue_ingestion(
+        self, *, source_id: UUID, job_id: UUID, content_type: str
+    ) -> None:
+        self.calls.append((source_id, job_id, content_type))
         if self._error is not None:
             raise self._error
 

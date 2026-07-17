@@ -384,14 +384,36 @@ def test_run_ingestion_terminal_job_is_noop(seed, db_engine: Engine) -> None:
     assert _read_event_types(db_engine, ctx.job.id) == [IngestionEventType.QUEUED]
 
 
-def test_celery_enqueuer_applies_async_with_ids_only() -> None:
+def test_celery_enqueuer_routes_epub_to_default_queue_with_ids_only() -> None:
     source_id = uuid4()
     job_id = uuid4()
 
     with patch("app.worker.tasks.run_ingestion.apply_async") as apply_async:
-        CeleryIngestionEnqueuer().enqueue_ingestion(source_id=source_id, job_id=job_id)
+        CeleryIngestionEnqueuer().enqueue_ingestion(
+            source_id=source_id,
+            job_id=job_id,
+            content_type="application/epub+zip",
+        )
 
+    # EPUB stays on the default queue: no ``queue`` kwarg, ids-only payload (ING-17).
     apply_async.assert_called_once_with(args=[str(source_id), str(job_id)])
+
+
+def test_celery_enqueuer_routes_pdf_to_ingest_pdf_queue() -> None:
+    source_id = uuid4()
+    job_id = uuid4()
+
+    with patch("app.worker.tasks.run_ingestion.apply_async") as apply_async:
+        CeleryIngestionEnqueuer().enqueue_ingestion(
+            source_id=source_id,
+            job_id=job_id,
+            content_type="application/pdf",
+        )
+
+    # PDF is routed to the dedicated isolated queue; payload is still ids-only.
+    apply_async.assert_called_once_with(
+        args=[str(source_id), str(job_id)], queue="ingest-pdf"
+    )
 
 
 # --- Corpus build through the real step (T9 integration) ------------------------
