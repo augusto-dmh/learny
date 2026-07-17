@@ -126,3 +126,69 @@ def test_base_app_services_still_build_from_source(base: dict) -> None:
     for service in _GHCR_REFS:
         assert base[service].get("build"), f"{service} must keep its build block in base"
         assert base[service].get("image") is None, f"{service} must not pin an image in base"
+
+
+# --- prod overlay adds a single public Caddy edge (DEP-06, DEP-07) ---------------
+
+
+def _prod_volumes() -> dict:
+    merged: dict = {}
+    for path in (_BASE, _PROD):
+        merged = _deep_merge(merged, _load(path).get("volumes") or {})
+    return merged
+
+
+def test_prod_publishes_host_ports_only_on_caddy(prod: dict) -> None:
+    for name, svc in prod.items():
+        if name == "caddy":
+            assert svc.get("ports"), "caddy must publish host ports in prod"
+        else:
+            assert not svc.get("ports"), f"{name} must not publish host ports in prod"
+
+
+def test_caddy_publishes_only_80_443_and_quic(prod: dict) -> None:
+    assert set(prod["caddy"]["ports"]) == {"80:80", "443:443", "443:443/udp"}
+
+
+def test_caddy_uses_a_pinned_alpine_image(prod: dict) -> None:
+    image = prod["caddy"]["image"]
+    assert image.startswith("caddy:")
+    assert not image.endswith(":latest"), "caddy image must be pinned"
+
+
+def test_caddy_restarts_unless_stopped(prod: dict) -> None:
+    assert prod["caddy"].get("restart") == "unless-stopped"
+
+
+def test_caddy_persists_cert_and_config_volumes(prod: dict) -> None:
+    volumes = prod["caddy"]["volumes"]
+    assert "./deploy/Caddyfile:/etc/caddy/Caddyfile:ro" in volumes
+    assert "caddy_data:/data" in volumes
+    assert "caddy_config:/config" in volumes
+
+
+def test_prod_declares_the_caddy_named_volumes() -> None:
+    volumes = _prod_volumes()
+    assert "caddy_data" in volumes
+    assert "caddy_config" in volumes
+
+
+def test_caddy_requires_the_domain_env(prod: dict) -> None:
+    domain = prod["caddy"]["environment"]["LEARNY_DOMAIN"]
+    # `:?` makes an unset LEARNY_DOMAIN abort the run instead of silent-defaulting.
+    assert domain == "${LEARNY_DOMAIN:?LEARNY_DOMAIN must be set}"
+
+
+def test_caddy_is_absent_from_base_and_override(base: dict, override: dict) -> None:
+    assert "caddy" not in base
+    assert "caddy" not in override
+
+
+# --- the Caddyfile reverse-proxies only web, never api (ADR-0017/AD-093) ---------
+
+
+def test_caddyfile_proxies_only_the_web_upstream() -> None:
+    text = _CADDYFILE.read_text()
+    assert "reverse_proxy web:3000" in text
+    assert "api:8000" not in text
+    assert "reverse_proxy api" not in text

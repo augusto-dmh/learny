@@ -79,3 +79,27 @@ services:
     # The prod image serves the built Next.js standalone server (see the prod
     # stage in frontend/Dockerfile), never `next dev`.
     command: ["node", "server.js"]
+
+  # Public TLS edge (ADR-0017/AD-093): the ONLY host-exposed service in prod.
+  # Caddy terminates TLS with automatic Let's Encrypt certs (persisted in
+  # caddy_data so restarts reuse them) and reverse-proxies to the Next.js
+  # same-origin proxy at web:3000 — api never gets a host port or a Caddy route.
+  caddy:
+    restart: unless-stopped
+    image: caddy:2.10-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      LEARNY_DOMAIN: ${LEARNY_DOMAIN:?LEARNY_DOMAIN must be set}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - web
+
+volumes:
+  caddy_data:
+  caddy_config:
