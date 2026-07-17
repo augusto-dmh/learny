@@ -34,7 +34,7 @@ from app.domain.entities import (
     QuizItemType,
     QuizSection,
 )
-from app.infrastructure.answering.anthropic import _AnthropicAdapter
+from app.infrastructure.answering.anthropic import AnthropicAdapterBase
 
 
 def _custom_id(index: int, anchor: str) -> str:
@@ -125,7 +125,7 @@ def _parse_items(message: Any) -> list[QuizCandidate]:
     ]
 
 
-class AnthropicQuizAdapter(_AnthropicAdapter):
+class AnthropicQuizAdapter(AnthropicAdapterBase):
     """``QuizGenerationPort`` over Claude's Message Batches + structured outputs.
 
     Reuses the shared lazy-client base (``model`` identity, injected fake client) so tests

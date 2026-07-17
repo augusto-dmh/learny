@@ -168,7 +168,7 @@ def _build_history_messages(
     return messages
 
 
-class _AnthropicAdapter:
+class AnthropicAdapterBase:
     """Shared construction and lazy client seam for the Anthropic adapters.
 
     Constructed with the API key, model id, and ``max_tokens``; the real
@@ -236,7 +236,7 @@ class _AnthropicAdapter:
         yield AnswerCompleted(answer=answer)
 
 
-class AnthropicAnswerAdapter(_AnthropicAdapter):
+class AnthropicAnswerAdapter(AnthropicAdapterBase):
     """``AnswerGenerationPort`` implementation over Claude's Citations API.
 
     The buffered path calls ``messages.create`` (``max_tokens`` is far below the
@@ -281,7 +281,7 @@ class AnthropicAnswerAdapter(_AnthropicAdapter):
         )
 
 
-class AnthropicTeachingAdapter(_AnthropicAdapter):
+class AnthropicTeachingAdapter(AnthropicAdapterBase):
     """``TeachingGenerationPort`` implementation with prompt caching (AD-032).
 
     Reuses the answer adapter's document builder, response parser, and sentinel
