@@ -435,6 +435,7 @@ def test_run_ingestion_builds_corpus_from_valid_epub(
     assert _read_event_types(db_engine, ctx.job.id) == [
         IngestionEventType.QUEUED,
         IngestionEventType.STARTED,
+        "corpus_normalized",
         "corpus_built",
         "embeddings_built",
         IngestionEventType.SUCCEEDED,
@@ -556,16 +557,18 @@ def test_reingestion_reembeds_exactly_the_rebuilt_chunk_set(
     _run(FakeSelf(), str(ctx.source.id), str(ctx.job.id))
     assert _count_embedded(db_engine, ctx.source.id) == 5
 
-    # Re-ingest a DIFFERENT (2-chunk) book: the atomic corpus replace drops the old
-    # 5 chunks and their vectors, and the embed step embeds exactly the rebuilt set
-    # — 2 chunks, all embedded, no stale/orphan vectors from the prior corpus (RET-11).
+    # Re-ingest a DIFFERENT book: the atomic corpus replace drops the old 5 chunks
+    # and their vectors, and the embed step embeds exactly the rebuilt set — with no
+    # stale/orphan vectors from the prior corpus (RET-11). Normalization merges
+    # no_toc's trivial "body" section into "Introduction", so the rebuilt corpus is a
+    # single chunk.
     _serve_bytes(monkeypatch, ctx.source.object_key, no_toc_book())
     job2 = _add_queued_job(db_engine, ctx.source.id)
     _run(FakeSelf(), str(ctx.source.id), str(job2.id))
 
     assert _read_job(db_engine, job2.id).status == IngestionStatus.SUCCEEDED
-    assert _count_for_source(db_engine, corpus_chunks, ctx.source.id) == 2
-    assert _count_embedded(db_engine, ctx.source.id) == 2
+    assert _count_for_source(db_engine, corpus_chunks, ctx.source.id) == 1
+    assert _count_embedded(db_engine, ctx.source.id) == 1
 
 
 def test_run_ingestion_retryable_embed_fault_records_retry(seed, db_engine: Engine) -> None:
@@ -629,6 +632,7 @@ def test_embed_failure_is_terminal_and_leaves_no_partial_vectors(
     assert _read_event_types(db_engine, ctx.job.id) == [
         IngestionEventType.QUEUED,
         IngestionEventType.STARTED,
+        "corpus_normalized",
         "corpus_built",
         IngestionEventType.FAILED,
     ]

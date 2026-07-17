@@ -97,3 +97,78 @@ def test_indices_are_contiguous_from_zero() -> None:
     chunks = _pack(["alpha", "beta", "gamma"], max_chars=5)
 
     assert [c.index for c in chunks] == [0, 1, 2]
+
+
+# --- page spans (ING-12 chunk half) --------------------------------------------
+
+
+def test_page_span_rolls_up_min_start_max_end_over_merged_blocks() -> None:
+    # Blocks that pack into one chunk contribute their page spans; the chunk's span
+    # is (min start, max end) across them (PDF citation range).
+    chunks = pack_chunks(
+        ["alpha", "beta", "gamma"],
+        max_chars=20,
+        section_path=_PATH,
+        anchor=_ANCHOR,
+        page_spans=[(1, 1), (2, 3), (3, 4)],
+    )
+
+    assert len(chunks) == 1
+    assert chunks[0].page_span == (1, 4)
+
+
+def test_page_span_ignores_spanless_blocks_in_rollup() -> None:
+    # A chunk whose blocks mix present and absent spans rolls up only the present ones.
+    chunks = pack_chunks(
+        ["alpha", "beta", "gamma"],
+        max_chars=20,
+        section_path=_PATH,
+        anchor=_ANCHOR,
+        page_spans=[(2, 5), None, (3, 4)],
+    )
+
+    assert len(chunks) == 1
+    assert chunks[0].page_span == (2, 5)
+
+
+def test_page_span_is_none_when_no_block_carries_one() -> None:
+    # All-``None`` per-block spans → a null chunk span (EPUB parity, A-9).
+    chunks = pack_chunks(
+        ["alpha", "beta"],
+        max_chars=20,
+        section_path=_PATH,
+        anchor=_ANCHOR,
+        page_spans=[None, None],
+    )
+
+    assert len(chunks) == 1
+    assert chunks[0].page_span is None
+
+
+def test_oversized_block_pieces_inherit_the_block_page_span() -> None:
+    # A block split across chunks propagates its own page span to every piece.
+    chunks = pack_chunks(
+        ["Aaa. Bbb. Ccc."],
+        max_chars=8,
+        section_path=_PATH,
+        anchor=_ANCHOR,
+        page_spans=[(7, 7)],
+    )
+
+    assert [c.text for c in chunks] == ["Aaa.", "Bbb.", "Ccc."]
+    assert all(c.page_span == (7, 7) for c in chunks)
+
+
+def test_page_span_separates_across_chunk_boundaries() -> None:
+    # When blocks split into two chunks, each chunk rolls up only its own blocks'
+    # spans — not the whole section's.
+    chunks = pack_chunks(
+        ["alpha", "beta", "gamma"],
+        max_chars=12,
+        section_path=_PATH,
+        anchor=_ANCHOR,
+        page_spans=[(1, 2), (2, 3), (9, 10)],
+    )
+
+    assert [c.text for c in chunks] == ["alpha\n\nbeta", "gamma"]
+    assert [c.page_span for c in chunks] == [(1, 3), (9, 10)]

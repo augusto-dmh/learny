@@ -1,12 +1,15 @@
 """T8/T10 gate — corpus application services (unit, in-memory fakes).
 
 Drives ``BuildCorpus`` over fake ports (storage/parser/markup/corpus/events) so
-the orchestration is asserted in isolation (CORP-01/04/05/08/10): the stored bytes
-flow through to the parser, each section's Markdown is the ``\\n\\n``-join of the
-converter's per-block output, chunks are packed from those block texts, the whole
-aggregate — including zero-block sections — is persisted with ``schema_version=1``,
-the ``corpus_built`` event carries the exact section/block/chunk counts, and a
-storage or parser fault propagates unwrapped with nothing persisted (CORP-08).
+the orchestration is asserted in isolation (CORP-01/04/05/08/10, ING-01/07/12):
+the stored bytes flow through to the parser, the parsed structure runs through the
+format-agnostic normalization pass (trivial sections merge into a survivor and
+keep resolving as aliases, generic titles are replaced), each section's Markdown is
+the ``\\n\\n``-join of the converter's per-block output, chunks are packed from
+those block texts with their page spans rolled up, the whole aggregate is persisted
+with ``schema_version=1``, the ``corpus_normalized`` and ``corpus_built`` events
+carry the exact counts, and a storage or parser fault propagates unwrapped with
+nothing persisted (CORP-08).
 
 Also drives ``ReadSourceStructure`` (CORP-11): the owner reads the persisted
 structure value; a missing source and a non-owner both collapse to
@@ -77,7 +80,11 @@ def _job(source_id: UUID) -> IngestionJob:
 
 
 def _book() -> ParsedBook:
-    """A two-section book: one with blocks, one with none (zero-block, kept)."""
+    """A clean two-section book normalization passes through unchanged.
+
+    Both sections have a real (non-generic) title and their own heading, so no merge
+    or title replacement fires — the persisted aggregate matches the parsed one.
+    """
     return ParsedBook(
         title="The Test Book",
         authors=("Ada", "Alan"),
@@ -96,11 +103,14 @@ def _book() -> ParsedBook:
             ),
             ParsedSection(
                 position=1,
-                title="Empty",
+                title="Two",
                 depth=0,
-                section_path=("Empty",),
-                anchor="empty.xhtml",
-                blocks=(),
+                section_path=("Two",),
+                anchor="two.xhtml",
+                blocks=(
+                    ParsedBlock(2, "heading", "H1"),
+                    ParsedBlock(3, "paragraph", "P1"),
+                ),
             ),
         ),
     )
@@ -146,10 +156,11 @@ def test_build_corpus_persists_full_aggregate() -> None:
     records = call["sections"]
     assert len(records) == 2
 
-    # Section with blocks: markdown is the join of the converter's per-block output;
-    # a single chunk carries that text plus the section's citation anchors.
+    # Clean book: normalization rebuilds each section (position/path) but leaves its
+    # values unchanged, so the persisted section equals the parsed one by value.
     first = records[0]
-    assert first.section is book.sections[0]
+    assert first.section == book.sections[0]
+    assert first.section.anchor_aliases == ()
     assert first.markdown == "md:H0\n\nmd:P0"
     assert len(first.chunks) == 1
     chunk = first.chunks[0]
@@ -159,11 +170,10 @@ def test_build_corpus_persists_full_aggregate() -> None:
     assert chunk.anchor == "one.xhtml"
     assert chunk.page_span is None
 
-    # Zero-block section is still persisted: empty markdown, no chunks (CORP-08 edge).
     second = records[1]
-    assert second.section is book.sections[1]
-    assert second.markdown == ""
-    assert second.chunks == ()
+    assert second.section == book.sections[1]
+    assert second.markdown == "md:H1\n\nmd:P1"
+    assert [c.text for c in second.chunks] == ["md:H1\n\nmd:P1"]
 
 
 def test_build_corpus_appends_counts_event_with_exact_message() -> None:
@@ -181,11 +191,14 @@ def test_build_corpus_appends_counts_event_with_exact_message() -> None:
     )(source=source, job=job)
 
     appended = events.list_for_job(job.id)
-    assert len(appended) == 1
-    event = appended[0]
-    assert event.type == "corpus_built"
-    assert event.message == "sections=2 blocks=2 chunks=1"
-    assert event.job_id == job.id
+    # A clean book normalizes to a no-op, then the build counts event follows.
+    assert [event.type for event in appended] == ["corpus_normalized", "corpus_built"]
+    normalized, built = appended
+    assert normalized.message == (
+        "titles_replaced=0 sections_merged=0 depths_adjusted=0 noise_blocks_stripped=0"
+    )
+    assert built.message == "sections=2 blocks=4 chunks=2"
+    assert built.job_id == job.id
 
 
 def test_build_corpus_chunks_derive_from_block_markdown() -> None:
@@ -210,7 +223,105 @@ def test_build_corpus_chunks_derive_from_block_markdown() -> None:
     first = corpus.replace_calls[0]["sections"][0]
     assert [c.text for c in first.chunks] == ["md:H0", "md:P0"]
     assert [c.index for c in first.chunks] == [0, 1]
-    assert events.list_for_job(job.id)[0].message == "sections=2 blocks=2 chunks=2"
+    built = next(e for e in events.list_for_job(job.id) if e.type == "corpus_built")
+    assert built.message == "sections=2 blocks=4 chunks=4"
+
+
+def _noisy_book() -> ParsedBook:
+    """A noisy book exercising the wired normalization pass end to end.
+
+    Gutenberg-framed front matter is stripped; a generic filename-stem title
+    (``part0034``) is replaced by its heading; an image-only plate merges into the
+    survivor and keeps resolving as an alias; a block page span rolls into the chunk.
+    """
+    return ParsedBook(
+        title="Noisy",
+        authors=(),
+        language="en",
+        sections=(
+            ParsedSection(
+                position=0,
+                title="front",
+                depth=0,
+                section_path=("front",),
+                anchor="front.xhtml",
+                blocks=(
+                    ParsedBlock(0, "paragraph", "License boilerplate."),
+                    ParsedBlock(
+                        1,
+                        "paragraph",
+                        "*** START OF THE PROJECT GUTENBERG EBOOK NOISY ***",
+                    ),
+                ),
+            ),
+            ParsedSection(
+                position=1,
+                title="part0034",
+                depth=0,
+                section_path=("part0034",),
+                anchor="part0034.xhtml",
+                blocks=(
+                    ParsedBlock(2, "heading", "Real Chapter"),
+                    ParsedBlock(3, "paragraph", "Body text.", page_span=(5, 6)),
+                    ParsedBlock(
+                        4,
+                        "paragraph",
+                        "*** END OF THE PROJECT GUTENBERG EBOOK NOISY ***",
+                    ),
+                ),
+            ),
+            ParsedSection(
+                position=2,
+                title="Plate",
+                depth=0,
+                section_path=("Plate",),
+                anchor="plate.xhtml",
+                blocks=(ParsedBlock(5, "img", "<img/>"),),
+            ),
+        ),
+    )
+
+
+def test_build_corpus_runs_structure_normalization() -> None:
+    # ING-01/02/05/07/12: BuildCorpus normalizes the parsed structure before building
+    # records — boilerplate is stripped, the generic title is replaced, the trivial
+    # plate + stripped front survive as aliases, the surviving block's page span rolls
+    # into the chunk, and a corpus_normalized event carries the exact counts.
+    source = _source()
+    job = _job(source.id)
+    corpus = FakeCorpusRepository()
+    events = FakeIngestionEventRepository()
+    storage = FakeStorage()
+    storage.objects[source.object_key] = b"epub-bytes"
+
+    _build(
+        storage=storage,
+        parser=FakeEpubParser(book=_noisy_book()),
+        corpus=corpus,
+        events=events,
+    )(source=source, job=job)
+
+    records = corpus.replace_calls[0]["sections"]
+    assert len(records) == 1
+    record = records[0]
+    # ING-02: the filename-stem title is replaced by the section's heading text.
+    assert record.section.title == "Real Chapter"
+    assert record.section.section_path == ("Real Chapter",)
+    assert record.section.anchor == "part0034.xhtml"
+    # ING-05: the stripped-empty front and the image-only plate merge in as aliases.
+    assert record.section.anchor_aliases == ("front.xhtml", "plate.xhtml")
+    # ING-06: no Gutenberg boilerplate reaches the persisted corpus.
+    assert "boilerplate" not in record.markdown.lower()
+    assert "gutenberg" not in record.markdown.lower()
+    # ING-12: the surviving block's page span rolls up into its chunk.
+    assert record.chunks[0].page_span == (5, 6)
+    # ING-07: the normalization counts event carries exactly what the pass changed.
+    normalized = next(
+        e for e in events.list_for_job(job.id) if e.type == "corpus_normalized"
+    )
+    assert normalized.message == (
+        "titles_replaced=1 sections_merged=2 depths_adjusted=0 noise_blocks_stripped=4"
+    )
 
 
 def test_build_corpus_propagates_storage_error_without_persisting() -> None:

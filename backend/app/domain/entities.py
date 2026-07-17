@@ -261,16 +261,16 @@ class SectionChunk:
 
     A chunk never crosses a section boundary; it carries the section's
     ``section_path`` and ``anchor`` so retrieval results cite exact passages
-    (ADR-0003). ``page_span`` is always ``None`` for EPUB (A-9) — the field is
-    reserved for future PDF citations. ``index`` is the chunk's order within its
-    section.
+    (ADR-0003). ``page_span`` is the ``(start, end)`` page range rolled up from the
+    chunk's source blocks for paged formats (PDF) and ``None`` for EPUB (A-9).
+    ``index`` is the chunk's order within its section.
     """
 
     index: int
     text: str
     section_path: tuple[str, ...]
     anchor: str
-    page_span: None
+    page_span: tuple[int, int] | None
 
 
 @dataclass(frozen=True)
