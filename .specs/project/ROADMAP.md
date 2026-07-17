@@ -28,7 +28,7 @@ TDD open question #10 lands in Cycle G). Research evidence: `docs/research/2026-
 | `v2-foundation` | A | QA artifacts + F2/F3/F4 fixes + CI + OSS hygiene | Done (PR #17, v0.1.0) |
 | `v2-embeddings` | B | Real embeddings (OpenAI 3-large@1536) + language-aware FTS | Done (PR #20) |
 | `v2-generation` | C | Claude generation: cited answers + teaching + eval harness | Done (PR #23) |
-| — | D | Frontend v2: product UI + streaming | Not started |
+| `v2-frontend` | D | Frontend v2: product UI + streaming | Done (PR #24) |
 | — | E | Active recall: quizzes + FSRS | Not started |
 | — | F | PDF (Docling) + EPUB hardening | Not started |
 | — | G | Deploy (GHCR→VPS, Caddy) + presentation | Not started |

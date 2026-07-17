@@ -11,6 +11,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 
+import { getIngestion } from "../app/lib/ingestion";
 import { startIngestion, type IngestionSummary } from "../app/lib/sources";
 
 const summary: IngestionSummary = {
@@ -74,5 +75,54 @@ describe("ingestion client (T7)", () => {
     await expect(
       startIngestion("s1", "csrf-xyz", fetchMock as unknown as typeof fetch),
     ).rejects.toThrow("Could not start ingestion.");
+  });
+});
+
+describe("ingestion status client (FE-18)", () => {
+  const ready: IngestionSummary = {
+    id: "j1",
+    status: "succeeded",
+    attempts: 1,
+    error: null,
+    created_at: "then",
+    updated_at: "now",
+    events: [
+      { type: "queued", message: null, created_at: "then" },
+      { type: "succeeded", message: "done", created_at: "now" },
+    ],
+  };
+
+  it("GETs the same-origin /api/sources/{id}/ingestion and parses the summary", async () => {
+    const fetchMock = fetchMockFn(async () => jsonResponse(200, ready));
+
+    const summary = await getIngestion("s1", fetchMock as unknown as typeof fetch);
+
+    expect(summary).toEqual(ready);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/sources/s1/ingestion");
+    expect(init.method).toBe("GET");
+    expect(init.credentials).toBe("same-origin");
+    // Read-only GET carries no CSRF header.
+    expect(new Headers(init.headers).has("X-CSRF-Token")).toBe(false);
+  });
+
+  it("throws a readable error when unauthenticated (401)", async () => {
+    const fetchMock = fetchMockFn(async () =>
+      jsonResponse(401, { detail: "Not authenticated." }),
+    );
+
+    await expect(
+      getIngestion("s1", fetchMock as unknown as typeof fetch),
+    ).rejects.toThrow("Not authenticated.");
+  });
+
+  it("throws a readable error when no job exists yet (404)", async () => {
+    const fetchMock = fetchMockFn(async () =>
+      jsonResponse(404, { detail: "No ingestion job for this source." }),
+    );
+
+    await expect(
+      getIngestion("s1", fetchMock as unknown as typeof fetch),
+    ).rejects.toThrow("No ingestion job for this source.");
   });
 });

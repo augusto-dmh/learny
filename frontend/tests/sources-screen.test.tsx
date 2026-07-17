@@ -1,9 +1,14 @@
 // @vitest-environment jsdom
 
 /**
- * T8 gate (component) — the /sources screen lists sources through the same-origin
- * proxy, uploads an EPUB (add-on-success), surfaces API rejections without
- * adding a row, and does a UX-only redirect when unauthenticated (SRC-11).
+ * C gate (component) — the library screen lists sources as cards through the
+ * same-origin proxy, uploads an EPUB (add-on-success), surfaces upload/validation
+ * errors without adding a row, links ready books to Ask/Teach/Read, offers a
+ * (re)start-ingestion control for uploaded/failed sources, shows a failed
+ * source's latest ingestion event message, and does a UX-only redirect when
+ * unauthenticated (FE-20/FE-21; SRC-11 behaviors preserved). The section-tree
+ * browsing that SourcesPanel embedded now lives in the sidebar
+ * (tests/app-sidebar.test.tsx).
  */
 
 import {
@@ -16,7 +21,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { SourcesPanel } from "../app/components/SourcesPanel";
+import { LibraryScreen } from "../app/components/library-screen";
 
 type Handler = (init: RequestInit) => Promise<Response> | Response;
 
@@ -85,36 +90,41 @@ const ingestionQueued = {
   events: [{ type: "queued", message: null, created_at: "now" }],
 };
 
-/** The parsed structure the backend returns for the ready fixture source. */
-const readyStructure = {
-  title: "Ready Book",
-  authors: ["Ada Lovelace"],
-  language: "en",
-  sections: [
-    {
-      title: "Chapter 1",
-      depth: 0,
-      section_path: ["Chapter 1"],
-      anchor: "c1.xhtml",
-      children: [
-        {
-          title: "Section 1.1",
-          depth: 1,
-          section_path: ["Chapter 1", "Section 1.1"],
-          anchor: "c1.xhtml#s1",
-          children: [],
-        },
-      ],
-    },
-    {
-      title: "Chapter 2",
-      depth: 0,
-      section_path: ["Chapter 2"],
-      anchor: "c2.xhtml",
-      children: [],
-    },
+/** The failed job the library reads to show a failed source's latest message. */
+const failedIngestion = {
+  id: "j-fail",
+  status: "failed",
+  attempts: 1,
+  error: "Ingestion failed.",
+  created_at: "now",
+  updated_at: "now",
+  events: [
+    { type: "queued", message: null, created_at: "t0" },
+    { type: "failed", message: "EPUB is missing its spine.", created_at: "t1" },
   ],
 };
+
+/** A still-running job for the processing source's 3s poll (FE-19). */
+const runningIngestion = {
+  id: "j-proc",
+  status: "running",
+  attempts: 1,
+  error: null,
+  created_at: "now",
+  updated_at: "now",
+  events: [{ type: "running", message: null, created_at: "t0" }],
+};
+
+/** Handler map for a `mixed` render: sources list plus the ingestion reads. */
+function mixedHandlers(extra: Record<string, Handler> = {}) {
+  return {
+    "GET /api/auth/me": () => authedMe.clone(),
+    "GET /api/sources": () => jsonResponse(200, mixed),
+    "GET /api/sources/s-fail/ingestion": () => jsonResponse(200, failedIngestion),
+    "GET /api/sources/s-proc/ingestion": () => jsonResponse(200, runningIngestion),
+    ...extra,
+  };
+}
 
 function selectFileAndTitle(title: string) {
   const file = new File([new Uint8Array([1, 2, 3])], "book.epub", {
@@ -122,7 +132,7 @@ function selectFileAndTitle(title: string) {
   });
   const fileInput = screen.getByLabelText("EPUB file") as HTMLInputElement;
   // jsdom won't let fireEvent assign an input's FileList; define it directly so
-  // the `required` file field is satisfied and the form actually submits.
+  // the file field is satisfied and the form actually submits.
   Object.defineProperty(fileInput, "files", {
     value: [file],
     configurable: true,
@@ -136,7 +146,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("SourcesPanel (T8)", () => {
+describe("LibraryScreen (upload + list)", () => {
   it("renders the empty-state when the user has no sources", async () => {
     vi.stubGlobal(
       "fetch",
@@ -146,7 +156,7 @@ describe("SourcesPanel (T8)", () => {
       }),
     );
 
-    render(<SourcesPanel />);
+    render(<LibraryScreen />);
 
     expect(await screen.findByText("No sources yet.")).toBeTruthy();
   });
@@ -161,7 +171,7 @@ describe("SourcesPanel (T8)", () => {
       }),
     );
 
-    render(<SourcesPanel />);
+    render(<LibraryScreen />);
     await screen.findByText("No sources yet.");
 
     selectFileAndTitle("My Book");
@@ -182,7 +192,7 @@ describe("SourcesPanel (T8)", () => {
       }),
     );
 
-    render(<SourcesPanel />);
+    render(<LibraryScreen />);
     await screen.findByText("No sources yet.");
 
     selectFileAndTitle("Not a book");
@@ -194,6 +204,29 @@ describe("SourcesPanel (T8)", () => {
     expect(screen.getByText("No sources yet.")).toBeTruthy();
   });
 
+  it("shows a readable validation error and posts nothing when no file is chosen", async () => {
+    const fetchMock = routedFetch({
+      "GET /api/auth/me": () => authedMe.clone(),
+      "GET /api/sources": () => jsonResponse(200, []),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<LibraryScreen />);
+    await screen.findByText("No sources yet.");
+
+    fireEvent.change(screen.getByLabelText("Title"), {
+      target: { value: "Titled but fileless" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Upload" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe("Choose an EPUB file to upload.");
+    // No upload POST was issued.
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === "POST")).toBe(
+      false,
+    );
+  });
+
   it("fires the UX-only redirect callback when unauthenticated", async () => {
     vi.stubGlobal(
       "fetch",
@@ -203,22 +236,16 @@ describe("SourcesPanel (T8)", () => {
     );
 
     const onRequireAuth = vi.fn();
-    render(<SourcesPanel onRequireAuth={onRequireAuth} />);
+    render(<LibraryScreen onRequireAuth={onRequireAuth} />);
 
     await waitFor(() => expect(onRequireAuth).toHaveBeenCalledTimes(1));
     expect(await screen.findByText("You are signed out.")).toBeTruthy();
   });
 
-  it("shows each source's ingestion status badge per row", async () => {
-    vi.stubGlobal(
-      "fetch",
-      routedFetch({
-        "GET /api/auth/me": () => authedMe.clone(),
-        "GET /api/sources": () => jsonResponse(200, mixed),
-      }),
-    );
+  it("shows each source's ingestion status badge per card", async () => {
+    vi.stubGlobal("fetch", routedFetch(mixedHandlers()));
 
-    render(<SourcesPanel />);
+    render(<LibraryScreen />);
     await screen.findByText("Uploaded Book");
 
     expect(screen.getByTestId("status-s-up").textContent).toBe("uploaded");
@@ -227,40 +254,58 @@ describe("SourcesPanel (T8)", () => {
     expect(screen.getByTestId("status-s-fail").textContent).toBe("failed");
   });
 
-  it("offers Start ingestion only for uploaded sources", async () => {
-    vi.stubGlobal(
-      "fetch",
-      routedFetch({
-        "GET /api/auth/me": () => authedMe.clone(),
-        "GET /api/sources": () => jsonResponse(200, mixed),
-      }),
-    );
+  it("links only ready cards to their Ask, Teach, and Read views", async () => {
+    vi.stubGlobal("fetch", routedFetch(mixedHandlers()));
 
-    render(<SourcesPanel />);
+    render(<LibraryScreen />);
+    await screen.findByText("Ready Book");
+
+    // Exactly one of each action link — all on the sole ready card.
+    for (const name of ["Ask", "Teach", "Read"]) {
+      const links = screen.getAllByRole("link", { name });
+      expect(links).toHaveLength(1);
+    }
+    const readyLi = screen.getByTestId("status-s-ready").closest("li");
+    expect(
+      within(readyLi!).getByRole("link", { name: "Ask" }).getAttribute("href"),
+    ).toBe("/sources/s-ready/ask");
+    expect(
+      within(readyLi!).getByRole("link", { name: "Teach" }).getAttribute("href"),
+    ).toBe("/sources/s-ready/teach");
+    expect(
+      within(readyLi!).getByRole("link", { name: "Read" }).getAttribute("href"),
+    ).toBe("/sources/s-ready/read");
+
+    // Non-ready cards offer no action links.
+    for (const id of ["s-up", "s-proc", "s-fail"]) {
+      const li = screen.getByTestId(`status-${id}`).closest("li");
+      expect(within(li!).queryByRole("link")).toBeNull();
+    }
+  });
+});
+
+describe("LibraryScreen (ingestion start)", () => {
+  it("offers Start ingestion only for uploaded sources", async () => {
+    vi.stubGlobal("fetch", routedFetch(mixedHandlers()));
+
+    render(<LibraryScreen />);
     await screen.findByText("Uploaded Book");
 
-    // Exactly one Start control — on the sole uploaded row.
+    // Exactly one Start control — on the sole uploaded card.
     const startButtons = screen.getAllByRole("button", {
       name: "Start ingestion",
     });
     expect(startButtons).toHaveLength(1);
+    const uploadedLi = screen.getByTestId("status-s-up").closest("li");
     expect(
-      screen.getByTestId("status-s-up").closest("li")?.querySelector("button")
-        ?.textContent,
-    ).toBe("Start ingestion");
+      within(uploadedLi!).getByRole("button", { name: "Start ingestion" }),
+    ).toBeTruthy();
 
-    // Processing/failed rows render no controls at all — keep the strict
-    // no-button invariant so any stray control regressions are caught.
-    for (const id of ["s-proc", "s-fail"]) {
-      expect(
-        screen.getByTestId(`status-${id}`).closest("li")?.querySelector("button"),
-      ).toBeNull();
+    // Ready/processing cards offer no start control at all.
+    for (const id of ["s-ready", "s-proc"]) {
+      const li = screen.getByTestId(`status-${id}`).closest("li");
+      expect(within(li!).queryByRole("button")).toBeNull();
     }
-    // The ready row legitimately carries its own "View structure" control
-    // (T13), so for it assert only that no start action is offered.
-    expect(
-      screen.getByTestId("status-s-ready").closest("li")?.textContent,
-    ).not.toContain("Start ingestion");
   });
 
   it("starts ingestion through the proxy and reflects processing on success", async () => {
@@ -272,12 +317,11 @@ describe("SourcesPanel (T8)", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    render(<SourcesPanel />);
+    render(<LibraryScreen />);
     await screen.findByText("Uploaded Book");
 
     fireEvent.click(screen.getByRole("button", { name: "Start ingestion" }));
 
-    // Row reflects processing and the start control is gone (no double-start).
     await waitFor(() =>
       expect(screen.getByTestId("status-s-up").textContent).toBe("processing"),
     );
@@ -285,16 +329,11 @@ describe("SourcesPanel (T8)", () => {
       screen.queryByRole("button", { name: "Start ingestion" }),
     ).toBeNull();
 
-    // The proxy POST was issued to the same-origin ingestion path.
     const posted = fetchMock.mock.calls.find(([, init]) => init?.method === "POST");
     expect(posted?.[0]).toBe("/api/sources/s-up/ingestion");
   });
 
   it("shows Starting… + disables the button in flight and blocks a double-start", async () => {
-    // The whole point of the SPEC_DEVIATION / lesson L-004 (keep the button
-    // mounted + disabled rather than an optimistic flip) is that the in-flight
-    // state is observable/testable. Drive it with a POST that resolves only when
-    // we say so, so the intermediate frame is actually asserted.
     let resolvePost!: (r: Response) => void;
     const pending = new Promise<Response>((resolve) => {
       resolvePost = resolve;
@@ -306,30 +345,27 @@ describe("SourcesPanel (T8)", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    render(<SourcesPanel />);
+    render(<LibraryScreen />);
     await screen.findByText("Uploaded Book");
 
     fireEvent.click(screen.getByRole("button", { name: "Start ingestion" }));
 
-    // In flight: label flips to "Starting…" and the button is disabled.
     const starting = (await screen.findByRole("button", {
       name: "Starting…",
     })) as HTMLButtonElement;
     expect(starting.disabled).toBe(true);
 
-    // Clicking the disabled button issues no second POST (no double-start).
     fireEvent.click(starting);
     const posts = fetchMock.mock.calls.filter(([, init]) => init?.method === "POST");
     expect(posts).toHaveLength(1);
 
-    // Resolve the request → the row reaches processing and the control is gone.
     resolvePost(jsonResponse(202, ingestionQueued));
     await waitFor(() =>
       expect(screen.getByTestId("status-s-up").textContent).toBe("processing"),
     );
   });
 
-  it("surfaces the error and keeps the row uploaded when the start is rejected", async () => {
+  it("surfaces the error and keeps the card uploaded when the start is rejected", async () => {
     vi.stubGlobal(
       "fetch",
       routedFetch({
@@ -340,14 +376,13 @@ describe("SourcesPanel (T8)", () => {
       }),
     );
 
-    render(<SourcesPanel />);
+    render(<LibraryScreen />);
     await screen.findByText("Uploaded Book");
 
     fireEvent.click(screen.getByRole("button", { name: "Start ingestion" }));
 
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toBe("Ingestion is already in progress.");
-    // Row did NOT flip to processing; the start control remains.
     expect(screen.getByTestId("status-s-up").textContent).toBe("uploaded");
     expect(
       screen.getByRole("button", { name: "Start ingestion" }),
@@ -355,211 +390,50 @@ describe("SourcesPanel (T8)", () => {
   });
 });
 
-describe("SourcesPanel structure view (T13)", () => {
-  it("offers View structure only on ready rows", async () => {
+describe("LibraryScreen (failed source)", () => {
+  it("shows the failed source's latest event message with a restart control", async () => {
     vi.stubGlobal(
       "fetch",
       routedFetch({
         "GET /api/auth/me": () => authedMe.clone(),
-        "GET /api/sources": () => jsonResponse(200, mixed),
+        "GET /api/sources": () => jsonResponse(200, [mixed[3]]),
+        "GET /api/sources/s-fail/ingestion": () =>
+          jsonResponse(200, failedIngestion),
       }),
     );
 
-    render(<SourcesPanel />);
-    await screen.findByText("Ready Book");
+    render(<LibraryScreen />);
+    await screen.findByText("Failed Book");
 
-    // Exactly one View-structure control — on the sole ready row.
-    const viewButtons = screen.getAllByRole("button", {
-      name: "View structure",
-    });
-    expect(viewButtons).toHaveLength(1);
+    // The latest ingestion event message is surfaced...
+    const message = await screen.findByTestId("failure-s-fail");
+    expect(message.textContent).toBe("EPUB is missing its spine.");
+    // ...alongside the restart control (still a start-ingestion POST).
     expect(
-      screen.getByTestId("status-s-ready").closest("li")?.textContent,
-    ).toContain("View structure");
-
-    // Uploaded/processing/failed rows offer no structure control.
-    for (const id of ["s-up", "s-proc", "s-fail"]) {
-      expect(
-        screen.getByTestId(`status-${id}`).closest("li")?.textContent,
-      ).not.toContain("View structure");
-    }
+      screen.getByRole("button", { name: "Restart ingestion" }),
+    ).toBeTruthy();
   });
 
-  it("renders the metadata line and nested section tree under the row", async () => {
-    vi.stubGlobal(
-      "fetch",
-      routedFetch({
-        "GET /api/auth/me": () => authedMe.clone(),
-        "GET /api/sources": () => jsonResponse(200, [mixed[2]]),
-        "GET /api/sources/s-ready/structure": () =>
-          jsonResponse(200, readyStructure),
-      }),
-    );
-
-    render(<SourcesPanel />);
-    await screen.findByText("Ready Book");
-
-    fireEvent.click(screen.getByRole("button", { name: "View structure" }));
-
-    // All section titles render.
-    expect(await screen.findByText("Section 1.1")).toBeTruthy();
-    expect(screen.getByText("Chapter 1")).toBeTruthy();
-    expect(screen.getByText("Chapter 2")).toBeTruthy();
-
-    // Nesting: the child sits inside its parent's <li> subtree, not at the root.
-    const chapter1Li = screen.getByText("Chapter 1").closest("li");
-    expect(chapter1Li).toBeTruthy();
-    expect(within(chapter1Li!).getByText("Section 1.1")).toBeTruthy();
-    // Its sibling root chapter is NOT inside Chapter 1's subtree.
-    expect(within(chapter1Li!).queryByText("Chapter 2")).toBeNull();
-    expect(chapter1Li!.querySelector("ul")).toBeTruthy();
-
-    // Metadata line carries title/authors/language.
-    const panel = screen.getByTestId("structure-s-ready");
-    expect(panel.textContent).toContain("Ada Lovelace");
-    expect(panel.textContent).toContain("en");
-  });
-
-  it("renders null metadata gracefully", async () => {
-    vi.stubGlobal(
-      "fetch",
-      routedFetch({
-        "GET /api/auth/me": () => authedMe.clone(),
-        "GET /api/sources": () => jsonResponse(200, [mixed[2]]),
-        "GET /api/sources/s-ready/structure": () =>
-          jsonResponse(200, {
-            title: null,
-            authors: [],
-            language: null,
-            sections: [],
-          }),
-      }),
-    );
-
-    render(<SourcesPanel />);
-    await screen.findByText("Ready Book");
-
-    fireEvent.click(screen.getByRole("button", { name: "View structure" }));
-
-    // The panel opens without crashing on the missing metadata.
-    const panel = await screen.findByTestId("structure-s-ready");
-    expect(panel).toBeTruthy();
-    expect(panel.textContent).toContain("Untitled");
-    expect(panel.textContent).toContain("Unknown author");
-  });
-
-  it("disables View structure while the structure fetch is in flight", async () => {
-    let resolveGet!: (r: Response) => void;
-    const pending = new Promise<Response>((resolve) => {
-      resolveGet = resolve;
-    });
+  it("restarts a failed source through the proxy and reflects processing", async () => {
     const fetchMock = routedFetch({
       "GET /api/auth/me": () => authedMe.clone(),
-      "GET /api/sources": () => jsonResponse(200, [mixed[2]]),
-      "GET /api/sources/s-ready/structure": () => pending,
+      "GET /api/sources": () => jsonResponse(200, [mixed[3]]),
+      "GET /api/sources/s-fail/ingestion": () =>
+        jsonResponse(200, failedIngestion),
+      "POST /api/sources/s-fail/ingestion": () =>
+        jsonResponse(202, ingestionQueued),
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    render(<SourcesPanel />);
-    await screen.findByText("Ready Book");
+    render(<LibraryScreen />);
+    await screen.findByTestId("failure-s-fail");
 
-    fireEvent.click(screen.getByRole("button", { name: "View structure" }));
+    fireEvent.click(screen.getByRole("button", { name: "Restart ingestion" }));
 
-    // In flight: label flips to "Loading…" and the button is disabled.
-    const loading = (await screen.findByRole("button", {
-      name: "Loading…",
-    })) as HTMLButtonElement;
-    expect(loading.disabled).toBe(true);
-
-    // Clicking the disabled button issues no second structure GET.
-    fireEvent.click(loading);
-    const structureGets = fetchMock.mock.calls.filter(
-      ([url]) => url === "/api/sources/s-ready/structure",
+    await waitFor(() =>
+      expect(screen.getByTestId("status-s-fail").textContent).toBe("processing"),
     );
-    expect(structureGets).toHaveLength(1);
-
-    // Resolving the request opens the panel.
-    resolveGet(jsonResponse(200, readyStructure));
-    expect(await screen.findByText("Chapter 1")).toBeTruthy();
-  });
-
-  it("shows an alert and re-enables the control when the fetch fails", async () => {
-    vi.stubGlobal(
-      "fetch",
-      routedFetch({
-        "GET /api/auth/me": () => authedMe.clone(),
-        "GET /api/sources": () => jsonResponse(200, [mixed[2]]),
-        "GET /api/sources/s-ready/structure": () =>
-          jsonResponse(404, { detail: "That source has no structure yet." }),
-      }),
-    );
-
-    render(<SourcesPanel />);
-    await screen.findByText("Ready Book");
-
-    fireEvent.click(screen.getByRole("button", { name: "View structure" }));
-
-    const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toBe("That source has no structure yet.");
-    // No panel, and the control is back to "View structure" and enabled.
-    expect(screen.queryByTestId("structure-s-ready")).toBeNull();
-    const btn = screen.getByRole("button", {
-      name: "View structure",
-    }) as HTMLButtonElement;
-    expect(btn.disabled).toBe(false);
-  });
-
-  it("collapses the panel and drops its content when toggled again", async () => {
-    vi.stubGlobal(
-      "fetch",
-      routedFetch({
-        "GET /api/auth/me": () => authedMe.clone(),
-        "GET /api/sources": () => jsonResponse(200, [mixed[2]]),
-        "GET /api/sources/s-ready/structure": () =>
-          jsonResponse(200, readyStructure),
-      }),
-    );
-
-    render(<SourcesPanel />);
-    await screen.findByText("Ready Book");
-
-    fireEvent.click(screen.getByRole("button", { name: "View structure" }));
-    expect(await screen.findByText("Chapter 1")).toBeTruthy();
-
-    // Toggle again → the panel and its section titles are removed.
-    fireEvent.click(screen.getByRole("button", { name: "Hide structure" }));
-    expect(screen.queryByText("Chapter 1")).toBeNull();
-    expect(screen.queryByTestId("structure-s-ready")).toBeNull();
-    expect(
-      screen.getByRole("button", { name: "View structure" }),
-    ).toBeTruthy();
-  });
-});
-
-describe("SourcesPanel teach link (E3)", () => {
-  it("links only ready rows to their teach view", async () => {
-    vi.stubGlobal(
-      "fetch",
-      routedFetch({
-        "GET /api/auth/me": () => authedMe.clone(),
-        "GET /api/sources": () => jsonResponse(200, mixed),
-      }),
-    );
-
-    render(<SourcesPanel />);
-    await screen.findByText("Ready Book");
-
-    // Exactly one Teach link — on the sole ready row, pointing at its teach view.
-    const teachLinks = screen.getAllByRole("link", { name: "Teach" });
-    expect(teachLinks).toHaveLength(1);
-    expect(teachLinks[0].getAttribute("href")).toBe("/sources/s-ready/teach");
-    const readyLi = screen.getByTestId("status-s-ready").closest("li");
-    expect(within(readyLi!).getByRole("link", { name: "Teach" })).toBeTruthy();
-
-    // Non-ready rows offer no teach link.
-    for (const id of ["s-up", "s-proc", "s-fail"]) {
-      const li = screen.getByTestId(`status-${id}`).closest("li");
-      expect(within(li!).queryByRole("link", { name: "Teach" })).toBeNull();
-    }
+    const posted = fetchMock.mock.calls.find(([, init]) => init?.method === "POST");
+    expect(posted?.[0]).toBe("/api/sources/s-fail/ingestion");
   });
 });

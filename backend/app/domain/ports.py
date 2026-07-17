@@ -32,6 +32,7 @@ from app.domain.entities import (
     IngestionJob,
     ParsedBook,
     PasswordCredential,
+    SectionContent,
     Session,
     Source,
     TeachingSession,
@@ -326,6 +327,10 @@ class CorpusRepository(Protocol):
 
     def get_structure(self, source_id: UUID) -> CorpusStructure | None:
         """Return the book structure for ``source_id``, or ``None`` if no corpus."""
+        ...
+
+    def get_section(self, source_id: UUID, anchor: str) -> SectionContent | None:
+        """Return ``source_id``'s section at ``anchor``, or ``None`` if none matches."""
         ...
 
 

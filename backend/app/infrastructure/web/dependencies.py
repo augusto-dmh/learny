@@ -24,7 +24,7 @@ from uuid import uuid4
 from fastapi import Depends, Request
 from sqlalchemy import Connection
 
-from app.application.corpus import ReadSourceStructure
+from app.application.corpus import ReadSection, ReadSourceStructure
 from app.application.identity import (
     AuthenticateUser,
     AuthorizeOwnership,
@@ -296,6 +296,14 @@ def get_read_ingestion(conn: DbConnection) -> ReadIngestion:
 
 def get_read_source_structure(conn: DbConnection) -> ReadSourceStructure:
     return ReadSourceStructure(
+        sources=SqlAlchemySourceRepository(conn),
+        corpus=SqlAlchemyCorpusRepository(conn),
+        authorize=AuthorizeOwnership(),
+    )
+
+
+def get_read_section(conn: DbConnection) -> ReadSection:
+    return ReadSection(
         sources=SqlAlchemySourceRepository(conn),
         corpus=SqlAlchemyCorpusRepository(conn),
         authorize=AuthorizeOwnership(),

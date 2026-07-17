@@ -27,6 +27,7 @@ from app.domain.entities import (
     IngestionJob,
     ParsedBook,
     PasswordCredential,
+    SectionContent,
     Session,
     Source,
     StructureSection,
@@ -342,6 +343,7 @@ class FakeCorpusRepository:
 
     def __init__(self) -> None:
         self._by_source: dict[UUID, CorpusStructure] = {}
+        self._sections_by_source: dict[UUID, tuple[SectionContent, ...]] = {}
         self.replace_calls: list[dict[str, object]] = []
 
     def replace(
@@ -379,9 +381,22 @@ class FakeCorpusRepository:
                 for record in sections
             ),
         )
+        self._sections_by_source[source_id] = tuple(
+            SectionContent(
+                anchor=record.section.anchor,
+                title=record.section.title,
+                section_path=tuple(record.section.section_path),
+                markdown=record.markdown,
+            )
+            for record in sections
+        )
 
     def get_structure(self, source_id: UUID) -> CorpusStructure | None:
         return self._by_source.get(source_id)
+
+    def get_section(self, source_id: UUID, anchor: str) -> SectionContent | None:
+        sections = self._sections_by_source.get(source_id, ())
+        return next((s for s in sections if s.anchor == anchor), None)
 
 
 class FakeEmbeddingPort:

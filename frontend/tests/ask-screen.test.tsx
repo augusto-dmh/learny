@@ -1,24 +1,42 @@
 // @vitest-environment jsdom
 
 /**
- * D2 gate (component) — the ask view submits a question through the same-origin
- * proxy and renders the grounded answer with its citations, the explicit
- * not-found message, or a readable error that leaves the form usable
- * (QA-18..QA-20); the sources list links ready rows to their ask view (QA-18).
+ * D3 gate (component) — the ask screen streams a grounded answer through the
+ * same-origin proxy: it POSTs `{question}` with the CSRF header to the stream URL
+ * (FE-06), renders text deltas progressively before the stream finishes (FE-07),
+ * renders the terminal citations or the explicit not-found state (FE-08), settles
+ * a mid-stream `error` part or a non-OK start (429) to a readable banner with
+ * partial text retained and the input re-enabled (FE-09), disables submitting
+ * while a stream is in flight, and never submits empty input (FE-10).
  */
 
 import {
+  act,
   cleanup,
   fireEvent,
   render,
   screen,
   waitFor,
-  within,
 } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { AskPanel } from "../app/components/AskPanel";
-import { SourcesPanel } from "../app/components/SourcesPanel";
+import { AskScreen } from "../app/components/ask-screen";
+
+// AI Elements' Conversation (stick-to-bottom) and the citation Popover reach for
+// ResizeObserver and pointer-capture APIs jsdom lacks; stub them.
+beforeAll(() => {
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
+    true;
+  globalThis.ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  } as unknown as typeof ResizeObserver;
+  Element.prototype.hasPointerCapture = () => false;
+  Element.prototype.setPointerCapture = () => {};
+  Element.prototype.releasePointerCapture = () => {};
+  Element.prototype.scrollIntoView = () => {};
+});
 
 type Handler = (init: RequestInit) => Promise<Response> | Response;
 
@@ -39,6 +57,36 @@ function routedFetch(handlers: Record<string, Handler>) {
   });
 }
 
+/** A UI Message Stream v1 SSE response whose frames the test pushes on demand. */
+function sseStream() {
+  const encoder = new TextEncoder();
+  let controller: ReadableStreamDefaultController<Uint8Array>;
+  const body = new ReadableStream<Uint8Array>({
+    start(c) {
+      controller = c;
+    },
+  });
+  const response = new Response(body, {
+    status: 200,
+    headers: {
+      "content-type": "text/event-stream",
+      "x-vercel-ai-ui-message-stream": "v1",
+    },
+  });
+  // Enqueue one frame, then yield a macrotask inside `act` so the SDK consumes
+  // the chunk and flushes its React state update before the next assertion.
+  const frame = (bytes: Uint8Array) =>
+    act(async () => {
+      controller.enqueue(bytes);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  return {
+    response,
+    push: (obj: unknown) => frame(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`)),
+    done: () => frame(encoder.encode("data: [DONE]\n\n")).then(() => controller.close()),
+  };
+}
+
 const authedMe = jsonResponse(200, {
   id: "u1",
   email: "a@b.c",
@@ -46,58 +94,23 @@ const authedMe = jsonResponse(200, {
   csrf_token: "csrf-xyz",
 });
 
-const answered = {
-  answer_status: "answered",
-  answer: "Ada Lovelace wrote the first algorithm.",
-  citations: [
-    {
-      chunk_id: "c1",
-      source_id: "s1",
-      section_path: ["Chapter 1", "Core Idea"],
-      anchor: "chapter-1.xhtml#core-idea",
-      page_span: null,
-      snippet: "the first algorithm ever written",
-      score: 0.03,
-    },
-    {
-      chunk_id: "c2",
-      source_id: "s1",
-      section_path: ["Chapter 2"],
-      anchor: "chapter-2.xhtml",
-      page_span: null,
-      snippet: "a note on the analytical engine",
-      score: 0.01,
-    },
-  ],
-  retrieval: { strategy: "hybrid", evidence_count: 8 },
-  model: "local-extractive",
+const citation = {
+  chunk_id: "c1",
+  source_id: "s1",
+  section_path: ["Chapter 1", "Core Idea"],
+  anchor: "chapter-1.xhtml#core-idea",
+  page_span: null,
+  snippet: "the first algorithm ever written",
+  score: 0.03,
 };
 
-const notFound = {
-  answer_status: "not_found_in_source",
-  answer: "",
-  citations: [],
-  retrieval: { strategy: "hybrid", evidence_count: 0 },
-  model: "local-extractive",
-};
+const STREAM_URL = "/api/sources/s1/questions/stream";
 
-function sourceRow(id: string, title: string, status: string) {
-  return {
-    id,
-    title,
-    filename: `${id}.epub`,
-    byte_size: 3,
-    content_type: "application/epub+zip",
-    status,
-    created_at: "now",
-  };
-}
-
-function askQuestionText(value: string) {
-  fireEvent.change(screen.getByLabelText("Question"), {
+function ask(value: string) {
+  fireEvent.change(screen.getByPlaceholderText(/ask a question/i), {
     target: { value },
   });
-  fireEvent.click(screen.getByRole("button", { name: "Ask" }));
+  fireEvent.click(screen.getByRole("button", { name: "Submit" }));
 }
 
 afterEach(() => {
@@ -105,88 +118,213 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("AskPanel (D2)", () => {
-  it("renders the answer text and each citation's section path and snippet", async () => {
-    vi.stubGlobal(
-      "fetch",
-      routedFetch({
-        "GET /api/auth/me": () => authedMe.clone(),
-        "POST /api/sources/s1/questions": () => jsonResponse(200, answered),
-      }),
+describe("AskScreen streaming (D3)", () => {
+  it("POSTs {question} with the CSRF header, streams deltas before finish, and renders citations", async () => {
+    const stream = sseStream();
+    const fetchMock = routedFetch({
+      "GET /api/auth/me": () => authedMe.clone(),
+      [`POST ${STREAM_URL}`]: () => stream.response,
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AskScreen sourceId="s1" />);
+    await screen.findByPlaceholderText(/ask a question/i);
+
+    ask("Who wrote the first algorithm?");
+
+    // FE-06: the request went to the stream URL with the exact body and CSRF header.
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([url]) => url === STREAM_URL),
+      ).toBe(true),
+    );
+    const call = fetchMock.mock.calls.find(([url]) => url === STREAM_URL)!;
+    expect(JSON.parse((call[1] as RequestInit).body as string)).toEqual({
+      question: "Who wrote the first algorithm?",
+    });
+    expect(new Headers((call[1] as RequestInit).headers).get("X-CSRF-Token")).toBe(
+      "csrf-xyz",
     );
 
-    render(<AskPanel sourceId="s1" />);
-    await screen.findByLabelText("Question");
+    // FE-07: a first delta is visible before the stream finishes.
+    await stream.push({ type: "start", messageId: "m1" });
+    await stream.push({ type: "text-start", id: "t1" });
+    await stream.push({ type: "text-delta", id: "t1", delta: "Ada Lovelace " });
+    await waitFor(() =>
+      expect(document.body.textContent).toContain("Ada Lovelace"),
+    );
+    expect(document.body.textContent).not.toContain("first algorithm ever");
 
-    askQuestionText("Who wrote the first algorithm?");
+    // FE-08: the rest streams, then the terminal citations render.
+    await stream.push({
+      type: "text-delta",
+      id: "t1",
+      delta: "wrote the first algorithm.",
+    });
+    await stream.push({ type: "text-end", id: "t1" });
+    await stream.push({ type: "data-citations", data: [citation] });
+    await stream.push({
+      type: "data-answer-status",
+      data: { status: "answered" },
+    });
+    await stream.push({ type: "finish" });
+    await stream.done();
 
-    // Answer prose renders.
+    await waitFor(() =>
+      expect(document.body.textContent).toContain(
+        "Ada Lovelace wrote the first algorithm.",
+      ),
+    );
+    // The citation renders as an "open in book" chip (breadcrumb from section_path).
     expect(
-      await screen.findByText("Ada Lovelace wrote the first algorithm."),
+      screen.getByRole("button", { name: "Citation: Chapter 1 › Core Idea" }),
     ).toBeTruthy();
-    // Each citation renders its section path (joined by " › ") and snippet.
-    expect(screen.getByText("Chapter 1 › Core Idea")).toBeTruthy();
-    expect(screen.getByText("the first algorithm ever written")).toBeTruthy();
-    expect(screen.getByText("Chapter 2")).toBeTruthy();
-    expect(screen.getByText("a note on the analytical engine")).toBeTruthy();
   });
 
-  it("renders an explicit not-found message and no citations on not_found_in_source", async () => {
+  it("renders the not-found state with no citations on not_found_in_source", async () => {
+    const stream = sseStream();
     vi.stubGlobal(
       "fetch",
       routedFetch({
         "GET /api/auth/me": () => authedMe.clone(),
-        "POST /api/sources/s1/questions": () => jsonResponse(200, notFound),
+        [`POST ${STREAM_URL}`]: () => stream.response,
       }),
     );
 
-    render(<AskPanel sourceId="s1" />);
-    await screen.findByLabelText("Question");
+    render(<AskScreen sourceId="s1" />);
+    await screen.findByPlaceholderText(/ask a question/i);
+    ask("nonsense token");
+    await waitFor(() =>
+      expect(document.body.textContent).toContain("nonsense token"),
+    );
 
-    askQuestionText("nonsense token");
+    await stream.push({ type: "start", messageId: "m1" });
+    await stream.push({ type: "text-start", id: "t1" });
+    await stream.push({ type: "text-end", id: "t1" });
+    await stream.push({ type: "data-citations", data: [] });
+    await stream.push({
+      type: "data-answer-status",
+      data: { status: "not_found_in_source" },
+    });
+    await stream.push({ type: "finish" });
+    await stream.done();
 
-    const message = await screen.findByTestId("not-found");
-    expect(message.textContent).toContain("not found in this source");
-    // No answer block and therefore no citation list rendered.
-    expect(screen.queryByTestId("answer")).toBeNull();
-    expect(screen.queryByRole("listitem")).toBeNull();
+    const notFound = await screen.findByTestId("not-found");
+    expect(notFound.textContent).toContain("not found in this source");
+    // No citation chips are rendered for a not-found answer.
+    expect(screen.queryByRole("button", { name: /^Citation:/ })).toBeNull();
   });
 
-  it("renders a readable error and keeps the form usable to resubmit", async () => {
-    let posts = 0;
+  it("settles a mid-stream error part to a banner, retaining partial text and re-enabling input", async () => {
+    const stream = sseStream();
     vi.stubGlobal(
       "fetch",
       routedFetch({
         "GET /api/auth/me": () => authedMe.clone(),
-        "POST /api/sources/s1/questions": () => {
-          posts += 1;
-          return posts === 1
-            ? jsonResponse(409, {
-                detail: "Source is not ready for questions.",
-              })
-            : jsonResponse(200, answered);
-        },
+        [`POST ${STREAM_URL}`]: () => stream.response,
       }),
     );
 
-    render(<AskPanel sourceId="s1" />);
-    await screen.findByLabelText("Question");
+    render(<AskScreen sourceId="s1" />);
+    await screen.findByPlaceholderText(/ask a question/i);
+    ask("first try");
 
-    // First ask fails: the backend detail renders as a readable error.
-    askQuestionText("first try");
+    await stream.push({ type: "start", messageId: "m1" });
+    await stream.push({ type: "text-start", id: "t1" });
+    await stream.push({ type: "text-delta", id: "t1", delta: "Partial answer" });
+    await waitFor(() =>
+      expect(document.body.textContent).toContain("Partial answer"),
+    );
+    // The error part terminates the stream; the SDK surfaces it via onError.
+    await stream.push({
+      type: "error",
+      errorText: "Answer generation failed. Please try again.",
+    });
+
+    // Readable banner, partial text retained, input usable again.
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toBe("Source is not ready for questions.");
-    expect(screen.queryByTestId("answer")).toBeNull();
-
-    // The form is still usable — a second ask succeeds and clears the error.
-    askQuestionText("second try");
+    expect(alert.textContent).toContain("Answer generation failed");
+    expect(document.body.textContent).toContain("Partial answer");
     expect(
-      await screen.findByText("Ada Lovelace wrote the first algorithm."),
-    ).toBeTruthy();
-    expect(screen.queryByRole("alert")).toBeNull();
-    expect(posts).toBe(2);
+      (screen.getByPlaceholderText(/ask a question/i) as HTMLTextAreaElement)
+        .disabled,
+    ).toBe(false);
   });
 
+  it("shows a readable throttle message when the stream start returns 429", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        [`POST ${STREAM_URL}`]: () =>
+          jsonResponse(429, { detail: "Too many requests." }),
+      }),
+    );
+
+    render(<AskScreen sourceId="s1" />);
+    await screen.findByPlaceholderText(/ask a question/i);
+    ask("a question");
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(/too many requests/i);
+    expect(
+      (screen.getByPlaceholderText(/ask a question/i) as HTMLTextAreaElement)
+        .disabled,
+    ).toBe(false);
+  });
+
+  it("swaps submit for a stop control while streaming and issues only one request", async () => {
+    const stream = sseStream();
+    const fetchMock = routedFetch({
+      "GET /api/auth/me": () => authedMe.clone(),
+      [`POST ${STREAM_URL}`]: () => stream.response,
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AskScreen sourceId="s1" />);
+    await screen.findByPlaceholderText(/ask a question/i);
+    ask("streaming question");
+
+    await stream.push({ type: "start", messageId: "m1" });
+    await stream.push({ type: "text-start", id: "t1" });
+    await stream.push({ type: "text-delta", id: "t1", delta: "Streaming…" });
+
+    // Mid-stream the submit control is a Stop button — you cannot submit again.
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Stop" })).toBeTruthy(),
+    );
+    expect(screen.queryByRole("button", { name: "Submit" })).toBeNull();
+    expect(
+      fetchMock.mock.calls.filter(([url]) => url === STREAM_URL),
+    ).toHaveLength(1);
+
+    await stream.done();
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Stop" })).toBeNull(),
+    );
+  });
+
+  it("never submits when the input is empty", async () => {
+    const fetchMock = routedFetch({
+      "GET /api/auth/me": () => authedMe.clone(),
+      [`POST ${STREAM_URL}`]: () => sseStream().response,
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AskScreen sourceId="s1" />);
+    await screen.findByPlaceholderText(/ask a question/i);
+
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+
+    // No stream request is issued for an empty question.
+    await Promise.resolve();
+    expect(
+      fetchMock.mock.calls.some(([url]) => url === STREAM_URL),
+    ).toBe(false);
+  });
+});
+
+describe("AskScreen auth (D3)", () => {
   it("does a UX-only redirect and shows the signed-out state when unauthenticated", async () => {
     vi.stubGlobal(
       "fetch",
@@ -196,43 +334,9 @@ describe("AskPanel (D2)", () => {
     );
 
     const onRequireAuth = vi.fn();
-    render(<AskPanel sourceId="s1" onRequireAuth={onRequireAuth} />);
+    render(<AskScreen sourceId="s1" onRequireAuth={onRequireAuth} />);
 
     await waitFor(() => expect(onRequireAuth).toHaveBeenCalledTimes(1));
     expect(await screen.findByText("You are signed out.")).toBeTruthy();
-  });
-});
-
-describe("SourcesPanel ask link (D2)", () => {
-  it("links only ready rows to their ask view", async () => {
-    const mixed = [
-      sourceRow("s-up", "Uploaded Book", "uploaded"),
-      sourceRow("s-proc", "Processing Book", "processing"),
-      sourceRow("s-ready", "Ready Book", "ready"),
-      sourceRow("s-fail", "Failed Book", "failed"),
-    ];
-    vi.stubGlobal(
-      "fetch",
-      routedFetch({
-        "GET /api/auth/me": () => authedMe.clone(),
-        "GET /api/sources": () => jsonResponse(200, mixed),
-      }),
-    );
-
-    render(<SourcesPanel />);
-    await screen.findByText("Ready Book");
-
-    // Exactly one Ask link — on the sole ready row, pointing at its ask view.
-    const askLinks = screen.getAllByRole("link", { name: "Ask" });
-    expect(askLinks).toHaveLength(1);
-    expect(askLinks[0].getAttribute("href")).toBe("/sources/s-ready/ask");
-    const readyLi = screen.getByTestId("status-s-ready").closest("li");
-    expect(within(readyLi!).getByRole("link", { name: "Ask" })).toBeTruthy();
-
-    // Non-ready rows offer no ask link.
-    for (const id of ["s-up", "s-proc", "s-fail"]) {
-      const li = screen.getByTestId(`status-${id}`).closest("li");
-      expect(within(li!).queryByRole("link", { name: "Ask" })).toBeNull();
-    }
   });
 });
