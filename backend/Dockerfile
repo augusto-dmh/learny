@@ -41,13 +41,22 @@ CMD ["celery", "-A", "app.worker.celery_app:celery_app", "worker", \
      "--concurrency", "1", "--max-tasks-per-child", "1"]
 
 # Default image for the api and worker services. Last stage, so an untargeted
-# build (api/worker in compose) resolves here; docling is never installed.
+# build (api/worker in compose) resolves here; docling is never installed. Only
+# the main dependencies land — no dev extra — so the dispatch factory's PDF
+# branch is unreachable here and never imports docling/docling_core.
 FROM base AS runtime
-RUN uv sync --frozen --no-install-project --extra dev
+RUN uv sync --frozen --no-install-project
 
 # Application source.
 COPY . .
-RUN uv sync --frozen --extra dev
+RUN uv sync --frozen
+
+# Run as a dedicated non-root user. The venv and source are root-owned and only
+# read at runtime — the api (uvicorn) and worker (celery) write nothing under
+# /app — so read-only ownership is sufficient.
+RUN groupadd --system --gid 10001 learny \
+    && useradd --system --uid 10001 --gid learny --create-home learny
+USER learny
 
 EXPOSE 8000
 
