@@ -145,6 +145,8 @@ A → B → C → D → E → F (sequential; B needs A's entities; C needs A's p
 
 ### T10: PDF worker image + compose topology
 
+**Scope addition (routed from Phase C blocker):** `.github/workflows/ci.yml:70` currently runs `uv sync --locked --all-extras`, which after the new `pdf` extra would install docling (torch, ~GB, model downloads) into CI and run the live tests — contradicting AD-089/CI-parity. Change it to sync dev without the pdf extra (e.g. `uv sync --locked --extra dev`) and assert in the topology test file that the workflow does not use `--all-extras`.
+
 **What**: `backend/Dockerfile` gains a `pdf-worker` target (uv sync `--extra pdf`, bake models via the docling model-downloader — verify helper name against installed docling); compose base `worker-pdf` service (`--queues ingest-pdf --concurrency 1 --max-tasks-per-child 1`, `mem_limit: 4g`, health/env/depends per `worker`); existing `worker` command gains explicit `--queues celery`; prod overlay parity; `test_compose_topology.py` asserting both services' queue flags, concurrency, mem_limit, max-tasks-per-child in base + prod merge.
 **Where**: `backend/Dockerfile`, `docker-compose.yml`, `docker-compose.override.yml` (if worker env needed), `docker-compose.prod.yml`, `backend/tests/test_compose_topology.py`.
 **Depends on**: T9. **Requirement**: ING-18, ING-19, ING-20.
