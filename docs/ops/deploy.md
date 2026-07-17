@@ -76,53 +76,79 @@ transferred by the deploy job (see design rationale in ADR-0023).
 
 ## Create runtime secrets
 
-The backend, workers, and database need credentials at startup. Create each secret file from the
-corresponding template in the Learny repo (`backend/secrets/*.env.production.example`).
+The backend, workers, and database need credentials at startup. The single source of truth for
+these is the template `backend/.env.production.example` in the Learny repo — copy the relevant
+lines into each file below with real values. Application settings are read with the `LEARNY_`
+prefix (see `backend/app/core/config.py`); an unprefixed name is silently ignored. Every file
+lives under `/opt/learny/secrets/` (git-ignored, never transferred by CI). `docker-compose.prod.yml`
+loads each one into its matching service, and `env_file` is per-service — the `api` and `worker`
+services do **not** share a file, so any value both need must appear in both.
 
 ### db.env
 
-PostgreSQL credentials. Create `/opt/learny/secrets/db.env`:
+PostgreSQL password (the user and database name are already set in the base compose file). Create
+`/opt/learny/secrets/db.env`:
 
 ```bash
-# Replace PASSWORD with a strong random string
+# Replace with a strong random string.
 POSTGRES_PASSWORD=<your-db-password>
-POSTGRES_DB=learny
-POSTGRES_USER=learny
 ```
 
 ### minio.env
 
-MinIO (S3-compatible object storage) credentials. Create `/opt/learny/secrets/minio.env`:
+MinIO root credentials (the object-storage service's own env vars — these are not `LEARNY_`
+settings). Create `/opt/learny/secrets/minio.env`:
 
 ```bash
-# Replace with strong random strings
+# Replace with strong random strings.
 MINIO_ROOT_USER=<your-access-key>
 MINIO_ROOT_PASSWORD=<your-secret-key>
-STORAGE_ENDPOINT=http://minio:9000
-STORAGE_ACCESS_KEY=<same-as-MINIO_ROOT_USER>
-STORAGE_SECRET_KEY=<same-as-MINIO_ROOT_PASSWORD>
 ```
 
 ### api.env
 
-FastAPI (backend) credentials and configuration. Create `/opt/learny/secrets/api.env`:
+FastAPI configuration. Create `/opt/learny/secrets/api.env`:
 
 ```bash
-# Generate a strong random secret (e.g., python -c "import secrets; print(secrets.token_hex(32))")
-SECRET_KEY=<your-fastapi-secret>
-ANTHROPIC_API_KEY=<your-anthropic-api-key>
+# Database URL — embeds the POSTGRES_PASSWORD from db.env above.
+LEARNY_DATABASE_URL=postgresql+psycopg://learny:<your-db-password>@db:5432/learny
+# Object-storage credentials — match minio.env (or your real S3 provider).
+LEARNY_STORAGE_ACCESS_KEY=<same-as-MINIO_ROOT_USER>
+LEARNY_STORAGE_SECRET_KEY=<same-as-MINIO_ROOT_PASSWORD>
+# Public HTTPS origin(s) for the CSRF Origin/Referer check — your LEARNY_DOMAIN, comma-separated
+# if several. This must match the domain you serve from or every write is rejected.
+LEARNY_CSRF_TRUSTED_ORIGINS=https://<your-domain>
+# Uvicorn worker processes (optional; defaults to 2).
+LEARNY_API_WORKERS=2
 ```
-
-(Do not commit `ANTHROPIC_API_KEY` to version control. Load it into the VPS at deploy time.)
 
 ### worker.env
 
-Celery worker configuration. Create `/opt/learny/secrets/worker.env`:
+Celery worker configuration. The worker reaches the same database and object storage as the API,
+so it needs its own copy of those credentials. Create `/opt/learny/secrets/worker.env`:
 
 ```bash
-# Workers inherit ANTHROPIC_API_KEY from api.env; no additional secrets required
-# (Leave this file minimal or add worker-specific config as needed)
+LEARNY_DATABASE_URL=postgresql+psycopg://learny:<your-db-password>@db:5432/learny
+LEARNY_STORAGE_ACCESS_KEY=<same-as-MINIO_ROOT_USER>
+LEARNY_STORAGE_SECRET_KEY=<same-as-MINIO_ROOT_PASSWORD>
 ```
+
+### Optional: enable the cloud AI providers
+
+The stack defaults to the deterministic, network-free adapters (`LEARNY_GENERATION_PROVIDER=local`,
+`LEARNY_EMBEDDING_PROVIDER=local`), so it boots with no provider keys. To serve real Claude answers
+and OpenAI embeddings instead, add these to **both** `api.env` and `worker.env` (the API streams
+answers/teaching; the worker runs quiz generation and ingestion embedding):
+
+```bash
+LEARNY_GENERATION_PROVIDER=anthropic
+LEARNY_ANTHROPIC_API_KEY=<your-anthropic-api-key>
+LEARNY_EMBEDDING_PROVIDER=openai
+LEARNY_OPENAI_API_KEY=<your-openai-api-key>
+```
+
+Changing the embedding provider or model requires re-embedding existing books — see the embedding
+notes in the repo before switching a populated deployment.
 
 ## .env: Set the domain
 
