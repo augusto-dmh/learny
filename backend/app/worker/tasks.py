@@ -17,15 +17,18 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import datetime, timedelta
 from uuid import UUID, uuid4
 
 from sqlalchemy import Connection, text
 
 from app.application.corpus import BuildCorpus
 from app.application.ingestion import RunIngestion
+from app.application.quiz import RunDeckGeneration
 from app.application.retrieval import EmbedCorpus
 from app.core.config import get_settings
 from app.core.tracing import bind_trace, new_trace_scope, reset_trace
+from app.domain.entities import QuizDeckHandle
 from app.domain.ports import IngestionStep, StoragePort
 from app.infrastructure.clock import SystemClock
 from app.infrastructure.db.engine import get_engine
@@ -34,11 +37,15 @@ from app.infrastructure.db.repositories import (
     SqlAlchemyEmbeddingIndexRepository,
     SqlAlchemyIngestionEventRepository,
     SqlAlchemyIngestionJobRepository,
+    SqlAlchemyQuizItemRepository,
+    SqlAlchemyQuizJobRepository,
     SqlAlchemySourceRepository,
 )
 from app.infrastructure.embeddings import build_embedding_adapter
 from app.infrastructure.ingestion.epub import EbooklibEpubParser
 from app.infrastructure.ingestion.markup import Bs4MarkupConverter
+from app.infrastructure.quiz import build_quiz_adapter
+from app.infrastructure.scheduling import build_scheduling_adapter
 from app.infrastructure.storage.s3 import S3StorageAdapter
 from app.infrastructure.worker.steps import (
     EmbedCorpusIngestionStep,
@@ -307,3 +314,166 @@ def _reembed_document_body(source_id: str) -> None:
         "reembed.document: completed",
         extra={**log, "chunks": embedded, "duration_ms": _elapsed_ms(start)},
     )
+
+
+# --- Deck generation (Cycle E, QUIZ-05/09) --------------------------------------
+#
+# ``generate_quiz_deck`` mirrors ``run_ingestion``: the task owns only the Celery
+# concerns (UoW-per-transition, retry decision, trace scope); ``RunDeckGeneration``
+# owns every durable transition. The local adapter computes candidates inline, so the
+# task finalizes in one invocation; the Anthropic adapter returns a pending batch, so
+# the task schedules ``poll_quiz_deck`` to self-reschedule until the batch ends or the
+# deadline passes. ``finalize`` is idempotent (upserts), so redelivery under
+# ``acks_late`` never duplicates items or resets scheduling.
+
+# Fixed, non-secret durable failure text (mirrors the ingestion redaction).
+_DECK_FAILURE_ERROR = "Quiz deck generation failed."
+_DECK_TIMEOUT_ERROR = "Quiz deck generation timed out."
+
+
+def _build_run_deck(conn: Connection) -> RunDeckGeneration:
+    """Wire the ``RunDeckGeneration`` driver on ``conn`` (the deck task's root)."""
+    settings = get_settings()
+    return RunDeckGeneration(
+        jobs=SqlAlchemyQuizJobRepository(conn),
+        items=SqlAlchemyQuizItemRepository(conn),
+        generation=build_quiz_adapter(settings),
+        embeddings=build_embedding_adapter(settings),
+        scheduling=build_scheduling_adapter(settings),
+        clock=_clock,
+        ids=uuid4,
+        min_section_chars=settings.quiz_min_section_chars,
+        dedup_threshold=settings.quiz_dedup_threshold,
+    )
+
+
+def _retry_or_fail_deck(self, jid, exc, log, start):  # noqa: ANN001, ANN202 — bound task ``self``
+    """Retry a deck task on a transient provider fault, else drive the job terminal.
+
+    The redacted summary is persisted (never the raw exception, which may carry provider
+    detail); the raw exception goes to the server log via ``exc_info``.
+    """
+    if self.request.retries < self.max_retries:
+        logger.info("quiz.generate_deck: retrying", extra=log, exc_info=exc)
+        raise self.retry(exc=exc, countdown=_retry_countdown(self.request.retries)) from exc
+    with get_engine().begin() as conn:
+        _build_run_deck(conn).fail(jid, _DECK_FAILURE_ERROR)
+    logger.info(
+        "quiz.generate_deck: failed",
+        extra={**log, "duration_ms": _elapsed_ms(start)},
+        exc_info=exc,
+    )
+    return None
+
+
+def _finalize_deck(jid, result, log, start):  # noqa: ANN001, ANN202
+    """Persist a completed pass and log success (idempotent; safe under redelivery)."""
+    with get_engine().begin() as conn:
+        _build_run_deck(conn).finalize(jid, result)
+    logger.info(
+        "quiz.generate_deck: succeeded",
+        extra={**log, "duration_ms": _elapsed_ms(start)},
+    )
+
+
+@celery_app.task(bind=True, name="quiz.generate_deck", max_retries=3)
+def generate_quiz_deck(self, source_id: str, job_id: str) -> None:  # noqa: ANN001 — bound task ``self``
+    """Drive a source's deck-generation job (QUIZ-05/09).
+
+    Idempotent under redelivery: a missing or already-terminal job no-ops via ``begin``.
+    The local provider finalizes inline; a pending Anthropic batch schedules
+    ``poll_quiz_deck`` with the handle payload and an absolute deadline. Any provider
+    fault at begin/collect retries with backoff, then fails the job terminally.
+    """
+    jid, sid = UUID(job_id), UUID(source_id)
+    log = {"job_id": job_id, "source_id": source_id}
+    token = new_trace_scope()
+    bind_trace(job_id=job_id, source_id=source_id)
+    start = time.perf_counter()
+    try:
+        return _generate_quiz_deck_body(self, jid, sid, job_id, log, start)
+    finally:
+        reset_trace(token)
+
+
+def _generate_quiz_deck_body(self, jid, sid, job_id, log, start):  # noqa: ANN001, ANN202
+    # 1. Claim the job: queued/running → running. None ⇒ missing/terminal ⇒ no-op.
+    with get_engine().begin() as conn:
+        job = _build_run_deck(conn).begin(jid)
+    if job is None:
+        logger.info("quiz.generate_deck: no-op (missing or terminal job)", extra=log)
+        return None
+    logger.info("quiz.generate_deck: started", extra=log)
+
+    # 2. Start the pass and collect once. A provider fault here retries the task.
+    try:
+        with get_engine().begin() as conn:
+            handle = _build_run_deck(conn).begin_deck(sid)
+        result = build_quiz_adapter(get_settings()).collect_deck(handle)
+    except Exception as exc:  # noqa: BLE001 — classified as retryable/terminal below
+        return _retry_or_fail_deck(self, jid, exc, log, start)
+
+    # 3a. Pending batch: schedule the poll task with an absolute deadline.
+    if result is None:
+        settings = get_settings()
+        deadline = _clock.now() + timedelta(seconds=settings.quiz_batch_timeout_s)
+        poll_quiz_deck.apply_async(
+            args=[job_id, handle.to_payload(), deadline.isoformat()],
+            countdown=settings.quiz_batch_poll_interval_s,
+        )
+        logger.info("quiz.generate_deck: batch pending, scheduled poll", extra=log)
+        return None
+
+    # 3b. Inline result (local provider or an already-finished batch): finalize now.
+    _finalize_deck(jid, result, log, start)
+    return None
+
+
+@celery_app.task(bind=True, name="quiz.poll_deck", max_retries=3)
+def poll_quiz_deck(  # noqa: ANN001 — bound task ``self``
+    self, job_id: str, handle_payload: dict, deadline_iso: str
+) -> None:
+    """Poll a pending deck batch: reschedule until it ends or the deadline passes.
+
+    A still-pending batch reschedules this task after ``quiz_batch_poll_interval_s`` until
+    the absolute ``deadline_iso`` is reached, at which point the job is failed with a
+    timeout (edge case). A completed batch is finalized (idempotent). A provider fault
+    retries with backoff, then fails the job.
+    """
+    jid = UUID(job_id)
+    log = {"job_id": job_id}
+    token = new_trace_scope()
+    bind_trace(job_id=job_id)
+    start = time.perf_counter()
+    try:
+        return _poll_quiz_deck_body(self, jid, job_id, handle_payload, deadline_iso, log, start)
+    finally:
+        reset_trace(token)
+
+
+def _poll_quiz_deck_body(self, jid, job_id, handle_payload, deadline_iso, log, start):  # noqa: ANN001, ANN202
+    handle = QuizDeckHandle.from_payload(handle_payload)
+    try:
+        result = build_quiz_adapter(get_settings()).collect_deck(handle)
+    except Exception as exc:  # noqa: BLE001 — classified as retryable/terminal below
+        return _retry_or_fail_deck(self, jid, exc, log, start)
+
+    if result is None:
+        # Still pending: fail on deadline, else reschedule this poll.
+        if _clock.now() >= datetime.fromisoformat(deadline_iso):
+            with get_engine().begin() as conn:
+                _build_run_deck(conn).fail(jid, _DECK_TIMEOUT_ERROR)
+            logger.info(
+                "quiz.poll_deck: timed out",
+                extra={**log, "duration_ms": _elapsed_ms(start)},
+            )
+            return None
+        poll_quiz_deck.apply_async(
+            args=[job_id, handle_payload, deadline_iso],
+            countdown=get_settings().quiz_batch_poll_interval_s,
+        )
+        logger.info("quiz.poll_deck: still pending, rescheduled", extra=log)
+        return None
+
+    _finalize_deck(jid, result, log, start)
+    return None
