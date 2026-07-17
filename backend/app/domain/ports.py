@@ -38,6 +38,7 @@ from app.domain.entities import (
     QuizGenerationJob,
     QuizItem,
     QuizSection,
+    ReconcileSection,
     ReviewLogEntry,
     SchedulingSnapshot,
     SectionContent,
@@ -339,6 +340,16 @@ class CorpusRepository(Protocol):
 
     def get_section(self, source_id: UUID, anchor: str) -> SectionContent | None:
         """Return ``source_id``'s section at ``anchor``, or ``None`` if none matches."""
+        ...
+
+    def section_texts(self, source_id: UUID) -> list[ReconcileSection]:
+        """Return every section's anchor/path plus its chunk text, in reading order (QUIZ-16).
+
+        The corpus text index quiz reconciliation reads after a corpus replace: each
+        :class:`~app.domain.entities.ReconcileSection` carries the section's concatenated
+        chunk text so a snapshotted ``source_excerpt`` can be re-checked for presence. All
+        sections (leaf or not) are returned so a relocated quote can be found anywhere.
+        """
         ...
 
 

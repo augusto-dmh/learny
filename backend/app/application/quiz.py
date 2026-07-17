@@ -35,10 +35,12 @@ from app.domain.entities import (
     QuizItemStatus,
     QuizItemType,
     QuizJobStatus,
+    ReconcileSection,
     User,
 )
 from app.domain.ports import (
     Clock,
+    CorpusRepository,
     EmbeddingPort,
     QuizGenerationPort,
     QuizItemRepository,
@@ -388,3 +390,65 @@ class ListQuizItems:
             due_by_item=self._items.due_map(source_id),
             latest_job=self._jobs.get_latest_for_source(source_id),
         )
+
+
+class ReconcileQuizItems:
+    """Reconcile a source's quiz items against a freshly replaced corpus (QUIZ-16).
+
+    Runs as a step of the ingestion pipeline after the corpus is replaced (invoked with
+    only ``source_id`` — ownership is the ingestion job's already). Per item, comparing the
+    snapshotted ``source_excerpt`` against the new corpus text (normalized containment):
+
+    - anchor still present ∧ excerpt still in that section's text → keep ``active``;
+    - anchor present ∧ excerpt gone → ``stale``;
+    - anchor gone ∧ excerpt found verbatim elsewhere → relocate (adopt that section's
+      anchor + ``section_path``, keep ``active``);
+    - otherwise → ``orphaned``.
+
+    Only ``anchor``/``section_path``/``status`` are ever written, and only when the
+    outcome differs from the item's current state — ``quiz_item_scheduling`` and
+    ``review_log`` rows are never touched (QUIZ-16). A source with no items is a no-op
+    fast path (the corpus is not even read).
+    """
+
+    def __init__(
+        self, *, items: QuizItemRepository, corpus: CorpusRepository
+    ) -> None:
+        self._items = items
+        self._corpus = corpus
+
+    def __call__(self, *, source_id: UUID) -> None:
+        items = self._items.items_for_reconcile(source_id)
+        if not items:
+            return  # no-op fast path — nothing to reconcile
+
+        sections = self._corpus.section_texts(source_id)
+        # First section per anchor in reading order (matches ``get_section`` resolution).
+        first_by_anchor: dict[str, ReconcileSection] = {}
+        for section in sections:
+            first_by_anchor.setdefault(section.anchor, section)
+
+        for item in items:
+            anchor, section_path, status = self._resolve(item, sections, first_by_anchor)
+            if (anchor, section_path, status) != (item.anchor, item.section_path, item.status):
+                self._items.update_reconciliation(
+                    item.id, anchor=anchor, section_path=section_path, status=status
+                )
+
+    def _resolve(
+        self,
+        item: QuizItem,
+        sections: list[ReconcileSection],
+        first_by_anchor: dict[str, ReconcileSection],
+    ) -> tuple[str, tuple[str, ...], str]:
+        """Return the item's reconciled ``(anchor, section_path, status)`` (QUIZ-16)."""
+        current = first_by_anchor.get(item.anchor)
+        if current is not None:
+            if quote_in_text(item.source_excerpt, current.text):
+                return item.anchor, item.section_path, QuizItemStatus.ACTIVE
+            return item.anchor, item.section_path, QuizItemStatus.STALE
+
+        for section in sections:
+            if quote_in_text(item.source_excerpt, section.text):
+                return section.anchor, section.section_path, QuizItemStatus.ACTIVE
+        return item.anchor, item.section_path, QuizItemStatus.ORPHANED

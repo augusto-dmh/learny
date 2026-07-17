@@ -328,6 +328,21 @@ class SectionContent:
 
 
 @dataclass(frozen=True)
+class ReconcileSection:
+    """One section's citation anchors plus its full chunk text, for reconciliation (QUIZ-16).
+
+    The post-re-ingestion read model: ``text`` is the section's chunk text concatenated in
+    reading order, so a quiz item's snapshotted ``source_excerpt`` (verified against a
+    chunk at generation) can be re-checked for verbatim presence in the new corpus. Carries
+    the ``anchor`` and ``section_path`` a relocated item adopts.
+    """
+
+    anchor: str
+    section_path: tuple[str, ...]
+    text: str
+
+
+@dataclass(frozen=True)
 class ChunkToEmbed:
     """The embed step's read DTO: one chunk's id and text to embed (design §4).
 

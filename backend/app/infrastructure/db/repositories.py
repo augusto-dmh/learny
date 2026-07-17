@@ -49,6 +49,7 @@ from app.domain.entities import (
     QuizItem,
     QuizItemStatus,
     QuizSection,
+    ReconcileSection,
     ReviewLogEntry,
     SchedulingSnapshot,
     SectionContent,
@@ -493,6 +494,52 @@ class SqlAlchemyCorpusRepository:
             section_path=tuple(row.section_path),
             markdown=row.markdown,
         )
+
+    def section_texts(self, source_id: UUID) -> list[ReconcileSection]:
+        # Reading-order sections with their chunk text concatenated (reconciliation
+        # checks a snapshotted excerpt against the same chunk text it was verified
+        # against at generation, QUIZ-16). One query joins chunks → sections →
+        # documents on ``source_id``; sections with no chunks still appear (empty text)
+        # via the outer join so an anchor that survives is always found.
+        rows = self._conn.execute(
+            select(
+                corpus_sections.c.position,
+                corpus_sections.c.anchor,
+                corpus_sections.c.section_path,
+                corpus_chunks.c.chunk_index,
+                corpus_chunks.c.text,
+            )
+            .select_from(
+                corpus_sections.join(
+                    corpus_documents,
+                    corpus_sections.c.document_id == corpus_documents.c.id,
+                ).outerjoin(
+                    corpus_chunks,
+                    corpus_chunks.c.section_id == corpus_sections.c.id,
+                )
+            )
+            .where(corpus_documents.c.source_id == source_id)
+            .order_by(corpus_sections.c.position, corpus_chunks.c.chunk_index)
+        ).all()
+
+        ordered_positions: list[int] = []
+        anchors: dict[int, tuple[str, tuple[str, ...]]] = {}
+        chunks: dict[int, list[str]] = {}
+        for row in rows:
+            if row.position not in anchors:
+                ordered_positions.append(row.position)
+                anchors[row.position] = (row.anchor, tuple(row.section_path))
+                chunks[row.position] = []
+            if row.text is not None:
+                chunks[row.position].append(row.text)
+        return [
+            ReconcileSection(
+                anchor=anchors[pos][0],
+                section_path=anchors[pos][1],
+                text=" ".join(chunks[pos]),
+            )
+            for pos in ordered_positions
+        ]
 
 
 class SqlAlchemyEmbeddingIndexRepository:

@@ -20,16 +20,23 @@ import pytest
 from sqlalchemy import Engine, func, select
 from sqlalchemy import delete as sa_delete
 
+from app.application.quiz_qc import content_key
 from app.domain.entities import (
     CorpusSectionRecord,
+    IngestionJob,
+    IngestionStatus,
     ParsedBlock,
     ParsedSection,
     QuizCandidate,
     QuizDeckHandle,
     QuizDeckResult,
     QuizGenerationJob,
+    QuizItem,
+    QuizItemStatus,
     QuizItemType,
     QuizJobStatus,
+    ReviewLogEntry,
+    SchedulingSnapshot,
     SectionChunk,
     Source,
     User,
@@ -37,19 +44,22 @@ from app.domain.entities import (
 from app.infrastructure.db.metadata import quiz_item_scheduling, quiz_items, users
 from app.infrastructure.db.repositories import (
     SqlAlchemyCorpusRepository,
+    SqlAlchemyIngestionJobRepository,
     SqlAlchemyQuizItemRepository,
     SqlAlchemyQuizJobRepository,
     SqlAlchemySourceRepository,
     SqlAlchemyUserRepository,
 )
 from app.infrastructure.worker.enqueuer import CeleryQuizDeckEnqueuer
-from app.worker.tasks import generate_quiz_deck, poll_quiz_deck
+from app.infrastructure.worker.steps import NoOpIngestionStep
+from app.worker.tasks import generate_quiz_deck, poll_quiz_deck, run_ingestion
 from tests.conftest import requires_db
 
 pytestmark = requires_db
 
 _generate = generate_quiz_deck.run.__func__
 _poll = poll_quiz_deck.run.__func__
+_ingest = run_ingestion.run.__func__
 
 # Two distinct leaf sections, each ≥ quiz_min_section_chars (200) so both are eligible.
 _TEXT_A = (
@@ -401,6 +411,89 @@ def test_generate_provider_fault_retries_then_fails(seed, db_engine: Engine) -> 
     job = _read_job(db_engine, ctx.job.id)
     assert job.status == QuizJobStatus.FAILED
     assert job.last_error == "Quiz deck generation failed."
+
+
+# --- reconcile wiring inside the ingestion pipeline (QUIZ-16) --------------------
+
+
+def test_reconcile_runs_inside_ingestion_pipeline(
+    db_engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A re-ingestion reconciles quiz items in the same pipeline: a previously-stale
+    item whose anchor + quote are present in the (replaced) corpus flips back to
+    ``active`` after ``run_ingestion`` runs — proving the reconcile step is wired in."""
+    monkeypatch.setattr("app.worker.tasks.get_engine", lambda: db_engine)
+    now = datetime.now(UTC)
+    user = User(id=uuid4(), email=f"{uuid4()}@x.com", created_at=now)
+    source = Source(
+        id=uuid4(),
+        user_id=user.id,
+        title="Biology",
+        filename="bio.epub",
+        content_type="application/epub+zip",
+        byte_size=10,
+        checksum="d" * 64,
+        object_key=f"sources/{uuid4()}.epub",
+        status="processing",
+        created_at=now,
+        updated_at=now,
+    )
+    job = IngestionJob(
+        id=uuid4(),
+        source_id=source.id,
+        status=IngestionStatus.QUEUED,
+        attempts=0,
+        last_error=None,
+        created_at=now,
+        updated_at=now,
+    )
+    stale = QuizItem(
+        id=uuid4(),
+        source_id=source.id,
+        item_type=QuizItemType.FREE_RECALL,
+        question="Q?",
+        answer="A",
+        section_path=("Chapter 1",),
+        anchor="ch1",
+        source_excerpt="powerhouse of the cell",
+        chunk_hash="h" * 64,
+        content_key=content_key(QuizItemType.FREE_RECALL, "Q?", "A"),
+        status=QuizItemStatus.STALE,
+        generation_meta={},
+        created_at=now,
+        updated_at=now,
+    )
+    with db_engine.begin() as conn:
+        SqlAlchemyUserRepository(conn).add(user)
+        SqlAlchemySourceRepository(conn).add(source)
+        SqlAlchemyIngestionJobRepository(conn).add(job)
+        SqlAlchemyCorpusRepository(conn).replace(
+            source.id,
+            title="Biology",
+            authors=["A"],
+            language="en",
+            schema_version=1,
+            sections=[_section_record(1, "Cells", ("Chapter 1",), "ch1", _TEXT_A)],
+        )
+        repo = SqlAlchemyQuizItemRepository(conn)
+        repo.upsert(stale, embedding=None)
+        repo.create_scheduling(
+            stale.id,
+            SchedulingSnapshot(
+                state=1, step=0, stability=3.5, difficulty=5.0, due=now, last_review=None
+            ),
+        )
+        repo.append_log(stale.id, ReviewLogEntry(rating=3, reviewed_at=now))
+
+    try:
+        with patch("app.worker.tasks._build_step", lambda conn: NoOpIngestionStep()):
+            _ingest(FakeSelf(), str(source.id), str(job.id))
+        with db_engine.connect() as conn:
+            reconciled = SqlAlchemyQuizItemRepository(conn).get_by_id(stale.id)
+        assert reconciled.status == QuizItemStatus.ACTIVE
+    finally:
+        with db_engine.begin() as conn:
+            conn.execute(sa_delete(users).where(users.c.id == user.id))
 
 
 # --- enqueuer (QUIZ-03) ---------------------------------------------------------

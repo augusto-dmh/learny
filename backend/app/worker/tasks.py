@@ -24,7 +24,7 @@ from sqlalchemy import Connection, text
 
 from app.application.corpus import BuildCorpus
 from app.application.ingestion import RunIngestion
-from app.application.quiz import RunDeckGeneration
+from app.application.quiz import ReconcileQuizItems, RunDeckGeneration
 from app.application.retrieval import EmbedCorpus
 from app.core.config import get_settings
 from app.core.tracing import bind_trace, new_trace_scope, reset_trace
@@ -146,6 +146,14 @@ def _build_embed_step(conn: Connection) -> IngestionStep:
     )
 
 
+def _build_reconcile(conn: Connection) -> ReconcileQuizItems:
+    """Wire ``ReconcileQuizItems`` on ``conn`` — the post-corpus-replace quiz step (QUIZ-16)."""
+    return ReconcileQuizItems(
+        items=SqlAlchemyQuizItemRepository(conn),
+        corpus=SqlAlchemyCorpusRepository(conn),
+    )
+
+
 def _build_embed_ingestion(conn: Connection) -> RunIngestion:
     """Wire a second ``RunIngestion`` whose step embeds the source's chunks."""
     return RunIngestion(
@@ -208,6 +216,12 @@ def _run_ingestion_body(  # noqa: ANN001, ANN202 — mirrors the bound task ``se
     try:
         with get_engine().begin() as conn:
             _build_run_ingestion(conn).run_step(job)
+        # Reconcile quiz items against the freshly replaced corpus, in its own committed
+        # transaction after the corpus build and before embedding (QUIZ-16). It needs only
+        # the new corpus text; a source with no quiz items is a no-op fast path. A raise
+        # here is classified by the retry/terminal branches below like any step fault.
+        with get_engine().begin() as conn:
+            _build_reconcile(conn)(source_id=job.source_id)
         with get_engine().begin() as conn:
             _build_embed_ingestion(conn).run_step(job)
     except RetryableIngestionError as exc:
