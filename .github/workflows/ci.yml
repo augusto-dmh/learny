@@ -67,7 +67,11 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "backend/uv.lock"
       - run: uv python install
-      - run: uv sync --locked --all-extras
+      # Install the dev extra only — never the `pdf` extra: docling pulls torch
+      # (~GB, model downloads) and its live conversion tests skip without it, so
+      # CI stays offline and fast (AD-089 / CI parity). The docling-core mapping
+      # tests run from the dev extra alone.
+      - run: uv sync --locked --extra dev
       - name: Wait for MinIO to accept requests
         run: timeout 60 bash -c 'until curl -fsS http://localhost:9000/minio/health/live; do sleep 2; done'
       - run: uv run pytest -q
@@ -109,14 +113,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # One build-and-boot step: `--wait` blocks until EVERY service healthcheck
-      # passes (api /healthz, worker celery ping, web fetch probe, db/redis/minio)
-      # and fails the job otherwise — a strictly stronger gate than polling one
-      # endpoint. Plain compose build (no bake): api and worker share an identical
-      # build definition, which bake dedupes into a single tag, leaving the
-      # worker's expected image name missing at `up` time.
+      # One build-and-boot step: `--wait` blocks until EVERY named service's
+      # healthcheck passes (api /healthz, worker celery ping, web fetch probe,
+      # db/redis/minio) and fails the job otherwise — a strictly stronger gate
+      # than polling one endpoint. Plain compose build (no bake): api and worker
+      # share an identical build definition, which bake dedupes into a single tag,
+      # leaving the worker's expected image name missing at `up` time.
+      #
+      # worker-pdf is named out deliberately: its pdf-worker image bakes docling +
+      # torch + models (multi-GB, minutes, network) — far beyond a smoke test. Its
+      # topology is asserted at the YAML/config level in test_compose_topology.py;
+      # building it is deferred to deploy.
       - name: Build and boot the full topology
-        run: docker compose up -d --build --wait --wait-timeout 300
+        run: docker compose up -d --build --wait --wait-timeout 300 db redis minio api worker web
       - name: Teardown (with logs on failure)
         if: always()
         run: |

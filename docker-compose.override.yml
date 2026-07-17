@@ -36,3 +36,9 @@ services:
       LEARNY_DATABASE_URL: postgresql+psycopg://learny:learny@db:5432/learny
       LEARNY_STORAGE_ACCESS_KEY: learny
       LEARNY_STORAGE_SECRET_KEY: learny-dev-secret
+
+  worker-pdf:
+    environment:
+      LEARNY_DATABASE_URL: postgresql+psycopg://learny:learny@db:5432/learny
+      LEARNY_STORAGE_ACCESS_KEY: learny
+      LEARNY_STORAGE_SECRET_KEY: learny-dev-secret
