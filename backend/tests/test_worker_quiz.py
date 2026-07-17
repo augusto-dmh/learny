@@ -102,9 +102,11 @@ class FakeQuizAdapter:
         *,
         result: QuizDeckResult | None = None,
         begin_error: Exception | None = None,
+        collect_error: Exception | None = None,
     ) -> None:
         self._result = result
         self._begin_error = begin_error
+        self._collect_error = collect_error
         self.begin_calls = 0
 
     def begin_deck(self, sections) -> QuizDeckHandle:  # noqa: ANN001
@@ -114,6 +116,8 @@ class FakeQuizAdapter:
         return QuizDeckHandle(provider="anthropic", batch_id="batch-1", payload={})
 
     def collect_deck(self, handle: QuizDeckHandle) -> QuizDeckResult | None:
+        if self._collect_error is not None:
+            raise self._collect_error
         return self._result
 
 
@@ -408,6 +412,30 @@ def test_generate_provider_fault_retries_then_fails(seed, db_engine: Engine) -> 
     # Retries exhausted: terminal failure with the redacted summary.
     with patch("app.worker.tasks.build_quiz_adapter", lambda settings: fake):
         _generate(FakeSelf(retries=3, max_retries=3), str(ctx.source.id), str(ctx.job.id))
+    job = _read_job(db_engine, ctx.job.id)
+    assert job.status == QuizJobStatus.FAILED
+    assert job.last_error == "Quiz deck generation failed."
+
+
+def test_poll_provider_fault_retries_then_fails(seed, db_engine: Engine) -> None:
+    """A ``collect_deck`` provider fault takes the same retry-then-terminal path as a
+    ``begin_deck`` fault: retries remaining → retry signal with backoff, job still
+    running; retries exhausted → job failed with the redacted summary."""
+    ctx = seed(job_status=QuizJobStatus.RUNNING)
+    fake = FakeQuizAdapter(collect_error=RuntimeError("anthropic 503"))
+    handle = QuizDeckHandle(provider="anthropic", batch_id="batch-1", payload={}).to_payload()
+    future = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
+
+    with patch("app.worker.tasks.build_quiz_adapter", lambda settings: fake):
+        retrying = FakeSelf(retries=0, max_retries=3)
+        with pytest.raises(FakeSelf.RetrySignal):
+            _poll(retrying, str(ctx.job.id), handle, future)
+    assert len(retrying.retry_calls) == 1
+    assert retrying.retry_calls[0]["countdown"] > 0
+    assert _read_job(db_engine, ctx.job.id).status == QuizJobStatus.RUNNING
+
+    with patch("app.worker.tasks.build_quiz_adapter", lambda settings: fake):
+        _poll(FakeSelf(retries=3, max_retries=3), str(ctx.job.id), handle, future)
     job = _read_job(db_engine, ctx.job.id)
     assert job.status == QuizJobStatus.FAILED
     assert job.last_error == "Quiz deck generation failed."

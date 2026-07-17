@@ -196,6 +196,23 @@ def test_export_route_returns_apkg_attachment_for_owner(
     assert zipfile.is_zipfile(io.BytesIO(resp.content))
 
 
+def test_export_filename_strips_non_ascii_title_characters() -> None:
+    """Accented characters (the real corpus has Portuguese titles) are stripped so the
+    latin-1 Content-Disposition header can never carry a broken filename."""
+    from app.infrastructure.web.quiz import _export_filename
+
+    assert _export_filename("Memórias Póstumas de Brás Cubas") == (
+        "Memrias_Pstumas_de_Brs_Cubas.apkg"
+    )
+
+
+def test_export_filename_falls_back_when_nothing_printable_remains() -> None:
+    from app.infrastructure.web.quiz import _export_filename
+
+    assert _export_filename("日本語の本") == "deck.apkg"
+    assert _export_filename("   ") == "deck.apkg"
+
+
 @requires_db
 def test_export_route_empty_source_returns_404(
     quiz_client: TestClient, db_conn: Connection
