@@ -30,6 +30,44 @@ component.
 Because `restart: unless-stopped` is set, a reverted service stays up across host
 restarts.
 
+## GHCR image-tag rollback (all-commit rollback)
+
+Each commit to main produces immutable container images tagged with the commit SHA (plus `:latest`).
+To roll back an entire deployment to a known-good prior commit (e.g., after a regression that spans
+multiple services or the worker pipeline):
+
+1. Identify the commit SHA of the known-good version:
+
+   ```bash
+   git log --oneline -20
+   # e.g., 7e3a4d5 is the working commit you want to revert to
+   ```
+
+2. SSH into the VPS and re-pull all images from that commit:
+
+   ```bash
+   ssh user@vps-host
+   cd /opt/learny
+   LEARNY_IMAGE_TAG=7e3a4d5 docker compose -f docker-compose.yml -f docker-compose.prod.yml pull
+   ```
+
+3. Restart the stack with the prior images:
+
+   ```bash
+   LEARNY_IMAGE_TAG=7e3a4d5 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-build --wait
+   ```
+
+4. Verify all services are healthy:
+
+   ```bash
+   docker compose -f docker-compose.yml -f docker-compose.prod.yml ps
+   curl -s https://your-domain/api/readyz | jq .
+   ```
+
+Because images are immutable by commit SHA, the rollback is instant (no rebuild required). The VPS
+always tracks the image tag you specify in `LEARNY_IMAGE_TAG`; if you do not set it, it defaults to
+`:latest`.
+
 ## Database migration rollback
 
 Schema migrations are reversible unless a migration is explicitly documented as

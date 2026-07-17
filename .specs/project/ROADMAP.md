@@ -31,4 +31,4 @@ TDD open question #10 lands in Cycle G). Research evidence: `docs/research/2026-
 | `v2-frontend` | D | Frontend v2: product UI + streaming | Done (PR #24) |
 | `v2-active-recall` | E | Active recall: quizzes + FSRS | Done (PR #25) |
 | `v2-ingestion-breadth` | F | PDF (Docling) + EPUB hardening | Done (PR #26) |
-| — | G | Deploy (GHCR→VPS, Caddy) + presentation | Not started |
+| `v2-deploy` | G | Deploy (GHCR→VPS, Caddy) + presentation | Done (PR #27) |
