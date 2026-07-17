@@ -23,7 +23,7 @@ def test_backend_version_is_0_2_0():
 def test_frontend_version_is_0_2_0():
     """Frontend version in package.json equals 0.2.0."""
     package_path = _REPO_ROOT / "frontend" / "package.json"
-    with open(package_path, "r") as f:
+    with open(package_path) as f:
         data = json.load(f)
     assert data["version"] == "0.2.0"
 
@@ -36,7 +36,7 @@ def test_backend_and_frontend_versions_match():
     with open(pyproject_path, "rb") as f:
         backend_version = tomllib.load(f)["project"]["version"]
 
-    with open(package_path, "r") as f:
+    with open(package_path) as f:
         frontend_version = json.load(f)["version"]
 
     assert backend_version == frontend_version
