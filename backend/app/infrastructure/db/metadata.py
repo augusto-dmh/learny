@@ -46,6 +46,7 @@ from __future__ import annotations
 from pgvector.sqlalchemy import VECTOR
 from sqlalchemy import (
     BigInteger,
+    CheckConstraint,
     Column,
     DateTime,
     Float,
@@ -53,6 +54,7 @@ from sqlalchemy import (
     Index,
     Integer,
     MetaData,
+    SmallInteger,
     String,
     Table,
     Text,
@@ -358,4 +360,107 @@ teaching_turn_citations = Table(
     Column("snippet", Text, nullable=False),
     Column("score", Float, nullable=False),
     UniqueConstraint("turn_id", "rank"),
+)
+
+# --- Active recall aggregate (Cycle E, RFC-002; design §Data Models) -------------
+# Citation-grounded quiz cards per source with a one-per-item FSRS scheduling snapshot
+# and an append-only review log; a deck-generation job mirrors ``ingestion_jobs``.
+# ``quiz_items``/``quiz_generation_jobs`` cascade from ``sources`` and the scheduling/
+# log rows cascade from ``quiz_items``, so a source delete removes the whole aggregate
+# with no orphans. Items snapshot their citation (``anchor``/``section_path``/
+# ``source_excerpt``) with no FK into the corpus tables, so they survive a corpus
+# replace (which regenerates chunk ids). ``embedding`` reuses the vector extension
+# (0005) for near-duplicate detection — no index (exact scan at author scale).
+
+quiz_items = Table(
+    "quiz_items",
+    metadata,
+    Column("id", UUID(as_uuid=True), primary_key=True),
+    Column(
+        "source_id",
+        UUID(as_uuid=True),
+        ForeignKey("sources.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    Column("item_type", Text, nullable=False),  # free_recall | cloze
+    Column("question", Text, nullable=False),
+    Column("answer", Text, nullable=False),
+    # Root-to-node TOC titles for the citation (snapshot; reconciled on re-ingest).
+    Column("section_path", JSONB, nullable=False),
+    Column("anchor", Text, nullable=False),
+    # Verified anchor_quote snapshot — survives a corpus replace (no chunk FK).
+    Column("source_excerpt", Text, nullable=False),
+    # sha256 of the chunk text at generation time.
+    Column("chunk_hash", Text, nullable=False),
+    # sha256(item_type \x1f norm(question) \x1f norm(answer)) — upsert identity.
+    Column("content_key", Text, nullable=False),
+    Column("status", Text, nullable=False, server_default="active"),  # active|stale|orphaned
+    # Near-duplicate detection identity; NULL until embedded (vector ext from 0005).
+    Column("embedding", VECTOR(1536), nullable=True),
+    Column("generation_meta", JSONB, nullable=False, server_default="{}"),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    # Deck regeneration upserts on this identity without minting duplicates (QUIZ-02).
+    UniqueConstraint("source_id", "content_key"),
+)
+
+quiz_item_scheduling = Table(
+    "quiz_item_scheduling",
+    metadata,
+    Column(
+        "quiz_item_id",
+        UUID(as_uuid=True),
+        ForeignKey("quiz_items.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    # FSRS-6 snapshot columns (State enum int, learning step, memory params).
+    Column("state", SmallInteger, nullable=False),
+    Column("step", SmallInteger, nullable=True),
+    Column("stability", Float, nullable=True),
+    Column("difficulty", Float, nullable=True),
+    Column("due", DateTime(timezone=True), nullable=False, index=True),
+    Column("last_review", DateTime(timezone=True), nullable=True),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+)
+
+review_log = Table(
+    "review_log",
+    metadata,
+    Column("id", UUID(as_uuid=True), primary_key=True),
+    Column(
+        "quiz_item_id",
+        UUID(as_uuid=True),
+        ForeignKey("quiz_items.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    Column("rating", SmallInteger, nullable=False),
+    Column("reviewed_at", DateTime(timezone=True), nullable=False),
+    Column("review_duration_ms", Integer, nullable=True),
+    # FSRS Rating is Again(1)/Hard(2)/Good(3)/Easy(4) — no other value is valid.
+    CheckConstraint("rating BETWEEN 1 AND 4", name="rating_range"),
+)
+
+quiz_generation_jobs = Table(
+    "quiz_generation_jobs",
+    metadata,
+    Column("id", UUID(as_uuid=True), primary_key=True),
+    Column(
+        "source_id",
+        UUID(as_uuid=True),
+        ForeignKey("sources.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    # Free-text lifecycle status: queued | running | succeeded | failed.
+    Column("status", Text, nullable=False),
+    Column("attempts", Integer, nullable=False, server_default="0"),
+    # Terminal-success counts (QUIZ-09).
+    Column("generated_count", Integer, nullable=False, server_default="0"),
+    Column("discarded_count", Integer, nullable=False, server_default="0"),
+    Column("failed_sections", Integer, nullable=False, server_default="0"),
+    Column("last_error", Text, nullable=True),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
 )

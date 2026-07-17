@@ -70,6 +70,10 @@ def test_migration_metadata_compiles() -> None:
         "teaching_sessions",
         "teaching_turns",
         "teaching_turn_citations",
+        "quiz_items",
+        "quiz_item_scheduling",
+        "review_log",
+        "quiz_generation_jobs",
     }
     # Unique email + unique session token_hash are the security-critical constraints.
     user_uniques = {c.name for c in users.constraints if c.__class__.__name__ == "UniqueConstraint"}
