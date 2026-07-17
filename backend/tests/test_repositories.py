@@ -862,6 +862,43 @@ def test_get_section_returns_content_at_anchor(db_conn: Connection) -> None:
     assert section.markdown == "two body"
 
 
+def test_get_section_duplicate_anchor_resolves_to_reading_order(db_conn: Connection) -> None:
+    # Two sections share one anchor; get_section returns the earlier-in-reading-order
+    # one (lower position), regardless of insertion order.
+    source = _persisted_source(db_conn, "corpus-section-dup@example.com")
+    repo = SqlAlchemyCorpusRepository(db_conn)
+    repo.replace(
+        source.id,
+        title="Bk",
+        authors=("Author",),
+        language="en",
+        schema_version=1,
+        sections=(
+            _section_record(
+                position=1,
+                title="Later",
+                section_path=("Later",),
+                anchor="dup.xhtml#a",
+                markdown="later body",
+            ),
+            _section_record(
+                position=0,
+                title="Earlier",
+                section_path=("Earlier",),
+                anchor="dup.xhtml#a",
+                markdown="earlier body",
+            ),
+        ),
+    )
+
+    section = repo.get_section(source.id, "dup.xhtml#a")
+
+    assert section is not None
+    assert section.title == "Earlier"
+    assert section.section_path == ("Earlier",)
+    assert section.markdown == "earlier body"
+
+
 def test_get_section_unknown_anchor_returns_none(db_conn: Connection) -> None:
     source = _persisted_source(db_conn, "corpus-section-miss@example.com")
     repo = SqlAlchemyCorpusRepository(db_conn)
