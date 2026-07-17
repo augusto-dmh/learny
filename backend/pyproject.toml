@@ -32,7 +32,9 @@ dev = [
     "pytest-asyncio>=0.25,<1",
     "httpx>=0.28,<1",
     "ruff>=0.9,<1",
+    "docling-core>=2.87,<3",
 ]
+pdf = ["docling>=2.112,<3"]
 
 [build-system]
 requires = ["hatchling"]
