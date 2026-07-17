@@ -37,6 +37,19 @@ _CI = _REPO_ROOT / ".github" / "workflows" / "ci.yml"
 _IMAGE_TAG = "${LEARNY_IMAGE_TAG:-latest}"
 
 
+def _executed_lines(text: str) -> list[str]:
+    """The script's executed lines (blank lines and full-line comments dropped).
+
+    Guards against the L-010 anti-pattern: a safety flag named only in a doc comment
+    must not satisfy an assertion — pin it on the line the shell actually runs.
+    """
+    return [
+        line
+        for line in text.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+
+
 def _load(path: Path) -> dict:
     return yaml.safe_load(path.read_text())
 
@@ -155,8 +168,18 @@ def test_backup_runs_in_strict_mode_with_pipefail() -> None:
 
 def test_backup_guards_against_a_concurrent_run() -> None:
     # `flock -n` fails immediately if a run is in progress (OPS-07); the guard must
-    # not block-and-wait (which would queue a duplicate dump).
-    assert "flock -n" in _BACKUP_SH
+    # not block-and-wait (which would queue a duplicate dump). Pin `-n` on the
+    # executed guard line, so dropping it from the real `if !` check fails here even
+    # while a doc comment still names `flock -n`.
+    guard = [line for line in _executed_lines(_BACKUP_SH) if "flock" in line]
+    assert guard, "backup.sh must run a flock guard"
+    guard_line = guard[0]
+    assert guard_line.lstrip().startswith("if !"), (
+        "the flock guard must be a non-blocking `if !` check"
+    )
+    assert "-n" in guard_line, (
+        "the flock guard must use -n (non-blocking); a blocking flock queues a duplicate dump"
+    )
 
 
 def test_backup_writes_a_compressed_custom_format_dump() -> None:
@@ -172,13 +195,26 @@ def test_backup_dumps_to_a_temp_name_and_renames_only_on_success() -> None:
 
 
 def test_backup_gates_offsite_on_all_four_remote_vars() -> None:
+    # OPS-05: offsite runs only when ALL four remote vars are set. Extract the executed
+    # `if [ -n ... ]` conditional and assert the four `-n` checks are AND-joined, so a
+    # regression flipping any `&&` to `||` (offsite on a single var) fails here.
+    lines = _executed_lines(_BACKUP_SH)
+    start = next(i for i, ln in enumerate(lines) if ln.lstrip().startswith("if [ -n"))
+    end = next(i for i in range(start, len(lines)) if lines[i].rstrip().endswith("; then"))
+    # Rejoin the backslash-continued conditional into one logical line.
+    conditional = " ".join(ln.rstrip().rstrip("\\").strip() for ln in lines[start : end + 1])
     for var in (
         "LEARNY_BACKUP_REMOTE_ENDPOINT",
         "LEARNY_BACKUP_REMOTE_ACCESS_KEY",
         "LEARNY_BACKUP_REMOTE_SECRET_KEY",
         "LEARNY_BACKUP_REMOTE_BUCKET",
     ):
-        assert var in _BACKUP_SH, f"offsite gating must reference {var}"
+        assert f'[ -n "${{{var}:-}}" ]' in conditional, (
+            f"offsite gate must check {var} with -n on the executed conditional"
+        )
+    # All four checks are AND-joined (three &&, no ||): a single set var must not enable offsite.
+    assert conditional.count("&&") == 3, "the four remote-var checks must be joined by &&"
+    assert "||" not in conditional, "offsite gating must not OR the remote-var checks"
     # The exact local-only notice CI asserts (OPS-05, OPS-10).
     assert "offsite not configured" in _BACKUP_SH
 
@@ -253,6 +289,24 @@ def test_backup_image_pins_alpine_and_verifies_mc_checksum() -> None:
 def test_entrypoint_defaults_the_schedule_and_runs_crond() -> None:
     assert "LEARNY_BACKUP_CRON:=30 3 * * *" in _ENTRYPOINT_SH
     assert "crond -f" in _ENTRYPOINT_SH
+
+
+def test_entrypoint_renders_the_schedule_into_the_crontab() -> None:
+    # The crond branch writes the schedule (running backup.sh) into /etc/crontabs/root;
+    # pin the target on the executed line so a redirect to the wrong path — a silently
+    # dead schedule — fails here, not in production.
+    executed = "\n".join(_executed_lines(_ENTRYPOINT_SH))
+    assert "/usr/local/bin/backup.sh" in executed
+    assert "> /etc/crontabs/root" in executed
+
+
+def test_entrypoint_persists_the_backup_env_filtered_by_prefix() -> None:
+    # Cron runs jobs with a bare environment; the branch snapshots only the
+    # POSTGRES_/MINIO_/LEARNY_ vars into /etc/backup.env. Pin the filter case and the
+    # target on the executed lines, not a whole-file substring.
+    executed = "\n".join(_executed_lines(_ENTRYPOINT_SH))
+    assert "POSTGRES_*|MINIO_*|LEARNY_*)" in executed
+    assert "> /etc/backup.env" in executed
 
 
 # --- CI restore roundtrip (OPS-10) ----------------------------------------------
