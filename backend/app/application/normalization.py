@@ -78,6 +78,31 @@ _NEUTRAL_HEURISTICS = LanguageHeuristics()
 _HEURISTICS: dict[str | None, LanguageHeuristics] = {
     None: _NEUTRAL_HEURISTICS,
     "en": _NEUTRAL_HEURISTICS,
+    "pt": LanguageHeuristics(
+        # Filename-stem families Brazilian/Portuguese ebooks produce
+        # (``capitulo0003``, ``parte-2``, ``secao_10`` …), accented or not.
+        generic_title_patterns=(
+            re.compile(r"^(cap[ií]tulo|parte|se[cç][aã]o)[_-]?\d+$", re.IGNORECASE),
+        ),
+        # Top-level structures: parts/books and canonical PT front/back matter.
+        part_keywords=frozenset(
+            {
+                "parte",
+                "livro",
+                "prefácio",
+                "prefacio",
+                "sumário",
+                "sumario",
+                "índice",
+                "indice",
+                "apêndice",
+                "apendice",
+                "introdução",
+                "introducao",
+            }
+        ),
+        chapter_keywords=frozenset({"capítulo", "capitulo"}),
+    ),
 }
 
 
