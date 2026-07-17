@@ -35,6 +35,7 @@ RESULTS_DIR = _REPO_ROOT / "evals" / "results"
 
 FAITHFULNESS_PROMPT_PATH = _HERE / "prompts" / "faithfulness.md"
 RELEVANCY_PROMPT_PATH = _HERE / "prompts" / "relevancy.md"
+ANSWERABILITY_PROMPT_PATH = _HERE / "prompts" / "answerability.md"
 
 # Judge output is short (a claim list or one integer); bound it well below the
 # non-streaming guard so the fake client stays a plain object.
@@ -74,6 +75,17 @@ _RELEVANCY_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
+_ANSWERABILITY_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "answerable": {"type": "boolean"},
+        "score": {"type": "integer", "enum": [1, 2, 3, 4, 5]},
+        "reason": {"type": "string"},
+    },
+    "required": ["answerable", "score", "reason"],
+    "additionalProperties": False,
+}
+
 
 @dataclass(frozen=True)
 class Claim:
@@ -100,6 +112,29 @@ class FaithfulnessResult:
             return 1.0
         supported = sum(1 for claim in self.claims if claim.supported)
         return supported / len(self.claims)
+
+
+@dataclass(frozen=True)
+class AnswerabilityResult:
+    """Whether a quiz item is answerable from its cited excerpt (QUIZ-24)."""
+
+    answerable: bool
+    score: int
+    reason: str
+
+
+@dataclass(frozen=True)
+class AnswerabilityInput:
+    """One quiz item ready for the answerability judge (provider/DB-agnostic).
+
+    ``excerpt`` is the item's snapshotted ``source_excerpt`` — the exact passage the
+    question was grounded in — so the judge scores answerability from that alone.
+    """
+
+    item_id: str
+    question: str
+    answer: str
+    excerpt: str
 
 
 @dataclass(frozen=True)
@@ -191,6 +226,21 @@ class Judge:
         )
         return int(data["score"])
 
+    def answerability(
+        self, *, question: str, answer: str, excerpt: str
+    ) -> AnswerabilityResult:
+        """Judge whether a quiz item is answerable from its cited excerpt (QUIZ-24)."""
+        data = self._judge(
+            system=ANSWERABILITY_PROMPT_PATH.read_text(encoding="utf-8"),
+            user=_answerability_user(question, answer, excerpt),
+            schema=_ANSWERABILITY_SCHEMA,
+        )
+        return AnswerabilityResult(
+            answerable=bool(data["answerable"]),
+            score=int(data["score"]),
+            reason=str(data["reason"]),
+        )
+
 
 def _first_text(message: Any) -> str:
     """Return the first ``text`` block's text from a Claude message."""
@@ -208,12 +258,24 @@ def _relevancy_user(question: str, answer: str) -> str:
     return f"QUESTION:\n{question}\n\nANSWER:\n{answer}"
 
 
+def _answerability_user(question: str, answer: str, excerpt: str) -> str:
+    return (
+        f"QUIZ QUESTION:\n{question}\n\nANSWER:\n{answer}\n\n"
+        f"SOURCE EXCERPT:\n{excerpt}"
+    )
+
+
 def prompt_hash() -> str:
     """sha256 of the judge prompt files — versions the results by judge prompt."""
     digest = hashlib.sha256()
     digest.update(FAITHFULNESS_PROMPT_PATH.read_bytes())
     digest.update(RELEVANCY_PROMPT_PATH.read_bytes())
     return digest.hexdigest()
+
+
+def answerability_prompt_hash() -> str:
+    """sha256 of the answerability prompt — versions the quiz eval by its own prompt."""
+    return hashlib.sha256(ANSWERABILITY_PROMPT_PATH.read_bytes()).hexdigest()
 
 
 def _git_sha() -> str:
@@ -281,6 +343,47 @@ def run_eval(
 
     if gate:
         _assert_aggregates(lines)
+    return lines
+
+
+def run_answerability_eval(
+    inputs: Sequence[AnswerabilityInput],
+    *,
+    judge: Judge,
+    max_cases: int,
+    results_dir: Path = RESULTS_DIR,
+) -> list[dict[str, Any]]:
+    """Judge up to ``max_cases`` quiz items for answerability; append one JSONL line each.
+
+    Caps the case count first (cost bound, mirroring :func:`run_eval`), scores each
+    item's answerability from its cited excerpt alone, and appends
+    ``evals/results/<date>-<git-sha>.jsonl`` lines: ``{item_id, ts, git_sha,
+    judge_model, prompt_hash, answerable, score, reason}``. Report-only
+    (calibration-first, research §5/§8): the nightly records the JSONL as the eval
+    dashboard; no aggregate gate is asserted. Returns the written lines.
+    """
+    git_sha = _git_sha()
+    phash = answerability_prompt_hash()
+    capped = list(inputs[:max_cases])
+    lines: list[dict[str, Any]] = []
+    for item in capped:
+        result = judge.answerability(
+            question=item.question, answer=item.answer, excerpt=item.excerpt
+        )
+        lines.append(
+            {
+                "item_id": item.item_id,
+                "ts": datetime.now(UTC).isoformat(),
+                "git_sha": git_sha,
+                "judge_model": judge.model,
+                "prompt_hash": phash,
+                "answerable": result.answerable,
+                "score": result.score,
+                "reason": result.reason,
+            }
+        )
+
+    _write_jsonl(lines, results_dir=results_dir, git_sha=git_sha)
     return lines
 
 

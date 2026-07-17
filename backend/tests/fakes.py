@@ -298,6 +298,19 @@ class FakeIngestionEnqueuer:
             raise self._error
 
 
+class FakeQuizDeckEnqueuer:
+    """``QuizDeckEnqueuer`` double: records enqueue calls, or raises if configured."""
+
+    def __init__(self, *, error: Exception | None = None) -> None:
+        self._error = error
+        self.calls: list[tuple[UUID, UUID]] = []
+
+    def enqueue_quiz_deck(self, *, source_id: UUID, job_id: UUID) -> None:
+        self.calls.append((source_id, job_id))
+        if self._error is not None:
+            raise self._error
+
+
 class FakeEpubParser:
     """``EpubParserPort`` double: returns a preset ``ParsedBook`` or raises.
 

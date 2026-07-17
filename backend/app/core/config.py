@@ -145,6 +145,26 @@ class Settings(BaseSettings):
     judge_model: str = "claude-haiku-4-5"
     eval_max_cases: int = 50
 
+    # Active recall — quiz deck generation (RFC-002 Cycle E). The provider SDK and
+    # model name live only in the quiz adapter; these knobs stay LEARNY_-prefixed and
+    # never hard-coded in application/domain code. ``quiz_model`` names the batched
+    # generation model (deterministic ``local`` adapter ignores it). The item/section
+    # caps and character floor bound deck density; ``quiz_dedup_threshold`` is the
+    # cosine-similarity ceiling above which a candidate is a near-duplicate; the batch
+    # timeout/poll-interval bound the Anthropic Message Batches polling loop.
+    quiz_model: str = "claude-haiku-4-5"
+    quiz_max_items_per_section: int = 6
+    quiz_min_section_chars: int = 200
+    quiz_dedup_threshold: float = 0.90
+    quiz_batch_timeout_s: int = 3600
+    quiz_batch_poll_interval_s: int = 30
+
+    # Active recall — FSRS scheduling (RFC-002 Cycle E). ``fsrs_desired_retention`` is
+    # the FSRS-6 target recall probability; ``fsrs_fuzzing`` spreads due dates to avoid
+    # review pile-ups (disabled in tests for deterministic interval assertions).
+    fsrs_desired_retention: float = 0.9
+    fsrs_fuzzing: bool = True
+
 
 @lru_cache
 def get_settings() -> Settings:

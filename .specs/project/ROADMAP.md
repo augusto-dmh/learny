@@ -29,6 +29,6 @@ TDD open question #10 lands in Cycle G). Research evidence: `docs/research/2026-
 | `v2-embeddings` | B | Real embeddings (OpenAI 3-large@1536) + language-aware FTS | Done (PR #20) |
 | `v2-generation` | C | Claude generation: cited answers + teaching + eval harness | Done (PR #23) |
 | `v2-frontend` | D | Frontend v2: product UI + streaming | Done (PR #24) |
-| — | E | Active recall: quizzes + FSRS | Not started |
+| `v2-active-recall` | E | Active recall: quizzes + FSRS | Done (PR #25) |
 | — | F | PDF (Docling) + EPUB hardening | Not started |
 | — | G | Deploy (GHCR→VPS, Caddy) + presentation | Not started |

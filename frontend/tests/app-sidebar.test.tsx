@@ -238,6 +238,18 @@ describe("AppSidebar", () => {
     ).toBe("/sources/s-ready/read?anchor=chapter-1.xhtml");
   });
 
+  it("offers a global Review entry linking to the due queue", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({ "GET /api/sources": () => jsonResponse(200, []) }),
+    );
+
+    renderSidebar();
+
+    const review = await screen.findByRole("link", { name: "Review" });
+    expect(review.getAttribute("href")).toBe("/review");
+  });
+
   it("shows an empty-library state with an upload affordance", async () => {
     vi.stubGlobal(
       "fetch",

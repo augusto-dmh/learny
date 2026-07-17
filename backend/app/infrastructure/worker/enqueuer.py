@@ -21,3 +21,17 @@ class CeleryIngestionEnqueuer:
         from app.worker.tasks import run_ingestion
 
         run_ingestion.apply_async(args=[str(source_id), str(job_id)])
+
+
+class CeleryQuizDeckEnqueuer:
+    """``QuizDeckEnqueuer`` backed by the Celery ``generate_quiz_deck`` task (QUIZ-03).
+
+    The deck POST handler calls this *after* the queued job is committed so the worker
+    always dequeues a durable row; only ids ride the queue (AD-014), mirroring
+    :class:`CeleryIngestionEnqueuer`.
+    """
+
+    def enqueue_quiz_deck(self, *, source_id: UUID, job_id: UUID) -> None:
+        from app.worker.tasks import generate_quiz_deck
+
+        generate_quiz_deck.apply_async(args=[str(source_id), str(job_id)])

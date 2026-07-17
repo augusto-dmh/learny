@@ -19,21 +19,39 @@ from collections.abc import Sequence
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import Connection, bindparam, func, insert, select, update
+from sqlalchemy import (
+    Connection,
+    bindparam,
+    func,
+    insert,
+    literal_column,
+    select,
+    update,
+)
 from sqlalchemy import delete as sa_delete
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 
 from app.application.errors import TeachingTurnConflict
 from app.application.text_search import resolve_text_search_config
 from app.domain.entities import (
+    ACTIVE_QUIZ_JOB_STATUSES,
     ChunkToEmbed,
     CorpusSectionRecord,
     CorpusStructure,
+    DueReviewItem,
     Evidence,
     HistoryTurn,
     IngestionEvent,
     IngestionJob,
     PasswordCredential,
+    QuizGenerationJob,
+    QuizItem,
+    QuizItemStatus,
+    QuizSection,
+    ReconcileSection,
+    ReviewLogEntry,
+    SchedulingSnapshot,
     SectionContent,
     Session,
     Source,
@@ -50,6 +68,10 @@ from app.infrastructure.db.metadata import (
     corpus_sections,
     ingestion_events,
     ingestion_jobs,
+    quiz_generation_jobs,
+    quiz_item_scheduling,
+    quiz_items,
+    review_log,
     sessions,
     sources,
     teaching_sessions,
@@ -473,6 +495,52 @@ class SqlAlchemyCorpusRepository:
             markdown=row.markdown,
         )
 
+    def section_texts(self, source_id: UUID) -> list[ReconcileSection]:
+        # Reading-order sections with their chunk text concatenated (reconciliation
+        # checks a snapshotted excerpt against the same chunk text it was verified
+        # against at generation, QUIZ-16). One query joins chunks → sections →
+        # documents on ``source_id``; sections with no chunks still appear (empty text)
+        # via the outer join so an anchor that survives is always found.
+        rows = self._conn.execute(
+            select(
+                corpus_sections.c.position,
+                corpus_sections.c.anchor,
+                corpus_sections.c.section_path,
+                corpus_chunks.c.chunk_index,
+                corpus_chunks.c.text,
+            )
+            .select_from(
+                corpus_sections.join(
+                    corpus_documents,
+                    corpus_sections.c.document_id == corpus_documents.c.id,
+                ).outerjoin(
+                    corpus_chunks,
+                    corpus_chunks.c.section_id == corpus_sections.c.id,
+                )
+            )
+            .where(corpus_documents.c.source_id == source_id)
+            .order_by(corpus_sections.c.position, corpus_chunks.c.chunk_index)
+        ).all()
+
+        ordered_positions: list[int] = []
+        anchors: dict[int, tuple[str, tuple[str, ...]]] = {}
+        chunks: dict[int, list[str]] = {}
+        for row in rows:
+            if row.position not in anchors:
+                ordered_positions.append(row.position)
+                anchors[row.position] = (row.anchor, tuple(row.section_path))
+                chunks[row.position] = []
+            if row.text is not None:
+                chunks[row.position].append(row.text)
+        return [
+            ReconcileSection(
+                anchor=anchors[pos][0],
+                section_path=anchors[pos][1],
+                text=" ".join(chunks[pos]),
+            )
+            for pos in ordered_positions
+        ]
+
 
 class SqlAlchemyEmbeddingIndexRepository:
     """``EmbeddingIndexRepository`` backed by ``corpus_chunks`` (RET-09/11).
@@ -745,6 +813,388 @@ class SqlAlchemyTeachingTurnRepository:
         return total, history
 
 
+class SqlAlchemyQuizItemRepository:
+    """``QuizItemRepository`` backed by ``quiz_items`` + scheduling/log tables.
+
+    Upsert keys on ``(source_id, content_key)`` and updates content fields only, so a
+    deck regeneration never touches an existing item's ``quiz_item_scheduling`` or
+    ``review_log`` rows (QUIZ-02). Reads/due queries reach ownership only via the
+    parent source's ``user_id`` (AD-014). Operates on the caller's ``Connection`` so
+    the transaction boundary lives at the composition root.
+    """
+
+    def __init__(self, connection: Connection) -> None:
+        self._conn = connection
+
+    def sections_for_generation(
+        self, source_id: UUID, *, min_chars: int
+    ) -> list[QuizSection]:
+        """Return ``source_id``'s eligible leaf sections (≥ ``min_chars`` text, A-3).
+
+        A section is a *leaf* when no other section's ``section_path`` strictly extends
+        it (the TOC-tree leaves); each eligible leaf carries its citation anchors and its
+        ``(chunk_id, text)`` chunks in reading order for candidate grounding. Sections
+        whose summed chunk text is shorter than ``min_chars`` (stub sections) are skipped.
+        """
+        document_id = self._conn.execute(
+            select(corpus_documents.c.id).where(
+                corpus_documents.c.source_id == source_id
+            )
+        ).scalar_one_or_none()
+        if document_id is None:
+            return []
+
+        section_rows = self._conn.execute(
+            select(
+                corpus_sections.c.id,
+                corpus_sections.c.section_path,
+                corpus_sections.c.anchor,
+                corpus_sections.c.title,
+            )
+            .where(corpus_sections.c.document_id == document_id)
+            .order_by(corpus_sections.c.position)
+        ).all()
+
+        chunk_rows = self._conn.execute(
+            select(
+                corpus_chunks.c.section_id,
+                corpus_chunks.c.id,
+                corpus_chunks.c.text,
+            )
+            .join(corpus_sections, corpus_chunks.c.section_id == corpus_sections.c.id)
+            .where(corpus_sections.c.document_id == document_id)
+            .order_by(corpus_sections.c.position, corpus_chunks.c.chunk_index)
+        ).all()
+        chunks_by_section: dict[UUID, list[tuple[UUID, str]]] = {}
+        for row in chunk_rows:
+            chunks_by_section.setdefault(row.section_id, []).append((row.id, row.text))
+
+        paths = [tuple(row.section_path) for row in section_rows]
+
+        def _is_leaf(index: int) -> bool:
+            path = paths[index]
+            depth = len(path)
+            return not any(
+                other[:depth] == path and len(other) > depth
+                for pos, other in enumerate(paths)
+                if pos != index
+            )
+
+        result: list[QuizSection] = []
+        for index, row in enumerate(section_rows):
+            if not _is_leaf(index):
+                continue
+            chunks = tuple(chunks_by_section.get(row.id, ()))
+            if sum(len(text) for _, text in chunks) < min_chars:
+                continue
+            result.append(
+                QuizSection(
+                    section_path=tuple(row.section_path),
+                    anchor=row.anchor,
+                    title=row.title,
+                    chunks=chunks,
+                )
+            )
+        return result
+
+    def existing_embeddings(self, source_id: UUID) -> list[tuple[UUID, list[float]]]:
+        """Return ``(item_id, embedding)`` for the source's already-embedded items."""
+        rows = self._conn.execute(
+            select(quiz_items.c.id, quiz_items.c.embedding)
+            .where(quiz_items.c.source_id == source_id)
+            .where(quiz_items.c.embedding.is_not(None))
+        ).all()
+        return [(row.id, [float(value) for value in row.embedding]) for row in rows]
+
+    def upsert(self, item: QuizItem, *, embedding: Sequence[float] | None) -> bool:
+        """Upsert on ``(source_id, content_key)``; update content fields only on conflict.
+
+        Returns ``True`` when a new row was inserted and ``False`` when an existing row's
+        content was updated. The conflict update leaves ``status`` and the scheduling/
+        review-log rows untouched (QUIZ-02); the ``(xmax = 0)`` projection is Postgres'
+        was-inserted signal (zero on a fresh insert, the updater's xid otherwise).
+        """
+        stmt = pg_insert(quiz_items).values(
+            id=item.id,
+            source_id=item.source_id,
+            item_type=item.item_type,
+            question=item.question,
+            answer=item.answer,
+            section_path=list(item.section_path),
+            anchor=item.anchor,
+            source_excerpt=item.source_excerpt,
+            chunk_hash=item.chunk_hash,
+            content_key=item.content_key,
+            status=item.status,
+            embedding=list(embedding) if embedding is not None else None,
+            generation_meta=item.generation_meta,
+            created_at=item.created_at,
+            updated_at=item.updated_at,
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["source_id", "content_key"],
+            set_={
+                "question": stmt.excluded.question,
+                "answer": stmt.excluded.answer,
+                "section_path": stmt.excluded.section_path,
+                "anchor": stmt.excluded.anchor,
+                "source_excerpt": stmt.excluded.source_excerpt,
+                "chunk_hash": stmt.excluded.chunk_hash,
+                "embedding": stmt.excluded.embedding,
+                "generation_meta": stmt.excluded.generation_meta,
+                "updated_at": stmt.excluded.updated_at,
+            },
+        ).returning(literal_column("(xmax = 0)").label("inserted"))
+        return bool(self._conn.execute(stmt).scalar_one())
+
+    def create_scheduling(
+        self, quiz_item_id: UUID, snapshot: SchedulingSnapshot
+    ) -> None:
+        """Insert the initial scheduling row for a newly created item (QUIZ-09)."""
+        self._conn.execute(
+            insert(quiz_item_scheduling).values(
+                quiz_item_id=quiz_item_id,
+                state=snapshot.state,
+                step=snapshot.step,
+                stability=snapshot.stability,
+                difficulty=snapshot.difficulty,
+                due=snapshot.due,
+                last_review=snapshot.last_review,
+            )
+        )
+
+    def get_scheduling(self, quiz_item_id: UUID) -> SchedulingSnapshot | None:
+        """Return the item's current scheduling snapshot, or ``None`` if absent."""
+        row = self._conn.execute(
+            select(quiz_item_scheduling).where(
+                quiz_item_scheduling.c.quiz_item_id == quiz_item_id
+            )
+        ).one_or_none()
+        return _to_scheduling(row) if row is not None else None
+
+    def update_scheduling(
+        self, quiz_item_id: UUID, snapshot: SchedulingSnapshot
+    ) -> None:
+        """Replace the item's scheduling snapshot after a review (QUIZ-12)."""
+        self._conn.execute(
+            update(quiz_item_scheduling)
+            .where(quiz_item_scheduling.c.quiz_item_id == quiz_item_id)
+            .values(
+                state=snapshot.state,
+                step=snapshot.step,
+                stability=snapshot.stability,
+                difficulty=snapshot.difficulty,
+                due=snapshot.due,
+                last_review=snapshot.last_review,
+                updated_at=func.now(),
+            )
+        )
+
+    def append_log(self, quiz_item_id: UUID, entry: ReviewLogEntry) -> None:
+        """Append an immutable review-log entry for the item (QUIZ-12)."""
+        self._conn.execute(
+            insert(review_log).values(
+                id=uuid4(),
+                quiz_item_id=quiz_item_id,
+                rating=entry.rating,
+                reviewed_at=entry.reviewed_at,
+                review_duration_ms=entry.review_duration_ms,
+            )
+        )
+
+    def list_for_source(self, source_id: UUID) -> list[QuizItem]:
+        """Return all of ``source_id``'s items (any status), oldest first (QUIZ-14)."""
+        rows = self._conn.execute(
+            select(*_QUIZ_ITEM_READ_COLUMNS)
+            .where(quiz_items.c.source_id == source_id)
+            .order_by(quiz_items.c.created_at, quiz_items.c.id)
+        ).all()
+        return [_to_quiz_item(row) for row in rows]
+
+    def due_map(self, source_id: UUID) -> dict[UUID, datetime]:
+        """Return ``item_id → due`` for ``source_id``'s items — the overview due column."""
+        rows = self._conn.execute(
+            select(quiz_item_scheduling.c.quiz_item_id, quiz_item_scheduling.c.due)
+            .select_from(
+                quiz_item_scheduling.join(
+                    quiz_items,
+                    quiz_item_scheduling.c.quiz_item_id == quiz_items.c.id,
+                )
+            )
+            .where(quiz_items.c.source_id == source_id)
+        ).all()
+        return {row.quiz_item_id: row.due for row in rows}
+
+    def counts_by_status(self, source_id: UUID) -> dict[str, int]:
+        """Return ``status → count`` for ``source_id``'s items (QUIZ-14)."""
+        rows = self._conn.execute(
+            select(quiz_items.c.status, func.count())
+            .where(quiz_items.c.source_id == source_id)
+            .group_by(quiz_items.c.status)
+        ).all()
+        return {row[0]: row[1] for row in rows}
+
+    def due_for_user(
+        self,
+        user_id: UUID,
+        *,
+        now: datetime,
+        limit: int,
+        source_id: UUID | None = None,
+    ) -> tuple[int, list[DueReviewItem]]:
+        """Return the caller's due queue: total due count and up to ``limit`` items.
+
+        Active items with ``due <= now`` across the user's sources (optionally filtered to
+        one ``source_id``), joined through ``sources`` for ownership so no other user's
+        items leak, ordered ``due ASC, id ASC`` (A-6). Stale/orphaned items are excluded
+        (QUIZ-17); the returned count is the full due total before the ``limit``.
+        """
+        join = quiz_items.join(
+            sources, quiz_items.c.source_id == sources.c.id
+        ).join(
+            quiz_item_scheduling,
+            quiz_item_scheduling.c.quiz_item_id == quiz_items.c.id,
+        )
+        conditions = [
+            sources.c.user_id == user_id,
+            quiz_items.c.status == QuizItemStatus.ACTIVE,
+            quiz_item_scheduling.c.due <= now,
+        ]
+        if source_id is not None:
+            conditions.append(quiz_items.c.source_id == source_id)
+
+        total = self._conn.execute(
+            select(func.count()).select_from(join).where(*conditions)
+        ).scalar_one()
+
+        rows = self._conn.execute(
+            select(
+                *_QUIZ_ITEM_READ_COLUMNS,
+                sources.c.title.label("source_title"),
+                quiz_item_scheduling.c.due.label("due"),
+            )
+            .select_from(join)
+            .where(*conditions)
+            .order_by(quiz_item_scheduling.c.due.asc(), quiz_items.c.id.asc())
+            .limit(limit)
+        ).all()
+        items = [
+            DueReviewItem(
+                item=_to_quiz_item(row), source_title=row.source_title, due=row.due
+            )
+            for row in rows
+        ]
+        return total, items
+
+    def get_by_id(self, item_id: UUID) -> QuizItem | None:
+        """Return the item with ``item_id``, or ``None`` if absent."""
+        row = self._conn.execute(
+            select(*_QUIZ_ITEM_READ_COLUMNS).where(quiz_items.c.id == item_id)
+        ).one_or_none()
+        return _to_quiz_item(row) if row is not None else None
+
+    def items_for_reconcile(self, source_id: UUID) -> list[QuizItem]:
+        """Return ``source_id``'s items for post-re-ingestion reconciliation (QUIZ-16)."""
+        rows = self._conn.execute(
+            select(*_QUIZ_ITEM_READ_COLUMNS)
+            .where(quiz_items.c.source_id == source_id)
+            .order_by(quiz_items.c.created_at, quiz_items.c.id)
+        ).all()
+        return [_to_quiz_item(row) for row in rows]
+
+    def update_reconciliation(
+        self,
+        item_id: UUID,
+        *,
+        anchor: str,
+        section_path: Sequence[str],
+        status: str,
+    ) -> None:
+        """Update only an item's ``anchor``/``section_path``/``status`` (QUIZ-16).
+
+        Reconciliation touches these three fields only — the scheduling and review-log
+        rows are never modified or deleted.
+        """
+        self._conn.execute(
+            update(quiz_items)
+            .where(quiz_items.c.id == item_id)
+            .values(anchor=anchor, section_path=list(section_path), status=status)
+        )
+
+
+class SqlAlchemyQuizJobRepository:
+    """``QuizJobRepository`` backed by ``quiz_generation_jobs`` (mirrors the ingestion jobs repo).
+
+    The single-active-job guard (QUIZ-04) is the ``get_active_for_source`` query rather
+    than a partial unique index, so a caller checks for a queued/running job before
+    inserting a new one.
+    """
+
+    def __init__(self, connection: Connection) -> None:
+        self._conn = connection
+
+    def add(self, job: QuizGenerationJob) -> QuizGenerationJob:
+        """Insert a new deck-generation job."""
+        self._conn.execute(
+            insert(quiz_generation_jobs).values(
+                id=job.id,
+                source_id=job.source_id,
+                status=job.status,
+                attempts=job.attempts,
+                generated_count=job.generated_count,
+                discarded_count=job.discarded_count,
+                failed_sections=job.failed_sections,
+                last_error=job.last_error,
+                created_at=job.created_at,
+                updated_at=job.updated_at,
+            )
+        )
+        return job
+
+    def get_by_id(self, job_id: UUID) -> QuizGenerationJob | None:
+        row = self._conn.execute(
+            select(quiz_generation_jobs).where(quiz_generation_jobs.c.id == job_id)
+        ).one_or_none()
+        return _to_quiz_job(row) if row is not None else None
+
+    def get_active_for_source(self, source_id: UUID) -> QuizGenerationJob | None:
+        """Return the source's queued/running job if one exists (QUIZ-04), else ``None``."""
+        row = self._conn.execute(
+            select(quiz_generation_jobs)
+            .where(quiz_generation_jobs.c.source_id == source_id)
+            .where(quiz_generation_jobs.c.status.in_(ACTIVE_QUIZ_JOB_STATUSES))
+            .order_by(quiz_generation_jobs.c.created_at.desc())
+            .limit(1)
+        ).one_or_none()
+        return _to_quiz_job(row) if row is not None else None
+
+    def get_latest_for_source(self, source_id: UUID) -> QuizGenerationJob | None:
+        row = self._conn.execute(
+            select(quiz_generation_jobs)
+            .where(quiz_generation_jobs.c.source_id == source_id)
+            .order_by(quiz_generation_jobs.c.created_at.desc())
+            .limit(1)
+        ).one_or_none()
+        return _to_quiz_job(row) if row is not None else None
+
+    def update(self, job: QuizGenerationJob) -> QuizGenerationJob:
+        """Persist ``status``/``attempts``/counts/``last_error``/``updated_at``."""
+        self._conn.execute(
+            update(quiz_generation_jobs)
+            .where(quiz_generation_jobs.c.id == job.id)
+            .values(
+                status=job.status,
+                attempts=job.attempts,
+                generated_count=job.generated_count,
+                discarded_count=job.discarded_count,
+                failed_sections=job.failed_sections,
+                last_error=job.last_error,
+                updated_at=job.updated_at,
+            )
+        )
+        return job
+
+
 def _to_user(row) -> User:  # noqa: ANN001 — Row is an internal SQLAlchemy type
     return User(id=row.id, email=row.email, created_at=row.created_at)
 
@@ -832,4 +1282,55 @@ def _to_teaching_turn(row, citations: tuple[Evidence, ...]) -> TeachingTurn:  # 
         evidence_count=row.evidence_count,
         citations=citations,
         created_at=row.created_at,
+    )
+
+
+# Every quiz_items column except ``embedding``: the 1536-dim vector exists only for
+# generation-time dedup, so read models must not drag it across the wire (the overview
+# is a 3 s polling target and the due queue returns up to 100 rows per request).
+_QUIZ_ITEM_READ_COLUMNS = tuple(c for c in quiz_items.c if c.name != "embedding")
+
+
+def _to_quiz_item(row) -> QuizItem:  # noqa: ANN001
+    return QuizItem(
+        id=row.id,
+        source_id=row.source_id,
+        item_type=row.item_type,
+        question=row.question,
+        answer=row.answer,
+        section_path=tuple(row.section_path),
+        anchor=row.anchor,
+        source_excerpt=row.source_excerpt,
+        chunk_hash=row.chunk_hash,
+        content_key=row.content_key,
+        status=row.status,
+        generation_meta=row.generation_meta,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+def _to_scheduling(row) -> SchedulingSnapshot:  # noqa: ANN001
+    return SchedulingSnapshot(
+        state=row.state,
+        step=row.step,
+        stability=row.stability,
+        difficulty=row.difficulty,
+        due=row.due,
+        last_review=row.last_review,
+    )
+
+
+def _to_quiz_job(row) -> QuizGenerationJob:  # noqa: ANN001
+    return QuizGenerationJob(
+        id=row.id,
+        source_id=row.source_id,
+        status=row.status,
+        attempts=row.attempts,
+        generated_count=row.generated_count,
+        discarded_count=row.discarded_count,
+        failed_sections=row.failed_sections,
+        last_error=row.last_error,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
     )

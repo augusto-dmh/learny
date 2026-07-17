@@ -34,7 +34,14 @@ from app.application.identity import (
 )
 from app.application.ingestion import ReadIngestion, RunIngestion, StartIngestion
 from app.application.qa import AskQuestion
+from app.application.quiz import (
+    ExportQuizDeck,
+    ListQuizItems,
+    PlanDeckGeneration,
+    RunDeckGeneration,
+)
 from app.application.retrieval import RetrieveEvidence
+from app.application.reviews import GetDueQueue, SubmitReview
 from app.application.sources import CreateSource, GetSource, ListSources
 from app.application.teaching import (
     ListTeachingSessions,
@@ -48,6 +55,7 @@ from app.domain.entities import Session, User
 from app.domain.ports import (
     AnswerGenerationPort,
     IngestionEnqueuer,
+    QuizDeckEnqueuer,
     StoragePort,
     TeachingGenerationPort,
 )
@@ -62,6 +70,8 @@ from app.infrastructure.db.repositories import (
     SqlAlchemyCredentialRepository,
     SqlAlchemyIngestionEventRepository,
     SqlAlchemyIngestionJobRepository,
+    SqlAlchemyQuizItemRepository,
+    SqlAlchemyQuizJobRepository,
     SqlAlchemySessionRepository,
     SqlAlchemySourceRepository,
     SqlAlchemyTeachingSessionRepository,
@@ -70,10 +80,15 @@ from app.infrastructure.db.repositories import (
 )
 from app.infrastructure.db.retrieval import SqlAlchemyRetrievalRepository
 from app.infrastructure.embeddings import build_embedding_adapter
+from app.infrastructure.quiz import build_quiz_adapter
+from app.infrastructure.scheduling import build_scheduling_adapter
 from app.infrastructure.security.password_hasher import Argon2PasswordHasher
 from app.infrastructure.security.tokens import SecretsTokenGenerator
 from app.infrastructure.storage.s3 import S3StorageAdapter
-from app.infrastructure.worker.enqueuer import CeleryIngestionEnqueuer
+from app.infrastructure.worker.enqueuer import (
+    CeleryIngestionEnqueuer,
+    CeleryQuizDeckEnqueuer,
+)
 from app.infrastructure.worker.steps import NoOpIngestionStep
 
 # Process-wide singletons for the stateless adapters. The hasher in particular is
@@ -442,4 +457,108 @@ def get_post_teaching_turn(
         ids=uuid4,
         evidence_top_k=settings.teaching_evidence_top_k,
         history_turns=settings.teaching_history_turns,
+    )
+
+
+# --- Active recall (Cycle E) ---------------------------------------------------
+#
+# The deck POST mirrors the ingestion start path: the queued job must be committed
+# before the synchronous enqueue (so the worker never dequeues a row that does not
+# yet exist), and on an enqueue failure a second UoW compensates the job to
+# terminal ``failed`` (so no phantom queued job blocks the QUIZ-04 single-in-flight
+# guard forever). Both write UoWs go through the injectable ``get_quiz_uow``
+# factory; tests override it to share the rolled-back ``db_conn``. The overview,
+# due-queue, and review-submit paths are ordinary request-scoped reads/writes.
+
+
+def _default_quiz_uow() -> AbstractContextManager[Connection]:
+    """Production deck-POST UoW: a fresh ``engine.begin()`` (commit on clean exit)."""
+    return get_engine().begin()
+
+
+_quiz_uow: Callable[[], AbstractContextManager[Connection]] = _default_quiz_uow
+
+
+def get_quiz_uow() -> Callable[[], AbstractContextManager[Connection]]:
+    """FastAPI dependency: the deck-POST UoW factory (overridable in tests)."""
+    return _quiz_uow
+
+
+_quiz_enqueuer: QuizDeckEnqueuer = CeleryQuizDeckEnqueuer()
+
+
+def get_quiz_deck_enqueuer() -> QuizDeckEnqueuer:
+    """FastAPI dependency: the process-wide deck enqueuer (overridable in tests)."""
+    return _quiz_enqueuer
+
+
+def build_plan_deck_generation(conn: Connection) -> PlanDeckGeneration:
+    """Wire ``PlanDeckGeneration`` on a deck-POST UoW connection (not request-scoped)."""
+    return PlanDeckGeneration(
+        sources=SqlAlchemySourceRepository(conn),
+        jobs=SqlAlchemyQuizJobRepository(conn),
+        authorize=AuthorizeOwnership(),
+        clock=_clock,
+        ids=uuid4,
+    )
+
+
+def build_deck_compensate(conn: Connection) -> RunDeckGeneration:
+    """Wire the enqueue-failure compensation driver on a deck-POST UoW connection.
+
+    Only ``RunDeckGeneration.fail`` is used on this path (it never starts a pass), so
+    the concrete generation/embedding/scheduling adapters it also composes are
+    inert here — they are built for parity with the worker's ``_build_run_deck``.
+    """
+    settings = get_settings()
+    return RunDeckGeneration(
+        jobs=SqlAlchemyQuizJobRepository(conn),
+        items=SqlAlchemyQuizItemRepository(conn),
+        generation=build_quiz_adapter(settings),
+        embeddings=build_embedding_adapter(settings),
+        scheduling=build_scheduling_adapter(settings),
+        clock=_clock,
+        ids=uuid4,
+        min_section_chars=settings.quiz_min_section_chars,
+        dedup_threshold=settings.quiz_dedup_threshold,
+    )
+
+
+def get_list_quiz_items(conn: DbConnection) -> ListQuizItems:
+    """Wire ``ListQuizItems`` on the request-scoped connection (QUIZ-14)."""
+    return ListQuizItems(
+        sources=SqlAlchemySourceRepository(conn),
+        items=SqlAlchemyQuizItemRepository(conn),
+        jobs=SqlAlchemyQuizJobRepository(conn),
+        authorize=AuthorizeOwnership(),
+    )
+
+
+def get_due_queue(conn: DbConnection) -> GetDueQueue:
+    """Wire ``GetDueQueue`` on the request-scoped connection (QUIZ-13)."""
+    return GetDueQueue(items=SqlAlchemyQuizItemRepository(conn), clock=_clock)
+
+
+def get_export_quiz_deck(conn: DbConnection) -> ExportQuizDeck:
+    """Wire ``ExportQuizDeck`` on the request-scoped connection (QUIZ-22)."""
+    return ExportQuizDeck(
+        sources=SqlAlchemySourceRepository(conn),
+        items=SqlAlchemyQuizItemRepository(conn),
+        authorize=AuthorizeOwnership(),
+    )
+
+
+def get_submit_review(conn: DbConnection) -> SubmitReview:
+    """Wire ``SubmitReview`` on the request-scoped connection (QUIZ-12).
+
+    A review is one atomic transaction (scheduling update + log append), so the
+    ordinary auto-committing request connection is the unit of work — no separate
+    commit-then-enqueue dance is needed as on the deck path.
+    """
+    return SubmitReview(
+        items=SqlAlchemyQuizItemRepository(conn),
+        sources=SqlAlchemySourceRepository(conn),
+        scheduling=build_scheduling_adapter(get_settings()),
+        authorize=AuthorizeOwnership(),
+        clock=_clock,
     )

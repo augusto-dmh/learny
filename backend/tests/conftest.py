@@ -183,6 +183,69 @@ def ingestion_client(db_conn: Connection, monkeypatch: pytest.MonkeyPatch):  # n
     get_settings.cache_clear()
 
 
+@pytest.fixture
+def quiz_client(db_conn: Connection, monkeypatch: pytest.MonkeyPatch):  # noqa: ANN201
+    """A ``TestClient`` for the quiz/review routers, isolated to a rolled-back txn.
+
+    Mirrors ``ingestion_client``: overrides ``get_db_connection`` (shared rolled-back
+    ``db_conn``), the deck-POST UoW factory (``get_quiz_uow``) to yield the same
+    ``db_conn`` *without committing* so UoW1 and the compensation UoW share one
+    transaction, and the deck enqueuer with a recording fake (also on ``app.state``
+    so tests can assert its calls). The 502 test installs a failing enqueuer via a
+    per-test ``dependency_overrides[get_quiz_deck_enqueuer]`` swap.
+    """
+    from contextlib import contextmanager
+
+    from fastapi.testclient import TestClient
+
+    from app.core.config import get_settings
+    from app.infrastructure.web.dependencies import (
+        get_db_connection,
+        get_quiz_deck_enqueuer,
+        get_quiz_uow,
+    )
+    from app.infrastructure.web.rate_limit import (
+        InMemoryFixedWindowRateLimiter,
+        get_rate_limiter,
+        set_rate_limiter,
+    )
+    from app.main import create_app
+    from tests.fakes import FakeQuizDeckEnqueuer
+
+    monkeypatch.setenv("LEARNY_SESSION_COOKIE_SECURE", "false")
+    monkeypatch.setenv("LEARNY_CSRF_TRUSTED_ORIGINS", TEST_ORIGIN)
+    get_settings.cache_clear()
+
+    previous_limiter = get_rate_limiter()
+    set_rate_limiter(InMemoryFixedWindowRateLimiter(max_attempts=1000))
+
+    app = create_app()
+
+    def _override_conn() -> Iterator[Connection]:
+        yield db_conn
+
+    @contextmanager
+    def _shared_uow() -> Iterator[Connection]:
+        # Yield the shared rolled-back connection WITHOUT committing, so the deck
+        # UoW and the compensation UoW observe one transaction.
+        yield db_conn
+
+    def _uow_factory() -> AbstractContextManager[Connection]:
+        return _shared_uow()
+
+    enqueuer = FakeQuizDeckEnqueuer()
+    app.state.quiz_enqueuer = enqueuer
+
+    app.dependency_overrides[get_db_connection] = _override_conn
+    app.dependency_overrides[get_quiz_uow] = lambda: _uow_factory
+    app.dependency_overrides[get_quiz_deck_enqueuer] = lambda: enqueuer
+    with TestClient(app, headers={"Origin": TEST_ORIGIN}) as c:
+        yield c
+    app.dependency_overrides.clear()
+    set_rate_limiter(previous_limiter)
+    get_settings.cache_clear()
+
+
 # A small EPUB byte-cap so the oversize-upload path is exercised cheaply (the
 # real 50 MiB default would force allocating a 50 MiB body in-process).
 SOURCES_MAX_BYTES = 1024

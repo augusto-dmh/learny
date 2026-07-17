@@ -65,3 +65,53 @@ def test_generation_settings_env_override(monkeypatch) -> None:
     assert settings.generation_max_tokens == 2048
     assert settings.judge_model == "claude-sonnet-4-6"
     assert settings.eval_max_cases == 10
+
+
+def test_quiz_settings_defaults() -> None:
+    # Design defaults (design §Settings additions): batched Haiku model, density caps,
+    # dedup threshold, and batch polling bounds — CI needs no key (local adapter).
+    settings = Settings(_env_file=None)
+
+    assert settings.quiz_model == "claude-haiku-4-5"
+    assert settings.quiz_max_items_per_section == 6
+    assert settings.quiz_min_section_chars == 200
+    assert settings.quiz_dedup_threshold == 0.90
+    assert settings.quiz_batch_timeout_s == 3600
+    assert settings.quiz_batch_poll_interval_s == 30
+
+
+def test_quiz_settings_env_override(monkeypatch) -> None:
+    # LEARNY_-prefixed env vars override every quiz knob.
+    monkeypatch.setenv("LEARNY_QUIZ_MODEL", "claude-opus-4-8")
+    monkeypatch.setenv("LEARNY_QUIZ_MAX_ITEMS_PER_SECTION", "4")
+    monkeypatch.setenv("LEARNY_QUIZ_MIN_SECTION_CHARS", "500")
+    monkeypatch.setenv("LEARNY_QUIZ_DEDUP_THRESHOLD", "0.85")
+    monkeypatch.setenv("LEARNY_QUIZ_BATCH_TIMEOUT_S", "7200")
+    monkeypatch.setenv("LEARNY_QUIZ_BATCH_POLL_INTERVAL_S", "15")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.quiz_model == "claude-opus-4-8"
+    assert settings.quiz_max_items_per_section == 4
+    assert settings.quiz_min_section_chars == 500
+    assert settings.quiz_dedup_threshold == 0.85
+    assert settings.quiz_batch_timeout_s == 7200
+    assert settings.quiz_batch_poll_interval_s == 15
+
+
+def test_fsrs_settings_defaults() -> None:
+    # FSRS-6 population defaults; fuzzing on by default (tests disable it explicitly).
+    settings = Settings(_env_file=None)
+
+    assert settings.fsrs_desired_retention == 0.9
+    assert settings.fsrs_fuzzing is True
+
+
+def test_fsrs_settings_env_override(monkeypatch) -> None:
+    monkeypatch.setenv("LEARNY_FSRS_DESIRED_RETENTION", "0.85")
+    monkeypatch.setenv("LEARNY_FSRS_FUZZING", "false")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.fsrs_desired_retention == 0.85
+    assert settings.fsrs_fuzzing is False
