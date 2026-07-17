@@ -11,7 +11,11 @@ case "${1:-crond}" in
     : "${LEARNY_BACKUP_CRON:=30 3 * * *}"
     # Cron jobs run with a bare environment; persist the container's backup-related
     # env (single-quote-escaped, so any secret value survives) so the scheduled
-    # backup.sh sees the same config as an on-demand run.
+    # backup.sh sees the same config as an on-demand run. The snapshot holds DB,
+    # MinIO, and offsite credentials, so create it owner-only (umask 077, restored
+    # after so the crontab write below keeps its normal mode).
+    prev_umask=$(umask)
+    umask 077
     printenv | while IFS='=' read -r key val; do
       case "$key" in
         POSTGRES_*|MINIO_*|LEARNY_*)
@@ -20,6 +24,7 @@ case "${1:-crond}" in
           ;;
       esac
     done > /etc/backup.env
+    umask "$prev_umask"
 
     printf '%s /usr/local/bin/backup.sh > /proc/1/fd/1 2>/proc/1/fd/2\n' \
       "$LEARNY_BACKUP_CRON" > /etc/crontabs/root

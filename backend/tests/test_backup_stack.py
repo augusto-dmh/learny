@@ -309,6 +309,12 @@ def test_entrypoint_persists_the_backup_env_filtered_by_prefix() -> None:
     assert "> /etc/backup.env" in executed
 
 
+def test_entrypoint_writes_the_backup_env_owner_only() -> None:
+    # /etc/backup.env snapshots DB/MinIO/offsite credentials, so it must be created
+    # owner-only. Pin the umask on the executed line (a doc comment must not satisfy it).
+    assert any("umask 077" in line for line in _executed_lines(_ENTRYPOINT_SH))
+
+
 # --- CI restore roundtrip (OPS-10) ----------------------------------------------
 #
 # The end-to-end proof lives in ci.yml's compose-smoke job; these asserts pin the
