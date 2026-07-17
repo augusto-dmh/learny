@@ -26,10 +26,16 @@ services:
       MINIO_ROOT_PASSWORD: learny-dev-secret
 
   api:
+    ports:
+      - "8000:8000"
     environment:
       LEARNY_DATABASE_URL: postgresql+psycopg://learny:learny@db:5432/learny
       LEARNY_STORAGE_ACCESS_KEY: learny
       LEARNY_STORAGE_SECRET_KEY: learny-dev-secret
+
+  web:
+    ports:
+      - "3000:3000"
 
   worker:
     environment:
