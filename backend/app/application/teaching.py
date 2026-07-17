@@ -311,6 +311,12 @@ class PostTeachingTurn:
         subtree_anchors = [
             s.anchor for s in sections if s.section_path[:depth] == target.section_path
         ]
+        # Expand the subtree to the anchors normalization merged away (AD-085) so
+        # evidence from a section a re-ingest folded into the subtree is still in
+        # scope (ING-23); the retrieval port signature is unchanged.
+        scoped_anchors = self._corpus.expand_anchors(
+            session.source_id, subtree_anchors
+        )
 
         # Bounded conversation context: the last ``history_turns`` message/response
         # pairs (response empty for a not-found turn), all of them when fewer exist
@@ -325,7 +331,7 @@ class PostTeachingTurn:
             source_id=session.source_id,
             query=message,
             top_k=self._evidence_top_k,
-            anchors=subtree_anchors,
+            anchors=scoped_anchors,
         )
         return target, history, evidence, total_turns
 
