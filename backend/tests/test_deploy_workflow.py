@@ -143,3 +143,101 @@ def test_docker_action_versions_are_pinned_to_real_majors() -> None:
     assert "docker/login-action@v3" in _RAW
     assert "docker/build-push-action@v6" in _RAW
     assert "actions/checkout@v4" in _RAW
+
+
+# --- DEP-10: the deploy job runs only after the images are published -------------
+
+
+def test_deploy_needs_the_build_job() -> None:
+    needs = _job("deploy")["needs"]
+    needs = [needs] if isinstance(needs, str) else needs
+    assert "build" in needs
+
+
+def test_deploy_shares_the_build_guard() -> None:
+    guard = _job("deploy")["if"]
+    assert "github.event.workflow_run.conclusion == 'success'" in guard
+    assert "github.event.workflow_run.head_branch == 'main'" in guard
+
+
+# --- DEP-11: absent VPS secrets → green skip with a notice ----------------------
+
+
+def _gate_step() -> dict:
+    return _step_by_id("deploy", "secrets")
+
+
+def _step_by_id(job: str, step_id: str) -> dict:
+    for step in _job(job)["steps"]:
+        if step.get("id") == step_id:
+            return step
+    raise AssertionError(f"no step with id {step_id!r} in job {job!r}")
+
+
+def test_secret_gate_maps_all_three_vps_secrets() -> None:
+    env = _gate_step()["env"]
+    assert env["VPS_HOST"] == "${{ secrets.VPS_HOST }}"
+    assert env["VPS_USER"] == "${{ secrets.VPS_USER }}"
+    assert env["VPS_SSH_KEY"] == "${{ secrets.VPS_SSH_KEY }}"
+
+
+def test_secret_gate_emits_notice_and_present_flag_when_missing() -> None:
+    run = _gate_step()["run"]
+    assert "::notice::" in run
+    assert "present=false" in run
+    assert "present=true" in run
+    # All three must be present for the deploy to proceed.
+    assert '[ -z "$VPS_HOST" ]' in run
+    assert '[ -z "$VPS_USER" ]' in run
+    assert '[ -z "$VPS_SSH_KEY" ]' in run
+
+
+def test_every_deploy_action_step_is_gated_on_the_present_flag() -> None:
+    gate = "steps.secrets.outputs.present == 'true'"
+    for step in _job("deploy")["steps"]:
+        if step.get("id") == "secrets":
+            continue  # the gate step itself always runs
+        assert step.get("if") == gate, f"step {step!r} is not gated on the present flag"
+
+
+# --- DEP-12: scp transfers exactly the compose triad, no secret material --------
+
+
+def test_scp_transfers_exactly_the_three_compose_files() -> None:
+    copy = _step_by_id_or_name("deploy", "Copy the compose files to the VPS")
+    run = copy["run"]
+    assert "docker-compose.yml" in run
+    assert "docker-compose.prod.yml" in run
+    assert "deploy/Caddyfile" in run
+    assert "/opt/learny/deploy/Caddyfile" in run
+
+
+def test_deploy_job_transfers_no_secret_material() -> None:
+    body = yaml.dump(_job("deploy"))
+    assert "secrets/" not in body  # no secrets/*.env transfer
+    assert ".env" not in body  # no dotenv transfer
+
+
+def _step_by_id_or_name(job: str, name: str) -> dict:
+    for step in _job(job)["steps"]:
+        if step.get("name") == name:
+            return step
+    raise AssertionError(f"no step named {name!r} in job {job!r}")
+
+
+# --- DEP-10/DEP-13: remote command shape + sha injection ------------------------
+
+
+def test_remote_command_pulls_and_waits_with_the_image_tag() -> None:
+    deploy = _step_by_id_or_name("deploy", "Pull images and restart the stack")
+    run = deploy["run"]
+    assert "docker compose -f docker-compose.yml -f docker-compose.prod.yml pull" in run
+    assert "up -d --no-build --wait" in run
+    assert "LEARNY_IMAGE_TAG=$DEPLOY_SHA" in run
+    # The injected tag resolves to the same sha the images were built and tagged with.
+    assert deploy["env"]["DEPLOY_SHA"] == _SHA_EXPR
+
+
+def test_deploy_checkout_uses_the_same_resolved_sha() -> None:
+    checkout = _step("deploy", "actions/checkout")
+    assert checkout["with"]["ref"] == _SHA_EXPR
