@@ -23,11 +23,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useChat } from "@ai-sdk/react";
 
 import { fetchAuthState } from "@/app/lib/auth";
-import { type Citation } from "@/app/lib/questions";
 import {
+  assistantView,
   createQuestionTransport,
   StreamRequestError,
-  type AnswerStatus,
   type LearnyUIMessage,
 } from "@/app/lib/streaming";
 import {
@@ -88,27 +87,6 @@ export function AskScreen({
   return (
     <AskChat sourceId={sourceId} csrf={csrf} onRequireAuth={onRequireAuth} />
   );
-}
-
-/** Read a message's collected text, citations, and answer status from its parts. */
-function assistantView(message: LearnyUIMessage): {
-  text: string;
-  citations: Citation[] | null;
-  status: AnswerStatus | null;
-} {
-  let text = "";
-  let citations: Citation[] | null = null;
-  let status: AnswerStatus | null = null;
-  for (const part of message.parts) {
-    if (part.type === "text") {
-      text += part.text;
-    } else if (part.type === "data-citations") {
-      citations = part.data;
-    } else if (part.type === "data-answer-status") {
-      status = part.data.status;
-    }
-  }
-  return { text, citations, status };
 }
 
 function AskChat({

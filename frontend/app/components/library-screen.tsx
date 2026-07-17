@@ -27,6 +27,7 @@ import {
   uploadSource,
   type SourceSummary,
 } from "@/app/lib/sources";
+import { statusVariant } from "@/app/lib/status";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -38,22 +39,6 @@ import {
 import { Input } from "@/components/ui/input";
 
 import { useIngestionPolling } from "./use-ingestion-polling";
-
-/** Map a source's projected status to a badge variant. */
-function statusVariant(
-  status: string,
-): "default" | "secondary" | "destructive" | "outline" {
-  switch (status) {
-    case "ready":
-      return "default";
-    case "processing":
-      return "secondary";
-    case "failed":
-      return "destructive";
-    default:
-      return "outline";
-  }
-}
 
 export function LibraryScreen({
   onRequireAuth,

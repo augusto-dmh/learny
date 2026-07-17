@@ -19,6 +19,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { fetchSourceStructure, listSources } from "@/app/lib/sources";
 import type { SourceStructure, SourceSummary } from "@/app/lib/sources";
+import { statusVariant } from "@/app/lib/status";
 import { flattenSections } from "@/app/lib/tree";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -39,22 +40,6 @@ import {
   SidebarMenuSubButton,
   SidebarMenuSubItem,
 } from "@/components/ui/sidebar";
-
-/** Map a source's projected status to a badge variant. */
-function statusVariant(
-  status: string,
-): "default" | "secondary" | "destructive" | "outline" {
-  switch (status) {
-    case "ready":
-      return "default";
-    case "processing":
-      return "secondary";
-    case "failed":
-      return "destructive";
-    default:
-      return "outline";
-  }
-}
 
 /** The lazily-fetched section tree under one ready source. */
 function SourceTree({ sourceId }: { sourceId: string }) {

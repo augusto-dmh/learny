@@ -37,6 +37,27 @@ export type LearnyDataParts = {
 /** A `useChat` message specialized to Learny's citation + answer-status parts. */
 export type LearnyUIMessage = UIMessage<unknown, LearnyDataParts>;
 
+/** Read a message's collected text, citations, and answer status from its parts. */
+export function assistantView(message: LearnyUIMessage): {
+  text: string;
+  citations: Citation[] | null;
+  status: AnswerStatus | null;
+} {
+  let text = "";
+  let citations: Citation[] | null = null;
+  let status: AnswerStatus | null = null;
+  for (const part of message.parts) {
+    if (part.type === "text") {
+      text += part.text;
+    } else if (part.type === "data-citations") {
+      citations = part.data;
+    } else if (part.type === "data-answer-status") {
+      status = part.data.status;
+    }
+  }
+  return { text, citations, status };
+}
+
 /** A pre-stream HTTP failure (network unreachable, or the status code). */
 export type StreamErrorKind = number | "network";
 
