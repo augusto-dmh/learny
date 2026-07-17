@@ -15,7 +15,7 @@
  */
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { fetchSourceStructure, listSources } from "@/app/lib/sources";
 import type { SourceStructure, SourceSummary } from "@/app/lib/sources";
@@ -41,34 +41,22 @@ import {
   SidebarMenuSubItem,
 } from "@/components/ui/sidebar";
 
-/** The lazily-fetched section tree under one ready source. */
-function SourceTree({ sourceId }: { sourceId: string }) {
-  const [structure, setStructure] = useState<SourceStructure | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    let active = true;
-    setLoading(true);
-    fetchSourceStructure(sourceId)
-      .then((next) => {
-        if (active) setStructure(next);
-      })
-      .catch((err: unknown) => {
-        if (active) {
-          setError(
-            err instanceof Error ? err.message : "Could not load the sections.",
-          );
-        }
-      })
-      .finally(() => {
-        if (active) setLoading(false);
-      });
-    return () => {
-      active = false;
-    };
-  }, [sourceId]);
-
+/**
+ * The section tree under one ready source, rendered from the structure the
+ * parent `SourceItem` fetched once and caches — collapsing and re-expanding
+ * reuses it rather than re-fetching.
+ */
+function SourceTree({
+  sourceId,
+  structure,
+  loading,
+  error,
+}: {
+  sourceId: string;
+  structure: SourceStructure | null;
+  loading: boolean;
+  error: string | null;
+}) {
   if (loading) {
     return <p className="px-2 py-1 text-xs text-muted-foreground">Loading…</p>;
   }
@@ -114,6 +102,41 @@ function SourceTree({ sourceId }: { sourceId: string }) {
 function SourceItem({ source }: { source: SourceSummary }) {
   const [open, setOpen] = useState(false);
   const isReady = source.status === "ready";
+  // The section tree is fetched lazily on first expand and cached here (this row
+  // stays mounted across collapse/re-expand), so re-expanding never re-fetches.
+  const [structure, setStructure] = useState<SourceStructure | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const fetched = useRef(false);
+
+  useEffect(() => {
+    if (!open || fetched.current) {
+      return;
+    }
+    fetched.current = true;
+    let active = true;
+    setLoading(true);
+    setError(null);
+    fetchSourceStructure(source.id)
+      .then((next) => {
+        if (active) setStructure(next);
+      })
+      .catch((err: unknown) => {
+        if (active) {
+          setError(
+            err instanceof Error ? err.message : "Could not load the sections.",
+          );
+          // Let a later re-expand retry a failed fetch.
+          fetched.current = false;
+        }
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [open, source.id]);
 
   return (
     <SidebarMenuItem>
@@ -150,7 +173,14 @@ function SourceItem({ source }: { source: SourceSummary }) {
                 Read
               </Link>
             </div>
-            {open ? <SourceTree sourceId={source.id} /> : null}
+            {open ? (
+              <SourceTree
+                sourceId={source.id}
+                structure={structure}
+                loading={loading}
+                error={error}
+              />
+            ) : null}
           </CollapsibleContent>
         ) : null}
       </Collapsible>

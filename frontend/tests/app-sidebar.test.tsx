@@ -181,6 +181,38 @@ describe("AppSidebar", () => {
     expect(screen.getByText("Chapter 1")).toBeTruthy();
   });
 
+  it("caches the section tree across collapse and re-expand", async () => {
+    let structureCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/sources": () => jsonResponse(200, [mixed[2]]),
+        "GET /api/sources/s-ready/structure": () => {
+          structureCalls += 1;
+          return jsonResponse(200, readyStructure);
+        },
+      }),
+    );
+
+    renderSidebar();
+
+    const trigger = await screen.findByText("Ready Book");
+
+    // First expand fetches the structure once and renders the tree.
+    fireEvent.click(trigger);
+    expect(await screen.findByText("Core Idea")).toBeTruthy();
+    expect(structureCalls).toBe(1);
+
+    // Collapse tears the tree down.
+    fireEvent.click(trigger);
+    await waitFor(() => expect(screen.queryByText("Core Idea")).toBeNull());
+
+    // Re-expand renders the cached tree without a second fetch.
+    fireEvent.click(trigger);
+    expect(await screen.findByText("Core Idea")).toBeTruthy();
+    expect(structureCalls).toBe(1);
+  });
+
   it("builds each tree link with the anchor encoded exactly once", async () => {
     vi.stubGlobal(
       "fetch",
