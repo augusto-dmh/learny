@@ -392,6 +392,36 @@ class ListQuizItems:
         )
 
 
+class ExportQuizDeck:
+    """Return an owned source's title and items for ``.apkg`` export (QUIZ-22).
+
+    Ownership is enforced via ``authorized_source`` (missing or non-owner →
+    ``SourceNotFound`` → 404, no disclosure). All items (any status) are returned —
+    stale/orphaned are still valid learning material and are footnoted in the
+    export. The empty-deck 404 is the web layer's concern (nothing to stream).
+    """
+
+    def __init__(
+        self,
+        *,
+        sources: SourceRepository,
+        items: QuizItemRepository,
+        authorize: AuthorizeOwnership,
+    ) -> None:
+        self._sources = sources
+        self._items = items
+        self._authorize = authorize
+
+    def __call__(self, *, user: User, source_id: UUID) -> tuple[str, list[QuizItem]]:
+        source = authorized_source(
+            user=user,
+            source_id=source_id,
+            sources=self._sources,
+            authorize=self._authorize,
+        )
+        return source.title, self._items.list_for_source(source_id)
+
+
 class ReconcileQuizItems:
     """Reconcile a source's quiz items against a freshly replaced corpus (QUIZ-16).
 

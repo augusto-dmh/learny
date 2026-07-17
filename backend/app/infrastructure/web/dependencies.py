@@ -34,7 +34,12 @@ from app.application.identity import (
 )
 from app.application.ingestion import ReadIngestion, RunIngestion, StartIngestion
 from app.application.qa import AskQuestion
-from app.application.quiz import ListQuizItems, PlanDeckGeneration, RunDeckGeneration
+from app.application.quiz import (
+    ExportQuizDeck,
+    ListQuizItems,
+    PlanDeckGeneration,
+    RunDeckGeneration,
+)
 from app.application.retrieval import RetrieveEvidence
 from app.application.reviews import GetDueQueue, SubmitReview
 from app.application.sources import CreateSource, GetSource, ListSources
@@ -532,6 +537,15 @@ def get_list_quiz_items(conn: DbConnection) -> ListQuizItems:
 def get_due_queue(conn: DbConnection) -> GetDueQueue:
     """Wire ``GetDueQueue`` on the request-scoped connection (QUIZ-13)."""
     return GetDueQueue(items=SqlAlchemyQuizItemRepository(conn), clock=_clock)
+
+
+def get_export_quiz_deck(conn: DbConnection) -> ExportQuizDeck:
+    """Wire ``ExportQuizDeck`` on the request-scoped connection (QUIZ-22)."""
+    return ExportQuizDeck(
+        sources=SqlAlchemySourceRepository(conn),
+        items=SqlAlchemyQuizItemRepository(conn),
+        authorize=AuthorizeOwnership(),
+    )
 
 
 def get_submit_review(conn: DbConnection) -> SubmitReview:

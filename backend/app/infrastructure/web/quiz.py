@@ -26,18 +26,19 @@ Contract (also consumed by the Next.js proxy):
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 from datetime import UTC, datetime
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy import Connection
 
 from app.application.errors import EnqueueFailed
-from app.application.quiz import ListQuizItems, QuizOverview
+from app.application.quiz import ExportQuizDeck, ListQuizItems, QuizOverview
 from app.application.reviews import GetDueQueue, SubmitReview
 from app.domain.entities import (
     DueReviewItem,
@@ -48,12 +49,14 @@ from app.domain.entities import (
     User,
 )
 from app.domain.ports import QuizDeckEnqueuer
+from app.infrastructure.export.anki import build_apkg
 from app.infrastructure.web.csrf import enforce_csrf, enforce_origin
 from app.infrastructure.web.dependencies import (
     build_deck_compensate,
     build_plan_deck_generation,
     get_authenticated_user,
     get_due_queue,
+    get_export_quiz_deck,
     get_list_quiz_items,
     get_quiz_deck_enqueuer,
     get_quiz_uow,
@@ -68,6 +71,18 @@ router = APIRouter(tags=["quiz"])
 # A fixed, non-secret durable error for the enqueue-failure compensation; the
 # underlying broker exception is never surfaced to the client or the log line.
 _ENQUEUE_FAILURE_ERROR = "Failed to enqueue quiz deck generation."
+
+
+def _export_filename(source_title: str) -> str:
+    """Return a safe ``<title>.apkg`` attachment filename derived from ``source_title``.
+
+    Strips everything but ASCII word chars, spaces, and dashes (Content-Disposition
+    is latin-1 encoded, so non-ASCII would break it), collapses whitespace, and
+    falls back to ``deck`` when nothing printable remains.
+    """
+    base = re.sub(r"[^A-Za-z0-9 _-]+", "", source_title).strip()
+    base = re.sub(r"\s+", "_", base) or "deck"
+    return f"{base}.apkg"
 
 
 # --- Request bodies ------------------------------------------------------------
@@ -360,3 +375,31 @@ def submit_review(
         review_duration_ms=body.review_duration_ms,
     )
     return SchedulingView.from_snapshot(snapshot)
+
+
+@router.get("/api/sources/{source_id}/quiz/export")
+def export_quiz_deck(
+    source_id: UUID,
+    user: Annotated[User, Depends(get_authenticated_user)],
+    service: Annotated[ExportQuizDeck, Depends(get_export_quiz_deck)],
+) -> Response:
+    """Stream the owned source's quiz deck as a genanki ``.apkg`` (200; 404).
+
+    ``ExportQuizDeck`` authorizes ownership (missing/non-owner → ``SourceNotFound``
+    → 404). A source with no items → 404 (nothing to export, QUIZ-22). Otherwise the
+    package bytes are returned as an ``application/octet-stream`` attachment named
+    from the (sanitized) book title.
+    """
+    title, items = service(user=user, source_id=source_id)
+    if not items:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="No quiz items to export."
+        )
+    data = build_apkg(items, title)
+    return Response(
+        content=data,
+        media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": f'attachment; filename="{_export_filename(title)}"'
+        },
+    )
