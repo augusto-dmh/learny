@@ -280,9 +280,12 @@ def test_restore_lists_archives_for_an_unknown_name() -> None:
 
 def test_backup_image_pins_alpine_and_verifies_mc_checksum() -> None:
     assert "FROM alpine:3.22" in _DOCKERFILE
-    # mc is pinned to a specific release and its checksum enforced at build.
+    # mc is pinned to a specific release and verified against a hardcoded digest ARG at
+    # build — never a checksum fetched same-origin as the binary (trust-on-first-use).
     assert "MC_RELEASE=RELEASE." in _DOCKERFILE
+    assert "ARG MC_SHA256=" in _DOCKERFILE
     assert "sha256sum -c" in _DOCKERFILE
+    assert ".sha256sum" not in _DOCKERFILE, "the mc digest must be a pinned constant, not fetched"
     assert "postgresql16-client" in _DOCKERFILE
 
 
