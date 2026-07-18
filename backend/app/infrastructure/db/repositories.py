@@ -401,7 +401,7 @@ class SqlAlchemyCorpusRepository:
                     "markdown": record.markdown,
                 }
             )
-            for block in section.blocks:
+            for index, block in enumerate(section.blocks):
                 block_rows.append(
                     {
                         "id": uuid4(),
@@ -409,6 +409,13 @@ class SqlAlchemyCorpusRepository:
                         "position": block.position,
                         "block_type": block.block_type,
                         "html_fragment": block.html_fragment,
+                        # Positionally aligned with ``section.blocks`` (NF-02); NULL
+                        # when the build did not compute a hash for this block.
+                        "content_hash": (
+                            record.block_hashes[index]
+                            if index < len(record.block_hashes)
+                            else None
+                        ),
                     }
                 )
             for chunk in record.chunks:

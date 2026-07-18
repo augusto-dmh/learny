@@ -279,12 +279,15 @@ class CorpusSectionRecord:
 
     Bundles a parsed section with its derived Markdown view and its retrieval
     chunks, so ``CorpusRepository.replace`` writes the whole section aggregate
-    (document → sections → blocks → chunks) in one call.
+    (document → sections → blocks → chunks) in one call. ``block_hashes`` is the
+    normalized-text sha256 of each block's derived Markdown, positionally aligned
+    with ``section.blocks`` (NF-02); empty when the build did not compute them.
     """
 
     section: ParsedSection
     markdown: str
     chunks: tuple[SectionChunk, ...]
+    block_hashes: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

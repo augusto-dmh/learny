@@ -453,6 +453,7 @@ def _section_record(
     blocks: tuple[ParsedBlock, ...] = (),
     chunks: tuple[SectionChunk, ...] = (),
     anchor_aliases: tuple[str, ...] = (),
+    block_hashes: tuple[str, ...] = (),
 ) -> CorpusSectionRecord:
     return CorpusSectionRecord(
         section=ParsedSection(
@@ -466,6 +467,7 @@ def _section_record(
         ),
         markdown=markdown,
         chunks=chunks,
+        block_hashes=block_hashes,
     )
 
 
@@ -530,6 +532,8 @@ def test_corpus_replace_persists_full_aggregate(db_conn: Connection) -> None:
         (0, "heading", "<h1>Chapter 1</h1>"),
         (1, "paragraph", "<p>Hello world.</p>"),
     ]
+    # No build hashes supplied here → content_hash stays NULL (nullable, no backfill).
+    assert [b.content_hash for b in blocks] == [None, None]
 
     chunk = db_conn.execute(
         select(corpus_chunks).where(corpus_chunks.c.section_id == section.id)
@@ -539,6 +543,46 @@ def test_corpus_replace_persists_full_aggregate(db_conn: Connection) -> None:
     assert chunk.section_path == ["Chapter 1"]
     assert chunk.anchor == "chapter01.xhtml#sec-1"
     assert chunk.page_span is None
+
+
+def test_corpus_replace_persists_block_content_hashes(db_conn: Connection) -> None:
+    # Build-supplied per-block hashes persist positionally (NF-02); a missing hash
+    # (tuple shorter than the blocks) leaves that block's content_hash NULL.
+    source = _persisted_source(db_conn, "corpus-block-hash@example.com")
+    repo = SqlAlchemyCorpusRepository(db_conn)
+    record = _section_record(
+        position=0,
+        title="Chapter 1",
+        section_path=("Chapter 1",),
+        anchor="chapter01.xhtml",
+        markdown="# Chapter 1\n\nHello world.",
+        blocks=(
+            ParsedBlock(position=0, block_type="heading", html_fragment="<h1>Chapter 1</h1>"),
+            ParsedBlock(position=1, block_type="paragraph", html_fragment="<p>Hello.</p>"),
+        ),
+        block_hashes=("a" * 64,),  # only the first block carries a hash
+    )
+    repo.replace(
+        source.id,
+        title="A Book",
+        authors=(),
+        language="en",
+        schema_version=1,
+        sections=(record,),
+    )
+
+    doc = db_conn.execute(
+        select(corpus_documents.c.id).where(corpus_documents.c.source_id == source.id)
+    ).one()
+    section = db_conn.execute(
+        select(corpus_sections.c.id).where(corpus_sections.c.document_id == doc.id)
+    ).one()
+    rows = db_conn.execute(
+        select(corpus_blocks.c.position, corpus_blocks.c.content_hash)
+        .where(corpus_blocks.c.section_id == section.id)
+        .order_by(corpus_blocks.c.position)
+    ).all()
+    assert [(r.position, r.content_hash) for r in rows] == [(0, "a" * 64), (1, None)]
 
 
 @pytest.mark.parametrize(

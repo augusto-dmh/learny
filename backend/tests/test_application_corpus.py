@@ -19,6 +19,7 @@ raises ``CorpusNotFound`` (A-7 → 404).
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import replace
 from datetime import UTC, datetime
 from itertools import count
@@ -29,6 +30,7 @@ import pytest
 from app.application.corpus import BuildCorpus, ReadSourceStructure
 from app.application.errors import CorpusNotFound, InvalidDocumentError, SourceNotFound
 from app.application.identity import AuthorizeOwnership
+from app.application.quiz_qc import normalize_text
 from app.domain.entities import (
     CorpusSectionRecord,
     IngestionJob,
@@ -226,6 +228,30 @@ def test_build_corpus_chunks_derive_from_block_markdown() -> None:
     assert [c.index for c in first.chunks] == [0, 1]
     built = next(e for e in events.list_for_job(job.id) if e.type == "corpus_built")
     assert built.message == "sections=2 blocks=4 chunks=4"
+
+
+def test_build_corpus_hashes_each_block_by_normalized_markdown() -> None:
+    # Every block carries the sha256 of its normalized derived Markdown (NF-02),
+    # positionally aligned with the section's blocks.
+    source = _source()
+    job = _job(source.id)
+    corpus = FakeCorpusRepository()
+    storage = FakeStorage()
+    storage.objects[source.object_key] = b"epub-bytes"
+
+    _build(
+        storage=storage,
+        parser=FakeEpubParser(book=_book()),
+        corpus=corpus,
+        events=FakeIngestionEventRepository(),
+    )(source=source, job=job)
+
+    def _hash(block_markdown: str) -> str:
+        return hashlib.sha256(normalize_text(block_markdown).encode("utf-8")).hexdigest()
+
+    sections = corpus.replace_calls[0]["sections"]
+    assert sections[0].block_hashes == (_hash("md:H0"), _hash("md:P0"))
+    assert sections[1].block_hashes == (_hash("md:H1"), _hash("md:P1"))
 
 
 def _noisy_book() -> ParsedBook:
