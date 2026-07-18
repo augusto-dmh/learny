@@ -176,15 +176,3 @@ def monkeypatch_class():  # noqa: ANN201
         yield mpatch
     finally:
         mpatch.undo()
-
-
-# --- Nightly enrollment guard --------------------------------------------------
-
-
-def test_keyed_arm_carries_the_nightly_markers() -> None:
-    # The `live` + `eval` markers are the sole wiring that enrolls the keyed
-    # arm in the nightly `-m "live and eval"` selection; losing either would
-    # silently drop retrieval from the nightly gate (only observable at
-    # collection time otherwise).
-    marker_names = {mark.name for mark in TestOpenAIRetrievalMetrics.pytestmark}
-    assert {"live", "eval"} <= marker_names

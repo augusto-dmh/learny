@@ -345,3 +345,18 @@ def test_live_judge_scores_one_case() -> None:
     assert len(lines) == 1
     assert 0.0 <= lines[0]["faithfulness"] <= 1.0
     assert lines[0]["relevancy"] in range(1, 6)
+
+
+# --- Nightly enrollment guard --------------------------------------------------
+
+
+def test_keyed_retrieval_arm_carries_the_nightly_markers() -> None:
+    # The `live` + `eval` markers are the sole wiring that enrolls the keyed
+    # retrieval arm in the nightly `-m "live and eval"` selection; losing
+    # either would silently drop retrieval from the nightly gate. Guarded here
+    # (not in the retrieval module) because that module is DB-gated and this
+    # check must run fully offline.
+    from tests.test_eval_retrieval_metrics import TestOpenAIRetrievalMetrics
+
+    marker_names = {mark.name for mark in TestOpenAIRetrievalMetrics.pytestmark}
+    assert {"live", "eval"} <= marker_names
