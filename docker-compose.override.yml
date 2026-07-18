@@ -32,6 +32,11 @@ services:
       LEARNY_DATABASE_URL: postgresql+psycopg://learny:learny@db:5432/learny
       LEARNY_STORAGE_ACCESS_KEY: learny
       LEARNY_STORAGE_SECRET_KEY: learny-dev-secret
+    # Optional local AI-provider keys (git-ignored; see backend/.env.example).
+    # `required: false` keeps a keyless clone booting deterministic adapters.
+    env_file:
+      - path: ./secrets/local-ai.env
+        required: false
 
   web:
     ports:
@@ -42,12 +47,18 @@ services:
       LEARNY_DATABASE_URL: postgresql+psycopg://learny:learny@db:5432/learny
       LEARNY_STORAGE_ACCESS_KEY: learny
       LEARNY_STORAGE_SECRET_KEY: learny-dev-secret
+    env_file:
+      - path: ./secrets/local-ai.env
+        required: false
 
   worker-pdf:
     environment:
       LEARNY_DATABASE_URL: postgresql+psycopg://learny:learny@db:5432/learny
       LEARNY_STORAGE_ACCESS_KEY: learny
       LEARNY_STORAGE_SECRET_KEY: learny-dev-secret
+    env_file:
+      - path: ./secrets/local-ai.env
+        required: false
 
   # Opt-in backup sidecar for local/CI use only (RFC-003 Cycle A). Behind the
   # `backup` profile so a plain `docker compose up` never starts it; drive it with
