@@ -15,16 +15,23 @@ from uuid import UUID, uuid4
 
 from app.domain.entities import (
     ACTIVE_STATUSES,
+    AnchorSection,
     AnswerCompleted,
     AnswerStreamEvent,
     AnswerTextDelta,
+    Backlink,
     ChunkToEmbed,
     CorpusSectionRecord,
     CorpusStructure,
+    DerivedNoteLink,
     Evidence,
     GeneratedAnswer,
     IngestionEvent,
     IngestionJob,
+    Note,
+    NoteAnchor,
+    NoteAnchorStatus,
+    NoteSummary,
     ParsedBook,
     PasswordCredential,
     SectionContent,
@@ -556,6 +563,206 @@ class FakeAnswerGeneration:
             yield AnswerCompleted(answer=self._answer)
         finally:
             self.stream_closed = True
+
+
+class IdentityMarkupConverter:
+    """``MarkupConverterPort`` double whose Markdown is the fragment verbatim.
+
+    The anchoring use cases derive block text through this port; returning the fragment
+    unchanged lets a test set a block's text directly and assert offsets against it.
+    """
+
+    def to_markdown(self, html: str) -> str:
+        return html
+
+
+class FakeAnchorCorpus:
+    """``CorpusRepository`` double for the anchoring read paths (NF-06/07).
+
+    Seeded with a source's :class:`AnchorSection` list; only the two block-level reads
+    the notes use cases call are implemented. ``blocks_for_section`` resolves canonical
+    anchors first, then aliases, mirroring the real repository.
+    """
+
+    def __init__(
+        self, sections_by_source: dict[UUID, list[AnchorSection]] | None = None
+    ) -> None:
+        self._by_source: dict[UUID, list[AnchorSection]] = sections_by_source or {}
+
+    def set_sections(self, source_id: UUID, sections: list[AnchorSection]) -> None:
+        self._by_source[source_id] = sections
+
+    def blocks_for_section(self, source_id: UUID, anchor: str) -> AnchorSection | None:
+        sections = self._by_source.get(source_id, [])
+        for section in sections:
+            if section.anchor == anchor:
+                return section
+        for section in sections:
+            if anchor in section.anchor_aliases:
+                return section
+        return None
+
+    def blocks_for_reconcile(self, source_id: UUID) -> list[AnchorSection]:
+        return list(self._by_source.get(source_id, []))
+
+
+class FakeNoteRepository:
+    """In-memory ``NoteRepository`` for unit-testing the notes use cases (NF-04..08).
+
+    Models owner-agnostic persistence (the service authorizes) plus the derived-index
+    rewrites and per-user tag identity. ``resolve_titles`` returns the earliest-created
+    note per lowercased title, and reconciliation writes touch only the anchor payload
+    and status — never a note's body.
+    """
+
+    def __init__(self) -> None:
+        self._notes: dict[UUID, Note] = {}
+        self._tags_by_note: dict[UUID, list[str]] = {}
+        self._links_by_note: dict[UUID, list[DerivedNoteLink]] = {}
+        self._anchors: dict[UUID, NoteAnchor] = {}
+
+    def add(self, note: Note) -> Note:
+        self._notes[note.id] = note
+        return note
+
+    def get_by_id(self, note_id: UUID) -> Note | None:
+        return self._notes.get(note_id)
+
+    def update(
+        self, note_id: UUID, *, title: str, body_markdown: str, updated_at: datetime
+    ) -> None:
+        note = self._notes[note_id]
+        self._notes[note_id] = replace(
+            note, title=title, body_markdown=body_markdown, updated_at=updated_at
+        )
+
+    def delete(self, note_id: UUID) -> None:
+        self._notes.pop(note_id, None)
+        self._tags_by_note.pop(note_id, None)
+        self._links_by_note.pop(note_id, None)
+        for anchor_id, anchor in list(self._anchors.items()):
+            if anchor.note_id == note_id:
+                del self._anchors[anchor_id]
+        # Inbound links to the deleted note lose their resolved target (SET NULL).
+        for source_note_id, links in self._links_by_note.items():
+            self._links_by_note[source_note_id] = [
+                replace(link, target_note_id=None)
+                if link.target_note_id == note_id
+                else link
+                for link in links
+            ]
+
+    def list_summaries(
+        self, user_id: UUID, *, tag: str | None = None
+    ) -> list[NoteSummary]:
+        owned = [n for n in self._notes.values() if n.user_id == user_id]
+        if tag is not None:
+            owned = [n for n in owned if tag in self._tags_by_note.get(n.id, [])]
+        owned.sort(key=lambda n: (n.updated_at, str(n.id)), reverse=True)
+        return [
+            NoteSummary(
+                note=note,
+                tags=tuple(sorted(self._tags_by_note.get(note.id, []))),
+                anchor_statuses=tuple(
+                    a.status for a in self._anchors.values() if a.note_id == note.id
+                ),
+            )
+            for note in owned
+        ]
+
+    def tags_for_note(self, note_id: UUID) -> list[str]:
+        return sorted(self._tags_by_note.get(note_id, []))
+
+    def anchors_for_note(self, note_id: UUID) -> list[NoteAnchor]:
+        return sorted(
+            (a for a in self._anchors.values() if a.note_id == note_id),
+            key=lambda a: (a.created_at, str(a.id)),
+        )
+
+    def backlinks(self, note_id: UUID) -> list[Backlink]:
+        seen: set[UUID] = set()
+        result: list[Backlink] = []
+        for source_note_id, links in self._links_by_note.items():
+            if source_note_id in seen:
+                continue
+            if any(link.target_note_id == note_id for link in links):
+                seen.add(source_note_id)
+                note = self._notes.get(source_note_id)
+                if note is not None:
+                    result.append(Backlink(note_id=note.id, title=note.title))
+        result.sort(key=lambda b: str(b.note_id))
+        return result
+
+    def resolve_titles(
+        self, user_id: UUID, titles: Sequence[str]
+    ) -> dict[str, UUID]:
+        wanted = {t.lower() for t in titles}
+        candidates = sorted(
+            (
+                n
+                for n in self._notes.values()
+                if n.user_id == user_id and n.title.lower() in wanted
+            ),
+            key=lambda n: (n.created_at, str(n.id)),
+        )
+        resolved: dict[str, UUID] = {}
+        for note in candidates:
+            resolved.setdefault(note.title.lower(), note.id)
+        return resolved
+
+    def set_tags(self, note_id: UUID, user_id: UUID, names: Sequence[str]) -> None:
+        self._tags_by_note[note_id] = list(names)
+
+    def set_links(self, note_id: UUID, links: Sequence[DerivedNoteLink]) -> None:
+        self._links_by_note[note_id] = list(links)
+
+    def links_for_note(self, note_id: UUID) -> list[DerivedNoteLink]:
+        """Test-only accessor for the derived links written for a note."""
+        return list(self._links_by_note.get(note_id, []))
+
+    def add_anchor(self, anchor: NoteAnchor) -> NoteAnchor:
+        self._anchors[anchor.id] = anchor
+        return anchor
+
+    def anchors_for_source(self, source_id: UUID) -> list[NoteAnchor]:
+        return sorted(
+            (a for a in self._anchors.values() if a.source_id == source_id),
+            key=lambda a: (a.created_at, str(a.id)),
+        )
+
+    def update_anchor_reconciliation(
+        self,
+        anchor_id: UUID,
+        *,
+        anchor: str,
+        section_path: Sequence[str],
+        block_hash: str | None,
+        block_ordinal: int | None,
+        start_offset: int | None,
+        end_offset: int | None,
+        status: str,
+    ) -> None:
+        existing = self._anchors[anchor_id]
+        self._anchors[anchor_id] = replace(
+            existing,
+            anchor=anchor,
+            section_path=tuple(section_path),
+            block_hash=block_hash,
+            block_ordinal=block_ordinal,
+            start_offset=start_offset,
+            end_offset=end_offset,
+            status=status,
+        )
+
+    def orphan_anchors_for_source(self, source_id: UUID) -> None:
+        for anchor_id, anchor in list(self._anchors.items()):
+            if (
+                anchor.source_id == source_id
+                and anchor.status != NoteAnchorStatus.ORPHANED
+            ):
+                self._anchors[anchor_id] = replace(
+                    anchor, status=NoteAnchorStatus.ORPHANED
+                )
 
 
 class FakeRetrievalPort:

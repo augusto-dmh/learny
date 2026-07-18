@@ -190,3 +190,28 @@ class QuizItemNotReviewable(Exception):
     (their citation no longer resolves), so a suspended card is not scheduled; the
     web layer maps this to 409.
     """
+
+
+class NoteNotFound(Exception):
+    """A note does not exist or is not the caller's (NF-05).
+
+    Mirrors :class:`SourceNotFound`: a missing note and a non-owner collapse to this
+    single error so the web layer returns 404 either way and a note's existence is
+    never disclosed.
+    """
+
+
+class NoteBodyTooLong(Exception):
+    """A note body exceeded ``LEARNY_NOTES_MAX_BODY_CHARS`` (NF-04).
+
+    Validated by the note use cases before any write; the web layer maps it to 422.
+    """
+
+
+class StaleCaptureTarget(Exception):
+    """A highlight capture's evidence no longer matches the served section (NF-06).
+
+    The section the reader selected against has since been replaced (a mid-flight
+    re-ingest), so the quote no longer resolves to a block; nothing is persisted and
+    the web layer maps this to 409 so the reader re-reads and re-selects.
+    """

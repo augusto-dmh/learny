@@ -188,6 +188,10 @@ class Settings(BaseSettings):
     fsrs_desired_retention: float = 0.9
     fsrs_fuzzing: bool = True
 
+    # Notes & second-brain (RFC-003 Cycle E; ADR-0026). ``notes_max_body_chars`` caps a
+    # note's Markdown body length, enforced by the note use cases before any write.
+    notes_max_body_chars: int = 100000
+
 
 @lru_cache
 def get_settings() -> Settings:
