@@ -1513,19 +1513,33 @@ class SqlAlchemyNoteRepository:
 
     def set_tags(self, note_id: UUID, user_id: UUID, names: Sequence[str]) -> None:
         self._conn.execute(sa_delete(note_tags).where(note_tags.c.note_id == note_id))
-        for name in names:
-            # Get-or-create the user's tag, then wire it to the note.
-            self._conn.execute(
-                pg_insert(tags)
-                .values(id=uuid4(), user_id=user_id, name=name)
-                .on_conflict_do_nothing(index_elements=["user_id", "name"])
+        # Batched get-or-create: one bulk upsert, one lookup, one bulk wire-up —
+        # a constant four statements per save instead of three per tag. Deduped
+        # defensively: duplicate (user_id, name) rows in a single INSERT would
+        # error before ON CONFLICT could ignore them.
+        unique_names = list(dict.fromkeys(names))
+        if not unique_names:
+            return
+        self._conn.execute(
+            pg_insert(tags)
+            .values(
+                [
+                    {"id": uuid4(), "user_id": user_id, "name": name}
+                    for name in unique_names
+                ]
             )
-            tag_id = self._conn.execute(
-                select(tags.c.id).where(tags.c.user_id == user_id, tags.c.name == name)
-            ).scalar_one()
-            self._conn.execute(
-                insert(note_tags).values(note_id=note_id, tag_id=tag_id)
+            .on_conflict_do_nothing(index_elements=["user_id", "name"])
+        )
+        rows = self._conn.execute(
+            select(tags.c.id).where(
+                tags.c.user_id == user_id, tags.c.name.in_(unique_names)
             )
+        ).all()
+        self._conn.execute(
+            insert(note_tags).values(
+                [{"note_id": note_id, "tag_id": row.id} for row in rows]
+            )
+        )
 
     def set_links(self, note_id: UUID, links: Sequence[DerivedNoteLink]) -> None:
         self._conn.execute(sa_delete(note_links).where(note_links.c.note_id == note_id))
