@@ -28,9 +28,17 @@ from app.application.notes import (
     DeleteNote,
     GetNote,
     ListNotes,
+    ReconcileNoteAnchors,
     UpdateNote,
 )
-from app.domain.entities import AnchorBlockSnapshot, AnchorSection, NoteAnchorStatus, Source, User
+from app.domain.entities import (
+    AnchorBlockSnapshot,
+    AnchorSection,
+    NoteAnchor,
+    NoteAnchorStatus,
+    Source,
+    User,
+)
 from tests.fakes import (
     FakeAnchorCorpus,
     FakeClock,
@@ -367,3 +375,202 @@ def test_capture_highlight_note_body_derives_wikilinks() -> None:
 
     links = notes.links_for_note(view.note.id)
     assert [link.target_text for link in links] == ["Concept"]
+
+
+# --- ReconcileNoteAnchors (NF-07) -----------------------------------------------
+
+
+def _seed_anchor(
+    notes: FakeNoteRepository,
+    source_id,  # noqa: ANN001
+    *,
+    anchor: str = "ch1",
+    block_hash: str | None = "h0",
+    block_ordinal: int | None = 0,
+    quote_exact: str = "quick brown",
+    status: str = NoteAnchorStatus.ACTIVE,
+) -> NoteAnchor:
+    now = datetime.now(UTC)
+    note = _create(notes)(user=_user(), title="anchored", body_markdown="", tags=[])
+    row = NoteAnchor(
+        id=uuid4(),
+        note_id=note.note.id,
+        source_id=source_id,
+        source_title="A Book",
+        anchor=anchor,
+        section_path=("Chapter 1",),
+        block_hash=block_hash,
+        block_ordinal=block_ordinal,
+        start_offset=0,
+        end_offset=11,
+        quote_exact=quote_exact,
+        quote_prefix="the ",
+        quote_suffix=" fox",
+        status=status,
+        created_at=now,
+        updated_at=now,
+    )
+    return notes.add_anchor(row)
+
+
+def _reconcile(notes: FakeNoteRepository, corpus: FakeAnchorCorpus) -> ReconcileNoteAnchors:
+    return ReconcileNoteAnchors(notes=notes, corpus=corpus, markup=IdentityMarkupConverter())
+
+
+def _anchor_section(
+    anchor: str,
+    *,
+    content_hash: str | None,
+    text: str,
+    section_path=("Chapter 1",),  # noqa: ANN001
+    aliases=(),  # noqa: ANN001
+) -> AnchorSection:
+    return AnchorSection(
+        anchor=anchor,
+        section_path=tuple(section_path),
+        anchor_aliases=tuple(aliases),
+        blocks=(
+            AnchorBlockSnapshot(ordinal=0, content_hash=content_hash, html_fragment=text),
+        ),
+    )
+
+
+def test_reconcile_tier1_block_hash_match_stays_active() -> None:
+    # The section resolves and holds a block whose stored hash equals the anchor's:
+    # active, offsets provably valid, even though the block text changed around it.
+    notes = FakeNoteRepository()
+    source_id = uuid4()
+    _seed_anchor(notes, source_id, block_hash="h0")
+    corpus = FakeAnchorCorpus(
+        {source_id: [_anchor_section("ch1", content_hash="h0", text="rewritten around")]}
+    )
+
+    _reconcile(notes, corpus)(source_id=source_id)
+
+    result = notes.anchors_for_source(source_id)[0]
+    assert result.status == NoteAnchorStatus.ACTIVE
+    assert result.anchor == "ch1"
+    assert result.block_hash == "h0"
+
+
+def test_reconcile_tier2_quote_rebinds_in_the_same_section() -> None:
+    # Hash changed but the quote is still in the section → active, payload rebound.
+    notes = FakeNoteRepository()
+    source_id = uuid4()
+    _seed_anchor(notes, source_id, block_hash="old", quote_exact="quick brown")
+    corpus = FakeAnchorCorpus(
+        {source_id: [_anchor_section("ch1", content_hash="new", text="the quick brown fox")]}
+    )
+
+    _reconcile(notes, corpus)(source_id=source_id)
+
+    result = notes.anchors_for_source(source_id)[0]
+    assert result.status == NoteAnchorStatus.ACTIVE
+    assert result.anchor == "ch1"
+    assert result.block_hash == "new"  # rebound to the new block
+
+
+def test_reconcile_tier3_relocates_when_quote_moved() -> None:
+    # The anchor's section is gone, but the quote is found in another section → active,
+    # anchor rewritten to the found section's canonical anchor.
+    notes = FakeNoteRepository()
+    source_id = uuid4()
+    _seed_anchor(notes, source_id, anchor="ch1", block_hash="old", quote_exact="quick brown")
+    corpus = FakeAnchorCorpus(
+        {
+            source_id: [
+                _anchor_section(
+                    "ch2",
+                    content_hash="h2",
+                    text="the quick brown fox",
+                    section_path=("Chapter 2",),
+                ),
+            ]
+        }
+    )
+
+    _reconcile(notes, corpus)(source_id=source_id)
+
+    result = notes.anchors_for_source(source_id)[0]
+    assert result.status == NoteAnchorStatus.ACTIVE
+    assert result.anchor == "ch2"
+    assert result.section_path == ("Chapter 2",)
+
+
+def test_reconcile_tier4_orphans_when_section_and_quote_gone() -> None:
+    notes = FakeNoteRepository()
+    source_id = uuid4()
+    _seed_anchor(notes, source_id, anchor="ch1", block_hash="old", quote_exact="quick brown")
+    corpus = FakeAnchorCorpus(
+        {source_id: [_anchor_section("ch9", content_hash="h9", text="unrelated content")]}
+    )
+
+    _reconcile(notes, corpus)(source_id=source_id)
+
+    assert notes.anchors_for_source(source_id)[0].status == NoteAnchorStatus.ORPHANED
+
+
+def test_reconcile_stale_when_section_lives_but_quote_gone() -> None:
+    # The anchor's section still resolves, but neither the hash nor the quote match and
+    # the quote is nowhere else → stale (anchor lives, quote gone).
+    notes = FakeNoteRepository()
+    source_id = uuid4()
+    _seed_anchor(notes, source_id, anchor="ch1", block_hash="old", quote_exact="quick brown")
+    corpus = FakeAnchorCorpus(
+        {source_id: [_anchor_section("ch1", content_hash="new", text="entirely different")]}
+    )
+
+    _reconcile(notes, corpus)(source_id=source_id)
+
+    assert notes.anchors_for_source(source_id)[0].status == NoteAnchorStatus.STALE
+
+
+def test_reconcile_relocates_alias_aware_and_rewrites_anchor() -> None:
+    # The anchor was captured against an anchor normalization later merged into a
+    # survivor as an alias; the survivor resolves it and the anchor is rewritten (D-6).
+    notes = FakeNoteRepository()
+    source_id = uuid4()
+    _seed_anchor(notes, source_id, anchor="old-ch1", block_hash="h0", quote_exact="quick brown")
+    corpus = FakeAnchorCorpus(
+        {
+            source_id: [
+                _anchor_section(
+                    "ch1",
+                    content_hash="h0",
+                    text="the quick brown fox",
+                    aliases=("old-ch1",),
+                ),
+            ]
+        }
+    )
+
+    _reconcile(notes, corpus)(source_id=source_id)
+
+    result = notes.anchors_for_source(source_id)[0]
+    assert result.status == NoteAnchorStatus.ACTIVE
+    assert result.anchor == "ch1"  # rewritten from the alias to the canonical
+
+
+def test_reconcile_writes_only_when_the_outcome_changed() -> None:
+    # An anchor whose block hash still matches its section keeps active, same anchor,
+    # same offsets → nothing is written (write-only-on-change discipline).
+    notes = FakeNoteRepository()
+    source_id = uuid4()
+    anchor = _seed_anchor(notes, source_id, anchor="ch1", block_hash="h0", block_ordinal=0)
+    corpus = FakeAnchorCorpus(
+        {source_id: [_anchor_section("ch1", content_hash="h0", text="the quick brown fox")]}
+    )
+
+    _reconcile(notes, corpus)(source_id=source_id)
+
+    assert anchor.id not in notes.reconciliation_writes
+
+
+def test_reconcile_no_anchors_is_a_noop() -> None:
+    notes = FakeNoteRepository()
+    source_id = uuid4()
+    corpus = FakeAnchorCorpus({source_id: []})
+
+    _reconcile(notes, corpus)(source_id=source_id)
+
+    assert notes.reconciliation_writes == []

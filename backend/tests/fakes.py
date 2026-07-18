@@ -620,6 +620,9 @@ class FakeNoteRepository:
         self._tags_by_note: dict[UUID, list[str]] = {}
         self._links_by_note: dict[UUID, list[DerivedNoteLink]] = {}
         self._anchors: dict[UUID, NoteAnchor] = {}
+        # Anchor ids passed to update_anchor_reconciliation, so a reconcile test can
+        # assert the write-only-on-change discipline (an unchanged anchor is skipped).
+        self.reconciliation_writes: list[UUID] = []
 
     def add(self, note: Note) -> Note:
         self._notes[note.id] = note
@@ -742,6 +745,7 @@ class FakeNoteRepository:
         end_offset: int | None,
         status: str,
     ) -> None:
+        self.reconciliation_writes.append(anchor_id)
         existing = self._anchors[anchor_id]
         self._anchors[anchor_id] = replace(
             existing,

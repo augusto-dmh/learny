@@ -362,3 +362,174 @@ class CaptureHighlight:
             )
         )
         return _view(self._notes, note)
+
+
+# The reconciled anchor payload + status a resolve pass yields (NF-07): section anchor,
+# section_path, block binding (hash/ordinal/offsets), and the new status.
+_Reconciled = tuple[str, tuple[str, ...], str | None, int | None, int | None, int | None, str]
+
+
+# SPEC_DEVIATION: NF-08 ("when a source is deleted, its anchors become orphaned")
+# specifies wiring the orphan flip at the source-delete path. No source-deletion
+# feature exists in the product (no endpoint, use case, or repository delete), so
+# there is no call site to hook. The capability is provided by
+# ``NoteRepository.orphan_anchors_for_source`` (ready for the future delete path), and
+# the reconcile cascade below already orphans a source's anchors whenever a re-ingest
+# leaves the corpus unable to resolve them (tier 4) — including an emptied corpus.
+# Reason: NF-09 lists no delete-source route; adding one would exceed this cycle's scope.
+class ReconcileNoteAnchors:
+    """Reconcile a source's note anchors against a freshly replaced corpus (NF-07).
+
+    Runs as an ingestion step after the corpus is replaced (invoked with only
+    ``source_id`` — ownership is the ingestion job's already), mirroring
+    ``ReconcileQuizItems``. Per anchor, an exact 4-tier cascade (ADR-0026 §1):
+
+    1. the section still resolves (canonical or alias) AND holds a block whose stored
+       ``content_hash`` equals the anchor's → ``active``, offsets provably valid (identical
+       content), rebound to that block and the section's canonical anchor;
+    2. else the quote-with-context still resolves inside that section → ``active``, the
+       payload rebound to the found block;
+    3. else the quote resolves somewhere else in the document → ``active``, the anchor
+       rewritten to the found section's canonical anchor/path (alias-aware);
+    4. else — the section still resolves but the quote is gone → ``stale``; the section
+       itself is gone → ``orphaned`` (the row is kept, rendered from its quote snapshot).
+
+    Only the anchor payload fields and status are ever written, and only when the outcome
+    differs from the stored state (the quiz reconcile's write discipline); a note's title
+    or body is never touched. A source with no anchors is a no-op fast path.
+    """
+
+    def __init__(
+        self,
+        *,
+        notes: NoteRepository,
+        corpus: CorpusRepository,
+        markup: MarkupConverterPort,
+    ) -> None:
+        self._notes = notes
+        self._corpus = corpus
+        self._markup = markup
+
+    def __call__(self, *, source_id: UUID) -> None:
+        anchors = self._notes.anchors_for_source(source_id)
+        if not anchors:
+            return  # no-op fast path — nothing to reconcile
+
+        sections = self._corpus.blocks_for_reconcile(source_id)
+        # Derive each block's Markdown once (the same conversion the build used) so the
+        # resolver matches like-for-like, and index sections by canonical anchor + alias.
+        prepared = [(section, self._to_blocks(section)) for section in sections]
+        first_by_anchor: dict[str, tuple] = {}
+        for section, blocks in prepared:
+            first_by_anchor.setdefault(section.anchor, (section, blocks))
+        # An alias resolves to its surviving section only when it does not shadow a live
+        # canonical anchor (a canonical always wins the collision, AD-085).
+        alias_to_section: dict[str, tuple] = {}
+        for section, blocks in prepared:
+            for alias in section.anchor_aliases:
+                if alias not in first_by_anchor:
+                    alias_to_section.setdefault(alias, (section, blocks))
+
+        for anchor in anchors:
+            resolved = self._resolve(anchor, prepared, first_by_anchor, alias_to_section)
+            current = (
+                anchor.anchor,
+                anchor.section_path,
+                anchor.block_hash,
+                anchor.block_ordinal,
+                anchor.start_offset,
+                anchor.end_offset,
+                anchor.status,
+            )
+            if resolved != current:
+                self._notes.update_anchor_reconciliation(
+                    anchor.id,
+                    anchor=resolved[0],
+                    section_path=resolved[1],
+                    block_hash=resolved[2],
+                    block_ordinal=resolved[3],
+                    start_offset=resolved[4],
+                    end_offset=resolved[5],
+                    status=resolved[6],
+                )
+
+    def _to_blocks(self, section) -> list[AnchorBlock]:  # noqa: ANN001 — AnchorSection
+        return [
+            AnchorBlock(
+                ordinal=block.ordinal,
+                content_hash=block.content_hash,
+                text=self._markup.to_markdown(block.html_fragment),
+            )
+            for block in section.blocks
+        ]
+
+    def _resolve(
+        self,
+        anchor: NoteAnchor,
+        prepared: list[tuple],
+        first_by_anchor: dict[str, tuple],
+        alias_to_section: dict[str, tuple],
+    ) -> _Reconciled:
+        """Return the anchor's reconciled ``(anchor, path, hash, ordinal, start, end, status)``."""
+        located = first_by_anchor.get(anchor.anchor) or alias_to_section.get(anchor.anchor)
+        if located is not None:
+            section, blocks = located
+            # Tier 1: block-hash match in the resolved section (offsets provably valid).
+            if anchor.block_hash is not None:
+                for snapshot in section.blocks:
+                    if snapshot.content_hash == anchor.block_hash:
+                        return (
+                            section.anchor,
+                            section.section_path,
+                            anchor.block_hash,
+                            snapshot.ordinal,
+                            anchor.start_offset,
+                            anchor.end_offset,
+                            NoteAnchorStatus.ACTIVE,
+                        )
+            # Tier 2: quote-with-context still resolves inside the resolved section.
+            binding = resolve(
+                blocks, anchor.quote_exact, anchor.quote_prefix, anchor.quote_suffix
+            )
+            if binding is not None:
+                return (
+                    section.anchor,
+                    section.section_path,
+                    binding.block_hash,
+                    binding.block_ordinal,
+                    binding.start_offset,
+                    binding.end_offset,
+                    NoteAnchorStatus.ACTIVE,
+                )
+
+        # Tier 3: the quote resolves elsewhere in the document → relocate (alias-aware).
+        for section, blocks in prepared:
+            binding = resolve(
+                blocks, anchor.quote_exact, anchor.quote_prefix, anchor.quote_suffix
+            )
+            if binding is not None:
+                return (
+                    section.anchor,
+                    section.section_path,
+                    binding.block_hash,
+                    binding.block_ordinal,
+                    binding.start_offset,
+                    binding.end_offset,
+                    NoteAnchorStatus.ACTIVE,
+                )
+
+        # Tier 4: section still resolves but quote gone → stale; section gone → orphaned.
+        status = (
+            NoteAnchorStatus.STALE
+            if located is not None
+            else NoteAnchorStatus.ORPHANED
+        )
+        return (
+            anchor.anchor,
+            anchor.section_path,
+            anchor.block_hash,
+            anchor.block_ordinal,
+            anchor.start_offset,
+            anchor.end_offset,
+            status,
+        )

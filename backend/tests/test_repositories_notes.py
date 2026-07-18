@@ -17,6 +17,8 @@ from sqlalchemy import Connection, insert, select
 from sqlalchemy import delete as sa_delete
 from sqlalchemy.exc import IntegrityError
 
+from app.application.identity import AuthorizeOwnership
+from app.application.notes import CaptureHighlight, ReconcileNoteAnchors
 from app.domain.entities import (
     CorpusSectionRecord,
     DerivedNoteLink,
@@ -29,6 +31,7 @@ from app.domain.entities import (
     Source,
     User,
 )
+from app.infrastructure.clock import SystemClock
 from app.infrastructure.db.metadata import (
     note_anchors,
     note_links,
@@ -43,6 +46,7 @@ from app.infrastructure.db.repositories import (
     SqlAlchemySourceRepository,
     SqlAlchemyUserRepository,
 )
+from app.infrastructure.ingestion.markup import Bs4MarkupConverter
 from tests.conftest import requires_db
 
 pytestmark = requires_db
@@ -572,3 +576,133 @@ def test_blocks_for_reconcile_returns_all_sections_in_reading_order(db_conn: Con
     assert [s.anchor for s in sections] == ["ch1", "ch2"]
     assert sections[0].anchor_aliases == ("old-ch1",)
     assert [b.html_fragment for b in sections[1].blocks] == ["gamma", "delta"]
+
+
+# --- End-to-end capture → re-ingest reconcile (NF-06/07/08) ---------------------
+
+_QUOTE_BLOCK = "<p>The quick brown fox jumps over the lazy dog.</p>"
+_QUOTE = "quick brown fox"
+
+
+def _replace_corpus(db_conn: Connection, source_id: UUID, sections: list) -> None:  # noqa: ANN001
+    SqlAlchemyCorpusRepository(db_conn).replace(
+        source_id,
+        title="A Book",
+        authors=(),
+        language="en",
+        schema_version=1,
+        sections=sections,
+    )
+
+
+def _capture_quote(db_conn: Connection, user: User, source_id: UUID) -> UUID:
+    """Capture a highlight against the ``ch1`` quote block and return its anchor id."""
+    view = CaptureHighlight(
+        sources=SqlAlchemySourceRepository(db_conn),
+        notes=SqlAlchemyNoteRepository(db_conn),
+        corpus=SqlAlchemyCorpusRepository(db_conn),
+        markup=Bs4MarkupConverter(),
+        authorize=AuthorizeOwnership(),
+        clock=SystemClock(),
+        ids=uuid4,
+        max_body_chars=100000,
+    )(
+        user=user,
+        source_id=source_id,
+        anchor="ch1",
+        quote_exact=_QUOTE,
+        title="highlight",
+        body_markdown="",
+    )
+    return view.anchors[0].id
+
+
+def _reconcile_notes(db_conn: Connection, source_id: UUID) -> None:
+    ReconcileNoteAnchors(
+        notes=SqlAlchemyNoteRepository(db_conn),
+        corpus=SqlAlchemyCorpusRepository(db_conn),
+        markup=Bs4MarkupConverter(),
+    )(source_id=source_id)
+
+
+def _anchor_status(db_conn: Connection, anchor_id: UUID) -> str:
+    return db_conn.execute(
+        select(note_anchors.c.status).where(note_anchors.c.id == anchor_id)
+    ).scalar_one()
+
+
+def _note_exists(db_conn: Connection, note_id: UUID) -> bool:
+    row = db_conn.execute(select(notes.c.id).where(notes.c.id == note_id)).one_or_none()
+    return row is not None
+
+
+def test_reconcile_keeps_anchor_active_after_identical_reingest(db_conn: Connection) -> None:
+    user = _persist_user(db_conn, "reco-active@example.com")
+    source = _persist_source(db_conn, user.id)
+    quote_section = _corpus_record(
+        position=0, anchor="ch1", title="One", block_texts=[_QUOTE_BLOCK]
+    )
+    _replace_corpus(db_conn, source.id, [quote_section])
+    anchor_id = _capture_quote(db_conn, user, source.id)
+    assert _anchor_status(db_conn, anchor_id) == NoteAnchorStatus.ACTIVE
+
+    # Re-ingest the same book (identical corpus), then reconcile.
+    _replace_corpus(db_conn, source.id, [quote_section])
+    _reconcile_notes(db_conn, source.id)
+
+    assert _anchor_status(db_conn, anchor_id) == NoteAnchorStatus.ACTIVE
+
+
+def test_reconcile_orphans_anchor_after_mutated_reingest(db_conn: Connection) -> None:
+    user = _persist_user(db_conn, "reco-orphan@example.com")
+    source = _persist_source(db_conn, user.id)
+    _replace_corpus(
+        db_conn,
+        source.id,
+        [_corpus_record(position=0, anchor="ch1", title="One", block_texts=[_QUOTE_BLOCK])],
+    )
+    anchor_id = _capture_quote(db_conn, user, source.id)
+
+    # Re-ingest a mutated book: the quoted passage is gone and the section renamed.
+    _replace_corpus(
+        db_conn,
+        source.id,
+        [
+            _corpus_record(
+                position=0,
+                anchor="ch9",
+                title="Rewritten",
+                block_texts=["<p>Totally different prose about nothing.</p>"],
+            )
+        ],
+    )
+    _reconcile_notes(db_conn, source.id)
+
+    assert _anchor_status(db_conn, anchor_id) == NoteAnchorStatus.ORPHANED
+    # The note itself survives the mutation (prose is indestructible).
+    note_id = db_conn.execute(
+        select(note_anchors.c.note_id).where(note_anchors.c.id == anchor_id)
+    ).scalar_one()
+    assert _note_exists(db_conn, note_id)
+
+
+def test_reconcile_orphans_anchors_after_source_delete(db_conn: Connection) -> None:
+    # NF-08: deleting a source cascades its corpus away but leaves note_anchors (bare
+    # UUID). Reconciling against the now-empty corpus orphans them; the note survives.
+    user = _persist_user(db_conn, "reco-delete@example.com")
+    source = _persist_source(db_conn, user.id)
+    _replace_corpus(
+        db_conn,
+        source.id,
+        [_corpus_record(position=0, anchor="ch1", title="One", block_texts=[_QUOTE_BLOCK])],
+    )
+    anchor_id = _capture_quote(db_conn, user, source.id)
+    note_id = db_conn.execute(
+        select(note_anchors.c.note_id).where(note_anchors.c.id == anchor_id)
+    ).scalar_one()
+
+    db_conn.execute(sa_delete(sources).where(sources.c.id == source.id))
+    _reconcile_notes(db_conn, source.id)
+
+    assert _anchor_status(db_conn, anchor_id) == NoteAnchorStatus.ORPHANED
+    assert _note_exists(db_conn, note_id)
