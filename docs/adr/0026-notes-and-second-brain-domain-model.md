@@ -1,8 +1,8 @@
 # ADR-026: Notes And Second-Brain Domain Model
 
 - **Date**: 2026-07-18
-- **Status**: Proposed — acceptance gates RFC-003 Cycles E–F
-- **Deciders**: Augusto (pending), Claude (proposer)
+- **Status**: Accepted (2026-07-18)
+- **Deciders**: Augusto, Claude
 - **Tags**: notes, highlights, anchoring, retrieval, quiz, export, product
 
 ## Context and Problem Statement
@@ -128,7 +128,6 @@ by construction — everything serialized is already stored by decisions 1–2.
 
 ## Acceptance
 
-This ADR is **Proposed**. Per RFC-003, Cycles E–F do not start until the user
-accepts it (or revises it — each decision block is independently revisable
-without invalidating the others, except decisions 1↔2 which share the anchor
-payload).
+Accepted by Augusto on 2026-07-18 (RFC-003's Cycle D gate) — Cycles E–F are
+unblocked. Each decision block remains independently revisable by a superseding
+ADR, except decisions 1↔2, which share the anchor payload.
