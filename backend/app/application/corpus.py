@@ -13,12 +13,14 @@ transaction rolls back with no partial corpus (CORP-08).
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 from uuid import UUID
 
 from app.application.chunking import pack_chunks
 from app.application.errors import CorpusNotFound
 from app.application.identity import AuthorizeOwnership
 from app.application.ingestion import authorized_source
+from app.application.language import detect_language, sample_text
 from app.application.normalization import normalize_book
 from app.domain.entities import (
     CorpusSectionRecord,
@@ -88,6 +90,14 @@ class BuildCorpus:
     def __call__(self, *, source: Source, job: IngestionJob) -> None:
         source_bytes = self._storage.get_object(source.object_key)
         parsed = self._parser.parse(source_bytes, filename=source.filename)
+        # Fill a missing language by detection (ADR-0025): PDFs carry none, and the
+        # tag feeds both the persisted FTS config and localized normalization. A
+        # parser-declared language (EPUB OPF) is never overridden; an undecisive
+        # detection leaves None, which downstream treats exactly as before.
+        if parsed.language is None:
+            detected = detect_language(sample_text(parsed))
+            if detected is not None:
+                parsed = replace(parsed, language=detected)
         # Format-agnostic structure cleanup (F7) between parse and record building:
         # titles/hierarchy/boilerplate are fixed once, so EPUB and PDF corpora share
         # it and merged-away anchors survive as aliases (ING-01, AD-084).

@@ -34,7 +34,12 @@ dev = [
     "ruff>=0.9,<1",
     "docling-core>=2.87,<3",
 ]
-pdf = ["docling>=2.112,<3"]
+pdf = [
+    # docling no longer bundles an OCR engine; EasyOCR is the selective-OCR
+    # engine (ADR-0025) and shares torch/torchvision with docling's own chain.
+    "docling>=2.112,<3",
+    "easyocr>=1.7,<2",
+]
 
 [build-system]
 requires = ["hatchling"]

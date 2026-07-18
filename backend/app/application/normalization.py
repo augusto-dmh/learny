@@ -52,6 +52,66 @@ _IMAGE_BLOCK_TYPES = frozenset({"img", "figure"})
 _GENERIC_TITLE = re.compile(
     r"^(part|split|index|text|wrap|ch(apter)?)?[_-]?\d+$", re.IGNORECASE
 )
+
+
+@dataclass(frozen=True)
+class LanguageHeuristics:
+    """Language-dependent knobs of the pass (ADR-0025) — additive data, not code.
+
+    ``generic_title_patterns`` extend the base generic-title family;
+    ``part_keywords``/``chapter_keywords`` drive the keyword fallback of the
+    flat-hierarchy inference (first title word → depth 0 / depth 1) when heading
+    levels alone are uninformative. Empty rows leave every pass exactly as the
+    language-neutral behavior.
+    """
+
+    generic_title_patterns: tuple[re.Pattern[str], ...] = ()
+    part_keywords: frozenset[str] = frozenset()
+    chapter_keywords: frozenset[str] = frozenset()
+
+
+_NEUTRAL_HEURISTICS = LanguageHeuristics()
+
+# Per-language rows keyed by primary subtag. The historical constants above ARE
+# the English family, so the ``en`` row adds nothing beyond neutral; further
+# languages are new rows, not new code.
+_HEURISTICS: dict[str | None, LanguageHeuristics] = {
+    None: _NEUTRAL_HEURISTICS,
+    "en": _NEUTRAL_HEURISTICS,
+    "pt": LanguageHeuristics(
+        # Filename-stem families Brazilian/Portuguese ebooks produce
+        # (``capitulo0003``, ``parte-2``, ``secao_10`` …), accented or not.
+        generic_title_patterns=(
+            re.compile(r"^(cap[ií]tulo|parte|se[cç][aã]o)[_-]?\d+$", re.IGNORECASE),
+        ),
+        # Top-level structures: parts/books and canonical PT front/back matter.
+        part_keywords=frozenset(
+            {
+                "parte",
+                "livro",
+                "prefácio",
+                "prefacio",
+                "sumário",
+                "sumario",
+                "índice",
+                "indice",
+                "apêndice",
+                "apendice",
+                "introdução",
+                "introducao",
+            }
+        ),
+        chapter_keywords=frozenset({"capítulo", "capitulo"}),
+    ),
+}
+
+
+def _heuristics_for(language: str | None) -> LanguageHeuristics:
+    """The heuristics row for a language tag's primary subtag, else neutral."""
+    if language is None:
+        return _NEUTRAL_HEURISTICS
+    primary = language.split("-", 1)[0].lower()
+    return _HEURISTICS.get(primary, _NEUTRAL_HEURISTICS)
 _GUTENBERG_START = re.compile(
     r"\*\*\*\s*START OF TH(E|IS) PROJECT GUTENBERG EBOOK", re.IGNORECASE
 )
@@ -85,19 +145,24 @@ class NormalizationResult:
 
 
 def normalize_book(book: ParsedBook) -> NormalizationResult:
-    """Run the fixed normalization pipeline over ``book`` (pure, idempotent)."""
+    """Run the fixed normalization pipeline over ``book`` (pure, idempotent).
+
+    Language-dependent knobs come from the book's own language tag via the
+    heuristics table; an unknown or absent language gets the neutral row.
+    """
+    heuristics = _heuristics_for(book.language)
     sections = list(book.sections)
     sections, stripped = _strip_gutenberg(sections)
     sections, merged = _merge_trivial(sections)
     depths_before = [section.depth for section in sections]
-    sections = _infer_flat_hierarchy(sections)
+    sections = _infer_flat_hierarchy(sections, heuristics)
     sections = _clamp_depths(sections)
     depths_adjusted = sum(
         1
         for section, before in zip(sections, depths_before, strict=True)
         if section.depth != before
     )
-    sections, titles_replaced = _apply_title_cascade(sections)
+    sections, titles_replaced = _apply_title_cascade(sections, heuristics)
     sections = _renumber_and_rebuild_paths(sections)
     counts = NormalizationCounts(
         titles_replaced=titles_replaced,
@@ -210,23 +275,52 @@ def _extend_aliases(
     return tuple(result)
 
 
-def _infer_flat_hierarchy(sections: list[ParsedSection]) -> list[ParsedSection]:
-    """Re-derive depth from heading levels when the TOC is flat (ING-03)."""
+def _infer_flat_hierarchy(
+    sections: list[ParsedSection], heuristics: LanguageHeuristics
+) -> list[ParsedSection]:
+    """Re-derive depth when the TOC is flat (ING-03, ADR-0025).
+
+    Heading levels are the primary signal. When they are uninformative (fewer
+    than two distinct levels) the language's part/chapter keywords are the
+    fallback: a title opening with a part keyword ranks depth 0, a chapter
+    keyword depth 1 — applied only when both ranks actually occur, so an
+    all-chapters book stays flat. Neutral rows have no keywords and skip the
+    fallback entirely (the historical behavior).
+    """
     if any(section.depth != 0 for section in sections):
         return sections
     levels = [_first_heading_level(section) for section in sections]
     distinct = sorted({level for level in levels if level is not None})
-    if len(distinct) < 2:
-        return sections
+    if len(distinct) >= 2:
+        rank = {level: index for index, level in enumerate(distinct)}
+        ranks: list[int | None] = [
+            rank[level] if level is not None else None for level in levels
+        ]
+    else:
+        ranks = [_keyword_rank(section.title, heuristics) for section in sections]
+        if len({r for r in ranks if r is not None}) < 2:
+            return sections
 
-    rank = {level: index for index, level in enumerate(distinct)}
     result: list[ParsedSection] = []
     previous_depth = 0
-    for section, level in zip(sections, levels, strict=True):
-        depth = rank[level] if level is not None else previous_depth
+    for section, section_rank in zip(sections, ranks, strict=True):
+        depth = section_rank if section_rank is not None else previous_depth
         result.append(replace(section, depth=depth))
         previous_depth = depth
     return result
+
+
+def _keyword_rank(title: str, heuristics: LanguageHeuristics) -> int | None:
+    """0/1 when the title's first word is a part/chapter keyword, else ``None``."""
+    words = title.strip().lower().split()
+    if not words:
+        return None
+    first = words[0].strip(".:;,–—-")
+    if first in heuristics.part_keywords:
+        return 0
+    if first in heuristics.chapter_keywords:
+        return 1
+    return None
 
 
 def _clamp_depths(sections: list[ParsedSection]) -> list[ParsedSection]:
@@ -241,13 +335,13 @@ def _clamp_depths(sections: list[ParsedSection]) -> list[ParsedSection]:
 
 
 def _apply_title_cascade(
-    sections: list[ParsedSection],
+    sections: list[ParsedSection], heuristics: LanguageHeuristics
 ) -> tuple[list[ParsedSection], int]:
     """Replace generic titles via the heading/short-text/placeholder cascade (ING-02)."""
     result: list[ParsedSection] = []
     replaced = 0
     for index, section in enumerate(sections):
-        if _is_generic_title(section):
+        if _is_generic_title(section, heuristics):
             result.append(replace(section, title=_infer_title(section, index)))
             replaced += 1
         else:
@@ -281,12 +375,14 @@ def _is_trivial(section: ParsedSection) -> bool:
     return words < _MIN_WORDS
 
 
-def _is_generic_title(section: ParsedSection) -> bool:
+def _is_generic_title(section: ParsedSection, heuristics: LanguageHeuristics) -> bool:
     """True when the title is a filename stem, matches the href stem, or is empty."""
     title = section.title.strip()
     if not title:
         return True
     if _GENERIC_TITLE.fullmatch(title):
+        return True
+    if any(pattern.fullmatch(title) for pattern in heuristics.generic_title_patterns):
         return True
     return title == _href_stem(section.anchor)
 

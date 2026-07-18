@@ -41,5 +41,9 @@ def build_parser(content_type: str) -> DocumentParserPort:
             ) from exc
         from app.infrastructure.ingestion.docling_pdf import DoclingPdfParser
 
-        return DoclingPdfParser()
+        settings = get_settings()
+        return DoclingPdfParser(
+            ocr_enabled=settings.pdf_ocr_enabled,
+            ocr_langs=settings.pdf_ocr_lang_list(),
+        )
     raise InvalidDocumentError(f"unsupported source content type: {content_type!r}")

@@ -158,6 +158,20 @@ def test_pdf_worker_target_installs_the_pdf_extra_and_bakes_models() -> None:
     assert "download_models" in text
 
 
+def test_pdf_worker_bakes_the_easyocr_models() -> None:
+    # Selective OCR needs its models at build time (no runtime downloads). Assert
+    # on the executed download_models line, not the whole file, so flipping the
+    # flag back off fails here.
+    text = _DOCKERFILE.read_text()
+    bake_lines = [
+        line
+        for line in text.splitlines()
+        if "download_models" in line and line.lstrip().startswith("RUN")
+    ]
+    assert len(bake_lines) == 1
+    assert "with_easyocr=True" in bake_lines[0]
+
+
 # --- runtime image ships without dev deps and runs as non-root (OPS-16/17) ------
 
 

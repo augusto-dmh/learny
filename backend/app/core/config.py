@@ -89,6 +89,25 @@ class Settings(BaseSettings):
     # so a crafted archive could otherwise inflate far past it in worker memory.
     epub_max_uncompressed_bytes: int = 524288000  # 500 MiB
 
+    # Scanned-PDF OCR (ADR-0025) — the Docling adapter retries a textless PDF
+    # once with OCR before failing. ``pdf_ocr_enabled`` is the operational
+    # kill-switch (False reproduces the OCR-less behavior exactly, for workers
+    # whose image lacks the baked OCR models); ``pdf_ocr_langs`` is the
+    # comma-separated EasyOCR language list the baked models must cover.
+    pdf_ocr_enabled: bool = True
+    pdf_ocr_langs: str = "en,pt"
+
+    def pdf_ocr_lang_list(self) -> tuple[str, ...]:
+        """The parsed OCR language list (trimmed, empties dropped).
+
+        A malformed value that leaves no usable entries falls back to the
+        default pair rather than configuring the OCR engine with zero languages.
+        """
+        langs = tuple(
+            part.strip() for part in self.pdf_ocr_langs.split(",") if part.strip()
+        )
+        return langs or ("en", "pt")
+
     # Corpus chunking (A-5) — max characters per retrieval chunk before packing
     # starts a new one; oversized single blocks split at sentence boundaries.
     chunk_max_chars: int = 2000

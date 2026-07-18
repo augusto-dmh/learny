@@ -46,7 +46,7 @@ notes-domain ADR is accepted.
 |---|---|---|---|
 | `v3-ops-maturity` | A | Backups + monitoring (TDD OQ #10) + image hygiene | Done (PR #28) |
 | `v3-eval-maturity` | B | Real-provider baselines + judge threshold gate | Not started |
-| `v3-ocr` | C | Scanned-PDF OCR + localized normalization | Not started |
+| `v3-ocr` | C | Scanned-PDF OCR + localized normalization | Done (PR #29) — ran before B per AD-103 |
 | `v3-notes-research` | D | Second-brain research + notes-domain ADR (gate for E–F) | Not started |
 | `v3-notes-foundation` | E | Capture + organize: highlights, notes, links (provisional) | Not started |
 | `v3-notes-loop` | F | Retrieve + reinforce: notes in RAG + quiz, export (provisional) | Not started |

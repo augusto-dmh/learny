@@ -19,6 +19,7 @@ raises ``CorpusNotFound`` (A-7 → 404).
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 from itertools import count
 from uuid import UUID, uuid4
@@ -322,6 +323,86 @@ def test_build_corpus_runs_structure_normalization() -> None:
     assert normalized.message == (
         "titles_replaced=1 sections_merged=2 depths_adjusted=0 noise_blocks_stripped=4"
     )
+
+
+_PT_PROSE = (
+    "Era uma vez um livro que não tinha mais de uma história para contar, "
+    "mas que já era muito conhecido por todos os que estão na cidade. "
+) * 20
+
+
+def _untagged_book(prose: str) -> ParsedBook:
+    return ParsedBook(
+        title="Sem Título",
+        authors=(),
+        language=None,
+        sections=(
+            ParsedSection(
+                position=0,
+                title="Capítulo Um",
+                depth=0,
+                section_path=("Capítulo Um",),
+                anchor="pdf:capitulo-um/b0000-0000000000000000",
+                blocks=(
+                    ParsedBlock(0, "heading", "<h1>Capítulo Um</h1>"),
+                    ParsedBlock(1, "paragraph", f"<p>{prose}</p>"),
+                ),
+            ),
+        ),
+    )
+
+
+def test_build_corpus_detects_language_for_untagged_books() -> None:
+    # A PDF-style book with no declared language gets the detected tag persisted
+    # (which the repository's FTS trigger then maps to the 'portuguese' config).
+    source = _source()
+    corpus = FakeCorpusRepository()
+    storage = FakeStorage()
+    storage.objects[source.object_key] = b"pdf-bytes"
+
+    _build(
+        storage=storage,
+        parser=FakeEpubParser(book=_untagged_book(_PT_PROSE)),
+        corpus=corpus,
+        events=FakeIngestionEventRepository(),
+    )(source=source, job=_job(source.id))
+
+    assert corpus.replace_calls[0]["language"] == "pt"
+
+
+def test_build_corpus_never_overrides_a_parser_declared_language() -> None:
+    # EPUB OPF language wins even when the prose reads as another language.
+    source = _source()
+    corpus = FakeCorpusRepository()
+    storage = FakeStorage()
+    storage.objects[source.object_key] = b"epub-bytes"
+    book = replace(_untagged_book(_PT_PROSE), language="en")
+
+    _build(
+        storage=storage,
+        parser=FakeEpubParser(book=book),
+        corpus=corpus,
+        events=FakeIngestionEventRepository(),
+    )(source=source, job=_job(source.id))
+
+    assert corpus.replace_calls[0]["language"] == "en"
+
+
+def test_build_corpus_leaves_language_none_when_detection_is_undecisive() -> None:
+    # Too little text → no guess; the corpus keeps None (the 'simple' FTS config).
+    source = _source()
+    corpus = FakeCorpusRepository()
+    storage = FakeStorage()
+    storage.objects[source.object_key] = b"pdf-bytes"
+
+    _build(
+        storage=storage,
+        parser=FakeEpubParser(book=_untagged_book("Texto curto demais.")),
+        corpus=corpus,
+        events=FakeIngestionEventRepository(),
+    )(source=source, job=_job(source.id))
+
+    assert corpus.replace_calls[0]["language"] is None
 
 
 def test_build_corpus_propagates_storage_error_without_persisting() -> None:

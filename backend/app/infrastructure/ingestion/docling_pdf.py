@@ -64,35 +64,61 @@ class _RawSection:
 
 
 class DoclingPdfParser:
-    """``DocumentParserPort`` backed by Docling for born-digital PDF (ING-10/14).
+    """``DocumentParserPort`` backed by Docling for PDF (ING-10/14, ADR-0025).
 
-    The constructor takes nothing settings-dependent: in the baked ``pdf-worker``
-    image Docling reads its model artifacts from its own environment, so the
-    adapter stays a plain composition-root object. OCR is disabled and table
-    structure enabled per RFC-002; tables are exported as HTML so the existing
-    Markdown path renders them as text.
+    Born-digital PDFs take the fast path (OCR off, table structure on). When the
+    fast path yields no extractable text — a scanned/image-only PDF — and OCR is
+    enabled, the conversion is retried exactly once with EasyOCR over
+    ``ocr_langs`` (models baked into the ``pdf-worker`` image); a document that is
+    still textless after OCR is terminal. With ``ocr_enabled=False`` the behavior
+    is exactly the pre-OCR one: no retry, textless PDFs fail. Docling reads its
+    model artifacts from its own environment, so beyond these two knobs the
+    adapter stays a plain composition-root object.
     """
 
+    def __init__(
+        self, ocr_enabled: bool = True, ocr_langs: tuple[str, ...] = ("en", "pt")
+    ) -> None:
+        self._ocr_enabled = ocr_enabled
+        self._ocr_langs = ocr_langs
+
     def parse(self, source_bytes: bytes, *, filename: str) -> ParsedBook:
-        document = self._convert(source_bytes, filename=filename)
+        document = self._convert(source_bytes, filename=filename, do_ocr=False)
+        if not _has_text(document) and self._ocr_enabled:
+            document = self._convert(source_bytes, filename=filename, do_ocr=True)
+        if not _has_text(document):
+            raise InvalidDocumentError(f"PDF {filename!r} has no extractable text")
         return _to_parsed_book(document, filename=filename)
 
-    def _convert(self, source_bytes: bytes, *, filename: str) -> DoclingDocument:
-        """Run Docling conversion, mapping any failure to a terminal error (ING-14).
+    def _convert(
+        self, source_bytes: bytes, *, filename: str, do_ocr: bool
+    ) -> DoclingDocument:
+        """Run one Docling conversion, mapping any failure to a terminal error.
 
-        ``docling`` is imported here (not at module load) so this module can be
-        imported on a worker without the ``pdf`` extra. Corrupt, encrypted, and
+        ``docling`` is imported here (not at module load) so this module still
+        loads on a worker without the ``pdf`` extra. Corrupt, encrypted, and
         otherwise unreadable PDFs raise from ``convert`` under ``raises_on_error``
-        and become :class:`InvalidDocumentError`; a converted document with no
-        non-empty text block is likewise terminal (a scanned/text-free PDF this
-        OCR-disabled pipeline cannot use).
+        and become :class:`InvalidDocumentError` (ING-14) — a conversion failure
+        is never retried; only a *successful* conversion with no text triggers
+        the caller's OCR retry. With ``do_ocr`` the pipeline runs EasyOCR over
+        the configured languages (API verified against docling v2.112.0).
         """
         from docling.datamodel.base_models import InputFormat
-        from docling.datamodel.pipeline_options import PdfPipelineOptions
+        from docling.datamodel.pipeline_options import (
+            EasyOcrOptions,
+            PdfPipelineOptions,
+        )
         from docling.document_converter import DocumentConverter, PdfFormatOption
         from docling_core.types.io import DocumentStream
 
-        options = PdfPipelineOptions(do_ocr=False, do_table_structure=True)
+        if do_ocr:
+            options = PdfPipelineOptions(
+                do_ocr=True,
+                do_table_structure=True,
+                ocr_options=EasyOcrOptions(lang=list(self._ocr_langs)),
+            )
+        else:
+            options = PdfPipelineOptions(do_ocr=False, do_table_structure=True)
         converter = DocumentConverter(
             format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=options)}
         )
@@ -102,10 +128,7 @@ class DoclingPdfParser:
         except Exception as exc:  # noqa: BLE001 — any conversion failure is terminal
             raise InvalidDocumentError(f"could not read PDF {filename!r}") from exc
 
-        document = result.document
-        if not _has_text(document):
-            raise InvalidDocumentError(f"PDF {filename!r} has no extractable text")
-        return document
+        return result.document
 
 
 def _to_parsed_book(document: DoclingDocument, *, filename: str) -> ParsedBook:
