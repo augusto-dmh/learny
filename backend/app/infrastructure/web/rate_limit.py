@@ -173,3 +173,20 @@ def rate_limit_quiz(request: Request) -> None:
             detail="Too many attempts. Please try again later.",
             headers={"Retry-After": str(retry_after)},
         )
+
+
+def rate_limit_notes(request: Request) -> None:
+    """FastAPI dependency: throttle note writes + highlight capture; 429 when exceeded.
+
+    Shares the same swappable limiter and per-IP+route key as ``rate_limit_auth``
+    (same ``KNOWN LIMITATION`` under the proxy topology), applied to the
+    state-changing notes endpoints (create/update/delete + capture) so a client
+    cannot flood the note writes or the corpus resolution capture does (NF-09).
+    """
+    allowed, retry_after = get_rate_limiter().hit(_client_key(request))
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many attempts. Please try again later.",
+            headers={"Retry-After": str(retry_after)},
+        )

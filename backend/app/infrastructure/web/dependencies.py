@@ -33,6 +33,15 @@ from app.application.identity import (
     RegisterUser,
 )
 from app.application.ingestion import ReadIngestion, RunIngestion, StartIngestion
+from app.application.notes import (
+    CaptureHighlight,
+    CreateNote,
+    DeleteNote,
+    GetBacklinks,
+    GetNote,
+    ListNotes,
+    UpdateNote,
+)
 from app.application.qa import AskQuestion
 from app.application.quiz import (
     ExportQuizDeck,
@@ -70,6 +79,7 @@ from app.infrastructure.db.repositories import (
     SqlAlchemyCredentialRepository,
     SqlAlchemyIngestionEventRepository,
     SqlAlchemyIngestionJobRepository,
+    SqlAlchemyNoteRepository,
     SqlAlchemyQuizItemRepository,
     SqlAlchemyQuizJobRepository,
     SqlAlchemySessionRepository,
@@ -80,6 +90,7 @@ from app.infrastructure.db.repositories import (
 )
 from app.infrastructure.db.retrieval import SqlAlchemyRetrievalRepository
 from app.infrastructure.embeddings import build_embedding_adapter
+from app.infrastructure.ingestion.markup import Bs4MarkupConverter
 from app.infrastructure.quiz import build_quiz_adapter
 from app.infrastructure.scheduling import build_scheduling_adapter
 from app.infrastructure.security.password_hasher import Argon2PasswordHasher
@@ -562,4 +573,73 @@ def get_submit_review(conn: DbConnection) -> SubmitReview:
         scheduling=build_scheduling_adapter(get_settings()),
         authorize=AuthorizeOwnership(),
         clock=_clock,
+    )
+
+
+# --- Notes & second-brain (Cycle E) --------------------------------------------
+#
+# Every note path is one atomic transaction — a create/update rebuilds the note's
+# derived link/tag indexes, and a capture creates the note plus its anchor, all in
+# the same unit of work — so the ordinary auto-committing request connection is the
+# boundary (no commit-then-enqueue dance as on the deck/ingestion paths). The body
+# cap is sourced from settings; capture derives each block's Markdown through the
+# same ``Bs4MarkupConverter`` the corpus build used so a selection binds like-for-like.
+
+
+def get_create_note(conn: DbConnection) -> CreateNote:
+    """Wire ``CreateNote`` on the request-scoped connection (NF-05)."""
+    return CreateNote(
+        notes=SqlAlchemyNoteRepository(conn),
+        clock=_clock,
+        ids=uuid4,
+        max_body_chars=get_settings().notes_max_body_chars,
+    )
+
+
+def get_update_note(conn: DbConnection) -> UpdateNote:
+    """Wire ``UpdateNote`` on the request-scoped connection (NF-05)."""
+    return UpdateNote(
+        notes=SqlAlchemyNoteRepository(conn),
+        clock=_clock,
+        max_body_chars=get_settings().notes_max_body_chars,
+    )
+
+
+def get_delete_note(conn: DbConnection) -> DeleteNote:
+    """Wire ``DeleteNote`` on the request-scoped connection (NF-05)."""
+    return DeleteNote(notes=SqlAlchemyNoteRepository(conn))
+
+
+def get_get_note(conn: DbConnection) -> GetNote:
+    """Wire ``GetNote`` on the request-scoped connection (NF-05/10)."""
+    return GetNote(notes=SqlAlchemyNoteRepository(conn))
+
+
+def get_list_notes(conn: DbConnection) -> ListNotes:
+    """Wire ``ListNotes`` on the request-scoped connection (NF-13)."""
+    return ListNotes(notes=SqlAlchemyNoteRepository(conn))
+
+
+def get_get_backlinks(conn: DbConnection) -> GetBacklinks:
+    """Wire ``GetBacklinks`` on the request-scoped connection (NF-10)."""
+    return GetBacklinks(notes=SqlAlchemyNoteRepository(conn))
+
+
+def get_capture_highlight(conn: DbConnection) -> CaptureHighlight:
+    """Wire ``CaptureHighlight`` on the request-scoped connection (NF-06).
+
+    The note and its anchor are created in the one request transaction; the source
+    repo enforces ownership, the corpus repo resolves the addressed section, and the
+    Markdown converter derives each block's text so the selection resolves against the
+    exact content the block hash / offsets were computed from.
+    """
+    return CaptureHighlight(
+        sources=SqlAlchemySourceRepository(conn),
+        notes=SqlAlchemyNoteRepository(conn),
+        corpus=SqlAlchemyCorpusRepository(conn),
+        markup=Bs4MarkupConverter(),
+        authorize=AuthorizeOwnership(),
+        clock=_clock,
+        ids=uuid4,
+        max_body_chars=get_settings().notes_max_body_chars,
     )

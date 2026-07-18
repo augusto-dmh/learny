@@ -26,6 +26,7 @@ from app.application.notes import (
     CaptureHighlight,
     CreateNote,
     DeleteNote,
+    GetBacklinks,
     GetNote,
     ListNotes,
     ReconcileNoteAnchors,
@@ -240,6 +241,32 @@ def test_list_notes_filters_by_tag_lowercased() -> None:
     summaries = ListNotes(notes=notes)(user=user, tag="PYTHON")
 
     assert [s.note.title for s in summaries] == ["Tagged"]
+
+
+# --- GetBacklinks (NF-10) -------------------------------------------------------
+
+
+def test_get_backlinks_returns_the_linking_notes() -> None:
+    notes = FakeNoteRepository()
+    user = _user()
+    create = _create(notes)
+    target = create(user=user, title="Target", body_markdown="", tags=[])
+    linker = create(user=user, title="Linker", body_markdown="see [[Target]]", tags=[])
+
+    backlinks = GetBacklinks(notes=notes)(user=user, note_id=target.note.id)
+
+    assert [b.note_id for b in backlinks] == [linker.note.id]
+    assert [b.title for b in backlinks] == ["Linker"]
+
+
+def test_get_backlinks_is_owner_scoped() -> None:
+    notes = FakeNoteRepository()
+    owner = _user()
+    other = _user()
+    target = _create(notes)(user=owner, title="Owned", body_markdown="", tags=[])
+
+    with pytest.raises(NoteNotFound):
+        GetBacklinks(notes=notes)(user=other, note_id=target.note.id)
 
 
 # --- CaptureHighlight (NF-06) ---------------------------------------------------

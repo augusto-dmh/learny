@@ -28,6 +28,7 @@ from app.application.errors import (
 from app.application.identity import AuthorizeOwnership
 from app.application.ingestion import authorized_source
 from app.domain.entities import (
+    Backlink,
     DerivedNoteLink,
     Note,
     NoteAnchor,
@@ -252,6 +253,22 @@ class ListNotes:
         return self._notes.list_summaries(
             user.id, tag=tag.strip().lower() if tag else None
         )
+
+
+class GetBacklinks:
+    """Return the notes whose wikilinks resolve to an owned note (NF-10/13).
+
+    Owner-scoped via ``_owned_note`` (a missing note or a non-owner collapses to
+    ``NoteNotFound`` → 404) before the repository's distinct inbound-link query, so
+    an unowned note's backlinks are never disclosed.
+    """
+
+    def __init__(self, *, notes: NoteRepository) -> None:
+        self._notes = notes
+
+    def __call__(self, *, user: User, note_id: UUID) -> list[Backlink]:
+        _owned_note(self._notes, user, note_id)
+        return self._notes.backlinks(note_id)
 
 
 class CaptureHighlight:
