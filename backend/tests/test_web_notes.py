@@ -597,6 +597,38 @@ def test_capture_highlight_returns_201_with_anchor_jumpback(
     assert anchor["section_path"] == ["Chapter 1"]
 
 
+def test_capture_highlight_over_cap_body_returns_422(
+    notes_client: TestClient, db_conn: Connection
+) -> None:
+    # The one route where the body cap is checked AFTER anchor resolution: a
+    # resolvable selection with an over-cap note body must reject with 422 and
+    # persist nothing.
+    user_id = _register(notes_client, "hl-toolong@example.com")
+    csrf = _csrf(notes_client)
+    source_id = _persist_source(db_conn, user_id)
+    _seed_corpus(
+        db_conn,
+        source_id,
+        anchor="ch1",
+        block_html="<p>The quick brown fox jumps over the lazy dog.</p>",
+    )
+
+    resp = _post_highlight(
+        notes_client,
+        source_id,
+        {
+            "anchor": "ch1",
+            "quote_exact": "quick brown fox",
+            "title": "highlight",
+            "body_markdown": "x" * (NOTES_MAX_BODY + 1),
+        },
+        csrf=csrf,
+    )
+
+    assert resp.status_code == 422, resp.text
+    assert notes_client.get("/api/notes").json() == []
+
+
 def test_capture_highlight_unknown_source_returns_404(
     notes_client: TestClient, db_conn: Connection
 ) -> None:
