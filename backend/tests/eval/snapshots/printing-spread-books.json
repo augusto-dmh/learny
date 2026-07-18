@@ -1,0 +1,29 @@
+{
+  "answer": {
+    "cited_chunk_ids": [
+      "0de4a39f-d005-455f-80b0-b14bd939ad7d"
+    ],
+    "found": true,
+    "text": "The printing press worked by having a workshop reproduce a page from movable metal type. Through this process, inked letters pressed onto paper carried pamphlets and books outward faster than any scribe could copy them."
+  },
+  "case_id": "printing-spread-books",
+  "evidence": [
+    {
+      "anchor": "ch3.xhtml",
+      "chunk_id": "0de4a39f-d005-455f-80b0-b14bd939ad7d",
+      "snippet": "# The Printing Press\n\nThe printing press let a workshop reproduce a page from movable metal type. Inked letters pressed onto paper carried pamphlets and books outward faster than any scribe could copy them."
+    },
+    {
+      "anchor": "ch2.xhtml",
+      "chunk_id": "55016c7e-dcd6-458b-afa9-bcb5cf39ca3e",
+      "snippet": "# How Volcanoes Erupt\n\nA volcano erupts when molten magma escapes upward through a vent in the crust. Basalt lava flows spread outward while ash billows from the crater during the eruption."
+    },
+    {
+      "anchor": "ch1.xhtml",
+      "chunk_id": "3b396434-5f40-43fe-8e59-d5f77d5395db",
+      "snippet": "# The Rhythm of Tides\n\nOcean tides rise and fall because the moon's gravity pulls seawater across the planet. When the moon and sun align their gravity, spring tides swell the highest water along every coastline."
+    }
+  ],
+  "model": "claude-sonnet-5",
+  "question": "How did the printing press carry pamphlets and books outward?"
+}
