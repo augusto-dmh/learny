@@ -225,6 +225,34 @@ def test_gate_on_asserts_aggregate_thresholds(tmp_path: Path) -> None:
         run_eval(_inputs(1), judge=judge, max_cases=10, results_dir=tmp_path, gate=True)
 
 
+def test_gate_trips_on_faithfulness_alone(tmp_path: Path) -> None:
+    # Relevancy clears its threshold (5 >= RELEVANCY_MIN); only faithfulness is
+    # below the bar — the gate must still raise, proving that comparison is
+    # individually load-bearing.
+    judge, _ = _judge([_faithfulness_payload(False), {"score": 5}])
+
+    with pytest.raises(AssertionError, match="faithfulness"):
+        run_eval(_inputs(1), judge=judge, max_cases=10, results_dir=tmp_path, gate=True)
+
+
+def test_gate_trips_on_relevancy_alone(tmp_path: Path) -> None:
+    # Faithfulness clears its threshold (1.0 >= FAITHFULNESS_MIN); only
+    # relevancy is below the bar — the gate must still raise.
+    judge, _ = _judge([_faithfulness_payload(True), {"score": 1}])
+
+    with pytest.raises(AssertionError, match="relevancy"):
+        run_eval(_inputs(1), judge=judge, max_cases=10, results_dir=tmp_path, gate=True)
+
+
+def test_gate_constants_pin_the_calibrated_baselines() -> None:
+    # The 2026-07-18 calibration (docs/ops/eval-calibration.md): observed mean
+    # minus the safety margin. A drive-by edit to either constant silently
+    # re-arms or disarms the nightly gate, so the derived values are pinned
+    # here exactly like the model default is pinned in test_config.py.
+    assert FAITHFULNESS_MIN == 0.90
+    assert RELEVANCY_MIN == 2.5
+
+
 def test_gate_defaults_to_env_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LEARNY_EVAL_GATE", "1")
     judge, _ = _judge([_faithfulness_payload(False), {"score": 1}])
