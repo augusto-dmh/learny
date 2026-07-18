@@ -154,6 +154,18 @@ def test_conversion_error_is_terminal_and_never_retried(monkeypatch) -> None:
     assert len(fake.calls) == 1
 
 
+def test_error_during_the_ocr_retry_is_terminal(monkeypatch) -> None:
+    # The retry's own error leg: a docling failure on the OCR pass surfaces as
+    # the terminal could-not-read error (never swallowed into the no-text
+    # message, never a third conversion).
+    fake = _FakeDocling(results=[_empty_doc(), RuntimeError("ocr engine crashed")])
+    fake.install(monkeypatch)
+
+    with pytest.raises(InvalidDocumentError, match="could not read PDF 'scan.pdf'"):
+        _parser().parse(b"%PDF", filename="scan.pdf")
+    assert [options.do_ocr for options in fake.calls] == [False, True]
+
+
 def test_factory_builds_the_parser_from_settings(monkeypatch) -> None:
     # The composition root threads the two OCR knobs from Settings.
     from app.core.config import get_settings
