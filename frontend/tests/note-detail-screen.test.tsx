@@ -67,6 +67,11 @@ const liveAnchor = {
 const orphanAnchor = {
   ...liveAnchor,
   id: "a2",
+  // Distinct identifiers from the live anchor: if the jump-back gate ever
+  // inverts, the rendered link would carry THIS href and the assertion on the
+  // live href below fails — the shared-fixture blind spot a mutation survived.
+  source_id: "s9",
+  anchor: "chapter-9.xhtml#vanished",
   quote_exact: "A passage that vanished on re-ingest",
   status: "orphaned",
 };
