@@ -12,6 +12,7 @@
 
 import {
   cleanup,
+  fireEvent,
   render,
   screen,
   waitFor,
@@ -22,11 +23,26 @@ import { SectionReader } from "../app/components/section-reader";
 
 // The component reads the anchor via `useSearchParams`; drive it from a mutable
 // holder set per test (constructed from a percent-encoded query string, so
-// `.get()` decodes exactly as the browser does).
-const nav = vi.hoisted(() => ({ params: new URLSearchParams() }));
+// `.get()` decodes exactly as the browser does). `useRouter().push` is spied so
+// the "Highlight + note" navigation to the created note can be asserted.
+const nav = vi.hoisted(() => ({
+  params: new URLSearchParams(),
+  push: vi.fn(),
+}));
 vi.mock("next/navigation", () => ({
   useSearchParams: () => nav.params,
+  useRouter: () => ({ push: nav.push, replace: vi.fn() }),
 }));
+
+/** Stub `window.getSelection` to return `text` as the current selection. */
+function selectText(text: string) {
+  window.getSelection = () =>
+    ({
+      toString: () => text,
+      rangeCount: 0,
+      getRangeAt: () => ({ getBoundingClientRect: () => undefined }),
+    }) as unknown as Selection;
+}
 
 // scrollIntoView is not implemented in jsdom; a spy both polyfills it and records
 // the call the reader makes when a section resolves.
@@ -75,6 +91,7 @@ const section = {
 
 beforeEach(() => {
   nav.params = new URLSearchParams(`anchor=${ENCODED_ANCHOR}`);
+  nav.push.mockClear();
   Element.prototype.scrollIntoView = vi.fn();
 });
 
@@ -162,6 +179,26 @@ describe("SectionReader (E1)", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("does not raise the capture popover for a selection absent from the markdown", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        [`GET ${SECTION_URL}`]: () => jsonResponse(200, section),
+      }),
+    );
+
+    const { container } = render(<SectionReader sourceId="s1" />);
+    await screen.findByText("Beginnings");
+
+    // A formatting-only span the reader shows but the Markdown does not hold
+    // verbatim resolves to nothing → no popover.
+    selectText("a phrase that is not in the section");
+    fireEvent.mouseUp(container.querySelector(".prose")!);
+
+    expect(screen.queryByRole("dialog", { name: "Capture highlight" })).toBeNull();
+  });
+
   it("does not inject raw HTML in the markdown as live DOM", async () => {
     const hostileSection = {
       ...section,
@@ -188,5 +225,134 @@ describe("SectionReader (E1)", () => {
     expect(
       (globalThis as { __xss?: number }).__xss,
     ).toBeUndefined();
+  });
+});
+
+// The selection the reader captures, verbatim in the section Markdown
+// ("## Beginnings\n\nAda Lovelace wrote the first algorithm.").
+const SELECTED = "Ada Lovelace wrote the first algorithm";
+const HIGHLIGHTS_URL = "/api/sources/s1/highlights";
+
+const capturedNote = {
+  id: "n1",
+  title: SELECTED,
+  body_markdown: "",
+  tags: [],
+  anchors: [
+    {
+      id: "a1",
+      source_id: "s1",
+      source_title: "Ready Book",
+      anchor: RAW_ANCHOR,
+      section_path: ["Chapter 1", "Core Idea"],
+      block_ordinal: 0,
+      start_offset: 0,
+      end_offset: 38,
+      quote_exact: SELECTED,
+      quote_prefix: "## Beginnings ",
+      quote_suffix: ".",
+      status: "active",
+    },
+  ],
+  created_at: "now",
+  updated_at: "now",
+};
+
+/** Render the reader, wait for the section, then select `SELECTED` and mouse-up. */
+async function renderAndSelect(handlers: Record<string, Handler>) {
+  const fetchMock = routedFetch({
+    "GET /api/auth/me": () => authedMe.clone(),
+    [`GET ${SECTION_URL}`]: () => jsonResponse(200, section),
+    ...handlers,
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  const view = render(<SectionReader sourceId="s1" />);
+  await screen.findByText("Beginnings");
+  selectText(SELECTED);
+  fireEvent.mouseUp(view.container.querySelector(".prose")!);
+  return fetchMock;
+}
+
+describe("SectionReader capture (NF-12)", () => {
+  it("raises the capture popover with both actions on a resolvable selection", async () => {
+    await renderAndSelect({});
+
+    const popover = await screen.findByRole("dialog", {
+      name: "Capture highlight",
+    });
+    expect(popover).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Highlight" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Highlight + note" })).toBeTruthy();
+  });
+
+  it("captures a bare highlight with the selection payload resolved against the markdown", async () => {
+    const fetchMock = await renderAndSelect({
+      [`POST ${HIGHLIGHTS_URL}`]: () => jsonResponse(201, capturedNote),
+    });
+
+    await screen.findByRole("dialog", { name: "Capture highlight" });
+    fireEvent.click(screen.getByRole("button", { name: "Highlight" }));
+
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(
+          ([url, init]) =>
+            url === HIGHLIGHTS_URL && (init as RequestInit)?.method === "POST",
+        ),
+      ).toBe(true),
+    );
+    const post = fetchMock.mock.calls.find(
+      ([url, init]) =>
+        url === HIGHLIGHTS_URL && (init as RequestInit)?.method === "POST",
+    )!;
+    const init = post[1] as RequestInit;
+    expect(new Headers(init.headers).get("X-CSRF-Token")).toBe("csrf-xyz");
+    // The quote is whitespace-normalized and its 32-char context is sliced from
+    // the served Markdown (never the DOM); prefix carries the heading, suffix the
+    // trailing period.
+    expect(JSON.parse(init.body as string)).toEqual({
+      anchor: RAW_ANCHOR,
+      quote_exact: SELECTED,
+      quote_prefix: "## Beginnings ",
+      quote_suffix: ".",
+      title: SELECTED,
+    });
+    // A bare highlight does not navigate away.
+    expect(nav.push).not.toHaveBeenCalled();
+    // The popover closes once the capture succeeds.
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "Capture highlight" }),
+      ).toBeNull(),
+    );
+  });
+
+  it("opens the created note after Highlight + note", async () => {
+    await renderAndSelect({
+      [`POST ${HIGHLIGHTS_URL}`]: () => jsonResponse(201, capturedNote),
+    });
+
+    await screen.findByRole("dialog", { name: "Capture highlight" });
+    fireEvent.click(screen.getByRole("button", { name: "Highlight + note" }));
+
+    await waitFor(() => expect(nav.push).toHaveBeenCalledWith("/notes/n1"));
+  });
+
+  it("shows a reload prompt when the capture is stale (409)", async () => {
+    await renderAndSelect({
+      [`POST ${HIGHLIGHTS_URL}`]: () =>
+        jsonResponse(409, { detail: "The book changed while you were reading." }),
+    });
+
+    await screen.findByRole("dialog", { name: "Capture highlight" });
+    fireEvent.click(screen.getByRole("button", { name: "Highlight" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(/reload the page/i);
+    // The popover stays open so the user can retry after reloading.
+    expect(
+      screen.getByRole("dialog", { name: "Capture highlight" }),
+    ).toBeTruthy();
   });
 });
