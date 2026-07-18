@@ -49,6 +49,19 @@ Socket security scan. Provenance and content hashes are pinned in the repo-root
 | `vercel-composition-patterns` | `vercel-labs/agent-skills` | Vercel Engineering | React composition/component APIs |
 | `web-design-guidelines` | `vercel-labs/agent-skills` | Vercel (Web Interface Guidelines) | UI/accessibility review |
 
+## Community workflow skills (user-accepted)
+
+Added 2026-07-18 at the user's explicit request (reviewed before install, per the
+CLAUDE.md third-party-skill constraint). Installed with `npx skills add
+mattpocock/skills --skill grill-me --skill grilling --copy`; pinned in
+`skills-lock.json`. These are interactive planning aids, not authoritative
+project guidance.
+
+| Skill | Source repo | Provenance | Why |
+|---|---|---|---|
+| `grill-me` | `mattpocock/skills` | Matt Pocock (community) | `/grill-me` launcher for a grilling session |
+| `grilling` | `mattpocock/skills` | Matt Pocock (community) | Relentless one-question-at-a-time interview to stress-test a plan before a cycle |
+
 Deliberately **not** installed and why:
 - `vercel/next.js` skills (`next-cache-components-*`, `next-dev-loop`) — built for
   **Next.js 16** Cache Components / `/_next/mcp`; the frontend is on **15.5.4**.
