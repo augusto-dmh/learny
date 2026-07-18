@@ -301,11 +301,13 @@ describe("LibraryScreen (ingestion start)", () => {
       within(uploadedLi!).getByRole("button", { name: "Start ingestion" }),
     ).toBeTruthy();
 
-    // Ready/processing cards offer no start control at all.
-    for (const id of ["s-ready", "s-proc"]) {
-      const li = screen.getByTestId(`status-${id}`).closest("li");
-      expect(within(li!).queryByRole("button")).toBeNull();
-    }
+    // The processing card offers no controls; the ready card offers only the
+    // (confirm-gated) re-ingest control, never a start control.
+    const procLi = screen.getByTestId("status-s-proc").closest("li");
+    expect(within(procLi!).queryByRole("button")).toBeNull();
+    const readyLi = screen.getByTestId("status-s-ready").closest("li");
+    const readyButtons = within(readyLi!).getAllByRole("button");
+    expect(readyButtons.map((b) => b.textContent)).toEqual(["Re-ingest"]);
   });
 
   it("starts ingestion through the proxy and reflects processing on success", async () => {
@@ -435,5 +437,76 @@ describe("LibraryScreen (failed source)", () => {
     );
     const posted = fetchMock.mock.calls.find(([, init]) => init?.method === "POST");
     expect(posted?.[0]).toBe("/api/sources/s-fail/ingestion");
+  });
+});
+
+describe("LibraryScreen (re-ingest ready source)", () => {
+  it("asks for confirmation before posting anything", async () => {
+    const fetchMock = routedFetch({
+      "GET /api/auth/me": () => authedMe.clone(),
+      "GET /api/sources": () => jsonResponse(200, [mixed[2]]),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<LibraryScreen />);
+    await screen.findByText("Ready Book");
+
+    fireEvent.click(screen.getByRole("button", { name: "Re-ingest" }));
+
+    // The confirmation replaces the trigger: warning text plus confirm/cancel.
+    expect(screen.queryByRole("button", { name: "Re-ingest" })).toBeNull();
+    expect(
+      screen.getByText(/rebuilds this book.s corpus/i),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Confirm re-ingest" }),
+    ).toBeTruthy();
+    // Nothing has been posted yet.
+    const posts = fetchMock.mock.calls.filter(([, init]) => init?.method === "POST");
+    expect(posts).toHaveLength(0);
+  });
+
+  it("re-ingests through the proxy after confirmation and reflects processing", async () => {
+    const fetchMock = routedFetch({
+      "GET /api/auth/me": () => authedMe.clone(),
+      "GET /api/sources": () => jsonResponse(200, [mixed[2]]),
+      "POST /api/sources/s-ready/ingestion": () =>
+        jsonResponse(202, ingestionQueued),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<LibraryScreen />);
+    await screen.findByText("Ready Book");
+
+    fireEvent.click(screen.getByRole("button", { name: "Re-ingest" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm re-ingest" }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("status-s-ready").textContent).toBe(
+        "processing",
+      ),
+    );
+    const posted = fetchMock.mock.calls.find(([, init]) => init?.method === "POST");
+    expect(posted?.[0]).toBe("/api/sources/s-ready/ingestion");
+  });
+
+  it("cancel dismisses the confirmation without posting", async () => {
+    const fetchMock = routedFetch({
+      "GET /api/auth/me": () => authedMe.clone(),
+      "GET /api/sources": () => jsonResponse(200, [mixed[2]]),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<LibraryScreen />);
+    await screen.findByText("Ready Book");
+
+    fireEvent.click(screen.getByRole("button", { name: "Re-ingest" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    // Back to the collapsed trigger; the card is untouched and nothing posted.
+    expect(screen.getByRole("button", { name: "Re-ingest" })).toBeTruthy();
+    expect(screen.getByTestId("status-s-ready").textContent).toBe("ready");
+    const posts = fetchMock.mock.calls.filter(([, init]) => init?.method === "POST");
+    expect(posts).toHaveLength(0);
   });
 });
