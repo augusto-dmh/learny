@@ -781,3 +781,155 @@ class QuizGenerationJob:
             last_error=error,
             updated_at=now,
         )
+
+
+# --- Notes & second-brain aggregate (RFC-003 Cycle E; ADR-0026 §1-2) -------------
+# Whole-Markdown notes owned by a user. Book citations live in ``NoteAnchor`` rows
+# carrying the layered anchor payload (section anchor + snapshot, block hash/ordinal,
+# in-block offsets, quote-with-context) that lets a highlight survive re-ingestion.
+# Notes and anchors never cascade from corpus/source deletion (the inverse-cascade
+# invariant); reconciliation moves an anchor's status, never a note's prose (NF-07).
+
+
+class NoteAnchorStatus:
+    """Note-anchor lifecycle vocabulary (NF-07), reusing the quiz vocabulary.
+
+    ``active`` anchors resolve to a live passage; ``stale`` (the section still resolves
+    but the quoted text is gone) and ``orphaned`` (nothing resolves) are kept forever and
+    rendered from their quote snapshot. Reconciliation moves anchors between these on
+    re-ingestion; a relocation stays ``active`` and rewrites the anchor payload (D-6).
+    """
+
+    ACTIVE = "active"
+    STALE = "stale"
+    ORPHANED = "orphaned"
+
+
+@dataclass(frozen=True)
+class Note:
+    """A whole-Markdown note owned by a user (ADR-0026 §2).
+
+    ``body_markdown`` is the single source of truth; the derived ``tags`` and
+    wikilink ``note_links`` indexes are rebuilt from it on every save. A note carries
+    0..N :class:`NoteAnchor` book citations (D-5); an empty body is allowed.
+    """
+
+    id: UUID
+    user_id: UUID
+    title: str
+    body_markdown: str
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
+class NoteAnchor:
+    """A book citation on a note — the layered, corpus-FK-free anchor (ADR-0026 §1).
+
+    ``source_id`` is a bare value reference (no FK) and ``source_title`` a snapshot, so
+    an orphaned anchor still renders after its source is gone. The block binding
+    (``block_hash``/``block_ordinal``/``start_offset``/``end_offset``) is ``None`` when
+    the owning block was unhashed or unresolved; the quote-with-context snapshot
+    (``quote_exact`` + 32-char ``quote_prefix``/``quote_suffix``) then carries the anchor
+    and drives the reconcile quote tiers. ``status`` is a :class:`NoteAnchorStatus`.
+    """
+
+    id: UUID
+    note_id: UUID
+    source_id: UUID
+    source_title: str
+    anchor: str
+    section_path: tuple[str, ...]
+    block_hash: str | None
+    block_ordinal: int | None
+    start_offset: int | None
+    end_offset: int | None
+    quote_exact: str
+    quote_prefix: str
+    quote_suffix: str
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
+class Tag:
+    """A first-class, user-owned label (ADR-0026 §2), unique per user by lowercased name."""
+
+    id: UUID
+    user_id: UUID
+    name: str
+
+
+@dataclass(frozen=True)
+class DerivedNoteLink:
+    """A ``[[wikilink]]`` derived from a note body on save (NF-05).
+
+    ``target_text`` is the raw link text (always kept so a broken/unresolved link still
+    renders); ``target_note_id`` is the resolved target when the text matches another of
+    the user's notes by title (case-insensitive), else ``None`` (D-4).
+    """
+
+    target_text: str
+    target_note_id: UUID | None
+
+
+@dataclass(frozen=True)
+class Backlink:
+    """One inbound wikilink for the backlinks panel (NF-10/13): the linking note."""
+
+    note_id: UUID
+    title: str
+
+
+@dataclass(frozen=True)
+class NoteSummary:
+    """The notes-list read model (NF-13): a note with its tags and anchor statuses.
+
+    ``anchor_statuses`` carries one status per anchor (any order) so the list can render
+    active/stale/orphaned badges without loading the anchor payloads.
+    """
+
+    note: Note
+    tags: tuple[str, ...]
+    anchor_statuses: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class NoteView:
+    """The note-detail read model (NF-05/10/13): a note with its tags and anchors."""
+
+    note: Note
+    tags: tuple[str, ...]
+    anchors: tuple[NoteAnchor, ...]
+
+
+@dataclass(frozen=True)
+class AnchorBlockSnapshot:
+    """One corpus block as the highlight-anchoring read path sees it (NF-03/06/07).
+
+    Carries the block's stored ``content_hash`` (NF-02; ``None`` for a pre-0010 block)
+    and its preserved ``html_fragment``. The anchoring use cases derive the block's
+    Markdown from the fragment — the same conversion the corpus build used — so the
+    resolver matches a selection against the exact text the ``content_hash`` and
+    in-block offsets were computed from.
+    """
+
+    ordinal: int
+    content_hash: str | None
+    html_fragment: str
+
+
+@dataclass(frozen=True)
+class AnchorSection:
+    """A section's blocks plus its citation anchors, for highlight anchoring (NF-06/07).
+
+    ``anchor``/``section_path`` are the section's canonical citation; ``anchor_aliases``
+    are the anchors normalization merged into it (AD-085), so an anchor snapshotted
+    against a merged-away section reconciles here. ``blocks`` are in reading order.
+    """
+
+    anchor: str
+    section_path: tuple[str, ...]
+    anchor_aliases: tuple[str, ...]
+    blocks: tuple[AnchorBlockSnapshot, ...]

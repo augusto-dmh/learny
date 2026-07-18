@@ -37,14 +37,22 @@ from app.application.errors import TeachingTurnConflict
 from app.application.text_search import resolve_text_search_config
 from app.domain.entities import (
     ACTIVE_QUIZ_JOB_STATUSES,
+    AnchorBlockSnapshot,
+    AnchorSection,
+    Backlink,
     ChunkToEmbed,
     CorpusSectionRecord,
     CorpusStructure,
+    DerivedNoteLink,
     DueReviewItem,
     Evidence,
     HistoryTurn,
     IngestionEvent,
     IngestionJob,
+    Note,
+    NoteAnchor,
+    NoteAnchorStatus,
+    NoteSummary,
     PasswordCredential,
     QuizGenerationJob,
     QuizItem,
@@ -69,12 +77,17 @@ from app.infrastructure.db.metadata import (
     corpus_sections,
     ingestion_events,
     ingestion_jobs,
+    note_anchors,
+    note_links,
+    note_tags,
+    notes,
     quiz_generation_jobs,
     quiz_item_scheduling,
     quiz_items,
     review_log,
     sessions,
     sources,
+    tags,
     teaching_sessions,
     teaching_turn_citations,
     teaching_turns,
@@ -601,6 +614,104 @@ class SqlAlchemyCorpusRepository:
                     seen.add(anchor)
                     expanded.append(anchor)
         return tuple(expanded)
+
+    def blocks_for_section(self, source_id: UUID, anchor: str) -> AnchorSection | None:
+        # Resolve the section canonical-first then by alias (mirrors ``get_section``),
+        # then load its reading-order blocks with their stored hash and preserved HTML.
+        canonical_first = (corpus_sections.c.anchor == anchor).desc()
+        section = self._conn.execute(
+            select(
+                corpus_sections.c.id,
+                corpus_sections.c.anchor,
+                corpus_sections.c.anchor_aliases,
+                corpus_sections.c.section_path,
+            )
+            .join(corpus_documents, corpus_sections.c.document_id == corpus_documents.c.id)
+            .where(corpus_documents.c.source_id == source_id)
+            .where(
+                or_(
+                    corpus_sections.c.anchor == anchor,
+                    corpus_sections.c.anchor_aliases.any(anchor),
+                )
+            )
+            .order_by(canonical_first, corpus_sections.c.position)
+            .limit(1)
+        ).first()
+        if section is None:
+            return None
+        block_rows = self._conn.execute(
+            select(
+                corpus_blocks.c.position,
+                corpus_blocks.c.content_hash,
+                corpus_blocks.c.html_fragment,
+            )
+            .where(corpus_blocks.c.section_id == section.id)
+            .order_by(corpus_blocks.c.position)
+        ).all()
+        return AnchorSection(
+            anchor=section.anchor,
+            section_path=tuple(section.section_path),
+            anchor_aliases=tuple(section.anchor_aliases),
+            blocks=tuple(_to_anchor_block(row) for row in block_rows),
+        )
+
+    def blocks_for_reconcile(self, source_id: UUID) -> list[AnchorSection]:
+        # Every section with its reading-order blocks — the block-level analogue of
+        # ``section_texts`` the 4-tier note-anchor cascade reads. One join pulls sections
+        # and their blocks; a section with no blocks still appears (empty ``blocks``) so a
+        # surviving anchor is always reachable.
+        rows = self._conn.execute(
+            select(
+                corpus_sections.c.position,
+                corpus_sections.c.anchor,
+                corpus_sections.c.anchor_aliases,
+                corpus_sections.c.section_path,
+                corpus_blocks.c.position.label("block_position"),
+                corpus_blocks.c.content_hash,
+                corpus_blocks.c.html_fragment,
+            )
+            .select_from(
+                corpus_sections.join(
+                    corpus_documents,
+                    corpus_sections.c.document_id == corpus_documents.c.id,
+                ).outerjoin(
+                    corpus_blocks,
+                    corpus_blocks.c.section_id == corpus_sections.c.id,
+                )
+            )
+            .where(corpus_documents.c.source_id == source_id)
+            .order_by(corpus_sections.c.position, corpus_blocks.c.position)
+        ).all()
+
+        ordered_positions: list[int] = []
+        meta: dict[int, tuple[str, tuple[str, ...], tuple[str, ...]]] = {}
+        blocks: dict[int, list[AnchorBlockSnapshot]] = {}
+        for row in rows:
+            if row.position not in meta:
+                ordered_positions.append(row.position)
+                meta[row.position] = (
+                    row.anchor,
+                    tuple(row.section_path),
+                    tuple(row.anchor_aliases),
+                )
+                blocks[row.position] = []
+            if row.block_position is not None:
+                blocks[row.position].append(
+                    AnchorBlockSnapshot(
+                        ordinal=row.block_position,
+                        content_hash=row.content_hash,
+                        html_fragment=row.html_fragment,
+                    )
+                )
+        return [
+            AnchorSection(
+                anchor=meta[pos][0],
+                section_path=meta[pos][1],
+                anchor_aliases=meta[pos][2],
+                blocks=tuple(blocks[pos]),
+            )
+            for pos in ordered_positions
+        ]
 
 
 class SqlAlchemyEmbeddingIndexRepository:
@@ -1256,6 +1367,247 @@ class SqlAlchemyQuizJobRepository:
         return job
 
 
+class SqlAlchemyNoteRepository:
+    """``NoteRepository`` backed by the notes/anchors/tags/links tables (ADR-0026 §2).
+
+    Owner scoping is the application service's job (AD-014); these methods key on ids.
+    The derived-index writes (``set_tags``/``set_links``) are delete-then-insert so a
+    save rebuilds the wikilink and tag indexes from the note body. Reconciliation writes
+    only an anchor's payload + status, never a note's prose (NF-07). Operates on the
+    caller's ``Connection`` so the transaction boundary lives at the composition root.
+    """
+
+    def __init__(self, connection: Connection) -> None:
+        self._conn = connection
+
+    def add(self, note: Note) -> Note:
+        self._conn.execute(
+            insert(notes).values(
+                id=note.id,
+                user_id=note.user_id,
+                title=note.title,
+                body_markdown=note.body_markdown,
+                created_at=note.created_at,
+                updated_at=note.updated_at,
+            )
+        )
+        return note
+
+    def get_by_id(self, note_id: UUID) -> Note | None:
+        row = self._conn.execute(
+            select(notes).where(notes.c.id == note_id)
+        ).one_or_none()
+        return _to_note(row) if row is not None else None
+
+    def update(
+        self, note_id: UUID, *, title: str, body_markdown: str, updated_at: datetime
+    ) -> None:
+        self._conn.execute(
+            update(notes)
+            .where(notes.c.id == note_id)
+            .values(title=title, body_markdown=body_markdown, updated_at=updated_at)
+        )
+
+    def delete(self, note_id: UUID) -> None:
+        self._conn.execute(sa_delete(notes).where(notes.c.id == note_id))
+
+    def list_summaries(
+        self, user_id: UUID, *, tag: str | None = None
+    ) -> list[NoteSummary]:
+        query = select(notes).where(notes.c.user_id == user_id)
+        if tag is not None:
+            query = query.where(
+                notes.c.id.in_(
+                    select(note_tags.c.note_id)
+                    .join(tags, note_tags.c.tag_id == tags.c.id)
+                    .where(tags.c.user_id == user_id, tags.c.name == tag)
+                )
+            )
+        rows = self._conn.execute(
+            query.order_by(notes.c.updated_at.desc(), notes.c.id)
+        ).all()
+        note_list = [_to_note(row) for row in rows]
+        if not note_list:
+            return []
+
+        ids = [note.id for note in note_list]
+        tag_rows = self._conn.execute(
+            select(note_tags.c.note_id, tags.c.name)
+            .join(tags, note_tags.c.tag_id == tags.c.id)
+            .where(note_tags.c.note_id.in_(ids))
+            .order_by(tags.c.name)
+        ).all()
+        tags_by_note: dict[UUID, list[str]] = {}
+        for row in tag_rows:
+            tags_by_note.setdefault(row.note_id, []).append(row.name)
+
+        status_rows = self._conn.execute(
+            select(note_anchors.c.note_id, note_anchors.c.status)
+            .where(note_anchors.c.note_id.in_(ids))
+            .order_by(note_anchors.c.created_at)
+        ).all()
+        statuses_by_note: dict[UUID, list[str]] = {}
+        for row in status_rows:
+            statuses_by_note.setdefault(row.note_id, []).append(row.status)
+
+        return [
+            NoteSummary(
+                note=note,
+                tags=tuple(tags_by_note.get(note.id, [])),
+                anchor_statuses=tuple(statuses_by_note.get(note.id, [])),
+            )
+            for note in note_list
+        ]
+
+    def tags_for_note(self, note_id: UUID) -> list[str]:
+        rows = self._conn.execute(
+            select(tags.c.name)
+            .join(note_tags, note_tags.c.tag_id == tags.c.id)
+            .where(note_tags.c.note_id == note_id)
+            .order_by(tags.c.name)
+        ).all()
+        return [row.name for row in rows]
+
+    def anchors_for_note(self, note_id: UUID) -> list[NoteAnchor]:
+        rows = self._conn.execute(
+            select(note_anchors)
+            .where(note_anchors.c.note_id == note_id)
+            .order_by(note_anchors.c.created_at, note_anchors.c.id)
+        ).all()
+        return [_to_note_anchor(row) for row in rows]
+
+    def backlinks(self, note_id: UUID) -> list[Backlink]:
+        rows = self._conn.execute(
+            select(notes.c.id, notes.c.title, notes.c.updated_at)
+            .join(note_links, note_links.c.note_id == notes.c.id)
+            .where(note_links.c.target_note_id == note_id)
+            .order_by(notes.c.updated_at.desc(), notes.c.id)
+        ).all()
+        # A note may link to the target more than once; collapse to distinct notes.
+        seen: set[UUID] = set()
+        result: list[Backlink] = []
+        for row in rows:
+            if row.id in seen:
+                continue
+            seen.add(row.id)
+            result.append(Backlink(note_id=row.id, title=row.title))
+        return result
+
+    def resolve_titles(
+        self, user_id: UUID, titles: Sequence[str]
+    ) -> dict[str, UUID]:
+        wanted = [title.lower() for title in titles]
+        if not wanted:
+            return {}
+        rows = self._conn.execute(
+            select(notes.c.id, notes.c.title)
+            .where(notes.c.user_id == user_id)
+            .where(func.lower(notes.c.title).in_(wanted))
+            .order_by(notes.c.created_at, notes.c.id)
+        ).all()
+        resolved: dict[str, UUID] = {}
+        for row in rows:
+            # First (earliest-created) note wins a title collision.
+            resolved.setdefault(row.title.lower(), row.id)
+        return resolved
+
+    def set_tags(self, note_id: UUID, user_id: UUID, names: Sequence[str]) -> None:
+        self._conn.execute(sa_delete(note_tags).where(note_tags.c.note_id == note_id))
+        for name in names:
+            # Get-or-create the user's tag, then wire it to the note.
+            self._conn.execute(
+                pg_insert(tags)
+                .values(id=uuid4(), user_id=user_id, name=name)
+                .on_conflict_do_nothing(index_elements=["user_id", "name"])
+            )
+            tag_id = self._conn.execute(
+                select(tags.c.id).where(tags.c.user_id == user_id, tags.c.name == name)
+            ).scalar_one()
+            self._conn.execute(
+                insert(note_tags).values(note_id=note_id, tag_id=tag_id)
+            )
+
+    def set_links(self, note_id: UUID, links: Sequence[DerivedNoteLink]) -> None:
+        self._conn.execute(sa_delete(note_links).where(note_links.c.note_id == note_id))
+        rows = [
+            {
+                "id": uuid4(),
+                "note_id": note_id,
+                "target_note_id": link.target_note_id,
+                "target_text": link.target_text,
+            }
+            for link in links
+        ]
+        if rows:
+            self._conn.execute(insert(note_links), rows)
+
+    def add_anchor(self, anchor: NoteAnchor) -> NoteAnchor:
+        self._conn.execute(
+            insert(note_anchors).values(
+                id=anchor.id,
+                note_id=anchor.note_id,
+                source_id=anchor.source_id,
+                source_title=anchor.source_title,
+                anchor=anchor.anchor,
+                section_path=list(anchor.section_path),
+                block_hash=anchor.block_hash,
+                block_ordinal=anchor.block_ordinal,
+                start_offset=anchor.start_offset,
+                end_offset=anchor.end_offset,
+                quote_exact=anchor.quote_exact,
+                quote_prefix=anchor.quote_prefix,
+                quote_suffix=anchor.quote_suffix,
+                status=anchor.status,
+                created_at=anchor.created_at,
+                updated_at=anchor.updated_at,
+            )
+        )
+        return anchor
+
+    def anchors_for_source(self, source_id: UUID) -> list[NoteAnchor]:
+        rows = self._conn.execute(
+            select(note_anchors)
+            .where(note_anchors.c.source_id == source_id)
+            .order_by(note_anchors.c.created_at, note_anchors.c.id)
+        ).all()
+        return [_to_note_anchor(row) for row in rows]
+
+    def update_anchor_reconciliation(
+        self,
+        anchor_id: UUID,
+        *,
+        anchor: str,
+        section_path: Sequence[str],
+        block_hash: str | None,
+        block_ordinal: int | None,
+        start_offset: int | None,
+        end_offset: int | None,
+        status: str,
+    ) -> None:
+        self._conn.execute(
+            update(note_anchors)
+            .where(note_anchors.c.id == anchor_id)
+            .values(
+                anchor=anchor,
+                section_path=list(section_path),
+                block_hash=block_hash,
+                block_ordinal=block_ordinal,
+                start_offset=start_offset,
+                end_offset=end_offset,
+                status=status,
+                updated_at=func.now(),
+            )
+        )
+
+    def orphan_anchors_for_source(self, source_id: UUID) -> None:
+        self._conn.execute(
+            update(note_anchors)
+            .where(note_anchors.c.source_id == source_id)
+            .where(note_anchors.c.status != NoteAnchorStatus.ORPHANED)
+            .values(status=NoteAnchorStatus.ORPHANED, updated_at=func.now())
+        )
+
+
 def _to_user(row) -> User:  # noqa: ANN001 — Row is an internal SQLAlchemy type
     return User(id=row.id, email=row.email, created_at=row.created_at)
 
@@ -1394,4 +1746,44 @@ def _to_quiz_job(row) -> QuizGenerationJob:  # noqa: ANN001
         last_error=row.last_error,
         created_at=row.created_at,
         updated_at=row.updated_at,
+    )
+
+
+def _to_note(row) -> Note:  # noqa: ANN001
+    return Note(
+        id=row.id,
+        user_id=row.user_id,
+        title=row.title,
+        body_markdown=row.body_markdown,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+def _to_note_anchor(row) -> NoteAnchor:  # noqa: ANN001
+    return NoteAnchor(
+        id=row.id,
+        note_id=row.note_id,
+        source_id=row.source_id,
+        source_title=row.source_title,
+        anchor=row.anchor,
+        section_path=tuple(row.section_path),
+        block_hash=row.block_hash,
+        block_ordinal=row.block_ordinal,
+        start_offset=row.start_offset,
+        end_offset=row.end_offset,
+        quote_exact=row.quote_exact,
+        quote_prefix=row.quote_prefix,
+        quote_suffix=row.quote_suffix,
+        status=row.status,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+def _to_anchor_block(row) -> AnchorBlockSnapshot:  # noqa: ANN001
+    return AnchorBlockSnapshot(
+        ordinal=row.position,
+        content_hash=row.content_hash,
+        html_fragment=row.html_fragment,
     )

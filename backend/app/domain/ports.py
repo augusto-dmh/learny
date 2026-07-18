@@ -21,16 +21,22 @@ from typing import Protocol, runtime_checkable
 from uuid import UUID
 
 from app.domain.entities import (
+    AnchorSection,
     AnswerStreamEvent,
+    Backlink,
     ChunkToEmbed,
     CorpusSectionRecord,
     CorpusStructure,
+    DerivedNoteLink,
     DueReviewItem,
     Evidence,
     GeneratedAnswer,
     HistoryTurn,
     IngestionEvent,
     IngestionJob,
+    Note,
+    NoteAnchor,
+    NoteSummary,
     ParsedBook,
     PasswordCredential,
     QuizDeckHandle,
@@ -373,6 +379,25 @@ class CorpusRepository(Protocol):
         anchor and all its aliases (deduplicated, input order preserved). Teaching-scoped
         retrieval expands its target subtree through this so evidence from a section that
         normalization merged away is still reachable (ING-23). An empty input returns empty.
+        """
+        ...
+
+    def blocks_for_section(self, source_id: UUID, anchor: str) -> AnchorSection | None:
+        """Return the section addressed by ``anchor`` with its blocks, or ``None`` (NF-06).
+
+        Resolves the section canonical-first then by alias (like :meth:`get_section`) and
+        returns its canonical anchor, ``section_path``, aliases, and reading-order blocks
+        (ordinal + stored ``content_hash`` + preserved ``html_fragment``). The highlight
+        capture path derives each block's Markdown from the fragment to bind a selection.
+        """
+        ...
+
+    def blocks_for_reconcile(self, source_id: UUID) -> list[AnchorSection]:
+        """Return every section with its blocks, in reading order, for reconcile (NF-07).
+
+        The block-level analogue of :meth:`section_texts`: each :class:`AnchorSection`
+        carries its canonical anchor/path, ``anchor_aliases``, and reading-order blocks so
+        the 4-tier cascade can match a stored anchor by block hash and rebind its quote.
         """
         ...
 
@@ -821,4 +846,108 @@ class QuizItemRepository(Protocol):
         Reconciliation touches these three fields only — scheduling and review-log rows
         are never modified or deleted.
         """
+        ...
+
+
+# --- Notes & second-brain ports (RFC-003 Cycle E; ADR-0026 §1-2) -----------------
+
+
+@runtime_checkable
+class NoteRepository(Protocol):
+    """Persistence port for the notes aggregate (ADR-0026 §2, design §Repositories).
+
+    Owner scoping is the application service's job (AD-014) — these methods key on ids
+    and ``user_id``. Notes and anchors never cascade from corpus/source deletion (the
+    inverse-cascade invariant lives in the schema); reconciliation and the source-delete
+    orphan flip are explicit writes here. Operates on the caller's ``Connection`` so the
+    transaction boundary (e.g. atomic note+anchor create) lives at the composition root.
+    """
+
+    def add(self, note: Note) -> Note:
+        """Insert a new note."""
+        ...
+
+    def get_by_id(self, note_id: UUID) -> Note | None:
+        """Return the note with ``note_id``, or ``None`` if absent."""
+        ...
+
+    def update(
+        self, note_id: UUID, *, title: str, body_markdown: str, updated_at: datetime
+    ) -> None:
+        """Persist a note's ``title``/``body_markdown``/``updated_at`` (NF-05)."""
+        ...
+
+    def delete(self, note_id: UUID) -> None:
+        """Delete a note; its anchors/tags/links cascade, inbound links SET NULL (NF-01)."""
+        ...
+
+    def list_summaries(
+        self, user_id: UUID, *, tag: str | None = None
+    ) -> list[NoteSummary]:
+        """Return the user's notes (newest-edited first) with tags and anchor statuses.
+
+        When ``tag`` (already lowercased) is given, only notes carrying that tag are
+        returned; every returned summary still lists all of its tags (NF-13).
+        """
+        ...
+
+    def tags_for_note(self, note_id: UUID) -> list[str]:
+        """Return a note's tag names, sorted."""
+        ...
+
+    def anchors_for_note(self, note_id: UUID) -> list[NoteAnchor]:
+        """Return a note's anchors in creation order (NF-10)."""
+        ...
+
+    def backlinks(self, note_id: UUID) -> list[Backlink]:
+        """Return the distinct notes whose wikilinks resolve to ``note_id`` (NF-10)."""
+        ...
+
+    def resolve_titles(
+        self, user_id: UUID, titles: Sequence[str]
+    ) -> dict[str, UUID]:
+        """Map each lowercased title to the user's earliest note of that title (NF-05).
+
+        The wikilink resolver: a ``[[title]]`` matches case-insensitively; ties resolve
+        to the earliest-created note. Titles with no match are absent from the result.
+        """
+        ...
+
+    def set_tags(self, note_id: UUID, user_id: UUID, names: Sequence[str]) -> None:
+        """Replace a note's tags with ``names`` (already lowercased/deduped by the caller).
+
+        Get-or-creates each tag under ``(user_id, name)`` so two casings never coexist,
+        then rewires ``note_tags`` for the note (the derived-index rewrite, NF-05).
+        """
+        ...
+
+    def set_links(self, note_id: UUID, links: Sequence[DerivedNoteLink]) -> None:
+        """Replace a note's derived wikilinks (NF-05) — delete-then-insert."""
+        ...
+
+    def add_anchor(self, anchor: NoteAnchor) -> NoteAnchor:
+        """Insert a note anchor (NF-06)."""
+        ...
+
+    def anchors_for_source(self, source_id: UUID) -> list[NoteAnchor]:
+        """Return every anchor citing ``source_id`` for reconciliation (NF-07)."""
+        ...
+
+    def update_anchor_reconciliation(
+        self,
+        anchor_id: UUID,
+        *,
+        anchor: str,
+        section_path: Sequence[str],
+        block_hash: str | None,
+        block_ordinal: int | None,
+        start_offset: int | None,
+        end_offset: int | None,
+        status: str,
+    ) -> None:
+        """Write only an anchor's payload fields + status (NF-07); never the note body."""
+        ...
+
+    def orphan_anchors_for_source(self, source_id: UUID) -> None:
+        """Flip every non-orphaned anchor citing ``source_id`` to ``orphaned`` (NF-08)."""
         ...
