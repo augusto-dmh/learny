@@ -5,8 +5,10 @@
  *
  * Resolves auth state via `/api/auth/me` (through the proxy), lists the user's
  * sources as cards with a status badge, uploads an EPUB (unchanged multipart
- * contract), links ready books to Ask/Teach/Read, and — for a failed source —
- * surfaces the latest ingestion event message alongside a restart control. All
+ * contract), links ready books to Ask/Teach/Read (with a confirm-gated
+ * re-ingest control that rebuilds the corpus, e.g. after an embedding-provider
+ * switch, ADR-0019), and — for a failed source — surfaces the latest ingestion
+ * event message alongside a restart control. All
  * same-origin; the CSRF token read on mount is reused for the state-changing
  * upload and (re)start calls (AD-007).
  *
@@ -216,6 +218,10 @@ export function LibraryScreen({
   // Id of the source whose ingestion (re)start is in flight, so we disable just
   // that row's button and block a double-start.
   const [startingId, setStartingId] = useState<string | null>(null);
+  // Id of the ready source whose re-ingest is awaiting confirmation. Re-ingest
+  // replaces the corpus and can stale/orphan quiz items, so it never fires on a
+  // single click.
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
   // Latest ingestion event message per failed source (FE-20).
   const [failureMessages, setFailureMessages] = useState<
     Record<string, string>
@@ -321,6 +327,7 @@ export function LibraryScreen({
       setError(err instanceof Error ? err.message : "Could not start ingestion.");
     } finally {
       setStartingId(null);
+      setConfirmingId(null);
     }
   }
 
@@ -421,6 +428,46 @@ export function LibraryScreen({
                         sourceId={source.id}
                         csrfToken={state.user.csrf_token}
                       />
+                      {confirmingId === source.id ? (
+                        <div className="space-y-2">
+                          <p className="text-sm text-muted-foreground">
+                            Re-ingesting rebuilds this book&apos;s corpus with
+                            the current providers. Existing quiz items may go
+                            stale or orphaned.
+                          </p>
+                          <div className="flex gap-2">
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              onClick={() => void handleStart(source)}
+                              disabled={startingId === source.id}
+                            >
+                              {startingId === source.id
+                                ? "Re-ingesting…"
+                                : "Confirm re-ingest"}
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => setConfirmingId(null)}
+                              disabled={startingId === source.id}
+                            >
+                              Cancel
+                            </Button>
+                          </div>
+                        </div>
+                      ) : (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => setConfirmingId(source.id)}
+                        >
+                          Re-ingest
+                        </Button>
+                      )}
                     </>
                   ) : null}
                   {source.status === "uploaded" ? (
