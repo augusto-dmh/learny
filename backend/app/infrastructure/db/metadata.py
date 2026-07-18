@@ -261,6 +261,10 @@ corpus_blocks = Table(
     Column("block_type", Text, nullable=False),  # heading | paragraph | list | table | ...
     # Preserved outer HTML so the Markdown view can be re-derived (ADR-0002).
     Column("html_fragment", Text, nullable=False),
+    # Normalized-text sha256 the corpus build computes per block (NF-02), used to
+    # bind highlight anchors to a block. Nullable, no backfill (AD-111): pre-0010
+    # blocks stay NULL until the next re-ingest recomputes them.
+    Column("content_hash", Text, nullable=True),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
 )
 
@@ -471,4 +475,121 @@ quiz_generation_jobs = Table(
     Column("last_error", Text, nullable=True),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+)
+
+# --- Notes & second-brain aggregate (RFC-003 Cycle E; ADR-0026 §1-2) -------------
+# Whole-Markdown notes owned by a user, with book-citation ``note_anchors``, first-
+# class ``tags``/``note_tags``, and wikilink-derived ``note_links``. THE INVERSE-
+# CASCADE RULE IS THE CORE INVARIANT: no note table FKs into ``corpus_*``/``sources``
+# — ``note_anchors.source_id`` is a bare UUID — so a source delete or corpus replace
+# can never destroy user prose. The only cascades are within the aggregate (notes
+# from users; anchors/tags/links from notes; note_tags from tags). A deleted note's
+# inbound ``note_links`` are SET NULL, keeping their ``target_text``.
+
+notes = Table(
+    "notes",
+    metadata,
+    Column("id", UUID(as_uuid=True), primary_key=True),
+    Column(
+        "user_id",
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    Column("title", Text, nullable=False),
+    Column("body_markdown", Text, nullable=False, server_default=""),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+)
+
+note_anchors = Table(
+    "note_anchors",
+    metadata,
+    Column("id", UUID(as_uuid=True), primary_key=True),
+    Column(
+        "note_id",
+        UUID(as_uuid=True),
+        ForeignKey("notes.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    # Bare UUID — deliberately NOT a foreign key (inverse-cascade invariant).
+    Column("source_id", UUID(as_uuid=True), nullable=False, index=True),
+    # Snapshots so an orphaned anchor still renders without the corpus.
+    Column("source_title", Text, nullable=False),
+    Column("anchor", Text, nullable=False),
+    Column("section_path", JSONB, nullable=False),
+    # Block binding — NULL when the block was unhashed/unresolved; the quote snapshot
+    # then carries the anchor.
+    Column("block_hash", Text, nullable=True),
+    Column("block_ordinal", Integer, nullable=True),
+    Column("start_offset", Integer, nullable=True),
+    Column("end_offset", Integer, nullable=True),
+    # Quote-with-context snapshot (exact + 32-char prefix/suffix, ADR-0026 §1).
+    Column("quote_exact", Text, nullable=False),
+    Column("quote_prefix", Text, nullable=False, server_default=""),
+    Column("quote_suffix", Text, nullable=False, server_default=""),
+    Column("status", Text, nullable=False, server_default="active"),  # active|stale|orphaned
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+)
+
+tags = Table(
+    "tags",
+    metadata,
+    Column("id", UUID(as_uuid=True), primary_key=True),
+    Column(
+        "user_id",
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    # Stored already-lowercased by the application; the unique below is the per-user
+    # identity so two casings of the same tag never coexist.
+    Column("name", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    UniqueConstraint("user_id", "name"),
+)
+
+note_tags = Table(
+    "note_tags",
+    metadata,
+    Column(
+        "note_id",
+        UUID(as_uuid=True),
+        ForeignKey("notes.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column(
+        "tag_id",
+        UUID(as_uuid=True),
+        ForeignKey("tags.id", ondelete="CASCADE"),
+        primary_key=True,
+        index=True,
+    ),
+)
+
+note_links = Table(
+    "note_links",
+    metadata,
+    Column("id", UUID(as_uuid=True), primary_key=True),
+    Column(
+        "note_id",
+        UUID(as_uuid=True),
+        ForeignKey("notes.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    # Resolved wikilink target; NULL when the [[title]] matches no note, and SET NULL
+    # (never deleted) when a resolved target note is later deleted.
+    Column(
+        "target_note_id",
+        UUID(as_uuid=True),
+        ForeignKey("notes.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    ),
+    # Always-populated raw link text so an unresolved/broken link still renders.
+    Column("target_text", Text, nullable=False),
 )
