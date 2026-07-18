@@ -45,7 +45,7 @@ notes-domain ADR is accepted.
 | tlc Cycle | RFC-003 Cycle | Scope | Status |
 |---|---|---|---|
 | `v3-ops-maturity` | A | Backups + monitoring (TDD OQ #10) + image hygiene | Done (PR #28) |
-| `v3-eval-maturity` | B | Real-provider baselines + judge threshold gate | Not started |
+| `v3-eval-maturity` | B | Real-provider baselines + judge threshold gate | Done (PR #35) |
 | `v3-ocr` | C | Scanned-PDF OCR + localized normalization | Done (PR #29) — ran before B per AD-103 |
 | `v3-notes-research` | D | Second-brain research + notes-domain ADR (gate for E–F) | Done (PR #30) — ADR-0026 Accepted 2026-07-18, E–F unblocked |
 | `v3-notes-foundation` | E | Capture + organize: highlights, notes, links (per ADR-0026) | Done (PR #31) |
