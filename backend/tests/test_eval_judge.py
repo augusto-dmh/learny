@@ -126,7 +126,7 @@ def test_relevancy_parses_integer_score() -> None:
 # --- JSONL result schema (GEN-21) ----------------------------------------------
 
 
-def _inputs(n: int) -> list[EvalInput]:
+def _inputs(n: int, *, citation_valid: bool = True) -> list[EvalInput]:
     return [
         EvalInput(
             case_id=f"case-{i}",
@@ -134,7 +134,7 @@ def _inputs(n: int) -> list[EvalInput]:
             evidence_text="passages",
             answer_text=f"a{i}",
             generation_model="claude-sonnet-4-6",
-            citation_valid=True,
+            citation_valid=citation_valid,
         )
         for i in range(n)
     ]
@@ -242,6 +242,37 @@ def test_gate_trips_on_relevancy_alone(tmp_path: Path) -> None:
 
     with pytest.raises(AssertionError, match="relevancy"):
         run_eval(_inputs(1), judge=judge, max_cases=10, results_dir=tmp_path, gate=True)
+
+
+def test_gate_trips_on_citation_validity_alone(tmp_path: Path) -> None:
+    # Faithfulness and relevancy both clear their thresholds; only a citation
+    # failure remains — the gate's third branch must be individually
+    # load-bearing too.
+    judge, _ = _judge([_faithfulness_payload(True), {"score": 5}])
+
+    with pytest.raises(AssertionError, match="citation"):
+        run_eval(
+            _inputs(1, citation_valid=False),
+            judge=judge,
+            max_cases=10,
+            results_dir=tmp_path,
+            gate=True,
+        )
+
+
+def test_gate_passes_on_baseline_aggregates(tmp_path: Path) -> None:
+    # All three branches clear: the gate must NOT raise. This is the case that
+    # kills an inverted comparison in any branch (an inverted assert fires on
+    # good aggregates, where the single-failure cases cannot see it).
+    judge, _ = _judge([_faithfulness_payload(True), {"score": 5}])
+
+    lines = run_eval(
+        _inputs(1), judge=judge, max_cases=10, results_dir=tmp_path, gate=True
+    )
+
+    assert lines[0]["faithfulness"] == 1.0
+    assert lines[0]["relevancy"] == 5
+    assert lines[0]["citation_valid"] is True
 
 
 def test_gate_constants_pin_the_calibrated_baselines() -> None:

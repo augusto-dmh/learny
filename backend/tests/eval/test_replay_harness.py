@@ -173,6 +173,11 @@ def test_committed_snapshots_roundtrip_or_skip() -> None:
         assert Snapshot.from_dict(snapshot.to_dict()) == snapshot
         assert snapshot.case_id
         assert all(e.chunk_id and e.anchor for e in snapshot.evidence)
+        # Not-found answers cite nothing — the recorded artifact must honor the
+        # same contract the live path enforces, so a corrupted snapshot cannot
+        # smuggle citations into a not-found case.
+        if not snapshot.answer.found:
+            assert snapshot.answer.cited_chunk_ids == ()
 
 
 # --- Live recording (GEN-18) — skipped offline / without the flag --------------
