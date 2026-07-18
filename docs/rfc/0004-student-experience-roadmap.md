@@ -1,6 +1,6 @@
 # RFC-004: Student-Experience Roadmap — Reading-First Learny
 
-- **Status**: Proposed (2026-07-18; scope locked in the 2026-07-18 planning session, identity decided by [ADR-027](../adr/0027-iron-gall-visual-identity.md))
+- **Status**: Accepted (2026-07-18)
 - **Date**: 2026-07-18
 - **Driver**: Augusto
 - **Approvers**: Augusto
