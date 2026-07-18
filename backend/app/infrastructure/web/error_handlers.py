@@ -32,11 +32,14 @@ from app.application.errors import (
     InvalidTeachingTarget,
     NotAuthenticated,
     NotAuthorized,
+    NoteBodyTooLong,
+    NoteNotFound,
     QuizDeckConflict,
     QuizItemNotFound,
     QuizItemNotReviewable,
     SourceNotFound,
     SourceNotReady,
+    StaleCaptureTarget,
     StorageUnavailable,
     TeachingSessionNotFound,
     TeachingTargetGone,
@@ -83,6 +86,9 @@ _STATUS_BY_ERROR = {
     QuizDeckConflict: status.HTTP_409_CONFLICT,
     QuizItemNotFound: status.HTTP_404_NOT_FOUND,
     QuizItemNotReviewable: status.HTTP_409_CONFLICT,
+    NoteNotFound: status.HTTP_404_NOT_FOUND,
+    NoteBodyTooLong: _HTTP_422,
+    StaleCaptureTarget: status.HTTP_409_CONFLICT,
 }
 
 # An invalid upload maps to a status keyed by its ``kind`` (design §Error Handling):

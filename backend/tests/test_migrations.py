@@ -74,6 +74,11 @@ def test_migration_metadata_compiles() -> None:
         "quiz_item_scheduling",
         "review_log",
         "quiz_generation_jobs",
+        "notes",
+        "note_anchors",
+        "tags",
+        "note_tags",
+        "note_links",
     }
     # Unique email + unique session token_hash are the security-critical constraints.
     user_uniques = {c.name for c in users.constraints if c.__class__.__name__ == "UniqueConstraint"}
@@ -898,6 +903,105 @@ def test_migration_0009_adds_anchor_aliases_column(monkeypatch) -> None:
     try:
         columns = {c["name"] for c in inspect(engine).get_columns("corpus_sections")}
         assert "anchor_aliases" in columns
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
+def test_migration_0010_creates_notes_tables(monkeypatch) -> None:
+    """0010 up: the five notes tables plus corpus_blocks.content_hash. THE CORE
+    INVARIANT is proven at the schema layer — note_anchors.source_id carries NO
+    foreign key into sources/corpus, so a source delete can never cascade into a
+    note anchor. Within-aggregate cascades hold (notes→users, anchors/tags/links→
+    notes, note_tags→tags), note_links.target_note_id is SET NULL, and tags are
+    unique per (user_id, name). Down one step to 0009 drops it all cleanly, re-up
+    restores it (upgrade→downgrade→upgrade round-trip)."""
+    monkeypatch.setenv("LEARNY_DATABASE_URL", TEST_DB_URL)
+    cfg = _alembic_config(TEST_DB_URL)
+
+    command.upgrade(cfg, "head")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        inspector = inspect(engine)
+        tables = set(inspector.get_table_names())
+        assert {"notes", "note_anchors", "tags", "note_tags", "note_links"} <= tables
+
+        # note_anchors.source_id is a BARE UUID — the inverse-cascade invariant. It
+        # references no table, so a source/corpus delete cannot reach a note anchor.
+        anchor_referred = {
+            fk["referred_table"] for fk in inspector.get_foreign_keys("note_anchors")
+        }
+        assert "sources" not in anchor_referred
+        assert "corpus_documents" not in anchor_referred
+        assert "corpus_sections" not in anchor_referred
+        anchor_fk_columns = [
+            fk["constrained_columns"] for fk in inspector.get_foreign_keys("note_anchors")
+        ]
+        assert ["source_id"] not in anchor_fk_columns
+
+        # Within-aggregate cascades: notes→users, anchors/tags/links→notes, tags→notes_tags.
+        notes_fk = next(
+            fk for fk in inspector.get_foreign_keys("notes")
+            if fk["constrained_columns"] == ["user_id"]
+        )
+        assert notes_fk["referred_table"] == "users"
+        assert notes_fk["options"].get("ondelete") == "CASCADE"
+
+        anchor_note_fk = next(
+            fk for fk in inspector.get_foreign_keys("note_anchors")
+            if fk["constrained_columns"] == ["note_id"]
+        )
+        assert anchor_note_fk["referred_table"] == "notes"
+        assert anchor_note_fk["options"].get("ondelete") == "CASCADE"
+
+        note_tag_fks = {
+            tuple(fk["constrained_columns"]): fk
+            for fk in inspector.get_foreign_keys("note_tags")
+        }
+        assert note_tag_fks[("note_id",)]["options"].get("ondelete") == "CASCADE"
+        assert note_tag_fks[("tag_id",)]["referred_table"] == "tags"
+        assert note_tag_fks[("tag_id",)]["options"].get("ondelete") == "CASCADE"
+
+        # note_links: outbound cascade from its note; target set NULL when the target
+        # note is deleted so the inbound link survives with its text.
+        link_fks = {
+            tuple(fk["constrained_columns"]): fk
+            for fk in inspector.get_foreign_keys("note_links")
+        }
+        assert link_fks[("note_id",)]["options"].get("ondelete") == "CASCADE"
+        assert link_fks[("target_note_id",)]["referred_table"] == "notes"
+        assert link_fks[("target_note_id",)]["options"].get("ondelete") == "SET NULL"
+
+        # Tags are unique per (user_id, name) — the per-user identity (app lowercases).
+        tag_uniques = [uc["column_names"] for uc in inspector.get_unique_constraints("tags")]
+        assert ["user_id", "name"] in tag_uniques
+
+        # corpus_blocks gains a nullable content_hash (no backfill, AD-111).
+        block_columns = {c["name"]: c for c in inspector.get_columns("corpus_blocks")}
+        assert "content_hash" in block_columns
+        assert block_columns["content_hash"]["nullable"] is True
+    finally:
+        engine.dispose()
+
+    # Down one step to 0009: the five tables drop and content_hash is removed.
+    command.downgrade(cfg, "0009_anchor_aliases")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        remaining = set(inspect(engine).get_table_names())
+        assert not (
+            {"notes", "note_anchors", "tags", "note_tags", "note_links"} & remaining
+        )
+        block_columns = {c["name"] for c in inspect(engine).get_columns("corpus_blocks")}
+        assert "content_hash" not in block_columns
+    finally:
+        engine.dispose()
+
+    # Re-upgrade restores everything — the schema round-trips.
+    command.upgrade(cfg, "head")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        restored = set(inspect(engine).get_table_names())
+        assert {"notes", "note_anchors", "tags", "note_tags", "note_links"} <= restored
     finally:
         engine.dispose()
 

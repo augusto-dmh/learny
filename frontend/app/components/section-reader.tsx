@@ -20,11 +20,18 @@
  */
 
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
 import { fetchAuthState } from "@/app/lib/auth";
+import { captureHighlight, NoteError } from "@/app/lib/notes";
 import { getSection, type SectionView } from "@/app/lib/sections";
+import {
+  CapturePopover,
+  deriveCaptureSelection,
+  type CaptureAction,
+  type CaptureSelection,
+} from "@/app/components/notes/capture-popover";
 import { MessageResponse } from "@/components/ai-elements/message";
 
 export function SectionReader({
@@ -73,6 +80,9 @@ function SectionContent({
   onRequireAuth?: () => void;
 }) {
   const [state, setState] = useState<LoadState>({ kind: "loading" });
+  // The CSRF token for the capture write (AD-007), read from the same
+  // `/api/auth/me` resolve that gates the section read.
+  const [csrf, setCsrf] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -87,6 +97,7 @@ function SectionContent({
         onRequireAuth?.();
         return;
       }
+      setCsrf(auth.user.csrf_token);
       try {
         const result = await getSection(sourceId, anchor);
         if (!active) {
@@ -143,13 +154,36 @@ function SectionContent({
       </div>
     );
   }
-  return <FoundSection section={state.section} />;
+  return <FoundSection sourceId={sourceId} csrf={csrf} section={state.section} />;
 }
 
-/** The resolved section: highlighted heading + breadcrumb + rendered markdown. */
-function FoundSection({ section }: { section: SectionView }) {
+/** A raised capture popover: the resolved selection payload plus its position. */
+type ActiveCapture = CaptureSelection & { top: number; left: number };
+
+/**
+ * The resolved section: highlighted heading + breadcrumb + rendered markdown, with
+ * reader highlight capture (NF-12). Selecting text over the prose raises a popover
+ * whose "Highlight"/"Highlight + note" actions POST the selection (resolved against
+ * the served Markdown, never the DOM) to the capture endpoint; "Highlight + note"
+ * then opens the created note. A stale capture (the corpus was replaced mid-read)
+ * surfaces a reload prompt rather than a silent failure.
+ */
+function FoundSection({
+  sourceId,
+  csrf,
+  section,
+}: {
+  sourceId: string;
+  csrf: string | null;
+  section: SectionView;
+}) {
+  const router = useRouter();
   const titleRef = useRef<HTMLDivElement>(null);
+  const proseRef = useRef<HTMLDivElement>(null);
   const [highlighted, setHighlighted] = useState(true);
+  const [capture, setCapture] = useState<ActiveCapture | null>(null);
+  const [pending, setPending] = useState(false);
+  const [captureError, setCaptureError] = useState<string | null>(null);
 
   useEffect(() => {
     titleRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -157,10 +191,61 @@ function FoundSection({ section }: { section: SectionView }) {
     return () => clearTimeout(timer);
   }, []);
 
+  // On mouse-up over the prose, resolve the selection against the served Markdown;
+  // a resolvable selection raises the popover near it, anything else dismisses it.
+  function handleMouseUp() {
+    const selection = window.getSelection();
+    const derived = deriveCaptureSelection(
+      section.markdown,
+      selection?.toString() ?? "",
+    );
+    if (!derived) {
+      setCapture(null);
+      return;
+    }
+    setCaptureError(null);
+    setCapture({ ...derived, ...selectionPosition(selection, proseRef.current) });
+  }
+
+  async function handleCapture(action: CaptureAction) {
+    if (!capture || !csrf) {
+      return;
+    }
+    setPending(true);
+    setCaptureError(null);
+    try {
+      const note = await captureHighlight(
+        sourceId,
+        {
+          anchor: section.anchor,
+          quote_exact: capture.quote_exact,
+          quote_prefix: capture.quote_prefix,
+          quote_suffix: capture.quote_suffix,
+          title: capture.quote_exact.slice(0, 120),
+        },
+        csrf,
+      );
+      setCapture(null);
+      if (action === "highlight-note") {
+        router.push(`/notes/${note.id}`);
+      }
+    } catch (err) {
+      setCaptureError(
+        err instanceof NoteError && err.kind === "stale_capture"
+          ? "The book changed while you were reading. Reload the page to capture this highlight."
+          : err instanceof Error
+            ? err.message
+            : "Could not capture the highlight.",
+      );
+    } finally {
+      setPending(false);
+    }
+  }
+
   const breadcrumb = section.section_path.join(" › ");
 
   return (
-    <article className="mx-auto max-w-2xl py-6">
+    <article className="relative mx-auto max-w-2xl py-6">
       <div
         ref={titleRef}
         data-testid="section-title"
@@ -172,9 +257,46 @@ function FoundSection({ section }: { section: SectionView }) {
         ) : null}
         <h1 className="text-2xl font-semibold">{section.title}</h1>
       </div>
-      <div className="prose prose-sm mt-4 max-w-none dark:prose-invert">
+      <div
+        ref={proseRef}
+        onMouseUp={handleMouseUp}
+        className="prose prose-sm mt-4 max-w-none dark:prose-invert"
+      >
         <MessageResponse>{section.markdown}</MessageResponse>
       </div>
+      {capture ? (
+        <CapturePopover
+          top={capture.top}
+          left={capture.left}
+          pending={pending}
+          error={captureError}
+          onCapture={handleCapture}
+        />
+      ) : null}
     </article>
   );
+}
+
+/**
+ * Position the popover just above the selection, in coordinates relative to the
+ * prose wrapper. Falls back to the wrapper origin when the DOM does not expose
+ * range geometry (e.g. jsdom), so capture stays usable and testable.
+ */
+function selectionPosition(
+  selection: Selection | null,
+  container: HTMLElement | null,
+): { top: number; left: number } {
+  if (!selection || selection.rangeCount === 0 || !container) {
+    return { top: 0, left: 0 };
+  }
+  const range = selection.getRangeAt(0);
+  const rect = range.getBoundingClientRect?.();
+  const containerRect = container.getBoundingClientRect?.();
+  if (!rect || !containerRect) {
+    return { top: 0, left: 0 };
+  }
+  return {
+    top: rect.top - containerRect.top,
+    left: rect.left - containerRect.left,
+  };
 }

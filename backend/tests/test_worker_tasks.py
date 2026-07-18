@@ -754,3 +754,29 @@ def test_run_ingestion_populates_trace_context_during_the_task(
         _run(FakeSelf(), str(ctx.source.id), str(ctx.job.id))
 
     assert seen == {"job_id": str(ctx.job.id), "source_id": str(ctx.source.id)}
+
+
+def test_note_reconcile_runs_after_quiz_reconcile(seed, db_engine: Engine) -> None:
+    """The note-anchor reconcile is a sibling step wired AFTER quiz reconcile (NF-07).
+
+    Both builders are replaced with recorders so ordering is observed without a corpus:
+    the quiz reconcile must run before the note reconcile in the ingestion body.
+    """
+    ctx = seed(IngestionStatus.QUEUED)
+    order: list[str] = []
+
+    class _Recorder:
+        def __init__(self, name: str) -> None:
+            self._name = name
+
+        def __call__(self, *, source_id: UUID) -> None:  # noqa: ARG002
+            order.append(self._name)
+
+    with (
+        patch("app.worker.tasks._build_step", lambda conn: NoOpIngestionStep()),
+        patch("app.worker.tasks._build_reconcile", lambda conn: _Recorder("quiz")),
+        patch("app.worker.tasks._build_reconcile_notes", lambda conn: _Recorder("notes")),
+    ):
+        _run(FakeSelf(), str(ctx.source.id), str(ctx.job.id))
+
+    assert order == ["quiz", "notes"]

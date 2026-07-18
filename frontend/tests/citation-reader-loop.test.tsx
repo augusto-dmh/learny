@@ -27,11 +27,13 @@ import { AppSidebar } from "../app/components/shell/app-sidebar";
 import { type Citation } from "../app/lib/questions";
 import { SidebarProvider } from "../components/ui/sidebar";
 
-// The reader reads the anchor via `useSearchParams`; drive it from a mutable
-// holder set per test. The sidebar and citation list do not call it.
-const nav = vi.hoisted(() => ({ params: new URLSearchParams() }));
+// The reader reads the anchor via `useSearchParams` and uses `useRouter` for the
+// highlight-capture navigation; drive the params from a mutable holder set per
+// test. The sidebar and citation list do not call either.
+const nav = vi.hoisted(() => ({ params: new URLSearchParams(), push: vi.fn() }));
 vi.mock("next/navigation", () => ({
   useSearchParams: () => nav.params,
+  useRouter: () => ({ push: nav.push, replace: vi.fn() }),
 }));
 
 const BASE = "http://localhost";

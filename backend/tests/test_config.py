@@ -149,3 +149,18 @@ def test_fsrs_settings_env_override(monkeypatch) -> None:
 
     assert settings.fsrs_desired_retention == 0.85
     assert settings.fsrs_fuzzing is False
+
+
+def test_notes_settings_default() -> None:
+    # Note-body cap default (NF-04); enforced by the note use cases before any write.
+    settings = Settings(_env_file=None)
+
+    assert settings.notes_max_body_chars == 100000
+
+
+def test_notes_settings_env_override(monkeypatch) -> None:
+    monkeypatch.setenv("LEARNY_NOTES_MAX_BODY_CHARS", "500")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.notes_max_body_chars == 500

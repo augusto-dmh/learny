@@ -12,6 +12,7 @@ transaction rolls back with no partial corpus (CORP-08).
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable
 from dataclasses import replace
 from uuid import UUID
@@ -22,6 +23,7 @@ from app.application.identity import AuthorizeOwnership
 from app.application.ingestion import authorized_source
 from app.application.language import detect_language, sample_text
 from app.application.normalization import normalize_book
+from app.application.quiz_qc import normalize_text
 from app.domain.entities import (
     CorpusSectionRecord,
     CorpusStructure,
@@ -52,6 +54,17 @@ _CORPUS_BUILT_EVENT = "corpus_built"
 # Progress-log event appended after the structure-normalization pass; its message
 # carries what the pass changed (titles/merges/depths/stripped noise, ING-07).
 _CORPUS_NORMALIZED_EVENT = "corpus_normalized"
+
+
+def _content_hash(block_markdown: str) -> str:
+    """Return the normalized-text sha256 of a block's derived Markdown (NF-02).
+
+    Normalizes (whitespace-collapse + lowercase, the shared quiz-QC idiom) before
+    hashing so the hash is a stable identity of the block's content across
+    re-derivation, then returns the full hex digest (matching the ``chunk_hash``
+    snapshot style).
+    """
+    return hashlib.sha256(normalize_text(block_markdown).encode("utf-8")).hexdigest()
 
 
 class BuildCorpus:
@@ -123,6 +136,11 @@ class BuildCorpus:
                     section=section,
                     markdown="\n\n".join(block_texts),
                     chunks=chunks,
+                    # Per-block content hash for highlight anchoring (NF-02): the
+                    # sha256 of each block's normalized Markdown, aligned with
+                    # ``section.blocks``. Same normalize_text idiom the quiz QC uses,
+                    # so the hash is whitespace/case-stable across re-derivation.
+                    block_hashes=tuple(_content_hash(text) for text in block_texts),
                 )
             )
             total_blocks += len(section.blocks)
