@@ -29,6 +29,16 @@ by two *partial* unique indexes so the two identity modes coexist in one table:
 Downgrade drops both partial indexes and the two columns, and restores the original
 named ``uq_quiz_items_source_id`` constraint.
 
+**Downgrade is not unconditional.** Restoring the global unique is only possible while
+no two rows share ``(source_id, content_key)`` — a state this migration deliberately
+makes reachable, since two highlights of the same sentence legitimately produce two
+cards with the same fingerprint. Rather than let Postgres fail with a bare duplicate-key
+error partway through, the downgrade checks first and raises an actionable message naming
+the offending sources. Resolving it means deleting or rewording the colliding cards, which
+is a decision about someone's study material and therefore an operator's call, never a
+migration's: silently deleting the duplicates would destroy user-authored cards to make a
+schema rollback succeed.
+
 Revision ID: 0012_card_provenance
 Revises: 0011_reader_progress
 Create Date: 2026-07-19
@@ -91,6 +101,32 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # The global unique cannot be restored while duplicate (source_id, content_key) rows
+    # exist — a state this migration makes legitimate. Check first so the operator gets a
+    # message they can act on instead of a bare duplicate-key error mid-transaction. The
+    # colliding rows are user-authored cards, so resolving them is an operator decision,
+    # never something a downgrade should do silently.
+    duplicates = (
+        op.get_bind()
+        .execute(
+            sa.text(
+                "SELECT source_id, content_key, count(*) AS n "
+                "FROM quiz_items GROUP BY source_id, content_key HAVING count(*) > 1 "
+                "ORDER BY n DESC LIMIT 5"
+            )
+        )
+        .fetchall()
+    )
+    if duplicates:
+        listed = ", ".join(f"source {row[0]} ({row[2]} cards)" for row in duplicates)
+        raise RuntimeError(
+            "Cannot downgrade 0012_card_provenance: quiz_items still holds cards that "
+            "share a (source_id, content_key) fingerprint, which the restored global "
+            f"unique constraint forbids. Affected: {listed}. These are user-authored "
+            "cards created from separate highlights of the same text — delete or reword "
+            "the duplicates you wish to lose, then re-run the downgrade."
+        )
+
     op.drop_index("uq_quiz_items_highlight_anchor_key", table_name="quiz_items")
     op.drop_index("uq_quiz_items_deck_content_key", table_name="quiz_items")
     # Restore the original global upsert identity under its original name.

@@ -1349,6 +1349,109 @@ def test_migration_0012_adds_card_origin_and_note_provenance(monkeypatch) -> Non
 
 
 @pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
+def test_migration_0012_downgrade_refuses_to_destroy_duplicate_cards(monkeypatch) -> None:
+    """Downgrading 0012 restores a GLOBAL unique on (source_id, content_key) — which the
+    upgraded schema deliberately allows to be violated: two highlights of the same
+    sentence legitimately yield two cards sharing a fingerprint.
+
+    The downgrade must refuse with an actionable message naming the affected source,
+    rather than letting Postgres raise a bare duplicate-key error partway through or
+    silently deleting user-authored cards to make the rollback succeed. Removing the
+    guard surfaces an IntegrityError instead, failing this test.
+    """
+    monkeypatch.setenv("LEARNY_DATABASE_URL", TEST_DB_URL)
+    cfg = _alembic_config(TEST_DB_URL)
+    command.upgrade(cfg, "head")
+
+    user_id = uuid.uuid4()
+    source_id = uuid.uuid4()
+    note_id = uuid.uuid4()
+    engine = create_engine(TEST_DB_URL)
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("INSERT INTO users (id, email) VALUES (:id, :email)"),
+                {"id": user_id, "email": f"{user_id}@example.test"},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO sources "
+                    "(id, user_id, title, filename, content_type, byte_size, checksum, object_key) "
+                    "VALUES (:id, :uid, 't', 'f.epub', 'application/epub+zip', 1, 'c', :key)"
+                ),
+                {"id": source_id, "uid": user_id, "key": f"sources/{source_id}.epub"},
+            )
+            conn.execute(
+                text("INSERT INTO notes (id, user_id, title) VALUES (:id, :uid, 'Origin')"),
+                {"id": note_id, "uid": user_id},
+            )
+            # Two DISTINCT anchors — two separate highlights of the same sentence.
+            for anchor_id in (uuid.uuid4(), uuid.uuid4()):
+                conn.execute(
+                    text(
+                        "INSERT INTO note_anchors "
+                        "(id, note_id, source_id, source_title, anchor, section_path, quote_exact) "
+                        "VALUES (:id, :nid, :sid, 'Book', 'a.xhtml', '[]', 'the same sentence')"
+                    ),
+                    {"id": anchor_id, "nid": note_id, "sid": source_id},
+                )
+                # Same content_key under different anchors: legal after 0012, and exactly
+                # what the restored global unique would forbid.
+                conn.execute(
+                    text(
+                        "INSERT INTO quiz_items "
+                        "(id, source_id, origin, note_anchor_id, item_type, question, answer, "
+                        " section_path, anchor, source_excerpt, chunk_hash, content_key) "
+                        "VALUES (:id, :sid, 'highlight', :aid, 'free_recall', 'q', 'a', "
+                        " '[]', 'a.xhtml', 'excerpt', 'ch', 'shared-fingerprint')"
+                    ),
+                    {"id": uuid.uuid4(), "sid": source_id, "aid": anchor_id},
+                )
+    finally:
+        engine.dispose()
+
+    with pytest.raises(RuntimeError) as excinfo:
+        command.downgrade(cfg, "0011_reader_progress")
+    message = str(excinfo.value)
+    assert "Cannot downgrade 0012_card_provenance" in message
+    assert str(source_id) in message  # names the affected source, so it is actionable
+
+    # The refusal is non-destructive: both cards survive and the schema is untouched.
+    engine = create_engine(TEST_DB_URL)
+    try:
+        with engine.connect() as conn:
+            surviving = conn.execute(
+                text("SELECT count(*) FROM quiz_items WHERE source_id = :sid"),
+                {"sid": source_id},
+            ).scalar_one()
+        assert surviving == 2
+        assert {"origin", "note_anchor_id"} <= {
+            c["name"] for c in inspect(engine).get_columns("quiz_items")
+        }
+    finally:
+        engine.dispose()
+
+    # Resolving the collision is exactly what the message asks an operator to do — and
+    # once done, the downgrade proceeds. That both proves the guard is not a dead end and
+    # clears the committed seed rows for the module fixture.
+    engine = create_engine(TEST_DB_URL)
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "DELETE FROM quiz_items WHERE id IN ("
+                    " SELECT id FROM quiz_items WHERE source_id = :sid "
+                    " ORDER BY id OFFSET 1)"
+                ),
+                {"sid": source_id},
+            )
+    finally:
+        engine.dispose()
+    command.downgrade(cfg, "0011_reader_progress")
+    command.downgrade(cfg, "base")
+
+
+@pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
 def test_in_process_migration_preserves_app_root_logging(monkeypatch) -> None:
     """An in-process migration must not reconfigure the app-owned root logger.
 
