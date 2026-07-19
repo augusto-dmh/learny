@@ -14,12 +14,19 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ReaderPanel } from "../app/components/reader-panel";
 
+// The shell test covers tabs, close, and which mode's body renders — not the
+// chat internals (unit-tested in ask-panel.test.tsx, which pull in AI-Elements).
+// Stub the ported Ask body to its marker so the shell stays a pure unit test.
+vi.mock("../app/components/ask-panel", () => ({
+  AskPanel: () => <div data-testid="ask-panel-body" />,
+}));
+
 afterEach(cleanup);
 
 describe("ReaderPanel shell (RA-01/02/03)", () => {
   it("offers exactly the Ask and Teach modes plus a close control", () => {
     render(
-      <ReaderPanel mode="ask" onModeChange={() => {}} onClose={() => {}} />,
+      <ReaderPanel sourceId="s1" csrf="csrf-xyz" mode="ask" onModeChange={() => {}} onClose={() => {}} />,
     );
 
     expect(screen.getByRole("tab", { name: "Ask" })).toBeTruthy();
@@ -30,7 +37,7 @@ describe("ReaderPanel shell (RA-01/02/03)", () => {
 
   it("renders the ask body and selects the ask tab in ask mode (RA-01)", () => {
     render(
-      <ReaderPanel mode="ask" onModeChange={() => {}} onClose={() => {}} />,
+      <ReaderPanel sourceId="s1" csrf="csrf-xyz" mode="ask" onModeChange={() => {}} onClose={() => {}} />,
     );
 
     expect(screen.getByTestId("ask-panel-body")).toBeTruthy();
@@ -45,7 +52,7 @@ describe("ReaderPanel shell (RA-01/02/03)", () => {
 
   it("renders the teach body and selects the teach tab in teach mode (RA-02)", () => {
     render(
-      <ReaderPanel mode="teach" onModeChange={() => {}} onClose={() => {}} />,
+      <ReaderPanel sourceId="s1" csrf="csrf-xyz" mode="teach" onModeChange={() => {}} onClose={() => {}} />,
     );
 
     expect(screen.getByTestId("teach-panel-body")).toBeTruthy();
@@ -58,7 +65,7 @@ describe("ReaderPanel shell (RA-01/02/03)", () => {
   it("reports the chosen mode when a tab is clicked (RA-03)", () => {
     const onModeChange = vi.fn();
     render(
-      <ReaderPanel mode="ask" onModeChange={onModeChange} onClose={() => {}} />,
+      <ReaderPanel sourceId="s1" csrf="csrf-xyz" mode="ask" onModeChange={onModeChange} onClose={() => {}} />,
     );
 
     fireEvent.click(screen.getByRole("tab", { name: "Teach" }));
@@ -68,7 +75,7 @@ describe("ReaderPanel shell (RA-01/02/03)", () => {
   it("reports a close request when the close control is clicked (RA-03)", () => {
     const onClose = vi.fn();
     render(
-      <ReaderPanel mode="ask" onModeChange={() => {}} onClose={onClose} />,
+      <ReaderPanel sourceId="s1" csrf="csrf-xyz" mode="ask" onModeChange={() => {}} onClose={onClose} />,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Close panel" }));

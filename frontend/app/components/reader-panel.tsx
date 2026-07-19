@@ -5,10 +5,10 @@
  * the Ask and Teach modes beside the chapter so studying never leaves the page.
  *
  * This shell owns the mode switch (an Ask | Teach segmented control) and the
- * close control; the mode bodies are ported in a later cycle (AskPanel /
- * TeachPanel) and stand in as placeholders for now. Open state and mode are pure
- * URL state driven by `?panel=`, so the parent renders the panel only when a mode
- * is active — closing it simply drops the query param and restores full reading
+ * close control, and renders the active mode's body — `AskPanel` (ported) or the
+ * Teach placeholder (ported in a later task). Open state and mode are pure URL
+ * state driven by `?panel=`, so the parent renders the panel only when a mode is
+ * active — closing it simply drops the query param and restores full reading
  * width, and reading stays non-modal underneath.
  */
 
@@ -16,6 +16,8 @@ import { X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+
+import { AskPanel, type PendingPanelRequest } from "./ask-panel";
 
 export type PanelMode = "ask" | "teach";
 
@@ -25,13 +27,23 @@ const MODES: { value: PanelMode; label: string }[] = [
 ];
 
 export function ReaderPanel({
+  sourceId,
+  csrf,
   mode,
   onModeChange,
   onClose,
+  pendingRequest,
+  onPendingConsumed,
+  onRequireAuth,
 }: {
+  sourceId: string;
+  csrf: string;
   mode: PanelMode;
   onModeChange: (mode: PanelMode) => void;
   onClose: () => void;
+  pendingRequest?: PendingPanelRequest | null;
+  onPendingConsumed?: () => void;
+  onRequireAuth?: () => void;
 }) {
   return (
     <aside
@@ -72,7 +84,13 @@ export function ReaderPanel({
       </div>
       <div className="min-h-0 flex-1 p-3">
         {mode === "ask" ? (
-          <div data-testid="ask-panel-body">Ask</div>
+          <AskPanel
+            sourceId={sourceId}
+            csrf={csrf}
+            pendingRequest={pendingRequest}
+            onPendingConsumed={onPendingConsumed}
+            onRequireAuth={onRequireAuth}
+          />
         ) : (
           <div data-testid="teach-panel-body">Teach</div>
         )}

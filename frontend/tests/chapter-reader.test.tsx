@@ -39,6 +39,14 @@ vi.mock("next/navigation", () => ({
   useParams: () => ({ id: "s1" }),
 }));
 
+// These reader tests exercise panel *wiring* (open/close/mode/URL), not the chat
+// internals — the Ask/Teach panels are unit-tested in their own files and pull in
+// AI-Elements (ResizeObserver, streaming). Stub them to the body markers the
+// shell renders so mounting the reader with a panel open stays lightweight.
+vi.mock("../app/components/ask-panel", () => ({
+  AskPanel: () => <div data-testid="ask-panel-body" />,
+}));
+
 /** Stub `window.getSelection` to return `text` as the current selection. */
 function selectText(text: string) {
   window.getSelection = () =>

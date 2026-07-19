@@ -192,6 +192,7 @@ export function ChapterReader({
       chapter={state.chapter}
       scrollTarget={scrollTarget}
       highlights={highlights}
+      onRequireAuth={onRequireAuth}
     />
   );
 }
@@ -229,6 +230,7 @@ export function ChapterFlow({
   scrollTarget,
   highlights = [],
   observerFactory,
+  onRequireAuth,
 }: {
   sourceId: string;
   csrf: string | null;
@@ -236,6 +238,7 @@ export function ChapterFlow({
   scrollTarget: string | null;
   highlights?: SourceHighlightView[];
   observerFactory?: ObserverFactory;
+  onRequireAuth?: () => void;
 }) {
   const router = useRouter();
   // The open panel and the current deep-link anchor are independent URL state.
@@ -546,11 +549,14 @@ export function ChapterFlow({
             />
           ) : null}
         </article>
-        {panelMode ? (
+        {panelMode && csrf ? (
           <ReaderPanel
+            sourceId={sourceId}
+            csrf={csrf}
             mode={panelMode}
             onModeChange={handlePanelModeChange}
             onClose={handlePanelClose}
+            onRequireAuth={onRequireAuth}
           />
         ) : null}
       </div>
