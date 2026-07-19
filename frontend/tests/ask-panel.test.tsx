@@ -409,6 +409,7 @@ const noteDetail = {
 };
 
 const HIGHLIGHTS_URL = "/api/sources/s1/highlights";
+const NOTES_URL = "/api/notes";
 
 /** Stream a complete, answered turn carrying `citations` and settling the stream. */
 async function streamAnswer(
@@ -452,6 +453,41 @@ describe("AskPanel save to note (RA-20/22)", () => {
         fetchMock.mock.calls.some(([url]) => url === HIGHLIGHTS_URL),
       ).toBe(true),
     );
+    expect(await screen.findByTestId("save-note-status")).toBeTruthy();
+  });
+
+  it("falls back to a plain note through the real notes clients on a stale capture (409)", async () => {
+    const stream = sseStream();
+    const fetchMock = routedFetch({
+      [`POST ${STREAM_URL}`]: () => stream.response,
+      [`POST ${HIGHLIGHTS_URL}`]: () =>
+        jsonResponse(409, {
+          detail: "The book changed while you were reading.",
+        }),
+      [`POST ${NOTES_URL}`]: () => jsonResponse(201, noteDetail),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+    ask("Who wrote the first algorithm?");
+    await streamAnswer(stream, [citation]);
+
+    const saveButton = await screen.findByRole("button", {
+      name: "Save to note",
+    });
+    await act(async () => {
+      fireEvent.click(saveButton);
+    });
+
+    // The 409 capture conflict degrades to a plain note carrying the answer plus
+    // a jump-back link — exercised through the real lib/notes clients, not fakes.
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([url]) => url === NOTES_URL)).toBe(true),
+    );
+    const notesCall = fetchMock.mock.calls.find(([url]) => url === NOTES_URL)!;
+    const body = JSON.parse((notesCall[1] as RequestInit).body as string);
+    expect(body.body_markdown).toContain("Ada Lovelace did.");
+    expect(body.body_markdown).toContain("/sources/s1/read?anchor=");
     expect(await screen.findByTestId("save-note-status")).toBeTruthy();
   });
 
@@ -608,6 +644,99 @@ describe("AskPanel selection verbs (RA-17/18)", () => {
     expect(JSON.parse((call[1] as RequestInit).body as string)).toEqual({
       question:
         'Regarding this passage:\n\n"a quoted passage"\n\nWhat does this mean?',
+    });
+  });
+
+  it("submits a bare question after the attached passage is removed", async () => {
+    const fetchMock = routedFetch({
+      [`POST ${STREAM_URL}`]: () => sseStream().response,
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <AskPanel
+        sourceId="s1"
+        csrf="csrf-xyz"
+        pendingRequest={{
+          kind: "ask",
+          quote: "a quoted passage",
+          anchor: "c1.xhtml#s1",
+        }}
+      />,
+    );
+
+    // Dismiss the attached passage before typing anything.
+    await screen.findByTestId("ask-context-chip");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Remove attached passage" }),
+    );
+    await waitFor(() =>
+      expect(screen.queryByTestId("ask-context-chip")).toBeNull(),
+    );
+
+    // The typed question submits unwrapped — the discarded passage never rides along.
+    ask("What does this mean?");
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([url]) => url === STREAM_URL),
+      ).toBe(true),
+    );
+    const call = fetchMock.mock.calls.find(([url]) => url === STREAM_URL)!;
+    expect(JSON.parse((call[1] as RequestInit).body as string)).toEqual({
+      question: "What does this mean?",
+    });
+  });
+
+  it("does not re-attach the quote to a second question after a combined submit", async () => {
+    const streams: ReturnType<typeof sseStream>[] = [];
+    const fetchMock = routedFetch({
+      [`POST ${STREAM_URL}`]: () => {
+        const next = sseStream();
+        streams.push(next);
+        return next.response;
+      },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <AskPanel
+        sourceId="s1"
+        csrf="csrf-xyz"
+        pendingRequest={{
+          kind: "ask",
+          quote: "a quoted passage",
+          anchor: "c1.xhtml#s1",
+        }}
+      />,
+    );
+    await screen.findByTestId("ask-context-chip");
+
+    // The first typed question rides along with the attached quote.
+    ask("What does this mean?");
+    await waitFor(() => expect(streams).toHaveLength(1));
+    const first = fetchMock.mock.calls.find(([url]) => url === STREAM_URL)!;
+    expect(JSON.parse((first[1] as RequestInit).body as string)).toEqual({
+      question:
+        'Regarding this passage:\n\n"a quoted passage"\n\nWhat does this mean?',
+    });
+    await streamAnswer(streams[0], []);
+    // Wait for the stream to settle so the input accepts a fresh submit.
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Submit" })).toBeTruthy(),
+    );
+
+    // A second question submits bare — the quote was consumed once, not made sticky.
+    ask("And now?");
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.filter(([url]) => url === STREAM_URL),
+      ).toHaveLength(2),
+    );
+    const second = fetchMock.mock.calls.filter(
+      ([url]) => url === STREAM_URL,
+    )[1];
+    expect(JSON.parse((second[1] as RequestInit).body as string)).toEqual({
+      question: "And now?",
     });
   });
 });
