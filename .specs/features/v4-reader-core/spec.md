@@ -193,39 +193,39 @@ The reader is a single-section page behind an auth→section fetch waterfall: no
 
 | Requirement ID | Story | Phase | Status |
 | --- | --- | --- | --- |
-| RD-01 | P1 Chapter-flow: chapter endpoint (shape + word counts + edges) | Design | Pending |
-| RD-02 | P1 Chapter-flow: ownership/404 semantics | Design | Pending |
-| RD-03 | P1 Chapter-flow: continuous article render + DOM ids | Design | Pending |
-| RD-04 | P1 Chapter-flow: `?anchor=` in-flow scroll + transient highlight | Design | Pending |
-| RD-05 | P1 Chapter-flow: sticky chapter boundary | Design | Pending |
-| RD-06 | P1 Chapter-flow: prev/next chapter nav | Design | Pending |
-| RD-07 | P1 Position: scroll-idle debounced write | Design | Pending |
-| RD-08 | P1 Position: upsert + server-computed percent | Design | Pending |
-| RD-09 | P1 Position: invalid anchor 404 | Design | Pending |
-| RD-10 | P1 Position: resume on open / first-chapter fallback | Design | Pending |
-| RD-11 | P1 Position: percent + minutes-left display | Design | Pending |
-| RD-12 | P1 Position: last-write-wins concurrency | Design | Pending |
-| RD-13 | P1 Position: silent-retry on write failure | Design | Pending |
-| RD-14 | P1 Word counts: build-time persistence | Design | Pending |
-| RD-15 | P1 Word counts: migration backfill | Design | Pending |
-| RD-16 | P1 Word counts: zero-word safety | Design | Pending |
-| RD-17 | P1 Aa: four controls present | Design | Pending |
-| RD-18 | P1 Aa: size/spacing via reader-scoped CSS vars | Design | Pending |
-| RD-19 | P1 Aa: Paper applies (light), chrome stays Iron Gall | Design | Pending |
-| RD-20 | P1 Aa: dark overrides appearance (AD-119) | Design | Pending |
-| RD-21 | P1 Aa: persistence + no-flash re-apply | Design | Pending |
-| RD-22 | P1 TOC: structure list + current position context | Design | Pending |
-| RD-23 | P1 TOC: click-to-navigate + URL update | Design | Pending |
-| RD-24 | P1 TOC: back-after-jump affordance | Design | Pending |
-| RD-25 | P1 TOC: narrow-viewport collapse | Design | Pending |
-| RD-26 | P1 Load path: parallel fetches | Design | Pending |
-| RD-27 | P1 Load path: 401 behavior preserved + skeleton | Design | Pending |
-| RD-28 | P2 Highlights: listing endpoint + ownership | Design | Pending |
-| RD-29 | P2 Highlights: active-only paint w/ disambiguation, silent non-match | Design | Pending |
-| RD-30 | P2 Ink-line: progress fill from tokens | Design | Pending |
-| RD-31 | P2 Chrome: recede/restore + reduced-motion | Design | Pending |
+| RD-01 | P1 Chapter-flow: chapter endpoint (shape + word counts + edges) | Design | Done |
+| RD-02 | P1 Chapter-flow: ownership/404 semantics | Design | Done |
+| RD-03 | P1 Chapter-flow: continuous article render + DOM ids | Design | Done |
+| RD-04 | P1 Chapter-flow: `?anchor=` in-flow scroll + transient highlight | Design | Done |
+| RD-05 | P1 Chapter-flow: sticky chapter boundary | Design | Done |
+| RD-06 | P1 Chapter-flow: prev/next chapter nav | Design | Done |
+| RD-07 | P1 Position: scroll-idle debounced write | Design | Done |
+| RD-08 | P1 Position: upsert + server-computed percent | Design | Done |
+| RD-09 | P1 Position: invalid anchor 404 | Design | Done |
+| RD-10 | P1 Position: resume on open / first-chapter fallback | Design | Done |
+| RD-11 | P1 Position: percent + minutes-left display | Design | Done |
+| RD-12 | P1 Position: last-write-wins concurrency | Design | Done |
+| RD-13 | P1 Position: silent-retry on write failure | Design | Done |
+| RD-14 | P1 Word counts: build-time persistence | Design | Done |
+| RD-15 | P1 Word counts: migration backfill | Design | Done |
+| RD-16 | P1 Word counts: zero-word safety | Design | Done |
+| RD-17 | P1 Aa: four controls present | Design | Done |
+| RD-18 | P1 Aa: size/spacing via reader-scoped CSS vars | Design | Done |
+| RD-19 | P1 Aa: Paper applies (light), chrome stays Iron Gall | Design | Done |
+| RD-20 | P1 Aa: dark overrides appearance (AD-119) | Design | Done |
+| RD-21 | P1 Aa: persistence + no-flash re-apply | Design | Done |
+| RD-22 | P1 TOC: structure list + current position context | Design | Done |
+| RD-23 | P1 TOC: click-to-navigate + URL update | Design | Done |
+| RD-24 | P1 TOC: back-after-jump affordance | Design | Done |
+| RD-25 | P1 TOC: narrow-viewport collapse | Design | Done |
+| RD-26 | P1 Load path: parallel fetches | Design | Done |
+| RD-27 | P1 Load path: 401 behavior preserved + skeleton | Design | Done |
+| RD-28 | P2 Highlights: listing endpoint + ownership | Design | Done |
+| RD-29 | P2 Highlights: active-only paint w/ disambiguation, silent non-match | Design | Done |
+| RD-30 | P2 Ink-line: progress fill from tokens | Design | Done |
+| RD-31 | P2 Chrome: recede/restore + reduced-motion | Design | Done |
 
-**Coverage:** 31 total, 0 mapped to tasks, 31 unmapped ⚠️ (pre-design)
+**Coverage:** 31 total, 31 implemented and gated across Phases A–D, 0 outstanding.
 
 ## Success Criteria
 
