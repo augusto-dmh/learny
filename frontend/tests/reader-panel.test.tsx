@@ -20,6 +20,9 @@ import { ReaderPanel } from "../app/components/reader-panel";
 vi.mock("../app/components/ask-panel", () => ({
   AskPanel: () => <div data-testid="ask-panel-body" />,
 }));
+vi.mock("../app/components/teach-panel", () => ({
+  TeachPanel: () => <div data-testid="teach-panel-body" />,
+}));
 
 afterEach(cleanup);
 

@@ -18,6 +18,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 import { AskPanel, type PendingPanelRequest } from "./ask-panel";
+import { TeachPanel } from "./teach-panel";
 
 export type PanelMode = "ask" | "teach";
 
@@ -34,6 +35,7 @@ export function ReaderPanel({
   onClose,
   pendingRequest,
   onPendingConsumed,
+  onShowInBook,
   onRequireAuth,
 }: {
   sourceId: string;
@@ -43,6 +45,7 @@ export function ReaderPanel({
   onClose: () => void;
   pendingRequest?: PendingPanelRequest | null;
   onPendingConsumed?: () => void;
+  onShowInBook?: (anchor: string) => void;
   onRequireAuth?: () => void;
 }) {
   return (
@@ -92,7 +95,12 @@ export function ReaderPanel({
             onRequireAuth={onRequireAuth}
           />
         ) : (
-          <div data-testid="teach-panel-body">Teach</div>
+          <TeachPanel
+            sourceId={sourceId}
+            csrf={csrf}
+            onShowInBook={onShowInBook}
+            onRequireAuth={onRequireAuth}
+          />
         )}
       </div>
     </aside>

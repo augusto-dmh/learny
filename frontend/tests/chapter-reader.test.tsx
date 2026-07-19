@@ -46,6 +46,9 @@ vi.mock("next/navigation", () => ({
 vi.mock("../app/components/ask-panel", () => ({
   AskPanel: () => <div data-testid="ask-panel-body" />,
 }));
+vi.mock("../app/components/teach-panel", () => ({
+  TeachPanel: () => <div data-testid="teach-panel-body" />,
+}));
 
 /** Stub `window.getSelection` to return `text` as the current selection. */
 function selectText(text: string) {
