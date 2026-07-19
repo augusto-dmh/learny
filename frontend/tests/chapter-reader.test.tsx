@@ -614,6 +614,8 @@ describe("ChapterFlow highlight painting (RD-28/29)", () => {
   function highlight(over: Partial<SourceHighlightView>): SourceHighlightView {
     return {
       note_id: "n1",
+      note_title: SHARED,
+      has_body: false,
       anchor: S1,
       quote_exact: SHARED,
       quote_prefix: "",
@@ -710,6 +712,8 @@ describe("ChapterReader highlight load (RD-28)", () => {
     nav.params = new URLSearchParams();
     const painted: SourceHighlightView = {
       note_id: "n9",
+      note_title: "Ada Lovelace wrote the first algorithm",
+      has_body: false,
       anchor: S1,
       quote_exact: "Ada Lovelace wrote the first algorithm",
       quote_prefix: "",
@@ -821,6 +825,8 @@ describe("ChapterFlow panel modes (RA-01/02/03/06)", () => {
     const obs = fakeObserver();
     const painted: SourceHighlightView = {
       note_id: "n3",
+      note_title: "Ada Lovelace wrote the first algorithm",
+      has_body: false,
       anchor: S1,
       quote_exact: "Ada Lovelace wrote the first algorithm",
       quote_prefix: "",
@@ -1274,5 +1280,124 @@ describe("ChapterFlow create card (CAP-01/08)", () => {
     expect(await screen.findByText("No cards for this passage.")).toBeTruthy();
     // Nothing is announced as an error; the highlight was still captured.
     expect(screen.queryByRole("alert")).toBeNull();
+  });
+});
+
+describe("ChapterFlow margin rail (CAP-18/21/24)", () => {
+  const FOREIGN = "part1/ch2.xhtml#s1";
+
+  function railHighlight(
+    over: Partial<SourceHighlightView>,
+  ): SourceHighlightView {
+    return {
+      note_id: "n1",
+      note_title: "Ada Lovelace wrote the first algorithm",
+      has_body: false,
+      anchor: S1,
+      quote_exact: "Ada Lovelace wrote the first algorithm",
+      quote_prefix: "",
+      quote_suffix: "",
+      status: "active",
+      ...over,
+    };
+  }
+
+  it("shows the loaded chapter's highlights and drops a highlight from another chapter", async () => {
+    nav.params = new URLSearchParams();
+    render(
+      <ChapterFlow
+        sourceId="s1"
+        csrf="csrf-xyz"
+        chapter={chapter}
+        scrollTarget={null}
+        highlights={[
+          railHighlight({ note_id: "n1", anchor: S1 }),
+          railHighlight({
+            note_id: "n2",
+            anchor: FOREIGN,
+            quote_exact: "Babbage designed the analytical engine",
+          }),
+        ]}
+      />,
+    );
+
+    await screen.findByTestId("margin-rail");
+    // The reader loads every highlight on the source in one call; the rail is
+    // scoped to the chapter on screen, so the next chapter's does not appear.
+    const quotes = screen
+      .getAllByTestId("rail-quote")
+      .map((node) => node.textContent);
+    expect(quotes).toEqual(["Ada Lovelace wrote the first algorithm"]);
+  });
+
+  it("scrolls to and flashes the section a rail entry points at", async () => {
+    nav.params = new URLSearchParams();
+    const scrollIntoView = vi.fn();
+    const { container } = render(
+      <ChapterFlow
+        sourceId="s1"
+        csrf="csrf-xyz"
+        chapter={chapter}
+        scrollTarget={null}
+        highlights={[railHighlight({ anchor: S2 })]}
+      />,
+    );
+    await screen.findByTestId("margin-rail");
+    const target = container.querySelector<HTMLElement>(
+      `[data-section-anchor="${S2}"]`,
+    )!;
+    target.scrollIntoView = scrollIntoView;
+
+    fireEvent.click(screen.getByTestId("rail-entry").querySelector("button")!);
+
+    expect(scrollIntoView).toHaveBeenCalledWith({
+      behavior: "smooth",
+      block: "start",
+    });
+    // The jumped-to heading flashes, exactly as a citation jump does.
+    await waitFor(() =>
+      expect(
+        container
+          .querySelector(`[data-section-heading="${S2}"]`)
+          ?.getAttribute("data-highlight"),
+      ).toBe("on"),
+    );
+    // The URL anchor keeps step so the position stays shareable.
+    expect(nav.replace).toHaveBeenCalledWith(
+      `/sources/s1/read?anchor=${ENCODED_S2}`,
+    );
+  });
+
+  it("hides the rail while the ask panel is open (AD-139)", async () => {
+    nav.params = new URLSearchParams("panel=ask");
+    render(
+      <ChapterFlow
+        sourceId="s1"
+        csrf="csrf-xyz"
+        chapter={chapter}
+        scrollTarget={null}
+        highlights={[railHighlight({})]}
+      />,
+    );
+
+    // The panel wins the right-hand column: the rail is not rendered at all.
+    await screen.findByTestId("reader-panel");
+    expect(screen.queryByTestId("margin-rail")).toBeNull();
+  });
+
+  it("renders the rail again once the panel is closed", async () => {
+    nav.params = new URLSearchParams();
+    render(
+      <ChapterFlow
+        sourceId="s1"
+        csrf="csrf-xyz"
+        chapter={chapter}
+        scrollTarget={null}
+        highlights={[railHighlight({})]}
+      />,
+    );
+
+    expect(await screen.findByTestId("margin-rail")).toBeTruthy();
+    expect(screen.queryByTestId("reader-panel")).toBeNull();
   });
 });

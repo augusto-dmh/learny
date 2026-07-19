@@ -65,6 +65,8 @@ const position: ReadingPositionView = {
 const highlights: SourceHighlightView[] = [
   {
     note_id: "n1",
+    note_title: "More body",
+    has_body: false,
     anchor: ANCHOR,
     quote_exact: "More body",
     quote_prefix: "## Section Two ",

@@ -21,6 +21,10 @@
  * over the right section so a multi-section chapter resolves each selection
  * against its own Markdown and anchor.
  *
+ * The margin rail (CAP-18..24) renders the same highlight set as a column beside
+ * the article, scoped to the loaded chapter, and yields to the Ask/Teach panel
+ * when one is open (AD-139).
+ *
  * "Create card" (CAP-01) builds on that same capture: the reader captures the
  * highlight, then asks for card suggestions on the anchor it produced, and renders
  * the resulting chips beside the passage. Sequencing the two calls here — rather
@@ -39,6 +43,7 @@ import {
   type CaptureAction,
   type CaptureSelection,
 } from "@/app/components/notes/capture-popover";
+import { MarginRail } from "@/app/components/margin-rail";
 import { ReaderPanel, type PanelMode } from "@/app/components/reader-panel";
 import { ReadingControls } from "@/app/components/reading-controls";
 import { ChapterNav, TocPanel } from "@/app/components/toc-panel";
@@ -320,6 +325,12 @@ export function ChapterFlow({
     }
     return byAnchor;
   }, [highlights]);
+  // The loaded chapter's section anchors in document order — the scroll tracker's
+  // observation set, the TOC's in-chapter test, and the rail's chapter scope.
+  const sectionAnchors = useMemo(
+    () => chapter.sections.map((section) => section.anchor),
+    [chapter.sections],
+  );
   const [flashAnchor, setFlashAnchor] = useState<string | null>(scrollTarget);
   // The below-lg table of contents collapses behind the top-bar toggle (RD-25).
   const [tocOpen, setTocOpen] = useState(false);
@@ -354,7 +365,7 @@ export function ChapterFlow({
   const { currentAnchor } = useScrollPosition({
     sourceId,
     csrf,
-    anchors: chapter.sections.map((section) => section.anchor),
+    anchors: sectionAnchors,
     initialAnchor: scrollTarget,
     containerRef: articleRef,
     observerFactory,
@@ -539,9 +550,7 @@ export function ChapterFlow({
   // anchor in another chapter navigates there, carrying the open panel along so
   // the answer stays beside the book.
   function handleShowInBook(anchor: string) {
-    const inChapter = chapter.sections.some(
-      (section) => section.anchor === anchor,
-    );
+    const inChapter = sectionAnchors.includes(anchor);
     if (!inChapter) {
       router.push(readUrl(sourceId, anchor, { panel: panelMode }));
       return;
@@ -663,7 +672,7 @@ export function ChapterFlow({
           sourceId={sourceId}
           currentAnchor={currentAnchor}
           chapterAnchor={chapter.chapter_anchor}
-          chapterSectionAnchors={chapter.sections.map((section) => section.anchor)}
+          chapterSectionAnchors={sectionAnchors}
           open={tocOpen}
           onSameChapterNavigate={handleSameChapterNavigate}
         />
@@ -723,6 +732,15 @@ export function ChapterFlow({
             </div>
           ) : null}
         </article>
+        {panelMode ? null : (
+          // The panel wins the right-hand column (AD-139): the rail is ambient
+          // context for reading, and two columns at once starve the measure.
+          <MarginRail
+            highlights={highlights}
+            chapterAnchors={sectionAnchors}
+            onJump={handleShowInBook}
+          />
+        )}
         {panelMode && csrf ? (
           <ReaderPanel
             sourceId={sourceId}
