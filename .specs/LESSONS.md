@@ -80,6 +80,12 @@ Seen once or not yet corroborated. Tracked, not trusted.
 - evidence: validation.md 2026-07-18 (M2a/M2b)
 - last seen: 2026-07-18T20:22:44Z
 
+### L-012 — Visual-persistence ACs (sticky/fixed/receding chrome) need an explicit class+structure assertion in jsdom — positional CSS behavior slips spec coverage when only content rendering is tested.
+- signal: `ac_gap` · recurrence: 1 feature(s) · scope: `frontend/tests` · harmful: 0
+- features: v4-reader-core
+- evidence: spec RD-05 / validation.md round 1 (frontend/tests)
+- last seen: 2026-07-19T17:15:07Z
+
 ## Quarantined (failed when applied — ignore)
 
 A confirmed lesson that recurred alongside failure. Kept for the maintainer to review.
