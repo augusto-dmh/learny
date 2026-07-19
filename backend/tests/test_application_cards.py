@@ -15,8 +15,9 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from app.application.cards import AcceptCard, SuggestCards
+from app.application.cards import AcceptCard, SuggestCards, UpdateCard
 from app.application.errors import (
+    CardNotEditable,
     InvalidCardText,
     QuizItemNotFound,
     SourceNotFound,
@@ -70,6 +71,12 @@ class FakeCardItemRepository:
         self.embeddings: dict[UUID, list[float] | None] = {}
         self.scheduling: dict[UUID, SchedulingSnapshot] = {}
         self.update_text_calls = 0
+        self.create_scheduling_calls = 0
+        self.update_scheduling_calls = 0
+        self.review_log: dict[UUID, list[int]] = {}
+
+    def append_log(self, quiz_item_id: UUID, entry) -> None:  # noqa: ANN001
+        self.review_log.setdefault(quiz_item_id, []).append(entry.rating)
 
     @staticmethod
     def _identity(item: QuizItem) -> tuple:
@@ -128,6 +135,11 @@ class FakeCardItemRepository:
             self._by_key[self._identity(updated)] = updated
 
     def create_scheduling(self, quiz_item_id: UUID, snapshot: SchedulingSnapshot) -> None:
+        self.create_scheduling_calls += 1
+        self.scheduling[quiz_item_id] = snapshot
+
+    def update_scheduling(self, quiz_item_id: UUID, snapshot: SchedulingSnapshot) -> None:
+        self.update_scheduling_calls += 1
         self.scheduling[quiz_item_id] = snapshot
 
     def list_all(self) -> list[QuizItem]:
@@ -307,6 +319,12 @@ class _World:
             authorize=AuthorizeOwnership(),
             clock=self.clock,
             ids=uuid4,
+            max_card_chars=max_card_chars,
+        )
+        self.update = UpdateCard(
+            sources=self.sources,
+            items=self.items,
+            authorize=AuthorizeOwnership(),
             max_card_chars=max_card_chars,
         )
 
@@ -836,3 +854,173 @@ def test_accepting_against_another_users_highlight_is_not_found() -> None:
         )
 
     assert world.items.list_all() == []
+
+
+# --- UpdateCard: editing keeps identity and scheduling (CAP-12) -----------------
+
+
+def _accepted(world: _World) -> QuizItem:
+    item, _ = world.accept(
+        user=_OWNER,
+        source_id=world.source.id,
+        note_anchor_id=world.anchor.id,
+        item_type=QuizItemType.FREE_RECALL,
+        question="What is the powerhouse of the cell?",
+        answer="The mitochondria",
+    )
+    return item
+
+
+def test_editing_a_card_keeps_its_id_and_due_date() -> None:
+    world = _World()
+    original = _accepted(world)
+    due_before = world.items.scheduling[original.id].due
+
+    updated = world.update(
+        user=_OWNER,
+        item_id=original.id,
+        question="Which organelle produces the cell's energy?",
+        answer="The mitochondrion",
+    )
+
+    assert updated.id == original.id
+    assert world.items.scheduling[original.id].due == due_before
+    assert updated.question == "Which organelle produces the cell's energy?"
+    assert updated.answer == "The mitochondrion"
+
+
+def test_editing_a_card_never_writes_scheduling_or_the_review_log() -> None:
+    world = _World()
+    original = _accepted(world)
+    scheduling_writes = world.items.create_scheduling_calls
+
+    world.update(
+        user=_OWNER,
+        item_id=original.id,
+        question="Which organelle produces the cell's energy?",
+        answer="The mitochondrion",
+    )
+
+    assert world.items.create_scheduling_calls == scheduling_writes
+    assert world.items.update_scheduling_calls == 0
+    assert world.items.review_log == {}
+
+
+def test_editing_a_card_recomputes_its_fingerprint() -> None:
+    world = _World()
+    original = _accepted(world)
+
+    updated = world.update(
+        user=_OWNER,
+        item_id=original.id,
+        question="Which organelle produces the cell's energy?",
+        answer="The mitochondrion",
+    )
+
+    assert updated.content_key != original.content_key
+    assert updated.content_key == content_key(
+        QuizItemType.FREE_RECALL,
+        "Which organelle produces the cell's energy?",
+        "The mitochondrion",
+    )
+
+
+def test_editing_a_card_leaves_its_citation_snapshot_alone() -> None:
+    world = _World()
+    original = _accepted(world)
+
+    updated = world.update(
+        user=_OWNER,
+        item_id=original.id,
+        question="Which organelle produces the cell's energy?",
+        answer="The mitochondrion",
+    )
+
+    assert updated.anchor == original.anchor
+    assert updated.section_path == original.section_path
+    assert updated.source_excerpt == original.source_excerpt
+    assert updated.note_anchor_id == original.note_anchor_id
+    assert updated.origin == QuizItemOrigin.HIGHLIGHT
+
+
+# --- UpdateCard: guards (CAP-12) ------------------------------------------------
+
+
+def test_editing_a_deck_card_is_rejected() -> None:
+    # A deck card's identity is its content hash; rewriting its text would move which
+    # row the next regeneration upserts into.
+    world = _World()
+    deck = world.items.seed(
+        _deck_item(
+            world.source.id,
+            item_type=QuizItemType.FREE_RECALL,
+            question="What is the powerhouse of the cell?",
+            answer="The mitochondria",
+        )
+    )
+
+    with pytest.raises(CardNotEditable):
+        world.update(
+            user=_OWNER,
+            item_id=deck.id,
+            question="Reworded question?",
+            answer="Reworded answer",
+        )
+
+    assert world.items.update_text_calls == 0
+    assert world.items.get_by_id(deck.id).question == "What is the powerhouse of the cell?"
+
+
+@pytest.mark.parametrize("field", ["question", "answer"])
+def test_editing_a_card_to_empty_text_is_rejected(field: str) -> None:
+    world = _World()
+    original = _accepted(world)
+    payload = {"question": "A question?", "answer": "An answer"}
+    payload[field] = "   "
+
+    with pytest.raises(InvalidCardText):
+        world.update(user=_OWNER, item_id=original.id, **payload)
+
+    assert world.items.update_text_calls == 0
+
+
+def test_editing_a_card_to_over_long_text_is_rejected() -> None:
+    world = _World(max_card_chars=50)
+    original = _accepted(world)
+
+    with pytest.raises(InvalidCardText):
+        world.update(
+            user=_OWNER,
+            item_id=original.id,
+            question="q" * 51,
+            answer="An answer",
+        )
+
+    assert world.items.update_text_calls == 0
+
+
+def test_editing_another_users_card_is_not_found() -> None:
+    world = _World()
+    original = _accepted(world)
+
+    with pytest.raises(QuizItemNotFound):
+        world.update(
+            user=_STRANGER,
+            item_id=original.id,
+            question="Reworded question?",
+            answer="Reworded answer",
+        )
+
+    assert world.items.update_text_calls == 0
+
+
+def test_editing_an_unknown_card_is_not_found() -> None:
+    world = _World()
+
+    with pytest.raises(QuizItemNotFound):
+        world.update(
+            user=_OWNER,
+            item_id=uuid4(),
+            question="Reworded question?",
+            answer="Reworded answer",
+        )

@@ -10,7 +10,8 @@ checks catch model fabrication rather than police the student. :class:`AcceptCar
 the one card the student chose — ``origin="highlight"`` under a creation-minted id, with
 typed provenance back to the note anchor and a citation snapshot taken from it — and
 deliberately does *not* apply the embedding dedup guard (AD-138), while still storing the
-embedding so later deck runs dedup against it.
+embedding so later deck runs dedup against it. :class:`UpdateCard` rewrites a highlight
+card's text under that stable id, never touching its scheduling or review log.
 
 Ownership is reachable only through the parent source (AD-014); every ownership failure
 collapses to ``QuizItemNotFound`` → 404 so no anchor's or card's existence is disclosed.
@@ -23,7 +24,9 @@ from collections.abc import Callable
 from uuid import UUID
 
 from app.application.errors import (
+    CardNotEditable,
     InvalidCardText,
+    NotAuthorized,
     QuizItemNotFound,
     StaleCaptureTarget,
 )
@@ -280,3 +283,67 @@ class AcceptCard:
                 return stored, False
         self._items.create_scheduling(item.id, self._scheduling.initial())
         return item, True
+
+
+class UpdateCard:
+    """Rewrite a highlight card's text under its stable id (CAP-12).
+
+    Loads the card (missing → ``QuizItemNotFound`` → 404) and authorizes through its
+    parent source, where a non-owner collapses to the same 404 (no disclosure). Only a
+    ``highlight``-origin card may be edited: a ``deck`` card's identity *is* its content
+    hash, so rewriting its text would move which row the next regeneration upserts into
+    — that is ``CardNotEditable`` → 409.
+
+    Writes the question, the answer, and the recomputed ``content_key`` fingerprint and
+    nothing else. The row's id, its scheduling snapshot, and its review log are all left
+    exactly as they were, so editing a card never costs its memory history (ADR-0026
+    decision 5).
+    """
+
+    def __init__(
+        self,
+        *,
+        sources: SourceRepository,
+        items: QuizItemRepository,
+        authorize: AuthorizeOwnership,
+        max_card_chars: int,
+    ) -> None:
+        self._sources = sources
+        self._items = items
+        self._authorize = authorize
+        self._max_card_chars = max_card_chars
+
+    def __call__(
+        self, *, user: User, item_id: UUID, question: str, answer: str
+    ) -> QuizItem:
+        item = self._items.get_by_id(item_id)
+        if item is None:
+            raise QuizItemNotFound("Quiz item not found.")
+
+        # Ownership is reachable only via the parent source (AD-014).
+        source = self._sources.get_by_id(item.source_id)
+        if source is None:
+            raise QuizItemNotFound("Quiz item not found.")
+        try:
+            self._authorize(user=user, owner_id=source.user_id)
+        except NotAuthorized as exc:
+            raise QuizItemNotFound("Quiz item not found.") from exc
+
+        if item.origin != QuizItemOrigin.HIGHLIGHT:
+            raise CardNotEditable("Only cards created from a highlight can be edited.")
+
+        question = _validated_text(question, "question", self._max_card_chars)
+        answer = _validated_text(answer, "answer", self._max_card_chars)
+
+        self._items.update_text(
+            item.id,
+            question=question,
+            answer=answer,
+            content_key=content_key(item.item_type, question, answer),
+        )
+        # ``update_text`` writes without returning; re-read so the caller sees the row
+        # as persisted (including its untouched id and created_at).
+        updated = self._items.get_by_id(item.id)
+        if updated is None:  # pragma: no cover — the row was just written
+            raise QuizItemNotFound("Quiz item not found.")
+        return updated
