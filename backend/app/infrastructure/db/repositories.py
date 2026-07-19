@@ -28,6 +28,7 @@ from sqlalchemy import (
     literal_column,
     or_,
     select,
+    text,
     update,
 )
 from sqlalchemy import delete as sa_delete
@@ -59,6 +60,7 @@ from app.domain.entities import (
     PasswordCredential,
     QuizGenerationJob,
     QuizItem,
+    QuizItemOrigin,
     QuizItemStatus,
     QuizSection,
     ReadingPosition,
@@ -1153,16 +1155,27 @@ class SqlAlchemyQuizItemRepository:
         return [(row.id, [float(value) for value in row.embedding]) for row in rows]
 
     def upsert(self, item: QuizItem, *, embedding: Sequence[float] | None) -> bool:
-        """Upsert on ``(source_id, content_key)``; update content fields only on conflict.
+        """Upsert on the item's origin-scoped identity; update content fields only.
 
         Returns ``True`` when a new row was inserted and ``False`` when an existing row's
         content was updated. The conflict update leaves ``status`` and the scheduling/
         review-log rows untouched (QUIZ-02); the ``(xmax = 0)`` projection is Postgres'
         was-inserted signal (zero on a fresh insert, the updater's xid otherwise).
+
+        The conflict target follows ``origin``, matching one of the two partial unique
+        indexes from 0012 — each ``index_where`` must equal its index's predicate or
+        Postgres cannot select the index and raises. Deck items keep collapsing on
+        ``(source_id, content_key)``; highlight items collapse on
+        ``(note_anchor_id, content_key)`` so re-accepting identical text from the same
+        highlight is idempotent while two different highlights may share a key. A
+        highlight item with no anchor (severed provenance) matches neither partial
+        index and is a plain insert under its minted id.
         """
         stmt = pg_insert(quiz_items).values(
             id=item.id,
             source_id=item.source_id,
+            origin=item.origin,
+            note_anchor_id=item.note_anchor_id,
             item_type=item.item_type,
             question=item.question,
             answer=item.answer,
@@ -1177,21 +1190,70 @@ class SqlAlchemyQuizItemRepository:
             created_at=item.created_at,
             updated_at=item.updated_at,
         )
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["source_id", "content_key"],
-            set_={
-                "question": stmt.excluded.question,
-                "answer": stmt.excluded.answer,
-                "section_path": stmt.excluded.section_path,
-                "anchor": stmt.excluded.anchor,
-                "source_excerpt": stmt.excluded.source_excerpt,
-                "chunk_hash": stmt.excluded.chunk_hash,
-                "embedding": stmt.excluded.embedding,
-                "generation_meta": stmt.excluded.generation_meta,
-                "updated_at": stmt.excluded.updated_at,
-            },
-        ).returning(literal_column("(xmax = 0)").label("inserted"))
+        content_update = {
+            "question": stmt.excluded.question,
+            "answer": stmt.excluded.answer,
+            "section_path": stmt.excluded.section_path,
+            "anchor": stmt.excluded.anchor,
+            "source_excerpt": stmt.excluded.source_excerpt,
+            "chunk_hash": stmt.excluded.chunk_hash,
+            "embedding": stmt.excluded.embedding,
+            "generation_meta": stmt.excluded.generation_meta,
+            "updated_at": stmt.excluded.updated_at,
+        }
+        if item.origin == QuizItemOrigin.HIGHLIGHT:
+            if item.note_anchor_id is None:
+                stmt = stmt.returning(literal_column("(xmax = 0)").label("inserted"))
+                return bool(self._conn.execute(stmt).scalar_one())
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["note_anchor_id", "content_key"],
+                index_where=text("origin = 'highlight' AND note_anchor_id IS NOT NULL"),
+                set_=content_update,
+            )
+        else:
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["source_id", "content_key"],
+                index_where=text("origin = 'deck'"),
+                set_=content_update,
+            )
+        stmt = stmt.returning(literal_column("(xmax = 0)").label("inserted"))
         return bool(self._conn.execute(stmt).scalar_one())
+
+    def get_by_anchor_and_key(
+        self, note_anchor_id: UUID, content_key: str
+    ) -> QuizItem | None:
+        """Return the highlight card already accepted for this anchor + fingerprint.
+
+        The read behind the idempotent re-accept path: scoped to ``highlight`` origin so
+        a deck item that happens to share the key is never returned.
+        """
+        row = self._conn.execute(
+            select(*_QUIZ_ITEM_READ_COLUMNS)
+            .where(quiz_items.c.note_anchor_id == note_anchor_id)
+            .where(quiz_items.c.content_key == content_key)
+            .where(quiz_items.c.origin == QuizItemOrigin.HIGHLIGHT)
+        ).one_or_none()
+        return _to_quiz_item(row) if row is not None else None
+
+    def update_text(
+        self, item_id: UUID, *, question: str, answer: str, content_key: str
+    ) -> None:
+        """Rewrite a card's text and its fingerprint, keeping its identity (CAP-12).
+
+        Touches these three fields plus ``updated_at`` and nothing else — the row's
+        ``id``, its ``quiz_item_scheduling`` snapshot, and its ``review_log`` history are
+        all left exactly as they were, so editing a card never costs its memory state.
+        """
+        self._conn.execute(
+            update(quiz_items)
+            .where(quiz_items.c.id == item_id)
+            .values(
+                question=question,
+                answer=answer,
+                content_key=content_key,
+                updated_at=func.now(),
+            )
+        )
 
     def create_scheduling(
         self, quiz_item_id: UUID, snapshot: SchedulingSnapshot
@@ -1904,6 +1966,8 @@ def _to_quiz_item(row) -> QuizItem:  # noqa: ANN001
         generation_meta=row.generation_meta,
         created_at=row.created_at,
         updated_at=row.updated_at,
+        origin=row.origin,
+        note_anchor_id=row.note_anchor_id,
     )
 
 

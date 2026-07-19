@@ -801,11 +801,34 @@ class QuizItemRepository(Protocol):
         ...
 
     def upsert(self, item: QuizItem, *, embedding: Sequence[float] | None) -> bool:
-        """Upsert on ``(source_id, content_key)``; update content fields only on conflict.
+        """Upsert on the item's origin-scoped identity; update content fields only.
 
         Returns ``True`` when a new row was inserted (the caller creates its initial
         scheduling row) and ``False`` when an existing row's content was updated — in
         which case its scheduling and review-log rows are left untouched (QUIZ-02).
+
+        ``deck`` items collapse on ``(source_id, content_key)``; ``highlight`` items
+        collapse on ``(note_anchor_id, content_key)``, so re-accepting the same text
+        from one highlight is idempotent while two highlights may share a key.
+        """
+        ...
+
+    def get_by_anchor_and_key(
+        self, note_anchor_id: UUID, content_key: str
+    ) -> QuizItem | None:
+        """Return the ``highlight`` card already stored for this anchor + fingerprint.
+
+        ``None`` when the student has not accepted this text from this highlight yet.
+        """
+        ...
+
+    def update_text(
+        self, item_id: UUID, *, question: str, answer: str, content_key: str
+    ) -> None:
+        """Rewrite a card's text and fingerprint, keeping its identity (CAP-12).
+
+        Never touches the item's scheduling snapshot or its review log, so editing a
+        card costs none of its memory history.
         """
         ...
 
