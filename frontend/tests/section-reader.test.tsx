@@ -128,6 +128,27 @@ describe("SectionReader (E1)", () => {
     ).toBe(true);
   });
 
+  it("renders corpus punctuation verbatim, never rewriting book text", async () => {
+    // IDF-06: typographic discipline applies to UI copy only — quotes, dashes,
+    // and ellipses already in the corpus text pass through untouched.
+    const punctuation =
+      "She said \"so-called 'algorithms'\" -- then paused... twice.";
+    const fetchMock = routedFetch({
+      "GET /api/auth/me": () => authedMe.clone(),
+      [`GET ${SECTION_URL}`]: () =>
+        jsonResponse(200, { ...section, markdown: punctuation }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<SectionReader sourceId="s1" />);
+
+    // Rendered text equals served text: straight quotes stay straight, double
+    // hyphens stay double, three dots stay three dots.
+    await waitFor(() =>
+      expect(document.body.textContent).toContain(punctuation),
+    );
+  });
+
   it("renders the book prose under the reading-typography class", async () => {
     const fetchMock = routedFetch({
       "GET /api/auth/me": () => authedMe.clone(),
