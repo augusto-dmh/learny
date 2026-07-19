@@ -7,7 +7,9 @@
  * loads the caller's due queue (optionally filtered to one source for per-source
  * sessions). Each card shows the question only (a cloze renders its `____` blank
  * as plain text); Reveal exposes the answer plus a citation footnote (section
- * breadcrumb + source excerpt + an "Open in book" link to the reader anchor). The
+ * breadcrumb + source excerpt). The pin — an "Open in book" link built through
+ * `readUrl`, plus the origin note when the card carries provenance — sits with the
+ * question and is therefore reachable without revealing first (CAP-25..27). The
  * 4-button grade bar (Again/Hard/Good/Easy → FSRS rating 1..4) submits a
  * self-grade and auto-advances; after the last card a summary shows counts per
  * rating. Nothing due and a fetch/submit failure each settle to their own
@@ -23,6 +25,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { fetchAuthState } from "@/app/lib/auth";
+import { readUrl } from "@/app/lib/read-url";
 import {
   getDueReviews,
   submitReview,
@@ -252,6 +255,33 @@ function ReviewCard({
           {item.question}
         </p>
 
+        {/*
+          The pin (CAP-25/26) sits with the question rather than in the revealed
+          footnote: a card the student just failed becomes a re-read only if the
+          way back is reachable *before* they give up, and putting it here is what
+          keeps the jump to one action (CAP-36). It carries the anchor, not the
+          answer, so it leaks nothing the reveal is holding back.
+        */}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+          <Link
+            href={readUrl(item.source_id, item.citation.anchor)}
+            className="text-primary underline-offset-4 hover:underline"
+          >
+            Open in book
+          </Link>
+          {item.provenance ? (
+            // A card made at a passage additionally offers the note it came from
+            // (CAP-27). A deck card, or one whose note was deleted, offers none.
+            <Link
+              data-testid="card-provenance"
+              href={`/notes/${item.provenance.note_id}`}
+              className="text-muted-foreground underline-offset-4 hover:underline"
+            >
+              From “{item.provenance.note_title}”
+            </Link>
+          ) : null}
+        </div>
+
         {revealed ? (
           <div className="space-y-3">
             <Separator />
@@ -261,14 +291,6 @@ function ReviewCard({
             <figure className="space-y-1 border-l-2 pl-3 text-sm text-muted-foreground">
               <figcaption>{item.citation.section_path.join(" › ")}</figcaption>
               <blockquote>{item.citation.source_excerpt}</blockquote>
-              <Link
-                href={`/sources/${item.source_id}/read?anchor=${encodeURIComponent(
-                  item.citation.anchor,
-                )}`}
-                className="text-primary underline-offset-4 hover:underline"
-              >
-                Open in book
-              </Link>
             </figure>
             <div
               role="group"

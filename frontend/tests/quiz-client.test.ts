@@ -73,6 +73,7 @@ const dueItem: DueItem = {
     anchor: "chapter-1.xhtml#core-idea",
     source_excerpt: "Ada wrote the first algorithm.",
   },
+  provenance: null,
   status: "active",
   due: "2026-07-16T00:00:00Z",
 };

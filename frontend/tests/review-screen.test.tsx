@@ -20,6 +20,7 @@ import {
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { ReviewScreen } from "../app/components/review-screen";
+import { readUrl } from "../app/lib/read-url";
 
 beforeAll(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
@@ -63,6 +64,7 @@ const clozeCard = {
     anchor: "chapter-1.xhtml#core-idea",
     source_excerpt: "Ada wrote the first algorithm.",
   },
+  provenance: null,
   status: "active",
   due: "2026-07-16T00:00:00Z",
 };
@@ -79,6 +81,7 @@ const recallCard = {
     anchor: "chapter-2.xhtml",
     source_excerpt: "Charles Babbage designed the analytical engine.",
   },
+  provenance: null,
   status: "active",
   due: "2026-07-16T00:00:00Z",
 };
@@ -327,5 +330,89 @@ describe("ReviewScreen auth (E2)", () => {
 
     await waitFor(() => expect(onRequireAuth).toHaveBeenCalledTimes(1));
     expect(await screen.findByText("You are signed out.")).toBeTruthy();
+  });
+});
+
+describe("ReviewScreen pin and provenance (CAP-25/26/27)", () => {
+  const highlightCard = {
+    ...recallCard,
+    id: "i3",
+    provenance: { note_id: "n4", note_title: "Why Ada matters" },
+  };
+
+  it("renders the pin through readUrl so the reader route never drifts", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        [`GET ${DUE}?source_id=s1`]: () =>
+          jsonResponse(200, { items: [clozeCard], total_due: 1 }),
+      }),
+    );
+
+    render(<ReviewScreen sourceId="s1" />);
+    await screen.findByTestId("question");
+
+    // The href is exactly what the shared route builder produces for this card's
+    // source and cited anchor — the hand-built URL is gone.
+    expect(
+      screen.getByRole("link", { name: "Open in book" }).getAttribute("href"),
+    ).toBe(readUrl(clozeCard.source_id, clozeCard.citation.anchor));
+  });
+
+  it("offers the pin before the answer is revealed", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        [`GET ${DUE}?source_id=s1`]: () =>
+          jsonResponse(200, { items: [clozeCard], total_due: 1 }),
+      }),
+    );
+
+    render(<ReviewScreen sourceId="s1" />);
+    await screen.findByTestId("question");
+
+    // A failed card should become a re-read; that only works if the way back is
+    // there while the answer is still hidden.
+    expect(screen.queryByTestId("answer")).toBeNull();
+    expect(screen.getByRole("link", { name: "Open in book" })).toBeTruthy();
+  });
+
+  it("shows the origin note's title for a card made at a passage", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        [`GET ${DUE}?source_id=s1`]: () =>
+          jsonResponse(200, { items: [highlightCard], total_due: 1 }),
+      }),
+    );
+
+    render(<ReviewScreen sourceId="s1" />);
+    await screen.findByTestId("question");
+
+    const note = screen.getByTestId("card-provenance");
+    expect(note.textContent).toContain("Why Ada matters");
+    expect(note.getAttribute("href")).toBe("/notes/n4");
+  });
+
+  it("renders no note affordance for a card without provenance", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        [`GET ${DUE}?source_id=s1`]: () =>
+          jsonResponse(200, { items: [clozeCard], total_due: 1 }),
+      }),
+    );
+
+    render(<ReviewScreen sourceId="s1" />);
+    await screen.findByTestId("question");
+
+    // A deck card — or one whose origin note was deleted — has no note to offer,
+    // and must not invent one. The pin itself still stands.
+    expect(screen.queryByTestId("card-provenance")).toBeNull();
+    expect(screen.getByRole("link", { name: "Open in book" })).toBeTruthy();
   });
 });
