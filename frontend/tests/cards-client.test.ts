@@ -2,12 +2,10 @@
  * D1 gate (logic) — the cards client calls the same-origin proxy.
  *
  * Verifies each helper targets the right same-origin path with `credentials:
- * "same-origin"`, echoes the CSRF token in `X-CSRF-Token` on all three
- * state-changing calls (AD-007), passes each success payload through unchanged,
- * and surfaces a typed `CardError` on every documented error status. The 409
- * mapping is per-route by design: a stale passage on the capture routes
- * (`stale_capture`, CAP-08) versus a deck card that cannot be reworded on the edit
- * route (`not_editable`), so a caller can branch without inspecting the URL. Two
+ * "same-origin"`, echoes the CSRF token in `X-CSRF-Token` on both state-changing
+ * calls (AD-007), passes each success payload through unchanged, and surfaces a
+ * typed `CardError` on every documented error status — 409 as `stale_capture`
+ * (CAP-08, the passage moved under the highlight) and 422 as `invalid`. Two
  * outcomes the flow depends on are pinned as *successes*, not errors: an empty
  * suggestion list (CAP-01, "no cards for this passage") and a 200 idempotent
  * re-accept (CAP-05, the double-submit edge case). No real network.
@@ -19,7 +17,6 @@ import {
   acceptCard,
   CardError,
   suggestCards,
-  updateCard,
   type Card,
   type CardSuggestion,
 } from "../app/lib/cards";
@@ -264,69 +261,5 @@ describe("acceptCard (CAP-05)", () => {
     expect(err).toBeInstanceOf(CardError);
     expect(err.kind).toBe("invalid");
     expect(err.message).toBe("Could not save this card.");
-  });
-});
-
-describe("updateCard (CAP-12)", () => {
-  it("PATCHes the quiz-item path with the CSRF token and the new text", async () => {
-    const reworded = { ...card, question: "Who wrote the very first algorithm?" };
-    const fetchMock = fetchMockFn(async () => jsonResponse(200, reworded));
-
-    const result = await updateCard(
-      "c1",
-      { question: "Who wrote the very first algorithm?", answer: "Ada Lovelace" },
-      "csrf-xyz",
-      fetchMock as unknown as typeof fetch,
-    );
-
-    expect(result).toEqual(reworded);
-    const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe("/api/quiz-items/c1");
-    expect(init.method).toBe("PATCH");
-    expect(init.credentials).toBe("same-origin");
-    expect(new Headers(init.headers).get("X-CSRF-Token")).toBe("csrf-xyz");
-    expect(JSON.parse(init.body as string)).toEqual({
-      question: "Who wrote the very first algorithm?",
-      answer: "Ada Lovelace",
-    });
-    // The identity is unchanged by a reword — the whole point of CAP-12.
-    expect(result.id).toBe("c1");
-  });
-
-  it("maps the edit route's 409 to not_editable, not to a stale passage", async () => {
-    // The same status means something different here than on the capture routes:
-    // this card is deck-origin, so its text is not the student's to rewrite.
-    const fetchMock = fetchMockFn(async () =>
-      jsonResponse(409, { detail: "This card cannot be edited." }),
-    );
-
-    const err = await updateCard(
-      "c1",
-      { question: "q", answer: "a" },
-      "csrf-xyz",
-      fetchMock as unknown as typeof fetch,
-    ).catch((e) => e);
-
-    expect(err).toBeInstanceOf(CardError);
-    expect(err.kind).toBe("not_editable");
-    expect(err.status).toBe(409);
-    expect(err.message).toBe("This card cannot be edited.");
-  });
-
-  it("raises an invalid CardError on a 422 empty or over-long text response", async () => {
-    const fetchMock = fetchMockFn(async () =>
-      jsonResponse(422, { detail: "Card text is too long." }),
-    );
-
-    const err = await updateCard(
-      "c1",
-      { question: "q", answer: "a" },
-      "csrf-xyz",
-      fetchMock as unknown as typeof fetch,
-    ).catch((e) => e);
-
-    expect(err).toBeInstanceOf(CardError);
-    expect(err.kind).toBe("invalid");
-    expect(err.message).toBe("Card text is too long.");
   });
 });

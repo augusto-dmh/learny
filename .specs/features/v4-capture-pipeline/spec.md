@@ -54,6 +54,7 @@ Every ambiguity is resolved or recorded here — nothing is left silently unclea
 | CAP-A7 — Rail scope | The rail shows annotations for the **currently loaded chapter only** | It is reading-column furniture, not a notes browser; `/notes` remains the cross-book surface | n (auto-decided) |
 | CAP-A8 — Rail vs. panel coexistence | When the Ask/Teach panel is open the rail yields (panel wins); below the `lg` breakpoint the rail renders after the article as a collapsible region | Two simultaneous right-hand columns at `w-56` + `w-26rem` starve the 65ch reading measure that ADR-027 exists to protect | n (auto-decided) |
 | CAP-A9 — Shortcut safety | A single global `keydown` listener, ignoring events when a modifier is held or the target is an input, textarea, or contenteditable; must not bind `b` (vendored sidebar owns Cmd/Ctrl+B) | The app has no shortcut precedent at all, so the guard is the load-bearing part | n (auto-decided) |
+| CAP-A11 — Reword affordance | Not shipped this cycle; the backend `PATCH /api/quiz-items/{id}` and its guarantee ship, no client for it does | RFC-004 Cycle D's "edit" is editing a suggestion before acceptance, not a saved card. Shipping an unused client helper would be dead code; it arrives with the note-derived cards that need it (RFC-003 Cycle F) | n (auto-decided, post-verification) |
 | CAP-A10 — Reconcile independence | Highlight-derived cards reconcile on their **own** snapshot via the existing `ReconcileQuizItems` ladder, independent of the linked note anchor's outcome; the current ingestion step order — **quiz reconcile first, then notes** (`app/worker/tasks.py`) — is pinned by a test | The two reconcilers have no ordering contract today; making cards depend on anchor outcomes would create one and couple two aggregates. Each carries its own excerpt, so each is self-consistent. The pin exists so a silent reorder fails loudly, not because either order is required | n (auto-decided) |
 
 **Open questions:** none — all resolved or logged above.
@@ -97,12 +98,20 @@ it appear in the source's quiz overview with a due date.
 
 ### P1: Stable identity and typed provenance ⭐ MVP
 
-**User Story**: As a student, I want a card I made from a highlight to keep its scheduling
-even after I reword it, so that editing a card never costs me my memory history.
+**User Story**: As a student, I want a card I made from a highlight to be identified by
+something other than its own text, so that when a reword affordance arrives it cannot cost me
+my memory history — and so that deleting the note it came from never destroys the card.
 
 **Why P1**: ADR-026 decision 5 is binding, and the existing content-hash identity (AD-073)
 actively breaks this — it is the one thing that cannot be retrofitted later without a data
 migration.
+
+**Scope note (CAP-A11)**: this cycle ships the identity, the provenance, and the API that
+enforces the guarantee; it does *not* ship a UI for rewording a saved card, which RFC-004
+Cycle D does not ask for (its "accept/edit/discard" is editing a *suggestion*, before
+acceptance — CAP-06). No card in the product has ever been editable, so nothing regresses.
+CAP-12 is therefore proven at the application, API, and database layers rather than through
+the reader.
 
 **Acceptance Criteria**:
 
@@ -125,8 +134,9 @@ migration.
 8. WHEN a re-ingestion reconciles a `highlight`-origin card THEN the system SHALL apply the
    existing anchor/excerpt ladder to it and SHALL NOT modify its scheduling or review log.
 
-**Independent Test**: Accept a card from a highlight, edit its text, and confirm the row id
-and its `due` value are unchanged; delete the source note and confirm the card survives.
+**Independent Test**: Accept a card from a highlight, edit its text through the API, and
+confirm the row id and its `due` value are unchanged; delete the source note and confirm the
+card survives and stays due.
 
 ---
 

@@ -5,8 +5,8 @@
  * scheduled review card, driven against FastAPI *through the same-origin Next.js
  * proxy* (`/api/...`, ADR-017) — never cross-origin. The HttpOnly session cookie
  * rides along automatically (`credentials: "same-origin"`), so this code never
- * reads or holds the session token. All three calls are state-changing writes, so
- * each echoes the CSRF token (from `/api/auth/me`) in `X-CSRF-Token` (AD-007),
+ * reads or holds the session token. Both calls are state-changing writes, so each
+ * echoes the CSRF token (from `/api/auth/me`) in `X-CSRF-Token` (AD-007),
  * mirroring `notes.ts`.
  *
  * FastAPI remains authoritative for auth, ownership, the groundedness QC that gates
@@ -17,9 +17,6 @@
  * Non-OK responses surface as a typed `CardError` whose `kind` lets callers branch
  * on the documented failures without matching on message strings — following the
  * `NoteError` convention in `notes.ts`, not the bare `Error` that `quiz.ts` throws.
- * A 409 means different things on different routes (a passage that moved under a
- * suggestion request vs. a deck card that is not editable), so the mapping is
- * per-call rather than status-only.
  */
 
 /** One ephemeral card candidate, mirroring the backend `CardSuggestionView`. */
@@ -65,25 +62,18 @@ export type AcceptCardBody = {
   answer: string;
 };
 
-/** The edit body, mirroring the backend `UpdateCardRequest`. */
-export type UpdateCardBody = {
-  question: string;
-  answer: string;
-};
-
 /**
- * The documented failures a caller can branch on. `stale_capture` (409 on the
- * suggestion route) means the passage changed under the highlight so the reader
- * should reload; `not_editable` (409 on the edit route) means the card is a
- * deck-origin card whose identity is its content hash; `invalid` (422) means the
- * submitted text is empty or over the length bound; every other non-OK response
- * collapses to `unknown`.
+ * The documented failures a caller can branch on. `stale_capture` (409) means the
+ * passage changed under the highlight so the reader should reload; `invalid` (422)
+ * means the submitted text is empty or over the length bound; every other non-OK
+ * response collapses to `unknown`.
+ *
+ * The backend also exposes `PATCH /api/quiz-items/{id}` for rewording an accepted
+ * card, which answers 409 for a deck-origin card. No surface in this cycle edits a
+ * saved card, so no client for that route ships here — it arrives with the note-
+ * derived cards that need it, rather than sitting unused in the meantime.
  */
-export type CardErrorKind =
-  | "stale_capture"
-  | "not_editable"
-  | "invalid"
-  | "unknown";
+export type CardErrorKind = "stale_capture" | "invalid" | "unknown";
 
 /**
  * A non-OK cards response, carrying the mapped `kind` and the backend `detail` (or
@@ -124,7 +114,7 @@ export async function suggestCards(
     body: JSON.stringify({ note_anchor_id: noteAnchorId }),
   });
   if (!res.ok) {
-    throw await toCardError(res, "stale_capture", "Could not suggest cards for this passage.");
+    throw await toCardError(res, "Could not suggest cards for this passage.");
   }
   const body = (await res.json()) as { suggestions: CardSuggestion[] };
   return body.suggestions;
@@ -152,50 +142,21 @@ export async function acceptCard(
     body: JSON.stringify(body),
   });
   if (!res.ok) {
-    throw await toCardError(res, "stale_capture", "Could not save this card.");
+    throw await toCardError(res, "Could not save this card.");
   }
   return (await res.json()) as Card;
 }
 
 /**
- * Reword an owned card under its stable id (200). Scheduling and the review log are
- * not addressable here by construction, so an edit never costs the student their
- * memory history. A deck-origin card, whose identity is its content hash, surfaces
- * as a `CardError` with kind `not_editable` (409).
+ * Build a typed `CardError` from a non-OK response. 409 maps to `stale_capture`
+ * (the passage moved under the highlight) and 422 to `invalid`. The backend
+ * `detail` string becomes the message; a 422 detail arrives as a list of validation
+ * errors, not a string, so those fall back to the readable message rather than a
+ * stringified list.
  */
-export async function updateCard(
-  itemId: string,
-  body: UpdateCardBody,
-  csrfToken: string,
-  fetchImpl: typeof fetch = fetch,
-): Promise<Card> {
-  const res = await fetchImpl(`/api/quiz-items/${itemId}`, {
-    method: "PATCH",
-    credentials: "same-origin",
-    headers: { "content-type": "application/json", "X-CSRF-Token": csrfToken },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    throw await toCardError(res, "not_editable", "Could not save this card.");
-  }
-  return (await res.json()) as Card;
-}
-
-/**
- * Build a typed `CardError` from a non-OK response. 422 maps to `invalid` and 409
- * maps to `conflictKind` — the caller supplies it because a 409 means "the passage
- * moved" on the capture routes and "this card is not editable" on the edit route,
- * so status alone cannot distinguish them. The backend `detail` string becomes the
- * message; a 422 detail arrives as a list of validation errors, not a string, so
- * those fall back to the readable message rather than a stringified list.
- */
-async function toCardError(
-  res: Response,
-  conflictKind: CardErrorKind,
-  fallback: string,
-): Promise<CardError> {
+async function toCardError(res: Response, fallback: string): Promise<CardError> {
   const kind: CardErrorKind =
-    res.status === 409 ? conflictKind : res.status === 422 ? "invalid" : "unknown";
+    res.status === 409 ? "stale_capture" : res.status === 422 ? "invalid" : "unknown";
   try {
     const body = (await res.json()) as { detail?: unknown };
     const message = typeof body.detail === "string" ? body.detail : fallback;
