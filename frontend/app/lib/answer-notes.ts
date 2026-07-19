@@ -20,8 +20,13 @@ import {
   NoteError,
 } from "./notes";
 import { type Citation } from "./questions";
+import { readUrl } from "./read-url";
 
-/** The note title cap the backend `NoteWriteRequest` enforces; mirrored here. */
+/**
+ * Client-side truncation length for a note title derived from the question. The
+ * backend enforces no title cap (only the note body is capped), so this is a
+ * display choice for question-derived titles, not a mirror of a server limit.
+ */
 const TITLE_MAX = 80;
 
 /**
@@ -87,7 +92,7 @@ export async function saveAnswerAsNote({
     }
   }
 
-  const link = `/sources/${sourceId}/read?anchor=${encodeURIComponent(anchor)}`;
+  const link = readUrl(sourceId, anchor);
   await createImpl(
     { title, body_markdown: `${answerText}\n\n[Open in book](${link})` },
     csrfToken,

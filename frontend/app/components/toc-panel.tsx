@@ -21,31 +21,11 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
-import type { PanelMode } from "@/app/components/reader-panel";
+import { readUrl } from "@/app/lib/read-url";
 import { fetchSourceStructure } from "@/app/lib/sources";
 import type { SourceStructure } from "@/app/lib/sources";
 import { flattenSections } from "@/app/lib/tree";
 import { cn } from "@/lib/utils";
-
-/**
- * The reader route for a source, with an optional anchor (encoded exactly once)
- * and an optional open panel mode. Both query params are independent, so a jump
- * can preserve the open panel and a panel toggle can preserve the anchor.
- */
-export function readUrl(
-  sourceId: string,
-  anchor: string | null,
-  options: { panel?: PanelMode | null } = {},
-): string {
-  const query: string[] = [];
-  if (anchor) {
-    query.push(`anchor=${encodeURIComponent(anchor)}`);
-  }
-  if (options.panel) {
-    query.push(`panel=${options.panel}`);
-  }
-  return `/sources/${sourceId}/read${query.length ? `?${query.join("&")}` : ""}`;
-}
 
 export function TocPanel({
   sourceId,

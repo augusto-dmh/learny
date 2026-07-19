@@ -36,7 +36,8 @@ import {
 import { type PendingPanelRequest } from "@/app/components/ask-panel";
 import { ReaderPanel, type PanelMode } from "@/app/components/reader-panel";
 import { ReadingControls } from "@/app/components/reading-controls";
-import { ChapterNav, TocPanel, readUrl } from "@/app/components/toc-panel";
+import { ChapterNav, TocPanel } from "@/app/components/toc-panel";
+import { readUrl } from "@/app/lib/read-url";
 import { useReadingSettings } from "@/app/components/use-reading-settings";
 import { useRecedingChrome } from "@/app/components/use-receding-chrome";
 import {

@@ -31,6 +31,7 @@ import Link from "next/link";
 import { BookOpenIcon } from "lucide-react";
 
 import { type Citation } from "@/app/lib/questions";
+import { readUrl } from "@/app/lib/read-url";
 import {
   Popover,
   PopoverContent,
@@ -79,9 +80,7 @@ function CitationPopover({
   onShowInBook?: (anchor: string) => void;
 }) {
   const breadcrumb = citation.section_path.join(" › ");
-  const href = `/sources/${sourceId}/read?anchor=${encodeURIComponent(
-    citation.anchor,
-  )}`;
+  const href = readUrl(sourceId, citation.anchor);
   return (
     <Popover>
       <PopoverTrigger asChild>
