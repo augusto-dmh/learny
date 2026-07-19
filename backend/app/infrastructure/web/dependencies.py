@@ -24,6 +24,7 @@ from uuid import uuid4
 from fastapi import Depends, Request
 from sqlalchemy import Connection
 
+from app.application.cards import AcceptCard, SuggestCards, UpdateCard
 from app.application.corpus import ReadSection, ReadSourceStructure
 from app.application.identity import (
     AuthenticateUser,
@@ -678,4 +679,58 @@ def get_capture_highlight(conn: DbConnection) -> CaptureHighlight:
         clock=_clock,
         ids=uuid4,
         max_body_chars=get_settings().notes_max_body_chars,
+    )
+
+
+# --- Cards at the passage (Cycle D) --------------------------------------------
+#
+# Each card path is one atomic request transaction: a suggestion writes nothing at
+# all, and an accept writes its item plus that item's initial scheduling together, so
+# the ordinary auto-committing request connection is the unit of work. The generation
+# adapter is the same one the deck worker composes — reached synchronously here
+# because the student is waiting on the popover (AD-134).
+
+
+def get_suggest_cards(conn: DbConnection) -> SuggestCards:
+    """Wire ``SuggestCards`` on the request-scoped connection (CAP-01..04)."""
+    settings = get_settings()
+    return SuggestCards(
+        sources=SqlAlchemySourceRepository(conn),
+        notes=SqlAlchemyNoteRepository(conn),
+        items=SqlAlchemyQuizItemRepository(conn),
+        generation=build_quiz_adapter(settings),
+        authorize=AuthorizeOwnership(),
+        max_suggestions=settings.quiz_max_suggestions,
+    )
+
+
+def get_accept_card(conn: DbConnection) -> AcceptCard:
+    """Wire ``AcceptCard`` on the request-scoped connection (CAP-05..07, 10..12).
+
+    The embedding adapter is composed because an accepted card's embedding is still
+    stored (so later deck runs dedup against it), even though dedup is deliberately
+    not applied to the card itself (AD-138).
+    """
+    settings = get_settings()
+    return AcceptCard(
+        sources=SqlAlchemySourceRepository(conn),
+        notes=SqlAlchemyNoteRepository(conn),
+        items=SqlAlchemyQuizItemRepository(conn),
+        generation=build_quiz_adapter(settings),
+        embeddings=build_embedding_adapter(settings),
+        scheduling=build_scheduling_adapter(settings),
+        authorize=AuthorizeOwnership(),
+        clock=_clock,
+        ids=uuid4,
+        max_card_chars=settings.quiz_max_card_chars,
+    )
+
+
+def get_update_card(conn: DbConnection) -> UpdateCard:
+    """Wire ``UpdateCard`` on the request-scoped connection (CAP-12)."""
+    return UpdateCard(
+        sources=SqlAlchemySourceRepository(conn),
+        items=SqlAlchemyQuizItemRepository(conn),
+        authorize=AuthorizeOwnership(),
+        max_card_chars=get_settings().quiz_max_card_chars,
     )
