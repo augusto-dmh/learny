@@ -32,9 +32,18 @@ import {
   type CaptureAction,
   type CaptureSelection,
 } from "@/app/components/notes/capture-popover";
+import {
+  useScrollPosition,
+  type ObserverFactory,
+} from "@/app/components/use-scroll-position";
 import { fetchAuthState } from "@/app/lib/auth";
 import { captureHighlight, NoteError } from "@/app/lib/notes";
-import { getChapter, type ChapterSectionView, type ChapterView } from "@/app/lib/reading";
+import {
+  getChapter,
+  minutesLeft,
+  type ChapterSectionView,
+  type ChapterView,
+} from "@/app/lib/reading";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -189,11 +198,13 @@ export function ChapterFlow({
   csrf,
   chapter,
   scrollTarget,
+  observerFactory,
 }: {
   sourceId: string;
   csrf: string | null;
   chapter: ChapterView;
   scrollTarget: string | null;
+  observerFactory?: ObserverFactory;
 }) {
   const router = useRouter();
   const articleRef = useRef<HTMLElement>(null);
@@ -201,6 +212,38 @@ export function ChapterFlow({
   const [capture, setCapture] = useState<ActiveCapture | null>(null);
   const [pending, setPending] = useState(false);
   const [captureError, setCaptureError] = useState<string | null>(null);
+
+  // Track the topmost visible section as the reader scrolls, and persist the
+  // position after each scroll-idle (RD-07/13).
+  const { currentAnchor } = useScrollPosition({
+    sourceId,
+    csrf,
+    anchors: chapter.sections.map((section) => section.anchor),
+    initialAnchor: scrollTarget,
+    containerRef: articleRef,
+    observerFactory,
+  });
+
+  // Live progress from the current section's word offset (RD-11): whole-book
+  // percent read, and chapter minutes-left at 220 wpm.
+  const currentIndex = currentAnchor
+    ? chapter.sections.findIndex((section) => section.anchor === currentAnchor)
+    : -1;
+  const wordsReadInChapter =
+    currentIndex > 0
+      ? chapter.sections
+          .slice(0, currentIndex)
+          .reduce((sum, section) => sum + section.word_count, 0)
+      : 0;
+  const bookPercent =
+    chapter.total_word_count > 0
+      ? ((chapter.words_before_chapter + wordsReadInChapter) /
+          chapter.total_word_count) *
+        100
+      : 0;
+  const chapterMinutesLeft = minutesLeft(
+    chapter.chapter_word_count - wordsReadInChapter,
+  );
 
   // Scroll the deep-link / resume target into view once per change and flash its
   // section heading. `getElementById` resolves the anchor verbatim — section ids
@@ -275,41 +318,60 @@ export function ChapterFlow({
   }
 
   return (
-    <article ref={articleRef} className="prose-reading relative mx-auto max-w-2xl py-6">
-      {chapter.sections.map((section) => {
-        const breadcrumb = section.section_path.join(" › ");
-        return (
-          <section
-            key={section.anchor}
-            id={section.anchor}
-            data-section-anchor={section.anchor}
-            onMouseUp={() => handleMouseUp(section)}
-            className="scroll-mt-16"
-          >
-            <div
-              data-section-heading={section.anchor}
-              data-highlight={flashAnchor === section.anchor ? "on" : "off"}
-              className="rounded-md px-2 py-1 transition-colors duration-500 data-[highlight=on]:bg-accent"
+    <div>
+      <div
+        data-testid="reader-top-bar"
+        className="sticky top-0 z-20 flex items-center justify-between gap-4 border-b bg-background/80 px-4 py-2 backdrop-blur"
+      >
+        <span className="min-w-0 truncate text-sm font-medium">
+          {chapter.chapter_title}
+        </span>
+        <span
+          data-testid="reading-progress"
+          className="shrink-0 text-xs text-muted-foreground tabular-nums"
+        >
+          {Math.round(bookPercent)}% read · {chapterMinutesLeft} min left
+        </span>
+      </div>
+      <article
+        ref={articleRef}
+        className="prose-reading relative mx-auto max-w-2xl py-6"
+      >
+        {chapter.sections.map((section) => {
+          const breadcrumb = section.section_path.join(" › ");
+          return (
+            <section
+              key={section.anchor}
+              id={section.anchor}
+              data-section-anchor={section.anchor}
+              onMouseUp={() => handleMouseUp(section)}
+              className="scroll-mt-16"
             >
-              {breadcrumb ? (
-                <p className="text-xs text-muted-foreground">{breadcrumb}</p>
-              ) : null}
-              <h2 className="text-2xl font-semibold">{section.title}</h2>
-            </div>
-            <MessageResponse>{section.markdown}</MessageResponse>
-          </section>
-        );
-      })}
-      {capture ? (
-        <CapturePopover
-          top={capture.top}
-          left={capture.left}
-          pending={pending}
-          error={captureError}
-          onCapture={handleCapture}
-        />
-      ) : null}
-    </article>
+              <div
+                data-section-heading={section.anchor}
+                data-highlight={flashAnchor === section.anchor ? "on" : "off"}
+                className="rounded-md px-2 py-1 transition-colors duration-500 data-[highlight=on]:bg-accent"
+              >
+                {breadcrumb ? (
+                  <p className="text-xs text-muted-foreground">{breadcrumb}</p>
+                ) : null}
+                <h2 className="text-2xl font-semibold">{section.title}</h2>
+              </div>
+              <MessageResponse>{section.markdown}</MessageResponse>
+            </section>
+          );
+        })}
+        {capture ? (
+          <CapturePopover
+            top={capture.top}
+            left={capture.left}
+            pending={pending}
+            error={captureError}
+            onCapture={handleCapture}
+          />
+        ) : null}
+      </article>
+    </div>
   );
 }
 

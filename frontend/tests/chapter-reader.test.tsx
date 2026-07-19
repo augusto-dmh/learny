@@ -12,6 +12,7 @@
  */
 
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -21,6 +22,7 @@ import {
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ChapterFlow, ChapterReader } from "../app/components/chapter-reader";
+import type { ObserverFactory } from "../app/components/use-scroll-position";
 import type { ChapterView } from "../app/lib/reading";
 
 // The component reads `useRouter().push` for the "Highlight + note" navigation;
@@ -80,23 +82,23 @@ const chapter: ChapterView = {
   chapter_count: 2,
   prev_anchor: null,
   next_anchor: "part1/ch2.xhtml#s1",
-  words_before_chapter: 0,
-  chapter_word_count: 14,
-  total_word_count: 40,
+  words_before_chapter: 100,
+  chapter_word_count: 500,
+  total_word_count: 1000,
   sections: [
     {
       anchor: S1,
       title: "The First Algorithm",
       section_path: ["Chapter One", "Beginnings"],
       markdown: "## Beginnings\n\nAda Lovelace wrote the first algorithm.",
-      word_count: 8,
+      word_count: 300,
     },
     {
       anchor: S2,
       title: "The Analytical Engine",
       section_path: ["Chapter One", "Mechanism"],
       markdown: "## Mechanism\n\nBabbage designed the analytical engine.",
-      word_count: 6,
+      word_count: 200,
     },
   ],
   reading_position: null,
@@ -127,6 +129,42 @@ function deferred<T>() {
     resolve = r;
   });
   return { promise, resolve };
+}
+
+/**
+ * An injectable IntersectionObserver stand-in: records observed elements and lets
+ * the test drive the callback with per-anchor intersection states.
+ */
+function fakeObserver() {
+  const observed: Element[] = [];
+  let cb: IntersectionObserverCallback | null = null;
+  const factory: ObserverFactory = (callback) => {
+    cb = callback;
+    return {
+      observe: (el: Element) => observed.push(el),
+      unobserve: () => {},
+      disconnect: () => {},
+      takeRecords: () => [],
+      root: null,
+      rootMargin: "",
+      thresholds: [],
+    } as unknown as IntersectionObserver;
+  };
+  function emit(states: Record<string, boolean>) {
+    const entries = observed
+      .map((el) => {
+        const anchor = el.getAttribute("data-section-anchor")!;
+        return anchor in states
+          ? ({
+              target: el,
+              isIntersecting: states[anchor],
+            } as unknown as IntersectionObserverEntry)
+          : null;
+      })
+      .filter((e): e is IntersectionObserverEntry => e !== null);
+    act(() => cb?.(entries, {} as IntersectionObserver));
+  }
+  return { factory, emit };
 }
 
 beforeEach(() => {
@@ -490,5 +528,41 @@ describe("ChapterReader orchestration (RD-26/27/10)", () => {
     );
     const flashed = document.querySelector(`[data-section-heading="${S2}"]`);
     expect(flashed?.getAttribute("data-highlight")).toBe("on");
+  });
+});
+
+describe("ChapterFlow progress (RD-11)", () => {
+  it("shows live book-percent and chapter minutes-left that update as the observed section changes", async () => {
+    const obs = fakeObserver();
+    render(
+      <ChapterFlow
+        sourceId="s1"
+        csrf="csrf-xyz"
+        chapter={chapter}
+        scrollTarget={null}
+        observerFactory={obs.factory}
+      />,
+    );
+    await screen.findByText("Ada Lovelace wrote the first algorithm.");
+
+    // At the chapter top (nothing observed yet): (words_before 100 + 0) / 1000 =
+    // 10%; minutes-left = ceil((500 - 0) / 220) = 3.
+    const progress = screen.getByTestId("reading-progress");
+    expect(progress.textContent).toContain("10%");
+    expect(progress.textContent).toContain("3 min");
+
+    // Scroll so section two is the topmost visible (section one scrolled above).
+    obs.emit({ [S1]: false, [S2]: true });
+
+    // words read in chapter = section one's 300 → (100 + 300) / 1000 = 40%;
+    // minutes-left = ceil((500 - 300) / 220) = 1.
+    await waitFor(() =>
+      expect(screen.getByTestId("reading-progress").textContent).toContain(
+        "40%",
+      ),
+    );
+    expect(screen.getByTestId("reading-progress").textContent).toContain(
+      "1 min",
+    );
   });
 });
