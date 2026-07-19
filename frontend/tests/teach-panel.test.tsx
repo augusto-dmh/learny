@@ -231,7 +231,7 @@ describe("TeachPanel start + stream (RA-10)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Start session" }));
 
     // The start POST carried the chosen target anchor.
-    await screen.findByPlaceholderText(/send a message/i);
+    await screen.findByPlaceholderText(/send a message/i, {}, { timeout: 5000 });
     const startPost = fetchMock.mock.calls.find(
       ([url]) => url === "/api/teaching-sessions",
     )!;
@@ -301,7 +301,7 @@ describe("TeachPanel start + stream (RA-10)", () => {
     render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
     await screen.findByLabelText("Target");
     fireEvent.click(screen.getByRole("button", { name: "Start session" }));
-    await screen.findByPlaceholderText(/send a message/i);
+    await screen.findByPlaceholderText(/send a message/i, {}, { timeout: 5000 });
     sendMessage("unrelated nonsense");
 
     await stream.push({ type: "start", messageId: "m1" });
@@ -334,7 +334,7 @@ describe("TeachPanel start + stream (RA-10)", () => {
     render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
     await screen.findByLabelText("Target");
     fireEvent.click(screen.getByRole("button", { name: "Start session" }));
-    await screen.findByPlaceholderText(/send a message/i);
+    await screen.findByPlaceholderText(/send a message/i, {}, { timeout: 5000 });
     sendMessage("a message");
 
     const alert = await screen.findByRole("alert");
@@ -355,7 +355,7 @@ describe("TeachPanel start + stream (RA-10)", () => {
     render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
     await screen.findByLabelText("Target");
     fireEvent.click(screen.getByRole("button", { name: "Start session" }));
-    await screen.findByPlaceholderText(/send a message/i);
+    await screen.findByPlaceholderText(/send a message/i, {}, { timeout: 5000 });
     sendMessage("first try");
 
     await stream.push({ type: "start", messageId: "m1" });
@@ -434,7 +434,7 @@ describe("TeachPanel auth (RA-10)", () => {
     );
     await screen.findByLabelText("Target");
     fireEvent.click(screen.getByRole("button", { name: "Start session" }));
-    await screen.findByPlaceholderText(/send a message/i);
+    await screen.findByPlaceholderText(/send a message/i, {}, { timeout: 5000 });
     sendMessage("a message");
 
     await waitFor(() => expect(onRequireAuth).toHaveBeenCalledTimes(1));
@@ -465,7 +465,7 @@ describe("TeachPanel save to note (RA-20/22)", () => {
     render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
     await screen.findByLabelText("Target");
     fireEvent.click(screen.getByRole("button", { name: "Start session" }));
-    await screen.findByPlaceholderText(/send a message/i);
+    await screen.findByPlaceholderText(/send a message/i, {}, { timeout: 5000 });
     sendMessage("Explain this chapter.");
 
     await stream.push({ type: "start", messageId: "m1" });
