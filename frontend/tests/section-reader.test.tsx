@@ -128,6 +128,46 @@ describe("SectionReader (E1)", () => {
     ).toBe(true);
   });
 
+  it("renders corpus punctuation verbatim, never rewriting book text", async () => {
+    // IDF-06: typographic discipline applies to UI copy only — quotes, dashes,
+    // and ellipses already in the corpus text pass through untouched.
+    const punctuation =
+      "She said \"so-called 'algorithms'\" -- then paused... twice.";
+    const fetchMock = routedFetch({
+      "GET /api/auth/me": () => authedMe.clone(),
+      [`GET ${SECTION_URL}`]: () =>
+        jsonResponse(200, { ...section, markdown: punctuation }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<SectionReader sourceId="s1" />);
+
+    // Rendered text equals served text: straight quotes stay straight, double
+    // hyphens stay double, three dots stay three dots.
+    await waitFor(() =>
+      expect(document.body.textContent).toContain(punctuation),
+    );
+  });
+
+  it("renders the book prose under the reading-typography class", async () => {
+    const fetchMock = routedFetch({
+      "GET /api/auth/me": () => authedMe.clone(),
+      [`GET ${SECTION_URL}`]: () => jsonResponse(200, section),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { container } = render(<SectionReader sourceId="s1" />);
+
+    await screen.findByText("Beginnings");
+    // The markdown wrapper carries .prose-reading (class presence, not pixels —
+    // jsdom applies no stylesheets), and the prose lives inside it.
+    const prose = container.querySelector(".prose-reading");
+    expect(prose).not.toBeNull();
+    expect(prose!.textContent).toContain(
+      "Ada Lovelace wrote the first algorithm.",
+    );
+  });
+
   it("scrolls the heading into view and applies a transient highlight", async () => {
     vi.stubGlobal(
       "fetch",
@@ -194,7 +234,7 @@ describe("SectionReader (E1)", () => {
     // A formatting-only span the reader shows but the Markdown does not hold
     // verbatim resolves to nothing → no popover.
     selectText("a phrase that is not in the section");
-    fireEvent.mouseUp(container.querySelector(".prose")!);
+    fireEvent.mouseUp(container.querySelector(".prose-reading")!);
 
     expect(screen.queryByRole("dialog", { name: "Capture highlight" })).toBeNull();
   });
@@ -270,7 +310,7 @@ async function renderAndSelect(handlers: Record<string, Handler>) {
   const view = render(<SectionReader sourceId="s1" />);
   await screen.findByText("Beginnings");
   selectText(SELECTED);
-  fireEvent.mouseUp(view.container.querySelector(".prose")!);
+  fireEvent.mouseUp(view.container.querySelector(".prose-reading")!);
   return fetchMock;
 }
 

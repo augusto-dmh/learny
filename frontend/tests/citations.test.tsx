@@ -63,6 +63,11 @@ describe("CitationList (D2)", () => {
     expect(link.getAttribute("href")).toBe(
       "/sources/s1/read?anchor=part1%2Fchapter-1.xhtml%23core-idea",
     );
+
+    // The snippet quotation renders under the reading-typography class — the
+    // popover speaks in the book's voice (class presence, not pixels).
+    const snippet = screen.getByText("the first algorithm ever written");
+    expect(snippet.closest("blockquote")!.className).toContain("prose-reading");
   });
 
   it("renders nothing when there are no citations", () => {

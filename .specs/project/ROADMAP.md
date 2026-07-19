@@ -65,3 +65,16 @@ notes-domain ADR is accepted.
   uninformative (both models ace it) — silver set must exist first; product
   default stays `claude-sonnet-5` until that evidence exists. Origin: user
   provocation post-Cycle-B, reasoning in the 2026-07-18 session.
+
+v4 is driven by the accepted [RFC-004 roadmap](../../docs/rfc/0004-student-experience-roadmap.md)
+(cycles A–F, reading-first student experience; identity per ADR-027). RFC-003
+Cycle F interleaves after RFC-004 Cycle C.
+
+| tlc Cycle | RFC-004 Cycle | Scope | Status |
+|---|---|---|---|
+| `v4-identity-foundation` | A | Iron Gall tokens + fonts + reading typography + Paper scaffolding | Done (PR #36) |
+| `v4-reader-core` | B | Chapter flow, position, progress, Aa popover, ink-line signature | Not started |
+| `v4-reader-apparatus` | C | Ask/Teach as panel modes, citations-as-passages — unblocks RFC-003 F | Not started |
+| `v4-capture-pipeline` | D | Cards at the highlight, margin rail, review pins | Not started |
+| `v4-home-ia` | E | Two-card Home, streak/heatmap, nav collapse | Not started |
+| `v4-polish-gate` | F | Restyle completion + 14-day dogfood gate | Not started |

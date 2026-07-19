@@ -123,6 +123,10 @@ Accepted architecture (locked — sourced from ADRs/TDD, not re-decided here):
 | AD-112 | Note links derive from `[[wikilink]]` parsing on save (case-insensitive title match, unresolved keeps text, SET NULL on target deletion); tags are explicit API-set values, lowercase-normalized. | Cycle v3-E context.md (D-4) |
 | AD-113 | A highlight IS a note with an anchor (note body optional; notes hold 0..N anchors) — no separate highlights table; resolves ADR-0026's open cardinality question for E. | Cycle v3-E context.md (D-5) |
 | AD-114 | Note-anchor statuses reuse the quiz vocabulary exactly (active/stale/orphaned; relocation stays active and rewrites the anchor). | Cycle v3-E context.md (D-6) |
+| AD-115..117 | v3-eval-maturity decisions (Sonnet 5 default model; threshold calibration rule as amended; runbook location) — recorded in that cycle's context.md, not duplicated here. | Cycle v3-B context.md |
+| AD-118 | WCAG AA verification for theme tokens = committed vitest test parsing `globals.css` in the frontend gate (no standalone script, no new CI step). | Cycle v4-A context.md |
+| AD-119 | Reader-scoped appearance layers use guarded container selectors (`html:not(.dark) [data-appearance="paper"]`): light-mode-only override via cascade, dark ignores the layer with zero duplicated tokens. Pattern for future appearance layers. | Cycle v4-A context.md |
+| AD-120 | Typographic punctuation discipline applies to author-owned UI copy only, in files a cycle already touches; corpus/book text is never rewritten (pinned by pass-through test). | Cycle v4-A context.md |
 
 ## Blockers
 

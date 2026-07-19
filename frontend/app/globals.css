@@ -7,6 +7,7 @@
 @theme inline {
     --font-heading: var(--font-sans);
     --font-sans: var(--font-sans);
+    --font-serif: var(--font-serif);
     --color-sidebar-ring: var(--sidebar-ring);
     --color-sidebar-border: var(--sidebar-border);
     --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -38,6 +39,10 @@
     --color-card: var(--card);
     --color-foreground: var(--foreground);
     --color-background: var(--background);
+    --color-highlight-yellow: var(--highlight-yellow);
+    --color-highlight-cyan: var(--highlight-cyan);
+    --color-highlight-violet: var(--highlight-violet);
+    --color-highlight-green: var(--highlight-green);
     --radius-sm: calc(var(--radius) * 0.6);
     --radius-md: calc(var(--radius) * 0.8);
     --radius-lg: var(--radius);
@@ -47,73 +52,106 @@
     --radius-4xl: calc(var(--radius) * 2.6);
 }
 
+/*
+ * Iron Gall identity (ADR-027, rq05 Direction B): blue-black ink on cool rag
+ * paper, Prussian-blue accent, warm marker highlights on the cool field.
+ * WCAG AA for every ink-on-field pair is enforced by
+ * tests/theme-tokens.test.ts — change values only with that gate green.
+ */
 :root {
-    --background: oklch(1 0 0);
-    --foreground: oklch(0.145 0 0);
-    --card: oklch(1 0 0);
-    --card-foreground: oklch(0.145 0 0);
-    --popover: oklch(1 0 0);
-    --popover-foreground: oklch(0.145 0 0);
-    --primary: oklch(0.205 0 0);
-    --primary-foreground: oklch(0.985 0 0);
-    --secondary: oklch(0.97 0 0);
-    --secondary-foreground: oklch(0.205 0 0);
-    --muted: oklch(0.97 0 0);
-    --muted-foreground: oklch(0.556 0 0);
-    --accent: oklch(0.97 0 0);
-    --accent-foreground: oklch(0.205 0 0);
+    --background: #F6F7F6;
+    --foreground: #1B2733;
+    --card: #FFFFFF;
+    --card-foreground: #1B2733;
+    --popover: #FFFFFF;
+    --popover-foreground: #1B2733;
+    --primary: #22557A;
+    --primary-foreground: #F4F8FA;
+    --secondary: #E9EEF1;
+    --secondary-foreground: #1B2733;
+    --muted: #EDF0F1;
+    --muted-foreground: #5D6B76;
+    --accent: #E3ECF2;
+    --accent-foreground: #1B2733;
     --destructive: oklch(0.577 0.245 27.325);
-    --border: oklch(0.922 0 0);
-    --input: oklch(0.922 0 0);
-    --ring: oklch(0.708 0 0);
+    --border: #DDE2E4;
+    --input: #DDE2E4;
+    --ring: #22557A;
     --chart-1: oklch(0.87 0 0);
     --chart-2: oklch(0.556 0 0);
     --chart-3: oklch(0.439 0 0);
     --chart-4: oklch(0.371 0 0);
     --chart-5: oklch(0.269 0 0);
-    --radius: 0.625rem;
-    --sidebar: oklch(0.985 0 0);
-    --sidebar-foreground: oklch(0.145 0 0);
-    --sidebar-primary: oklch(0.205 0 0);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.97 0 0);
-    --sidebar-accent-foreground: oklch(0.205 0 0);
-    --sidebar-border: oklch(0.922 0 0);
-    --sidebar-ring: oklch(0.708 0 0);
+    --radius: 0.25rem;
+    --sidebar: #F1F3F3;
+    --sidebar-foreground: #1B2733;
+    --sidebar-primary: #22557A;
+    --sidebar-primary-foreground: #F4F8FA;
+    --sidebar-accent: #E3ECF2;
+    --sidebar-accent-foreground: #1B2733;
+    --sidebar-border: #DDE2E4;
+    --sidebar-ring: #22557A;
+    --highlight-yellow: #EFE3A0;
+    --highlight-cyan: #C2DEE8;
+    --highlight-violet: #D6D0EC;
+    --highlight-green: #C9DFCF;
 }
 
 .dark {
-    --background: oklch(0.145 0 0);
-    --foreground: oklch(0.985 0 0);
-    --card: oklch(0.205 0 0);
-    --card-foreground: oklch(0.985 0 0);
-    --popover: oklch(0.205 0 0);
-    --popover-foreground: oklch(0.985 0 0);
-    --primary: oklch(0.922 0 0);
-    --primary-foreground: oklch(0.205 0 0);
-    --secondary: oklch(0.269 0 0);
-    --secondary-foreground: oklch(0.985 0 0);
-    --muted: oklch(0.269 0 0);
-    --muted-foreground: oklch(0.708 0 0);
-    --accent: oklch(0.269 0 0);
-    --accent-foreground: oklch(0.985 0 0);
+    --background: #0F161B;
+    --foreground: #D9E2E8;
+    --card: #172128;
+    --card-foreground: #D9E2E8;
+    --popover: #172128;
+    --popover-foreground: #D9E2E8;
+    --primary: #6FA9CC;
+    --primary-foreground: #0E1A22;
+    --secondary: #1E2B34;
+    --secondary-foreground: #D9E2E8;
+    --muted: #1C2830;
+    --muted-foreground: #7F93A0;
+    --accent: #223546;
+    --accent-foreground: #D9E2E8;
     --destructive: oklch(0.704 0.191 22.216);
-    --border: oklch(1 0 0 / 10%);
-    --input: oklch(1 0 0 / 15%);
-    --ring: oklch(0.556 0 0);
+    --border: #263340;
+    --input: #263340;
+    --ring: #6FA9CC;
     --chart-1: oklch(0.87 0 0);
     --chart-2: oklch(0.556 0 0);
     --chart-3: oklch(0.439 0 0);
     --chart-4: oklch(0.371 0 0);
     --chart-5: oklch(0.269 0 0);
-    --sidebar: oklch(0.205 0 0);
-    --sidebar-foreground: oklch(0.985 0 0);
-    --sidebar-primary: oklch(0.488 0.243 264.376);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.269 0 0);
-    --sidebar-accent-foreground: oklch(0.985 0 0);
-    --sidebar-border: oklch(1 0 0 / 10%);
-    --sidebar-ring: oklch(0.556 0 0);
+    --sidebar: #131C22;
+    --sidebar-foreground: #D9E2E8;
+    --sidebar-primary: #6FA9CC;
+    --sidebar-primary-foreground: #0E1A22;
+    --sidebar-accent: #223546;
+    --sidebar-accent-foreground: #D9E2E8;
+    --sidebar-border: #263340;
+    --sidebar-ring: #6FA9CC;
+    --highlight-yellow: #4E4620;
+    --highlight-cyan: #1F3F4A;
+    --highlight-violet: #37315D;
+    --highlight-green: #26412F;
+}
+
+/*
+ * Paper reading appearance (ADR-027): a warm reading surface for the reader
+ * container only — token overrides cascade no further than the attributed
+ * element. The html:not(.dark) guard makes dark mode ignore the layer
+ * entirely; dark stays Iron Gall. No toggle ships yet: the Aa popover wires
+ * data-appearance in a later cycle.
+ */
+html:not(.dark) [data-appearance="paper"] {
+    --background: #F4EFE5;
+    --card: #FCF9F2;
+    --popover: #FCF9F2;
+    --foreground: #27211A;
+    --card-foreground: #27211A;
+    --popover-foreground: #27211A;
+    --muted-foreground: #6F6455;
+    --border: #E2DACA;
+    --input: #E2DACA;
 }
 
 @layer base {
@@ -126,4 +164,20 @@
   html {
     @apply font-sans;
     }
+}
+
+@layer components {
+  /*
+   * Reading typography (the book's voice, distinct from chrome): serif book
+   * measure for the section reader and citation snippets. Ragged right, and
+   * hyphenation stays off until a lang-aware opt-in exists.
+   */
+  .prose-reading {
+    font-family: var(--font-serif);
+    font-size: 19px;
+    line-height: 1.6;
+    max-width: 65ch;
+    text-align: left;
+    hyphens: none;
+  }
 }

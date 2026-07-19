@@ -134,7 +134,7 @@ function SectionContent({
     return (
       <div className="mx-auto max-w-2xl py-12 text-center">
         <p className="text-muted-foreground">
-          We couldn&apos;t find that section.
+          We couldn’t find that section.
         </p>
         <Link
           href="/sources"
@@ -260,7 +260,7 @@ function FoundSection({
       <div
         ref={proseRef}
         onMouseUp={handleMouseUp}
-        className="prose prose-sm mt-4 max-w-none dark:prose-invert"
+        className="prose-reading mt-4"
       >
         <MessageResponse>{section.markdown}</MessageResponse>
       </div>
