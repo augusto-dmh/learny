@@ -48,6 +48,7 @@ import { ReaderPanel, type PanelMode } from "@/app/components/reader-panel";
 import { ReadingControls } from "@/app/components/reading-controls";
 import { ChapterNav, TocPanel } from "@/app/components/toc-panel";
 import { readUrl } from "@/app/lib/read-url";
+import { useKeyShortcuts } from "@/app/components/use-key-shortcuts";
 import { useReadingSettings } from "@/app/components/use-reading-settings";
 import { useRecedingChrome } from "@/app/components/use-receding-chrome";
 import {
@@ -507,6 +508,18 @@ export function ChapterFlow({
     setCardAnchorId(null);
     setCapture(null);
   }
+
+  // The two capture verbs on bare keys (CAP-28/29), live only while the popover
+  // is up: with nothing selected there is no passage to act on, and a key that
+  // fired anyway would do something the student cannot see. Both keys run the
+  // very same handlers the buttons do, so the two routes can never diverge.
+  useKeyShortcuts(
+    {
+      h: () => void handleCapture("highlight"),
+      c: () => void handleCreateCard(),
+    },
+    Boolean(capture),
+  );
 
   // Once a return chip is showing, dismiss it after the reader has scrolled a
   // way past where the jump landed — they have settled into the new spot (RD-24).

@@ -25,6 +25,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { fetchAuthState } from "@/app/lib/auth";
+import { useKeyShortcuts } from "@/app/components/use-key-shortcuts";
 import { readUrl } from "@/app/lib/read-url";
 import {
   getDueReviews,
@@ -133,6 +134,23 @@ export function ReviewScreen({
       setSubmitting(false);
     }
   }
+
+  // Grading on bare keys (CAP-30/31). The binding set follows the card's own
+  // state so a key can only ever do the thing the card is currently offering:
+  // space reveals while the answer is hidden, and 1–4 grade once it is out. The
+  // shortcuts are live only while a card is actually on screen.
+  const cardOnScreen = queue !== null && index < queue.length;
+  useKeyShortcuts(
+    revealed
+      ? Object.fromEntries(
+          GRADES.map((grade) => [
+            String(grade.rating),
+            () => void handleGrade(grade.rating),
+          ]),
+        )
+      : { space: () => setRevealed(true) },
+    cardOnScreen,
+  );
 
   if (authed === null) {
     return <p className="text-muted-foreground">Loading…</p>;

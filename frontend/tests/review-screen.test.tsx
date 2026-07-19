@@ -11,6 +11,7 @@
  */
 
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -414,5 +415,117 @@ describe("ReviewScreen pin and provenance (CAP-25/26/27)", () => {
     // and must not invent one. The pin itself still stands.
     expect(screen.queryByTestId("card-provenance")).toBeNull();
     expect(screen.getByRole("link", { name: "Open in book" })).toBeTruthy();
+  });
+});
+
+describe("ReviewScreen grading shortcuts (CAP-30/31/32)", () => {
+  function pressKey(
+    key: string,
+    target: EventTarget = window,
+    init: KeyboardEventInit = {},
+  ) {
+    act(() => {
+      target.dispatchEvent(
+        new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init }),
+      );
+    });
+  }
+
+  function reviewFetch(onReview?: () => void) {
+    return routedFetch({
+      "GET /api/auth/me": () => authedMe.clone(),
+      [`GET ${DUE}?source_id=s1`]: () =>
+        jsonResponse(200, { items: [clozeCard], total_due: 1 }),
+      "POST /api/quiz-items/i1/reviews": () => {
+        onReview?.();
+        return jsonResponse(200, {
+          state: 2,
+          step: null,
+          stability: 4,
+          difficulty: 5,
+          due: "2026-07-20T00:00:00Z",
+          last_review: "2026-07-16T00:00:00Z",
+        });
+      },
+    });
+  }
+
+  it("reveals the answer on the space bar", async () => {
+    vi.stubGlobal("fetch", reviewFetch());
+
+    render(<ReviewScreen sourceId="s1" />);
+    await screen.findByTestId("question");
+    expect(screen.queryByTestId("answer")).toBeNull();
+
+    pressKey(" ");
+
+    expect((await screen.findByTestId("answer")).textContent).toBe("algorithm");
+  });
+
+  it("submits the pressed grade once the answer is revealed", async () => {
+    const fetchMock = reviewFetch();
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ReviewScreen sourceId="s1" />);
+    await screen.findByTestId("question");
+    fireEvent.click(screen.getByRole("button", { name: "Reveal answer" }));
+
+    pressKey("3");
+
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(
+        ([url]) => url === "/api/quiz-items/i1/reviews",
+      );
+      expect(call).toBeTruthy();
+      expect(JSON.parse((call![1] as RequestInit).body as string).rating).toBe(3);
+    });
+    // The session advanced past the only card, exactly as the button does.
+    expect(await screen.findByTestId("reviewed-total")).toBeTruthy();
+  });
+
+  it("does not grade while the answer is still hidden", async () => {
+    let reviews = 0;
+    vi.stubGlobal("fetch", reviewFetch(() => (reviews += 1)));
+
+    render(<ReviewScreen sourceId="s1" />);
+    await screen.findByTestId("question");
+
+    // A grade key before reveal would submit a self-assessment the student never
+    // made — the binding set only carries the verb the card is offering.
+    pressKey("1");
+    pressKey("4");
+
+    await waitFor(() => expect(screen.getByTestId("position")).toBeTruthy());
+    expect(reviews).toBe(0);
+  });
+
+  it("ignores a grade key typed into a text field", async () => {
+    let reviews = 0;
+    vi.stubGlobal("fetch", reviewFetch(() => (reviews += 1)));
+
+    render(<ReviewScreen sourceId="s1" />);
+    await screen.findByTestId("question");
+    fireEvent.click(screen.getByRole("button", { name: "Reveal answer" }));
+
+    const input = document.body.appendChild(document.createElement("input"));
+    pressKey("3", input);
+
+    await waitFor(() => expect(screen.getByTestId("answer")).toBeTruthy());
+    expect(reviews).toBe(0);
+    input.remove();
+  });
+
+  it("ignores a grade key while a modifier is held", async () => {
+    let reviews = 0;
+    vi.stubGlobal("fetch", reviewFetch(() => (reviews += 1)));
+
+    render(<ReviewScreen sourceId="s1" />);
+    await screen.findByTestId("question");
+    fireEvent.click(screen.getByRole("button", { name: "Reveal answer" }));
+
+    pressKey("3", window, { metaKey: true });
+
+    await waitFor(() => expect(screen.getByTestId("answer")).toBeTruthy());
+    expect(reviews).toBe(0);
   });
 });

@@ -1401,3 +1401,140 @@ describe("ChapterFlow margin rail (CAP-18/21/24)", () => {
     expect(screen.queryByTestId("reader-panel")).toBeNull();
   });
 });
+
+describe("ChapterFlow capture shortcuts (CAP-28/29/32)", () => {
+  const SUGGEST_URL = "/api/sources/s1/cards/suggestions";
+  const QUOTE = "Ada Lovelace wrote the first algorithm";
+
+  const capturedNote = {
+    id: "n1",
+    title: QUOTE,
+    body_markdown: "",
+    tags: [],
+    anchors: [
+      {
+        id: "a1",
+        source_id: "s1",
+        source_title: "Ready Book",
+        anchor: S1,
+        section_path: ["Chapter One", "Beginnings"],
+        block_ordinal: 0,
+        start_offset: 0,
+        end_offset: 37,
+        quote_exact: QUOTE,
+        quote_prefix: "## Beginnings ",
+        quote_suffix: ".",
+        status: "active",
+      },
+    ],
+    created_at: "now",
+    updated_at: "now",
+  };
+
+  /** Writes to the capture endpoint only — the TOC's own reads are not actions. */
+  const captures = (fetchMock: ReturnType<typeof routedFetch>) =>
+    fetchMock.mock.calls.filter(([url]) => url === HIGHLIGHTS_URL).length;
+
+  /** Render the flow; `select` raises the popover on a selection in section one. */
+  function renderFlow() {
+    const view = render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+    );
+    return {
+      ...view,
+      select() {
+        selectText(QUOTE);
+        fireEvent.mouseUp(
+          view.container.querySelector(`[data-section-anchor="${S1}"]`)!,
+        );
+      },
+    };
+  }
+
+  function pressKey(
+    key: string,
+    target: EventTarget = window,
+    init: KeyboardEventInit = {},
+  ) {
+    target.dispatchEvent(
+      new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init }),
+    );
+  }
+
+  it("captures the selection on the highlight key, exactly as the verb does", async () => {
+    const fetchMock = routedFetch({
+      [`POST ${HIGHLIGHTS_URL}`]: () => jsonResponse(201, capturedNote),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const view = renderFlow();
+    view.select();
+    act(() => pressKey("h"));
+
+    await waitFor(() => expect(captures(fetchMock)).toBe(1));
+    const call = fetchMock.mock.calls.find(([url]) => url === HIGHLIGHTS_URL)!;
+    expect(JSON.parse((call[1] as RequestInit).body as string).quote_exact).toBe(
+      QUOTE,
+    );
+  });
+
+  it("starts the card flow on the card key", async () => {
+    const fetchMock = routedFetch({
+      [`POST ${HIGHLIGHTS_URL}`]: () => jsonResponse(201, capturedNote),
+      [`POST ${SUGGEST_URL}`]: () => jsonResponse(200, { suggestions: [] }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const view = renderFlow();
+    view.select();
+    act(() => pressKey("c"));
+
+    expect(await screen.findByText("No cards for this passage.")).toBeTruthy();
+  });
+
+  it("does nothing on a bare key press with no selection open", async () => {
+    const fetchMock = routedFetch({});
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderFlow();
+    // No popover is up, so there is no passage the key could act on — and a
+    // write the student has no on-screen evidence of must never happen.
+    act(() => {
+      pressKey("h");
+      pressKey("c");
+    });
+
+    expect(captures(fetchMock)).toBe(0);
+    expect(screen.queryByRole("dialog", { name: "Capture highlight" })).toBeNull();
+  });
+
+  it("ignores the highlight key typed into a text field", async () => {
+    const fetchMock = routedFetch({});
+    vi.stubGlobal("fetch", fetchMock);
+
+    const view = renderFlow();
+    view.select();
+    // The popover is open, so the shortcut is armed — but the student is typing.
+    const textarea = document.body.appendChild(document.createElement("textarea"));
+    act(() => pressKey("h", textarea));
+
+    expect(captures(fetchMock)).toBe(0);
+    textarea.remove();
+  });
+
+  it("ignores the highlight key while a modifier is held, and never binds b", async () => {
+    const fetchMock = routedFetch({});
+    vi.stubGlobal("fetch", fetchMock);
+
+    const view = renderFlow();
+    view.select();
+    act(() => {
+      pressKey("h", window, { ctrlKey: true });
+      // The sidebar owns Cmd/Ctrl+B; the reader must never claim `b` at all.
+      pressKey("b");
+      pressKey("b", window, { ctrlKey: true });
+    });
+
+    expect(captures(fetchMock)).toBe(0);
+  });
+});
