@@ -49,6 +49,11 @@ from app.application.quiz import (
     PlanDeckGeneration,
     RunDeckGeneration,
 )
+from app.application.reading import (
+    ListSourceHighlights,
+    ReadChapter,
+    SaveReadingPosition,
+)
 from app.application.retrieval import RetrieveEvidence
 from app.application.reviews import GetDueQueue, SubmitReview
 from app.application.sources import CreateSource, GetSource, ListSources
@@ -82,6 +87,7 @@ from app.infrastructure.db.repositories import (
     SqlAlchemyNoteRepository,
     SqlAlchemyQuizItemRepository,
     SqlAlchemyQuizJobRepository,
+    SqlAlchemyReadingPositionRepository,
     SqlAlchemySessionRepository,
     SqlAlchemySourceRepository,
     SqlAlchemyTeachingSessionRepository,
@@ -333,6 +339,36 @@ def get_read_section(conn: DbConnection) -> ReadSection:
     return ReadSection(
         sources=SqlAlchemySourceRepository(conn),
         corpus=SqlAlchemyCorpusRepository(conn),
+        authorize=AuthorizeOwnership(),
+    )
+
+
+def get_read_chapter(conn: DbConnection) -> ReadChapter:
+    """Wire ``ReadChapter`` on the request-scoped connection (RD-01/10)."""
+    return ReadChapter(
+        sources=SqlAlchemySourceRepository(conn),
+        corpus=SqlAlchemyCorpusRepository(conn),
+        positions=SqlAlchemyReadingPositionRepository(conn),
+        authorize=AuthorizeOwnership(),
+    )
+
+
+def get_save_reading_position(conn: DbConnection) -> SaveReadingPosition:
+    """Wire ``SaveReadingPosition`` on the request-scoped connection (RD-08/09/12)."""
+    return SaveReadingPosition(
+        sources=SqlAlchemySourceRepository(conn),
+        corpus=SqlAlchemyCorpusRepository(conn),
+        positions=SqlAlchemyReadingPositionRepository(conn),
+        authorize=AuthorizeOwnership(),
+        clock=_clock,
+    )
+
+
+def get_list_source_highlights(conn: DbConnection) -> ListSourceHighlights:
+    """Wire ``ListSourceHighlights`` on the request-scoped connection (RD-28)."""
+    return ListSourceHighlights(
+        sources=SqlAlchemySourceRepository(conn),
+        notes=SqlAlchemyNoteRepository(conn),
         authorize=AuthorizeOwnership(),
     )
 

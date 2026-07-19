@@ -704,3 +704,77 @@ def test_capture_highlight_unauthenticated_returns_401(
         csrf="whatever",
     )
     assert resp.status_code == 401, resp.text
+
+
+# --- List highlights (RD-28) ---------------------------------------------------
+
+
+def _capture(client: TestClient, db_conn: Connection, email: str) -> UUID:
+    """Register, seed a one-section corpus, capture one highlight; return the source id."""
+    user_id = _register(client, email)
+    csrf = _csrf(client)
+    source_id = _persist_source(db_conn, user_id)
+    _seed_corpus(
+        db_conn,
+        source_id,
+        anchor="ch1",
+        block_html="<p>The quick brown fox jumps over the lazy dog.</p>",
+    )
+    resp = _post_highlight(
+        client,
+        source_id,
+        {"anchor": "ch1", "quote_exact": "quick brown fox", "title": "h"},
+        csrf=csrf,
+    )
+    assert resp.status_code == 201, resp.text
+    return source_id
+
+
+def test_list_source_highlights_returns_owner_highlights(
+    notes_client: TestClient, db_conn: Connection
+) -> None:
+    source_id = _capture(notes_client, db_conn, "hl-list@example.com")
+
+    resp = notes_client.get(f"/api/sources/{source_id}/highlights")
+
+    assert resp.status_code == 200, resp.text
+    rows = resp.json()
+    assert len(rows) == 1
+    assert set(rows[0]) == {
+        "note_id",
+        "anchor",
+        "quote_exact",
+        "quote_prefix",
+        "quote_suffix",
+        "status",
+    }
+    assert rows[0]["anchor"] == "ch1"
+    assert rows[0]["quote_exact"] == "quick brown fox"
+    assert rows[0]["status"] == "active"
+    UUID(rows[0]["note_id"])
+
+
+def test_list_source_highlights_non_owner_returns_404(
+    notes_client: TestClient, db_conn: Connection
+) -> None:
+    source_id = _capture(notes_client, db_conn, "hl-list-owner@example.com")
+
+    _register(notes_client, "hl-list-intruder@example.com")  # become a different user
+    resp = notes_client.get(f"/api/sources/{source_id}/highlights")
+    assert resp.status_code == 404, resp.text
+
+
+def test_list_source_highlights_unknown_source_returns_404(
+    notes_client: TestClient, db_conn: Connection
+) -> None:
+    _register(notes_client, "hl-list-404@example.com")
+    _csrf(notes_client)
+    resp = notes_client.get(f"/api/sources/{uuid4()}/highlights")
+    assert resp.status_code == 404, resp.text
+
+
+def test_list_source_highlights_unauthenticated_returns_401(
+    notes_client: TestClient, db_conn: Connection
+) -> None:
+    notes_client.cookies.clear()
+    assert notes_client.get(f"/api/sources/{uuid4()}/highlights").status_code == 401
