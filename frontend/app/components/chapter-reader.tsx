@@ -98,8 +98,27 @@ export function ChapterReader({
   // They are P2 and non-blocking: the chapter renders without waiting on them,
   // and a failed fetch simply leaves the prose unpainted (RD-28/29).
   const [highlights, setHighlights] = useState<SourceHighlightView[]>([]);
+  // The section anchors of the chapter currently in `found` state. A cross-chapter
+  // jump changes `?anchor=` to an anchor this set does NOT contain and must reload
+  // (RA-14); a same-chapter anchor change (a citation "Show in book" that lands in
+  // this chapter, or a TOC jump within it) is served by the in-flow scroll effect,
+  // so reloading — which would refetch the same chapter and reset the open panel
+  // and scroll — is skipped (RA-13).
+  const loadedRef = useRef<{ sourceId: string; anchors: Set<string> } | null>(
+    null,
+  );
 
   useEffect(() => {
+    const loaded = loadedRef.current;
+    if (
+      urlAnchor &&
+      loaded &&
+      loaded.sourceId === sourceId &&
+      loaded.anchors.has(urlAnchor)
+    ) {
+      // Same-chapter anchor change: the flow scrolls to it in place; no reload.
+      return;
+    }
     let active = true;
     setState({ kind: "loading" });
     setHighlights([]);
@@ -134,11 +153,20 @@ export function ChapterReader({
         if (!active) {
           return;
         }
-        setState(
-          result.status === "not_found"
-            ? { kind: "not-found" }
-            : { kind: "found", chapter: result.chapter },
-        );
+        if (result.status === "not_found") {
+          loadedRef.current = null;
+          setState({ kind: "not-found" });
+        } else {
+          // Remember the loaded chapter's anchors so a later same-chapter anchor
+          // change scrolls in place instead of reloading (RA-13/14).
+          loadedRef.current = {
+            sourceId,
+            anchors: new Set(
+              result.chapter.sections.map((section) => section.anchor),
+            ),
+          };
+          setState({ kind: "found", chapter: result.chapter });
+        }
       } catch (err) {
         if (!active) {
           return;
@@ -426,6 +454,27 @@ export function ChapterFlow({
     router.replace(readUrl(sourceId, urlAnchor));
   }
 
+  // Bring a cited (or taught) passage into view without leaving the answer
+  // (RA-11/13/14). An anchor in the loaded chapter scrolls to it in the flow and
+  // flashes its heading, keeping the panel open and the URL anchor in step (the
+  // loaded-chapter guard in `ChapterReader` makes this a no-reload replace); an
+  // anchor in another chapter navigates there, carrying the open panel along so
+  // the answer stays beside the book.
+  function handleShowInBook(anchor: string) {
+    const inChapter = chapter.sections.some(
+      (section) => section.anchor === anchor,
+    );
+    if (!inChapter) {
+      router.push(readUrl(sourceId, anchor, { panel: panelMode }));
+      return;
+    }
+    document
+      .getElementById(anchor)
+      ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    setFlashAnchor(anchor);
+    router.replace(readUrl(sourceId, anchor, { panel: panelMode }));
+  }
+
   // A TOC click inside the loaded chapter scrolls within the flow rather than
   // reloading, and keeps the URL anchor in step so the deep link stays shareable.
   function handleSameChapterNavigate(anchor: string) {
@@ -556,6 +605,7 @@ export function ChapterFlow({
             mode={panelMode}
             onModeChange={handlePanelModeChange}
             onClose={handlePanelClose}
+            onShowInBook={handleShowInBook}
             onRequireAuth={onRequireAuth}
           />
         ) : null}

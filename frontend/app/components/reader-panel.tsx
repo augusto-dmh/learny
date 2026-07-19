@@ -92,6 +92,7 @@ export function ReaderPanel({
             csrf={csrf}
             pendingRequest={pendingRequest}
             onPendingConsumed={onPendingConsumed}
+            onShowInBook={onShowInBook}
             onRequireAuth={onRequireAuth}
           />
         ) : (

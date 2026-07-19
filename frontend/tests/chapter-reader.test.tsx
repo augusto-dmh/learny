@@ -39,15 +39,37 @@ vi.mock("next/navigation", () => ({
   useParams: () => ({ id: "s1" }),
 }));
 
-// These reader tests exercise panel *wiring* (open/close/mode/URL), not the chat
-// internals — the Ask/Teach panels are unit-tested in their own files and pull in
-// AI-Elements (ResizeObserver, streaming). Stub them to the body markers the
-// shell renders so mounting the reader with a panel open stays lightweight.
+// Anchors the mocked teach panel jumps to via `onShowInBook`: one inside the
+// loaded chapter (an in-flow scroll) and one in another chapter (a navigation).
+const jump = vi.hoisted(() => ({
+  inChapter: "part1/ch1.xhtml#s2",
+  foreign: "part1/ch2.xhtml#s1",
+}));
+
+// These reader tests exercise panel *wiring* (open/close/mode/URL and the
+// show-in-book jump), not the chat internals — the Ask/Teach panels are
+// unit-tested in their own files and pull in AI-Elements (ResizeObserver,
+// streaming). Stub them to body markers so mounting the reader with a panel open
+// stays lightweight; the teach stub also surfaces the `onShowInBook` wiring so the
+// citation-jump handler can be driven from a real click (RA-13/14).
 vi.mock("../app/components/ask-panel", () => ({
   AskPanel: () => <div data-testid="ask-panel-body" />,
 }));
 vi.mock("../app/components/teach-panel", () => ({
-  TeachPanel: () => <div data-testid="teach-panel-body" />,
+  TeachPanel: ({
+    onShowInBook,
+  }: {
+    onShowInBook?: (anchor: string) => void;
+  }) => (
+    <div data-testid="teach-panel-body">
+      <button type="button" onClick={() => onShowInBook?.(jump.inChapter)}>
+        show-in-chapter
+      </button>
+      <button type="button" onClick={() => onShowInBook?.(jump.foreign)}>
+        show-foreign
+      </button>
+    </div>
+  ),
 }));
 
 /** Stub `window.getSelection` to return `text` as the current selection. */
@@ -818,6 +840,128 @@ describe("ChapterFlow panel modes (RA-01/02/03/06)", () => {
     await waitFor(() =>
       expect(screen.getByTestId("reading-progress").textContent).toContain("40%"),
     );
+  });
+});
+
+describe("ChapterFlow show in book (RA-13/14)", () => {
+  it("scrolls to an in-chapter cited anchor and flashes it, panel still open, no navigation", async () => {
+    nav.params = new URLSearchParams("panel=teach");
+    render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+    );
+    await screen.findByText("Ada Lovelace wrote the first algorithm.");
+    // No target on load, so nothing has scrolled yet.
+    expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled();
+
+    // The teach panel asks to show an anchor that lives in the loaded chapter.
+    fireEvent.click(screen.getByRole("button", { name: "show-in-chapter" }));
+
+    // It scrolled to the anchor in the flow and flashed its heading; the panel
+    // stays open beside the answer and there is no full navigation (push).
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
+    const flashed = document.querySelector(`[data-section-heading="${S2}"]`);
+    expect(flashed?.getAttribute("data-highlight")).toBe("on");
+    expect(screen.getByTestId("reader-panel")).toBeTruthy();
+    expect(nav.push).not.toHaveBeenCalled();
+    // The anchor rides into the URL (with the panel preserved) as a shallow replace.
+    expect(nav.replace).toHaveBeenCalledWith(
+      `/sources/s1/read?anchor=${ENCODED_S2}&panel=teach`,
+    );
+  });
+
+  it("navigates to a cited anchor in another chapter, carrying the open panel", async () => {
+    nav.params = new URLSearchParams("panel=teach");
+    render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+    );
+    await screen.findByText("Ada Lovelace wrote the first algorithm.");
+
+    // The teach panel asks to show an anchor NOT in the loaded chapter.
+    fireEvent.click(screen.getByRole("button", { name: "show-foreign" }));
+
+    // It navigates to that anchor with the panel param preserved; no in-flow scroll.
+    expect(nav.push).toHaveBeenCalledWith(
+      "/sources/s1/read?anchor=part1%2Fch2.xhtml%23s1&panel=teach",
+    );
+    expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled();
+    expect(nav.replace).not.toHaveBeenCalled();
+  });
+});
+
+describe("ChapterReader cross-chapter jump (RA-13/14)", () => {
+  const ENCODED_S1 = "part1%2Fch1.xhtml%23s1";
+  const CHAPTER_URL_S1 = `/api/sources/s1/chapter?anchor=${ENCODED_S1}`;
+  const FOREIGN_ENC = "part1%2Fch2.xhtml%23s1";
+  const CHAPTER_URL_FOREIGN = `/api/sources/s1/chapter?anchor=${FOREIGN_ENC}`;
+
+  const chapterCallsOf = (fetchMock: ReturnType<typeof routedFetch>) => () =>
+    fetchMock.mock.calls.filter(([u]) =>
+      String(u).startsWith("/api/sources/s1/chapter"),
+    ).length;
+
+  it("does not refetch when the anchor changes within the loaded chapter (RA-13)", async () => {
+    nav.params = new URLSearchParams(`anchor=${ENCODED_S1}`);
+    const fetchMock = routedFetch({
+      "GET /api/auth/me": () => authedMe.clone(),
+      [`GET ${CHAPTER_URL_S1}`]: () => jsonResponse(200, chapter),
+      [`GET ${HIGHLIGHTS_URL}`]: () => jsonResponse(200, []),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const chapterCalls = chapterCallsOf(fetchMock);
+
+    const { rerender } = render(<ChapterReader sourceId="s1" />);
+    await screen.findByText("Ada Lovelace wrote the first algorithm.");
+    expect(chapterCalls()).toBe(1);
+
+    // The anchor changes to a section that lives in the SAME loaded chapter.
+    nav.params = new URLSearchParams(`anchor=${ENCODED_S2}`);
+    rerender(<ChapterReader sourceId="s1" />);
+
+    // The flow scrolls to it in place (its heading flashes); no new chapter load.
+    await waitFor(() => {
+      const flashed = document.querySelector(`[data-section-heading="${S2}"]`);
+      expect(flashed?.getAttribute("data-highlight")).toBe("on");
+    });
+    expect(chapterCalls()).toBe(1);
+  });
+
+  it("refetches when the anchor changes to a section outside the loaded chapter (RA-14)", async () => {
+    nav.params = new URLSearchParams(`anchor=${ENCODED_S2}`);
+    const foreignChapter: ChapterView = {
+      ...chapter,
+      chapter_title: "Chapter Two",
+      chapter_anchor: "part1/ch2.xhtml#s1",
+      prev_anchor: S1,
+      next_anchor: null,
+      sections: [
+        {
+          anchor: "part1/ch2.xhtml#s1",
+          title: "The Second Chapter",
+          section_path: ["Chapter Two", "Onward"],
+          markdown: "## Onward\n\nThe second chapter opens here.",
+          word_count: 200,
+        },
+      ],
+    };
+    const fetchMock = routedFetch({
+      "GET /api/auth/me": () => authedMe.clone(),
+      [`GET ${CHAPTER_URL_S2}`]: () => jsonResponse(200, chapter),
+      [`GET ${CHAPTER_URL_FOREIGN}`]: () => jsonResponse(200, foreignChapter),
+      [`GET ${HIGHLIGHTS_URL}`]: () => jsonResponse(200, []),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const chapterCalls = chapterCallsOf(fetchMock);
+
+    const { rerender } = render(<ChapterReader sourceId="s1" />);
+    await screen.findByText("Ada Lovelace wrote the first algorithm.");
+    expect(chapterCalls()).toBe(1);
+
+    // The anchor changes to a section in ANOTHER chapter — a reload is required.
+    nav.params = new URLSearchParams(`anchor=${FOREIGN_ENC}`);
+    rerender(<ChapterReader sourceId="s1" />);
+
+    await screen.findByText("The second chapter opens here.");
+    expect(chapterCalls()).toBe(2);
   });
 });
 
