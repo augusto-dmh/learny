@@ -260,7 +260,7 @@ function FoundSection({
       <div
         ref={proseRef}
         onMouseUp={handleMouseUp}
-        className="prose prose-sm mt-4 max-w-none dark:prose-invert"
+        className="prose-reading mt-4"
       >
         <MessageResponse>{section.markdown}</MessageResponse>
       </div>

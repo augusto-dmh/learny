@@ -128,6 +128,25 @@ describe("SectionReader (E1)", () => {
     ).toBe(true);
   });
 
+  it("renders the book prose under the reading-typography class", async () => {
+    const fetchMock = routedFetch({
+      "GET /api/auth/me": () => authedMe.clone(),
+      [`GET ${SECTION_URL}`]: () => jsonResponse(200, section),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { container } = render(<SectionReader sourceId="s1" />);
+
+    await screen.findByText("Beginnings");
+    // The markdown wrapper carries .prose-reading (class presence, not pixels —
+    // jsdom applies no stylesheets), and the prose lives inside it.
+    const prose = container.querySelector(".prose-reading");
+    expect(prose).not.toBeNull();
+    expect(prose!.textContent).toContain(
+      "Ada Lovelace wrote the first algorithm.",
+    );
+  });
+
   it("scrolls the heading into view and applies a transient highlight", async () => {
     vi.stubGlobal(
       "fetch",
@@ -194,7 +213,7 @@ describe("SectionReader (E1)", () => {
     // A formatting-only span the reader shows but the Markdown does not hold
     // verbatim resolves to nothing → no popover.
     selectText("a phrase that is not in the section");
-    fireEvent.mouseUp(container.querySelector(".prose")!);
+    fireEvent.mouseUp(container.querySelector(".prose-reading")!);
 
     expect(screen.queryByRole("dialog", { name: "Capture highlight" })).toBeNull();
   });
@@ -270,7 +289,7 @@ async function renderAndSelect(handlers: Record<string, Handler>) {
   const view = render(<SectionReader sourceId="s1" />);
   await screen.findByText("Beginnings");
   selectText(SELECTED);
-  fireEvent.mouseUp(view.container.querySelector(".prose")!);
+  fireEvent.mouseUp(view.container.querySelector(".prose-reading")!);
   return fetchMock;
 }
 

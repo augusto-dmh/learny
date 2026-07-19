@@ -84,7 +84,7 @@ function CitationPopover({
       </PopoverTrigger>
       <PopoverContent align="start" className="w-80">
         <p className="text-xs font-medium text-muted-foreground">{breadcrumb}</p>
-        <blockquote className="border-l-2 border-muted pl-3 text-sm italic text-muted-foreground">
+        <blockquote className="prose-reading border-l-2 border-muted pl-3 italic text-muted-foreground">
           {citation.snippet}
         </blockquote>
         <Link

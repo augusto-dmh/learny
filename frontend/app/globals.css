@@ -146,3 +146,19 @@
     @apply font-sans;
     }
 }
+
+@layer components {
+  /*
+   * Reading typography (the book's voice, distinct from chrome): serif book
+   * measure for the section reader and citation snippets. Ragged right, and
+   * hyphenation stays off until a lang-aware opt-in exists.
+   */
+  .prose-reading {
+    font-family: var(--font-serif);
+    font-size: 19px;
+    line-height: 1.6;
+    max-width: 65ch;
+    text-align: left;
+    hyphens: none;
+  }
+}
