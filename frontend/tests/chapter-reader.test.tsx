@@ -53,7 +53,19 @@ const jump = vi.hoisted(() => ({
 // stays lightweight; the teach stub also surfaces the `onShowInBook` wiring so the
 // citation-jump handler can be driven from a real click (RA-13/14).
 vi.mock("../app/components/ask-panel", () => ({
-  AskPanel: () => <div data-testid="ask-panel-body" />,
+  AskPanel: ({
+    pendingRequest,
+  }: {
+    pendingRequest?: { kind: string; quote: string; anchor: string } | null;
+  }) => (
+    <div data-testid="ask-panel-body">
+      {pendingRequest ? (
+        <span data-testid="pending-request">
+          {pendingRequest.kind}|{pendingRequest.quote}|{pendingRequest.anchor}
+        </span>
+      ) : null}
+    </div>
+  ),
 }));
 vi.mock("../app/components/teach-panel", () => ({
   TeachPanel: ({
@@ -370,16 +382,17 @@ describe("ChapterFlow capture (NF-12)", () => {
     return view;
   }
 
-  it("raises the capture popover on a selection resolvable in the section", () => {
+  it("raises the five-verb capture popover on a selection resolvable in the section", () => {
     renderAndSelect(S1, "Ada Lovelace wrote the first algorithm");
 
+    // The reader wires the panel-bound verbs, so the popover carries all five
+    // (Highlight/Note keep the existing capture flow; RA-15/16).
     expect(
       screen.getByRole("dialog", { name: "Capture highlight" }),
     ).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Highlight" })).toBeTruthy();
-    expect(
-      screen.getByRole("button", { name: "Highlight + note" }),
-    ).toBeTruthy();
+    for (const verb of ["Highlight", "Note", "Explain", "Ask", "Create card"]) {
+      expect(screen.getByRole("button", { name: verb })).toBeTruthy();
+    }
   });
 
   it("does not raise the popover for a selection absent from the section markdown", () => {
@@ -437,7 +450,7 @@ describe("ChapterFlow capture (NF-12)", () => {
     expect(nav.push).not.toHaveBeenCalled();
   });
 
-  it("opens the created note after Highlight + note", async () => {
+  it("opens the created note after the Note verb", async () => {
     const capturedNote = {
       id: "n7",
       title: "Ada",
@@ -454,7 +467,7 @@ describe("ChapterFlow capture (NF-12)", () => {
 
     renderAndSelect(S1, "Ada Lovelace wrote the first algorithm");
     await screen.findByRole("dialog", { name: "Capture highlight" });
-    fireEvent.click(screen.getByRole("button", { name: "Highlight + note" }));
+    fireEvent.click(screen.getByRole("button", { name: "Note" }));
 
     await waitFor(() => expect(nav.push).toHaveBeenCalledWith("/notes/n7"));
   });
@@ -885,6 +898,69 @@ describe("ChapterFlow show in book (RA-13/14)", () => {
     );
     expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled();
     expect(nav.replace).not.toHaveBeenCalled();
+  });
+});
+
+describe("ChapterFlow selection verbs (RA-17/18)", () => {
+  function selectInSection(container: HTMLElement, anchor: string, text: string) {
+    selectText(text);
+    fireEvent.mouseUp(
+      container.querySelector(`[data-section-anchor="${anchor}"]`)!,
+    );
+  }
+
+  it("hands the ask panel an explain request carrying the quote and anchor", async () => {
+    nav.params = new URLSearchParams("panel=ask");
+    const { container } = render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+    );
+    await screen.findByText("Ada Lovelace wrote the first algorithm.");
+
+    selectInSection(container, S1, "Ada Lovelace wrote the first algorithm");
+    fireEvent.click(screen.getByRole("button", { name: "Explain" }));
+
+    // The ask panel receives an explain request with the verbatim selection quote
+    // and the selection's section anchor.
+    expect(screen.getByTestId("pending-request").textContent).toBe(
+      `explain|Ada Lovelace wrote the first algorithm|${S1}`,
+    );
+    // The capture popover is dismissed once the verb routes into the panel.
+    expect(
+      screen.queryByRole("dialog", { name: "Capture highlight" }),
+    ).toBeNull();
+  });
+
+  it("hands the ask panel an ask-about request when Ask is tapped", async () => {
+    nav.params = new URLSearchParams("panel=ask");
+    const { container } = render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+    );
+    await screen.findByText("Ada Lovelace wrote the first algorithm.");
+
+    selectInSection(container, S1, "Ada Lovelace wrote the first algorithm");
+    fireEvent.click(screen.getByRole("button", { name: "Ask" }));
+
+    expect(screen.getByTestId("pending-request").textContent).toBe(
+      `ask|Ada Lovelace wrote the first algorithm|${S1}`,
+    );
+  });
+
+  it("opens the panel in ask mode when a verb is tapped with the panel closed", async () => {
+    nav.params = new URLSearchParams();
+    const { container } = render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+    );
+    await screen.findByText("Ada Lovelace wrote the first algorithm.");
+    expect(screen.queryByTestId("reader-panel")).toBeNull();
+
+    selectInSection(container, S1, "Ada Lovelace wrote the first algorithm");
+    fireEvent.click(screen.getByRole("button", { name: "Explain" }));
+
+    // The reader opens the ask panel via a shallow URL replace (anchor preserved).
+    expect(nav.replace).toHaveBeenCalledWith("/sources/s1/read?panel=ask");
+    expect(
+      screen.queryByRole("dialog", { name: "Capture highlight" }),
+    ).toBeNull();
   });
 });
 

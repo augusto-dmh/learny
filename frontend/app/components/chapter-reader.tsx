@@ -33,6 +33,7 @@ import {
   type CaptureAction,
   type CaptureSelection,
 } from "@/app/components/notes/capture-popover";
+import { type PendingPanelRequest } from "@/app/components/ask-panel";
 import { ReaderPanel, type PanelMode } from "@/app/components/reader-panel";
 import { ReadingControls } from "@/app/components/reading-controls";
 import { ChapterNav, TocPanel, readUrl } from "@/app/components/toc-panel";
@@ -314,6 +315,11 @@ export function ChapterFlow({
   const [capture, setCapture] = useState<ActiveCapture | null>(null);
   const [pending, setPending] = useState(false);
   const [captureError, setCaptureError] = useState<string | null>(null);
+  // A selection verb (Explain/Ask) the reader hands to the Ask panel: it carries
+  // the verbatim quote and the selection's section anchor, is opened in ask mode,
+  // and is cleared once the panel has consumed it (RA-17/18).
+  const [pendingRequest, setPendingRequest] =
+    useState<PendingPanelRequest | null>(null);
 
   // Track the topmost visible section as the reader scrolls, and persist the
   // position after each scroll-idle (RD-07/13).
@@ -475,6 +481,32 @@ export function ChapterFlow({
     router.replace(readUrl(sourceId, anchor, { panel: panelMode }));
   }
 
+  // A selection verb routes the passage into the Ask panel: stash the request,
+  // dismiss the capture popover, and open the panel in ask mode when it is closed
+  // (a shallow URL replace that preserves the anchor). The panel auto-submits an
+  // Explain, or attaches an Ask quote to the next typed question (RA-17/18).
+  function openAskWithPassage(request: PendingPanelRequest) {
+    setPendingRequest(request);
+    setCapture(null);
+    if (panelMode !== "ask") {
+      router.replace(readUrl(sourceId, urlAnchor, { panel: "ask" }));
+    }
+  }
+
+  function handleExplain(quote: string) {
+    if (!capture) {
+      return;
+    }
+    openAskWithPassage({ kind: "explain", quote, anchor: capture.anchor });
+  }
+
+  function handleAskAbout(quote: string) {
+    if (!capture) {
+      return;
+    }
+    openAskWithPassage({ kind: "ask", quote, anchor: capture.anchor });
+  }
+
   // A TOC click inside the loaded chapter scrolls within the flow rather than
   // reloading, and keeps the URL anchor in step so the deep link stays shareable.
   function handleSameChapterNavigate(anchor: string) {
@@ -592,9 +624,12 @@ export function ChapterFlow({
             <CapturePopover
               top={capture.top}
               left={capture.left}
+              quote={capture.quote_exact}
               pending={pending}
               error={captureError}
               onCapture={handleCapture}
+              onExplain={handleExplain}
+              onAskAbout={handleAskAbout}
             />
           ) : null}
         </article>
@@ -605,6 +640,8 @@ export function ChapterFlow({
             mode={panelMode}
             onModeChange={handlePanelModeChange}
             onClose={handlePanelClose}
+            pendingRequest={pendingRequest}
+            onPendingConsumed={() => setPendingRequest(null)}
             onShowInBook={handleShowInBook}
             onRequireAuth={onRequireAuth}
           />
