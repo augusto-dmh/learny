@@ -174,10 +174,25 @@ html:not(.dark) [data-appearance="paper"] {
    */
   .prose-reading {
     font-family: var(--font-serif);
-    font-size: 19px;
-    line-height: 1.6;
+    font-size: var(--reading-size, 19px);
+    line-height: var(--reading-leading, 1.6);
     max-width: 65ch;
     text-align: left;
     hyphens: none;
+  }
+
+  /*
+   * Inline highlight marks the reader paints over existing highlight anchors
+   * (RD-28/29). The warm marker wash comes from the identity `--highlight-yellow`
+   * token (both modes); the text colour is inherited so the prose ink is
+   * untouched, and `box-decoration-break: clone` keeps the wash unbroken when a
+   * highlight wraps across lines.
+   */
+  .reader-highlight {
+    background-color: var(--highlight-yellow);
+    color: inherit;
+    border-radius: var(--radius-sm);
+    box-decoration-break: clone;
+    -webkit-box-decoration-break: clone;
   }
 }

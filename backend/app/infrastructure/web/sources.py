@@ -24,9 +24,12 @@ from pydantic import BaseModel
 
 from app.application.corpus import ReadSection, ReadSourceStructure
 from app.application.errors import StorageUnavailable
+from app.application.reading import ReadChapter, SaveReadingPosition
 from app.application.sources import CreateSource, GetSource, ListSources
 from app.domain.entities import (
+    ChapterContent,
     CorpusStructure,
+    ReadingPosition,
     SectionContent,
     Source,
     StructureSection,
@@ -39,8 +42,10 @@ from app.infrastructure.web.dependencies import (
     get_create_source,
     get_get_source,
     get_list_sources,
+    get_read_chapter,
     get_read_section,
     get_read_source_structure,
+    get_save_reading_position,
 )
 from app.infrastructure.web.rate_limit import rate_limit_upload
 
@@ -246,3 +251,127 @@ def get_source_section(
     return SectionContentView.from_content(
         service(user=user, source_id=source_id, anchor=anchor)
     )
+
+
+class ReadingPositionView(BaseModel):
+    """Where the reader stopped (RD-08): resolved anchor + whole-book percent.
+
+    ``percent`` is the server-computed whole-book percent (0–100) at ``anchor``; the
+    client never forges it. Serialized as a JSON number (from the stored ``NUMERIC``).
+    """
+
+    anchor: str
+    percent: float
+    updated_at: datetime
+
+    @classmethod
+    def from_position(cls, position: ReadingPosition) -> ReadingPositionView:
+        return cls(
+            anchor=position.anchor,
+            percent=float(position.percent),
+            updated_at=position.updated_at,
+        )
+
+
+class ChapterSectionView(BaseModel):
+    """One section of the chapter flow (RD-01/03): DOM-id anchor + readable markdown."""
+
+    anchor: str
+    title: str
+    section_path: list[str]
+    markdown: str
+    word_count: int
+
+
+class ChapterView(BaseModel):
+    """A whole chapter for the reader (RD-01), with the embedded stored position.
+
+    ``chapter_index`` is 0-based within ``chapter_count``; ``prev_anchor``/``next_anchor``
+    are the adjacent chapters' anchors (null at a book edge). The word sums let the client
+    compute whole-book percent and chapter minutes-left; ``reading_position`` is the stored
+    position (or null) so the reader can show progress immediately.
+    """
+
+    chapter_title: str
+    chapter_anchor: str
+    chapter_index: int
+    chapter_count: int
+    prev_anchor: str | None
+    next_anchor: str | None
+    words_before_chapter: int
+    chapter_word_count: int
+    total_word_count: int
+    sections: list[ChapterSectionView]
+    reading_position: ReadingPositionView | None
+
+    @classmethod
+    def from_content(
+        cls, content: ChapterContent, position: ReadingPosition | None
+    ) -> ChapterView:
+        return cls(
+            chapter_title=content.chapter_title,
+            chapter_anchor=content.chapter_anchor,
+            chapter_index=content.chapter_index,
+            chapter_count=content.chapter_count,
+            prev_anchor=content.prev_anchor,
+            next_anchor=content.next_anchor,
+            words_before_chapter=content.words_before_chapter,
+            chapter_word_count=content.chapter_word_count,
+            total_word_count=content.total_word_count,
+            sections=[
+                ChapterSectionView(
+                    anchor=section.anchor,
+                    title=section.title,
+                    section_path=list(section.section_path),
+                    markdown=section.markdown,
+                    word_count=section.word_count,
+                )
+                for section in content.sections
+            ],
+            reading_position=(
+                ReadingPositionView.from_position(position)
+                if position is not None
+                else None
+            ),
+        )
+
+
+@router.get("/{source_id}/chapter")
+def get_source_chapter(
+    source_id: UUID,
+    user: Annotated[User, Depends(get_authenticated_user)],
+    service: Annotated[ReadChapter, Depends(get_read_chapter)],
+    anchor: Annotated[str | None, Query()] = None,
+) -> ChapterView:
+    """Return the chapter containing ``anchor`` — or the resume chapter when omitted (200).
+
+    404 missing/non-owner/no-corpus/unknown-anchor (identical to ``/section``); with no
+    ``anchor`` the server resumes the stored position's chapter, or the first chapter.
+    """
+    content, position = service(user=user, source_id=source_id, anchor=anchor)
+    return ChapterView.from_content(content, position)
+
+
+class ReadingPositionWriteRequest(BaseModel):
+    """Position-write body (RD-08): the topmost visible section anchor."""
+
+    anchor: str
+
+
+@router.put(
+    "/{source_id}/reading-position",
+    dependencies=[Depends(enforce_origin), Depends(enforce_csrf)],
+)
+def put_reading_position(
+    source_id: UUID,
+    user: Annotated[User, Depends(get_authenticated_user)],
+    service: Annotated[SaveReadingPosition, Depends(get_save_reading_position)],
+    body: ReadingPositionWriteRequest,
+) -> ReadingPositionView:
+    """Store the caller's reading position for a source (200); 404 unknown anchor/non-owner.
+
+    Auth + CSRF/Origin like the notes mutations; no rate limit (AD-124). A bad anchor →
+    404 and nothing is stored; an alias normalizes to its canonical anchor on write.
+    """
+    position = service(user=user, source_id=source_id, anchor=body.anchor)
+    return ReadingPositionView.from_position(position)

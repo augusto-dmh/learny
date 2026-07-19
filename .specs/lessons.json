@@ -3,7 +3,7 @@
   "promote_threshold": 2,
   "window_days": 45,
   "quarantine_threshold": 2,
-  "next_id": 12,
+  "next_id": 13,
   "lessons": [
     {
       "id": "L-001",
@@ -202,6 +202,24 @@
       ],
       "created": "2026-07-18T20:22:44Z",
       "last_seen": "2026-07-18T20:22:44Z"
+    },
+    {
+      "id": "L-012",
+      "key": "ac_gap::visual persistence acs sticky fixed receding chrome need an explicit class structure assertion in jsdom positional css behavior slips spec coverage when only content rendering is tested",
+      "text": "Visual-persistence ACs (sticky/fixed/receding chrome) need an explicit class+structure assertion in jsdom — positional CSS behavior slips spec coverage when only content rendering is tested.",
+      "signal": "ac_gap",
+      "scope": "frontend/tests",
+      "status": "candidate",
+      "features": [
+        "v4-reader-core"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "spec RD-05 / validation.md round 1 (frontend/tests)"
+      ],
+      "created": "2026-07-19T17:15:07Z",
+      "last_seen": "2026-07-19T17:15:07Z"
     }
   ]
 }

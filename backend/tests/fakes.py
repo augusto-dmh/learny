@@ -20,6 +20,8 @@ from app.domain.entities import (
     AnswerStreamEvent,
     AnswerTextDelta,
     Backlink,
+    ChapterIndexRow,
+    ChapterSection,
     ChunkToEmbed,
     CorpusSectionRecord,
     CorpusStructure,
@@ -34,9 +36,11 @@ from app.domain.entities import (
     NoteSummary,
     ParsedBook,
     PasswordCredential,
+    ReadingPosition,
     SectionContent,
     Session,
     Source,
+    SourceHighlight,
     StructureSection,
     User,
 )
@@ -366,6 +370,7 @@ class FakeCorpusRepository:
     def __init__(self) -> None:
         self._by_source: dict[UUID, CorpusStructure] = {}
         self._sections_by_source: dict[UUID, tuple[SectionContent, ...]] = {}
+        self._records_by_source: dict[UUID, tuple[CorpusSectionRecord, ...]] = {}
         self.replace_calls: list[dict[str, object]] = []
 
     def replace(
@@ -412,6 +417,7 @@ class FakeCorpusRepository:
             )
             for record in sections
         )
+        self._records_by_source[source_id] = tuple(sections)
 
     def get_structure(self, source_id: UUID) -> CorpusStructure | None:
         return self._by_source.get(source_id)
@@ -419,6 +425,43 @@ class FakeCorpusRepository:
     def get_section(self, source_id: UUID, anchor: str) -> SectionContent | None:
         sections = self._sections_by_source.get(source_id, ())
         return next((s for s in sections if s.anchor == anchor), None)
+
+    def get_chapter_index(self, source_id: UUID) -> tuple[ChapterIndexRow, ...] | None:
+        if source_id not in self._records_by_source:
+            return None
+        records = sorted(
+            self._records_by_source[source_id], key=lambda r: r.section.position
+        )
+        return tuple(
+            ChapterIndexRow(
+                position=record.section.position,
+                depth=record.section.depth,
+                title=record.section.title,
+                section_path=tuple(record.section.section_path),
+                anchor=record.section.anchor,
+                anchor_aliases=tuple(record.section.anchor_aliases),
+                word_count=record.word_count,
+            )
+            for record in records
+        )
+
+    def get_sections_span(
+        self, source_id: UUID, first_position: int, last_position: int
+    ) -> tuple[ChapterSection, ...]:
+        records = sorted(
+            self._records_by_source.get(source_id, ()), key=lambda r: r.section.position
+        )
+        return tuple(
+            ChapterSection(
+                anchor=record.section.anchor,
+                title=record.section.title,
+                section_path=tuple(record.section.section_path),
+                markdown=record.markdown,
+                word_count=record.word_count,
+            )
+            for record in records
+            if first_position <= record.section.position <= last_position
+        )
 
 
 class FakeEmbeddingPort:
@@ -733,6 +776,27 @@ class FakeNoteRepository:
             key=lambda a: (a.created_at, str(a.id)),
         )
 
+    def highlights_for_source(
+        self, user_id: UUID, source_id: UUID
+    ) -> tuple[SourceHighlight, ...]:
+        anchors = sorted(
+            (a for a in self._anchors.values() if a.source_id == source_id),
+            key=lambda a: (a.created_at, str(a.id)),
+        )
+        return tuple(
+            SourceHighlight(
+                note_id=anchor.note_id,
+                anchor=anchor.anchor,
+                quote_exact=anchor.quote_exact,
+                quote_prefix=anchor.quote_prefix,
+                quote_suffix=anchor.quote_suffix,
+                status=anchor.status,
+            )
+            for anchor in anchors
+            if (note := self._notes.get(anchor.note_id)) is not None
+            and note.user_id == user_id
+        )
+
     def update_anchor_reconciliation(
         self,
         anchor_id: UUID,
@@ -767,6 +831,35 @@ class FakeNoteRepository:
                 self._anchors[anchor_id] = replace(
                     anchor, status=NoteAnchorStatus.ORPHANED
                 )
+
+
+class FakeReadingPositionRepository:
+    """In-memory ``ReadingPositionRepository``: last-write-wins on (user, source).
+
+    ``upsert`` overwrites any stored position for the ``(user_id, source_id)`` key and
+    records each call so a test can assert nothing was written on the 404 path.
+    """
+
+    def __init__(self) -> None:
+        self._by_key: dict[tuple[UUID, UUID], ReadingPosition] = {}
+        self.upsert_calls: list[tuple[UUID, UUID]] = []
+
+    def get(self, user_id: UUID, source_id: UUID) -> ReadingPosition | None:
+        return self._by_key.get((user_id, source_id))
+
+    def upsert(
+        self,
+        user_id: UUID,
+        source_id: UUID,
+        *,
+        anchor: str,
+        percent,  # noqa: ANN001 — Decimal
+        updated_at: datetime,
+    ) -> ReadingPosition:
+        self.upsert_calls.append((user_id, source_id))
+        stored = ReadingPosition(anchor=anchor, percent=percent, updated_at=updated_at)
+        self._by_key[(user_id, source_id)] = stored
+        return stored
 
 
 class FakeRetrievalPort:

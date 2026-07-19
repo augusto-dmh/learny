@@ -112,10 +112,12 @@ describe.each([
 describe("prose-reading declarations", () => {
   const prose = cssBlock(".prose-reading");
 
-  it("sets the serif book measure", () => {
+  it("sets the serif book measure, size and leading driven by reader vars", () => {
     expect(prose).toContain("font-family: var(--font-serif);");
-    expect(prose).toContain("font-size: 19px;");
-    expect(prose).toContain("line-height: 1.6;");
+    // Size and leading now read the Aa-popover custom properties, falling back
+    // to the pinned reading defaults (19px / 1.6) when unset (RD-06/RD-18).
+    expect(prose).toContain("font-size: var(--reading-size, 19px);");
+    expect(prose).toContain("line-height: var(--reading-leading, 1.6);");
     expect(prose).toContain("max-width: 65ch;");
   });
 
@@ -190,6 +192,14 @@ describe("highlight tokens", () => {
     for (const [name] of HIGHLIGHTS) {
       expect(css).toContain(`--color-${name}: var(--${name});`);
     }
+  });
+
+  // RD-28 — the inline highlight mark paints with the identity yellow token and
+  // never a raw colour, so the marker tracks the palette in both modes. jsdom
+  // applies no stylesheets, so the declaration is pinned from the committed CSS.
+  it("paints the inline highlight mark from the yellow token", () => {
+    const mark = cssBlock(".reader-highlight");
+    expect(mark).toContain("background-color: var(--highlight-yellow);");
   });
 
   it("keeps raw highlight hexes out of every other frontend file", () => {

@@ -47,7 +47,15 @@ from app.application.notes import (
     ListNotes,
     UpdateNote,
 )
-from app.domain.entities import Backlink, NoteAnchor, NoteSummary, NoteView, User
+from app.application.reading import ListSourceHighlights
+from app.domain.entities import (
+    Backlink,
+    NoteAnchor,
+    NoteSummary,
+    NoteView,
+    SourceHighlight,
+    User,
+)
 from app.infrastructure.web.csrf import enforce_csrf, enforce_origin
 from app.infrastructure.web.dependencies import (
     get_authenticated_user,
@@ -57,6 +65,7 @@ from app.infrastructure.web.dependencies import (
     get_get_backlinks,
     get_get_note,
     get_list_notes,
+    get_list_source_highlights,
     get_update_note,
 )
 from app.infrastructure.web.rate_limit import rate_limit_notes
@@ -199,6 +208,32 @@ class BacklinkView(BaseModel):
     @classmethod
     def from_backlink(cls, backlink: Backlink) -> BacklinkView:
         return cls(note_id=backlink.note_id, title=backlink.title)
+
+
+class SourceHighlightView(BaseModel):
+    """One of the caller's highlights on a source, for inline reader painting (RD-28).
+
+    The owning ``note_id`` plus the anchor's quote-with-context and ``status`` — the
+    reader paints ``active`` quotes and ignores stale/orphaned ones (RD-29).
+    """
+
+    note_id: UUID
+    anchor: str
+    quote_exact: str
+    quote_prefix: str
+    quote_suffix: str
+    status: str
+
+    @classmethod
+    def from_highlight(cls, highlight: SourceHighlight) -> SourceHighlightView:
+        return cls(
+            note_id=highlight.note_id,
+            anchor=highlight.anchor,
+            quote_exact=highlight.quote_exact,
+            quote_prefix=highlight.quote_prefix,
+            quote_suffix=highlight.quote_suffix,
+            status=highlight.status,
+        )
 
 
 # --- Endpoints -----------------------------------------------------------------
@@ -359,3 +394,20 @@ def capture_highlight(
         tags=body.tags,
     )
     return NoteDetailView.from_view(view)
+
+
+@router.get("/api/sources/{source_id}/highlights")
+def get_source_highlights(
+    source_id: UUID,
+    user: Annotated[User, Depends(get_authenticated_user)],
+    service: Annotated[ListSourceHighlights, Depends(get_list_source_highlights)],
+) -> list[SourceHighlightView]:
+    """Return the caller's highlights on an owned source (200); 404 missing/non-owner.
+
+    Owner-scoped like the other source reads (``SourceNotFound`` → 404); every status is
+    returned so the reader paints the ``active`` quotes and lists the rest.
+    """
+    return [
+        SourceHighlightView.from_highlight(h)
+        for h in service(user=user, source_id=source_id)
+    ]

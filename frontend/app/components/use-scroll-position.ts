@@ -1,0 +1,133 @@
+"use client";
+
+/**
+ * Reading-position tracking (RD-07/13).
+ *
+ * Watches the rendered section wrappers with an IntersectionObserver, tracks the
+ * topmost visible section (in reading order), and — after the reader has been
+ * scroll-idle for `idleMs` — writes the changed anchor to the backend exactly
+ * once per idle period. The write is fire-and-forget: a failure is swallowed and
+ * retried on the next scroll-idle, so a flaky network never surfaces in the
+ * reader. The loaded position is never re-written until the reader actually moves
+ * off it.
+ *
+ * The observer factory is injectable so jsdom tests (which lack a real
+ * IntersectionObserver) can drive the callback directly (design §Risks); with no
+ * factory and no global IntersectionObserver the hook simply does not observe.
+ */
+
+import { useEffect, useRef, useState, type RefObject } from "react";
+
+import { saveReadingPosition } from "@/app/lib/reading";
+
+/** Constructs the IntersectionObserver — replaced in tests to drive callbacks directly. */
+export type ObserverFactory = (
+  callback: IntersectionObserverCallback,
+  options?: IntersectionObserverInit,
+) => IntersectionObserver;
+
+const IDLE_MS = 2000;
+
+/** The real factory, or null when no IntersectionObserver exists (SSR / jsdom). */
+function defaultFactory(): ObserverFactory | null {
+  if (typeof IntersectionObserver === "undefined") {
+    return null;
+  }
+  return (callback, options) => new IntersectionObserver(callback, options);
+}
+
+export function useScrollPosition({
+  sourceId,
+  csrf,
+  anchors,
+  initialAnchor,
+  containerRef,
+  observerFactory,
+  idleMs = IDLE_MS,
+  saveImpl = saveReadingPosition,
+}: {
+  sourceId: string;
+  csrf: string | null;
+  anchors: string[];
+  initialAnchor: string | null;
+  containerRef: RefObject<HTMLElement | null>;
+  observerFactory?: ObserverFactory;
+  idleMs?: number;
+  saveImpl?: typeof saveReadingPosition;
+}): { currentAnchor: string | null } {
+  const [currentAnchor, setCurrentAnchor] = useState<string | null>(initialAnchor);
+
+  // Refs so the observer callback — created once per effect — always reads fresh
+  // values without re-subscribing on every render.
+  const currentRef = useRef(initialAnchor);
+  const savedRef = useRef(initialAnchor);
+  const idleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const csrfRef = useRef(csrf);
+  csrfRef.current = csrf;
+
+  // A stable key so the effect re-subscribes only when the section set changes,
+  // not on every render's fresh `anchors` array.
+  const anchorsKey = anchors.join("\x00");
+
+  useEffect(() => {
+    const factory = observerFactory ?? defaultFactory();
+    const container = containerRef.current;
+    if (!factory || !container) {
+      return;
+    }
+    const order = anchorsKey.length ? anchorsKey.split("\x00") : [];
+    const visible = new Set<string>();
+
+    function scheduleSave() {
+      if (idleTimer.current !== null) {
+        clearTimeout(idleTimer.current);
+      }
+      idleTimer.current = setTimeout(() => {
+        const anchor = currentRef.current;
+        const token = csrfRef.current;
+        if (!anchor || !token || anchor === savedRef.current) {
+          return;
+        }
+        void saveImpl(sourceId, anchor, token)
+          .then(() => {
+            savedRef.current = anchor;
+          })
+          .catch(() => {
+            // Silent: the next scroll-idle retries this write (RD-13).
+          });
+      }, idleMs);
+    }
+
+    const observer = factory((entries) => {
+      for (const entry of entries) {
+        const anchor = entry.target.getAttribute("data-section-anchor");
+        if (!anchor) continue;
+        if (entry.isIntersecting) {
+          visible.add(anchor);
+        } else {
+          visible.delete(anchor);
+        }
+      }
+      const topmost = order.find((anchor) => visible.has(anchor)) ?? null;
+      if (topmost && topmost !== currentRef.current) {
+        currentRef.current = topmost;
+        setCurrentAnchor(topmost);
+      }
+      scheduleSave();
+    });
+
+    container
+      .querySelectorAll("[data-section-anchor]")
+      .forEach((el) => observer.observe(el));
+
+    return () => {
+      observer.disconnect();
+      if (idleTimer.current !== null) {
+        clearTimeout(idleTimer.current);
+        idleTimer.current = null;
+      }
+    };
+  }, [sourceId, anchorsKey, containerRef, observerFactory, idleMs, saveImpl]);
+
+  return { currentAnchor };
+}

@@ -1,11 +1,11 @@
 "use client";
 
 /**
- * Reader capture popover (NF-12) — the small overlay the section reader raises on
+ * Reader capture popover (NF-12) — the small overlay the chapter reader raises on
  * a text selection, offering "Highlight" (a bare highlight) and "Highlight + note"
  * (highlight, then open the new note). It is deliberately presentational: the
  * reader owns the selection, the capture call, and the pending/error state and
- * feeds them in, so `section-reader.tsx` stays readable.
+ * feeds them in, so `chapter-reader.tsx` stays readable.
  *
  * `deriveCaptureSelection` is the pure seam behind it (design §Risks): the
  * selection payload is computed against the SERVED Markdown string, never against

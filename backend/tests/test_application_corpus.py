@@ -254,6 +254,63 @@ def test_build_corpus_hashes_each_block_by_normalized_markdown() -> None:
     assert sections[1].block_hashes == (_hash("md:H1"), _hash("md:P1"))
 
 
+def test_build_corpus_persists_section_word_counts() -> None:
+    # RD-14: every persisted section carries word_count = whitespace-token count of
+    # its derived Markdown. Each section's markdown is "md:H*\n\nmd:P*" (two tokens),
+    # so both counts are 2 — proving the build stamps a per-section count, not a
+    # book-level one, without disturbing the other persisted fields.
+    source = _source()
+    job = _job(source.id)
+    corpus = FakeCorpusRepository()
+    storage = FakeStorage()
+    storage.objects[source.object_key] = b"epub-bytes"
+
+    _build(
+        storage=storage,
+        parser=FakeEpubParser(book=_book()),
+        corpus=corpus,
+        events=FakeIngestionEventRepository(),
+    )(source=source, job=job)
+
+    sections = corpus.replace_calls[0]["sections"]
+    assert [record.word_count for record in sections] == [2, 2]
+    # The count matches an independent split of the persisted markdown.
+    assert sections[0].word_count == len(sections[0].markdown.split())
+
+
+def test_section_record_word_count_is_zero_for_empty_markdown() -> None:
+    # RD-16 / spec P1 Word-counts AC3: a section with no prose (empty markdown —
+    # e.g. a zero-block section the build persists with markdown "") counts 0 so the
+    # downstream percent math never divides by zero.
+    empty = CorpusSectionRecord(
+        section=ParsedSection(
+            position=0,
+            title="Blank",
+            depth=0,
+            section_path=("Blank",),
+            anchor="blank.xhtml",
+            blocks=(),
+        ),
+        markdown="",
+        chunks=(),
+    )
+    assert empty.word_count == 0
+
+    prose = CorpusSectionRecord(
+        section=ParsedSection(
+            position=1,
+            title="Prose",
+            depth=0,
+            section_path=("Prose",),
+            anchor="prose.xhtml",
+            blocks=(),
+        ),
+        markdown="one two three",
+        chunks=(),
+    )
+    assert prose.word_count == 3
+
+
 def _noisy_book() -> ParsedBook:
     """A noisy book exercising the wired normalization pass end to end.
 
