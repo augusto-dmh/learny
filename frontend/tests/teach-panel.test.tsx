@@ -441,6 +441,86 @@ describe("TeachPanel auth (RA-10)", () => {
   });
 });
 
+const noteDetail = {
+  id: "n1",
+  title: "note",
+  body_markdown: "body",
+  tags: [],
+  anchors: [],
+  created_at: "now",
+  updated_at: "now",
+};
+
+describe("TeachPanel save to note (RA-20/22)", () => {
+  it("saves a cited taught turn as a note and confirms success", async () => {
+    const stream = sseStream();
+    const fetchMock = routedFetch({
+      ...baseHandlers(),
+      "POST /api/teaching-sessions": () => jsonResponse(201, chapter2Session),
+      [`POST ${TURN_STREAM}`]: () => stream.response,
+      "POST /api/sources/s1/highlights": () => jsonResponse(201, noteDetail),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
+    await screen.findByLabelText("Target");
+    fireEvent.click(screen.getByRole("button", { name: "Start session" }));
+    await screen.findByPlaceholderText(/send a message/i);
+    sendMessage("Explain this chapter.");
+
+    await stream.push({ type: "start", messageId: "m1" });
+    await stream.push({ type: "text-start", id: "t1" });
+    await stream.push({ type: "text-delta", id: "t1", delta: "A lesson." });
+    await stream.push({ type: "text-end", id: "t1" });
+    await stream.push({ type: "data-citations", data: [citation] });
+    await stream.push({
+      type: "data-answer-status",
+      data: { status: "answered" },
+    });
+    await stream.push({ type: "finish" });
+    await stream.done();
+
+    const saveButton = await screen.findByRole("button", {
+      name: "Save to note",
+    });
+    await act(async () => {
+      fireEvent.click(saveButton);
+    });
+
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(
+          ([url]) => url === "/api/sources/s1/highlights",
+        ),
+      ).toBe(true),
+    );
+    expect(await screen.findByTestId("save-note-status")).toBeTruthy();
+  });
+
+  it("offers Save to note only on the cited turn of a resumed session", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/sources/s1/structure": () => jsonResponse(200, structure),
+        "GET /api/sources/s1/teaching-sessions": () =>
+          jsonResponse(200, [summary]),
+        "GET /api/teaching-sessions/sess1": () =>
+          jsonResponse(200, resumedDetail),
+      }),
+    );
+
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
+    await screen.findByText("Previous sessions");
+    fireEvent.click(screen.getByRole("button", { name: "Resume" }));
+    await screen.findByText("It is about early computing.");
+
+    // The answered, cited turn offers the action; the not-found turn does not.
+    expect(
+      screen.getAllByRole("button", { name: "Save to note" }),
+    ).toHaveLength(1);
+  });
+});
+
 describe("TeachPanel taught passage (RA-11)", () => {
   it("shows the target in the book once on start and never per turn", async () => {
     const stream = sseStream();

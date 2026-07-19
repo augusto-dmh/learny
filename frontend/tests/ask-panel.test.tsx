@@ -398,6 +398,136 @@ describe("AskPanel streaming caret (RA-09)", () => {
   });
 });
 
+const noteDetail = {
+  id: "n1",
+  title: "note",
+  body_markdown: "body",
+  tags: [],
+  anchors: [],
+  created_at: "now",
+  updated_at: "now",
+};
+
+const HIGHLIGHTS_URL = "/api/sources/s1/highlights";
+
+/** Stream a complete, answered turn carrying `citations` and settling the stream. */
+async function streamAnswer(
+  stream: ReturnType<typeof sseStream>,
+  citations: unknown[],
+) {
+  await stream.push({ type: "start", messageId: "m1" });
+  await stream.push({ type: "text-start", id: "t1" });
+  await stream.push({ type: "text-delta", id: "t1", delta: "Ada Lovelace did." });
+  await stream.push({ type: "text-end", id: "t1" });
+  await stream.push({ type: "data-citations", data: citations });
+  await stream.push({ type: "data-answer-status", data: { status: "answered" } });
+  await stream.push({ type: "finish" });
+  await stream.done();
+}
+
+describe("AskPanel save to note (RA-20/22)", () => {
+  it("offers Save to note on a cited answer and confirms success", async () => {
+    const stream = sseStream();
+    const fetchMock = routedFetch({
+      [`POST ${STREAM_URL}`]: () => stream.response,
+      [`POST ${HIGHLIGHTS_URL}`]: () => jsonResponse(201, noteDetail),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+    ask("Who wrote the first algorithm?");
+    await streamAnswer(stream, [citation]);
+
+    // A cited, completed answer offers the save action.
+    const saveButton = await screen.findByRole("button", {
+      name: "Save to note",
+    });
+    await act(async () => {
+      fireEvent.click(saveButton);
+    });
+
+    // The action drives the capture endpoint and confirms success in the UI.
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([url]) => url === HIGHLIGHTS_URL),
+      ).toBe(true),
+    );
+    expect(await screen.findByTestId("save-note-status")).toBeTruthy();
+  });
+
+  it("shows an inline error and no confirmation when saving fails", async () => {
+    const stream = sseStream();
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        [`POST ${STREAM_URL}`]: () => stream.response,
+        [`POST ${HIGHLIGHTS_URL}`]: () =>
+          jsonResponse(500, { detail: "boom" }),
+      }),
+    );
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+    ask("a question");
+    await streamAnswer(stream, [citation]);
+
+    const saveButton = await screen.findByRole("button", {
+      name: "Save to note",
+    });
+    await act(async () => {
+      fireEvent.click(saveButton);
+    });
+
+    const error = await screen.findByTestId("save-note-error");
+    expect(error.textContent).toContain("Could not save");
+    expect(screen.queryByTestId("save-note-status")).toBeNull();
+  });
+
+  it("does not offer Save to note on a not-found answer", async () => {
+    const stream = sseStream();
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({ [`POST ${STREAM_URL}`]: () => stream.response }),
+    );
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+    ask("nonsense token");
+    await stream.push({ type: "start", messageId: "m1" });
+    await stream.push({ type: "text-start", id: "t1" });
+    await stream.push({ type: "text-end", id: "t1" });
+    await stream.push({ type: "data-citations", data: [] });
+    await stream.push({
+      type: "data-answer-status",
+      data: { status: "not_found_in_source" },
+    });
+    await stream.push({ type: "finish" });
+    await stream.done();
+
+    await screen.findByTestId("not-found");
+    expect(
+      screen.queryByRole("button", { name: "Save to note" }),
+    ).toBeNull();
+  });
+
+  it("does not offer Save to note on an answered response with no citations", async () => {
+    const stream = sseStream();
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({ [`POST ${STREAM_URL}`]: () => stream.response }),
+    );
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+    ask("a question");
+    await streamAnswer(stream, []);
+
+    await waitFor(() =>
+      expect(document.body.textContent).toContain("Ada Lovelace did."),
+    );
+    expect(
+      screen.queryByRole("button", { name: "Save to note" }),
+    ).toBeNull();
+  });
+});
+
 describe("AskPanel selection verbs (RA-17/18)", () => {
   it("auto-submits the fixed Explain template for an explain pending request", async () => {
     const stream = sseStream();

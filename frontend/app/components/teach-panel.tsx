@@ -61,6 +61,7 @@ import {
   type PromptInputMessage,
 } from "@/components/ai-elements/prompt-input";
 
+import { SaveToNoteAction } from "./ask-panel";
 import { CitationList } from "./citations";
 
 /** A session the user has entered, plus the messages seeding its conversation. */
@@ -297,14 +298,14 @@ function TeachChat({
       <h2 className="text-lg font-semibold">{target}</h2>
       <Conversation>
         <ConversationContent>
-          {messages.map((message) => {
+          {messages.map((message, index) => {
             if (message.role === "user") {
               return (
                 <Message from="user" key={message.id}>
                   <MessageContent>
-                    {message.parts.map((part, index) =>
+                    {message.parts.map((part, i) =>
                       part.type === "text" ? (
-                        <span data-testid="user-message" key={index}>
+                        <span data-testid="user-message" key={i}>
                           {part.text}
                         </span>
                       ) : null,
@@ -316,6 +317,14 @@ function TeachChat({
             const { text, citations, status: answerStatus } =
               assistantView(message);
             const notFound = answerStatus === "not_found_in_source";
+            const previous = messages[index - 1];
+            const question =
+              previous?.role === "user"
+                ? previous.parts
+                    .filter((part) => part.type === "text")
+                    .map((part) => part.text)
+                    .join("")
+                : "";
             return (
               <Message from="assistant" key={message.id}>
                 <MessageContent>
@@ -329,6 +338,15 @@ function TeachChat({
                       sourceId={sourceId}
                       citations={citations}
                       onShowInBook={onShowInBook}
+                    />
+                  ) : null}
+                  {!notFound && citations && citations.length > 0 ? (
+                    <SaveToNoteAction
+                      sourceId={sourceId}
+                      question={question}
+                      answerText={text}
+                      citations={citations}
+                      csrf={csrf}
                     />
                   ) : null}
                 </MessageContent>
