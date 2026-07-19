@@ -33,8 +33,9 @@ import {
   type CaptureAction,
   type CaptureSelection,
 } from "@/app/components/notes/capture-popover";
+import { ReaderPanel, type PanelMode } from "@/app/components/reader-panel";
 import { ReadingControls } from "@/app/components/reading-controls";
-import { ChapterNav, TocPanel } from "@/app/components/toc-panel";
+import { ChapterNav, TocPanel, readUrl } from "@/app/components/toc-panel";
 import { useReadingSettings } from "@/app/components/use-reading-settings";
 import { useRecedingChrome } from "@/app/components/use-receding-chrome";
 import {
@@ -237,6 +238,15 @@ export function ChapterFlow({
   observerFactory?: ObserverFactory;
 }) {
   const router = useRouter();
+  // The open panel and the current deep-link anchor are independent URL state.
+  // An unknown `panel` value renders the panel closed; toggling it or switching
+  // modes preserves the anchor and never refetches the chapter (the load effect
+  // lives in `ChapterReader` and is not keyed on `panel`).
+  const searchParams = useSearchParams();
+  const urlAnchor = searchParams.get("anchor");
+  const panelParam = searchParams.get("panel");
+  const panelMode: PanelMode | null =
+    panelParam === "ask" ? "ask" : panelParam === "teach" ? "teach" : null;
   const articleRef = useRef<HTMLElement>(null);
   // Device-local reading surface: type size, spacing, and Default/Paper (RD-18).
   const reading = useReadingSettings();
@@ -400,6 +410,19 @@ export function ChapterFlow({
     return () => window.removeEventListener("scroll", onScroll, true);
   }, [returnAnchor]);
 
+  // Opening a panel mode or switching between modes is pure URL state: replace
+  // the query in place (preserving the anchor) so it is deep-linkable and the
+  // back button works, without a chapter refetch or a scroll reset.
+  function handlePanelModeChange(mode: PanelMode) {
+    router.replace(readUrl(sourceId, urlAnchor, { panel: mode }));
+  }
+
+  // Closing drops the panel param, restoring full reading width; the anchor rides
+  // along so the reader stays where they were.
+  function handlePanelClose() {
+    router.replace(readUrl(sourceId, urlAnchor));
+  }
+
   // A TOC click inside the loaded chapter scrolls within the flow rather than
   // reloading, and keeps the URL anchor in step so the deep link stays shareable.
   function handleSameChapterNavigate(anchor: string) {
@@ -523,6 +546,13 @@ export function ChapterFlow({
             />
           ) : null}
         </article>
+        {panelMode ? (
+          <ReaderPanel
+            mode={panelMode}
+            onModeChange={handlePanelModeChange}
+            onClose={handlePanelClose}
+          />
+        ) : null}
       </div>
       {returnAnchor ? <ReturnChip onReturn={handleReturn} /> : null}
     </div>

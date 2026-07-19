@@ -696,6 +696,147 @@ describe("ChapterReader highlight load (RD-28)", () => {
   });
 });
 
+describe("ChapterFlow panel modes (RA-01/02/03/06)", () => {
+  it("opens the ask panel when ?panel=ask (RA-01)", async () => {
+    nav.params = new URLSearchParams("panel=ask");
+    render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+    );
+
+    await screen.findByText("Ada Lovelace wrote the first algorithm.");
+    const panel = screen.getByTestId("reader-panel");
+    expect(panel.getAttribute("data-mode")).toBe("ask");
+    expect(screen.getByTestId("ask-panel-body")).toBeTruthy();
+  });
+
+  it("opens the teach panel when ?panel=teach (RA-02)", async () => {
+    nav.params = new URLSearchParams("panel=teach");
+    render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+    );
+
+    await screen.findByText("Ada Lovelace wrote the first algorithm.");
+    const panel = screen.getByTestId("reader-panel");
+    expect(panel.getAttribute("data-mode")).toBe("teach");
+    expect(screen.getByTestId("teach-panel-body")).toBeTruthy();
+  });
+
+  it("renders no panel when the panel param is absent", async () => {
+    nav.params = new URLSearchParams();
+    render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+    );
+
+    await screen.findByText("Ada Lovelace wrote the first algorithm.");
+    expect(screen.queryByTestId("reader-panel")).toBeNull();
+  });
+
+  it("renders no panel for an unknown panel value (edge case)", async () => {
+    nav.params = new URLSearchParams("panel=notes");
+    render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+    );
+
+    await screen.findByText("Ada Lovelace wrote the first algorithm.");
+    expect(screen.queryByTestId("reader-panel")).toBeNull();
+  });
+
+  it("closes the panel via router.replace, preserving the anchor (RA-03)", async () => {
+    nav.params = new URLSearchParams(`anchor=${ENCODED_S2}&panel=ask`);
+    render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={S2} />,
+    );
+
+    await screen.findByText("Ada Lovelace wrote the first algorithm.");
+    fireEvent.click(screen.getByRole("button", { name: "Close panel" }));
+
+    // The panel param is dropped (full reading width restored) but the anchor rides along.
+    expect(nav.replace).toHaveBeenCalledWith(
+      `/sources/s1/read?anchor=${ENCODED_S2}`,
+    );
+  });
+
+  it("switches modes via router.replace, preserving the anchor (RA-03)", async () => {
+    nav.params = new URLSearchParams(`anchor=${ENCODED_S2}&panel=ask`);
+    render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={S2} />,
+    );
+
+    await screen.findByText("Ada Lovelace wrote the first algorithm.");
+    fireEvent.click(screen.getByRole("tab", { name: "Teach" }));
+
+    expect(nav.replace).toHaveBeenCalledWith(
+      `/sources/s1/read?anchor=${ENCODED_S2}&panel=teach`,
+    );
+  });
+
+  it("keeps scroll tracking and highlight painting active with the panel open (RA-06)", async () => {
+    nav.params = new URLSearchParams("panel=ask");
+    const obs = fakeObserver();
+    const painted: SourceHighlightView = {
+      note_id: "n3",
+      anchor: S1,
+      quote_exact: "Ada Lovelace wrote the first algorithm",
+      quote_prefix: "",
+      quote_suffix: "",
+      status: "active",
+    };
+    const { container } = render(
+      <ChapterFlow
+        sourceId="s1"
+        csrf="csrf-xyz"
+        chapter={chapter}
+        scrollTarget={null}
+        highlights={[painted]}
+        observerFactory={obs.factory}
+      />,
+    );
+
+    // The painted highlight splits the sentence text node, so anchor the render
+    // check on the structural heading instead of the painted prose.
+    await screen.findByRole("heading", { name: "The First Algorithm" });
+    // Reading stays non-modal: the panel is open beside the article, not over it.
+    expect(screen.getByTestId("reader-panel")).toBeTruthy();
+    // Highlight painting keeps working under the open panel.
+    await waitFor(() =>
+      expect(container.querySelectorAll("mark.reader-highlight")).toHaveLength(1),
+    );
+    // Scroll-position tracking still drives live progress with the panel open.
+    expect(screen.getByTestId("reading-progress").textContent).toContain("10%");
+    obs.emit({ [S1]: false, [S2]: true });
+    await waitFor(() =>
+      expect(screen.getByTestId("reading-progress").textContent).toContain("40%"),
+    );
+  });
+});
+
+describe("ChapterReader panel param (RA-03)", () => {
+  it("does not refetch the chapter when only the panel param changes", async () => {
+    nav.params = new URLSearchParams(`anchor=${ENCODED_S2}`);
+    const fetchMock = routedFetch({
+      "GET /api/auth/me": () => authedMe.clone(),
+      [`GET ${CHAPTER_URL_S2}`]: () => jsonResponse(200, chapter),
+      [`GET ${HIGHLIGHTS_URL}`]: () => jsonResponse(200, []),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { rerender } = render(<ChapterReader sourceId="s1" />);
+    await screen.findByText("Ada Lovelace wrote the first algorithm.");
+    const chapterCalls = () =>
+      fetchMock.mock.calls.filter(([u]) =>
+        String(u).startsWith("/api/sources/s1/chapter"),
+      ).length;
+    expect(chapterCalls()).toBe(1);
+
+    // The panel opens on the same anchor — a shallow URL change, not a new load.
+    nav.params = new URLSearchParams(`anchor=${ENCODED_S2}&panel=ask`);
+    rerender(<ChapterReader sourceId="s1" />);
+
+    await screen.findByTestId("reader-panel");
+    expect(chapterCalls()).toBe(1);
+  });
+});
+
 describe("ChapterFlow progress (RD-11)", () => {
   it("shows live book-percent and chapter minutes-left that update as the observed section changes", async () => {
     const obs = fakeObserver();
