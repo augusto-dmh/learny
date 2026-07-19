@@ -770,6 +770,9 @@ class FakeNoteRepository:
         self._anchors[anchor.id] = anchor
         return anchor
 
+    def get_anchor(self, anchor_id: UUID) -> NoteAnchor | None:
+        return self._anchors.get(anchor_id)
+
     def anchors_for_source(self, source_id: UUID) -> list[NoteAnchor]:
         return sorted(
             (a for a in self._anchors.values() if a.source_id == source_id),

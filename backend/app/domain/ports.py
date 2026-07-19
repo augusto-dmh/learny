@@ -808,6 +808,18 @@ class QuizItemRepository(Protocol):
         """
         ...
 
+    def section_for_anchor(self, source_id: UUID, anchor: str) -> QuizSection | None:
+        """Return the single section ``anchor`` cites, or ``None`` if it resolves to none.
+
+        The quote-scoped counterpart of :meth:`sections_for_generation`: a highlight
+        names exactly one section, and neither the leaf test nor the ``min_chars`` floor
+        applies — those bound whole-deck density, whereas a passage the student chose is
+        eligible whatever section it sits in. Resolution is canonical-anchor-first then
+        by alias, matching the note-anchoring reads, and the section carries its
+        ``(chunk_id, text)`` chunks so a candidate's citation stays constrained to them.
+        """
+        ...
+
     def existing_embeddings(self, source_id: UUID) -> list[tuple[UUID, list[float]]]:
         """Return ``(item_id, embedding)`` for the source's already-embedded items.
 
@@ -994,6 +1006,14 @@ class NoteRepository(Protocol):
 
     def add_anchor(self, anchor: NoteAnchor) -> NoteAnchor:
         """Insert a note anchor (NF-06)."""
+        ...
+
+    def get_anchor(self, anchor_id: UUID) -> NoteAnchor | None:
+        """Return the anchor with ``anchor_id``, or ``None`` if absent.
+
+        Owner-agnostic like the rest of this port: the caller authorizes through the
+        anchor's note (CAP-09 — a cross-owner anchor is a 404, never a 403).
+        """
         ...
 
     def anchors_for_source(self, source_id: UUID) -> list[NoteAnchor]:

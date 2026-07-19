@@ -1146,6 +1146,48 @@ class SqlAlchemyQuizItemRepository:
             )
         return result
 
+    def section_for_anchor(self, source_id: UUID, anchor: str) -> QuizSection | None:
+        """Return the one section ``anchor`` resolves to, with its chunks (CAP-01).
+
+        Resolves canonical-anchor-first then by alias (mirroring ``blocks_for_section``)
+        so a highlight snapshotted against a merged-away section still finds its
+        survivor. Deliberately applies neither the leaf test nor the ``min_chars`` floor
+        that ``sections_for_generation`` uses: those bound whole-deck density, and a
+        passage the student explicitly highlighted is eligible wherever it sits.
+        """
+        canonical_first = (corpus_sections.c.anchor == anchor).desc()
+        section = self._conn.execute(
+            select(
+                corpus_sections.c.id,
+                corpus_sections.c.section_path,
+                corpus_sections.c.anchor,
+                corpus_sections.c.title,
+            )
+            .join(corpus_documents, corpus_sections.c.document_id == corpus_documents.c.id)
+            .where(corpus_documents.c.source_id == source_id)
+            .where(
+                or_(
+                    corpus_sections.c.anchor == anchor,
+                    corpus_sections.c.anchor_aliases.any(anchor),
+                )
+            )
+            .order_by(canonical_first, corpus_sections.c.position)
+            .limit(1)
+        ).first()
+        if section is None:
+            return None
+        chunk_rows = self._conn.execute(
+            select(corpus_chunks.c.id, corpus_chunks.c.text)
+            .where(corpus_chunks.c.section_id == section.id)
+            .order_by(corpus_chunks.c.chunk_index)
+        ).all()
+        return QuizSection(
+            section_path=tuple(section.section_path),
+            anchor=section.anchor,
+            title=section.title,
+            chunks=tuple((row.id, row.text) for row in chunk_rows),
+        )
+
     def existing_embeddings(self, source_id: UUID) -> list[tuple[UUID, list[float]]]:
         """Return ``(item_id, embedding)`` for the source's already-embedded items."""
         rows = self._conn.execute(
@@ -1734,6 +1776,12 @@ class SqlAlchemyNoteRepository:
             )
         )
         return anchor
+
+    def get_anchor(self, anchor_id: UUID) -> NoteAnchor | None:
+        row = self._conn.execute(
+            select(note_anchors).where(note_anchors.c.id == anchor_id)
+        ).one_or_none()
+        return _to_note_anchor(row) if row is not None else None
 
     def anchors_for_source(self, source_id: UUID) -> list[NoteAnchor]:
         rows = self._conn.execute(

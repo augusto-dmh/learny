@@ -136,6 +136,7 @@ def _section_record(
     section_path: tuple[str, ...],
     anchor: str,
     chunk_texts: tuple[str, ...],
+    anchor_aliases: tuple[str, ...] = (),
 ) -> CorpusSectionRecord:
     chunks = tuple(
         SectionChunk(
@@ -155,6 +156,7 @@ def _section_record(
             section_path=section_path,
             anchor=anchor,
             blocks=(ParsedBlock(position=0, block_type="paragraph", html_fragment="<p/>"),),
+            anchor_aliases=anchor_aliases,
         ),
         markdown="".join(chunk_texts),
         chunks=chunks,
@@ -583,6 +585,101 @@ def test_sections_for_generation_empty_without_corpus(db_conn: Connection) -> No
     source = _persisted_source(db_conn, "quiz-nocorpus@example.com")
     repo = SqlAlchemyQuizItemRepository(db_conn)
     assert repo.sections_for_generation(source.id, min_chars=200) == []
+
+
+# --- section_for_anchor (quote-scoped generation, CAP-01) -----------------------
+
+
+def _anchor_corpus(db_conn: Connection, source_id: UUID) -> None:
+    """Seed a two-section corpus: a short parent leaf and an aliased child."""
+    SqlAlchemyCorpusRepository(db_conn).replace(
+        source_id,
+        title="Book",
+        authors=("Author",),
+        language="en",
+        schema_version=1,
+        sections=(
+            _section_record(
+                position=0,
+                title="Part One",
+                depth=0,
+                section_path=("Part One",),
+                anchor="part1.xhtml",
+                chunk_texts=("Short.",),
+            ),
+            _section_record(
+                position=1,
+                title="Chapter A",
+                depth=1,
+                section_path=("Part One", "Chapter A"),
+                anchor="chA.xhtml",
+                chunk_texts=("First chunk. ", "Second chunk."),
+                anchor_aliases=("chA.xhtml#old",),
+            ),
+        ),
+    )
+
+
+def test_section_for_anchor_returns_the_cited_section_with_its_chunks(
+    db_conn: Connection,
+) -> None:
+    source = _persisted_source(db_conn, "quiz-anchor-section@example.com")
+    _anchor_corpus(db_conn, source.id)
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+
+    section = repo.section_for_anchor(source.id, "chA.xhtml")
+
+    assert section is not None
+    assert section.title == "Chapter A"
+    assert section.section_path == ("Part One", "Chapter A")
+    # Chunks in reading order as (chunk_id, text) pairs, so a candidate's citation
+    # can be constrained to them.
+    assert [text for _, text in section.chunks] == ["First chunk. ", "Second chunk."]
+    assert all(isinstance(chunk_id, UUID) for chunk_id, _ in section.chunks)
+
+
+def test_section_for_anchor_resolves_a_merged_away_alias(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "quiz-anchor-alias@example.com")
+    _anchor_corpus(db_conn, source.id)
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+
+    section = repo.section_for_anchor(source.id, "chA.xhtml#old")
+
+    assert section is not None
+    # Resolves to the survivor under its canonical anchor (AD-085).
+    assert section.anchor == "chA.xhtml"
+
+
+def test_section_for_anchor_ignores_the_deck_eligibility_filters(
+    db_conn: Connection,
+) -> None:
+    # A passage the student highlighted is eligible even in a non-leaf section far
+    # below the deck path's ``min_chars`` floor.
+    source = _persisted_source(db_conn, "quiz-anchor-short@example.com")
+    _anchor_corpus(db_conn, source.id)
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+
+    assert repo.sections_for_generation(source.id, min_chars=200) == []
+    section = repo.section_for_anchor(source.id, "part1.xhtml")
+    assert section is not None
+    assert section.title == "Part One"
+
+
+def test_section_for_anchor_is_none_for_an_unknown_anchor(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "quiz-anchor-missing@example.com")
+    _anchor_corpus(db_conn, source.id)
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+
+    assert repo.section_for_anchor(source.id, "gone.xhtml") is None
+
+
+def test_section_for_anchor_is_scoped_to_its_own_source(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "quiz-anchor-scope-a@example.com")
+    other = _persisted_source(db_conn, "quiz-anchor-scope-b@example.com")
+    _anchor_corpus(db_conn, source.id)
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+
+    assert repo.section_for_anchor(other.id, "chA.xhtml") is None
 
 
 # --- deck generation jobs (QUIZ-04/09) ------------------------------------------

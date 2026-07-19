@@ -404,6 +404,31 @@ def test_add_anchor_and_anchors_for_note(db_conn: Connection) -> None:
     assert fetched[0].status == NoteAnchorStatus.ACTIVE
 
 
+def test_get_anchor_returns_the_full_anchor_by_id(db_conn: Connection) -> None:
+    user = _persist_user(db_conn, "note-anchor-byid@example.com")
+    source = _persist_source(db_conn, user.id)
+    repo = SqlAlchemyNoteRepository(db_conn)
+    note = _note(user.id)
+    repo.add(note)
+    stored = repo.add_anchor(_anchor(note.id, source.id))
+
+    fetched = repo.get_anchor(stored.id)
+
+    assert fetched is not None
+    # The card services authorize through ``note_id`` and scope by ``source_id``, and
+    # snapshot the citation from ``anchor``/``section_path``/``quote_exact``.
+    assert fetched.note_id == note.id
+    assert fetched.source_id == source.id
+    assert fetched.anchor == "chapter01.xhtml#sec-1"
+    assert fetched.section_path == ("Chapter 1",)
+    assert fetched.quote_exact == "a highlighted quote"
+
+
+def test_get_anchor_is_none_when_absent(db_conn: Connection) -> None:
+    repo = SqlAlchemyNoteRepository(db_conn)
+    assert repo.get_anchor(uuid4()) is None
+
+
 def test_anchors_for_source_spans_notes(db_conn: Connection) -> None:
     user = _persist_user(db_conn, "note-anchor-src@example.com")
     source = _persist_source(db_conn, user.id)
