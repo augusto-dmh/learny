@@ -50,6 +50,7 @@ const dark = cssBlock(".dark");
 const PINNED: [name: string, lightHex: string, darkHex: string][] = [
   ["background", "#F6F7F6", "#0F161B"],
   ["card", "#FFFFFF", "#172128"],
+  ["popover", "#FFFFFF", "#172128"],
   ["foreground", "#1B2733", "#D9E2E8"],
   ["muted-foreground", "#5D6B76", "#7F93A0"],
   ["border", "#DDE2E4", "#263340"],
@@ -102,6 +103,25 @@ describe.each([
     expect(fgHex).toMatch(/^#[0-9A-F]{6}$/);
     expect(bgHex).toMatch(/^#[0-9A-F]{6}$/);
     expect(contrast(fgHex, bgHex)).toBeGreaterThanOrEqual(4.5);
+  });
+});
+
+// IDF-04 — the reading-typography class must actually carry the reading
+// values, not merely exist: component tests can only see class presence
+// (jsdom applies no stylesheets), so the declarations are pinned here.
+describe("prose-reading declarations", () => {
+  const prose = cssBlock(".prose-reading");
+
+  it("sets the serif book measure", () => {
+    expect(prose).toContain("font-family: var(--font-serif);");
+    expect(prose).toContain("font-size: 19px;");
+    expect(prose).toContain("line-height: 1.6;");
+    expect(prose).toContain("max-width: 65ch;");
+  });
+
+  it("keeps ragged right and hyphenation off", () => {
+    expect(prose).toContain("text-align: left;");
+    expect(prose).toContain("hyphens: none;");
   });
 });
 
