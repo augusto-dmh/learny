@@ -33,3 +33,11 @@
   currently one synthetic smoke case — the doc must flag that widening the
   tier to real pipeline cases requires re-derivation, and that the
   answerability tier showed 1/18 judge-variance flake (not gated, noted).
+
+## Deferred Ideas
+
+- Eval-deepening follow-up (silver set over real books, rubric anchoring, judge
+  and generation A/Bs vs Opus 4.8) — recorded as a roadmap candidate
+  (`.specs/project/ROADMAP.md` → Recorded candidates), scheduled after RFC-004
+  Cycle A. Product generation default deliberately stays `claude-sonnet-5`
+  until the A/B research doc says otherwise.
