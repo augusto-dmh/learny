@@ -135,6 +135,10 @@ Accepted architecture (locked — sourced from ADRs/TDD, not re-decided here):
 | AD-126 | Minutes-left = ceil(unread chapter words / 220 wpm), named constant; shown with whole-book percent. | Cycle v4-B context.md (D-6) |
 | AD-127 | Inline highlights: new owner-scoped `GET /api/sources/{id}/highlights`; client paints `active` anchors only via section-scoped quote search with prefix/suffix disambiguation; unmatched quotes silently don't paint; server never injects marks into corpus markdown. | Cycle v4-B context.md (D-7) |
 | AD-128 | Load-path fix = parallel client fetches (auth + content) with a reading skeleton; no RSC rewrite this cycle. | Cycle v4-B context.md (D-8) |
+| AD-129 | Ask/Teach panel state = `?panel=ask\|teach` query on the read route; old ask/teach pages become server `redirect()` tombstones; unknown values render closed. | Cycle v4-C context.md (D-1, D-2) |
+| AD-130 | Citation passage = the stored verbatim snippet restyled in reading serif with section-path locators (no popover-open fetch); ids/scores never rendered; jump = in-chapter scroll+flash, else anchor navigation preserving panel params (server resolves aliases). | Cycle v4-C context.md (D-3, D-4) |
+| AD-131 | Selection verbs: Explain/Ask scope via prompt-level quote embedding (no retrieval API change — frozen per RFC-004); Create card ships visible-but-disabled until Cycle D. | Cycle v4-C context.md (D-5, D-6) |
+| AD-132 | Save-answer-to-note reuses highlight capture (first citation's anchor + first-paragraph quote) with a plain-note + jump-link fallback on bind failure; frontend-only cycle, zero backend additions. | Cycle v4-C context.md (D-7) |
 
 ## Blockers
 
