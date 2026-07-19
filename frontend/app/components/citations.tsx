@@ -5,9 +5,15 @@
  *
  * Renders the grounded citations attached to a streamed answer or teaching turn
  * as compact chips. Clicking a chip opens a popover with the citation's
- * section-path breadcrumb, its snippet, and an "Open in book" link into the
- * reader at that citation's anchor — turning citations into navigation, not
- * decoration.
+ * section-path breadcrumb, its verbatim passage, and a way into the reader at that
+ * citation's anchor — turning citations into navigation, not decoration. The
+ * popover never surfaces retrieval machinery (`chunk_id`, `score`): it speaks the
+ * book's passage, not the index behind it (RA-12).
+ *
+ * Inside the reader panel the caller passes `onShowInBook`, so the action becomes
+ * an in-place "Show in book" button that jumps the open chapter while the answer
+ * stays visible (RA-13/14). Outside it (no callback), the action falls back to an
+ * "Open in book" link into the reader route.
  *
  * The anchor is `href[#fragment]` (reserved `/` and `#`), so it is
  * `encodeURIComponent`-encoded exactly once into the reader route's `anchor`
@@ -25,6 +31,7 @@ import Link from "next/link";
 import { BookOpenIcon } from "lucide-react";
 
 import { type Citation } from "@/app/lib/questions";
+import { readUrl } from "@/app/lib/read-url";
 import {
   Popover,
   PopoverContent,
@@ -35,9 +42,12 @@ import {
 export function CitationList({
   sourceId,
   citations,
+  onShowInBook,
 }: {
   sourceId: string;
   citations: Citation[];
+  /** In-reader jump: provided → "Show in book" button; absent → reader-route link. */
+  onShowInBook?: (anchor: string) => void;
 }) {
   if (citations.length === 0) {
     return null;
@@ -50,26 +60,27 @@ export function CitationList({
           sourceId={sourceId}
           citation={citation}
           index={index + 1}
+          onShowInBook={onShowInBook}
         />
       ))}
     </div>
   );
 }
 
-/** One citation chip: opens a popover with breadcrumb, snippet, and reader link. */
+/** One citation chip: opens a popover with breadcrumb, passage, and reader jump. */
 function CitationPopover({
   sourceId,
   citation,
   index,
+  onShowInBook,
 }: {
   sourceId: string;
   citation: Citation;
   index: number;
+  onShowInBook?: (anchor: string) => void;
 }) {
   const breadcrumb = citation.section_path.join(" › ");
-  const href = `/sources/${sourceId}/read?anchor=${encodeURIComponent(
-    citation.anchor,
-  )}`;
+  const href = readUrl(sourceId, citation.anchor);
   return (
     <Popover>
       <PopoverTrigger asChild>
@@ -87,13 +98,24 @@ function CitationPopover({
         <blockquote className="prose-reading border-l-2 border-muted pl-3 italic text-muted-foreground">
           {citation.snippet}
         </blockquote>
-        <Link
-          href={href}
-          className="inline-flex items-center gap-1.5 text-sm text-primary underline-offset-4 hover:underline"
-        >
-          <BookOpenIcon className="size-3.5" />
-          Open in book
-        </Link>
+        {onShowInBook ? (
+          <button
+            type="button"
+            onClick={() => onShowInBook(citation.anchor)}
+            className="inline-flex items-center gap-1.5 text-sm text-primary underline-offset-4 hover:underline"
+          >
+            <BookOpenIcon className="size-3.5" />
+            Show in book
+          </button>
+        ) : (
+          <Link
+            href={href}
+            className="inline-flex items-center gap-1.5 text-sm text-primary underline-offset-4 hover:underline"
+          >
+            <BookOpenIcon className="size-3.5" />
+            Open in book
+          </Link>
+        )}
       </PopoverContent>
     </Popover>
   );

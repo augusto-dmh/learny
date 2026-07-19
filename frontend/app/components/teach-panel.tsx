@@ -1,32 +1,36 @@
 "use client";
 
 /**
- * Teach screen (FE-11..FE-13) — replaces the unstyled TeachPanel.
+ * Teach panel (RA-10/11) — the Teach mode body of the reader side panel.
  *
- * Drives one source's teaching flow. It resolves auth via `/api/auth/me`
- * (through the proxy) for the CSRF token, then shows a target picker (the section
- * tree, from the structure client + `lib/tree`) and a resume list of previous
- * sessions with their turn counts. Picking either enters the session view, which
- * seeds the Vercel AI SDK `useChat` from the session's persisted turns
- * (`turnsToUIMessages`) so resumed history renders identically to live turns, and
- * streams new turns over the turn transport (`app/lib/streaming.ts`). The
- * conversation follows the same readable state contract as Ask: not-found, a
- * throttle/error banner with partial text retained, and a stop control.
+ * This is the standalone teach screen's flow ported into the panel: a target
+ * picker (the section tree, from the structure client + `lib/tree`), a resume list
+ * of prior sessions with their turn counts, and a session view that seeds `useChat`
+ * from the session's persisted turns (`turnsToUIMessages`) and streams new turns
+ * over the *unchanged* turn transport (`app/lib/streaming.ts`) — so start, resume,
+ * deltas, citations, not-found, and the error banner behave exactly as they did on
+ * the page (parity). Auth is resolved once upstream in `ChapterReader`; the panel
+ * receives the CSRF token as a prop rather than fetching `/api/auth/me` itself.
  *
- * `onRequireAuth` is a UX-only redirect for unauthenticated users, NOT the
- * security boundary — FastAPI enforces auth, ownership, readiness, and target
- * scoping on every call regardless of client-side routing (FR-AUTH-007, ADR-017).
+ * Panel-only addition: when a session activates — on start AND on resume — the
+ * panel asks the reader to bring the taught passage into view via `onShowInBook`,
+ * exactly once per activation, so the book sits on the target while teaching runs
+ * beside it (RA-11).
+ *
+ * `onRequireAuth` is a UX-only redirect for a mid-stream 401, NOT the security
+ * boundary — FastAPI enforces auth, ownership, readiness, and target scoping on
+ * every call regardless of client-side routing (FR-AUTH-007, ADR-017).
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useChat } from "@ai-sdk/react";
 
-import { fetchAuthState } from "@/app/lib/auth";
 import { fetchSourceStructure, type SourceStructure } from "@/app/lib/sources";
 import {
   assistantView,
   createTurnTransport,
+  messageText,
   StreamRequestError,
   turnsToUIMessages,
   type LearnyUIMessage,
@@ -59,6 +63,7 @@ import {
 } from "@/components/ai-elements/prompt-input";
 
 import { CitationList } from "./citations";
+import { SaveToNoteAction } from "./save-to-note-action";
 
 /** A session the user has entered, plus the messages seeding its conversation. */
 type ActiveSession = {
@@ -66,15 +71,17 @@ type ActiveSession = {
   initialMessages: LearnyUIMessage[];
 };
 
-export function TeachScreen({
+export function TeachPanel({
   sourceId,
+  csrf,
+  onShowInBook,
   onRequireAuth,
 }: {
   sourceId: string;
+  csrf: string;
+  onShowInBook?: (anchor: string) => void;
   onRequireAuth?: () => void;
 }) {
-  const [csrf, setCsrf] = useState<string | null>(null);
-  const [authed, setAuthed] = useState<boolean | null>(null);
   const [structure, setStructure] = useState<SourceStructure | null>(null);
   const [sessions, setSessions] = useState<TeachingSessionSummary[] | null>(
     null,
@@ -86,14 +93,6 @@ export function TeachScreen({
   const [resumingId, setResumingId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    const next = await fetchAuthState();
-    if (!next.authenticated) {
-      setAuthed(false);
-      onRequireAuth?.();
-      return;
-    }
-    setCsrf(next.user.csrf_token);
-    setAuthed(true);
     try {
       const [struct, list] = await Promise.all([
         fetchSourceStructure(sourceId),
@@ -108,25 +107,32 @@ export function TeachScreen({
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load this book.");
     }
-  }, [sourceId, onRequireAuth]);
+  }, [sourceId]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
+  // Bring the taught passage into view once per session activation (start AND
+  // resume), never per turn (RA-11). The ref makes the call idempotent per session
+  // id, so a parent re-render (or a new callback identity) cannot re-trigger it.
+  const shownForSessionRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (active && shownForSessionRef.current !== active.session.id) {
+      shownForSessionRef.current = active.session.id;
+      onShowInBook?.(active.session.target.anchor);
+    }
+  }, [active, onShowInBook]);
+
   async function handleStart(event: React.FormEvent) {
     event.preventDefault();
     setError(null);
-    if (!csrf || !selectedAnchor) {
+    if (!selectedAnchor) {
       return;
     }
     setStarting(true);
     try {
-      const started = await startTeachingSession(
-        sourceId,
-        selectedAnchor,
-        csrf,
-      );
+      const started = await startTeachingSession(sourceId, selectedAnchor, csrf);
       setActive({ session: started, initialMessages: [] });
     } catch (err) {
       setError(
@@ -155,13 +161,6 @@ export function TeachScreen({
     }
   }
 
-  if (authed === null) {
-    return <p className="text-muted-foreground">Loading…</p>;
-  }
-  if (!authed || csrf === null) {
-    return <p className="text-muted-foreground">You are signed out.</p>;
-  }
-
   if (active !== null) {
     return (
       <TeachChat
@@ -171,6 +170,7 @@ export function TeachScreen({
         csrf={csrf}
         target={active.session.target.section_path.join(" › ")}
         initialMessages={active.initialMessages}
+        onShowInBook={onShowInBook}
         onRequireAuth={onRequireAuth}
       />
     );
@@ -252,6 +252,7 @@ function TeachChat({
   csrf,
   target,
   initialMessages,
+  onShowInBook,
   onRequireAuth,
 }: {
   sourceId: string;
@@ -259,6 +260,7 @@ function TeachChat({
   csrf: string;
   target: string;
   initialMessages: LearnyUIMessage[];
+  onShowInBook?: (anchor: string) => void;
   onRequireAuth?: () => void;
 }) {
   const [banner, setBanner] = useState<string | null>(null);
@@ -297,14 +299,14 @@ function TeachChat({
       <h2 className="text-lg font-semibold">{target}</h2>
       <Conversation>
         <ConversationContent>
-          {messages.map((message) => {
+          {messages.map((message, index) => {
             if (message.role === "user") {
               return (
                 <Message from="user" key={message.id}>
                   <MessageContent>
-                    {message.parts.map((part, index) =>
+                    {message.parts.map((part, i) =>
                       part.type === "text" ? (
-                        <span data-testid="user-message" key={index}>
+                        <span data-testid="user-message" key={i}>
                           {part.text}
                         </span>
                       ) : null,
@@ -316,6 +318,9 @@ function TeachChat({
             const { text, citations, status: answerStatus } =
               assistantView(message);
             const notFound = answerStatus === "not_found_in_source";
+            const previous = messages[index - 1];
+            const question =
+              previous?.role === "user" ? messageText(previous) : "";
             return (
               <Message from="assistant" key={message.id}>
                 <MessageContent>
@@ -325,7 +330,20 @@ function TeachChat({
                       That was not found in this target.
                     </p>
                   ) : citations ? (
-                    <CitationList sourceId={sourceId} citations={citations} />
+                    <CitationList
+                      sourceId={sourceId}
+                      citations={citations}
+                      onShowInBook={onShowInBook}
+                    />
+                  ) : null}
+                  {!notFound && citations && citations.length > 0 ? (
+                    <SaveToNoteAction
+                      sourceId={sourceId}
+                      question={question}
+                      answerText={text}
+                      citations={citations}
+                      csrf={csrf}
+                    />
                   ) : null}
                 </MessageContent>
               </Message>

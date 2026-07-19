@@ -86,6 +86,12 @@ Seen once or not yet corroborated. Tracked, not trusted.
 - evidence: spec RD-05 / validation.md round 1 (frontend/tests)
 - last seen: 2026-07-19T17:15:07Z
 
+### L-013 — Verify error-kind and enum string values against their defining module before naming them in design; do not guess them from memory.
+- signal: `spec_deviation` · recurrence: 1 feature(s) · scope: `frontend` · harmful: 0
+- features: v4-reader-apparatus
+- evidence: frontend/app/lib/answer-notes.ts:81-83 (SPEC_DEVIATION) (frontend)
+- last seen: 2026-07-19T20:05:19Z
+
 ## Quarantined (failed when applied — ignore)
 
 A confirmed lesson that recurred alongside failure. Kept for the maintainer to review.

@@ -3,7 +3,7 @@
   "promote_threshold": 2,
   "window_days": 45,
   "quarantine_threshold": 2,
-  "next_id": 13,
+  "next_id": 14,
   "lessons": [
     {
       "id": "L-001",
@@ -220,6 +220,24 @@
       ],
       "created": "2026-07-19T17:15:07Z",
       "last_seen": "2026-07-19T17:15:07Z"
+    },
+    {
+      "id": "L-013",
+      "key": "spec_deviation::verify error kind and enum string values against their defining module before naming them in design do not guess them from memory",
+      "text": "Verify error-kind and enum string values against their defining module before naming them in design; do not guess them from memory.",
+      "signal": "spec_deviation",
+      "scope": "frontend",
+      "status": "candidate",
+      "features": [
+        "v4-reader-apparatus"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "frontend/app/lib/answer-notes.ts:81-83 (SPEC_DEVIATION) (frontend)"
+      ],
+      "created": "2026-07-19T20:05:19Z",
+      "last_seen": "2026-07-19T20:05:19Z"
     }
   ]
 }

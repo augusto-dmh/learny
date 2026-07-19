@@ -33,8 +33,10 @@ import {
   type CaptureAction,
   type CaptureSelection,
 } from "@/app/components/notes/capture-popover";
+import { ReaderPanel, type PanelMode } from "@/app/components/reader-panel";
 import { ReadingControls } from "@/app/components/reading-controls";
 import { ChapterNav, TocPanel } from "@/app/components/toc-panel";
+import { readUrl } from "@/app/lib/read-url";
 import { useReadingSettings } from "@/app/components/use-reading-settings";
 import { useRecedingChrome } from "@/app/components/use-receding-chrome";
 import {
@@ -43,6 +45,7 @@ import {
 } from "@/app/components/use-scroll-position";
 import { fetchAuthState } from "@/app/lib/auth";
 import { paintHighlights } from "@/app/lib/highlight-paint";
+import { type PendingPanelRequest } from "@/app/lib/panel";
 import { captureHighlight, NoteError } from "@/app/lib/notes";
 import {
   getChapter,
@@ -97,8 +100,27 @@ export function ChapterReader({
   // They are P2 and non-blocking: the chapter renders without waiting on them,
   // and a failed fetch simply leaves the prose unpainted (RD-28/29).
   const [highlights, setHighlights] = useState<SourceHighlightView[]>([]);
+  // The section anchors of the chapter currently in `found` state. A cross-chapter
+  // jump changes `?anchor=` to an anchor this set does NOT contain and must reload
+  // (RA-14); a same-chapter anchor change (a citation "Show in book" that lands in
+  // this chapter, or a TOC jump within it) is served by the in-flow scroll effect,
+  // so reloading — which would refetch the same chapter and reset the open panel
+  // and scroll — is skipped (RA-13).
+  const loadedRef = useRef<{ sourceId: string; anchors: Set<string> } | null>(
+    null,
+  );
 
   useEffect(() => {
+    const loaded = loadedRef.current;
+    if (
+      urlAnchor &&
+      loaded &&
+      loaded.sourceId === sourceId &&
+      loaded.anchors.has(urlAnchor)
+    ) {
+      // Same-chapter anchor change: the flow scrolls to it in place; no reload.
+      return;
+    }
     let active = true;
     setState({ kind: "loading" });
     setHighlights([]);
@@ -133,11 +155,20 @@ export function ChapterReader({
         if (!active) {
           return;
         }
-        setState(
-          result.status === "not_found"
-            ? { kind: "not-found" }
-            : { kind: "found", chapter: result.chapter },
-        );
+        if (result.status === "not_found") {
+          loadedRef.current = null;
+          setState({ kind: "not-found" });
+        } else {
+          // Remember the loaded chapter's anchors so a later same-chapter anchor
+          // change scrolls in place instead of reloading (RA-13/14).
+          loadedRef.current = {
+            sourceId,
+            anchors: new Set(
+              result.chapter.sections.map((section) => section.anchor),
+            ),
+          };
+          setState({ kind: "found", chapter: result.chapter });
+        }
       } catch (err) {
         if (!active) {
           return;
@@ -191,6 +222,7 @@ export function ChapterReader({
       chapter={state.chapter}
       scrollTarget={scrollTarget}
       highlights={highlights}
+      onRequireAuth={onRequireAuth}
     />
   );
 }
@@ -228,6 +260,7 @@ export function ChapterFlow({
   scrollTarget,
   highlights = [],
   observerFactory,
+  onRequireAuth,
 }: {
   sourceId: string;
   csrf: string | null;
@@ -235,8 +268,18 @@ export function ChapterFlow({
   scrollTarget: string | null;
   highlights?: SourceHighlightView[];
   observerFactory?: ObserverFactory;
+  onRequireAuth?: () => void;
 }) {
   const router = useRouter();
+  // The open panel and the current deep-link anchor are independent URL state.
+  // An unknown `panel` value renders the panel closed; toggling it or switching
+  // modes preserves the anchor and never refetches the chapter (the load effect
+  // lives in `ChapterReader` and is not keyed on `panel`).
+  const searchParams = useSearchParams();
+  const urlAnchor = searchParams.get("anchor");
+  const panelParam = searchParams.get("panel");
+  const panelMode: PanelMode | null =
+    panelParam === "ask" ? "ask" : panelParam === "teach" ? "teach" : null;
   const articleRef = useRef<HTMLElement>(null);
   // Device-local reading surface: type size, spacing, and Default/Paper (RD-18).
   const reading = useReadingSettings();
@@ -273,6 +316,11 @@ export function ChapterFlow({
   const [capture, setCapture] = useState<ActiveCapture | null>(null);
   const [pending, setPending] = useState(false);
   const [captureError, setCaptureError] = useState<string | null>(null);
+  // A selection verb (Explain/Ask) the reader hands to the Ask panel: it carries
+  // the verbatim quote and the selection's section anchor, is opened in ask mode,
+  // and is cleared once the panel has consumed it (RA-17/18).
+  const [pendingRequest, setPendingRequest] =
+    useState<PendingPanelRequest | null>(null);
 
   // Track the topmost visible section as the reader scrolls, and persist the
   // position after each scroll-idle (RD-07/13).
@@ -400,6 +448,66 @@ export function ChapterFlow({
     return () => window.removeEventListener("scroll", onScroll, true);
   }, [returnAnchor]);
 
+  // Opening a panel mode or switching between modes is pure URL state: replace
+  // the query in place (preserving the anchor) so it is deep-linkable and the
+  // back button works, without a chapter refetch or a scroll reset.
+  function handlePanelModeChange(mode: PanelMode) {
+    router.replace(readUrl(sourceId, urlAnchor, { panel: mode }));
+  }
+
+  // Closing drops the panel param, restoring full reading width; the anchor rides
+  // along so the reader stays where they were.
+  function handlePanelClose() {
+    router.replace(readUrl(sourceId, urlAnchor));
+  }
+
+  // Bring a cited (or taught) passage into view without leaving the answer
+  // (RA-11/13/14). An anchor in the loaded chapter scrolls to it in the flow and
+  // flashes its heading, keeping the panel open and the URL anchor in step (the
+  // loaded-chapter guard in `ChapterReader` makes this a no-reload replace); an
+  // anchor in another chapter navigates there, carrying the open panel along so
+  // the answer stays beside the book.
+  function handleShowInBook(anchor: string) {
+    const inChapter = chapter.sections.some(
+      (section) => section.anchor === anchor,
+    );
+    if (!inChapter) {
+      router.push(readUrl(sourceId, anchor, { panel: panelMode }));
+      return;
+    }
+    document
+      .getElementById(anchor)
+      ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    setFlashAnchor(anchor);
+    router.replace(readUrl(sourceId, anchor, { panel: panelMode }));
+  }
+
+  // A selection verb routes the passage into the Ask panel: stash the request,
+  // dismiss the capture popover, and open the panel in ask mode when it is closed
+  // (a shallow URL replace that preserves the anchor). The panel auto-submits an
+  // Explain, or attaches an Ask quote to the next typed question (RA-17/18).
+  function openAskWithPassage(request: PendingPanelRequest) {
+    setPendingRequest(request);
+    setCapture(null);
+    if (panelMode !== "ask") {
+      router.replace(readUrl(sourceId, urlAnchor, { panel: "ask" }));
+    }
+  }
+
+  function handleExplain(quote: string) {
+    if (!capture) {
+      return;
+    }
+    openAskWithPassage({ kind: "explain", quote, anchor: capture.anchor });
+  }
+
+  function handleAskAbout(quote: string) {
+    if (!capture) {
+      return;
+    }
+    openAskWithPassage({ kind: "ask", quote, anchor: capture.anchor });
+  }
+
   // A TOC click inside the loaded chapter scrolls within the flow rather than
   // reloading, and keeps the URL anchor in step so the deep link stays shareable.
   function handleSameChapterNavigate(anchor: string) {
@@ -517,12 +625,28 @@ export function ChapterFlow({
             <CapturePopover
               top={capture.top}
               left={capture.left}
+              quote={capture.quote_exact}
               pending={pending}
               error={captureError}
               onCapture={handleCapture}
+              onExplain={handleExplain}
+              onAskAbout={handleAskAbout}
             />
           ) : null}
         </article>
+        {panelMode && csrf ? (
+          <ReaderPanel
+            sourceId={sourceId}
+            csrf={csrf}
+            mode={panelMode}
+            onModeChange={handlePanelModeChange}
+            onClose={handlePanelClose}
+            pendingRequest={pendingRequest}
+            onPendingConsumed={() => setPendingRequest(null)}
+            onShowInBook={handleShowInBook}
+            onRequireAuth={onRequireAuth}
+          />
+        ) : null}
       </div>
       {returnAnchor ? <ReturnChip onReturn={handleReturn} /> : null}
     </div>

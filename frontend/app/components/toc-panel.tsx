@@ -21,15 +21,11 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
+import { readUrl } from "@/app/lib/read-url";
 import { fetchSourceStructure } from "@/app/lib/sources";
 import type { SourceStructure } from "@/app/lib/sources";
 import { flattenSections } from "@/app/lib/tree";
 import { cn } from "@/lib/utils";
-
-/** The reader route for a source at a given anchor, encoded exactly once. */
-function readUrl(sourceId: string, anchor: string): string {
-  return `/sources/${sourceId}/read?anchor=${encodeURIComponent(anchor)}`;
-}
 
 export function TocPanel({
   sourceId,

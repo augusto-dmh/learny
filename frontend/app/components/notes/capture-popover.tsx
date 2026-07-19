@@ -67,20 +67,37 @@ export function deriveCaptureSelection(
  * relatively-positioned prose wrapper via `top`/`left` (both in px, measured from
  * that wrapper). While a capture is in flight the actions disable; a failure (e.g.
  * a stale-capture reload prompt) renders below them.
+ *
+ * When the reader supplies `onExplain`/`onAskAbout` the popover grows to the full
+ * five-verb selection set (RA-15): Highlight and Note run the capture flow
+ * unchanged (RA-16); Explain and Ask carry the verbatim `quote` up to the reader
+ * panel; and Create card is a disabled placeholder for the next cycle (RA-19).
+ * Absent those callbacks it stays the original two-button capture popover, so the
+ * highlight-capture flow is byte-identical wherever the verbs are not wired.
  */
 export function CapturePopover({
   top,
   left,
+  quote,
   pending,
   error,
   onCapture,
+  onExplain,
+  onAskAbout,
 }: {
   top: number;
   left: number;
+  /** The resolved selection text, carried to Explain/Ask when the verbs are wired. */
+  quote?: string;
   pending: boolean;
   error: string | null;
   onCapture: (action: CaptureAction) => void;
+  onExplain?: (quote: string) => void;
+  onAskAbout?: (quote: string) => void;
 }) {
+  // The full verb set only when the reader wires the panel-bound verbs; otherwise
+  // the popover is the original two-action capture control (RA-15/16).
+  const verbs = Boolean(onExplain && onAskAbout);
   return (
     <div
       role="dialog"
@@ -91,7 +108,7 @@ export function CapturePopover({
       // capture reads the same range that raised it.
       onMouseDown={(event) => event.preventDefault()}
     >
-      <div className="flex gap-1">
+      <div className="flex flex-wrap gap-1">
         <Button
           type="button"
           size="sm"
@@ -108,8 +125,41 @@ export function CapturePopover({
           disabled={pending}
           onClick={() => onCapture("highlight-note")}
         >
-          Highlight + note
+          {verbs ? "Note" : "Highlight + note"}
         </Button>
+        {verbs ? (
+          <>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              disabled={pending}
+              onClick={() => onExplain?.(quote ?? "")}
+            >
+              Explain
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              disabled={pending}
+              onClick={() => onAskAbout?.(quote ?? "")}
+            >
+              Ask
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              // A placeholder for RFC-004 Cycle D: shown to complete the verb set,
+              // but disabled with a hint and wired to nothing (RA-19).
+              disabled
+              title="Coming soon"
+            >
+              Create card
+            </Button>
+          </>
+        ) : null}
       </div>
       {error ? (
         <p role="alert" className="px-2 pb-1 text-xs text-destructive">

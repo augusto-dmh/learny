@@ -1,13 +1,21 @@
 // @vitest-environment jsdom
 
 /**
- * D4 gate (component) — the teach screen builds a target picker from the
- * structure endpoint and a resume list with turn counts (FE-11); starting a
- * session streams a cited turn's deltas progressively and posts `{message}` to
- * the turns stream (FE-12); resuming seeds the conversation from persisted turns
- * so prior turns render with their citations (FE-12); and a throttle (429),
+ * B2 (component) — the Teach panel is the teach screen's flow ported into the
+ * reader side panel. It keeps parity with the old screen: it builds a target
+ * picker from the structure endpoint and a resume list with turn counts (RA-10);
+ * starting a session streams a cited turn's deltas progressively and POSTs
+ * `{message}` to the turns stream; resuming seeds the conversation from persisted
+ * turns so prior turns render with their citations; and a throttle (429), a
  * mid-stream error, or not-found settle to the same readable state contract as
- * Ask (FE-13).
+ * Ask, with a 401 routed to `onRequireAuth`.
+ *
+ * Panel-only behavior: when a session activates — on start AND on resume — the
+ * panel calls `onShowInBook` exactly once with the session's target anchor, never
+ * per turn (RA-11).
+ *
+ * Auth is resolved upstream in the reader, so the panel takes the CSRF token as a
+ * prop — these tests never stub `/api/auth/me`.
  */
 
 import {
@@ -20,7 +28,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { TeachScreen } from "../app/components/teach-screen";
+import { TeachPanel } from "../app/components/teach-panel";
 
 beforeAll(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
@@ -81,13 +89,6 @@ function sseStream() {
     done: () => frame(encoder.encode("data: [DONE]\n\n")).then(() => controller.close()),
   };
 }
-
-const authedMe = jsonResponse(200, {
-  id: "u1",
-  email: "a@b.c",
-  created_at: "now",
-  csrf_token: "csrf-xyz",
-});
 
 const structure = {
   title: "Ready Book",
@@ -187,7 +188,6 @@ const TURN_STREAM = "/api/teaching-sessions/sess1/turns/stream";
 
 function baseHandlers(): Record<string, Handler> {
   return {
-    "GET /api/auth/me": () => authedMe.clone(),
     "GET /api/sources/s1/structure": () => jsonResponse(200, structure),
     "GET /api/sources/s1/teaching-sessions": () => jsonResponse(200, []),
   };
@@ -205,7 +205,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("TeachScreen start + stream (D4)", () => {
+describe("TeachPanel start + stream (RA-10)", () => {
   it("builds the target picker, starts a session, and streams a cited turn progressively", async () => {
     const stream = sseStream();
     const fetchMock = routedFetch({
@@ -215,10 +215,11 @@ describe("TeachScreen start + stream (D4)", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    render(<TeachScreen sourceId="s1" />);
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
 
-    // FE-11: every flattened section (incl. the nested one as a breadcrumb) is offered.
+    // Every flattened section (incl. the nested one as a breadcrumb) is offered.
     await screen.findByLabelText("Target");
+    await screen.findByRole("option", { name: "Chapter 1" }, { timeout: 5000 });
     expect(screen.getByRole("option", { name: "Chapter 1" })).toBeTruthy();
     expect(
       screen.getByRole("option", { name: "Chapter 1 › Section 1.1" }),
@@ -231,7 +232,7 @@ describe("TeachScreen start + stream (D4)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Start session" }));
 
     // The start POST carried the chosen target anchor.
-    await screen.findByPlaceholderText(/send a message/i);
+    await screen.findByPlaceholderText(/send a message/i, {}, { timeout: 5000 });
     const startPost = fetchMock.mock.calls.find(
       ([url]) => url === "/api/teaching-sessions",
     )!;
@@ -242,7 +243,7 @@ describe("TeachScreen start + stream (D4)", () => {
 
     sendMessage("Explain this chapter.");
 
-    // FE-12: the turn POSTs {message} with the CSRF header to the turns stream.
+    // The turn POSTs {message} with the CSRF header to the turns stream.
     await waitFor(() =>
       expect(fetchMock.mock.calls.some(([url]) => url === TURN_STREAM)).toBe(
         true,
@@ -298,10 +299,11 @@ describe("TeachScreen start + stream (D4)", () => {
       }),
     );
 
-    render(<TeachScreen sourceId="s1" />);
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
     await screen.findByLabelText("Target");
+    await screen.findByRole("option", { name: "Chapter 1" }, { timeout: 5000 });
     fireEvent.click(screen.getByRole("button", { name: "Start session" }));
-    await screen.findByPlaceholderText(/send a message/i);
+    await screen.findByPlaceholderText(/send a message/i, {}, { timeout: 5000 });
     sendMessage("unrelated nonsense");
 
     await stream.push({ type: "start", messageId: "m1" });
@@ -331,10 +333,11 @@ describe("TeachScreen start + stream (D4)", () => {
       }),
     );
 
-    render(<TeachScreen sourceId="s1" />);
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
     await screen.findByLabelText("Target");
+    await screen.findByRole("option", { name: "Chapter 1" }, { timeout: 5000 });
     fireEvent.click(screen.getByRole("button", { name: "Start session" }));
-    await screen.findByPlaceholderText(/send a message/i);
+    await screen.findByPlaceholderText(/send a message/i, {}, { timeout: 5000 });
     sendMessage("a message");
 
     const alert = await screen.findByRole("alert");
@@ -352,10 +355,11 @@ describe("TeachScreen start + stream (D4)", () => {
       }),
     );
 
-    render(<TeachScreen sourceId="s1" />);
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
     await screen.findByLabelText("Target");
+    await screen.findByRole("option", { name: "Chapter 1" }, { timeout: 5000 });
     fireEvent.click(screen.getByRole("button", { name: "Start session" }));
-    await screen.findByPlaceholderText(/send a message/i);
+    await screen.findByPlaceholderText(/send a message/i, {}, { timeout: 5000 });
     sendMessage("first try");
 
     await stream.push({ type: "start", messageId: "m1" });
@@ -375,12 +379,11 @@ describe("TeachScreen start + stream (D4)", () => {
   });
 });
 
-describe("TeachScreen resume (D4)", () => {
+describe("TeachPanel resume (RA-10)", () => {
   it("lists previous sessions with turn counts and resumes full cited history", async () => {
     vi.stubGlobal(
       "fetch",
       routedFetch({
-        "GET /api/auth/me": () => authedMe.clone(),
         "GET /api/sources/s1/structure": () => jsonResponse(200, structure),
         "GET /api/sources/s1/teaching-sessions": () =>
           jsonResponse(200, [summary]),
@@ -389,15 +392,15 @@ describe("TeachScreen resume (D4)", () => {
       }),
     );
 
-    render(<TeachScreen sourceId="s1" />);
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
 
-    // FE-11: the resume list shows the session with its turn count.
+    // The resume list shows the session with its turn count.
     await screen.findByText("Previous sessions");
     expect(screen.getByText(/2 turns/)).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Resume" }));
 
-    // FE-12: seeded history renders both stored turns with their citation and callout.
+    // Seeded history renders both stored turns with their citation and callout.
     expect(await screen.findByText("It is about early computing.")).toBeTruthy();
     expect(screen.getByText("What is this about?")).toBeTruthy();
     expect(
@@ -418,19 +421,183 @@ describe("TeachScreen resume (D4)", () => {
   });
 });
 
-describe("TeachScreen auth (D4)", () => {
-  it("does a UX-only redirect and shows the signed-out state when unauthenticated", async () => {
+describe("TeachPanel auth (RA-10)", () => {
+  it("routes a 401 turn stream to onRequireAuth", async () => {
     vi.stubGlobal(
       "fetch",
       routedFetch({
-        "GET /api/auth/me": () => new Response(null, { status: 401 }),
+        ...baseHandlers(),
+        "POST /api/teaching-sessions": () => jsonResponse(201, chapter2Session),
+        [`POST ${TURN_STREAM}`]: () => new Response(null, { status: 401 }),
       }),
     );
 
     const onRequireAuth = vi.fn();
-    render(<TeachScreen sourceId="s1" onRequireAuth={onRequireAuth} />);
+    render(
+      <TeachPanel sourceId="s1" csrf="csrf-xyz" onRequireAuth={onRequireAuth} />,
+    );
+    await screen.findByLabelText("Target");
+    await screen.findByRole("option", { name: "Chapter 1" }, { timeout: 5000 });
+    fireEvent.click(screen.getByRole("button", { name: "Start session" }));
+    await screen.findByPlaceholderText(/send a message/i, {}, { timeout: 5000 });
+    sendMessage("a message");
 
     await waitFor(() => expect(onRequireAuth).toHaveBeenCalledTimes(1));
-    expect(await screen.findByText("You are signed out.")).toBeTruthy();
+  });
+});
+
+const noteDetail = {
+  id: "n1",
+  title: "note",
+  body_markdown: "body",
+  tags: [],
+  anchors: [],
+  created_at: "now",
+  updated_at: "now",
+};
+
+describe("TeachPanel save to note (RA-20/22)", () => {
+  it("saves a cited taught turn as a note and confirms success", async () => {
+    const stream = sseStream();
+    const fetchMock = routedFetch({
+      ...baseHandlers(),
+      "POST /api/teaching-sessions": () => jsonResponse(201, chapter2Session),
+      [`POST ${TURN_STREAM}`]: () => stream.response,
+      "POST /api/sources/s1/highlights": () => jsonResponse(201, noteDetail),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
+    await screen.findByLabelText("Target");
+    await screen.findByRole("option", { name: "Chapter 1" }, { timeout: 5000 });
+    fireEvent.click(screen.getByRole("button", { name: "Start session" }));
+    await screen.findByPlaceholderText(/send a message/i, {}, { timeout: 5000 });
+    sendMessage("Explain this chapter.");
+
+    await stream.push({ type: "start", messageId: "m1" });
+    await stream.push({ type: "text-start", id: "t1" });
+    await stream.push({ type: "text-delta", id: "t1", delta: "A lesson." });
+    await stream.push({ type: "text-end", id: "t1" });
+    await stream.push({ type: "data-citations", data: [citation] });
+    await stream.push({
+      type: "data-answer-status",
+      data: { status: "answered" },
+    });
+    await stream.push({ type: "finish" });
+    await stream.done();
+
+    const saveButton = await screen.findByRole("button", {
+      name: "Save to note",
+    });
+    await act(async () => {
+      fireEvent.click(saveButton);
+    });
+
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(
+          ([url]) => url === "/api/sources/s1/highlights",
+        ),
+      ).toBe(true),
+    );
+    expect(await screen.findByTestId("save-note-status")).toBeTruthy();
+  });
+
+  it("offers Save to note only on the cited turn of a resumed session", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/sources/s1/structure": () => jsonResponse(200, structure),
+        "GET /api/sources/s1/teaching-sessions": () =>
+          jsonResponse(200, [summary]),
+        "GET /api/teaching-sessions/sess1": () =>
+          jsonResponse(200, resumedDetail),
+      }),
+    );
+
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
+    await screen.findByText("Previous sessions");
+    fireEvent.click(screen.getByRole("button", { name: "Resume" }));
+    await screen.findByText("It is about early computing.");
+
+    // The answered, cited turn offers the action; the not-found turn does not.
+    expect(
+      screen.getAllByRole("button", { name: "Save to note" }),
+    ).toHaveLength(1);
+  });
+});
+
+describe("TeachPanel taught passage (RA-11)", () => {
+  it("shows the target in the book once on start and never per turn", async () => {
+    const stream = sseStream();
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        ...baseHandlers(),
+        "POST /api/teaching-sessions": () => jsonResponse(201, chapter2Session),
+        [`POST ${TURN_STREAM}`]: () => stream.response,
+      }),
+    );
+
+    const onShowInBook = vi.fn();
+    render(
+      <TeachPanel sourceId="s1" csrf="csrf-xyz" onShowInBook={onShowInBook} />,
+    );
+    await screen.findByLabelText("Target");
+    await screen.findByRole("option", { name: "Chapter 1" }, { timeout: 5000 });
+    fireEvent.change(screen.getByLabelText("Target"), {
+      target: { value: "c2.xhtml" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start session" }));
+
+    // The book is asked to show the session's target anchor exactly once.
+    await waitFor(() =>
+      expect(onShowInBook).toHaveBeenCalledWith("c2.xhtml"),
+    );
+    expect(onShowInBook).toHaveBeenCalledTimes(1);
+
+    // Streaming a full turn does not re-trigger the jump.
+    sendMessage("Explain this chapter.");
+    await stream.push({ type: "start", messageId: "m1" });
+    await stream.push({ type: "text-start", id: "t1" });
+    await stream.push({ type: "text-delta", id: "t1", delta: "A lesson." });
+    await stream.push({ type: "text-end", id: "t1" });
+    await stream.push({ type: "data-citations", data: [citation] });
+    await stream.push({
+      type: "data-answer-status",
+      data: { status: "answered" },
+    });
+    await stream.push({ type: "finish" });
+    await stream.done();
+
+    await waitFor(() =>
+      expect(document.body.textContent).toContain("A lesson."),
+    );
+    expect(onShowInBook).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the resumed session's target in the book once", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/sources/s1/structure": () => jsonResponse(200, structure),
+        "GET /api/sources/s1/teaching-sessions": () =>
+          jsonResponse(200, [summary]),
+        "GET /api/teaching-sessions/sess1": () =>
+          jsonResponse(200, resumedDetail),
+      }),
+    );
+
+    const onShowInBook = vi.fn();
+    render(
+      <TeachPanel sourceId="s1" csrf="csrf-xyz" onShowInBook={onShowInBook} />,
+    );
+    await screen.findByText("Previous sessions");
+    fireEvent.click(screen.getByRole("button", { name: "Resume" }));
+
+    await waitFor(() =>
+      expect(onShowInBook).toHaveBeenCalledWith("c1.xhtml"),
+    );
+    expect(onShowInBook).toHaveBeenCalledTimes(1);
   });
 });

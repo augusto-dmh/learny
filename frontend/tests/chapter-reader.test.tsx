@@ -39,6 +39,51 @@ vi.mock("next/navigation", () => ({
   useParams: () => ({ id: "s1" }),
 }));
 
+// Anchors the mocked teach panel jumps to via `onShowInBook`: one inside the
+// loaded chapter (an in-flow scroll) and one in another chapter (a navigation).
+const jump = vi.hoisted(() => ({
+  inChapter: "part1/ch1.xhtml#s2",
+  foreign: "part1/ch2.xhtml#s1",
+}));
+
+// These reader tests exercise panel *wiring* (open/close/mode/URL and the
+// show-in-book jump), not the chat internals — the Ask/Teach panels are
+// unit-tested in their own files and pull in AI-Elements (ResizeObserver,
+// streaming). Stub them to body markers so mounting the reader with a panel open
+// stays lightweight; the teach stub also surfaces the `onShowInBook` wiring so the
+// citation-jump handler can be driven from a real click (RA-13/14).
+vi.mock("../app/components/ask-panel", () => ({
+  AskPanel: ({
+    pendingRequest,
+  }: {
+    pendingRequest?: { kind: string; quote: string; anchor: string } | null;
+  }) => (
+    <div data-testid="ask-panel-body">
+      {pendingRequest ? (
+        <span data-testid="pending-request">
+          {pendingRequest.kind}|{pendingRequest.quote}|{pendingRequest.anchor}
+        </span>
+      ) : null}
+    </div>
+  ),
+}));
+vi.mock("../app/components/teach-panel", () => ({
+  TeachPanel: ({
+    onShowInBook,
+  }: {
+    onShowInBook?: (anchor: string) => void;
+  }) => (
+    <div data-testid="teach-panel-body">
+      <button type="button" onClick={() => onShowInBook?.(jump.inChapter)}>
+        show-in-chapter
+      </button>
+      <button type="button" onClick={() => onShowInBook?.(jump.foreign)}>
+        show-foreign
+      </button>
+    </div>
+  ),
+}));
+
 /** Stub `window.getSelection` to return `text` as the current selection. */
 function selectText(text: string) {
   window.getSelection = () =>
@@ -337,16 +382,17 @@ describe("ChapterFlow capture (NF-12)", () => {
     return view;
   }
 
-  it("raises the capture popover on a selection resolvable in the section", () => {
+  it("raises the five-verb capture popover on a selection resolvable in the section", () => {
     renderAndSelect(S1, "Ada Lovelace wrote the first algorithm");
 
+    // The reader wires the panel-bound verbs, so the popover carries all five
+    // (Highlight/Note keep the existing capture flow; RA-15/16).
     expect(
       screen.getByRole("dialog", { name: "Capture highlight" }),
     ).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Highlight" })).toBeTruthy();
-    expect(
-      screen.getByRole("button", { name: "Highlight + note" }),
-    ).toBeTruthy();
+    for (const verb of ["Highlight", "Note", "Explain", "Ask", "Create card"]) {
+      expect(screen.getByRole("button", { name: verb })).toBeTruthy();
+    }
   });
 
   it("does not raise the popover for a selection absent from the section markdown", () => {
@@ -404,7 +450,7 @@ describe("ChapterFlow capture (NF-12)", () => {
     expect(nav.push).not.toHaveBeenCalled();
   });
 
-  it("opens the created note after Highlight + note", async () => {
+  it("opens the created note after the Note verb", async () => {
     const capturedNote = {
       id: "n7",
       title: "Ada",
@@ -421,7 +467,7 @@ describe("ChapterFlow capture (NF-12)", () => {
 
     renderAndSelect(S1, "Ada Lovelace wrote the first algorithm");
     await screen.findByRole("dialog", { name: "Capture highlight" });
-    fireEvent.click(screen.getByRole("button", { name: "Highlight + note" }));
+    fireEvent.click(screen.getByRole("button", { name: "Note" }));
 
     await waitFor(() => expect(nav.push).toHaveBeenCalledWith("/notes/n7"));
   });
@@ -693,6 +739,332 @@ describe("ChapterReader highlight load (RD-28)", () => {
     expect(container.querySelector("mark.reader-highlight")?.textContent).toBe(
       "Ada Lovelace wrote the first algorithm",
     );
+  });
+});
+
+describe("ChapterFlow panel modes (RA-01/02/03/06)", () => {
+  it("opens the ask panel when ?panel=ask (RA-01)", async () => {
+    nav.params = new URLSearchParams("panel=ask");
+    render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+    );
+
+    await screen.findByText("Ada Lovelace wrote the first algorithm.");
+    const panel = screen.getByTestId("reader-panel");
+    expect(panel.getAttribute("data-mode")).toBe("ask");
+    expect(screen.getByTestId("ask-panel-body")).toBeTruthy();
+  });
+
+  it("opens the teach panel when ?panel=teach (RA-02)", async () => {
+    nav.params = new URLSearchParams("panel=teach");
+    render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+    );
+
+    await screen.findByText("Ada Lovelace wrote the first algorithm.");
+    const panel = screen.getByTestId("reader-panel");
+    expect(panel.getAttribute("data-mode")).toBe("teach");
+    expect(screen.getByTestId("teach-panel-body")).toBeTruthy();
+  });
+
+  it("renders no panel when the panel param is absent", async () => {
+    nav.params = new URLSearchParams();
+    render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+    );
+
+    await screen.findByText("Ada Lovelace wrote the first algorithm.");
+    expect(screen.queryByTestId("reader-panel")).toBeNull();
+  });
+
+  it("renders no panel for an unknown panel value (edge case)", async () => {
+    nav.params = new URLSearchParams("panel=notes");
+    render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+    );
+
+    await screen.findByText("Ada Lovelace wrote the first algorithm.");
+    expect(screen.queryByTestId("reader-panel")).toBeNull();
+  });
+
+  it("closes the panel via router.replace, preserving the anchor (RA-03)", async () => {
+    nav.params = new URLSearchParams(`anchor=${ENCODED_S2}&panel=ask`);
+    render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={S2} />,
+    );
+
+    await screen.findByText("Ada Lovelace wrote the first algorithm.");
+    fireEvent.click(screen.getByRole("button", { name: "Close panel" }));
+
+    // The panel param is dropped (full reading width restored) but the anchor rides along.
+    expect(nav.replace).toHaveBeenCalledWith(
+      `/sources/s1/read?anchor=${ENCODED_S2}`,
+    );
+  });
+
+  it("switches modes via router.replace, preserving the anchor (RA-03)", async () => {
+    nav.params = new URLSearchParams(`anchor=${ENCODED_S2}&panel=ask`);
+    render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={S2} />,
+    );
+
+    await screen.findByText("Ada Lovelace wrote the first algorithm.");
+    fireEvent.click(screen.getByRole("tab", { name: "Teach" }));
+
+    expect(nav.replace).toHaveBeenCalledWith(
+      `/sources/s1/read?anchor=${ENCODED_S2}&panel=teach`,
+    );
+  });
+
+  it("keeps scroll tracking and highlight painting active with the panel open (RA-06)", async () => {
+    nav.params = new URLSearchParams("panel=ask");
+    const obs = fakeObserver();
+    const painted: SourceHighlightView = {
+      note_id: "n3",
+      anchor: S1,
+      quote_exact: "Ada Lovelace wrote the first algorithm",
+      quote_prefix: "",
+      quote_suffix: "",
+      status: "active",
+    };
+    const { container } = render(
+      <ChapterFlow
+        sourceId="s1"
+        csrf="csrf-xyz"
+        chapter={chapter}
+        scrollTarget={null}
+        highlights={[painted]}
+        observerFactory={obs.factory}
+      />,
+    );
+
+    // The painted highlight splits the sentence text node, so anchor the render
+    // check on the structural heading instead of the painted prose.
+    await screen.findByRole("heading", { name: "The First Algorithm" });
+    // Reading stays non-modal: the panel is open beside the article, not over it.
+    expect(screen.getByTestId("reader-panel")).toBeTruthy();
+    // Highlight painting keeps working under the open panel.
+    await waitFor(() =>
+      expect(container.querySelectorAll("mark.reader-highlight")).toHaveLength(1),
+    );
+    // Scroll-position tracking still drives live progress with the panel open.
+    expect(screen.getByTestId("reading-progress").textContent).toContain("10%");
+    obs.emit({ [S1]: false, [S2]: true });
+    await waitFor(() =>
+      expect(screen.getByTestId("reading-progress").textContent).toContain("40%"),
+    );
+  });
+});
+
+describe("ChapterFlow show in book (RA-13/14)", () => {
+  it("scrolls to an in-chapter cited anchor and flashes it, panel still open, no navigation", async () => {
+    nav.params = new URLSearchParams("panel=teach");
+    render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+    );
+    await screen.findByText("Ada Lovelace wrote the first algorithm.");
+    // No target on load, so nothing has scrolled yet.
+    expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled();
+
+    // The teach panel asks to show an anchor that lives in the loaded chapter.
+    fireEvent.click(screen.getByRole("button", { name: "show-in-chapter" }));
+
+    // It scrolled to the anchor in the flow and flashed its heading; the panel
+    // stays open beside the answer and there is no full navigation (push).
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
+    const flashed = document.querySelector(`[data-section-heading="${S2}"]`);
+    expect(flashed?.getAttribute("data-highlight")).toBe("on");
+    expect(screen.getByTestId("reader-panel")).toBeTruthy();
+    expect(nav.push).not.toHaveBeenCalled();
+    // The anchor rides into the URL (with the panel preserved) as a shallow replace.
+    expect(nav.replace).toHaveBeenCalledWith(
+      `/sources/s1/read?anchor=${ENCODED_S2}&panel=teach`,
+    );
+  });
+
+  it("navigates to a cited anchor in another chapter, carrying the open panel", async () => {
+    nav.params = new URLSearchParams("panel=teach");
+    render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+    );
+    await screen.findByText("Ada Lovelace wrote the first algorithm.");
+
+    // The teach panel asks to show an anchor NOT in the loaded chapter.
+    fireEvent.click(screen.getByRole("button", { name: "show-foreign" }));
+
+    // It navigates to that anchor with the panel param preserved; no in-flow scroll.
+    expect(nav.push).toHaveBeenCalledWith(
+      "/sources/s1/read?anchor=part1%2Fch2.xhtml%23s1&panel=teach",
+    );
+    expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled();
+    expect(nav.replace).not.toHaveBeenCalled();
+  });
+});
+
+describe("ChapterFlow selection verbs (RA-17/18)", () => {
+  function selectInSection(container: HTMLElement, anchor: string, text: string) {
+    selectText(text);
+    fireEvent.mouseUp(
+      container.querySelector(`[data-section-anchor="${anchor}"]`)!,
+    );
+  }
+
+  it("hands the ask panel an explain request carrying the quote and anchor", async () => {
+    nav.params = new URLSearchParams("panel=ask");
+    const { container } = render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+    );
+    await screen.findByText("Ada Lovelace wrote the first algorithm.");
+
+    selectInSection(container, S1, "Ada Lovelace wrote the first algorithm");
+    fireEvent.click(screen.getByRole("button", { name: "Explain" }));
+
+    // The ask panel receives an explain request with the verbatim selection quote
+    // and the selection's section anchor.
+    expect(screen.getByTestId("pending-request").textContent).toBe(
+      `explain|Ada Lovelace wrote the first algorithm|${S1}`,
+    );
+    // The capture popover is dismissed once the verb routes into the panel.
+    expect(
+      screen.queryByRole("dialog", { name: "Capture highlight" }),
+    ).toBeNull();
+  });
+
+  it("hands the ask panel an ask-about request when Ask is tapped", async () => {
+    nav.params = new URLSearchParams("panel=ask");
+    const { container } = render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+    );
+    await screen.findByText("Ada Lovelace wrote the first algorithm.");
+
+    selectInSection(container, S1, "Ada Lovelace wrote the first algorithm");
+    fireEvent.click(screen.getByRole("button", { name: "Ask" }));
+
+    expect(screen.getByTestId("pending-request").textContent).toBe(
+      `ask|Ada Lovelace wrote the first algorithm|${S1}`,
+    );
+  });
+
+  it("opens the panel in ask mode when a verb is tapped with the panel closed", async () => {
+    nav.params = new URLSearchParams();
+    const { container } = render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+    );
+    await screen.findByText("Ada Lovelace wrote the first algorithm.");
+    expect(screen.queryByTestId("reader-panel")).toBeNull();
+
+    selectInSection(container, S1, "Ada Lovelace wrote the first algorithm");
+    fireEvent.click(screen.getByRole("button", { name: "Explain" }));
+
+    // The reader opens the ask panel via a shallow URL replace (anchor preserved).
+    expect(nav.replace).toHaveBeenCalledWith("/sources/s1/read?panel=ask");
+    expect(
+      screen.queryByRole("dialog", { name: "Capture highlight" }),
+    ).toBeNull();
+  });
+});
+
+describe("ChapterReader cross-chapter jump (RA-13/14)", () => {
+  const ENCODED_S1 = "part1%2Fch1.xhtml%23s1";
+  const CHAPTER_URL_S1 = `/api/sources/s1/chapter?anchor=${ENCODED_S1}`;
+  const FOREIGN_ENC = "part1%2Fch2.xhtml%23s1";
+  const CHAPTER_URL_FOREIGN = `/api/sources/s1/chapter?anchor=${FOREIGN_ENC}`;
+
+  const chapterCallsOf = (fetchMock: ReturnType<typeof routedFetch>) => () =>
+    fetchMock.mock.calls.filter(([u]) =>
+      String(u).startsWith("/api/sources/s1/chapter"),
+    ).length;
+
+  it("does not refetch when the anchor changes within the loaded chapter (RA-13)", async () => {
+    nav.params = new URLSearchParams(`anchor=${ENCODED_S1}`);
+    const fetchMock = routedFetch({
+      "GET /api/auth/me": () => authedMe.clone(),
+      [`GET ${CHAPTER_URL_S1}`]: () => jsonResponse(200, chapter),
+      [`GET ${HIGHLIGHTS_URL}`]: () => jsonResponse(200, []),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const chapterCalls = chapterCallsOf(fetchMock);
+
+    const { rerender } = render(<ChapterReader sourceId="s1" />);
+    await screen.findByText("Ada Lovelace wrote the first algorithm.");
+    expect(chapterCalls()).toBe(1);
+
+    // The anchor changes to a section that lives in the SAME loaded chapter.
+    nav.params = new URLSearchParams(`anchor=${ENCODED_S2}`);
+    rerender(<ChapterReader sourceId="s1" />);
+
+    // The flow scrolls to it in place (its heading flashes); no new chapter load.
+    await waitFor(() => {
+      const flashed = document.querySelector(`[data-section-heading="${S2}"]`);
+      expect(flashed?.getAttribute("data-highlight")).toBe("on");
+    });
+    expect(chapterCalls()).toBe(1);
+  });
+
+  it("refetches when the anchor changes to a section outside the loaded chapter (RA-14)", async () => {
+    nav.params = new URLSearchParams(`anchor=${ENCODED_S2}`);
+    const foreignChapter: ChapterView = {
+      ...chapter,
+      chapter_title: "Chapter Two",
+      chapter_anchor: "part1/ch2.xhtml#s1",
+      prev_anchor: S1,
+      next_anchor: null,
+      sections: [
+        {
+          anchor: "part1/ch2.xhtml#s1",
+          title: "The Second Chapter",
+          section_path: ["Chapter Two", "Onward"],
+          markdown: "## Onward\n\nThe second chapter opens here.",
+          word_count: 200,
+        },
+      ],
+    };
+    const fetchMock = routedFetch({
+      "GET /api/auth/me": () => authedMe.clone(),
+      [`GET ${CHAPTER_URL_S2}`]: () => jsonResponse(200, chapter),
+      [`GET ${CHAPTER_URL_FOREIGN}`]: () => jsonResponse(200, foreignChapter),
+      [`GET ${HIGHLIGHTS_URL}`]: () => jsonResponse(200, []),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const chapterCalls = chapterCallsOf(fetchMock);
+
+    const { rerender } = render(<ChapterReader sourceId="s1" />);
+    await screen.findByText("Ada Lovelace wrote the first algorithm.");
+    expect(chapterCalls()).toBe(1);
+
+    // The anchor changes to a section in ANOTHER chapter — a reload is required.
+    nav.params = new URLSearchParams(`anchor=${FOREIGN_ENC}`);
+    rerender(<ChapterReader sourceId="s1" />);
+
+    await screen.findByText("The second chapter opens here.");
+    expect(chapterCalls()).toBe(2);
+  });
+});
+
+describe("ChapterReader panel param (RA-03)", () => {
+  it("does not refetch the chapter when only the panel param changes", async () => {
+    nav.params = new URLSearchParams(`anchor=${ENCODED_S2}`);
+    const fetchMock = routedFetch({
+      "GET /api/auth/me": () => authedMe.clone(),
+      [`GET ${CHAPTER_URL_S2}`]: () => jsonResponse(200, chapter),
+      [`GET ${HIGHLIGHTS_URL}`]: () => jsonResponse(200, []),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { rerender } = render(<ChapterReader sourceId="s1" />);
+    await screen.findByText("Ada Lovelace wrote the first algorithm.");
+    const chapterCalls = () =>
+      fetchMock.mock.calls.filter(([u]) =>
+        String(u).startsWith("/api/sources/s1/chapter"),
+      ).length;
+    expect(chapterCalls()).toBe(1);
+
+    // The panel opens on the same anchor — a shallow URL change, not a new load.
+    nav.params = new URLSearchParams(`anchor=${ENCODED_S2}&panel=ask`);
+    rerender(<ChapterReader sourceId="s1" />);
+
+    await screen.findByTestId("reader-panel");
+    expect(chapterCalls()).toBe(1);
   });
 });
 
