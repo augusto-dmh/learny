@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from datetime import datetime
+from decimal import Decimal
 from uuid import UUID
 
 
@@ -859,6 +860,85 @@ class NoteAnchor:
     quote_suffix: str
     status: str
     created_at: datetime
+    updated_at: datetime
+
+
+# --- Reader progress (RFC-004 Cycle B; design §Components/Data Models) -----------
+# The chapter-flow reader assembles a whole chapter per request from a lightweight
+# section index (no per-request re-parse). ``ChapterIndexRow`` is the flat, position-
+# ordered read model chapter partitioning and percent math run over; ``ChapterSection``
+# and ``ChapterContent`` are the assembled read model the web layer projects; and
+# ``ReadingPosition`` is where the reader stopped (anchor + server-computed percent).
+
+
+@dataclass(frozen=True)
+class ChapterIndexRow:
+    """One row of the flat, position-ordered chapter index (RD-01, design §Components).
+
+    The lightweight read model chapter partitioning (`partition`), anchor resolution
+    (`locate`), and whole-book percent (`percent_at`) run over — no section markdown,
+    so building the index and computing progress never loads chapter bodies.
+    ``anchor_aliases`` mirrors ``get_section``'s alias resolution; ``word_count`` is
+    the persisted per-section token count.
+    """
+
+    position: int
+    depth: int
+    title: str
+    section_path: tuple[str, ...]
+    anchor: str
+    anchor_aliases: tuple[str, ...]
+    word_count: int
+
+
+@dataclass(frozen=True)
+class ChapterSection:
+    """One section of an assembled chapter, with its readable markdown (RD-01/03).
+
+    The reader renders these in order inside one continuous article; ``anchor`` is the
+    section's DOM id and citation target, ``word_count`` feeds the live minutes-left math.
+    """
+
+    anchor: str
+    title: str
+    section_path: tuple[str, ...]
+    markdown: str
+    word_count: int
+
+
+@dataclass(frozen=True)
+class ChapterContent:
+    """A whole chapter assembled for the reader (RD-01, design §Data Models).
+
+    ``chapter_index`` is 0-based within ``chapter_count`` chapters; ``prev_anchor``/
+    ``next_anchor`` are the adjacent chapters' canonical anchors (``None`` at a book
+    edge). ``words_before_chapter``/``chapter_word_count``/``total_word_count`` let the
+    client compute whole-book percent and chapter minutes-left as the reader scrolls.
+    """
+
+    chapter_title: str
+    chapter_anchor: str
+    chapter_index: int
+    chapter_count: int
+    prev_anchor: str | None
+    next_anchor: str | None
+    words_before_chapter: int
+    chapter_word_count: int
+    total_word_count: int
+    sections: tuple[ChapterSection, ...]
+
+
+@dataclass(frozen=True)
+class ReadingPosition:
+    """Where the reader stopped in a source (RD-08/10): resolved anchor + percent.
+
+    ``anchor`` is the canonical section anchor; ``percent`` is the server-computed
+    whole-book percent at it (0.00–100.00). Returned to the reader for its progress
+    display and to resume the right chapter on open.
+    """
+
+    anchor: str
+    percent: Decimal
     updated_at: datetime
 
 
