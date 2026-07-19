@@ -219,6 +219,7 @@ describe("TeachPanel start + stream (RA-10)", () => {
 
     // Every flattened section (incl. the nested one as a breadcrumb) is offered.
     await screen.findByLabelText("Target");
+    await screen.findByRole("option", { name: "Chapter 1" }, { timeout: 5000 });
     expect(screen.getByRole("option", { name: "Chapter 1" })).toBeTruthy();
     expect(
       screen.getByRole("option", { name: "Chapter 1 › Section 1.1" }),
@@ -300,6 +301,7 @@ describe("TeachPanel start + stream (RA-10)", () => {
 
     render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
     await screen.findByLabelText("Target");
+    await screen.findByRole("option", { name: "Chapter 1" }, { timeout: 5000 });
     fireEvent.click(screen.getByRole("button", { name: "Start session" }));
     await screen.findByPlaceholderText(/send a message/i, {}, { timeout: 5000 });
     sendMessage("unrelated nonsense");
@@ -333,6 +335,7 @@ describe("TeachPanel start + stream (RA-10)", () => {
 
     render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
     await screen.findByLabelText("Target");
+    await screen.findByRole("option", { name: "Chapter 1" }, { timeout: 5000 });
     fireEvent.click(screen.getByRole("button", { name: "Start session" }));
     await screen.findByPlaceholderText(/send a message/i, {}, { timeout: 5000 });
     sendMessage("a message");
@@ -354,6 +357,7 @@ describe("TeachPanel start + stream (RA-10)", () => {
 
     render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
     await screen.findByLabelText("Target");
+    await screen.findByRole("option", { name: "Chapter 1" }, { timeout: 5000 });
     fireEvent.click(screen.getByRole("button", { name: "Start session" }));
     await screen.findByPlaceholderText(/send a message/i, {}, { timeout: 5000 });
     sendMessage("first try");
@@ -433,6 +437,7 @@ describe("TeachPanel auth (RA-10)", () => {
       <TeachPanel sourceId="s1" csrf="csrf-xyz" onRequireAuth={onRequireAuth} />,
     );
     await screen.findByLabelText("Target");
+    await screen.findByRole("option", { name: "Chapter 1" }, { timeout: 5000 });
     fireEvent.click(screen.getByRole("button", { name: "Start session" }));
     await screen.findByPlaceholderText(/send a message/i, {}, { timeout: 5000 });
     sendMessage("a message");
@@ -464,6 +469,7 @@ describe("TeachPanel save to note (RA-20/22)", () => {
 
     render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
     await screen.findByLabelText("Target");
+    await screen.findByRole("option", { name: "Chapter 1" }, { timeout: 5000 });
     fireEvent.click(screen.getByRole("button", { name: "Start session" }));
     await screen.findByPlaceholderText(/send a message/i, {}, { timeout: 5000 });
     sendMessage("Explain this chapter.");
@@ -538,6 +544,7 @@ describe("TeachPanel taught passage (RA-11)", () => {
       <TeachPanel sourceId="s1" csrf="csrf-xyz" onShowInBook={onShowInBook} />,
     );
     await screen.findByLabelText("Target");
+    await screen.findByRole("option", { name: "Chapter 1" }, { timeout: 5000 });
     fireEvent.change(screen.getByLabelText("Target"), {
       target: { value: "c2.xhtml" },
     });
