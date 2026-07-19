@@ -33,7 +33,6 @@ import {
   type CaptureAction,
   type CaptureSelection,
 } from "@/app/components/notes/capture-popover";
-import { type PendingPanelRequest } from "@/app/components/ask-panel";
 import { ReaderPanel, type PanelMode } from "@/app/components/reader-panel";
 import { ReadingControls } from "@/app/components/reading-controls";
 import { ChapterNav, TocPanel } from "@/app/components/toc-panel";
@@ -46,6 +45,7 @@ import {
 } from "@/app/components/use-scroll-position";
 import { fetchAuthState } from "@/app/lib/auth";
 import { paintHighlights } from "@/app/lib/highlight-paint";
+import { type PendingPanelRequest } from "@/app/lib/panel";
 import { captureHighlight, NoteError } from "@/app/lib/notes";
 import {
   getChapter,

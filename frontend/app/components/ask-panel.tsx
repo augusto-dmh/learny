@@ -28,11 +28,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useChat } from "@ai-sdk/react";
 
-import { saveAnswerAsNote } from "@/app/lib/answer-notes";
-import { type Citation } from "@/app/lib/questions";
+import { type PendingPanelRequest } from "@/app/lib/panel";
 import {
   assistantView,
   createQuestionTransport,
+  messageText,
   StreamRequestError,
   type LearnyUIMessage,
 } from "@/app/lib/streaming";
@@ -56,13 +56,7 @@ import {
 import { Button } from "@/components/ui/button";
 
 import { CitationList } from "./citations";
-
-/** A selection verb handed to the panel: one-tap explain, or ask-about context. */
-export type PendingPanelRequest = {
-  kind: "explain" | "ask";
-  quote: string;
-  anchor: string;
-};
+import { SaveToNoteAction } from "./save-to-note-action";
 
 /** Fixed empty-state suggestions; clicking one submits it as a question (RA-08). */
 const SUGGESTED_PROMPTS = [
@@ -79,14 +73,6 @@ function explainPrompt(quote: string): string {
 /** The submitted body when a typed question rides along with an attached quote. */
 function askAboutPrompt(quote: string, question: string): string {
   return `Regarding this passage:\n\n"${quote}"\n\n${question}`;
-}
-
-/** The concatenated text of a message's text parts (used for the note title). */
-function messageText(message: LearnyUIMessage): string {
-  return message.parts
-    .filter((part) => part.type === "text")
-    .map((part) => part.text)
-    .join("");
 }
 
 export function AskPanel({
@@ -279,78 +265,6 @@ export function AskPanel({
           <PromptInputSubmit status={status} onStop={() => void stop()} />
         </PromptInputFooter>
       </PromptInput>
-    </div>
-  );
-}
-
-/**
- * "Save to note" on a completed, cited answer (RA-20/21). Renders only where the
- * caller has already established the answer has ≥1 citation and is not not-found
- * (RA-22). Delegates the anchored-capture / plain-note fallback to
- * `saveAnswerAsNote`; a save failure surfaces an inline message (no retry loop —
- * the button simply stays available for a manual retry).
- */
-export function SaveToNoteAction({
-  sourceId,
-  question,
-  answerText,
-  citations,
-  csrf,
-}: {
-  sourceId: string;
-  question: string;
-  answerText: string;
-  citations: Citation[];
-  csrf: string;
-}) {
-  const [state, setState] = useState<"idle" | "saving" | "saved" | "error">(
-    "idle",
-  );
-
-  const handleSave = useCallback(async () => {
-    setState("saving");
-    try {
-      await saveAnswerAsNote({
-        sourceId,
-        question,
-        answerText,
-        citations,
-        csrfToken: csrf,
-      });
-      setState("saved");
-    } catch {
-      setState("error");
-    }
-  }, [sourceId, question, answerText, citations, csrf]);
-
-  if (state === "saved") {
-    return (
-      <p data-testid="save-note-status" className="text-xs text-muted-foreground">
-        Saved to notes.
-      </p>
-    );
-  }
-
-  return (
-    <div className="space-y-1">
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        onClick={() => void handleSave()}
-        disabled={state === "saving"}
-      >
-        {state === "saving" ? "Saving…" : "Save to note"}
-      </Button>
-      {state === "error" ? (
-        <p
-          role="alert"
-          data-testid="save-note-error"
-          className="text-xs text-destructive"
-        >
-          Could not save this answer as a note. Please try again.
-        </p>
-      ) : null}
     </div>
   );
 }

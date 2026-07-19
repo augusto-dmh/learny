@@ -30,6 +30,7 @@ import { fetchSourceStructure, type SourceStructure } from "@/app/lib/sources";
 import {
   assistantView,
   createTurnTransport,
+  messageText,
   StreamRequestError,
   turnsToUIMessages,
   type LearnyUIMessage,
@@ -61,8 +62,8 @@ import {
   type PromptInputMessage,
 } from "@/components/ai-elements/prompt-input";
 
-import { SaveToNoteAction } from "./ask-panel";
 import { CitationList } from "./citations";
+import { SaveToNoteAction } from "./save-to-note-action";
 
 /** A session the user has entered, plus the messages seeding its conversation. */
 type ActiveSession = {
@@ -319,12 +320,7 @@ function TeachChat({
             const notFound = answerStatus === "not_found_in_source";
             const previous = messages[index - 1];
             const question =
-              previous?.role === "user"
-                ? previous.parts
-                    .filter((part) => part.type === "text")
-                    .map((part) => part.text)
-                    .join("")
-                : "";
+              previous?.role === "user" ? messageText(previous) : "";
             return (
               <Message from="assistant" key={message.id}>
                 <MessageContent>

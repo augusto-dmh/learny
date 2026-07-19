@@ -37,6 +37,14 @@ export type LearnyDataParts = {
 /** A `useChat` message specialized to Learny's citation + answer-status parts. */
 export type LearnyUIMessage = UIMessage<unknown, LearnyDataParts>;
 
+/** The concatenated text of a message's text parts. */
+export function messageText(message: LearnyUIMessage): string {
+  return message.parts
+    .filter((part) => part.type === "text")
+    .map((part) => part.text)
+    .join("");
+}
+
 /** Read a message's collected text, citations, and answer status from its parts. */
 export function assistantView(message: LearnyUIMessage): {
   text: string;

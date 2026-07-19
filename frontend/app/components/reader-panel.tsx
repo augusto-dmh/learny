@@ -17,7 +17,9 @@ import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-import { AskPanel, type PendingPanelRequest } from "./ask-panel";
+import { type PendingPanelRequest } from "@/app/lib/panel";
+
+import { AskPanel } from "./ask-panel";
 import { TeachPanel } from "./teach-panel";
 
 export type PanelMode = "ask" | "teach";
