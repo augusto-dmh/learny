@@ -79,6 +79,7 @@ def test_migration_metadata_compiles() -> None:
         "tags",
         "note_tags",
         "note_links",
+        "reading_positions",
     }
     # Unique email + unique session token_hash are the security-critical constraints.
     user_uniques = {c.name for c in users.constraints if c.__class__.__name__ == "UniqueConstraint"}
@@ -1004,6 +1005,160 @@ def test_migration_0010_creates_notes_tables(monkeypatch) -> None:
         assert {"notes", "note_anchors", "tags", "note_tags", "note_links"} <= restored
     finally:
         engine.dispose()
+
+
+@pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
+def test_migration_0011_backfills_word_count_and_creates_reading_positions(
+    monkeypatch,
+) -> None:
+    """0011 up: backfills ``corpus_sections.word_count`` from stored markdown and
+    creates ``reading_positions``. The backfill matches ``len(markdown.split())`` on
+    pre-existing rows — multi-word, single-word, empty, and whitespace-only markdown
+    (blank => 0). ``reading_positions`` is (user_id, source_id)-keyed with both FKs
+    cascading, so deleting the source removes the stored position. Down one step to
+    0010 drops the table and the column (corpus_sections survives)."""
+    monkeypatch.setenv("LEARNY_DATABASE_URL", TEST_DB_URL)
+    cfg = _alembic_config(TEST_DB_URL)
+
+    # Land exactly on 0010 (pre-word_count) regardless of the shared DB's start
+    # state, so the seeded rows are backfilled by the 0011 upgrade below.
+    command.upgrade(cfg, "head")
+    command.downgrade(cfg, "0010_notes_schema")
+
+    # Seed a users -> source -> document -> sections chain with markdown whose word
+    # counts are known, committed so the 0011 backfill (its own transaction) sees them.
+    user_id = uuid.uuid4()
+    source_id = uuid.uuid4()
+    document_id = uuid.uuid4()
+    # (position, markdown, expected word_count)
+    cases = [
+        (0, "one two three four five", 5),
+        (1, "single", 1),
+        (2, "", 0),
+        (3, "   \n\t  ", 0),
+        (4, "alpha\nbeta\tgamma  delta", 4),
+    ]
+    section_ids = {position: uuid.uuid4() for position, _, _ in cases}
+    engine = create_engine(TEST_DB_URL)
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("INSERT INTO users (id, email) VALUES (:id, :email)"),
+                {"id": user_id, "email": f"{user_id}@example.test"},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO sources "
+                    "(id, user_id, title, filename, content_type, byte_size, checksum, object_key) "
+                    "VALUES (:id, :uid, 't', 'f.epub', 'application/epub+zip', 1, 'c', :key)"
+                ),
+                {"id": source_id, "uid": user_id, "key": f"sources/{source_id}.epub"},
+            )
+            conn.execute(
+                text("INSERT INTO corpus_documents (id, source_id) VALUES (:id, :sid)"),
+                {"id": document_id, "sid": source_id},
+            )
+            for position, markdown, _ in cases:
+                conn.execute(
+                    text(
+                        "INSERT INTO corpus_sections "
+                        "(id, document_id, position, depth, title, section_path, anchor, markdown) "
+                        "VALUES (:id, :did, :pos, 0, 't', '[]', :anchor, :md)"
+                    ),
+                    {
+                        "id": section_ids[position],
+                        "did": document_id,
+                        "pos": position,
+                        "anchor": f"a-{position}.xhtml",
+                        "md": markdown,
+                    },
+                )
+    finally:
+        engine.dispose()
+
+    # Upgrade to 0011: add_column DEFAULT 0 then the backfill UPDATE overwrites.
+    command.upgrade(cfg, "head")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        columns = {c["name"]: c for c in inspect(engine).get_columns("corpus_sections")}
+        assert "word_count" in columns
+        assert columns["word_count"]["nullable"] is False
+
+        with engine.connect() as conn:
+            stored = dict(
+                conn.execute(
+                    text(
+                        "SELECT position, word_count FROM corpus_sections "
+                        "WHERE document_id = :did"
+                    ),
+                    {"did": document_id},
+                ).all()
+            )
+        for position, _markdown, expected in cases:
+            assert stored[position] == expected
+
+        # reading_positions shape: (user_id, source_id) PK, NOT NULL anchor/percent/
+        # updated_at, both FKs cascade.
+        inspector = inspect(engine)
+        rp_columns = {c["name"]: c for c in inspector.get_columns("reading_positions")}
+        assert set(rp_columns) == {
+            "user_id",
+            "source_id",
+            "anchor",
+            "percent",
+            "updated_at",
+        }
+        assert rp_columns["anchor"]["nullable"] is False
+        assert rp_columns["percent"]["nullable"] is False
+        assert rp_columns["updated_at"]["nullable"] is False
+        rp_pk = inspector.get_pk_constraint("reading_positions")["constrained_columns"]
+        assert rp_pk == ["user_id", "source_id"]
+        rp_fks = {
+            tuple(fk["constrained_columns"]): fk
+            for fk in inspector.get_foreign_keys("reading_positions")
+        }
+        assert rp_fks[("user_id",)]["referred_table"] == "users"
+        assert rp_fks[("user_id",)]["options"].get("ondelete") == "CASCADE"
+        assert rp_fks[("source_id",)]["referred_table"] == "sources"
+        assert rp_fks[("source_id",)]["options"].get("ondelete") == "CASCADE"
+
+        # Real cascade: a stored position is removed when its source is deleted.
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO reading_positions "
+                    "(user_id, source_id, anchor, percent, updated_at) "
+                    "VALUES (:uid, :sid, 'a-0.xhtml', 12.34, now())"
+                ),
+                {"uid": user_id, "sid": source_id},
+            )
+        with engine.begin() as conn:
+            conn.execute(
+                text("DELETE FROM sources WHERE id = :sid"), {"sid": source_id}
+            )
+        with engine.connect() as conn:
+            remaining = conn.execute(
+                text("SELECT count(*) FROM reading_positions WHERE source_id = :sid"),
+                {"sid": source_id},
+            ).scalar_one()
+        assert remaining == 0
+    finally:
+        engine.dispose()
+
+    # Down one step to 0010: the table drops and the column is removed; the parent
+    # corpus_sections table survives.
+    command.downgrade(cfg, "0010_notes_schema")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        assert "corpus_sections" in set(inspect(engine).get_table_names())
+        assert "reading_positions" not in set(inspect(engine).get_table_names())
+        columns = {c["name"] for c in inspect(engine).get_columns("corpus_sections")}
+        assert "word_count" not in columns
+    finally:
+        engine.dispose()
+
+    # Drop everything to clear the committed seed rows; the module fixture restores head.
+    command.downgrade(cfg, "base")
 
 
 @pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")

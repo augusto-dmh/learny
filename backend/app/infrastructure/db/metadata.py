@@ -54,6 +54,7 @@ from sqlalchemy import (
     Index,
     Integer,
     MetaData,
+    Numeric,
     SmallInteger,
     String,
     Table,
@@ -241,6 +242,11 @@ corpus_sections = Table(
     ),
     # Derived Markdown view of this section's blocks (CORP-04).
     Column("markdown", Text, nullable=False),
+    # Whitespace-token count of ``markdown`` (``len(markdown.split())``), stamped at
+    # build time and backfilled by 0011, so whole-book percent / minutes-left are
+    # derivable without re-parsing. NOT NULL with a DEFAULT 0 so a row is valid before
+    # the build sets a real count (0 => no prose, no divide-by-zero downstream).
+    Column("word_count", Integer, nullable=False, server_default="0"),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     UniqueConstraint("document_id", "position"),
 )
@@ -592,4 +598,31 @@ note_links = Table(
     ),
     # Always-populated raw link text so an unresolved/broken link still renders.
     Column("target_text", Text, nullable=False),
+)
+
+# --- Reader progress (RFC-004 Cycle B; design §Data Models) ----------------------
+# One row per (user, source) recording where the reader stopped: the resolved
+# section ``anchor`` and the server-computed whole-book ``percent`` at it. Both FKs
+# cascade — unlike a note anchor this is disposable reading state, not user prose, so
+# deleting a user or source removes their positions. Last-write-wins on the (user,
+# source) primary key via ``INSERT ... ON CONFLICT DO UPDATE``.
+
+reading_positions = Table(
+    "reading_positions",
+    metadata,
+    Column(
+        "user_id",
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column(
+        "source_id",
+        UUID(as_uuid=True),
+        ForeignKey("sources.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column("anchor", Text, nullable=False),
+    Column("percent", Numeric(precision=5, scale=2), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
 )
