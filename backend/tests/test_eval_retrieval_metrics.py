@@ -119,6 +119,7 @@ class TestDeterministicRetrievalMetrics:
 
 
 @pytest.mark.live
+@pytest.mark.eval
 @pytest.mark.skipif(
     not os.environ.get("LEARNY_OPENAI_API_KEY"),
     reason="LEARNY_OPENAI_API_KEY unset — live OpenAI retrieval metrics skipped",

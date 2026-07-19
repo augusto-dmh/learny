@@ -1,10 +1,14 @@
-# Nightly generation evaluation (RFC-002 Cycle C, design §8).
+# Nightly generation + retrieval evaluation (RFC-002 Cycle C; gate enabled and
+# the keyed retrieval arm added in RFC-003 Cycle B).
 #
-# Runs the live smoke + LLM judge suite (`pytest -m "live and eval"`) against the
-# real provider and uploads the results JSONL. Never runs on PRs — the offline
-# suite (ci.yml) already asserts the deterministic citation invariants on every
-# PR. The provider secret is optional: when `ANTHROPIC_API_KEY` is unset the job
-# exits successfully with a notice, so a fork or a key-less repo stays green.
+# Runs the live smoke + LLM judge suite plus the keyed OpenAI retrieval-metrics
+# arm (`pytest -m "live and eval"`) against the real providers, with the
+# calibrated aggregate gate armed (`LEARNY_EVAL_GATE=1`) so a regression from
+# the recorded baselines fails the nightly run. Never runs on PRs — the offline
+# suite (ci.yml) stays deterministic and gate-free. The provider secrets are
+# optional: when `LEARNY_ANTHROPIC_API_KEY` is unset the job exits successfully
+# with a notice, so a fork or a key-less repo stays green; a missing
+# `LEARNY_OPENAI_API_KEY` only skips the retrieval arm (its tests self-skip).
 name: Nightly eval
 
 on:
@@ -42,16 +46,20 @@ jobs:
       # Secrets cannot be referenced in an `if:` condition, so map the secret to
       # an env var in a step and publish a boolean output the later steps gate on.
       # Absent secret → notice + success exit (the remaining steps are skipped).
-      - name: Check for the provider secret
+      - name: Check for the provider secrets
         id: secret
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          LEARNY_ANTHROPIC_API_KEY: ${{ secrets.LEARNY_ANTHROPIC_API_KEY }}
+          LEARNY_OPENAI_API_KEY: ${{ secrets.LEARNY_OPENAI_API_KEY }}
         run: |
-          if [ -z "$ANTHROPIC_API_KEY" ]; then
-            echo "::notice::ANTHROPIC_API_KEY is not configured — skipping the nightly generation eval."
+          if [ -z "$LEARNY_ANTHROPIC_API_KEY" ]; then
+            echo "::notice::LEARNY_ANTHROPIC_API_KEY is not configured — skipping the nightly eval."
             echo "present=false" >> "$GITHUB_OUTPUT"
           else
             echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+          if [ -z "$LEARNY_OPENAI_API_KEY" ]; then
+            echo "::notice::LEARNY_OPENAI_API_KEY is not configured — the keyed retrieval arm will self-skip."
           fi
       - uses: astral-sh/setup-uv@v7
         if: steps.secret.outputs.present == 'true'
@@ -71,7 +79,9 @@ jobs:
         working-directory: backend
         run: uv run pytest -m "live and eval" -q
         env:
-          LEARNY_ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          LEARNY_ANTHROPIC_API_KEY: ${{ secrets.LEARNY_ANTHROPIC_API_KEY }}
+          LEARNY_OPENAI_API_KEY: ${{ secrets.LEARNY_OPENAI_API_KEY }}
+          LEARNY_EVAL_GATE: "1"
           LEARNY_EVAL_MAX_CASES: "20"
           LEARNY_TEST_DATABASE_URL: postgresql+psycopg://learny:learny@localhost:5432/learny_test
       # The judge appends to evals/results/*.jsonl at the repo root; upload it so

@@ -74,6 +74,12 @@ Seen once or not yet corroborated. Tracked, not trusted.
 - evidence: backend/tests/test_backup_stack.py:228 (mutant #1, restore.sh:71 --if-exists) (backend/tests, shell-script-pins)
 - last seen: 2026-07-17T21:45:05Z
 
+### L-011 — Pin externally-derived constants (calibrated thresholds, measured baselines) with an exact-value offline test — the deriving runs are keyed/manual, so nothing else catches a typo. When one assert enforces multiple thresholds, add a single-failure test per threshold; a both-bad case cannot attribute, so an inverted comparison survives masked.
+- signal: `surviving_mutant` · recurrence: 1 feature(s) · harmful: 0
+- features: v3-eval-maturity
+- evidence: validation.md 2026-07-18 (M2a/M2b)
+- last seen: 2026-07-18T20:22:44Z
+
 ## Quarantined (failed when applied — ignore)
 
 A confirmed lesson that recurred alongside failure. Kept for the maintainer to review.

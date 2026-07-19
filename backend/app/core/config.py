@@ -163,7 +163,7 @@ class Settings(BaseSettings):
     # ``eval_max_cases`` bound the offline-optional evaluation harness.
     generation_provider: str = "local"
     anthropic_api_key: str = ""
-    generation_model: str = "claude-sonnet-4-6"
+    generation_model: str = "claude-sonnet-5"
     generation_max_tokens: int = 1024
     judge_model: str = "claude-haiku-4-5"
     eval_max_cases: int = 50

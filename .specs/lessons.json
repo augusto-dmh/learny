@@ -3,7 +3,7 @@
   "promote_threshold": 2,
   "window_days": 45,
   "quarantine_threshold": 2,
-  "next_id": 11,
+  "next_id": 12,
   "lessons": [
     {
       "id": "L-001",
@@ -184,6 +184,24 @@
       ],
       "created": "2026-07-17T21:45:05Z",
       "last_seen": "2026-07-17T21:45:05Z"
+    },
+    {
+      "id": "L-011",
+      "key": "surviving_mutant::pin externally derived constants calibrated thresholds measured baselines with an exact value offline test the deriving runs are keyed manual so nothing else catches a typo when one assert enforces multiple thresholds add a single failure test per threshold a both bad case cannot attribute so an inverted comparison survives masked",
+      "text": "Pin externally-derived constants (calibrated thresholds, measured baselines) with an exact-value offline test — the deriving runs are keyed/manual, so nothing else catches a typo. When one assert enforces multiple thresholds, add a single-failure test per threshold; a both-bad case cannot attribute, so an inverted comparison survives masked.",
+      "signal": "surviving_mutant",
+      "scope": "",
+      "status": "candidate",
+      "features": [
+        "v3-eval-maturity"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "validation.md 2026-07-18 (M2a/M2b)"
+      ],
+      "created": "2026-07-18T20:22:44Z",
+      "last_seen": "2026-07-18T20:22:44Z"
     }
   ]
 }

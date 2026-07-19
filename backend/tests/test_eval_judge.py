@@ -126,7 +126,7 @@ def test_relevancy_parses_integer_score() -> None:
 # --- JSONL result schema (GEN-21) ----------------------------------------------
 
 
-def _inputs(n: int) -> list[EvalInput]:
+def _inputs(n: int, *, citation_valid: bool = True) -> list[EvalInput]:
     return [
         EvalInput(
             case_id=f"case-{i}",
@@ -134,7 +134,7 @@ def _inputs(n: int) -> list[EvalInput]:
             evidence_text="passages",
             answer_text=f"a{i}",
             generation_model="claude-sonnet-4-6",
-            citation_valid=True,
+            citation_valid=citation_valid,
         )
         for i in range(n)
     ]
@@ -225,6 +225,65 @@ def test_gate_on_asserts_aggregate_thresholds(tmp_path: Path) -> None:
         run_eval(_inputs(1), judge=judge, max_cases=10, results_dir=tmp_path, gate=True)
 
 
+def test_gate_trips_on_faithfulness_alone(tmp_path: Path) -> None:
+    # Relevancy clears its threshold (5 >= RELEVANCY_MIN); only faithfulness is
+    # below the bar — the gate must still raise, proving that comparison is
+    # individually load-bearing.
+    judge, _ = _judge([_faithfulness_payload(False), {"score": 5}])
+
+    with pytest.raises(AssertionError, match="faithfulness"):
+        run_eval(_inputs(1), judge=judge, max_cases=10, results_dir=tmp_path, gate=True)
+
+
+def test_gate_trips_on_relevancy_alone(tmp_path: Path) -> None:
+    # Faithfulness clears its threshold (1.0 >= FAITHFULNESS_MIN); only
+    # relevancy is below the bar — the gate must still raise.
+    judge, _ = _judge([_faithfulness_payload(True), {"score": 1}])
+
+    with pytest.raises(AssertionError, match="relevancy"):
+        run_eval(_inputs(1), judge=judge, max_cases=10, results_dir=tmp_path, gate=True)
+
+
+def test_gate_trips_on_citation_validity_alone(tmp_path: Path) -> None:
+    # Faithfulness and relevancy both clear their thresholds; only a citation
+    # failure remains — the gate's third branch must be individually
+    # load-bearing too.
+    judge, _ = _judge([_faithfulness_payload(True), {"score": 5}])
+
+    with pytest.raises(AssertionError, match="citation"):
+        run_eval(
+            _inputs(1, citation_valid=False),
+            judge=judge,
+            max_cases=10,
+            results_dir=tmp_path,
+            gate=True,
+        )
+
+
+def test_gate_passes_on_baseline_aggregates(tmp_path: Path) -> None:
+    # All three branches clear: the gate must NOT raise. This is the case that
+    # kills an inverted comparison in any branch (an inverted assert fires on
+    # good aggregates, where the single-failure cases cannot see it).
+    judge, _ = _judge([_faithfulness_payload(True), {"score": 5}])
+
+    lines = run_eval(
+        _inputs(1), judge=judge, max_cases=10, results_dir=tmp_path, gate=True
+    )
+
+    assert lines[0]["faithfulness"] == 1.0
+    assert lines[0]["relevancy"] == 5
+    assert lines[0]["citation_valid"] is True
+
+
+def test_gate_constants_pin_the_calibrated_baselines() -> None:
+    # The 2026-07-18 calibration (docs/ops/eval-calibration.md): observed mean
+    # minus the safety margin. A drive-by edit to either constant silently
+    # re-arms or disarms the nightly gate, so the derived values are pinned
+    # here exactly like the model default is pinned in test_config.py.
+    assert FAITHFULNESS_MIN == 0.90
+    assert RELEVANCY_MIN == 2.5
+
+
 def test_gate_defaults_to_env_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LEARNY_EVAL_GATE", "1")
     judge, _ = _judge([_faithfulness_payload(False), {"score": 1}])
@@ -286,3 +345,18 @@ def test_live_judge_scores_one_case() -> None:
     assert len(lines) == 1
     assert 0.0 <= lines[0]["faithfulness"] <= 1.0
     assert lines[0]["relevancy"] in range(1, 6)
+
+
+# --- Nightly enrollment guard --------------------------------------------------
+
+
+def test_keyed_retrieval_arm_carries_the_nightly_markers() -> None:
+    # The `live` + `eval` markers are the sole wiring that enrolls the keyed
+    # retrieval arm in the nightly `-m "live and eval"` selection; losing
+    # either would silently drop retrieval from the nightly gate. Guarded here
+    # (not in the retrieval module) because that module is DB-gated and this
+    # check must run fully offline.
+    from tests.test_eval_retrieval_metrics import TestOpenAIRetrievalMetrics
+
+    marker_names = {mark.name for mark in TestOpenAIRetrievalMetrics.pytestmark}
+    assert {"live", "eval"} <= marker_names

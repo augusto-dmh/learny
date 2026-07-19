@@ -45,8 +45,23 @@ notes-domain ADR is accepted.
 | tlc Cycle | RFC-003 Cycle | Scope | Status |
 |---|---|---|---|
 | `v3-ops-maturity` | A | Backups + monitoring (TDD OQ #10) + image hygiene | Done (PR #28) |
-| `v3-eval-maturity` | B | Real-provider baselines + judge threshold gate | Not started |
+| `v3-eval-maturity` | B | Real-provider baselines + judge threshold gate | Done (PR #35) |
 | `v3-ocr` | C | Scanned-PDF OCR + localized normalization | Done (PR #29) — ran before B per AD-103 |
 | `v3-notes-research` | D | Second-brain research + notes-domain ADR (gate for E–F) | Done (PR #30) — ADR-0026 Accepted 2026-07-18, E–F unblocked |
 | `v3-notes-foundation` | E | Capture + organize: highlights, notes, links (per ADR-0026) | Done (PR #31) |
 | `v3-notes-loop` | F | Retrieve + reinforce: notes in RAG + quiz, export (provisional) | Not started |
+
+## Recorded candidates (not scheduled; user-blessed 2026-07-18)
+
+- **`eval-deepening`** (half-day, after RFC-004 Cycle A): (1) local **silver eval
+  set** — 10–20 hand-authored Q→expected-passage cases over the user's real books
+  (data git-ignored: copyrighted text; only a small runner committed); (2)
+  **relevancy rubric anchoring** — per-score exemplars in the judge prompt (fixes
+  the Haiku-parks-at-3 artifact; prompt_hash changes → one recalibration pass);
+  (3) **judge A/B** Haiku 4.5 vs Opus 4.8 on identical outputs; (4) **generation
+  A/B** Sonnet 5 vs Opus 4.8 over golden + silver → research doc under
+  `docs/research/` that decides whether the product default moves to Opus.
+  Sequencing rationale: comparison over the synthetic golden set alone is
+  uninformative (both models ace it) — silver set must exist first; product
+  default stays `claude-sonnet-5` until that evidence exists. Origin: user
+  provocation post-Cycle-B, reasoning in the 2026-07-18 session.

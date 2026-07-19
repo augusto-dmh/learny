@@ -41,12 +41,17 @@ ANSWERABILITY_PROMPT_PATH = _HERE / "prompts" / "answerability.md"
 # non-streaming guard so the fake client stays a plain object.
 _JUDGE_MAX_TOKENS = 1024
 
-# Aggregate gate thresholds — asserted only when LEARNY_EVAL_GATE=1. Provisional
-# literature defaults (research §4); recalibrate from the first observed baselines
-# before enabling the gate (research §5/§8: literature numbers are not Learny-
-# calibrated, so the default is report-only).
-FAITHFULNESS_MIN = 0.75
-RELEVANCY_MIN = 4.0
+# Aggregate gate thresholds — asserted only when LEARNY_EVAL_GATE=1. Calibrated
+# 2026-07-18 from five keyed seed runs of the live judge tier (generation
+# claude-sonnet-5, judge claude-haiku-4-5): observed faithfulness 1.0 and
+# relevancy 3 were stable across every run, citations always valid. Derivation
+# rule (docs/ops/eval-calibration.md): observed mean minus a safety margin
+# (faithfulness −0.10, relevancy −0.5) — the gate detects regression from this
+# baseline, it does not encode aspirational quality. Re-derive whenever the
+# generation or judge model changes, or when the judge tier widens beyond the
+# single smoke case.
+FAITHFULNESS_MIN = 0.90
+RELEVANCY_MIN = 2.5
 
 _FAITHFULNESS_SCHEMA: dict[str, Any] = {
     "type": "object",
