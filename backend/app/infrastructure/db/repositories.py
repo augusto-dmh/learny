@@ -42,6 +42,7 @@ from app.domain.entities import (
     AnchorBlockSnapshot,
     AnchorSection,
     Backlink,
+    CardProvenance,
     ChapterIndexRow,
     ChapterSection,
     ChunkToEmbed,
@@ -1357,11 +1358,18 @@ class SqlAlchemyQuizItemRepository:
         items leak, ordered ``due ASC, id ASC`` (A-6). Stale/orphaned items are excluded
         (QUIZ-17); the returned count is the full due total before the ``limit``.
         """
-        join = quiz_items.join(
-            sources, quiz_items.c.source_id == sources.c.id
-        ).join(
-            quiz_item_scheduling,
-            quiz_item_scheduling.c.quiz_item_id == quiz_items.c.id,
+        # The provenance hops are OUTER joins on purpose: a deck card has no anchor and
+        # a highlight card whose note was deleted has a NULL link, and neither may drop
+        # out of the due queue. Both hops are to a primary key, so they can only ever
+        # match one row and cannot inflate the count either (CAP-16).
+        join = (
+            quiz_items.join(sources, quiz_items.c.source_id == sources.c.id)
+            .join(
+                quiz_item_scheduling,
+                quiz_item_scheduling.c.quiz_item_id == quiz_items.c.id,
+            )
+            .outerjoin(note_anchors, quiz_items.c.note_anchor_id == note_anchors.c.id)
+            .outerjoin(notes, note_anchors.c.note_id == notes.c.id)
         )
         conditions = [
             sources.c.user_id == user_id,
@@ -1380,6 +1388,8 @@ class SqlAlchemyQuizItemRepository:
                 *_QUIZ_ITEM_READ_COLUMNS,
                 sources.c.title.label("source_title"),
                 quiz_item_scheduling.c.due.label("due"),
+                notes.c.id.label("provenance_note_id"),
+                notes.c.title.label("provenance_note_title"),
             )
             .select_from(join)
             .where(*conditions)
@@ -1388,7 +1398,18 @@ class SqlAlchemyQuizItemRepository:
         ).all()
         items = [
             DueReviewItem(
-                item=_to_quiz_item(row), source_title=row.source_title, due=row.due
+                item=_to_quiz_item(row),
+                source_title=row.source_title,
+                due=row.due,
+                # NULL on both the deck path and the severed-link path.
+                provenance=(
+                    CardProvenance(
+                        note_id=row.provenance_note_id,
+                        note_title=row.provenance_note_title,
+                    )
+                    if row.provenance_note_id is not None
+                    else None
+                ),
             )
             for row in rows
         ]
@@ -1727,8 +1748,11 @@ class SqlAlchemyNoteRepository:
     ) -> tuple[SourceHighlight, ...]:
         # Owner-scoped highlights for inline painting: a note anchor belongs to its
         # note's owner, so join notes and filter by user_id (unlike ``anchors_for_source``
-        # which spans all owners for reconciliation). Projects only the quote-with-context
-        # + status the reader painter needs, stably ordered.
+        # which spans all owners for reconciliation). Projects the quote-with-context +
+        # status the reader painter needs, stably ordered, plus the origin note's title
+        # and a has-body flag so the margin rail can label each entry from this one
+        # already-scoped query rather than a second round trip (AD-140). The painter
+        # ignores the two added fields.
         rows = self._conn.execute(
             select(
                 note_anchors.c.note_id,
@@ -1737,6 +1761,14 @@ class SqlAlchemyNoteRepository:
                 note_anchors.c.quote_prefix,
                 note_anchors.c.quote_suffix,
                 note_anchors.c.status,
+                notes.c.title.label("note_title"),
+                # A note is "annotated" when its body holds more than whitespace, so a
+                # bare highlight (body saved as '') reads as bodyless in the rail. The
+                # trim set is explicit: btrim defaults to spaces only, which would count
+                # a body of blank lines as prose.
+                (
+                    func.length(func.btrim(notes.c.body_markdown, " \t\r\n\f\v")) > 0
+                ).label("has_body"),
             )
             .join(notes, note_anchors.c.note_id == notes.c.id)
             .where(notes.c.user_id == user_id)
@@ -1751,6 +1783,8 @@ class SqlAlchemyNoteRepository:
                 quote_prefix=row.quote_prefix,
                 quote_suffix=row.quote_suffix,
                 status=row.status,
+                note_title=row.note_title,
+                has_body=row.has_body,
             )
             for row in rows
         )

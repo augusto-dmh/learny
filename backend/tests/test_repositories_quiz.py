@@ -38,7 +38,7 @@ from app.domain.entities import (
     Source,
     User,
 )
-from app.infrastructure.db.metadata import quiz_items, review_log
+from app.infrastructure.db.metadata import note_anchors, quiz_items, review_log
 from app.infrastructure.db.repositories import (
     SqlAlchemyCorpusRepository,
     SqlAlchemyNoteRepository,
@@ -728,6 +728,16 @@ def _persisted_anchor(
     )
 
 
+def _owner_of(db_conn: Connection, source: Source) -> UUID:
+    return source.user_id
+
+
+def _note_id_of_anchor(db_conn: Connection, anchor_id: UUID) -> UUID:
+    return db_conn.execute(
+        select(note_anchors.c.note_id).where(note_anchors.c.id == anchor_id)
+    ).scalar_one()
+
+
 def _highlight_item(
     source_id: UUID,
     note_anchor_id: UUID | None,
@@ -976,3 +986,88 @@ def test_reconcile_and_list_reads_carry_origin_and_provenance(
         assert by_id[deck.id].note_anchor_id is None
         assert by_id[highlight.id].origin == QuizItemOrigin.HIGHLIGHT
         assert by_id[highlight.id].note_anchor_id == anchor.id
+
+
+# --- due-queue provenance join is NULL-safe (CAP-15, CAP-16) --------------------
+
+
+def test_due_queue_carries_origin_note_provenance(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "quiz-due-provenance@example.com")
+    anchor = _persisted_anchor(db_conn, source, title="On attention")
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    item = _highlight_item(source.id, anchor.id)
+    repo.upsert(item, embedding=None)
+    now = datetime.now(UTC)
+    repo.create_scheduling(item.id, _snapshot(due=now - timedelta(minutes=1)))
+
+    total, due = repo.due_for_user(_owner_of(db_conn, source), now=now, limit=10)
+
+    assert total == 1
+    assert due[0].provenance is not None
+    assert due[0].provenance.note_title == "On attention"
+
+
+def test_due_queue_keeps_deck_cards_that_have_no_provenance(
+    db_conn: Connection,
+) -> None:
+    """THE join-safety check: the provenance hops are OUTER joins, so a deck card —
+    which has no anchor at all — must still appear in the due queue."""
+    source = _persisted_source(db_conn, "quiz-due-deck-kept@example.com")
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    item = _item(source.id)
+    repo.upsert(item, embedding=None)
+    now = datetime.now(UTC)
+    repo.create_scheduling(item.id, _snapshot(due=now - timedelta(minutes=1)))
+
+    total, due = repo.due_for_user(_owner_of(db_conn, source), now=now, limit=10)
+
+    assert total == 1
+    assert [row.item.id for row in due] == [item.id]
+    assert due[0].provenance is None
+
+
+def test_deleting_the_origin_note_keeps_the_card_due_with_null_provenance(
+    db_conn: Connection,
+) -> None:
+    """Deleting a note severs the link and nothing else: the card stays in the queue,
+    keeps its own excerpt, and simply reports no provenance (CAP-15)."""
+    source = _persisted_source(db_conn, "quiz-due-severed@example.com")
+    anchor = _persisted_anchor(db_conn, source, title="Doomed note")
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    item = _highlight_item(source.id, anchor.id)
+    repo.upsert(item, embedding=None)
+    now = datetime.now(UTC)
+    repo.create_scheduling(item.id, _snapshot(due=now - timedelta(minutes=1)))
+
+    SqlAlchemyNoteRepository(db_conn).delete(_note_id_of_anchor(db_conn, anchor.id))
+
+    total, due = repo.due_for_user(_owner_of(db_conn, source), now=now, limit=10)
+    assert total == 1
+    assert due[0].item.id == item.id
+    assert due[0].provenance is None
+    assert due[0].item.note_anchor_id is None
+    assert due[0].item.source_excerpt == item.source_excerpt
+
+
+def test_due_queue_mixes_deck_and_highlight_cards_without_dropping_either(
+    db_conn: Connection,
+) -> None:
+    """The outer joins must not drop rows or inflate the total count."""
+    source = _persisted_source(db_conn, "quiz-due-mixed@example.com")
+    anchor = _persisted_anchor(db_conn, source, title="Mixed")
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    deck = _item(source.id, question="Deck question?", answer="Deck answer")
+    highlight = _highlight_item(source.id, anchor.id)
+    repo.upsert(deck, embedding=None)
+    repo.upsert(highlight, embedding=None)
+    now = datetime.now(UTC)
+    repo.create_scheduling(deck.id, _snapshot(due=now - timedelta(minutes=2)))
+    repo.create_scheduling(highlight.id, _snapshot(due=now - timedelta(minutes=1)))
+
+    total, due = repo.due_for_user(_owner_of(db_conn, source), now=now, limit=10)
+
+    assert total == 2
+    assert {row.item.id for row in due} == {deck.id, highlight.id}
+    by_id = {row.item.id: row.provenance for row in due}
+    assert by_id[deck.id] is None
+    assert by_id[highlight.id].note_title == "Mixed"
