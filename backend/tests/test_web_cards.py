@@ -329,7 +329,11 @@ def test_suggestions_are_capped_at_the_configured_maximum(
     resp = _post_suggestions(cards_client, source_id, anchor_id, csrf=csrf)
 
     assert resp.status_code == 200, resp.text
-    assert len(resp.json()["suggestions"]) <= get_settings().quiz_max_suggestions
+    suggestions = resp.json()["suggestions"]
+    # Non-empty first: a bare `<= cap` passes on an empty response, so the cap would
+    # read as enforced even if the route had stopped generating anything at all.
+    assert suggestions
+    assert len(suggestions) <= get_settings().quiz_max_suggestions
 
 
 def test_suggestions_persist_nothing(
@@ -790,3 +794,99 @@ def test_deleting_the_origin_note_leaves_the_card_due_with_null_provenance(
     assert view["id"] == created.json()["id"]
     assert view["provenance"] is None
     assert view["citation"]["source_excerpt"] == QUOTE
+
+
+# --- Rate limiting (spec edge case: throttled on the quiz limiter) --------------
+
+
+@pytest.fixture
+def throttled_cards_client(db_conn: Connection, monkeypatch: pytest.MonkeyPatch):  # noqa: ANN201
+    """``cards_client`` with a 3-attempt limiter so the 4th call trips.
+
+    The card routes are the app's first synchronous LLM call inside a request
+    handler, and ``rate_limit_quiz`` is what bounds that exposure. Without a test
+    the dependency can be deleted from every route with the suite still green.
+    """
+    from app.core.config import get_settings
+    from app.infrastructure.web.dependencies import get_db_connection
+    from app.infrastructure.web.rate_limit import (
+        InMemoryFixedWindowRateLimiter,
+        get_rate_limiter,
+        set_rate_limiter,
+    )
+    from app.main import create_app
+
+    monkeypatch.setenv("LEARNY_SESSION_COOKIE_SECURE", "false")
+    monkeypatch.setenv("LEARNY_CSRF_TRUSTED_ORIGINS", TEST_ORIGIN)
+    monkeypatch.setenv("LEARNY_QUIZ_MAX_CARD_CHARS", str(CARDS_MAX_CHARS))
+    monkeypatch.setenv("LEARNY_GENERATION_PROVIDER", "local")
+    monkeypatch.setenv("LEARNY_EMBEDDING_PROVIDER", "local")
+    get_settings.cache_clear()
+
+    previous_limiter = get_rate_limiter()
+    set_rate_limiter(InMemoryFixedWindowRateLimiter(max_attempts=3, window_seconds=300))
+
+    app = create_app()
+
+    def _override() -> Iterator[Connection]:
+        yield db_conn
+
+    app.dependency_overrides[get_db_connection] = _override
+    with TestClient(app, headers={"Origin": TEST_ORIGIN}) as c:
+        yield c
+    app.dependency_overrides.clear()
+    set_rate_limiter(previous_limiter)
+    get_settings.cache_clear()
+
+
+def test_suggestions_are_throttled_on_the_quiz_limiter(
+    throttled_cards_client: TestClient, db_conn: Connection
+) -> None:
+    # Generation is the expensive leg — the limiter must trip regardless of outcome.
+    source_id, anchor_id, csrf = _seed_highlighted_source(
+        throttled_cards_client, db_conn, "suggest-rl@example.com"
+    )
+    for _ in range(3):
+        _post_suggestions(throttled_cards_client, source_id, anchor_id, csrf=csrf)
+    throttled = _post_suggestions(
+        throttled_cards_client, source_id, anchor_id, csrf=csrf
+    )
+    assert throttled.status_code == 429, throttled.text
+    assert "retry-after" in {k.lower() for k in throttled.headers}
+
+
+def test_accept_is_throttled_on_the_quiz_limiter(
+    throttled_cards_client: TestClient, db_conn: Connection
+) -> None:
+    source_id, anchor_id, csrf = _seed_highlighted_source(
+        throttled_cards_client, db_conn, "accept-rl@example.com"
+    )
+    body = _accept_body(note_anchor_id=str(anchor_id))
+    for _ in range(3):
+        _post_card(throttled_cards_client, source_id, body, csrf=csrf)
+    throttled = _post_card(throttled_cards_client, source_id, body, csrf=csrf)
+    assert throttled.status_code == 429, throttled.text
+    assert "retry-after" in {k.lower() for k in throttled.headers}
+
+
+def test_patch_is_throttled_on_the_quiz_limiter(
+    throttled_cards_client: TestClient, db_conn: Connection
+) -> None:
+    source_id, anchor_id, csrf = _seed_highlighted_source(
+        throttled_cards_client, db_conn, "patch-rl@example.com"
+    )
+    created = _post_card(
+        throttled_cards_client,
+        source_id,
+        _accept_body(note_anchor_id=str(anchor_id)),
+        csrf=csrf,
+    )
+    assert created.status_code == 201, created.text
+    item_id = created.json()["id"]
+    edit = {"question": "Reworded?", "answer": "Yes"}
+    # The limiter buckets per route, so the accept above spends nothing here.
+    for _ in range(3):
+        _patch_card(throttled_cards_client, item_id, edit, csrf=csrf)
+    throttled = _patch_card(throttled_cards_client, item_id, edit, csrf=csrf)
+    assert throttled.status_code == 429, throttled.text
+    assert "retry-after" in {k.lower() for k in throttled.headers}

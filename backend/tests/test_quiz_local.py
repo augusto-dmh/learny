@@ -123,6 +123,9 @@ def test_suggest_cards_never_exceeds_the_limit() -> None:
 
     for limit in (1, 2, 3):
         candidates = adapter.suggest_cards(section, "It also does more.", limit)
+        # Non-empty first: `<= limit` alone holds for an adapter that returns nothing,
+        # which would satisfy the cap while silently producing no cards.
+        assert candidates
         assert len(candidates) <= limit
 
 

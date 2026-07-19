@@ -1448,6 +1448,30 @@ def test_migration_0012_downgrade_refuses_to_destroy_duplicate_cards(monkeypatch
     finally:
         engine.dispose()
     command.downgrade(cfg, "0011_reader_progress")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        # The remedy actually completes: the columns are gone and 0008's global
+        # constraint is back. Asserting this is what makes the guard a gate rather
+        # than a wall — without it, "not a dead end" rests on nothing raising.
+        columns = {c["name"] for c in inspect(engine).get_columns("quiz_items")}
+        assert "origin" not in columns
+        assert "note_anchor_id" not in columns
+        restored = {
+            uc["name"]: uc["column_names"]
+            for uc in inspect(engine).get_unique_constraints("quiz_items")
+        }
+        assert restored.get("uq_quiz_items_source_id") == ["source_id", "content_key"]
+        surviving = None
+        with engine.connect() as conn:
+            surviving = conn.execute(
+                text("SELECT count(*) FROM quiz_items WHERE source_id = :sid"),
+                {"sid": source_id},
+            ).scalar_one()
+        # Only the operator's own deletion removed a card — the downgrade took none.
+        assert surviving == 1
+    finally:
+        engine.dispose()
+
     command.downgrade(cfg, "base")
 
 
