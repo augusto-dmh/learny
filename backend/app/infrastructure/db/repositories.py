@@ -412,6 +412,7 @@ class SqlAlchemyCorpusRepository:
                     "anchor": section.anchor,
                     "anchor_aliases": list(section.anchor_aliases),
                     "markdown": record.markdown,
+                    "word_count": record.word_count,
                 }
             )
             for index, block in enumerate(section.blocks):

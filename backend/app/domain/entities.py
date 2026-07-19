@@ -289,6 +289,16 @@ class CorpusSectionRecord:
     chunks: tuple[SectionChunk, ...]
     block_hashes: tuple[str, ...] = ()
 
+    @property
+    def word_count(self) -> int:
+        """Whitespace-token count of the derived section markdown (RD-14).
+
+        Derived from ``markdown`` (its single source of truth) so build-time and
+        stored counts never drift; a section with no prose counts 0, so downstream
+        percent / minutes-left math never divides by zero (RD-16).
+        """
+        return len(self.markdown.split())
+
 
 @dataclass(frozen=True)
 class StructureSection:
