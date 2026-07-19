@@ -105,6 +105,35 @@ describe.each([
   });
 });
 
+// IDF-05 AC1 — the Paper appearance is a reader-scoped token layer: warm
+// values live only under the guarded container selector, so app chrome (and
+// all of dark mode) never sees them.
+describe("paper reading appearance", () => {
+  const PAPER_SELECTOR = 'html:not(.dark) [data-appearance="paper"]';
+  const PAPER: [name: string, hex: string][] = [
+    ["background", "#F4EFE5"],
+    ["card", "#FCF9F2"],
+    ["popover", "#FCF9F2"],
+    ["foreground", "#27211A"],
+    ["muted-foreground", "#6F6455"],
+    ["border", "#E2DACA"],
+  ];
+
+  it("defines the warm surface under the scoped, light-only selector", () => {
+    const paper = cssBlock(PAPER_SELECTOR);
+    for (const [name, hex] of PAPER) {
+      expect(token(paper, name)).toBe(hex);
+    }
+  });
+
+  it("keeps paper values out of the app-wide token blocks", () => {
+    for (const [, hex] of PAPER) {
+      expect(light).not.toContain(hex);
+      expect(dark).not.toContain(hex);
+    }
+  });
+});
+
 // IDF-02 AC1 — the reading serif is bound at build time with Portuguese
 // diacritic coverage. RootLayout renders <html>, which Testing Library cannot
 // mount, so the binding is asserted over the committed source.
