@@ -28,10 +28,10 @@ Test-count floor: frontend suite starts at **324 passed** — migrated ask/teach
 
 | Phase | Tasks | ACs |
 |---|---|---|
-| A — Panel shell & routing | A1, A2 | RA-01..06 |
-| B — Ask & Teach panel modes | B1, B2, B3 | RA-07..11 |
-| C — Citations as passages + selection verbs | C1, C2, C3 | RA-12..19 |
-| D — Save-to-note + hardening | D1, D2, D3 | RA-20..22 |
+| A — Panel shell & routing | A1 ✅ acc9262, A2 ✅ 3735ce3 (full gate: 340 passed + tsc clean) | RA-01..06 |
+| B — Ask & Teach panel modes | B1 ✅ 2df78dd, B2 ✅ c34792a, B3 ✅ 0ce3838 (full gate: 346 passed + tsc clean; ask 7→11, teach 6→8 scenarios, auth legs adapted to reader-owned auth) | RA-07..11 |
+| C — Citations as passages + selection verbs | C1 ✅ 4e1f166, C2 ✅ 1e262f8 (squashed from a duplicate-worker overlap, tree verified identical), C3 ✅ 5ca4bd0 (full gate: 362 passed + tsc clean; citations 2→5, chapter-reader 29→36, capture-popover +6 new; NF-12 "Highlight + note"→"Note" label adapted for the five-verb set) | RA-12..19 |
+| D — Save-to-note + hardening | D1 ✅ 91ceeb7, D2 ✅ 0acaa4d, D3 ✅ no-commit (sweep clean; final gates: frontend 380 passed + tsc + build, backend 824 passed/0 failed + ruff; SPEC_DEVIATION: fallback keys off NoteError kind `stale_capture`, design.md had guessed `stale`) | RA-20..22 |
 
 ## Task Breakdown
 

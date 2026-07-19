@@ -66,4 +66,6 @@ Auto-decided per the learny-ship-cycle autonomy contract (recommended option cho
 
 ## Deviations
 
-_(recorded during execution if any)_
+- Phase B: the panels no longer resolve auth themselves (the reader owns it), so the two migrated auth scenarios became "401 stream start → onRequireAuth" legs — behavior preserved at the integration boundary, test shape adapted. Reported in the Phase B summary.
+- Phase C: the capture popover's combined "Highlight + note" verb label became "Note" to satisfy the five-verb set (Highlight and Note are separate verbs per RFC-004); the underlying capture action, payload, navigation, and 409 legs are untouched, and the notes-foundation test was strengthened (asserts all five verbs) rather than weakened.
+- Phase C execution incident: the session-limit-killed worker revived after the account limit reset, colliding with its relaunched replacement — C2 briefly existed as two same-message commits from the two agents. Resolved at the orchestrator: both workers stopped, C2 squashed to `1e262f8` via commit-tree with the final tree verified bit-identical to the pre-squash HEAD, C3 re-applied as `5ca4bd0`. Lesson for future cycles: a worker that dies on a session limit may resume when the limit resets — stop it explicitly (TaskStop) before relaunching a replacement.
