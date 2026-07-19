@@ -36,6 +36,7 @@ import {
 import { ReadingControls } from "@/app/components/reading-controls";
 import { ChapterNav, TocPanel } from "@/app/components/toc-panel";
 import { useReadingSettings } from "@/app/components/use-reading-settings";
+import { useRecedingChrome } from "@/app/components/use-receding-chrome";
 import {
   useScrollPosition,
   type ObserverFactory,
@@ -51,6 +52,7 @@ import {
 import { MessageResponse } from "@/components/ai-elements/message";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { cn } from "@/lib/utils";
 
 type LoadState =
   | { kind: "loading" }
@@ -219,6 +221,15 @@ export function ChapterFlow({
   const [flashAnchor, setFlashAnchor] = useState<string | null>(scrollTarget);
   // The below-lg table of contents collapses behind the top-bar toggle (RD-25).
   const [tocOpen, setTocOpen] = useState(false);
+  // Top bar recedes on downward scroll, restores on upward scroll (RD-31).
+  const chromeHidden = useRecedingChrome();
+  // When a deep link opens away from the stored reading position, offer a
+  // one-click return to it (RD-24). A same-chapter TOC jump refreshes this to
+  // the pre-jump section below.
+  const [returnAnchor, setReturnAnchor] = useState<string | null>(() => {
+    const stored = chapter.reading_position?.anchor ?? null;
+    return stored && scrollTarget && scrollTarget !== stored ? stored : null;
+  });
   const [capture, setCapture] = useState<ActiveCapture | null>(null);
   const [pending, setPending] = useState(false);
   const [captureError, setCaptureError] = useState<string | null>(null);
@@ -327,9 +338,35 @@ export function ChapterFlow({
     }
   }
 
+  // Once a return chip is showing, dismiss it after the reader has scrolled a
+  // way past where the jump landed — they have settled into the new spot (RD-24).
+  useEffect(() => {
+    if (!returnAnchor) {
+      return;
+    }
+    let baseline: number | null = null;
+    function onScroll(event: Event) {
+      const target = event.target;
+      const y = target instanceof HTMLElement ? target.scrollTop : window.scrollY;
+      if (baseline === null) {
+        baseline = y;
+        return;
+      }
+      if (Math.abs(y - baseline) > 400) {
+        setReturnAnchor(null);
+      }
+    }
+    window.addEventListener("scroll", onScroll, true);
+    return () => window.removeEventListener("scroll", onScroll, true);
+  }, [returnAnchor]);
+
   // A TOC click inside the loaded chapter scrolls within the flow rather than
   // reloading, and keeps the URL anchor in step so the deep link stays shareable.
   function handleSameChapterNavigate(anchor: string) {
+    // Remember where the reader was so the chip can bring them back (RD-24).
+    if (currentAnchor && currentAnchor !== anchor) {
+      setReturnAnchor(currentAnchor);
+    }
     document
       .getElementById(anchor)
       ?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -337,44 +374,70 @@ export function ChapterFlow({
     setTocOpen(false);
   }
 
+  // One-click return to the pre-jump position: scroll to it if it is in this
+  // chapter, otherwise load its chapter; then dismiss the chip (RD-24).
+  function handleReturn() {
+    if (!returnAnchor) {
+      return;
+    }
+    const target = document.getElementById(returnAnchor);
+    if (target) {
+      target.scrollIntoView({ behavior: "smooth", block: "start" });
+      router.replace(
+        `/sources/${sourceId}/read?anchor=${encodeURIComponent(returnAnchor)}`,
+      );
+    } else {
+      router.push(
+        `/sources/${sourceId}/read?anchor=${encodeURIComponent(returnAnchor)}`,
+      );
+    }
+    setReturnAnchor(null);
+  }
+
   return (
     <div>
-      <div
-        data-testid="reader-top-bar"
-        className="sticky top-0 z-20 flex items-center justify-between gap-4 border-b bg-background/80 px-4 py-2 backdrop-blur"
-      >
-        <div className="flex min-w-0 items-center gap-2">
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label="Table of contents"
-            aria-expanded={tocOpen}
-            className="lg:hidden"
-            onClick={() => setTocOpen((prev) => !prev)}
-          >
-            <List />
-          </Button>
-          <span className="min-w-0 truncate text-sm font-medium">
-            {chapter.chapter_title}
-          </span>
+      <div className="sticky top-0 z-20">
+        <div
+          data-testid="reader-top-bar"
+          className={cn(
+            "flex items-center justify-between gap-4 border-b bg-background/80 px-4 py-2 backdrop-blur transition-transform duration-200 motion-reduce:transition-none",
+            chromeHidden && "-translate-y-full",
+          )}
+        >
+          <div className="flex min-w-0 items-center gap-2">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Table of contents"
+              aria-expanded={tocOpen}
+              className="lg:hidden"
+              onClick={() => setTocOpen((prev) => !prev)}
+            >
+              <List />
+            </Button>
+            <span className="min-w-0 truncate text-sm font-medium">
+              {chapter.chapter_title}
+            </span>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <span
+              data-testid="reading-progress"
+              className="text-xs text-muted-foreground tabular-nums"
+            >
+              {Math.round(bookPercent)}% read · {chapterMinutesLeft} min left
+            </span>
+            <ReadingControls
+              size={reading.size}
+              leading={reading.leading}
+              appearance={reading.appearance}
+              onSizeChange={reading.setSize}
+              onLeadingChange={reading.setLeading}
+              onAppearanceChange={reading.setAppearance}
+            />
+          </div>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <span
-            data-testid="reading-progress"
-            className="text-xs text-muted-foreground tabular-nums"
-          >
-            {Math.round(bookPercent)}% read · {chapterMinutesLeft} min left
-          </span>
-          <ReadingControls
-            size={reading.size}
-            leading={reading.leading}
-            appearance={reading.appearance}
-            onSizeChange={reading.setSize}
-            onLeadingChange={reading.setLeading}
-            onAppearanceChange={reading.setAppearance}
-          />
-        </div>
+        <InkLine percent={bookPercent} />
       </div>
       <div className="lg:flex lg:items-start lg:gap-6">
         <TocPanel
@@ -396,30 +459,30 @@ export function ChapterFlow({
           }
           className="prose-reading relative mx-auto max-w-2xl bg-background py-6 text-foreground"
         >
-        {chapter.sections.map((section) => {
-          const breadcrumb = section.section_path.join(" › ");
-          return (
-            <section
-              key={section.anchor}
-              id={section.anchor}
-              data-section-anchor={section.anchor}
-              onMouseUp={() => handleMouseUp(section)}
-              className="scroll-mt-16"
-            >
-              <div
-                data-section-heading={section.anchor}
-                data-highlight={flashAnchor === section.anchor ? "on" : "off"}
-                className="rounded-md px-2 py-1 transition-colors duration-500 data-[highlight=on]:bg-accent"
+          {chapter.sections.map((section) => {
+            const breadcrumb = section.section_path.join(" › ");
+            return (
+              <section
+                key={section.anchor}
+                id={section.anchor}
+                data-section-anchor={section.anchor}
+                onMouseUp={() => handleMouseUp(section)}
+                className="scroll-mt-16"
               >
-                {breadcrumb ? (
-                  <p className="text-xs text-muted-foreground">{breadcrumb}</p>
-                ) : null}
-                <h2 className="text-2xl font-semibold">{section.title}</h2>
-              </div>
-              <MessageResponse>{section.markdown}</MessageResponse>
-            </section>
-          );
-        })}
+                <div
+                  data-section-heading={section.anchor}
+                  data-highlight={flashAnchor === section.anchor ? "on" : "off"}
+                  className="rounded-md px-2 py-1 transition-colors duration-500 data-[highlight=on]:bg-accent"
+                >
+                  {breadcrumb ? (
+                    <p className="text-xs text-muted-foreground">{breadcrumb}</p>
+                  ) : null}
+                  <h2 className="text-2xl font-semibold">{section.title}</h2>
+                </div>
+                <MessageResponse>{section.markdown}</MessageResponse>
+              </section>
+            );
+          })}
           <ChapterNav
             sourceId={sourceId}
             prevAnchor={chapter.prev_anchor}
@@ -436,7 +499,48 @@ export function ChapterFlow({
           ) : null}
         </article>
       </div>
+      {returnAnchor ? <ReturnChip onReturn={handleReturn} /> : null}
     </div>
+  );
+}
+
+/**
+ * The whole-book progress hairline (RD-30): a token-only rule whose fill tracks
+ * the reading percent. It sits below the top bar and stays put when the bar
+ * recedes, so progress is always legible. Colours come from identity tokens
+ * (`--border` rail, `--primary` ink) — no raw hexes, so the leak scan stays green.
+ */
+function InkLine({ percent }: { percent: number }) {
+  const clamped = Math.max(0, Math.min(100, percent));
+  return (
+    <div
+      data-testid="ink-line"
+      aria-hidden
+      className="h-px w-full bg-border"
+    >
+      <div
+        data-testid="ink-line-fill"
+        style={{ width: `${clamped}%` }}
+        className="h-full bg-primary transition-[width] duration-300 motion-reduce:transition-none"
+      />
+    </div>
+  );
+}
+
+/**
+ * The jump-back affordance (RD-24): a floating control that returns the reader to
+ * the position they jumped away from. It is only mounted while a return target is
+ * live, so its presence is itself the "there is somewhere to go back to" signal.
+ */
+function ReturnChip({ onReturn }: { onReturn: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onReturn}
+      className="fixed bottom-6 left-1/2 z-30 -translate-x-1/2 rounded-full border bg-card px-4 py-2 text-sm font-medium shadow-md ring-1 ring-foreground/10 transition-colors hover:bg-accent"
+    >
+      Return to where you were
+    </button>
   );
 }
 
