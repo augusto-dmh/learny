@@ -111,7 +111,7 @@ highlight-derived card, `null` after the note is deleted; highlight rows carry t
 
 **C3 — Reconcile coverage and step-order pin**
 Assert the existing ladder applies to highlight-origin rows (keep/stale/relocate/orphan) without
-touching scheduling, and pin the ingestion step order (notes reconcile before quiz).
+touching scheduling, and pin the shipped ingestion step order (quiz reconcile, then notes).
 *Verify*: `tests/test_reconcile_quiz.py` (DB-gated) + a step-order assertion in the worker tests.
 *Covers*: CAP-17.
 

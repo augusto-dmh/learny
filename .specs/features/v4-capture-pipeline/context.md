@@ -92,7 +92,7 @@ model setting already exists), and every decision has a defensible recommendatio
 
 - **(a) Highlight-origin cards reconcile through the existing `ReconcileQuizItems` ladder on
   their own anchor + excerpt snapshot, independent of the linked anchor's fate; a test pins the
-  current ingestion step order (notes reconcile before quiz) — CHOSEN.** Why: the two
+  current ingestion step order — **quiz reconcile first, then note anchors** — CHOSEN.** Why: the two
   reconcilers have no ordering contract today, and giving cards a data dependency on note-anchor
   outcomes would create one, coupling two aggregates across an ingestion pipeline. Each object
   carries its own snapshot, so each converges on the same corpus independently. Why not: a card

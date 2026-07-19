@@ -242,7 +242,7 @@ notes aggregate references quiz.
 | Concern | Location | Impact | Mitigation |
 | --- | --- | --- | --- |
 | First synchronous LLM call inside a request handler; a slow provider ties up a worker | new `web/cards.py` | Latency/thread pressure under concurrency | Bounded by `generation_max_tokens`, a 3-candidate cap, and `rate_limit_quiz`; single-user scale (RFC-003 assumption). Flagged for the merge gate |
-| Two reconcilers with no ordering contract | `worker/tasks.py:180` and `:188` | A card and its origin anchor can disagree after re-ingest | AD-137: independent reconcile on own snapshots; a test pins the current step order so a silent reorder fails |
+| Two reconcilers with no ordering contract | `worker/tasks.py` — quiz reconcile, then notes | A card and its origin anchor can disagree after re-ingest | AD-137: independent reconcile on own snapshots; `test_note_reconcile_runs_after_quiz_reconcile` pins the shipped order (quiz → notes) so a silent reorder fails |
 | Partial unique indexes are easy to miss when reading the schema | `metadata.py` quiz_items | A future contributor may reinstate a global unique | Explicit tests for both index behaviours + a comment at the index site |
 | `sources` CASCADE deletes quiz items while notes survive (bare-UUID `source_id`) | `metadata.py:395` vs `:523` | Deleting a source destroys cards but keeps orphaned notes | Pre-existing and correct per ADR-026 (prose is protected, derived cards are not); documented, not changed |
 | `quiz.ts` throws untyped `Error` | `frontend/app/lib/quiz.ts:203` | Suggestion flow cannot branch on error kind | New `lib/cards.ts` follows the `NoteError` typed convention; `quiz.ts` left untouched to keep the diff honest |
