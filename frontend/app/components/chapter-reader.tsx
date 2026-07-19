@@ -22,6 +22,7 @@
  * against its own Markdown and anchor.
  */
 
+import { List } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState, type CSSProperties } from "react";
@@ -33,6 +34,7 @@ import {
   type CaptureSelection,
 } from "@/app/components/notes/capture-popover";
 import { ReadingControls } from "@/app/components/reading-controls";
+import { ChapterNav, TocPanel } from "@/app/components/toc-panel";
 import { useReadingSettings } from "@/app/components/use-reading-settings";
 import {
   useScrollPosition,
@@ -47,6 +49,7 @@ import {
   type ChapterView,
 } from "@/app/lib/reading";
 import { MessageResponse } from "@/components/ai-elements/message";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 
 type LoadState =
@@ -214,6 +217,8 @@ export function ChapterFlow({
   const reading = useReadingSettings();
   const { size, leading, appearance } = reading;
   const [flashAnchor, setFlashAnchor] = useState<string | null>(scrollTarget);
+  // The below-lg table of contents collapses behind the top-bar toggle (RD-25).
+  const [tocOpen, setTocOpen] = useState(false);
   const [capture, setCapture] = useState<ActiveCapture | null>(null);
   const [pending, setPending] = useState(false);
   const [captureError, setCaptureError] = useState<string | null>(null);
@@ -322,15 +327,38 @@ export function ChapterFlow({
     }
   }
 
+  // A TOC click inside the loaded chapter scrolls within the flow rather than
+  // reloading, and keeps the URL anchor in step so the deep link stays shareable.
+  function handleSameChapterNavigate(anchor: string) {
+    document
+      .getElementById(anchor)
+      ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    router.replace(`/sources/${sourceId}/read?anchor=${encodeURIComponent(anchor)}`);
+    setTocOpen(false);
+  }
+
   return (
     <div>
       <div
         data-testid="reader-top-bar"
         className="sticky top-0 z-20 flex items-center justify-between gap-4 border-b bg-background/80 px-4 py-2 backdrop-blur"
       >
-        <span className="min-w-0 truncate text-sm font-medium">
-          {chapter.chapter_title}
-        </span>
+        <div className="flex min-w-0 items-center gap-2">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Table of contents"
+            aria-expanded={tocOpen}
+            className="lg:hidden"
+            onClick={() => setTocOpen((prev) => !prev)}
+          >
+            <List />
+          </Button>
+          <span className="min-w-0 truncate text-sm font-medium">
+            {chapter.chapter_title}
+          </span>
+        </div>
         <div className="flex shrink-0 items-center gap-2">
           <span
             data-testid="reading-progress"
@@ -348,17 +376,26 @@ export function ChapterFlow({
           />
         </div>
       </div>
-      <article
-        ref={articleRef}
-        data-appearance={appearance}
-        style={
-          {
-            "--reading-size": `${size}px`,
-            "--reading-leading": `${leading}`,
-          } as CSSProperties
-        }
-        className="prose-reading relative mx-auto max-w-2xl bg-background py-6 text-foreground"
-      >
+      <div className="lg:flex lg:items-start lg:gap-6">
+        <TocPanel
+          sourceId={sourceId}
+          currentAnchor={currentAnchor}
+          chapterAnchor={chapter.chapter_anchor}
+          chapterSectionAnchors={chapter.sections.map((section) => section.anchor)}
+          open={tocOpen}
+          onSameChapterNavigate={handleSameChapterNavigate}
+        />
+        <article
+          ref={articleRef}
+          data-appearance={appearance}
+          style={
+            {
+              "--reading-size": `${size}px`,
+              "--reading-leading": `${leading}`,
+            } as CSSProperties
+          }
+          className="prose-reading relative mx-auto max-w-2xl bg-background py-6 text-foreground"
+        >
         {chapter.sections.map((section) => {
           const breadcrumb = section.section_path.join(" › ");
           return (
@@ -383,16 +420,22 @@ export function ChapterFlow({
             </section>
           );
         })}
-        {capture ? (
-          <CapturePopover
-            top={capture.top}
-            left={capture.left}
-            pending={pending}
-            error={captureError}
-            onCapture={handleCapture}
+          <ChapterNav
+            sourceId={sourceId}
+            prevAnchor={chapter.prev_anchor}
+            nextAnchor={chapter.next_anchor}
           />
-        ) : null}
-      </article>
+          {capture ? (
+            <CapturePopover
+              top={capture.top}
+              left={capture.left}
+              pending={pending}
+              error={captureError}
+              onCapture={handleCapture}
+            />
+          ) : null}
+        </article>
+      </div>
     </div>
   );
 }
