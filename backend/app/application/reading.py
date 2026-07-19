@@ -18,8 +18,25 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from decimal import Decimal
+from uuid import UUID
 
-from app.domain.entities import ChapterIndexRow
+from app.application.errors import CorpusNotFound
+from app.application.identity import AuthorizeOwnership
+from app.application.ingestion import authorized_source
+from app.domain.entities import (
+    ChapterContent,
+    ChapterIndexRow,
+    ReadingPosition,
+    SourceHighlight,
+    User,
+)
+from app.domain.ports import (
+    Clock,
+    CorpusRepository,
+    NoteRepository,
+    ReadingPositionRepository,
+    SourceRepository,
+)
 
 # Adult silent-reading rate for the minutes-left estimate (AD-126). A named constant
 # — precision is not the product point; the view and client mirror this value.
@@ -86,3 +103,190 @@ def percent_at(index: Sequence[ChapterIndexRow], row_idx: int) -> Decimal:
         return Decimal("0.00")
     words_before = sum(row.word_count for row in index[:row_idx])
     return (Decimal(words_before) * 100 / Decimal(total)).quantize(_PERCENT_QUANTUM)
+
+
+def _chapter_of(chapters: Sequence[Chapter], row_idx: int) -> int:
+    """Return the index of the chapter whose half-open span contains ``row_idx``.
+
+    ``partition`` tiles the whole index, so a valid ``row_idx`` always lands in exactly
+    one chapter; the final chapter is the defensive fallback.
+    """
+    for i, chapter in enumerate(chapters):
+        if chapter.start <= row_idx < chapter.end:
+            return i
+    return len(chapters) - 1
+
+
+class ReadChapter:
+    """Assemble the chapter containing an anchor (or the resume point) for the owner.
+
+    Mirrors ``ReadSection``'s ownership-first shape: a missing source and a non-owner
+    collapse to ``SourceNotFound`` (no existence disclosure). An owned source with no
+    corpus, or an ``anchor`` that resolves to no section, raises ``CorpusNotFound`` —
+    the web layer maps both to 404, so a valid anchor is indistinguishable from an
+    unknown one to a non-owner.
+
+    ``anchor is None`` is the resume path (spec P1-Position AC4): the reader opens at
+    the stored position's chapter, or the first chapter when there is no stored
+    position or the stored anchor no longer resolves (a superseded corpus) — the stored
+    row is left untouched in that case. The stored position is always returned (or
+    ``None``) so the reader can show book percent immediately.
+    """
+
+    def __init__(
+        self,
+        *,
+        sources: SourceRepository,
+        corpus: CorpusRepository,
+        positions: ReadingPositionRepository,
+        authorize: AuthorizeOwnership,
+    ) -> None:
+        self._sources = sources
+        self._corpus = corpus
+        self._positions = positions
+        self._authorize = authorize
+
+    def __call__(
+        self, *, user: User, source_id: UUID, anchor: str | None
+    ) -> tuple[ChapterContent, ReadingPosition | None]:
+        authorized_source(
+            user=user,
+            source_id=source_id,
+            sources=self._sources,
+            authorize=self._authorize,
+        )
+        index = self._corpus.get_chapter_index(source_id)
+        if not index:
+            raise CorpusNotFound("No corpus for this source.")
+
+        stored = self._positions.get(user.id, source_id)
+        if anchor is not None:
+            target_idx = locate(index, anchor)
+            if target_idx is None:
+                raise CorpusNotFound("No section for this anchor.")
+        else:
+            # Resume: the stored anchor's row, else the first chapter. A stale stored
+            # anchor (superseded corpus) falls back to row 0 without touching the row.
+            target_idx = locate(index, stored.anchor) if stored is not None else None
+            if target_idx is None:
+                target_idx = 0
+
+        content = self._assemble(source_id, index, target_idx)
+        return content, stored
+
+    def _assemble(
+        self, source_id: UUID, index: Sequence[ChapterIndexRow], target_idx: int
+    ) -> ChapterContent:
+        chapters = partition(index)
+        chapter_index = _chapter_of(chapters, target_idx)
+        chapter = chapters[chapter_index]
+
+        first_row = index[chapter.start]
+        last_row = index[chapter.end - 1]
+        sections = self._corpus.get_sections_span(
+            source_id, first_row.position, last_row.position
+        )
+
+        prev_anchor = (
+            index[chapters[chapter_index - 1].start].anchor
+            if chapter_index > 0
+            else None
+        )
+        next_anchor = (
+            index[chapters[chapter_index + 1].start].anchor
+            if chapter_index < len(chapters) - 1
+            else None
+        )
+        return ChapterContent(
+            chapter_title=first_row.title,
+            chapter_anchor=first_row.anchor,
+            chapter_index=chapter_index,
+            chapter_count=len(chapters),
+            prev_anchor=prev_anchor,
+            next_anchor=next_anchor,
+            words_before_chapter=sum(
+                index[i].word_count for i in range(chapter.start)
+            ),
+            chapter_word_count=sum(
+                index[i].word_count for i in range(chapter.start, chapter.end)
+            ),
+            total_word_count=sum(row.word_count for row in index),
+            sections=sections,
+        )
+
+
+class SaveReadingPosition:
+    """Store where the owner stopped reading a source, with a server-computed percent.
+
+    Ownership-first like ``ReadChapter``. The ``anchor`` is resolved against the chapter
+    index (``locate`` — canonical then alias); a miss raises ``CorpusNotFound`` → 404 and
+    nothing is stored (RD-09). The **canonical** anchor of the matched row is persisted,
+    so an alias write normalizes to the canonical anchor (survives renormalization), and
+    the whole-book percent at that row is computed server-side (never client-forged).
+    Last-write-wins on the ``(user, source)`` key (RD-12).
+    """
+
+    def __init__(
+        self,
+        *,
+        sources: SourceRepository,
+        corpus: CorpusRepository,
+        positions: ReadingPositionRepository,
+        authorize: AuthorizeOwnership,
+        clock: Clock,
+    ) -> None:
+        self._sources = sources
+        self._corpus = corpus
+        self._positions = positions
+        self._authorize = authorize
+        self._clock = clock
+
+    def __call__(self, *, user: User, source_id: UUID, anchor: str) -> ReadingPosition:
+        authorized_source(
+            user=user,
+            source_id=source_id,
+            sources=self._sources,
+            authorize=self._authorize,
+        )
+        index = self._corpus.get_chapter_index(source_id)
+        target_idx = locate(index, anchor) if index else None
+        if target_idx is None:
+            raise CorpusNotFound("No section for this anchor.")
+
+        percent = percent_at(index, target_idx)
+        return self._positions.upsert(
+            user.id,
+            source_id,
+            anchor=index[target_idx].anchor,
+            percent=percent,
+            updated_at=self._clock.now(),
+        )
+
+
+class ListSourceHighlights:
+    """Return the owner's highlights on a source for inline reader painting (RD-28).
+
+    Ownership-first (missing/non-owner → ``SourceNotFound`` → 404); then the caller's
+    ``(user, source)``-scoped highlights, every status included so the client paints the
+    active ones and ignores stale/orphaned (RD-29).
+    """
+
+    def __init__(
+        self,
+        *,
+        sources: SourceRepository,
+        notes: NoteRepository,
+        authorize: AuthorizeOwnership,
+    ) -> None:
+        self._sources = sources
+        self._notes = notes
+        self._authorize = authorize
+
+    def __call__(self, *, user: User, source_id: UUID) -> tuple[SourceHighlight, ...]:
+        authorized_source(
+            user=user,
+            source_id=source_id,
+            sources=self._sources,
+            authorize=self._authorize,
+        )
+        return self._notes.highlights_for_source(user.id, source_id)
