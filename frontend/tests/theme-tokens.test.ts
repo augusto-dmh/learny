@@ -105,6 +105,32 @@ describe.each([
   });
 });
 
+// IDF-02 AC1 — the reading serif is bound at build time with Portuguese
+// diacritic coverage. RootLayout renders <html>, which Testing Library cannot
+// mount, so the binding is asserted over the committed source.
+describe("reading serif binding", () => {
+  const layout = readFileSync(`${root}app/layout.tsx`, "utf8");
+
+  it("self-hosts Source Serif 4 via next/font with latin coverage", () => {
+    expect(layout).toMatch(
+      /import \{ Source_Serif_4 \} from "next\/font\/google"/,
+    );
+    expect(layout).toMatch(/subsets:\s*\[\s*"latin",\s*"latin-ext"\s*\]/);
+    expect(layout).toMatch(/variable:\s*"--font-source-serif"/);
+  });
+
+  it("exposes --font-serif beside the untouched Geist sans", () => {
+    expect(layout).toContain('"--font-serif": "var(--font-source-serif)"');
+    expect(layout).toContain('"--font-sans": "var(--font-geist-sans)"');
+    expect(layout).toContain("sourceSerif.variable");
+    expect(layout).toContain("GeistSans.variable");
+  });
+
+  it("bridges --font-serif into the theme so the serif utility exists", () => {
+    expect(css).toContain("--font-serif: var(--font-serif);");
+  });
+});
+
 describe("highlight tokens", () => {
   it.each(HIGHLIGHTS)("defines --%s in both modes", (name, lightHex, darkHex) => {
     expect(token(light, name)).toBe(lightHex);
