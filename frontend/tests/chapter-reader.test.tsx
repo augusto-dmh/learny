@@ -211,6 +211,22 @@ describe("ChapterFlow render (RD-03)", () => {
     ).toBeTruthy();
   });
 
+  it("keeps the chapter title visible in a sticky boundary element (RD-05)", async () => {
+    render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+    );
+
+    await screen.findByText("Ada Lovelace wrote the first algorithm.");
+    const topBar = screen.getByTestId("reader-top-bar");
+    // The boundary carries the current chapter title...
+    expect(topBar.textContent).toContain("Chapter One");
+    // ...and its positioning container is sticky at the viewport top, so the
+    // title stays visible while the chapter scrolls underneath it.
+    const stickyContainer = topBar.parentElement!;
+    expect(stickyContainer.className).toContain("sticky");
+    expect(stickyContainer.className).toContain("top-0");
+  });
+
   it("renders the book prose under the reading-typography class", async () => {
     const { container } = render(
       <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
