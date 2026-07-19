@@ -23,7 +23,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 
 import { ChapterFlow, ChapterReader } from "../app/components/chapter-reader";
 import type { ObserverFactory } from "../app/components/use-scroll-position";
-import type { ChapterView } from "../app/lib/reading";
+import type { ChapterView, SourceHighlightView } from "../app/lib/reading";
 
 // The component reads `useRouter().push` for the "Highlight + note" navigation;
 // spy it. `useSearchParams` is stubbed for the orchestrator tests that share this
@@ -528,6 +528,119 @@ describe("ChapterReader orchestration (RD-26/27/10)", () => {
     );
     const flashed = document.querySelector(`[data-section-heading="${S2}"]`);
     expect(flashed?.getAttribute("data-highlight")).toBe("on");
+  });
+});
+
+describe("ChapterFlow highlight painting (RD-28/29)", () => {
+  // Both sections contain the identical phrase; the highlight is anchored to
+  // section one only, proving painting is scoped to the anchoring section.
+  const SHARED = "the analytical engine";
+  const shared: ChapterView = {
+    ...chapter,
+    sections: [
+      {
+        ...chapter.sections[0],
+        markdown: "## Beginnings\n\nBabbage built the analytical engine.",
+      },
+      {
+        ...chapter.sections[1],
+        markdown: "## Mechanism\n\nAda praised the analytical engine.",
+      },
+    ],
+  };
+
+  function highlight(over: Partial<SourceHighlightView>): SourceHighlightView {
+    return {
+      note_id: "n1",
+      anchor: S1,
+      quote_exact: SHARED,
+      quote_prefix: "",
+      quote_suffix: "",
+      status: "active",
+      ...over,
+    };
+  }
+
+  it("paints an active highlight in its anchoring section only", async () => {
+    const { container } = render(
+      <ChapterFlow
+        sourceId="s1"
+        csrf="csrf-xyz"
+        chapter={shared}
+        scrollTarget={null}
+        highlights={[highlight({ note_id: "n5" })]}
+      />,
+    );
+    await screen.findByText(/Babbage built/);
+
+    // Exactly one mark, in section one — even though section two holds the same
+    // phrase, no highlight is anchored there, so it stays unpainted.
+    await waitFor(() =>
+      expect(container.querySelectorAll("mark.reader-highlight")).toHaveLength(1),
+    );
+    const mark = container.querySelector("mark.reader-highlight")!;
+    expect(mark.getAttribute("data-note-id")).toBe("n5");
+    expect(mark.textContent).toBe(SHARED);
+    const s1El = container.querySelector(`[data-section-anchor="${S1}"]`)!;
+    const s2El = container.querySelector(`[data-section-anchor="${S2}"]`)!;
+    expect(s1El.contains(mark)).toBe(true);
+    expect(s2El.contains(mark)).toBe(false);
+  });
+
+  it("does not paint a stale highlight even when its quote is present", async () => {
+    const { container } = render(
+      <ChapterFlow
+        sourceId="s1"
+        csrf="csrf-xyz"
+        chapter={shared}
+        scrollTarget={null}
+        highlights={[highlight({ status: "stale" })]}
+      />,
+    );
+    await screen.findByText(/Babbage built/);
+
+    // Give any paint effect a chance to run, then confirm nothing was painted.
+    await waitFor(() =>
+      expect(screen.getByText(/Ada praised/)).toBeTruthy(),
+    );
+    expect(container.querySelectorAll("mark.reader-highlight")).toHaveLength(0);
+  });
+});
+
+describe("ChapterReader highlight load (RD-28)", () => {
+  it("fetches the source highlights and paints them into the flow", async () => {
+    nav.params = new URLSearchParams();
+    const painted: SourceHighlightView = {
+      note_id: "n9",
+      anchor: S1,
+      quote_exact: "Ada Lovelace wrote the first algorithm",
+      quote_prefix: "",
+      quote_suffix: "",
+      status: "active",
+    };
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        [`GET ${CHAPTER_URL_RESUME}`]: () => jsonResponse(200, chapter),
+        [`GET ${HIGHLIGHTS_URL}`]: () => jsonResponse(200, [painted]),
+      }),
+    );
+
+    const { container } = render(<ChapterReader sourceId="s1" />);
+
+    // The chapter loaded, the highlights fetch resolved, and its active quote
+    // painted in section one (the mark exists only inside the rendered flow).
+    await waitFor(() =>
+      expect(
+        container
+          .querySelector("mark.reader-highlight")
+          ?.getAttribute("data-note-id"),
+      ).toBe("n9"),
+    );
+    expect(container.querySelector("mark.reader-highlight")?.textContent).toBe(
+      "Ada Lovelace wrote the first algorithm",
+    );
   });
 });
 

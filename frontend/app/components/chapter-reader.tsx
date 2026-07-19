@@ -25,7 +25,7 @@
 import { List } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 
 import {
   CapturePopover,
@@ -42,17 +42,23 @@ import {
   type ObserverFactory,
 } from "@/app/components/use-scroll-position";
 import { fetchAuthState } from "@/app/lib/auth";
+import { paintHighlights } from "@/app/lib/highlight-paint";
 import { captureHighlight, NoteError } from "@/app/lib/notes";
 import {
   getChapter,
+  listHighlights,
   minutesLeft,
   type ChapterSectionView,
   type ChapterView,
+  type SourceHighlightView,
 } from "@/app/lib/reading";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
+
+/** A stable empty highlight list, so sections without highlights never repaint. */
+const NO_HIGHLIGHTS: SourceHighlightView[] = [];
 
 type LoadState =
   | { kind: "loading" }
@@ -87,10 +93,15 @@ export function ChapterReader({
   // The CSRF token for the capture write (AD-007), read from the same
   // `/api/auth/me` resolve that gates the chapter read.
   const [csrf, setCsrf] = useState<string | null>(null);
+  // The caller's existing highlights, painted into the flow once they arrive.
+  // They are P2 and non-blocking: the chapter renders without waiting on them,
+  // and a failed fetch simply leaves the prose unpainted (RD-28/29).
+  const [highlights, setHighlights] = useState<SourceHighlightView[]>([]);
 
   useEffect(() => {
     let active = true;
     setState({ kind: "loading" });
+    setHighlights([]);
     // Dispatch both requests before awaiting either — parallel, not chained.
     const authPromise = fetchAuthState();
     const chapterPromise = getChapter(sourceId, urlAnchor);
@@ -108,6 +119,15 @@ export function ChapterReader({
         return;
       }
       setCsrf(auth.user.csrf_token);
+      // Fetch highlights alongside consuming the chapter; they paint in when
+      // ready without gating first contentful render, and a failure is ignored.
+      void listHighlights(sourceId)
+        .then((found) => {
+          if (active) {
+            setHighlights(found);
+          }
+        })
+        .catch(() => {});
       try {
         const result = await chapterPromise;
         if (!active) {
@@ -170,6 +190,7 @@ export function ChapterReader({
       csrf={csrf}
       chapter={state.chapter}
       scrollTarget={scrollTarget}
+      highlights={highlights}
     />
   );
 }
@@ -205,12 +226,14 @@ export function ChapterFlow({
   csrf,
   chapter,
   scrollTarget,
+  highlights = [],
   observerFactory,
 }: {
   sourceId: string;
   csrf: string | null;
   chapter: ChapterView;
   scrollTarget: string | null;
+  highlights?: SourceHighlightView[];
   observerFactory?: ObserverFactory;
 }) {
   const router = useRouter();
@@ -218,6 +241,23 @@ export function ChapterFlow({
   // Device-local reading surface: type size, spacing, and Default/Paper (RD-18).
   const reading = useReadingSettings();
   const { size, leading, appearance } = reading;
+  // Group the caller's highlights by section anchor so each section paints only
+  // its own (RD-28). The grouped arrays stay referentially stable while
+  // `highlights` is unchanged, so a re-render (scroll/progress) never triggers a
+  // needless repaint; status rides along because `paintHighlights` paints
+  // `active` only.
+  const highlightsByAnchor = useMemo(() => {
+    const byAnchor = new Map<string, SourceHighlightView[]>();
+    for (const highlight of highlights) {
+      const list = byAnchor.get(highlight.anchor);
+      if (list) {
+        list.push(highlight);
+      } else {
+        byAnchor.set(highlight.anchor, [highlight]);
+      }
+    }
+    return byAnchor;
+  }, [highlights]);
   const [flashAnchor, setFlashAnchor] = useState<string | null>(scrollTarget);
   // The below-lg table of contents collapses behind the top-bar toggle (RD-25).
   const [tocOpen, setTocOpen] = useState(false);
@@ -459,30 +499,15 @@ export function ChapterFlow({
           }
           className="prose-reading relative mx-auto max-w-2xl bg-background py-6 text-foreground"
         >
-          {chapter.sections.map((section) => {
-            const breadcrumb = section.section_path.join(" › ");
-            return (
-              <section
-                key={section.anchor}
-                id={section.anchor}
-                data-section-anchor={section.anchor}
-                onMouseUp={() => handleMouseUp(section)}
-                className="scroll-mt-16"
-              >
-                <div
-                  data-section-heading={section.anchor}
-                  data-highlight={flashAnchor === section.anchor ? "on" : "off"}
-                  className="rounded-md px-2 py-1 transition-colors duration-500 data-[highlight=on]:bg-accent"
-                >
-                  {breadcrumb ? (
-                    <p className="text-xs text-muted-foreground">{breadcrumb}</p>
-                  ) : null}
-                  <h2 className="text-2xl font-semibold">{section.title}</h2>
-                </div>
-                <MessageResponse>{section.markdown}</MessageResponse>
-              </section>
-            );
-          })}
+          {chapter.sections.map((section) => (
+            <FlowSection
+              key={section.anchor}
+              section={section}
+              flashing={flashAnchor === section.anchor}
+              highlights={highlightsByAnchor.get(section.anchor) ?? NO_HIGHLIGHTS}
+              onMouseUp={() => handleMouseUp(section)}
+            />
+          ))}
           <ChapterNav
             sourceId={sourceId}
             prevAnchor={chapter.prev_anchor}
@@ -501,6 +526,64 @@ export function ChapterFlow({
       </div>
       {returnAnchor ? <ReturnChip onReturn={handleReturn} /> : null}
     </div>
+  );
+}
+
+/**
+ * One section of the chapter flow: its structural heading (transiently flashed
+ * when it is the deep-link target) and its Markdown rendered by the memoized
+ * Streamdown. After the Markdown commits, the section's `active` highlights are
+ * painted into the rendered prose (RD-28/29).
+ *
+ * The paint runs in an effect keyed on the Markdown and the section's highlights,
+ * both stable across unrelated re-renders, so the injected marks survive: the
+ * memoized `MessageResponse` subtree does not re-render while its Markdown is
+ * unchanged, and the effect only repaints when the content or the highlight set
+ * actually changes. `paintHighlights` is idempotent (unwrap-first), so even a
+ * repaint yields the same DOM.
+ */
+function FlowSection({
+  section,
+  flashing,
+  highlights,
+  onMouseUp,
+}: {
+  section: ChapterSectionView;
+  flashing: boolean;
+  highlights: SourceHighlightView[];
+  onMouseUp: () => void;
+}) {
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const breadcrumb = section.section_path.join(" › ");
+
+  useEffect(() => {
+    const body = bodyRef.current;
+    if (body) {
+      paintHighlights(body, highlights);
+    }
+  }, [section.markdown, highlights]);
+
+  return (
+    <section
+      id={section.anchor}
+      data-section-anchor={section.anchor}
+      onMouseUp={onMouseUp}
+      className="scroll-mt-16"
+    >
+      <div
+        data-section-heading={section.anchor}
+        data-highlight={flashing ? "on" : "off"}
+        className="rounded-md px-2 py-1 transition-colors duration-500 data-[highlight=on]:bg-accent"
+      >
+        {breadcrumb ? (
+          <p className="text-xs text-muted-foreground">{breadcrumb}</p>
+        ) : null}
+        <h2 className="text-2xl font-semibold">{section.title}</h2>
+      </div>
+      <div ref={bodyRef}>
+        <MessageResponse>{section.markdown}</MessageResponse>
+      </div>
+    </section>
   );
 }
 

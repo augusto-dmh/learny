@@ -194,6 +194,14 @@ describe("highlight tokens", () => {
     }
   });
 
+  // RD-28 — the inline highlight mark paints with the identity yellow token and
+  // never a raw colour, so the marker tracks the palette in both modes. jsdom
+  // applies no stylesheets, so the declaration is pinned from the committed CSS.
+  it("paints the inline highlight mark from the yellow token", () => {
+    const mark = cssBlock(".reader-highlight");
+    expect(mark).toContain("background-color: var(--highlight-yellow);");
+  });
+
   it("keeps raw highlight hexes out of every other frontend file", () => {
     const raw = HIGHLIGHTS.flatMap(([, lightHex, darkHex]) => [
       lightHex,
