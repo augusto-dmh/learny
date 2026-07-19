@@ -41,6 +41,7 @@ from app.application.errors import EnqueueFailed
 from app.application.quiz import ExportQuizDeck, ListQuizItems, QuizOverview
 from app.application.reviews import GetDueQueue, SubmitReview
 from app.domain.entities import (
+    CardProvenance,
     DueReviewItem,
     QuizGenerationJob,
     QuizItem,
@@ -193,11 +194,29 @@ class CitationView(BaseModel):
     source_excerpt: str
 
 
+class CardProvenanceView(BaseModel):
+    """The origin note of a card accepted from a highlight (CAP-16).
+
+    Read by join, so a renamed note shows its current title at review.
+    """
+
+    note_id: UUID
+    note_title: str
+
+    @classmethod
+    def from_provenance(cls, provenance: CardProvenance) -> CardProvenanceView:
+        return cls(note_id=provenance.note_id, note_title=provenance.note_title)
+
+
 class DueItemView(BaseModel):
     """One due review card (QUIZ-13/15).
 
     Carries the full card — question, answer, and citation — because reveal is a
     client-side act in the self-grade flow (no server round-trip to reveal).
+    ``provenance`` is the origin note of a card the student made at a passage; it is
+    explicitly ``null`` for a deck card and for a card whose origin note was deleted,
+    both of which stay in the queue and stay reviewable from their own citation
+    snapshot (CAP-15/16).
     """
 
     id: UUID
@@ -207,6 +226,7 @@ class DueItemView(BaseModel):
     question: str
     answer: str
     citation: CitationView
+    provenance: CardProvenanceView | None
     status: str
     due: datetime
 
@@ -224,6 +244,11 @@ class DueItemView(BaseModel):
                 section_path=list(item.section_path),
                 anchor=item.anchor,
                 source_excerpt=item.source_excerpt,
+            ),
+            provenance=(
+                CardProvenanceView.from_provenance(due.provenance)
+                if due.provenance is not None
+                else None
             ),
             status=item.status,
             due=due.due,

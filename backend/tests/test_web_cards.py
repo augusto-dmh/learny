@@ -224,8 +224,10 @@ def _seed_corpus(
     )
 
 
-def _capture(client: TestClient, source_id: UUID, csrf: str, *, title: str = "highlight") -> UUID:
-    """Capture a highlight over :data:`QUOTE` and return its note-anchor id."""
+def _capture_note(
+    client: TestClient, source_id: UUID, csrf: str, *, title: str = "highlight"
+) -> tuple[UUID, UUID]:
+    """Capture a highlight over :data:`QUOTE`; return (note_id, note_anchor_id)."""
     resp = client.post(
         f"/api/sources/{source_id}/highlights",
         json={
@@ -237,7 +239,13 @@ def _capture(client: TestClient, source_id: UUID, csrf: str, *, title: str = "hi
         headers={"X-CSRF-Token": csrf},
     )
     assert resp.status_code == 201, resp.text
-    return UUID(resp.json()["anchors"][0]["id"])
+    body = resp.json()
+    return UUID(body["id"]), UUID(body["anchors"][0]["id"])
+
+
+def _capture(client: TestClient, source_id: UUID, csrf: str, *, title: str = "highlight") -> UUID:
+    """Capture a highlight over :data:`QUOTE` and return its note-anchor id."""
+    return _capture_note(client, source_id, csrf, title=title)[1]
 
 
 def _seed_highlighted_source(
@@ -729,3 +737,56 @@ def test_accepted_card_appears_in_the_due_queue(
 
     assert resp.status_code == 200, resp.text
     assert [i["id"] for i in resp.json()["items"]] == [created.json()["id"]]
+
+
+# --- Provenance at review (CAP-15, CAP-16) -------------------------------------
+
+
+def test_due_queue_shows_the_origin_note_title_for_a_highlight_card(
+    cards_client: TestClient, db_conn: Connection
+) -> None:
+    user_id = _register(cards_client, "prov-title@example.com")
+    csrf = _csrf(cards_client)
+    source_id = _persist_source(db_conn, user_id)
+    _seed_corpus(db_conn, source_id)
+    note_id, anchor_id = _capture_note(cards_client, source_id, csrf, title="On foxes")
+    created = _post_card(
+        cards_client, source_id, _accept_body(note_anchor_id=str(anchor_id)), csrf=csrf
+    )
+    assert created.status_code == 201, created.text
+
+    resp = cards_client.get("/api/reviews/due")
+
+    assert resp.status_code == 200, resp.text
+    view = resp.json()["items"][0]
+    assert view["provenance"] == {"note_id": str(note_id), "note_title": "On foxes"}
+
+
+def test_deleting_the_origin_note_leaves_the_card_due_with_null_provenance(
+    cards_client: TestClient, db_conn: Connection
+) -> None:
+    # CAP-15: nothing in the notes aggregate may destroy a card. The link is severed,
+    # the card stays reviewable from its own citation snapshot, and ``provenance`` is
+    # explicitly null rather than absent or an error.
+    user_id = _register(cards_client, "prov-deleted@example.com")
+    csrf = _csrf(cards_client)
+    source_id = _persist_source(db_conn, user_id)
+    _seed_corpus(db_conn, source_id)
+    note_id, anchor_id = _capture_note(cards_client, source_id, csrf, title="On foxes")
+    created = _post_card(
+        cards_client, source_id, _accept_body(note_anchor_id=str(anchor_id)), csrf=csrf
+    )
+    assert created.status_code == 201, created.text
+
+    deleted = cards_client.delete(
+        f"/api/notes/{note_id}", headers={"X-CSRF-Token": csrf}
+    )
+    assert deleted.status_code == 204, deleted.text
+
+    resp = cards_client.get("/api/reviews/due")
+
+    assert resp.status_code == 200, resp.text
+    view = resp.json()["items"][0]
+    assert view["id"] == created.json()["id"]
+    assert view["provenance"] is None
+    assert view["citation"]["source_excerpt"] == QUOTE

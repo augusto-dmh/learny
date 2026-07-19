@@ -747,11 +747,56 @@ def test_list_source_highlights_returns_owner_highlights(
         "quote_prefix",
         "quote_suffix",
         "status",
+        "note_title",
+        "has_body",
     }
     assert rows[0]["anchor"] == "ch1"
     assert rows[0]["quote_exact"] == "quick brown fox"
     assert rows[0]["status"] == "active"
     UUID(rows[0]["note_id"])
+
+
+def test_list_source_highlights_carries_note_title_and_body_flag(
+    notes_client: TestClient, db_conn: Connection
+) -> None:
+    # CAP-19: the rail labels each entry from the origin note and tells a bare
+    # highlight from an annotated one, without a second request.
+    user_id = _register(notes_client, "hl-rail@example.com")
+    csrf = _csrf(notes_client)
+    source_id = _persist_source(db_conn, user_id)
+    _seed_corpus(
+        db_conn,
+        source_id,
+        anchor="ch1",
+        block_html="<p>The quick brown fox jumps over the lazy dog.</p>",
+    )
+    bare = _post_highlight(
+        notes_client,
+        source_id,
+        {"anchor": "ch1", "quote_exact": "quick brown", "title": "Bare quote"},
+        csrf=csrf,
+    )
+    annotated = _post_highlight(
+        notes_client,
+        source_id,
+        {
+            "anchor": "ch1",
+            "quote_exact": "lazy dog",
+            "title": "On dogs",
+            "body_markdown": "A thought.",
+        },
+        csrf=csrf,
+    )
+    assert bare.status_code == 201, bare.text
+    assert annotated.status_code == 201, annotated.text
+
+    resp = notes_client.get(f"/api/sources/{source_id}/highlights")
+
+    assert resp.status_code == 200, resp.text
+    by_title = {row["note_title"]: row for row in resp.json()}
+    assert set(by_title) == {"Bare quote", "On dogs"}
+    assert by_title["Bare quote"]["has_body"] is False
+    assert by_title["On dogs"]["has_body"] is True
 
 
 def test_list_source_highlights_non_owner_returns_404(
