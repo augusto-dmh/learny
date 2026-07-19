@@ -607,6 +607,42 @@ describe("ChapterFlow highlight painting (RD-28/29)", () => {
   });
 });
 
+describe("ChapterFlow fixture-scale render (RFC assumption)", () => {
+  it("lays out a large multi-section chapter in one pass with every section present", async () => {
+    // A synthetic chapter at book scale (~10k words across many sections): the
+    // RFC assumes a full chapter renders without windowing. Each section ends in
+    // a unique sentinel so the first and last both being present proves the whole
+    // chapter laid out, not a truncated head.
+    const SECTIONS = 16;
+    const sentence =
+      "Ada Lovelace annotated the analytical engine and foresaw that machines might one day compose music and manipulate symbols beyond calculation. ";
+    const sections = Array.from({ length: SECTIONS }, (_, i) => ({
+      anchor: `part1/ch1.xhtml#s${i}`,
+      title: `Section ${i}`,
+      section_path: ["Chapter One", `Section ${i}`],
+      markdown: `## Section ${i}\n\n${sentence.repeat(40)}\n\nMarker ${i} sentinel.`,
+      word_count: 800,
+    }));
+    const large: ChapterView = {
+      ...chapter,
+      sections,
+      chapter_word_count: SECTIONS * 800,
+      total_word_count: SECTIONS * 800,
+    };
+
+    const { container } = render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={large} scrollTarget={null} />,
+    );
+
+    // First and last section sentinels both present → the chapter rendered whole.
+    await screen.findByText("Marker 0 sentinel.", undefined, { timeout: 5000 });
+    await screen.findByText(`Marker ${SECTIONS - 1} sentinel.`);
+    expect(container.querySelectorAll("[data-section-anchor]")).toHaveLength(
+      SECTIONS,
+    );
+  });
+});
+
 describe("ChapterReader highlight load (RD-28)", () => {
   it("fetches the source highlights and paints them into the flow", async () => {
     nav.params = new URLSearchParams();
