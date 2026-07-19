@@ -156,13 +156,13 @@ function SourceItem({ source }: { source: SourceSummary }) {
           <CollapsibleContent>
             <div className="flex gap-3 px-2 pb-1 text-xs">
               <Link
-                href={`/sources/${source.id}/ask`}
+                href={`/sources/${source.id}/read?panel=ask`}
                 className="text-primary underline-offset-4 hover:underline"
               >
                 Ask
               </Link>
               <Link
-                href={`/sources/${source.id}/teach`}
+                href={`/sources/${source.id}/read?panel=teach`}
                 className="text-primary underline-offset-4 hover:underline"
               >
                 Teach

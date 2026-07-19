@@ -141,7 +141,7 @@ describe("AppSidebar", () => {
     }
   });
 
-  it("links a ready source entry to its Ask, Teach, and Read views", async () => {
+  it("links a ready source entry to its Ask and Teach panel modes and Read view", async () => {
     vi.stubGlobal(
       "fetch",
       routedFetch({ "GET /api/sources": () => jsonResponse(200, [mixed[2]]) }),
@@ -151,11 +151,12 @@ describe("AppSidebar", () => {
 
     fireEvent.click(await screen.findByText("Ready Book"));
 
+    // Ask and Teach now deep-link into the reader with the matching panel open.
     const ask = await screen.findByRole("link", { name: "Ask" });
-    expect(ask.getAttribute("href")).toBe("/sources/s-ready/ask");
+    expect(ask.getAttribute("href")).toBe("/sources/s-ready/read?panel=ask");
     expect(
       screen.getByRole("link", { name: "Teach" }).getAttribute("href"),
-    ).toBe("/sources/s-ready/teach");
+    ).toBe("/sources/s-ready/read?panel=teach");
     expect(
       screen.getByRole("link", { name: "Read" }).getAttribute("href"),
     ).toBe("/sources/s-ready/read");
