@@ -5,7 +5,7 @@
 Implement these tasks with the `tlc-spec-driven` skill: **activate it by name and follow its Execute flow and Critical Rules.** Do not search for skill files by filesystem path. If the skill cannot be activated, STOP.
 
 **Design**: `.specs/features/v4-reader-core/design.md`
-**Status**: Approved (auto-decision mode per learny-ship-cycle)
+**Status**: In Progress — Phase A ✅ complete (A1 `2eb7811` · A2 `e9428ee` · A3 `ba7b901` · A4 `02e0505` · A5 `b0f9c37` · A6 `e14a814`; offline 825 passed/0 failed, DB-gated reader modules 191 passed, ruff clean). Phase deviations: `NoteRepository.highlights_for_source(user_id, source_id)` (name collision with existing `anchors_for_source`); `word_count` = computed property on `CorpusSectionRecord` (build code untouched); migration keeps `NOT NULL DEFAULT 0` (0009 idiom). Chapter route: `anchor` optional — omitted = resume. Phase B ✅ complete (B1 `81cadee` · B2 `1df7a3d` · B3 `0bb07f9` · B4 `d79b5f8`; frontend 273 passed/0 failed, tsc clean). Phase notes: reader lives in `app/components/chapter-reader.tsx` (`ChapterReader` orchestrator + exported `ChapterFlow`); hook `app/components/use-scroll-position.ts` (house-style location); `section-reader.tsx`/`.test.tsx` deleted, citation-loop test re-pointed at `/chapter`; sticky `data-testid="reader-top-bar"` + `.prose-reading` article (`articleRef`) are the C/D seams.
 
 ---
 
@@ -177,13 +177,13 @@ Phase D (highlights + gate):   D1 → D2 → D3
 **Tests**: jsdom (`reading-controls.test.tsx`) · **Gate**: quick frontend
 **Commit**: `feat(reader): add the reading controls popover`
 
-### C3: TOC panel + position context [P]
+### C3: TOC panel + position context + chapter nav [P]
 
-**What**: `toc-panel.tsx` — structure via `fetchSourceStructure`+`flattenSections`; current chapter/section marked from scroll state; click → same-chapter smooth scroll or cross-chapter `router.push`, URL always updated; ≥lg persistent, below lg behind top-bar toggle.
+**What**: `toc-panel.tsx` — structure via `fetchSourceStructure`+`flattenSections`; current chapter/section marked from scroll state; click → same-chapter smooth scroll or cross-chapter `router.push`, URL always updated; ≥lg persistent, below lg behind top-bar toggle. PLUS `ChapterNav` prev/next controls from `prev_anchor`/`next_anchor` (hidden/absent at book edges) — RD-06 was unmapped in the original breakdown (caught at Phase B handoff); it lands here with the other navigation.
 **Where**: `frontend/app/components/toc-panel.tsx`, `chapter-reader.tsx`
 **Depends on**: B4 (scroll state) · **Reuses**: `tree.ts`, sidebar fetch caching idiom
-**Requirement**: RD-22, RD-23, RD-25
-**Done when**: jsdom tests: current-position marking follows scroll state; same-chapter click scrolls without refetch; cross-chapter click pushes new anchor; collapsed state toggles.
+**Requirement**: RD-06, RD-22, RD-23, RD-25
+**Done when**: jsdom tests: current-position marking follows scroll state; same-chapter click scrolls without refetch; cross-chapter click pushes new anchor; collapsed state toggles; prev/next navigate to adjacent chapter anchors and are absent at book edges (single-chapter book shows neither).
 **Tests**: jsdom (`toc-panel.test.tsx`) · **Gate**: quick frontend
 **Commit**: `feat(reader): add an in-reader table of contents with position context`
 
@@ -219,7 +219,7 @@ Phase D (highlights + gate):   D1 → D2 → D3
 
 ### D3: Full-suite hardening + status docs
 
-**What**: Full gates everywhere; fixture-scale render sanity (largest fixture chapter through `ChapterFlow` in a test — assertion on render completing, RFC assumption check); tasks.md statuses; ROADMAP row stays "Not started" until Stage 2 publish flips it (per prior cycles the row update rides in the PR).
+**What**: Full gates everywhere; fixture-scale render sanity (largest fixture chapter through `ChapterFlow` in a test — assertion on render completing, RFC assumption check); tasks.md statuses; ROADMAP row stays "Not started" until Stage 2 publish flips it (per prior cycles the row update rides in the PR). Also: fix the stale doc-comment in `capture-popover.tsx` referencing the deleted `section-reader.tsx` (flagged at Phase B handoff).
 **Where**: repo-wide
 **Depends on**: D2
 **Requirement**: spec Success Criteria

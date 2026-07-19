@@ -112,10 +112,12 @@ describe.each([
 describe("prose-reading declarations", () => {
   const prose = cssBlock(".prose-reading");
 
-  it("sets the serif book measure", () => {
+  it("sets the serif book measure, size and leading driven by reader vars", () => {
     expect(prose).toContain("font-family: var(--font-serif);");
-    expect(prose).toContain("font-size: 19px;");
-    expect(prose).toContain("line-height: 1.6;");
+    // Size and leading now read the Aa-popover custom properties, falling back
+    // to the pinned reading defaults (19px / 1.6) when unset (RD-06/RD-18).
+    expect(prose).toContain("font-size: var(--reading-size, 19px);");
+    expect(prose).toContain("line-height: var(--reading-leading, 1.6);");
     expect(prose).toContain("max-width: 65ch;");
   });
 

@@ -174,8 +174,8 @@ html:not(.dark) [data-appearance="paper"] {
    */
   .prose-reading {
     font-family: var(--font-serif);
-    font-size: 19px;
-    line-height: 1.6;
+    font-size: var(--reading-size, 19px);
+    line-height: var(--reading-leading, 1.6);
     max-width: 65ch;
     text-align: left;
     hyphens: none;

@@ -24,7 +24,7 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 
 import {
   CapturePopover,
@@ -32,6 +32,7 @@ import {
   type CaptureAction,
   type CaptureSelection,
 } from "@/app/components/notes/capture-popover";
+import { useReadingSettings } from "@/app/components/use-reading-settings";
 import {
   useScrollPosition,
   type ObserverFactory,
@@ -208,6 +209,8 @@ export function ChapterFlow({
 }) {
   const router = useRouter();
   const articleRef = useRef<HTMLElement>(null);
+  // Device-local reading surface: type size, spacing, and Default/Paper (RD-18).
+  const { size, leading, appearance } = useReadingSettings();
   const [flashAnchor, setFlashAnchor] = useState<string | null>(scrollTarget);
   const [capture, setCapture] = useState<ActiveCapture | null>(null);
   const [pending, setPending] = useState(false);
@@ -335,7 +338,14 @@ export function ChapterFlow({
       </div>
       <article
         ref={articleRef}
-        className="prose-reading relative mx-auto max-w-2xl py-6"
+        data-appearance={appearance}
+        style={
+          {
+            "--reading-size": `${size}px`,
+            "--reading-leading": `${leading}`,
+          } as CSSProperties
+        }
+        className="prose-reading relative mx-auto max-w-2xl bg-background py-6 text-foreground"
       >
         {chapter.sections.map((section) => {
           const breadcrumb = section.section_path.join(" › ");
