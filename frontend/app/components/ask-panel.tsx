@@ -84,12 +84,14 @@ export function AskPanel({
   csrf,
   pendingRequest,
   onPendingConsumed,
+  onShowInBook,
   onRequireAuth,
 }: {
   sourceId: string;
   csrf: string;
   pendingRequest?: PendingPanelRequest | null;
   onPendingConsumed?: () => void;
+  onShowInBook?: (anchor: string) => void;
   onRequireAuth?: () => void;
 }) {
   const [banner, setBanner] = useState<string | null>(null);
@@ -207,7 +209,11 @@ export function AskPanel({
                       That question was not found in this source.
                     </p>
                   ) : citations ? (
-                    <CitationList sourceId={sourceId} citations={citations} />
+                    <CitationList
+                      sourceId={sourceId}
+                      citations={citations}
+                      onShowInBook={onShowInBook}
+                    />
                   ) : null}
                 </MessageContent>
               </Message>

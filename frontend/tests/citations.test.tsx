@@ -8,7 +8,7 @@
  */
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { CitationList } from "../app/components/citations";
 import { type Citation } from "../app/lib/questions";
@@ -75,5 +75,61 @@ describe("CitationList (D2)", () => {
       <CitationList sourceId="s1" citations={[]} />,
     );
     expect(container.firstChild).toBeNull();
+  });
+});
+
+describe("CitationList as passage (RA-12)", () => {
+  it("renders the verbatim passage in the reading serif and no retrieval machinery", () => {
+    render(<CitationList sourceId="s1" citations={[citation]} />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Citation: Chapter 1 › Core Idea" }),
+    );
+
+    // The passage renders as a verbatim blockquote under the reading-typography
+    // class — the popover speaks in the book's voice, with its section-path locator.
+    expect(screen.getByText("Chapter 1 › Core Idea")).toBeTruthy();
+    const snippet = screen.getByText("the first algorithm ever written");
+    expect(snippet.closest("blockquote")!.className).toContain("prose-reading");
+
+    // The retrieval index behind the citation never leaks into the DOM: neither
+    // the chunk id nor the similarity score is rendered anywhere.
+    expect(document.body.textContent).not.toContain(citation.chunk_id);
+    expect(document.body.textContent).not.toContain(String(citation.score));
+  });
+
+  it("shows an in-book jump button that invokes onShowInBook with the anchor (RA-13)", () => {
+    const onShowInBook = vi.fn();
+    render(
+      <CitationList
+        sourceId="s1"
+        citations={[citation]}
+        onShowInBook={onShowInBook}
+      />,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Citation: Chapter 1 › Core Idea" }),
+    );
+
+    // With the callback, the action is an in-place button — not a navigating link.
+    expect(screen.queryByRole("link", { name: /in book/i })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /show in book/i }));
+
+    // It carries the citation's raw anchor to the reader, verbatim (no encoding).
+    expect(onShowInBook).toHaveBeenCalledTimes(1);
+    expect(onShowInBook).toHaveBeenCalledWith(citation.anchor);
+  });
+
+  it("falls back to the reader-route link when no callback is given", () => {
+    render(<CitationList sourceId="s1" citations={[citation]} />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Citation: Chapter 1 › Core Idea" }),
+    );
+
+    // Without the callback (outside the reader), the action is the encoded link.
+    expect(screen.queryByRole("button", { name: /show in book/i })).toBeNull();
+    const link = screen.getByRole("link", { name: /open in book/i });
+    expect(link.getAttribute("href")).toBe(
+      "/sources/s1/read?anchor=part1%2Fchapter-1.xhtml%23core-idea",
+    );
   });
 });

@@ -168,6 +168,7 @@ export function TeachPanel({
         csrf={csrf}
         target={active.session.target.section_path.join(" › ")}
         initialMessages={active.initialMessages}
+        onShowInBook={onShowInBook}
         onRequireAuth={onRequireAuth}
       />
     );
@@ -249,6 +250,7 @@ function TeachChat({
   csrf,
   target,
   initialMessages,
+  onShowInBook,
   onRequireAuth,
 }: {
   sourceId: string;
@@ -256,6 +258,7 @@ function TeachChat({
   csrf: string;
   target: string;
   initialMessages: LearnyUIMessage[];
+  onShowInBook?: (anchor: string) => void;
   onRequireAuth?: () => void;
 }) {
   const [banner, setBanner] = useState<string | null>(null);
@@ -322,7 +325,11 @@ function TeachChat({
                       That was not found in this target.
                     </p>
                   ) : citations ? (
-                    <CitationList sourceId={sourceId} citations={citations} />
+                    <CitationList
+                      sourceId={sourceId}
+                      citations={citations}
+                      onShowInBook={onShowInBook}
+                    />
                   ) : null}
                 </MessageContent>
               </Message>
