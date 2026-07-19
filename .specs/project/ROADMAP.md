@@ -72,7 +72,7 @@ Cycle F interleaves after RFC-004 Cycle C.
 
 | tlc Cycle | RFC-004 Cycle | Scope | Status |
 |---|---|---|---|
-| `v4-identity-foundation` | A | Iron Gall tokens + fonts + reading typography + Paper scaffolding | Planned (spec written, branch open) |
+| `v4-identity-foundation` | A | Iron Gall tokens + fonts + reading typography + Paper scaffolding | Done (PR #36) |
 | `v4-reader-core` | B | Chapter flow, position, progress, Aa popover, ink-line signature | Not started |
 | `v4-reader-apparatus` | C | Ask/Teach as panel modes, citations-as-passages — unblocks RFC-003 F | Not started |
 | `v4-capture-pipeline` | D | Cards at the highlight, margin rail, review pins | Not started |
