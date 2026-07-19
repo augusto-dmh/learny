@@ -175,8 +175,12 @@ class Settings(BaseSettings):
     # caps and character floor bound deck density; ``quiz_dedup_threshold`` is the
     # cosine-similarity ceiling above which a candidate is a near-duplicate; the batch
     # timeout/poll-interval bound the Anthropic Message Batches polling loop.
+    # ``quiz_max_suggestions`` caps the interactive per-quote card suggestions (RFC-004
+    # Cycle D) and is deliberately separate from ``quiz_max_items_per_section`` so
+    # tuning the foreground popover never moves whole-deck density.
     quiz_model: str = "claude-haiku-4-5"
     quiz_max_items_per_section: int = 6
+    quiz_max_suggestions: int = 3
     quiz_min_section_chars: int = 200
     quiz_dedup_threshold: float = 0.90
     quiz_batch_timeout_s: int = 3600

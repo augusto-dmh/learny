@@ -42,6 +42,7 @@ from app.domain.entities import (
     NoteSummary,
     ParsedBook,
     PasswordCredential,
+    QuizCandidate,
     QuizDeckHandle,
     QuizDeckResult,
     QuizGenerationJob,
@@ -705,6 +706,21 @@ class QuizGenerationPort(Protocol):
         ``None`` means the underlying batch is still in progress and the caller should
         poll again later; a result means the pass finished (per-request failures are
         surfaced as the result's ``errors``).
+        """
+        ...
+
+    def suggest_cards(
+        self, section: QuizSection, quote: str, limit: int
+    ) -> list[QuizCandidate]:
+        """Return at most ``limit`` candidates scoped to ``quote`` within ``section``.
+
+        The foreground counterpart of the batched deck path (AD-134): the student is
+        waiting on a popover, so this is synchronous — the local adapter derives its
+        candidates inline and the Anthropic adapter issues one Messages call with the
+        same structured-output schema, its ``source_chunk_id`` enum still constrained to
+        ``section``'s chunks. Candidates are ungrounded until the caller's QC pipeline
+        re-verifies them; a ``quote`` that appears in none of ``section``'s chunks yields
+        an empty list rather than an error.
         """
         ...
 

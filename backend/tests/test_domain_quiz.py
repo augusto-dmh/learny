@@ -346,14 +346,31 @@ def test_quiz_generation_port_is_runtime_checkable_protocol() -> None:
         def collect_deck(self, handle):  # noqa: ANN001, ANN201
             return None
 
+        def suggest_cards(self, section, quote, limit):  # noqa: ANN001, ANN201
+            return []
+
     class MissingCollect:
         model = "x"
 
         def begin_deck(self, sections):  # noqa: ANN001, ANN201
             return None
 
+        def suggest_cards(self, section, quote, limit):  # noqa: ANN001, ANN201
+            return []
+
+    class MissingSuggest:
+        model = "x"
+
+        def begin_deck(self, sections):  # noqa: ANN001, ANN201
+            return None
+
+        def collect_deck(self, handle):  # noqa: ANN001, ANN201
+            return None
+
     assert isinstance(ConformingAdapter(), QuizGenerationPort)
     assert not isinstance(MissingCollect(), QuizGenerationPort)
+    # The quote-scoped suggestion method is part of the port contract (AD-134).
+    assert not isinstance(MissingSuggest(), QuizGenerationPort)
 
 
 def test_scheduling_port_is_runtime_checkable_protocol() -> None:

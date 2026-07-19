@@ -114,6 +114,54 @@ def test_collect_deck_returns_immediately_never_pending() -> None:
     assert adapter.collect_deck(handle) is not None
 
 
+# --- suggest_cards (quote-scoped, CAP-02) ---------------------------------------
+
+
+def test_suggest_cards_never_exceeds_the_limit() -> None:
+    section, _ = _section(_TEXT)
+    adapter = DeterministicQuizAdapter()
+
+    for limit in (1, 2, 3):
+        candidates = adapter.suggest_cards(section, "It also does more.", limit)
+        assert len(candidates) <= limit
+
+
+def test_suggest_cards_are_scoped_to_the_quote_not_the_section() -> None:
+    # The quote is the section's *second* sentence, which the deck path never picks.
+    section, chunk_id = _section(_TEXT)
+    quote = "It also does more."
+
+    candidates = DeterministicQuizAdapter().suggest_cards(section, quote, 3)
+
+    assert candidates
+    for candidate in candidates:
+        assert candidate.anchor_quote == quote
+        assert candidate.source_chunk_id == chunk_id
+        # Still grounded in the chunk it cites (QUIZ-06).
+        assert quote_in_text(candidate.anchor_quote, _TEXT)
+    cloze = next(c for c in candidates if c.item_type == QuizItemType.CLOZE)
+    assert cloze_is_valid(cloze.question, cloze.answer, cloze.anchor_quote)
+
+
+def test_suggest_cards_only_free_recall_and_cloze_types() -> None:
+    section, _ = _section(_TEXT)
+    candidates = DeterministicQuizAdapter().suggest_cards(section, _TEXT, 5)
+    assert all(
+        c.item_type in {QuizItemType.FREE_RECALL, QuizItemType.CLOZE}
+        for c in candidates
+    )
+
+
+def test_suggest_cards_for_a_quote_absent_from_the_section_yields_none() -> None:
+    section, _ = _section(_TEXT)
+    assert DeterministicQuizAdapter().suggest_cards(section, "Not in this book.", 3) == []
+
+
+def test_suggest_cards_with_a_non_positive_limit_yields_none() -> None:
+    section, _ = _section(_TEXT)
+    assert DeterministicQuizAdapter().suggest_cards(section, _TEXT, 0) == []
+
+
 def test_handle_survives_json_payload_roundtrip() -> None:
     section, chunk_id = _section(_TEXT)
     adapter = DeterministicQuizAdapter()
