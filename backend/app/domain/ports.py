@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
 from datetime import datetime
+from decimal import Decimal
 from typing import Protocol, runtime_checkable
 from uuid import UUID
 
@@ -24,6 +25,8 @@ from app.domain.entities import (
     AnchorSection,
     AnswerStreamEvent,
     Backlink,
+    ChapterIndexRow,
+    ChapterSection,
     ChunkToEmbed,
     CorpusSectionRecord,
     CorpusStructure,
@@ -44,12 +47,14 @@ from app.domain.entities import (
     QuizGenerationJob,
     QuizItem,
     QuizSection,
+    ReadingPosition,
     ReconcileSection,
     ReviewLogEntry,
     SchedulingSnapshot,
     SectionContent,
     Session,
     Source,
+    SourceHighlight,
     TeachingSession,
     TeachingSessionSummary,
     TeachingTurn,
@@ -355,6 +360,29 @@ class CorpusRepository(Protocol):
 
     def get_section(self, source_id: UUID, anchor: str) -> SectionContent | None:
         """Return ``source_id``'s section at ``anchor``, or ``None`` if none matches."""
+        ...
+
+    def get_chapter_index(self, source_id: UUID) -> tuple[ChapterIndexRow, ...] | None:
+        """Return ``source_id``'s flat, position-ordered section index, or ``None`` (RD-01).
+
+        The lightweight read model chapter partitioning and percent math run over:
+        one row per section with its position/depth/title/section_path/anchor/aliases
+        and persisted ``word_count`` — deliberately *not* the section markdown, so
+        building the index and computing progress never loads chapter bodies. Returns
+        ``None`` when the source has no corpus (no document); an empty tuple for a
+        document with no sections.
+        """
+        ...
+
+    def get_sections_span(
+        self, source_id: UUID, first_position: int, last_position: int
+    ) -> tuple[ChapterSection, ...]:
+        """Return ``source_id``'s sections in the inclusive ``[first, last]`` position span.
+
+        The chapter-body read: each :class:`~app.domain.entities.ChapterSection` carries
+        its anchor/title/section_path plus the derived ``markdown`` and ``word_count``,
+        position-ordered. Loads markdown for one chapter's span only (not the whole book).
+        """
         ...
 
     def section_texts(self, source_id: UUID) -> list[ReconcileSection]:
@@ -933,6 +961,19 @@ class NoteRepository(Protocol):
         """Return every anchor citing ``source_id`` for reconciliation (NF-07)."""
         ...
 
+    def highlights_for_source(
+        self, user_id: UUID, source_id: UUID
+    ) -> tuple[SourceHighlight, ...]:
+        """Return the caller's highlights on ``source_id`` for inline painting (RD-28).
+
+        Scoped to ``(user_id, source_id)`` — a note anchor belongs to its note's owner,
+        so this joins ``note_anchors`` to ``notes`` and filters by ``user_id`` (unlike the
+        reconciliation-scoped :meth:`anchors_for_source`, which spans all owners of a
+        source). Returns each anchor's quote-with-context + status as a lightweight
+        :class:`~app.domain.entities.SourceHighlight`; the reader paints ``active`` ones.
+        """
+        ...
+
     def update_anchor_reconciliation(
         self,
         anchor_id: UUID,
@@ -950,4 +991,38 @@ class NoteRepository(Protocol):
 
     def orphan_anchors_for_source(self, source_id: UUID) -> None:
         """Flip every non-orphaned anchor citing ``source_id`` to ``orphaned`` (NF-08)."""
+        ...
+
+
+# --- Reader progress (RFC-004 Cycle B; design §Ports) ----------------------------
+
+
+@runtime_checkable
+class ReadingPositionRepository(Protocol):
+    """Persistence port for :class:`~app.domain.entities.ReadingPosition` (RD-08/12).
+
+    Owner scoping is the application service's job (AD-014) — these methods key on
+    ``(user_id, source_id)``. ``upsert`` is a last-write-wins ``INSERT ... ON CONFLICT
+    DO UPDATE`` on that primary key, so two concurrent sessions never conflict: the
+    later write by server time wins (RD-12) with no error surfaced.
+    """
+
+    def get(self, user_id: UUID, source_id: UUID) -> ReadingPosition | None:
+        """Return the caller's stored position for ``source_id``, or ``None`` if none."""
+        ...
+
+    def upsert(
+        self,
+        user_id: UUID,
+        source_id: UUID,
+        *,
+        anchor: str,
+        percent: Decimal,
+        updated_at: datetime,
+    ) -> ReadingPosition:
+        """Insert or overwrite the caller's position for ``source_id`` (last-write-wins).
+
+        Writes ``anchor``/``percent``/``updated_at`` for ``(user_id, source_id)`` and
+        returns the stored :class:`~app.domain.entities.ReadingPosition`.
+        """
         ...

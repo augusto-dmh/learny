@@ -943,6 +943,24 @@ class ReadingPosition:
 
 
 @dataclass(frozen=True)
+class SourceHighlight:
+    """One of the caller's highlights on a source, for inline reader painting (RD-28).
+
+    The read model behind ``GET /sources/{id}/highlights``: the owning ``note_id`` and
+    the anchor's quote-with-context (``quote_exact`` + ``quote_prefix``/``quote_suffix``)
+    plus its ``status`` so the reader paints ``active`` quotes and ignores stale/orphaned
+    ones (RD-29). Carries no note prose — only what the painter needs.
+    """
+
+    note_id: UUID
+    anchor: str
+    quote_exact: str
+    quote_prefix: str
+    quote_suffix: str
+    status: str
+
+
+@dataclass(frozen=True)
 class Tag:
     """A first-class, user-owned label (ADR-0026 §2), unique per user by lowercased name."""
 

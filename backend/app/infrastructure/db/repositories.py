@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import datetime
+from decimal import Decimal
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
@@ -40,6 +41,8 @@ from app.domain.entities import (
     AnchorBlockSnapshot,
     AnchorSection,
     Backlink,
+    ChapterIndexRow,
+    ChapterSection,
     ChunkToEmbed,
     CorpusSectionRecord,
     CorpusStructure,
@@ -58,12 +61,14 @@ from app.domain.entities import (
     QuizItem,
     QuizItemStatus,
     QuizSection,
+    ReadingPosition,
     ReconcileSection,
     ReviewLogEntry,
     SchedulingSnapshot,
     SectionContent,
     Session,
     Source,
+    SourceHighlight,
     StructureSection,
     TeachingSession,
     TeachingSessionSummary,
@@ -84,6 +89,7 @@ from app.infrastructure.db.metadata import (
     quiz_generation_jobs,
     quiz_item_scheduling,
     quiz_items,
+    reading_positions,
     review_log,
     sessions,
     sources,
@@ -524,6 +530,73 @@ class SqlAlchemyCorpusRepository:
             title=row.title,
             section_path=tuple(row.section_path),
             markdown=row.markdown,
+        )
+
+    def get_chapter_index(self, source_id: UUID) -> tuple[ChapterIndexRow, ...] | None:
+        # The flat, position-ordered index chapter partitioning / percent math run over.
+        # Mirrors ``get_structure``'s document guard (None => no corpus) but selects the
+        # per-section word_count too, and deliberately NOT markdown — the index never
+        # loads chapter bodies (design §Components).
+        document = self._conn.execute(
+            select(corpus_documents.c.id).where(corpus_documents.c.source_id == source_id)
+        ).one_or_none()
+        if document is None:
+            return None
+        rows = self._conn.execute(
+            select(
+                corpus_sections.c.position,
+                corpus_sections.c.depth,
+                corpus_sections.c.title,
+                corpus_sections.c.section_path,
+                corpus_sections.c.anchor,
+                corpus_sections.c.anchor_aliases,
+                corpus_sections.c.word_count,
+            )
+            .where(corpus_sections.c.document_id == document.id)
+            .order_by(corpus_sections.c.position)
+        ).all()
+        return tuple(
+            ChapterIndexRow(
+                position=row.position,
+                depth=row.depth,
+                title=row.title,
+                section_path=tuple(row.section_path),
+                anchor=row.anchor,
+                anchor_aliases=tuple(row.anchor_aliases),
+                word_count=row.word_count,
+            )
+            for row in rows
+        )
+
+    def get_sections_span(
+        self, source_id: UUID, first_position: int, last_position: int
+    ) -> tuple[ChapterSection, ...]:
+        # One chapter's body: the sections in the inclusive [first, last] position span,
+        # with their derived markdown + word_count, position-ordered. Loads markdown for
+        # this span only (never the whole book).
+        rows = self._conn.execute(
+            select(
+                corpus_sections.c.anchor,
+                corpus_sections.c.title,
+                corpus_sections.c.section_path,
+                corpus_sections.c.markdown,
+                corpus_sections.c.word_count,
+            )
+            .join(corpus_documents, corpus_sections.c.document_id == corpus_documents.c.id)
+            .where(corpus_documents.c.source_id == source_id)
+            .where(corpus_sections.c.position >= first_position)
+            .where(corpus_sections.c.position <= last_position)
+            .order_by(corpus_sections.c.position)
+        ).all()
+        return tuple(
+            ChapterSection(
+                anchor=row.anchor,
+                title=row.title,
+                section_path=tuple(row.section_path),
+                markdown=row.markdown,
+                word_count=row.word_count,
+            )
+            for row in rows
         )
 
     def section_texts(self, source_id: UUID) -> list[ReconcileSection]:
@@ -1587,6 +1660,39 @@ class SqlAlchemyNoteRepository:
         ).all()
         return [_to_note_anchor(row) for row in rows]
 
+    def highlights_for_source(
+        self, user_id: UUID, source_id: UUID
+    ) -> tuple[SourceHighlight, ...]:
+        # Owner-scoped highlights for inline painting: a note anchor belongs to its
+        # note's owner, so join notes and filter by user_id (unlike ``anchors_for_source``
+        # which spans all owners for reconciliation). Projects only the quote-with-context
+        # + status the reader painter needs, stably ordered.
+        rows = self._conn.execute(
+            select(
+                note_anchors.c.note_id,
+                note_anchors.c.anchor,
+                note_anchors.c.quote_exact,
+                note_anchors.c.quote_prefix,
+                note_anchors.c.quote_suffix,
+                note_anchors.c.status,
+            )
+            .join(notes, note_anchors.c.note_id == notes.c.id)
+            .where(notes.c.user_id == user_id)
+            .where(note_anchors.c.source_id == source_id)
+            .order_by(note_anchors.c.created_at, note_anchors.c.id)
+        ).all()
+        return tuple(
+            SourceHighlight(
+                note_id=row.note_id,
+                anchor=row.anchor,
+                quote_exact=row.quote_exact,
+                quote_prefix=row.quote_prefix,
+                quote_suffix=row.quote_suffix,
+                status=row.status,
+            )
+            for row in rows
+        )
+
     def update_anchor_reconciliation(
         self,
         anchor_id: UUID,
@@ -1620,6 +1726,69 @@ class SqlAlchemyNoteRepository:
             .where(note_anchors.c.source_id == source_id)
             .where(note_anchors.c.status != NoteAnchorStatus.ORPHANED)
             .values(status=NoteAnchorStatus.ORPHANED, updated_at=func.now())
+        )
+
+
+class SqlAlchemyReadingPositionRepository:
+    """``ReadingPositionRepository`` backed by ``reading_positions`` (RD-08/12).
+
+    Owner scoping is the application service's job (AD-014); these methods key on the
+    ``(user_id, source_id)`` primary key. ``upsert`` is a last-write-wins
+    ``INSERT ... ON CONFLICT DO UPDATE`` on that key, so two concurrent position writes
+    never conflict — the later one overwrites with no error surfaced. Operates on the
+    caller's ``Connection`` so the transaction boundary lives at the composition root.
+    """
+
+    def __init__(self, connection: Connection) -> None:
+        self._conn = connection
+
+    def get(self, user_id: UUID, source_id: UUID) -> ReadingPosition | None:
+        row = self._conn.execute(
+            select(
+                reading_positions.c.anchor,
+                reading_positions.c.percent,
+                reading_positions.c.updated_at,
+            )
+            .where(reading_positions.c.user_id == user_id)
+            .where(reading_positions.c.source_id == source_id)
+        ).one_or_none()
+        if row is None:
+            return None
+        return ReadingPosition(
+            anchor=row.anchor, percent=row.percent, updated_at=row.updated_at
+        )
+
+    def upsert(
+        self,
+        user_id: UUID,
+        source_id: UUID,
+        *,
+        anchor: str,
+        percent: Decimal,
+        updated_at: datetime,
+    ) -> ReadingPosition:
+        stmt = pg_insert(reading_positions).values(
+            user_id=user_id,
+            source_id=source_id,
+            anchor=anchor,
+            percent=percent,
+            updated_at=updated_at,
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[reading_positions.c.user_id, reading_positions.c.source_id],
+            set_={
+                "anchor": stmt.excluded.anchor,
+                "percent": stmt.excluded.percent,
+                "updated_at": stmt.excluded.updated_at,
+            },
+        ).returning(
+            reading_positions.c.anchor,
+            reading_positions.c.percent,
+            reading_positions.c.updated_at,
+        )
+        row = self._conn.execute(stmt).one()
+        return ReadingPosition(
+            anchor=row.anchor, percent=row.percent, updated_at=row.updated_at
         )
 
 
