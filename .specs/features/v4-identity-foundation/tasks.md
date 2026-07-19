@@ -9,7 +9,7 @@ Implement these tasks with the `tlc-spec-driven` skill: **activate it by name an
 ---
 
 **Design**: `.specs/features/v4-identity-foundation/design.md`
-**Status**: Approved
+**Status**: Done — T1 `7ed3976`, T2 `037a7f4`, T3 `7ca964c`, T4 `50edc19`, T5 `2ad33ad`, T6 gate-only (253 vitest + tsc + build green; served-bundle proof: self-hosted woff2, no fonts.g* refs, paper selector compiled)
 
 ---
 
