@@ -54,7 +54,7 @@ jobs:
     steps:
       # Build the exact commit CI validated (head_sha on workflow_run), or the
       # dispatched ref's sha. Same expression drives the image tags below.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - uses: docker/setup-buildx-action@v3
@@ -104,7 +104,7 @@ jobs:
           fi
       # Check out the same commit the images were built from, to ship the matching
       # compose files.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         if: steps.secrets.outputs.present == 'true'
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}

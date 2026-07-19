@@ -42,7 +42,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Secrets cannot be referenced in an `if:` condition, so map the secret to
       # an env var in a step and publish a boolean output the later steps gate on.
       # Absent secret → notice + success exit (the remaining steps are skipped).
