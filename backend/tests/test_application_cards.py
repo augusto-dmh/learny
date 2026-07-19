@@ -8,30 +8,37 @@ is asserted on what the caller receives (CAP-01..04, CAP-09), and the ownership 
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import replace
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 import pytest
 
-from app.application.cards import SuggestCards
+from app.application.cards import AcceptCard, SuggestCards
 from app.application.errors import (
+    InvalidCardText,
     QuizItemNotFound,
     SourceNotFound,
     StaleCaptureTarget,
 )
 from app.application.identity import AuthorizeOwnership
+from app.application.quiz_qc import content_key, normalize_text
 from app.domain.entities import (
     Note,
     NoteAnchor,
     NoteAnchorStatus,
     QuizCandidate,
+    QuizItem,
+    QuizItemOrigin,
+    QuizItemStatus,
     QuizItemType,
     QuizSection,
+    SchedulingSnapshot,
     Source,
     User,
 )
-from tests.fakes import FakeNoteRepository, FakeSourceRepository
+from tests.fakes import FakeClock, FakeNoteRepository, FakeSourceRepository
 
 _NOW = datetime(2026, 7, 19, 12, 0, 0, tzinfo=UTC)
 
@@ -50,14 +57,114 @@ class FakeCardItemRepository:
     """In-memory ``QuizItemRepository`` slice the card services touch.
 
     ``section_for_anchor`` returns a preset section per anchor (``None`` for an anchor
-    the corpus no longer resolves, the stale-target leg).
+    the corpus no longer resolves, the stale-target leg). ``upsert`` models the two
+    partial unique indexes faithfully: a ``deck`` row collapses on
+    ``(source_id, content_key)`` and a ``highlight`` row on
+    ``(note_anchor_id, content_key)``, so a card minted with the wrong origin would
+    collide with an unrelated deck row exactly as it would in Postgres.
     """
 
     def __init__(self, sections: dict[str, QuizSection] | None = None) -> None:
         self._sections = sections or {}
+        self._by_key: dict[tuple, QuizItem] = {}
+        self.embeddings: dict[UUID, list[float] | None] = {}
+        self.scheduling: dict[UUID, SchedulingSnapshot] = {}
+        self.update_text_calls = 0
+
+    @staticmethod
+    def _identity(item: QuizItem) -> tuple:
+        if item.origin == QuizItemOrigin.HIGHLIGHT:
+            return (QuizItemOrigin.HIGHLIGHT, item.note_anchor_id, item.content_key)
+        return (QuizItemOrigin.DECK, item.source_id, item.content_key)
+
+    def seed(self, item: QuizItem, embedding: list[float] | None = None) -> QuizItem:
+        self._by_key[self._identity(item)] = item
+        self.embeddings[item.id] = embedding
+        self.scheduling[item.id] = _INITIAL
+        return item
 
     def section_for_anchor(self, source_id: UUID, anchor: str) -> QuizSection | None:
         return self._sections.get(anchor)
+
+    def upsert(self, item: QuizItem, *, embedding) -> bool:  # noqa: ANN001
+        key = self._identity(item)
+        inserted = key not in self._by_key
+        if inserted:
+            self._by_key[key] = item
+        else:
+            existing = self._by_key[key]
+            self._by_key[key] = replace(
+                item, id=existing.id, created_at=existing.created_at
+            )
+        self.embeddings[self._by_key[key].id] = (
+            list(embedding) if embedding is not None else None
+        )
+        return inserted
+
+    def get_by_anchor_and_key(
+        self, note_anchor_id: UUID, content_key: str
+    ) -> QuizItem | None:
+        # Scoped to highlight origin: a deck row sharing the key is never returned.
+        return self._by_key.get(
+            (QuizItemOrigin.HIGHLIGHT, note_anchor_id, content_key)
+        )
+
+    def get_by_id(self, item_id: UUID) -> QuizItem | None:
+        return next(
+            (item for item in self._by_key.values() if item.id == item_id), None
+        )
+
+    def update_text(
+        self, item_id: UUID, *, question: str, answer: str, content_key: str
+    ) -> None:
+        self.update_text_calls += 1
+        for key, item in list(self._by_key.items()):
+            if item.id != item_id:
+                continue
+            updated = replace(
+                item, question=question, answer=answer, content_key=content_key
+            )
+            del self._by_key[key]
+            self._by_key[self._identity(updated)] = updated
+
+    def create_scheduling(self, quiz_item_id: UUID, snapshot: SchedulingSnapshot) -> None:
+        self.scheduling[quiz_item_id] = snapshot
+
+    def list_all(self) -> list[QuizItem]:
+        """Test-only accessor for every persisted row."""
+        return list(self._by_key.values())
+
+
+_INITIAL = SchedulingSnapshot(
+    state=1, step=0, stability=None, difficulty=None, due=_NOW, last_review=None
+)
+
+
+class FakeCardScheduling:
+    """``SchedulingPort`` double whose ``initial`` returns a due-now snapshot."""
+
+    def initial(self) -> SchedulingSnapshot:
+        return _INITIAL
+
+    def review(self, snapshot, rating, reviewed_at):  # noqa: ANN001, ANN201
+        raise NotImplementedError
+
+
+class FakeCardEmbedding:
+    """``EmbeddingPort`` double returning one preset vector for every text."""
+
+    model = "fake-embedding@2"
+
+    def __init__(self, vector: list[float] | None = None) -> None:
+        self._vector = vector or [1.0, 0.0]
+        self.calls: list[list[str]] = []
+
+    def embed_query(self, text: str) -> list[float]:
+        return list(self._vector)
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        self.calls.append(list(texts))
+        return [list(self._vector) for _ in texts]
 
 
 class FakeSuggestGeneration:
@@ -157,6 +264,7 @@ class _World:
         *,
         candidates: list[QuizCandidate] | None = None,
         max_suggestions: int = 3,
+        max_card_chars: int = 2000,
         anchor_resolves: bool = True,
         owner: User = _OWNER,
     ) -> None:
@@ -179,6 +287,8 @@ class _World:
         sections = {"ch1#cells": _section()} if anchor_resolves else {}
         self.items = FakeCardItemRepository(sections)
         self.generation = FakeSuggestGeneration(candidates)
+        self.embeddings = FakeCardEmbedding()
+        self.clock = FakeClock(_NOW)
         self.suggest = SuggestCards(
             sources=self.sources,
             notes=self.notes,
@@ -186,6 +296,18 @@ class _World:
             generation=self.generation,
             authorize=AuthorizeOwnership(),
             max_suggestions=max_suggestions,
+        )
+        self.accept = AcceptCard(
+            sources=self.sources,
+            notes=self.notes,
+            items=self.items,
+            generation=self.generation,
+            embeddings=self.embeddings,
+            scheduling=FakeCardScheduling(),
+            authorize=AuthorizeOwnership(),
+            clock=self.clock,
+            ids=uuid4,
+            max_card_chars=max_card_chars,
         )
 
 
@@ -388,3 +510,329 @@ def test_another_users_source_is_not_found_and_generates_nothing() -> None:
         )
 
     assert world.generation.calls == []
+
+
+# --- AcceptCard: minting one card (CAP-05, CAP-10, CAP-11) ----------------------
+
+
+def _deck_item(source_id: UUID, *, item_type: str, question: str, answer: str) -> QuizItem:
+    """A whole-deck item, built the way ``RunDeckGeneration`` builds one."""
+    return QuizItem(
+        id=uuid4(),
+        source_id=source_id,
+        item_type=item_type,
+        question=question,
+        answer=answer,
+        section_path=("Chapter 1", "Cells"),
+        anchor="ch1#cells",
+        source_excerpt=_QUOTE,
+        chunk_hash="c" * 64,
+        content_key=content_key(item_type, question, answer),
+        status=QuizItemStatus.ACTIVE,
+        generation_meta={"model": "fake-generation@1"},
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+
+
+def test_accepting_persists_exactly_one_card_due_immediately() -> None:
+    world = _World()
+
+    item, created = world.accept(
+        user=_OWNER,
+        source_id=world.source.id,
+        note_anchor_id=world.anchor.id,
+        item_type=QuizItemType.FREE_RECALL,
+        question="What is the powerhouse of the cell?",
+        answer="The mitochondria",
+    )
+
+    assert created is True
+    assert len(world.items.list_all()) == 1
+    # Its initial scheduling exists and is due at acceptance time (CAP-05).
+    assert world.items.scheduling[item.id].due == _NOW
+
+
+def test_accepted_card_records_highlight_origin_and_provenance() -> None:
+    world = _World()
+
+    item, _ = world.accept(
+        user=_OWNER,
+        source_id=world.source.id,
+        note_anchor_id=world.anchor.id,
+        item_type=QuizItemType.FREE_RECALL,
+        question="What is the powerhouse of the cell?",
+        answer="The mitochondria",
+    )
+
+    assert item.origin == QuizItemOrigin.HIGHLIGHT
+    assert item.note_anchor_id == world.anchor.id
+
+
+def test_accepted_card_does_not_collide_with_a_deck_card_of_the_same_text() -> None:
+    # The identity guard that origin exists for: a deck row with the identical
+    # content key must not swallow the accepted card (CAP-13/14).
+    world = _World()
+    question, answer = "What is the powerhouse of the cell?", "The mitochondria"
+    world.items.seed(
+        _deck_item(
+            world.source.id,
+            item_type=QuizItemType.FREE_RECALL,
+            question=question,
+            answer=answer,
+        )
+    )
+
+    item, created = world.accept(
+        user=_OWNER,
+        source_id=world.source.id,
+        note_anchor_id=world.anchor.id,
+        item_type=QuizItemType.FREE_RECALL,
+        question=question,
+        answer=answer,
+    )
+
+    assert created is True
+    stored = world.items.list_all()
+    assert len(stored) == 2
+    assert {i.origin for i in stored} == {QuizItemOrigin.DECK, QuizItemOrigin.HIGHLIGHT}
+    assert item.id != next(i.id for i in stored if i.origin == QuizItemOrigin.DECK)
+
+
+def test_accepted_card_snapshots_its_citation_from_the_highlight() -> None:
+    world = _World()
+
+    item, _ = world.accept(
+        user=_OWNER,
+        source_id=world.source.id,
+        note_anchor_id=world.anchor.id,
+        item_type=QuizItemType.FREE_RECALL,
+        question="What is the powerhouse of the cell?",
+        answer="The mitochondria",
+    )
+
+    # Renderable from its own snapshot even once provenance is severed (CAP-15).
+    assert item.anchor == world.anchor.anchor
+    assert item.section_path == world.anchor.section_path
+    assert item.source_excerpt == _QUOTE
+    assert item.chunk_hash == hashlib.sha256(
+        normalize_text(_QUOTE).encode("utf-8")
+    ).hexdigest()
+    assert item.status == QuizItemStatus.ACTIVE
+    assert item.generation_meta == {"model": "fake-generation@1"}
+
+
+def test_accepting_stores_the_edited_text_not_the_suggested_text() -> None:
+    world = _World()
+
+    item, _ = world.accept(
+        user=_OWNER,
+        source_id=world.source.id,
+        note_anchor_id=world.anchor.id,
+        item_type=QuizItemType.FREE_RECALL,
+        question="Which organelle produces the cell's energy?",
+        answer="The mitochondria",
+    )
+
+    assert item.question == "Which organelle produces the cell's energy?"
+    assert world.items.get_by_id(item.id).question == item.question
+
+
+def test_discarding_a_suggestion_persists_nothing() -> None:
+    # Discard is the absence of an accept: nothing is written for it (CAP-07).
+    world = _World(candidates=[_candidate()])
+
+    world.suggest(
+        user=_OWNER, source_id=world.source.id, note_anchor_id=world.anchor.id
+    )
+
+    assert world.items.list_all() == []
+
+
+# --- AcceptCard: embeddings without dedup (CAP-A5 / AD-138) ---------------------
+
+
+def test_accepting_stores_the_embedding() -> None:
+    world = _World()
+
+    item, _ = world.accept(
+        user=_OWNER,
+        source_id=world.source.id,
+        note_anchor_id=world.anchor.id,
+        item_type=QuizItemType.FREE_RECALL,
+        question="What is the powerhouse of the cell?",
+        answer="The mitochondria",
+    )
+
+    # Stored so future deck generation dedups against this card.
+    assert world.items.embeddings[item.id] == [1.0, 0.0]
+
+
+def test_a_near_duplicate_of_an_existing_card_is_still_accepted() -> None:
+    # The deliberate asymmetry: dedup protects bulk generation, never overrules an
+    # explicit acceptance (CAP-A5). The fake embeds every text identically, so an
+    # applied dedup guard would discard this card.
+    world = _World()
+    world.items.seed(
+        _deck_item(
+            world.source.id,
+            item_type=QuizItemType.FREE_RECALL,
+            question="What is the powerhouse of the cell?",
+            answer="The mitochondria",
+        ),
+        embedding=[1.0, 0.0],
+    )
+
+    item, created = world.accept(
+        user=_OWNER,
+        source_id=world.source.id,
+        note_anchor_id=world.anchor.id,
+        item_type=QuizItemType.FREE_RECALL,
+        question="Which organelle is the powerhouse of the cell?",
+        answer="The mitochondria",
+    )
+
+    assert created is True
+    assert world.items.get_by_id(item.id) is not None
+
+
+# --- AcceptCard: idempotent re-accept (double submit) ---------------------------
+
+
+def test_accepting_the_same_text_twice_yields_one_card() -> None:
+    world = _World()
+    payload = {
+        "user": _OWNER,
+        "source_id": world.source.id,
+        "note_anchor_id": world.anchor.id,
+        "item_type": QuizItemType.FREE_RECALL,
+        "question": "What is the powerhouse of the cell?",
+        "answer": "The mitochondria",
+    }
+
+    first, first_created = world.accept(**payload)
+    second, second_created = world.accept(**payload)
+
+    assert first_created is True
+    assert second_created is False
+    assert second.id == first.id
+    assert len(world.items.list_all()) == 1
+
+
+def test_the_same_text_from_a_different_highlight_is_a_distinct_card() -> None:
+    # Two highlights of the same sentence are two cards (CAP-14).
+    world = _World()
+    other_anchor = world.notes.add_anchor(
+        _anchor(
+            next(iter(world.notes.anchors_for_source(world.source.id))).note_id,
+            world.source.id,
+        )
+    )
+    payload = {
+        "user": _OWNER,
+        "source_id": world.source.id,
+        "item_type": QuizItemType.FREE_RECALL,
+        "question": "What is the powerhouse of the cell?",
+        "answer": "The mitochondria",
+    }
+
+    first, _ = world.accept(note_anchor_id=world.anchor.id, **payload)
+    second, second_created = world.accept(note_anchor_id=other_anchor.id, **payload)
+
+    assert second_created is True
+    assert second.id != first.id
+    assert len(world.items.list_all()) == 2
+
+
+# --- AcceptCard: validation and ownership (edge cases, CAP-09) ------------------
+
+
+@pytest.mark.parametrize("question", ["", "   ", "\n\t"])
+def test_accepting_an_empty_question_is_rejected(question: str) -> None:
+    world = _World()
+
+    with pytest.raises(InvalidCardText):
+        world.accept(
+            user=_OWNER,
+            source_id=world.source.id,
+            note_anchor_id=world.anchor.id,
+            item_type=QuizItemType.FREE_RECALL,
+            question=question,
+            answer="The mitochondria",
+        )
+
+    assert world.items.list_all() == []
+
+
+def test_accepting_an_empty_answer_is_rejected() -> None:
+    world = _World()
+
+    with pytest.raises(InvalidCardText):
+        world.accept(
+            user=_OWNER,
+            source_id=world.source.id,
+            note_anchor_id=world.anchor.id,
+            item_type=QuizItemType.FREE_RECALL,
+            question="What is the powerhouse of the cell?",
+            answer="  ",
+        )
+
+    assert world.items.list_all() == []
+
+
+def test_accepting_over_long_text_is_rejected() -> None:
+    world = _World(max_card_chars=50)
+
+    with pytest.raises(InvalidCardText):
+        world.accept(
+            user=_OWNER,
+            source_id=world.source.id,
+            note_anchor_id=world.anchor.id,
+            item_type=QuizItemType.FREE_RECALL,
+            question="q" * 51,
+            answer="The mitochondria",
+        )
+
+    assert world.items.list_all() == []
+
+
+def test_accepting_an_unsupported_card_type_is_rejected() -> None:
+    world = _World()
+
+    with pytest.raises(InvalidCardText):
+        world.accept(
+            user=_OWNER,
+            source_id=world.source.id,
+            note_anchor_id=world.anchor.id,
+            item_type="multiple_choice",
+            question="What is the powerhouse of the cell?",
+            answer="The mitochondria",
+        )
+
+    assert world.items.list_all() == []
+
+
+def test_accepting_against_another_users_highlight_is_not_found() -> None:
+    world = _World()
+    stranger_note = Note(
+        id=uuid4(),
+        user_id=_STRANGER.id,
+        title="Theirs",
+        body_markdown="",
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+    world.notes.add(stranger_note)
+    foreign = world.notes.add_anchor(_anchor(stranger_note.id, world.source.id))
+
+    with pytest.raises(QuizItemNotFound):
+        world.accept(
+            user=_OWNER,
+            source_id=world.source.id,
+            note_anchor_id=foreign.id,
+            item_type=QuizItemType.FREE_RECALL,
+            question="What is the powerhouse of the cell?",
+            answer="The mitochondria",
+        )
+
+    assert world.items.list_all() == []

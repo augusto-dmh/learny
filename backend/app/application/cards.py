@@ -6,7 +6,11 @@ application module: nothing here imports FastAPI, SQLAlchemy, or Celery.
 
 :class:`SuggestCards` generates candidates for a single highlighted quote and gates them
 through the same groundedness QC the deck pipeline applies (QUIZ-06/07), because those
-checks catch model fabrication rather than police the student.
+checks catch model fabrication rather than police the student. :class:`AcceptCard` mints
+the one card the student chose — ``origin="highlight"`` under a creation-minted id, with
+typed provenance back to the note anchor and a citation snapshot taken from it — and
+deliberately does *not* apply the embedding dedup guard (AD-138), while still storing the
+embedding so later deck runs dedup against it.
 
 Ownership is reachable only through the parent source (AD-014); every ownership failure
 collapses to ``QuizItemNotFound`` → 404 so no anchor's or card's existence is disclosed.
@@ -14,23 +18,40 @@ collapses to ``QuizItemNotFound`` → 404 so no anchor's or card's existence is 
 
 from __future__ import annotations
 
+import hashlib
+from collections.abc import Callable
 from uuid import UUID
 
-from app.application.errors import QuizItemNotFound, StaleCaptureTarget
+from app.application.errors import (
+    InvalidCardText,
+    QuizItemNotFound,
+    StaleCaptureTarget,
+)
 from app.application.identity import AuthorizeOwnership
 from app.application.ingestion import authorized_source
-from app.application.quiz_qc import cloze_is_valid, quote_in_text
+from app.application.quiz_qc import (
+    cloze_is_valid,
+    content_key,
+    normalize_text,
+    quote_in_text,
+)
 from app.domain.entities import (
     NoteAnchor,
     QuizCandidate,
+    QuizItem,
+    QuizItemOrigin,
+    QuizItemStatus,
     QuizItemType,
     QuizSection,
     User,
 )
 from app.domain.ports import (
+    Clock,
+    EmbeddingPort,
     NoteRepository,
     QuizGenerationPort,
     QuizItemRepository,
+    SchedulingPort,
     SourceRepository,
 )
 
@@ -81,6 +102,20 @@ def _passes_qc(candidate: QuizCandidate, section_text: str) -> bool:
     if candidate.item_type == QuizItemType.CLOZE:
         return cloze_is_valid(candidate.question, candidate.answer, candidate.anchor_quote)
     return True
+
+
+def _validated_text(value: str, field: str, max_chars: int) -> str:
+    """Return ``value`` stripped, or raise ``InvalidCardText`` (CAP-05/06 → 422).
+
+    Empty (or whitespace-only) text has nothing to review, and text past the configured
+    bound is rejected before any write rather than truncated silently.
+    """
+    text = value.strip()
+    if not text:
+        raise InvalidCardText(f"A card's {field} cannot be empty.")
+    if len(text) > max_chars:
+        raise InvalidCardText(f"A card's {field} is longer than {max_chars} characters.")
+    return text
 
 
 class SuggestCards:
@@ -137,3 +172,111 @@ class SuggestCards:
         section_text = _section_text(section)
         survivors = [c for c in candidates if _passes_qc(c, section_text)]
         return survivors[: self._max_suggestions]
+
+
+class AcceptCard:
+    """Mint the one card the student accepted from a highlight (CAP-05..07, 10..12).
+
+    Authorizes the source and the anchor exactly as :class:`SuggestCards` does, validates
+    the submitted text (empty or over-long → ``InvalidCardText`` → 422), and mints a
+    ``highlight``-origin item whose identity is its **created** id, not its content hash
+    (ADR-0026 decision 5) — so later edits never disturb its scheduling. Provenance is the
+    typed ``note_anchor_id`` link, and the citation (``anchor``, ``section_path``,
+    ``source_excerpt``) is snapshotted from the anchor so the card stays renderable even
+    after the origin note is deleted.
+
+    Accepting the same text from the same highlight twice is idempotent: the existing card
+    is returned with ``created=False`` and no second row appears (double-submit edge
+    case). The submitted text is stored as the student sent it — generated candidates were
+    already gated by :class:`SuggestCards`, and text the student edited is author-owned
+    (AD-138). Embedding dedup is deliberately **not** applied here: silently discarding a
+    card someone just chose would be an inexplicable no-op. The embedding is still computed
+    and stored so future deck generation dedups against this card.
+    """
+
+    def __init__(
+        self,
+        *,
+        sources: SourceRepository,
+        notes: NoteRepository,
+        items: QuizItemRepository,
+        generation: QuizGenerationPort,
+        embeddings: EmbeddingPort,
+        scheduling: SchedulingPort,
+        authorize: AuthorizeOwnership,
+        clock: Clock,
+        ids: Callable[[], UUID],
+        max_card_chars: int,
+    ) -> None:
+        self._sources = sources
+        self._notes = notes
+        self._items = items
+        self._generation = generation
+        self._embeddings = embeddings
+        self._scheduling = scheduling
+        self._authorize = authorize
+        self._clock = clock
+        self._ids = ids
+        self._max_card_chars = max_card_chars
+
+    def __call__(
+        self,
+        *,
+        user: User,
+        source_id: UUID,
+        note_anchor_id: UUID,
+        item_type: str,
+        question: str,
+        answer: str,
+    ) -> tuple[QuizItem, bool]:
+        authorized_source(
+            user=user,
+            source_id=source_id,
+            sources=self._sources,
+            authorize=self._authorize,
+        )
+        anchor = _owned_anchor(self._notes, user, source_id, note_anchor_id)
+
+        if item_type not in _VALID_ITEM_TYPES:
+            raise InvalidCardText(f"Unsupported card type: {item_type}.")
+        question = _validated_text(question, "question", self._max_card_chars)
+        answer = _validated_text(answer, "answer", self._max_card_chars)
+
+        key = content_key(item_type, question, answer)
+        existing = self._items.get_by_anchor_and_key(note_anchor_id, key)
+        if existing is not None:
+            return existing, False
+
+        now = self._clock.now()
+        item = QuizItem(
+            id=self._ids(),
+            source_id=source_id,
+            origin=QuizItemOrigin.HIGHLIGHT,
+            note_anchor_id=note_anchor_id,
+            item_type=item_type,
+            question=question,
+            answer=answer,
+            section_path=anchor.section_path,
+            anchor=anchor.anchor,
+            source_excerpt=anchor.quote_exact,
+            # The highlighted quote *is* the text this card was made from, so the
+            # NOT NULL chunk snapshot keeps its meaning for a card with no chunk.
+            chunk_hash=hashlib.sha256(
+                normalize_text(anchor.quote_exact).encode("utf-8")
+            ).hexdigest(),
+            content_key=key,
+            status=QuizItemStatus.ACTIVE,
+            generation_meta={"model": self._generation.model},
+            created_at=now,
+            updated_at=now,
+        )
+        embedding = self._embeddings.embed_documents([f"{question}\n{answer}"])[0]
+
+        if not self._items.upsert(item, embedding=list(embedding)):
+            # Lost a double-submit race at the partial unique index: the winner's row
+            # is the card, so return it rather than reporting a conflict.
+            stored = self._items.get_by_anchor_and_key(note_anchor_id, key)
+            if stored is not None:
+                return stored, False
+        self._items.create_scheduling(item.id, self._scheduling.initial())
+        return item, True

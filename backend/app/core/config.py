@@ -178,9 +178,12 @@ class Settings(BaseSettings):
     # ``quiz_max_suggestions`` caps the interactive per-quote card suggestions (RFC-004
     # Cycle D) and is deliberately separate from ``quiz_max_items_per_section`` so
     # tuning the foreground popover never moves whole-deck density.
+    # ``quiz_max_card_chars`` bounds the question/answer text a student may accept or
+    # edit onto one card.
     quiz_model: str = "claude-haiku-4-5"
     quiz_max_items_per_section: int = 6
     quiz_max_suggestions: int = 3
+    quiz_max_card_chars: int = 2000
     quiz_min_section_chars: int = 200
     quiz_dedup_threshold: float = 0.90
     quiz_batch_timeout_s: int = 3600
