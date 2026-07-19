@@ -68,10 +68,11 @@ export function deriveCaptureSelection(
  * that wrapper). While a capture is in flight the actions disable; a failure (e.g.
  * a stale-capture reload prompt) renders below them.
  *
- * When the reader supplies `onExplain`/`onAskAbout` the popover grows to the full
- * five-verb selection set (RA-15): Highlight and Note run the capture flow
- * unchanged (RA-16); Explain and Ask carry the verbatim `quote` up to the reader
- * panel; and Create card is a disabled placeholder for the next cycle (RA-19).
+ * When the reader supplies `onExplain`/`onAskAbout`/`onCreateCard` the popover grows
+ * to the full five-verb selection set (RA-15): Highlight and Note run the capture
+ * flow unchanged (RA-16); Explain and Ask carry the verbatim `quote` up to the
+ * reader panel; and Create card starts the capture-to-card flow (CAP-01), which the
+ * reader owns because it sequences a highlight capture and a suggestion request.
  * Absent those callbacks it stays the original two-button capture popover, so the
  * highlight-capture flow is byte-identical wherever the verbs are not wired.
  */
@@ -84,6 +85,7 @@ export function CapturePopover({
   onCapture,
   onExplain,
   onAskAbout,
+  onCreateCard,
 }: {
   top: number;
   left: number;
@@ -94,10 +96,11 @@ export function CapturePopover({
   onCapture: (action: CaptureAction) => void;
   onExplain?: (quote: string) => void;
   onAskAbout?: (quote: string) => void;
+  onCreateCard?: () => void;
 }) {
-  // The full verb set only when the reader wires the panel-bound verbs; otherwise
-  // the popover is the original two-action capture control (RA-15/16).
-  const verbs = Boolean(onExplain && onAskAbout);
+  // The full verb set only when the reader wires the panel- and card-bound verbs;
+  // otherwise the popover is the original two-action capture control (RA-15/16).
+  const verbs = Boolean(onExplain && onAskAbout && onCreateCard);
   return (
     <div
       role="dialog"
@@ -151,10 +154,8 @@ export function CapturePopover({
               type="button"
               size="sm"
               variant="ghost"
-              // A placeholder for RFC-004 Cycle D: shown to complete the verb set,
-              // but disabled with a hint and wired to nothing (RA-19).
-              disabled
-              title="Coming soon"
+              disabled={pending}
+              onClick={() => onCreateCard?.()}
             >
               Create card
             </Button>

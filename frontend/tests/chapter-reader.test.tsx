@@ -1103,3 +1103,176 @@ describe("ChapterFlow progress (RD-11)", () => {
     );
   });
 });
+
+describe("ChapterFlow create card (CAP-01/08)", () => {
+  const SUGGEST_URL = "/api/sources/s1/cards/suggestions";
+  const CARDS_URL = "/api/sources/s1/cards";
+  const QUOTE = "Ada Lovelace wrote the first algorithm";
+
+  /** The capture response the card flow reads the new anchor's id from. */
+  const capturedNote = {
+    id: "n1",
+    title: QUOTE,
+    body_markdown: "",
+    tags: [],
+    anchors: [
+      {
+        id: "a1",
+        source_id: "s1",
+        source_title: "Ready Book",
+        anchor: S1,
+        section_path: ["Chapter One", "Beginnings"],
+        block_ordinal: 0,
+        start_offset: 0,
+        end_offset: 37,
+        quote_exact: QUOTE,
+        quote_prefix: "## Beginnings ",
+        quote_suffix: ".",
+        status: "active",
+      },
+    ],
+    created_at: "now",
+    updated_at: "now",
+  };
+
+  const suggestion = {
+    item_type: "free_recall",
+    question: "Who wrote the first algorithm?",
+    answer: "Ada Lovelace",
+    anchor_quote: QUOTE,
+  };
+
+  const savedCard = {
+    id: "c1",
+    source_id: "s1",
+    origin: "highlight",
+    note_anchor_id: "a1",
+    item_type: "free_recall",
+    question: "Who wrote the first algorithm?",
+    answer: "Ada Lovelace",
+    citation: { section_path: ["Chapter One"], anchor: S1, source_excerpt: QUOTE },
+    status: "active",
+    created_at: "now",
+    updated_at: "now",
+  };
+
+  /** Render the flow and raise the popover on a selection in section one. */
+  function renderAndSelect() {
+    const view = render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+    );
+    selectText(QUOTE);
+    fireEvent.mouseUp(
+      view.container.querySelector(`[data-section-anchor="${S1}"]`)!,
+    );
+    return view;
+  }
+
+  const callsTo = (fetchMock: ReturnType<typeof routedFetch>, url: string) => () =>
+    fetchMock.mock.calls.filter(([u]) => u === url).length;
+
+  it("captures the highlight first, then asks for suggestions on the anchor it produced", async () => {
+    const fetchMock = routedFetch({
+      [`POST ${HIGHLIGHTS_URL}`]: () => jsonResponse(201, capturedNote),
+      [`POST ${SUGGEST_URL}`]: () => jsonResponse(200, { suggestions: [suggestion] }),
+      [`POST ${CARDS_URL}`]: () => jsonResponse(201, savedCard),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderAndSelect();
+    fireEvent.click(screen.getByRole("button", { name: "Create card" }));
+
+    // The suggestion request carries the anchor id the capture just minted —
+    // proof the reader sequenced the two single-purpose calls rather than
+    // expecting one endpoint to do both.
+    await waitFor(() => expect(callsTo(fetchMock, SUGGEST_URL)()).toBe(1));
+    const suggest = fetchMock.mock.calls.find(([u]) => u === SUGGEST_URL)!;
+    expect(JSON.parse((suggest[1] as RequestInit).body as string)).toEqual({
+      note_anchor_id: "a1",
+    });
+
+    // The chip renders and accepting it writes the card against the same anchor.
+    await screen.findByText("Who wrote the first algorithm?");
+    fireEvent.click(screen.getByRole("button", { name: "Accept" }));
+    await waitFor(() => expect(callsTo(fetchMock, CARDS_URL)()).toBe(1));
+    const accept = fetchMock.mock.calls.find(([u]) => u === CARDS_URL)!;
+    expect(JSON.parse((accept[1] as RequestInit).body as string)).toEqual({
+      note_anchor_id: "a1",
+      item_type: "free_recall",
+      question: "Who wrote the first algorithm?",
+      answer: "Ada Lovelace",
+    });
+    // The whole selection flow closes once the last suggestion is resolved.
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "Capture highlight" }),
+      ).toBeNull(),
+    );
+  });
+
+  it("keeps the highlight and retries only generation when suggestions fail", async () => {
+    let suggestAttempt = 0;
+    const fetchMock = routedFetch({
+      [`POST ${HIGHLIGHTS_URL}`]: () => jsonResponse(201, capturedNote),
+      [`POST ${SUGGEST_URL}`]: () => {
+        suggestAttempt += 1;
+        return suggestAttempt === 1
+          ? jsonResponse(502, { detail: "The card generator is unavailable." })
+          : jsonResponse(200, { suggestions: [suggestion] });
+      },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const captures = callsTo(fetchMock, HIGHLIGHTS_URL);
+
+    renderAndSelect();
+    fireEvent.click(screen.getByRole("button", { name: "Create card" }));
+
+    // Generation failed, but the highlight was already saved and stays saved.
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe("The card generator is unavailable.");
+    expect(captures()).toBe(1);
+
+    // Pressing the verb again retries generation ONLY — capturing the same
+    // passage twice would leave the student with a duplicate highlight.
+    fireEvent.click(screen.getByRole("button", { name: "Create card" }));
+
+    await screen.findByText("Who wrote the first algorithm?");
+    expect(suggestAttempt).toBe(2);
+    expect(captures()).toBe(1);
+  });
+
+  it("shows the reload prompt when the passage moved under the selection (409)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        [`POST ${HIGHLIGHTS_URL}`]: () => jsonResponse(201, capturedNote),
+        [`POST ${SUGGEST_URL}`]: () =>
+          jsonResponse(409, { detail: "That passage changed." }),
+      }),
+    );
+
+    renderAndSelect();
+    fireEvent.click(screen.getByRole("button", { name: "Create card" }));
+
+    // The same reload message the highlight capture uses for its own 409.
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(/reload the page/i);
+  });
+
+  it("reports an empty batch as no cards for this passage, not as a failure", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        [`POST ${HIGHLIGHTS_URL}`]: () => jsonResponse(201, capturedNote),
+        [`POST ${SUGGEST_URL}`]: () => jsonResponse(200, { suggestions: [] }),
+      }),
+    );
+
+    renderAndSelect();
+    fireEvent.click(screen.getByRole("button", { name: "Create card" }));
+
+    expect(await screen.findByText("No cards for this passage.")).toBeTruthy();
+    // Nothing is announced as an error; the highlight was still captured.
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+});
