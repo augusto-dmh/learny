@@ -127,6 +127,14 @@ Accepted architecture (locked — sourced from ADRs/TDD, not re-decided here):
 | AD-118 | WCAG AA verification for theme tokens = committed vitest test parsing `globals.css` in the frontend gate (no standalone script, no new CI step). | Cycle v4-A context.md |
 | AD-119 | Reader-scoped appearance layers use guarded container selectors (`html:not(.dark) [data-appearance="paper"]`): light-mode-only override via cascade, dark ignores the layer with zero duplicated tokens. Pattern for future appearance layers. | Cycle v4-A context.md |
 | AD-120 | Typographic punctuation discipline applies to author-owned UI copy only, in files a cycle already touches; corpus/book text is never rewritten (pinned by pass-through test). | Cycle v4-A context.md |
+| AD-121 | A "chapter" = a depth-0 `corpus_sections` row plus all contiguous following rows of greater depth (position order); flat books yield one-section chapters. No schema change. | Cycle v4-B context.md (D-1) |
+| AD-122 | Chapter delivery via new `GET /api/sources/{id}/chapter?anchor=` (`ReadChapter` use case beside `ReadSection`; sections+word counts+prev/next+percent-at-start in one response); `/section` route untouched. | Cycle v4-B context.md (D-2) |
+| AD-123 | `corpus_sections.word_count` persisted at corpus build; migration backfills existing rows from stored markdown (NOT NULL after backfill). | Cycle v4-B context.md (D-3) |
+| AD-124 | `reading_positions` PK (user_id, source_id), FKs ON DELETE CASCADE (product state — ADR-0026 inverse-cascade applies to notes only); PUT sends anchor-only, server computes whole-book percent from word counts; last-write-wins; no rate limit (client scroll-idle debounce). API shape (design refinement): PUT only — no GET route; the chapter response embeds the stored position, and `GET /chapter` without `anchor` resumes server-side. | Cycle v4-B context.md (D-4) + design.md |
+| AD-125 | Aa preferences are device-local (versioned localStorage key) applied as reader-scoped CSS vars + `data-appearance` on the reader container; theme stays with next-themes; no backend prefs this cycle. | Cycle v4-B context.md (D-5) |
+| AD-126 | Minutes-left = ceil(unread chapter words / 220 wpm), named constant; shown with whole-book percent. | Cycle v4-B context.md (D-6) |
+| AD-127 | Inline highlights: new owner-scoped `GET /api/sources/{id}/highlights`; client paints `active` anchors only via section-scoped quote search with prefix/suffix disambiguation; unmatched quotes silently don't paint; server never injects marks into corpus markdown. | Cycle v4-B context.md (D-7) |
+| AD-128 | Load-path fix = parallel client fetches (auth + content) with a reading skeleton; no RSC rewrite this cycle. | Cycle v4-B context.md (D-8) |
 
 ## Blockers
 
