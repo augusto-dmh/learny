@@ -16,7 +16,6 @@ from __future__ import annotations
 from decimal import Decimal
 
 from app.application.reading import (
-    WORDS_PER_MINUTE,
     Chapter,
     locate,
     partition,
@@ -127,8 +126,3 @@ def test_percent_at_quantizes_to_two_decimals() -> None:
 def test_percent_at_zero_total_is_zero_not_division_error() -> None:
     index = (_row(0, 0, "a", words=0), _row(1, 0, "b", words=0))
     assert percent_at(index, 1) == Decimal("0.00")
-
-
-def test_words_per_minute_constant_is_220() -> None:
-    # AD-126 / spec P1-Position AC5: minutes-left is computed at 220 wpm.
-    assert WORDS_PER_MINUTE == 220

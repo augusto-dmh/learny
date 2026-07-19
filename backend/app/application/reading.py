@@ -38,10 +38,6 @@ from app.domain.ports import (
     SourceRepository,
 )
 
-# Adult silent-reading rate for the minutes-left estimate (AD-126). A named constant
-# — precision is not the product point; the view and client mirror this value.
-WORDS_PER_MINUTE = 220
-
 # Percent is stored/displayed to two decimals (NUMERIC(5,2)); all percent math
 # quantizes to this so there is no float drift (design §Tech Decisions).
 _PERCENT_QUANTUM = Decimal("0.01")
