@@ -20,7 +20,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ChapterFlow } from "../app/components/chapter-reader";
+import { ChapterFlow, ChapterReader } from "../app/components/chapter-reader";
 import type { ChapterView } from "../app/lib/reading";
 
 // The component reads `useRouter().push` for the "Highlight + note" navigation;
@@ -107,7 +107,30 @@ beforeAll(() => {
     true;
 });
 
+// The orchestrator reads the anchor from `useSearchParams`; the S2 deep-link and
+// the URL the client re-encodes it onto.
+const ENCODED_S2 = "part1%2Fch1.xhtml%23s2";
+const CHAPTER_URL_S2 = `/api/sources/s1/chapter?anchor=${ENCODED_S2}`;
+const CHAPTER_URL_RESUME = "/api/sources/s1/chapter";
+
+const authedMe = jsonResponse(200, {
+  id: "u1",
+  email: "a@b.c",
+  created_at: "now",
+  csrf_token: "csrf-xyz",
+});
+
+/** A promise whose resolution the test controls, to observe in-flight fetches. */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
 beforeEach(() => {
+  nav.params = new URLSearchParams();
   nav.push.mockClear();
   nav.replace.mockClear();
   Element.prototype.scrollIntoView = vi.fn();
@@ -368,5 +391,104 @@ describe("ChapterFlow capture (NF-12)", () => {
     expect(
       screen.getByRole("dialog", { name: "Capture highlight" }),
     ).toBeTruthy();
+  });
+});
+
+describe("ChapterReader orchestration (RD-26/27/10)", () => {
+  it("dispatches the auth and chapter fetches in parallel and shows a skeleton while pending", async () => {
+    const authD = deferred<Response>();
+    const chapterD = deferred<Response>();
+    const fetchMock = vi.fn((url: string) => {
+      if (url === "/api/auth/me") return authD.promise;
+      if (url.startsWith("/api/sources/s1/chapter")) return chapterD.promise;
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    nav.params = new URLSearchParams(`anchor=${ENCODED_S2}`);
+
+    render(<ChapterReader sourceId="s1" />);
+
+    // Both requests are dispatched before EITHER resolves — a sequential
+    // auth→content chain would issue only the auth call at this point.
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    const urls = fetchMock.mock.calls.map((c) => c[0]);
+    expect(urls).toContain("/api/auth/me");
+    expect(urls).toContain(CHAPTER_URL_S2);
+
+    // While both are pending the reader shows a reading-surface skeleton, not
+    // bare "Loading…" text.
+    expect(screen.getByTestId("reading-skeleton")).toBeTruthy();
+    expect(screen.queryByText("Loading…")).toBeNull();
+
+    // Resolving both renders the chapter.
+    authD.resolve(authedMe.clone());
+    chapterD.resolve(jsonResponse(200, chapter));
+    expect(
+      await screen.findByText("Ada Lovelace wrote the first algorithm."),
+    ).toBeTruthy();
+  });
+
+  it("redirects to login when the content fetch is unauthenticated (401)", async () => {
+    const onRequireAuth = vi.fn();
+    nav.params = new URLSearchParams(`anchor=${ENCODED_S2}`);
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => new Response(null, { status: 401 }),
+        [`GET ${CHAPTER_URL_S2}`]: () => new Response(null, { status: 401 }),
+      }),
+    );
+
+    render(<ChapterReader sourceId="s1" onRequireAuth={onRequireAuth} />);
+
+    await waitFor(() => expect(onRequireAuth).toHaveBeenCalled());
+    expect(await screen.findByText(/signed out/i)).toBeTruthy();
+  });
+
+  it("shows a readable not-found state with a way back for an unknown anchor", async () => {
+    nav.params = new URLSearchParams(`anchor=${ENCODED_S2}`);
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        [`GET ${CHAPTER_URL_S2}`]: () => new Response(null, { status: 404 }),
+      }),
+    );
+
+    render(<ChapterReader sourceId="s1" />);
+
+    expect(await screen.findByText(/couldn.t find that chapter/i)).toBeTruthy();
+    expect(
+      screen
+        .getByRole("link", { name: /back to your library/i })
+        .getAttribute("href"),
+    ).toBe("/sources");
+  });
+
+  it("resumes the stored position's chapter scrolled to the stored anchor with no ?anchor=", async () => {
+    // No URL anchor → the client omits the query and the server resumes; the
+    // routed key without a query string proves the anchor was omitted.
+    nav.params = new URLSearchParams();
+    const resumed: ChapterView = {
+      ...chapter,
+      reading_position: { anchor: S2, percent: 40, updated_at: "now" },
+    };
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        [`GET ${CHAPTER_URL_RESUME}`]: () => jsonResponse(200, resumed),
+      }),
+    );
+
+    render(<ChapterReader sourceId="s1" />);
+
+    await screen.findByText("Babbage designed the analytical engine.");
+    // Scrolled to the stored section, whose heading carries the transient flash.
+    await waitFor(() =>
+      expect(Element.prototype.scrollIntoView).toHaveBeenCalled(),
+    );
+    const flashed = document.querySelector(`[data-section-heading="${S2}"]`);
+    expect(flashed?.getAttribute("data-highlight")).toBe("on");
   });
 });

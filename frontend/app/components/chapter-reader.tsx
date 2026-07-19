@@ -22,7 +22,8 @@
  * against its own Markdown and anchor.
  */
 
-import { useRouter } from "next/navigation";
+import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
 import {
@@ -31,9 +32,148 @@ import {
   type CaptureAction,
   type CaptureSelection,
 } from "@/app/components/notes/capture-popover";
+import { fetchAuthState } from "@/app/lib/auth";
 import { captureHighlight, NoteError } from "@/app/lib/notes";
-import type { ChapterSectionView, ChapterView } from "@/app/lib/reading";
+import { getChapter, type ChapterSectionView, type ChapterView } from "@/app/lib/reading";
 import { MessageResponse } from "@/components/ai-elements/message";
+import { Skeleton } from "@/components/ui/skeleton";
+
+type LoadState =
+  | { kind: "loading" }
+  | { kind: "signed-out" }
+  | { kind: "not-found" }
+  | { kind: "error"; message: string }
+  | { kind: "found"; chapter: ChapterView };
+
+/**
+ * The reader entry point: resolves auth and the chapter *in parallel* (no
+ * sequential auth→content chain, RD-26), then renders the resolved state. The URL
+ * `?anchor=` is the deep-link target; when it is absent the chapter request omits
+ * the anchor and the server resumes the stored position (RD-10) — still one
+ * content round-trip.
+ *
+ * A 401 on the content fetch behaves exactly as before: `/api/auth/me` reports
+ * anonymous and `onRequireAuth` redirects to login (a UX convenience, NOT the
+ * security boundary — FastAPI enforces auth and ownership on every reader route
+ * regardless of client-side routing, FR-AUTH-007/ADR-017).
+ */
+export function ChapterReader({
+  sourceId,
+  onRequireAuth,
+}: {
+  sourceId: string;
+  onRequireAuth?: () => void;
+}) {
+  // `useSearchParams().get()` decodes the percent-encoded anchor; `null` when
+  // absent, which asks the server to resume the stored reading position.
+  const urlAnchor = useSearchParams().get("anchor");
+  const [state, setState] = useState<LoadState>({ kind: "loading" });
+  // The CSRF token for the capture write (AD-007), read from the same
+  // `/api/auth/me` resolve that gates the chapter read.
+  const [csrf, setCsrf] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    setState({ kind: "loading" });
+    // Dispatch both requests before awaiting either — parallel, not chained.
+    const authPromise = fetchAuthState();
+    const chapterPromise = getChapter(sourceId, urlAnchor);
+    // If we bail before consuming it (signed-out), a 401 on the content fetch
+    // still needs a rejection handler so it is never an unhandled rejection.
+    chapterPromise.catch(() => {});
+    void (async () => {
+      const auth = await authPromise;
+      if (!active) {
+        return;
+      }
+      if (!auth.authenticated) {
+        setState({ kind: "signed-out" });
+        onRequireAuth?.();
+        return;
+      }
+      setCsrf(auth.user.csrf_token);
+      try {
+        const result = await chapterPromise;
+        if (!active) {
+          return;
+        }
+        setState(
+          result.status === "not_found"
+            ? { kind: "not-found" }
+            : { kind: "found", chapter: result.chapter },
+        );
+      } catch (err) {
+        if (!active) {
+          return;
+        }
+        setState({
+          kind: "error",
+          message:
+            err instanceof Error ? err.message : "Could not load this chapter.",
+        });
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [sourceId, urlAnchor, onRequireAuth]);
+
+  if (state.kind === "loading") {
+    return <ReadingSkeleton />;
+  }
+  if (state.kind === "signed-out") {
+    return <p className="text-muted-foreground">You are signed out.</p>;
+  }
+  if (state.kind === "not-found") {
+    return (
+      <div className="mx-auto max-w-2xl py-12 text-center">
+        <p className="text-muted-foreground">We couldn’t find that chapter.</p>
+        <Link
+          href="/sources"
+          className="text-primary underline-offset-4 hover:underline"
+        >
+          Back to your library
+        </Link>
+      </div>
+    );
+  }
+  if (state.kind === "error") {
+    return (
+      <div className="mx-auto max-w-2xl py-12">
+        <p role="alert" className="text-destructive">
+          {state.message}
+        </p>
+      </div>
+    );
+  }
+  // Deep-link target: the URL anchor, or the resumed position, or the chapter top.
+  const scrollTarget = urlAnchor ?? state.chapter.reading_position?.anchor ?? null;
+  return (
+    <ChapterFlow
+      sourceId={sourceId}
+      csrf={csrf}
+      chapter={state.chapter}
+      scrollTarget={scrollTarget}
+    />
+  );
+}
+
+/** A reading-surface skeleton shown while the chapter loads (RD-27) — not bare text. */
+function ReadingSkeleton() {
+  return (
+    <div
+      data-testid="reading-skeleton"
+      aria-hidden
+      className="mx-auto max-w-2xl space-y-4 py-6"
+    >
+      <Skeleton className="h-8 w-2/3" />
+      <Skeleton className="h-4 w-full" />
+      <Skeleton className="h-4 w-full" />
+      <Skeleton className="h-4 w-5/6" />
+      <Skeleton className="h-4 w-11/12" />
+    </div>
+  );
+}
 
 /** A raised capture popover: the resolved selection payload, its section anchor, and position. */
 type ActiveCapture = CaptureSelection & { anchor: string; top: number; left: number };

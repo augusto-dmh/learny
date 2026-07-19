@@ -21,10 +21,11 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { ChapterReader } from "../app/components/chapter-reader";
 import { CitationList } from "../app/components/citations";
-import { SectionReader } from "../app/components/section-reader";
 import { AppSidebar } from "../app/components/shell/app-sidebar";
 import { type Citation } from "../app/lib/questions";
+import { type ChapterView } from "../app/lib/reading";
 import { SidebarProvider } from "../components/ui/sidebar";
 
 // The reader reads the anchor via `useSearchParams` and uses `useRouter` for the
@@ -40,7 +41,7 @@ const BASE = "http://localhost";
 // The anchor carries both reserved chars — the hostile round-trip case.
 const RAW_ANCHOR = "part1/chapter-1.xhtml#core-idea";
 const ENCODED_ANCHOR = "part1%2Fchapter-1.xhtml%23core-idea";
-const SECTION_URL = `/api/sources/s1/section?anchor=${ENCODED_ANCHOR}`;
+const CHAPTER_URL = `/api/sources/s1/chapter?anchor=${ENCODED_ANCHOR}`;
 
 beforeAll(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
@@ -91,11 +92,28 @@ const citation: Citation = {
   score: 0.03,
 };
 
-const section = {
-  anchor: RAW_ANCHOR,
-  title: "The First Algorithm",
-  section_path: ["Chapter 1", "Core Idea"],
-  markdown: "## Beginnings\n\nAda Lovelace wrote the first algorithm.",
+// The chapter containing the cited section — the reader now opens whole chapters
+// and lands on (scrolls to) the deep-linked section within the flow.
+const chapter: ChapterView = {
+  chapter_title: "Chapter 1",
+  chapter_anchor: RAW_ANCHOR,
+  chapter_index: 0,
+  chapter_count: 1,
+  prev_anchor: null,
+  next_anchor: null,
+  words_before_chapter: 0,
+  chapter_word_count: 7,
+  total_word_count: 7,
+  sections: [
+    {
+      anchor: RAW_ANCHOR,
+      title: "The First Algorithm",
+      section_path: ["Chapter 1", "Core Idea"],
+      markdown: "## Beginnings\n\nAda Lovelace wrote the first algorithm.",
+      word_count: 7,
+    },
+  ],
+  reading_position: null,
 };
 
 const readySource = {
@@ -171,22 +189,22 @@ describe("citation → reader loop (E2)", () => {
     first.unmount();
 
     // 2. Drive the reader with that exact query string; it re-encodes the anchor
-    //    onto the backend request and renders the resolved section.
+    //    onto the backend chapter request and renders the resolved section.
     nav.params = new URLSearchParams(url.search);
     const fetchMock = routedFetch({
       "GET /api/auth/me": () => authedMe.clone(),
-      [`GET ${SECTION_URL}`]: () => jsonResponse(200, section),
+      [`GET ${CHAPTER_URL}`]: () => jsonResponse(200, chapter),
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    render(<SectionReader sourceId="s1" />);
+    render(<ChapterReader sourceId="s1" />);
 
     expect(await screen.findByText("Beginnings")).toBeTruthy();
     expect(
       screen.getByRole("heading", { name: "The First Algorithm" }),
     ).toBeTruthy();
-    // The backend section request carried the anchor encoded exactly once.
-    expect(fetchMock.mock.calls.some(([u]) => u === SECTION_URL)).toBe(true);
+    // The backend chapter request carried the anchor encoded exactly once.
+    expect(fetchMock.mock.calls.some(([u]) => u === CHAPTER_URL)).toBe(true);
   });
 
   it("a sidebar tree node targets the reader at the section's anchor", async () => {
