@@ -32,6 +32,7 @@ import {
   type CaptureAction,
   type CaptureSelection,
 } from "@/app/components/notes/capture-popover";
+import { ReadingControls } from "@/app/components/reading-controls";
 import { useReadingSettings } from "@/app/components/use-reading-settings";
 import {
   useScrollPosition,
@@ -210,7 +211,8 @@ export function ChapterFlow({
   const router = useRouter();
   const articleRef = useRef<HTMLElement>(null);
   // Device-local reading surface: type size, spacing, and Default/Paper (RD-18).
-  const { size, leading, appearance } = useReadingSettings();
+  const reading = useReadingSettings();
+  const { size, leading, appearance } = reading;
   const [flashAnchor, setFlashAnchor] = useState<string | null>(scrollTarget);
   const [capture, setCapture] = useState<ActiveCapture | null>(null);
   const [pending, setPending] = useState(false);
@@ -329,12 +331,22 @@ export function ChapterFlow({
         <span className="min-w-0 truncate text-sm font-medium">
           {chapter.chapter_title}
         </span>
-        <span
-          data-testid="reading-progress"
-          className="shrink-0 text-xs text-muted-foreground tabular-nums"
-        >
-          {Math.round(bookPercent)}% read · {chapterMinutesLeft} min left
-        </span>
+        <div className="flex shrink-0 items-center gap-2">
+          <span
+            data-testid="reading-progress"
+            className="text-xs text-muted-foreground tabular-nums"
+          >
+            {Math.round(bookPercent)}% read · {chapterMinutesLeft} min left
+          </span>
+          <ReadingControls
+            size={reading.size}
+            leading={reading.leading}
+            appearance={reading.appearance}
+            onSizeChange={reading.setSize}
+            onLeadingChange={reading.setLeading}
+            onAppearanceChange={reading.setAppearance}
+          />
+        </div>
       </div>
       <article
         ref={articleRef}
