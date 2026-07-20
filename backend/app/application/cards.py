@@ -13,8 +13,17 @@ deliberately does *not* apply the embedding dedup guard (AD-138), while still st
 embedding so later deck runs dedup against it. :class:`UpdateCard` rewrites a highlight
 card's text under that stable id, never touching its scheduling or review log.
 
-Ownership is reachable only through the parent source (AD-014); every ownership failure
-collapses to ``QuizItemNotFound`` → 404 so no anchor's or card's existence is disclosed.
+:class:`SuggestNoteCards` and :class:`AcceptNoteCard` are the note→quiz siblings (NL-08/09,
+RFC-003 Cycle F): the promoted note *is* the source, so groundedness QC verifies against
+the note body rather than a section, and an accepted card is source-less — ``origin='note'``
+owned by the reader directly (AD-149), its identity the minted id (AD-148) so the note's
+text may be regenerated later without disturbing scheduling. Re-promoting the same text
+from one note is idempotent (NL-15): a service-level ``content_key`` dedup returns the
+existing card, since note cards carry no partial unique index.
+
+Ownership is reachable through the parent source for deck/highlight cards (AD-014) and
+directly through the note for note cards; every ownership failure collapses to
+``QuizItemNotFound`` → 404 so no anchor's, note's, or card's existence is disclosed.
 """
 
 from __future__ import annotations
@@ -37,9 +46,11 @@ from app.application.quiz_qc import (
     cloze_is_valid,
     content_key,
     normalize_text,
+    note_card_passes_qc,
     quote_in_text,
 )
 from app.domain.entities import (
+    Note,
     NoteAnchor,
     QuizCandidate,
     QuizItem,
@@ -365,3 +376,161 @@ class UpdateCard:
         if updated is None:  # pragma: no cover — the row was just written
             raise QuizItemNotFound("Quiz item not found.")
         return updated
+
+
+def _owned_note(notes: NoteRepository, user: User, note_id: UUID) -> Note:
+    """Return the caller's note, else ``QuizItemNotFound`` (NL-08 non-disclosure).
+
+    A missing note and another user's note collapse to the same 404 so the promotion
+    surfaces never reveal that a note exists.
+    """
+    note = notes.get_by_id(note_id)
+    if note is None or note.user_id != user.id:
+        raise QuizItemNotFound("Note not found.")
+    return note
+
+
+def _note_context(anchors: list[NoteAnchor]) -> str:
+    """Render an anchored note's book context for generation, empty when unanchored.
+
+    A generation hint only (NL-08): the deterministic offline adapter ignores it and QC
+    always re-verifies against the note body alone, so the context can never smuggle in
+    text the card is then "grounded" against. Each anchor contributes its source title,
+    section path, and the quoted passage — the book the note is talking about.
+    """
+    lines = [
+        f"{anchor.source_title} — {' > '.join(anchor.section_path)}: {anchor.quote_exact}"
+        for anchor in anchors
+    ]
+    return "\n".join(lines)
+
+
+class SuggestNoteCards:
+    """Generate QC-passing card candidates from one owned note (NL-08).
+
+    The note→quiz mirror of :class:`SuggestCards`: authorizes the note, carries the note's
+    book-anchor context into generation when the note is anchored, and asks the generation
+    port for at most ``max_suggestions`` candidates grounded in the note body. Every
+    candidate is re-verified against the note body here (the note *is* the source), so
+    grounding holds for any provider. Nothing is persisted (AD-134); a pass where no
+    candidate survives QC returns an empty list — an outcome ("no cards for this note"),
+    not an error.
+    """
+
+    def __init__(
+        self,
+        *,
+        notes: NoteRepository,
+        generation: QuizGenerationPort,
+        max_suggestions: int,
+    ) -> None:
+        self._notes = notes
+        self._generation = generation
+        self._max_suggestions = max_suggestions
+
+    def __call__(self, *, user: User, note_id: UUID) -> list[QuizCandidate]:
+        note = _owned_note(self._notes, user, note_id)
+        context = _note_context(self._notes.anchors_for_note(note_id))
+
+        candidates = self._generation.suggest_note_cards(
+            note.body_markdown, context, self._max_suggestions
+        )
+        survivors = [c for c in candidates if note_card_passes_qc(c, note.body_markdown)]
+        return survivors[: self._max_suggestions]
+
+
+class AcceptNoteCard:
+    """Mint the one card the reader promoted from a note (NL-09, NL-15).
+
+    Authorizes the note as :class:`SuggestNoteCards` does, validates the submitted text
+    (empty or over-long → ``InvalidCardText`` → 422), and mints a source-less
+    ``note``-origin item owned by the reader directly (AD-149) whose identity is its
+    **created** id, not its content hash (AD-148) — so a later regenerate never disturbs
+    its scheduling. Provenance is the typed ``note_id`` link plus a snapshot (the note
+    title as the citation path, a bounded body excerpt) so the card stays renderable after
+    the note is deleted; the live note-title provenance line is join-based (NL-14).
+
+    Re-promoting the same text from the same note is idempotent (NL-15): the existing card
+    is returned with ``created=False`` and no second row appears, since note cards carry no
+    partial unique index and dedup is service-level on ``(note_id, content_key)``. The
+    submitted text is stored as the reader sent it — generated candidates were already
+    gated by :class:`SuggestNoteCards`, edited text is author-owned (AD-138). Embedding
+    dedup is deliberately **not** applied, but the embedding is computed and stored so the
+    regenerate-and-match step and later deck runs can match against it.
+    """
+
+    def __init__(
+        self,
+        *,
+        notes: NoteRepository,
+        items: QuizItemRepository,
+        generation: QuizGenerationPort,
+        embeddings: EmbeddingPort,
+        scheduling: SchedulingPort,
+        clock: Clock,
+        ids: Callable[[], UUID],
+        max_card_chars: int,
+        excerpt_chars: int,
+    ) -> None:
+        self._notes = notes
+        self._items = items
+        self._generation = generation
+        self._embeddings = embeddings
+        self._scheduling = scheduling
+        self._clock = clock
+        self._ids = ids
+        self._max_card_chars = max_card_chars
+        self._excerpt_chars = excerpt_chars
+
+    def __call__(
+        self,
+        *,
+        user: User,
+        note_id: UUID,
+        item_type: str,
+        question: str,
+        answer: str,
+    ) -> tuple[QuizItem, bool]:
+        note = _owned_note(self._notes, user, note_id)
+
+        if item_type not in _VALID_ITEM_TYPES:
+            raise InvalidCardText(f"Unsupported card type: {item_type}.")
+        question = _validated_text(question, "question", self._max_card_chars)
+        answer = _validated_text(answer, "answer", self._max_card_chars)
+
+        key = content_key(item_type, question, answer)
+        existing = self._items.get_by_note_and_key(note_id, key)
+        if existing is not None:
+            return existing, False
+
+        now = self._clock.now()
+        # The note is the whole source, so the excerpt is a bounded body prefix — the
+        # standalone citation snapshot that survives the note's deletion (NL-14).
+        excerpt = note.body_markdown.strip()[: self._excerpt_chars]
+        item = QuizItem(
+            id=self._ids(),
+            source_id=None,
+            user_id=user.id,
+            origin=QuizItemOrigin.NOTE,
+            note_id=note_id,
+            item_type=item_type,
+            question=question,
+            answer=answer,
+            # The note title is the card's citation path (title snapshot, NL-09); the
+            # synthetic anchor keeps the NOT NULL column meaningful for a source-less card.
+            section_path=(note.title,),
+            anchor=f"note:{note_id}",
+            source_excerpt=excerpt,
+            chunk_hash=hashlib.sha256(normalize_text(excerpt).encode("utf-8")).hexdigest(),
+            content_key=key,
+            status=QuizItemStatus.ACTIVE,
+            generation_meta={"model": self._generation.model},
+            created_at=now,
+            updated_at=now,
+        )
+        embedding = self._embeddings.embed_documents([f"{question}\n{answer}"])[0]
+        # Note cards have no partial unique index, so the upsert is always a plain insert
+        # under the minted id; the pre-insert dedup above carries NL-15's idempotency.
+        self._items.upsert(item, embedding=list(embedding))
+        self._items.create_scheduling(item.id, self._scheduling.initial())
+        return item, True

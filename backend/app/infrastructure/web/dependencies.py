@@ -24,7 +24,13 @@ from uuid import uuid4
 from fastapi import Depends, Request
 from sqlalchemy import Connection
 
-from app.application.cards import AcceptCard, SuggestCards, UpdateCard
+from app.application.cards import (
+    AcceptCard,
+    AcceptNoteCard,
+    SuggestCards,
+    SuggestNoteCards,
+    UpdateCard,
+)
 from app.application.corpus import ReadSection, ReadSourceStructure
 from app.application.identity import (
     AuthenticateUser,
@@ -778,4 +784,35 @@ def get_update_card(conn: DbConnection) -> UpdateCard:
         items=SqlAlchemyQuizItemRepository(conn),
         authorize=AuthorizeOwnership(),
         max_card_chars=get_settings().quiz_max_card_chars,
+    )
+
+
+def get_suggest_note_cards(conn: DbConnection) -> SuggestNoteCards:
+    """Wire ``SuggestNoteCards`` on the request-scoped connection (NL-08)."""
+    settings = get_settings()
+    return SuggestNoteCards(
+        notes=SqlAlchemyNoteRepository(conn),
+        generation=get_card_generation(),
+        max_suggestions=settings.quiz_max_suggestions,
+    )
+
+
+def get_accept_note_card(conn: DbConnection) -> AcceptNoteCard:
+    """Wire ``AcceptNoteCard`` on the request-scoped connection (NL-09, NL-15).
+
+    The embedding is composed for the same reason as the highlight path: a note card's
+    embedding is stored so the regenerate-and-match step (T10) and later deck runs can
+    match against it, even though dedup is not applied to the card itself (AD-138).
+    """
+    settings = get_settings()
+    return AcceptNoteCard(
+        notes=SqlAlchemyNoteRepository(conn),
+        items=SqlAlchemyQuizItemRepository(conn),
+        generation=get_card_generation(),
+        embeddings=get_card_embeddings(),
+        scheduling=build_scheduling_adapter(settings),
+        clock=_clock,
+        ids=uuid4,
+        max_card_chars=settings.quiz_max_card_chars,
+        excerpt_chars=settings.quiz_note_excerpt_chars,
     )

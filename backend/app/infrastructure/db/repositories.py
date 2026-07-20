@@ -1290,6 +1290,24 @@ class SqlAlchemyQuizItemRepository:
         ).one_or_none()
         return _to_quiz_item(row) if row is not None else None
 
+    def get_by_note_and_key(
+        self, note_id: UUID, content_key: str
+    ) -> QuizItem | None:
+        """Return the note card already promoted from this note + fingerprint (NL-15).
+
+        The read behind the idempotent re-promotion path: scoped to ``note`` origin so a
+        deck/highlight item that happens to share the key is never returned. A card whose
+        note was deleted has ``note_id = NULL`` and is unreachable here, matching the
+        service (a deleted note cannot be re-promoted).
+        """
+        row = self._conn.execute(
+            select(*_QUIZ_ITEM_READ_COLUMNS)
+            .where(quiz_items.c.note_id == note_id)
+            .where(quiz_items.c.content_key == content_key)
+            .where(quiz_items.c.origin == QuizItemOrigin.NOTE)
+        ).one_or_none()
+        return _to_quiz_item(row) if row is not None else None
+
     def update_text(
         self, item_id: UUID, *, question: str, answer: str, content_key: str
     ) -> None:

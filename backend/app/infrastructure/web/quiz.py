@@ -220,7 +220,9 @@ class DueItemView(BaseModel):
     """
 
     id: UUID
-    source_id: UUID
+    # ``null`` for a source-less ``note`` card (AD-149); ``source_title`` is then the
+    # constant "Your notes".
+    source_id: UUID | None
     source_title: str
     item_type: str
     question: str

@@ -894,6 +894,18 @@ class QuizItemRepository(Protocol):
         """
         ...
 
+    def get_by_note_and_key(
+        self, note_id: UUID, content_key: str
+    ) -> QuizItem | None:
+        """Return the ``note`` card already promoted from this note + fingerprint (NL-15).
+
+        The service-level dedup behind idempotent re-promotion (note cards carry no
+        partial unique index — AD-148): scoped to ``note`` origin so a deck/highlight
+        item that happens to share the key is never returned. ``None`` when the reader
+        has not accepted this text from this note yet.
+        """
+        ...
+
     def update_text(
         self, item_id: UUID, *, question: str, answer: str, content_key: str
     ) -> None:

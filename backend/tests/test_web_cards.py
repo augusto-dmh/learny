@@ -29,6 +29,7 @@ from sqlalchemy import Connection
 from app.application.quiz_qc import content_key
 from app.domain.entities import (
     CorpusSectionRecord,
+    Note,
     ParsedBlock,
     ParsedSection,
     QuizItem,
@@ -39,6 +40,7 @@ from app.domain.entities import (
 )
 from app.infrastructure.db.repositories import (
     SqlAlchemyCorpusRepository,
+    SqlAlchemyNoteRepository,
     SqlAlchemyQuizItemRepository,
     SqlAlchemySourceRepository,
 )
@@ -890,3 +892,247 @@ def test_patch_is_throttled_on_the_quiz_limiter(
     throttled = _patch_card(throttled_cards_client, item_id, edit, csrf=csrf)
     assert throttled.status_code == 429, throttled.text
     assert "retry-after" in {k.lower() for k in throttled.headers}
+
+
+
+
+# --- Note promotion (NL-08, NL-09, NL-15) --------------------------------------
+
+# A note body whose leading sentence has a maskable word, so the deterministic adapter
+# derives a grounded free_recall + cloze pair from it.
+NOTE_BODY = "Spaced repetition schedules reviews at expanding intervals."
+
+
+def _persist_note(
+    db_conn: Connection,
+    user_id: str,
+    *,
+    title: str = "Memory",
+    body: str = NOTE_BODY,
+) -> UUID:
+    """Seed a note directly on the test connection (the `/api/notes` UoW isn't overridden).
+
+    The cards fixture only overrides the cards router's connection, so a note is seeded
+    on ``db_conn`` the same way sources are — no dependency on the notes router's separate
+    unit of work.
+    """
+    now = datetime.now(UTC)
+    note = Note(
+        id=uuid4(),
+        user_id=UUID(user_id),
+        title=title,
+        body_markdown=body,
+        created_at=now,
+        updated_at=now,
+    )
+    return SqlAlchemyNoteRepository(db_conn).add(note).id
+
+
+def _post_note_suggest(
+    client: TestClient,
+    note_id: object,
+    *,
+    csrf: str | None,
+    origin: str | None = None,
+):
+    return client.post(
+        f"/api/notes/{note_id}/cards/suggest", headers=_headers(csrf, origin)
+    )
+
+
+def _post_note_card(
+    client: TestClient,
+    note_id: object,
+    body: dict,
+    *,
+    csrf: str | None,
+    origin: str | None = None,
+):
+    return client.post(
+        f"/api/notes/{note_id}/cards", json=body, headers=_headers(csrf, origin)
+    )
+
+
+def _note_accept_body(**overrides) -> dict:
+    body = {
+        "item_type": QuizItemType.FREE_RECALL,
+        "question": "What schedules reviews?",
+        "answer": "Spaced repetition",
+    }
+    body.update(overrides)
+    return body
+
+
+def test_note_suggest_returns_grounded_candidates(
+    cards_client: TestClient, db_conn: Connection
+) -> None:
+    user_id = _register(cards_client, "owner-note-suggest@example.com")
+    csrf = _csrf(cards_client)
+    note_id = _persist_note(db_conn, user_id)
+
+    resp = _post_note_suggest(cards_client, note_id, csrf=csrf)
+
+    assert resp.status_code == 200, resp.text
+    suggestions = resp.json()["suggestions"]
+    assert suggestions
+    for s in suggestions:
+        assert s["item_type"] in {QuizItemType.FREE_RECALL, QuizItemType.CLOZE}
+        # Grounded verbatim in the note body (the note IS the source, NL-08).
+        assert s["anchor_quote"] in NOTE_BODY
+
+
+def test_note_suggest_empty_body_returns_an_empty_list(
+    cards_client: TestClient, db_conn: Connection
+) -> None:
+    user_id = _register(cards_client, "owner-note-empty@example.com")
+    csrf = _csrf(cards_client)
+    note_id = _persist_note(db_conn, user_id, body="")
+
+    resp = _post_note_suggest(cards_client, note_id, csrf=csrf)
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["suggestions"] == []
+
+
+def test_note_promote_roundtrips_into_the_due_queue(
+    cards_client: TestClient, db_conn: Connection
+) -> None:
+    user_id = _register(cards_client, "owner-note-promote@example.com")
+    csrf = _csrf(cards_client)
+    note_id = _persist_note(db_conn, user_id)
+
+    accepted = _post_note_card(cards_client, note_id, _note_accept_body(), csrf=csrf)
+    assert accepted.status_code == 201, accepted.text
+    card = accepted.json()
+    assert card["origin"] == "note"
+    assert card["source_id"] is None
+    assert card["note_id"] == str(note_id)
+
+    # The promoted card is due now and shows in the review queue as a note card.
+    due = cards_client.get("/api/reviews/due")
+    assert due.status_code == 200, due.text
+    rows = {r["id"]: r for r in due.json()["items"]}
+    assert card["id"] in rows
+    assert rows[card["id"]]["source_title"] == "Your notes"
+    assert rows[card["id"]]["source_id"] is None
+
+
+def test_note_re_promote_is_idempotent(
+    cards_client: TestClient, db_conn: Connection
+) -> None:
+    # NL-15: promoting the same text from one note twice returns the existing card.
+    user_id = _register(cards_client, "owner-note-idem@example.com")
+    csrf = _csrf(cards_client)
+    note_id = _persist_note(db_conn, user_id)
+
+    first = _post_note_card(cards_client, note_id, _note_accept_body(), csrf=csrf)
+    second = _post_note_card(cards_client, note_id, _note_accept_body(), csrf=csrf)
+
+    assert first.status_code == 201, first.text
+    assert second.status_code == 200, second.text
+    assert second.json()["id"] == first.json()["id"]
+    # Exactly one card is due — no duplicate row.
+    due = cards_client.get("/api/reviews/due")
+    assert sum(1 for r in due.json()["items"] if r["id"] == first.json()["id"]) == 1
+
+
+def test_note_promote_persists_edited_text(
+    cards_client: TestClient, db_conn: Connection
+) -> None:
+    user_id = _register(cards_client, "owner-note-edit@example.com")
+    csrf = _csrf(cards_client)
+    note_id = _persist_note(db_conn, user_id)
+
+    body = _note_accept_body(question="My own wording?", answer="Spaced repetition")
+    resp = _post_note_card(cards_client, note_id, body, csrf=csrf)
+
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["question"] == "My own wording?"
+
+
+def test_note_suggest_for_another_users_note_is_404(
+    cards_client: TestClient, db_conn: Connection
+) -> None:
+    owner_id = _register(cards_client, "owner-note-a@example.com")
+    _csrf(cards_client)
+    note_id = _persist_note(db_conn, owner_id)
+
+    _register(cards_client, "stranger-note-a@example.com")
+    stranger_csrf = _csrf(cards_client)
+    resp = _post_note_suggest(cards_client, note_id, csrf=stranger_csrf)
+
+    assert resp.status_code == 404, resp.text
+
+
+def test_note_promote_for_another_users_note_is_404(
+    cards_client: TestClient, db_conn: Connection
+) -> None:
+    owner_id = _register(cards_client, "owner-note-b@example.com")
+    _csrf(cards_client)
+    note_id = _persist_note(db_conn, owner_id)
+
+    _register(cards_client, "stranger-note-b@example.com")
+    stranger_csrf = _csrf(cards_client)
+    resp = _post_note_card(cards_client, note_id, _note_accept_body(), csrf=stranger_csrf)
+
+    assert resp.status_code == 404, resp.text
+
+
+def test_note_suggest_for_an_unknown_note_is_404(cards_client: TestClient) -> None:
+    _register(cards_client, "owner-note-unknown@example.com")
+    csrf = _csrf(cards_client)
+    resp = _post_note_suggest(cards_client, uuid4(), csrf=csrf)
+    assert resp.status_code == 404, resp.text
+
+
+def test_note_promote_rejects_over_long_text(
+    cards_client: TestClient, db_conn: Connection
+) -> None:
+    user_id = _register(cards_client, "owner-note-long@example.com")
+    csrf = _csrf(cards_client)
+    note_id = _persist_note(db_conn, user_id)
+
+    body = _note_accept_body(answer="y" * (CARDS_MAX_CHARS + 1))
+    resp = _post_note_card(cards_client, note_id, body, csrf=csrf)
+
+    assert resp.status_code == 422, resp.text
+
+
+def test_note_suggest_without_a_session_is_401(
+    cards_client: TestClient, db_conn: Connection
+) -> None:
+    user_id = _register(cards_client, "owner-note-unauth@example.com")
+    csrf = _csrf(cards_client)
+    note_id = _persist_note(db_conn, user_id)
+    cards_client.cookies.clear()
+
+    resp = _post_note_suggest(cards_client, note_id, csrf=csrf)
+    assert resp.status_code == 401, resp.text
+
+
+def test_note_suggest_without_csrf_is_403(
+    cards_client: TestClient, db_conn: Connection
+) -> None:
+    user_id = _register(cards_client, "owner-note-csrf1@example.com")
+    _csrf(cards_client)  # establish the CSRF cookie; the request omits the header
+    note_id = _persist_note(db_conn, user_id)
+
+    resp = _post_note_suggest(cards_client, note_id, csrf=None)
+    assert resp.status_code == 403, resp.text
+
+
+def test_note_promote_with_untrusted_origin_is_403(
+    cards_client: TestClient, db_conn: Connection
+) -> None:
+    user_id = _register(cards_client, "owner-note-csrf2@example.com")
+    csrf = _csrf(cards_client)
+    note_id = _persist_note(db_conn, user_id)
+
+    resp = _post_note_card(
+        cards_client,
+        note_id,
+        _note_accept_body(),
+        csrf=csrf,
+        origin="https://evil.example.com",
+    )
+    assert resp.status_code == 403, resp.text

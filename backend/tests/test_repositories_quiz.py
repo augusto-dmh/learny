@@ -986,6 +986,41 @@ def test_get_by_anchor_and_key_ignores_deck_items(db_conn: Connection) -> None:
     assert repo.get_by_anchor_and_key(anchor.id, deck.content_key) is None
 
 
+# --- get_by_note_and_key: the re-promotion dedup read (NL-15) --------------------
+
+
+def test_get_by_note_and_key_returns_the_promoted_card(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "quiz-note-lookup@example.com")
+    note = _persisted_note(db_conn, source.user_id)
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    item = _note_item(source.user_id, note.id)
+    repo.upsert(item, embedding=None)
+
+    found = repo.get_by_note_and_key(note.id, item.content_key)
+
+    assert found is not None
+    assert found.id == item.id
+
+
+def test_get_by_note_and_key_is_none_for_an_unpromoted_key(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "quiz-note-lookup-miss@example.com")
+    note = _persisted_note(db_conn, source.user_id)
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+
+    assert repo.get_by_note_and_key(note.id, "no-such-key") is None
+
+
+def test_get_by_note_and_key_ignores_non_note_items(db_conn: Connection) -> None:
+    """A deck item sharing the key is not a promoted note card (origin-scoped, NL-15)."""
+    source = _persisted_source(db_conn, "quiz-note-lookup-deck@example.com")
+    note = _persisted_note(db_conn, source.user_id)
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    deck = _item(source.id)
+    repo.upsert(deck, embedding=None)
+
+    assert repo.get_by_note_and_key(note.id, deck.content_key) is None
+
+
 # --- update_text keeps identity, scheduling, and review log (CAP-12) ------------
 
 

@@ -25,6 +25,10 @@ Contract (also consumed by the Next.js proxy):
 - ``POST  /api/sources/{source_id}/cards`` → 201 created card, or 200 with the
   existing card on an idempotent re-accept; auth + CSRF/Origin + limit.
 - ``PATCH /api/quiz-items/{item_id}`` → 200 rewritten card; auth + CSRF/Origin + limit.
+- ``POST  /api/notes/{note_id}/cards/suggest`` → 200 ephemeral candidates from a note;
+  auth + CSRF/Origin + limit.
+- ``POST  /api/notes/{note_id}/cards`` → 201 promoted card, or 200 with the existing
+  card on an idempotent re-promote (NL-15); auth + CSRF/Origin + limit.
 """
 
 from __future__ import annotations
@@ -36,13 +40,21 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Response, status
 from pydantic import BaseModel
 
-from app.application.cards import AcceptCard, SuggestCards, UpdateCard
+from app.application.cards import (
+    AcceptCard,
+    AcceptNoteCard,
+    SuggestCards,
+    SuggestNoteCards,
+    UpdateCard,
+)
 from app.domain.entities import QuizCandidate, QuizItem, User
 from app.infrastructure.web.csrf import enforce_csrf, enforce_origin
 from app.infrastructure.web.dependencies import (
     get_accept_card,
+    get_accept_note_card,
     get_authenticated_user,
     get_suggest_cards,
+    get_suggest_note_cards,
     get_update_card,
 )
 from app.infrastructure.web.rate_limit import rate_limit_quiz
@@ -81,6 +93,19 @@ class UpdateCardRequest(BaseModel):
     never costs the student their memory history.
     """
 
+    question: str
+    answer: str
+
+
+class AcceptNoteCardRequest(BaseModel):
+    """Promote body (NL-09): the chosen card's text — the note is named in the path.
+
+    The note→quiz mirror of :class:`AcceptCardRequest` without an anchor: the promoted
+    note is the whole source. The text is whatever the reader accepted (generated
+    candidate or their own edit); it is bounds-checked by the use case (422).
+    """
+
+    item_type: str
     question: str
     answer: str
 
@@ -131,16 +156,18 @@ class CardCitationView(BaseModel):
 class CardView(BaseModel):
     """A persisted card (CAP-05, CAP-10..12).
 
-    ``id`` is the creation-minted stable identity a ``highlight`` card keeps across
-    every later edit; ``note_anchor_id`` is the typed provenance back to the highlight,
-    and it goes ``null`` when that highlight's note is deleted while the card itself
-    survives on its own ``citation`` snapshot.
+    ``id`` is the creation-minted stable identity a ``highlight`` or ``note`` card keeps
+    across every later edit or regenerate; ``note_anchor_id`` is the typed provenance back
+    to the highlight and ``note_id`` the provenance back to the promoted note — each goes
+    ``null`` when its origin is deleted while the card survives on its own ``citation``
+    snapshot. A ``note`` card is source-less, so ``source_id`` is ``null``.
     """
 
     id: UUID
-    source_id: UUID
+    source_id: UUID | None
     origin: str
     note_anchor_id: UUID | None
+    note_id: UUID | None
     item_type: str
     question: str
     answer: str
@@ -156,6 +183,7 @@ class CardView(BaseModel):
             source_id=item.source_id,
             origin=item.origin,
             note_anchor_id=item.note_anchor_id,
+            note_id=item.note_id,
             item_type=item.item_type,
             question=item.question,
             answer=item.answer,
@@ -264,4 +292,67 @@ def update_card(
     item = service(
         user=user, item_id=item_id, question=body.question, answer=body.answer
     )
+    return CardView.from_item(item)
+
+
+@router.post(
+    "/api/notes/{note_id}/cards/suggest",
+    dependencies=[
+        Depends(rate_limit_quiz),
+        Depends(enforce_origin),
+        Depends(enforce_csrf),
+    ],
+)
+def suggest_note_cards(
+    note_id: UUID,
+    user: Annotated[User, Depends(get_authenticated_user)],
+    service: Annotated[SuggestNoteCards, Depends(get_suggest_note_cards)],
+) -> CardSuggestionsView:
+    """Return QC-passing card candidates for one owned note (200; 404).
+
+    ``SuggestNoteCards`` authorizes the note (missing or another user's →
+    ``QuizItemNotFound`` → 404), then generates against the note body — carrying the
+    note's book-anchor context when it is anchored — and drops every candidate not quoted
+    verbatim from the body. Nothing is persisted on this path; an empty list is a normal
+    outcome ("no cards for this note").
+    """
+    candidates = service(user=user, note_id=note_id)
+    return CardSuggestionsView(
+        suggestions=[CardSuggestionView.from_candidate(c) for c in candidates]
+    )
+
+
+@router.post(
+    "/api/notes/{note_id}/cards",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[
+        Depends(rate_limit_quiz),
+        Depends(enforce_origin),
+        Depends(enforce_csrf),
+    ],
+)
+def accept_note_card(
+    note_id: UUID,
+    user: Annotated[User, Depends(get_authenticated_user)],
+    service: Annotated[AcceptNoteCard, Depends(get_accept_note_card)],
+    body: AcceptNoteCardRequest,
+    response: Response,
+) -> CardView:
+    """Promote the accepted card and schedule it due now (201; 200/404/422).
+
+    ``AcceptNoteCard`` authorizes the note as the suggest route does, rejects empty/
+    over-long text and unknown item types (``InvalidCardText`` → 422), and mints the
+    source-less ``note`` card with its initial FSRS state. Re-promoting the same text from
+    the same note is idempotent (NL-15): the second call returns the **existing** card
+    with 200 instead of 201, so a double promote cannot produce a duplicate.
+    """
+    item, created = service(
+        user=user,
+        note_id=note_id,
+        item_type=body.item_type,
+        question=body.question,
+        answer=body.answer,
+    )
+    if not created:
+        response.status_code = status.HTTP_200_OK
     return CardView.from_item(item)
