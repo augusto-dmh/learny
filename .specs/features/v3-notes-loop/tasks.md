@@ -7,7 +7,7 @@ Implement these tasks with the `tlc-spec-driven` skill: **activate it by name an
 ---
 
 **Design**: `.specs/features/v3-notes-loop/design.md`
-**Status**: In Progress — Phase A done (T1 `db0c509`, T2 `0995186`, T3 `bc6a145`; full gate 1390 passed / 10 skipped, ruff clean, +22 tests). Phase A contract notes: `UpdateNote` returns `(NoteView, body_changed)`; note evidence projects `chunk_id = source_id = note_id`; `refresh_note_cards` is a registered no-op stub for Phase C. Gate env: `LEARNY_EMBEDDING_PROVIDER=local LEARNY_GENERATION_PROVIDER=local` (backend/.env carries a real OpenAI key otherwise hit by one ingestion test).
+**Status**: In Progress — Phase B done (T4 `a75828a`, T5 `8be4367`, T6 `cbe5b4e`; backend 1399/10 + ruff, frontend 474 passed / 49 files + tsc + build; +10 backend +11 frontend tests; note fields emitted only for note evidence via a wrap-mode serializer so book citations stay byte-identical). Orchestrator fix `ec701dd`: the NL-02 rank-first test was a per-run RRF-tie coin flip ('simple' FTS doesn't stem "costs", so the note missed the lexical arm and tied the book's semantic hit, broken by random-UUID comparison) — query tokens aligned with the body + transactional HNSW REINDEX; assertions untouched; verified 5× isolation + full suite 1400/10. Phase A done (T1 `db0c509`, T2 `0995186`, T3 `bc6a145`; full gate 1390 passed / 10 skipped, ruff clean, +22 tests). Phase A contract notes: `UpdateNote` returns `(NoteView, body_changed)`; note evidence projects `chunk_id = source_id = note_id`; `refresh_note_cards` is a registered no-op stub for Phase C. Gate env: `LEARNY_EMBEDDING_PROVIDER=local LEARNY_GENERATION_PROVIDER=local` (backend/.env carries a real OpenAI key otherwise hit by one ingestion test).
 
 ---
 
