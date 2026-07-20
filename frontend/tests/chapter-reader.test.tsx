@@ -614,6 +614,8 @@ describe("ChapterFlow highlight painting (RD-28/29)", () => {
   function highlight(over: Partial<SourceHighlightView>): SourceHighlightView {
     return {
       note_id: "n1",
+      note_title: SHARED,
+      has_body: false,
       anchor: S1,
       quote_exact: SHARED,
       quote_prefix: "",
@@ -710,6 +712,8 @@ describe("ChapterReader highlight load (RD-28)", () => {
     nav.params = new URLSearchParams();
     const painted: SourceHighlightView = {
       note_id: "n9",
+      note_title: "Ada Lovelace wrote the first algorithm",
+      has_body: false,
       anchor: S1,
       quote_exact: "Ada Lovelace wrote the first algorithm",
       quote_prefix: "",
@@ -821,6 +825,8 @@ describe("ChapterFlow panel modes (RA-01/02/03/06)", () => {
     const obs = fakeObserver();
     const painted: SourceHighlightView = {
       note_id: "n3",
+      note_title: "Ada Lovelace wrote the first algorithm",
+      has_body: false,
       anchor: S1,
       quote_exact: "Ada Lovelace wrote the first algorithm",
       quote_prefix: "",
@@ -1101,5 +1107,506 @@ describe("ChapterFlow progress (RD-11)", () => {
     expect(screen.getByTestId("reading-progress").textContent).toContain(
       "1 min",
     );
+  });
+});
+
+describe("ChapterFlow create card (CAP-01/08)", () => {
+  const SUGGEST_URL = "/api/sources/s1/cards/suggestions";
+  const CARDS_URL = "/api/sources/s1/cards";
+  const QUOTE = "Ada Lovelace wrote the first algorithm";
+
+  /** The capture response the card flow reads the new anchor's id from. */
+  const capturedNote = {
+    id: "n1",
+    title: QUOTE,
+    body_markdown: "",
+    tags: [],
+    anchors: [
+      {
+        id: "a1",
+        source_id: "s1",
+        source_title: "Ready Book",
+        anchor: S1,
+        section_path: ["Chapter One", "Beginnings"],
+        block_ordinal: 0,
+        start_offset: 0,
+        end_offset: 37,
+        quote_exact: QUOTE,
+        quote_prefix: "## Beginnings ",
+        quote_suffix: ".",
+        status: "active",
+      },
+    ],
+    created_at: "now",
+    updated_at: "now",
+  };
+
+  const suggestion = {
+    item_type: "free_recall",
+    question: "Who wrote the first algorithm?",
+    answer: "Ada Lovelace",
+    anchor_quote: QUOTE,
+  };
+
+  const savedCard = {
+    id: "c1",
+    source_id: "s1",
+    origin: "highlight",
+    note_anchor_id: "a1",
+    item_type: "free_recall",
+    question: "Who wrote the first algorithm?",
+    answer: "Ada Lovelace",
+    citation: { section_path: ["Chapter One"], anchor: S1, source_excerpt: QUOTE },
+    status: "active",
+    created_at: "now",
+    updated_at: "now",
+  };
+
+  /** Render the flow and raise the popover on a selection in section one. */
+  function renderAndSelect() {
+    const view = render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+    );
+    selectText(QUOTE);
+    fireEvent.mouseUp(
+      view.container.querySelector(`[data-section-anchor="${S1}"]`)!,
+    );
+    return view;
+  }
+
+  const callsTo = (fetchMock: ReturnType<typeof routedFetch>, url: string) => () =>
+    fetchMock.mock.calls.filter(([u]) => u === url).length;
+
+  it("reuses the card flow's highlight instead of capturing the passage twice", async () => {
+    // Create card saves the highlight as its first step. Pressing Highlight after it
+    // must not write a second identical highlight for the same selection.
+    const fetchMock = routedFetch({
+      [`POST ${HIGHLIGHTS_URL}`]: () => jsonResponse(201, capturedNote),
+      [`POST ${SUGGEST_URL}`]: () => jsonResponse(200, { suggestions: [suggestion] }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderAndSelect();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create card" }));
+    await screen.findByText("Who wrote the first algorithm?");
+    expect(callsTo(fetchMock, HIGHLIGHTS_URL)()).toBe(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Highlight" }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Capture highlight" })).toBeNull(),
+    );
+    // Still one highlight for one passage.
+    expect(callsTo(fetchMock, HIGHLIGHTS_URL)()).toBe(1);
+  });
+
+  it("opens the note the card flow already made rather than making another", async () => {
+    const fetchMock = routedFetch({
+      [`POST ${HIGHLIGHTS_URL}`]: () => jsonResponse(201, capturedNote),
+      [`POST ${SUGGEST_URL}`]: () => jsonResponse(200, { suggestions: [suggestion] }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderAndSelect();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create card" }));
+    await screen.findByText("Who wrote the first algorithm?");
+
+    fireEvent.click(screen.getByRole("button", { name: "Note" }));
+
+    await waitFor(() => expect(nav.push).toHaveBeenCalledWith("/notes/n1"));
+    expect(callsTo(fetchMock, HIGHLIGHTS_URL)()).toBe(1);
+  });
+
+  it("starts a fresh card flow when the student selects a different passage", async () => {
+    // Without the reset, the second selection would generate cards against the first
+    // passage's anchor — cards attributed to text the student did not choose.
+    const fetchMock = routedFetch({
+      [`POST ${HIGHLIGHTS_URL}`]: () => jsonResponse(201, capturedNote),
+      [`POST ${SUGGEST_URL}`]: () => jsonResponse(200, { suggestions: [suggestion] }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const view = renderAndSelect();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create card" }));
+    await screen.findByText("Who wrote the first algorithm?");
+
+    // A new selection in another section: the previous suggestions must be gone.
+    selectText("Babbage designed the analytical engine");
+    fireEvent.mouseUp(
+      view.container.querySelector(`[data-section-anchor="${S2}"]`)!,
+    );
+
+    await waitFor(() =>
+      expect(screen.queryByText("Who wrote the first algorithm?")).toBeNull(),
+    );
+
+    // Creating a card now captures the NEW passage rather than reusing the old anchor.
+    fireEvent.click(screen.getByRole("button", { name: "Create card" }));
+    await waitFor(() => expect(callsTo(fetchMock, HIGHLIGHTS_URL)()).toBe(2));
+    const second = fetchMock.mock.calls.filter(([u]) => u === HIGHLIGHTS_URL)[1];
+    expect(JSON.parse((second[1] as RequestInit).body as string).quote_exact).toBe(
+      "Babbage designed the analytical engine",
+    );
+  });
+
+  it("captures the highlight first, then asks for suggestions on the anchor it produced", async () => {
+    const fetchMock = routedFetch({
+      [`POST ${HIGHLIGHTS_URL}`]: () => jsonResponse(201, capturedNote),
+      [`POST ${SUGGEST_URL}`]: () => jsonResponse(200, { suggestions: [suggestion] }),
+      [`POST ${CARDS_URL}`]: () => jsonResponse(201, savedCard),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderAndSelect();
+    fireEvent.click(screen.getByRole("button", { name: "Create card" }));
+
+    // The suggestion request carries the anchor id the capture just minted —
+    // proof the reader sequenced the two single-purpose calls rather than
+    // expecting one endpoint to do both.
+    await waitFor(() => expect(callsTo(fetchMock, SUGGEST_URL)()).toBe(1));
+    const suggest = fetchMock.mock.calls.find(([u]) => u === SUGGEST_URL)!;
+    expect(JSON.parse((suggest[1] as RequestInit).body as string)).toEqual({
+      note_anchor_id: "a1",
+    });
+
+    // The chip renders and accepting it writes the card against the same anchor.
+    await screen.findByText("Who wrote the first algorithm?");
+    fireEvent.click(screen.getByRole("button", { name: "Accept" }));
+    await waitFor(() => expect(callsTo(fetchMock, CARDS_URL)()).toBe(1));
+    const accept = fetchMock.mock.calls.find(([u]) => u === CARDS_URL)!;
+    expect(JSON.parse((accept[1] as RequestInit).body as string)).toEqual({
+      note_anchor_id: "a1",
+      item_type: "free_recall",
+      question: "Who wrote the first algorithm?",
+      answer: "Ada Lovelace",
+    });
+    // The whole selection flow closes once the last suggestion is resolved.
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "Capture highlight" }),
+      ).toBeNull(),
+    );
+  });
+
+  it("keeps the highlight and retries only generation when suggestions fail", async () => {
+    let suggestAttempt = 0;
+    const fetchMock = routedFetch({
+      [`POST ${HIGHLIGHTS_URL}`]: () => jsonResponse(201, capturedNote),
+      [`POST ${SUGGEST_URL}`]: () => {
+        suggestAttempt += 1;
+        return suggestAttempt === 1
+          ? jsonResponse(502, { detail: "The card generator is unavailable." })
+          : jsonResponse(200, { suggestions: [suggestion] });
+      },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const captures = callsTo(fetchMock, HIGHLIGHTS_URL);
+
+    renderAndSelect();
+    fireEvent.click(screen.getByRole("button", { name: "Create card" }));
+
+    // Generation failed, but the highlight was already saved and stays saved.
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe("The card generator is unavailable.");
+    expect(captures()).toBe(1);
+
+    // Pressing the verb again retries generation ONLY — capturing the same
+    // passage twice would leave the student with a duplicate highlight.
+    fireEvent.click(screen.getByRole("button", { name: "Create card" }));
+
+    await screen.findByText("Who wrote the first algorithm?");
+    expect(suggestAttempt).toBe(2);
+    expect(captures()).toBe(1);
+  });
+
+  it("shows the reload prompt when the passage moved under the selection (409)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        [`POST ${HIGHLIGHTS_URL}`]: () => jsonResponse(201, capturedNote),
+        [`POST ${SUGGEST_URL}`]: () =>
+          jsonResponse(409, { detail: "That passage changed." }),
+      }),
+    );
+
+    renderAndSelect();
+    fireEvent.click(screen.getByRole("button", { name: "Create card" }));
+
+    // The same reload message the highlight capture uses for its own 409.
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(/reload the page/i);
+  });
+
+  it("reports an empty batch as no cards for this passage, not as a failure", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        [`POST ${HIGHLIGHTS_URL}`]: () => jsonResponse(201, capturedNote),
+        [`POST ${SUGGEST_URL}`]: () => jsonResponse(200, { suggestions: [] }),
+      }),
+    );
+
+    renderAndSelect();
+    fireEvent.click(screen.getByRole("button", { name: "Create card" }));
+
+    expect(await screen.findByText("No cards for this passage.")).toBeTruthy();
+    // Nothing is announced as an error; the highlight was still captured.
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+});
+
+describe("ChapterFlow margin rail (CAP-18/21/24)", () => {
+  const FOREIGN = "part1/ch2.xhtml#s1";
+
+  function railHighlight(
+    over: Partial<SourceHighlightView>,
+  ): SourceHighlightView {
+    return {
+      note_id: "n1",
+      note_title: "Ada Lovelace wrote the first algorithm",
+      has_body: false,
+      anchor: S1,
+      quote_exact: "Ada Lovelace wrote the first algorithm",
+      quote_prefix: "",
+      quote_suffix: "",
+      status: "active",
+      ...over,
+    };
+  }
+
+  it("shows the loaded chapter's highlights and drops a highlight from another chapter", async () => {
+    nav.params = new URLSearchParams();
+    render(
+      <ChapterFlow
+        sourceId="s1"
+        csrf="csrf-xyz"
+        chapter={chapter}
+        scrollTarget={null}
+        highlights={[
+          railHighlight({ note_id: "n1", anchor: S1 }),
+          railHighlight({
+            note_id: "n2",
+            anchor: FOREIGN,
+            quote_exact: "Babbage designed the analytical engine",
+          }),
+        ]}
+      />,
+    );
+
+    await screen.findByTestId("margin-rail");
+    // The reader loads every highlight on the source in one call; the rail is
+    // scoped to the chapter on screen, so the next chapter's does not appear.
+    const quotes = screen
+      .getAllByTestId("rail-quote")
+      .map((node) => node.textContent);
+    expect(quotes).toEqual(["Ada Lovelace wrote the first algorithm"]);
+  });
+
+  it("scrolls to and flashes the section a rail entry points at", async () => {
+    nav.params = new URLSearchParams();
+    const scrollIntoView = vi.fn();
+    const { container } = render(
+      <ChapterFlow
+        sourceId="s1"
+        csrf="csrf-xyz"
+        chapter={chapter}
+        scrollTarget={null}
+        highlights={[railHighlight({ anchor: S2 })]}
+      />,
+    );
+    await screen.findByTestId("margin-rail");
+    const target = container.querySelector<HTMLElement>(
+      `[data-section-anchor="${S2}"]`,
+    )!;
+    target.scrollIntoView = scrollIntoView;
+
+    fireEvent.click(screen.getByTestId("rail-entry").querySelector("button")!);
+
+    expect(scrollIntoView).toHaveBeenCalledWith({
+      behavior: "smooth",
+      block: "start",
+    });
+    // The jumped-to heading flashes, exactly as a citation jump does.
+    await waitFor(() =>
+      expect(
+        container
+          .querySelector(`[data-section-heading="${S2}"]`)
+          ?.getAttribute("data-highlight"),
+      ).toBe("on"),
+    );
+    // The URL anchor keeps step so the position stays shareable.
+    expect(nav.replace).toHaveBeenCalledWith(
+      `/sources/s1/read?anchor=${ENCODED_S2}`,
+    );
+  });
+
+  it("hides the rail while the ask panel is open (AD-139)", async () => {
+    nav.params = new URLSearchParams("panel=ask");
+    render(
+      <ChapterFlow
+        sourceId="s1"
+        csrf="csrf-xyz"
+        chapter={chapter}
+        scrollTarget={null}
+        highlights={[railHighlight({})]}
+      />,
+    );
+
+    // The panel wins the right-hand column: the rail is not rendered at all.
+    await screen.findByTestId("reader-panel");
+    expect(screen.queryByTestId("margin-rail")).toBeNull();
+  });
+
+  it("renders the rail again once the panel is closed", async () => {
+    nav.params = new URLSearchParams();
+    render(
+      <ChapterFlow
+        sourceId="s1"
+        csrf="csrf-xyz"
+        chapter={chapter}
+        scrollTarget={null}
+        highlights={[railHighlight({})]}
+      />,
+    );
+
+    expect(await screen.findByTestId("margin-rail")).toBeTruthy();
+    expect(screen.queryByTestId("reader-panel")).toBeNull();
+  });
+});
+
+describe("ChapterFlow capture shortcuts (CAP-28/29/32)", () => {
+  const SUGGEST_URL = "/api/sources/s1/cards/suggestions";
+  const QUOTE = "Ada Lovelace wrote the first algorithm";
+
+  const capturedNote = {
+    id: "n1",
+    title: QUOTE,
+    body_markdown: "",
+    tags: [],
+    anchors: [
+      {
+        id: "a1",
+        source_id: "s1",
+        source_title: "Ready Book",
+        anchor: S1,
+        section_path: ["Chapter One", "Beginnings"],
+        block_ordinal: 0,
+        start_offset: 0,
+        end_offset: 37,
+        quote_exact: QUOTE,
+        quote_prefix: "## Beginnings ",
+        quote_suffix: ".",
+        status: "active",
+      },
+    ],
+    created_at: "now",
+    updated_at: "now",
+  };
+
+  /** Writes to the capture endpoint only — the TOC's own reads are not actions. */
+  const captures = (fetchMock: ReturnType<typeof routedFetch>) =>
+    fetchMock.mock.calls.filter(([url]) => url === HIGHLIGHTS_URL).length;
+
+  /** Render the flow; `select` raises the popover on a selection in section one. */
+  function renderFlow() {
+    const view = render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+    );
+    return {
+      ...view,
+      select() {
+        selectText(QUOTE);
+        fireEvent.mouseUp(
+          view.container.querySelector(`[data-section-anchor="${S1}"]`)!,
+        );
+      },
+    };
+  }
+
+  function pressKey(
+    key: string,
+    target: EventTarget = window,
+    init: KeyboardEventInit = {},
+  ) {
+    target.dispatchEvent(
+      new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init }),
+    );
+  }
+
+  it("captures the selection on the highlight key, exactly as the verb does", async () => {
+    const fetchMock = routedFetch({
+      [`POST ${HIGHLIGHTS_URL}`]: () => jsonResponse(201, capturedNote),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const view = renderFlow();
+    view.select();
+    act(() => pressKey("h"));
+
+    await waitFor(() => expect(captures(fetchMock)).toBe(1));
+    const call = fetchMock.mock.calls.find(([url]) => url === HIGHLIGHTS_URL)!;
+    expect(JSON.parse((call[1] as RequestInit).body as string).quote_exact).toBe(
+      QUOTE,
+    );
+  });
+
+  it("starts the card flow on the card key", async () => {
+    const fetchMock = routedFetch({
+      [`POST ${HIGHLIGHTS_URL}`]: () => jsonResponse(201, capturedNote),
+      [`POST ${SUGGEST_URL}`]: () => jsonResponse(200, { suggestions: [] }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const view = renderFlow();
+    view.select();
+    act(() => pressKey("c"));
+
+    expect(await screen.findByText("No cards for this passage.")).toBeTruthy();
+  });
+
+  it("does nothing on a bare key press with no selection open", async () => {
+    const fetchMock = routedFetch({});
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderFlow();
+    // No popover is up, so there is no passage the key could act on — and a
+    // write the student has no on-screen evidence of must never happen.
+    act(() => {
+      pressKey("h");
+      pressKey("c");
+    });
+
+    expect(captures(fetchMock)).toBe(0);
+    expect(screen.queryByRole("dialog", { name: "Capture highlight" })).toBeNull();
+  });
+
+  it("ignores the highlight key typed into a text field", async () => {
+    const fetchMock = routedFetch({});
+    vi.stubGlobal("fetch", fetchMock);
+
+    const view = renderFlow();
+    view.select();
+    // The popover is open, so the shortcut is armed — but the student is typing.
+    const textarea = document.body.appendChild(document.createElement("textarea"));
+    act(() => pressKey("h", textarea));
+
+    expect(captures(fetchMock)).toBe(0);
+    textarea.remove();
+  });
+
+  it("ignores the highlight key while a modifier is held, and never binds b", async () => {
+    const fetchMock = routedFetch({});
+    vi.stubGlobal("fetch", fetchMock);
+
+    const view = renderFlow();
+    view.select();
+    act(() => {
+      pressKey("h", window, { ctrlKey: true });
+      // The sidebar owns Cmd/Ctrl+B; the reader must never claim `b` at all.
+      pressKey("b");
+      pressKey("b", window, { ctrlKey: true });
+    });
+
+    expect(captures(fetchMock)).toBe(0);
   });
 });

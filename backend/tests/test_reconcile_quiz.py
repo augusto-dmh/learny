@@ -9,6 +9,7 @@ each case is isolated.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
@@ -18,9 +19,13 @@ from app.application.quiz import ReconcileQuizItems
 from app.application.quiz_qc import content_key
 from app.domain.entities import (
     CorpusSectionRecord,
+    Note,
+    NoteAnchor,
+    NoteAnchorStatus,
     ParsedBlock,
     ParsedSection,
     QuizItem,
+    QuizItemOrigin,
     QuizItemStatus,
     QuizItemType,
     ReviewLogEntry,
@@ -32,6 +37,7 @@ from app.domain.entities import (
 from app.infrastructure.db.metadata import quiz_item_scheduling, review_log
 from app.infrastructure.db.repositories import (
     SqlAlchemyCorpusRepository,
+    SqlAlchemyNoteRepository,
     SqlAlchemyQuizItemRepository,
     SqlAlchemySourceRepository,
     SqlAlchemyUserRepository,
@@ -380,3 +386,166 @@ def test_reconcile_noop_when_source_has_no_items(db_conn: Connection) -> None:
     # No corpus, no items: the fast path returns without reading the corpus.
     _reconcile(db_conn, source.id)  # must not raise
     assert SqlAlchemyQuizItemRepository(db_conn).list_for_source(source.id) == []
+
+
+# --- Cards made at a passage reconcile on their own snapshot (CAP-17) ----------
+
+
+def _anchor_on(db_conn: Connection, source: Source, *, quote: str) -> NoteAnchor:
+    """Persist a note plus one highlight anchor on ``source``, owned by its owner."""
+    notes = SqlAlchemyNoteRepository(db_conn)
+    now = datetime.now(UTC)
+    note = notes.add(
+        Note(
+            id=uuid4(),
+            user_id=source.user_id,
+            title="A highlight",
+            body_markdown="",
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    return notes.add_anchor(
+        NoteAnchor(
+            id=uuid4(),
+            note_id=note.id,
+            source_id=source.id,
+            source_title="Book",
+            anchor="ch1",
+            section_path=("One",),
+            block_hash="b" * 64,
+            block_ordinal=0,
+            start_offset=0,
+            end_offset=len(quote),
+            quote_exact=quote,
+            quote_prefix="",
+            quote_suffix="",
+            status=NoteAnchorStatus.ACTIVE,
+            created_at=now,
+            updated_at=now,
+        )
+    )
+
+
+def _highlight_item(
+    source_id: UUID,
+    note_anchor_id: UUID,
+    *,
+    question: str,
+    anchor: str,
+    section_path: tuple[str, ...],
+    excerpt: str,
+) -> QuizItem:
+    """An item the student accepted from a highlight, with its provenance link."""
+    return replace(
+        _item(
+            source_id,
+            question=question,
+            anchor=anchor,
+            section_path=section_path,
+            excerpt=excerpt,
+        ),
+        origin=QuizItemOrigin.HIGHLIGHT,
+        note_anchor_id=note_anchor_id,
+    )
+
+
+def test_reconcile_matrix_applies_to_highlight_origin_items(db_conn: Connection) -> None:
+    # CAP-17: a card made at a passage walks the same keep/stale/relocate/orphan
+    # ladder as a deck card, on its own excerpt snapshot — independent of whatever
+    # the linked note anchor's own reconciliation decided (AD-137).
+    source = _source(db_conn)
+    SqlAlchemyCorpusRepository(db_conn).replace(
+        source.id,
+        title="Book",
+        authors=["A"],
+        language="en",
+        schema_version=1,
+        sections=_V2_SECTIONS,
+    )
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    keep = _highlight_item(
+        source.id,
+        _anchor_on(db_conn, source, quote="alpha beta").id,
+        question="Q keep?",
+        anchor="ch1",
+        section_path=("One",),
+        excerpt="alpha beta",
+    )
+    stale = _highlight_item(
+        source.id,
+        _anchor_on(db_conn, source, quote="gamma delta").id,
+        question="Q stale?",
+        anchor="ch2",
+        section_path=("Two",),
+        excerpt="gamma delta",
+    )
+    relocate = _highlight_item(
+        source.id,
+        _anchor_on(db_conn, source, quote="epsilon zeta").id,
+        question="Q reloc?",
+        anchor="ch3",
+        section_path=("Three",),
+        excerpt="epsilon zeta",
+    )
+    orphan = _highlight_item(
+        source.id,
+        _anchor_on(db_conn, source, quote="phrase not present").id,
+        question="Q orphan?",
+        anchor="ch4",
+        section_path=("Four",),
+        excerpt="phrase not present",
+    )
+    for item in (keep, stale, relocate, orphan):
+        _seed_item(repo, item)
+
+    _reconcile(db_conn, source.id)
+
+    assert repo.get_by_id(keep.id).status == QuizItemStatus.ACTIVE
+    assert repo.get_by_id(stale.id).status == QuizItemStatus.STALE
+    moved = repo.get_by_id(relocate.id)
+    assert (moved.status, moved.anchor, moved.section_path) == (
+        QuizItemStatus.ACTIVE,
+        "ch9",
+        ("Later", "Nine"),
+    )
+    assert repo.get_by_id(orphan.id).status == QuizItemStatus.ORPHANED
+
+
+def test_reconcile_keeps_a_highlight_card_identity_scheduling_and_provenance(
+    db_conn: Connection,
+) -> None:
+    # CAP-17: re-ingestion may move a card, but it may never cost the student their
+    # memory history — nor sever the link back to the highlight it came from.
+    source = _source(db_conn)
+    SqlAlchemyCorpusRepository(db_conn).replace(
+        source.id,
+        title="Book",
+        authors=["A"],
+        language="en",
+        schema_version=1,
+        sections=_V2_SECTIONS,
+    )
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    anchor = _anchor_on(db_conn, source, quote="epsilon zeta")
+    relocate = _highlight_item(
+        source.id,
+        anchor.id,
+        question="Q reloc?",
+        anchor="ch3",
+        section_path=("Three",),
+        excerpt="epsilon zeta",
+    )
+    _seed_item(repo, relocate)
+    before_sched = dict(_scheduling_row(db_conn, relocate.id))
+    before_log = [dict(row) for row in _log_rows(db_conn, relocate.id)]
+
+    _reconcile(db_conn, source.id)
+
+    moved = repo.get_by_id(relocate.id)
+    assert moved.anchor == "ch9"  # the item did change
+    assert moved.id == relocate.id
+    assert moved.origin == QuizItemOrigin.HIGHLIGHT
+    assert moved.note_anchor_id == anchor.id
+    assert dict(_scheduling_row(db_conn, relocate.id)) == before_sched
+    assert [dict(row) for row in _log_rows(db_conn, relocate.id)] == before_log

@@ -53,9 +53,24 @@ export type QuizCitation = {
 };
 
 /**
+ * The origin note of a card made at a passage, mirroring the backend
+ * `CardProvenanceView`. Read by join, so the title is always the note's current
+ * one rather than a copy that drifts after a rename.
+ */
+export type CardProvenance = {
+  note_id: string;
+  note_title: string;
+};
+
+/**
  * One due review card, mirroring the backend `DueItemView`. Carries the full
  * card — question, answer, and citation — because reveal is a client-side act in
  * the self-grade flow (no server round-trip to reveal).
+ *
+ * `provenance` is the origin note of a card the student made at a passage
+ * (CAP-16). It is explicitly `null` for a deck-generated card and for one whose
+ * origin note has since been deleted — the card outlives its note, so review must
+ * render either way.
  */
 export type DueItem = {
   id: string;
@@ -65,6 +80,7 @@ export type DueItem = {
   question: string;
   answer: string;
   citation: QuizCitation;
+  provenance: CardProvenance | null;
   status: string;
   due: string;
 };

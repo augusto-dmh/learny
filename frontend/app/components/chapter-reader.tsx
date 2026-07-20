@@ -20,6 +20,16 @@
  * never the DOM — to the capture endpoint. The per-section `onMouseUp` closes
  * over the right section so a multi-section chapter resolves each selection
  * against its own Markdown and anchor.
+ *
+ * The margin rail (CAP-18..24) renders the same highlight set as a column beside
+ * the article, scoped to the loaded chapter, and yields to the Ask/Teach panel
+ * when one is open (AD-139).
+ *
+ * "Create card" (CAP-01) builds on that same capture: the reader captures the
+ * highlight, then asks for card suggestions on the anchor it produced, and renders
+ * the resulting chips beside the passage. Sequencing the two calls here — rather
+ * than folding generation into the capture endpoint — is what keeps a failed
+ * generation from costing the student their highlight.
  */
 
 import { List } from "lucide-react";
@@ -33,17 +43,21 @@ import {
   type CaptureAction,
   type CaptureSelection,
 } from "@/app/components/notes/capture-popover";
+import { MarginRail } from "@/app/components/margin-rail";
 import { ReaderPanel, type PanelMode } from "@/app/components/reader-panel";
 import { ReadingControls } from "@/app/components/reading-controls";
 import { ChapterNav, TocPanel } from "@/app/components/toc-panel";
 import { readUrl } from "@/app/lib/read-url";
+import { useKeyShortcuts } from "@/app/components/use-key-shortcuts";
 import { useReadingSettings } from "@/app/components/use-reading-settings";
 import { useRecedingChrome } from "@/app/components/use-receding-chrome";
 import {
   useScrollPosition,
   type ObserverFactory,
 } from "@/app/components/use-scroll-position";
+import { CardSuggestions } from "@/app/components/notes/card-suggestions";
 import { fetchAuthState } from "@/app/lib/auth";
+import { CardError, suggestCards, type CardSuggestion } from "@/app/lib/cards";
 import { paintHighlights } from "@/app/lib/highlight-paint";
 import { type PendingPanelRequest } from "@/app/lib/panel";
 import { captureHighlight, NoteError } from "@/app/lib/notes";
@@ -62,6 +76,17 @@ import { cn } from "@/lib/utils";
 
 /** A stable empty highlight list, so sections without highlights never repaint. */
 const NO_HIGHLIGHTS: SourceHighlightView[] = [];
+
+/**
+ * What the reader says when the served evidence no longer matches the section — a
+ * mid-flight re-ingest moved the passage out from under the selection. Shared by
+ * the highlight capture and the capture-to-card flow, which fail the same way.
+ */
+const STALE_CAPTURE_MESSAGE =
+  "The book changed while you were reading. Reload the page to capture this highlight.";
+
+/** Pixels below the popover's top edge to drop the suggestion row, clearing the verbs. */
+const SUGGESTIONS_OFFSET = 44;
 
 type LoadState =
   | { kind: "loading" }
@@ -301,6 +326,12 @@ export function ChapterFlow({
     }
     return byAnchor;
   }, [highlights]);
+  // The loaded chapter's section anchors in document order — the scroll tracker's
+  // observation set, the TOC's in-chapter test, and the rail's chapter scope.
+  const sectionAnchors = useMemo(
+    () => chapter.sections.map((section) => section.anchor),
+    [chapter.sections],
+  );
   const [flashAnchor, setFlashAnchor] = useState<string | null>(scrollTarget);
   // The below-lg table of contents collapses behind the top-bar toggle (RD-25).
   const [tocOpen, setTocOpen] = useState(false);
@@ -316,6 +347,18 @@ export function ChapterFlow({
   const [capture, setCapture] = useState<ActiveCapture | null>(null);
   const [pending, setPending] = useState(false);
   const [captureError, setCaptureError] = useState<string | null>(null);
+  // The capture-to-card flow (CAP-01). The highlight is captured first and its
+  // anchor id kept here, so a suggestion request that fails afterwards can be
+  // retried on its own — the highlight is already saved and must not be captured
+  // twice. `suggestions` holds the batch until the student resolves every chip;
+  // an empty array is a real answer ("no cards for this passage"), not an error,
+  // which is why it is distinct from `null` (no request made yet).
+  const [cardAnchorId, setCardAnchorId] = useState<string | null>(null);
+  // The note that `cardAnchorId` belongs to. Create card captures a highlight as its
+  // first step, so the passage is already saved: the plain capture verbs must reuse
+  // that note instead of writing a second one for the same words.
+  const [cardNoteId, setCardNoteId] = useState<string | null>(null);
+  const [suggestions, setSuggestions] = useState<CardSuggestion[] | null>(null);
   // A selection verb (Explain/Ask) the reader hands to the Ask panel: it carries
   // the verbatim quote and the selection's section anchor, is opened in ask mode,
   // and is cleared once the panel has consumed it (RA-17/18).
@@ -327,7 +370,7 @@ export function ChapterFlow({
   const { currentAnchor } = useScrollPosition({
     sourceId,
     csrf,
-    anchors: chapter.sections.map((section) => section.anchor),
+    anchors: sectionAnchors,
     initialAnchor: scrollTarget,
     containerRef: articleRef,
     observerFactory,
@@ -384,6 +427,11 @@ export function ChapterFlow({
       return;
     }
     setCaptureError(null);
+    // A new selection starts a new card flow: neither the previous highlight's
+    // anchor nor its suggestions belong to this passage.
+    setCardAnchorId(null);
+    setCardNoteId(null);
+    setSuggestions(null);
     setCapture({
       ...derived,
       anchor: section.anchor,
@@ -393,6 +441,20 @@ export function ChapterFlow({
 
   async function handleCapture(action: CaptureAction) {
     if (!capture || !csrf) {
+      return;
+    }
+    // Create card already saved this passage. Capturing again would leave the student
+    // with two identical highlights for one selection, so reuse what it wrote: the
+    // highlight verb has nothing left to do, and the note verb opens the note itself.
+    if (cardNoteId) {
+      const existing = cardNoteId;
+      setCapture(null);
+      setSuggestions(null);
+      setCardAnchorId(null);
+      setCardNoteId(null);
+      if (action === "highlight-note") {
+        router.push(`/notes/${existing}`);
+      }
       return;
     }
     setPending(true);
@@ -414,17 +476,71 @@ export function ChapterFlow({
         router.push(`/notes/${note.id}`);
       }
     } catch (err) {
-      setCaptureError(
-        err instanceof NoteError && err.kind === "stale_capture"
-          ? "The book changed while you were reading. Reload the page to capture this highlight."
-          : err instanceof Error
-            ? err.message
-            : "Could not capture the highlight.",
-      );
+      setCaptureError(captureMessage(err, "Could not capture the highlight."));
     } finally {
       setPending(false);
     }
   }
+
+  // The fifth verb (CAP-01): capture the highlight, then ask for card suggestions
+  // on the anchor it produced. The two calls stay separate on purpose — generation
+  // has no write side effects — so a failure between them leaves a perfectly good
+  // highlight behind. `cardAnchorId` remembers that highlight, so pressing the verb
+  // again retries only the generation step instead of capturing the passage twice.
+  async function handleCreateCard() {
+    if (!capture || !csrf) {
+      return;
+    }
+    setPending(true);
+    setCaptureError(null);
+    try {
+      let anchorId = cardAnchorId;
+      if (!anchorId) {
+        const note = await captureHighlight(
+          sourceId,
+          {
+            anchor: capture.anchor,
+            quote_exact: capture.quote_exact,
+            quote_prefix: capture.quote_prefix,
+            quote_suffix: capture.quote_suffix,
+            title: capture.quote_exact.slice(0, 120),
+          },
+          csrf,
+        );
+        anchorId = note.anchors[0]?.id ?? null;
+        if (!anchorId) {
+          throw new Error("Could not anchor this passage to the book.");
+        }
+        setCardAnchorId(anchorId);
+        setCardNoteId(note.id);
+      }
+      setSuggestions(await suggestCards(sourceId, anchorId, csrf));
+    } catch (err) {
+      setCaptureError(captureMessage(err, "Could not suggest cards for this passage."));
+    } finally {
+      setPending(false);
+    }
+  }
+
+  // The student has resolved every suggestion: close the whole flow.
+  function handleSuggestionsDismissed() {
+    setSuggestions(null);
+    setCardAnchorId(null);
+    setCardNoteId(null);
+    setCapture(null);
+  }
+
+  // The two capture verbs on bare keys (CAP-28/29), live only while the popover
+  // is up: with nothing selected there is no passage to act on, and a key that
+  // fired anyway would do something the student cannot see. Both keys run the
+  // very same handlers the buttons do, so the two routes can never diverge.
+  useKeyShortcuts(
+    {
+      h: () => void handleCapture("highlight"),
+      c: () => void handleCreateCard(),
+    },
+    Boolean(capture),
+  );
 
   // Once a return chip is showing, dismiss it after the reader has scrolled a
   // way past where the jump landed — they have settled into the new spot (RD-24).
@@ -468,9 +584,7 @@ export function ChapterFlow({
   // anchor in another chapter navigates there, carrying the open panel along so
   // the answer stays beside the book.
   function handleShowInBook(anchor: string) {
-    const inChapter = chapter.sections.some(
-      (section) => section.anchor === anchor,
-    );
+    const inChapter = sectionAnchors.includes(anchor);
     if (!inChapter) {
       router.push(readUrl(sourceId, anchor, { panel: panelMode }));
       return;
@@ -592,7 +706,7 @@ export function ChapterFlow({
           sourceId={sourceId}
           currentAnchor={currentAnchor}
           chapterAnchor={chapter.chapter_anchor}
-          chapterSectionAnchors={chapter.sections.map((section) => section.anchor)}
+          chapterSectionAnchors={sectionAnchors}
           open={tocOpen}
           onSameChapterNavigate={handleSameChapterNavigate}
         />
@@ -631,9 +745,36 @@ export function ChapterFlow({
               onCapture={handleCapture}
               onExplain={handleExplain}
               onAskAbout={handleAskAbout}
+              onCreateCard={handleCreateCard}
             />
           ) : null}
+          {capture && suggestions && cardAnchorId && csrf ? (
+            // A sibling of the popover rather than a child of it: the popover
+            // suppresses mousedown to keep the selection alive, which would also
+            // stop the inline edit fields from taking focus.
+            <div
+              className="absolute z-10 w-72"
+              style={{ top: capture.top + SUGGESTIONS_OFFSET, left: capture.left }}
+            >
+              <CardSuggestions
+                sourceId={sourceId}
+                noteAnchorId={cardAnchorId}
+                csrf={csrf}
+                suggestions={suggestions}
+                onDismiss={handleSuggestionsDismissed}
+              />
+            </div>
+          ) : null}
         </article>
+        {panelMode ? null : (
+          // The panel wins the right-hand column (AD-139): the rail is ambient
+          // context for reading, and two columns at once starve the measure.
+          <MarginRail
+            highlights={highlights}
+            chapterAnchors={sectionAnchors}
+            onJump={handleShowInBook}
+          />
+        )}
         {panelMode && csrf ? (
           <ReaderPanel
             sourceId={sourceId}
@@ -749,6 +890,22 @@ function ReturnChip({ onReturn }: { onReturn: () => void }) {
       Return to where you were
     </button>
   );
+}
+
+/**
+ * The message for a failed capture-side call. A stale target — the passage moved
+ * under the selection — gets the reload prompt whichever call reported it: both the
+ * highlight capture (`NoteError`) and the suggestion request (`CardError`) surface
+ * the same 409 as kind `stale_capture`. Everything else shows its own message.
+ */
+function captureMessage(err: unknown, fallback: string): string {
+  if (
+    (err instanceof NoteError || err instanceof CardError) &&
+    err.kind === "stale_capture"
+  ) {
+    return STALE_CAPTURE_MESSAGE;
+  }
+  return err instanceof Error ? err.message : fallback;
 }
 
 /**

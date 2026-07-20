@@ -2,11 +2,11 @@
 
 /**
  * C3 (component) — the reader capture popover carries the full five-verb selection
- * set when the reader wires the panel-bound verbs (RA-15): Highlight and Note run
- * the existing capture flow (RA-16), Explain and Ask hand the verbatim quote to
- * the reader, and Create card is a disabled "coming soon" placeholder that fires
- * nothing (RA-19). Absent those callbacks the popover stays the original
- * two-action capture control, byte-identical to the shipped highlight flow.
+ * set when the reader wires the panel- and card-bound verbs (RA-15): Highlight and
+ * Note run the existing capture flow (RA-16), Explain and Ask hand the verbatim
+ * quote to the reader, and Create card starts the capture-to-card flow the reader
+ * owns (CAP-01). Absent those callbacks the popover stays the original two-action
+ * capture control, byte-identical to the shipped highlight flow.
  */
 
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
@@ -35,8 +35,13 @@ function renderPopover(
 }
 
 describe("CapturePopover five verbs (RA-15)", () => {
-  it("offers exactly five verbs when the panel-bound verbs are wired", () => {
-    renderPopover({ quote: "a passage", onExplain: vi.fn(), onAskAbout: vi.fn() });
+  it("offers exactly five verbs when the panel- and card-bound verbs are wired", () => {
+    renderPopover({
+      quote: "a passage",
+      onExplain: vi.fn(),
+      onAskAbout: vi.fn(),
+      onCreateCard: vi.fn(),
+    });
 
     const dialog = screen.getByRole("dialog", { name: "Capture highlight" });
     const buttons = within(dialog).getAllByRole("button");
@@ -52,7 +57,12 @@ describe("CapturePopover five verbs (RA-15)", () => {
   it("Explain and Ask carry the verbatim quote up to the reader (RA-17/18)", () => {
     const onExplain = vi.fn();
     const onAskAbout = vi.fn();
-    renderPopover({ quote: "the selected sentence", onExplain, onAskAbout });
+    renderPopover({
+      quote: "the selected sentence",
+      onExplain,
+      onAskAbout,
+      onCreateCard: vi.fn(),
+    });
 
     fireEvent.click(screen.getByRole("button", { name: "Explain" }));
     expect(onExplain).toHaveBeenCalledTimes(1);
@@ -70,6 +80,7 @@ describe("CapturePopover five verbs (RA-15)", () => {
       onCapture,
       onExplain: vi.fn(),
       onAskAbout: vi.fn(),
+      onCreateCard: vi.fn(),
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Highlight" }));
@@ -79,23 +90,43 @@ describe("CapturePopover five verbs (RA-15)", () => {
   });
 });
 
-describe("CapturePopover Create card (RA-19)", () => {
-  it("shows a disabled Create card with a coming-soon hint that fires nothing", () => {
+describe("CapturePopover Create card (CAP-01)", () => {
+  it("is a live verb that hands the card flow to the reader", () => {
     const onCapture = vi.fn();
+    const onCreateCard = vi.fn();
     renderPopover({
       quote: "a passage",
       onCapture,
       onExplain: vi.fn(),
       onAskAbout: vi.fn(),
+      onCreateCard,
+    });
+
+    const createCard = screen.getByRole("button", { name: "Create card" });
+    // No longer a placeholder: it is enabled and carries no coming-soon hint.
+    expect((createCard as HTMLButtonElement).disabled).toBe(false);
+    expect(createCard.getAttribute("title")).toBeNull();
+
+    fireEvent.click(createCard);
+    expect(onCreateCard).toHaveBeenCalledTimes(1);
+    // The card flow is its own verb — it does not run the plain capture action.
+    expect(onCapture).not.toHaveBeenCalled();
+  });
+
+  it("disables while a capture or generation is in flight", () => {
+    const onCreateCard = vi.fn();
+    renderPopover({
+      quote: "a passage",
+      pending: true,
+      onExplain: vi.fn(),
+      onAskAbout: vi.fn(),
+      onCreateCard,
     });
 
     const createCard = screen.getByRole("button", { name: "Create card" });
     expect((createCard as HTMLButtonElement).disabled).toBe(true);
-    expect(createCard.getAttribute("title")).toBe("Coming soon");
-
-    // A disabled button dispatches no click, so the placeholder triggers no action.
     fireEvent.click(createCard);
-    expect(onCapture).not.toHaveBeenCalled();
+    expect(onCreateCard).not.toHaveBeenCalled();
   });
 });
 

@@ -53,9 +53,17 @@ export type ChapterView = {
   reading_position: ReadingPositionView | null;
 };
 
-/** One of the caller's highlights, mirroring the backend `SourceHighlightView`. */
+/**
+ * One of the caller's highlights, mirroring the backend `SourceHighlightView`.
+ *
+ * `note_title` and `has_body` let the margin rail label an entry without a second
+ * round trip (CAP-19): a highlight the student wrote on shows its note's title,
+ * while a bare highlight is identified by its own quote snapshot.
+ */
 export type SourceHighlightView = {
   note_id: string;
+  note_title: string;
+  has_body: boolean;
   anchor: string;
   quote_exact: string;
   quote_prefix: string;

@@ -12,6 +12,7 @@ from fastapi import FastAPI
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.infrastructure.web.auth import router as auth_router
+from app.infrastructure.web.cards import router as cards_router
 from app.infrastructure.web.error_handlers import register_error_handlers
 from app.infrastructure.web.health import router as health_router
 from app.infrastructure.web.ingestion import router as ingestion_router
@@ -42,6 +43,7 @@ def create_app() -> FastAPI:
     app.include_router(teaching_router)
     app.include_router(quiz_router)
     app.include_router(notes_router)
+    app.include_router(cards_router)
     return app
 
 

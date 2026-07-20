@@ -11,6 +11,7 @@
  */
 
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -20,6 +21,7 @@ import {
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { ReviewScreen } from "../app/components/review-screen";
+import { readUrl } from "../app/lib/read-url";
 
 beforeAll(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
@@ -63,6 +65,7 @@ const clozeCard = {
     anchor: "chapter-1.xhtml#core-idea",
     source_excerpt: "Ada wrote the first algorithm.",
   },
+  provenance: null,
   status: "active",
   due: "2026-07-16T00:00:00Z",
 };
@@ -79,6 +82,7 @@ const recallCard = {
     anchor: "chapter-2.xhtml",
     source_excerpt: "Charles Babbage designed the analytical engine.",
   },
+  provenance: null,
   status: "active",
   due: "2026-07-16T00:00:00Z",
 };
@@ -327,5 +331,201 @@ describe("ReviewScreen auth (E2)", () => {
 
     await waitFor(() => expect(onRequireAuth).toHaveBeenCalledTimes(1));
     expect(await screen.findByText("You are signed out.")).toBeTruthy();
+  });
+});
+
+describe("ReviewScreen pin and provenance (CAP-25/26/27)", () => {
+  const highlightCard = {
+    ...recallCard,
+    id: "i3",
+    provenance: { note_id: "n4", note_title: "Why Ada matters" },
+  };
+
+  it("renders the pin through readUrl so the reader route never drifts", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        [`GET ${DUE}?source_id=s1`]: () =>
+          jsonResponse(200, { items: [clozeCard], total_due: 1 }),
+      }),
+    );
+
+    render(<ReviewScreen sourceId="s1" />);
+    await screen.findByTestId("question");
+
+    // The href is exactly what the shared route builder produces for this card's
+    // source and cited anchor — the hand-built URL is gone.
+    expect(
+      screen.getByRole("link", { name: "Open in book" }).getAttribute("href"),
+    ).toBe(readUrl(clozeCard.source_id, clozeCard.citation.anchor));
+  });
+
+  it("offers the pin before the answer is revealed", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        [`GET ${DUE}?source_id=s1`]: () =>
+          jsonResponse(200, { items: [clozeCard], total_due: 1 }),
+      }),
+    );
+
+    render(<ReviewScreen sourceId="s1" />);
+    await screen.findByTestId("question");
+
+    // A failed card should become a re-read; that only works if the way back is
+    // there while the answer is still hidden.
+    expect(screen.queryByTestId("answer")).toBeNull();
+    expect(screen.getByRole("link", { name: "Open in book" })).toBeTruthy();
+  });
+
+  it("shows the origin note's title for a card made at a passage", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        [`GET ${DUE}?source_id=s1`]: () =>
+          jsonResponse(200, { items: [highlightCard], total_due: 1 }),
+      }),
+    );
+
+    render(<ReviewScreen sourceId="s1" />);
+    await screen.findByTestId("question");
+
+    const note = screen.getByTestId("card-provenance");
+    expect(note.textContent).toContain("Why Ada matters");
+    expect(note.getAttribute("href")).toBe("/notes/n4");
+  });
+
+  it("renders no note affordance for a card without provenance", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        [`GET ${DUE}?source_id=s1`]: () =>
+          jsonResponse(200, { items: [clozeCard], total_due: 1 }),
+      }),
+    );
+
+    render(<ReviewScreen sourceId="s1" />);
+    await screen.findByTestId("question");
+
+    // A deck card — or one whose origin note was deleted — has no note to offer,
+    // and must not invent one. The pin itself still stands.
+    expect(screen.queryByTestId("card-provenance")).toBeNull();
+    expect(screen.getByRole("link", { name: "Open in book" })).toBeTruthy();
+  });
+});
+
+describe("ReviewScreen grading shortcuts (CAP-30/31/32)", () => {
+  function pressKey(
+    key: string,
+    target: EventTarget = window,
+    init: KeyboardEventInit = {},
+  ) {
+    act(() => {
+      target.dispatchEvent(
+        new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init }),
+      );
+    });
+  }
+
+  function reviewFetch(onReview?: () => void) {
+    return routedFetch({
+      "GET /api/auth/me": () => authedMe.clone(),
+      [`GET ${DUE}?source_id=s1`]: () =>
+        jsonResponse(200, { items: [clozeCard], total_due: 1 }),
+      "POST /api/quiz-items/i1/reviews": () => {
+        onReview?.();
+        return jsonResponse(200, {
+          state: 2,
+          step: null,
+          stability: 4,
+          difficulty: 5,
+          due: "2026-07-20T00:00:00Z",
+          last_review: "2026-07-16T00:00:00Z",
+        });
+      },
+    });
+  }
+
+  it("reveals the answer on the space bar", async () => {
+    vi.stubGlobal("fetch", reviewFetch());
+
+    render(<ReviewScreen sourceId="s1" />);
+    await screen.findByTestId("question");
+    expect(screen.queryByTestId("answer")).toBeNull();
+
+    pressKey(" ");
+
+    expect((await screen.findByTestId("answer")).textContent).toBe("algorithm");
+  });
+
+  it("submits the pressed grade once the answer is revealed", async () => {
+    const fetchMock = reviewFetch();
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ReviewScreen sourceId="s1" />);
+    await screen.findByTestId("question");
+    fireEvent.click(screen.getByRole("button", { name: "Reveal answer" }));
+
+    pressKey("3");
+
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(
+        ([url]) => url === "/api/quiz-items/i1/reviews",
+      );
+      expect(call).toBeTruthy();
+      expect(JSON.parse((call![1] as RequestInit).body as string).rating).toBe(3);
+    });
+    // The session advanced past the only card, exactly as the button does.
+    expect(await screen.findByTestId("reviewed-total")).toBeTruthy();
+  });
+
+  it("does not grade while the answer is still hidden", async () => {
+    let reviews = 0;
+    vi.stubGlobal("fetch", reviewFetch(() => (reviews += 1)));
+
+    render(<ReviewScreen sourceId="s1" />);
+    await screen.findByTestId("question");
+
+    // A grade key before reveal would submit a self-assessment the student never
+    // made — the binding set only carries the verb the card is offering.
+    pressKey("1");
+    pressKey("4");
+
+    await waitFor(() => expect(screen.getByTestId("position")).toBeTruthy());
+    expect(reviews).toBe(0);
+  });
+
+  it("ignores a grade key typed into a text field", async () => {
+    let reviews = 0;
+    vi.stubGlobal("fetch", reviewFetch(() => (reviews += 1)));
+
+    render(<ReviewScreen sourceId="s1" />);
+    await screen.findByTestId("question");
+    fireEvent.click(screen.getByRole("button", { name: "Reveal answer" }));
+
+    const input = document.body.appendChild(document.createElement("input"));
+    pressKey("3", input);
+
+    await waitFor(() => expect(screen.getByTestId("answer")).toBeTruthy());
+    expect(reviews).toBe(0);
+    input.remove();
+  });
+
+  it("ignores a grade key while a modifier is held", async () => {
+    let reviews = 0;
+    vi.stubGlobal("fetch", reviewFetch(() => (reviews += 1)));
+
+    render(<ReviewScreen sourceId="s1" />);
+    await screen.findByTestId("question");
+    fireEvent.click(screen.getByRole("button", { name: "Reveal answer" }));
+
+    pressKey("3", window, { metaKey: true });
+
+    await waitFor(() => expect(screen.getByTestId("answer")).toBeTruthy());
+    expect(reviews).toBe(0);
   });
 });

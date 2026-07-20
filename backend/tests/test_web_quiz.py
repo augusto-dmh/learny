@@ -453,6 +453,7 @@ def test_due_returns_items_and_total_with_full_card(
         "question",
         "answer",
         "citation",
+        "provenance",
         "status",
         "due",
     }
@@ -465,6 +466,23 @@ def test_due_returns_items_and_total_with_full_card(
         "anchor": "ch1.xhtml",
         "source_excerpt": "The mitochondria is the powerhouse of the cell.",
     }
+
+
+def test_due_deck_card_is_queued_with_null_provenance(
+    quiz_client: TestClient, db_conn: Connection
+) -> None:
+    # CAP-16: a whole-deck card has no origin note, so ``provenance`` is present and
+    # explicitly null — and the card still appears in the queue like any other.
+    source_id, _ = _seed_ready_source(quiz_client, db_conn, "due-deck-prov@example.com")
+    item = _seed_item(db_conn, UUID(source_id))
+
+    resp = quiz_client.get("/api/reviews/due")
+
+    assert resp.status_code == 200, resp.text
+    view = resp.json()["items"][0]
+    assert view["id"] == str(item.id)
+    assert "provenance" in view
+    assert view["provenance"] is None
 
 
 def test_due_over_max_limit_returns_422(

@@ -28,6 +28,7 @@ from sqlalchemy import (
     literal_column,
     or_,
     select,
+    text,
     update,
 )
 from sqlalchemy import delete as sa_delete
@@ -41,6 +42,7 @@ from app.domain.entities import (
     AnchorBlockSnapshot,
     AnchorSection,
     Backlink,
+    CardProvenance,
     ChapterIndexRow,
     ChapterSection,
     ChunkToEmbed,
@@ -59,6 +61,7 @@ from app.domain.entities import (
     PasswordCredential,
     QuizGenerationJob,
     QuizItem,
+    QuizItemOrigin,
     QuizItemStatus,
     QuizSection,
     ReadingPosition,
@@ -1143,6 +1146,48 @@ class SqlAlchemyQuizItemRepository:
             )
         return result
 
+    def section_for_anchor(self, source_id: UUID, anchor: str) -> QuizSection | None:
+        """Return the one section ``anchor`` resolves to, with its chunks (CAP-01).
+
+        Resolves canonical-anchor-first then by alias (mirroring ``blocks_for_section``)
+        so a highlight snapshotted against a merged-away section still finds its
+        survivor. Deliberately applies neither the leaf test nor the ``min_chars`` floor
+        that ``sections_for_generation`` uses: those bound whole-deck density, and a
+        passage the student explicitly highlighted is eligible wherever it sits.
+        """
+        canonical_first = (corpus_sections.c.anchor == anchor).desc()
+        section = self._conn.execute(
+            select(
+                corpus_sections.c.id,
+                corpus_sections.c.section_path,
+                corpus_sections.c.anchor,
+                corpus_sections.c.title,
+            )
+            .join(corpus_documents, corpus_sections.c.document_id == corpus_documents.c.id)
+            .where(corpus_documents.c.source_id == source_id)
+            .where(
+                or_(
+                    corpus_sections.c.anchor == anchor,
+                    corpus_sections.c.anchor_aliases.any(anchor),
+                )
+            )
+            .order_by(canonical_first, corpus_sections.c.position)
+            .limit(1)
+        ).first()
+        if section is None:
+            return None
+        chunk_rows = self._conn.execute(
+            select(corpus_chunks.c.id, corpus_chunks.c.text)
+            .where(corpus_chunks.c.section_id == section.id)
+            .order_by(corpus_chunks.c.chunk_index)
+        ).all()
+        return QuizSection(
+            section_path=tuple(section.section_path),
+            anchor=section.anchor,
+            title=section.title,
+            chunks=tuple((row.id, row.text) for row in chunk_rows),
+        )
+
     def existing_embeddings(self, source_id: UUID) -> list[tuple[UUID, list[float]]]:
         """Return ``(item_id, embedding)`` for the source's already-embedded items."""
         rows = self._conn.execute(
@@ -1153,16 +1198,27 @@ class SqlAlchemyQuizItemRepository:
         return [(row.id, [float(value) for value in row.embedding]) for row in rows]
 
     def upsert(self, item: QuizItem, *, embedding: Sequence[float] | None) -> bool:
-        """Upsert on ``(source_id, content_key)``; update content fields only on conflict.
+        """Upsert on the item's origin-scoped identity; update content fields only.
 
         Returns ``True`` when a new row was inserted and ``False`` when an existing row's
         content was updated. The conflict update leaves ``status`` and the scheduling/
         review-log rows untouched (QUIZ-02); the ``(xmax = 0)`` projection is Postgres'
         was-inserted signal (zero on a fresh insert, the updater's xid otherwise).
+
+        The conflict target follows ``origin``, matching one of the two partial unique
+        indexes from 0012 — each ``index_where`` must equal its index's predicate or
+        Postgres cannot select the index and raises. Deck items keep collapsing on
+        ``(source_id, content_key)``; highlight items collapse on
+        ``(note_anchor_id, content_key)`` so re-accepting identical text from the same
+        highlight is idempotent while two different highlights may share a key. A
+        highlight item with no anchor (severed provenance) matches neither partial
+        index and is a plain insert under its minted id.
         """
         stmt = pg_insert(quiz_items).values(
             id=item.id,
             source_id=item.source_id,
+            origin=item.origin,
+            note_anchor_id=item.note_anchor_id,
             item_type=item.item_type,
             question=item.question,
             answer=item.answer,
@@ -1177,21 +1233,70 @@ class SqlAlchemyQuizItemRepository:
             created_at=item.created_at,
             updated_at=item.updated_at,
         )
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["source_id", "content_key"],
-            set_={
-                "question": stmt.excluded.question,
-                "answer": stmt.excluded.answer,
-                "section_path": stmt.excluded.section_path,
-                "anchor": stmt.excluded.anchor,
-                "source_excerpt": stmt.excluded.source_excerpt,
-                "chunk_hash": stmt.excluded.chunk_hash,
-                "embedding": stmt.excluded.embedding,
-                "generation_meta": stmt.excluded.generation_meta,
-                "updated_at": stmt.excluded.updated_at,
-            },
-        ).returning(literal_column("(xmax = 0)").label("inserted"))
+        content_update = {
+            "question": stmt.excluded.question,
+            "answer": stmt.excluded.answer,
+            "section_path": stmt.excluded.section_path,
+            "anchor": stmt.excluded.anchor,
+            "source_excerpt": stmt.excluded.source_excerpt,
+            "chunk_hash": stmt.excluded.chunk_hash,
+            "embedding": stmt.excluded.embedding,
+            "generation_meta": stmt.excluded.generation_meta,
+            "updated_at": stmt.excluded.updated_at,
+        }
+        if item.origin == QuizItemOrigin.HIGHLIGHT:
+            if item.note_anchor_id is None:
+                stmt = stmt.returning(literal_column("(xmax = 0)").label("inserted"))
+                return bool(self._conn.execute(stmt).scalar_one())
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["note_anchor_id", "content_key"],
+                index_where=text("origin = 'highlight' AND note_anchor_id IS NOT NULL"),
+                set_=content_update,
+            )
+        else:
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["source_id", "content_key"],
+                index_where=text("origin = 'deck'"),
+                set_=content_update,
+            )
+        stmt = stmt.returning(literal_column("(xmax = 0)").label("inserted"))
         return bool(self._conn.execute(stmt).scalar_one())
+
+    def get_by_anchor_and_key(
+        self, note_anchor_id: UUID, content_key: str
+    ) -> QuizItem | None:
+        """Return the highlight card already accepted for this anchor + fingerprint.
+
+        The read behind the idempotent re-accept path: scoped to ``highlight`` origin so
+        a deck item that happens to share the key is never returned.
+        """
+        row = self._conn.execute(
+            select(*_QUIZ_ITEM_READ_COLUMNS)
+            .where(quiz_items.c.note_anchor_id == note_anchor_id)
+            .where(quiz_items.c.content_key == content_key)
+            .where(quiz_items.c.origin == QuizItemOrigin.HIGHLIGHT)
+        ).one_or_none()
+        return _to_quiz_item(row) if row is not None else None
+
+    def update_text(
+        self, item_id: UUID, *, question: str, answer: str, content_key: str
+    ) -> None:
+        """Rewrite a card's text and its fingerprint, keeping its identity (CAP-12).
+
+        Touches these three fields plus ``updated_at`` and nothing else — the row's
+        ``id``, its ``quiz_item_scheduling`` snapshot, and its ``review_log`` history are
+        all left exactly as they were, so editing a card never costs its memory state.
+        """
+        self._conn.execute(
+            update(quiz_items)
+            .where(quiz_items.c.id == item_id)
+            .values(
+                question=question,
+                answer=answer,
+                content_key=content_key,
+                updated_at=func.now(),
+            )
+        )
 
     def create_scheduling(
         self, quiz_item_id: UUID, snapshot: SchedulingSnapshot
@@ -1295,11 +1400,18 @@ class SqlAlchemyQuizItemRepository:
         items leak, ordered ``due ASC, id ASC`` (A-6). Stale/orphaned items are excluded
         (QUIZ-17); the returned count is the full due total before the ``limit``.
         """
-        join = quiz_items.join(
-            sources, quiz_items.c.source_id == sources.c.id
-        ).join(
-            quiz_item_scheduling,
-            quiz_item_scheduling.c.quiz_item_id == quiz_items.c.id,
+        # The provenance hops are OUTER joins on purpose: a deck card has no anchor and
+        # a highlight card whose note was deleted has a NULL link, and neither may drop
+        # out of the due queue. Both hops are to a primary key, so they can only ever
+        # match one row and cannot inflate the count either (CAP-16).
+        join = (
+            quiz_items.join(sources, quiz_items.c.source_id == sources.c.id)
+            .join(
+                quiz_item_scheduling,
+                quiz_item_scheduling.c.quiz_item_id == quiz_items.c.id,
+            )
+            .outerjoin(note_anchors, quiz_items.c.note_anchor_id == note_anchors.c.id)
+            .outerjoin(notes, note_anchors.c.note_id == notes.c.id)
         )
         conditions = [
             sources.c.user_id == user_id,
@@ -1318,6 +1430,8 @@ class SqlAlchemyQuizItemRepository:
                 *_QUIZ_ITEM_READ_COLUMNS,
                 sources.c.title.label("source_title"),
                 quiz_item_scheduling.c.due.label("due"),
+                notes.c.id.label("provenance_note_id"),
+                notes.c.title.label("provenance_note_title"),
             )
             .select_from(join)
             .where(*conditions)
@@ -1326,7 +1440,18 @@ class SqlAlchemyQuizItemRepository:
         ).all()
         items = [
             DueReviewItem(
-                item=_to_quiz_item(row), source_title=row.source_title, due=row.due
+                item=_to_quiz_item(row),
+                source_title=row.source_title,
+                due=row.due,
+                # NULL on both the deck path and the severed-link path.
+                provenance=(
+                    CardProvenance(
+                        note_id=row.provenance_note_id,
+                        note_title=row.provenance_note_title,
+                    )
+                    if row.provenance_note_id is not None
+                    else None
+                ),
             )
             for row in rows
         ]
@@ -1652,6 +1777,12 @@ class SqlAlchemyNoteRepository:
         )
         return anchor
 
+    def get_anchor(self, anchor_id: UUID) -> NoteAnchor | None:
+        row = self._conn.execute(
+            select(note_anchors).where(note_anchors.c.id == anchor_id)
+        ).one_or_none()
+        return _to_note_anchor(row) if row is not None else None
+
     def anchors_for_source(self, source_id: UUID) -> list[NoteAnchor]:
         rows = self._conn.execute(
             select(note_anchors)
@@ -1665,8 +1796,11 @@ class SqlAlchemyNoteRepository:
     ) -> tuple[SourceHighlight, ...]:
         # Owner-scoped highlights for inline painting: a note anchor belongs to its
         # note's owner, so join notes and filter by user_id (unlike ``anchors_for_source``
-        # which spans all owners for reconciliation). Projects only the quote-with-context
-        # + status the reader painter needs, stably ordered.
+        # which spans all owners for reconciliation). Projects the quote-with-context +
+        # status the reader painter needs, stably ordered, plus the origin note's title
+        # and a has-body flag so the margin rail can label each entry from this one
+        # already-scoped query rather than a second round trip (AD-140). The painter
+        # ignores the two added fields.
         rows = self._conn.execute(
             select(
                 note_anchors.c.note_id,
@@ -1675,6 +1809,14 @@ class SqlAlchemyNoteRepository:
                 note_anchors.c.quote_prefix,
                 note_anchors.c.quote_suffix,
                 note_anchors.c.status,
+                notes.c.title.label("note_title"),
+                # A note is "annotated" when its body holds more than whitespace, so a
+                # bare highlight (body saved as '') reads as bodyless in the rail. The
+                # trim set is explicit: btrim defaults to spaces only, which would count
+                # a body of blank lines as prose.
+                (
+                    func.length(func.btrim(notes.c.body_markdown, " \t\r\n\f\v")) > 0
+                ).label("has_body"),
             )
             .join(notes, note_anchors.c.note_id == notes.c.id)
             .where(notes.c.user_id == user_id)
@@ -1689,6 +1831,8 @@ class SqlAlchemyNoteRepository:
                 quote_prefix=row.quote_prefix,
                 quote_suffix=row.quote_suffix,
                 status=row.status,
+                note_title=row.note_title,
+                has_body=row.has_body,
             )
             for row in rows
         )
@@ -1904,6 +2048,8 @@ def _to_quiz_item(row) -> QuizItem:  # noqa: ANN001
         generation_meta=row.generation_meta,
         created_at=row.created_at,
         updated_at=row.updated_at,
+        origin=row.origin,
+        note_anchor_id=row.note_anchor_id,
     )
 
 

@@ -17,7 +17,7 @@ import re
 from collections.abc import Sequence
 from uuid import UUID
 
-from app.application.quiz_qc import CLOZE_BLANK
+from app.application.quiz_qc import CLOZE_BLANK, quote_in_text
 from app.domain.entities import (
     QuizCandidate,
     QuizDeckHandle,
@@ -49,23 +49,21 @@ def _longest_word(sentence: str) -> str | None:
     return max(words, key=len)
 
 
-def _section_candidates(section: QuizSection) -> list[QuizCandidate]:
-    """Derive the free-recall + cloze candidates for one section (grounded by construction).
+def _candidates_from(sentence: str, chunk_id: UUID, title: str) -> list[QuizCandidate]:
+    """Derive the free-recall + cloze pair for one sentence of ``chunk_id``.
 
-    Returns an empty list for a section with no chunks or no usable leading sentence —
-    the adapter's own eligibility guard on top of the repository's leaf/length filter.
+    Both candidates cite ``chunk_id`` and quote ``sentence`` verbatim, so they are
+    grounded by construction (QUIZ-06/07). Returns an empty list when the sentence has
+    no maskable word — shared by the deck pass and the quote-scoped suggestion path so
+    the two never drift apart.
     """
-    if not section.chunks:
-        return []
-    chunk_id, chunk_text = section.chunks[0]
-    sentence = _leading_sentence(chunk_text)
     word = _longest_word(sentence)
     if not sentence or word is None:
         return []
 
     free_recall = QuizCandidate(
         item_type=QuizItemType.FREE_RECALL,
-        question=f"What does the passage in “{section.title}” state?",
+        question=f"What does the passage in “{title}” state?",
         answer=sentence,
         source_chunk_id=chunk_id,
         anchor_quote=sentence,
@@ -79,6 +77,30 @@ def _section_candidates(section: QuizSection) -> list[QuizCandidate]:
         anchor_quote=sentence,
     )
     return [free_recall, cloze]
+
+
+def _section_candidates(section: QuizSection) -> list[QuizCandidate]:
+    """Derive the free-recall + cloze candidates for one section (grounded by construction).
+
+    Returns an empty list for a section with no chunks or no usable leading sentence —
+    the adapter's own eligibility guard on top of the repository's leaf/length filter.
+    """
+    if not section.chunks:
+        return []
+    chunk_id, chunk_text = section.chunks[0]
+    return _candidates_from(_leading_sentence(chunk_text), chunk_id, section.title)
+
+
+def _locate_quote(section: QuizSection, quote: str) -> UUID | None:
+    """Return the id of the first section chunk containing ``quote``, else ``None``.
+
+    Uses the same normalized containment the QC pipeline applies, so a quote this
+    adapter accepts is one whose candidates can survive grounding.
+    """
+    for chunk_id, chunk_text in section.chunks:
+        if quote_in_text(quote, chunk_text):
+            return chunk_id
+    return None
 
 
 def _candidate_to_payload(candidate: QuizCandidate) -> dict:
@@ -123,6 +145,23 @@ class DeterministicQuizAdapter:
         return QuizDeckHandle(
             provider="local", batch_id=None, payload={"candidates": candidates, "errors": []}
         )
+
+    def suggest_cards(
+        self, section: QuizSection, quote: str, limit: int
+    ) -> list[QuizCandidate]:
+        """Derive candidates from ``quote`` itself, capped at ``limit`` (AD-134).
+
+        The deck path's construction narrowed to the passage the student highlighted:
+        the quote *is* the anchor quote, so the pair stays grounded by construction. A
+        quote that no chunk of ``section`` contains yields nothing — the caller reports
+        "no cards for this passage" rather than an error.
+        """
+        if limit <= 0:
+            return []
+        chunk_id = _locate_quote(section, quote)
+        if chunk_id is None:
+            return []
+        return _candidates_from(quote.strip(), chunk_id, section.title)[:limit]
 
     def collect_deck(self, handle: QuizDeckHandle) -> QuizDeckResult | None:
         """Return the inline result immediately — the local adapter never pends."""

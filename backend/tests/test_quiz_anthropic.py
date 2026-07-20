@@ -12,6 +12,8 @@ from __future__ import annotations
 import json
 from uuid import uuid4
 
+import pytest
+
 from app.domain.entities import QuizItemType, QuizSection
 from app.infrastructure.quiz.anthropic import AnthropicQuizAdapter
 
@@ -67,21 +69,31 @@ class _FakeBatches:
 
 
 class _FakeMessages:
-    def __init__(self, batches: _FakeBatches) -> None:
+    def __init__(self, batches: _FakeBatches, reply: str | None = None) -> None:
         self.batches = batches
+        self._reply = reply
+        self.create_kwargs: dict | None = None
+        self.create_calls = 0
+
+    def create(self, **kwargs):  # noqa: ANN003, ANN201
+        self.create_calls += 1
+        self.create_kwargs = kwargs
+        return _Message(self._reply or "")
 
 
 class _FakeClient:
-    def __init__(self, batches: _FakeBatches) -> None:
-        self.messages = _FakeMessages(batches)
+    def __init__(self, batches: _FakeBatches, reply: str | None = None) -> None:
+        self.messages = _FakeMessages(batches, reply)
 
 
-def _adapter(batches: _FakeBatches) -> AnthropicQuizAdapter:
+def _adapter(
+    batches: _FakeBatches, *, reply: str | None = None
+) -> AnthropicQuizAdapter:
     return AnthropicQuizAdapter(
         api_key="sk-test",
         model="claude-haiku-4-5",
         max_tokens=1024,
-        client=_FakeClient(batches),
+        client=_FakeClient(batches, reply),
     )
 
 
@@ -242,5 +254,89 @@ def test_collect_deck_malformed_json_becomes_section_error() -> None:
     assert custom_id in result.errors[0]
 
 
+# --- suggest_cards (quote-scoped, single synchronous call — CAP-02) --------------
+
+
+def test_suggest_cards_constrains_source_chunk_id_to_the_section_chunks() -> None:
+    chunk_a, chunk_b = uuid4(), uuid4()
+    section = _section("A", [chunk_a, chunk_b])
+    adapter = _adapter(_FakeBatches(), reply=_items_json(chunk_a))
+
+    adapter.suggest_cards(section, "The key term.", 3)
+
+    kwargs = adapter._get_client().messages.create_kwargs
+    schema = kwargs["output_config"]["format"]["schema"]
+    enum = schema["properties"]["items"]["items"]["properties"]["source_chunk_id"]["enum"]
+    assert enum == [str(chunk_a), str(chunk_b)]
+    assert kwargs["model"] == "claude-haiku-4-5"
+
+
+def test_suggest_cards_issues_exactly_one_message_and_no_batch() -> None:
+    chunk = uuid4()
+    batches = _FakeBatches()
+    adapter = _adapter(batches, reply=_items_json(chunk))
+
+    adapter.suggest_cards(_section("A", [chunk]), "The key term.", 3)
+
+    assert adapter._get_client().messages.create_calls == 1
+    assert batches.create_calls == 0
+
+
+def test_suggest_cards_never_exceeds_the_limit() -> None:
+    chunk = uuid4()
+    # The stubbed reply carries two items; a limit of one must truncate it.
+    adapter = _adapter(_FakeBatches(), reply=_items_json(chunk))
+
+    candidates = adapter.suggest_cards(_section("A", [chunk]), "The key term.", 1)
+
+    assert len(candidates) == 1
+
+
+def test_suggest_cards_parses_candidates_from_the_structured_reply() -> None:
+    chunk = uuid4()
+    adapter = _adapter(_FakeBatches(), reply=_items_json(chunk))
+
+    candidates = adapter.suggest_cards(_section("A", [chunk]), "The key term.", 3)
+
+    assert {c.item_type for c in candidates} == {
+        QuizItemType.FREE_RECALL,
+        QuizItemType.CLOZE,
+    }
+    assert all(c.source_chunk_id == chunk for c in candidates)
+
+
+def test_suggest_cards_malformed_reply_raises_for_a_retryable_failure() -> None:
+    chunk = uuid4()
+    adapter = _adapter(_FakeBatches(), reply="not json at all")
+
+    with pytest.raises(ValueError):
+        adapter.suggest_cards(_section("A", [chunk]), "The key term.", 3)
+
+
+def test_suggest_cards_with_a_non_positive_limit_calls_no_provider() -> None:
+    chunk = uuid4()
+    adapter = _adapter(_FakeBatches(), reply=_items_json(chunk))
+
+    assert adapter.suggest_cards(_section("A", [chunk]), "The key term.", 0) == []
+    assert adapter._get_client().messages.create_calls == 0
+
+
 def test_model_identity_is_the_configured_quiz_model() -> None:
     assert _adapter(_FakeBatches()).model == "claude-haiku-4-5"
+
+
+def test_suggest_cards_bounds_the_foreground_call_with_a_timeout() -> None:
+    """The one synchronous generation call must not inherit the SDK's 600s default.
+
+    It runs on the shared threadpool while a student waits on a popover, so an
+    unbounded read holds a slot long after they have given up. The deck path is
+    batched and asynchronous, so it is deliberately left alone.
+    """
+    chunk = uuid4()
+    adapter = _adapter(_FakeBatches(), reply=_items_json(chunk))
+
+    adapter.suggest_cards(_section("A", [chunk]), "The key term.", 3)
+
+    timeout = adapter._get_client().messages.create_kwargs["timeout"]
+    assert timeout is not None
+    assert 0 < timeout <= 60

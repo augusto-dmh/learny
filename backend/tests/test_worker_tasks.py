@@ -761,6 +761,12 @@ def test_note_reconcile_runs_after_quiz_reconcile(seed, db_engine: Engine) -> No
 
     Both builders are replaced with recorders so ordering is observed without a corpus:
     the quiz reconcile must run before the note reconcile in the ingestion body.
+
+    The two reconcilers are deliberately independent — each converges on the replaced
+    corpus from its own snapshot, and a card never reads its origin anchor's outcome
+    (CAP-17/AD-137). That independence is only safe while the order stays *fixed*: this
+    assertion is the tripwire that turns a silent reorder into a failing test, so it
+    must not be relaxed to a set or a subset check.
     """
     ctx = seed(IngestionStatus.QUEUED)
     order: list[str] = []

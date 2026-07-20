@@ -11,6 +11,7 @@ future-due items (QUIZ-13/17); and the deck-job single-active guard is a query
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -20,10 +21,14 @@ from sqlalchemy import Connection, func, select
 from app.application.quiz_qc import content_key
 from app.domain.entities import (
     CorpusSectionRecord,
+    Note,
+    NoteAnchor,
+    NoteAnchorStatus,
     ParsedBlock,
     ParsedSection,
     QuizGenerationJob,
     QuizItem,
+    QuizItemOrigin,
     QuizItemStatus,
     QuizItemType,
     QuizJobStatus,
@@ -33,9 +38,10 @@ from app.domain.entities import (
     Source,
     User,
 )
-from app.infrastructure.db.metadata import quiz_items, review_log
+from app.infrastructure.db.metadata import note_anchors, quiz_items, review_log
 from app.infrastructure.db.repositories import (
     SqlAlchemyCorpusRepository,
+    SqlAlchemyNoteRepository,
     SqlAlchemyQuizItemRepository,
     SqlAlchemyQuizJobRepository,
     SqlAlchemySourceRepository,
@@ -130,6 +136,7 @@ def _section_record(
     section_path: tuple[str, ...],
     anchor: str,
     chunk_texts: tuple[str, ...],
+    anchor_aliases: tuple[str, ...] = (),
 ) -> CorpusSectionRecord:
     chunks = tuple(
         SectionChunk(
@@ -149,6 +156,7 @@ def _section_record(
             section_path=section_path,
             anchor=anchor,
             blocks=(ParsedBlock(position=0, block_type="paragraph", html_fragment="<p/>"),),
+            anchor_aliases=anchor_aliases,
         ),
         markdown="".join(chunk_texts),
         chunks=chunks,
@@ -579,6 +587,101 @@ def test_sections_for_generation_empty_without_corpus(db_conn: Connection) -> No
     assert repo.sections_for_generation(source.id, min_chars=200) == []
 
 
+# --- section_for_anchor (quote-scoped generation, CAP-01) -----------------------
+
+
+def _anchor_corpus(db_conn: Connection, source_id: UUID) -> None:
+    """Seed a two-section corpus: a short parent leaf and an aliased child."""
+    SqlAlchemyCorpusRepository(db_conn).replace(
+        source_id,
+        title="Book",
+        authors=("Author",),
+        language="en",
+        schema_version=1,
+        sections=(
+            _section_record(
+                position=0,
+                title="Part One",
+                depth=0,
+                section_path=("Part One",),
+                anchor="part1.xhtml",
+                chunk_texts=("Short.",),
+            ),
+            _section_record(
+                position=1,
+                title="Chapter A",
+                depth=1,
+                section_path=("Part One", "Chapter A"),
+                anchor="chA.xhtml",
+                chunk_texts=("First chunk. ", "Second chunk."),
+                anchor_aliases=("chA.xhtml#old",),
+            ),
+        ),
+    )
+
+
+def test_section_for_anchor_returns_the_cited_section_with_its_chunks(
+    db_conn: Connection,
+) -> None:
+    source = _persisted_source(db_conn, "quiz-anchor-section@example.com")
+    _anchor_corpus(db_conn, source.id)
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+
+    section = repo.section_for_anchor(source.id, "chA.xhtml")
+
+    assert section is not None
+    assert section.title == "Chapter A"
+    assert section.section_path == ("Part One", "Chapter A")
+    # Chunks in reading order as (chunk_id, text) pairs, so a candidate's citation
+    # can be constrained to them.
+    assert [text for _, text in section.chunks] == ["First chunk. ", "Second chunk."]
+    assert all(isinstance(chunk_id, UUID) for chunk_id, _ in section.chunks)
+
+
+def test_section_for_anchor_resolves_a_merged_away_alias(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "quiz-anchor-alias@example.com")
+    _anchor_corpus(db_conn, source.id)
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+
+    section = repo.section_for_anchor(source.id, "chA.xhtml#old")
+
+    assert section is not None
+    # Resolves to the survivor under its canonical anchor (AD-085).
+    assert section.anchor == "chA.xhtml"
+
+
+def test_section_for_anchor_ignores_the_deck_eligibility_filters(
+    db_conn: Connection,
+) -> None:
+    # A passage the student highlighted is eligible even in a non-leaf section far
+    # below the deck path's ``min_chars`` floor.
+    source = _persisted_source(db_conn, "quiz-anchor-short@example.com")
+    _anchor_corpus(db_conn, source.id)
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+
+    assert repo.sections_for_generation(source.id, min_chars=200) == []
+    section = repo.section_for_anchor(source.id, "part1.xhtml")
+    assert section is not None
+    assert section.title == "Part One"
+
+
+def test_section_for_anchor_is_none_for_an_unknown_anchor(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "quiz-anchor-missing@example.com")
+    _anchor_corpus(db_conn, source.id)
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+
+    assert repo.section_for_anchor(source.id, "gone.xhtml") is None
+
+
+def test_section_for_anchor_is_scoped_to_its_own_source(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "quiz-anchor-scope-a@example.com")
+    other = _persisted_source(db_conn, "quiz-anchor-scope-b@example.com")
+    _anchor_corpus(db_conn, source.id)
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+
+    assert repo.section_for_anchor(other.id, "chA.xhtml") is None
+
+
 # --- deck generation jobs (QUIZ-04/09) ------------------------------------------
 
 
@@ -679,3 +782,413 @@ def test_job_update_persists_counts_and_error(db_conn: Connection) -> None:
     failed = jobs.get_by_id(job.id)
     assert failed.status == QuizJobStatus.FAILED
     assert failed.last_error == "boom"
+
+
+# --- origin-scoped identity: two modes in one table (CAP-13, CAP-14) ------------
+
+
+def _persisted_anchor(
+    db_conn: Connection, source: Source, *, title: str = "On attention", body: str = ""
+) -> NoteAnchor:
+    """Persist a note + one anchor on ``source``, owned by the source's owner."""
+    notes = SqlAlchemyNoteRepository(db_conn)
+    now = datetime.now(UTC)
+    note = notes.add(
+        Note(
+            id=uuid4(),
+            user_id=source.user_id,
+            title=title,
+            body_markdown=body,
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    return notes.add_anchor(
+        NoteAnchor(
+            id=uuid4(),
+            note_id=note.id,
+            source_id=source.id,
+            source_title="A Book",
+            anchor="ch01.xhtml",
+            section_path=("Chapter 1",),
+            block_hash="a" * 64,
+            block_ordinal=1,
+            start_offset=0,
+            end_offset=10,
+            quote_exact="the quoted sentence",
+            quote_prefix="",
+            quote_suffix="",
+            status=NoteAnchorStatus.ACTIVE,
+            created_at=now,
+            updated_at=now,
+        )
+    )
+
+
+def _owner_of(db_conn: Connection, source: Source) -> UUID:
+    return source.user_id
+
+
+def _note_id_of_anchor(db_conn: Connection, anchor_id: UUID) -> UUID:
+    return db_conn.execute(
+        select(note_anchors.c.note_id).where(note_anchors.c.id == anchor_id)
+    ).scalar_one()
+
+
+def _highlight_item(
+    source_id: UUID,
+    note_anchor_id: UUID | None,
+    *,
+    question: str = "What is the capital of France?",
+    answer: str = "Paris",
+) -> QuizItem:
+    return replace(
+        _item(source_id, question=question, answer=answer),
+        origin=QuizItemOrigin.HIGHLIGHT,
+        note_anchor_id=note_anchor_id,
+    )
+
+
+def test_upsert_persists_origin_and_provenance(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "quiz-origin-persist@example.com")
+    anchor = _persisted_anchor(db_conn, source)
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    item = _highlight_item(source.id, anchor.id)
+
+    assert repo.upsert(item, embedding=None) is True
+
+    stored = repo.get_by_id(item.id)
+    assert stored.origin == QuizItemOrigin.HIGHLIGHT
+    assert stored.note_anchor_id == anchor.id
+
+
+def test_deck_items_default_to_deck_origin_with_no_provenance(
+    db_conn: Connection,
+) -> None:
+    source = _persisted_source(db_conn, "quiz-origin-default@example.com")
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    item = _item(source.id)
+
+    repo.upsert(item, embedding=None)
+
+    stored = repo.get_by_id(item.id)
+    assert stored.origin == QuizItemOrigin.DECK
+    assert stored.note_anchor_id is None
+
+
+def test_two_deck_items_with_one_content_key_collapse_to_one_row(
+    db_conn: Connection,
+) -> None:
+    """The shipped deck upsert identity is unchanged by the origin split (CAP-13)."""
+    source = _persisted_source(db_conn, "quiz-deck-collapse@example.com")
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    first = _item(source.id)
+    second = _item(source.id, source_excerpt="Regenerated excerpt.")
+    assert first.content_key == second.content_key
+
+    assert repo.upsert(first, embedding=None) is True
+    assert repo.upsert(second, embedding=None) is False
+
+    stored = repo.list_for_source(source.id)
+    assert len(stored) == 1
+    assert stored[0].id == first.id  # the original row survived, keyed by content
+    assert stored[0].source_excerpt == "Regenerated excerpt."
+
+
+def test_two_highlight_items_share_a_content_key_across_different_anchors(
+    db_conn: Connection,
+) -> None:
+    """THE origin-split invariant: the same sentence highlighted in two places is two
+    cards. A global unique on (source_id, content_key) would collapse them (CAP-14)."""
+    source = _persisted_source(db_conn, "quiz-highlight-distinct@example.com")
+    first_anchor = _persisted_anchor(db_conn, source, title="First")
+    second_anchor = _persisted_anchor(db_conn, source, title="Second")
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    first = _highlight_item(source.id, first_anchor.id)
+    second = _highlight_item(source.id, second_anchor.id)
+    assert first.content_key == second.content_key
+
+    assert repo.upsert(first, embedding=None) is True
+    assert repo.upsert(second, embedding=None) is True
+
+    stored = {item.id for item in repo.list_for_source(source.id)}
+    assert stored == {first.id, second.id}
+
+
+def test_reaccepting_identical_text_from_one_anchor_is_idempotent(
+    db_conn: Connection,
+) -> None:
+    """Double-submit protection lives in the database, not a disabled button."""
+    source = _persisted_source(db_conn, "quiz-highlight-idempotent@example.com")
+    anchor = _persisted_anchor(db_conn, source)
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    first = _highlight_item(source.id, anchor.id)
+    duplicate = _highlight_item(source.id, anchor.id)
+    assert first.id != duplicate.id
+
+    assert repo.upsert(first, embedding=None) is True
+    assert repo.upsert(duplicate, embedding=None) is False
+
+    stored = repo.list_for_source(source.id)
+    assert len(stored) == 1
+    assert stored[0].id == first.id  # the id minted first is the stable identity
+
+
+def test_highlight_item_does_not_collide_with_a_deck_item_of_the_same_key(
+    db_conn: Connection,
+) -> None:
+    """Different origins never share an identity, even on one source (CAP-14)."""
+    source = _persisted_source(db_conn, "quiz-cross-origin@example.com")
+    anchor = _persisted_anchor(db_conn, source)
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    deck = _item(source.id)
+    highlight = _highlight_item(source.id, anchor.id)
+    assert deck.content_key == highlight.content_key
+
+    assert repo.upsert(deck, embedding=None) is True
+    assert repo.upsert(highlight, embedding=None) is True
+
+    stored = {item.id: item.origin for item in repo.list_for_source(source.id)}
+    assert stored == {deck.id: QuizItemOrigin.DECK, highlight.id: QuizItemOrigin.HIGHLIGHT}
+
+
+def test_get_by_anchor_and_key_returns_the_accepted_card(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "quiz-anchor-lookup@example.com")
+    anchor = _persisted_anchor(db_conn, source)
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    item = _highlight_item(source.id, anchor.id)
+    repo.upsert(item, embedding=None)
+
+    found = repo.get_by_anchor_and_key(anchor.id, item.content_key)
+
+    assert found is not None
+    assert found.id == item.id
+
+
+def test_get_by_anchor_and_key_is_none_for_an_unaccepted_key(
+    db_conn: Connection,
+) -> None:
+    source = _persisted_source(db_conn, "quiz-anchor-lookup-miss@example.com")
+    anchor = _persisted_anchor(db_conn, source)
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+
+    assert repo.get_by_anchor_and_key(anchor.id, "no-such-key") is None
+
+
+def test_get_by_anchor_and_key_ignores_deck_items(db_conn: Connection) -> None:
+    """A deck item that happens to share the key is not the accepted card."""
+    source = _persisted_source(db_conn, "quiz-anchor-lookup-deck@example.com")
+    anchor = _persisted_anchor(db_conn, source)
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    deck = _item(source.id)
+    repo.upsert(deck, embedding=None)
+
+    assert repo.get_by_anchor_and_key(anchor.id, deck.content_key) is None
+
+
+# --- update_text keeps identity, scheduling, and review log (CAP-12) ------------
+
+
+def test_update_text_rewrites_content_and_keeps_the_row_id(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "quiz-update-text@example.com")
+    anchor = _persisted_anchor(db_conn, source)
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    item = _highlight_item(source.id, anchor.id)
+    repo.upsert(item, embedding=None)
+
+    rewritten_key = content_key(item.item_type, "Reworded?", "Reworded answer")
+    repo.update_text(
+        item.id,
+        question="Reworded?",
+        answer="Reworded answer",
+        content_key=rewritten_key,
+    )
+
+    stored = repo.get_by_id(item.id)
+    assert stored.id == item.id  # identity is the minted id, not the content
+    assert stored.question == "Reworded?"
+    assert stored.answer == "Reworded answer"
+    assert stored.content_key == rewritten_key
+    # Provenance and origin are untouched by a text edit.
+    assert stored.origin == QuizItemOrigin.HIGHLIGHT
+    assert stored.note_anchor_id == anchor.id
+
+
+def test_update_text_leaves_scheduling_and_review_log_byte_identical(
+    db_conn: Connection,
+) -> None:
+    """Editing a card must cost none of its memory history (CAP-12) — asserted on the
+    stored values, not on the absence of an exception."""
+    source = _persisted_source(db_conn, "quiz-update-preserves@example.com")
+    anchor = _persisted_anchor(db_conn, source)
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    item = _highlight_item(source.id, anchor.id)
+    repo.upsert(item, embedding=None)
+
+    due = datetime(2026, 8, 1, 12, tzinfo=UTC)
+    reviewed = datetime(2026, 7, 19, 9, tzinfo=UTC)
+    repo.create_scheduling(
+        item.id,
+        _snapshot(due=due, state=2, step=1, stability=7.25, difficulty=4.5,
+                  last_review=reviewed),
+    )
+    repo.append_log(
+        item.id, ReviewLogEntry(rating=3, reviewed_at=reviewed, review_duration_ms=1200)
+    )
+    before = repo.get_scheduling(item.id)
+    log_before = db_conn.execute(
+        select(review_log.c.rating, review_log.c.reviewed_at, review_log.c.review_duration_ms)
+        .where(review_log.c.quiz_item_id == item.id)
+    ).all()
+
+    repo.update_text(
+        item.id,
+        question="Reworded?",
+        answer="Reworded answer",
+        content_key=content_key(item.item_type, "Reworded?", "Reworded answer"),
+    )
+
+    after = repo.get_scheduling(item.id)
+    assert after == before
+    assert after.due == due  # the value the student's memory schedule depends on
+    assert after.state == 2
+    assert after.stability == 7.25
+    assert after.difficulty == 4.5
+    assert after.last_review == reviewed
+    log_after = db_conn.execute(
+        select(review_log.c.rating, review_log.c.reviewed_at, review_log.c.review_duration_ms)
+        .where(review_log.c.quiz_item_id == item.id)
+    ).all()
+    assert log_after == log_before
+    assert len(log_after) == 1
+
+
+# --- read models carry the new fields (CAP-10) ---------------------------------
+
+
+def test_reconcile_and_list_reads_carry_origin_and_provenance(
+    db_conn: Connection,
+) -> None:
+    source = _persisted_source(db_conn, "quiz-reads-carry@example.com")
+    anchor = _persisted_anchor(db_conn, source)
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    deck = _item(source.id, question="Deck question?", answer="Deck answer")
+    highlight = _highlight_item(source.id, anchor.id)
+    repo.upsert(deck, embedding=None)
+    repo.upsert(highlight, embedding=None)
+
+    for read in (repo.list_for_source(source.id), repo.items_for_reconcile(source.id)):
+        by_id = {item.id: item for item in read}
+        assert by_id[deck.id].origin == QuizItemOrigin.DECK
+        assert by_id[deck.id].note_anchor_id is None
+        assert by_id[highlight.id].origin == QuizItemOrigin.HIGHLIGHT
+        assert by_id[highlight.id].note_anchor_id == anchor.id
+
+
+# --- due-queue provenance join is NULL-safe (CAP-15, CAP-16) --------------------
+
+
+def test_due_queue_carries_origin_note_provenance(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "quiz-due-provenance@example.com")
+    anchor = _persisted_anchor(db_conn, source, title="On attention")
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    item = _highlight_item(source.id, anchor.id)
+    repo.upsert(item, embedding=None)
+    now = datetime.now(UTC)
+    repo.create_scheduling(item.id, _snapshot(due=now - timedelta(minutes=1)))
+
+    total, due = repo.due_for_user(_owner_of(db_conn, source), now=now, limit=10)
+
+    assert total == 1
+    assert due[0].provenance is not None
+    assert due[0].provenance.note_title == "On attention"
+
+
+def test_due_queue_keeps_deck_cards_that_have_no_provenance(
+    db_conn: Connection,
+) -> None:
+    """THE join-safety check: the provenance hops are OUTER joins, so a deck card —
+    which has no anchor at all — must still appear in the due queue."""
+    source = _persisted_source(db_conn, "quiz-due-deck-kept@example.com")
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    item = _item(source.id)
+    repo.upsert(item, embedding=None)
+    now = datetime.now(UTC)
+    repo.create_scheduling(item.id, _snapshot(due=now - timedelta(minutes=1)))
+
+    total, due = repo.due_for_user(_owner_of(db_conn, source), now=now, limit=10)
+
+    assert total == 1
+    assert [row.item.id for row in due] == [item.id]
+    assert due[0].provenance is None
+
+
+def test_deleting_the_origin_note_keeps_the_card_due_with_null_provenance(
+    db_conn: Connection,
+) -> None:
+    """Deleting a note severs the link and nothing else: the card stays in the queue,
+    keeps its own excerpt, and simply reports no provenance (CAP-15)."""
+    source = _persisted_source(db_conn, "quiz-due-severed@example.com")
+    anchor = _persisted_anchor(db_conn, source, title="Doomed note")
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    item = _highlight_item(source.id, anchor.id)
+    repo.upsert(item, embedding=None)
+    now = datetime.now(UTC)
+    repo.create_scheduling(item.id, _snapshot(due=now - timedelta(minutes=1)))
+
+    SqlAlchemyNoteRepository(db_conn).delete(_note_id_of_anchor(db_conn, anchor.id))
+
+    total, due = repo.due_for_user(_owner_of(db_conn, source), now=now, limit=10)
+    assert total == 1
+    assert due[0].item.id == item.id
+    assert due[0].provenance is None
+    assert due[0].item.note_anchor_id is None
+    assert due[0].item.source_excerpt == item.source_excerpt
+
+
+def test_due_queue_mixes_deck_and_highlight_cards_without_dropping_either(
+    db_conn: Connection,
+) -> None:
+    """The outer joins must not drop rows or inflate the total count."""
+    source = _persisted_source(db_conn, "quiz-due-mixed@example.com")
+    anchor = _persisted_anchor(db_conn, source, title="Mixed")
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    deck = _item(source.id, question="Deck question?", answer="Deck answer")
+    highlight = _highlight_item(source.id, anchor.id)
+    repo.upsert(deck, embedding=None)
+    repo.upsert(highlight, embedding=None)
+    now = datetime.now(UTC)
+    repo.create_scheduling(deck.id, _snapshot(due=now - timedelta(minutes=2)))
+    repo.create_scheduling(highlight.id, _snapshot(due=now - timedelta(minutes=1)))
+
+    total, due = repo.due_for_user(_owner_of(db_conn, source), now=now, limit=10)
+
+    assert total == 2
+    assert {row.item.id for row in due} == {deck.id, highlight.id}
+    by_id = {row.item.id: row.provenance for row in due}
+    assert by_id[deck.id] is None
+    assert by_id[highlight.id].note_title == "Mixed"
+
+
+def test_two_highlight_items_with_no_anchor_both_persist(db_conn: Connection) -> None:
+    """A highlight row with a severed link matches neither partial index.
+
+    Both partial uniques require a non-null ``note_anchor_id``, so these rows take the
+    plain-insert branch with no conflict target. Two of them must coexist rather than
+    silently collapsing: after a note is deleted its cards keep their own identity, and
+    a conflict target that matched them would merge two students' distinct cards into
+    one row.
+    """
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    source = _persisted_source(db_conn, "quiz-null-anchor@example.com")
+
+    first = _highlight_item(source.id, None)
+    second = _highlight_item(source.id, None)
+    assert first.content_key == second.content_key
+    assert first.id != second.id
+
+    assert repo.upsert(first, embedding=None) is True
+    assert repo.upsert(second, embedding=None) is True
+
+    stored = {item.id for item in repo.list_for_source(source.id)}
+    assert stored == {first.id, second.id}

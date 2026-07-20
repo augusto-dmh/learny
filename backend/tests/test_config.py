@@ -74,6 +74,8 @@ def test_quiz_settings_defaults() -> None:
 
     assert settings.quiz_model == "claude-haiku-4-5"
     assert settings.quiz_max_items_per_section == 6
+    assert settings.quiz_max_suggestions == 3
+    assert settings.quiz_max_card_chars == 2000
     assert settings.quiz_min_section_chars == 200
     assert settings.quiz_dedup_threshold == 0.90
     assert settings.quiz_batch_timeout_s == 3600
@@ -84,6 +86,8 @@ def test_quiz_settings_env_override(monkeypatch) -> None:
     # LEARNY_-prefixed env vars override every quiz knob.
     monkeypatch.setenv("LEARNY_QUIZ_MODEL", "claude-opus-4-8")
     monkeypatch.setenv("LEARNY_QUIZ_MAX_ITEMS_PER_SECTION", "4")
+    monkeypatch.setenv("LEARNY_QUIZ_MAX_SUGGESTIONS", "5")
+    monkeypatch.setenv("LEARNY_QUIZ_MAX_CARD_CHARS", "500")
     monkeypatch.setenv("LEARNY_QUIZ_MIN_SECTION_CHARS", "500")
     monkeypatch.setenv("LEARNY_QUIZ_DEDUP_THRESHOLD", "0.85")
     monkeypatch.setenv("LEARNY_QUIZ_BATCH_TIMEOUT_S", "7200")
@@ -93,6 +97,8 @@ def test_quiz_settings_env_override(monkeypatch) -> None:
 
     assert settings.quiz_model == "claude-opus-4-8"
     assert settings.quiz_max_items_per_section == 4
+    assert settings.quiz_max_suggestions == 5
+    assert settings.quiz_max_card_chars == 500
     assert settings.quiz_min_section_chars == 500
     assert settings.quiz_dedup_threshold == 0.85
     assert settings.quiz_batch_timeout_s == 7200

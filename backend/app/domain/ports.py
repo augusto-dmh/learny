@@ -42,6 +42,7 @@ from app.domain.entities import (
     NoteSummary,
     ParsedBook,
     PasswordCredential,
+    QuizCandidate,
     QuizDeckHandle,
     QuizDeckResult,
     QuizGenerationJob,
@@ -708,6 +709,21 @@ class QuizGenerationPort(Protocol):
         """
         ...
 
+    def suggest_cards(
+        self, section: QuizSection, quote: str, limit: int
+    ) -> list[QuizCandidate]:
+        """Return at most ``limit`` candidates scoped to ``quote`` within ``section``.
+
+        The foreground counterpart of the batched deck path (AD-134): the student is
+        waiting on a popover, so this is synchronous — the local adapter derives its
+        candidates inline and the Anthropic adapter issues one Messages call with the
+        same structured-output schema, its ``source_chunk_id`` enum still constrained to
+        ``section``'s chunks. Candidates are ungrounded until the caller's QC pipeline
+        re-verifies them; a ``quote`` that appears in none of ``section``'s chunks yields
+        an empty list rather than an error.
+        """
+        ...
+
 
 @runtime_checkable
 class SchedulingPort(Protocol):
@@ -792,6 +808,18 @@ class QuizItemRepository(Protocol):
         """
         ...
 
+    def section_for_anchor(self, source_id: UUID, anchor: str) -> QuizSection | None:
+        """Return the single section ``anchor`` cites, or ``None`` if it resolves to none.
+
+        The quote-scoped counterpart of :meth:`sections_for_generation`: a highlight
+        names exactly one section, and neither the leaf test nor the ``min_chars`` floor
+        applies — those bound whole-deck density, whereas a passage the student chose is
+        eligible whatever section it sits in. Resolution is canonical-anchor-first then
+        by alias, matching the note-anchoring reads, and the section carries its
+        ``(chunk_id, text)`` chunks so a candidate's citation stays constrained to them.
+        """
+        ...
+
     def existing_embeddings(self, source_id: UUID) -> list[tuple[UUID, list[float]]]:
         """Return ``(item_id, embedding)`` for the source's already-embedded items.
 
@@ -801,11 +829,34 @@ class QuizItemRepository(Protocol):
         ...
 
     def upsert(self, item: QuizItem, *, embedding: Sequence[float] | None) -> bool:
-        """Upsert on ``(source_id, content_key)``; update content fields only on conflict.
+        """Upsert on the item's origin-scoped identity; update content fields only.
 
         Returns ``True`` when a new row was inserted (the caller creates its initial
         scheduling row) and ``False`` when an existing row's content was updated — in
         which case its scheduling and review-log rows are left untouched (QUIZ-02).
+
+        ``deck`` items collapse on ``(source_id, content_key)``; ``highlight`` items
+        collapse on ``(note_anchor_id, content_key)``, so re-accepting the same text
+        from one highlight is idempotent while two highlights may share a key.
+        """
+        ...
+
+    def get_by_anchor_and_key(
+        self, note_anchor_id: UUID, content_key: str
+    ) -> QuizItem | None:
+        """Return the ``highlight`` card already stored for this anchor + fingerprint.
+
+        ``None`` when the student has not accepted this text from this highlight yet.
+        """
+        ...
+
+    def update_text(
+        self, item_id: UUID, *, question: str, answer: str, content_key: str
+    ) -> None:
+        """Rewrite a card's text and fingerprint, keeping its identity (CAP-12).
+
+        Never touches the item's scheduling snapshot or its review log, so editing a
+        card costs none of its memory history.
         """
         ...
 
@@ -955,6 +1006,14 @@ class NoteRepository(Protocol):
 
     def add_anchor(self, anchor: NoteAnchor) -> NoteAnchor:
         """Insert a note anchor (NF-06)."""
+        ...
+
+    def get_anchor(self, anchor_id: UUID) -> NoteAnchor | None:
+        """Return the anchor with ``anchor_id``, or ``None`` if absent.
+
+        Owner-agnostic like the rest of this port: the caller authorizes through the
+        anchor's note (CAP-09 — a cross-owner anchor is a 404, never a 403).
+        """
         ...
 
     def anchors_for_source(self, source_id: UUID) -> list[NoteAnchor]:

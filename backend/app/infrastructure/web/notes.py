@@ -214,7 +214,10 @@ class SourceHighlightView(BaseModel):
     """One of the caller's highlights on a source, for inline reader painting (RD-28).
 
     The owning ``note_id`` plus the anchor's quote-with-context and ``status`` — the
-    reader paints ``active`` quotes and ignores stale/orphaned ones (RD-29).
+    reader paints ``active`` quotes and ignores stale/orphaned ones (RD-29). The
+    origin note's ``note_title`` and a ``has_body`` flag let the margin rail label each
+    entry and tell a bare highlight from an annotated one without a second request
+    (CAP-19); the painter ignores both.
     """
 
     note_id: UUID
@@ -223,6 +226,8 @@ class SourceHighlightView(BaseModel):
     quote_prefix: str
     quote_suffix: str
     status: str
+    note_title: str
+    has_body: bool
 
     @classmethod
     def from_highlight(cls, highlight: SourceHighlight) -> SourceHighlightView:
@@ -233,6 +238,8 @@ class SourceHighlightView(BaseModel):
             quote_prefix=highlight.quote_prefix,
             quote_suffix=highlight.quote_suffix,
             status=highlight.status,
+            note_title=highlight.note_title,
+            has_body=highlight.has_body,
         )
 
 

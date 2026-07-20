@@ -36,6 +36,12 @@ from app.domain.entities import (
 )
 from app.infrastructure.answering.anthropic import AnthropicAdapterBase
 
+# Wall-clock bound for the one foreground generation call (card suggestions). The deck
+# path is batched and asynchronous, so it is deliberately unaffected. Chosen well under
+# a reader's patience: past this the student has already given up, and holding the
+# threadpool slot only makes the next request worse.
+_SUGGEST_TIMEOUT_S = 30.0
+
 
 def _custom_id(index: int, anchor: str) -> str:
     """Return a batch-legal, section-unique custom id derived from the anchor.
@@ -99,6 +105,28 @@ def _section_prompt(section: QuizSection) -> str:
         "sentence copied verbatim from that chunk. Use item_type 'free_recall' for a "
         "question/answer pair, or 'cloze' for a fill-in-the-blank where the question is a "
         "sentence from the chunk with the key term replaced by ____ and answer is that term."
+    )
+
+
+def _quote_prompt(section: QuizSection, quote: str, limit: int) -> str:
+    """Render the section's text plus the instruction to write items for one quote."""
+    path = " > ".join(section.section_path)
+    chunks_text = "\n\n".join(
+        f"[chunk {chunk_id}]\n{text}" for chunk_id, text in section.chunks
+    )
+    return (
+        "You are writing active-recall study items for one passage a student "
+        "highlighted while reading.\n"
+        f"Section: {path}\n\n"
+        f"Section text (each chunk is labeled with its id):\n{chunks_text}\n\n"
+        f"Highlighted passage:\n{quote}\n\n"
+        f"Write at most {limit} items about the highlighted passage only, grounded "
+        "strictly in the section text above. Each item must set source_chunk_id to the "
+        "id of the chunk the highlighted passage appears in and anchor_quote to a "
+        "sentence copied verbatim from that chunk. Use item_type 'free_recall' for a "
+        "question/answer pair, or 'cloze' for a fill-in-the-blank where the question is "
+        "a sentence from the chunk with the key term replaced by ____ and answer is "
+        "that term."
     )
 
 
@@ -173,6 +201,42 @@ class AnthropicQuizAdapter(AnthropicAdapterBase):
             batch_id=batch.id,
             payload={"sections": section_meta},
         )
+
+    def suggest_cards(
+        self, section: QuizSection, quote: str, limit: int
+    ) -> list[QuizCandidate]:
+        """Issue one Messages call for ``quote`` and return at most ``limit`` candidates.
+
+        Synchronous by design (AD-134) — the student is waiting — but structurally the
+        same request as one batch entry: the same ``_items_schema`` with
+        ``source_chunk_id`` constrained to this section's chunk ids, so grounding stays
+        schema-enforced. Malformed structured output raises ``ValueError`` for the caller
+        to surface as a retryable failure; the QC pipeline still re-verifies whatever
+        parses.
+        """
+        if limit <= 0 or not section.chunks:
+            return []
+        chunk_ids = [str(chunk_id) for chunk_id, _ in section.chunks]
+        message = self._get_client().messages.create(
+            model=self._model,
+            max_tokens=self._max_tokens,
+            messages=[{"role": "user", "content": _quote_prompt(section, quote, limit)}],
+            output_config={
+                "format": {"type": "json_schema", "schema": _items_schema(chunk_ids)}
+            },
+            # Bounded per call rather than on the shared client, which the streaming
+            # answer path also uses and where a long read is legitimate. This one is a
+            # student waiting on a popover, and it occupies a threadpool slot while it
+            # waits: on the SDK default a hung connection would hold that slot for ten
+            # minutes. Rate limiting caps how often this is entered, not how long it
+            # stays, so the bound has to live here.
+            timeout=_SUGGEST_TIMEOUT_S,
+        )
+        try:
+            candidates = _parse_items(message)
+        except (KeyError, json.JSONDecodeError) as exc:
+            raise ValueError(f"suggestion response was not usable: {exc}") from exc
+        return candidates[:limit]
 
     def collect_deck(self, handle: QuizDeckHandle) -> QuizDeckResult | None:
         """Poll the batch; ``None`` while processing, else the mapped result (QUIZ-05)."""

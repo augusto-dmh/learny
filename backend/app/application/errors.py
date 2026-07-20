@@ -192,6 +192,39 @@ class QuizItemNotReviewable(Exception):
     """
 
 
+class InvalidCardText(Exception):
+    """A card was accepted or edited with unusable question/answer text (CAP-05/06).
+
+    Covers empty (or whitespace-only) text, text beyond
+    ``LEARNY_QUIZ_MAX_CARD_CHARS``, and an item type outside the ``free_recall`` /
+    ``cloze`` vocabulary. Validated by the card use cases before any write, so nothing
+    is persisted; the web layer maps it to 422.
+    """
+
+
+class CardNotEditable(Exception):
+    """A text edit was attempted on a card that does not own its identity (CAP-12).
+
+    Only ``highlight``-origin cards carry a creation-minted stable id whose text may be
+    rewritten freely. A ``deck`` card's identity *is* its content hash, so rewriting its
+    text would silently change which row a regeneration upserts into; the web layer maps
+    this to 409.
+    """
+
+
+class CardAlreadyExists(Exception):
+    """Another card already occupies this highlight's text identity (CAP-05/12).
+
+    Cards made at a highlight are unique per (highlight, text): re-accepting identical
+    text answers with the existing card, which is the ordinary idempotent path and not
+    this error. This is raised for the two cases that cannot be answered that way — a
+    concurrent accept whose winning row is not yet visible to this transaction, and an
+    edit that would reword one card into a sibling's exact text under the same
+    highlight. Both would otherwise reach the database as a unique violation and
+    surface as a 500; the web layer maps this to 409 instead.
+    """
+
+
 class NoteNotFound(Exception):
     """A note does not exist or is not the caller's (NF-05).
 

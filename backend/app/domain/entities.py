@@ -567,6 +567,19 @@ class QuizItemStatus:
     ORPHANED = "orphaned"
 
 
+class QuizItemOrigin:
+    """How a quiz card came to exist (ADR-0026 decision 5).
+
+    ``deck`` cards are minted by whole-source generation and keep the content-hash
+    upsert identity (QUIZ-02). ``highlight`` cards are accepted by the student at a
+    passage; their identity is the id minted at acceptance, so their text may be
+    reworded without disturbing scheduling or the review log.
+    """
+
+    DECK = "deck"
+    HIGHLIGHT = "highlight"
+
+
 class QuizJobStatus:
     """Deck-generation job status vocabulary (mirrors :class:`IngestionStatus`).
 
@@ -670,9 +683,15 @@ class QuizItem:
 
     Snapshots its citation (``section_path``, ``anchor``, ``source_excerpt``) and the
     ``chunk_hash`` of the chunk it was generated from, so it survives a corpus replace
-    with no FK to the corpus (AD-078). ``content_key`` is the ``(source_id, content_key)``
-    upsert identity (QUIZ-02). ``embedding`` is a persistence-only dedup detail and is
-    not carried on this entity.
+    with no FK to the corpus (AD-078). ``embedding`` is a persistence-only dedup detail
+    and is not carried on this entity.
+
+    ``origin`` selects the identity mode (:class:`QuizItemOrigin`). For ``deck`` items
+    ``content_key`` is the ``(source_id, content_key)`` upsert identity (QUIZ-02); for
+    ``highlight`` items the minted ``id`` is the identity and ``content_key`` is a
+    rewritable fingerprint. ``note_anchor_id`` is the typed provenance back to the
+    highlight a card was accepted from — ``None`` for deck items and for a card whose
+    origin note has since been deleted, which the stored snapshot survives.
     """
 
     id: UUID
@@ -689,6 +708,10 @@ class QuizItem:
     generation_meta: dict
     created_at: datetime
     updated_at: datetime
+    # Default to the deck identity mode: every construction site that predates card
+    # capture is whole-source generation, matching the column's server default.
+    origin: str = QuizItemOrigin.DECK
+    note_anchor_id: UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -724,16 +747,31 @@ class ReviewLogEntry:
 
 
 @dataclass(frozen=True)
+class CardProvenance:
+    """The origin note of a highlight-derived card, for display at review (CAP-16).
+
+    Read by join so a renamed note shows its current title. Absent (``None`` on the
+    review item) for deck-origin cards and for cards whose origin note was deleted.
+    """
+
+    note_id: UUID
+    note_title: str
+
+
+@dataclass(frozen=True)
 class DueReviewItem:
     """A due quiz card plus the join fields the review queue needs (QUIZ-13/15).
 
     Bundles the reviewable :class:`QuizItem` with its owning source's ``source_title``
-    (the queue spans all the caller's sources) and its scheduled ``due`` time.
+    (the queue spans all the caller's sources), its scheduled ``due`` time, and the
+    origin-note ``provenance`` when the card was accepted from a highlight and that
+    note still exists.
     """
 
     item: QuizItem
     source_title: str
     due: datetime
+    provenance: CardProvenance | None = None
 
 
 @dataclass(frozen=True)
@@ -949,7 +987,9 @@ class SourceHighlight:
     The read model behind ``GET /sources/{id}/highlights``: the owning ``note_id`` and
     the anchor's quote-with-context (``quote_exact`` + ``quote_prefix``/``quote_suffix``)
     plus its ``status`` so the reader paints ``active`` quotes and ignores stale/orphaned
-    ones (RD-29). Carries no note prose — only what the painter needs.
+    ones (RD-29). Carries no note prose — only what the painter needs, plus the origin
+    note's ``note_title`` and a ``has_body`` flag so the margin rail can label each entry
+    and tell a bare highlight from an annotated one without a second request.
     """
 
     note_id: UUID
@@ -958,6 +998,10 @@ class SourceHighlight:
     quote_prefix: str
     quote_suffix: str
     status: str
+    # Rail labelling. Defaulted so the painter's existing construction sites are
+    # unaffected; the owner-scoped query populates both from the joined note.
+    note_title: str = ""
+    has_body: bool = False
 
 
 @dataclass(frozen=True)

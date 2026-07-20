@@ -23,12 +23,16 @@ from app.application.quiz_qc import (
 )
 from app.domain.entities import (
     ACTIVE_QUIZ_JOB_STATUSES,
+    CardProvenance,
+    DueReviewItem,
     QuizDeckHandle,
     QuizGenerationJob,
     QuizItem,
+    QuizItemOrigin,
     QuizItemStatus,
     QuizItemType,
     QuizJobStatus,
+    SourceHighlight,
 )
 from app.domain.ports import (
     QuizDeckEnqueuer,
@@ -206,6 +210,129 @@ def test_quiz_item_is_frozen() -> None:
         item.status = QuizItemStatus.STALE  # type: ignore[misc]
 
 
+# --- Card origin and provenance (CAP-10, CAP-16, CAP-19) -------------------------
+
+
+def test_item_origins_are_exactly_deck_and_highlight() -> None:
+    """The vocabulary is closed: a third origin would need its own identity rule."""
+    origins = {
+        value
+        for key, value in vars(QuizItemOrigin).items()
+        if not key.startswith("_") and isinstance(value, str)
+    }
+    assert origins == {"deck", "highlight"}
+
+
+def test_item_origin_vocabulary() -> None:
+    assert QuizItemOrigin.DECK == "deck"
+    assert QuizItemOrigin.HIGHLIGHT == "highlight"
+
+
+def _item(**overrides) -> QuizItem:  # noqa: ANN003
+    now = datetime(2026, 7, 19, tzinfo=UTC)
+    fields = {
+        "id": uuid4(),
+        "source_id": uuid4(),
+        "item_type": QuizItemType.FREE_RECALL,
+        "question": "q",
+        "answer": "a",
+        "section_path": ("Chapter 1",),
+        "anchor": "ch1.xhtml",
+        "source_excerpt": "the cat sat",
+        "chunk_hash": "deadbeef",
+        "content_key": content_key(QuizItemType.FREE_RECALL, "q", "a"),
+        "status": QuizItemStatus.ACTIVE,
+        "generation_meta": {},
+        "created_at": now,
+        "updated_at": now,
+    }
+    return QuizItem(**{**fields, **overrides})
+
+
+def test_quiz_item_defaults_to_deck_origin_with_no_provenance() -> None:
+    """The pre-capture construction sites are all deck generation, so that is the
+    default — matching the column's server default and needing no backfill."""
+    item = _item()
+
+    assert item.origin == QuizItemOrigin.DECK
+    assert item.note_anchor_id is None
+
+
+def test_quiz_item_carries_highlight_origin_and_its_anchor_provenance() -> None:
+    anchor_id = uuid4()
+
+    item = _item(origin=QuizItemOrigin.HIGHLIGHT, note_anchor_id=anchor_id)
+
+    assert item.origin == QuizItemOrigin.HIGHLIGHT
+    assert item.note_anchor_id == anchor_id
+
+
+def test_highlight_item_keeps_its_excerpt_when_provenance_is_severed() -> None:
+    """Deleting the origin note clears the link, never the card: the excerpt is the
+    card's own snapshot, so it stays renderable (CAP-15)."""
+    item = _item(
+        origin=QuizItemOrigin.HIGHLIGHT,
+        note_anchor_id=None,
+        source_excerpt="the quoted sentence",
+    )
+
+    assert item.note_anchor_id is None
+    assert item.source_excerpt == "the quoted sentence"
+
+
+def test_due_review_item_has_no_provenance_by_default() -> None:
+    now = datetime(2026, 7, 19, tzinfo=UTC)
+
+    due = DueReviewItem(item=_item(), source_title="Book", due=now)
+
+    assert due.provenance is None
+
+
+def test_due_review_item_carries_origin_note_provenance() -> None:
+    now = datetime(2026, 7, 19, tzinfo=UTC)
+    note_id = uuid4()
+
+    due = DueReviewItem(
+        item=_item(origin=QuizItemOrigin.HIGHLIGHT, note_anchor_id=uuid4()),
+        source_title="Book",
+        due=now,
+        provenance=CardProvenance(note_id=note_id, note_title="On attention"),
+    )
+
+    assert due.provenance == CardProvenance(note_id=note_id, note_title="On attention")
+
+
+def test_source_highlight_carries_note_title_and_body_flag() -> None:
+    highlight = SourceHighlight(
+        note_id=uuid4(),
+        anchor="ch1.xhtml",
+        quote_exact="the cat sat",
+        quote_prefix="",
+        quote_suffix="",
+        status="active",
+        note_title="On attention",
+        has_body=True,
+    )
+
+    assert highlight.note_title == "On attention"
+    assert highlight.has_body is True
+
+
+def test_source_highlight_defaults_to_untitled_and_bodyless() -> None:
+    """The painter's construction sites predate the rail and supply neither field."""
+    highlight = SourceHighlight(
+        note_id=uuid4(),
+        anchor="ch1.xhtml",
+        quote_exact="the cat sat",
+        quote_prefix="",
+        quote_suffix="",
+        status="active",
+    )
+
+    assert highlight.note_title == ""
+    assert highlight.has_body is False
+
+
 # --- Port protocols are runtime-checkable ----------------------------------------
 
 
@@ -219,14 +346,31 @@ def test_quiz_generation_port_is_runtime_checkable_protocol() -> None:
         def collect_deck(self, handle):  # noqa: ANN001, ANN201
             return None
 
+        def suggest_cards(self, section, quote, limit):  # noqa: ANN001, ANN201
+            return []
+
     class MissingCollect:
         model = "x"
 
         def begin_deck(self, sections):  # noqa: ANN001, ANN201
             return None
 
+        def suggest_cards(self, section, quote, limit):  # noqa: ANN001, ANN201
+            return []
+
+    class MissingSuggest:
+        model = "x"
+
+        def begin_deck(self, sections):  # noqa: ANN001, ANN201
+            return None
+
+        def collect_deck(self, handle):  # noqa: ANN001, ANN201
+            return None
+
     assert isinstance(ConformingAdapter(), QuizGenerationPort)
     assert not isinstance(MissingCollect(), QuizGenerationPort)
+    # The quote-scoped suggestion method is part of the port contract (AD-134).
+    assert not isinstance(MissingSuggest(), QuizGenerationPort)
 
 
 def test_scheduling_port_is_runtime_checkable_protocol() -> None:

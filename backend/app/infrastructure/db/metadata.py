@@ -401,6 +401,19 @@ quiz_items = Table(
         nullable=False,
         index=True,
     ),
+    # deck (whole-source generation) | highlight (accepted at a passage). The two
+    # origins are two identity modes — see the partial uniques at the end of the table.
+    Column("origin", Text, nullable=False, server_default="deck"),
+    # Typed provenance back to the highlight this card was accepted from. SET NULL, so
+    # deleting the note severs the link without destroying the derived card; the card
+    # still renders from its own source_excerpt/anchor snapshot (ADR-0026).
+    Column(
+        "note_anchor_id",
+        UUID(as_uuid=True),
+        ForeignKey("note_anchors.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    ),
     Column("item_type", Text, nullable=False),  # free_recall | cloze
     Column("question", Text, nullable=False),
     Column("answer", Text, nullable=False),
@@ -419,8 +432,26 @@ quiz_items = Table(
     Column("generation_meta", JSONB, nullable=False, server_default="{}"),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
-    # Deck regeneration upserts on this identity without minting duplicates (QUIZ-02).
-    UniqueConstraint("source_id", "content_key"),
+    # Two identity modes, one table — both uniques are PARTIAL, scoped by ``origin``.
+    # Deck regeneration upserts on (source_id, content_key) without minting duplicates
+    # (QUIZ-02); the WHERE keeps that guarantee for deck rows only.
+    Index(
+        "uq_quiz_items_deck_content_key",
+        "source_id",
+        "content_key",
+        unique=True,
+        postgresql_where=text("origin = 'deck'"),
+    ),
+    # Highlight cards are identified by their minted ``id``, so ``content_key`` is only
+    # a rewritable fingerprint: two different highlights may yield the same key, while
+    # re-accepting identical text from the SAME anchor stays idempotent.
+    Index(
+        "uq_quiz_items_highlight_anchor_key",
+        "note_anchor_id",
+        "content_key",
+        unique=True,
+        postgresql_where=text("origin = 'highlight' AND note_anchor_id IS NOT NULL"),
+    ),
 )
 
 quiz_item_scheduling = Table(

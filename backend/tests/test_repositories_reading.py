@@ -99,13 +99,15 @@ def _replace(db_conn: Connection, source_id: UUID, records: list[CorpusSectionRe
     )
 
 
-def _note(db_conn: Connection, user_id: UUID, *, title: str = "Note") -> UUID:
+def _note(
+    db_conn: Connection, user_id: UUID, *, title: str = "Note", body: str = ""
+) -> UUID:
     now = datetime.now(UTC)
     note = Note(
         id=uuid4(),
         user_id=user_id,
         title=title,
-        body_markdown="",
+        body_markdown=body,
         created_at=now,
         updated_at=now,
     )
@@ -306,3 +308,49 @@ def test_highlights_for_source_returns_all_statuses(db_conn: Connection) -> None
         NoteAnchorStatus.ACTIVE,
         NoteAnchorStatus.STALE,
     }
+
+
+# --- rail labelling: note title + has-body (CAP-19) ----------------------------
+
+
+def test_highlights_carry_their_origin_note_title(db_conn: Connection) -> None:
+    """The rail labels each entry with the note it belongs to, from this one query."""
+    owner = _add_user(db_conn, "reader-hl-title@example.com")
+    source_id = _persist_source(db_conn, owner)
+    note_id = _note(db_conn, owner, title="On attention")
+    _anchor(db_conn, note_id, source_id, anchor="ch1", quote_exact="a quote")
+
+    highlights = SqlAlchemyNoteRepository(db_conn).highlights_for_source(owner, source_id)
+
+    assert len(highlights) == 1
+    assert highlights[0].note_title == "On attention"
+
+
+def test_highlights_report_whether_their_note_has_a_body(db_conn: Connection) -> None:
+    """A bare highlight and an annotated one are different rail entries, so the flag
+    distinguishes real prose from an empty body."""
+    owner = _add_user(db_conn, "reader-hl-body@example.com")
+    source_id = _persist_source(db_conn, owner)
+    annotated = _note(db_conn, owner, title="Annotated", body="Why this matters.")
+    bare = _note(db_conn, owner, title="Bare", body="")
+    _anchor(db_conn, annotated, source_id, anchor="ch1", quote_exact="annotated quote")
+    _anchor(db_conn, bare, source_id, anchor="ch2", quote_exact="bare quote")
+
+    highlights = SqlAlchemyNoteRepository(db_conn).highlights_for_source(owner, source_id)
+
+    by_title = {h.note_title: h.has_body for h in highlights}
+    assert by_title == {"Annotated": True, "Bare": False}
+
+
+def test_whitespace_only_note_body_does_not_count_as_a_body(
+    db_conn: Connection,
+) -> None:
+    """A body of blank lines is not an annotation — it would label an empty entry."""
+    owner = _add_user(db_conn, "reader-hl-blank@example.com")
+    source_id = _persist_source(db_conn, owner)
+    note_id = _note(db_conn, owner, title="Blank", body="   \n\t  ")
+    _anchor(db_conn, note_id, source_id, anchor="ch1", quote_exact="a quote")
+
+    highlights = SqlAlchemyNoteRepository(db_conn).highlights_for_source(owner, source_id)
+
+    assert highlights[0].has_body is False

@@ -766,9 +766,19 @@ def test_migration_0008_creates_quiz_tables(monkeypatch) -> None:
         assert "corpus_chunks" not in item_referred
         assert "corpus_sections" not in item_referred
 
-        # Upsert identity: unique (source_id, content_key) (QUIZ-02).
-        item_uniques = [uc["column_names"] for uc in inspector.get_unique_constraints("quiz_items")]
-        assert ["source_id", "content_key"] in item_uniques
+        # Upsert identity (QUIZ-02). 0008 created this as a plain UNIQUE (source_id,
+        # content_key); 0012 replaced it with an origin-scoped PARTIAL unique index of
+        # the same columns, so at head the guarantee lives in the index. 0012's own test
+        # owns both partial indexes and proves the downgrade restores 0008's constraint.
+        with engine.connect() as conn:
+            deck_unique_def = conn.execute(
+                text(
+                    "SELECT indexdef FROM pg_indexes "
+                    "WHERE indexname = 'uq_quiz_items_deck_content_key'"
+                )
+            ).scalar_one()
+        assert "UNIQUE" in deck_unique_def
+        assert "source_id" in deck_unique_def and "content_key" in deck_unique_def
 
         # Near-duplicate embedding column present and nullable (dedup identity, QUIZ-08).
         item_columns = {c["name"]: c for c in inspector.get_columns("quiz_items")}
@@ -1158,6 +1168,310 @@ def test_migration_0011_backfills_word_count_and_creates_reading_positions(
         engine.dispose()
 
     # Drop everything to clear the committed seed rows; the module fixture restores head.
+    command.downgrade(cfg, "base")
+
+
+@pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
+def test_migration_0012_adds_card_origin_and_note_provenance(monkeypatch) -> None:
+    """0012 up: ``quiz_items`` gains ``origin`` (NOT NULL DEFAULT 'deck') and a
+    ``note_anchor_id`` provenance FK (SET NULL, indexed), and the global
+    ``uq_quiz_items_source_id`` unique is replaced by two origin-scoped PARTIAL unique
+    indexes. A row seeded before the upgrade reads back as ``origin='deck'`` — the
+    existing corpus is deck-origin by construction, so no backfill is needed. The FK's
+    SET NULL is exercised for real: deleting the origin note severs the link and leaves
+    the card and its excerpt intact. Down one step to 0011 restores 0008's original
+    named constraint and drops both columns; a re-up round-trips.
+    """
+    monkeypatch.setenv("LEARNY_DATABASE_URL", TEST_DB_URL)
+    cfg = _alembic_config(TEST_DB_URL)
+
+    # Land on 0011 (pre-origin) so the row seeded below is a genuine pre-existing row.
+    command.upgrade(cfg, "head")
+    command.downgrade(cfg, "0011_reader_progress")
+
+    user_id = uuid.uuid4()
+    source_id = uuid.uuid4()
+    item_id = uuid.uuid4()
+    engine = create_engine(TEST_DB_URL)
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("INSERT INTO users (id, email) VALUES (:id, :email)"),
+                {"id": user_id, "email": f"{user_id}@example.test"},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO sources "
+                    "(id, user_id, title, filename, content_type, byte_size, checksum, object_key) "
+                    "VALUES (:id, :uid, 't', 'f.epub', 'application/epub+zip', 1, 'c', :key)"
+                ),
+                {"id": source_id, "uid": user_id, "key": f"sources/{source_id}.epub"},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO quiz_items "
+                    "(id, source_id, item_type, question, answer, section_path, anchor, "
+                    " source_excerpt, chunk_hash, content_key) "
+                    "VALUES (:id, :sid, 'free_recall', 'q', 'a', '[]', 'a.xhtml', "
+                    " 'excerpt', 'ch', 'ck')"
+                ),
+                {"id": item_id, "sid": source_id},
+            )
+    finally:
+        engine.dispose()
+
+    command.upgrade(cfg, "head")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        inspector = inspect(engine)
+        columns = {c["name"]: c for c in inspector.get_columns("quiz_items")}
+        assert columns["origin"]["nullable"] is False
+        assert columns["note_anchor_id"]["nullable"] is True
+
+        # The pre-existing row is classified as deck-origin by the server default.
+        with engine.connect() as conn:
+            origin = conn.execute(
+                text("SELECT origin FROM quiz_items WHERE id = :id"), {"id": item_id}
+            ).scalar_one()
+        assert origin == "deck"
+
+        # Provenance FK: quiz -> note_anchors, SET NULL (never CASCADE), and indexed.
+        anchor_fk = next(
+            fk
+            for fk in inspector.get_foreign_keys("quiz_items")
+            if fk["constrained_columns"] == ["note_anchor_id"]
+        )
+        assert anchor_fk["referred_table"] == "note_anchors"
+        assert anchor_fk["options"].get("ondelete") == "SET NULL"
+        item_indexes = [ix["column_names"] for ix in inspector.get_indexes("quiz_items")]
+        assert ["note_anchor_id"] in item_indexes
+
+        # The global unique is gone; both replacements are UNIQUE and PARTIAL.
+        item_uniques = [uc["column_names"] for uc in inspector.get_unique_constraints("quiz_items")]
+        assert ["source_id", "content_key"] not in item_uniques
+        with engine.connect() as conn:
+            deck_def = conn.execute(
+                text(
+                    "SELECT indexdef FROM pg_indexes "
+                    "WHERE indexname = 'uq_quiz_items_deck_content_key'"
+                )
+            ).scalar_one()
+            highlight_def = conn.execute(
+                text(
+                    "SELECT indexdef FROM pg_indexes "
+                    "WHERE indexname = 'uq_quiz_items_highlight_anchor_key'"
+                )
+            ).scalar_one()
+        assert "UNIQUE" in deck_def
+        assert "source_id" in deck_def and "content_key" in deck_def
+        assert "origin = 'deck'" in deck_def  # partial — deck rows only
+        assert "UNIQUE" in highlight_def
+        assert "note_anchor_id" in highlight_def and "content_key" in highlight_def
+        assert "origin = 'highlight'" in highlight_def
+        assert "note_anchor_id IS NOT NULL" in highlight_def
+
+        # SET NULL for real: a card made from a highlight survives its note's deletion
+        # with the link cleared and its own excerpt intact (ADR-0026 cascade direction).
+        note_id = uuid.uuid4()
+        anchor_id = uuid.uuid4()
+        card_id = uuid.uuid4()
+        with engine.begin() as conn:
+            conn.execute(
+                text("INSERT INTO notes (id, user_id, title) VALUES (:id, :uid, 'Origin')"),
+                {"id": note_id, "uid": user_id},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO note_anchors "
+                    "(id, note_id, source_id, source_title, anchor, section_path, quote_exact) "
+                    "VALUES (:id, :nid, :sid, 'Book', 'a.xhtml', '[]', 'the quoted sentence')"
+                ),
+                {"id": anchor_id, "nid": note_id, "sid": source_id},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO quiz_items "
+                    "(id, source_id, origin, note_anchor_id, item_type, question, answer, "
+                    " section_path, anchor, source_excerpt, chunk_hash, content_key) "
+                    "VALUES (:id, :sid, 'highlight', :aid, 'free_recall', 'q2', 'a2', "
+                    " '[]', 'a.xhtml', 'the quoted sentence', 'ch2', 'ck2')"
+                ),
+                {"id": card_id, "sid": source_id, "aid": anchor_id},
+            )
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM notes WHERE id = :id"), {"id": note_id})
+        with engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT note_anchor_id, source_excerpt FROM quiz_items WHERE id = :id"
+                ),
+                {"id": card_id},
+            ).one()
+        assert row.note_anchor_id is None  # link severed, not the row
+        assert row.source_excerpt == "the quoted sentence"
+    finally:
+        engine.dispose()
+
+    # Down one step to 0011: both columns drop and 0008's named constraint returns.
+    command.downgrade(cfg, "0011_reader_progress")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        columns = {c["name"] for c in inspect(engine).get_columns("quiz_items")}
+        assert "origin" not in columns
+        assert "note_anchor_id" not in columns
+        restored = {
+            uc["name"]: uc["column_names"]
+            for uc in inspect(engine).get_unique_constraints("quiz_items")
+        }
+        assert restored.get("uq_quiz_items_source_id") == ["source_id", "content_key"]
+        with engine.connect() as conn:
+            leftover = conn.execute(
+                text(
+                    "SELECT indexname FROM pg_indexes WHERE indexname IN "
+                    "('uq_quiz_items_deck_content_key', 'uq_quiz_items_highlight_anchor_key')"
+                )
+            ).fetchall()
+        assert leftover == []
+    finally:
+        engine.dispose()
+
+    # Re-upgrade restores the columns — the schema round-trips.
+    command.upgrade(cfg, "head")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        columns = {c["name"] for c in inspect(engine).get_columns("quiz_items")}
+        assert {"origin", "note_anchor_id"} <= columns
+    finally:
+        engine.dispose()
+
+    # Drop everything to clear the committed seed rows; the module fixture restores head.
+    command.downgrade(cfg, "base")
+
+
+@pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
+def test_migration_0012_downgrade_refuses_to_destroy_duplicate_cards(monkeypatch) -> None:
+    """Downgrading 0012 restores a GLOBAL unique on (source_id, content_key) — which the
+    upgraded schema deliberately allows to be violated: two highlights of the same
+    sentence legitimately yield two cards sharing a fingerprint.
+
+    The downgrade must refuse with an actionable message naming the affected source,
+    rather than letting Postgres raise a bare duplicate-key error partway through or
+    silently deleting user-authored cards to make the rollback succeed. Removing the
+    guard surfaces an IntegrityError instead, failing this test.
+    """
+    monkeypatch.setenv("LEARNY_DATABASE_URL", TEST_DB_URL)
+    cfg = _alembic_config(TEST_DB_URL)
+    command.upgrade(cfg, "head")
+
+    user_id = uuid.uuid4()
+    source_id = uuid.uuid4()
+    note_id = uuid.uuid4()
+    engine = create_engine(TEST_DB_URL)
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("INSERT INTO users (id, email) VALUES (:id, :email)"),
+                {"id": user_id, "email": f"{user_id}@example.test"},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO sources "
+                    "(id, user_id, title, filename, content_type, byte_size, checksum, object_key) "
+                    "VALUES (:id, :uid, 't', 'f.epub', 'application/epub+zip', 1, 'c', :key)"
+                ),
+                {"id": source_id, "uid": user_id, "key": f"sources/{source_id}.epub"},
+            )
+            conn.execute(
+                text("INSERT INTO notes (id, user_id, title) VALUES (:id, :uid, 'Origin')"),
+                {"id": note_id, "uid": user_id},
+            )
+            # Two DISTINCT anchors — two separate highlights of the same sentence.
+            for anchor_id in (uuid.uuid4(), uuid.uuid4()):
+                conn.execute(
+                    text(
+                        "INSERT INTO note_anchors "
+                        "(id, note_id, source_id, source_title, anchor, section_path, quote_exact) "
+                        "VALUES (:id, :nid, :sid, 'Book', 'a.xhtml', '[]', 'the same sentence')"
+                    ),
+                    {"id": anchor_id, "nid": note_id, "sid": source_id},
+                )
+                # Same content_key under different anchors: legal after 0012, and exactly
+                # what the restored global unique would forbid.
+                conn.execute(
+                    text(
+                        "INSERT INTO quiz_items "
+                        "(id, source_id, origin, note_anchor_id, item_type, question, answer, "
+                        " section_path, anchor, source_excerpt, chunk_hash, content_key) "
+                        "VALUES (:id, :sid, 'highlight', :aid, 'free_recall', 'q', 'a', "
+                        " '[]', 'a.xhtml', 'excerpt', 'ch', 'shared-fingerprint')"
+                    ),
+                    {"id": uuid.uuid4(), "sid": source_id, "aid": anchor_id},
+                )
+    finally:
+        engine.dispose()
+
+    with pytest.raises(RuntimeError) as excinfo:
+        command.downgrade(cfg, "0011_reader_progress")
+    message = str(excinfo.value)
+    assert "Cannot downgrade 0012_card_provenance" in message
+    assert str(source_id) in message  # names the affected source, so it is actionable
+
+    # The refusal is non-destructive: both cards survive and the schema is untouched.
+    engine = create_engine(TEST_DB_URL)
+    try:
+        with engine.connect() as conn:
+            surviving = conn.execute(
+                text("SELECT count(*) FROM quiz_items WHERE source_id = :sid"),
+                {"sid": source_id},
+            ).scalar_one()
+        assert surviving == 2
+        assert {"origin", "note_anchor_id"} <= {
+            c["name"] for c in inspect(engine).get_columns("quiz_items")
+        }
+    finally:
+        engine.dispose()
+
+    # Resolving the collision is exactly what the message asks an operator to do — and
+    # once done, the downgrade proceeds. That both proves the guard is not a dead end and
+    # clears the committed seed rows for the module fixture.
+    engine = create_engine(TEST_DB_URL)
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "DELETE FROM quiz_items WHERE id IN ("
+                    " SELECT id FROM quiz_items WHERE source_id = :sid "
+                    " ORDER BY id OFFSET 1)"
+                ),
+                {"sid": source_id},
+            )
+    finally:
+        engine.dispose()
+    command.downgrade(cfg, "0011_reader_progress")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        # The remedy actually completes: the columns are gone and 0008's global
+        # constraint is back. Asserting this is what makes the guard a gate rather
+        # than a wall — without it, "not a dead end" rests on nothing raising.
+        columns = {c["name"] for c in inspect(engine).get_columns("quiz_items")}
+        assert "origin" not in columns
+        assert "note_anchor_id" not in columns
+        restored = {
+            uc["name"]: uc["column_names"]
+            for uc in inspect(engine).get_unique_constraints("quiz_items")
+        }
+        assert restored.get("uq_quiz_items_source_id") == ["source_id", "content_key"]
+        surviving = None
+        with engine.connect() as conn:
+            surviving = conn.execute(
+                text("SELECT count(*) FROM quiz_items WHERE source_id = :sid"),
+                {"sid": source_id},
+            ).scalar_one()
+        # Only the operator's own deletion removed a card — the downgrade took none.
+        assert surviving == 1
+    finally:
+        engine.dispose()
+
     command.downgrade(cfg, "base")
 
 
