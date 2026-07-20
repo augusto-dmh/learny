@@ -1168,3 +1168,27 @@ def test_due_queue_mixes_deck_and_highlight_cards_without_dropping_either(
     by_id = {row.item.id: row.provenance for row in due}
     assert by_id[deck.id] is None
     assert by_id[highlight.id].note_title == "Mixed"
+
+
+def test_two_highlight_items_with_no_anchor_both_persist(db_conn: Connection) -> None:
+    """A highlight row with a severed link matches neither partial index.
+
+    Both partial uniques require a non-null ``note_anchor_id``, so these rows take the
+    plain-insert branch with no conflict target. Two of them must coexist rather than
+    silently collapsing: after a note is deleted its cards keep their own identity, and
+    a conflict target that matched them would merge two students' distinct cards into
+    one row.
+    """
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    source = _persisted_source(db_conn, "quiz-null-anchor@example.com")
+
+    first = _highlight_item(source.id, None)
+    second = _highlight_item(source.id, None)
+    assert first.content_key == second.content_key
+    assert first.id != second.id
+
+    assert repo.upsert(first, embedding=None) is True
+    assert repo.upsert(second, embedding=None) is True
+
+    stored = {item.id for item in repo.list_for_source(source.id)}
+    assert stored == {first.id, second.id}
