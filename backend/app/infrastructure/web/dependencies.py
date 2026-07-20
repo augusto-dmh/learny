@@ -69,8 +69,10 @@ from app.core.tracing import bind_trace
 from app.domain.entities import Session, User
 from app.domain.ports import (
     AnswerGenerationPort,
+    EmbeddingPort,
     IngestionEnqueuer,
     QuizDeckEnqueuer,
+    QuizGenerationPort,
     StoragePort,
     TeachingGenerationPort,
 )
@@ -691,6 +693,23 @@ def get_capture_highlight(conn: DbConnection) -> CaptureHighlight:
 # because the student is waiting on the popover (AD-134).
 
 
+# Process-wide quiz generator and embedder, resolved once at first use like
+# ``get_answer_generation``. Building these per request would mint a provider SDK
+# client — and its own HTTPS connection pool — on every card call, paying a fresh TLS
+# handshake on the path where the student is watching a popover, and leaking the pool
+# afterwards. Overridable in tests via ``dependency_overrides`` exactly as before.
+@lru_cache
+def get_card_generation() -> QuizGenerationPort:
+    """FastAPI dependency: the settings-selected quiz generator, built once."""
+    return build_quiz_adapter(get_settings())
+
+
+@lru_cache
+def get_card_embeddings() -> EmbeddingPort:
+    """FastAPI dependency: the settings-selected embedder for accepted cards, built once."""
+    return build_embedding_adapter(get_settings())
+
+
 def get_suggest_cards(conn: DbConnection) -> SuggestCards:
     """Wire ``SuggestCards`` on the request-scoped connection (CAP-01..04)."""
     settings = get_settings()
@@ -698,7 +717,7 @@ def get_suggest_cards(conn: DbConnection) -> SuggestCards:
         sources=SqlAlchemySourceRepository(conn),
         notes=SqlAlchemyNoteRepository(conn),
         items=SqlAlchemyQuizItemRepository(conn),
-        generation=build_quiz_adapter(settings),
+        generation=get_card_generation(),
         authorize=AuthorizeOwnership(),
         max_suggestions=settings.quiz_max_suggestions,
     )
@@ -716,8 +735,8 @@ def get_accept_card(conn: DbConnection) -> AcceptCard:
         sources=SqlAlchemySourceRepository(conn),
         notes=SqlAlchemyNoteRepository(conn),
         items=SqlAlchemyQuizItemRepository(conn),
-        generation=build_quiz_adapter(settings),
-        embeddings=build_embedding_adapter(settings),
+        generation=get_card_generation(),
+        embeddings=get_card_embeddings(),
         scheduling=build_scheduling_adapter(settings),
         authorize=AuthorizeOwnership(),
         clock=_clock,
