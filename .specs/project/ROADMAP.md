@@ -75,6 +75,6 @@ Cycle F interleaves after RFC-004 Cycle C.
 | `v4-identity-foundation` | A | Iron Gall tokens + fonts + reading typography + Paper scaffolding | Done (PR #36) |
 | `v4-reader-core` | B | Chapter flow, position, progress, Aa popover, ink-line signature | Done (PR #37) |
 | `v4-reader-apparatus` | C | Ask/Teach as panel modes, citations-as-passages — unblocks RFC-003 F | Done (PR #38) |
-| `v4-capture-pipeline` | D | Cards at the highlight, margin rail, review pins | Not started |
+| `v4-capture-pipeline` | D | Cards at the highlight, margin rail, review pins | Done (PR #39) |
 | `v4-home-ia` | E | Two-card Home, streak/heatmap, nav collapse | Not started |
 | `v4-polish-gate` | F | Restyle completion + 14-day dogfood gate | Not started |
