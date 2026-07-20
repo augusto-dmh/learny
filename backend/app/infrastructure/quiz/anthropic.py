@@ -153,6 +153,64 @@ def _parse_items(message: Any) -> list[QuizCandidate]:
     ]
 
 
+def _note_items_schema() -> dict[str, Any]:
+    """json_schema for note candidates: no ``source_chunk_id`` (a note is not chunked)."""
+    return {
+        "type": "object",
+        "properties": {
+            "items": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "item_type": {
+                            "type": "string",
+                            "enum": [QuizItemType.FREE_RECALL, QuizItemType.CLOZE],
+                        },
+                        "question": {"type": "string"},
+                        "answer": {"type": "string"},
+                        "anchor_quote": {"type": "string"},
+                    },
+                    "required": ["item_type", "question", "answer", "anchor_quote"],
+                    "additionalProperties": False,
+                },
+            }
+        },
+        "required": ["items"],
+        "additionalProperties": False,
+    }
+
+
+def _note_prompt(note_body: str, context: str, limit: int) -> str:
+    """Render the note body (+ book context when anchored) plus the item-writing task."""
+    context_block = (
+        f"\n\nBook context this note refers to:\n{context}" if context.strip() else ""
+    )
+    return (
+        "You are writing active-recall study items from a reader's own note.\n"
+        f"Note:\n{note_body}{context_block}\n\n"
+        f"Write at most {limit} items grounded strictly in the note text above. Set "
+        "anchor_quote to a sentence copied verbatim from the note. Use item_type "
+        "'free_recall' for a question/answer pair, or 'cloze' for a fill-in-the-blank "
+        "where the question is a sentence from the note with the key term replaced by "
+        "____ and answer is that term."
+    )
+
+
+def _parse_note_items(message: Any) -> list[QuizCandidate]:
+    """Parse a note's structured-output message into candidates (QC re-verifies)."""
+    data = json.loads(_first_text(message))
+    return [
+        QuizCandidate(
+            item_type=item["item_type"],
+            question=item["question"],
+            answer=item["answer"],
+            anchor_quote=item["anchor_quote"],
+        )
+        for item in data["items"]
+    ]
+
+
 class AnthropicQuizAdapter(AnthropicAdapterBase):
     """``QuizGenerationPort`` over Claude's Message Batches + structured outputs.
 
@@ -236,6 +294,35 @@ class AnthropicQuizAdapter(AnthropicAdapterBase):
             candidates = _parse_items(message)
         except (KeyError, json.JSONDecodeError) as exc:
             raise ValueError(f"suggestion response was not usable: {exc}") from exc
+        return candidates[:limit]
+
+    def suggest_note_cards(
+        self, note_body: str, context: str, limit: int
+    ) -> list[QuizCandidate]:
+        """Issue one Messages call for a note and return at most ``limit`` candidates.
+
+        Synchronous by design (AD-134) — the reader is waiting — and structurally the
+        note→quiz mirror of :meth:`suggest_cards`: the same ``timeout`` bound, but the
+        ``_note_items_schema`` drops ``source_chunk_id`` (a note is not chunked) and the
+        prompt carries the note's book context only when present. Malformed structured
+        output raises ``ValueError`` for the caller to surface as a retryable failure; the
+        QC pipeline still re-verifies whatever parses against the note body.
+        """
+        if limit <= 0 or not note_body.strip():
+            return []
+        message = self._get_client().messages.create(
+            model=self._model,
+            max_tokens=self._max_tokens,
+            messages=[{"role": "user", "content": _note_prompt(note_body, context, limit)}],
+            output_config={
+                "format": {"type": "json_schema", "schema": _note_items_schema()}
+            },
+            timeout=_SUGGEST_TIMEOUT_S,
+        )
+        try:
+            candidates = _parse_note_items(message)
+        except (KeyError, json.JSONDecodeError) as exc:
+            raise ValueError(f"note suggestion response was not usable: {exc}") from exc
         return candidates[:limit]
 
     def collect_deck(self, handle: QuizDeckHandle) -> QuizDeckResult | None:

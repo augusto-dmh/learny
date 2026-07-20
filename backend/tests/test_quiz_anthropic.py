@@ -321,6 +321,119 @@ def test_suggest_cards_with_a_non_positive_limit_calls_no_provider() -> None:
     assert adapter._get_client().messages.create_calls == 0
 
 
+# --- suggest_note_cards (note→quiz, single synchronous call — NL-08) -------------
+
+
+def _note_items_json() -> str:
+    # Note candidates carry no source_chunk_id: a note is not chunked (NL-08).
+    return json.dumps(
+        {
+            "items": [
+                {
+                    "item_type": "free_recall",
+                    "question": "Q1?",
+                    "answer": "A1",
+                    "anchor_quote": "A verbatim sentence.",
+                },
+                {
+                    "item_type": "cloze",
+                    "question": "The ____ term.",
+                    "answer": "key",
+                    "anchor_quote": "The key term.",
+                },
+            ]
+        }
+    )
+
+
+def test_suggest_note_cards_schema_omits_source_chunk_id() -> None:
+    adapter = _adapter(_FakeBatches(), reply=_note_items_json())
+
+    adapter.suggest_note_cards("A note body.", "", 3)
+
+    kwargs = adapter._get_client().messages.create_kwargs
+    schema = kwargs["output_config"]["format"]["schema"]
+    props = schema["properties"]["items"]["items"]["properties"]
+    assert "source_chunk_id" not in props
+    assert set(props) == {"item_type", "question", "answer", "anchor_quote"}
+    assert kwargs["model"] == "claude-haiku-4-5"
+
+
+def test_suggest_note_cards_issues_exactly_one_message_and_no_batch() -> None:
+    batches = _FakeBatches()
+    adapter = _adapter(batches, reply=_note_items_json())
+
+    adapter.suggest_note_cards("A note body.", "", 3)
+
+    assert adapter._get_client().messages.create_calls == 1
+    assert batches.create_calls == 0
+
+
+def test_suggest_note_cards_parses_candidates_without_a_chunk_id() -> None:
+    adapter = _adapter(_FakeBatches(), reply=_note_items_json())
+
+    candidates = adapter.suggest_note_cards("A note body.", "", 3)
+
+    assert {c.item_type for c in candidates} == {
+        QuizItemType.FREE_RECALL,
+        QuizItemType.CLOZE,
+    }
+    assert all(c.source_chunk_id is None for c in candidates)
+
+
+def test_suggest_note_cards_never_exceeds_the_limit() -> None:
+    adapter = _adapter(_FakeBatches(), reply=_note_items_json())
+
+    candidates = adapter.suggest_note_cards("A note body.", "", 1)
+
+    assert len(candidates) == 1
+
+
+def test_suggest_note_cards_carries_book_context_only_when_anchored() -> None:
+    adapter = _adapter(_FakeBatches(), reply=_note_items_json())
+
+    adapter.suggest_note_cards("A note body.", "Chapter on memory.", 3)
+    with_context = adapter._get_client().messages.create_kwargs["messages"][0]["content"]
+    assert "Chapter on memory." in with_context
+
+    adapter.suggest_note_cards("A note body.", "", 3)
+    without = adapter._get_client().messages.create_kwargs["messages"][0]["content"]
+    assert "Book context" not in without
+
+
+def test_suggest_note_cards_malformed_reply_raises_for_a_retryable_failure() -> None:
+    adapter = _adapter(_FakeBatches(), reply="not json at all")
+
+    with pytest.raises(ValueError):
+        adapter.suggest_note_cards("A note body.", "", 3)
+
+
+def test_suggest_note_cards_with_a_non_positive_limit_calls_no_provider() -> None:
+    adapter = _adapter(_FakeBatches(), reply=_note_items_json())
+
+    assert adapter.suggest_note_cards("A note body.", "", 0) == []
+    assert adapter._get_client().messages.create_calls == 0
+
+
+def test_suggest_note_cards_with_an_empty_body_calls_no_provider() -> None:
+    adapter = _adapter(_FakeBatches(), reply=_note_items_json())
+
+    assert adapter.suggest_note_cards("   ", "", 3) == []
+    assert adapter._get_client().messages.create_calls == 0
+
+
+def test_suggest_note_cards_bounds_the_foreground_call_with_a_timeout() -> None:
+    # The reader waits on a popover; the one synchronous call must not inherit the SDK's
+    # 600s default (mirrors suggest_cards — AD-134).
+    adapter = _adapter(_FakeBatches(), reply=_note_items_json())
+
+    adapter.suggest_note_cards("A note body.", "", 3)
+
+    timeout = adapter._get_client().messages.create_kwargs["timeout"]
+    assert timeout is not None
+    assert 0 < timeout <= 60
+
+
 def test_model_identity_is_the_configured_quiz_model() -> None:
     assert _adapter(_FakeBatches()).model == "claude-haiku-4-5"
 

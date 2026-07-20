@@ -634,14 +634,16 @@ class QuizCandidate:
     Produced by a :class:`~app.domain.ports.QuizGenerationPort`; not yet grounded.
     ``anchor_quote`` is the verbatim passage the item claims to come from and
     ``source_chunk_id`` the chunk it cites — both re-verified by the QC pipeline
-    (QUIZ-06/07) before an item is persisted.
+    (QUIZ-06/07) before an item is persisted. ``source_chunk_id`` is ``None`` for a
+    note candidate: a note is not chunked, so its ``anchor_quote`` is verified against
+    the whole note body instead of a chunk (NL-08).
     """
 
     item_type: str
     question: str
     answer: str
-    source_chunk_id: UUID
     anchor_quote: str
+    source_chunk_id: UUID | None = None
 
 
 @dataclass(frozen=True)

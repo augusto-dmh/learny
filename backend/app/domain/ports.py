@@ -753,6 +753,21 @@ class QuizGenerationPort(Protocol):
         """
         ...
 
+    def suggest_note_cards(
+        self, note_body: str, context: str, limit: int
+    ) -> list[QuizCandidate]:
+        """Return at most ``limit`` candidates grounded in ``note_body`` (NL-08).
+
+        The note→quiz counterpart of :meth:`suggest_cards`: the note *is* the source, so
+        there is no chunk and the returned candidates carry ``source_chunk_id=None`` (the
+        Anthropic adapter drops the chunk-id enum from its schema). ``context`` is the
+        note's book-anchor context, carried into generation only when the note is anchored
+        (empty otherwise); grounding is always re-verified against ``note_body`` alone by
+        the caller's QC pipeline. An empty ``note_body`` (or ``limit <= 0``) yields an
+        empty list rather than an error.
+        """
+        ...
+
 
 @runtime_checkable
 class SchedulingPort(Protocol):
