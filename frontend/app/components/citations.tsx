@@ -28,7 +28,7 @@
  */
 
 import Link from "next/link";
-import { BookOpenIcon } from "lucide-react";
+import { BookOpenIcon, StickyNoteIcon } from "lucide-react";
 
 import { type Citation } from "@/app/lib/questions";
 import { readUrl } from "@/app/lib/read-url";
@@ -54,16 +54,68 @@ export function CitationList({
   }
   return (
     <div aria-label="citations" className="mt-3 flex flex-wrap gap-1.5">
-      {citations.map((citation, index) => (
-        <CitationPopover
-          key={citation.chunk_id}
-          sourceId={sourceId}
-          citation={citation}
-          index={index + 1}
-          onShowInBook={onShowInBook}
-        />
-      ))}
+      {citations.map((citation, index) =>
+        citation.origin === "note" ? (
+          <NoteCitationPopover
+            key={citation.chunk_id}
+            citation={citation}
+            index={index + 1}
+          />
+        ) : (
+          <CitationPopover
+            key={citation.chunk_id}
+            sourceId={sourceId}
+            citation={citation}
+            index={index + 1}
+            onShowInBook={onShowInBook}
+          />
+        ),
+      )}
     </div>
+  );
+}
+
+/**
+ * One note citation chip: opens a popover with the note's title, the cited
+ * passage, and a link into the note itself (NL-03). Visibly distinct from a book
+ * citation — a note glyph, a "Your note — <title>" label, and an "Open note" link
+ * to `/notes/{id}` instead of any into-the-book action.
+ */
+function NoteCitationPopover({
+  citation,
+  index,
+}: {
+  citation: Citation;
+  index: number;
+}) {
+  const title = citation.note_title ?? "";
+  const label = title ? `Your note — ${title}` : "Your note";
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          aria-label={`Your note: ${title}`}
+          className="inline-flex items-center gap-1 rounded-full bg-secondary px-2 py-0.5 text-xs font-medium text-secondary-foreground transition-colors hover:bg-accent"
+        >
+          <span className="tabular-nums">{index}</span>
+          <StickyNoteIcon className="size-3" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-80">
+        <p className="text-xs font-medium text-muted-foreground">{label}</p>
+        <blockquote className="prose-reading border-l-2 border-muted pl-3 italic text-muted-foreground">
+          {citation.snippet}
+        </blockquote>
+        <Link
+          href={`/notes/${citation.note_id}`}
+          className="inline-flex items-center gap-1.5 text-sm text-primary underline-offset-4 hover:underline"
+        >
+          <StickyNoteIcon className="size-3.5" />
+          Open note
+        </Link>
+      </PopoverContent>
+    </Popover>
   );
 }
 
