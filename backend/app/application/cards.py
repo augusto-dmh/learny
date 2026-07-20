@@ -24,6 +24,7 @@ from collections.abc import Callable
 from uuid import UUID
 
 from app.application.errors import (
+    CardAlreadyExists,
     CardNotEditable,
     InvalidCardText,
     NotAuthorized,
@@ -281,6 +282,11 @@ class AcceptCard:
             stored = self._items.get_by_anchor_and_key(note_anchor_id, key)
             if stored is not None:
                 return stored, False
+            # The winner has not committed yet, so its row is invisible here. Falling
+            # through would schedule against an id that was never inserted — an FK
+            # violation reported as a 201 for a card that does not exist. The other
+            # request is creating that card; say so instead of inventing one.
+            raise CardAlreadyExists("This card is already being saved.")
         self._items.create_scheduling(item.id, self._scheduling.initial())
         return item, True
 
@@ -334,12 +340,24 @@ class UpdateCard:
 
         question = _validated_text(question, "question", self._max_card_chars)
         answer = _validated_text(answer, "answer", self._max_card_chars)
+        key = content_key(item.item_type, question, answer)
+
+        # Cards from one highlight are unique per text, so rewording this one into a
+        # sibling's exact wording collides at the index. Check first: reaching the
+        # database would surface a unique violation as a 500 rather than a conflict.
+        # Matching this card's own key is a no-op edit, not a collision.
+        if item.note_anchor_id is not None:
+            clash = self._items.get_by_anchor_and_key(item.note_anchor_id, key)
+            if clash is not None and clash.id != item.id:
+                raise CardAlreadyExists(
+                    "Another card from this highlight already has that text."
+                )
 
         self._items.update_text(
             item.id,
             question=question,
             answer=answer,
-            content_key=content_key(item.item_type, question, answer),
+            content_key=key,
         )
         # ``update_text`` writes without returning; re-read so the caller sees the row
         # as persisted (including its untouched id and created_at).

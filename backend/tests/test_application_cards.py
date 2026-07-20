@@ -17,6 +17,7 @@ import pytest
 
 from app.application.cards import AcceptCard, SuggestCards, UpdateCard
 from app.application.errors import (
+    CardAlreadyExists,
     CardNotEditable,
     InvalidCardText,
     QuizItemNotFound,
@@ -1024,3 +1025,98 @@ def test_editing_an_unknown_card_is_not_found() -> None:
             question="Reworded question?",
             answer="Reworded answer",
         )
+
+
+# --- AcceptCard: the unrecoverable lost race (review finding) -------------------
+
+
+def test_losing_a_race_to_an_invisible_row_is_a_conflict_not_a_phantom_card() -> None:
+    """A lost upsert whose winner is not yet visible must not fabricate a card.
+
+    Falling through here would schedule against an id that was never inserted — an FK
+    violation reported to the student as a created card. The other request is writing
+    that card, so this one reports the conflict instead.
+    """
+    world = _World()
+
+    # Reproduce the race: the insert loses, and the winning row is invisible to this
+    # transaction (uncommitted), so the recovery read finds nothing.
+    world.items.upsert = lambda item, *, embedding: False  # type: ignore[assignment]
+    world.items.get_by_anchor_and_key = lambda note_anchor_id, content_key: None  # type: ignore[assignment]
+
+    scheduling_writes = world.items.create_scheduling_calls
+
+    with pytest.raises(CardAlreadyExists):
+        world.accept(
+            user=_OWNER,
+            source_id=world.source.id,
+            note_anchor_id=world.anchor.id,
+            item_type=QuizItemType.FREE_RECALL,
+            question="What is the powerhouse of the cell?",
+            answer="The mitochondria",
+        )
+
+    # Nothing was scheduled against the row that was never inserted.
+    assert world.items.create_scheduling_calls == scheduling_writes
+
+
+# --- UpdateCard: rewording into a sibling's text (review finding) ---------------
+
+
+def test_rewording_a_card_into_a_sibling_card_s_text_is_a_conflict() -> None:
+    """Two cards from one highlight are unique per text, so this collides at the index.
+
+    Reaching the database would surface a unique violation as a 500 rather than the
+    documented conflict.
+    """
+    world = _World()
+    payload = {
+        "user": _OWNER,
+        "source_id": world.source.id,
+        "note_anchor_id": world.anchor.id,
+        "item_type": QuizItemType.FREE_RECALL,
+    }
+    first, _ = world.accept(
+        **payload, question="What is the powerhouse of the cell?", answer="Mitochondria"
+    )
+    second, _ = world.accept(
+        **payload, question="Which organelle makes ATP?", answer="Mitochondria"
+    )
+
+    with pytest.raises(CardAlreadyExists):
+        world.update(
+            user=_OWNER,
+            item_id=second.id,
+            question="What is the powerhouse of the cell?",
+            answer="Mitochondria",
+        )
+
+    # The target card is untouched — a rejected edit writes nothing.
+    assert world.items.get_by_id(second.id).question == "Which organelle makes ATP?"
+    assert world.items.get_by_id(first.id).question == "What is the powerhouse of the cell?"
+
+
+def test_rewriting_a_card_to_its_own_existing_text_is_allowed() -> None:
+    """The collision guard must not mistake a card for its own sibling.
+
+    A no-op edit matches this card's own key; treating that as a conflict would make
+    re-saving unchanged text fail.
+    """
+    world = _World()
+    card, _ = world.accept(
+        user=_OWNER,
+        source_id=world.source.id,
+        note_anchor_id=world.anchor.id,
+        item_type=QuizItemType.FREE_RECALL,
+        question="What is the powerhouse of the cell?",
+        answer="Mitochondria",
+    )
+
+    updated = world.update(
+        user=_OWNER,
+        item_id=card.id,
+        question="What is the powerhouse of the cell?",
+        answer="Mitochondria",
+    )
+
+    assert updated.id == card.id

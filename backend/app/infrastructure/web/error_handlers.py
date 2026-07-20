@@ -23,6 +23,7 @@ from fastapi.responses import JSONResponse
 from app.application.errors import (
     ActiveIngestionExists,
     AnswerGenerationFailed,
+    CardAlreadyExists,
     CardNotEditable,
     CorpusNotFound,
     EmailAlreadyExists,
@@ -93,6 +94,7 @@ _STATUS_BY_ERROR = {
     StaleCaptureTarget: status.HTTP_409_CONFLICT,
     InvalidCardText: _HTTP_422,
     CardNotEditable: status.HTTP_409_CONFLICT,
+    CardAlreadyExists: status.HTTP_409_CONFLICT,
 }
 
 # An invalid upload maps to a status keyed by its ``kind`` (design §Error Handling):
