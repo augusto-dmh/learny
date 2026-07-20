@@ -536,6 +536,13 @@ notes = Table(
     ),
     Column("title", Text, nullable=False),
     Column("body_markdown", Text, nullable=False, server_default=""),
+    # Async-populated whole-note semantic vector for the note-semantic retrieval arm
+    # (NL-01); NULL until the embed_note task runs, so the lexical note arm carries
+    # recall during embedding lag (NL-06). The HNSW index is created in 0013 via raw
+    # SQL. ``embedding_model`` records the ``<model>@<dims>`` identity that produced it
+    # (idempotent re-embedding when the model changes), NULL until embedded.
+    Column("embedding", VECTOR(1536), nullable=True),
+    Column("embedding_model", Text, nullable=True),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
 )

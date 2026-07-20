@@ -1476,6 +1476,148 @@ def test_migration_0012_downgrade_refuses_to_destroy_duplicate_cards(monkeypatch
 
 
 @pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
+def test_migration_0013_indexes_notes_for_hybrid_search(monkeypatch) -> None:
+    """0013 up: ``notes`` gains a nullable ``embedding vector(1536)`` + ``embedding_model``
+    and a trigger-fed ``search_vector`` (title 'A' over body 'D', fixed 'simple' config)
+    backed by an HNSW index over ``embedding`` and a GIN index over ``search_vector``
+    (NL-01). The trigger maintains ``search_vector`` on insert AND update; a note with no
+    title and no body yields an empty tsvector. Down one step to 0012 drops both indexes,
+    the trigger, the function, and all three columns; a re-up round-trips.
+    """
+    monkeypatch.setenv("LEARNY_DATABASE_URL", TEST_DB_URL)
+    cfg = _alembic_config(TEST_DB_URL)
+
+    command.upgrade(cfg, "head")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        # NL-01: nullable embedding vector + embedding_model; a search_vector column.
+        columns = {c["name"]: c for c in inspect(engine).get_columns("notes")}
+        assert "embedding" in columns
+        assert columns["embedding"]["nullable"] is True
+        assert "embedding_model" in columns
+        assert columns["embedding_model"]["nullable"] is True
+        assert "search_vector" in columns
+
+        # HNSW (vector_cosine_ops, m=16, ef_construction=64) over embedding and GIN over
+        # search_vector — the same index shapes the corpus arms use (AD-020).
+        with engine.connect() as conn:
+            hnsw_def = conn.execute(
+                text(
+                    "SELECT indexdef FROM pg_indexes "
+                    "WHERE indexname = 'ix_notes_embedding_hnsw'"
+                )
+            ).scalar_one()
+            gin_def = conn.execute(
+                text(
+                    "SELECT indexdef FROM pg_indexes "
+                    "WHERE indexname = 'ix_notes_search_vector'"
+                )
+            ).scalar_one()
+        assert "hnsw" in hnsw_def and "vector_cosine_ops" in hnsw_def
+        assert "m='16'" in hnsw_def.replace(" ", "") or "m=16" in hnsw_def.replace(" ", "")
+        assert "ef_construction" in hnsw_def
+        assert "gin" in gin_def.lower() and "search_vector" in gin_def
+
+        # Seed a user + a note; the BEFORE INSERT trigger builds search_vector from the
+        # title ('A') and body ('D') under 'simple' (no stemming — raw lexemes appear).
+        user_id = uuid.uuid4()
+        note_id = uuid.uuid4()
+        with engine.begin() as conn:
+            conn.execute(
+                text("INSERT INTO users (id, email) VALUES (:id, :email)"),
+                {"id": user_id, "email": f"{user_id}@example.test"},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO notes (id, user_id, title, body_markdown) "
+                    "VALUES (:id, :uid, 'Photosynthesis', 'chlorophyll captures light')"
+                ),
+                {"id": note_id, "uid": user_id},
+            )
+        with engine.connect() as conn:
+            sv = conn.execute(
+                text("SELECT search_vector::text FROM notes WHERE id = :id"),
+                {"id": note_id},
+            ).scalar_one()
+        assert sv and "photosynthesis" in sv  # title lexeme (weighted 'A')
+        assert "chlorophyll" in sv  # body lexeme
+
+        # BEFORE UPDATE OF title, body_markdown: editing the body recomputes the vector.
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "UPDATE notes SET body_markdown = 'mitochondria respiration' "
+                    "WHERE id = :id"
+                ),
+                {"id": note_id},
+            )
+            updated_sv = conn.execute(
+                text("SELECT search_vector::text FROM notes WHERE id = :id"),
+                {"id": note_id},
+            ).scalar_one()
+        assert "mitochondria" in updated_sv  # new body lexeme present after the edit
+        assert "chlorophyll" not in updated_sv  # old body lexeme gone
+
+        # An empty note (no title, no body) yields a genuinely empty tsvector — the
+        # coalesce keeps the trigger from erroring and produces no lexemes.
+        empty_id = uuid.uuid4()
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO notes (id, user_id, title, body_markdown) "
+                    "VALUES (:id, :uid, '', '')"
+                ),
+                {"id": empty_id, "uid": user_id},
+            )
+        with engine.connect() as conn:
+            empty_sv = conn.execute(
+                text("SELECT search_vector::text FROM notes WHERE id = :id"),
+                {"id": empty_id},
+            ).scalar_one()
+        assert empty_sv == ""
+    finally:
+        engine.dispose()
+
+    # Down one step to 0012: both indexes, the trigger/function, and all three columns go.
+    command.downgrade(cfg, "0012_card_provenance")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        columns = {c["name"] for c in inspect(engine).get_columns("notes")}
+        assert "embedding" not in columns
+        assert "embedding_model" not in columns
+        assert "search_vector" not in columns
+        with engine.connect() as conn:
+            remaining_ix = conn.execute(
+                text(
+                    "SELECT indexname FROM pg_indexes WHERE indexname IN "
+                    "('ix_notes_embedding_hnsw', 'ix_notes_search_vector')"
+                )
+            ).fetchall()
+            trigger = conn.execute(
+                text("SELECT 1 FROM pg_trigger WHERE tgname = 'trg_notes_search_vector'")
+            ).scalar()
+            func = conn.execute(
+                text("SELECT 1 FROM pg_proc WHERE proname = 'notes_search_vector_update'")
+            ).scalar()
+        assert remaining_ix == []
+        assert trigger is None
+        assert func is None
+    finally:
+        engine.dispose()
+
+    # Re-upgrade restores everything — the schema round-trips.
+    command.upgrade(cfg, "head")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        columns = {c["name"] for c in inspect(engine).get_columns("notes")}
+        assert {"embedding", "embedding_model", "search_vector"} <= columns
+    finally:
+        engine.dispose()
+
+    command.downgrade(cfg, "base")
+
+
+@pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
 def test_in_process_migration_preserves_app_root_logging(monkeypatch) -> None:
     """An in-process migration must not reconfigure the app-owned root logger.
 
