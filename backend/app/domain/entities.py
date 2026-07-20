@@ -587,6 +587,10 @@ class QuizItemOrigin:
 
     DECK = "deck"
     HIGHLIGHT = "highlight"
+    # ``note`` cards are promoted from a note (RFC-003 Cycle F). Like ``highlight``
+    # cards their identity is the minted id, so the note's text may be regenerated
+    # without disturbing scheduling; they are the only source-less origin (AD-148/149).
+    NOTE = "note"
 
 
 class QuizJobStatus:
@@ -721,6 +725,16 @@ class QuizItem:
     # capture is whole-source generation, matching the column's server default.
     origin: str = QuizItemOrigin.DECK
     note_anchor_id: UUID | None = None
+    # Denormalized owner (AD-149). Set explicitly on a source-less ``note`` card; for
+    # deck/highlight cards it is derived from the source at persist time, so existing
+    # construction sites leave it ``None`` and stay byte-compatible.
+    user_id: UUID | None = None
+    # Provenance back to the promoted note (``origin='note'``); ``None`` once the note
+    # is deleted, which the stored snapshot survives (AD-145).
+    note_id: UUID | None = None
+    # When the origin note last changed under this card (AD-144); drives the review
+    # badge. ``None`` until a regenerate-and-match flags the card.
+    note_changed_at: datetime | None = None
 
 
 @dataclass(frozen=True)

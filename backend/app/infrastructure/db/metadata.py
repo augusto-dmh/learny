@@ -394,15 +394,28 @@ quiz_items = Table(
     "quiz_items",
     metadata,
     Column("id", UUID(as_uuid=True), primary_key=True),
+    # Nullable since RFC-003 Cycle F: a ``note`` card promoted from an un-anchored note
+    # has no source. The CHECK at the tail keeps every other origin source-backed.
     Column(
         "source_id",
         UUID(as_uuid=True),
         ForeignKey("sources.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    ),
+    # Denormalized ownership (AD-149): every card is owned by a user directly, so a
+    # source-less note card is still authorized. Backfilled from ``sources`` in 0014
+    # then made NOT NULL; CASCADE with the user, like ``sources``/``notes``.
+    Column(
+        "user_id",
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     ),
-    # deck (whole-source generation) | highlight (accepted at a passage). The two
-    # origins are two identity modes — see the partial uniques at the end of the table.
+    # deck (whole-source generation) | highlight (accepted at a passage) | note
+    # (promoted from a note). The origins are identity modes — see the partial uniques
+    # at the end of the table; note cards are identified by their minted id alone.
     Column("origin", Text, nullable=False, server_default="deck"),
     # Typed provenance back to the highlight this card was accepted from. SET NULL, so
     # deleting the note severs the link without destroying the derived card; the card
@@ -411,6 +424,16 @@ quiz_items = Table(
         "note_anchor_id",
         UUID(as_uuid=True),
         ForeignKey("note_anchors.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    ),
+    # Provenance back to the note a card was promoted from (origin='note'). SET NULL,
+    # so deleting the note severs the link but the card survives on its own snapshot
+    # (AD-145); distinct from ``note_anchor_id`` (highlight provenance).
+    Column(
+        "note_id",
+        UUID(as_uuid=True),
+        ForeignKey("notes.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     ),
@@ -432,6 +455,10 @@ quiz_items = Table(
     Column("generation_meta", JSONB, nullable=False, server_default="{}"),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    # When the origin note last changed under a promoted card (AD-144): the due queue
+    # derives the "your note changed" badge from this against the last review, and an
+    # explicit schedule reset clears it. NULL until a regenerate-and-match flags it.
+    Column("note_changed_at", DateTime(timezone=True), nullable=True),
     # Two identity modes, one table — both uniques are PARTIAL, scoped by ``origin``.
     # Deck regeneration upserts on (source_id, content_key) without minting duplicates
     # (QUIZ-02); the WHERE keeps that guarantee for deck rows only.
@@ -451,6 +478,12 @@ quiz_items = Table(
         "content_key",
         unique=True,
         postgresql_where=text("origin = 'highlight' AND note_anchor_id IS NOT NULL"),
+    ),
+    # A card has a source unless it was promoted from a note (AD-149): note cards are
+    # source-less, every other origin keeps its source.
+    CheckConstraint(
+        "source_id IS NOT NULL OR origin = 'note'",
+        name="ck_quiz_items_source_or_note",
     ),
 )
 

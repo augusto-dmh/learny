@@ -1211,14 +1211,27 @@ class SqlAlchemyQuizItemRepository:
         ``(source_id, content_key)``; highlight items collapse on
         ``(note_anchor_id, content_key)`` so re-accepting identical text from the same
         highlight is idempotent while two different highlights may share a key. A
-        highlight item with no anchor (severed provenance) matches neither partial
-        index and is a plain insert under its minted id.
+        highlight item with no anchor (severed provenance) and a ``note`` item (no
+        uniqueness at all — AD-148, dedup is service-level) match no partial index and
+        are plain inserts under their minted id.
         """
+        # Denormalized ownership (AD-149): a note card carries its owner explicitly
+        # (it has no source); every other origin leaves ``user_id`` unset and it is
+        # derived from the source here, so the deck/highlight mint paths are untouched.
+        user_id = (
+            item.user_id
+            if item.user_id is not None
+            else select(sources.c.user_id)
+            .where(sources.c.id == item.source_id)
+            .scalar_subquery()
+        )
         stmt = pg_insert(quiz_items).values(
             id=item.id,
             source_id=item.source_id,
+            user_id=user_id,
             origin=item.origin,
             note_anchor_id=item.note_anchor_id,
+            note_id=item.note_id,
             item_type=item.item_type,
             question=item.question,
             answer=item.answer,
@@ -1244,21 +1257,20 @@ class SqlAlchemyQuizItemRepository:
             "generation_meta": stmt.excluded.generation_meta,
             "updated_at": stmt.excluded.updated_at,
         }
-        if item.origin == QuizItemOrigin.HIGHLIGHT:
-            if item.note_anchor_id is None:
-                stmt = stmt.returning(literal_column("(xmax = 0)").label("inserted"))
-                return bool(self._conn.execute(stmt).scalar_one())
-            stmt = stmt.on_conflict_do_update(
-                index_elements=["note_anchor_id", "content_key"],
-                index_where=text("origin = 'highlight' AND note_anchor_id IS NOT NULL"),
-                set_=content_update,
-            )
-        else:
+        if item.origin == QuizItemOrigin.DECK:
             stmt = stmt.on_conflict_do_update(
                 index_elements=["source_id", "content_key"],
                 index_where=text("origin = 'deck'"),
                 set_=content_update,
             )
+        elif item.origin == QuizItemOrigin.HIGHLIGHT and item.note_anchor_id is not None:
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["note_anchor_id", "content_key"],
+                index_where=text("origin = 'highlight' AND note_anchor_id IS NOT NULL"),
+                set_=content_update,
+            )
+        # else: a note card, or a severed-provenance highlight — no partial index to
+        # collapse on, so it is a plain insert under its minted id.
         stmt = stmt.returning(literal_column("(xmax = 0)").label("inserted"))
         return bool(self._conn.execute(stmt).scalar_one())
 
@@ -1395,26 +1407,27 @@ class SqlAlchemyQuizItemRepository:
     ) -> tuple[int, list[DueReviewItem]]:
         """Return the caller's due queue: total due count and up to ``limit`` items.
 
-        Active items with ``due <= now`` across the user's sources (optionally filtered to
-        one ``source_id``), joined through ``sources`` for ownership so no other user's
-        items leak, ordered ``due ASC, id ASC`` (A-6). Stale/orphaned items are excluded
-        (QUIZ-17); the returned count is the full due total before the ``limit``.
+        Active items with ``due <= now`` owned by the user directly (AD-149; optionally
+        filtered to one ``source_id``), ordered ``due ASC, id ASC`` (A-6). Stale/orphaned
+        items are excluded (QUIZ-17); the returned count is the full due total before the
+        ``limit``.
         """
-        # The provenance hops are OUTER joins on purpose: a deck card has no anchor and
-        # a highlight card whose note was deleted has a NULL link, and neither may drop
-        # out of the due queue. Both hops are to a primary key, so they can only ever
-        # match one row and cannot inflate the count either (CAP-16).
+        # Ownership is now the item's own ``user_id`` (AD-149), so ``sources`` is an OUTER
+        # join: a source-less ``note`` card must not drop out, and its ``source_title`` is
+        # the constant "Your notes". The provenance hops are OUTER joins for the same
+        # reason — a deck card has no anchor, a highlight card whose note was deleted has a
+        # NULL link. Every hop is to a primary key, so none can inflate the count (CAP-16).
         join = (
-            quiz_items.join(sources, quiz_items.c.source_id == sources.c.id)
-            .join(
+            quiz_items.join(
                 quiz_item_scheduling,
                 quiz_item_scheduling.c.quiz_item_id == quiz_items.c.id,
             )
+            .outerjoin(sources, quiz_items.c.source_id == sources.c.id)
             .outerjoin(note_anchors, quiz_items.c.note_anchor_id == note_anchors.c.id)
             .outerjoin(notes, note_anchors.c.note_id == notes.c.id)
         )
         conditions = [
-            sources.c.user_id == user_id,
+            quiz_items.c.user_id == user_id,
             quiz_items.c.status == QuizItemStatus.ACTIVE,
             quiz_item_scheduling.c.due <= now,
         ]
@@ -1428,7 +1441,7 @@ class SqlAlchemyQuizItemRepository:
         rows = self._conn.execute(
             select(
                 *_QUIZ_ITEM_READ_COLUMNS,
-                sources.c.title.label("source_title"),
+                func.coalesce(sources.c.title, "Your notes").label("source_title"),
                 quiz_item_scheduling.c.due.label("due"),
                 notes.c.id.label("provenance_note_id"),
                 notes.c.title.label("provenance_note_title"),
@@ -2061,6 +2074,9 @@ def _to_quiz_item(row) -> QuizItem:  # noqa: ANN001
         updated_at=row.updated_at,
         origin=row.origin,
         note_anchor_id=row.note_anchor_id,
+        user_id=row.user_id,
+        note_id=row.note_id,
+        note_changed_at=row.note_changed_at,
     )
 
 

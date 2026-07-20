@@ -1170,6 +1170,94 @@ def test_due_queue_mixes_deck_and_highlight_cards_without_dropping_either(
     assert by_id[highlight.id].note_title == "Mixed"
 
 
+# --- note cards: source-less ownership by user_id (AD-148/149) ------------------
+
+
+def _persisted_note(db_conn: Connection, user_id: UUID, *, title: str = "My note") -> Note:
+    """Persist an empty note owned by ``user_id``."""
+    now = datetime.now(UTC)
+    return SqlAlchemyNoteRepository(db_conn).add(
+        Note(
+            id=uuid4(),
+            user_id=user_id,
+            title=title,
+            body_markdown="",
+            created_at=now,
+            updated_at=now,
+        )
+    )
+
+
+def _note_item(
+    user_id: UUID,
+    note_id: UUID | None,
+    *,
+    question: str = "What is spaced repetition?",
+    answer: str = "Reviewing at increasing intervals.",
+) -> QuizItem:
+    """A source-less ``note`` card owned directly by ``user_id`` (AD-148/149)."""
+    return replace(
+        _item(None, question=question, answer=answer),
+        source_id=None,
+        origin=QuizItemOrigin.NOTE,
+        user_id=user_id,
+        note_id=note_id,
+    )
+
+
+def test_upsert_persists_a_source_less_note_card(db_conn: Connection) -> None:
+    """A note card is owned by its user directly and carries no source (AD-148/149)."""
+    source = _persisted_source(db_conn, "quiz-note-persist@example.com")
+    note = _persisted_note(db_conn, source.user_id)
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    item = _note_item(source.user_id, note.id)
+
+    assert repo.upsert(item, embedding=None) is True
+
+    stored = repo.get_by_id(item.id)
+    assert stored.origin == QuizItemOrigin.NOTE
+    assert stored.source_id is None
+    assert stored.user_id == source.user_id
+    assert stored.note_id == note.id
+
+
+def test_due_for_user_serves_source_less_note_cards_titled_your_notes(
+    db_conn: Connection,
+) -> None:
+    """A note card with no source stays in the due queue and reads 'Your notes'."""
+    source = _persisted_source(db_conn, "quiz-note-due@example.com")
+    note = _persisted_note(db_conn, source.user_id)
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    item = _note_item(source.user_id, note.id)
+    repo.upsert(item, embedding=None)
+    now = datetime.now(UTC)
+    repo.create_scheduling(item.id, _snapshot(due=now - timedelta(minutes=1)))
+
+    total, due = repo.due_for_user(source.user_id, now=now, limit=10)
+
+    assert total == 1
+    assert due[0].item.id == item.id
+    assert due[0].source_title == "Your notes"
+
+
+def test_due_for_user_isolates_another_users_note_cards(db_conn: Connection) -> None:
+    """Ownership is the card's own user_id now: a note card never leaks across users."""
+    now = datetime.now(UTC)
+    past = now - timedelta(minutes=1)
+    owner = _persisted_source(db_conn, "quiz-note-owner@example.com")
+    other = _persisted_source(db_conn, "quiz-note-other@example.com")
+    note = _persisted_note(db_conn, owner.user_id)
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    mine = _note_item(owner.user_id, note.id)
+    repo.upsert(mine, embedding=None)
+    repo.create_scheduling(mine.id, _snapshot(due=past))
+
+    total, due = repo.due_for_user(other.user_id, now=now, limit=10)
+
+    assert total == 0
+    assert due == []
+
+
 def test_two_highlight_items_with_no_anchor_both_persist(db_conn: Connection) -> None:
     """A highlight row with a severed link matches neither partial index.
 
