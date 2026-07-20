@@ -198,6 +198,11 @@ class Settings(BaseSettings):
     # Notes & second-brain (RFC-003 Cycle E; ADR-0026). ``notes_max_body_chars`` caps a
     # note's Markdown body length, enforced by the note use cases before any write.
     notes_max_body_chars: int = 100000
+    # Deterministic truncation applied to a note body before it is embedded, so an
+    # oversized note never breaches the embedding provider's per-input limit (~8191
+    # tokens for OpenAI); ~4 chars/token keeps this comfortably under it. The default
+    # local adapter has no limit, so truncation is a no-op there.
+    notes_embedding_max_chars: int = 32000
 
 
 @lru_cache

@@ -31,21 +31,22 @@ across two shapes. This matches the design's architecture diagram (CRUD vs captu
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from contextlib import AbstractContextManager
 from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Response, status
 from pydantic import BaseModel, Field
+from sqlalchemy import Connection
 
 from app.application.notes import (
     CaptureHighlight,
-    CreateNote,
     DeleteNote,
     GetBacklinks,
     GetNote,
     ListNotes,
-    UpdateNote,
 )
 from app.application.reading import ListSourceHighlights
 from app.domain.entities import (
@@ -56,21 +57,31 @@ from app.domain.entities import (
     SourceHighlight,
     User,
 )
+from app.domain.ports import NoteIndexEnqueuer
 from app.infrastructure.web.csrf import enforce_csrf, enforce_origin
 from app.infrastructure.web.dependencies import (
+    build_create_note,
+    build_update_note,
     get_authenticated_user,
     get_capture_highlight,
-    get_create_note,
     get_delete_note,
     get_get_backlinks,
     get_get_note,
     get_list_notes,
     get_list_source_highlights,
-    get_update_note,
+    get_note_index_enqueuer,
+    get_note_uow,
 )
 from app.infrastructure.web.rate_limit import rate_limit_notes
 
 router = APIRouter(tags=["notes"])
+
+# Create/update commit in this UoW factory before the after-commit embed enqueue
+# (AD-016), mirroring the ingestion/deck start paths; tests override both.
+NoteUowFactory = Annotated[
+    Callable[[], AbstractContextManager[Connection]], Depends(get_note_uow)
+]
+NoteEnqueuer = Annotated[NoteIndexEnqueuer, Depends(get_note_index_enqueuer)]
 
 
 # --- Request bodies ------------------------------------------------------------
@@ -257,17 +268,23 @@ class SourceHighlightView(BaseModel):
 )
 def create_note(
     user: Annotated[User, Depends(get_authenticated_user)],
-    service: Annotated[CreateNote, Depends(get_create_note)],
+    uow_factory: NoteUowFactory,
+    enqueuer: NoteEnqueuer,
     body: NoteWriteRequest,
 ) -> NoteDetailView:
     """Create a whole-Markdown note for the caller and derive its indexes (201).
 
     ``CreateNote`` validates the body cap (``NoteBodyTooLong`` → 422) then persists
-    the note and rebuilds its wikilink/tag indexes in one transaction.
+    the note and rebuilds its wikilink/tag indexes in one committed UoW; the note is
+    then embedded asynchronously (only when it has a body to embed, NL-01), enqueued
+    after commit so the worker reads a durable row (AD-016).
     """
-    view = service(
-        user=user, title=body.title, body_markdown=body.body_markdown, tags=body.tags
-    )
+    with uow_factory() as conn:
+        view = build_create_note(conn)(
+            user=user, title=body.title, body_markdown=body.body_markdown, tags=body.tags
+        )
+    if body.body_markdown:
+        enqueuer.enqueue_embed(view.note.id)
     return NoteDetailView.from_view(view)
 
 
@@ -311,21 +328,27 @@ def get_note(
 def update_note(
     note_id: UUID,
     user: Annotated[User, Depends(get_authenticated_user)],
-    service: Annotated[UpdateNote, Depends(get_update_note)],
+    uow_factory: NoteUowFactory,
+    enqueuer: NoteEnqueuer,
     body: NoteWriteRequest,
 ) -> NoteDetailView:
     """Update an owned note and rewrite its derived indexes (200; 404/422).
 
     Missing/non-owner → ``NoteNotFound`` → 404; over-cap body → ``NoteBodyTooLong`` →
-    422. The wikilink/tag indexes are rebuilt from the new body in the same transaction.
+    422. The wikilink/tag indexes are rebuilt from the new body in one committed UoW;
+    the note is re-embedded asynchronously only when its body actually changed (a
+    title/tags-only edit enqueues nothing, NL-01), after commit (AD-016).
     """
-    view = service(
-        user=user,
-        note_id=note_id,
-        title=body.title,
-        body_markdown=body.body_markdown,
-        tags=body.tags,
-    )
+    with uow_factory() as conn:
+        view, body_changed = build_update_note(conn)(
+            user=user,
+            note_id=note_id,
+            title=body.title,
+            body_markdown=body.body_markdown,
+            tags=body.tags,
+        )
+    if body_changed:
+        enqueuer.enqueue_embed(note_id)
     return NoteDetailView.from_view(view)
 
 

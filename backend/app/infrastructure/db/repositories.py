@@ -1607,6 +1607,17 @@ class SqlAlchemyNoteRepository:
             .values(title=title, body_markdown=body_markdown, updated_at=updated_at)
         )
 
+    def set_embedding(
+        self, note_id: UUID, *, embedding: list[float] | None, model: str | None
+    ) -> None:
+        # The VECTOR type serializes the list on bind (no global registration); None
+        # clears the column. The trigger-fed search_vector is untouched here.
+        self._conn.execute(
+            update(notes)
+            .where(notes.c.id == note_id)
+            .values(embedding=embedding, embedding_model=model)
+        )
+
     def delete(self, note_id: UUID) -> None:
         self._conn.execute(sa_delete(notes).where(notes.c.id == note_id))
 

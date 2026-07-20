@@ -273,6 +273,26 @@ class IngestionEnqueuer(Protocol):
 
 
 @runtime_checkable
+class NoteIndexEnqueuer(Protocol):
+    """The Celery boundary for maintaining a note's retrieval index (AD-016).
+
+    Called *after* the note write is committed so the worker always reads a durable
+    row (mirrors :class:`IngestionEnqueuer`); only the note id rides the queue. The
+    embed task re-reads the body at run time, so a stale enqueue still embeds the
+    newest body. ``enqueue_refresh_cards`` exists for the note→quiz loop (its task
+    body lands in a later cycle); the web layer gates it on promoted notes.
+    """
+
+    def enqueue_embed(self, note_id: UUID) -> None:
+        """Enqueue the whole-note (re)embed for ``note_id`` (empty body clears it)."""
+        ...
+
+    def enqueue_refresh_cards(self, note_id: UUID) -> None:
+        """Enqueue regenerate-and-match for a promoted note's derived cards."""
+        ...
+
+
+@runtime_checkable
 class StoragePort(Protocol):
     """S3-compatible object-storage port (AD-008).
 
@@ -954,6 +974,16 @@ class NoteRepository(Protocol):
         self, note_id: UUID, *, title: str, body_markdown: str, updated_at: datetime
     ) -> None:
         """Persist a note's ``title``/``body_markdown``/``updated_at`` (NF-05)."""
+        ...
+
+    def set_embedding(
+        self, note_id: UUID, *, embedding: list[float] | None, model: str | None
+    ) -> None:
+        """Write (or clear) a note's whole-note ``embedding`` + ``embedding_model`` (NL-01).
+
+        ``None``/``None`` clears both, so an emptied note leaves the semantic arm
+        (async embed maintenance, never a note write's concern).
+        """
         ...
 
     def delete(self, note_id: UUID) -> None:

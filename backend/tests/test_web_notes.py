@@ -58,17 +58,26 @@ def notes_client(db_conn: Connection, monkeypatch: pytest.MonkeyPatch):  # noqa:
 
     Mirrors ``sources_client`` (shared ``db_conn``, non-Secure cookie, trusted
     Origin, generous limiter) but pins ``notes_max_body_chars`` to
-    :data:`NOTES_MAX_BODY` so the over-cap reject stays cheap. Every note path is one
-    atomic request, so no UoW-factory override is needed.
+    :data:`NOTES_MAX_BODY` so the over-cap reject stays cheap. Create/update commit in
+    a UoW factory before the after-commit embed enqueue (AD-016), so the factory is
+    overridden to yield the shared ``db_conn`` *without committing* and the enqueuer is
+    a recording fake (on ``app.state`` so tests can assert its calls).
     """
+    from contextlib import contextmanager
+
     from app.core.config import get_settings
-    from app.infrastructure.web.dependencies import get_db_connection
+    from app.infrastructure.web.dependencies import (
+        get_db_connection,
+        get_note_index_enqueuer,
+        get_note_uow,
+    )
     from app.infrastructure.web.rate_limit import (
         InMemoryFixedWindowRateLimiter,
         get_rate_limiter,
         set_rate_limiter,
     )
     from app.main import create_app
+    from tests.fakes import FakeNoteIndexEnqueuer
 
     monkeypatch.setenv("LEARNY_SESSION_COOKIE_SECURE", "false")
     monkeypatch.setenv("LEARNY_CSRF_TRUSTED_ORIGINS", TEST_ORIGIN)
@@ -83,7 +92,19 @@ def notes_client(db_conn: Connection, monkeypatch: pytest.MonkeyPatch):  # noqa:
     def _override() -> Iterator[Connection]:
         yield db_conn
 
+    @contextmanager
+    def _shared_uow() -> Iterator[Connection]:
+        # Yield the shared rolled-back connection WITHOUT committing, so the note
+        # write is observed by the test's one transaction (isolation kept exactly as
+        # ``get_db_connection`` is overridden).
+        yield db_conn
+
+    enqueuer = FakeNoteIndexEnqueuer()
+    app.state.note_enqueuer = enqueuer
+
     app.dependency_overrides[get_db_connection] = _override
+    app.dependency_overrides[get_note_uow] = lambda: _shared_uow
+    app.dependency_overrides[get_note_index_enqueuer] = lambda: enqueuer
     with TestClient(app, headers={"Origin": TEST_ORIGIN}) as c:
         yield c
     app.dependency_overrides.clear()
@@ -101,14 +122,21 @@ def throttled_notes_client(  # noqa: ANN201
     separate buckets and never eat into the note-write budget — the 4th ``POST
     /api/notes`` trips ``rate_limit_notes`` deterministically (NF-09).
     """
+    from contextlib import contextmanager
+
     from app.core.config import get_settings
-    from app.infrastructure.web.dependencies import get_db_connection
+    from app.infrastructure.web.dependencies import (
+        get_db_connection,
+        get_note_index_enqueuer,
+        get_note_uow,
+    )
     from app.infrastructure.web.rate_limit import (
         InMemoryFixedWindowRateLimiter,
         get_rate_limiter,
         set_rate_limiter,
     )
     from app.main import create_app
+    from tests.fakes import FakeNoteIndexEnqueuer
 
     monkeypatch.setenv("LEARNY_SESSION_COOKIE_SECURE", "false")
     monkeypatch.setenv("LEARNY_CSRF_TRUSTED_ORIGINS", TEST_ORIGIN)
@@ -122,7 +150,16 @@ def throttled_notes_client(  # noqa: ANN201
     def _override() -> Iterator[Connection]:
         yield db_conn
 
+    @contextmanager
+    def _shared_uow() -> Iterator[Connection]:
+        yield db_conn
+
+    enqueuer = FakeNoteIndexEnqueuer()
+    app.state.note_enqueuer = enqueuer
+
     app.dependency_overrides[get_db_connection] = _override
+    app.dependency_overrides[get_note_uow] = lambda: _shared_uow
+    app.dependency_overrides[get_note_index_enqueuer] = lambda: enqueuer
     with TestClient(app, headers={"Origin": TEST_ORIGIN}) as c:
         yield c
     app.dependency_overrides.clear()
@@ -487,6 +524,94 @@ def test_update_note_missing_csrf_returns_403(
     note = _created_note(notes_client, csrf, title="X")
     resp = _patch_note(notes_client, note["id"], {"title": "Y"}, csrf=None)
     assert resp.status_code == 403, resp.text
+
+
+# --- Async embed enqueue (NL-01, NL-07) ----------------------------------------
+
+
+def test_create_note_with_body_enqueues_embed_after_commit(
+    notes_client: TestClient, db_conn: Connection
+) -> None:
+    """A create with a non-empty body enqueues exactly one embed for the new note (NL-01)."""
+    _register(notes_client, "note-embed-create@example.com")
+    csrf = _csrf(notes_client)
+    enq = notes_client.app.state.note_enqueuer
+
+    note = _created_note(notes_client, csrf, title="T", body_markdown="a distinctive fact")
+
+    assert enq.embed_calls == [UUID(note["id"])]
+
+
+def test_create_note_empty_body_enqueues_nothing(
+    notes_client: TestClient, db_conn: Connection
+) -> None:
+    """An empty-body note has nothing to embed, so no embed is enqueued (NL-01)."""
+    _register(notes_client, "note-embed-empty@example.com")
+    csrf = _csrf(notes_client)
+    enq = notes_client.app.state.note_enqueuer
+
+    _created_note(notes_client, csrf, title="Bare", body_markdown="")
+
+    assert enq.embed_calls == []
+
+
+def test_update_note_body_change_enqueues_embed_after_commit(
+    notes_client: TestClient, db_conn: Connection
+) -> None:
+    """Editing the body re-embeds after commit (NL-01)."""
+    _register(notes_client, "note-embed-update@example.com")
+    csrf = _csrf(notes_client)
+    enq = notes_client.app.state.note_enqueuer
+    note = _created_note(notes_client, csrf, title="N", body_markdown="")
+    assert enq.embed_calls == []  # empty-body create enqueued nothing
+
+    resp = _patch_note(
+        notes_client,
+        note["id"],
+        {"title": "N", "body_markdown": "now it has content", "tags": []},
+        csrf=csrf,
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert enq.embed_calls == [UUID(note["id"])]
+
+
+def test_update_note_title_or_tags_only_enqueues_no_embed(
+    notes_client: TestClient, db_conn: Connection
+) -> None:
+    """A PATCH that leaves the body byte-identical enqueues no re-embed (NL-01)."""
+    _register(notes_client, "note-embed-titleonly@example.com")
+    csrf = _csrf(notes_client)
+    enq = notes_client.app.state.note_enqueuer
+    note = _created_note(notes_client, csrf, title="Keep", body_markdown="stable body")
+    assert enq.embed_calls == [UUID(note["id"])]  # the create embedded once
+
+    resp = _patch_note(
+        notes_client,
+        note["id"],
+        {"title": "Renamed", "body_markdown": "stable body", "tags": ["x"]},
+        csrf=csrf,
+    )
+
+    assert resp.status_code == 200, resp.text
+    # No second enqueue — only the create's embed remains.
+    assert enq.embed_calls == [UUID(note["id"])]
+
+
+def test_delete_note_enqueues_nothing(
+    notes_client: TestClient, db_conn: Connection
+) -> None:
+    """Deleting a note enqueues no index work — its index rows die with it (NL-07)."""
+    _register(notes_client, "note-embed-delete@example.com")
+    csrf = _csrf(notes_client)
+    enq = notes_client.app.state.note_enqueuer
+    note = _created_note(notes_client, csrf, title="Doomed", body_markdown="")
+
+    resp = _delete_note(notes_client, note["id"], csrf=csrf)
+
+    assert resp.status_code == 204, resp.text
+    assert enq.embed_calls == []
+    assert enq.refresh_calls == []
 
 
 # --- Delete (NF-05) ------------------------------------------------------------

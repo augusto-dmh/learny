@@ -71,6 +71,7 @@ from app.domain.ports import (
     AnswerGenerationPort,
     EmbeddingPort,
     IngestionEnqueuer,
+    NoteIndexEnqueuer,
     QuizDeckEnqueuer,
     QuizGenerationPort,
     StoragePort,
@@ -107,6 +108,7 @@ from app.infrastructure.security.tokens import SecretsTokenGenerator
 from app.infrastructure.storage.s3 import S3StorageAdapter
 from app.infrastructure.worker.enqueuer import (
     CeleryIngestionEnqueuer,
+    CeleryNoteIndexEnqueuer,
     CeleryQuizDeckEnqueuer,
 )
 from app.infrastructure.worker.steps import NoOpIngestionStep
@@ -617,16 +619,40 @@ def get_submit_review(conn: DbConnection) -> SubmitReview:
 
 # --- Notes & second-brain (Cycle E) --------------------------------------------
 #
-# Every note path is one atomic transaction — a create/update rebuilds the note's
-# derived link/tag indexes, and a capture creates the note plus its anchor, all in
-# the same unit of work — so the ordinary auto-committing request connection is the
-# boundary (no commit-then-enqueue dance as on the deck/ingestion paths). The body
-# cap is sourced from settings; capture derives each block's Markdown through the
-# same ``Bs4MarkupConverter`` the corpus build used so a selection binds like-for-like.
+# Create/update rebuild the note's derived link/tag indexes and then (NL-01)
+# re-embed the note asynchronously — so they own the commit-then-enqueue dance the
+# deck/ingestion paths do: the write commits in a UoW factory (``get_note_uow``)
+# before ``NoteIndexEnqueuer`` puts the note id on the queue, so the worker always
+# reads a durable row (AD-016). The read/delete/capture paths stay on the ordinary
+# auto-committing request connection (delete needs no enqueue — index rows die with
+# the note, NL-07). The body cap is sourced from settings; capture derives each
+# block's Markdown through the same ``Bs4MarkupConverter`` the corpus build used so a
+# selection binds like-for-like.
 
 
-def get_create_note(conn: DbConnection) -> CreateNote:
-    """Wire ``CreateNote`` on the request-scoped connection (NF-05)."""
+def _default_note_uow() -> AbstractContextManager[Connection]:
+    """Production note-write UoW: a fresh ``engine.begin()`` (commit on clean exit)."""
+    return get_engine().begin()
+
+
+_note_uow: Callable[[], AbstractContextManager[Connection]] = _default_note_uow
+
+
+def get_note_uow() -> Callable[[], AbstractContextManager[Connection]]:
+    """FastAPI dependency: the note-write UoW factory (overridable in tests)."""
+    return _note_uow
+
+
+_note_index_enqueuer: NoteIndexEnqueuer = CeleryNoteIndexEnqueuer()
+
+
+def get_note_index_enqueuer() -> NoteIndexEnqueuer:
+    """FastAPI dependency: the process-wide note-index enqueuer (overridable in tests)."""
+    return _note_index_enqueuer
+
+
+def build_create_note(conn: Connection) -> CreateNote:
+    """Wire ``CreateNote`` on a note-write UoW connection (NF-05)."""
     return CreateNote(
         notes=SqlAlchemyNoteRepository(conn),
         clock=_clock,
@@ -635,8 +661,8 @@ def get_create_note(conn: DbConnection) -> CreateNote:
     )
 
 
-def get_update_note(conn: DbConnection) -> UpdateNote:
-    """Wire ``UpdateNote`` on the request-scoped connection (NF-05)."""
+def build_update_note(conn: Connection) -> UpdateNote:
+    """Wire ``UpdateNote`` on a note-write UoW connection (NF-05)."""
     return UpdateNote(
         notes=SqlAlchemyNoteRepository(conn),
         clock=_clock,

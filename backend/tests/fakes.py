@@ -324,6 +324,20 @@ class FakeQuizDeckEnqueuer:
             raise self._error
 
 
+class FakeNoteIndexEnqueuer:
+    """``NoteIndexEnqueuer`` double: records the note ids embed/refresh were asked for."""
+
+    def __init__(self) -> None:
+        self.embed_calls: list[UUID] = []
+        self.refresh_calls: list[UUID] = []
+
+    def enqueue_embed(self, note_id: UUID) -> None:
+        self.embed_calls.append(note_id)
+
+    def enqueue_refresh_cards(self, note_id: UUID) -> None:
+        self.refresh_calls.append(note_id)
+
+
 class FakeEpubParser:
     """``DocumentParserPort`` double: returns a preset ``ParsedBook`` or raises.
 
