@@ -36,6 +36,12 @@ from app.domain.entities import (
 )
 from app.infrastructure.answering.anthropic import AnthropicAdapterBase
 
+# Wall-clock bound for the one foreground generation call (card suggestions). The deck
+# path is batched and asynchronous, so it is deliberately unaffected. Chosen well under
+# a reader's patience: past this the student has already given up, and holding the
+# threadpool slot only makes the next request worse.
+_SUGGEST_TIMEOUT_S = 30.0
+
 
 def _custom_id(index: int, anchor: str) -> str:
     """Return a batch-legal, section-unique custom id derived from the anchor.
@@ -218,6 +224,13 @@ class AnthropicQuizAdapter(AnthropicAdapterBase):
             output_config={
                 "format": {"type": "json_schema", "schema": _items_schema(chunk_ids)}
             },
+            # Bounded per call rather than on the shared client, which the streaming
+            # answer path also uses and where a long read is legitimate. This one is a
+            # student waiting on a popover, and it occupies a threadpool slot while it
+            # waits: on the SDK default a hung connection would hold that slot for ten
+            # minutes. Rate limiting caps how often this is entered, not how long it
+            # stays, so the bound has to live here.
+            timeout=_SUGGEST_TIMEOUT_S,
         )
         try:
             candidates = _parse_items(message)

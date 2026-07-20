@@ -323,3 +323,20 @@ def test_suggest_cards_with_a_non_positive_limit_calls_no_provider() -> None:
 
 def test_model_identity_is_the_configured_quiz_model() -> None:
     assert _adapter(_FakeBatches()).model == "claude-haiku-4-5"
+
+
+def test_suggest_cards_bounds_the_foreground_call_with_a_timeout() -> None:
+    """The one synchronous generation call must not inherit the SDK's 600s default.
+
+    It runs on the shared threadpool while a student waits on a popover, so an
+    unbounded read holds a slot long after they have given up. The deck path is
+    batched and asynchronous, so it is deliberately left alone.
+    """
+    chunk = uuid4()
+    adapter = _adapter(_FakeBatches(), reply=_items_json(chunk))
+
+    adapter.suggest_cards(_section("A", [chunk]), "The key term.", 3)
+
+    timeout = adapter._get_client().messages.create_kwargs["timeout"]
+    assert timeout is not None
+    assert 0 < timeout <= 60
