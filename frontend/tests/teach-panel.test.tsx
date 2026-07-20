@@ -203,6 +203,7 @@ function sendMessage(value: string) {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  localStorage.clear();
 });
 
 describe("TeachPanel start + stream (RA-10)", () => {
@@ -599,5 +600,44 @@ describe("TeachPanel taught passage (RA-11)", () => {
       expect(onShowInBook).toHaveBeenCalledWith("c1.xhtml"),
     );
     expect(onShowInBook).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("TeachPanel include-my-notes toggle (NL-04)", () => {
+  it("defaults the toggle off and sends the flag only after the reader turns it on", async () => {
+    const stream = sseStream();
+    const fetchMock = routedFetch({
+      ...baseHandlers(),
+      "POST /api/teaching-sessions": () => jsonResponse(201, chapter2Session),
+      [`POST ${TURN_STREAM}`]: () => stream.response,
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
+
+    // Start a session so the conversation view (and its toggle) mounts.
+    await screen.findByLabelText("Target");
+    fireEvent.change(screen.getByLabelText("Target"), {
+      target: { value: "c2.xhtml" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start session" }));
+    await screen.findByPlaceholderText(/send a message/i, {}, { timeout: 5000 });
+
+    // The toggle reflects teaching's server default (off) before any choice.
+    const toggle = screen.getByRole("checkbox", { name: /include my notes/i });
+    expect((toggle as HTMLInputElement).checked).toBe(false);
+
+    // Turning it on is an explicit choice → the next turn carries the flag.
+    fireEvent.click(toggle);
+    sendMessage("Explain this chapter.");
+
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([url]) => url === TURN_STREAM)).toBe(true),
+    );
+    const turnPost = fetchMock.mock.calls.find(([url]) => url === TURN_STREAM)!;
+    expect(JSON.parse((turnPost[1] as RequestInit).body as string)).toEqual({
+      message: "Explain this chapter.",
+      include_notes: true,
+    });
   });
 });

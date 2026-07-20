@@ -56,7 +56,9 @@ import {
 import { Button } from "@/components/ui/button";
 
 import { CitationList } from "./citations";
+import { IncludeNotesToggle } from "./include-notes-toggle";
 import { SaveToNoteAction } from "./save-to-note-action";
+import { useIncludeNotes } from "./use-include-notes";
 
 /** Fixed empty-state suggestions; clicking one submits it as a question (RA-08). */
 const SUGGESTED_PROMPTS = [
@@ -94,9 +96,17 @@ export function AskPanel({
   // A quote the reader chose to "Ask about": it rides along, once, with the next
   // typed question (RA-18) and shows as a dismissable context chip until then.
   const [attachedQuote, setAttachedQuote] = useState<string | null>(null);
+  // Include-my-notes preference (NL-04): the flag rides the request only once the
+  // reader has made an explicit choice; otherwise the server applies its default.
+  const notes = useIncludeNotes("ask");
   const transport = useMemo(
-    () => createQuestionTransport(sourceId, csrf),
-    [sourceId, csrf],
+    () =>
+      createQuestionTransport(
+        sourceId,
+        csrf,
+        notes.chosen ? notes.includeNotes : undefined,
+      ),
+    [sourceId, csrf, notes.chosen, notes.includeNotes],
   );
   const { messages, sendMessage, status, stop } = useChat<LearnyUIMessage>({
     transport,
@@ -253,6 +263,11 @@ export function AskPanel({
           </Button>
         </div>
       ) : null}
+
+      <IncludeNotesToggle
+        checked={notes.includeNotes}
+        onChange={notes.setIncludeNotes}
+      />
 
       <PromptInput onSubmit={handleSubmit}>
         <PromptInputBody>

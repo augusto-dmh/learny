@@ -103,6 +103,47 @@ describe("createTurnTransport request shaping (D1)", () => {
   });
 });
 
+describe("include_notes request flag (NL-04)", () => {
+  it("omits include_notes when the question transport is given no choice", async () => {
+    const prepared = await callPrepare(createQuestionTransport("s1", "c"), [
+      userMessage("m1", "a question"),
+    ]);
+    // No explicit choice → the flag is absent and the server applies its default.
+    expect(prepared.body).toEqual({ question: "a question" });
+  });
+
+  it("carries the chosen include_notes flag on the question body when provided", async () => {
+    const on = await callPrepare(createQuestionTransport("s1", "c", true), [
+      userMessage("m1", "a question"),
+    ]);
+    expect(on.body).toEqual({ question: "a question", include_notes: true });
+
+    const off = await callPrepare(createQuestionTransport("s1", "c", false), [
+      userMessage("m1", "a question"),
+    ]);
+    expect(off.body).toEqual({ question: "a question", include_notes: false });
+  });
+
+  it("omits include_notes when the turn transport is given no choice", async () => {
+    const prepared = await callPrepare(createTurnTransport("sess1", "c"), [
+      userMessage("m1", "a message"),
+    ]);
+    expect(prepared.body).toEqual({ message: "a message" });
+  });
+
+  it("carries the chosen include_notes flag on the turn body when provided", async () => {
+    const on = await callPrepare(createTurnTransport("sess1", "c", true), [
+      userMessage("m1", "a message"),
+    ]);
+    expect(on.body).toEqual({ message: "a message", include_notes: true });
+
+    const off = await callPrepare(createTurnTransport("sess1", "c", false), [
+      userMessage("m1", "a message"),
+    ]);
+    expect(off.body).toEqual({ message: "a message", include_notes: false });
+  });
+});
+
 describe("turnsToUIMessages (D1)", () => {
   const answered: TeachingTurnView = {
     turn_index: 0,
