@@ -19,7 +19,7 @@ from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager
 from functools import lru_cache
 from typing import Annotated
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi import Depends, Request
 from sqlalchemy import Connection
@@ -674,6 +674,15 @@ def build_update_note(conn: Connection) -> UpdateNote:
         clock=_clock,
         max_body_chars=get_settings().notes_max_body_chars,
     )
+
+
+def build_has_note_items(conn: Connection) -> Callable[[UUID], bool]:
+    """Return the ``has_note_items`` predicate on a note-write UoW connection (NL-10).
+
+    Evaluated inside the note-update transaction so the refresh enqueue fires only when
+    the note has a live note card to refresh (the promoted-note gate for AD-144).
+    """
+    return SqlAlchemyQuizItemRepository(conn).has_note_items
 
 
 def get_delete_note(conn: DbConnection) -> DeleteNote:

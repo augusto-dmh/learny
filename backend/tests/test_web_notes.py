@@ -23,21 +23,28 @@ Exercises the owner-scoped notes endpoints end-to-end through FastAPI's
 from __future__ import annotations
 
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import Connection
 
+from app.application.quiz_qc import content_key
 from app.domain.entities import (
     CorpusSectionRecord,
     ParsedBlock,
     ParsedSection,
+    QuizItem,
+    QuizItemOrigin,
+    QuizItemStatus,
+    QuizItemType,
     SectionChunk,
     Source,
 )
 from app.infrastructure.db.repositories import (
     SqlAlchemyCorpusRepository,
+    SqlAlchemyQuizItemRepository,
     SqlAlchemySourceRepository,
 )
 from tests.conftest import TEST_ORIGIN, TEST_PASSWORD, requires_db
@@ -596,6 +603,97 @@ def test_update_note_title_or_tags_only_enqueues_no_embed(
     assert resp.status_code == 200, resp.text
     # No second enqueue — only the create's embed remains.
     assert enq.embed_calls == [UUID(note["id"])]
+
+
+def _promote_note(db_conn: Connection, note_id: UUID, user_id: str) -> None:
+    """Seed one live ``note`` card for ``note_id`` so the refresh gate sees it (NL-10)."""
+    now = datetime.now(UTC)
+    question = "What does this note state?"
+    answer = "A fact."
+    SqlAlchemyQuizItemRepository(db_conn).upsert(
+        QuizItem(
+            id=uuid4(),
+            source_id=None,
+            user_id=UUID(user_id),
+            origin=QuizItemOrigin.NOTE,
+            note_id=note_id,
+            item_type=QuizItemType.FREE_RECALL,
+            question=question,
+            answer=answer,
+            section_path=("N",),
+            anchor=f"note:{note_id}",
+            source_excerpt="body",
+            chunk_hash="f" * 64,
+            content_key=content_key(QuizItemType.FREE_RECALL, question, answer),
+            status=QuizItemStatus.ACTIVE,
+            generation_meta={},
+            created_at=now,
+            updated_at=now,
+        ),
+        embedding=None,
+    )
+
+
+def test_update_promoted_note_body_change_enqueues_refresh(
+    notes_client: TestClient, db_conn: Connection
+) -> None:
+    """A body edit on a note with live cards enqueues a regenerate-and-match (NL-10)."""
+    user_id = _register(notes_client, "note-refresh-promoted@example.com")
+    csrf = _csrf(notes_client)
+    enq = notes_client.app.state.note_enqueuer
+    note = _created_note(notes_client, csrf, title="N", body_markdown="first body")
+    _promote_note(db_conn, UUID(note["id"]), user_id)
+
+    resp = _patch_note(
+        notes_client,
+        note["id"],
+        {"title": "N", "body_markdown": "a reworded body", "tags": []},
+        csrf=csrf,
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert enq.refresh_calls == [UUID(note["id"])]
+
+
+def test_update_unpromoted_note_body_change_enqueues_no_refresh(
+    notes_client: TestClient, db_conn: Connection
+) -> None:
+    """A body edit on a note with no cards enqueues an embed but no refresh (NL-10 gate)."""
+    _register(notes_client, "note-refresh-unpromoted@example.com")
+    csrf = _csrf(notes_client)
+    enq = notes_client.app.state.note_enqueuer
+    note = _created_note(notes_client, csrf, title="N", body_markdown="first body")
+
+    resp = _patch_note(
+        notes_client,
+        note["id"],
+        {"title": "N", "body_markdown": "a reworded body", "tags": []},
+        csrf=csrf,
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert enq.refresh_calls == []
+
+
+def test_update_promoted_note_title_only_enqueues_no_refresh(
+    notes_client: TestClient, db_conn: Connection
+) -> None:
+    """A title/tags-only edit never regenerates cards — the body is byte-identical."""
+    user_id = _register(notes_client, "note-refresh-titleonly@example.com")
+    csrf = _csrf(notes_client)
+    enq = notes_client.app.state.note_enqueuer
+    note = _created_note(notes_client, csrf, title="Keep", body_markdown="stable body")
+    _promote_note(db_conn, UUID(note["id"]), user_id)
+
+    resp = _patch_note(
+        notes_client,
+        note["id"],
+        {"title": "Renamed", "body_markdown": "stable body", "tags": ["x"]},
+        csrf=csrf,
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert enq.refresh_calls == []
 
 
 def test_delete_note_enqueues_nothing(

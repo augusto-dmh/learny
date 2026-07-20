@@ -1308,6 +1308,70 @@ class SqlAlchemyQuizItemRepository:
         ).one_or_none()
         return _to_quiz_item(row) if row is not None else None
 
+    def has_note_items(self, note_id: UUID) -> bool:
+        """Return whether the note has any live ``note`` card (the refresh enqueue gate)."""
+        row = self._conn.execute(
+            select(quiz_items.c.id)
+            .where(quiz_items.c.note_id == note_id)
+            .where(quiz_items.c.origin == QuizItemOrigin.NOTE)
+            .where(quiz_items.c.status == QuizItemStatus.ACTIVE)
+            .limit(1)
+        ).first()
+        return row is not None
+
+    def note_items_with_embeddings(
+        self, note_id: UUID
+    ) -> list[tuple[QuizItem, list[float] | None]]:
+        """Return the note's live ``note`` cards with their stored embedding (NL-10)."""
+        rows = self._conn.execute(
+            select(*_QUIZ_ITEM_READ_COLUMNS, quiz_items.c.embedding)
+            .where(quiz_items.c.note_id == note_id)
+            .where(quiz_items.c.origin == QuizItemOrigin.NOTE)
+            .where(quiz_items.c.status == QuizItemStatus.ACTIVE)
+            .order_by(quiz_items.c.id.asc())
+        ).all()
+        return [
+            (
+                _to_quiz_item(row),
+                [float(v) for v in row.embedding] if row.embedding is not None else None,
+            )
+            for row in rows
+        ]
+
+    def update_note_card(
+        self,
+        item_id: UUID,
+        *,
+        question: str,
+        answer: str,
+        content_key: str,
+        source_excerpt: str,
+        embedding: Sequence[float] | None,
+        note_changed_at: datetime,
+    ) -> None:
+        """Rewrite a matched note card's content + flag it, leaving schedule/log (NL-10)."""
+        self._conn.execute(
+            update(quiz_items)
+            .where(quiz_items.c.id == item_id)
+            .values(
+                question=question,
+                answer=answer,
+                content_key=content_key,
+                source_excerpt=source_excerpt,
+                embedding=list(embedding) if embedding is not None else None,
+                note_changed_at=note_changed_at,
+                updated_at=func.now(),
+            )
+        )
+
+    def flag_note_changed(self, item_id: UUID, note_changed_at: datetime) -> None:
+        """Set only ``note_changed_at`` on an unmatched note card (NL-11)."""
+        self._conn.execute(
+            update(quiz_items)
+            .where(quiz_items.c.id == item_id)
+            .values(note_changed_at=note_changed_at)
+        )
+
     def update_text(
         self, item_id: UUID, *, question: str, answer: str, content_key: str
     ) -> None:

@@ -906,6 +906,55 @@ class QuizItemRepository(Protocol):
         """
         ...
 
+    def has_note_items(self, note_id: UUID) -> bool:
+        """Return whether the note has any live (active) ``note``-origin card (AD-144).
+
+        The enqueue gate for regenerate-and-match: a note body save fires a refresh only
+        when there is something to refresh, so an unpromoted note's edit enqueues nothing.
+        """
+        ...
+
+    def note_items_with_embeddings(
+        self, note_id: UUID
+    ) -> list[tuple[QuizItem, list[float] | None]]:
+        """Return the note's live ``note`` cards paired with their stored embedding (NL-10).
+
+        The regenerate-and-match input: each active note-origin card of ``note_id`` with
+        its embedding (``None`` when it was never embedded — such a card is unmatchable
+        and takes the note-changed flag path). Deterministic order (by item id) so the
+        greedy pairing is reproducible.
+        """
+        ...
+
+    def update_note_card(
+        self,
+        item_id: UUID,
+        *,
+        question: str,
+        answer: str,
+        content_key: str,
+        source_excerpt: str,
+        embedding: Sequence[float] | None,
+        note_changed_at: datetime,
+    ) -> None:
+        """Rewrite a matched note card's content and flag it note-changed (NL-10/11).
+
+        Writes question/answer/fingerprint/excerpt/embedding and ``note_changed_at`` under
+        the card's existing id. Never touches the ``quiz_item_scheduling`` snapshot or the
+        ``review_log`` — the edit-stability invariant: a note edit costs none of the card's
+        memory history (ADR-0026 d5).
+        """
+        ...
+
+    def flag_note_changed(self, item_id: UUID, note_changed_at: datetime) -> None:
+        """Set only ``note_changed_at`` on an unmatched note card (NL-11).
+
+        The card could not be paired to any regenerated suggestion, so its text is left
+        exactly as it was and only the badge signal is raised. Scheduling and the review
+        log are untouched.
+        """
+        ...
+
     def update_text(
         self, item_id: UUID, *, question: str, answer: str, content_key: str
     ) -> None:

@@ -1098,6 +1098,116 @@ def test_update_text_leaves_scheduling_and_review_log_byte_identical(
     assert len(log_after) == 1
 
 
+# --- note-card refresh reads/writes (NL-10, NL-11) ------------------------------
+
+
+def test_has_note_items_true_only_with_a_live_note_card(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "quiz-has-note-items@example.com")
+    note = _persisted_note(db_conn, source.user_id)
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+
+    assert repo.has_note_items(note.id) is False
+    repo.upsert(_note_item(source.user_id, note.id), embedding=None)
+    assert repo.has_note_items(note.id) is True
+
+
+def test_note_items_with_embeddings_returns_live_cards_with_vectors(
+    db_conn: Connection,
+) -> None:
+    source = _persisted_source(db_conn, "quiz-note-items-emb@example.com")
+    note = _persisted_note(db_conn, source.user_id)
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    embedded = _note_item(source.user_id, note.id, question="Q1?", answer="A1")
+    unembedded = _note_item(source.user_id, note.id, question="Q2?", answer="A2")
+    repo.upsert(embedded, embedding=[0.1] * 1536)
+    repo.upsert(unembedded, embedding=None)
+
+    rows = repo.note_items_with_embeddings(note.id)
+
+    by_id = {item.id: emb for item, emb in rows}
+    assert len(by_id) == 2
+    assert by_id[embedded.id] is not None
+    assert len(by_id[embedded.id]) == 1536
+    # A never-embedded card comes back with a NULL embedding (the unmatchable path).
+    assert by_id[unembedded.id] is None
+
+
+def test_update_note_card_rewrites_content_and_flags_leaving_schedule_and_log(
+    db_conn: Connection,
+) -> None:
+    """The NL-10 core invariant: a refresh's content rewrite leaves the card's scheduling
+    row and review-log rows byte-equal — asserted on the stored values."""
+    source = _persisted_source(db_conn, "quiz-note-refresh@example.com")
+    note = _persisted_note(db_conn, source.user_id)
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    item = _note_item(source.user_id, note.id, question="Original?", answer="Original")
+    repo.upsert(item, embedding=[0.2] * 1536)
+
+    due = datetime(2026, 8, 1, 12, tzinfo=UTC)
+    reviewed = datetime(2026, 7, 19, 9, tzinfo=UTC)
+    repo.create_scheduling(
+        item.id,
+        _snapshot(due=due, state=2, step=1, stability=7.25, difficulty=4.5,
+                  last_review=reviewed),
+    )
+    repo.append_log(
+        item.id, ReviewLogEntry(rating=3, reviewed_at=reviewed, review_duration_ms=1200)
+    )
+    before = repo.get_scheduling(item.id)
+    log_before = db_conn.execute(
+        select(review_log.c.rating, review_log.c.reviewed_at, review_log.c.review_duration_ms)
+        .where(review_log.c.quiz_item_id == item.id)
+    ).all()
+
+    changed_at = datetime(2026, 7, 20, 8, tzinfo=UTC)
+    new_key = content_key(item.item_type, "Reworded?", "Reworded answer")
+    repo.update_note_card(
+        item.id,
+        question="Reworded?",
+        answer="Reworded answer",
+        content_key=new_key,
+        source_excerpt="a fresh excerpt",
+        embedding=[0.3] * 1536,
+        note_changed_at=changed_at,
+    )
+
+    stored = repo.get_by_id(item.id)
+    assert stored.question == "Reworded?"
+    assert stored.answer == "Reworded answer"
+    assert stored.content_key == new_key
+    assert stored.source_excerpt == "a fresh excerpt"
+    assert stored.note_changed_at == changed_at
+    # The memory history is byte-identical.
+    after = repo.get_scheduling(item.id)
+    assert after == before
+    log_after = db_conn.execute(
+        select(review_log.c.rating, review_log.c.reviewed_at, review_log.c.review_duration_ms)
+        .where(review_log.c.quiz_item_id == item.id)
+    ).all()
+    assert log_after == log_before
+    assert len(log_after) == 1
+
+
+def test_flag_note_changed_sets_only_the_badge(db_conn: Connection) -> None:
+    """An unmatched card is flagged only: its text and memory history are untouched."""
+    source = _persisted_source(db_conn, "quiz-note-flag@example.com")
+    note = _persisted_note(db_conn, source.user_id)
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    item = _note_item(source.user_id, note.id, question="Original?", answer="Original")
+    repo.upsert(item, embedding=None)
+    repo.create_scheduling(item.id, _snapshot(due=datetime(2026, 8, 1, tzinfo=UTC)))
+    before = repo.get_scheduling(item.id)
+
+    changed_at = datetime(2026, 7, 20, 8, tzinfo=UTC)
+    repo.flag_note_changed(item.id, changed_at)
+
+    stored = repo.get_by_id(item.id)
+    assert stored.note_changed_at == changed_at
+    assert stored.question == "Original?"  # text untouched
+    assert stored.content_key == item.content_key
+    assert repo.get_scheduling(item.id) == before  # schedule untouched
+
+
 # --- read models carry the new fields (CAP-10) ---------------------------------
 
 

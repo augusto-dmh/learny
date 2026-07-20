@@ -18,6 +18,7 @@ import pytest
 from app.application.cards import (
     AcceptCard,
     AcceptNoteCard,
+    RefreshNoteCards,
     SuggestCards,
     SuggestNoteCards,
     UpdateCard,
@@ -167,6 +168,62 @@ class FakeCardItemRepository:
     def update_scheduling(self, quiz_item_id: UUID, snapshot: SchedulingSnapshot) -> None:
         self.update_scheduling_calls += 1
         self.scheduling[quiz_item_id] = snapshot
+
+    def has_note_items(self, note_id: UUID) -> bool:
+        return any(
+            item.origin == QuizItemOrigin.NOTE
+            and item.note_id == note_id
+            and item.status == QuizItemStatus.ACTIVE
+            for item in self._by_key.values()
+        )
+
+    def note_items_with_embeddings(
+        self, note_id: UUID
+    ) -> list[tuple[QuizItem, list[float] | None]]:
+        rows = [
+            item
+            for item in self._by_key.values()
+            if item.origin == QuizItemOrigin.NOTE
+            and item.note_id == note_id
+            and item.status == QuizItemStatus.ACTIVE
+        ]
+        rows.sort(key=lambda item: str(item.id))
+        return [(item, self.embeddings.get(item.id)) for item in rows]
+
+    def update_note_card(
+        self,
+        item_id: UUID,
+        *,
+        question: str,
+        answer: str,
+        content_key: str,
+        source_excerpt: str,
+        embedding,  # noqa: ANN001
+        note_changed_at,  # noqa: ANN001
+    ) -> None:
+        # Content + badge only; scheduling and the review log are never addressed here.
+        for key, item in list(self._by_key.items()):
+            if item.id != item_id:
+                continue
+            updated = replace(
+                item,
+                question=question,
+                answer=answer,
+                content_key=content_key,
+                source_excerpt=source_excerpt,
+                note_changed_at=note_changed_at,
+            )
+            del self._by_key[key]
+            self._by_key[self._identity(updated)] = updated
+            self.embeddings[item_id] = list(embedding) if embedding is not None else None
+
+    def flag_note_changed(self, item_id: UUID, note_changed_at) -> None:  # noqa: ANN001
+        for key, item in list(self._by_key.items()):
+            if item.id != item_id:
+                continue
+            updated = replace(item, note_changed_at=note_changed_at)
+            del self._by_key[key]
+            self._by_key[self._identity(updated)] = updated
 
     def list_all(self) -> list[QuizItem]:
         """Test-only accessor for every persisted row."""
@@ -1420,3 +1477,213 @@ def test_accept_note_card_bounds_the_excerpt() -> None:
         answer="A",
     )
     assert len(card.source_excerpt) == 100
+
+
+# --- RefreshNoteCards: regenerate-and-match edit stability (NL-10, NL-11) ---------
+
+_MATCH_VECTOR = [1.0, 0.0]
+_ORTHOGONAL_VECTOR = [0.0, 1.0]
+
+
+def _seed_note_card(
+    items: FakeCardItemRepository,
+    note_id: UUID,
+    user_id: UUID,
+    *,
+    question: str,
+    answer: str,
+    embedding: list[float] | None = None,
+    item_type: str = QuizItemType.FREE_RECALL,
+) -> QuizItem:
+    """Seed a live note card with a scheduling row (the state a refresh must preserve)."""
+    item = QuizItem(
+        id=uuid4(),
+        source_id=None,
+        user_id=user_id,
+        origin=QuizItemOrigin.NOTE,
+        note_id=note_id,
+        item_type=item_type,
+        question=question,
+        answer=answer,
+        section_path=("Memory",),
+        anchor=f"note:{note_id}",
+        source_excerpt=_NOTE_BODY,
+        chunk_hash="d" * 64,
+        content_key=content_key(item_type, question, answer),
+        status=QuizItemStatus.ACTIVE,
+        generation_meta={},
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+    return items.seed(item, embedding)
+
+
+class _RefreshWorld:
+    """A seeded note + its live cards, wired to ``RefreshNoteCards``."""
+
+    def __init__(
+        self,
+        *,
+        note_candidates: list[QuizCandidate] | None = None,
+        body: str = _NOTE_BODY,
+        suggestion_vector: list[float] | None = None,
+        max_suggestions: int = 3,
+        excerpt_chars: int = 2000,
+        match_threshold: float = 0.80,
+        owner: User = _OWNER,
+    ) -> None:
+        self.notes = FakeNoteRepository()
+        self.note = Note(
+            id=uuid4(),
+            user_id=owner.id,
+            title="Memory",
+            body_markdown=body,
+            created_at=_NOW,
+            updated_at=_NOW,
+        )
+        self.notes.add(self.note)
+        self.items = FakeCardItemRepository()
+        self.generation = FakeSuggestGeneration(note_candidates=note_candidates)
+        self.embeddings = FakeCardEmbedding(suggestion_vector or _MATCH_VECTOR)
+        self.clock = FakeClock(_NOW)
+        self.refresh = RefreshNoteCards(
+            notes=self.notes,
+            items=self.items,
+            generation=self.generation,
+            embeddings=self.embeddings,
+            clock=self.clock,
+            max_suggestions=max_suggestions,
+            excerpt_chars=excerpt_chars,
+            match_threshold=match_threshold,
+        )
+
+    def seed_card(self, **kwargs) -> QuizItem:  # noqa: ANN003
+        return _seed_note_card(self.items, self.note.id, self.note.user_id, **kwargs)
+
+
+def test_refresh_rewrites_a_matched_changed_card_and_flags_it() -> None:
+    world = _RefreshWorld(
+        note_candidates=[_note_candidate(question="Reworded?", answer="Reworded answer")],
+    )
+    card = world.seed_card(
+        question="Original?", answer="Original answer", embedding=_MATCH_VECTOR
+    )
+
+    world.refresh(note_id=world.note.id)
+
+    updated = world.items.get_by_id(card.id)
+    assert updated.question == "Reworded?"
+    assert updated.answer == "Reworded answer"
+    assert updated.content_key == content_key(
+        QuizItemType.FREE_RECALL, "Reworded?", "Reworded answer"
+    )
+    assert updated.note_changed_at == _NOW
+    # Scheduling and the review log were never addressed (the core invariant).
+    assert world.items.update_scheduling_calls == 0
+    assert world.items.create_scheduling_calls == 0
+
+
+def test_refresh_leaves_a_matched_identical_card_untouched() -> None:
+    # The regenerated text is identical, so the card is not rewritten and not flagged.
+    world = _RefreshWorld(
+        note_candidates=[_note_candidate(question="Same?", answer="Same answer")],
+    )
+    card = world.seed_card(
+        question="Same?", answer="Same answer", embedding=_MATCH_VECTOR
+    )
+
+    world.refresh(note_id=world.note.id)
+
+    updated = world.items.get_by_id(card.id)
+    assert updated.question == "Same?"
+    assert updated.note_changed_at is None
+
+
+def test_refresh_flags_an_unmatched_card_without_rewriting_it() -> None:
+    # The suggestion's embedding is orthogonal to the card's, so nothing pairs.
+    world = _RefreshWorld(
+        note_candidates=[_note_candidate(question="Reworded?", answer="X")],
+        suggestion_vector=_ORTHOGONAL_VECTOR,
+    )
+    card = world.seed_card(
+        question="Original?", answer="Original answer", embedding=_MATCH_VECTOR
+    )
+
+    world.refresh(note_id=world.note.id)
+
+    updated = world.items.get_by_id(card.id)
+    assert updated.question == "Original?"  # text untouched
+    assert updated.note_changed_at == _NOW  # flagged only (NL-11)
+
+
+def test_refresh_flags_a_null_embedding_card_as_unmatchable() -> None:
+    world = _RefreshWorld(
+        note_candidates=[_note_candidate(question="Reworded?", answer="X")],
+    )
+    card = world.seed_card(question="Original?", answer="A", embedding=None)
+
+    world.refresh(note_id=world.note.id)
+
+    updated = world.items.get_by_id(card.id)
+    assert updated.question == "Original?"
+    assert updated.note_changed_at == _NOW
+
+
+def test_refresh_never_creates_or_deletes_cards() -> None:
+    # One live card, two grounded suggestions: the leftover suggestion is dropped.
+    world = _RefreshWorld(
+        note_candidates=[
+            _note_candidate(question="Reworded?", answer="A"),
+            _note_candidate(question="Second?", answer="B"),
+        ],
+    )
+    card = world.seed_card(
+        question="Original?", answer="A", embedding=_MATCH_VECTOR
+    )
+
+    world.refresh(note_id=world.note.id)
+
+    ids = [item.id for item in world.items.list_all()]
+    assert ids == [card.id]
+
+
+def test_refresh_reads_the_newest_body() -> None:
+    # A stale enqueue that runs after a newer save regenerates from the newest body.
+    world = _RefreshWorld()
+    world.seed_card(question="Q?", answer="A", embedding=_MATCH_VECTOR)
+    new_body = "A completely rewritten note body sentence."
+    world.notes.update(
+        world.note.id, title="Memory", body_markdown=new_body, updated_at=_NOW
+    )
+
+    world.refresh(note_id=world.note.id)
+
+    assert world.generation.note_calls[0][0] == new_body
+
+
+def test_refresh_on_a_deleted_note_is_a_noop() -> None:
+    world = _RefreshWorld(note_candidates=[_note_candidate()])
+    world.refresh(note_id=uuid4())  # no such note
+    assert world.generation.note_calls == []
+
+
+def test_refresh_with_no_live_cards_is_a_noop() -> None:
+    world = _RefreshWorld(note_candidates=[_note_candidate()])
+    world.refresh(note_id=world.note.id)  # note exists but nothing promoted
+    assert world.generation.note_calls == []
+
+
+def test_refresh_recomputes_the_excerpt_from_the_current_body() -> None:
+    world = _RefreshWorld(
+        note_candidates=[_note_candidate(question="Reworded?", answer="A")],
+        excerpt_chars=10,
+        body=_NOTE_QUOTE + " " + "x" * 500,  # long, still contains the anchor quote
+    )
+    card = world.seed_card(
+        question="Original?", answer="A", embedding=_MATCH_VECTOR
+    )
+
+    world.refresh(note_id=world.note.id)
+
+    updated = world.items.get_by_id(card.id)
+    assert len(updated.source_excerpt) == 10

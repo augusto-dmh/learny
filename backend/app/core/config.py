@@ -197,6 +197,12 @@ class Settings(BaseSettings):
     quiz_max_suggestions: int = 3
     quiz_max_card_chars: int = 2000
     quiz_note_excerpt_chars: int = 2000
+    # ``quiz_note_match_threshold`` is the cosine floor for pairing a live note card
+    # with a freshly generated suggestion during regenerate-and-match (NL-10). It is
+    # deliberately looser than ``quiz_dedup_threshold`` (0.90): that ceiling rejects
+    # near-duplicates, whereas matching an *edited* note's reworded card to its prior
+    # version must tolerate more drift.
+    quiz_note_match_threshold: float = 0.80
     quiz_min_section_chars: int = 200
     quiz_dedup_threshold: float = 0.90
     quiz_batch_timeout_s: int = 3600

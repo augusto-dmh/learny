@@ -61,6 +61,7 @@ from app.domain.ports import NoteIndexEnqueuer
 from app.infrastructure.web.csrf import enforce_csrf, enforce_origin
 from app.infrastructure.web.dependencies import (
     build_create_note,
+    build_has_note_items,
     build_update_note,
     get_authenticated_user,
     get_capture_highlight,
@@ -347,8 +348,13 @@ def update_note(
             body_markdown=body.body_markdown,
             tags=body.tags,
         )
+        # Read the refresh gate inside the UoW (AD-144): a body edit regenerates the
+        # note's derived cards only when it has live ones to refresh.
+        refresh_cards = body_changed and build_has_note_items(conn)(note_id)
     if body_changed:
         enqueuer.enqueue_embed(note_id)
+    if refresh_cards:
+        enqueuer.enqueue_refresh_cards(note_id)
     return NoteDetailView.from_view(view)
 
 
