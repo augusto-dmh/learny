@@ -1177,6 +1177,78 @@ describe("ChapterFlow create card (CAP-01/08)", () => {
   const callsTo = (fetchMock: ReturnType<typeof routedFetch>, url: string) => () =>
     fetchMock.mock.calls.filter(([u]) => u === url).length;
 
+  it("reuses the card flow's highlight instead of capturing the passage twice", async () => {
+    // Create card saves the highlight as its first step. Pressing Highlight after it
+    // must not write a second identical highlight for the same selection.
+    const fetchMock = routedFetch({
+      [`POST ${HIGHLIGHTS_URL}`]: () => jsonResponse(201, capturedNote),
+      [`POST ${SUGGEST_URL}`]: () => jsonResponse(200, { suggestions: [suggestion] }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderAndSelect();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create card" }));
+    await screen.findByText("Who wrote the first algorithm?");
+    expect(callsTo(fetchMock, HIGHLIGHTS_URL)()).toBe(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Highlight" }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Capture highlight" })).toBeNull(),
+    );
+    // Still one highlight for one passage.
+    expect(callsTo(fetchMock, HIGHLIGHTS_URL)()).toBe(1);
+  });
+
+  it("opens the note the card flow already made rather than making another", async () => {
+    const fetchMock = routedFetch({
+      [`POST ${HIGHLIGHTS_URL}`]: () => jsonResponse(201, capturedNote),
+      [`POST ${SUGGEST_URL}`]: () => jsonResponse(200, { suggestions: [suggestion] }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderAndSelect();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create card" }));
+    await screen.findByText("Who wrote the first algorithm?");
+
+    fireEvent.click(screen.getByRole("button", { name: "Note" }));
+
+    await waitFor(() => expect(nav.push).toHaveBeenCalledWith("/notes/n1"));
+    expect(callsTo(fetchMock, HIGHLIGHTS_URL)()).toBe(1);
+  });
+
+  it("starts a fresh card flow when the student selects a different passage", async () => {
+    // Without the reset, the second selection would generate cards against the first
+    // passage's anchor — cards attributed to text the student did not choose.
+    const fetchMock = routedFetch({
+      [`POST ${HIGHLIGHTS_URL}`]: () => jsonResponse(201, capturedNote),
+      [`POST ${SUGGEST_URL}`]: () => jsonResponse(200, { suggestions: [suggestion] }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const view = renderAndSelect();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create card" }));
+    await screen.findByText("Who wrote the first algorithm?");
+
+    // A new selection in another section: the previous suggestions must be gone.
+    selectText("Babbage designed the analytical engine");
+    fireEvent.mouseUp(
+      view.container.querySelector(`[data-section-anchor="${S2}"]`)!,
+    );
+
+    await waitFor(() =>
+      expect(screen.queryByText("Who wrote the first algorithm?")).toBeNull(),
+    );
+
+    // Creating a card now captures the NEW passage rather than reusing the old anchor.
+    fireEvent.click(screen.getByRole("button", { name: "Create card" }));
+    await waitFor(() => expect(callsTo(fetchMock, HIGHLIGHTS_URL)()).toBe(2));
+    const second = fetchMock.mock.calls.filter(([u]) => u === HIGHLIGHTS_URL)[1];
+    expect(JSON.parse((second[1] as RequestInit).body as string).quote_exact).toBe(
+      "Babbage designed the analytical engine",
+    );
+  });
+
   it("captures the highlight first, then asks for suggestions on the anchor it produced", async () => {
     const fetchMock = routedFetch({
       [`POST ${HIGHLIGHTS_URL}`]: () => jsonResponse(201, capturedNote),

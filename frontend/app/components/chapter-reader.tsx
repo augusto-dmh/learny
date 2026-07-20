@@ -354,6 +354,10 @@ export function ChapterFlow({
   // an empty array is a real answer ("no cards for this passage"), not an error,
   // which is why it is distinct from `null` (no request made yet).
   const [cardAnchorId, setCardAnchorId] = useState<string | null>(null);
+  // The note that `cardAnchorId` belongs to. Create card captures a highlight as its
+  // first step, so the passage is already saved: the plain capture verbs must reuse
+  // that note instead of writing a second one for the same words.
+  const [cardNoteId, setCardNoteId] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<CardSuggestion[] | null>(null);
   // A selection verb (Explain/Ask) the reader hands to the Ask panel: it carries
   // the verbatim quote and the selection's section anchor, is opened in ask mode,
@@ -426,6 +430,7 @@ export function ChapterFlow({
     // A new selection starts a new card flow: neither the previous highlight's
     // anchor nor its suggestions belong to this passage.
     setCardAnchorId(null);
+    setCardNoteId(null);
     setSuggestions(null);
     setCapture({
       ...derived,
@@ -436,6 +441,20 @@ export function ChapterFlow({
 
   async function handleCapture(action: CaptureAction) {
     if (!capture || !csrf) {
+      return;
+    }
+    // Create card already saved this passage. Capturing again would leave the student
+    // with two identical highlights for one selection, so reuse what it wrote: the
+    // highlight verb has nothing left to do, and the note verb opens the note itself.
+    if (cardNoteId) {
+      const existing = cardNoteId;
+      setCapture(null);
+      setSuggestions(null);
+      setCardAnchorId(null);
+      setCardNoteId(null);
+      if (action === "highlight-note") {
+        router.push(`/notes/${existing}`);
+      }
       return;
     }
     setPending(true);
@@ -493,6 +512,7 @@ export function ChapterFlow({
           throw new Error("Could not anchor this passage to the book.");
         }
         setCardAnchorId(anchorId);
+        setCardNoteId(note.id);
       }
       setSuggestions(await suggestCards(sourceId, anchorId, csrf));
     } catch (err) {
@@ -506,6 +526,7 @@ export function ChapterFlow({
   function handleSuggestionsDismissed() {
     setSuggestions(null);
     setCardAnchorId(null);
+    setCardNoteId(null);
     setCapture(null);
   }
 
