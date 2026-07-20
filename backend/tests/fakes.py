@@ -550,13 +550,23 @@ class FakeRetrieveEvidence:
         self.results: list[Evidence] = results if results is not None else []
         self._error = error
         self.calls: list[dict[str, object]] = []
+        # The notes toggle is captured alongside ``calls`` (parallel list) so the
+        # historical ``calls`` shape the Q&A suite asserts verbatim stays unchanged.
+        self.include_notes_calls: list[bool] = []
 
     def __call__(
-        self, *, user: User, source_id: UUID, query: str, top_k: int | None = None
+        self,
+        *,
+        user: User,
+        source_id: UUID,
+        query: str,
+        top_k: int | None = None,
+        include_notes: bool = False,
     ) -> list[Evidence]:
         self.calls.append(
             {"user": user, "source_id": source_id, "query": query, "top_k": top_k}
         )
+        self.include_notes_calls.append(include_notes)
         if self._error is not None:
             raise self._error
         return self.results
@@ -891,6 +901,9 @@ class FakeRetrievalPort:
     def __init__(self, results: list[Evidence] | None = None) -> None:
         self.results: list[Evidence] = results if results is not None else []
         self.calls: list[dict[str, object]] = []
+        # The note-scope kwargs are captured in a parallel list so the historical
+        # ``calls`` dict shape (asserted verbatim by the retrieval suite) is unchanged.
+        self.note_scope_calls: list[dict[str, object]] = []
 
     def search(
         self,
@@ -904,6 +917,8 @@ class FakeRetrievalPort:
         rrf_k: int,
         ef_search: int,
         anchors: Sequence[str] | None = None,
+        user_id: UUID | None = None,
+        include_notes: bool = False,
     ) -> list[Evidence]:
         self.calls.append(
             {
@@ -917,5 +932,8 @@ class FakeRetrievalPort:
                 "ef_search": ef_search,
                 "anchors": anchors,
             }
+        )
+        self.note_scope_calls.append(
+            {"user_id": user_id, "include_notes": include_notes}
         )
         return self.results

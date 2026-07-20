@@ -299,6 +299,7 @@ class FakeScopedRetrieveEvidence:
         query: str,
         top_k: int | None = None,
         anchors: Sequence[str] | None = None,
+        include_notes: bool = False,
     ) -> list[Evidence]:
         self.calls.append(
             {
@@ -307,6 +308,7 @@ class FakeScopedRetrieveEvidence:
                 "query": query,
                 "top_k": top_k,
                 "anchors": None if anchors is None else list(anchors),
+                "include_notes": include_notes,
             }
         )
         if self._error is not None:
@@ -768,6 +770,34 @@ def test_turn_scopes_retrieval_to_target_and_descendants() -> None:
     assert call["source_id"] == source.id
     assert call["query"] == "q"
     assert call["top_k"] == _TOP_K
+
+
+def test_turn_forwards_include_notes_to_retrieve() -> None:
+    # NL-04: the teaching turn forwards the include_notes decision to retrieval
+    # verbatim on both the buffered and the streaming path (default off for teaching
+    # is owned by the web layer; the service passes through whatever it is given).
+    target = _section("ch1.xhtml#core", ("Chapter 1",))
+    owner, source, session, sessions, sources = _seeded(target=target)
+    e0 = _evidence(source.id, "first", anchor="ch1.xhtml#core", score=0.9)
+    generation = FakeTeachingGeneration(
+        answer=GeneratedAnswer(
+            text="the answer", cited_chunk_ids=(e0.chunk_id,), model=_MODEL, found=True
+        )
+    )
+    retrieve = FakeScopedRetrieveEvidence([e0])
+    service = _post(
+        sessions=sessions,
+        turns=FakeTeachingTurnRepository(),
+        sources=sources,
+        corpus=FakeCorpus(_structure(target)),
+        retrieve=retrieve,
+        generation=generation,
+    )
+
+    service(user=owner, session_id=session.id, message="q", include_notes=True)
+    service.stream(user=owner, session_id=session.id, message="q", include_notes=False)
+
+    assert [c["include_notes"] for c in retrieve.calls] == [True, False]
 
 
 def test_turn_expands_subtree_retrieval_through_anchor_aliases() -> None:

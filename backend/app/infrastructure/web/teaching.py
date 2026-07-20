@@ -87,6 +87,9 @@ class TurnRequest(BaseModel):
     """
 
     message: str = Field(min_length=1)
+    # AD-147: teaching keeps notes OFF by default (ADR-0026 d4 — unproven for
+    # teaching). An absent flag defaults off here; a client opts in explicitly (NL-04).
+    include_notes: bool = False
 
     @field_validator("message")
     @classmethod
@@ -277,7 +280,12 @@ def post_teaching_turn(
     ``AnswerGenerationFailed`` → 502 with nothing persisted, and a turn-index race
     loses with ``TeachingTurnConflict`` → 409.
     """
-    turn = service(user=user, session_id=session_id, message=body.message)
+    turn = service(
+        user=user,
+        session_id=session_id,
+        message=body.message,
+        include_notes=body.include_notes,
+    )
     return TurnView.from_turn(turn)
 
 
@@ -305,7 +313,12 @@ def post_teaching_turn_stream(
     stream completion, so a mid-stream failure (rendered as a protocol ``error``
     part) or a client disconnect persists nothing (TEACH-13/17).
     """
-    events = service.stream(user=user, session_id=session_id, message=body.message)
+    events = service.stream(
+        user=user,
+        session_id=session_id,
+        message=body.message,
+        include_notes=body.include_notes,
+    )
     return to_sse_response(events)
 
 

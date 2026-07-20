@@ -15,11 +15,12 @@ Contract (also consumed by the Next.js proxy in Phase 7):
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_serializer
+from pydantic.functional_serializers import SerializerFunctionWrapHandler
 
 from app.application.retrieval import RetrieveEvidence
 from app.core.config import get_settings
@@ -45,6 +46,9 @@ class RetrieveRequest(BaseModel):
 
     query: str = Field(min_length=1)
     top_k: int | None = None
+    # Diagnostic endpoint: the note arms stay off unless a caller opts in (AD-147);
+    # its existing behaviour is unchanged for a body that omits the flag (NL-04).
+    include_notes: bool = False
 
     @field_validator("query")
     @classmethod
@@ -65,10 +69,16 @@ class RetrieveRequest(BaseModel):
 
 
 class EvidenceView(BaseModel):
-    """Public, citation-only view of one evidence item (RET-18).
+    """Public, citation-only view of one evidence item (RET-18, NL-03).
 
     Exposes only the citation anchors and score — never an internal storage field
     (``object_key``/``checksum``); ``Evidence`` carries none, keeping it that way.
+
+    A note citation additionally carries ``origin='note'`` plus the note's identity
+    (``note_id``/``note_title``) so the client renders it distinctly (NL-03). Those
+    three fields are emitted **only** for note evidence: a book citation serializes
+    to exactly the original seven keys (NL-03 book-citations-unchanged), so existing
+    clients and the pinned wire contract see no change.
     """
 
     chunk_id: UUID
@@ -78,6 +88,20 @@ class EvidenceView(BaseModel):
     page_span: dict | None
     snippet: str
     score: float
+    origin: Literal["book", "note"] = "book"
+    note_id: UUID | None = None
+    note_title: str | None = None
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        # The default handler serializes every field (respecting python/json mode);
+        # for book evidence the note-only fields are dropped so the projection is
+        # byte-identical to the pre-notes contract (NL-03).
+        data = handler(self)
+        if self.origin == "book":
+            for key in ("origin", "note_id", "note_title"):
+                data.pop(key, None)
+        return data
 
     @classmethod
     def from_evidence(cls, evidence: Evidence) -> EvidenceView:
@@ -89,6 +113,9 @@ class EvidenceView(BaseModel):
             page_span=evidence.page_span,
             snippet=evidence.snippet,
             score=evidence.score,
+            origin=evidence.origin,
+            note_id=evidence.note_id,
+            note_title=evidence.note_title,
         )
 
 
@@ -114,5 +141,11 @@ def retrieve(
     → 404 via the global handler), embeds the validated query, and runs the hybrid
     RRF search; an unmatched query yields ``results: []`` (200, not an error).
     """
-    evidence = service(user=user, source_id=source_id, query=body.query, top_k=body.top_k)
+    evidence = service(
+        user=user,
+        source_id=source_id,
+        query=body.query,
+        top_k=body.top_k,
+        include_notes=body.include_notes,
+    )
     return RetrieveResponse(results=[EvidenceView.from_evidence(e) for e in evidence])

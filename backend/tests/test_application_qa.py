@@ -229,6 +229,49 @@ def test_ask_forwards_trimmed_question_and_settings_top_k() -> None:
     assert generation.calls == [{"question": "photosynthesis", "evidence": evidence}]
 
 
+def test_ask_forwards_include_notes_to_retrieve() -> None:
+    # NL-04: the include_notes decision reaches retrieval verbatim on the buffered
+    # path — True when opted in, False when not — so the notes arms are gated by it.
+    owner = _user()
+    sources = FakeSourceRepository()
+    source = _owned_source(owner.id)
+    sources.add(source)
+    evidence = [_evidence(source.id, "passage", score=0.7)]
+    generation = FakeAnswerGeneration(
+        answer=GeneratedAnswer(
+            text="answer", cited_chunk_ids=(evidence[0].chunk_id,), model=_MODEL, found=True
+        )
+    )
+
+    retrieve = FakeRetrieveEvidence(results=evidence)
+    service = _ask(sources=sources, retrieve=retrieve, generation=generation)
+    service(user=owner, source_id=source.id, question="q", include_notes=True)
+    service(user=owner, source_id=source.id, question="q", include_notes=False)
+
+    assert retrieve.include_notes_calls == [True, False]
+
+
+def test_stream_forwards_include_notes_to_retrieve() -> None:
+    # NL-04: the streaming path forwards the flag identically (retrieval runs eagerly
+    # when the stream is opened, before any delta).
+    owner = _user()
+    sources = FakeSourceRepository()
+    source = _owned_source(owner.id)
+    sources.add(source)
+    e0 = _evidence(source.id, "passage", score=0.9)
+    generation = FakeAnswerGeneration(
+        answer=GeneratedAnswer(
+            text="answer", cited_chunk_ids=(e0.chunk_id,), model=_MODEL, found=True
+        )
+    )
+
+    retrieve = FakeRetrieveEvidence(results=[e0])
+    service = _ask(sources=sources, retrieve=retrieve, generation=generation)
+    service.stream(user=owner, source_id=source.id, question="q", include_notes=True)
+
+    assert retrieve.include_notes_calls == [True]
+
+
 def test_ask_empty_evidence_is_not_found_without_invoking_port() -> None:
     # QA-13 (+ zero-chunk edge): zero evidence → not-found, port never invoked;
     # model comes from the port's stable identity, evidence_count is 0.

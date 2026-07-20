@@ -138,6 +138,7 @@ class RetrieveEvidence:
         query: str,
         top_k: int | None = None,
         anchors: Sequence[str] | None = None,
+        include_notes: bool = False,
     ) -> list[Evidence]:
         authorized_source(
             user=user,
@@ -146,6 +147,8 @@ class RetrieveEvidence:
             authorize=self._authorize,
         )
         query_vec = self._embeddings.embed_query(query)
+        # The owner is always forwarded so the port can scope the note arms to this
+        # user (NL-05); ``include_notes`` gates whether those arms run at all (NL-04).
         return self._retrieval.search(
             source_id=source_id,
             query_text=query,
@@ -156,4 +159,6 @@ class RetrieveEvidence:
             rrf_k=self._rrf_k,
             ef_search=self._ef_search,
             anchors=anchors,
+            user_id=user.id,
+            include_notes=include_notes,
         )

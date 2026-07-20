@@ -1050,3 +1050,52 @@ def test_turn_stream_mid_stream_failure_emits_error_part_and_persists_nothing(
     # Nothing persisted — the conversation is still empty.
     read = auth_client.get(f"/api/teaching-sessions/{session.id}")
     assert read.json()["turns"] == []
+
+
+# --- include_notes default (AD-147 / NL-04) ------------------------------------
+
+
+def test_post_turn_defaults_include_notes_false_and_forwards_explicit_choice(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # AD-147 / NL-04: teaching keeps the note arms OFF when the flag is absent, and
+    # forwards an explicit opt-in verbatim. Asserted by spying on the wired service.
+    from app.infrastructure.web.dependencies import get_post_teaching_turn
+
+    _register(auth_client, "teachnotes@example.com")
+    csrf = _csrf(auth_client)
+    session_id = uuid4()
+
+    seen: list[bool] = []
+
+    class _SpyService:
+        def __call__(  # noqa: ANN001
+            self, *, user, session_id, message, include_notes=False
+        ) -> TeachingTurn:
+            seen.append(include_notes)
+            return TeachingTurn(
+                id=uuid4(),
+                session_id=session_id,
+                turn_index=0,
+                message=message,
+                answer_status="not_found_in_source",
+                answer_text="",
+                model=_MODEL,
+                evidence_count=0,
+                citations=(),
+                created_at=datetime.now(UTC),
+            )
+
+    auth_client.app.dependency_overrides[get_post_teaching_turn] = lambda: _SpyService()
+    try:
+        absent = _post_turn(auth_client, session_id, {"message": "explain"}, csrf=csrf)
+        opted_in = _post_turn(
+            auth_client, session_id, {"message": "explain", "include_notes": True}, csrf=csrf
+        )
+    finally:
+        auth_client.app.dependency_overrides.pop(get_post_teaching_turn, None)
+
+    assert absent.status_code == 201, absent.text
+    assert opted_in.status_code == 201, opted_in.text
+    # Absent → teaching's default (off); explicit True → forwarded.
+    assert seen == [False, True]
