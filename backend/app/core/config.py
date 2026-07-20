@@ -139,6 +139,16 @@ class Settings(BaseSettings):
     retrieval_max_top_k: int = 50
     hnsw_ef_search: int = 100
 
+    # Notes-in-retrieval arms (ADR-0026 d4, NL-02) — two extra RRF arms over the
+    # user's own notes, fused into the same ranking behind ``include_notes``. Smaller
+    # per-arm limits than the book arms (the notes corpus is far smaller); weight 1.0
+    # is neutral (no eval signal for a bias — the limits are the constraint); the
+    # snippet cap bounds how much note body is projected as evidence text.
+    retrieval_notes_semantic_limit: int = 5
+    retrieval_notes_lexical_limit: int = 5
+    retrieval_notes_weight: float = 1.0
+    retrieval_notes_snippet_chars: int = 2000
+
     # Cited Q&A (Phase 7) — question length bound enforced by the web validator
     # and the server-controlled evidence budget. ``qa_evidence_top_k`` is the
     # ``top_k`` handed to Phase-6 retrieval; keep it ≤ ``retrieval_max_top_k``.

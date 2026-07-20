@@ -17,6 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from decimal import Decimal
+from typing import Literal
 from uuid import UUID
 
 
@@ -394,6 +395,14 @@ class Evidence:
     page_span: dict | None
     snippet: str
     score: float
+    # Widened for the notes-in-retrieval arms (ADR-0026 d4, NL-02). ``origin``
+    # discriminates a book chunk from the user's own note; ``chunk_id`` remains the
+    # opaque evidence id grounding matches on (the note's id for a note). ``note_id``/
+    # ``note_title`` carry the note's identity for its distinct citation. All default
+    # so every existing book construction stays valid (additive, frozen).
+    origin: Literal["book", "note"] = "book"
+    note_id: UUID | None = None
+    note_title: str | None = None
 
 
 @dataclass(frozen=True)

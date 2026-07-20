@@ -536,12 +536,21 @@ class RetrievalPort(Protocol):
         rrf_k: int,
         ef_search: int,
         anchors: Sequence[str] | None = None,
+        user_id: UUID | None = None,
+        include_notes: bool = False,
     ) -> list[Evidence]:
         """Return up to ``top_k`` fused ``Evidence`` for ``source_id``, RRF-ordered.
 
-        When ``anchors`` is given, both arms are restricted to chunks whose section
+        When ``anchors`` is given, both book arms are restricted to chunks whose section
         ``anchor`` is in the set — the target-subtree scope for teaching (TEACH-09,
         AD-031). ``None`` (the default) keeps the whole-source behaviour unchanged.
+
+        When ``include_notes`` and ``user_id`` are both provided, two additional RRF
+        arms over that user's own notes (semantic + lexical) are fused into the same
+        ranking behind a notes weight (ADR-0026 d4, NL-02); note evidence carries
+        ``origin='note'`` and the note's identity. Either omitted keeps the book-only
+        behaviour byte-identical (the anchors, if any, constrain only the book arms —
+        notes have no anchors).
         """
         ...
 
