@@ -25,7 +25,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import Connection
+from sqlalchemy import Connection, text
 
 from app.domain.entities import (
     CorpusSectionRecord,
@@ -183,12 +183,23 @@ def _search(
 def test_distinctive_note_ranks_first_and_projects_note_evidence(db_conn: Connection) -> None:
     # NL-02: a note carrying a fact the book never mentions ranks first for that query,
     # and its evidence is projected distinctly from a book chunk.
+    #
+    # Two determinism guards, no assertion changes:
+    # 1. Every query token below appears verbatim in the note body ('simple' does not
+    #    stem, so "cost" would NOT match the body's "costs") — the note then wins BOTH
+    #    note arms while the book (which never mentions zolgensma) can at best take one
+    #    semantic slot, making the top rank a decisive 2/(k+1) vs 1/(k+1), never an
+    #    RRF tie broken by comparing random UUIDs.
+    # 2. Rebuild the HNSW index first (transactional; skips the aborted tuples that
+    #    every rolled-back test leaves in the shared graph) so approximate recall of
+    #    the freshly seeded note cannot degrade with suite-run history.
+    db_conn.execute(text("REINDEX INDEX ix_notes_embedding_hnsw"))
     user, source = _persisted_user_and_source(db_conn, "fuse@example.com")
     _two_topic_book(db_conn, source.id)
     note_id = _seed_note(db_conn, user.id, title="Drug pricing", body=_NOTE_FACT)
 
     results = _search(
-        db_conn, source.id, "zolgensma gene therapy dose cost", user_id=user.id, include_notes=True
+        db_conn, source.id, "zolgensma gene therapy dose", user_id=user.id, include_notes=True
     )
 
     assert results, "expected the note among the results"
