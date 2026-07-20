@@ -37,6 +37,10 @@ Q&A retrieval is hard-scoped to one `source_id`; notes are user-global and may b
 - Reuse `note_anchor_id` to reach the note via an anchor — why: no new column. Why not: un-anchored notes (the majority) have no anchor; wrong join direction — the card derives from the note, not from a highlight.
 - Separate `note_quiz_items` table — why: clean separation. Why not: forks the entire review pipeline (queue, scheduling, export, UI) for no behavioral difference.
 
+## Execution-model decision (logged per autonomy contract)
+
+6 phases > 3 → tlc's worker-per-phase offer auto-accepted on the recommended option (sequential workers, compact summaries, v4-D precedent). Phase workers pinned to Opus per the ship-cycle cost-discipline table (every phase carries a design decision or correctness invariant; F is code-fact docs, kept off Haiku per the recorded Haiku-runbook lesson). Verifier runs on the session model (Fable 5) — the ship-cycle table's named candidate upshift, made the session default by the user's own model switch.
+
 ## Escalation check
 
 None of AD-143..148 changes product direction beyond the cycle, locks a new provider, or lacks a defensible recommendation — no user escalation required (ship-cycle Stage 1 rule).

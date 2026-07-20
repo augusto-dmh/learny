@@ -7,7 +7,7 @@ Implement these tasks with the `tlc-spec-driven` skill: **activate it by name an
 ---
 
 **Design**: `.specs/features/v3-notes-loop/design.md`
-**Status**: Approved (auto, ship-cycle autonomy contract)
+**Status**: In Progress — Phase A done (T1 `db0c509`, T2 `0995186`, T3 `bc6a145`; full gate 1390 passed / 10 skipped, ruff clean, +22 tests). Phase A contract notes: `UpdateNote` returns `(NoteView, body_changed)`; note evidence projects `chunk_id = source_id = note_id`; `refresh_note_cards` is a registered no-op stub for Phase C. Gate env: `LEARNY_EMBEDDING_PROVIDER=local LEARNY_GENERATION_PROVIDER=local` (backend/.env carries a real OpenAI key otherwise hit by one ingestion test).
 
 ---
 
