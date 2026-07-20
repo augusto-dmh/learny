@@ -122,8 +122,10 @@ touching scheduling, and pin the shipped ingestion step order (quiz reconcile, t
 ## Phase D — Reader capture flow
 
 **D1 — `lib/cards.ts`**
-`suggestCards`, `acceptCard`, `updateCard`, `CardError` with `kind`, each with the trailing
-`fetchImpl` seam.
+`suggestCards`, `acceptCard`, `CardError` with `kind`, each with the trailing `fetchImpl` seam.
+(An `updateCard` helper was built here and then removed during review triage: no surface in this
+cycle edits a saved card, so it was dead code. The backend `PATCH` route it targeted stays as the
+contract RFC-003 Cycle F consumes — see CAP-A11.)
 *Verify*: `tests/cards-client.test.ts` — URL/method/CSRF header per call; 409 → `stale_capture`;
 422 → `invalid`.
 *Covers*: CAP-01, CAP-08.

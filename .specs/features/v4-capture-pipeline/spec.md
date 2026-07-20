@@ -13,14 +13,14 @@ from a card under review back to the sentence it came from without hand-navigati
 
 ## Goals
 
-- [ ] A highlighted quote produces card suggestions on demand, accepted/edited/discarded
+- [x] A highlighted quote produces card suggestions on demand, accepted/edited/discarded
       one at a time — never silently, never in bulk.
-- [ ] Accepted cards carry a creation-minted stable identity and typed provenance back to
+- [x] Accepted cards carry a creation-minted stable identity and typed provenance back to
       the highlight they came from, so later edits never disturb FSRS scheduling.
-- [ ] The reading view surfaces the chapter's own notes and orphaned highlights beside the
+- [x] The reading view surfaces the chapter's own notes and orphaned highlights beside the
       text, without a page change.
-- [ ] A card under review returns the student to its source passage in one click.
-- [ ] The capture gestures meet a measured friction budget.
+- [x] A card under review returns the student to its source passage in one click.
+- [x] The capture gestures meet a measured friction budget.
 
 ## Out of Scope
 
@@ -259,42 +259,42 @@ regression adds one.
 
 | Requirement ID | Story | Phase | Status |
 | --- | --- | --- | --- |
-| CAP-01 | P1: Create a card | Design | Pending |
-| CAP-02 | P1: Create a card | Design | Pending |
-| CAP-03 | P1: Create a card | Design | Pending |
-| CAP-04 | P1: Create a card | Design | Pending |
-| CAP-05 | P1: Create a card | Design | Pending |
-| CAP-06 | P1: Create a card | Design | Pending |
-| CAP-07 | P1: Create a card | Design | Pending |
-| CAP-08 | P1: Create a card | Design | Pending |
-| CAP-09 | P1: Create a card | Design | Pending |
-| CAP-10 | P1: Identity + provenance | Design | Pending |
-| CAP-11 | P1: Identity + provenance | Design | Pending |
-| CAP-12 | P1: Identity + provenance | Design | Pending |
-| CAP-13 | P1: Identity + provenance | Design | Pending |
-| CAP-14 | P1: Identity + provenance | Design | Pending |
-| CAP-15 | P1: Identity + provenance | Design | Pending |
-| CAP-16 | P1: Identity + provenance | Design | Pending |
-| CAP-17 | P1: Identity + provenance | Design | Pending |
-| CAP-18 | P1: Margin rail | Design | Pending |
-| CAP-19 | P1: Margin rail | Design | Pending |
-| CAP-20 | P1: Margin rail | Design | Pending |
-| CAP-21 | P1: Margin rail | Design | Pending |
-| CAP-22 | P1: Margin rail | Design | Pending |
-| CAP-23 | P1: Margin rail | Design | Pending |
-| CAP-24 | P1: Margin rail | Design | Pending |
-| CAP-25 | P1: Review pin | Design | Pending |
-| CAP-26 | P1: Review pin | Design | Pending |
-| CAP-27 | P1: Review pin | Design | Pending |
-| CAP-28 | P2: Shortcuts | Design | Pending |
-| CAP-29 | P2: Shortcuts | Design | Pending |
-| CAP-30 | P2: Shortcuts | Design | Pending |
-| CAP-31 | P2: Shortcuts | Design | Pending |
-| CAP-32 | P2: Shortcuts | Design | Pending |
-| CAP-33 | P2: Shortcuts | Design | Pending |
-| CAP-34 | P2: Friction budget | Design | Pending |
-| CAP-35 | P2: Friction budget | Design | Pending |
-| CAP-36 | P2: Friction budget | Design | Pending |
+| CAP-01 | P1: Create a card | B, C, D | Verified |
+| CAP-02 | P1: Create a card | B, C, D | Verified |
+| CAP-03 | P1: Create a card | B, C, D | Verified |
+| CAP-04 | P1: Create a card | B, C, D | Verified |
+| CAP-05 | P1: Create a card | B, C, D | Verified |
+| CAP-06 | P1: Create a card | B, C, D | Verified |
+| CAP-07 | P1: Create a card | B, C, D | Verified |
+| CAP-08 | P1: Create a card | B, C, D | Verified |
+| CAP-09 | P1: Create a card | B, C, D | Verified |
+| CAP-10 | P1: Identity + provenance | A, B, C | Verified |
+| CAP-11 | P1: Identity + provenance | A, B, C | Verified |
+| CAP-12 | P1: Identity + provenance | A, B, C | Verified |
+| CAP-13 | P1: Identity + provenance | A, B, C | Verified |
+| CAP-14 | P1: Identity + provenance | A, B, C | Verified |
+| CAP-15 | P1: Identity + provenance | A, B, C | Verified |
+| CAP-16 | P1: Identity + provenance | A, B, C | Verified |
+| CAP-17 | P1: Identity + provenance | A, B, C | Verified |
+| CAP-18 | P1: Margin rail | A, C, E | Verified |
+| CAP-19 | P1: Margin rail | A, C, E | Verified |
+| CAP-20 | P1: Margin rail | A, C, E | Verified |
+| CAP-21 | P1: Margin rail | A, C, E | Verified |
+| CAP-22 | P1: Margin rail | A, C, E | Verified |
+| CAP-23 | P1: Margin rail | A, C, E | Verified |
+| CAP-24 | P1: Margin rail | A, C, E | Verified |
+| CAP-25 | P1: Review pin | C, E | Verified |
+| CAP-26 | P1: Review pin | C, E | Verified |
+| CAP-27 | P1: Review pin | C, E | Verified |
+| CAP-28 | P2: Shortcuts | E | Verified |
+| CAP-29 | P2: Shortcuts | E | Verified |
+| CAP-30 | P2: Shortcuts | E | Verified |
+| CAP-31 | P2: Shortcuts | E | Verified |
+| CAP-32 | P2: Shortcuts | E | Verified |
+| CAP-33 | P2: Shortcuts | E | Verified |
+| CAP-34 | P2: Friction budget | E | Verified |
+| CAP-35 | P2: Friction budget | E | Verified |
+| CAP-36 | P2: Friction budget | E | Verified |
 
 **ID mapping:** CAP-01..09 = P1 Create-a-card AC 1..9; CAP-10..17 = P1 Identity AC 1..8;
 CAP-18..24 = P1 Rail AC 1..7; CAP-25..27 = P1 Pin AC 1..3; CAP-28..33 = P2 Shortcuts AC 1..6;
@@ -302,14 +302,14 @@ CAP-34..36 = P2 Friction AC 1..3.
 
 **Status values:** Pending → In Design → In Tasks → Implementing → Verified
 
-**Coverage:** 36 total, 0 mapped to tasks yet.
+**Coverage:** 36 total, 36 mapped to tasks, 36 verified against named tests. 0 unmapped.
 
 ---
 
 ## Success Criteria
 
-- [ ] A passage becomes a scheduled card in two pointer actions.
-- [ ] Editing a highlight-derived card leaves its `due` value and review log byte-identical.
-- [ ] Deleting a note leaves every card it produced intact and reviewable.
-- [ ] Orphaned highlights are visible in the reader rather than only in `/notes`.
-- [ ] Backend and frontend suites green; no regression in whole-deck generation behaviour.
+- [x] A passage becomes a scheduled card in two pointer actions.
+- [x] Editing a highlight-derived card leaves its `due` value and review log byte-identical (proven at the API and database layers — see CAP-A11).
+- [x] Deleting a note leaves every card it produced intact and reviewable.
+- [x] Orphaned highlights are visible in the reader rather than only in `/notes`.
+- [x] Backend and frontend suites green; no regression in whole-deck generation behaviour.

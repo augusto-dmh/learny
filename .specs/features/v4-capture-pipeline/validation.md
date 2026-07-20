@@ -5,6 +5,16 @@
 **Verifier**: fresh sub-agent, author ≠ verifier, evidence-or-zero
 **Date**: 2026-07-19
 
+> **Status after review (2026-07-19, later).** This record is a snapshot of the branch as
+> verified, and the branch has moved since. Both ranked gaps are closed: the rate-limit
+> sensor exists (M16's survivor is dead — removing `rate_limit_quiz` now fails three
+> tests), and the unconsumed `updateCard` client was removed. Six review lanes then found
+> two real defects this pass did not — an `AcceptCard` fall-through that could schedule
+> against a row that was never inserted, and an `UpdateCard` text collision reaching the
+> database as a 500. Both are fixed with sensors. Neither was reachable by mutation
+> testing: each lives on a branch no test executed, so there was nothing to mutate.
+> Full reasoning in `review-triage.md`.
+
 ---
 
 ## Verdict: **PASS**, with one gap that should be closed before merge
