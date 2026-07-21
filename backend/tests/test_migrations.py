@@ -81,6 +81,7 @@ def test_migration_metadata_compiles() -> None:
         "note_tags",
         "note_links",
         "reading_positions",
+        "study_days",
     }
     # Unique email + unique session token_hash are the security-critical constraints.
     user_uniques = {c.name for c in users.constraints if c.__class__.__name__ == "UniqueConstraint"}
@@ -1780,6 +1781,98 @@ def test_migration_0014_adds_card_ownership_and_note_provenance(monkeypatch) -> 
     try:
         columns = {c["name"] for c in inspect(engine).get_columns("quiz_items")}
         assert {"user_id", "note_id", "note_changed_at"} <= columns
+    finally:
+        engine.dispose()
+
+    # Drop everything to clear the committed seed rows; the module fixture restores head.
+    command.downgrade(cfg, "base")
+
+
+@pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
+def test_migration_0015_creates_study_days(monkeypatch) -> None:
+    """0015 up: creates ``study_days`` keyed ``(user_id, day)`` with per-kind counters
+    ``reviews_count``/``reading_updates`` (INTEGER NOT NULL DEFAULT 0) and a CASCADE FK to
+    ``users``. An inserted row defaults both counters to 0; the FK cascade is exercised for
+    real (deleting the user removes their study days). Down one step to 0014 drops the
+    table; ``users`` survives."""
+    monkeypatch.setenv("LEARNY_DATABASE_URL", TEST_DB_URL)
+    cfg = _alembic_config(TEST_DB_URL)
+
+    # Land on 0014 (pre-study_days) so the upgrade below is the one under test.
+    command.upgrade(cfg, "head")
+    command.downgrade(cfg, "0014_note_cards")
+
+    user_id = uuid.uuid4()
+    engine = create_engine(TEST_DB_URL)
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("INSERT INTO users (id, email) VALUES (:id, :email)"),
+                {"id": user_id, "email": f"{user_id}@example.test"},
+            )
+    finally:
+        engine.dispose()
+
+    command.upgrade(cfg, "head")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        inspector = inspect(engine)
+        assert "study_days" in set(inspector.get_table_names())
+
+        columns = {c["name"]: c for c in inspector.get_columns("study_days")}
+        assert set(columns) == {"user_id", "day", "reviews_count", "reading_updates"}
+        assert columns["day"]["nullable"] is False
+        assert columns["reviews_count"]["nullable"] is False
+        assert columns["reading_updates"]["nullable"] is False
+
+        pk = inspector.get_pk_constraint("study_days")["constrained_columns"]
+        assert pk == ["user_id", "day"]
+
+        user_fk = next(
+            fk
+            for fk in inspector.get_foreign_keys("study_days")
+            if fk["constrained_columns"] == ["user_id"]
+        )
+        assert user_fk["referred_table"] == "users"
+        assert user_fk["options"].get("ondelete") == "CASCADE"
+
+        # An inserted row with no counters supplied defaults both to 0.
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO study_days (user_id, day) VALUES (:uid, DATE '2026-07-21')"
+                ),
+                {"uid": user_id},
+            )
+        with engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT reviews_count, reading_updates FROM study_days "
+                    "WHERE user_id = :uid"
+                ),
+                {"uid": user_id},
+            ).one()
+        assert (row.reviews_count, row.reading_updates) == (0, 0)
+
+        # Real cascade: deleting the user removes their study days.
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM users WHERE id = :uid"), {"uid": user_id})
+        with engine.connect() as conn:
+            remaining = conn.execute(
+                text("SELECT count(*) FROM study_days WHERE user_id = :uid"),
+                {"uid": user_id},
+            ).scalar_one()
+        assert remaining == 0
+    finally:
+        engine.dispose()
+
+    # Down one step to 0014: the table drops; users survives.
+    command.downgrade(cfg, "0014_note_cards")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        tables = set(inspect(engine).get_table_names())
+        assert "study_days" not in tables
+        assert "users" in tables
     finally:
         engine.dispose()
 

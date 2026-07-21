@@ -16,7 +16,7 @@ Mapping notes:
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID, uuid4
 
@@ -65,6 +65,7 @@ from app.domain.entities import (
     QuizItemStatus,
     QuizSection,
     ReadingPosition,
+    RecentReadingPosition,
     ReconcileSection,
     ReviewLogEntry,
     SchedulingSnapshot,
@@ -73,6 +74,7 @@ from app.domain.entities import (
     Source,
     SourceHighlight,
     StructureSection,
+    StudyDay,
     TeachingSession,
     TeachingSessionSummary,
     TeachingTurn,
@@ -96,6 +98,7 @@ from app.infrastructure.db.metadata import (
     review_log,
     sessions,
     sources,
+    study_days,
     tags,
     teaching_sessions,
     teaching_turn_citations,
@@ -2078,6 +2081,111 @@ class SqlAlchemyReadingPositionRepository:
         return ReadingPosition(
             anchor=row.anchor, percent=row.percent, updated_at=row.updated_at
         )
+
+    def most_recent_for_user(self, user_id: UUID) -> RecentReadingPosition | None:
+        """Return the caller's single most-recently-updated position, or ``None`` (HOME-01/04).
+
+        Joins ``reading_positions`` to the owning ``sources`` for the title and scopes to
+        the caller's own ``user_id`` in SQL (I-5) — another user's rows are unreachable,
+        not filtered out afterward. Ordered by ``updated_at DESC`` with ``source_id DESC``
+        breaking ties deterministically (two positions saved in the same instant resolve
+        to one stable winner). ``LIMIT 1`` returns the single most-recent row.
+        """
+        row = self._conn.execute(
+            select(
+                reading_positions.c.source_id,
+                sources.c.title,
+                reading_positions.c.anchor,
+                reading_positions.c.percent,
+                reading_positions.c.updated_at,
+            )
+            .select_from(
+                reading_positions.join(
+                    sources, reading_positions.c.source_id == sources.c.id
+                )
+            )
+            .where(reading_positions.c.user_id == user_id)
+            .order_by(
+                reading_positions.c.updated_at.desc(),
+                reading_positions.c.source_id.desc(),
+            )
+            .limit(1)
+        ).one_or_none()
+        if row is None:
+            return None
+        return RecentReadingPosition(
+            source_id=row.source_id,
+            source_title=row.title,
+            anchor=row.anchor,
+            percent=row.percent,
+            updated_at=row.updated_at,
+        )
+
+
+class SqlAlchemyStudyDayRepository:
+    """``StudyDayRepository`` backed by ``study_days`` (HOME-07/08/10, AD-151/153).
+
+    ``record`` is a single ``INSERT ... ON CONFLICT (user_id, day) DO UPDATE`` that adds
+    the passed deltas to the stored counters — concurrency-safe by construction (two
+    same-day writes never conflict; the second takes the atomic increment path), so N
+    same-day events leave exactly one row with counters equal to the totals. ``window``
+    reads the caller's rows in a day range for the adherence/heatmap surface. Operates on
+    the caller's ``Connection`` so the rollup shares the triggering write's transaction.
+    """
+
+    def __init__(self, connection: Connection) -> None:
+        self._conn = connection
+
+    def record(
+        self,
+        user_id: UUID,
+        day: date,
+        *,
+        reviews: int = 0,
+        reading_updates: int = 0,
+    ) -> None:
+        stmt = pg_insert(study_days).values(
+            user_id=user_id,
+            day=day,
+            reviews_count=reviews,
+            reading_updates=reading_updates,
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[study_days.c.user_id, study_days.c.day],
+            set_={
+                # Atomic increment against the stored value (not a read-then-write), so
+                # concurrent commits both count.
+                "reviews_count": study_days.c.reviews_count + stmt.excluded.reviews_count,
+                "reading_updates": study_days.c.reading_updates
+                + stmt.excluded.reading_updates,
+            },
+        )
+        self._conn.execute(stmt)
+
+    def window(
+        self, user_id: UUID, *, start: date, end: date
+    ) -> list[StudyDay]:
+        rows = self._conn.execute(
+            select(
+                study_days.c.user_id,
+                study_days.c.day,
+                study_days.c.reviews_count,
+                study_days.c.reading_updates,
+            )
+            .where(study_days.c.user_id == user_id)
+            .where(study_days.c.day >= start)
+            .where(study_days.c.day <= end)
+            .order_by(study_days.c.day)
+        ).all()
+        return [
+            StudyDay(
+                user_id=row.user_id,
+                day=row.day,
+                reviews_count=row.reviews_count,
+                reading_updates=row.reading_updates,
+            )
+            for row in rows
+        ]
 
 
 def _to_user(row) -> User:  # noqa: ANN001 — Row is an internal SQLAlchemy type
