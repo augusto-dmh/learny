@@ -212,6 +212,35 @@ describe("paper reading appearance", () => {
       expect(dark).not.toContain(hex);
     }
   });
+
+  // POL-05 — the warm surface is a second reading ground and must hold AA on
+  // its own: paper ink on every paper field it can sit on.
+  it.each([
+    ["foreground", "background"],
+    ["foreground", "card"],
+    ["foreground", "popover"],
+    ["muted-foreground", "background"],
+  ])("keeps paper --%s on paper --%s >= 4.5:1", (fg, bg) => {
+    const paper = cssBlock(PAPER_SELECTOR);
+    expect(contrast(token(paper, fg), token(paper, bg))).toBeGreaterThanOrEqual(
+      4.5,
+    );
+  });
+});
+
+// POL-06 — highlight legibility: the inline mark keeps the prose ink
+// (`color: inherit`), so the ink of every ground that can render a highlight
+// must hold AA over the yellow wash of that ground's mode.
+describe("highlight legibility", () => {
+  const paper = cssBlock('html:not(.dark) [data-appearance="paper"]');
+
+  it.each([
+    ["light foreground", token(light, "foreground"), token(light, "highlight-yellow")],
+    ["paper foreground", token(paper, "foreground"), token(light, "highlight-yellow")],
+    ["dark foreground", token(dark, "foreground"), token(dark, "highlight-yellow")],
+  ])("keeps %s >= 4.5:1 over the highlight wash", (_ground, ink, wash) => {
+    expect(contrast(ink, wash)).toBeGreaterThanOrEqual(4.5);
+  });
 });
 
 // IDF-02 AC1 — the reading serif is bound at build time with Portuguese
