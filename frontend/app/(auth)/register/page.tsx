@@ -23,7 +23,7 @@ export default function RegisterPage() {
       <CardContent className="space-y-4">
         <AuthForm
           mode="register"
-          onAuthenticated={() => router.push("/account")}
+          onAuthenticated={() => router.push("/home")}
         />
         <p className="text-sm text-muted-foreground">
           Already have an account?{" "}

@@ -21,7 +21,7 @@ export default function LoginPage() {
         <CardDescription>Welcome back to Learny.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        <AuthForm mode="login" onAuthenticated={() => router.push("/account")} />
+        <AuthForm mode="login" onAuthenticated={() => router.push("/home")} />
         <p className="text-sm text-muted-foreground">
           No account?{" "}
           <Link
