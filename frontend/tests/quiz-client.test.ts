@@ -12,7 +12,7 @@
  * pure same-origin URL builder (no fetch). No real network.
  */
 
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   generateDeck,
@@ -27,6 +27,24 @@ import {
   type QuizOverview,
   type Scheduling,
 } from "../app/lib/quiz";
+
+/** Force `Intl.DateTimeFormat` to report a fixed zone for the duration of a test. */
+function stubZone(zone: string) {
+  vi.spyOn(Intl, "DateTimeFormat").mockImplementation(
+    () => ({ resolvedOptions: () => ({ timeZone: zone }) }) as never,
+  );
+}
+
+/** Force `Intl.DateTimeFormat` to be unusable, exercising the safe fallback. */
+function breakIntl() {
+  vi.spyOn(Intl, "DateTimeFormat").mockImplementation(() => {
+    throw new Error("Intl unavailable");
+  });
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 const job: QuizJob = {
   id: "job1",
@@ -337,6 +355,39 @@ describe("submitReview (E1)", () => {
         fetchMock as unknown as typeof fetch,
       ),
     ).rejects.toThrow("Could not submit your review.");
+  });
+
+  it("attaches X-Client-Timezone for the study-day boundary when the zone is available (HOME-09)", async () => {
+    stubZone("America/Sao_Paulo");
+    const fetchMock = fetchMockFn(async () => jsonResponse(200, scheduling));
+
+    await submitReview(
+      "i1",
+      { rating: 3 },
+      "csrf-xyz",
+      fetchMock as unknown as typeof fetch,
+    );
+
+    const headers = new Headers(fetchMock.mock.calls[0][1].headers);
+    expect(headers.get("X-Client-Timezone")).toBe("America/Sao_Paulo");
+    // The pre-existing CSRF header is untouched by the additive tz header.
+    expect(headers.get("X-CSRF-Token")).toBe("csrf-xyz");
+  });
+
+  it("omits X-Client-Timezone entirely — never 'undefined' — when the zone is unavailable (HOME-09)", async () => {
+    breakIntl();
+    const fetchMock = fetchMockFn(async () => jsonResponse(200, scheduling));
+
+    await submitReview(
+      "i1",
+      { rating: 3 },
+      "csrf-xyz",
+      fetchMock as unknown as typeof fetch,
+    );
+
+    const headers = new Headers(fetchMock.mock.calls[0][1].headers);
+    expect(headers.has("X-Client-Timezone")).toBe(false);
+    expect(headers.get("X-Client-Timezone")).not.toBe("undefined");
   });
 });
 

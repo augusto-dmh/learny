@@ -14,18 +14,20 @@ Exercises the chapter-flow and reading-position endpoints end-to-end through Fas
 from __future__ import annotations
 
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import Connection, select
 
+from app.application.dates import local_day
 from app.domain.entities import (
     CorpusSectionRecord,
     ParsedSection,
     Source,
 )
-from app.infrastructure.db.metadata import reading_positions
+from app.infrastructure.db.metadata import reading_positions, study_days
 from app.infrastructure.db.repositories import (
     SqlAlchemyCorpusRepository,
     SqlAlchemySourceRepository,
@@ -113,8 +115,6 @@ def _put_position(
 
 
 def _persist_source(db_conn: Connection, user_id: str) -> UUID:
-    from datetime import UTC, datetime
-
     now = datetime.now(UTC)
     source = Source(
         id=uuid4(),
@@ -381,3 +381,89 @@ def test_put_reading_position_unauthenticated_returns_401(
     reading_client.cookies.clear()
     resp = _put_position(reading_client, uuid4(), "c1", csrf="whatever")
     assert resp.status_code == 401, resp.text
+
+
+# --- study-day rollup + client timezone (HOME-08/09, I-6) ----------------------
+
+
+def test_put_reading_position_credits_a_reading_study_day(
+    reading_client: TestClient, db_conn: Connection
+) -> None:
+    # HOME-08/09: a saved position with the client-timezone header credits exactly one
+    # study day with reading_updates=1 (and no review credit).
+    user_id = _register(reading_client, "rp-study@example.com")
+    csrf = _csrf(reading_client)
+    source_id = _persist_source(db_conn, user_id)
+    _seed_book(db_conn, source_id)
+
+    resp = reading_client.put(
+        f"/api/sources/{source_id}/reading-position",
+        json={"anchor": "c1s1"},
+        headers={"X-CSRF-Token": csrf, "X-Client-Timezone": "America/Sao_Paulo"},
+    )
+
+    assert resp.status_code == 200, resp.text
+    rows = db_conn.execute(
+        select(study_days.c.reviews_count, study_days.c.reading_updates).where(
+            study_days.c.user_id == UUID(user_id)
+        )
+    ).all()
+    assert [(r.reviews_count, r.reading_updates) for r in rows] == [(0, 1)]
+
+
+def test_put_reading_position_garbage_timezone_succeeds_and_credits_utc_day(
+    reading_client: TestClient, db_conn: Connection
+) -> None:
+    # HOME-09: a garbage zone must not 4xx/5xx; the position is stored and the study day
+    # is credited on the UTC date.
+    user_id = _register(reading_client, "rp-badtz@example.com")
+    csrf = _csrf(reading_client)
+    source_id = _persist_source(db_conn, user_id)
+    _seed_book(db_conn, source_id)
+
+    before = datetime.now(UTC)
+    resp = reading_client.put(
+        f"/api/sources/{source_id}/reading-position",
+        json={"anchor": "c1s1"},
+        headers={"X-CSRF-Token": csrf, "X-Client-Timezone": "Mars/Olympus"},
+    )
+    after = datetime.now(UTC)
+
+    assert resp.status_code == 200, resp.text
+    row = db_conn.execute(
+        select(study_days.c.day, study_days.c.reading_updates).where(
+            study_days.c.user_id == UUID(user_id)
+        )
+    ).one()
+    assert row.reading_updates == 1
+    assert row.day in {local_day(before, None), local_day(after, None)}
+
+
+def test_put_reading_position_body_is_unchanged_by_the_timezone_header(
+    reading_client: TestClient, db_conn: Connection
+) -> None:
+    # I-6: the client-timezone header is additive — it changes no response field. The
+    # body schema and its header-independent values (anchor, server percent) are the same
+    # whether or not it is sent. (updated_at is the server clock and advances per write,
+    # so it is deliberately not compared.)
+    user_id = _register(reading_client, "rp-i6@example.com")
+    csrf = _csrf(reading_client)
+    source_id = _persist_source(db_conn, user_id)
+    _seed_book(db_conn, source_id)
+
+    without = _put_position(reading_client, source_id, "c1s1", csrf=csrf)
+    with_header = reading_client.put(
+        f"/api/sources/{source_id}/reading-position",
+        json={"anchor": "c1s1"},
+        headers={"X-CSRF-Token": csrf, "X-Client-Timezone": "Asia/Tokyo"},
+    )
+
+    assert without.status_code == 200, without.text
+    assert with_header.status_code == 200, with_header.text
+    assert set(without.json()) == set(with_header.json()) == {
+        "anchor",
+        "percent",
+        "updated_at",
+    }
+    assert without.json()["anchor"] == with_header.json()["anchor"] == "c1s1"
+    assert without.json()["percent"] == with_header.json()["percent"] == 30.0

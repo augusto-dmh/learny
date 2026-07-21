@@ -15,7 +15,7 @@ Security invariants encoded here:
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal
 from uuid import UUID
@@ -1004,6 +1004,70 @@ class ReadingPosition:
     """
 
     anchor: str
+    percent: Decimal
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
+class RecentReadingPosition:
+    """The caller's single most-recently-updated reading position across all sources.
+
+    The read model behind the Home continue-reading hero (HOME-01): the owning
+    ``source_id`` and its ``source_title`` (joined in SQL), the stored ``anchor`` and
+    server-computed ``percent``, and the ``updated_at`` that made it the most recent.
+    Chapter-title resolution against the source's chapter index is the application
+    service's job, not the repository's, so this carries the anchor rather than a title.
+    """
+
+    source_id: UUID
+    source_title: str
+    anchor: str
+    percent: Decimal
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
+class StudyDay:
+    """One user-local day of study activity, with per-kind counters (HOME-07/08).
+
+    The durable rollup row keyed ``(user_id, day)``: ``reviews_count`` and
+    ``reading_updates`` are incremented atomically as reviews are submitted and reading
+    positions saved (AD-151). Adherence ("Studied X of the last 14 days") and the heatmap
+    are derived from these rows at read time — no streak/adherence value is ever stored.
+    """
+
+    user_id: UUID
+    day: date
+    reviews_count: int
+    reading_updates: int
+
+
+@dataclass(frozen=True)
+class StudySummary:
+    """The adherence read model for the Home stats block (HOME-11).
+
+    ``days`` are the caller's study-day rows within the requested window (day-ordered);
+    ``studied_last_14`` is the count of distinct days with any activity in the 14-day
+    window ending on the caller's local today. Both are computed at read time from the
+    ``study_days`` rollup — nothing derived is persisted (I-4).
+    """
+
+    days: tuple[StudyDay, ...]
+    studied_last_14: int
+
+
+@dataclass(frozen=True)
+class ContinuePoint:
+    """The resolved continue-reading hero (HOME-01): where to resume, in one click.
+
+    The caller's most-recent reading position with its ``chapter_title`` resolved from the
+    stored anchor against the source's chapter index, plus the ``source_title``,
+    server-computed ``percent``, and ``updated_at``.
+    """
+
+    source_id: UUID
+    source_title: str
+    chapter_title: str
     percent: Decimal
     updated_at: datetime
 

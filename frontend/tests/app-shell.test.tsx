@@ -60,18 +60,6 @@ const authedMe = jsonResponse(200, {
   csrf_token: "csrf-xyz",
 });
 
-function sourceRow(id: string, title: string, status: string) {
-  return {
-    id,
-    title,
-    filename: `${id}.epub`,
-    byte_size: 3,
-    content_type: "application/epub+zip",
-    status,
-    created_at: "now",
-  };
-}
-
 function renderHeader() {
   return render(
     <SidebarProvider>
@@ -178,10 +166,7 @@ describe("app shell composition", () => {
   it("wraps (app) pages in the sidebar shell with the header", async () => {
     vi.stubGlobal(
       "fetch",
-      routedFetch({
-        "GET /api/auth/me": () => authedMe.clone(),
-        "GET /api/sources": () => jsonResponse(200, [sourceRow("s1", "Ready Book", "ready")]),
-      }),
+      routedFetch({ "GET /api/auth/me": () => authedMe.clone() }),
     );
 
     render(
@@ -190,9 +175,9 @@ describe("app shell composition", () => {
       </AppLayout>,
     );
 
-    // Header (email) and sidebar (Library group) both frame the page content.
+    // Header (email) and sidebar (nav) both frame the page content.
     expect(await screen.findByText("a@b.c")).toBeTruthy();
-    expect(screen.getByText("Library")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Bookshelf" })).toBeTruthy();
     expect(screen.getByTestId("page-content")).toBeTruthy();
   });
 
@@ -204,7 +189,7 @@ describe("app shell composition", () => {
     );
 
     expect(screen.getByTestId("auth-child")).toBeTruthy();
-    // No library sidebar around auth pages.
-    expect(screen.queryByText("Library")).toBeNull();
+    // No navigation sidebar around auth pages.
+    expect(screen.queryByRole("link", { name: "Bookshelf" })).toBeNull();
   });
 });

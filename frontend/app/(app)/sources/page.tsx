@@ -18,7 +18,7 @@ export default function SourcesPage() {
   const router = useRouter();
   return (
     <main className="flex-1 p-6">
-      <h1 className="mb-6 text-2xl font-semibold">Your library</h1>
+      <h1 className="mb-6 text-2xl font-semibold">Your bookshelf</h1>
       <LibraryScreen onRequireAuth={() => router.replace("/login")} />
     </main>
   );

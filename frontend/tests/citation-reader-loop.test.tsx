@@ -3,14 +3,15 @@
 /**
  * E2 gate (closure) — the citation → reader navigation loop is closed (FE-16).
  *
- * A citation's "Open in book" action, a sidebar tree node, and the reader all
- * speak one anchor contract: the link is built with the anchor encoded exactly
- * once, `useSearchParams` decodes it, and the reader re-encodes it onto the
- * backend request. This proves the whole round-trip end to end for a hostile
- * anchor bearing both a `/` and a `#`: parse each link with `new URL(href, base)`
- * and assert its pathname and decoded `anchor`, then drive the reader with that
- * exact query string and assert the backend section request carried the
- * re-encoded anchor.
+ * A citation's "Open in book" action and the reader speak one anchor contract:
+ * the link is built with the anchor encoded exactly once, `useSearchParams`
+ * decodes it, and the reader re-encodes it onto the backend request. This proves
+ * the whole round-trip end to end for a hostile anchor bearing both a `/` and a
+ * `#`: parse the link with `new URL(href, base)` and assert its pathname and
+ * decoded `anchor`, then drive the reader with that exact query string and
+ * assert the backend section request carried the re-encoded anchor. The reader's
+ * table of contents emits the same encode-once section links
+ * (tests/toc-panel.test.tsx).
  */
 
 import {
@@ -23,14 +24,12 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 
 import { ChapterReader } from "../app/components/chapter-reader";
 import { CitationList } from "../app/components/citations";
-import { AppSidebar } from "../app/components/shell/app-sidebar";
 import { type Citation } from "../app/lib/questions";
 import { type ChapterView } from "../app/lib/reading";
-import { SidebarProvider } from "../components/ui/sidebar";
 
 // The reader reads the anchor via `useSearchParams` and uses `useRouter` for the
 // highlight-capture navigation; drive the params from a mutable holder set per
-// test. The sidebar and citation list do not call either.
+// test. The citation list does not call either.
 const nav = vi.hoisted(() => ({ params: new URLSearchParams(), push: vi.fn() }));
 vi.mock("next/navigation", () => ({
   useSearchParams: () => nav.params,
@@ -46,7 +45,7 @@ const CHAPTER_URL = `/api/sources/s1/chapter?anchor=${ENCODED_ANCHOR}`;
 beforeAll(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
     true;
-  // Radix Popover + shadcn Sidebar reach for APIs jsdom lacks.
+  // The citation's Radix Popover reaches for APIs jsdom lacks.
   globalThis.ResizeObserver = class {
     observe() {}
     unobserve() {}
@@ -116,54 +115,8 @@ const chapter: ChapterView = {
   reading_position: null,
 };
 
-const readySource = {
-  id: "s1",
-  title: "Ready Book",
-  filename: "s1.epub",
-  byte_size: 3,
-  content_type: "application/epub+zip",
-  status: "ready",
-  created_at: "now",
-};
-
-// A structure whose deepest section anchor also carries a `/` and a `#`.
-const readyStructure = {
-  title: "Ready Book",
-  authors: ["Ada Lovelace"],
-  language: "en",
-  sections: [
-    {
-      title: "Chapter 1",
-      depth: 0,
-      section_path: ["Chapter 1"],
-      anchor: "chapter-1.xhtml",
-      children: [
-        {
-          title: "Core Idea",
-          depth: 1,
-          section_path: ["Chapter 1", "Core Idea"],
-          anchor: RAW_ANCHOR,
-          children: [],
-        },
-      ],
-    },
-  ],
-};
-
 beforeEach(() => {
   Element.prototype.scrollIntoView = vi.fn();
-  // shadcn SidebarProvider reads the viewport via matchMedia, absent in jsdom.
-  window.matchMedia = (query: string) =>
-    ({
-      matches: false,
-      media: query,
-      onchange: null,
-      addEventListener: () => {},
-      removeEventListener: () => {},
-      addListener: () => {},
-      removeListener: () => {},
-      dispatchEvent: () => false,
-    }) as unknown as MediaQueryList;
 });
 
 afterEach(() => {
@@ -205,29 +158,5 @@ describe("citation → reader loop (E2)", () => {
     ).toBeTruthy();
     // The backend chapter request carried the anchor encoded exactly once.
     expect(fetchMock.mock.calls.some(([u]) => u === CHAPTER_URL)).toBe(true);
-  });
-
-  it("a sidebar tree node targets the reader at the section's anchor", async () => {
-    vi.stubGlobal(
-      "fetch",
-      routedFetch({
-        "GET /api/sources": () => jsonResponse(200, [readySource]),
-        "GET /api/sources/s1/structure": () =>
-          jsonResponse(200, readyStructure),
-      }),
-    );
-
-    render(
-      <SidebarProvider>
-        <AppSidebar />
-      </SidebarProvider>,
-    );
-
-    fireEvent.click(await screen.findByText("Ready Book"));
-
-    const link = await screen.findByRole("link", { name: "Core Idea" });
-    const url = new URL(link.getAttribute("href")!, BASE);
-    expect(url.pathname).toBe("/sources/s1/read");
-    expect(url.searchParams.get("anchor")).toBe(RAW_ANCHOR);
   });
 });

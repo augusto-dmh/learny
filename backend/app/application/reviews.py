@@ -15,6 +15,7 @@ from __future__ import annotations
 from dataclasses import replace
 from uuid import UUID
 
+from app.application.dates import local_day
 from app.application.errors import (
     QuizItemNotFound,
     QuizItemNotReviewable,
@@ -30,6 +31,7 @@ from app.domain.ports import (
     Clock,
     QuizItemRepository,
     SchedulingPort,
+    StudyDayRepository,
 )
 
 
@@ -91,6 +93,12 @@ class SubmitReview:
     transaction (QUIZ-12), returning the updated snapshot. Reviewing a note card naturally
     retires its "your note changed" badge — the due queue derives it against the last
     review time (NL-12), so no explicit clear is needed here.
+
+    Submitting a review also credits the reviewer's study day: an atomic
+    ``StudyDayRepository.record`` (``reviews_count += 1``) on the user-local day derived
+    from ``client_tz`` (HOME-07), issued on the same connection as the log append so the
+    review and its day credit commit together (I-1). A missing/invalid ``client_tz``
+    degrades to UTC via :func:`~app.application.dates.local_day` (HOME-09), never an error.
     """
 
     def __init__(
@@ -99,10 +107,12 @@ class SubmitReview:
         items: QuizItemRepository,
         scheduling: SchedulingPort,
         clock: Clock,
+        study_days: StudyDayRepository,
     ) -> None:
         self._items = items
         self._scheduling = scheduling
         self._clock = clock
+        self._study_days = study_days
 
     def __call__(
         self,
@@ -111,15 +121,18 @@ class SubmitReview:
         item_id: UUID,
         rating: int,
         review_duration_ms: int | None = None,
+        client_tz: str | None = None,
     ) -> SchedulingSnapshot:
         item = _owned_item(self._items, user, item_id)
         if item.status != QuizItemStatus.ACTIVE:
             raise QuizItemNotReviewable("Quiz item is not reviewable.")
 
+        now = self._clock.now()
         snapshot = self._items.get_scheduling(item.id)
-        advanced, log = self._scheduling.review(snapshot, rating, self._clock.now())
+        advanced, log = self._scheduling.review(snapshot, rating, now)
         self._items.update_scheduling(item.id, advanced)
         self._items.append_log(item.id, replace(log, review_duration_ms=review_duration_ms))
+        self._study_days.record(user.id, local_day(now, client_tz), reviews=1)
         return advanced
 
 

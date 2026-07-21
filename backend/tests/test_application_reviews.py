@@ -17,6 +17,7 @@ from uuid import UUID, uuid4
 import pytest
 from sqlalchemy import Connection, func, select
 
+from app.application.dates import local_day
 from app.application.errors import QuizItemNotFound, QuizItemNotReviewable
 from app.application.quiz_qc import content_key
 from app.application.reviews import (
@@ -38,11 +39,12 @@ from app.domain.entities import (
     Source,
     User,
 )
-from app.infrastructure.db.metadata import review_log
+from app.infrastructure.db.metadata import review_log, study_days
 from app.infrastructure.db.repositories import (
     SqlAlchemyNoteRepository,
     SqlAlchemyQuizItemRepository,
     SqlAlchemySourceRepository,
+    SqlAlchemyStudyDayRepository,
     SqlAlchemyUserRepository,
 )
 from app.infrastructure.scheduling.fsrs import FsrsSchedulingAdapter
@@ -196,6 +198,7 @@ def _service(db_conn: Connection, *, now: datetime) -> SubmitReview:
         items=SqlAlchemyQuizItemRepository(db_conn),
         scheduling=FsrsSchedulingAdapter(fuzzing=False),
         clock=FakeClock(now),
+        study_days=SqlAlchemyStudyDayRepository(db_conn),
     )
 
 
@@ -296,6 +299,108 @@ def test_submit_review_non_owner_raises_not_found(db_conn: Connection) -> None:
         )
     ).scalar_one()
     assert logged == 0
+
+
+# --- SubmitReview study-day rollup (HOME-07/09, I-1) ----------------------------
+
+# A UTC instant late enough that a positive-offset zone is already the next calendar
+# day — so a test can tell "used the client zone" from "used UTC".
+_NEAR_MIDNIGHT = datetime(2026, 7, 16, 23, 30, 0, tzinfo=UTC)
+
+
+class _FailingStudyDayRepository:
+    """A ``StudyDayRepository`` whose ``record`` always raises — forces the post-write
+    failure that the atomicity sensor (I-1) needs."""
+
+    def record(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
+        raise RuntimeError("study-day credit failed")
+
+    def window(self, *args, **kwargs):  # noqa: ANN002, ANN003, ANN201
+        return []
+
+
+@requires_db
+def test_submit_review_credits_a_study_day_in_the_same_transaction(
+    db_conn: Connection,
+) -> None:
+    # HOME-07 / I-1: submitting a review writes the review log AND the study-day credit
+    # on the same connection — both visible together, one transaction. The client zone
+    # sets the day (Tokyo is already the 17th at 23:30 UTC on the 16th).
+    source = _persisted_source(db_conn, "review-study-txn@example.com")
+    user = SqlAlchemyUserRepository(db_conn).get_by_id(source.user_id)
+    item = _seed_active_item(db_conn, source.id)
+
+    _service(db_conn, now=_NEAR_MIDNIGHT)(
+        user=user, item_id=item.id, rating=3, client_tz="Asia/Tokyo"
+    )
+
+    logged = db_conn.execute(
+        select(func.count()).select_from(review_log).where(
+            review_log.c.quiz_item_id == item.id
+        )
+    ).scalar_one()
+    assert logged == 1
+    rows = db_conn.execute(
+        select(
+            study_days.c.day, study_days.c.reviews_count, study_days.c.reading_updates
+        ).where(study_days.c.user_id == user.id)
+    ).all()
+    assert [(r.day, r.reviews_count, r.reading_updates) for r in rows] == [
+        (local_day(_NEAR_MIDNIGHT, "Asia/Tokyo"), 1, 0)
+    ]
+
+
+@requires_db
+def test_submit_review_study_day_falls_back_to_utc_on_garbage_timezone(
+    db_conn: Connection,
+) -> None:
+    # HOME-09: a garbage zone credits the UTC day (the 16th), never the client zone's
+    # next day, and never an error.
+    source = _persisted_source(db_conn, "review-study-utc@example.com")
+    user = SqlAlchemyUserRepository(db_conn).get_by_id(source.user_id)
+    item = _seed_active_item(db_conn, source.id)
+
+    _service(db_conn, now=_NEAR_MIDNIGHT)(
+        user=user, item_id=item.id, rating=3, client_tz="Mars/Olympus"
+    )
+
+    day = db_conn.execute(
+        select(study_days.c.day).where(study_days.c.user_id == user.id)
+    ).scalar_one()
+    assert day == _NEAR_MIDNIGHT.date()  # UTC date, 2026-07-16
+
+
+@requires_db
+def test_submit_review_rolls_back_the_review_when_the_study_credit_fails(
+    db_conn: Connection,
+) -> None:
+    # I-1: a failure after the review write (study credit raises) rolls the whole
+    # transaction back — no review-log row and no study-day row survive.
+    source = _persisted_source(db_conn, "review-study-atomic@example.com")
+    user = SqlAlchemyUserRepository(db_conn).get_by_id(source.user_id)
+    item = _seed_active_item(db_conn, source.id)
+    service = SubmitReview(
+        items=SqlAlchemyQuizItemRepository(db_conn),
+        scheduling=FsrsSchedulingAdapter(fuzzing=False),
+        clock=FakeClock(_NOW),
+        study_days=_FailingStudyDayRepository(),
+    )
+
+    with pytest.raises(RuntimeError), db_conn.begin_nested():
+        service(user=user, item_id=item.id, rating=3)
+
+    logged = db_conn.execute(
+        select(func.count()).select_from(review_log).where(
+            review_log.c.quiz_item_id == item.id
+        )
+    ).scalar_one()
+    assert logged == 0
+    days = db_conn.execute(
+        select(func.count()).select_from(study_days).where(
+            study_days.c.user_id == user.id
+        )
+    ).scalar_one()
+    assert days == 0
 
 
 # --- Note-card review + ResetSchedule (NL-12) -----------------------------------
@@ -411,7 +516,9 @@ def test_reset_returns_fresh_state_clears_badge_and_preserves_log(
         .where(review_log.c.quiz_item_id == item.id)
     ).all()
 
+    before = datetime.now(UTC)
     fresh = _reset_service(db_conn)(user=user, item_id=item.id)
+    after = datetime.now(UTC)
 
     # Fresh state: the learning shape a new card receives (no hand-rolled literal), and
     # the stored snapshot is exactly what was returned.
@@ -420,7 +527,9 @@ def test_reset_returns_fresh_state_clears_badge_and_preserves_log(
     assert fresh.stability == reference.stability
     assert fresh.difficulty == reference.difficulty
     assert fresh.last_review is None
-    assert fresh.due < _NOW + timedelta(days=5)  # no longer the advanced due
+    # Due is minted "now" (Learning), bounded by the call window — the advanced
+    # schedule is gone. Bounding against the real clock keeps this date-proof.
+    assert before <= fresh.due <= after
     assert repo.get_scheduling(item.id) == fresh
     # Badge cleared, review log untouched.
     assert repo.get_by_id(item.id).note_changed_at is None

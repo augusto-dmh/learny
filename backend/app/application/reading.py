@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from uuid import UUID
 
+from app.application.dates import local_day
 from app.application.errors import CorpusNotFound
 from app.application.identity import AuthorizeOwnership
 from app.application.ingestion import authorized_source
@@ -36,6 +37,7 @@ from app.domain.ports import (
     NoteRepository,
     ReadingPositionRepository,
     SourceRepository,
+    StudyDayRepository,
 )
 
 # Percent is stored/displayed to two decimals (NUMERIC(5,2)); all percent math
@@ -111,6 +113,24 @@ def _chapter_of(chapters: Sequence[Chapter], row_idx: int) -> int:
         if chapter.start <= row_idx < chapter.end:
             return i
     return len(chapters) - 1
+
+
+def chapter_title(index: Sequence[ChapterIndexRow] | None, anchor: str) -> str:
+    """Return the title of the chapter containing ``anchor`` (mirrors ``ReadChapter``).
+
+    Resolves the anchor's row (canonical then alias), falls back to the first row when the
+    anchor no longer resolves (a superseded corpus), then returns the depth-0 title of the
+    chapter that row belongs to. An absent/empty index yields ``""`` — a caller shows the
+    book without a chapter label rather than erroring.
+    """
+    if not index:
+        return ""
+    row_idx = locate(index, anchor)
+    if row_idx is None:
+        row_idx = 0
+    chapters = partition(index)
+    chapter = chapters[_chapter_of(chapters, row_idx)]
+    return index[chapter.start].title
 
 
 class ReadChapter:
@@ -220,6 +240,13 @@ class SaveReadingPosition:
     so an alias write normalizes to the canonical anchor (survives renormalization), and
     the whole-book percent at that row is computed server-side (never client-forged).
     Last-write-wins on the ``(user, source)`` key (RD-12).
+
+    Saving a position also credits the reader's study day: an atomic
+    ``StudyDayRepository.record`` (``reading_updates += 1``) on the user-local day derived
+    from ``client_tz`` (HOME-08), issued on the same connection as the position upsert so
+    the two commit together (I-1). It runs only on the success path — a bad anchor 404s
+    before anything is stored and earns no study credit. A missing/invalid ``client_tz``
+    degrades to UTC (HOME-09), never an error.
     """
 
     def __init__(
@@ -230,14 +257,18 @@ class SaveReadingPosition:
         positions: ReadingPositionRepository,
         authorize: AuthorizeOwnership,
         clock: Clock,
+        study_days: StudyDayRepository,
     ) -> None:
         self._sources = sources
         self._corpus = corpus
         self._positions = positions
         self._authorize = authorize
         self._clock = clock
+        self._study_days = study_days
 
-    def __call__(self, *, user: User, source_id: UUID, anchor: str) -> ReadingPosition:
+    def __call__(
+        self, *, user: User, source_id: UUID, anchor: str, client_tz: str | None = None
+    ) -> ReadingPosition:
         authorized_source(
             user=user,
             source_id=source_id,
@@ -249,14 +280,17 @@ class SaveReadingPosition:
         if target_idx is None:
             raise CorpusNotFound("No section for this anchor.")
 
+        now = self._clock.now()
         percent = percent_at(index, target_idx)
-        return self._positions.upsert(
+        position = self._positions.upsert(
             user.id,
             source_id,
             anchor=index[target_idx].anchor,
             percent=percent,
-            updated_at=self._clock.now(),
+            updated_at=now,
         )
+        self._study_days.record(user.id, local_day(now, client_tz), reading_updates=1)
+        return position
 
 
 class ListSourceHighlights:

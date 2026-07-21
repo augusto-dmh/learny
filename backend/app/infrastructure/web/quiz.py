@@ -35,7 +35,7 @@ from datetime import UTC, datetime
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy import Connection
 
@@ -393,20 +393,24 @@ def submit_review(
     user: Annotated[User, Depends(get_authenticated_user)],
     service: Annotated[SubmitReview, Depends(get_submit_review)],
     body: ReviewRequest,
+    client_tz: Annotated[str | None, Header(alias="X-Client-Timezone")] = None,
 ) -> SchedulingView:
     """Grade one owned active item and return its updated scheduling (200).
 
     ``SubmitReview`` resolves the item + owner (missing/non-owner →
     ``QuizItemNotFound`` → 404), rejects a non-active item
-    (``QuizItemNotReviewable`` → 409), advances the FSRS schedule, and appends the
-    review-log row (with the optional duration) in one transaction. Rating outside
-    1..4 → 422 (Pydantic, before the service runs).
+    (``QuizItemNotReviewable`` → 409), advances the FSRS schedule, appends the
+    review-log row (with the optional duration), and credits the reviewer's study day
+    in one transaction. Rating outside 1..4 → 422 (Pydantic, before the service runs).
+    The optional ``X-Client-Timezone`` header sets the study-day boundary (silent UTC
+    fallback); it does not affect the response body.
     """
     snapshot = service(
         user=user,
         item_id=item_id,
         rating=body.rating,
         review_duration_ms=body.review_duration_ms,
+        client_tz=client_tz,
     )
     return SchedulingView.from_snapshot(snapshot)
 

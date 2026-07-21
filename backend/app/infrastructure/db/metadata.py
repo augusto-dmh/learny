@@ -48,6 +48,7 @@ from sqlalchemy import (
     BigInteger,
     CheckConstraint,
     Column,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -696,4 +697,27 @@ reading_positions = Table(
     Column("anchor", Text, nullable=False),
     Column("percent", Numeric(precision=5, scale=2), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
+)
+
+# --- Study-day rollup (RFC-004 Cycle E; design §Components) -----------------------
+# One row per (user, user-local day) durably recording study activity: a submitted
+# review bumps ``reviews_count``, a saved reading position bumps ``reading_updates``
+# (AD-151, per-kind counters). Written by an atomic ``INSERT ... ON CONFLICT (user_id,
+# day) DO UPDATE`` counter increment inside the triggering write's transaction (AD-153),
+# so recorded activity and its day credit cannot diverge. The FK cascades — this is the
+# durable study record, disposable only with the user. Adherence and the heatmap derive
+# from these rows at read time; nothing derived is ever stored.
+
+study_days = Table(
+    "study_days",
+    metadata,
+    Column(
+        "user_id",
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column("day", Date, nullable=False, primary_key=True),
+    Column("reviews_count", Integer, nullable=False, server_default="0"),
+    Column("reading_updates", Integer, nullable=False, server_default="0"),
 )

@@ -388,7 +388,7 @@ export function LibraryScreen({
       ) : sources.length === 0 ? (
         <p className="text-muted-foreground">No sources yet.</p>
       ) : (
-        <ul className="grid gap-4 sm:grid-cols-2">
+        <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {sources.map((source) => (
             <li key={source.id}>
               <Card>

@@ -9,7 +9,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Iterator, Sequence
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from itertools import count
 from uuid import UUID, uuid4
 
@@ -42,6 +42,7 @@ from app.domain.entities import (
     Source,
     SourceHighlight,
     StructureSection,
+    StudyDay,
     User,
 )
 
@@ -894,6 +895,48 @@ class FakeReadingPositionRepository:
         stored = ReadingPosition(anchor=anchor, percent=percent, updated_at=updated_at)
         self._by_key[(user_id, source_id)] = stored
         return stored
+
+
+class FakeStudyDayRepository:
+    """In-memory ``StudyDayRepository``: upsert-increment on the (user, day) key.
+
+    ``record`` adds the passed deltas to the stored counters (creating the row if
+    absent), mirroring the real ON CONFLICT increment, and records each call so a test
+    can assert what was credited (and that nothing was credited on a rejected path).
+    """
+
+    def __init__(self) -> None:
+        self._rows: dict[tuple[UUID, date], StudyDay] = {}
+        self.record_calls: list[tuple[UUID, date, int, int]] = []
+
+    def record(
+        self,
+        user_id: UUID,
+        day: date,
+        *,
+        reviews: int = 0,
+        reading_updates: int = 0,
+    ) -> None:
+        self.record_calls.append((user_id, day, reviews, reading_updates))
+        existing = self._rows.get((user_id, day))
+        base_reviews = existing.reviews_count if existing else 0
+        base_reading = existing.reading_updates if existing else 0
+        self._rows[(user_id, day)] = StudyDay(
+            user_id=user_id,
+            day=day,
+            reviews_count=base_reviews + reviews,
+            reading_updates=base_reading + reading_updates,
+        )
+
+    def window(self, user_id: UUID, *, start: date, end: date) -> list[StudyDay]:
+        return sorted(
+            (
+                row
+                for (uid, day), row in self._rows.items()
+                if uid == user_id and start <= day <= end
+            ),
+            key=lambda row: row.day,
+        )
 
 
 class FakeRetrievalPort:

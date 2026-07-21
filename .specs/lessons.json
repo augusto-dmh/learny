@@ -3,7 +3,7 @@
   "promote_threshold": 2,
   "window_days": 45,
   "quarantine_threshold": 2,
-  "next_id": 14,
+  "next_id": 15,
   "lessons": [
     {
       "id": "L-001",
@@ -238,6 +238,24 @@
       ],
       "created": "2026-07-19T20:05:19Z",
       "last_seen": "2026-07-19T20:05:19Z"
+    },
+    {
+      "id": "L-014",
+      "key": "spec_precision_gap::for a preservation ac x keeps working reachable from the header add a direct positive assertion an untouched code path plus a green regression suite is not evidence for the clause",
+      "text": "For a preservation AC ('X keeps working' / 'reachable from the header'), add a direct positive assertion — an untouched code path plus a green regression suite is not evidence for the clause.",
+      "signal": "spec_precision_gap",
+      "scope": "coverage",
+      "status": "candidate",
+      "features": [
+        "v4-home-ia"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "HOME-19 (coverage)"
+      ],
+      "created": "2026-07-21T15:35:08Z",
+      "last_seen": "2026-07-21T15:35:08Z"
     }
   ]
 }

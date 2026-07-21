@@ -92,6 +92,12 @@ Seen once or not yet corroborated. Tracked, not trusted.
 - evidence: frontend/app/lib/answer-notes.ts:81-83 (SPEC_DEVIATION) (frontend)
 - last seen: 2026-07-19T20:05:19Z
 
+### L-014 — For a preservation AC ('X keeps working' / 'reachable from the header'), add a direct positive assertion — an untouched code path plus a green regression suite is not evidence for the clause.
+- signal: `spec_precision_gap` · recurrence: 1 feature(s) · scope: `coverage` · harmful: 0
+- features: v4-home-ia
+- evidence: HOME-19 (coverage)
+- last seen: 2026-07-21T15:35:08Z
+
 ## Quarantined (failed when applied — ignore)
 
 A confirmed lesson that recurred alongside failure. Kept for the maintainer to review.

@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID, uuid4
 
-from sqlalchemy import Connection
+from sqlalchemy import Connection, text
 
 from app.domain.entities import (
     CorpusSectionRecord,
@@ -24,6 +24,7 @@ from app.domain.entities import (
     NoteAnchor,
     NoteAnchorStatus,
     ParsedSection,
+    RecentReadingPosition,
     Source,
     User,
 )
@@ -354,3 +355,140 @@ def test_whitespace_only_note_body_does_not_count_as_a_body(
     highlights = SqlAlchemyNoteRepository(db_conn).highlights_for_source(owner, source_id)
 
     assert highlights[0].has_body is False
+
+
+# --- most_recent_for_user (HOME-01/04) -----------------------------------------
+
+
+def _persist_titled_source(db_conn: Connection, user_id: UUID, title: str) -> UUID:
+    now = datetime.now(UTC)
+    source = Source(
+        id=uuid4(),
+        user_id=user_id,
+        title=title,
+        filename="a-book.epub",
+        content_type="application/epub+zip",
+        byte_size=1024,
+        checksum="d" * 64,
+        object_key=f"sources/{user_id}/{uuid4()}.epub",
+        status="ready",
+        created_at=now,
+        updated_at=now,
+    )
+    return SqlAlchemySourceRepository(db_conn).add(source).id
+
+
+def test_most_recent_for_user_returns_latest_across_sources_with_title(
+    db_conn: Connection,
+) -> None:
+    user_id = _add_user(db_conn, "reader-mru@example.com")
+    older = _persist_titled_source(db_conn, user_id, "Older Book")
+    newer = _persist_titled_source(db_conn, user_id, "Newer Book")
+    repo = SqlAlchemyReadingPositionRepository(db_conn)
+    t_old = datetime(2026, 7, 19, 10, 0, 0, tzinfo=UTC)
+    t_new = datetime(2026, 7, 20, 10, 0, 0, tzinfo=UTC)
+    repo.upsert(user_id, older, anchor="a1", percent=Decimal("10.00"), updated_at=t_old)
+    repo.upsert(user_id, newer, anchor="a2", percent=Decimal("55.00"), updated_at=t_new)
+
+    recent = repo.most_recent_for_user(user_id)
+
+    assert recent == RecentReadingPosition(
+        source_id=newer,
+        source_title="Newer Book",
+        anchor="a2",
+        percent=Decimal("55.00"),
+        updated_at=t_new,
+    )
+
+
+def test_most_recent_for_user_returns_none_without_positions(
+    db_conn: Connection,
+) -> None:
+    user_id = _add_user(db_conn, "reader-mru-none@example.com")
+    _persist_titled_source(db_conn, user_id, "A Book")  # source but no position
+    assert SqlAlchemyReadingPositionRepository(db_conn).most_recent_for_user(user_id) is None
+
+
+def test_most_recent_for_user_never_returns_another_users_position(
+    db_conn: Connection,
+) -> None:
+    # HOME-04: another user's (even more recent) position is unreachable — the query is
+    # scoped to the caller's own user_id in SQL.
+    caller = _add_user(db_conn, "reader-mru-caller@example.com")
+    other = _add_user(db_conn, "reader-mru-other@example.com")
+    caller_source = _persist_titled_source(db_conn, caller, "Caller Book")
+    other_source = _persist_titled_source(db_conn, other, "Other Book")
+    repo = SqlAlchemyReadingPositionRepository(db_conn)
+    repo.upsert(
+        caller,
+        caller_source,
+        anchor="a1",
+        percent=Decimal("10.00"),
+        updated_at=datetime(2026, 7, 19, 10, 0, 0, tzinfo=UTC),
+    )
+    # The other user's position is strictly more recent, yet must never surface.
+    repo.upsert(
+        other,
+        other_source,
+        anchor="a2",
+        percent=Decimal("90.00"),
+        updated_at=datetime(2026, 7, 20, 10, 0, 0, tzinfo=UTC),
+    )
+
+    recent = repo.most_recent_for_user(caller)
+
+    assert recent is not None
+    assert recent.source_id == caller_source
+    assert recent.source_title == "Caller Book"
+
+
+def test_most_recent_for_user_breaks_ties_deterministically(
+    db_conn: Connection,
+) -> None:
+    # Two positions saved at the identical instant must resolve to one stable winner
+    # (source_id DESC), never a nondeterministic pick.
+    user_id = _add_user(db_conn, "reader-mru-tie@example.com")
+    source_a = _persist_titled_source(db_conn, user_id, "Book A")
+    source_b = _persist_titled_source(db_conn, user_id, "Book B")
+    repo = SqlAlchemyReadingPositionRepository(db_conn)
+    same = datetime(2026, 7, 20, 10, 0, 0, tzinfo=UTC)
+    repo.upsert(user_id, source_a, anchor="a1", percent=Decimal("1.00"), updated_at=same)
+    repo.upsert(user_id, source_b, anchor="a2", percent=Decimal("2.00"), updated_at=same)
+
+    expected = max(source_a, source_b)  # the deterministic source_id DESC winner
+    recent = repo.most_recent_for_user(user_id)
+
+    assert recent is not None
+    assert recent.source_id == expected
+
+
+def test_most_recent_for_user_falls_back_when_top_source_deleted(
+    db_conn: Connection,
+) -> None:
+    # A deleted source cascades its position away, so the query returns the next most
+    # recent — never a dangling reference to the gone source.
+    user_id = _add_user(db_conn, "reader-mru-cascade@example.com")
+    older = _persist_titled_source(db_conn, user_id, "Older Book")
+    newer = _persist_titled_source(db_conn, user_id, "Newer Book")
+    repo = SqlAlchemyReadingPositionRepository(db_conn)
+    repo.upsert(
+        user_id,
+        older,
+        anchor="a1",
+        percent=Decimal("10.00"),
+        updated_at=datetime(2026, 7, 19, 10, 0, 0, tzinfo=UTC),
+    )
+    repo.upsert(
+        user_id,
+        newer,
+        anchor="a2",
+        percent=Decimal("55.00"),
+        updated_at=datetime(2026, 7, 20, 10, 0, 0, tzinfo=UTC),
+    )
+
+    db_conn.execute(text("DELETE FROM sources WHERE id = :sid"), {"sid": newer})
+
+    recent = repo.most_recent_for_user(user_id)
+
+    assert recent is not None
+    assert recent.source_id == older

@@ -64,6 +64,7 @@ from app.application.reading import (
 from app.application.retrieval import RetrieveEvidence
 from app.application.reviews import GetDueQueue, ResetSchedule, SubmitReview
 from app.application.sources import CreateSource, GetSource, ListSources
+from app.application.study import ContinueReading, GetStudySummary
 from app.application.teaching import (
     ListTeachingSessions,
     PostTeachingTurn,
@@ -101,6 +102,7 @@ from app.infrastructure.db.repositories import (
     SqlAlchemyReadingPositionRepository,
     SqlAlchemySessionRepository,
     SqlAlchemySourceRepository,
+    SqlAlchemyStudyDayRepository,
     SqlAlchemyTeachingSessionRepository,
     SqlAlchemyTeachingTurnRepository,
     SqlAlchemyUserRepository,
@@ -373,6 +375,7 @@ def get_save_reading_position(conn: DbConnection) -> SaveReadingPosition:
         positions=SqlAlchemyReadingPositionRepository(conn),
         authorize=AuthorizeOwnership(),
         clock=_clock,
+        study_days=SqlAlchemyStudyDayRepository(conn),
     )
 
 
@@ -382,6 +385,21 @@ def get_list_source_highlights(conn: DbConnection) -> ListSourceHighlights:
         sources=SqlAlchemySourceRepository(conn),
         notes=SqlAlchemyNoteRepository(conn),
         authorize=AuthorizeOwnership(),
+    )
+
+
+def get_study_summary(conn: DbConnection) -> GetStudySummary:
+    """Wire ``GetStudySummary`` on the request-scoped connection (HOME-11)."""
+    return GetStudySummary(
+        study_days=SqlAlchemyStudyDayRepository(conn), clock=_clock
+    )
+
+
+def get_continue_reading(conn: DbConnection) -> ContinueReading:
+    """Wire ``ContinueReading`` on the request-scoped connection (HOME-01)."""
+    return ContinueReading(
+        positions=SqlAlchemyReadingPositionRepository(conn),
+        corpus=SqlAlchemyCorpusRepository(conn),
     )
 
 
@@ -624,6 +642,7 @@ def get_submit_review(conn: DbConnection) -> SubmitReview:
         items=SqlAlchemyQuizItemRepository(conn),
         scheduling=build_scheduling_adapter(get_settings()),
         clock=_clock,
+        study_days=SqlAlchemyStudyDayRepository(conn),
     )
 
 

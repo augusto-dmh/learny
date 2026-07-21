@@ -16,7 +16,7 @@ Conventions:
 from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Protocol, runtime_checkable
 from uuid import UUID
@@ -49,6 +49,7 @@ from app.domain.entities import (
     QuizItem,
     QuizSection,
     ReadingPosition,
+    RecentReadingPosition,
     ReconcileSection,
     ReviewLogEntry,
     SchedulingSnapshot,
@@ -56,6 +57,7 @@ from app.domain.entities import (
     Session,
     Source,
     SourceHighlight,
+    StudyDay,
     TeachingSession,
     TeachingSessionSummary,
     TeachingTurn,
@@ -1217,4 +1219,39 @@ class ReadingPositionRepository(Protocol):
         Writes ``anchor``/``percent``/``updated_at`` for ``(user_id, source_id)`` and
         returns the stored :class:`~app.domain.entities.ReadingPosition`.
         """
+        ...
+
+    def most_recent_for_user(self, user_id: UUID) -> RecentReadingPosition | None:
+        """Return the caller's most-recently-updated position across sources, or ``None``.
+
+        Joined to the owning source for its title and scoped to ``user_id`` in SQL
+        (HOME-01/04); ``None`` when the user has no stored positions.
+        """
+        ...
+
+
+@runtime_checkable
+class StudyDayRepository(Protocol):
+    """Persistence port for the ``study_days`` activity rollup (HOME-07/08/10).
+
+    ``record`` is an atomic upsert-increment on the ``(user_id, day)`` key, so N same-day
+    events (including concurrent commits) leave exactly one row whose counters equal the
+    totals. ``window`` returns the caller's rows in a day range, day-ordered, for the
+    adherence and heatmap surface. Owner scoping is by ``user_id``; the caller's
+    ``Connection`` owns the transaction, so ``record`` shares the triggering write's.
+    """
+
+    def record(
+        self,
+        user_id: UUID,
+        day: date,
+        *,
+        reviews: int = 0,
+        reading_updates: int = 0,
+    ) -> None:
+        """Add the passed deltas to ``(user_id, day)``, inserting the row if absent."""
+        ...
+
+    def window(self, user_id: UUID, *, start: date, end: date) -> list[StudyDay]:
+        """Return the caller's study days with ``start <= day <= end``, day-ordered."""
         ...

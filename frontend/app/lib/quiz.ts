@@ -13,7 +13,14 @@
  * FSRS scheduling; these helpers just carry inputs in and surface the
  * overview/queue/scheduling/error out. The response types mirror the backend
  * views in `web/quiz.py` exactly so the two never drift.
+ *
+ * A submitted review also credits the day's study rollup (HOME-07), so
+ * `submitReview` echoes the caller's IANA zone in `X-Client-Timezone` for the day
+ * boundary — omitted when the zone is unavailable so the server falls back to UTC
+ * (HOME-09).
  */
+
+import { clientTimezone } from "@/app/lib/study";
 
 /** A deck-generation job's public state, mirroring the backend `QuizJobView`. */
 export type QuizJob = {
@@ -193,13 +200,18 @@ export async function submitReview(
   csrfToken: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<Scheduling> {
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+    "X-CSRF-Token": csrfToken,
+  };
+  const tz = clientTimezone();
+  if (tz) {
+    headers["X-Client-Timezone"] = tz;
+  }
   const res = await fetchImpl(`/api/quiz-items/${itemId}/reviews`, {
     method: "POST",
     credentials: "same-origin",
-    headers: {
-      "content-type": "application/json",
-      "X-CSRF-Token": csrfToken,
-    },
+    headers,
     body: JSON.stringify(body),
   });
   if (!res.ok) {
