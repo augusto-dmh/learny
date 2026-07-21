@@ -67,6 +67,8 @@ describe("StudyHeatmap grid (HOME-13, I-7)", () => {
   const days = [
     { day: "2026-07-20", reviews_count: 2, reading_updates: 1 }, // total 3 → level 2
     { day: "2026-07-17", reviews_count: 1, reading_updates: 0 }, // total 1 → level 1
+    { day: "2026-07-15", reviews_count: 4, reading_updates: 1 }, // total 5 → level 3
+    { day: "2026-07-13", reviews_count: 5, reading_updates: 3 }, // total 8 → level 4
   ];
 
   it("renders the full window and shades active days by activity total", () => {
@@ -77,13 +79,39 @@ describe("StudyHeatmap grid (HOME-13, I-7)", () => {
       84,
     );
 
-    // Active days carry a non-zero shading level scaled by their total.
+    // Active days carry a non-zero shading level scaled by their total, across the
+    // whole gradient — every non-zero level and both upper thresholds are pinned.
     expect(
       container.querySelector('[data-day="2026-07-20"]')?.getAttribute("data-level"),
     ).toBe("2");
     expect(
       container.querySelector('[data-day="2026-07-17"]')?.getAttribute("data-level"),
     ).toBe("1");
+    expect(
+      container.querySelector('[data-day="2026-07-15"]')?.getAttribute("data-level"),
+    ).toBe("3");
+    expect(
+      container.querySelector('[data-day="2026-07-13"]')?.getAttribute("data-level"),
+    ).toBe("4");
+  });
+
+  it("caps the shading at the top level and keeps the boundary totals distinct", () => {
+    const boundaryDays = [
+      { day: "2026-07-20", reviews_count: 6, reading_updates: 0 }, // total 6 → level 3 (top of band)
+      { day: "2026-07-19", reviews_count: 7, reading_updates: 0 }, // total 7 → level 4
+      { day: "2026-07-18", reviews_count: 40, reading_updates: 2 }, // total 42 → still level 4
+    ];
+    const { container } = render(<StudyHeatmap days={boundaryDays} today={today} />);
+
+    expect(
+      container.querySelector('[data-day="2026-07-20"]')?.getAttribute("data-level"),
+    ).toBe("3");
+    expect(
+      container.querySelector('[data-day="2026-07-19"]')?.getAttribute("data-level"),
+    ).toBe("4");
+    expect(
+      container.querySelector('[data-day="2026-07-18"]')?.getAttribute("data-level"),
+    ).toBe("4");
   });
 
   it("leaves zero-activity days as plain empty cells with no warning affordance (silent grace)", () => {
