@@ -44,3 +44,8 @@ Auto-decided per the ship-cycle autonomy contract (no user prompts except merge 
 - `backend/.env` has `LEARNY_ANTHROPIC_API_KEY` and `LEARNY_OPENAI_API_KEY` (values not read).
 - No confirmed tlc lessons in the store.
 - Eval seams: judge + prompts `backend/app/eval/`; replay harness `backend/tests/eval/harness.py`; cases `backend/tests/eval/cases.yaml` (12); gate constants `judge.py:53-54` pinned by `test_eval_judge.py:278`; calibration doc `docs/ops/eval-calibration.md`; results sink `evals/results/`.
+- **Local gate footgun (found pinning the baseline):** `Settings` loads `backend/.env` (`config.py:23`), and the dogfood `.env` sets real providers — 11 deterministic tests fail unless gates prefix `LEARNY_GENERATION_PROVIDER=local LEARNY_EMBEDDING_PROVIDER=local`. CI unaffected (no `.env`). All cycle gate commands carry the prefix.
+
+## Deferred Ideas
+
+- conftest should pin `LEARNY_GENERATION_PROVIDER`/`LEARNY_EMBEDDING_PROVIDER` to `local` (mirroring its cookie/CSRF pins) so a dogfood-configured `.env` can't fail the deterministic suite. Out of this cycle's scope; surface for a future hygiene task.
