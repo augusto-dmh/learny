@@ -43,6 +43,7 @@
     --color-highlight-cyan: var(--highlight-cyan);
     --color-highlight-violet: var(--highlight-violet);
     --color-highlight-green: var(--highlight-green);
+    --color-overlay: var(--overlay);
     --radius-sm: calc(var(--radius) * 0.6);
     --radius-md: calc(var(--radius) * 0.8);
     --radius-lg: var(--radius);
@@ -95,6 +96,7 @@
     --highlight-cyan: #C2DEE8;
     --highlight-violet: #D6D0EC;
     --highlight-green: #C9DFCF;
+    --overlay: rgb(27 39 51 / 0.15);
 }
 
 .dark {
@@ -133,6 +135,7 @@
     --highlight-cyan: #1F3F4A;
     --highlight-violet: #37315D;
     --highlight-green: #26412F;
+    --overlay: rgb(0 0 0 / 0.55);
 }
 
 /*

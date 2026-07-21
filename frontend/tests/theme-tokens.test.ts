@@ -243,6 +243,32 @@ describe("highlight legibility", () => {
   });
 });
 
+// POL-12 — the dialog/sheet scrim is a theme-aware token: an ink-tinted wash
+// in light, a materially stronger black in dark (a 10% scrim was near-invisible
+// over the night palette). The primitives draw it via the bridged utility and
+// never a raw palette class.
+describe("overlay scrim", () => {
+  it("defines distinct mode-appropriate scrims", () => {
+    expect(token(light, "overlay")).toBe("RGB(27 39 51 / 0.15)");
+    expect(token(dark, "overlay")).toBe("RGB(0 0 0 / 0.55)");
+  });
+
+  it("bridges the overlay token into the theme so the utility exists", () => {
+    expect(css).toContain("--color-overlay: var(--overlay);");
+  });
+
+  it("scrims the dialog and sheet from the token, with no raw black left", () => {
+    for (const file of ["dialog.tsx", "sheet.tsx"]) {
+      const source = readFileSync(join(root, "components", "ui", file), "utf8");
+      expect(source, `${file} uses the token`).toContain("bg-overlay");
+    }
+    for (const entry of readdirSync(join(root, "components", "ui"))) {
+      const source = readFileSync(join(root, "components", "ui", entry), "utf8");
+      expect(source, `${entry} has no raw black scrim`).not.toContain("bg-black/");
+    }
+  });
+});
+
 // IDF-02 AC1 — the reading serif is bound at build time with Portuguese
 // diacritic coverage. RootLayout renders <html>, which Testing Library cannot
 // mount, so the binding is asserted over the committed source.
