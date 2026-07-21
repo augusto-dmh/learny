@@ -43,6 +43,7 @@ import {
   type CaptureAction,
   type CaptureSelection,
 } from "@/app/components/notes/capture-popover";
+import { InkLine } from "@/app/components/ink-line";
 import { MarginRail } from "@/app/components/margin-rail";
 import { ReaderPanel, type PanelMode } from "@/app/components/reader-panel";
 import { ReadingControls } from "@/app/components/reading-controls";
@@ -849,29 +850,6 @@ function FlowSection({
         <MessageResponse>{section.markdown}</MessageResponse>
       </div>
     </section>
-  );
-}
-
-/**
- * The whole-book progress hairline (RD-30): a token-only rule whose fill tracks
- * the reading percent. It sits below the top bar and stays put when the bar
- * recedes, so progress is always legible. Colours come from identity tokens
- * (`--border` rail, `--primary` ink) — no raw hexes, so the leak scan stays green.
- */
-function InkLine({ percent }: { percent: number }) {
-  const clamped = Math.max(0, Math.min(100, percent));
-  return (
-    <div
-      data-testid="ink-line"
-      aria-hidden
-      className="h-px w-full bg-border"
-    >
-      <div
-        data-testid="ink-line-fill"
-        style={{ width: `${clamped}%` }}
-        className="h-full bg-primary transition-[width] duration-300 motion-reduce:transition-none"
-      />
-    </div>
   );
 }
 
