@@ -177,7 +177,7 @@ def test_update_note_rewrites_body_tags_and_links() -> None:
     note = create(user=user, title="Note", body_markdown="", tags=["old"])
 
     update = UpdateNote(notes=notes, clock=FakeClock(), max_body_chars=100000)
-    view = update(
+    view, body_changed = update(
         user=user,
         note_id=note.note.id,
         title="Note",
@@ -186,8 +186,28 @@ def test_update_note_rewrites_body_tags_and_links() -> None:
     )
 
     assert view.tags == ("new",)
+    assert body_changed is True  # body went from "" to non-empty
     links = notes.links_for_note(note.note.id)
     assert [link.target_note_id for link in links] == [target.note.id]
+
+
+def test_update_note_reports_body_unchanged_for_title_or_tag_only_edit() -> None:
+    """A PATCH that leaves body_markdown byte-identical reports body_changed=False,
+    so the web layer skips the async re-embed (NL-01: embed only when body changed)."""
+    notes = FakeNoteRepository()
+    user = _user()
+    note = _create(notes)(user=user, title="Note", body_markdown="stable body", tags=["a"])
+
+    update = UpdateNote(notes=notes, clock=FakeClock(), max_body_chars=100000)
+    _, body_changed = update(
+        user=user,
+        note_id=note.note.id,
+        title="Renamed",
+        body_markdown="stable body",
+        tags=["a", "b"],
+    )
+
+    assert body_changed is False
 
 
 def test_update_note_by_non_owner_is_not_found() -> None:

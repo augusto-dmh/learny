@@ -157,6 +157,22 @@ describe("NotesScreen (NF-13/14)", () => {
     await waitFor(() => expect(nav.push).toHaveBeenCalledWith("/notes/n9"));
   });
 
+  it("offers an Export vault download pointing at the export endpoint (NL-16)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        "GET /api/notes": () => jsonResponse(200, []),
+      }),
+    );
+
+    render(<NotesScreen />);
+
+    const link = await screen.findByRole("link", { name: "Export vault" });
+    expect(link.getAttribute("href")).toBe("/api/export/vault");
+    expect(link.hasAttribute("download")).toBe(true);
+  });
+
   it("shows a nothing-yet state when the user has no notes", async () => {
     vi.stubGlobal(
       "fetch",

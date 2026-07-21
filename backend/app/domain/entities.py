@@ -17,6 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from decimal import Decimal
+from typing import Literal
 from uuid import UUID
 
 
@@ -394,6 +395,14 @@ class Evidence:
     page_span: dict | None
     snippet: str
     score: float
+    # Widened for the notes-in-retrieval arms (ADR-0026 d4, NL-02). ``origin``
+    # discriminates a book chunk from the user's own note; ``chunk_id`` remains the
+    # opaque evidence id grounding matches on (the note's id for a note). ``note_id``/
+    # ``note_title`` carry the note's identity for its distinct citation. All default
+    # so every existing book construction stays valid (additive, frozen).
+    origin: Literal["book", "note"] = "book"
+    note_id: UUID | None = None
+    note_title: str | None = None
 
 
 @dataclass(frozen=True)
@@ -578,6 +587,10 @@ class QuizItemOrigin:
 
     DECK = "deck"
     HIGHLIGHT = "highlight"
+    # ``note`` cards are promoted from a note (RFC-003 Cycle F). Like ``highlight``
+    # cards their identity is the minted id, so the note's text may be regenerated
+    # without disturbing scheduling; they are the only source-less origin (AD-148/149).
+    NOTE = "note"
 
 
 class QuizJobStatus:
@@ -621,14 +634,16 @@ class QuizCandidate:
     Produced by a :class:`~app.domain.ports.QuizGenerationPort`; not yet grounded.
     ``anchor_quote`` is the verbatim passage the item claims to come from and
     ``source_chunk_id`` the chunk it cites — both re-verified by the QC pipeline
-    (QUIZ-06/07) before an item is persisted.
+    (QUIZ-06/07) before an item is persisted. ``source_chunk_id`` is ``None`` for a
+    note candidate: a note is not chunked, so its ``anchor_quote`` is verified against
+    the whole note body instead of a chunk (NL-08).
     """
 
     item_type: str
     question: str
     answer: str
-    source_chunk_id: UUID
     anchor_quote: str
+    source_chunk_id: UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -712,6 +727,16 @@ class QuizItem:
     # capture is whole-source generation, matching the column's server default.
     origin: str = QuizItemOrigin.DECK
     note_anchor_id: UUID | None = None
+    # Denormalized owner (AD-149). Set explicitly on a source-less ``note`` card; for
+    # deck/highlight cards it is derived from the source at persist time, so existing
+    # construction sites leave it ``None`` and stay byte-compatible.
+    user_id: UUID | None = None
+    # Provenance back to the promoted note (``origin='note'``); ``None`` once the note
+    # is deleted, which the stored snapshot survives (AD-145).
+    note_id: UUID | None = None
+    # When the origin note last changed under this card (AD-144); drives the review
+    # badge. ``None`` until a regenerate-and-match flags the card.
+    note_changed_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -748,10 +773,11 @@ class ReviewLogEntry:
 
 @dataclass(frozen=True)
 class CardProvenance:
-    """The origin note of a highlight-derived card, for display at review (CAP-16).
+    """The origin note of a highlight- or note-derived card, for display at review.
 
     Read by join so a renamed note shows its current title. Absent (``None`` on the
-    review item) for deck-origin cards and for cards whose origin note was deleted.
+    review item) for deck-origin cards and for cards whose origin note was deleted —
+    a highlight card via its anchor (CAP-16), a note card via its ``note_id`` (NL-13).
     """
 
     note_id: UUID
@@ -763,15 +789,17 @@ class DueReviewItem:
     """A due quiz card plus the join fields the review queue needs (QUIZ-13/15).
 
     Bundles the reviewable :class:`QuizItem` with its owning source's ``source_title``
-    (the queue spans all the caller's sources), its scheduled ``due`` time, and the
-    origin-note ``provenance`` when the card was accepted from a highlight and that
-    note still exists.
+    (the queue spans all the caller's sources), its scheduled ``due`` time, the origin-note
+    ``provenance`` when the card came from a highlight or a note and that note still exists,
+    and ``note_changed`` — whether the origin note changed since the card was last reviewed
+    or created (the "your note changed" review badge, NL-12).
     """
 
     item: QuizItem
     source_title: str
     due: datetime
     provenance: CardProvenance | None = None
+    note_changed: bool = False
 
 
 @dataclass(frozen=True)

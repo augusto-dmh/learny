@@ -63,7 +63,9 @@ import {
 } from "@/components/ai-elements/prompt-input";
 
 import { CitationList } from "./citations";
+import { IncludeNotesToggle } from "./include-notes-toggle";
 import { SaveToNoteAction } from "./save-to-note-action";
+import { useIncludeNotes } from "./use-include-notes";
 
 /** A session the user has entered, plus the messages seeding its conversation. */
 type ActiveSession = {
@@ -264,9 +266,17 @@ function TeachChat({
   onRequireAuth?: () => void;
 }) {
   const [banner, setBanner] = useState<string | null>(null);
+  // Include-my-notes preference (NL-04): teaching defaults off; the flag rides a
+  // turn only once the reader has explicitly opted in.
+  const notes = useIncludeNotes("teach");
   const transport = useMemo(
-    () => createTurnTransport(sessionId, csrf),
-    [sessionId, csrf],
+    () =>
+      createTurnTransport(
+        sessionId,
+        csrf,
+        notes.chosen ? notes.includeNotes : undefined,
+      ),
+    [sessionId, csrf, notes.chosen, notes.includeNotes],
   );
   const { messages, sendMessage, status, stop } = useChat<LearnyUIMessage>({
     transport,
@@ -357,6 +367,11 @@ function TeachChat({
           {banner}
         </p>
       ) : null}
+
+      <IncludeNotesToggle
+        checked={notes.includeNotes}
+        onChange={notes.setIncludeNotes}
+      />
 
       <PromptInput onSubmit={handleSubmit}>
         <PromptInputBody>

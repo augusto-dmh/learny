@@ -79,6 +79,34 @@ def _candidates_from(sentence: str, chunk_id: UUID, title: str) -> list[QuizCand
     return [free_recall, cloze]
 
 
+def _note_candidates_from(sentence: str) -> list[QuizCandidate]:
+    """Derive the free-recall + cloze pair for one sentence of a note (NL-08).
+
+    The note→quiz mirror of :func:`_candidates_from`: the sentence is a verbatim span of
+    the note body, so both candidates are grounded by construction, and they carry no
+    ``source_chunk_id`` (a note is not chunked). Empty when the sentence has no maskable
+    word, so the deterministic path and the QC pipeline stay in agreement.
+    """
+    word = _longest_word(sentence)
+    if not sentence or word is None:
+        return []
+
+    free_recall = QuizCandidate(
+        item_type=QuizItemType.FREE_RECALL,
+        question="What does this note state?",
+        answer=sentence,
+        anchor_quote=sentence,
+    )
+    cloze_question = re.sub(rf"\b{re.escape(word)}\b", CLOZE_BLANK, sentence, count=1)
+    cloze = QuizCandidate(
+        item_type=QuizItemType.CLOZE,
+        question=cloze_question,
+        answer=word,
+        anchor_quote=sentence,
+    )
+    return [free_recall, cloze]
+
+
 def _section_candidates(section: QuizSection) -> list[QuizCandidate]:
     """Derive the free-recall + cloze candidates for one section (grounded by construction).
 
@@ -162,6 +190,21 @@ class DeterministicQuizAdapter:
         if chunk_id is None:
             return []
         return _candidates_from(quote.strip(), chunk_id, section.title)[:limit]
+
+    def suggest_note_cards(
+        self, note_body: str, context: str, limit: int
+    ) -> list[QuizCandidate]:
+        """Derive candidates from the note body's leading sentence, capped (NL-08).
+
+        Deterministic and grounded by construction (the sentence is verbatim from the
+        note body), so the offline promotion path is reproducible. ``context`` — the book
+        anchor context an anchored note carries — is a generation hint the real provider
+        uses; grounding here is against the note body alone, so this adapter ignores it.
+        An empty body (or a sentence with no maskable word) yields nothing.
+        """
+        if limit <= 0:
+            return []
+        return _note_candidates_from(_leading_sentence(note_body))[:limit]
 
     def collect_deck(self, handle: QuizDeckHandle) -> QuizDeckResult | None:
         """Return the inline result immediately — the local adapter never pends."""

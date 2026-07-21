@@ -271,7 +271,12 @@ class PostTeachingTurn:
         self._history_turns = history_turns
 
     def _preflight(
-        self, *, user: User, session_id: UUID, message: str
+        self,
+        *,
+        user: User,
+        session_id: UUID,
+        message: str,
+        include_notes: bool = False,
     ) -> tuple[StructureSection, list[HistoryTurn], list[Evidence], int]:
         """Run the shared turn guards and scoped retrieval (buffered + streaming).
 
@@ -332,14 +337,23 @@ class PostTeachingTurn:
             query=message,
             top_k=self._evidence_top_k,
             anchors=scoped_anchors,
+            include_notes=include_notes,
         )
         return target, history, evidence, total_turns
 
     def __call__(
-        self, *, user: User, session_id: UUID, message: str
+        self,
+        *,
+        user: User,
+        session_id: UUID,
+        message: str,
+        include_notes: bool = False,
     ) -> TeachingTurn:
         target, history, evidence, turn_index = self._preflight(
-            user=user, session_id=session_id, message=message
+            user=user,
+            session_id=session_id,
+            message=message,
+            include_notes=include_notes,
         )
 
         if not evidence:
@@ -397,7 +411,12 @@ class PostTeachingTurn:
         return persisted
 
     def stream(
-        self, *, user: User, session_id: UUID, message: str
+        self,
+        *,
+        user: User,
+        session_id: UUID,
+        message: str,
+        include_notes: bool = False,
     ) -> Iterator[TurnStreamEvent]:
         """Run one cited turn incrementally, persisting only on stream completion.
 
@@ -412,7 +431,10 @@ class PostTeachingTurn:
         failure surfaces as ``AnswerGenerationFailed`` from within the stream.
         """
         target, history, evidence, turn_index = self._preflight(
-            user=user, session_id=session_id, message=message
+            user=user,
+            session_id=session_id,
+            message=message,
+            include_notes=include_notes,
         )
         return self._turn_stream(
             session_id=session_id,

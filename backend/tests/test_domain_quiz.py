@@ -19,12 +19,14 @@ from app.application.quiz_qc import (
     cloze_is_valid,
     content_key,
     normalize_text,
+    note_card_passes_qc,
     quote_in_text,
 )
 from app.domain.entities import (
     ACTIVE_QUIZ_JOB_STATUSES,
     CardProvenance,
     DueReviewItem,
+    QuizCandidate,
     QuizDeckHandle,
     QuizGenerationJob,
     QuizItem,
@@ -92,6 +94,92 @@ def test_cloze_invalid_when_blank_missing() -> None:
     # QUIZ-07: a cloze question must carry the ____ blank (A-5).
     assert CLOZE_BLANK == "____"
     assert cloze_is_valid("The cat sat on the mat", "cat", "The cat sat on the mat") is False
+
+
+# --- note_card_passes_qc (NL-08 — the note IS the source) ------------------------
+
+_NOTE_BODY = "Spaced repetition schedules reviews at expanding intervals. It aids recall."
+
+
+def _note_candidate(
+    *,
+    item_type: str = QuizItemType.FREE_RECALL,
+    question: str = "What does spaced repetition schedule?",
+    answer: str = "reviews at expanding intervals",
+    anchor_quote: str = "Spaced repetition schedules reviews at expanding intervals.",
+) -> QuizCandidate:
+    # source_chunk_id defaults to None: a note is not chunked (NL-08).
+    return QuizCandidate(
+        item_type=item_type, question=question, answer=answer, anchor_quote=anchor_quote
+    )
+
+
+def test_note_card_passes_qc_for_a_grounded_free_recall() -> None:
+    # A free-recall candidate whose quote appears verbatim in the note body is grounded.
+    assert note_card_passes_qc(_note_candidate(), _NOTE_BODY) is True
+
+
+def test_note_card_passes_qc_for_a_valid_cloze() -> None:
+    cloze = _note_candidate(
+        item_type=QuizItemType.CLOZE,
+        question="Spaced ____ schedules reviews at expanding intervals.",
+        answer="repetition",
+        anchor_quote="Spaced repetition schedules reviews at expanding intervals.",
+    )
+    assert note_card_passes_qc(cloze, _NOTE_BODY) is True
+
+
+def test_note_card_qc_normalizes_whitespace_when_matching_the_body() -> None:
+    # QUIZ-06 parity: containment is whitespace/case-normalized against the note body.
+    body = "Spaced   repetition\nschedules   reviews."
+    candidate = _note_candidate(
+        anchor_quote="spaced repetition schedules reviews.",
+        question="q?",
+        answer="a",
+    )
+    assert note_card_passes_qc(candidate, body) is True
+
+
+def test_note_card_qc_discards_an_ungrounded_quote() -> None:
+    # NL-08: an anchor quote absent from the note body is not grounded → discarded.
+    fabricated = _note_candidate(anchor_quote="A sentence the note never contains.")
+    assert note_card_passes_qc(fabricated, _NOTE_BODY) is False
+
+
+def test_note_card_qc_discards_an_unknown_item_type() -> None:
+    # QUIZ-10: only free_recall/cloze survive; an MCQ (or anything else) is rejected.
+    assert note_card_passes_qc(_note_candidate(item_type="mcq"), _NOTE_BODY) is False
+
+
+def test_note_card_qc_discards_empty_question_or_answer() -> None:
+    assert note_card_passes_qc(_note_candidate(question="   "), _NOTE_BODY) is False
+    assert note_card_passes_qc(_note_candidate(answer=""), _NOTE_BODY) is False
+
+
+def test_note_card_qc_discards_empty_anchor_quote() -> None:
+    assert note_card_passes_qc(_note_candidate(anchor_quote="  "), _NOTE_BODY) is False
+
+
+def test_note_card_qc_discards_a_cloze_with_an_invalid_mask() -> None:
+    # QUIZ-07: the quote is grounded, but the masked answer is not in the quote.
+    bad_cloze = _note_candidate(
+        item_type=QuizItemType.CLOZE,
+        question="Spaced ____ schedules reviews at expanding intervals.",
+        answer="chloroplast",
+        anchor_quote="Spaced repetition schedules reviews at expanding intervals.",
+    )
+    assert note_card_passes_qc(bad_cloze, _NOTE_BODY) is False
+
+
+def test_note_card_qc_discards_a_cloze_missing_the_blank() -> None:
+    # QUIZ-07: a cloze question without the ____ blank is discarded even when grounded.
+    no_blank = _note_candidate(
+        item_type=QuizItemType.CLOZE,
+        question="Spaced repetition schedules reviews at expanding intervals.",
+        answer="repetition",
+        anchor_quote="Spaced repetition schedules reviews at expanding intervals.",
+    )
+    assert note_card_passes_qc(no_blank, _NOTE_BODY) is False
 
 
 # --- Item type / status vocabulary (QUIZ-10) -------------------------------------
@@ -213,19 +301,24 @@ def test_quiz_item_is_frozen() -> None:
 # --- Card origin and provenance (CAP-10, CAP-16, CAP-19) -------------------------
 
 
-def test_item_origins_are_exactly_deck_and_highlight() -> None:
-    """The vocabulary is closed: a third origin would need its own identity rule."""
+def test_item_origins_are_exactly_deck_highlight_and_note() -> None:
+    """The vocabulary is closed: a fourth origin would need its own identity rule.
+
+    ``note`` joins ``deck``/``highlight`` with AD-148's minted-id identity — the only
+    source-less origin — so a promoted note can be regenerated without touching schedule.
+    """
     origins = {
         value
         for key, value in vars(QuizItemOrigin).items()
         if not key.startswith("_") and isinstance(value, str)
     }
-    assert origins == {"deck", "highlight"}
+    assert origins == {"deck", "highlight", "note"}
 
 
 def test_item_origin_vocabulary() -> None:
     assert QuizItemOrigin.DECK == "deck"
     assert QuizItemOrigin.HIGHLIGHT == "highlight"
+    assert QuizItemOrigin.NOTE == "note"
 
 
 def _item(**overrides) -> QuizItem:  # noqa: ANN003
@@ -349,6 +442,9 @@ def test_quiz_generation_port_is_runtime_checkable_protocol() -> None:
         def suggest_cards(self, section, quote, limit):  # noqa: ANN001, ANN201
             return []
 
+        def suggest_note_cards(self, note_body, context, limit):  # noqa: ANN001, ANN201
+            return []
+
     class MissingCollect:
         model = "x"
 
@@ -356,6 +452,9 @@ def test_quiz_generation_port_is_runtime_checkable_protocol() -> None:
             return None
 
         def suggest_cards(self, section, quote, limit):  # noqa: ANN001, ANN201
+            return []
+
+        def suggest_note_cards(self, note_body, context, limit):  # noqa: ANN001, ANN201
             return []
 
     class MissingSuggest:
@@ -367,10 +466,27 @@ def test_quiz_generation_port_is_runtime_checkable_protocol() -> None:
         def collect_deck(self, handle):  # noqa: ANN001, ANN201
             return None
 
+        def suggest_note_cards(self, note_body, context, limit):  # noqa: ANN001, ANN201
+            return []
+
+    class MissingSuggestNote:
+        model = "x"
+
+        def begin_deck(self, sections):  # noqa: ANN001, ANN201
+            return None
+
+        def collect_deck(self, handle):  # noqa: ANN001, ANN201
+            return None
+
+        def suggest_cards(self, section, quote, limit):  # noqa: ANN001, ANN201
+            return []
+
     assert isinstance(ConformingAdapter(), QuizGenerationPort)
     assert not isinstance(MissingCollect(), QuizGenerationPort)
     # The quote-scoped suggestion method is part of the port contract (AD-134).
     assert not isinstance(MissingSuggest(), QuizGenerationPort)
+    # The note→quiz suggestion method is part of the same port contract (NL-08).
+    assert not isinstance(MissingSuggestNote(), QuizGenerationPort)
 
 
 def test_scheduling_port_is_runtime_checkable_protocol() -> None:

@@ -21,6 +21,8 @@ Contract (also consumed by the Next.js proxy):
 - ``GET  /api/reviews/due`` → 200 due queue + total; auth.
 - ``POST /api/quiz-items/{id}/reviews`` → 200 updated scheduling; auth + CSRF/Origin
   + limit.
+- ``POST /api/quiz-items/{id}/schedule-reset`` → 200 fresh scheduling + badge cleared;
+  auth + CSRF/Origin + limit (NL-12).
 """
 
 from __future__ import annotations
@@ -39,7 +41,7 @@ from sqlalchemy import Connection
 
 from app.application.errors import EnqueueFailed
 from app.application.quiz import ExportQuizDeck, ListQuizItems, QuizOverview
-from app.application.reviews import GetDueQueue, SubmitReview
+from app.application.reviews import GetDueQueue, ResetSchedule, SubmitReview
 from app.domain.entities import (
     CardProvenance,
     DueReviewItem,
@@ -61,6 +63,7 @@ from app.infrastructure.web.dependencies import (
     get_list_quiz_items,
     get_quiz_deck_enqueuer,
     get_quiz_uow,
+    get_reset_schedule,
     get_submit_review,
 )
 from app.infrastructure.web.rate_limit import rate_limit_quiz
@@ -220,7 +223,9 @@ class DueItemView(BaseModel):
     """
 
     id: UUID
-    source_id: UUID
+    # ``null`` for a source-less ``note`` card (AD-149); ``source_title`` is then the
+    # constant "Your notes".
+    source_id: UUID | None
     source_title: str
     item_type: str
     question: str
@@ -229,6 +234,9 @@ class DueItemView(BaseModel):
     provenance: CardProvenanceView | None
     status: str
     due: datetime
+    # The "your note changed" badge (NL-12): the origin note changed since this card was
+    # last reviewed or created. Always ``false`` for deck/highlight cards.
+    note_changed: bool
 
     @classmethod
     def from_due(cls, due: DueReviewItem) -> DueItemView:
@@ -252,6 +260,7 @@ class DueItemView(BaseModel):
             ),
             status=item.status,
             due=due.due,
+            note_changed=due.note_changed,
         )
 
 
@@ -400,6 +409,31 @@ def submit_review(
         review_duration_ms=body.review_duration_ms,
     )
     return SchedulingView.from_snapshot(snapshot)
+
+
+@router.post(
+    "/api/quiz-items/{item_id}/schedule-reset",
+    dependencies=[
+        Depends(rate_limit_quiz),
+        Depends(enforce_origin),
+        Depends(enforce_csrf),
+    ],
+)
+def reset_schedule(
+    item_id: UUID,
+    user: Annotated[User, Depends(get_authenticated_user)],
+    service: Annotated[ResetSchedule, Depends(get_reset_schedule)],
+) -> SchedulingView:
+    """Reset one owned active card to its fresh state and retire the badge (200; 404/409).
+
+    ``ResetSchedule`` resolves the item on its own ``user_id`` (missing/non-owner →
+    ``QuizItemNotFound`` → 404, no disclosure — a source-less note card resets the same as
+    any other), rejects a non-active item (``QuizItemNotReviewable`` → 409), replaces the
+    scheduling snapshot with the fresh initial state, and clears the note-changed flag. The
+    append-only review log is left untouched. This is the only non-review path that changes
+    scheduling (NL-12).
+    """
+    return SchedulingView.from_snapshot(service(user=user, item_id=item_id))
 
 
 @router.get("/api/sources/{source_id}/quiz/export")

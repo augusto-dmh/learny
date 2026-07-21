@@ -133,3 +133,63 @@ describe("CitationList as passage (RA-12)", () => {
     );
   });
 });
+
+// A citation drawn from the user's own note: origin='note' plus the note identity.
+const noteCitation: Citation = {
+  chunk_id: "n1",
+  source_id: "n1",
+  section_path: [],
+  anchor: "note:n1",
+  page_span: null,
+  snippet: "a distinctive fact from my own note",
+  score: 0.9,
+  origin: "note",
+  note_id: "note-123",
+  note_title: "My Insight",
+};
+
+describe("CitationList note citations (NL-03)", () => {
+  it("renders a note citation distinctly, linking into the note and never the book", () => {
+    render(<CitationList sourceId="s1" citations={[noteCitation]} />);
+
+    // The note chip carries its own label (not the book "Citation:" one).
+    fireEvent.click(screen.getByRole("button", { name: "Your note: My Insight" }));
+
+    // "Your note — <title>" label and the cited passage render in the popover.
+    expect(screen.getByText("Your note — My Insight")).toBeTruthy();
+    expect(
+      screen.getByText("a distinctive fact from my own note"),
+    ).toBeTruthy();
+
+    // The action links into the note detail — never any into-the-book action.
+    const link = screen.getByRole("link", { name: /open note/i });
+    expect(link.getAttribute("href")).toBe("/notes/note-123");
+    expect(screen.queryByRole("link", { name: /open in book/i })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /show in book/i }),
+    ).toBeNull();
+  });
+
+  it("renders both a book and a note citation in a mixed list, each with its own action", () => {
+    const onShowInBook = vi.fn();
+    render(
+      <CitationList
+        sourceId="s1"
+        citations={[citation, noteCitation]}
+        onShowInBook={onShowInBook}
+      />,
+    );
+
+    // The book chip still opens the in-book action (unchanged).
+    fireEvent.click(
+      screen.getByRole("button", { name: "Citation: Chapter 1 › Core Idea" }),
+    );
+    expect(screen.getByRole("button", { name: /show in book/i })).toBeTruthy();
+    expect(screen.queryByRole("link", { name: /open note/i })).toBeNull();
+
+    // The note chip opens the into-the-note action instead.
+    fireEvent.click(screen.getByRole("button", { name: "Your note: My Insight" }));
+    const noteLink = screen.getByRole("link", { name: /open note/i });
+    expect(noteLink.getAttribute("href")).toBe("/notes/note-123");
+  });
+});

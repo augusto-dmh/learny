@@ -50,7 +50,7 @@ Invoke `tlc-spec-driven` for the cycle (Specify → Design → Tasks → Execute
 
 Execute honors the full tlc contract (tests from acceptance criteria, gate per task, atomic commits, mandatory fresh Verifier). A Verifier FAIL stops the pipeline with the report — do not continue to Stage 2.
 
-When Execute runs one worker per phase, set each worker's model per the **Cost discipline** section (Opus for any phase with a design decision or correctness invariant; Haiku only for a chore dispatched as its own unit; Verifier always Opus), and give each worker scoped gate commands (affected module per commit, full suite at phase boundary).
+When Execute runs one worker per phase, set each worker's model per the **Cost discipline** section (Opus for any phase with a design decision or correctness invariant; Haiku only for a chore dispatched as its own unit; Verifier always Opus), write each brief per **Worker briefs — state the goal, not the steps**, and give each worker scoped gate commands (affected module per commit, full suite at phase boundary).
 
 ## Stage 2 — Publish (learny-finalize)
 
@@ -115,7 +115,34 @@ Fail any one → **Opus**. **When unsure → Opus.**
 | Stage 4 triage (real-vs-false against the code) | Opus — adversarial reasoning |
 | Stage 5 fixes | Opus by default; Haiku only for a truly local, fully-specified fix that passes the four-condition test |
 
+**Upshifting to Fable 5.** Fable is the strongest model on long-horizon autonomy, on navigating ambiguity, and on reading code for what it *can* do rather than what it currently does — the axis this pipeline is weakest on, since a discrimination sensor can only mutate branches a test already reaches. It costs exactly 2× Opus in both directions ($10/$50 vs $5/$25 per MTok) and takes materially longer per turn, so it is an upshift for specific roles, never a blanket default.
+
+Two preconditions, both hard: the org must allow **30-day data retention** (a zero-retention org gets a 400 on every Fable request, with a valid payload — check this before diagnosing anything else), and Fable's safety classifiers target most cybersecurity content, with its bug-finding gains explicitly **excluding security-focused analysis**.
+
+| Role | Fable 5? |
+|---|---|
+| Stage 1 Verifier · Stage 4 triage | **Candidate upshift** — short goal-shaped prompts, small token share, and the exact reasoning these roles need |
+| `pr-review` Security lane | **Never** — classifier false positives on security-adjacent work, and no bug-finding gain there |
+| Stage 1 phase workers | Only after their briefs are goal-stated (below) — a step-listed brief measurably *reduces* Fable's output quality, so it would underperform Opus at double the price |
+| Stage 0 / 6 / 8 mechanical ops | Never — Haiku territory |
+
 A ship-cycle **phase is one worker** even when it mixes scaffolding with a hard kernel (e.g. env+settings alongside a batching algorithm or a sub-batch-ordering edge): the kernel sets the model, so keep the whole phase on Opus. Split a chore to Haiku only when it is dispatched as its own unit. Do **not** treat the Verifier as license to Haiku-ify hard work — its sensor only catches faults it mutates; sensor-blind gaps slip.
+
+## Worker briefs — state the goal, not the steps
+
+A delegated worker's brief must give it **what must be true when it finishes**, and leave *how* to the worker. An ordered recipe caps the worker at what the orchestrator already thought of, which is the wrong ceiling: the expensive defects in this pipeline are the ones nobody enumerated. In the capture-pipeline cycle both real bugs lived on branches no test executed — a worker reasoning about what the code can do finds those; a worker transcribing a checklist does not. Over-prescription also measurably degrades Fable 5, so goal-shaped briefs are the prerequisite for upshifting at all.
+
+**Always give (these are context, not prescription):**
+- The **seams** — signatures and `file:line` refs from the Explore survey, not file bodies.
+- The **binding decisions** — the ADRs and `AD-NNN` rows the phase must conform to, and any accepted assumption it must not relitigate.
+- The **invariants that must hold**, named as invariants: "editing a card must not disturb its schedule", "ownership failures must be indistinguishable to the caller". Require a sensor for each; do **not** dictate the test's shape or name.
+- **Environment facts** that cost time to rediscover — interpreter path, env vars the suite needs, the verified baseline counts, services that must be running.
+- The **non-negotiable contract** — tests derive from acceptance criteria, gate green before done, one atomic commit per task, no attribution, no internal IDs. This is the definition of done, not a method.
+- The **report contract** — what the closing summary must contain, including that deviations be stated plainly rather than buried.
+
+**Don't give:** an ordered list of edits; an enumerated list of tests to write; "cover each of these points" checklists; or a solution the worker is meant to transcribe. If you find yourself writing the implementation into the brief, either the phase is a Haiku chore (where a step list is correct — it transcribes by design) or you are doing the worker's thinking and should hand it the constraint instead.
+
+**Traps are the exception worth naming.** A known landmine — a defaulted field that silently produces the wrong value, a repository method with no guard the caller must supply — belongs in the brief, because it is knowledge the worker cannot derive from the seams. State the trap and the consequence, then require a sensor. That is a constraint, not a step.
 
 **Gate scoping (no quality risk):** run the affected test module/subset per intermediate task commit; run the full suite once per phase boundary and once before pushing fixes. The Verifier's discrimination mutations run only the target test file, not the whole suite per mutation.
 

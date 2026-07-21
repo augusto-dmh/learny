@@ -52,6 +52,10 @@ class QuestionRequest(BaseModel):
     """
 
     question: str = Field(min_length=1)
+    # AD-147: Q&A includes the user's notes by default. The client sends the flag
+    # only after an explicit choice; an absent flag defaults on here (server-owned),
+    # so a note-carrying answer is the out-of-the-box behaviour (NL-04).
+    include_notes: bool = True
 
     @field_validator("question")
     @classmethod
@@ -121,7 +125,12 @@ def ask_question(
     either composes a grounded answer or returns the explicit not-found outcome;
     a generation failure surfaces as ``AnswerGenerationFailed`` → 502 (generic).
     """
-    result = service(user=user, source_id=source_id, question=body.question)
+    result = service(
+        user=user,
+        source_id=source_id,
+        question=body.question,
+        include_notes=body.include_notes,
+    )
     return AnswerResponse.from_question_answer(result)
 
 
@@ -149,5 +158,10 @@ def ask_question_stream(
     frame generator returned. A generation failure after that point is rendered by
     the presenter as a protocol ``error`` part (headers are already sent).
     """
-    events = service.stream(user=user, source_id=source_id, question=body.question)
+    events = service.stream(
+        user=user,
+        source_id=source_id,
+        question=body.question,
+        include_notes=body.include_notes,
+    )
     return to_sse_response(events)

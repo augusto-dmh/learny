@@ -179,7 +179,12 @@ class CreateNote:
 
 
 class UpdateNote:
-    """Update an owned note and rewrite its derived indexes in the same transaction (NF-05)."""
+    """Update an owned note and rewrite its derived indexes in the same transaction (NF-05).
+
+    Returns ``(view, body_changed)``: ``body_changed`` is ``True`` only when the stored
+    body differs from the new one, so the web layer re-embeds after commit on a real body
+    change and skips a title/tags-only edit (NL-01; the embed itself is async, AD-016).
+    """
 
     def __init__(
         self,
@@ -200,9 +205,10 @@ class UpdateNote:
         title: str,
         body_markdown: str,
         tags: Sequence[str] = (),
-    ) -> NoteView:
-        _owned_note(self._notes, user, note_id)
+    ) -> tuple[NoteView, bool]:
+        existing = _owned_note(self._notes, user, note_id)
         _validate_body(body_markdown, self._max_body_chars)
+        body_changed = existing.body_markdown != body_markdown
         now = self._clock.now()
         self._notes.update(
             note_id, title=title, body_markdown=body_markdown, updated_at=now
@@ -216,7 +222,7 @@ class UpdateNote:
         )
         updated = self._notes.get_by_id(note_id)
         assert updated is not None  # just updated in this transaction
-        return _view(self._notes, updated)
+        return _view(self._notes, updated), body_changed
 
 
 class DeleteNote:

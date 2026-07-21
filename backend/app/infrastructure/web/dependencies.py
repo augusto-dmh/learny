@@ -19,12 +19,18 @@ from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager
 from functools import lru_cache
 from typing import Annotated
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi import Depends, Request
 from sqlalchemy import Connection
 
-from app.application.cards import AcceptCard, SuggestCards, UpdateCard
+from app.application.cards import (
+    AcceptCard,
+    AcceptNoteCard,
+    SuggestCards,
+    SuggestNoteCards,
+    UpdateCard,
+)
 from app.application.corpus import ReadSection, ReadSourceStructure
 from app.application.identity import (
     AuthenticateUser,
@@ -56,7 +62,7 @@ from app.application.reading import (
     SaveReadingPosition,
 )
 from app.application.retrieval import RetrieveEvidence
-from app.application.reviews import GetDueQueue, SubmitReview
+from app.application.reviews import GetDueQueue, ResetSchedule, SubmitReview
 from app.application.sources import CreateSource, GetSource, ListSources
 from app.application.teaching import (
     ListTeachingSessions,
@@ -64,6 +70,7 @@ from app.application.teaching import (
     ReadTeachingSession,
     StartTeachingSession,
 )
+from app.application.vault import ExportVault
 from app.core.config import Settings, get_settings
 from app.core.tracing import bind_trace
 from app.domain.entities import Session, User
@@ -71,6 +78,7 @@ from app.domain.ports import (
     AnswerGenerationPort,
     EmbeddingPort,
     IngestionEnqueuer,
+    NoteIndexEnqueuer,
     QuizDeckEnqueuer,
     QuizGenerationPort,
     StoragePort,
@@ -107,6 +115,7 @@ from app.infrastructure.security.tokens import SecretsTokenGenerator
 from app.infrastructure.storage.s3 import S3StorageAdapter
 from app.infrastructure.worker.enqueuer import (
     CeleryIngestionEnqueuer,
+    CeleryNoteIndexEnqueuer,
     CeleryQuizDeckEnqueuer,
 )
 from app.infrastructure.worker.steps import NoOpIngestionStep
@@ -599,6 +608,11 @@ def get_export_quiz_deck(conn: DbConnection) -> ExportQuizDeck:
     )
 
 
+def get_export_vault(conn: DbConnection) -> ExportVault:
+    """Wire ``ExportVault`` on the request-scoped connection (NL-16)."""
+    return ExportVault(notes=SqlAlchemyNoteRepository(conn))
+
+
 def get_submit_review(conn: DbConnection) -> SubmitReview:
     """Wire ``SubmitReview`` on the request-scoped connection (QUIZ-12).
 
@@ -608,25 +622,59 @@ def get_submit_review(conn: DbConnection) -> SubmitReview:
     """
     return SubmitReview(
         items=SqlAlchemyQuizItemRepository(conn),
-        sources=SqlAlchemySourceRepository(conn),
         scheduling=build_scheduling_adapter(get_settings()),
-        authorize=AuthorizeOwnership(),
         clock=_clock,
+    )
+
+
+def get_reset_schedule(conn: DbConnection) -> ResetSchedule:
+    """Wire ``ResetSchedule`` on the request-scoped connection (NL-12).
+
+    Like a review, a reset is one atomic transaction (scheduling replace + badge clear),
+    so the auto-committing request connection is the unit of work.
+    """
+    return ResetSchedule(
+        items=SqlAlchemyQuizItemRepository(conn),
+        scheduling=build_scheduling_adapter(get_settings()),
     )
 
 
 # --- Notes & second-brain (Cycle E) --------------------------------------------
 #
-# Every note path is one atomic transaction — a create/update rebuilds the note's
-# derived link/tag indexes, and a capture creates the note plus its anchor, all in
-# the same unit of work — so the ordinary auto-committing request connection is the
-# boundary (no commit-then-enqueue dance as on the deck/ingestion paths). The body
-# cap is sourced from settings; capture derives each block's Markdown through the
-# same ``Bs4MarkupConverter`` the corpus build used so a selection binds like-for-like.
+# Create/update rebuild the note's derived link/tag indexes and then (NL-01)
+# re-embed the note asynchronously — so they own the commit-then-enqueue dance the
+# deck/ingestion paths do: the write commits in a UoW factory (``get_note_uow``)
+# before ``NoteIndexEnqueuer`` puts the note id on the queue, so the worker always
+# reads a durable row (AD-016). The read/delete/capture paths stay on the ordinary
+# auto-committing request connection (delete needs no enqueue — index rows die with
+# the note, NL-07). The body cap is sourced from settings; capture derives each
+# block's Markdown through the same ``Bs4MarkupConverter`` the corpus build used so a
+# selection binds like-for-like.
 
 
-def get_create_note(conn: DbConnection) -> CreateNote:
-    """Wire ``CreateNote`` on the request-scoped connection (NF-05)."""
+def _default_note_uow() -> AbstractContextManager[Connection]:
+    """Production note-write UoW: a fresh ``engine.begin()`` (commit on clean exit)."""
+    return get_engine().begin()
+
+
+_note_uow: Callable[[], AbstractContextManager[Connection]] = _default_note_uow
+
+
+def get_note_uow() -> Callable[[], AbstractContextManager[Connection]]:
+    """FastAPI dependency: the note-write UoW factory (overridable in tests)."""
+    return _note_uow
+
+
+_note_index_enqueuer: NoteIndexEnqueuer = CeleryNoteIndexEnqueuer()
+
+
+def get_note_index_enqueuer() -> NoteIndexEnqueuer:
+    """FastAPI dependency: the process-wide note-index enqueuer (overridable in tests)."""
+    return _note_index_enqueuer
+
+
+def build_create_note(conn: Connection) -> CreateNote:
+    """Wire ``CreateNote`` on a note-write UoW connection (NF-05)."""
     return CreateNote(
         notes=SqlAlchemyNoteRepository(conn),
         clock=_clock,
@@ -635,13 +683,22 @@ def get_create_note(conn: DbConnection) -> CreateNote:
     )
 
 
-def get_update_note(conn: DbConnection) -> UpdateNote:
-    """Wire ``UpdateNote`` on the request-scoped connection (NF-05)."""
+def build_update_note(conn: Connection) -> UpdateNote:
+    """Wire ``UpdateNote`` on a note-write UoW connection (NF-05)."""
     return UpdateNote(
         notes=SqlAlchemyNoteRepository(conn),
         clock=_clock,
         max_body_chars=get_settings().notes_max_body_chars,
     )
+
+
+def build_has_note_items(conn: Connection) -> Callable[[UUID], bool]:
+    """Return the ``has_note_items`` predicate on a note-write UoW connection (NL-10).
+
+    Evaluated inside the note-update transaction so the refresh enqueue fires only when
+    the note has a live note card to refresh (the promoted-note gate for AD-144).
+    """
+    return SqlAlchemyQuizItemRepository(conn).has_note_items
 
 
 def get_delete_note(conn: DbConnection) -> DeleteNote:
@@ -752,4 +809,35 @@ def get_update_card(conn: DbConnection) -> UpdateCard:
         items=SqlAlchemyQuizItemRepository(conn),
         authorize=AuthorizeOwnership(),
         max_card_chars=get_settings().quiz_max_card_chars,
+    )
+
+
+def get_suggest_note_cards(conn: DbConnection) -> SuggestNoteCards:
+    """Wire ``SuggestNoteCards`` on the request-scoped connection (NL-08)."""
+    settings = get_settings()
+    return SuggestNoteCards(
+        notes=SqlAlchemyNoteRepository(conn),
+        generation=get_card_generation(),
+        max_suggestions=settings.quiz_max_suggestions,
+    )
+
+
+def get_accept_note_card(conn: DbConnection) -> AcceptNoteCard:
+    """Wire ``AcceptNoteCard`` on the request-scoped connection (NL-09, NL-15).
+
+    The embedding is composed for the same reason as the highlight path: a note card's
+    embedding is stored so the regenerate-and-match step (T10) and later deck runs can
+    match against it, even though dedup is not applied to the card itself (AD-138).
+    """
+    settings = get_settings()
+    return AcceptNoteCard(
+        notes=SqlAlchemyNoteRepository(conn),
+        items=SqlAlchemyQuizItemRepository(conn),
+        generation=get_card_generation(),
+        embeddings=get_card_embeddings(),
+        scheduling=build_scheduling_adapter(settings),
+        clock=_clock,
+        ids=uuid4,
+        max_card_chars=settings.quiz_max_card_chars,
+        excerpt_chars=settings.quiz_note_excerpt_chars,
     )

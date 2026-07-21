@@ -18,25 +18,29 @@ import pytest
 from sqlalchemy import Connection, func, select
 
 from app.application.errors import QuizItemNotFound, QuizItemNotReviewable
-from app.application.identity import AuthorizeOwnership
 from app.application.quiz_qc import content_key
 from app.application.reviews import (
     DEFAULT_DUE_LIMIT,
     MAX_DUE_LIMIT,
     GetDueQueue,
+    ResetSchedule,
     SubmitReview,
 )
 from app.domain.entities import (
     DueReviewItem,
+    Note,
     QuizItem,
+    QuizItemOrigin,
     QuizItemStatus,
     QuizItemType,
+    ReviewLogEntry,
     SchedulingSnapshot,
     Source,
     User,
 )
 from app.infrastructure.db.metadata import review_log
 from app.infrastructure.db.repositories import (
+    SqlAlchemyNoteRepository,
     SqlAlchemyQuizItemRepository,
     SqlAlchemySourceRepository,
     SqlAlchemyUserRepository,
@@ -190,9 +194,7 @@ def _seed_active_item(
 def _service(db_conn: Connection, *, now: datetime) -> SubmitReview:
     return SubmitReview(
         items=SqlAlchemyQuizItemRepository(db_conn),
-        sources=SqlAlchemySourceRepository(db_conn),
         scheduling=FsrsSchedulingAdapter(fuzzing=False),
-        authorize=AuthorizeOwnership(),
         clock=FakeClock(now),
     )
 
@@ -294,3 +296,165 @@ def test_submit_review_non_owner_raises_not_found(db_conn: Connection) -> None:
         )
     ).scalar_one()
     assert logged == 0
+
+
+# --- Note-card review + ResetSchedule (NL-12) -----------------------------------
+
+
+def _persisted_note_card(
+    db_conn: Connection,
+    email: str,
+    *,
+    status: str = QuizItemStatus.ACTIVE,
+    due: datetime | None = None,
+    flagged_at: datetime | None = None,
+) -> tuple[User, QuizItem]:
+    """Seed a source-less ``note`` card owned by a fresh user (AD-148/149)."""
+    source = _persisted_source(db_conn, email)  # creates the owning user
+    user = SqlAlchemyUserRepository(db_conn).get_by_id(source.user_id)
+    now = datetime.now(UTC)
+    note = SqlAlchemyNoteRepository(db_conn).add(
+        Note(
+            id=uuid4(),
+            user_id=user.id,
+            title="My note",
+            body_markdown="a body",
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    item = QuizItem(
+        id=uuid4(),
+        source_id=None,
+        user_id=user.id,
+        origin=QuizItemOrigin.NOTE,
+        note_id=note.id,
+        item_type=QuizItemType.FREE_RECALL,
+        question="What does the note say?",
+        answer="A fact.",
+        section_path=("My note",),
+        anchor=f"note:{note.id}",
+        source_excerpt="a body",
+        chunk_hash="e" * 64,
+        content_key=content_key(QuizItemType.FREE_RECALL, "What does the note say?", "A fact."),
+        status=status,
+        generation_meta={},
+        created_at=now,
+        updated_at=now,
+    )
+    repo.upsert(item, embedding=None)
+    repo.create_scheduling(
+        item.id,
+        SchedulingSnapshot(
+            state=1, step=0, stability=None, difficulty=None,
+            due=due or (now - timedelta(hours=1)), last_review=None,
+        ),
+    )
+    if flagged_at is not None:
+        repo.flag_note_changed(item.id, flagged_at)
+    return user, repo.get_by_id(item.id)
+
+
+def _reset_service(db_conn: Connection) -> ResetSchedule:
+    return ResetSchedule(
+        items=SqlAlchemyQuizItemRepository(db_conn),
+        scheduling=FsrsSchedulingAdapter(fuzzing=False),
+    )
+
+
+@requires_db
+def test_submit_review_advances_a_source_less_note_card(db_conn: Connection) -> None:
+    # AD-149: a note card has no source, but authorization is its own user_id, so it is
+    # reviewable like any other card.
+    user, item = _persisted_note_card(db_conn, "review-note@example.com")
+
+    advanced = _service(db_conn, now=_NOW)(user=user, item_id=item.id, rating=3)
+
+    assert advanced.due > _NOW
+    assert SqlAlchemyQuizItemRepository(db_conn).get_scheduling(item.id) == advanced
+
+
+@requires_db
+def test_submit_review_note_card_non_owner_is_404(db_conn: Connection) -> None:
+    user, item = _persisted_note_card(db_conn, "review-note-owner@example.com")
+    intruder_source = _persisted_source(db_conn, "review-note-intruder@example.com")
+    intruder = SqlAlchemyUserRepository(db_conn).get_by_id(intruder_source.user_id)
+
+    with pytest.raises(QuizItemNotFound):
+        _service(db_conn, now=_NOW)(user=intruder, item_id=item.id, rating=3)
+
+
+@requires_db
+def test_reset_returns_fresh_state_clears_badge_and_preserves_log(
+    db_conn: Connection,
+) -> None:
+    user, item = _persisted_note_card(
+        db_conn,
+        "reset-ok@example.com",
+        flagged_at=datetime.now(UTC) + timedelta(hours=1),
+    )
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    # Give the card a review history and an advanced schedule to reset away from.
+    repo.append_log(
+        item.id, ReviewLogEntry(rating=3, reviewed_at=_NOW, review_duration_ms=800)
+    )
+    repo.update_scheduling(
+        item.id,
+        SchedulingSnapshot(
+            state=2, step=1, stability=9.0, difficulty=5.0,
+            due=_NOW + timedelta(days=5), last_review=_NOW,
+        ),
+    )
+    log_before = db_conn.execute(
+        select(review_log.c.rating, review_log.c.reviewed_at, review_log.c.review_duration_ms)
+        .where(review_log.c.quiz_item_id == item.id)
+    ).all()
+
+    fresh = _reset_service(db_conn)(user=user, item_id=item.id)
+
+    # Fresh state: the learning shape a new card receives (no hand-rolled literal), and
+    # the stored snapshot is exactly what was returned.
+    reference = FsrsSchedulingAdapter(fuzzing=False).initial()
+    assert fresh.state == reference.state
+    assert fresh.stability == reference.stability
+    assert fresh.difficulty == reference.difficulty
+    assert fresh.last_review is None
+    assert fresh.due < _NOW + timedelta(days=5)  # no longer the advanced due
+    assert repo.get_scheduling(item.id) == fresh
+    # Badge cleared, review log untouched.
+    assert repo.get_by_id(item.id).note_changed_at is None
+    log_after = db_conn.execute(
+        select(review_log.c.rating, review_log.c.reviewed_at, review_log.c.review_duration_ms)
+        .where(review_log.c.quiz_item_id == item.id)
+    ).all()
+    assert log_after == log_before
+    assert len(log_after) == 1
+
+
+@requires_db
+@pytest.mark.parametrize("status", [QuizItemStatus.STALE, QuizItemStatus.ORPHANED])
+def test_reset_rejects_a_non_active_item(db_conn: Connection, status: str) -> None:
+    user, item = _persisted_note_card(db_conn, f"reset-{status}@example.com", status=status)
+
+    with pytest.raises(QuizItemNotReviewable):
+        _reset_service(db_conn)(user=user, item_id=item.id)
+
+
+@requires_db
+def test_reset_non_owner_is_404(db_conn: Connection) -> None:
+    _user, item = _persisted_note_card(db_conn, "reset-owner@example.com")
+    intruder_source = _persisted_source(db_conn, "reset-intruder@example.com")
+    intruder = SqlAlchemyUserRepository(db_conn).get_by_id(intruder_source.user_id)
+
+    with pytest.raises(QuizItemNotFound):
+        _reset_service(db_conn)(user=intruder, item_id=item.id)
+
+
+@requires_db
+def test_reset_missing_item_is_404(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "reset-missing@example.com")
+    user = SqlAlchemyUserRepository(db_conn).get_by_id(source.user_id)
+
+    with pytest.raises(QuizItemNotFound):
+        _reset_service(db_conn)(user=user, item_id=uuid4())

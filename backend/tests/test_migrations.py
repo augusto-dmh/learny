@@ -16,6 +16,7 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.exc import IntegrityError
 
 from app.core.logging import SensitiveDataFilter
 
@@ -1291,12 +1292,12 @@ def test_migration_0012_adds_card_origin_and_note_provenance(monkeypatch) -> Non
             conn.execute(
                 text(
                     "INSERT INTO quiz_items "
-                    "(id, source_id, origin, note_anchor_id, item_type, question, answer, "
+                    "(id, source_id, user_id, origin, note_anchor_id, item_type, question, answer, "
                     " section_path, anchor, source_excerpt, chunk_hash, content_key) "
-                    "VALUES (:id, :sid, 'highlight', :aid, 'free_recall', 'q2', 'a2', "
+                    "VALUES (:id, :sid, :uid, 'highlight', :aid, 'free_recall', 'q2', 'a2', "
                     " '[]', 'a.xhtml', 'the quoted sentence', 'ch2', 'ck2')"
                 ),
-                {"id": card_id, "sid": source_id, "aid": anchor_id},
+                {"id": card_id, "sid": source_id, "uid": user_id, "aid": anchor_id},
             )
         with engine.begin() as conn:
             conn.execute(text("DELETE FROM notes WHERE id = :id"), {"id": note_id})
@@ -1400,12 +1401,12 @@ def test_migration_0012_downgrade_refuses_to_destroy_duplicate_cards(monkeypatch
                 conn.execute(
                     text(
                         "INSERT INTO quiz_items "
-                        "(id, source_id, origin, note_anchor_id, item_type, question, answer, "
-                        " section_path, anchor, source_excerpt, chunk_hash, content_key) "
-                        "VALUES (:id, :sid, 'highlight', :aid, 'free_recall', 'q', 'a', "
+                        "(id, source_id, user_id, origin, note_anchor_id, item_type, question, "
+                        " answer, section_path, anchor, source_excerpt, chunk_hash, content_key) "
+                        "VALUES (:id, :sid, :uid, 'highlight', :aid, 'free_recall', 'q', 'a', "
                         " '[]', 'a.xhtml', 'excerpt', 'ch', 'shared-fingerprint')"
                     ),
-                    {"id": uuid.uuid4(), "sid": source_id, "aid": anchor_id},
+                    {"id": uuid.uuid4(), "sid": source_id, "uid": user_id, "aid": anchor_id},
                 )
     finally:
         engine.dispose()
@@ -1472,6 +1473,317 @@ def test_migration_0012_downgrade_refuses_to_destroy_duplicate_cards(monkeypatch
     finally:
         engine.dispose()
 
+    command.downgrade(cfg, "base")
+
+
+@pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
+def test_migration_0013_indexes_notes_for_hybrid_search(monkeypatch) -> None:
+    """0013 up: ``notes`` gains a nullable ``embedding vector(1536)`` + ``embedding_model``
+    and a trigger-fed ``search_vector`` (title 'A' over body 'D', fixed 'simple' config)
+    backed by an HNSW index over ``embedding`` and a GIN index over ``search_vector``
+    (NL-01). The trigger maintains ``search_vector`` on insert AND update; a note with no
+    title and no body yields an empty tsvector. Down one step to 0012 drops both indexes,
+    the trigger, the function, and all three columns; a re-up round-trips.
+    """
+    monkeypatch.setenv("LEARNY_DATABASE_URL", TEST_DB_URL)
+    cfg = _alembic_config(TEST_DB_URL)
+
+    command.upgrade(cfg, "head")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        # NL-01: nullable embedding vector + embedding_model; a search_vector column.
+        columns = {c["name"]: c for c in inspect(engine).get_columns("notes")}
+        assert "embedding" in columns
+        assert columns["embedding"]["nullable"] is True
+        assert "embedding_model" in columns
+        assert columns["embedding_model"]["nullable"] is True
+        assert "search_vector" in columns
+
+        # HNSW (vector_cosine_ops, m=16, ef_construction=64) over embedding and GIN over
+        # search_vector — the same index shapes the corpus arms use (AD-020).
+        with engine.connect() as conn:
+            hnsw_def = conn.execute(
+                text(
+                    "SELECT indexdef FROM pg_indexes "
+                    "WHERE indexname = 'ix_notes_embedding_hnsw'"
+                )
+            ).scalar_one()
+            gin_def = conn.execute(
+                text(
+                    "SELECT indexdef FROM pg_indexes "
+                    "WHERE indexname = 'ix_notes_search_vector'"
+                )
+            ).scalar_one()
+        assert "hnsw" in hnsw_def and "vector_cosine_ops" in hnsw_def
+        assert "m='16'" in hnsw_def.replace(" ", "") or "m=16" in hnsw_def.replace(" ", "")
+        assert "ef_construction" in hnsw_def
+        assert "gin" in gin_def.lower() and "search_vector" in gin_def
+
+        # Seed a user + a note; the BEFORE INSERT trigger builds search_vector from the
+        # title ('A') and body ('D') under 'simple' (no stemming — raw lexemes appear).
+        user_id = uuid.uuid4()
+        note_id = uuid.uuid4()
+        with engine.begin() as conn:
+            conn.execute(
+                text("INSERT INTO users (id, email) VALUES (:id, :email)"),
+                {"id": user_id, "email": f"{user_id}@example.test"},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO notes (id, user_id, title, body_markdown) "
+                    "VALUES (:id, :uid, 'Photosynthesis', 'chlorophyll captures light')"
+                ),
+                {"id": note_id, "uid": user_id},
+            )
+        with engine.connect() as conn:
+            sv = conn.execute(
+                text("SELECT search_vector::text FROM notes WHERE id = :id"),
+                {"id": note_id},
+            ).scalar_one()
+        assert sv and "photosynthesis" in sv  # title lexeme (weighted 'A')
+        assert "chlorophyll" in sv  # body lexeme
+
+        # BEFORE UPDATE OF title, body_markdown: editing the body recomputes the vector.
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "UPDATE notes SET body_markdown = 'mitochondria respiration' "
+                    "WHERE id = :id"
+                ),
+                {"id": note_id},
+            )
+            updated_sv = conn.execute(
+                text("SELECT search_vector::text FROM notes WHERE id = :id"),
+                {"id": note_id},
+            ).scalar_one()
+        assert "mitochondria" in updated_sv  # new body lexeme present after the edit
+        assert "chlorophyll" not in updated_sv  # old body lexeme gone
+
+        # An empty note (no title, no body) yields a genuinely empty tsvector — the
+        # coalesce keeps the trigger from erroring and produces no lexemes.
+        empty_id = uuid.uuid4()
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO notes (id, user_id, title, body_markdown) "
+                    "VALUES (:id, :uid, '', '')"
+                ),
+                {"id": empty_id, "uid": user_id},
+            )
+        with engine.connect() as conn:
+            empty_sv = conn.execute(
+                text("SELECT search_vector::text FROM notes WHERE id = :id"),
+                {"id": empty_id},
+            ).scalar_one()
+        assert empty_sv == ""
+    finally:
+        engine.dispose()
+
+    # Down one step to 0012: both indexes, the trigger/function, and all three columns go.
+    command.downgrade(cfg, "0012_card_provenance")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        columns = {c["name"] for c in inspect(engine).get_columns("notes")}
+        assert "embedding" not in columns
+        assert "embedding_model" not in columns
+        assert "search_vector" not in columns
+        with engine.connect() as conn:
+            remaining_ix = conn.execute(
+                text(
+                    "SELECT indexname FROM pg_indexes WHERE indexname IN "
+                    "('ix_notes_embedding_hnsw', 'ix_notes_search_vector')"
+                )
+            ).fetchall()
+            trigger = conn.execute(
+                text("SELECT 1 FROM pg_trigger WHERE tgname = 'trg_notes_search_vector'")
+            ).scalar()
+            func = conn.execute(
+                text("SELECT 1 FROM pg_proc WHERE proname = 'notes_search_vector_update'")
+            ).scalar()
+        assert remaining_ix == []
+        assert trigger is None
+        assert func is None
+    finally:
+        engine.dispose()
+
+    # Re-upgrade restores everything — the schema round-trips.
+    command.upgrade(cfg, "head")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        columns = {c["name"] for c in inspect(engine).get_columns("notes")}
+        assert {"embedding", "embedding_model", "search_vector"} <= columns
+    finally:
+        engine.dispose()
+
+    command.downgrade(cfg, "base")
+
+
+@pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
+def test_migration_0014_adds_card_ownership_and_note_provenance(monkeypatch) -> None:
+    """0014 up: ``quiz_items`` gains denormalized ``user_id`` (backfilled from the card's
+    source, then NOT NULL, FK CASCADE, indexed), a nullable ``source_id`` gated by a CHECK
+    ``source_id IS NOT NULL OR origin='note'``, a ``note_id`` provenance FK (SET NULL,
+    indexed), and ``note_changed_at`` (AD-148/149). A deck row seeded before the upgrade
+    reads back with ``user_id`` = its source's owner. The CHECK rejects a source-less
+    non-note row and admits a source-less ``note`` row; the note FK SET NULL is exercised
+    for real. Down one step to 0013 deletes note rows, drops the additions, and restores
+    ``source_id NOT NULL``; a re-up round-trips.
+    """
+    monkeypatch.setenv("LEARNY_DATABASE_URL", TEST_DB_URL)
+    cfg = _alembic_config(TEST_DB_URL)
+
+    # Land on 0013 (pre-ownership) so the row seeded below is a genuine pre-existing row
+    # that the 0014 backfill must reach.
+    command.upgrade(cfg, "head")
+    command.downgrade(cfg, "0013_notes_retrieval")
+
+    user_id = uuid.uuid4()
+    source_id = uuid.uuid4()
+    deck_item_id = uuid.uuid4()
+    engine = create_engine(TEST_DB_URL)
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("INSERT INTO users (id, email) VALUES (:id, :email)"),
+                {"id": user_id, "email": f"{user_id}@example.test"},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO sources "
+                    "(id, user_id, title, filename, content_type, byte_size, checksum, object_key) "
+                    "VALUES (:id, :uid, 't', 'f.epub', 'application/epub+zip', 1, 'c', :key)"
+                ),
+                {"id": source_id, "uid": user_id, "key": f"sources/{source_id}.epub"},
+            )
+            # A pre-existing deck card with no user_id column yet — the backfill target.
+            conn.execute(
+                text(
+                    "INSERT INTO quiz_items "
+                    "(id, source_id, origin, item_type, question, answer, section_path, "
+                    " anchor, source_excerpt, chunk_hash, content_key) "
+                    "VALUES (:id, :sid, 'deck', 'free_recall', 'q', 'a', '[]', 'a.xhtml', "
+                    " 'excerpt', 'ch', 'ck')"
+                ),
+                {"id": deck_item_id, "sid": source_id},
+            )
+    finally:
+        engine.dispose()
+
+    command.upgrade(cfg, "head")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        inspector = inspect(engine)
+        columns = {c["name"]: c for c in inspector.get_columns("quiz_items")}
+        assert columns["user_id"]["nullable"] is False
+        assert columns["source_id"]["nullable"] is True  # relaxed for note cards
+        assert "note_id" in columns
+        assert "note_changed_at" in columns
+
+        # Backfill: the pre-existing deck row acquires its source's owner.
+        with engine.connect() as conn:
+            backfilled = conn.execute(
+                text("SELECT user_id FROM quiz_items WHERE id = :id"), {"id": deck_item_id}
+            ).scalar_one()
+        assert backfilled == user_id
+
+        # user_id FK CASCADE + index; note_id FK SET NULL + index.
+        user_fk = next(
+            fk
+            for fk in inspector.get_foreign_keys("quiz_items")
+            if fk["constrained_columns"] == ["user_id"]
+        )
+        assert user_fk["referred_table"] == "users"
+        assert user_fk["options"].get("ondelete") == "CASCADE"
+        note_fk = next(
+            fk
+            for fk in inspector.get_foreign_keys("quiz_items")
+            if fk["constrained_columns"] == ["note_id"]
+        )
+        assert note_fk["referred_table"] == "notes"
+        assert note_fk["options"].get("ondelete") == "SET NULL"
+        item_indexes = [ix["column_names"] for ix in inspector.get_indexes("quiz_items")]
+        assert ["user_id"] in item_indexes
+        assert ["note_id"] in item_indexes
+
+        # The CHECK rejects a source-less card that is NOT a note.
+        with engine.begin() as conn, pytest.raises(IntegrityError):
+            conn.execute(
+                text(
+                    "INSERT INTO quiz_items "
+                    "(id, user_id, origin, item_type, question, answer, section_path, "
+                    " anchor, source_excerpt, chunk_hash, content_key) "
+                    "VALUES (:id, :uid, 'deck', 'free_recall', 'q', 'a', '[]', 'a.xhtml', "
+                    " 'e', 'ch', 'ck2')"
+                ),
+                {"id": uuid.uuid4(), "uid": user_id},
+            )
+
+        # A source-less NOTE card is admitted, and deleting its origin note severs the
+        # link (SET NULL) while leaving the card intact (AD-145).
+        note_id = uuid.uuid4()
+        note_card_id = uuid.uuid4()
+        with engine.begin() as conn:
+            conn.execute(
+                text("INSERT INTO notes (id, user_id, title) VALUES (:id, :uid, 'Origin')"),
+                {"id": note_id, "uid": user_id},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO quiz_items "
+                    "(id, user_id, note_id, origin, item_type, question, answer, section_path, "
+                    " anchor, source_excerpt, chunk_hash, content_key) "
+                    "VALUES (:id, :uid, :nid, 'note', 'free_recall', 'q', 'a', '[]', 'note:', "
+                    " 'excerpt', 'ch', 'nk')"
+                ),
+                {"id": note_card_id, "uid": user_id, "nid": note_id},
+            )
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM notes WHERE id = :id"), {"id": note_id})
+        with engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT source_id, note_id, source_excerpt FROM quiz_items WHERE id = :id"
+                ),
+                {"id": note_card_id},
+            ).one()
+        assert row.source_id is None
+        assert row.note_id is None  # link severed, not the card
+        assert row.source_excerpt == "excerpt"
+    finally:
+        engine.dispose()
+
+    # Down one step to 0013: note rows are deleted, the additions drop, source_id NOT NULL.
+    command.downgrade(cfg, "0013_notes_retrieval")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        columns = {c["name"]: c for c in inspect(engine).get_columns("quiz_items")}
+        assert "user_id" not in columns
+        assert "note_id" not in columns
+        assert "note_changed_at" not in columns
+        assert columns["source_id"]["nullable"] is False
+        with engine.connect() as conn:
+            # The pre-existing deck card survives the downgrade; note cards are gone.
+            deck_alive = conn.execute(
+                text("SELECT count(*) FROM quiz_items WHERE id = :id"), {"id": deck_item_id}
+            ).scalar_one()
+            note_gone = conn.execute(
+                text("SELECT count(*) FROM quiz_items WHERE origin = 'note'")
+            ).scalar_one()
+        assert deck_alive == 1
+        assert note_gone == 0
+    finally:
+        engine.dispose()
+
+    # Re-upgrade restores the additions — the schema round-trips.
+    command.upgrade(cfg, "head")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        columns = {c["name"] for c in inspect(engine).get_columns("quiz_items")}
+        assert {"user_id", "note_id", "note_changed_at"} <= columns
+    finally:
+        engine.dispose()
+
+    # Drop everything to clear the committed seed rows; the module fixture restores head.
     command.downgrade(cfg, "base")
 
 

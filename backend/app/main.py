@@ -23,6 +23,7 @@ from app.infrastructure.web.quiz import router as quiz_router
 from app.infrastructure.web.retrieval import router as retrieval_router
 from app.infrastructure.web.sources import router as sources_router
 from app.infrastructure.web.teaching import router as teaching_router
+from app.infrastructure.web.vault import router as vault_router
 
 
 def create_app() -> FastAPI:
@@ -44,6 +45,7 @@ def create_app() -> FastAPI:
     app.include_router(quiz_router)
     app.include_router(notes_router)
     app.include_router(cards_router)
+    app.include_router(vault_router)
     return app
 
 

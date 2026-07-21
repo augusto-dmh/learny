@@ -22,6 +22,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import Connection, text
 
+from app.application.cards import RefreshNoteCards
 from app.application.corpus import BuildCorpus
 from app.application.ingestion import RunIngestion
 from app.application.notes import ReconcileNoteAnchors
@@ -373,6 +374,85 @@ def _reembed_document_body(source_id: str) -> None:
     logger.info(
         "reembed.document: completed",
         extra={**log, "chunks": embedded, "duration_ms": _elapsed_ms(start)},
+    )
+
+
+# --- Notes retrieval index (RFC-003 Cycle F, NL-01) -----------------------------
+
+
+@celery_app.task(bind=True, name="notes.embed")
+def embed_note(self, note_id: str) -> None:  # noqa: ANN001 — bound task ``self``
+    """(Re)embed a note's whole body through the settings-selected provider (NL-01).
+
+    Enqueued after a note create/update commits (AD-016). Idempotent and
+    newest-body-wins: the body is read at run time inside the write transaction, so a
+    stale enqueue that lands after a newer save still embeds the newest body; an empty
+    body clears any stored vector (the note leaves the semantic arm, NL-06); a note
+    deleted before the task runs is a no-op (its index rows died with it, NL-07). The
+    input is truncated deterministically to the provider limit so an oversized note
+    never fails the embed. A raise fails the task (mirrors ``reembed_document``); the
+    lexical note arm keeps serving in the meantime.
+    """
+    token = new_trace_scope()
+    bind_trace(note_id=note_id)
+    try:
+        return _embed_note_body(note_id)
+    finally:
+        reset_trace(token)
+
+
+def _embed_note_body(note_id: str) -> None:
+    nid = UUID(note_id)
+    settings = get_settings()
+    adapter = build_embedding_adapter(settings)
+    with get_engine().begin() as conn:
+        repo = SqlAlchemyNoteRepository(conn)
+        note = repo.get_by_id(nid)
+        if note is None:
+            return  # deleted before the task ran — nothing to embed (NL-07)
+        if not note.body_markdown:
+            # Empty body → clear any prior vector so the note leaves the semantic arm.
+            repo.set_embedding(nid, embedding=None, model=None)
+            return
+        truncated = note.body_markdown[: settings.notes_embedding_max_chars]
+        vector = adapter.embed_documents([truncated])[0]
+        repo.set_embedding(nid, embedding=vector, model=adapter.model)
+
+
+@celery_app.task(bind=True, name="notes.refresh_cards")
+def refresh_note_cards(self, note_id: str) -> None:  # noqa: ANN001 — bound task ``self``
+    """Regenerate-and-match a promoted note's derived cards after an edit (NL-10/11).
+
+    Enqueued after a note-body save commits, only when the note has live note cards
+    (AD-016 + the ``has_note_items`` gate). Newest-body-wins: ``RefreshNoteCards`` reads
+    the note's current body inside the write transaction, so a stale enqueue that lands
+    after a newer save converges on the newest body. Matched cards are rewritten in place
+    and flagged, unmatched cards are flagged, and scheduling / the review log are never
+    touched — the edit-stability invariant. A note deleted before the task runs is a
+    no-op (its cards survive their severed provenance, AD-145). A raise fails the task;
+    the cards keep serving their prior text in the meantime.
+    """
+    token = new_trace_scope()
+    bind_trace(note_id=note_id)
+    try:
+        with get_engine().begin() as conn:
+            _build_refresh_note_cards(conn)(note_id=UUID(note_id))
+    finally:
+        reset_trace(token)
+
+
+def _build_refresh_note_cards(conn: Connection) -> RefreshNoteCards:
+    """Wire ``RefreshNoteCards`` on ``conn`` (the refresh task's root)."""
+    settings = get_settings()
+    return RefreshNoteCards(
+        notes=SqlAlchemyNoteRepository(conn),
+        items=SqlAlchemyQuizItemRepository(conn),
+        generation=build_quiz_adapter(settings),
+        embeddings=build_embedding_adapter(settings),
+        clock=_clock,
+        max_suggestions=settings.quiz_max_suggestions,
+        excerpt_chars=settings.quiz_note_excerpt_chars,
+        match_threshold=settings.quiz_note_match_threshold,
     )
 
 

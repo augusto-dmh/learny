@@ -118,6 +118,7 @@ function ask(value: string) {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  localStorage.clear();
 });
 
 describe("AskPanel streaming (RA-07)", () => {
@@ -307,6 +308,34 @@ describe("AskPanel streaming (RA-07)", () => {
     expect(
       fetchMock.mock.calls.some(([url]) => url === STREAM_URL),
     ).toBe(false);
+  });
+});
+
+describe("AskPanel include-my-notes toggle (NL-04)", () => {
+  it("defaults the toggle on and sends the flag only after the reader changes it", async () => {
+    const fetchMock = routedFetch({
+      [`POST ${STREAM_URL}`]: () => sseStream().response,
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+
+    // The toggle reflects the Q&A server default (on) before any choice.
+    const toggle = screen.getByRole("checkbox", { name: /include my notes/i });
+    expect((toggle as HTMLInputElement).checked).toBe(true);
+
+    // Turning it off is an explicit choice → the next question carries the flag.
+    fireEvent.click(toggle);
+    ask("a question");
+
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([url]) => url === STREAM_URL)).toBe(true),
+    );
+    const call = fetchMock.mock.calls.find(([url]) => url === STREAM_URL)!;
+    expect(JSON.parse((call[1] as RequestInit).body as string)).toEqual({
+      question: "a question",
+      include_notes: false,
+    });
   });
 });
 

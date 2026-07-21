@@ -337,3 +337,40 @@ def test_retrieve_nonsense_query_returns_200_empty(
 
     assert resp.status_code == 200, resp.text
     assert resp.json() == {"results": []}
+
+
+# --- include_notes default (AD-147 / NL-04) ------------------------------------
+
+
+def test_retrieve_defaults_include_notes_false_and_forwards_explicit_choice(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # AD-147 / NL-04: the diagnostic retrieve endpoint keeps the note arms OFF when
+    # the flag is absent (unchanged behaviour), and forwards an explicit choice
+    # verbatim. Asserted by spying on the wired service.
+    from app.infrastructure.web.dependencies import get_retrieve_evidence
+
+    source_id, csrf = _seed_owned_embedded_source(auth_client, db_conn, "notes@example.com")
+
+    seen: list[bool] = []
+
+    class _SpyService:
+        def __call__(  # noqa: ANN001
+            self, *, user, source_id, query, top_k=None, anchors=None, include_notes=False
+        ):
+            seen.append(include_notes)
+            return []
+
+    auth_client.app.dependency_overrides[get_retrieve_evidence] = lambda: _SpyService()
+    try:
+        absent = _retrieve(auth_client, source_id, {"query": "photosynthesis"}, csrf=csrf)
+        opted_in = _retrieve(
+            auth_client, source_id, {"query": "photosynthesis", "include_notes": True}, csrf=csrf
+        )
+    finally:
+        auth_client.app.dependency_overrides.pop(get_retrieve_evidence, None)
+
+    assert absent.status_code == 200, absent.text
+    assert opted_in.status_code == 200, opted_in.text
+    # Absent → the endpoint's own default (off); explicit True → forwarded.
+    assert seen == [False, True]

@@ -1211,14 +1211,27 @@ class SqlAlchemyQuizItemRepository:
         ``(source_id, content_key)``; highlight items collapse on
         ``(note_anchor_id, content_key)`` so re-accepting identical text from the same
         highlight is idempotent while two different highlights may share a key. A
-        highlight item with no anchor (severed provenance) matches neither partial
-        index and is a plain insert under its minted id.
+        highlight item with no anchor (severed provenance) and a ``note`` item (no
+        uniqueness at all — AD-148, dedup is service-level) match no partial index and
+        are plain inserts under their minted id.
         """
+        # Denormalized ownership (AD-149): a note card carries its owner explicitly
+        # (it has no source); every other origin leaves ``user_id`` unset and it is
+        # derived from the source here, so the deck/highlight mint paths are untouched.
+        user_id = (
+            item.user_id
+            if item.user_id is not None
+            else select(sources.c.user_id)
+            .where(sources.c.id == item.source_id)
+            .scalar_subquery()
+        )
         stmt = pg_insert(quiz_items).values(
             id=item.id,
             source_id=item.source_id,
+            user_id=user_id,
             origin=item.origin,
             note_anchor_id=item.note_anchor_id,
+            note_id=item.note_id,
             item_type=item.item_type,
             question=item.question,
             answer=item.answer,
@@ -1244,21 +1257,20 @@ class SqlAlchemyQuizItemRepository:
             "generation_meta": stmt.excluded.generation_meta,
             "updated_at": stmt.excluded.updated_at,
         }
-        if item.origin == QuizItemOrigin.HIGHLIGHT:
-            if item.note_anchor_id is None:
-                stmt = stmt.returning(literal_column("(xmax = 0)").label("inserted"))
-                return bool(self._conn.execute(stmt).scalar_one())
-            stmt = stmt.on_conflict_do_update(
-                index_elements=["note_anchor_id", "content_key"],
-                index_where=text("origin = 'highlight' AND note_anchor_id IS NOT NULL"),
-                set_=content_update,
-            )
-        else:
+        if item.origin == QuizItemOrigin.DECK:
             stmt = stmt.on_conflict_do_update(
                 index_elements=["source_id", "content_key"],
                 index_where=text("origin = 'deck'"),
                 set_=content_update,
             )
+        elif item.origin == QuizItemOrigin.HIGHLIGHT and item.note_anchor_id is not None:
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["note_anchor_id", "content_key"],
+                index_where=text("origin = 'highlight' AND note_anchor_id IS NOT NULL"),
+                set_=content_update,
+            )
+        # else: a note card, or a severed-provenance highlight — no partial index to
+        # collapse on, so it is a plain insert under its minted id.
         stmt = stmt.returning(literal_column("(xmax = 0)").label("inserted"))
         return bool(self._conn.execute(stmt).scalar_one())
 
@@ -1277,6 +1289,96 @@ class SqlAlchemyQuizItemRepository:
             .where(quiz_items.c.origin == QuizItemOrigin.HIGHLIGHT)
         ).one_or_none()
         return _to_quiz_item(row) if row is not None else None
+
+    def get_by_note_and_key(
+        self, note_id: UUID, content_key: str
+    ) -> QuizItem | None:
+        """Return the note card already promoted from this note + fingerprint (NL-15).
+
+        The read behind the idempotent re-promotion path: scoped to ``note`` origin so a
+        deck/highlight item that happens to share the key is never returned. A card whose
+        note was deleted has ``note_id = NULL`` and is unreachable here, matching the
+        service (a deleted note cannot be re-promoted).
+        """
+        row = self._conn.execute(
+            select(*_QUIZ_ITEM_READ_COLUMNS)
+            .where(quiz_items.c.note_id == note_id)
+            .where(quiz_items.c.content_key == content_key)
+            .where(quiz_items.c.origin == QuizItemOrigin.NOTE)
+        ).one_or_none()
+        return _to_quiz_item(row) if row is not None else None
+
+    def has_note_items(self, note_id: UUID) -> bool:
+        """Return whether the note has any live ``note`` card (the refresh enqueue gate)."""
+        row = self._conn.execute(
+            select(quiz_items.c.id)
+            .where(quiz_items.c.note_id == note_id)
+            .where(quiz_items.c.origin == QuizItemOrigin.NOTE)
+            .where(quiz_items.c.status == QuizItemStatus.ACTIVE)
+            .limit(1)
+        ).first()
+        return row is not None
+
+    def note_items_with_embeddings(
+        self, note_id: UUID
+    ) -> list[tuple[QuizItem, list[float] | None]]:
+        """Return the note's live ``note`` cards with their stored embedding (NL-10)."""
+        rows = self._conn.execute(
+            select(*_QUIZ_ITEM_READ_COLUMNS, quiz_items.c.embedding)
+            .where(quiz_items.c.note_id == note_id)
+            .where(quiz_items.c.origin == QuizItemOrigin.NOTE)
+            .where(quiz_items.c.status == QuizItemStatus.ACTIVE)
+            .order_by(quiz_items.c.id.asc())
+        ).all()
+        return [
+            (
+                _to_quiz_item(row),
+                [float(v) for v in row.embedding] if row.embedding is not None else None,
+            )
+            for row in rows
+        ]
+
+    def update_note_card(
+        self,
+        item_id: UUID,
+        *,
+        question: str,
+        answer: str,
+        content_key: str,
+        source_excerpt: str,
+        embedding: Sequence[float] | None,
+        note_changed_at: datetime,
+    ) -> None:
+        """Rewrite a matched note card's content + flag it, leaving schedule/log (NL-10)."""
+        self._conn.execute(
+            update(quiz_items)
+            .where(quiz_items.c.id == item_id)
+            .values(
+                question=question,
+                answer=answer,
+                content_key=content_key,
+                source_excerpt=source_excerpt,
+                embedding=list(embedding) if embedding is not None else None,
+                note_changed_at=note_changed_at,
+                updated_at=func.now(),
+            )
+        )
+
+    def flag_note_changed(self, item_id: UUID, note_changed_at: datetime) -> None:
+        """Set only ``note_changed_at`` on an unmatched note card (NL-11)."""
+        self._conn.execute(
+            update(quiz_items)
+            .where(quiz_items.c.id == item_id)
+            .values(note_changed_at=note_changed_at)
+        )
+
+    def clear_note_changed(self, item_id: UUID) -> None:
+        """Clear ``note_changed_at`` — the explicit schedule reset's badge retire (NL-12)."""
+        self._conn.execute(
+            update(quiz_items)
+            .where(quiz_items.c.id == item_id)
+            .values(note_changed_at=None)
+        )
 
     def update_text(
         self, item_id: UUID, *, question: str, answer: str, content_key: str
@@ -1395,26 +1497,32 @@ class SqlAlchemyQuizItemRepository:
     ) -> tuple[int, list[DueReviewItem]]:
         """Return the caller's due queue: total due count and up to ``limit`` items.
 
-        Active items with ``due <= now`` across the user's sources (optionally filtered to
-        one ``source_id``), joined through ``sources`` for ownership so no other user's
-        items leak, ordered ``due ASC, id ASC`` (A-6). Stale/orphaned items are excluded
-        (QUIZ-17); the returned count is the full due total before the ``limit``.
+        Active items with ``due <= now`` owned by the user directly (AD-149; optionally
+        filtered to one ``source_id``), ordered ``due ASC, id ASC`` (A-6). Stale/orphaned
+        items are excluded (QUIZ-17); the returned count is the full due total before the
+        ``limit``.
         """
-        # The provenance hops are OUTER joins on purpose: a deck card has no anchor and
-        # a highlight card whose note was deleted has a NULL link, and neither may drop
-        # out of the due queue. Both hops are to a primary key, so they can only ever
-        # match one row and cannot inflate the count either (CAP-16).
+        # Ownership is now the item's own ``user_id`` (AD-149), so ``sources`` is an OUTER
+        # join: a source-less ``note`` card must not drop out, and its ``source_title`` is
+        # the constant "Your notes". The provenance hops are OUTER joins for the same
+        # reason — a deck card has no anchor, a highlight card whose note was deleted has a
+        # NULL link. A note card's provenance is a second hop straight to ``notes`` on
+        # ``note_id`` (NL-13; NULL once the note is deleted, NL-14). The two note reaches
+        # are exclusive (a card has an anchor or a note id, never both), so a coalesce picks
+        # the right title. Every hop is to a primary key, so none can inflate the count.
+        notes_via_id = notes.alias("notes_via_note_id")
         join = (
-            quiz_items.join(sources, quiz_items.c.source_id == sources.c.id)
-            .join(
+            quiz_items.join(
                 quiz_item_scheduling,
                 quiz_item_scheduling.c.quiz_item_id == quiz_items.c.id,
             )
+            .outerjoin(sources, quiz_items.c.source_id == sources.c.id)
             .outerjoin(note_anchors, quiz_items.c.note_anchor_id == note_anchors.c.id)
             .outerjoin(notes, note_anchors.c.note_id == notes.c.id)
+            .outerjoin(notes_via_id, quiz_items.c.note_id == notes_via_id.c.id)
         )
         conditions = [
-            sources.c.user_id == user_id,
+            quiz_items.c.user_id == user_id,
             quiz_items.c.status == QuizItemStatus.ACTIVE,
             quiz_item_scheduling.c.due <= now,
         ]
@@ -1425,13 +1533,24 @@ class SqlAlchemyQuizItemRepository:
             select(func.count()).select_from(join).where(*conditions)
         ).scalar_one()
 
+        # The "your note changed" badge (NL-12): the note changed since the card was last
+        # reviewed, or since it was created if never reviewed. NULL ``note_changed_at``
+        # (never flagged) yields NULL → falsy, coerced to False on the Python side.
+        note_changed = (
+            quiz_items.c.note_changed_at
+            > func.coalesce(quiz_item_scheduling.c.last_review, quiz_items.c.created_at)
+        ).label("note_changed")
+
         rows = self._conn.execute(
             select(
                 *_QUIZ_ITEM_READ_COLUMNS,
-                sources.c.title.label("source_title"),
+                func.coalesce(sources.c.title, "Your notes").label("source_title"),
                 quiz_item_scheduling.c.due.label("due"),
-                notes.c.id.label("provenance_note_id"),
-                notes.c.title.label("provenance_note_title"),
+                func.coalesce(notes.c.id, notes_via_id.c.id).label("provenance_note_id"),
+                func.coalesce(notes.c.title, notes_via_id.c.title).label(
+                    "provenance_note_title"
+                ),
+                note_changed,
             )
             .select_from(join)
             .where(*conditions)
@@ -1443,7 +1562,7 @@ class SqlAlchemyQuizItemRepository:
                 item=_to_quiz_item(row),
                 source_title=row.source_title,
                 due=row.due,
-                # NULL on both the deck path and the severed-link path.
+                # NULL on the deck path and on a severed (deleted-note) link.
                 provenance=(
                     CardProvenance(
                         note_id=row.provenance_note_id,
@@ -1452,6 +1571,7 @@ class SqlAlchemyQuizItemRepository:
                     if row.provenance_note_id is not None
                     else None
                 ),
+                note_changed=bool(row.note_changed),
             )
             for row in rows
         ]
@@ -1605,6 +1725,17 @@ class SqlAlchemyNoteRepository:
             update(notes)
             .where(notes.c.id == note_id)
             .values(title=title, body_markdown=body_markdown, updated_at=updated_at)
+        )
+
+    def set_embedding(
+        self, note_id: UUID, *, embedding: list[float] | None, model: str | None
+    ) -> None:
+        # The VECTOR type serializes the list on bind (no global registration); None
+        # clears the column. The trigger-fed search_vector is untouched here.
+        self._conn.execute(
+            update(notes)
+            .where(notes.c.id == note_id)
+            .values(embedding=embedding, embedding_model=model)
         )
 
     def delete(self, note_id: UUID) -> None:
@@ -1787,6 +1918,19 @@ class SqlAlchemyNoteRepository:
         rows = self._conn.execute(
             select(note_anchors)
             .where(note_anchors.c.source_id == source_id)
+            .order_by(note_anchors.c.created_at, note_anchors.c.id)
+        ).all()
+        return [_to_note_anchor(row) for row in rows]
+
+    def anchors_for_user(self, user_id: UUID) -> list[NoteAnchor]:
+        # Owner-scoped across all sources for the vault export: a note anchor belongs to
+        # its note's owner, so join notes and filter by user_id (unlike
+        # ``anchors_for_source``, which spans all owners of one source). Stable order so
+        # the export is deterministic (NL-19).
+        rows = self._conn.execute(
+            select(note_anchors)
+            .join(notes, note_anchors.c.note_id == notes.c.id)
+            .where(notes.c.user_id == user_id)
             .order_by(note_anchors.c.created_at, note_anchors.c.id)
         ).all()
         return [_to_note_anchor(row) for row in rows]
@@ -2050,6 +2194,9 @@ def _to_quiz_item(row) -> QuizItem:  # noqa: ANN001
         updated_at=row.updated_at,
         origin=row.origin,
         note_anchor_id=row.note_anchor_id,
+        user_id=row.user_id,
+        note_id=row.note_id,
+        note_changed_at=row.note_changed_at,
     )
 
 

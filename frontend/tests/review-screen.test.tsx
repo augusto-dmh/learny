@@ -418,6 +418,139 @@ describe("ReviewScreen pin and provenance (CAP-25/26/27)", () => {
   });
 });
 
+describe("ReviewScreen note-changed badge and reset (NL-12/NL-13)", () => {
+  const freshScheduling = {
+    state: 1,
+    step: 0,
+    stability: null,
+    difficulty: null,
+    due: "2026-07-20T00:00:00Z",
+    last_review: null,
+  };
+
+  const noteCard = {
+    id: "i9",
+    // A source-less note card (AD-149): no book to open, "Your notes" as its source.
+    source_id: null,
+    source_title: "Your notes",
+    item_type: "free_recall",
+    question: "What schedules reviews?",
+    answer: "Spaced repetition",
+    citation: {
+      section_path: [],
+      anchor: "",
+      source_excerpt: "Spaced repetition schedules reviews",
+    },
+    provenance: { note_id: "n7", note_title: "How memory works" },
+    status: "active",
+    due: "2026-07-16T00:00:00Z",
+    note_changed: true,
+  };
+
+  it("shows the badge linking the note, and offers no book pin for a note card", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        [`GET ${DUE}`]: () =>
+          jsonResponse(200, { items: [noteCard], total_due: 1 }),
+      }),
+    );
+
+    render(<ReviewScreen />);
+    await screen.findByTestId("question");
+
+    // The "your note changed" badge is present and links the origin note (NL-12).
+    const badge = screen.getByTestId("note-changed-badge");
+    expect(badge.textContent).toContain("Your note changed");
+    expect(badge.getAttribute("href")).toBe("/notes/n7");
+    // A note card has no book, so the pin is absent — but its note provenance links
+    // out (NL-13), reachable before reveal.
+    expect(screen.queryByRole("link", { name: "Open in book" })).toBeNull();
+    expect(screen.getByTestId("card-provenance").getAttribute("href")).toBe(
+      "/notes/n7",
+    );
+  });
+
+  it("hides the badge when the note has not changed since the card was seen", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        [`GET ${DUE}`]: () =>
+          jsonResponse(200, {
+            items: [{ ...noteCard, note_changed: false }],
+            total_due: 1,
+          }),
+      }),
+    );
+
+    render(<ReviewScreen />);
+    await screen.findByTestId("question");
+
+    expect(screen.queryByTestId("note-changed-badge")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Reset schedule" })).toBeNull();
+  });
+
+  it("fires nothing when the reset confirm is declined", async () => {
+    let resets = 0;
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        [`GET ${DUE}`]: () =>
+          jsonResponse(200, { items: [noteCard], total_due: 1 }),
+        "POST /api/quiz-items/i9/schedule-reset": () => {
+          resets += 1;
+          return jsonResponse(200, freshScheduling);
+        },
+      }),
+    );
+
+    render(<ReviewScreen />);
+    await screen.findByTestId("question");
+
+    fireEvent.click(screen.getByRole("button", { name: "Reset schedule" }));
+    // The reset is confirm-gated: declining must not call the endpoint (NL-12).
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(resets).toBe(0);
+    // The badge stands — nothing was reset.
+    expect(screen.getByTestId("note-changed-badge")).toBeTruthy();
+  });
+
+  it("resets the schedule on explicit confirm and retires the badge", async () => {
+    let resets = 0;
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        [`GET ${DUE}`]: () =>
+          jsonResponse(200, { items: [noteCard], total_due: 1 }),
+        "POST /api/quiz-items/i9/schedule-reset": () => {
+          resets += 1;
+          return jsonResponse(200, freshScheduling);
+        },
+      }),
+    );
+
+    render(<ReviewScreen />);
+    await screen.findByTestId("question");
+
+    fireEvent.click(screen.getByRole("button", { name: "Reset schedule" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm reset" }));
+
+    // The endpoint fired exactly once and the badge retired to reflect the reset.
+    await waitFor(() => expect(resets).toBe(1));
+    await waitFor(() =>
+      expect(screen.queryByTestId("note-changed-badge")).toBeNull(),
+    );
+    // The card stays on screen — a reset is a relearn, not a review, so it does not
+    // advance the session.
+    expect(screen.getByTestId("position").textContent).toBe("1/1");
+  });
+});
+
 describe("ReviewScreen grading shortcuts (CAP-30/31/32)", () => {
   function pressKey(
     key: string,

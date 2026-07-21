@@ -165,6 +165,82 @@ def test_suggest_cards_with_a_non_positive_limit_yields_none() -> None:
     assert DeterministicQuizAdapter().suggest_cards(section, _TEXT, 0) == []
 
 
+# --- suggest_note_cards (the note IS the source, NL-08) --------------------------
+
+_NOTE_BODY = "Spaced repetition schedules reviews at expanding intervals. It aids recall."
+_NOTE_SENTENCE = "Spaced repetition schedules reviews at expanding intervals."
+
+
+def test_suggest_note_cards_pairs_free_recall_and_cloze_from_the_leading_sentence() -> None:
+    candidates = DeterministicQuizAdapter().suggest_note_cards(_NOTE_BODY, "", 5)
+
+    assert len(candidates) == 2
+    by_type = {c.item_type: c for c in candidates}
+    assert set(by_type) == {QuizItemType.FREE_RECALL, QuizItemType.CLOZE}
+
+    free = by_type[QuizItemType.FREE_RECALL]
+    assert free.answer == _NOTE_SENTENCE
+    assert free.anchor_quote == _NOTE_SENTENCE
+
+    cloze = by_type[QuizItemType.CLOZE]
+    # Longest word of the leading sentence is masked.
+    assert cloze.answer == "repetition"
+    assert cloze.question == "Spaced ____ schedules reviews at expanding intervals."
+
+
+def test_suggest_note_cards_carry_no_source_chunk_id() -> None:
+    # A note is not chunked, so its candidates cite no chunk (NL-08).
+    candidates = DeterministicQuizAdapter().suggest_note_cards(_NOTE_BODY, "", 5)
+    assert candidates
+    assert all(c.source_chunk_id is None for c in candidates)
+
+
+def test_suggest_note_cards_are_grounded_in_the_note_body() -> None:
+    candidates = DeterministicQuizAdapter().suggest_note_cards(_NOTE_BODY, "", 5)
+    for candidate in candidates:
+        # anchor_quote is a verbatim span of the note body (NL-08).
+        assert quote_in_text(candidate.anchor_quote, _NOTE_BODY)
+    cloze = next(c for c in candidates if c.item_type == QuizItemType.CLOZE)
+    assert cloze_is_valid(cloze.question, cloze.answer, cloze.anchor_quote)
+
+
+def test_suggest_note_cards_never_exceeds_the_limit() -> None:
+    adapter = DeterministicQuizAdapter()
+    for limit in (1, 2, 3):
+        candidates = adapter.suggest_note_cards(_NOTE_BODY, "", limit)
+        assert candidates
+        assert len(candidates) <= limit
+
+
+def test_suggest_note_cards_ignore_the_anchor_context_for_grounding() -> None:
+    # `context` is a generation hint the real provider uses; the offline adapter grounds
+    # against the note body alone, so passing context changes nothing.
+    adapter = DeterministicQuizAdapter()
+    without = adapter.suggest_note_cards(_NOTE_BODY, "", 5)
+    with_context = adapter.suggest_note_cards(_NOTE_BODY, "Book chapter on memory.", 5)
+    assert without == with_context
+
+
+def test_suggest_note_cards_are_deterministic() -> None:
+    adapter = DeterministicQuizAdapter()
+    assert adapter.suggest_note_cards(_NOTE_BODY, "", 5) == adapter.suggest_note_cards(
+        _NOTE_BODY, "", 5
+    )
+
+
+def test_suggest_note_cards_for_an_empty_body_yields_none() -> None:
+    assert DeterministicQuizAdapter().suggest_note_cards("   ", "", 5) == []
+
+
+def test_suggest_note_cards_for_a_body_without_a_maskable_word_yields_none() -> None:
+    # A leading "sentence" of only punctuation has no word to derive candidates from.
+    assert DeterministicQuizAdapter().suggest_note_cards("...", "", 5) == []
+
+
+def test_suggest_note_cards_with_a_non_positive_limit_yields_none() -> None:
+    assert DeterministicQuizAdapter().suggest_note_cards(_NOTE_BODY, "", 0) == []
+
+
 def test_handle_survives_json_payload_roundtrip() -> None:
     section, chunk_id = _section(_TEXT)
     adapter = DeterministicQuizAdapter()

@@ -273,6 +273,26 @@ class IngestionEnqueuer(Protocol):
 
 
 @runtime_checkable
+class NoteIndexEnqueuer(Protocol):
+    """The Celery boundary for maintaining a note's retrieval index (AD-016).
+
+    Called *after* the note write is committed so the worker always reads a durable
+    row (mirrors :class:`IngestionEnqueuer`); only the note id rides the queue. The
+    embed task re-reads the body at run time, so a stale enqueue still embeds the
+    newest body. ``enqueue_refresh_cards`` exists for the note→quiz loop (its task
+    body lands in a later cycle); the web layer gates it on promoted notes.
+    """
+
+    def enqueue_embed(self, note_id: UUID) -> None:
+        """Enqueue the whole-note (re)embed for ``note_id`` (empty body clears it)."""
+        ...
+
+    def enqueue_refresh_cards(self, note_id: UUID) -> None:
+        """Enqueue regenerate-and-match for a promoted note's derived cards."""
+        ...
+
+
+@runtime_checkable
 class StoragePort(Protocol):
     """S3-compatible object-storage port (AD-008).
 
@@ -516,12 +536,21 @@ class RetrievalPort(Protocol):
         rrf_k: int,
         ef_search: int,
         anchors: Sequence[str] | None = None,
+        user_id: UUID | None = None,
+        include_notes: bool = False,
     ) -> list[Evidence]:
         """Return up to ``top_k`` fused ``Evidence`` for ``source_id``, RRF-ordered.
 
-        When ``anchors`` is given, both arms are restricted to chunks whose section
+        When ``anchors`` is given, both book arms are restricted to chunks whose section
         ``anchor`` is in the set — the target-subtree scope for teaching (TEACH-09,
         AD-031). ``None`` (the default) keeps the whole-source behaviour unchanged.
+
+        When ``include_notes`` and ``user_id`` are both provided, two additional RRF
+        arms over that user's own notes (semantic + lexical) are fused into the same
+        ranking behind a notes weight (ADR-0026 d4, NL-02); note evidence carries
+        ``origin='note'`` and the note's identity. Either omitted keeps the book-only
+        behaviour byte-identical (the anchors, if any, constrain only the book arms —
+        notes have no anchors).
         """
         ...
 
@@ -724,6 +753,21 @@ class QuizGenerationPort(Protocol):
         """
         ...
 
+    def suggest_note_cards(
+        self, note_body: str, context: str, limit: int
+    ) -> list[QuizCandidate]:
+        """Return at most ``limit`` candidates grounded in ``note_body`` (NL-08).
+
+        The note→quiz counterpart of :meth:`suggest_cards`: the note *is* the source, so
+        there is no chunk and the returned candidates carry ``source_chunk_id=None`` (the
+        Anthropic adapter drops the chunk-id enum from its schema). ``context`` is the
+        note's book-anchor context, carried into generation only when the note is anchored
+        (empty otherwise); grounding is always re-verified against ``note_body`` alone by
+        the caller's QC pipeline. An empty ``note_body`` (or ``limit <= 0``) yields an
+        empty list rather than an error.
+        """
+        ...
+
 
 @runtime_checkable
 class SchedulingPort(Protocol):
@@ -850,6 +894,75 @@ class QuizItemRepository(Protocol):
         """
         ...
 
+    def get_by_note_and_key(
+        self, note_id: UUID, content_key: str
+    ) -> QuizItem | None:
+        """Return the ``note`` card already promoted from this note + fingerprint (NL-15).
+
+        The service-level dedup behind idempotent re-promotion (note cards carry no
+        partial unique index — AD-148): scoped to ``note`` origin so a deck/highlight
+        item that happens to share the key is never returned. ``None`` when the reader
+        has not accepted this text from this note yet.
+        """
+        ...
+
+    def has_note_items(self, note_id: UUID) -> bool:
+        """Return whether the note has any live (active) ``note``-origin card (AD-144).
+
+        The enqueue gate for regenerate-and-match: a note body save fires a refresh only
+        when there is something to refresh, so an unpromoted note's edit enqueues nothing.
+        """
+        ...
+
+    def note_items_with_embeddings(
+        self, note_id: UUID
+    ) -> list[tuple[QuizItem, list[float] | None]]:
+        """Return the note's live ``note`` cards paired with their stored embedding (NL-10).
+
+        The regenerate-and-match input: each active note-origin card of ``note_id`` with
+        its embedding (``None`` when it was never embedded — such a card is unmatchable
+        and takes the note-changed flag path). Deterministic order (by item id) so the
+        greedy pairing is reproducible.
+        """
+        ...
+
+    def update_note_card(
+        self,
+        item_id: UUID,
+        *,
+        question: str,
+        answer: str,
+        content_key: str,
+        source_excerpt: str,
+        embedding: Sequence[float] | None,
+        note_changed_at: datetime,
+    ) -> None:
+        """Rewrite a matched note card's content and flag it note-changed (NL-10/11).
+
+        Writes question/answer/fingerprint/excerpt/embedding and ``note_changed_at`` under
+        the card's existing id. Never touches the ``quiz_item_scheduling`` snapshot or the
+        ``review_log`` — the edit-stability invariant: a note edit costs none of the card's
+        memory history (ADR-0026 d5).
+        """
+        ...
+
+    def flag_note_changed(self, item_id: UUID, note_changed_at: datetime) -> None:
+        """Set only ``note_changed_at`` on an unmatched note card (NL-11).
+
+        The card could not be paired to any regenerated suggestion, so its text is left
+        exactly as it was and only the badge signal is raised. Scheduling and the review
+        log are untouched.
+        """
+        ...
+
+    def clear_note_changed(self, item_id: UUID) -> None:
+        """Clear ``note_changed_at`` on a card (the explicit schedule reset, NL-12).
+
+        Retires the "your note changed" badge. Touches only that column — scheduling is
+        reset separately via :meth:`update_scheduling` and the review log is untouched.
+        """
+        ...
+
     def update_text(
         self, item_id: UUID, *, question: str, answer: str, content_key: str
     ) -> None:
@@ -956,6 +1069,16 @@ class NoteRepository(Protocol):
         """Persist a note's ``title``/``body_markdown``/``updated_at`` (NF-05)."""
         ...
 
+    def set_embedding(
+        self, note_id: UUID, *, embedding: list[float] | None, model: str | None
+    ) -> None:
+        """Write (or clear) a note's whole-note ``embedding`` + ``embedding_model`` (NL-01).
+
+        ``None``/``None`` clears both, so an emptied note leaves the semantic arm
+        (async embed maintenance, never a note write's concern).
+        """
+        ...
+
     def delete(self, note_id: UUID) -> None:
         """Delete a note; its anchors/tags/links cascade, inbound links SET NULL (NF-01)."""
         ...
@@ -1018,6 +1141,16 @@ class NoteRepository(Protocol):
 
     def anchors_for_source(self, source_id: UUID) -> list[NoteAnchor]:
         """Return every anchor citing ``source_id`` for reconciliation (NF-07)."""
+        ...
+
+    def anchors_for_user(self, user_id: UUID) -> list[NoteAnchor]:
+        """Return every anchor the caller owns, for the vault export (NL-16/20).
+
+        Joins ``note_anchors`` to ``notes`` and filters by ``user_id`` — like
+        :meth:`highlights_for_source` but across all of the caller's sources — so the
+        export sees only the caller's highlights, never another owner's on a shared
+        source. Deterministically ordered by ``(created_at, id)``.
+        """
         ...
 
     def highlights_for_source(

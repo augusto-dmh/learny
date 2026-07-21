@@ -51,3 +51,22 @@ class CeleryQuizDeckEnqueuer:
         from app.worker.tasks import generate_quiz_deck
 
         generate_quiz_deck.apply_async(args=[str(source_id), str(job_id)])
+
+
+class CeleryNoteIndexEnqueuer:
+    """``NoteIndexEnqueuer`` backed by the note-index Celery tasks (AD-016, NL-01).
+
+    The note create/update handlers call this *after* the write is committed so the
+    worker always reads a durable row; only the note id rides the queue (AD-014),
+    mirroring :class:`CeleryIngestionEnqueuer`.
+    """
+
+    def enqueue_embed(self, note_id: UUID) -> None:
+        from app.worker.tasks import embed_note
+
+        embed_note.apply_async(args=[str(note_id)])
+
+    def enqueue_refresh_cards(self, note_id: UUID) -> None:
+        from app.worker.tasks import refresh_note_cards
+
+        refresh_note_cards.apply_async(args=[str(note_id)])

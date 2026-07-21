@@ -986,6 +986,41 @@ def test_get_by_anchor_and_key_ignores_deck_items(db_conn: Connection) -> None:
     assert repo.get_by_anchor_and_key(anchor.id, deck.content_key) is None
 
 
+# --- get_by_note_and_key: the re-promotion dedup read (NL-15) --------------------
+
+
+def test_get_by_note_and_key_returns_the_promoted_card(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "quiz-note-lookup@example.com")
+    note = _persisted_note(db_conn, source.user_id)
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    item = _note_item(source.user_id, note.id)
+    repo.upsert(item, embedding=None)
+
+    found = repo.get_by_note_and_key(note.id, item.content_key)
+
+    assert found is not None
+    assert found.id == item.id
+
+
+def test_get_by_note_and_key_is_none_for_an_unpromoted_key(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "quiz-note-lookup-miss@example.com")
+    note = _persisted_note(db_conn, source.user_id)
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+
+    assert repo.get_by_note_and_key(note.id, "no-such-key") is None
+
+
+def test_get_by_note_and_key_ignores_non_note_items(db_conn: Connection) -> None:
+    """A deck item sharing the key is not a promoted note card (origin-scoped, NL-15)."""
+    source = _persisted_source(db_conn, "quiz-note-lookup-deck@example.com")
+    note = _persisted_note(db_conn, source.user_id)
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    deck = _item(source.id)
+    repo.upsert(deck, embedding=None)
+
+    assert repo.get_by_note_and_key(note.id, deck.content_key) is None
+
+
 # --- update_text keeps identity, scheduling, and review log (CAP-12) ------------
 
 
@@ -1061,6 +1096,221 @@ def test_update_text_leaves_scheduling_and_review_log_byte_identical(
     ).all()
     assert log_after == log_before
     assert len(log_after) == 1
+
+
+# --- note-card refresh reads/writes (NL-10, NL-11) ------------------------------
+
+
+def test_has_note_items_true_only_with_a_live_note_card(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "quiz-has-note-items@example.com")
+    note = _persisted_note(db_conn, source.user_id)
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+
+    assert repo.has_note_items(note.id) is False
+    repo.upsert(_note_item(source.user_id, note.id), embedding=None)
+    assert repo.has_note_items(note.id) is True
+
+
+def test_note_items_with_embeddings_returns_live_cards_with_vectors(
+    db_conn: Connection,
+) -> None:
+    source = _persisted_source(db_conn, "quiz-note-items-emb@example.com")
+    note = _persisted_note(db_conn, source.user_id)
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    embedded = _note_item(source.user_id, note.id, question="Q1?", answer="A1")
+    unembedded = _note_item(source.user_id, note.id, question="Q2?", answer="A2")
+    repo.upsert(embedded, embedding=[0.1] * 1536)
+    repo.upsert(unembedded, embedding=None)
+
+    rows = repo.note_items_with_embeddings(note.id)
+
+    by_id = {item.id: emb for item, emb in rows}
+    assert len(by_id) == 2
+    assert by_id[embedded.id] is not None
+    assert len(by_id[embedded.id]) == 1536
+    # A never-embedded card comes back with a NULL embedding (the unmatchable path).
+    assert by_id[unembedded.id] is None
+
+
+def test_update_note_card_rewrites_content_and_flags_leaving_schedule_and_log(
+    db_conn: Connection,
+) -> None:
+    """The NL-10 core invariant: a refresh's content rewrite leaves the card's scheduling
+    row and review-log rows byte-equal — asserted on the stored values."""
+    source = _persisted_source(db_conn, "quiz-note-refresh@example.com")
+    note = _persisted_note(db_conn, source.user_id)
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    item = _note_item(source.user_id, note.id, question="Original?", answer="Original")
+    repo.upsert(item, embedding=[0.2] * 1536)
+
+    due = datetime(2026, 8, 1, 12, tzinfo=UTC)
+    reviewed = datetime(2026, 7, 19, 9, tzinfo=UTC)
+    repo.create_scheduling(
+        item.id,
+        _snapshot(due=due, state=2, step=1, stability=7.25, difficulty=4.5,
+                  last_review=reviewed),
+    )
+    repo.append_log(
+        item.id, ReviewLogEntry(rating=3, reviewed_at=reviewed, review_duration_ms=1200)
+    )
+    before = repo.get_scheduling(item.id)
+    log_before = db_conn.execute(
+        select(review_log.c.rating, review_log.c.reviewed_at, review_log.c.review_duration_ms)
+        .where(review_log.c.quiz_item_id == item.id)
+    ).all()
+
+    changed_at = datetime(2026, 7, 20, 8, tzinfo=UTC)
+    new_key = content_key(item.item_type, "Reworded?", "Reworded answer")
+    repo.update_note_card(
+        item.id,
+        question="Reworded?",
+        answer="Reworded answer",
+        content_key=new_key,
+        source_excerpt="a fresh excerpt",
+        embedding=[0.3] * 1536,
+        note_changed_at=changed_at,
+    )
+
+    stored = repo.get_by_id(item.id)
+    assert stored.question == "Reworded?"
+    assert stored.answer == "Reworded answer"
+    assert stored.content_key == new_key
+    assert stored.source_excerpt == "a fresh excerpt"
+    assert stored.note_changed_at == changed_at
+    # The memory history is byte-identical.
+    after = repo.get_scheduling(item.id)
+    assert after == before
+    log_after = db_conn.execute(
+        select(review_log.c.rating, review_log.c.reviewed_at, review_log.c.review_duration_ms)
+        .where(review_log.c.quiz_item_id == item.id)
+    ).all()
+    assert log_after == log_before
+    assert len(log_after) == 1
+
+
+def test_flag_note_changed_sets_only_the_badge(db_conn: Connection) -> None:
+    """An unmatched card is flagged only: its text and memory history are untouched."""
+    source = _persisted_source(db_conn, "quiz-note-flag@example.com")
+    note = _persisted_note(db_conn, source.user_id)
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    item = _note_item(source.user_id, note.id, question="Original?", answer="Original")
+    repo.upsert(item, embedding=None)
+    repo.create_scheduling(item.id, _snapshot(due=datetime(2026, 8, 1, tzinfo=UTC)))
+    before = repo.get_scheduling(item.id)
+
+    changed_at = datetime(2026, 7, 20, 8, tzinfo=UTC)
+    repo.flag_note_changed(item.id, changed_at)
+
+    stored = repo.get_by_id(item.id)
+    assert stored.note_changed_at == changed_at
+    assert stored.question == "Original?"  # text untouched
+    assert stored.content_key == item.content_key
+    assert repo.get_scheduling(item.id) == before  # schedule untouched
+
+
+def test_clear_note_changed_retires_the_flag(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "quiz-note-clear@example.com")
+    note = _persisted_note(db_conn, source.user_id)
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    item = _note_item(source.user_id, note.id)
+    repo.upsert(item, embedding=None)
+    repo.flag_note_changed(item.id, datetime(2026, 7, 20, 8, tzinfo=UTC))
+
+    repo.clear_note_changed(item.id)
+
+    assert repo.get_by_id(item.id).note_changed_at is None
+
+
+# --- due queue: note-card badge + provenance (NL-12, NL-13, NL-14) --------------
+
+
+def _seed_due_note_card(db_conn: Connection, note, user_id: UUID):  # noqa: ANN202
+    """Seed a note card owned by ``user_id`` on ``note``, due one minute ago."""
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    item = _note_item(user_id, note.id)
+    repo.upsert(item, embedding=None)
+    repo.create_scheduling(
+        item.id, _snapshot(due=datetime.now(UTC) - timedelta(minutes=1))
+    )
+    return repo, repo.get_by_id(item.id)
+
+
+def test_due_for_user_flags_note_changed_after_a_change(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "quiz-badge-on@example.com")
+    note = _persisted_note(db_conn, source.user_id)
+    repo, item = _seed_due_note_card(db_conn, note, source.user_id)
+    # Flagged after the card was created and never reviewed → the badge is on (NL-12).
+    repo.flag_note_changed(item.id, item.created_at + timedelta(hours=1))
+
+    _total, due = repo.due_for_user(source.user_id, now=datetime.now(UTC), limit=10)
+
+    assert due[0].item.id == item.id
+    assert due[0].note_changed is True
+
+
+def test_due_for_user_no_badge_when_never_flagged(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "quiz-badge-off@example.com")
+    note = _persisted_note(db_conn, source.user_id)
+    _repo, item = _seed_due_note_card(db_conn, note, source.user_id)
+
+    _total, due = repo_due(db_conn, source.user_id)
+
+    assert due[0].item.id == item.id
+    assert due[0].note_changed is False
+
+
+def test_due_for_user_badge_retires_after_review(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "quiz-badge-retire@example.com")
+    note = _persisted_note(db_conn, source.user_id)
+    repo, item = _seed_due_note_card(db_conn, note, source.user_id)
+    flagged = item.created_at + timedelta(hours=1)
+    repo.flag_note_changed(item.id, flagged)
+    # A later review advances the schedule with last_review after the flag: the badge is
+    # derived against last_review, so it retires with no stored clear (NL-12).
+    repo.update_scheduling(
+        item.id,
+        _snapshot(due=datetime.now(UTC) + timedelta(days=1), last_review=flagged
+                  + timedelta(hours=1)),
+    )
+
+    _total, due = repo.due_for_user(
+        source.user_id, now=datetime.now(UTC) + timedelta(days=2), limit=10
+    )
+
+    assert due[0].note_changed is False
+
+
+def test_due_for_user_note_card_provenance_from_note_id(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "quiz-note-prov@example.com")
+    note = _persisted_note(db_conn, source.user_id, title="Attention residue")
+    _repo, item = _seed_due_note_card(db_conn, note, source.user_id)
+
+    _total, due = repo_due(db_conn, source.user_id)
+
+    assert due[0].provenance is not None
+    assert due[0].provenance.note_id == note.id
+    assert due[0].provenance.note_title == "Attention residue"
+
+
+def test_due_for_user_severed_note_card_served_without_provenance(
+    db_conn: Connection,
+) -> None:
+    source = _persisted_source(db_conn, "quiz-note-severed@example.com")
+    note = _persisted_note(db_conn, source.user_id)
+    _repo, item = _seed_due_note_card(db_conn, note, source.user_id)
+    # Deleting the note SET NULLs the card's note_id; the card survives (NL-14).
+    SqlAlchemyNoteRepository(db_conn).delete(note.id)
+
+    _total, due = repo_due(db_conn, source.user_id)
+
+    assert due[0].item.id == item.id  # still served
+    assert due[0].provenance is None  # provenance line absent once severed
+
+
+def repo_due(db_conn: Connection, user_id: UUID):  # noqa: ANN202
+    return SqlAlchemyQuizItemRepository(db_conn).due_for_user(
+        user_id, now=datetime.now(UTC), limit=10
+    )
 
 
 # --- read models carry the new fields (CAP-10) ---------------------------------
@@ -1168,6 +1418,94 @@ def test_due_queue_mixes_deck_and_highlight_cards_without_dropping_either(
     by_id = {row.item.id: row.provenance for row in due}
     assert by_id[deck.id] is None
     assert by_id[highlight.id].note_title == "Mixed"
+
+
+# --- note cards: source-less ownership by user_id (AD-148/149) ------------------
+
+
+def _persisted_note(db_conn: Connection, user_id: UUID, *, title: str = "My note") -> Note:
+    """Persist an empty note owned by ``user_id``."""
+    now = datetime.now(UTC)
+    return SqlAlchemyNoteRepository(db_conn).add(
+        Note(
+            id=uuid4(),
+            user_id=user_id,
+            title=title,
+            body_markdown="",
+            created_at=now,
+            updated_at=now,
+        )
+    )
+
+
+def _note_item(
+    user_id: UUID,
+    note_id: UUID | None,
+    *,
+    question: str = "What is spaced repetition?",
+    answer: str = "Reviewing at increasing intervals.",
+) -> QuizItem:
+    """A source-less ``note`` card owned directly by ``user_id`` (AD-148/149)."""
+    return replace(
+        _item(None, question=question, answer=answer),
+        source_id=None,
+        origin=QuizItemOrigin.NOTE,
+        user_id=user_id,
+        note_id=note_id,
+    )
+
+
+def test_upsert_persists_a_source_less_note_card(db_conn: Connection) -> None:
+    """A note card is owned by its user directly and carries no source (AD-148/149)."""
+    source = _persisted_source(db_conn, "quiz-note-persist@example.com")
+    note = _persisted_note(db_conn, source.user_id)
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    item = _note_item(source.user_id, note.id)
+
+    assert repo.upsert(item, embedding=None) is True
+
+    stored = repo.get_by_id(item.id)
+    assert stored.origin == QuizItemOrigin.NOTE
+    assert stored.source_id is None
+    assert stored.user_id == source.user_id
+    assert stored.note_id == note.id
+
+
+def test_due_for_user_serves_source_less_note_cards_titled_your_notes(
+    db_conn: Connection,
+) -> None:
+    """A note card with no source stays in the due queue and reads 'Your notes'."""
+    source = _persisted_source(db_conn, "quiz-note-due@example.com")
+    note = _persisted_note(db_conn, source.user_id)
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    item = _note_item(source.user_id, note.id)
+    repo.upsert(item, embedding=None)
+    now = datetime.now(UTC)
+    repo.create_scheduling(item.id, _snapshot(due=now - timedelta(minutes=1)))
+
+    total, due = repo.due_for_user(source.user_id, now=now, limit=10)
+
+    assert total == 1
+    assert due[0].item.id == item.id
+    assert due[0].source_title == "Your notes"
+
+
+def test_due_for_user_isolates_another_users_note_cards(db_conn: Connection) -> None:
+    """Ownership is the card's own user_id now: a note card never leaks across users."""
+    now = datetime.now(UTC)
+    past = now - timedelta(minutes=1)
+    owner = _persisted_source(db_conn, "quiz-note-owner@example.com")
+    other = _persisted_source(db_conn, "quiz-note-other@example.com")
+    note = _persisted_note(db_conn, owner.user_id)
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    mine = _note_item(owner.user_id, note.id)
+    repo.upsert(mine, embedding=None)
+    repo.create_scheduling(mine.id, _snapshot(due=past))
+
+    total, due = repo.due_for_user(other.user_id, now=now, limit=10)
+
+    assert total == 0
+    assert due == []
 
 
 def test_two_highlight_items_with_no_anchor_both_persist(db_conn: Connection) -> None:

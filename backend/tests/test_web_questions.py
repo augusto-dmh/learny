@@ -33,10 +33,12 @@ from fastapi.testclient import TestClient
 from sqlalchemy import Connection
 
 from app.domain.entities import (
+    AnswerCompleted,
     AnswerTextDelta,
     CorpusSectionRecord,
     Evidence,
     GeneratedAnswer,
+    Note,
     ParsedSection,
     QuestionAnswer,
     SectionChunk,
@@ -45,6 +47,7 @@ from app.domain.entities import (
 from app.infrastructure.db.repositories import (
     SqlAlchemyCorpusRepository,
     SqlAlchemyEmbeddingIndexRepository,
+    SqlAlchemyNoteRepository,
     SqlAlchemySourceRepository,
 )
 from app.infrastructure.embeddings import DeterministicEmbeddingAdapter
@@ -156,6 +159,26 @@ def _seed_owned_embedded_source(
     return str(source_id), csrf
 
 
+def _seed_note(db_conn: Connection, user_id: str, *, title: str, body: str) -> UUID:
+    """Insert an embedded note for ``user_id`` (its search_vector is trigger-fed)."""
+    repo = SqlAlchemyNoteRepository(db_conn)
+    now = datetime.now(UTC)
+    note = Note(
+        id=uuid4(),
+        user_id=UUID(user_id),
+        title=title,
+        body_markdown=body,
+        created_at=now,
+        updated_at=now,
+    )
+    repo.add(note)
+    adapter = DeterministicEmbeddingAdapter()
+    repo.set_embedding(
+        note.id, embedding=adapter.embed_documents([body])[0], model=adapter.model
+    )
+    return note.id
+
+
 # --- 200 answered (QA-01/02/04) ------------------------------------------------
 
 
@@ -211,7 +234,9 @@ def test_ask_trims_question_before_calling_service(
     captured: dict[str, str] = {}
 
     class _SpyService:
-        def __call__(self, *, user, source_id, question) -> QuestionAnswer:  # noqa: ANN001
+        def __call__(  # noqa: ANN001
+            self, *, user, source_id, question, include_notes=True
+        ) -> QuestionAnswer:
             captured["question"] = question
             return QuestionAnswer(
                 status="not_found_in_source",
@@ -722,3 +747,192 @@ def test_ask_stream_mid_stream_failure_emits_error_part(
         isinstance(p, dict) and p["type"] == "text-delta" and p["delta"] == "partial "
         for p in parts
     )
+
+
+# --- include_notes: default, gating, and distinct note citations (NL-03/04) -----
+
+
+def test_ask_defaults_include_notes_true_and_forwards_explicit_choice(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # AD-147 / NL-04: Q&A includes the user's notes when the flag is absent, and
+    # forwards an explicit opt-out verbatim. Asserted by spying on the wired service.
+    from app.infrastructure.web.dependencies import get_ask_question
+
+    source_id, csrf = _seed_owned_embedded_source(auth_client, db_conn, "askdefault@example.com")
+
+    seen: list[bool] = []
+
+    class _SpyService:
+        def __call__(  # noqa: ANN001
+            self, *, user, source_id, question, include_notes=True
+        ) -> QuestionAnswer:
+            seen.append(include_notes)
+            return QuestionAnswer(
+                status="not_found_in_source",
+                text="",
+                citations=(),
+                evidence_count=0,
+                model=_MODEL,
+            )
+
+    auth_client.app.dependency_overrides[get_ask_question] = lambda: _SpyService()
+    try:
+        absent = _ask(auth_client, source_id, {"question": "photosynthesis"}, csrf=csrf)
+        opted_out = _ask(
+            auth_client,
+            source_id,
+            {"question": "photosynthesis", "include_notes": False},
+            csrf=csrf,
+        )
+    finally:
+        auth_client.app.dependency_overrides.pop(get_ask_question, None)
+
+    assert absent.status_code == 200, absent.text
+    assert opted_out.status_code == 200, opted_out.text
+    # Absent → Q&A's on-default; explicit False → forwarded.
+    assert seen == [True, False]
+
+
+_CITATION_KEYS = {
+    "chunk_id",
+    "source_id",
+    "section_path",
+    "anchor",
+    "page_span",
+    "snippet",
+    "score",
+}
+
+
+def test_ask_include_notes_gates_note_evidence_and_distinct_citation(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # NL-03/NL-04: with notes on, the user's own note reaches the generation port
+    # and comes back as a distinct note citation (origin='note' + note identity),
+    # while book citations render byte-identically. With notes off, no note content
+    # appears in the port's evidence or the citations (asserted against a capturing
+    # generation port).
+    from app.infrastructure.web.dependencies import get_answer_generation
+
+    user_id = _register(auth_client, "asknote@example.com")
+    csrf = _csrf(auth_client)
+    source_id = _persist_source(db_conn, user_id)
+    _seed_photosynthesis_corpus(db_conn, source_id)
+    _embed_all(db_conn, source_id)
+    note_id = _seed_note(
+        db_conn,
+        user_id,
+        title="My Insight",
+        body="photosynthesis and sunlight energy fascinate me every single day",
+    )
+
+    class _CitingCapture:
+        model = _MODEL
+
+        def __init__(self) -> None:
+            self.evidence_seen: list[Evidence] = []
+
+        def generate(self, *, question: str, evidence: Sequence[Evidence]) -> GeneratedAnswer:
+            self.evidence_seen = list(evidence)
+            return GeneratedAnswer(
+                text="a composed answer",
+                cited_chunk_ids=tuple(e.chunk_id for e in evidence),
+                model=_MODEL,
+                found=True,
+            )
+
+    cap = _CitingCapture()
+    auth_client.app.dependency_overrides[get_answer_generation] = lambda: cap
+    try:
+        on = _ask(
+            auth_client, str(source_id), {"question": "photosynthesis sunlight energy"}, csrf=csrf
+        )
+        on_origins = [e.origin for e in cap.evidence_seen]
+        off = _ask(
+            auth_client,
+            str(source_id),
+            {"question": "photosynthesis sunlight energy", "include_notes": False},
+            csrf=csrf,
+        )
+        off_origins = [e.origin for e in cap.evidence_seen]
+    finally:
+        auth_client.app.dependency_overrides.pop(get_answer_generation, None)
+
+    # Notes on: the note reached the port and returns as a distinct note citation.
+    assert on.status_code == 200, on.text
+    assert "note" in on_origins, "the user's note was fused into the port's evidence"
+    on_cits = on.json()["citations"]
+    note_cits = [c for c in on_cits if c.get("origin") == "note"]
+    assert len(note_cits) == 1
+    assert note_cits[0]["note_id"] == str(note_id)
+    assert note_cits[0]["note_title"] == "My Insight"
+    # The book chunk is still cited, and its citation is byte-identical to today
+    # (exactly the seven citation keys — no origin/note_id/note_title leak).
+    book_cits = [c for c in on_cits if c.get("origin") != "note"]
+    assert book_cits, "the book chunk is cited alongside the note"
+    for bc in book_cits:
+        assert set(bc) == _CITATION_KEYS
+
+    # Notes off: zero note content in the port's evidence and zero note citations.
+    assert off.status_code == 200, off.text
+    assert "note" not in off_origins
+    assert all(c.get("origin") != "note" for c in off.json()["citations"])
+
+
+def test_ask_stream_note_citation_carries_origin_and_note_identity(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # NL-03: the streamed data-citations part carries the same distinct note
+    # citation (origin='note' + identity) as the JSON path, book citations unchanged.
+    from app.infrastructure.web.dependencies import get_answer_generation
+
+    user_id = _register(auth_client, "askstreamnote@example.com")
+    csrf = _csrf(auth_client)
+    source_id = _persist_source(db_conn, user_id)
+    _seed_photosynthesis_corpus(db_conn, source_id)
+    _embed_all(db_conn, source_id)
+    note_id = _seed_note(
+        db_conn,
+        user_id,
+        title="Stream Note",
+        body="photosynthesis and sunlight energy delight me endlessly",
+    )
+
+    class _CitingStreamCapture:
+        model = _MODEL
+
+        def generate(self, *, question: str, evidence: Sequence[Evidence]) -> GeneratedAnswer:
+            raise AssertionError("stream path must not call generate")
+
+        def generate_stream(self, *, question: str, evidence: Sequence[Evidence]):
+            yield AnswerTextDelta(text="an answer")
+            yield AnswerCompleted(
+                answer=GeneratedAnswer(
+                    text="an answer",
+                    cited_chunk_ids=tuple(e.chunk_id for e in evidence),
+                    model=_MODEL,
+                    found=True,
+                )
+            )
+
+    auth_client.app.dependency_overrides[get_answer_generation] = lambda: _CitingStreamCapture()
+    try:
+        resp = _ask_stream(
+            auth_client, str(source_id), {"question": "photosynthesis sunlight energy"}, csrf=csrf
+        )
+    finally:
+        auth_client.app.dependency_overrides.pop(get_answer_generation, None)
+
+    assert resp.status_code == 200, resp.text
+    parts = _parse_ui_stream(resp.text)
+    citations = next(
+        p for p in parts if isinstance(p, dict) and p["type"] == "data-citations"
+    )["data"]
+    note_cits = [c for c in citations if c.get("origin") == "note"]
+    assert len(note_cits) == 1
+    assert note_cits[0]["note_id"] == str(note_id)
+    assert note_cits[0]["note_title"] == "Stream Note"
+    # Book citations in the stream part remain exactly the seven citation keys.
+    for bc in [c for c in citations if c.get("origin") != "note"]:
+        assert set(bc) == _CITATION_KEYS

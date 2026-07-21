@@ -98,6 +98,17 @@ export function NotesScreen({
 
   return (
     <section aria-label="notes" className="space-y-6">
+      <div className="flex items-center justify-between gap-2">
+        <h1 className="text-xl font-semibold">Notes</h1>
+        {/* Plain same-origin GET download (auth cookie, no CSRF) — the proxy streams
+            the deterministic Obsidian vault zip straight from FastAPI (NL-16). */}
+        <Button asChild variant="outline">
+          <a href="/api/export/vault" download="learny-vault.zip">
+            Export vault
+          </a>
+        </Button>
+      </div>
+
       <Card>
         <CardHeader>
           <CardTitle>New note</CardTitle>

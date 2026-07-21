@@ -341,4 +341,34 @@ def test_retrieve_evidence_passes_empty_through_and_defaults_top_k() -> None:
     result = service(user=owner, source_id=source.id, query="unmatched")
 
     assert result == []
+
+
+def test_retrieve_evidence_forwards_owner_and_include_notes_flag() -> None:
+    # NL-04/NL-05: when the caller opts notes in, the flag AND the owner id reach
+    # the port, so the note arms run scoped to this user's own notes.
+    owner = _user()
+    sources = FakeSourceRepository()
+    source = _owned_source(owner.id)
+    sources.add(source)
+    retrieval = FakeRetrievalPort(results=[])
+    service = _retrieve(sources=sources, retrieval=retrieval, embeddings=_StubEmbeddings())
+
+    service(user=owner, source_id=source.id, query="anything", include_notes=True)
+
+    assert retrieval.note_scope_calls == [{"user_id": owner.id, "include_notes": True}]
+
+
+def test_retrieve_evidence_defaults_notes_off_but_forwards_owner() -> None:
+    # NL-04: the service defaults the note arms OFF (the web layer owns the Q&A
+    # on-default); the owner id is forwarded regardless so scoping is always ready.
+    owner = _user()
+    sources = FakeSourceRepository()
+    source = _owned_source(owner.id)
+    sources.add(source)
+    retrieval = FakeRetrievalPort(results=[])
+    service = _retrieve(sources=sources, retrieval=retrieval, embeddings=_StubEmbeddings())
+
+    service(user=owner, source_id=source.id, query="anything")
+
+    assert retrieval.note_scope_calls == [{"user_id": owner.id, "include_notes": False}]
     assert retrieval.calls[0]["top_k"] == _DEFAULT_TOP_K

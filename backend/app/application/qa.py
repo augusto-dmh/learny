@@ -69,7 +69,12 @@ class AskQuestion:
         self._evidence_top_k = evidence_top_k
 
     def __call__(
-        self, *, user: User, source_id: UUID, question: str
+        self,
+        *,
+        user: User,
+        source_id: UUID,
+        question: str,
+        include_notes: bool = False,
     ) -> QuestionAnswer:
         source = authorized_source(
             user=user,
@@ -86,6 +91,7 @@ class AskQuestion:
             source_id=source_id,
             query=question,
             top_k=self._evidence_top_k,
+            include_notes=include_notes,
         )
         result = self._answer(question=question, evidence=evidence)
         # One content-free lifecycle log per completion — never the question or
@@ -100,7 +106,12 @@ class AskQuestion:
         return result
 
     def stream(
-        self, *, user: User, source_id: UUID, question: str
+        self,
+        *,
+        user: User,
+        source_id: UUID,
+        question: str,
+        include_notes: bool = False,
     ) -> Iterator[AskStreamEvent]:
         """Answer incrementally: the same guards + grounding as ``__call__``, streamed.
 
@@ -127,6 +138,7 @@ class AskQuestion:
             source_id=source_id,
             query=question,
             top_k=self._evidence_top_k,
+            include_notes=include_notes,
         )
         return self._answer_stream(question=question, evidence=evidence)
 

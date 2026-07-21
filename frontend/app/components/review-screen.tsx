@@ -29,6 +29,7 @@ import { useKeyShortcuts } from "@/app/components/use-key-shortcuts";
 import { readUrl } from "@/app/lib/read-url";
 import {
   getDueReviews,
+  resetSchedule,
   submitReview,
   type DueItem,
 } from "@/app/lib/quiz";
@@ -70,6 +71,8 @@ export function ReviewScreen({
   const [revealed, setRevealed] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [resetting, setResetting] = useState(false);
+  const [resetError, setResetError] = useState<string | null>(null);
   const [tally, setTally] = useState<Tally>(EMPTY_TALLY);
   // When the current card's question was shown, so review duration is the
   // question-to-grade span (best-effort, optional field).
@@ -108,6 +111,7 @@ export function ReviewScreen({
   useEffect(() => {
     setRevealed(false);
     setSubmitError(null);
+    setResetError(null);
     questionShownAt.current = Date.now();
   }, [index]);
 
@@ -132,6 +136,35 @@ export function ReviewScreen({
       );
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  // The explicit, confirm-gated schedule reset (NL-12): the only non-review path
+  // that changes scheduling. On success the badge retires locally and the card stays
+  // on screen — a reset is a deliberate relearn, not a review, so it neither grades
+  // nor advances.
+  async function handleReset() {
+    if (!csrf || !queue || resetting) {
+      return;
+    }
+    const item = queue[index];
+    setResetting(true);
+    setResetError(null);
+    try {
+      await resetSchedule(item.id, csrf);
+      setQueue((prev) =>
+        prev
+          ? prev.map((card, i) =>
+              i === index ? { ...card, note_changed: false } : card,
+            )
+          : prev,
+      );
+    } catch (err) {
+      setResetError(
+        err instanceof Error ? err.message : "Could not reset this card's schedule.",
+      );
+    } finally {
+      setResetting(false);
     }
   }
 
@@ -226,7 +259,14 @@ export function ReviewScreen({
         onReveal={() => setRevealed(true)}
         onGrade={handleGrade}
         submitting={submitting}
+        onReset={handleReset}
+        resetting={resetting}
       />
+      {resetError ? (
+        <p role="alert" className="text-sm text-destructive">
+          {resetError}
+        </p>
+      ) : null}
       {submitError ? (
         <div className="space-y-2">
           <p role="alert" className="text-sm text-destructive">
@@ -253,13 +293,25 @@ function ReviewCard({
   onReveal,
   onGrade,
   submitting,
+  onReset,
+  resetting,
 }: {
   item: DueItem;
   revealed: boolean;
   onReveal: () => void;
   onGrade: (rating: number) => void;
   submitting: boolean;
+  onReset: () => void;
+  resetting: boolean;
 }) {
+  // The two-step confirm for the schedule reset lives with the card so a declined
+  // confirm fires nothing (NL-12). Advancing to another card drops any open confirm
+  // so it never carries forward onto the next card's badge.
+  const [confirmingReset, setConfirmingReset] = useState(false);
+  useEffect(() => {
+    setConfirmingReset(false);
+  }, [item.id]);
+
   return (
     <Card>
       <CardHeader>
@@ -279,17 +331,23 @@ function ReviewCard({
           way back is reachable *before* they give up, and putting it here is what
           keeps the jump to one action (CAP-36). It carries the anchor, not the
           answer, so it leaks nothing the reveal is holding back.
+
+          A source-less `note` card has no book to open, so the pin is absent for it;
+          its provenance line links the note instead (AD-149).
         */}
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
-          <Link
-            href={readUrl(item.source_id, item.citation.anchor)}
-            className="text-primary underline-offset-4 hover:underline"
-          >
-            Open in book
-          </Link>
+          {item.source_id ? (
+            <Link
+              href={readUrl(item.source_id, item.citation.anchor)}
+              className="text-primary underline-offset-4 hover:underline"
+            >
+              Open in book
+            </Link>
+          ) : null}
           {item.provenance ? (
-            // A card made at a passage additionally offers the note it came from
-            // (CAP-27). A deck card, or one whose note was deleted, offers none.
+            // A card made at a passage — or promoted from a note — additionally offers
+            // the note it came from (CAP-27, NL-13). A deck card, or one whose note was
+            // deleted, offers none.
             <Link
               data-testid="card-provenance"
               href={`/notes/${item.provenance.note_id}`}
@@ -299,6 +357,68 @@ function ReviewCard({
             </Link>
           ) : null}
         </div>
+
+        {item.note_changed ? (
+          // The "your note changed" badge (NL-12): the origin note was revised since
+          // this card was last reviewed. It links the note (when still present) and
+          // offers the explicit, confirm-gated reset — reviewing the card as-is
+          // naturally retires the badge, and reset is the only way to relearn it.
+          <div
+            data-testid="note-changed"
+            className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm"
+          >
+            {item.provenance ? (
+              <Link
+                data-testid="note-changed-badge"
+                href={`/notes/${item.provenance.note_id}`}
+                className="rounded-4xl bg-secondary px-2 py-0.5 text-xs font-medium text-secondary-foreground underline-offset-4 hover:underline"
+              >
+                Your note changed
+              </Link>
+            ) : (
+              <span
+                data-testid="note-changed-badge"
+                className="rounded-4xl bg-secondary px-2 py-0.5 text-xs font-medium text-secondary-foreground"
+              >
+                Your note changed
+              </span>
+            )}
+            {confirmingReset ? (
+              <span className="flex flex-wrap items-center gap-2">
+                <span className="text-muted-foreground">
+                  Reset this card’s schedule?
+                </span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={resetting}
+                  onClick={onReset}
+                >
+                  {resetting ? "Resetting…" : "Confirm reset"}
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  disabled={resetting}
+                  onClick={() => setConfirmingReset(false)}
+                >
+                  Cancel
+                </Button>
+              </span>
+            ) : (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => setConfirmingReset(true)}
+              >
+                Reset schedule
+              </Button>
+            )}
+          </div>
+        ) : null}
 
         {revealed ? (
           <div className="space-y-3">

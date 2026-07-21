@@ -139,6 +139,16 @@ class Settings(BaseSettings):
     retrieval_max_top_k: int = 50
     hnsw_ef_search: int = 100
 
+    # Notes-in-retrieval arms (ADR-0026 d4, NL-02) — two extra RRF arms over the
+    # user's own notes, fused into the same ranking behind ``include_notes``. Smaller
+    # per-arm limits than the book arms (the notes corpus is far smaller); weight 1.0
+    # is neutral (no eval signal for a bias — the limits are the constraint); the
+    # snippet cap bounds how much note body is projected as evidence text.
+    retrieval_notes_semantic_limit: int = 5
+    retrieval_notes_lexical_limit: int = 5
+    retrieval_notes_weight: float = 1.0
+    retrieval_notes_snippet_chars: int = 2000
+
     # Cited Q&A (Phase 7) — question length bound enforced by the web validator
     # and the server-controlled evidence budget. ``qa_evidence_top_k`` is the
     # ``top_k`` handed to Phase-6 retrieval; keep it ≤ ``retrieval_max_top_k``.
@@ -179,11 +189,20 @@ class Settings(BaseSettings):
     # Cycle D) and is deliberately separate from ``quiz_max_items_per_section`` so
     # tuning the foreground popover never moves whole-deck density.
     # ``quiz_max_card_chars`` bounds the question/answer text a student may accept or
-    # edit onto one card.
+    # edit onto one card. ``quiz_note_excerpt_chars`` bounds the note-body excerpt
+    # snapshotted onto a promoted ``note`` card (its provenance line and standalone
+    # citation) — a note is the whole source, so the excerpt is a readable prefix.
     quiz_model: str = "claude-haiku-4-5"
     quiz_max_items_per_section: int = 6
     quiz_max_suggestions: int = 3
     quiz_max_card_chars: int = 2000
+    quiz_note_excerpt_chars: int = 2000
+    # ``quiz_note_match_threshold`` is the cosine floor for pairing a live note card
+    # with a freshly generated suggestion during regenerate-and-match (NL-10). It is
+    # deliberately looser than ``quiz_dedup_threshold`` (0.90): that ceiling rejects
+    # near-duplicates, whereas matching an *edited* note's reworded card to its prior
+    # version must tolerate more drift.
+    quiz_note_match_threshold: float = 0.80
     quiz_min_section_chars: int = 200
     quiz_dedup_threshold: float = 0.90
     quiz_batch_timeout_s: int = 3600
@@ -198,6 +217,11 @@ class Settings(BaseSettings):
     # Notes & second-brain (RFC-003 Cycle E; ADR-0026). ``notes_max_body_chars`` caps a
     # note's Markdown body length, enforced by the note use cases before any write.
     notes_max_body_chars: int = 100000
+    # Deterministic truncation applied to a note body before it is embedded, so an
+    # oversized note never breaches the embedding provider's per-input limit (~8191
+    # tokens for OpenAI); ~4 chars/token keeps this comfortably under it. The default
+    # local adapter has no limit, so truncation is a no-op there.
+    notes_embedding_max_chars: int = 32000
 
 
 @lru_cache
