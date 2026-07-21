@@ -23,6 +23,13 @@ describe("InkLine", () => {
     expect(screen.getByTestId("ink-line-fill").style.width).toBe("42%");
   });
 
+  it("renders a zero-width fill at 0% instead of dropping it", () => {
+    // Pins the `=== undefined` guard: 0 is defined-but-falsy, so a regression
+    // to a falsy check would silently drop a just-started book's fill.
+    render(<InkLine percent={0} />);
+    expect(screen.getByTestId("ink-line-fill").style.width).toBe("0%");
+  });
+
   it("clamps the fill to the 0..100 range", () => {
     render(<InkLine percent={140} />);
     expect(screen.getByTestId("ink-line-fill").style.width).toBe("100%");
