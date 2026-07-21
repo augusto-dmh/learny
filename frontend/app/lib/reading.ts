@@ -17,7 +17,13 @@
  * throwing; other non-OK responses throw. The anchor carries reserved characters
  * (`/`, `#`), so it is `encodeURIComponent`-encoded exactly once — and omitted
  * entirely when resuming, so the server picks the stored position's chapter.
+ *
+ * A saved position also credits the day's study rollup (HOME-08), so the write
+ * echoes the caller's IANA zone in `X-Client-Timezone` for the day boundary —
+ * omitted when the zone is unavailable so the server falls back to UTC (HOME-09).
  */
+
+import { clientTimezone } from "@/app/lib/study";
 
 /** Words-per-minute for the minutes-left estimate (AD-126; mirrors the backend). */
 export const WORDS_PER_MINUTE = 220;
@@ -113,10 +119,18 @@ export async function saveReadingPosition(
   csrfToken: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<ReadingPositionView> {
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+    "X-CSRF-Token": csrfToken,
+  };
+  const tz = clientTimezone();
+  if (tz) {
+    headers["X-Client-Timezone"] = tz;
+  }
   const res = await fetchImpl(`/api/sources/${sourceId}/reading-position`, {
     method: "PUT",
     credentials: "same-origin",
-    headers: { "content-type": "application/json", "X-CSRF-Token": csrfToken },
+    headers,
     body: JSON.stringify({ anchor }),
   });
   if (!res.ok) {
