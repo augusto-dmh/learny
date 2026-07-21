@@ -24,6 +24,7 @@ import { useEffect, useState } from "react";
 import { getContinueReading, type ContinueReadingView } from "@/app/lib/study";
 import { getDueReviews } from "@/app/lib/quiz";
 import { readUrl } from "@/app/lib/read-url";
+import { StudyStats } from "./study-heatmap";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -90,13 +91,16 @@ export function HomeScreen() {
   }, []);
 
   return (
-    <section
-      aria-label="home"
-      className="grid gap-4 md:grid-cols-2"
-    >
-      <ContinueHero state={hero} />
-      <DueCard state={due} />
-    </section>
+    <div className="space-y-6">
+      <section
+        aria-label="home"
+        className="grid gap-4 md:grid-cols-2"
+      >
+        <ContinueHero state={hero} />
+        <DueCard state={due} />
+      </section>
+      <StudyStats />
+    </div>
   );
 }
 

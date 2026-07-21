@@ -36,6 +36,12 @@ function routedFetch(handlers: Record<string, Handler>) {
   return vi.fn(async (url: string, init?: RequestInit) => {
     const key = `${init?.method ?? "GET"} ${url}`;
     const handler = handlers[key];
+    // StudyStats mounts below the fold and fetches its own window; these hero/due
+    // tests don't exercise it, so its request defaults to an empty summary unless
+    // a test registers its own handler (e.g. to fail it for the isolation edge).
+    if (!handler && key === STUDY) {
+      return jsonResponse(200, { days: [], studied_last_14: 0 });
+    }
     if (!handler) throw new Error(`unexpected fetch: ${key}`);
     return handler(init ?? {});
   });
@@ -43,6 +49,7 @@ function routedFetch(handlers: Record<string, Handler>) {
 
 const CONTINUE = "GET /api/reading/continue";
 const DUE = "GET /api/reviews/due?limit=1";
+const STUDY = "GET /api/study/days?window=84";
 
 const hero = {
   source_id: "s1",
@@ -178,6 +185,29 @@ describe("HomeScreen fetch isolation (spec edge case)", () => {
     );
     // …while the due card shows its own quiet error.
     expect((await screen.findByRole("alert")).textContent).toContain("Due boom.");
+  });
+});
+
+describe("HomeScreen stats isolation (spec edge case)", () => {
+  it("renders the hero and due card when the stats fetch fails, without blanking them", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        [CONTINUE]: () => jsonResponse(200, hero),
+        [DUE]: () => jsonResponse(200, dueQueue(5)),
+        [STUDY]: () => jsonResponse(500, { detail: "Stats boom." }),
+      }),
+    );
+
+    render(<HomeScreen />);
+
+    // The two cards render their data…
+    expect((await screen.findByTestId("hero-title")).textContent).toBe(
+      "Ready Book",
+    );
+    expect((await screen.findByTestId("due-count")).textContent).toContain("5");
+    // …while the stats block shows its own quiet error below the fold.
+    expect((await screen.findByRole("alert")).textContent).toContain("Stats boom.");
   });
 });
 
