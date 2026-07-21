@@ -23,6 +23,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
+from sqlalchemy import Connection, select
+
+from app.infrastructure.db.metadata import (
+    corpus_chunks,
+    corpus_documents,
+    corpus_sections,
+    sources,
+)
 
 _HERE = Path(__file__).resolve().parent
 # silver.py -> tests/eval -> tests -> backend -> repo root; the ignored data tree
@@ -159,4 +167,102 @@ def _parse_case(entry: object, index: int) -> SilverCase:
         expected_anchors=tuple(anchors),
         expected_snippet=snippet,
         language=language,
+    )
+
+
+# --- DB resolution (checksum -> source, anchor -> chunks) -----------------------
+
+
+@dataclass(frozen=True)
+class ResolvedCase:
+    """A runnable case: its book is present and every expected anchor resolves.
+
+    ``source_id`` is the chosen source (latest ``created_at`` when the checksum is
+    duplicated) as a string; ``expected_chunk_ids`` are the corpus chunks the
+    expected anchors point at, in anchor order, deduplicated.
+    """
+
+    case: SilverCase
+    source_id: str
+    expected_chunk_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class SkippedCase:
+    """The referenced book is not present in this DB (checksum miss) — skip, not fail."""
+
+    case: SilverCase
+    reason: str
+
+
+@dataclass(frozen=True)
+class BrokenCase:
+    """The book is present but ``anchor`` no longer resolves — the case needs re-authoring.
+
+    Distinct from :class:`SkippedCase` (DEEP-18): the source exists, so the case is
+    stale (book re-ingested with different structure), not merely absent.
+    """
+
+    case: SilverCase
+    anchor: str
+    source_id: str
+
+
+def resolve_case(
+    conn: Connection, case: SilverCase
+) -> ResolvedCase | SkippedCase | BrokenCase:
+    """Resolve ``case`` against ``conn`` by source checksum then expected anchor(s).
+
+    Checksum miss -> :class:`SkippedCase` (book absent). Checksum hit but an
+    expected anchor matches no chunk (via the section's ``anchor`` or its
+    ``anchor_aliases``) -> :class:`BrokenCase` naming that anchor. All anchors
+    resolve -> :class:`ResolvedCase`. Duplicate checksums resolve deterministically
+    to the latest ``created_at`` (id as tie-break); the chosen source id is
+    surfaced so a result line records which book was scored. SELECT-only.
+    """
+    source_id = conn.execute(
+        select(sources.c.id)
+        .where(sources.c.checksum == case.source_checksum)
+        .order_by(sources.c.created_at.desc(), sources.c.id.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    if source_id is None:
+        return SkippedCase(
+            case=case,
+            reason=f"no source with checksum {case.source_checksum} in this DB",
+        )
+
+    rows = conn.execute(
+        select(
+            corpus_chunks.c.id,
+            corpus_sections.c.anchor,
+            corpus_sections.c.anchor_aliases,
+        )
+        .select_from(
+            corpus_documents.join(
+                corpus_sections,
+                corpus_sections.c.document_id == corpus_documents.c.id,
+            ).join(
+                corpus_chunks,
+                corpus_chunks.c.section_id == corpus_sections.c.id,
+            )
+        )
+        .where(corpus_documents.c.source_id == source_id)
+    ).all()
+
+    chunk_ids: list[str] = []
+    for anchor in case.expected_anchors:
+        matches = [
+            str(row.id)
+            for row in rows
+            if row.anchor == anchor or anchor in (row.anchor_aliases or ())
+        ]
+        if not matches:
+            return BrokenCase(case=case, anchor=anchor, source_id=str(source_id))
+        for chunk_id in matches:
+            if chunk_id not in chunk_ids:
+                chunk_ids.append(chunk_id)
+
+    return ResolvedCase(
+        case=case, source_id=str(source_id), expected_chunk_ids=tuple(chunk_ids)
     )
