@@ -70,6 +70,7 @@ from app.application.teaching import (
     ReadTeachingSession,
     StartTeachingSession,
 )
+from app.application.vault import ExportVault
 from app.core.config import Settings, get_settings
 from app.core.tracing import bind_trace
 from app.domain.entities import Session, User
@@ -605,6 +606,11 @@ def get_export_quiz_deck(conn: DbConnection) -> ExportQuizDeck:
         items=SqlAlchemyQuizItemRepository(conn),
         authorize=AuthorizeOwnership(),
     )
+
+
+def get_export_vault(conn: DbConnection) -> ExportVault:
+    """Wire ``ExportVault`` on the request-scoped connection (NL-16)."""
+    return ExportVault(notes=SqlAlchemyNoteRepository(conn))
 
 
 def get_submit_review(conn: DbConnection) -> SubmitReview:

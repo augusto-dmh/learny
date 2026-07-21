@@ -749,6 +749,13 @@ class FakeNoteRepository:
             key=lambda a: (a.created_at, str(a.id)),
         )
 
+    def anchors_for_user(self, user_id: UUID) -> list[NoteAnchor]:
+        owned = {n.id for n in self._notes.values() if n.user_id == user_id}
+        return sorted(
+            (a for a in self._anchors.values() if a.note_id in owned),
+            key=lambda a: (a.created_at, str(a.id)),
+        )
+
     def backlinks(self, note_id: UUID) -> list[Backlink]:
         seen: set[UUID] = set()
         result: list[Backlink] = []

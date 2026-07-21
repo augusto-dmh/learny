@@ -1143,6 +1143,16 @@ class NoteRepository(Protocol):
         """Return every anchor citing ``source_id`` for reconciliation (NF-07)."""
         ...
 
+    def anchors_for_user(self, user_id: UUID) -> list[NoteAnchor]:
+        """Return every anchor the caller owns, for the vault export (NL-16/20).
+
+        Joins ``note_anchors`` to ``notes`` and filters by ``user_id`` — like
+        :meth:`highlights_for_source` but across all of the caller's sources — so the
+        export sees only the caller's highlights, never another owner's on a shared
+        source. Deterministically ordered by ``(created_at, id)``.
+        """
+        ...
+
     def highlights_for_source(
         self, user_id: UUID, source_id: UUID
     ) -> tuple[SourceHighlight, ...]:

@@ -1922,6 +1922,19 @@ class SqlAlchemyNoteRepository:
         ).all()
         return [_to_note_anchor(row) for row in rows]
 
+    def anchors_for_user(self, user_id: UUID) -> list[NoteAnchor]:
+        # Owner-scoped across all sources for the vault export: a note anchor belongs to
+        # its note's owner, so join notes and filter by user_id (unlike
+        # ``anchors_for_source``, which spans all owners of one source). Stable order so
+        # the export is deterministic (NL-19).
+        rows = self._conn.execute(
+            select(note_anchors)
+            .join(notes, note_anchors.c.note_id == notes.c.id)
+            .where(notes.c.user_id == user_id)
+            .order_by(note_anchors.c.created_at, note_anchors.c.id)
+        ).all()
+        return [_to_note_anchor(row) for row in rows]
+
     def highlights_for_source(
         self, user_id: UUID, source_id: UUID
     ) -> tuple[SourceHighlight, ...]:
