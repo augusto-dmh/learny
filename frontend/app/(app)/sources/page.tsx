@@ -12,13 +12,17 @@
 
 import { useRouter } from "next/navigation";
 
+import { InkLine } from "@/app/components/ink-line";
 import { LibraryScreen } from "@/app/components/library-screen";
 
 export default function SourcesPage() {
   const router = useRouter();
   return (
     <main className="flex-1 p-6">
-      <h1 className="mb-6 text-2xl font-semibold">Your bookshelf</h1>
+      <header className="mb-6 space-y-2">
+        <h1 className="text-2xl font-semibold">Your bookshelf</h1>
+        <InkLine />
+      </header>
       <LibraryScreen onRequireAuth={() => router.replace("/login")} />
     </main>
   );
