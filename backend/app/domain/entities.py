@@ -1043,6 +1043,36 @@ class StudyDay:
 
 
 @dataclass(frozen=True)
+class StudySummary:
+    """The adherence read model for the Home stats block (HOME-11).
+
+    ``days`` are the caller's study-day rows within the requested window (day-ordered);
+    ``studied_last_14`` is the count of distinct days with any activity in the 14-day
+    window ending on the caller's local today. Both are computed at read time from the
+    ``study_days`` rollup — nothing derived is persisted (I-4).
+    """
+
+    days: tuple[StudyDay, ...]
+    studied_last_14: int
+
+
+@dataclass(frozen=True)
+class ContinuePoint:
+    """The resolved continue-reading hero (HOME-01): where to resume, in one click.
+
+    The caller's most-recent reading position with its ``chapter_title`` resolved from the
+    stored anchor against the source's chapter index, plus the ``source_title``,
+    server-computed ``percent``, and ``updated_at``.
+    """
+
+    source_id: UUID
+    source_title: str
+    chapter_title: str
+    percent: Decimal
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
 class SourceHighlight:
     """One of the caller's highlights on a source, for inline reader painting (RD-28).
 
