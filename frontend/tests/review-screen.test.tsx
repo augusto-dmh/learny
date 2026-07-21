@@ -592,7 +592,11 @@ describe("ReviewScreen grading shortcuts (CAP-30/31/32)", () => {
 
     pressKey(" ");
 
-    expect((await screen.findByTestId("answer")).textContent).toBe("algorithm");
+    // A generous timeout: under full-suite parallel load the default 1s window
+    // intermittently expired before the reveal re-render landed.
+    expect(
+      (await screen.findByTestId("answer", {}, { timeout: 5000 })).textContent,
+    ).toBe("algorithm");
   });
 
   it("submits the pressed grade once the answer is revealed", async () => {
