@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime
 
-from app.application.study import local_day
+from app.application.dates import local_day
 
 
 def test_valid_zone_east_of_utc_can_advance_the_date() -> None:

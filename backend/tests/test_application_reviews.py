@@ -17,6 +17,7 @@ from uuid import UUID, uuid4
 import pytest
 from sqlalchemy import Connection, func, select
 
+from app.application.dates import local_day
 from app.application.errors import QuizItemNotFound, QuizItemNotReviewable
 from app.application.quiz_qc import content_key
 from app.application.reviews import (
@@ -26,7 +27,6 @@ from app.application.reviews import (
     ResetSchedule,
     SubmitReview,
 )
-from app.application.study import local_day
 from app.domain.entities import (
     DueReviewItem,
     Note,

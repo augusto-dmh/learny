@@ -27,8 +27,8 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import Connection, select
 
+from app.application.dates import local_day
 from app.application.quiz_qc import content_key
-from app.application.study import local_day
 from app.domain.entities import (
     Note,
     QuizGenerationJob,

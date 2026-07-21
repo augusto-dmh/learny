@@ -15,11 +15,11 @@ from __future__ import annotations
 from dataclasses import replace
 from uuid import UUID
 
+from app.application.dates import local_day
 from app.application.errors import (
     QuizItemNotFound,
     QuizItemNotReviewable,
 )
-from app.application.study import local_day
 from app.domain.entities import (
     DueReviewItem,
     QuizItem,
@@ -98,7 +98,7 @@ class SubmitReview:
     ``StudyDayRepository.record`` (``reviews_count += 1``) on the user-local day derived
     from ``client_tz`` (HOME-07), issued on the same connection as the log append so the
     review and its day credit commit together (I-1). A missing/invalid ``client_tz``
-    degrades to UTC via :func:`~app.application.study.local_day` (HOME-09), never an error.
+    degrades to UTC via :func:`~app.application.dates.local_day` (HOME-09), never an error.
     """
 
     def __init__(

@@ -20,10 +20,10 @@ from dataclasses import dataclass
 from decimal import Decimal
 from uuid import UUID
 
+from app.application.dates import local_day
 from app.application.errors import CorpusNotFound
 from app.application.identity import AuthorizeOwnership
 from app.application.ingestion import authorized_source
-from app.application.study import local_day
 from app.domain.entities import (
     ChapterContent,
     ChapterIndexRow,
@@ -113,6 +113,24 @@ def _chapter_of(chapters: Sequence[Chapter], row_idx: int) -> int:
         if chapter.start <= row_idx < chapter.end:
             return i
     return len(chapters) - 1
+
+
+def chapter_title(index: Sequence[ChapterIndexRow] | None, anchor: str) -> str:
+    """Return the title of the chapter containing ``anchor`` (mirrors ``ReadChapter``).
+
+    Resolves the anchor's row (canonical then alias), falls back to the first row when the
+    anchor no longer resolves (a superseded corpus), then returns the depth-0 title of the
+    chapter that row belongs to. An absent/empty index yields ``""`` — a caller shows the
+    book without a chapter label rather than erroring.
+    """
+    if not index:
+        return ""
+    row_idx = locate(index, anchor)
+    if row_idx is None:
+        row_idx = 0
+    chapters = partition(index)
+    chapter = chapters[_chapter_of(chapters, row_idx)]
+    return index[chapter.start].title
 
 
 class ReadChapter:

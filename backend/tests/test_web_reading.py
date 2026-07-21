@@ -21,7 +21,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import Connection, select
 
-from app.application.study import local_day
+from app.application.dates import local_day
 from app.domain.entities import (
     CorpusSectionRecord,
     ParsedSection,
