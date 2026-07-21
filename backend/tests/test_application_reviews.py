@@ -516,7 +516,9 @@ def test_reset_returns_fresh_state_clears_badge_and_preserves_log(
         .where(review_log.c.quiz_item_id == item.id)
     ).all()
 
+    before = datetime.now(UTC)
     fresh = _reset_service(db_conn)(user=user, item_id=item.id)
+    after = datetime.now(UTC)
 
     # Fresh state: the learning shape a new card receives (no hand-rolled literal), and
     # the stored snapshot is exactly what was returned.
@@ -525,7 +527,9 @@ def test_reset_returns_fresh_state_clears_badge_and_preserves_log(
     assert fresh.stability == reference.stability
     assert fresh.difficulty == reference.difficulty
     assert fresh.last_review is None
-    assert fresh.due < _NOW + timedelta(days=5)  # no longer the advanced due
+    # Due is minted "now" (Learning), bounded by the call window — the advanced
+    # schedule is gone. Bounding against the real clock keeps this date-proof.
+    assert before <= fresh.due <= after
     assert repo.get_scheduling(item.id) == fresh
     # Badge cleared, review log untouched.
     assert repo.get_by_id(item.id).note_changed_at is None
