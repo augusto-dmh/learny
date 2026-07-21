@@ -142,8 +142,8 @@
  * Paper reading appearance (ADR-027): a warm reading surface for the reader
  * container only — token overrides cascade no further than the attributed
  * element. The html:not(.dark) guard makes dark mode ignore the layer
- * entirely; dark stays Iron Gall. No toggle ships yet: the Aa popover wires
- * data-appearance in a later cycle.
+ * entirely; dark stays Iron Gall. The Aa popover (reading-controls) wires
+ * data-appearance onto the reader container via use-reading-settings.
  */
 html:not(.dark) [data-appearance="paper"] {
     --background: #F4EFE5;
