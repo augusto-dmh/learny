@@ -2,7 +2,7 @@
 
 **Book intelligence with citations you can trust.** Learny ingests EPUB books while preserving their structure, answers questions with passage-level citations, and runs guided teaching sessions anchored to specific sections of the book — so every claim traces back to an exact location in the source.
 
-> Status: v2 shipped (v0.2.0). EPUB **and** PDF ingestion, cited Q&A and teaching with real streaming Claude generation, active-recall quizzes with spaced repetition, and hybrid retrieval over real OpenAI embeddings all work end-to-end. Real provider adapters (OpenAI embeddings, Anthropic Claude generation) sit behind Learny-owned ports; the deterministic, network-free adapters remain the default for offline development and CI, so the suite runs with no keys. The stack is deployed via CI → GHCR images → a VPS behind a Caddy TLS edge.
+> Status: v3 shipped (v0.3.0). Everything from v2 — EPUB **and** PDF ingestion, cited Q&A and teaching with real streaming Claude generation, active-recall quizzes with spaced repetition, and hybrid retrieval over real OpenAI embeddings — plus the v3 second-brain loop: highlights and notes captured from the reader now feed cited Q&A (behind an "include my notes" toggle, cited distinctly from the book), promote to spaced-repetition review in one action without disturbing a card's schedule, and export to a deterministic Obsidian-compatible vault. Real provider adapters (OpenAI embeddings, Anthropic Claude generation) sit behind Learny-owned ports; the deterministic, network-free adapters remain the default for offline development and CI, so the suite runs with no keys. The stack is deployed via CI → GHCR images → a VPS behind a Caddy TLS edge, with off-VPS backups and self-hosted monitoring.
 
 ---
 
@@ -61,14 +61,14 @@ flowchart LR
 backend/app/
 ├── domain/          # frozen entities + port Protocols — zero framework imports
 ├── application/     # use-case services (identity, ingestion, normalization, corpus,
-│                    #   retrieval, qa, teaching, quiz, scheduling, grounding) —
-│                    #   framework-free, injected via ports
+│                    #   retrieval, qa, teaching, quiz, scheduling, grounding,
+│                    #   notes, cards, reviews, vault) — framework-free, via ports
 ├── infrastructure/  # adapters: web/ (FastAPI routers), db/ (SQLAlchemy Core),
 │                    #   storage/ (S3), embeddings/ (deterministic + OpenAI),
 │                    #   answering/ + teaching/ (deterministic + Anthropic Claude),
 │                    #   quiz/ (deterministic + Anthropic), scheduling/ (FSRS),
 │                    #   ingestion/ (ebooklib EPUB + Docling PDF), security/ (Argon2id),
-│                    #   worker/ (Celery enqueuer)
+│                    #   export/ (Anki .apkg + Obsidian vault), worker/ (Celery enqueuer)
 ├── core/            # config (pydantic-settings), structured logging, tracing
 ├── worker/          # Celery app + tasks (thin shells over application services)
 └── main.py          # FastAPI composition root
@@ -100,9 +100,22 @@ One SQL statement ([ADR-0006](docs/adr/0006-use-postgresql-hybrid-search-with-pg
 
 Results project directly into `Evidence` DTOs carrying `section_path`, `anchor`, `page_span`, and `snippet` — citations are a first-class output of retrieval, not a post-processing step. Teaching sessions reuse the same query with an anchor-subtree filter so tutoring stays scoped to the passage being taught.
 
+When a request opts in (`include_notes`), the same statement grows two more RRF arms over the caller's own notes — a semantic arm on a whole-note `vector(1536)` embedding and a lexical arm on a note `tsvector` — fused with a configurable notes weight and smaller per-arm limits than the book arms (`LEARNY_RETRIEVAL_NOTES_*`). Notes never enter `corpus_chunks`; they carry a parallel index, so a note the user just wrote is retrievable without re-ingesting anything, and the note arms are strictly scoped to the requesting user.
+
 ### Active recall
 
 Beyond reading and asking, Learny turns a book into durable memory ([ADR-0021](docs/adr/0021-active-recall-design.md)). A Celery deck pipeline generates grounded quiz items (free-recall and single-mask cloze) from corpus sections, each carrying a citation snapshot and server-side quality checks (verbatim-quote containment, embedding dedup). Reviews are scheduled by the **FSRS** spaced-repetition algorithm behind a `SchedulingPort` (the `fsrs` library at the edge), with a cross-source due queue and an append-only review log; FSRS state describes the learner's memory, so it survives re-ingest untouched. Decks export to Anki as `.apkg` via `genanki`, with stable note GUIDs so re-import updates in place.
+
+### Second brain: capture → retrieve → reinforce → export
+
+Reading a book produces thinking, and v3 keeps that thinking in the loop ([ADR-0026](docs/adr/0026-notes-and-second-brain-domain-model.md)):
+
+- **Capture.** A reader selection becomes a highlight or a whole-Markdown note, anchored to the exact corpus anchor and snapshotted so it survives re-ingestion (the quiz-item precedent). Notes carry tags and note↔note / note↔section links with a backlinks panel in the reader (`POST /api/sources/{id}/highlights`, `POST /api/notes`, `GET /api/notes/{id}/backlinks`).
+- **Retrieve.** With the "include my notes" toggle on (default on for Q&A, off for teaching), the user's notes join hybrid retrieval as the two extra RRF arms above and are cited distinctly — a "Your note — <title>" citation linking the note detail, while book citations render byte-identically. `include_notes=false` keeps note content out of evidence, prompt, and citations entirely.
+- **Reinforce.** One action promotes a note to review cards: suggestions are generated from the note body through the same quiz-generation port (the note *is* the source, QC'd against it), and accepted cards get `origin='note'`, fresh FSRS scheduling, and a due-queue slot like any other card (`POST /api/notes/{id}/cards/suggest`, `POST /api/notes/{id}/cards`). Editing the note afterward runs an async regenerate-and-match that rewrites matched cards' text **in place** — their scheduling and review-log rows are left byte-for-byte untouched, the invariant this cycle was built around. A changed note surfaces a "your note changed" badge at review with an explicit, opt-in schedule reset (`POST /api/quiz-items/{id}/schedule-reset`); rescheduling never happens implicitly.
+- **Export.** `GET /api/export/vault` streams a deterministic `learny-vault.zip` — a `Learny/` folder with one Markdown file per book that has highlights (each a `> [!quote]` callout with a stable `^lh-<id>` block anchor) and one file per note (namespaced `learny-*` Properties frontmatter, verbatim Markdown body). Two exports of the same data are byte-identical, and the vault opens in Obsidian with working wikilinks and block deep-links. Export is a one-way projection, never a sync ([ADR-0026](docs/adr/0026-notes-and-second-brain-domain-model.md)).
+
+Card ownership moved to `quiz_items.user_id` this cycle so a note card can exist without a source; note cards are source-less by construction (`source_id` null, guarded by a CHECK), and their provenance line reads "Your notes".
 
 ### Security model
 
@@ -187,28 +200,33 @@ Evaluation uses **golden fixtures**: a hand-authored EPUB is run through the *re
 | Teaching | `POST /api/teaching-sessions`, `GET /api/teaching-sessions/{id}`, `POST /api/teaching-sessions/{id}/turns`, `GET /api/sources/{id}/teaching-sessions` |
 | Streaming | `POST /api/sources/{id}/questions/stream`, `POST /api/teaching-sessions/{id}/turns/stream` (SSE, UI Message Stream) |
 | Quizzes | `POST /api/sources/{id}/quiz/deck` (202, async), `GET /api/sources/{id}/quiz`, `GET /api/sources/{id}/quiz/export` (.apkg) |
-| Reviews | `GET /api/reviews/due` (cross-source), `POST /api/quiz-items/{id}/reviews` (FSRS grade) |
+| Reviews | `GET /api/reviews/due` (cross-source), `POST /api/quiz-items/{id}/reviews` (FSRS grade), `POST /api/quiz-items/{id}/schedule-reset` |
+| Notes & highlights | `POST /api/notes`, `GET /api/notes` (`?tag=`), `GET`/`PATCH`/`DELETE /api/notes/{id}`, `GET /api/notes/{id}/backlinks`, `POST`/`GET /api/sources/{id}/highlights` |
+| Note review cards | `POST /api/notes/{id}/cards/suggest` (grounded suggestions), `POST /api/notes/{id}/cards` (promote) |
+| Export | `GET /api/export/vault` (Obsidian-compatible `learny-vault.zip`) |
 
 ## Engineering process
 
-The repository is decision-driven: 23 [ADRs](docs/adr/) record accepted architecture choices with context and trade-offs, [RFCs](docs/rfc/) hold open proposals (RFC-002 drove the v2 roadmap), and a [technical design doc](docs/tdd/0001-mvp-architecture.md) maps the MVP. Features were built in spec-driven cycles (specify → design → tasks → execute with independent verification) with small, reviewed PRs. Operational runbooks live in [docs/ops/](docs/ops/) (deploy, backups, rollback, [end-to-end QA](docs/ops/e2e-qa.md)); the v2 build is written up in the [v2 retrospective](docs/retrospectives/2026-07-learny-v2.md).
+The repository is decision-driven: 27 [ADRs](docs/adr/) record accepted architecture choices with context and trade-offs, [RFCs](docs/rfc/) hold open proposals (RFC-002 drove the v2 roadmap, RFC-003 the v3 second-brain arc), and a [technical design doc](docs/tdd/0001-mvp-architecture.md) maps the MVP. Features were built in spec-driven cycles (specify → design → tasks → execute with independent verification) with small, reviewed PRs. Operational runbooks live in [docs/ops/](docs/ops/) (deploy, backups, monitoring, rollback, [end-to-end QA](docs/ops/e2e-qa.md)); each release is written up in a retrospective ([v2](docs/retrospectives/2026-07-learny-v2.md), [v3](docs/retrospectives/2026-07-learny-v3.md)).
 
 ## Roadmap
 
-v2 (RFC-002 cycles A–G) is shipped at **v0.2.0** — everything the original roadmap listed as future work is now in `main`:
+v3 (RFC-003 cycles A–F) is shipped at **v0.3.0**, on top of v2 (RFC-002 cycles A–G, **v0.2.0**). Everything both roadmaps listed as future work is now in `main`:
 
-- ✅ **Real provider adapters** behind the existing ports — OpenAI embeddings ([ADR-0019](docs/adr/0019-use-openai-embeddings-with-per-chunk-model-versioning.md)) and Anthropic Claude generation with citations + streaming ([ADR-0020](docs/adr/0020-use-anthropic-claude-for-generation.md)), deterministic adapters retained as the offline default.
+- ✅ **The second-brain loop** ([ADR-0026](docs/adr/0026-notes-and-second-brain-domain-model.md)): highlights and notes captured from the reader, fused into cited Q&A behind an "include my notes" toggle, promotable to spaced-repetition review without disturbing a card's schedule, and exportable as a deterministic Obsidian-compatible vault.
+- ✅ **Ops maturity**: off-VPS backups with a tested restore path, self-hosted Netdata monitoring, and production image hygiene ([ADR-0024](docs/adr/0024-backup-and-monitoring-stack.md)).
+- ✅ **Eval maturity**: real-provider baselines and a calibrated LLM-judge threshold gate on the nightly run (PRs stay offline/deterministic).
+- ✅ **Scanned-PDF OCR** and localized normalization behind the existing parser port ([ADR-0025](docs/adr/0025-selective-ocr-and-localized-normalization.md)).
+- ✅ **Real provider adapters** — OpenAI embeddings ([ADR-0019](docs/adr/0019-use-openai-embeddings-with-per-chunk-model-versioning.md)) and Anthropic Claude generation with citations + streaming ([ADR-0020](docs/adr/0020-use-anthropic-claude-for-generation.md)), deterministic adapters retained as the offline default.
 - ✅ **PDF ingestion** via Docling behind the shared parser port, plus a format-agnostic corpus normalization pass ([ADR-0022](docs/adr/0022-pdf-ingestion-via-docling-and-corpus-normalization.md)).
-- ✅ **Active-recall quizzes** with FSRS spaced repetition and Anki export ([ADR-0021](docs/adr/0021-active-recall-design.md)) — the successor to the MVP's deferred quiz/notes scope ([ADR-0010](docs/adr/0010-scope-first-mvp-to-ingestion-cited-qa-and-teaching-sessions.md)).
-- ✅ **A real product frontend** (Next.js App Router, streaming UI) and **CI + Apache-2.0 hygiene**.
-- ✅ **Deployment**: CI-built GHCR images auto-deployed to a VPS behind a Caddy TLS edge ([ADR-0023](docs/adr/0023-ghcr-ssh-deploy-caddy-edge.md)). A nightly LLM-judge evaluation runs against real providers, with results persisted as JSONL.
+- ✅ **Active-recall quizzes** with FSRS spaced repetition and Anki export ([ADR-0021](docs/adr/0021-active-recall-design.md)).
+- ✅ **A real product frontend** (Next.js App Router, streaming UI), **CI + Apache-2.0 hygiene**, and CI-built GHCR images auto-deployed to a VPS behind a Caddy TLS edge ([ADR-0023](docs/adr/0023-ghcr-ssh-deploy-caddy-edge.md)).
 
-Possible future directions (out of RFC-002 scope, no decision recorded yet):
+Possible future directions (no decision recorded yet):
 
+- Paragraph-level note chunking for retrieval (ADR-0026 embeds whole notes first; chunking is the recorded upgrade).
 - Multi-provider / bring-your-own-key generation and embeddings.
 - A dedicated vector database or reranker if PostgreSQL hybrid search stops scaling.
-- Notes and second-brain workflows layered on the canonical corpus.
-- A monitoring/metrics stack and automated backups (structured logs and the ops runbooks are the current hooks).
 - A publicly hosted multi-tenant instance.
 
-See the [v2 retrospective](docs/retrospectives/2026-07-learny-v2.md) for what shipped in each cycle and what to improve next.
+See the [v2](docs/retrospectives/2026-07-learny-v2.md) and [v3](docs/retrospectives/2026-07-learny-v3.md) retrospectives for what shipped in each cycle and what to improve next.
