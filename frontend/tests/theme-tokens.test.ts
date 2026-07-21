@@ -56,6 +56,8 @@ const PINNED: [name: string, lightHex: string, darkHex: string][] = [
   ["border", "#DDE2E4", "#263340"],
   ["primary", "#22557A", "#6FA9CC"],
   ["primary-foreground", "#F4F8FA", "#0E1A22"],
+  // POL-07 — destructive is identity oxblood, hex so the AA gate can see it.
+  ["destructive", "#9E3B34", "#E08D85"],
 ];
 
 // IDF-03 AC1 — warm marker highlights on the cool field, both modes.
@@ -88,6 +90,8 @@ const AA_PAIRS: [fg: string, bg: string][] = [
   ["accent-foreground", "accent"],
   ["muted-foreground", "background"],
   ["muted-foreground", "muted"],
+  // POL-07 — destructive's dominant usage is error text on the field.
+  ["destructive", "background"],
   ["sidebar-foreground", "sidebar"],
   ["sidebar-primary-foreground", "sidebar-primary"],
   ["sidebar-accent-foreground", "sidebar-accent"],
