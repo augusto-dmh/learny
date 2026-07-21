@@ -104,10 +104,10 @@ N/A for this scope.
 
 | Requirement ID | Story | Phase | Status |
 | --- | --- | --- | --- |
-| POL-01..04 | P1 heatmap | 1 | Pending |
-| POL-05..08 | P1 WCAG gate | 1 | Pending |
-| POL-09..11 | P2 ink-line | 2 | Pending |
-| POL-12..13 | P2 papercuts | 3 | Pending |
+| POL-01..04 | P1 heatmap | 1 | Implemented |
+| POL-05..08 | P1 WCAG gate | 1 | Implemented |
+| POL-09..11 | P2 ink-line | 2 | Implemented |
+| POL-12..13 | P2 papercuts | 3 | Implemented |
 
 **Coverage:** 13 total, mapped to tasks at Tasks time.
 
