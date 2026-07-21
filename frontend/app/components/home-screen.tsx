@@ -21,6 +21,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
+import { InkLine } from "@/app/components/ink-line";
 import { getContinueReading, type ContinueReadingView } from "@/app/lib/study";
 import { getDueReviews } from "@/app/lib/quiz";
 import { readUrl } from "@/app/lib/read-url";
@@ -141,6 +142,7 @@ function ContinueHero({ state }: { state: Loadable<ContinueReadingView | null> }
                 {Math.round(state.data.percent)}% read
               </p>
             </div>
+            <InkLine percent={state.data.percent} />
             <Button asChild>
               <Link href={readUrl(state.data.source_id, null)}>Resume</Link>
             </Button>
