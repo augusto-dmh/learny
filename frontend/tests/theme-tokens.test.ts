@@ -106,6 +106,60 @@ describe.each([
   });
 });
 
+// POL-01..03 — the chart tokens are an Iron Gall sequential ramp (the heatmap
+// is their consumer), pinned in both modes. Intensity is monotonic in the
+// mode-appropriate direction and the ramp top clears the non-text UI contrast
+// threshold against the field.
+const CHARTS: [name: string, lightHex: string, darkHex: string][] = [
+  ["chart-1", "#D7E3EC", "#22384A"],
+  ["chart-2", "#B3CCDD", "#2E4C63"],
+  ["chart-3", "#82A9C3", "#3F6885"],
+  ["chart-4", "#4F7EA3", "#5588AB"],
+  ["chart-5", "#22557A", "#6FA9CC"],
+];
+
+describe("chart ramp", () => {
+  it.each(CHARTS)("pins --%s in both modes", (name, lightHex, darkHex) => {
+    expect(token(light, name)).toBe(lightHex);
+    expect(token(dark, name)).toBe(darkHex);
+  });
+
+  it("tops the ramp at the mode's primary", () => {
+    expect(token(light, "chart-5")).toBe(token(light, "primary"));
+    expect(token(dark, "chart-5")).toBe(token(dark, "primary"));
+  });
+
+  // POL-02 — heatmap levels 1..4 map to --chart-2..5: darker with level in
+  // light, lighter with level in dark, strictly monotonic.
+  it("darkens strictly with intensity in light mode", () => {
+    const ramp = ["chart-2", "chart-3", "chart-4", "chart-5"].map((name) =>
+      luminance(token(light, name)),
+    );
+    for (let i = 1; i < ramp.length; i++) {
+      expect(ramp[i]).toBeLessThan(ramp[i - 1]);
+    }
+  });
+
+  it("lightens strictly with intensity in dark mode", () => {
+    const ramp = ["chart-2", "chart-3", "chart-4", "chart-5"].map((name) =>
+      luminance(token(dark, name)),
+    );
+    for (let i = 1; i < ramp.length; i++) {
+      expect(ramp[i]).toBeGreaterThan(ramp[i - 1]);
+    }
+  });
+
+  // POL-03 — WCAG non-text UI component threshold for the strongest cell.
+  it.each([
+    ["light", light],
+    ["dark", dark],
+  ] as const)("keeps --chart-5 >= 3:1 against --background (%s)", (_mode, block) => {
+    expect(
+      contrast(token(block, "chart-5"), token(block, "background")),
+    ).toBeGreaterThanOrEqual(3);
+  });
+});
+
 // IDF-04 — the reading-typography class must actually carry the reading
 // values, not merely exist: component tests can only see class presence
 // (jsdom applies no stylesheets), so the declarations are pinned here.
