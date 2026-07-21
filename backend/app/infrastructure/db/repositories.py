@@ -1372,6 +1372,14 @@ class SqlAlchemyQuizItemRepository:
             .values(note_changed_at=note_changed_at)
         )
 
+    def clear_note_changed(self, item_id: UUID) -> None:
+        """Clear ``note_changed_at`` — the explicit schedule reset's badge retire (NL-12)."""
+        self._conn.execute(
+            update(quiz_items)
+            .where(quiz_items.c.id == item_id)
+            .values(note_changed_at=None)
+        )
+
     def update_text(
         self, item_id: UUID, *, question: str, answer: str, content_key: str
     ) -> None:
@@ -1498,7 +1506,11 @@ class SqlAlchemyQuizItemRepository:
         # join: a source-less ``note`` card must not drop out, and its ``source_title`` is
         # the constant "Your notes". The provenance hops are OUTER joins for the same
         # reason — a deck card has no anchor, a highlight card whose note was deleted has a
-        # NULL link. Every hop is to a primary key, so none can inflate the count (CAP-16).
+        # NULL link. A note card's provenance is a second hop straight to ``notes`` on
+        # ``note_id`` (NL-13; NULL once the note is deleted, NL-14). The two note reaches
+        # are exclusive (a card has an anchor or a note id, never both), so a coalesce picks
+        # the right title. Every hop is to a primary key, so none can inflate the count.
+        notes_via_id = notes.alias("notes_via_note_id")
         join = (
             quiz_items.join(
                 quiz_item_scheduling,
@@ -1507,6 +1519,7 @@ class SqlAlchemyQuizItemRepository:
             .outerjoin(sources, quiz_items.c.source_id == sources.c.id)
             .outerjoin(note_anchors, quiz_items.c.note_anchor_id == note_anchors.c.id)
             .outerjoin(notes, note_anchors.c.note_id == notes.c.id)
+            .outerjoin(notes_via_id, quiz_items.c.note_id == notes_via_id.c.id)
         )
         conditions = [
             quiz_items.c.user_id == user_id,
@@ -1520,13 +1533,24 @@ class SqlAlchemyQuizItemRepository:
             select(func.count()).select_from(join).where(*conditions)
         ).scalar_one()
 
+        # The "your note changed" badge (NL-12): the note changed since the card was last
+        # reviewed, or since it was created if never reviewed. NULL ``note_changed_at``
+        # (never flagged) yields NULL → falsy, coerced to False on the Python side.
+        note_changed = (
+            quiz_items.c.note_changed_at
+            > func.coalesce(quiz_item_scheduling.c.last_review, quiz_items.c.created_at)
+        ).label("note_changed")
+
         rows = self._conn.execute(
             select(
                 *_QUIZ_ITEM_READ_COLUMNS,
                 func.coalesce(sources.c.title, "Your notes").label("source_title"),
                 quiz_item_scheduling.c.due.label("due"),
-                notes.c.id.label("provenance_note_id"),
-                notes.c.title.label("provenance_note_title"),
+                func.coalesce(notes.c.id, notes_via_id.c.id).label("provenance_note_id"),
+                func.coalesce(notes.c.title, notes_via_id.c.title).label(
+                    "provenance_note_title"
+                ),
+                note_changed,
             )
             .select_from(join)
             .where(*conditions)
@@ -1538,7 +1562,7 @@ class SqlAlchemyQuizItemRepository:
                 item=_to_quiz_item(row),
                 source_title=row.source_title,
                 due=row.due,
-                # NULL on both the deck path and the severed-link path.
+                # NULL on the deck path and on a severed (deleted-note) link.
                 provenance=(
                     CardProvenance(
                         note_id=row.provenance_note_id,
@@ -1547,6 +1571,7 @@ class SqlAlchemyQuizItemRepository:
                     if row.provenance_note_id is not None
                     else None
                 ),
+                note_changed=bool(row.note_changed),
             )
             for row in rows
         ]

@@ -955,6 +955,14 @@ class QuizItemRepository(Protocol):
         """
         ...
 
+    def clear_note_changed(self, item_id: UUID) -> None:
+        """Clear ``note_changed_at`` on a card (the explicit schedule reset, NL-12).
+
+        Retires the "your note changed" badge. Touches only that column — scheduling is
+        reset separately via :meth:`update_scheduling` and the review log is untouched.
+        """
+        ...
+
     def update_text(
         self, item_id: UUID, *, question: str, answer: str, content_key: str
     ) -> None:

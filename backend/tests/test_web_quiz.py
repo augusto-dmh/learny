@@ -29,8 +29,10 @@ from sqlalchemy import Connection, select
 
 from app.application.quiz_qc import content_key
 from app.domain.entities import (
+    Note,
     QuizGenerationJob,
     QuizItem,
+    QuizItemOrigin,
     QuizItemStatus,
     QuizItemType,
     QuizJobStatus,
@@ -39,6 +41,7 @@ from app.domain.entities import (
 )
 from app.infrastructure.db.metadata import review_log
 from app.infrastructure.db.repositories import (
+    SqlAlchemyNoteRepository,
     SqlAlchemyQuizItemRepository,
     SqlAlchemyQuizJobRepository,
     SqlAlchemySourceRepository,
@@ -456,8 +459,10 @@ def test_due_returns_items_and_total_with_full_card(
         "provenance",
         "status",
         "due",
+        "note_changed",
     }
     assert view["id"] == str(item.id)
+    assert view["note_changed"] is False  # a deck card is never note-changed
     assert view["source_title"] == "Due Book"
     assert view["question"] == "What?"
     assert view["answer"] == "This"
@@ -612,3 +617,174 @@ def test_review_rate_limit_returns_429(
         assert r.status_code == 200
     throttled = _post_review(throttled_quiz_client, item.id, {"rating": 3}, csrf=csrf)
     assert throttled.status_code == 429, throttled.text
+
+
+# --- Note cards at review: badge + schedule reset (NL-12, NL-13) -----------------
+
+
+def _seed_note_card(
+    db_conn: Connection,
+    user_id: str,
+    *,
+    status: str = QuizItemStatus.ACTIVE,
+    due: datetime | None = None,
+    flagged_at: datetime | None = None,
+    title: str = "My note",
+) -> tuple[QuizItem, UUID]:
+    """Seed a source-less ``note`` card owned by ``user_id``; return (item, note_id)."""
+    now = datetime.now(UTC)
+    note = SqlAlchemyNoteRepository(db_conn).add(
+        Note(
+            id=uuid4(),
+            user_id=UUID(user_id),
+            title=title,
+            body_markdown="a body",
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    item = QuizItem(
+        id=uuid4(),
+        source_id=None,
+        user_id=UUID(user_id),
+        origin=QuizItemOrigin.NOTE,
+        note_id=note.id,
+        item_type=QuizItemType.FREE_RECALL,
+        question="What does the note say?",
+        answer="A fact.",
+        section_path=(title,),
+        anchor=f"note:{note.id}",
+        source_excerpt="a body",
+        chunk_hash="e" * 64,
+        content_key=content_key(QuizItemType.FREE_RECALL, "What does the note say?", "A fact."),
+        status=status,
+        generation_meta={},
+        created_at=now,
+        updated_at=now,
+    )
+    repo.upsert(item, embedding=None)
+    repo.create_scheduling(
+        item.id,
+        SchedulingSnapshot(
+            state=1, step=0, stability=None, difficulty=None,
+            due=due or (now - timedelta(hours=1)), last_review=None,
+        ),
+    )
+    if flagged_at is not None:
+        repo.flag_note_changed(item.id, flagged_at)
+    return item, note.id
+
+
+def _post_reset(
+    client: TestClient,
+    item_id: object,
+    *,
+    csrf: str | None,
+    origin: str | None = None,
+):
+    headers: dict[str, str] = {}
+    if csrf is not None:
+        headers["X-CSRF-Token"] = csrf
+    if origin is not None:
+        headers["Origin"] = origin
+    return client.post(f"/api/quiz-items/{item_id}/schedule-reset", headers=headers)
+
+
+def test_due_queue_flags_a_changed_note_card_with_provenance(
+    quiz_client: TestClient, db_conn: Connection
+) -> None:
+    user_id = _register(quiz_client, "due-note-badge@example.com")
+    _csrf(quiz_client)
+    item, note_id = _seed_note_card(
+        db_conn, user_id, flagged_at=datetime.now(UTC) + timedelta(hours=1)
+    )
+
+    resp = quiz_client.get("/api/reviews/due")
+
+    assert resp.status_code == 200, resp.text
+    row = next(r for r in resp.json()["items"] if r["id"] == str(item.id))
+    assert row["note_changed"] is True
+    assert row["source_title"] == "Your notes"
+    assert row["provenance"]["note_id"] == str(note_id)
+
+
+def test_due_queue_note_changed_false_for_a_deck_card(
+    quiz_client: TestClient, db_conn: Connection
+) -> None:
+    source_id, _csrf_token = _seed_ready_source(quiz_client, db_conn, "due-deck-badge@example.com")
+    item = _seed_item(db_conn, UUID(source_id))
+
+    resp = quiz_client.get("/api/reviews/due")
+
+    row = next(r for r in resp.json()["items"] if r["id"] == str(item.id))
+    assert row["note_changed"] is False
+
+
+def test_reset_fresh_schedule_and_clears_badge(
+    quiz_client: TestClient, db_conn: Connection
+) -> None:
+    user_id = _register(quiz_client, "reset-badge@example.com")
+    csrf = _csrf(quiz_client)
+    item, _note_id = _seed_note_card(
+        db_conn, user_id, flagged_at=datetime.now(UTC) + timedelta(hours=1)
+    )
+
+    resp = _post_reset(quiz_client, item.id, csrf=csrf)
+
+    assert resp.status_code == 200, resp.text
+    # The badge has retired on the next due read.
+    due = quiz_client.get("/api/reviews/due")
+    row = next(r for r in due.json()["items"] if r["id"] == str(item.id))
+    assert row["note_changed"] is False
+
+
+def test_reset_non_active_item_returns_409(
+    quiz_client: TestClient, db_conn: Connection
+) -> None:
+    user_id = _register(quiz_client, "reset-stale@example.com")
+    csrf = _csrf(quiz_client)
+    item, _note_id = _seed_note_card(db_conn, user_id, status=QuizItemStatus.STALE)
+
+    resp = _post_reset(quiz_client, item.id, csrf=csrf)
+
+    assert resp.status_code == 409, resp.text
+
+
+def test_reset_non_owner_returns_404(
+    quiz_client: TestClient, db_conn: Connection
+) -> None:
+    owner_id = _register(quiz_client, "reset-owner@example.com")
+    _csrf(quiz_client)
+    item, _note_id = _seed_note_card(db_conn, owner_id)
+
+    _register(quiz_client, "reset-intruder@example.com")
+    intruder_csrf = _csrf(quiz_client)
+    resp = _post_reset(quiz_client, item.id, csrf=intruder_csrf)
+
+    assert resp.status_code == 404, resp.text
+
+
+def test_reset_missing_csrf_returns_403(
+    quiz_client: TestClient, db_conn: Connection
+) -> None:
+    user_id = _register(quiz_client, "reset-nocsrf@example.com")
+    _csrf(quiz_client)
+    item, _note_id = _seed_note_card(db_conn, user_id)
+
+    resp = _post_reset(quiz_client, item.id, csrf=None)
+
+    assert resp.status_code == 403, resp.text
+
+
+def test_reset_without_a_session_returns_401(
+    quiz_client: TestClient, db_conn: Connection
+) -> None:
+    user_id = _register(quiz_client, "reset-unauth@example.com")
+    csrf = _csrf(quiz_client)
+    item, _note_id = _seed_note_card(db_conn, user_id)
+    quiz_client.cookies.clear()
+
+    resp = _post_reset(quiz_client, item.id, csrf=csrf)
+
+    assert resp.status_code == 401, resp.text

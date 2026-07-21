@@ -1208,6 +1208,111 @@ def test_flag_note_changed_sets_only_the_badge(db_conn: Connection) -> None:
     assert repo.get_scheduling(item.id) == before  # schedule untouched
 
 
+def test_clear_note_changed_retires_the_flag(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "quiz-note-clear@example.com")
+    note = _persisted_note(db_conn, source.user_id)
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    item = _note_item(source.user_id, note.id)
+    repo.upsert(item, embedding=None)
+    repo.flag_note_changed(item.id, datetime(2026, 7, 20, 8, tzinfo=UTC))
+
+    repo.clear_note_changed(item.id)
+
+    assert repo.get_by_id(item.id).note_changed_at is None
+
+
+# --- due queue: note-card badge + provenance (NL-12, NL-13, NL-14) --------------
+
+
+def _seed_due_note_card(db_conn: Connection, note, user_id: UUID):  # noqa: ANN202
+    """Seed a note card owned by ``user_id`` on ``note``, due one minute ago."""
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    item = _note_item(user_id, note.id)
+    repo.upsert(item, embedding=None)
+    repo.create_scheduling(
+        item.id, _snapshot(due=datetime.now(UTC) - timedelta(minutes=1))
+    )
+    return repo, repo.get_by_id(item.id)
+
+
+def test_due_for_user_flags_note_changed_after_a_change(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "quiz-badge-on@example.com")
+    note = _persisted_note(db_conn, source.user_id)
+    repo, item = _seed_due_note_card(db_conn, note, source.user_id)
+    # Flagged after the card was created and never reviewed → the badge is on (NL-12).
+    repo.flag_note_changed(item.id, item.created_at + timedelta(hours=1))
+
+    _total, due = repo.due_for_user(source.user_id, now=datetime.now(UTC), limit=10)
+
+    assert due[0].item.id == item.id
+    assert due[0].note_changed is True
+
+
+def test_due_for_user_no_badge_when_never_flagged(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "quiz-badge-off@example.com")
+    note = _persisted_note(db_conn, source.user_id)
+    _repo, item = _seed_due_note_card(db_conn, note, source.user_id)
+
+    _total, due = repo_due(db_conn, source.user_id)
+
+    assert due[0].item.id == item.id
+    assert due[0].note_changed is False
+
+
+def test_due_for_user_badge_retires_after_review(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "quiz-badge-retire@example.com")
+    note = _persisted_note(db_conn, source.user_id)
+    repo, item = _seed_due_note_card(db_conn, note, source.user_id)
+    flagged = item.created_at + timedelta(hours=1)
+    repo.flag_note_changed(item.id, flagged)
+    # A later review advances the schedule with last_review after the flag: the badge is
+    # derived against last_review, so it retires with no stored clear (NL-12).
+    repo.update_scheduling(
+        item.id,
+        _snapshot(due=datetime.now(UTC) + timedelta(days=1), last_review=flagged
+                  + timedelta(hours=1)),
+    )
+
+    _total, due = repo.due_for_user(
+        source.user_id, now=datetime.now(UTC) + timedelta(days=2), limit=10
+    )
+
+    assert due[0].note_changed is False
+
+
+def test_due_for_user_note_card_provenance_from_note_id(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "quiz-note-prov@example.com")
+    note = _persisted_note(db_conn, source.user_id, title="Attention residue")
+    _repo, item = _seed_due_note_card(db_conn, note, source.user_id)
+
+    _total, due = repo_due(db_conn, source.user_id)
+
+    assert due[0].provenance is not None
+    assert due[0].provenance.note_id == note.id
+    assert due[0].provenance.note_title == "Attention residue"
+
+
+def test_due_for_user_severed_note_card_served_without_provenance(
+    db_conn: Connection,
+) -> None:
+    source = _persisted_source(db_conn, "quiz-note-severed@example.com")
+    note = _persisted_note(db_conn, source.user_id)
+    _repo, item = _seed_due_note_card(db_conn, note, source.user_id)
+    # Deleting the note SET NULLs the card's note_id; the card survives (NL-14).
+    SqlAlchemyNoteRepository(db_conn).delete(note.id)
+
+    _total, due = repo_due(db_conn, source.user_id)
+
+    assert due[0].item.id == item.id  # still served
+    assert due[0].provenance is None  # provenance line absent once severed
+
+
+def repo_due(db_conn: Connection, user_id: UUID):  # noqa: ANN202
+    return SqlAlchemyQuizItemRepository(db_conn).due_for_user(
+        user_id, now=datetime.now(UTC), limit=10
+    )
+
+
 # --- read models carry the new fields (CAP-10) ---------------------------------
 
 

@@ -773,10 +773,11 @@ class ReviewLogEntry:
 
 @dataclass(frozen=True)
 class CardProvenance:
-    """The origin note of a highlight-derived card, for display at review (CAP-16).
+    """The origin note of a highlight- or note-derived card, for display at review.
 
     Read by join so a renamed note shows its current title. Absent (``None`` on the
-    review item) for deck-origin cards and for cards whose origin note was deleted.
+    review item) for deck-origin cards and for cards whose origin note was deleted —
+    a highlight card via its anchor (CAP-16), a note card via its ``note_id`` (NL-13).
     """
 
     note_id: UUID
@@ -788,15 +789,17 @@ class DueReviewItem:
     """A due quiz card plus the join fields the review queue needs (QUIZ-13/15).
 
     Bundles the reviewable :class:`QuizItem` with its owning source's ``source_title``
-    (the queue spans all the caller's sources), its scheduled ``due`` time, and the
-    origin-note ``provenance`` when the card was accepted from a highlight and that
-    note still exists.
+    (the queue spans all the caller's sources), its scheduled ``due`` time, the origin-note
+    ``provenance`` when the card came from a highlight or a note and that note still exists,
+    and ``note_changed`` — whether the origin note changed since the card was last reviewed
+    or created (the "your note changed" review badge, NL-12).
     """
 
     item: QuizItem
     source_title: str
     due: datetime
     provenance: CardProvenance | None = None
+    note_changed: bool = False
 
 
 @dataclass(frozen=True)

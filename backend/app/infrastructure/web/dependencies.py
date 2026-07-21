@@ -62,7 +62,7 @@ from app.application.reading import (
     SaveReadingPosition,
 )
 from app.application.retrieval import RetrieveEvidence
-from app.application.reviews import GetDueQueue, SubmitReview
+from app.application.reviews import GetDueQueue, ResetSchedule, SubmitReview
 from app.application.sources import CreateSource, GetSource, ListSources
 from app.application.teaching import (
     ListTeachingSessions,
@@ -616,10 +616,20 @@ def get_submit_review(conn: DbConnection) -> SubmitReview:
     """
     return SubmitReview(
         items=SqlAlchemyQuizItemRepository(conn),
-        sources=SqlAlchemySourceRepository(conn),
         scheduling=build_scheduling_adapter(get_settings()),
-        authorize=AuthorizeOwnership(),
         clock=_clock,
+    )
+
+
+def get_reset_schedule(conn: DbConnection) -> ResetSchedule:
+    """Wire ``ResetSchedule`` on the request-scoped connection (NL-12).
+
+    Like a review, a reset is one atomic transaction (scheduling replace + badge clear),
+    so the auto-committing request connection is the unit of work.
+    """
+    return ResetSchedule(
+        items=SqlAlchemyQuizItemRepository(conn),
+        scheduling=build_scheduling_adapter(get_settings()),
     )
 
 
