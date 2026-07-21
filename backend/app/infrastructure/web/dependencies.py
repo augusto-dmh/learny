@@ -101,6 +101,7 @@ from app.infrastructure.db.repositories import (
     SqlAlchemyReadingPositionRepository,
     SqlAlchemySessionRepository,
     SqlAlchemySourceRepository,
+    SqlAlchemyStudyDayRepository,
     SqlAlchemyTeachingSessionRepository,
     SqlAlchemyTeachingTurnRepository,
     SqlAlchemyUserRepository,
@@ -373,6 +374,7 @@ def get_save_reading_position(conn: DbConnection) -> SaveReadingPosition:
         positions=SqlAlchemyReadingPositionRepository(conn),
         authorize=AuthorizeOwnership(),
         clock=_clock,
+        study_days=SqlAlchemyStudyDayRepository(conn),
     )
 
 
@@ -624,6 +626,7 @@ def get_submit_review(conn: DbConnection) -> SubmitReview:
         items=SqlAlchemyQuizItemRepository(conn),
         scheduling=build_scheduling_adapter(get_settings()),
         clock=_clock,
+        study_days=SqlAlchemyStudyDayRepository(conn),
     )
 
 

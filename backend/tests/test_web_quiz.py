@@ -28,6 +28,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import Connection, select
 
 from app.application.quiz_qc import content_key
+from app.application.study import local_day
 from app.domain.entities import (
     Note,
     QuizGenerationJob,
@@ -39,7 +40,7 @@ from app.domain.entities import (
     SchedulingSnapshot,
     Source,
 )
-from app.infrastructure.db.metadata import review_log
+from app.infrastructure.db.metadata import review_log, study_days
 from app.infrastructure.db.repositories import (
     SqlAlchemyNoteRepository,
     SqlAlchemyQuizItemRepository,
@@ -84,12 +85,15 @@ def _post_review(
     *,
     csrf: str | None,
     origin: str | None = None,
+    client_tz: str | None = None,
 ):
     headers: dict[str, str] = {}
     if csrf is not None:
         headers["X-CSRF-Token"] = csrf
     if origin is not None:
         headers["Origin"] = origin
+    if client_tz is not None:
+        headers["X-Client-Timezone"] = client_tz
     return client.post(f"/api/quiz-items/{item_id}/reviews", json=body, headers=headers)
 
 
@@ -548,6 +552,62 @@ def test_review_advances_scheduling_and_logs(
         )
     ).all()
     assert [(r.rating, r.review_duration_ms) for r in rows] == [(3, 4200)]
+
+
+def test_review_with_client_timezone_credits_a_study_day(
+    quiz_client: TestClient, db_conn: Connection
+) -> None:
+    # HOME-07/09: a review with the client-timezone header credits exactly one study day
+    # with reviews_count=1 (no reading credit); the header adds no body fields (I-6).
+    source_id, csrf = _seed_ready_source(quiz_client, db_conn, "review-study@example.com")
+    item = _seed_item(db_conn, UUID(source_id))
+
+    resp = _post_review(
+        quiz_client, item.id, {"rating": 3}, csrf=csrf, client_tz="America/Sao_Paulo"
+    )
+
+    assert resp.status_code == 200, resp.text
+    # The additive header leaks no fields into the SchedulingView body (I-6).
+    assert set(resp.json()) == {
+        "state",
+        "step",
+        "stability",
+        "difficulty",
+        "due",
+        "last_review",
+    }
+    user_id = SqlAlchemySourceRepository(db_conn).get_by_id(UUID(source_id)).user_id
+    rows = db_conn.execute(
+        select(study_days.c.reviews_count, study_days.c.reading_updates).where(
+            study_days.c.user_id == user_id
+        )
+    ).all()
+    assert [(r.reviews_count, r.reading_updates) for r in rows] == [(1, 0)]
+
+
+def test_review_garbage_timezone_succeeds_and_credits_utc_day(
+    quiz_client: TestClient, db_conn: Connection
+) -> None:
+    # HOME-09: a garbage zone must not 4xx/5xx; the review is graded and the study day is
+    # credited on the UTC date.
+    source_id, csrf = _seed_ready_source(quiz_client, db_conn, "review-badtz@example.com")
+    item = _seed_item(db_conn, UUID(source_id))
+
+    before = datetime.now(UTC)
+    resp = _post_review(
+        quiz_client, item.id, {"rating": 3}, csrf=csrf, client_tz="Mars/Olympus"
+    )
+    after = datetime.now(UTC)
+
+    assert resp.status_code == 200, resp.text
+    user_id = SqlAlchemySourceRepository(db_conn).get_by_id(UUID(source_id)).user_id
+    row = db_conn.execute(
+        select(study_days.c.day, study_days.c.reviews_count).where(
+            study_days.c.user_id == user_id
+        )
+    ).one()
+    assert row.reviews_count == 1
+    assert row.day in {local_day(before, None), local_day(after, None)}
 
 
 @pytest.mark.parametrize("rating", [0, 5, -1])

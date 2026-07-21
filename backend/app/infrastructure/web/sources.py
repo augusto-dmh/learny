@@ -19,7 +19,7 @@ from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, Header, Query, UploadFile, status
 from pydantic import BaseModel
 
 from app.application.corpus import ReadSection, ReadSourceStructure
@@ -367,11 +367,16 @@ def put_reading_position(
     user: Annotated[User, Depends(get_authenticated_user)],
     service: Annotated[SaveReadingPosition, Depends(get_save_reading_position)],
     body: ReadingPositionWriteRequest,
+    client_tz: Annotated[str | None, Header(alias="X-Client-Timezone")] = None,
 ) -> ReadingPositionView:
     """Store the caller's reading position for a source (200); 404 unknown anchor/non-owner.
 
     Auth + CSRF/Origin like the notes mutations; no rate limit (AD-124). A bad anchor →
-    404 and nothing is stored; an alias normalizes to its canonical anchor on write.
+    404 and nothing is stored; an alias normalizes to its canonical anchor on write. The
+    optional ``X-Client-Timezone`` header sets the study-day boundary (silent UTC
+    fallback); it does not affect the response body.
     """
-    position = service(user=user, source_id=source_id, anchor=body.anchor)
+    position = service(
+        user=user, source_id=source_id, anchor=body.anchor, client_tz=client_tz
+    )
     return ReadingPositionView.from_position(position)

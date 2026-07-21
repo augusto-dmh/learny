@@ -17,7 +17,7 @@ fakes, asserting the spec ACs and edges without a DB:
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from uuid import uuid4
 
@@ -45,6 +45,7 @@ from tests.fakes import (
     FakeNoteRepository,
     FakeReadingPositionRepository,
     FakeSourceRepository,
+    FakeStudyDayRepository,
 )
 
 _NOW = datetime(2026, 7, 19, 12, 0, 0, tzinfo=UTC)
@@ -110,13 +111,14 @@ def _read_chapter(sources, corpus, positions) -> ReadChapter:  # noqa: ANN001
     )
 
 
-def _save_position(sources, corpus, positions) -> SaveReadingPosition:  # noqa: ANN001
+def _save_position(sources, corpus, positions, study_days=None) -> SaveReadingPosition:  # noqa: ANN001
     return SaveReadingPosition(
         sources=sources,
         corpus=corpus,
         positions=positions,
         authorize=AuthorizeOwnership(),
         clock=FakeClock(_NOW),
+        study_days=study_days if study_days is not None else FakeStudyDayRepository(),
     )
 
 
@@ -381,6 +383,88 @@ def test_save_reading_position_non_owner_raises_source_not_found() -> None:
             user=intruder, source_id=source.id, anchor="c1"
         )
     assert positions.upsert_calls == []
+
+
+# --- SaveReadingPosition study-day rollup (HOME-08/09) --------------------------
+
+
+def _seeded_reader() -> tuple[User, Source, FakeSourceRepository, FakeCorpusRepository]:
+    user = _user()
+    source = _source(user.id)
+    sources = FakeSourceRepository()
+    sources.add(source)
+    corpus = FakeCorpusRepository()
+    _seed_book(corpus, source.id)
+    return user, source, sources, corpus
+
+
+def _save_position_at(
+    now, study, sources, corpus, positions  # noqa: ANN001
+) -> SaveReadingPosition:
+    return SaveReadingPosition(
+        sources=sources,
+        corpus=corpus,
+        positions=positions,
+        authorize=AuthorizeOwnership(),
+        clock=FakeClock(now),
+        study_days=study,
+    )
+
+
+def test_save_reading_position_credits_a_reading_study_day() -> None:
+    # HOME-08: a saved position bumps reading_updates (not reviews) on the day of the
+    # clock instant (_NOW = 2026-07-19 UTC), no client zone supplied → UTC.
+    user, source, sources, corpus = _seeded_reader()
+    study = FakeStudyDayRepository()
+
+    _save_position(sources, corpus, FakeReadingPositionRepository(), study)(
+        user=user, source_id=source.id, anchor="c1"
+    )
+
+    assert study.record_calls == [(user.id, date(2026, 7, 19), 0, 1)]
+
+
+def test_save_reading_position_uses_client_timezone_for_the_study_day() -> None:
+    # HOME-09: at 23:30 UTC the client's Tokyo zone is already the next day (the 20th),
+    # so the credited day follows the client zone, not UTC.
+    user, source, sources, corpus = _seeded_reader()
+    study = FakeStudyDayRepository()
+    near_midnight = datetime(2026, 7, 19, 23, 30, 0, tzinfo=UTC)
+
+    _save_position_at(near_midnight, study, sources, corpus, FakeReadingPositionRepository())(
+        user=user, source_id=source.id, anchor="c1", client_tz="Asia/Tokyo"
+    )
+
+    assert study.record_calls == [(user.id, date(2026, 7, 20), 0, 1)]
+
+
+def test_save_reading_position_garbage_timezone_falls_back_to_utc() -> None:
+    # HOME-09: a garbage zone credits the UTC day (the 19th), never raises.
+    user, source, sources, corpus = _seeded_reader()
+    study = FakeStudyDayRepository()
+    near_midnight = datetime(2026, 7, 19, 23, 30, 0, tzinfo=UTC)
+
+    _save_position_at(near_midnight, study, sources, corpus, FakeReadingPositionRepository())(
+        user=user, source_id=source.id, anchor="c1", client_tz="Mars/Olympus"
+    )
+
+    assert study.record_calls == [(user.id, date(2026, 7, 19), 0, 1)]
+
+
+def test_save_reading_position_bad_anchor_credits_no_study_day() -> None:
+    # The study credit is on the success path only: a bad anchor 404s with nothing
+    # stored and no study day recorded.
+    user, source, sources, corpus = _seeded_reader()
+    study = FakeStudyDayRepository()
+    positions = FakeReadingPositionRepository()
+
+    with pytest.raises(CorpusNotFound):
+        _save_position(sources, corpus, positions, study)(
+            user=user, source_id=source.id, anchor="missing"
+        )
+
+    assert positions.upsert_calls == []
+    assert study.record_calls == []
 
 
 # --- ListSourceHighlights ------------------------------------------------------
