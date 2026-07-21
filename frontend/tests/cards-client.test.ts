@@ -15,8 +15,10 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   acceptCard,
+  acceptNoteCard,
   CardError,
   suggestCards,
+  suggestNoteCards,
   type Card,
   type CardSuggestion,
 } from "../app/lib/cards";
@@ -261,5 +263,125 @@ describe("acceptCard (CAP-05)", () => {
     expect(err).toBeInstanceOf(CardError);
     expect(err.kind).toBe("invalid");
     expect(err.message).toBe("Could not save this card.");
+  });
+});
+
+describe("suggestNoteCards (NL-08)", () => {
+  it("POSTs the note suggest path with the CSRF token and no highlight", async () => {
+    const fetchMock = fetchMockFn(async () =>
+      jsonResponse(200, { suggestions: [suggestion] }),
+    );
+
+    const result = await suggestNoteCards(
+      "n1",
+      "csrf-xyz",
+      fetchMock as unknown as typeof fetch,
+    );
+
+    expect(result).toEqual([suggestion]);
+    const [url, init] = fetchMock.mock.calls[0];
+    // The note is the whole source — addressed in the path, no anchor body.
+    expect(url).toBe("/api/notes/n1/cards/suggest");
+    expect(init.method).toBe("POST");
+    expect(init.credentials).toBe("same-origin");
+    expect(new Headers(init.headers).get("X-CSRF-Token")).toBe("csrf-xyz");
+  });
+
+  it("returns an empty list rather than an error when QC grounds nothing", async () => {
+    // "No cards could be grounded" is a normal 200 outcome, not a failure.
+    const fetchMock = fetchMockFn(async () => jsonResponse(200, { suggestions: [] }));
+
+    const result = await suggestNoteCards(
+      "n1",
+      "csrf-xyz",
+      fetchMock as unknown as typeof fetch,
+    );
+
+    expect(result).toEqual([]);
+  });
+
+  it("surfaces a readable, retryable error on a 502 provider failure", async () => {
+    const fetchMock = fetchMockFn(async () =>
+      jsonResponse(502, { detail: "The card generator is unavailable." }),
+    );
+
+    const err = await suggestNoteCards(
+      "n1",
+      "csrf-xyz",
+      fetchMock as unknown as typeof fetch,
+    ).catch((e) => e);
+
+    expect(err).toBeInstanceOf(CardError);
+    expect(err.kind).toBe("unknown");
+    expect(err.status).toBe(502);
+    expect(err.message).toBe("The card generator is unavailable.");
+  });
+});
+
+describe("acceptNoteCard (NL-09/NL-15)", () => {
+  const noteCard: Card = {
+    ...card,
+    id: "nc1",
+    source_id: null,
+    origin: "note",
+    note_anchor_id: null,
+  };
+
+  it("POSTs the note cards path and reports a fresh promote as created", async () => {
+    const fetchMock = fetchMockFn(async () => jsonResponse(201, noteCard));
+
+    const body = {
+      item_type: "free_recall",
+      question: "What schedules reviews?",
+      answer: "Spaced repetition",
+    };
+    const result = await acceptNoteCard(
+      "n1",
+      body,
+      "csrf-xyz",
+      fetchMock as unknown as typeof fetch,
+    );
+
+    expect(result.card).toEqual(noteCard);
+    expect(result.created).toBe(true);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/notes/n1/cards");
+    expect(init.method).toBe("POST");
+    expect(new Headers(init.headers).get("X-CSRF-Token")).toBe("csrf-xyz");
+    expect(JSON.parse(init.body as string)).toEqual(body);
+  });
+
+  it("reports an idempotent re-promote (200) as not created, returning the existing card", async () => {
+    // NL-15: promoting the same text twice returns the existing card with 200 — the
+    // caller must be able to tell this apart from a fresh 201 so its count stays honest.
+    const fetchMock = fetchMockFn(async () => jsonResponse(200, noteCard));
+
+    const result = await acceptNoteCard(
+      "n1",
+      { item_type: "free_recall", question: "q", answer: "a" },
+      "csrf-xyz",
+      fetchMock as unknown as typeof fetch,
+    );
+
+    expect(result.card.id).toBe("nc1");
+    expect(result.created).toBe(false);
+  });
+
+  it("raises an invalid CardError on a 422 empty or over-long text response", async () => {
+    const fetchMock = fetchMockFn(async () =>
+      jsonResponse(422, { detail: "Card text cannot be empty." }),
+    );
+
+    const err = await acceptNoteCard(
+      "n1",
+      { item_type: "free_recall", question: "", answer: "x" },
+      "csrf-xyz",
+      fetchMock as unknown as typeof fetch,
+    ).catch((e) => e);
+
+    expect(err).toBeInstanceOf(CardError);
+    expect(err.kind).toBe("invalid");
+    expect(err.status).toBe(422);
+    expect(err.message).toBe("Card text cannot be empty.");
   });
 });

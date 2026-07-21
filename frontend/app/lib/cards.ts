@@ -36,13 +36,14 @@ export type CardCitation = {
 
 /**
  * A persisted card, mirroring the backend `CardView`. `id` is the creation-minted
- * stable identity a `highlight` card keeps across every later edit, and
+ * stable identity a `highlight` or `note` card keeps across every later edit, and
  * `note_anchor_id` is the typed provenance back to the highlight it came from — it
- * goes `null` when that highlight's note is deleted while the card survives.
+ * goes `null` when that highlight's note is deleted while the card survives. A `note`
+ * card is source-less, so `source_id` is `null`.
  */
 export type Card = {
   id: string;
-  source_id: string;
+  source_id: string | null;
   origin: string;
   note_anchor_id: string | null;
   item_type: string;
@@ -57,6 +58,17 @@ export type Card = {
 /** The accept body, mirroring the backend `AcceptCardRequest`. */
 export type AcceptCardBody = {
   note_anchor_id: string;
+  item_type: string;
+  question: string;
+  answer: string;
+};
+
+/**
+ * The promote body, mirroring the backend `AcceptNoteCardRequest` (NL-09). The
+ * note→quiz mirror of `AcceptCardBody` without an anchor: the promoted note is
+ * named in the path, so it IS the whole source.
+ */
+export type AcceptNoteCardBody = {
   item_type: string;
   question: string;
   answer: string;
@@ -145,6 +157,65 @@ export async function acceptCard(
     throw await toCardError(res, "Could not save this card.");
   }
   return (await res.json()) as Card;
+}
+
+/**
+ * Ask for card candidates grounded in one owned note (200). The note IS the
+ * source, so there is no highlight to name — the note is addressed in the path and
+ * the body is empty. Like the highlight suggestion path, nothing is persisted: the
+ * candidates live in component state until the reader promotes one, so a reader who
+ * never accepts leaves no rows behind.
+ *
+ * State-changing per the backend (CSRF + quiz throttle), so it carries the CSRF
+ * token in `X-CSRF-Token`. An empty list is a normal outcome — the QC dropped every
+ * candidate as ungrounded ("no cards for this note") — not an error. A generation
+ * provider failure (502) surfaces as a `CardError` with kind `unknown`, carrying the
+ * backend detail so the caller can show a readable, retryable message.
+ */
+export async function suggestNoteCards(
+  noteId: string,
+  csrfToken: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<CardSuggestion[]> {
+  const res = await fetchImpl(`/api/notes/${noteId}/cards/suggest`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "content-type": "application/json", "X-CSRF-Token": csrfToken },
+  });
+  if (!res.ok) {
+    throw await toCardError(res, "Could not suggest cards for this note.");
+  }
+  const body = (await res.json()) as { suggestions: CardSuggestion[] };
+  return body.suggestions;
+}
+
+/**
+ * Promote one candidate to a scheduled `note` card (201), or resolve to the
+ * existing card on an idempotent re-promote (200, NL-15). The text is whatever the
+ * reader accepted — the candidate verbatim or their own edit of it.
+ *
+ * Returns the card plus a `created` flag so the caller can keep an honest count of
+ * the note's cards: re-promoting the same text returns the same card with `created`
+ * false rather than duplicating it, so a caller that dedups on the card id (or on
+ * this flag) never over-counts. Empty or over-long text surfaces as a `CardError`
+ * with kind `invalid` (422).
+ */
+export async function acceptNoteCard(
+  noteId: string,
+  body: AcceptNoteCardBody,
+  csrfToken: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ card: Card; created: boolean }> {
+  const res = await fetchImpl(`/api/notes/${noteId}/cards`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "content-type": "application/json", "X-CSRF-Token": csrfToken },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    throw await toCardError(res, "Could not add this card to review.");
+  }
+  return { card: (await res.json()) as Card, created: res.status === 201 };
 }
 
 /**

@@ -176,6 +176,18 @@ describe("NoteDetailScreen (NF-13/14)", () => {
     await waitFor(() => expect(save.disabled).toBe(true));
   });
 
+  it("offers the note→review promotion affordance once the note has loaded", async () => {
+    // The panel is wired in but idle: it must not fetch on mount (the routed fetch
+    // throws on any unregistered call), so a stray suggest here would fail the test.
+    vi.stubGlobal("fetch", routedFetch(loadHandlers()));
+
+    render(<NoteDetailScreen noteId="n1" />);
+
+    expect(
+      await screen.findByRole("button", { name: "Add to review" }),
+    ).toBeTruthy();
+  });
+
   it("toggles a Markdown preview of the body", async () => {
     vi.stubGlobal("fetch", routedFetch(loadHandlers()));
 

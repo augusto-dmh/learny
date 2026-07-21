@@ -34,6 +34,7 @@ import {
   type NoteDetail,
 } from "@/app/lib/notes";
 import { AnchorStatusBadge } from "@/app/components/notes/anchor-status-badge";
+import { NoteCardSuggestions } from "@/app/components/notes/note-card-suggestions";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -294,6 +295,17 @@ export function NoteDetailScreen({
           </Button>
         )}
       </div>
+
+      {csrf ? (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Review</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <NoteCardSuggestions noteId={noteId} csrf={csrf} />
+          </CardContent>
+        </Card>
+      ) : null}
 
       <Card>
         <CardHeader>
