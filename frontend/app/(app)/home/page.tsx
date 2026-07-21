@@ -8,11 +8,15 @@
  */
 
 import { HomeScreen } from "@/app/components/home-screen";
+import { InkLine } from "@/app/components/ink-line";
 
 export default function HomePage() {
   return (
     <main className="flex-1 p-6">
-      <h1 className="mb-6 text-2xl font-semibold">Home</h1>
+      <header className="mb-6 space-y-2">
+        <h1 className="text-2xl font-semibold">Home</h1>
+        <InkLine />
+      </header>
       <HomeScreen />
     </main>
   );

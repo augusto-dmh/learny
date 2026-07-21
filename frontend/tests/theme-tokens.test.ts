@@ -56,6 +56,8 @@ const PINNED: [name: string, lightHex: string, darkHex: string][] = [
   ["border", "#DDE2E4", "#263340"],
   ["primary", "#22557A", "#6FA9CC"],
   ["primary-foreground", "#F4F8FA", "#0E1A22"],
+  // POL-07 — destructive is identity oxblood, hex so the AA gate can see it.
+  ["destructive", "#9E3B34", "#E08D85"],
 ];
 
 // IDF-03 AC1 — warm marker highlights on the cool field, both modes.
@@ -88,6 +90,8 @@ const AA_PAIRS: [fg: string, bg: string][] = [
   ["accent-foreground", "accent"],
   ["muted-foreground", "background"],
   ["muted-foreground", "muted"],
+  // POL-07 — destructive's dominant usage is error text on the field.
+  ["destructive", "background"],
   ["sidebar-foreground", "sidebar"],
   ["sidebar-primary-foreground", "sidebar-primary"],
   ["sidebar-accent-foreground", "sidebar-accent"],
@@ -103,6 +107,60 @@ describe.each([
     expect(fgHex).toMatch(/^#[0-9A-F]{6}$/);
     expect(bgHex).toMatch(/^#[0-9A-F]{6}$/);
     expect(contrast(fgHex, bgHex)).toBeGreaterThanOrEqual(4.5);
+  });
+});
+
+// POL-01..03 — the chart tokens are an Iron Gall sequential ramp (the heatmap
+// is their consumer), pinned in both modes. Intensity is monotonic in the
+// mode-appropriate direction and the ramp top clears the non-text UI contrast
+// threshold against the field.
+const CHARTS: [name: string, lightHex: string, darkHex: string][] = [
+  ["chart-1", "#D7E3EC", "#22384A"],
+  ["chart-2", "#B3CCDD", "#2E4C63"],
+  ["chart-3", "#82A9C3", "#3F6885"],
+  ["chart-4", "#4F7EA3", "#5588AB"],
+  ["chart-5", "#22557A", "#6FA9CC"],
+];
+
+describe("chart ramp", () => {
+  it.each(CHARTS)("pins --%s in both modes", (name, lightHex, darkHex) => {
+    expect(token(light, name)).toBe(lightHex);
+    expect(token(dark, name)).toBe(darkHex);
+  });
+
+  it("tops the ramp at the mode's primary", () => {
+    expect(token(light, "chart-5")).toBe(token(light, "primary"));
+    expect(token(dark, "chart-5")).toBe(token(dark, "primary"));
+  });
+
+  // POL-02 — heatmap levels 1..4 map to --chart-2..5: darker with level in
+  // light, lighter with level in dark, strictly monotonic.
+  it("darkens strictly with intensity in light mode", () => {
+    const ramp = ["chart-2", "chart-3", "chart-4", "chart-5"].map((name) =>
+      luminance(token(light, name)),
+    );
+    for (let i = 1; i < ramp.length; i++) {
+      expect(ramp[i]).toBeLessThan(ramp[i - 1]);
+    }
+  });
+
+  it("lightens strictly with intensity in dark mode", () => {
+    const ramp = ["chart-2", "chart-3", "chart-4", "chart-5"].map((name) =>
+      luminance(token(dark, name)),
+    );
+    for (let i = 1; i < ramp.length; i++) {
+      expect(ramp[i]).toBeGreaterThan(ramp[i - 1]);
+    }
+  });
+
+  // POL-03 — WCAG non-text UI component threshold for the strongest cell.
+  it.each([
+    ["light", light],
+    ["dark", dark],
+  ] as const)("keeps --chart-5 >= 3:1 against --background (%s)", (_mode, block) => {
+    expect(
+      contrast(token(block, "chart-5"), token(block, "background")),
+    ).toBeGreaterThanOrEqual(3);
   });
 });
 
@@ -152,6 +210,61 @@ describe("paper reading appearance", () => {
     for (const [, hex] of PAPER) {
       expect(light).not.toContain(hex);
       expect(dark).not.toContain(hex);
+    }
+  });
+
+  // POL-05 — the warm surface is a second reading ground and must hold AA on
+  // its own: paper ink on every paper field it can sit on.
+  it.each([
+    ["foreground", "background"],
+    ["foreground", "card"],
+    ["foreground", "popover"],
+    ["muted-foreground", "background"],
+  ])("keeps paper --%s on paper --%s >= 4.5:1", (fg, bg) => {
+    const paper = cssBlock(PAPER_SELECTOR);
+    expect(contrast(token(paper, fg), token(paper, bg))).toBeGreaterThanOrEqual(
+      4.5,
+    );
+  });
+});
+
+// POL-06 — highlight legibility: the inline mark keeps the prose ink
+// (`color: inherit`), so the ink of every ground that can render a highlight
+// must hold AA over the yellow wash of that ground's mode.
+describe("highlight legibility", () => {
+  const paper = cssBlock('html:not(.dark) [data-appearance="paper"]');
+
+  it.each([
+    ["light foreground", token(light, "foreground"), token(light, "highlight-yellow")],
+    ["paper foreground", token(paper, "foreground"), token(light, "highlight-yellow")],
+    ["dark foreground", token(dark, "foreground"), token(dark, "highlight-yellow")],
+  ])("keeps %s >= 4.5:1 over the highlight wash", (_ground, ink, wash) => {
+    expect(contrast(ink, wash)).toBeGreaterThanOrEqual(4.5);
+  });
+});
+
+// POL-12 — the dialog/sheet scrim is a theme-aware token: an ink-tinted wash
+// in light, a materially stronger black in dark (a 10% scrim was near-invisible
+// over the night palette). The primitives draw it via the bridged utility and
+// never a raw palette class.
+describe("overlay scrim", () => {
+  it("defines distinct mode-appropriate scrims", () => {
+    expect(token(light, "overlay")).toBe("RGB(27 39 51 / 0.15)");
+    expect(token(dark, "overlay")).toBe("RGB(0 0 0 / 0.55)");
+  });
+
+  it("bridges the overlay token into the theme so the utility exists", () => {
+    expect(css).toContain("--color-overlay: var(--overlay);");
+  });
+
+  it("scrims the dialog and sheet from the token, with no raw black left", () => {
+    for (const file of ["dialog.tsx", "sheet.tsx"]) {
+      const source = readFileSync(join(root, "components", "ui", file), "utf8");
+      expect(source, `${file} uses the token`).toContain("bg-overlay");
+    }
+    for (const entry of readdirSync(join(root, "components", "ui"))) {
+      const source = readFileSync(join(root, "components", "ui", entry), "utf8");
+      expect(source, `${entry} has no raw black scrim`).not.toContain("bg-black/");
     }
   });
 });

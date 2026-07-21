@@ -15,6 +15,7 @@
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense } from "react";
 
+import { InkLine } from "@/app/components/ink-line";
 import { ReviewScreen } from "@/app/components/review-screen";
 
 function ReviewSession() {
@@ -32,7 +33,10 @@ function ReviewSession() {
 export default function ReviewPage() {
   return (
     <main className="flex-1 p-6">
-      <h1 className="mb-6 text-2xl font-semibold">Review</h1>
+      <header className="mb-6 space-y-2">
+        <h1 className="text-2xl font-semibold">Review</h1>
+        <InkLine />
+      </header>
       <Suspense fallback={<p className="text-muted-foreground">Loading…</p>}>
         <ReviewSession />
       </Suspense>

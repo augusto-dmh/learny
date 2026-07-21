@@ -43,6 +43,7 @@
     --color-highlight-cyan: var(--highlight-cyan);
     --color-highlight-violet: var(--highlight-violet);
     --color-highlight-green: var(--highlight-green);
+    --color-overlay: var(--overlay);
     --radius-sm: calc(var(--radius) * 0.6);
     --radius-md: calc(var(--radius) * 0.8);
     --radius-lg: var(--radius);
@@ -73,15 +74,15 @@
     --muted-foreground: #5D6B76;
     --accent: #E3ECF2;
     --accent-foreground: #1B2733;
-    --destructive: oklch(0.577 0.245 27.325);
+    --destructive: #9E3B34;
     --border: #DDE2E4;
     --input: #DDE2E4;
     --ring: #22557A;
-    --chart-1: oklch(0.87 0 0);
-    --chart-2: oklch(0.556 0 0);
-    --chart-3: oklch(0.439 0 0);
-    --chart-4: oklch(0.371 0 0);
-    --chart-5: oklch(0.269 0 0);
+    --chart-1: #D7E3EC;
+    --chart-2: #B3CCDD;
+    --chart-3: #82A9C3;
+    --chart-4: #4F7EA3;
+    --chart-5: #22557A;
     --radius: 0.25rem;
     --sidebar: #F1F3F3;
     --sidebar-foreground: #1B2733;
@@ -95,6 +96,7 @@
     --highlight-cyan: #C2DEE8;
     --highlight-violet: #D6D0EC;
     --highlight-green: #C9DFCF;
+    --overlay: rgb(27 39 51 / 0.15);
 }
 
 .dark {
@@ -112,15 +114,15 @@
     --muted-foreground: #7F93A0;
     --accent: #223546;
     --accent-foreground: #D9E2E8;
-    --destructive: oklch(0.704 0.191 22.216);
+    --destructive: #E08D85;
     --border: #263340;
     --input: #263340;
     --ring: #6FA9CC;
-    --chart-1: oklch(0.87 0 0);
-    --chart-2: oklch(0.556 0 0);
-    --chart-3: oklch(0.439 0 0);
-    --chart-4: oklch(0.371 0 0);
-    --chart-5: oklch(0.269 0 0);
+    --chart-1: #22384A;
+    --chart-2: #2E4C63;
+    --chart-3: #3F6885;
+    --chart-4: #5588AB;
+    --chart-5: #6FA9CC;
     --sidebar: #131C22;
     --sidebar-foreground: #D9E2E8;
     --sidebar-primary: #6FA9CC;
@@ -133,14 +135,15 @@
     --highlight-cyan: #1F3F4A;
     --highlight-violet: #37315D;
     --highlight-green: #26412F;
+    --overlay: rgb(0 0 0 / 0.55);
 }
 
 /*
  * Paper reading appearance (ADR-027): a warm reading surface for the reader
  * container only — token overrides cascade no further than the attributed
  * element. The html:not(.dark) guard makes dark mode ignore the layer
- * entirely; dark stays Iron Gall. No toggle ships yet: the Aa popover wires
- * data-appearance in a later cycle.
+ * entirely; dark stays Iron Gall. The Aa popover (reading-controls) wires
+ * data-appearance onto the reader container via use-reading-settings.
  */
 html:not(.dark) [data-appearance="paper"] {
     --background: #F4EFE5;

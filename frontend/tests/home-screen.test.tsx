@@ -90,6 +90,8 @@ describe("ContinueHero (HOME-02/03)", () => {
     expect(
       screen.getByRole("link", { name: "Resume" }).getAttribute("href"),
     ).toBe("/sources/s1/read");
+    // POL-10 — the ink-line fill encodes the same percent the text shows.
+    expect(screen.getByTestId("ink-line-fill").style.width).toBe("42.5%");
   });
 
   it("shows a pick-a-book empty state linking the bookshelf when nothing is in progress (HOME-02)", async () => {
@@ -108,6 +110,8 @@ describe("ContinueHero (HOME-02/03)", () => {
     // The empty hero shows no resume affordance and no fabricated book.
     expect(screen.queryByTestId("hero-title")).toBeNull();
     expect(screen.queryByRole("link", { name: "Resume" })).toBeNull();
+    // POL-10 edge — nothing to encode, so no progress fill renders.
+    expect(screen.queryByTestId("ink-line-fill")).toBeNull();
   });
 });
 
