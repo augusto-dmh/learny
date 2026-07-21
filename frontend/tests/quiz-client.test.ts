@@ -19,6 +19,7 @@ import {
   getDueReviews,
   getQuizOverview,
   quizExportUrl,
+  resetSchedule,
   submitReview,
   type DueItem,
   type DueQueue,
@@ -76,6 +77,7 @@ const dueItem: DueItem = {
   provenance: null,
   status: "active",
   due: "2026-07-16T00:00:00Z",
+  note_changed: false,
 };
 
 const dueQueue: DueQueue = { items: [dueItem], total_due: 12 };
@@ -341,5 +343,34 @@ describe("submitReview (E1)", () => {
 describe("quizExportUrl (E1)", () => {
   it("builds the same-origin export URL for a source (no fetch)", () => {
     expect(quizExportUrl("s1")).toBe("/api/sources/s1/quiz/export");
+  });
+});
+
+describe("resetSchedule (NL-12)", () => {
+  it("POSTs the schedule-reset path with the CSRF token and passes fresh scheduling through", async () => {
+    const fetchMock = fetchMockFn(async () => jsonResponse(200, scheduling));
+
+    const result = await resetSchedule(
+      "i1",
+      "csrf-xyz",
+      fetchMock as unknown as typeof fetch,
+    );
+
+    expect(result).toEqual(scheduling);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/quiz-items/i1/schedule-reset");
+    expect(init.method).toBe("POST");
+    expect(init.credentials).toBe("same-origin");
+    expect(new Headers(init.headers).get("X-CSRF-Token")).toBe("csrf-xyz");
+  });
+
+  it("surfaces the backend detail on a 409 non-active response", async () => {
+    const fetchMock = fetchMockFn(async () =>
+      jsonResponse(409, { detail: "This card is not active." }),
+    );
+
+    await expect(
+      resetSchedule("i1", "csrf-xyz", fetchMock as unknown as typeof fetch),
+    ).rejects.toThrow("This card is not active.");
   });
 });

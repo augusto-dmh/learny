@@ -71,10 +71,15 @@ export type CardProvenance = {
  * (CAP-16). It is explicitly `null` for a deck-generated card and for one whose
  * origin note has since been deleted — the card outlives its note, so review must
  * render either way.
+ *
+ * `source_id` is `null` for a source-less `note` card (AD-149); `source_title` is
+ * then the constant "Your notes" and there is no book to open. `note_changed` is
+ * the "your note changed" badge (NL-12): true when the origin note changed since
+ * this card was last reviewed or created — always `false` for deck/highlight cards.
  */
 export type DueItem = {
   id: string;
-  source_id: string;
+  source_id: string | null;
   source_title: string;
   item_type: string;
   question: string;
@@ -83,6 +88,7 @@ export type DueItem = {
   provenance: CardProvenance | null;
   status: string;
   due: string;
+  note_changed: boolean;
 };
 
 /** The due queue response, mirroring the backend `DueQueueView`. */
@@ -198,6 +204,32 @@ export async function submitReview(
   });
   if (!res.ok) {
     throw await toQuizError(res, "Could not submit your review.");
+  }
+  return (await res.json()) as Scheduling;
+}
+
+/**
+ * Reset one note-derived card's schedule to its fresh initial state and retire its
+ * "your note changed" badge (200), returning the refreshed scheduling. This is the
+ * ONLY non-review path that changes scheduling (NL-12): it exists so a reader can
+ * deliberately relearn a card whose note was revised, and it must never fire except
+ * from the explicit reset action. State-changing, so it carries the session-bound
+ * CSRF token in `X-CSRF-Token` (AD-007). The append-only review log is untouched.
+ * On a non-OK response (404 missing/non-owned, 409 non-active) the backend `detail`
+ * is surfaced via `toQuizError`.
+ */
+export async function resetSchedule(
+  itemId: string,
+  csrfToken: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<Scheduling> {
+  const res = await fetchImpl(`/api/quiz-items/${itemId}/schedule-reset`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrfToken },
+  });
+  if (!res.ok) {
+    throw await toQuizError(res, "Could not reset this card's schedule.");
   }
   return (await res.json()) as Scheduling;
 }
