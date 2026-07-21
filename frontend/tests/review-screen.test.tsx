@@ -510,9 +510,9 @@ describe("ReviewScreen note-changed badge and reset (NL-12/NL-13)", () => {
     render(<ReviewScreen />);
     await screen.findByTestId("question");
 
-    fireEvent.click(screen.getByRole("button", { name: "Reset schedule" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Reset schedule" }));
     // The reset is confirm-gated: declining must not call the endpoint (NL-12).
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
 
     expect(resets).toBe(0);
     // The badge stands — nothing was reset.
@@ -537,8 +537,8 @@ describe("ReviewScreen note-changed badge and reset (NL-12/NL-13)", () => {
     render(<ReviewScreen />);
     await screen.findByTestId("question");
 
-    fireEvent.click(screen.getByRole("button", { name: "Reset schedule" }));
-    fireEvent.click(screen.getByRole("button", { name: "Confirm reset" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Reset schedule" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Confirm reset" }));
 
     // The endpoint fired exactly once and the badge retired to reflect the reset.
     await waitFor(() => expect(resets).toBe(1));
