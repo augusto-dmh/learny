@@ -18,13 +18,20 @@ callables injected, so the committed skip path never touches a provider (DEEP-03
 
 from __future__ import annotations
 
+import json
+import os
 import re
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any, Protocol
+from uuid import uuid4
 
 import yaml
 from sqlalchemy import Connection, select
 
+from app.eval.judge import _git_sha
 from app.infrastructure.db.metadata import (
     corpus_chunks,
     corpus_documents,
@@ -266,3 +273,167 @@ def resolve_case(
     return ResolvedCase(
         case=case, source_id=str(source_id), expected_chunk_ids=tuple(chunk_ids)
     )
+
+
+# --- Per-case execution + JSONL results ----------------------------------------
+
+
+class _Evidence(Protocol):
+    """The retrieved-chunk slice the runner reads (matches ``domain.Evidence``)."""
+
+    chunk_id: Any
+    snippet: str
+    anchor: str
+
+
+class _Answer(Protocol):
+    """The generation slice the runner reads (matches ``domain.GeneratedAnswer``)."""
+
+    text: str
+    cited_chunk_ids: Sequence[Any]
+    model: str
+    found: bool
+
+
+@dataclass(frozen=True)
+class SilverJudgement:
+    """One case's judge scores — the shape ``run_silver_case`` records on the line.
+
+    The live runner composes the two :class:`~app.eval.judge.Judge` calls
+    (faithfulness ratio + relevancy 1-5) into this; fakes build it directly.
+    """
+
+    faithfulness: float
+    relevancy: int
+    model: str
+    prompt_hash: str
+
+
+# Injected callables (the runner wires real adapters; tests wire fakes).
+Retrieve = Callable[["ResolvedCase"], Sequence[_Evidence]]
+Generate = Callable[[str, Sequence[_Evidence]], _Answer]
+JudgeCall = Callable[[str, Sequence[_Evidence], _Answer], SilverJudgement]
+
+
+def _now_iso(now: datetime | None) -> str:
+    return (now or datetime.now(UTC)).isoformat()
+
+
+def _base_line(case: SilverCase, now: datetime | None) -> dict[str, Any]:
+    """The identity fields every silver result line carries (checksum-keyed, AD-162)."""
+    return {
+        "case_id": case.case_id,
+        "ts": _now_iso(now),
+        "tier": "silver",
+        "source_checksum": case.source_checksum,
+        "language": case.language,
+    }
+
+
+def _citation_valid(answer: _Answer, retrieved_ids: set[str]) -> bool:
+    """A found answer must cite only retrieved chunks; a decline must cite nothing."""
+    cited = {str(c) for c in answer.cited_chunk_ids}
+    if not answer.found:
+        return not cited
+    return bool(cited) and cited <= retrieved_ids
+
+
+def run_silver_case(
+    resolved: ResolvedCase,
+    *,
+    retrieve: Retrieve,
+    generate: Generate,
+    judge: JudgeCall,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Retrieve -> generate -> judge one resolved case; return its JSONL result line.
+
+    Status ``ok`` on success, ``error`` when any injected step raises (a provider
+    5xx or a malformed judge output surfaces as a visible error line, never a
+    silent score — DEEP-17/20). Empty retrieval is *not* an error: the case is
+    still generated and judged, with ``retrieved_empty`` flagged (DEEP-19). No book
+    text is written — only ids, scores, and flags.
+    """
+    line = _base_line(resolved.case, now)
+    line["source_id"] = resolved.source_id
+    try:
+        evidence = list(retrieve(resolved))
+        answer = generate(resolved.case.question, evidence)
+        judgement = judge(resolved.case.question, evidence, answer)
+        faithfulness = float(judgement.faithfulness)
+        relevancy = int(judgement.relevancy)
+        judge_model = str(judgement.model)
+        judge_prompt_hash = str(judgement.prompt_hash)
+        generation_model = str(answer.model)
+    except Exception as exc:  # noqa: BLE001 — any step failing becomes a visible error line
+        return {**line, "status": "error", "error": f"{type(exc).__name__}: {exc}"}
+
+    retrieved_ids = {str(item.chunk_id) for item in evidence}
+    return {
+        **line,
+        "status": "ok",
+        "generation_model": generation_model,
+        "judge_model": judge_model,
+        "prompt_hash": judge_prompt_hash,
+        "faithfulness": faithfulness,
+        "relevancy": relevancy,
+        "citation_valid": _citation_valid(answer, retrieved_ids),
+        "retrieved_empty": not evidence,
+        "expected_chunk_hit": bool(retrieved_ids & set(resolved.expected_chunk_ids)),
+    }
+
+
+def skipped_result(skipped: SkippedCase, *, now: datetime | None = None) -> dict[str, Any]:
+    """A result line for a case whose book is absent (status ``skipped``, DEEP-02)."""
+    return {**_base_line(skipped.case, now), "status": "skipped", "reason": skipped.reason}
+
+
+def broken_result(broken: BrokenCase, *, now: datetime | None = None) -> dict[str, Any]:
+    """A result line for a case whose anchor no longer resolves (status ``broken``, DEEP-18)."""
+    return {
+        **_base_line(broken.case, now),
+        "source_id": broken.source_id,
+        "status": "broken",
+        "anchor": broken.anchor,
+    }
+
+
+def write_silver_results(
+    lines: Sequence[dict[str, Any]],
+    *,
+    results_dir: Path = SILVER_RESULTS_DIR,
+    git_sha: str | None = None,
+    now: datetime | None = None,
+) -> Path:
+    """Write ``lines`` to a **fresh** JSONL file under ``results_dir``; return its path.
+
+    A per-run uuid suffix makes every run its own file, so a rerun never mutates a
+    prior results file (DEEP-20) — the file is opened exclusively (``x``) so a name
+    collision is a hard error, not a silent append.
+    """
+    results_dir.mkdir(parents=True, exist_ok=True)
+    stamp = (now or datetime.now(UTC)).strftime("%Y-%m-%dT%H%M%S")
+    sha = git_sha if git_sha is not None else _git_sha()
+    path = results_dir / f"{stamp}-{sha}-{uuid4().hex[:8]}.jsonl"
+    with path.open("x", encoding="utf-8") as handle:
+        for line in lines:
+            handle.write(json.dumps(line, sort_keys=True) + "\n")
+    return path
+
+
+def silver_run_skip_reason(*, cases_path: Path = SILVER_CASES_PATH) -> str | None:
+    """Why the committed live runner must self-skip, or ``None`` when it can run.
+
+    The runner checks this at module import so CI and fresh clones skip *before*
+    importing any provider SDK (DEEP-03): no local cases file, or a missing key /
+    DB url, each yields a reason.
+    """
+    if not cases_path.exists():
+        return f"no silver cases at {cases_path} — local silver tier not present"
+    if not os.getenv("LEARNY_ANTHROPIC_API_KEY"):
+        return "LEARNY_ANTHROPIC_API_KEY unset — live silver run skipped"
+    if not os.getenv("LEARNY_OPENAI_API_KEY"):
+        return "LEARNY_OPENAI_API_KEY unset — live silver run skipped"
+    if not os.getenv("LEARNY_DATABASE_URL"):
+        return "LEARNY_DATABASE_URL unset — no corpus DB to resolve against"
+    return None
