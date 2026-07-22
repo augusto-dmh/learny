@@ -300,6 +300,34 @@ def test_skip_reason_when_a_key_is_missing(tmp_path: Path, monkeypatch: pytest.M
     assert "ANTHROPIC" in reason
 
 
+def test_skip_reason_when_openai_key_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cases = tmp_path / "cases.yaml"
+    cases.write_text("cases: []", encoding="utf-8")
+    monkeypatch.setenv("LEARNY_ANTHROPIC_API_KEY", "x")
+    monkeypatch.setenv("LEARNY_DATABASE_URL", "x")
+    monkeypatch.delenv("LEARNY_OPENAI_API_KEY", raising=False)
+
+    reason = silver_run_skip_reason(cases_path=cases)
+    assert reason is not None
+    assert "OPENAI" in reason
+
+
+def test_skip_reason_when_database_url_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cases = tmp_path / "cases.yaml"
+    cases.write_text("cases: []", encoding="utf-8")
+    monkeypatch.setenv("LEARNY_ANTHROPIC_API_KEY", "x")
+    monkeypatch.setenv("LEARNY_OPENAI_API_KEY", "x")
+    monkeypatch.delenv("LEARNY_DATABASE_URL", raising=False)
+
+    reason = silver_run_skip_reason(cases_path=cases)
+    assert reason is not None
+    assert "DATABASE_URL" in reason
+
+
 def test_skip_reason_none_when_data_keys_and_db_present(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
