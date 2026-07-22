@@ -105,28 +105,28 @@ The eval harness (RFC-003 Cycle B) gates only a synthetic, lexically-disjoint go
 
 | Requirement ID | Story | Phase | Status |
 | --- | --- | --- | --- |
-| DEEP-01 | P1 silver: runner resolves checksum+anchor, runs, appends JSONL | Design | Pending |
-| DEEP-02 | P1 silver: missing-book case → per-case skip | Design | Pending |
-| DEEP-03 | P1 silver: absent data → clean self-skip, no provider call | Design | Pending |
-| DEEP-04 | P1 silver: 10–20 cases, ≥3 books, both languages | Design | Pending |
-| DEEP-05 | P1 silver: nothing under evals/silver/ tracked | Design | Pending |
-| DEEP-06 | P1 rubric: 5 exemplars, prompt_hash changes | Design | Pending |
-| DEEP-07 | P1 rubric: recalibration baselines recorded in calibration doc | Design | Pending |
-| DEEP-08 | P1 rubric: RELEVANCY_MIN + pinning test updated together | Design | Pending |
-| DEEP-09 | P1 rubric: deterministic suite green without keys | Design | Pending |
-| DEEP-10 | P2 judge A/B: both judges over identical outputs, persisted | Design | Pending |
-| DEEP-11 | P2 judge A/B: distributions + agreement + recommendation in doc | Design | Pending |
-| DEEP-12 | P2 judge A/B: judge_model unchanged absent material disagreement | Design | Pending |
-| DEEP-13 | P2 gen A/B: both models, identical cases + evidence, judged | Design | Pending |
-| DEEP-14 | P2 gen A/B: research doc with metrics split + explicit decision | Design | Pending |
-| DEEP-15 | P2 gen A/B: config default matches the decision | Design | Pending |
-| DEEP-16 | P2 gen A/B: no long copyrighted quotes in the doc | Design | Pending |
-| DEEP-17 | Edge: malformed judge output → visible error line | Design | Pending |
-| DEEP-18 | Edge: broken anchor → broken (not skip) | Design | Pending |
-| DEEP-19 | Edge: empty retrieval → still generated+judged, flagged | Design | Pending |
-| DEEP-20 | Edge: mid-run failure → completed results survive, rerun safe | Design | Pending |
+| DEEP-01 | P1 silver: runner resolves checksum+anchor, runs, appends JSONL | Done | Verified |
+| DEEP-02 | P1 silver: missing-book case → per-case skip | Done | Verified |
+| DEEP-03 | P1 silver: absent data → clean self-skip, no provider call | Done | Verified |
+| DEEP-04 | P1 silver: 10–20 cases, ≥3 books, both languages | Done | Verified |
+| DEEP-05 | P1 silver: nothing under evals/silver/ tracked | Done | Verified |
+| DEEP-06 | P1 rubric: 5 exemplars, prompt_hash changes | Done | Verified |
+| DEEP-07 | P1 rubric: recalibration baselines recorded in calibration doc | Done | Verified |
+| DEEP-08 | P1 rubric: RELEVANCY_MIN + pinning test updated together | Done | Verified |
+| DEEP-09 | P1 rubric: deterministic suite green without keys | Done | Verified |
+| DEEP-10 | P2 judge A/B: both judges over identical outputs, persisted | Done | Verified |
+| DEEP-11 | P2 judge A/B: distributions + agreement + recommendation in doc | Done | Verified |
+| DEEP-12 | P2 judge A/B: judge_model unchanged absent material disagreement | Done | Verified |
+| DEEP-13 | P2 gen A/B: both models, identical cases + evidence, judged | Done | Verified |
+| DEEP-14 | P2 gen A/B: research doc with metrics split + explicit decision | Done | Verified |
+| DEEP-15 | P2 gen A/B: config default matches the decision | Done | Verified |
+| DEEP-16 | P2 gen A/B: no long copyrighted quotes in the doc | Done | Verified |
+| DEEP-17 | Edge: malformed judge output → visible error line | Done | Verified |
+| DEEP-18 | Edge: broken anchor → broken (not skip) | Done | Verified |
+| DEEP-19 | Edge: empty retrieval → still generated+judged, flagged | Done | Verified |
+| DEEP-20 | Edge: mid-run failure → completed results survive, rerun safe | Done | Verified |
 
-**Coverage:** 20 total, 0 mapped to tasks (pre-design).
+**Coverage:** 20 total, 20 mapped to tasks, 20 Verified (validation.md, 2026-07-22).
 
 ## Success Criteria
 
