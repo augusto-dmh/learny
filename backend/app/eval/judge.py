@@ -290,7 +290,7 @@ def answerability_prompt_hash() -> str:
     return hashlib.sha256(ANSWERABILITY_PROMPT_PATH.read_bytes()).hexdigest()
 
 
-def _git_sha() -> str:
+def git_sha_of_head() -> str:
     """Short git sha for the results filename / line; env first, then git, else 'unknown'."""
     env_sha = os.getenv("GITHUB_SHA")
     if env_sha:
@@ -328,7 +328,7 @@ def run_eval(
     if gate is None:
         gate = os.getenv("LEARNY_EVAL_GATE") == "1"
 
-    git_sha = _git_sha()
+    git_sha = git_sha_of_head()
     phash = prompt_hash()
     capped = list(inputs[:max_cases])
     lines: list[dict[str, Any]] = []
@@ -374,7 +374,7 @@ def run_answerability_eval(
     (calibration-first, research §5/§8): the nightly records the JSONL as the eval
     dashboard; no aggregate gate is asserted. Returns the written lines.
     """
-    git_sha = _git_sha()
+    git_sha = git_sha_of_head()
     phash = answerability_prompt_hash()
     capped = list(inputs[:max_cases])
     lines: list[dict[str, Any]] = []

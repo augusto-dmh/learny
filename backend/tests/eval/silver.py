@@ -31,7 +31,7 @@ from uuid import uuid4
 import yaml
 from sqlalchemy import Connection, select
 
-from app.eval.judge import _git_sha
+from app.eval.judge import git_sha_of_head
 from app.infrastructure.db.metadata import (
     corpus_chunks,
     corpus_documents,
@@ -413,7 +413,7 @@ def write_silver_results(
     """
     results_dir.mkdir(parents=True, exist_ok=True)
     stamp = (now or datetime.now(UTC)).strftime("%Y-%m-%dT%H%M%S")
-    sha = git_sha if git_sha is not None else _git_sha()
+    sha = git_sha if git_sha is not None else git_sha_of_head()
     path = results_dir / f"{stamp}-{sha}-{uuid4().hex[:8]}.jsonl"
     with path.open("x", encoding="utf-8") as handle:
         for line in lines:
