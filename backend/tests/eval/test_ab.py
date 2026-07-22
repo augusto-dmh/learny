@@ -160,12 +160,12 @@ def test_relevancy_mean_excludes_declined_lines():
     agg = aggregate(
         [
             _silver("s1", faithfulness=1.0, relevancy=4, found=True),
-            _silver("s2", faithfulness=1.0, relevancy=1, found=False),
+            _silver("s2", faithfulness=0.5, relevancy=1, found=False),
         ]
     )
     assert agg.silver.answered == 1
     assert agg.silver.mean_relevancy == 4.0  # only the answered line
-    assert agg.silver.mean_faithfulness == 1.0  # both lines
+    assert agg.silver.mean_faithfulness == 0.75  # both lines — excluding the decline would give 1.0
 
 
 def test_not_found_discipline_is_correct_declines_over_expected_not_found():
