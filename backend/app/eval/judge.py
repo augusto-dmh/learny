@@ -41,17 +41,24 @@ ANSWERABILITY_PROMPT_PATH = _HERE / "prompts" / "answerability.md"
 # non-streaming guard so the fake client stays a plain object.
 _JUDGE_MAX_TOKENS = 1024
 
-# Aggregate gate thresholds — asserted only when LEARNY_EVAL_GATE=1. Calibrated
-# 2026-07-18 from five keyed seed runs of the live judge tier (generation
-# claude-sonnet-5, judge claude-haiku-4-5): observed faithfulness 1.0 and
-# relevancy 3 were stable across every run, citations always valid. Derivation
+# Aggregate gate thresholds — asserted only when LEARNY_EVAL_GATE=1. Derivation
 # rule (docs/ops/eval-calibration.md): observed mean minus a safety margin
-# (faithfulness −0.10, relevancy −0.5) — the gate detects regression from this
-# baseline, it does not encode aspirational quality. Re-derive whenever the
-# generation or judge model changes, or when the judge tier widens beyond the
-# single smoke case.
+# (faithfulness −0.10, relevancy −0.5) — the gate detects regression from a
+# measured baseline, it does not encode aspirational quality.
+#
+# FAITHFULNESS_MIN (2026-07-18): five keyed seed runs of the live judge tier
+# (generation claude-sonnet-5, judge claude-haiku-4-5) scored faithfulness 1.0
+# stably; 1.0 − 0.10.
+#
+# RELEVANCY_MIN (2026-07-21): after the relevancy rubric gained one worked
+# exemplar per score, the anchored judge (haiku) was re-run over the 12 committed
+# replay snapshots ×3. The nine answered cases held a stable mean of ~3.3
+# (3.44/3.22/3.22); the three not-found declines score 1 by construction — an
+# empty answer is off-topic — and are excluded from the relevancy baseline exactly
+# as faithfulness treats them as vacuously faithful. 3.3 − 0.5. Re-derive whenever
+# the generation or judge model changes, or when the judge tier widens.
 FAITHFULNESS_MIN = 0.90
-RELEVANCY_MIN = 2.5
+RELEVANCY_MIN = 2.8
 
 _FAITHFULNESS_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -283,7 +290,7 @@ def answerability_prompt_hash() -> str:
     return hashlib.sha256(ANSWERABILITY_PROMPT_PATH.read_bytes()).hexdigest()
 
 
-def _git_sha() -> str:
+def git_sha_of_head() -> str:
     """Short git sha for the results filename / line; env first, then git, else 'unknown'."""
     env_sha = os.getenv("GITHUB_SHA")
     if env_sha:
@@ -321,7 +328,7 @@ def run_eval(
     if gate is None:
         gate = os.getenv("LEARNY_EVAL_GATE") == "1"
 
-    git_sha = _git_sha()
+    git_sha = git_sha_of_head()
     phash = prompt_hash()
     capped = list(inputs[:max_cases])
     lines: list[dict[str, Any]] = []
@@ -367,7 +374,7 @@ def run_answerability_eval(
     (calibration-first, research §5/§8): the nightly records the JSONL as the eval
     dashboard; no aggregate gate is asserted. Returns the written lines.
     """
-    git_sha = _git_sha()
+    git_sha = git_sha_of_head()
     phash = answerability_prompt_hash()
     capped = list(inputs[:max_cases])
     lines: list[dict[str, Any]] = []

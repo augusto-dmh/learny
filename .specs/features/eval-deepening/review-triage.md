@@ -1,0 +1,13 @@
+# PR #46 Review Triage — eval-deepening (2026-07-22)
+
+Review: 6 lanes (security, requirements, tests, architecture, regression, performance). 3 inline comments + 1 requirements issue comment + 1 summary comment. Security/regression/performance: zero findings. Comments are deleted in the cleanup stage; this file is the surviving record.
+
+| # | Source | Location | Finding | Verdict | Action | Rationale |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | inline 3626633823 (tests lane) | `backend/tests/eval/test_ab.py:168` | `test_relevancy_mean_excludes_declined_lines` uses `faithfulness=1.0` on both lines, so the `mean_faithfulness == 1.0` assertion passes whether or not the declined line is included — the docstring's named behavior ("still counts toward faithfulness") is undiscriminated | **Real** | **Fix** | Verified in code: both `_silver(...)` lines carry 1.0. Give the declined line a distinct faithfulness (0.5) and assert the mean (0.75) so exclusion would fail the test. |
+| 2 | inline 3626633872 (tests lane) | `backend/tests/eval/silver.py:436` | `silver_run_skip_reason` has 4 skip branches + the None path; only cases-absent, ANTHROPIC-unset, and all-present are tested — OPENAI-unset and DATABASE_URL-unset have no dedicated test | **Real** | **Fix** | Verified: `test_silver_run.py:285-310` covers 3 of 5 paths. The skip path is the CI-facing DEEP-03 contract; add the two missing branch tests. |
+| 3 | inline 3626635440 (architecture lane) | `backend/tests/eval/silver.py:34` | Imports private `_git_sha` from `app.eval.judge` across a module boundary (leaky-export smell) | **Real** | **Fix** | Verified: `judge.py:293` defines `_git_sha`; silver.py imports it. Promote to public `git_sha` in judge.py (rename + internal call sites + silver.py import). No other external users (grepped). |
+| 4 | issue 5040539929 (requirements lane) | PR-level | Advisory: (a) DEEP-04 case set and the live-run figures are not diff-verifiable because silver data is git-ignored; (b) generation `stay` verdict rests on a 0.005 single-run faithfulness gap the research doc calls noise-sensitive | **Real (advisory)** | **Won't-fix (no code action)** | (a) is the accepted design (AD-163) — the deterministic loader/resolver tests are the CI-facing proxy, and the independent verification re-derived the local artifacts. (b) is inherent to single-run evidence and stated plainly in the research doc; the verdict function's tie/worse rules were chosen precisely so noise cannot force a "move". Carried to the merge-gate report. |
+| 5 | issue 5040821340 (summary) | PR-level | Consolidated summary table | Not a finding | Delete at cleanup | — |
+
+Counts: 4 findings (3 code, 1 advisory) — 3 real+fix, 1 real+won't-fix (advisory, by-design), 0 false.

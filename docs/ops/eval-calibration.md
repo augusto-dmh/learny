@@ -24,7 +24,7 @@ Generation: `claude-sonnet-5`. Judge: `claude-haiku-4-5`. Embeddings:
 | Metric | Observed | Gate threshold | Derivation |
 |---|---|---|---|
 | Judge faithfulness (mean) | 1.0 — stable across 5 keyed seed runs | ≥ 0.90 | mean − 0.10 |
-| Judge relevancy (mean) | 3 — stable across 5 keyed seed runs | ≥ 2.5 | mean − 0.5 |
+| Judge relevancy (mean) | superseded 2026-07-21 (see below) | ≥ 2.8 | mean − 0.5 |
 | Citation validity | all valid, every run | all must be valid | invariant, no margin |
 | Retrieval recall@1 (keyed, 42 labeled pairs) | 1.0 | ≥ 0.9 | test constants, confirmed at ceiling |
 | Retrieval recall@5 | 1.0 | ≥ 1.0 | " |
@@ -47,6 +47,52 @@ recorded the same day against the same models; PR CI replays them offline.
 - The keyed retrieval arm scores a deliberately lexically-disjoint golden
   corpus at ceiling (1.0 across the board); its thresholds guard against
   total failure and ranking regressions, not fine-grained quality drift.
+
+## Relevancy re-derivation (2026-07-21) — rubric anchored
+
+The relevancy rubric (`backend/app/eval/prompts/relevancy.md`) gained one worked
+exemplar per score 1–5, fixing the 2/3/4 boundaries on realistic cited-answer
+cases (a circular answer that restates the question = 2, an answer that omits the
+mechanism asked for = 3, a minor imprecision = 4). Because `prompt_hash()` hashes
+the relevancy prompt bytes, the judge prompt hash moved with the edit:
+
+- old `prompt_hash`: `7a1437780e74e7627aba2754d28041ccc18177bde065ba0bb0b688a4a40f3508`
+- new `prompt_hash`: `211d9d8c8db49ac171a4ee398627023177fa76fa03697275c21eadfcc9928870`
+
+The anchored judge (`claude-haiku-4-5`) was re-run live over the 12 committed
+replay snapshots (`backend/tests/eval/snapshots/`, generation `claude-sonnet-5`)
+three times. Per-case relevancy (three runs shown as a set):
+
+| Case | Tier | Relevancy (3 runs) |
+|---|---|---|
+| notfound-black-holes | not-found | 1, 1, 1 |
+| notfound-inflation | not-found | 1, 1, 1 |
+| notfound-photosynthesis | not-found | 1, 1, 1 |
+| tides-spring-alignment (circular restatement) | answered | 2, 2, 2 |
+| tides-moon-gravity | answered | 3, 3, 3 |
+| volcano-magma-vent (omits mechanism) | answered | 3, 3, 3 |
+| volcano-lava-ash | answered | 3, 3, 3 |
+| printing-movable-type | answered | 3, 3, 3 |
+| volcano-eruption | answered | 4, 3, 3 |
+| printing-spread-books | answered | 4, 4, 3 |
+| tides-rise-and-fall | answered | 4, 4, 4 |
+| printing-workshop (clean, complete) | answered | 5, 4, 5 |
+
+Observed **answered-case** mean: 3.44 / 3.22 / 3.22 → **~3.3, stable**. The three
+not-found declines score 1 by construction — their answer text is empty, so an
+empty answer is off-topic for the question — and are excluded from the relevancy
+baseline, exactly as `FaithfulnessResult.supported_ratio` treats an empty answer
+as vacuously faithful (1.0) and as not-found discipline is measured separately.
+The single-case 2026-07-18 baseline (relevancy 3, `live-tides`) was itself an
+answered case.
+
+Derivation: 3.3 − 0.5 margin → **`RELEVANCY_MIN = 2.8`** (was 2.5), pinned in
+`test_gate_constants_pin_the_calibrated_baselines`. The scores spread across
+{1,2,3,4,5} every run — the anchoring stabilised the 2/3/4 boundaries (the
+mechanism-omitting case stopped flapping 2↔3) rather than rescuing a collapsed
+distribution; the pre-anchor rubric already spread these snapshots. `FAITHFULNESS_MIN`,
+`faithfulness.md`, and the not-found/citation semantics are unchanged. Live spend:
+72 Haiku relevancy calls (6 runs × 12), well under $1.
 
 ## Re-derivation procedure (any model swap)
 

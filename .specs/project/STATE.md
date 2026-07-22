@@ -167,6 +167,13 @@ Accepted architecture (locked — sourced from ADRs/TDD, not re-decided here):
 | AD-158 | Annotation restyle completion = legibility proof, not color wiring: cyan/violet/green highlight tokens stay unconsumed scaffolding (no color field in ADR-026's domain); the Cycle A WCAG gate is extended — Paper text pairs, ink-on-highlight on all grounds, destructive normalized to gated hex, chart pins + monotonic luminance + 3:1 — and never weakened. | Cycle v4-polish-gate context.md (D-2, D-3) |
 | AD-159 | Ink-line becomes a shared component (static rule + optional progress fill): reader progress moved (testids byte-identical), Home hero gains a functional fill from its existing percent, four top-level screen headers get static rules; decorative fills explicitly rejected (ADR-027: functional, not decorative). | Cycle v4-polish-gate context.md (D-4) |
 | AD-160 | Dialog/sheet scrims move from `bg-black/10` to a theme-aware `--overlay` token (ink-tinted light, materially stronger dark — the 10% black scrim was near-invisible on the night palette), pinned in the gate. | Cycle v4-polish-gate context.md (D-5) |
+| AD-161 | Silver eval cases authored in-cycle by the agent from the local corpus DB (per-passage curation, verified anchors); user may revise during dogfood — data is local, not code. | Cycle eval-deepening context.md (D-1) |
+| AD-162 | Silver case identity = source checksum + chunk/section anchor (never source UUID); unresolvable anchors reported as broken, not skipped. | Cycle eval-deepening context.md (D-2) |
+| AD-163 | Silver data lives in git-ignored `evals/silver/` (cases + results); only loader/runner committed under `backend/tests/eval/`; CI and fresh clones self-skip. | Cycle eval-deepening context.md (D-3) |
+| AD-164 | Rubric recalibration baselines re-derived over the 12 committed replay snapshots (zero generation spend); silver distributions recorded as evidence, not gated this cycle. | Cycle eval-deepening context.md (D-4) |
+| AD-165 | `judge_model` stays `claude-haiku-4-5` unless the A/B shows material disagreement: exact agreement < 60% or within-1 < 90% on the anchored rubric, or any gate-verdict flip. | Cycle eval-deepening context.md (D-5) |
+| AD-166 | Generation default flips to Opus in-cycle only on a decisive A/B verdict (better on ≥2 of faithfulness/relevancy/not-found over silver, none worse, cost stated); flip isolated in its own commit and surfaced at the merge gate. | Cycle eval-deepening context.md (D-6) |
+| AD-167 | One judged dataset serves both A/Bs: generation A/B outputs + the 12 replayed snapshots are each scored by both judges (Haiku primary, Opus robustness). | Cycle eval-deepening context.md (D-7) |
 
 ## Blockers
 

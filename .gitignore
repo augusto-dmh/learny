@@ -8,3 +8,8 @@
 # committed — created from the *.env.production.example templates, AD-042/AD-043).
 secrets/
 *.env.production
+
+# Local silver eval tier — copyrighted real-book cases, snippets, and results
+# live only on the maintainer's machine; only the runner/loader code is committed.
+# The golden tier under evals/results/ stays tracked.
+evals/silver/
