@@ -44,7 +44,7 @@ def test_generation_settings_defaults() -> None:
     assert settings.anthropic_api_key == ""
     assert settings.generation_model == "claude-sonnet-5"
     assert settings.generation_max_tokens == 1024
-    assert settings.judge_model == "claude-opus-4-8"
+    assert settings.judge_model == "claude-haiku-4-5"
     assert settings.eval_max_cases == 50
 
 

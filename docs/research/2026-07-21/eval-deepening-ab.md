@@ -158,6 +158,16 @@ declines. That is a point in Haiku's favor, not Opus's.
    override of a correctly-functioning verdict, so it is surfaced here for the
    merge decision rather than silently applied.
 
+**Merge decision (2026-07-22): the switch was stripped at the merge gate.** The
+maintainer took the human-override reading above: the flips are treated as a
+threshold-placement artifact (6 of 8 sit on the `RELEVANCY_MIN = 2.8` boundary
+that was calibrated for Haiku, not Opus), and Opus's 0.0-on-declines behavior
+would have pushed the nightly mean-faithfulness gate below its 0.90 floor until
+the baselines were re-derived. The judge default therefore remains
+`claude-haiku-4-5`. A future switch requires the follow-up below **first**
+(re-derive baselines under Opus, and settle the decline-faithfulness semantics),
+then a re-run of this comparison against the recalibrated thresholds.
+
 ### Required follow-up if the judge switch is kept
 
 The gate constants (`FAITHFULNESS_MIN = 0.90`, `RELEVANCY_MIN = 2.8`) were
