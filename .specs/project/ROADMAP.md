@@ -68,8 +68,10 @@ notes-domain ADR is accepted.
   Status: Done (2026-07-21) — silver tier + anchored rubric shipped; both A/B
   studies run and decided in `docs/research/2026-07-21/eval-deepening-ab.md`.
   Generation default stays `claude-sonnet-5` (Opus not strictly better on silver);
-  judge default switched to `claude-opus-4-8` per the study (8/60 gate flips),
-  isolated for the merge gate, with Opus recalibration flagged as follow-up.
+  the study's judge-switch verdict (8/60 gate flips) was overridden at the merge
+  gate — judge stays `claude-haiku-4-5` until baselines are re-derived under Opus
+  and the decline-faithfulness semantics are settled (deferral recorded in the
+  research doc).
 
 v4 is driven by the accepted [RFC-004 roadmap](../../docs/rfc/0004-student-experience-roadmap.md)
 (cycles A–F, reading-first student experience; identity per ADR-027). RFC-003
