@@ -171,11 +171,15 @@ class Settings(BaseSettings):
     # max-tokens below), so CI and local development stay offline and key-free.
     # ``anthropic_api_key`` is an env-only secret. ``judge_model`` and
     # ``eval_max_cases`` bound the offline-optional evaluation harness.
+    # ``judge_model`` moved from Claude Haiku to Claude Opus after the judge A/B
+    # study found the two judges flip the per-case gate on 8 of 60 paired outputs
+    # (docs/research/2026-07-21/eval-deepening-ab.md); the gate baselines still
+    # reflect the prior judge and want re-derivation for Opus (see that doc).
     generation_provider: str = "local"
     anthropic_api_key: str = ""
     generation_model: str = "claude-sonnet-5"
     generation_max_tokens: int = 1024
-    judge_model: str = "claude-haiku-4-5"
+    judge_model: str = "claude-opus-4-8"
     eval_max_cases: int = 50
 
     # Active recall — quiz deck generation (RFC-002 Cycle E). The provider SDK and
