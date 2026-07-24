@@ -40,6 +40,31 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     )
 
 
+@pytest.fixture(autouse=True)
+def _force_local_providers(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Keep the offline suite network-free regardless of a local ``backend/.env``.
+
+    ``Settings`` reads ``backend/.env``, whose real ``LEARNY_GENERATION_PROVIDER`` /
+    ``LEARNY_EMBEDDING_PROVIDER`` values would otherwise select the live provider
+    adapters and make offline tests hit the network. Pinning the process env to
+    ``local`` overrides the ``.env`` file (env beats ``env_file`` in
+    pydantic-settings), so a bare ``pytest`` uses the deterministic adapters. Only a
+    variable that is *unset* is pinned, so an explicit choice always wins — a shell
+    prefix, a per-test ``monkeypatch.setenv``, or the class-scoped live ``openai``
+    embedding fixture that runs before this function-scoped pin. Inert in CI and the
+    nightly eval workflow, where no ``.env`` is present and providers are set
+    explicitly.
+    """
+    from app.core.config import get_settings
+
+    for var in ("LEARNY_GENERATION_PROVIDER", "LEARNY_EMBEDDING_PROVIDER"):
+        if var not in os.environ:
+            monkeypatch.setenv(var, "local")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
 @pytest.fixture(scope="session")
 def db_engine() -> Iterator[Engine]:
     if TEST_DB_URL is None:

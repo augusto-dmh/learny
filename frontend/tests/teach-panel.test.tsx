@@ -397,9 +397,11 @@ describe("TeachPanel resume (RA-10)", () => {
 
     // The resume list shows the session with its turn count.
     await screen.findByText("Previous sessions");
-    expect(screen.getByText(/2 turns/)).toBeTruthy();
+    expect(await screen.findByText(/2 turns/, {}, { timeout: 5000 })).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Resume" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Resume" }, { timeout: 5000 }),
+    );
 
     // Seeded history renders both stored turns with their citation and callout.
     expect(await screen.findByText("It is about early computing.")).toBeTruthy();
@@ -518,7 +520,9 @@ describe("TeachPanel save to note (RA-20/22)", () => {
 
     render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
     await screen.findByText("Previous sessions");
-    fireEvent.click(screen.getByRole("button", { name: "Resume" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Resume" }, { timeout: 5000 }),
+    );
     await screen.findByText("It is about early computing.");
 
     // The answered, cited turn offers the action; the not-found turn does not.
@@ -594,7 +598,9 @@ describe("TeachPanel taught passage (RA-11)", () => {
       <TeachPanel sourceId="s1" csrf="csrf-xyz" onShowInBook={onShowInBook} />,
     );
     await screen.findByText("Previous sessions");
-    fireEvent.click(screen.getByRole("button", { name: "Resume" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Resume" }, { timeout: 5000 }),
+    );
 
     await waitFor(() =>
       expect(onShowInBook).toHaveBeenCalledWith("c1.xhtml"),

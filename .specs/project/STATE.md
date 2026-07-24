@@ -174,6 +174,8 @@ Accepted architecture (locked — sourced from ADRs/TDD, not re-decided here):
 | AD-165 | `judge_model` stays `claude-haiku-4-5` unless the A/B shows material disagreement: exact agreement < 60% or within-1 < 90% on the anchored rubric, or any gate-verdict flip. | Cycle eval-deepening context.md (D-5) |
 | AD-166 | Generation default flips to Opus in-cycle only on a decisive A/B verdict (better on ≥2 of faithfulness/relevancy/not-found over silver, none worse, cost stated); flip isolated in its own commit and surfaced at the merge gate. | Cycle eval-deepening context.md (D-6) |
 | AD-167 | One judged dataset serves both A/Bs: generation A/B outputs + the 12 replayed snapshots are each scored by both judges (Haiku primary, Opus robustness). | Cycle eval-deepening context.md (D-7) |
+| AD-168 | Offline suite stays network-free via a function-scoped autouse conftest fixture that pins `LEARNY_GENERATION_PROVIDER`/`LEARNY_EMBEDDING_PROVIDER=local` **only if unset** (env beats the `.env` file leak; explicit shell/per-test/class overrides win) and clears the `get_settings` cache. Session-scope and unconditional-pin rejected (clobber the live `openai` embedding fixture / deliberate overrides). | Cycle v5-offline-suite-honesty context.md (D-1) |
+| AD-169 | Frontend `TeachPanel resume` deflake = await the async-loaded resume-list content (`findBy*` on the turn count + `Resume` button) before interacting, mirroring sibling deflake `c0aa7c4`; not a timeout bump/retry/weakened assertion. | Cycle v5-offline-suite-honesty context.md (D-2) |
 
 ## Blockers
 

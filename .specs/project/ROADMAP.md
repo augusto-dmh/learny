@@ -85,3 +85,22 @@ Cycle F interleaves after RFC-004 Cycle C.
 | `v4-capture-pipeline` | D | Cards at the highlight, margin rail, review pins | Done (PR #39) |
 | `v4-home-ia` | E | Two-card Home, streak/heatmap, nav collapse | Done (PR #44) |
 | `v4-polish-gate` | F | Restyle completion + 14-day dogfood gate | Polish shipped (PR #45); dogfood window open 2026-07-21, retrospective closes the RFC |
+
+## v5 (RFC-005 — Draft)
+
+v5 is proposed in [RFC-005](../../docs/rfc/0005-evidence-gated-hardening-roadmap.md)
+(**Draft, work-in-window authorized 2026-07-24**): evidence-gated hardening plus one
+product beachhead, written into the open RFC-004 dogfood window. Cycles A–E are ungated
+backend/eval/ops debt authorized to start now under Draft (they touch no surface the
+dogfooding author sees); Cycle F builds now but holds its deploy until after the
+retrospective. Formal acceptance is pending the RFC-004 dogfood retrospective (~2026-08-04),
+which also seeds a sibling RFC-006 for the dogfood-gated reader visuals. Targets v0.5.0.
+
+| tlc Cycle | RFC-005 Cycle | Scope | Status |
+|---|---|---|---|
+| `v5-offline-suite-honesty` | A | conftest provider pin (offline-suite leak) + teach-panel resume deflake | Not started |
+| `v5-opus-judge-recalibration` | B | Decline-faithfulness contract (ADR-0028) + Opus judge re-derivation → flip-or-stay | Not started |
+| `v5-generation-denoise` | C | Multi-run Sonnet-vs-Opus A/B, per-metric variance | Not started |
+| `v5-eval-dashboard` | D | Read-only render of the nightly eval JSONL (compact, cuttable) | Not started |
+| `v5-worker-recovery-hardening` | E | Celery worker liveness/heartbeat + WAL/PITR restore drill | Not started |
+| `v5-spoiler-safe-retrieval` | F | Position-scoped retrieval (build now, deploy after the retrospective) | Not started (deploy dogfood-gated) |

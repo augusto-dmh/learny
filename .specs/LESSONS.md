@@ -98,6 +98,12 @@ Seen once or not yet corroborated. Tracked, not trusted.
 - evidence: HOME-19 (coverage)
 - last seen: 2026-07-21T15:35:08Z
 
+### L-015 — A conditional guard (e.g. only-set-if-absent) whose protected branch is DB/key-gated needs its own offline discriminating test that reproduces the pre-condition ordering — e.g. a class-scoped fixture presetting the value before the function-scoped autouse fixture — or the discrimination sensor flags the guard as uncovered.
+- signal: `surviving_mutant` · recurrence: 1 feature(s) · scope: `backend/tests/conftest-fixtures` · harmful: 0
+- features: v5-offline-suite-honesty
+- evidence: M3 (test_offline_provider_pin.py) (backend/tests/conftest-fixtures)
+- last seen: 2026-07-24T16:53:30Z
+
 ## Quarantined (failed when applied — ignore)
 
 A confirmed lesson that recurred alongside failure. Kept for the maintainer to review.
