@@ -3,7 +3,7 @@
   "promote_threshold": 2,
   "window_days": 45,
   "quarantine_threshold": 2,
-  "next_id": 15,
+  "next_id": 16,
   "lessons": [
     {
       "id": "L-001",
@@ -256,6 +256,24 @@
       ],
       "created": "2026-07-21T15:35:08Z",
       "last_seen": "2026-07-21T15:35:08Z"
+    },
+    {
+      "id": "L-015",
+      "key": "surviving_mutant::a conditional guard e g only set if absent whose protected branch is db key gated needs its own offline discriminating test that reproduces the pre condition ordering e g a class scoped fixture presetting the value before the function scoped autouse fixture or the discrimination sensor flags the guard as uncovered",
+      "text": "A conditional guard (e.g. only-set-if-absent) whose protected branch is DB/key-gated needs its own offline discriminating test that reproduces the pre-condition ordering — e.g. a class-scoped fixture presetting the value before the function-scoped autouse fixture — or the discrimination sensor flags the guard as uncovered.",
+      "signal": "surviving_mutant",
+      "scope": "backend/tests/conftest-fixtures",
+      "status": "candidate",
+      "features": [
+        "v5-offline-suite-honesty"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "M3 (test_offline_provider_pin.py) (backend/tests/conftest-fixtures)"
+      ],
+      "created": "2026-07-24T16:53:30Z",
+      "last_seen": "2026-07-24T16:53:30Z"
     }
   ]
 }
