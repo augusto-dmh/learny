@@ -98,7 +98,7 @@ which also seeds a sibling RFC-006 for the dogfood-gated reader visuals. Targets
 
 | tlc Cycle | RFC-005 Cycle | Scope | Status |
 |---|---|---|---|
-| `v5-offline-suite-honesty` | A | conftest provider pin (offline-suite leak) + teach-panel resume deflake | Not started |
+| `v5-offline-suite-honesty` | A | conftest provider pin (offline-suite leak) + teach-panel resume deflake | Done (PR #47) |
 | `v5-opus-judge-recalibration` | B | Decline-faithfulness contract (ADR-0028) + Opus judge re-derivation → flip-or-stay | Not started |
 | `v5-generation-denoise` | C | Multi-run Sonnet-vs-Opus A/B, per-metric variance | Not started |
 | `v5-eval-dashboard` | D | Read-only render of the nightly eval JSONL (compact, cuttable) | Not started |
