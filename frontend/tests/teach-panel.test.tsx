@@ -397,9 +397,11 @@ describe("TeachPanel resume (RA-10)", () => {
 
     // The resume list shows the session with its turn count.
     await screen.findByText("Previous sessions");
-    expect(screen.getByText(/2 turns/)).toBeTruthy();
+    expect(await screen.findByText(/2 turns/, {}, { timeout: 5000 })).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Resume" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Resume" }, { timeout: 5000 }),
+    );
 
     // Seeded history renders both stored turns with their citation and callout.
     expect(await screen.findByText("It is about early computing.")).toBeTruthy();
