@@ -9,6 +9,7 @@ factory branch. See spec AC-1/AC-2/AC-5.
 from __future__ import annotations
 
 import os
+from collections.abc import Iterator
 
 import pytest
 
@@ -80,3 +81,26 @@ def test_explicit_embedding_override_reaches_real_branch(
 
     settings = get_settings()
     assert isinstance(build_embedding_adapter(settings), OpenAIEmbeddingAdapter)
+
+
+class TestPinDoesNotClobberPresetProvider:
+    """AC-2 / FR-2: the pin must not overwrite a provider set BEFORE it runs.
+
+    The class-scoped fixture sets the provider before the function-scoped autouse
+    pin, reproducing the class-scoped live ``openai`` embedding fixture pattern in
+    ``test_eval_retrieval_metrics.py``. The pin's "only if absent" guard is what
+    keeps that override intact — an unconditional ``setenv`` would clobber it back to
+    ``local``, which this test kills.
+    """
+
+    @pytest.fixture(scope="class", autouse=True)
+    def _preset_openai_embedding(self) -> Iterator[pytest.MonkeyPatch]:
+        mp = pytest.MonkeyPatch()
+        mp.setenv("LEARNY_EMBEDDING_PROVIDER", "openai")
+        yield mp
+        mp.undo()
+
+    def test_preset_provider_survives_the_pin(self) -> None:
+        get_settings.cache_clear()
+        assert os.environ.get("LEARNY_EMBEDDING_PROVIDER") == "openai"
+        assert get_settings().embedding_provider == "openai"
