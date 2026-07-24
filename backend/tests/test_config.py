@@ -11,8 +11,11 @@ from __future__ import annotations
 from app.core.config import Settings
 
 
-def test_embedding_settings_defaults() -> None:
+def test_embedding_settings_defaults(monkeypatch) -> None:
     # Default provider is the offline deterministic adapter — CI needs no key.
+    # Clear the suite-wide provider pin so this asserts the field default, not the
+    # injected env value (Settings(_env_file=None) still reads os.environ).
+    monkeypatch.delenv("LEARNY_EMBEDDING_PROVIDER", raising=False)
     settings = Settings(_env_file=None)
 
     assert settings.embedding_provider == "local"
@@ -36,8 +39,11 @@ def test_embedding_settings_env_override(monkeypatch) -> None:
     assert settings.embedding_dim == 512
 
 
-def test_generation_settings_defaults() -> None:
+def test_generation_settings_defaults(monkeypatch) -> None:
     # Default provider is the offline deterministic adapter — CI needs no key.
+    # Clear the suite-wide provider pin so this asserts the field default, not the
+    # injected env value (Settings(_env_file=None) still reads os.environ).
+    monkeypatch.delenv("LEARNY_GENERATION_PROVIDER", raising=False)
     settings = Settings(_env_file=None)
 
     assert settings.generation_provider == "local"
