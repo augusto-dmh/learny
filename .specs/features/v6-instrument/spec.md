@@ -13,10 +13,10 @@ This cycle builds the ruler. It measures nothing faster; later cycles cite it.
 
 ## Goals
 
-- [ ] Every HTTP request, every slow SQL statement, and every Celery task reports a duration through one deliberate instrument rather than ad-hoc code.
-- [ ] A single dev-only surface ranks the slowest endpoints and lists recent slow queries with their statement text.
-- [ ] The browser sees the server's share of each request via a `Server-Timing` header that survives the Next.js proxy.
-- [ ] Nothing is optimized, no new runtime dependency is added, and the instrument is prod-safe by construction.
+- [x] Every HTTP request, every slow SQL statement, and every Celery task reports a duration through one deliberate instrument rather than ad-hoc code.
+- [x] A single dev-only surface ranks the slowest endpoints and lists recent slow queries with their statement text.
+- [x] Wherever the instrument is enabled, the browser sees the server's share of each request via a `Server-Timing` header that survives the Next.js proxy. (Amended by AD-182: the header ships on the instrument's own switch, so a production process emits none — see the amendment under "Server timing on the wire".)
+- [x] Nothing is optimized, no new runtime dependency is added, and the instrument is prod-safe by construction. (AD-181 made "by construction" literal: the application refuses the surface on a production process rather than relying on the production compose omitting the flag.)
 
 ## Out of Scope
 
@@ -81,7 +81,7 @@ Explicitly excluded. Documented to prevent scope creep.
 
 **Acceptance Criteria**:
 
-1. WHEN any HTTP response leaves the application THEN it SHALL carry a `Server-Timing` header containing an `app` metric whose `dur` value equals the time-to-response-start reported on that request's access log record — one measurement, two consumers, never two independent timings.
+1. WHEN the instrument is enabled THEN any HTTP response leaving the application SHALL carry a `Server-Timing` header containing an `app` metric whose `dur` value equals the time-to-response-start reported on that request's access log record — one measurement, two consumers, never two independent timings; WHEN the instrument is disabled THEN no response SHALL carry the header, while the access record SHALL still report the same time-to-response-start field.
 2. WHEN a response is relayed through the Next.js API proxy THEN the `Server-Timing` header SHALL still be present on the response delivered to the browser.
 3. WHEN a response is produced by the application's own exception handlers THEN it SHALL still carry `Server-Timing`; WHEN an exception escapes to Starlette's outermost error middleware THEN the response SHALL carry neither `Server-Timing` nor `X-Request-ID` — the pre-existing, documented boundary of a pure-ASGI middleware — and the request SHALL still be recorded with its final status code.
 4. WHEN a response is streamed THEN the access log's `duration_ms` SHALL continue to measure the whole request including the streamed body, and the recorder SHALL rank on that whole-request duration, so that streaming endpoints remain rankable by what they actually cost.
@@ -134,7 +134,7 @@ Explicitly excluded. Documented to prevent scope creep.
 
 **Acceptance Criteria**:
 
-1. WHEN `LEARNY_DEV_INSTRUMENT_ENABLED` is unset or false THEN a request to the dev instrument path SHALL receive 404.
+1. WHEN `LEARNY_DEV_INSTRUMENT_ENABLED` is unset or false THEN a request to the dev instrument path SHALL receive 404; and WHEN the process is configured as production THEN the path SHALL receive 404 even with the flag set, and the refusal SHALL be logged so a misconfiguration is visible rather than silent.
 2. WHEN the flag is true and the caller has no valid session THEN the request SHALL receive 401.
 3. WHEN the flag is true and the caller is authenticated THEN the response SHALL be 200 and SHALL carry the ranked endpoint rows and the recent slow-query entries.
 4. WHEN no samples have been recorded THEN the response SHALL be 200 with empty collections, not an error.
@@ -200,8 +200,13 @@ for the per-criterion evidence and the mutation sensor behind each one.
 
 ## Success Criteria
 
-- [ ] Opening the dev surface after exercising the app names the slowest endpoint and the slowest statement without reading a log file.
-- [ ] Every Celery task reports a duration, including ones that were never hand-instrumented.
-- [ ] The browser network panel shows a server-time split for API calls.
-- [ ] The production configuration cannot expose the surface, and no bound parameter value can reach a captured statement.
-- [ ] No endpoint, query, or task is made faster by this cycle.
+- [x] Opening the dev surface after exercising the app names the slowest endpoint and the slowest statement without reading a log file.
+- [x] Every Celery task reports a duration, including ones that were never hand-instrumented.
+- [x] The browser network panel shows a server-time split for API calls (with the instrument enabled, which is every environment where a devtools panel is read).
+- [x] No configuration can expose the surface on a production process, and no bound parameter value can reach a captured statement.
+- [x] No endpoint, query, or task is made faster by this cycle.
+
+**Sensor-blind, stated rather than implied:** the first and third are verified at
+the API boundary (the ranked response carries both collections) and at the proxy
+boundary (the relay preserves the header), not by a human opening devtools. The
+remaining evidence is a pair of eyes on the running app.
