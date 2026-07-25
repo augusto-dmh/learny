@@ -1,13 +1,14 @@
-"""B1/B2 gate — the request middleware feeds the timing recorder and the wire
-(unit, OBS-01/02/07/08/10).
+"""B1/B2/B4 gate — the request middleware feeds the timing recorder and the wire
+(unit, OBS-01/02/07/08/10/25).
 
 Every case derives from the spec's "One timing recorder" and "Server timing on
 the wire" acceptance criteria as they apply to the HTTP producer: what a
 completed request contributes (route template, method, status, duration), what
 an unmatched request contributes (one constant placeholder, never the raw path),
-that the browser receives the same duration the access log reports, and the
-containment property — a recorder that fails must leave the response it measures
-exactly as it was.
+which of the two intervals each consumer receives — the browser the server's own
+share, the log and the ranking the whole request including a streamed body — and
+the containment property: a recorder that fails must leave the response it
+measures exactly as it was.
 
 The parametrized-route case is also the framework sensor: the route template is
 read from the ASGI ``scope`` the router populates, so if a future Starlette or
@@ -18,11 +19,13 @@ placeholder and this file fails rather than silently recording raw paths.
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Iterator
 
 import httpx
 import pytest
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
 
 from app.core.instrumentation import (
@@ -35,6 +38,10 @@ from app.core.tracing import TraceContextFilter
 from app.infrastructure.web.middleware import RequestContextMiddleware
 
 SECRET_ID = "9f1c0e2a-secret-resource"
+
+#: Time a streamed body spends between its first and last chunk. It is what makes
+#: the whole-request duration distinguishable from the time to response start.
+STREAM_BODY_DELAY_MS = 50.0
 
 
 class _RecordingHandler(logging.Handler):
@@ -94,6 +101,15 @@ def _build_app() -> FastAPI:
     @app.get("/boom")
     def boom() -> None:
         raise RuntimeError("kaboom")
+
+    @app.get("/stream")
+    def stream() -> StreamingResponse:
+        def chunks() -> Iterator[bytes]:
+            yield b"first"
+            time.sleep(STREAM_BODY_DELAY_MS / 1000)
+            yield b"last"
+
+        return StreamingResponse(chunks(), media_type="text/plain")
 
     return app
 
@@ -234,16 +250,16 @@ def test_response_carries_a_server_timing_app_metric(recorder: InstrumentRecorde
     assert _app_metric_dur(response) >= 0.0
 
 
-def test_server_timing_reports_the_duration_the_access_log_reports(
+def test_server_timing_reports_the_time_to_response_start_the_access_log_reports(
     captured: _RecordingHandler,
 ) -> None:
     # One measurement, two consumers: the header may not carry a second,
-    # independently taken number.
+    # independently taken number, and it stays traceable to a log line.
     client = TestClient(_build_app())
 
     response = client.get(f"/items/{SECRET_ID}")
 
-    assert _app_metric_dur(response) == _access_record(captured).duration_ms
+    assert _app_metric_dur(response) == _access_record(captured).response_start_ms
 
 
 def test_server_timing_leaves_the_request_id_header_intact() -> None:
@@ -266,7 +282,7 @@ def test_handled_error_response_carries_server_timing(
     response = client.get("/http-error")
 
     assert response.status_code == 404
-    assert _app_metric_dur(response) == _access_record(captured).duration_ms
+    assert _app_metric_dur(response) == _access_record(captured).response_start_ms
     assert recorder.recent_requests()[0].status_code == 404
 
 
@@ -286,3 +302,28 @@ def test_unhandled_exception_response_shares_the_documented_header_gap(
     assert "Server-Timing" not in response.headers
     assert "X-Request-ID" not in response.headers
     assert recorder.recent_requests()[0].status_code == 500
+
+
+# --- OBS-25: a streamed body counts against the endpoint, not against nothing -
+
+
+def test_streamed_response_logs_and_ranks_on_the_whole_request(
+    recorder: InstrumentRecorder, captured: _RecordingHandler
+) -> None:
+    # The header can only report the server's share, but the cost of a streamed
+    # answer *is* the streaming: if the log or the ranking measured at response
+    # start instead, an endpoint that spends seconds generating would rank as
+    # free. The gap between the two numbers is what tells the semantics apart.
+    client = TestClient(_build_app())
+
+    response = client.get("/stream")
+
+    assert response.text == "firstlast"
+    record = _access_record(captured)
+    header_dur = _app_metric_dur(response)
+    assert header_dur == record.response_start_ms
+    # Tolerance below the delay only for sleep granularity — a whole-request
+    # measurement cannot be less than the time the body spent streaming.
+    assert record.duration_ms - header_dur >= STREAM_BODY_DELAY_MS * 0.8
+    (sample,) = recorder.recent_requests()
+    assert sample.duration_ms == record.duration_ms

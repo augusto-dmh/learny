@@ -13,17 +13,25 @@ the handler emits. It:
 - records that same duration on the in-process instrument, keyed on the *route
   template* — never the raw path, which would leak resource identifiers into a
   surface with weaker access control than the resources they name;
-- reports that same duration to the browser as ``Server-Timing: app;dur=…``, so
-  devtools can split server time from network and render time.
+- reports the server's own share to the browser as ``Server-Timing: app;dur=…``,
+  so devtools can split server time from network and render time.
 
-**One measurement, three consumers.** The header has to be written before the
-response starts, while the access record is emitted after the request finishes,
-so the request is timed once — at ``http.response.start`` — and that single
-number is what the header, the access record, and the instrument all carry.
-``duration_ms`` is therefore the server's own share: the time from receiving the
-request to starting its response, which for a streamed response deliberately
-excludes the time spent streaming the body. Only when no response ever starts
-does the ``finally`` measure instead, so the record is never lost.
+**Two intervals, named apart.** A header must be written before the response
+starts; the access record is emitted after the request finishes. Rather than
+collapse those into one number, the request is timed at both points and each
+consumer gets the interval it can honestly use:
+
+- ``duration_ms`` — the whole request, streamed body included. It is what the
+  access record has always meant, and what the instrument ranks on, so a
+  streaming endpoint stays rankable by what it actually costs (the generation
+  time behind a streamed answer is the point of measuring at all).
+- ``response_start_ms`` — the time from receiving the request to starting the
+  response: the server's own share, and all a browser can attribute to us. This
+  is the number the ``Server-Timing`` header carries, taken once and reported in
+  both places so the header is always traceable to a log line.
+
+When no response ever starts, ``response_start_ms`` is absent and only the whole
+duration is reported, so no record is lost.
 
 Accepted gap: a *truly unhandled* exception is turned into a 500 by Starlette's
 outermost ``ServerErrorMiddleware`` (outside this middleware), so the response it
@@ -114,18 +122,21 @@ class RequestContextMiddleware:
         try:
             await self.app(scope, receive, send_wrapper)
         finally:
-            duration_ms = timing_holder.get("duration_ms")
-            if duration_ms is None:
-                # No response ever started (the unhandled-exception gap above):
-                # measure here so the record still fires.
-                duration_ms = _elapsed_ms(start)
+            # The whole request, streamed body included — what the access record
+            # has always meant, and what a streaming endpoint actually costs.
+            duration_ms = _elapsed_ms(start)
             _access_logger.info(
                 "http.request",
-                extra={"status_code": status_holder["code"], "duration_ms": duration_ms},
+                extra={
+                    "status_code": status_holder["code"],
+                    "duration_ms": duration_ms,
+                    # The header's own number, so it is traceable to a log line.
+                    "response_start_ms": timing_holder.get("response_start_ms"),
+                },
             )
-            # One measurement, two consumers. ``record_request`` contains its own
-            # failures, so the instrument cannot change the outcome it measures
-            # and this call needs no guard of its own.
+            # ``record_request`` contains its own failures, so the instrument
+            # cannot change the outcome it measures and this call needs no guard
+            # of its own.
             record_request(
                 method=scope.get("method", ""),
                 route=_route_template(scope),
@@ -145,13 +156,18 @@ class RequestContextMiddleware:
         async def send_wrapper(message: Message) -> None:
             if message["type"] == "http.response.start":
                 status_holder["code"] = message["status"]
-                duration_ms = _elapsed_ms(start)
-                timing_holder["duration_ms"] = duration_ms
+                # Taken once here and reported both on the wire and in the
+                # access record, so the browser's number is never a second,
+                # independent measurement.
+                response_start_ms = _elapsed_ms(start)
+                timing_holder["response_start_ms"] = response_start_ms
                 headers = MutableHeaders(raw=message.setdefault("headers", []))
                 headers[_REQUEST_ID_HEADER] = request_id
                 # ``Server-Timing`` is a list header: append so a metric a
                 # handler set for itself survives alongside ours.
-                headers.append(_SERVER_TIMING_HEADER, f"{_SERVER_TIMING_METRIC};dur={duration_ms}")
+                headers.append(
+                    _SERVER_TIMING_HEADER, f"{_SERVER_TIMING_METRIC};dur={response_start_ms}"
+                )
             await send(message)
 
         return send_wrapper
