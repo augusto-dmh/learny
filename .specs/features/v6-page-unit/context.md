@@ -100,6 +100,29 @@ provider lock, and every one had a defensible recommendation).
   *Why:* small numbers, no dependency on the book-level offset.
   *Why not:* "page 3" would then be ambiguous across the book, defeating the point of the unit.
 
+## AD-191 — `pages` is a required field on the client mirror type; the protected fixtures widen
+
+Discovered mid-Execute: `frontend/tests/study-heatmap.test.tsx` builds `StudyDayView` fixtures
+without `pages` and uses `satisfies StudySummaryView`, so a required new field fails `tsc` on the
+very file I-PU-8 protects.
+
+- **(a) Type `pages: number` as required; widen the fixtures; amend I-PU-8 to protect the
+  assertions rather than the file's bytes. — CHOSEN**
+  *Why:* the client type is a hand-maintained mirror of the wire, and the server always sends
+  `pages` (a required Pydantic field). Typing it as maybe-absent would be a small untruth that
+  every future consumer inherits, and would silently render 0 if the field ever went missing
+  instead of failing the build. I-PU-8's actual content is that the redesigned markup does not
+  disturb the adherence sentence — adding a field to a fixture does not weaken that assertion by
+  one bit, so the invariant was over-specified when written as "unedited".
+  *Why not:* it edits a file the spec named as protected, so the amendment must be explicit
+  (done, in `spec.md`) rather than argued after the fact at review.
+- **(b) Type `pages?: number` optional and render `?? 0`, leaving the file untouched.**
+  *Why:* satisfies the original wording literally; zero edits to the protected test.
+  *Why not:* the mirror understates the contract, and the `?? 0` fallback converts a wire
+  regression into a silently wrong figure instead of a build failure.
+
+**Bound:** weakening, retargeting, or deleting any assertion in that file remains forbidden.
+
 ## AD-190 — One shared header-offset value feeds both the bar and the scroll margin
 
 - **(a) Single source for the sticky header's height, consumed by both the bar and each

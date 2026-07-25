@@ -51,7 +51,10 @@ already-ingested book pages retroactively — no re-processing, no corpus migrat
 - **I-7 (carried) — Silent grace.** Zero-activity days stay plain empty cells: no tooltip, no
   `title`, no badge, no celebration, and no "missed / broken / lost" language anywhere.
 - **I-PU-8 — The sentence is byte-identical.** `textContent` of the adherence line stays
-  `Studied N of the last 14 days`, so `frontend/tests/study-heatmap.test.tsx` passes **unedited**.
+  `Studied N of the last 14 days`, and the existing assertions in
+  `frontend/tests/study-heatmap.test.tsx` that check it pass **unmodified**. Widening a fixture
+  to carry a genuinely new wire field is permitted (see AD-191); weakening, retargeting, or
+  deleting any assertion in that file is not.
 
 ## Requirements
 
@@ -149,8 +152,9 @@ fails if the invariant is broken. Specifically:
 6. A test proves a rule never lands inside a paragraph and never after the last one (PAGE-13).
 7. A test proves the percentage changes on scroll within one section (PAGE-16) and that the save
    payload is unchanged by interpolation (PAGE-18 / I-PU-3).
-8. `frontend/tests/study-heatmap.test.tsx` passes **without edits** (I-PU-8), and a test proves
-   empty cells expose no tooltip and are not focusable (PAGE-22 / I-7).
+8. Every existing assertion in `frontend/tests/study-heatmap.test.tsx` still passes unmodified
+   (I-PU-8), and a test proves empty cells expose no tooltip and are not focusable
+   (PAGE-22 / I-7).
 
 ## Verification gates
 
