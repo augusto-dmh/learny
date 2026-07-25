@@ -271,6 +271,28 @@ def test_a_long_statement_is_stored_truncated_to_the_configured_cap(
     assert sample.statement.startswith("SELECT 1 AS a")
 
 
+def test_the_log_record_carries_the_statement_untruncated_while_the_recorder_caps_it(
+    build_app_engine, captured: _RecordingHandler
+) -> None:
+    # The asymmetry is deliberate and load-bearing: a log stream wants the whole
+    # statement, a bounded in-memory buffer must not hold arbitrarily long
+    # strings. It is stated in the runbook, so it needs a sensor of its own —
+    # otherwise capture could start truncating before logging with only a
+    # documentation test standing in the way.
+    engine = build_app_engine(slow_query_ms=0)
+    capped = InstrumentRecorder(statement_max_chars=40)
+    set_recorder(capped)
+    statement = "SELECT 1 AS a -- " + "x" * 3000
+
+    with engine.connect() as conn:
+        conn.execute(text(statement))
+
+    (sample,) = capped.recent_queries()
+    assert len(sample.statement) == 40
+    (record,) = captured.slow_queries
+    assert record.statement == statement
+
+
 # --- OBS-15: a failing capture leaves the database operation intact --------------
 
 

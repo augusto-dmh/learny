@@ -15,6 +15,7 @@ one's duration.
 
 from __future__ import annotations
 
+import importlib
 import logging
 import time
 from collections.abc import Iterator
@@ -22,6 +23,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
+from app.worker import instrumentation as worker_instrumentation
 from app.worker.celery_app import celery_app
 from app.worker.instrumentation import (
     TASK_DURATION_LOGGER,
@@ -154,10 +156,36 @@ def test_a_failing_task_reports_a_duration_under_a_distinct_state(
 def test_a_retried_task_reports_one_duration_per_attempt(
     captured: _RecordingHandler,
 ) -> None:
+    # Counting records is not enough: two records describing the *same* attempt
+    # would count the same. What the per-attempt timing state exists to deliver is
+    # that the two records belong to one task id and describe different attempts —
+    # so they are read by the fields that say which attempt each one is.
     assert uninstrumented_retry.apply().get() == "done"
 
     records = captured.durations_for("tests.uninstrumented_retry")
     assert len(records) == 2
+    assert len({record.task_id for record in records}) == 1
+    assert [record.retries for record in records] == [0, 1]
+    assert [record.state for record in records] == ["RETRY", "SUCCESS"]
+
+
+def test_a_second_import_installing_the_signals_again_still_reports_one_record(
+    captured: _RecordingHandler,
+) -> None:
+    # Importing the Celery app installed the receivers once. Celery keys a
+    # receiver by its own object identity unless it is given an explicit
+    # identity, so installing the *same* function objects again is a no-op —
+    # but a re-imported module hands it new function objects for the same
+    # receivers, and those would register a second time. Every task in every
+    # worker would then emit two duration records for one attempt. The explicit
+    # identity is what keeps a second installation a single registration, so the
+    # second installation here comes from a genuine re-import.
+    importlib.reload(worker_instrumentation)
+    worker_instrumentation.install_task_duration_signals()
+
+    uninstrumented_success.apply()
+
+    assert len(captured.durations_for("tests.uninstrumented_success")) == 1
 
 
 # --- OBS-18: the existing per-task duration records keep being emitted -----------
