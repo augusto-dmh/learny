@@ -10,12 +10,14 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from app.core.config import get_settings
+from app.core.instrumentation import InstrumentRecorder, set_recorder
 from app.core.logging import configure_logging
 from app.infrastructure.web.auth import router as auth_router
 from app.infrastructure.web.cards import router as cards_router
 from app.infrastructure.web.error_handlers import register_error_handlers
 from app.infrastructure.web.health import router as health_router
 from app.infrastructure.web.ingestion import router as ingestion_router
+from app.infrastructure.web.instrument import router as instrument_router
 from app.infrastructure.web.middleware import RequestContextMiddleware
 from app.infrastructure.web.notes import router as notes_router
 from app.infrastructure.web.questions import router as questions_router
@@ -32,6 +34,17 @@ def create_app() -> FastAPI:
     configure_logging()
     settings = get_settings()
     app = FastAPI(title=settings.app_name)
+    # The instrument's bounds are configuration, so the recorder the process uses
+    # is built here rather than left at its module defaults — otherwise
+    # LEARNY_INSTRUMENT_CAPACITY and LEARNY_SLOW_QUERY_STATEMENT_CHARS would be
+    # documented settings that changed nothing. Assembly time is where settings
+    # may safely be read; import time is not (lesson L-007).
+    set_recorder(
+        InstrumentRecorder(
+            capacity=settings.instrument_capacity,
+            statement_max_chars=settings.slow_query_statement_chars,
+        )
+    )
     # Outermost user middleware: wraps routing + exception handling so handled
     # responses carry the request id and every request is access-logged.
     app.add_middleware(RequestContextMiddleware)
@@ -48,6 +61,11 @@ def create_app() -> FastAPI:
     app.include_router(cards_router)
     app.include_router(vault_router)
     app.include_router(study_router)
+    # Mounted only when deliberately enabled, so with the flag off the dev
+    # instrument path matches no route at all — 404, and absent from the OpenAPI
+    # schema. Authentication gates it independently once it is mounted.
+    if settings.dev_instrument_enabled:
+        app.include_router(instrument_router)
     return app
 
 
