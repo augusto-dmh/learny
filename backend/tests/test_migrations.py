@@ -1859,13 +1859,15 @@ def test_migration_0015_creates_study_days(monkeypatch) -> None:
 
 @pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
 def test_migration_0016_adds_reading_volume_without_touching_the_corpus(monkeypatch) -> None:
-    """0016 up: adds ``study_days.words_advanced`` (INTEGER NOT NULL DEFAULT 0).
+    """0016 up: adds ``study_days.words_advanced`` (BIGINT NOT NULL DEFAULT 0).
 
     A study-day row written before the counter existed takes 0 with no backfill and
     keeps its existing counters untouched, so no already-shaded heatmap cell changes.
     The corpus tables gain nothing: pages come from word counts that are already stored,
-    so no ingested book needs re-processing. Down one step to 0015 drops the column and
-    leaves the rows intact.
+    so no ingested book needs re-processing. The column holds a value past the 32-bit
+    ceiling, so a caller cannot drive it into an overflow that would abort the position
+    write sharing its transaction. Down one step to 0015 drops the column and leaves the
+    rows intact.
     """
     monkeypatch.setenv("LEARNY_DATABASE_URL", TEST_DB_URL)
     cfg = _alembic_config(TEST_DB_URL)
@@ -1935,6 +1937,28 @@ def test_migration_0016_adds_reading_volume_without_touching_the_corpus(monkeypa
                 {"uid": user_id},
             ).scalar_one()
         assert fresh == 0
+
+        # Past the 32-bit ceiling: the counter's addend is the caller's own claimed
+        # advance on an unthrottled endpoint, so a narrow column would be reachable —
+        # and the overflow would abort the position write in the same transaction.
+        beyond_int32 = 3_000_000_000
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "UPDATE study_days SET words_advanced = :w "
+                    "WHERE user_id = :uid AND day = DATE '2026-07-22'"
+                ),
+                {"uid": user_id, "w": beyond_int32},
+            )
+        with engine.connect() as conn:
+            wide = conn.execute(
+                text(
+                    "SELECT words_advanced FROM study_days "
+                    "WHERE user_id = :uid AND day = DATE '2026-07-22'"
+                ),
+                {"uid": user_id},
+            ).scalar_one()
+        assert wide == beyond_int32
     finally:
         engine.dispose()
 

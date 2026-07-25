@@ -1,10 +1,18 @@
 """Per-day reading volume on the study-day rollup
 
 Adds ``study_days.words_advanced``: how many of a book's words the reader newly
-covered on that user-local day, ``INTEGER`` NOT NULL DEFAULT ``0``. Words are stored
+covered on that user-local day, ``BIGINT`` NOT NULL DEFAULT ``0``. Words are stored
 rather than pages so a day's many small advances accumulate losslessly and the page
 quantum stays a presentation constant that can change without rewriting history; the
 study window derives its pages figure from this column at read time.
+
+64-bit, unlike its neighbours. They move by one per event; this one moves by however
+many words the reader's own anchor says they covered, and the endpoint that feeds it is
+deliberately unthrottled — so its addend has no small ceiling, and a caller alternating
+between two ends of a long book could reach a 32-bit overflow in a few thousand
+requests. An overflow here does not merely lose a figure: it aborts the upsert, and with
+it the position write sharing that transaction, so the reader could no longer save their
+place for the rest of the day. A wider column removes the reachable ceiling outright.
 
 The DEFAULT means every existing row takes 0 with no backfill — a rollup that predates
 the counter simply reports no reading volume, never a fabricated one. The column joins
@@ -38,7 +46,7 @@ def upgrade() -> None:
         "study_days",
         # NOT NULL with a server default: existing rows take 0 without a backfill, and
         # the atomic increment always reads a real integer, never NULL.
-        sa.Column("words_advanced", sa.Integer(), server_default="0", nullable=False),
+        sa.Column("words_advanced", sa.BigInteger(), server_default="0", nullable=False),
     )
 
 

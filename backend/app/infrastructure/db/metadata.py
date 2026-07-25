@@ -722,6 +722,9 @@ study_days = Table(
     Column("reviews_count", Integer, nullable=False, server_default="0"),
     Column("reading_updates", Integer, nullable=False, server_default="0"),
     # Words, not pages: a day's small advances accumulate losslessly and the page
-    # quantum stays a read-time presentation constant (AD-183).
-    Column("words_advanced", Integer, nullable=False, server_default="0"),
+    # quantum stays a read-time presentation constant (AD-183). 64-bit unlike its
+    # neighbours: they count events (+1 each), while this one adds however many words the
+    # caller's own anchor claims, on an endpoint with no rate limit — so an overflow is
+    # reachable, and it would abort the position write sharing the same transaction.
+    Column("words_advanced", BigInteger, nullable=False, server_default="0"),
 )
