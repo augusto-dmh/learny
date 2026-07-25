@@ -121,6 +121,24 @@ describe("relayResponse — upstream response relay (D1, AC-2)", () => {
     expect(relayed.headers.get("content-length")).toBeNull();
     expect(relayed.headers.get("content-type")).toBe("application/json");
   });
+
+  it("relays Server-Timing so the browser keeps the backend's timing split", () => {
+    // FastAPI reports its share of each request as `Server-Timing: app;dur=…`,
+    // which only reaches devtools if the proxy passes it through. Pinned here
+    // because it survives by omission from the response denylist: a future entry
+    // added to that list would otherwise blind the browser without a failure.
+    const upstream = new Response('{"ok":true}', {
+      status: 200,
+      headers: {
+        "content-type": "application/json",
+        "server-timing": "app;dur=12.345",
+      },
+    });
+
+    const relayed = relayResponse(upstream);
+
+    expect(relayed.headers.get("server-timing")).toBe("app;dur=12.345");
+  });
 });
 
 describe("relayResponse — SSE stream relay (FE-22)", () => {
