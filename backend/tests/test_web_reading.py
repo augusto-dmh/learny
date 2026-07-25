@@ -403,6 +403,54 @@ def test_put_reading_position_credits_a_reading_study_day(
     assert [(r.reviews_count, r.reading_updates) for r in rows] == [(0, 1)]
 
 
+def test_put_reading_position_credits_the_words_covered_since_the_last_save(
+    reading_client: TestClient, db_conn: Connection
+) -> None:
+    # PAGE-07 end to end: c1s1 sits 3 words into the book and c2s1 6 words in, so the
+    # second save credits 3 words to the same day — and the words land in the same row
+    # as the reading_updates count, written by the request that stored the position.
+    user_id = _register(reading_client, "rp-words@example.com")
+    csrf = _csrf(reading_client)
+    source_id = _persist_source(db_conn, user_id)
+    _seed_book(db_conn, source_id)
+
+    assert _put_position(reading_client, source_id, "c1s1", csrf=csrf).status_code == 200
+    assert _put_position(reading_client, source_id, "c2s1", csrf=csrf).status_code == 200
+
+    rows = db_conn.execute(
+        select(study_days.c.reading_updates, study_days.c.words_advanced).where(
+            study_days.c.user_id == UUID(user_id)
+        )
+    ).all()
+    assert [(r.reading_updates, r.words_advanced) for r in rows] == [(2, 3)]
+
+
+def test_put_reading_position_rejected_save_stores_and_credits_nothing(
+    reading_client: TestClient, db_conn: Connection
+) -> None:
+    # I-PU-6: the credit rides the same transaction as the position upsert and only on
+    # the success path — a 404'd anchor leaves no position row and no study day at all,
+    # not a study day with zero words.
+    user_id = _register(reading_client, "rp-words-404@example.com")
+    csrf = _csrf(reading_client)
+    source_id = _persist_source(db_conn, user_id)
+    _seed_book(db_conn, source_id)
+
+    resp = _put_position(reading_client, source_id, "missing", csrf=csrf)
+
+    assert resp.status_code == 404, resp.text
+    assert (
+        db_conn.execute(
+            select(reading_positions.c.anchor).where(reading_positions.c.source_id == source_id)
+        ).all()
+        == []
+    )
+    assert (
+        db_conn.execute(select(study_days.c.day).where(study_days.c.user_id == UUID(user_id))).all()
+        == []
+    )
+
+
 def test_put_reading_position_garbage_timezone_succeeds_and_credits_utc_day(
     reading_client: TestClient, db_conn: Connection
 ) -> None:

@@ -11,7 +11,8 @@ fakes, asserting the spec ACs and edges without a DB:
   there is no stored position or the stored anchor is stale (row untouched) (RD-01/10).
 - ``SaveReadingPosition``: stores the canonical anchor + server-computed percent, an
   alias write normalizes to canonical, and an unknown anchor / empty corpus 404s with
-  nothing stored (RD-08/09).
+  nothing stored (RD-08/09). The day's reading volume is credited from the position being
+  replaced — forward only, zero without a usable baseline, nothing on a rejected save.
 - ``ListSourceHighlights``: returns the owner's ``(user, source)`` highlights (RD-28).
 """
 
@@ -444,6 +445,87 @@ def test_save_reading_position_garbage_timezone_falls_back_to_utc() -> None:
         user=user, source_id=source.id, anchor="c1", client_tz="Mars/Olympus"
     )
 
+    assert study.record_calls == [(user.id, date(2026, 7, 19), 0, 1, 0)]
+
+
+# --- SaveReadingPosition reading volume (PAGE-07/08, I-PU-4/5/6) ----------------
+
+
+def test_save_reading_position_credits_the_ground_covered_since_the_last_save() -> None:
+    # PAGE-07: the day is credited the words between the position being replaced and the
+    # new one — c1s1 sits 3 words in, c2s1 6 words in, so the second save earns 3.
+    user, source, sources, corpus = _seeded_reader()
+    study = FakeStudyDayRepository()
+    positions = FakeReadingPositionRepository()
+    save = _save_position(sources, corpus, positions, study)
+
+    save(user=user, source_id=source.id, anchor="c1s1")
+    save(user=user, source_id=source.id, anchor="c2s1")
+
+    assert [call[4] for call in study.record_calls] == [0, 3]
+
+
+def test_save_reading_position_first_ever_save_credits_no_words() -> None:
+    # I-PU-5: resuming a book at the halfway mark with nothing stored claims nothing,
+    # though the position itself is stored and the day still counts as a reading day.
+    user, source, sources, corpus = _seeded_reader()
+    study = FakeStudyDayRepository()
+    positions = FakeReadingPositionRepository()
+
+    stored = _save_position(sources, corpus, positions, study)(
+        user=user, source_id=source.id, anchor="c2s1"
+    )
+
+    assert stored.anchor == "c2s1"
+    assert study.record_calls == [(user.id, date(2026, 7, 19), 0, 1, 0)]
+
+
+def test_save_reading_position_moving_backwards_credits_no_words() -> None:
+    # I-PU-4: scrolling back re-stores the earlier position but earns nothing — the
+    # figure never goes negative and the earlier advance is not clawed back.
+    user, source, sources, corpus = _seeded_reader()
+    study = FakeStudyDayRepository()
+    positions = FakeReadingPositionRepository()
+    save = _save_position(sources, corpus, positions, study)
+
+    save(user=user, source_id=source.id, anchor="c1s1")
+    save(user=user, source_id=source.id, anchor="c2s1")
+    stored = save(user=user, source_id=source.id, anchor="c1")
+
+    assert stored.anchor == "c1"
+    assert [call[4] for call in study.record_calls] == [0, 3, 0]
+
+
+def test_save_reading_position_credits_each_advance_from_the_new_baseline() -> None:
+    # Successive advances each measure from the position they replace, so a day of small
+    # saves totals the ground actually covered rather than double-counting it.
+    user, source, sources, corpus = _seeded_reader()
+    study = FakeStudyDayRepository()
+    positions = FakeReadingPositionRepository()
+    save = _save_position(sources, corpus, positions, study)
+
+    save(user=user, source_id=source.id, anchor="c1")  # offset 0
+    save(user=user, source_id=source.id, anchor="c1s1")  # offset 3
+    save(user=user, source_id=source.id, anchor="c2")  # offset 5
+    save(user=user, source_id=source.id, anchor="c2s1")  # offset 6
+
+    assert [call[4] for call in study.record_calls] == [0, 3, 2, 1]
+
+
+def test_save_reading_position_stale_prior_anchor_credits_zero_and_still_saves() -> None:
+    # PAGE-07: the stored anchor no longer resolves (the corpus was replaced). The old
+    # offset is meaningless against the current index, so nothing is credited — but the
+    # save must still succeed and re-baseline the reader.
+    user, source, sources, corpus = _seeded_reader()
+    study = FakeStudyDayRepository()
+    positions = FakeReadingPositionRepository()
+    positions.upsert(user.id, source.id, anchor="gone", percent=Decimal("90.00"), updated_at=_NOW)
+
+    stored = _save_position(sources, corpus, positions, study)(
+        user=user, source_id=source.id, anchor="c2s1"
+    )
+
+    assert stored.anchor == "c2s1"
     assert study.record_calls == [(user.id, date(2026, 7, 19), 0, 1, 0)]
 
 

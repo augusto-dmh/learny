@@ -144,6 +144,31 @@ def pages_from_words(words: int, words_per_page: int) -> int:
     return max(words, 0) // words_per_page
 
 
+def words_credited(
+    index: Sequence[ChapterIndexRow], *, prior_anchor: str | None, target_idx: int
+) -> int:
+    """Return the words a move from ``prior_anchor`` to ``target_idx`` newly covers.
+
+    The reading volume one position save earns, and deliberately conservative on every
+    edge, because it feeds a durable counter nothing else recomputes:
+
+    - **Forward only.** The difference of the two points' word offsets, floored at zero,
+      so re-reading or scrolling back credits nothing rather than a negative (I-PU-4).
+    - **No baseline, no claim.** No prior stored position credits zero (AD-184): opening
+      a book at the halfway mark is indistinguishable from having read half of it, and
+      claiming half a book from one click is a durable, uncorrectable inflation.
+    - **A prior anchor that no longer resolves** (the corpus was replaced) also credits
+      zero — the old offset means nothing against the new index — and the caller still
+      saves the position.
+    """
+    if prior_anchor is None:
+        return 0
+    prior_idx = locate(index, prior_anchor)
+    if prior_idx is None:
+        return 0
+    return max(words_before_row(index, target_idx) - words_before_row(index, prior_idx), 0)
+
+
 def _chapter_of(chapters: Sequence[Chapter], row_idx: int) -> int:
     """Return the index of the chapter whose half-open span contains ``row_idx``.
 
@@ -278,6 +303,10 @@ class SaveReadingPosition:
     the two commit together (I-1). It runs only on the success path — a bad anchor 404s
     before anything is stored and earns no study credit. A missing/invalid ``client_tz``
     degrades to UTC (HOME-09), never an error.
+
+    The same credit carries the day's reading *volume*: the words between the position
+    being replaced and the new one (``words_credited`` — forward-only, and zero without a
+    usable baseline). The prior row is therefore read before the upsert overwrites it.
     """
 
     def __init__(
@@ -311,6 +340,15 @@ class SaveReadingPosition:
         if target_idx is None:
             raise CorpusNotFound("No section for this anchor.")
 
+        # Read the baseline before the upsert replaces it; a superseded corpus can leave
+        # the stored anchor unresolvable, which credits zero without failing the save.
+        prior = self._positions.get(user.id, source_id)
+        advance = words_credited(
+            index,
+            prior_anchor=prior.anchor if prior is not None else None,
+            target_idx=target_idx,
+        )
+
         now = self._clock.now()
         percent = percent_at(index, target_idx)
         position = self._positions.upsert(
@@ -320,7 +358,12 @@ class SaveReadingPosition:
             percent=percent,
             updated_at=now,
         )
-        self._study_days.record(user.id, local_day(now, client_tz), reading_updates=1)
+        self._study_days.record(
+            user.id,
+            local_day(now, client_tz),
+            reading_updates=1,
+            words_advanced=advance,
+        )
         return position
 
 

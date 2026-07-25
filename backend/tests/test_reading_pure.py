@@ -11,6 +11,8 @@ spec ACs and edge cases:
 - ``percent_at`` (RD-16): position math, 2-decimal quantization, and a zero-total book.
 - ``words_before_row``, ``page_at`` and ``pages_from_words``: the page unit derived from
   the word counts already stored per section, with no DB and no HTTP.
+- ``words_credited``: the forward-only reading volume one position save earns, at every
+  edge (advance, retreat, no baseline, a baseline that no longer resolves).
 """
 
 from __future__ import annotations
@@ -25,6 +27,7 @@ from app.application.reading import (
     partition,
     percent_at,
     words_before_row,
+    words_credited,
 )
 from app.domain.entities import ChapterIndexRow
 
@@ -220,3 +223,47 @@ def test_pages_from_words_never_reports_a_negative_figure() -> None:
 
 def test_pages_from_words_degrades_to_zero_for_a_non_positive_quantum() -> None:
     assert pages_from_words(1000, 0) == 0
+
+
+# --- words_credited (PAGE-07, I-PU-4/I-PU-5) ------------------------------------
+
+# Word offsets 0, 3, 5, 6 (counts 3, 2, 1, 4); "c2" also answers to "old-c2".
+_BOOK = (
+    _row(0, 0, "c1", words=3),
+    _row(1, 1, "c1s1", words=2),
+    _row(2, 0, "c2", aliases=("old-c2",), words=1),
+    _row(3, 1, "c2s1", words=4),
+)
+
+
+def test_words_credited_is_the_ground_covered_since_the_prior_position() -> None:
+    # Moving from row 1 (3 words in) to row 3 (6 words in) covers 3 words.
+    assert words_credited(_BOOK, prior_anchor="c1s1", target_idx=3) == 3
+
+
+def test_words_credited_is_zero_when_the_reader_moves_backwards() -> None:
+    # I-PU-4: re-reading credits nothing — never a negative that would eat the day's
+    # earlier progress.
+    assert words_credited(_BOOK, prior_anchor="c2s1", target_idx=1) == 0
+
+
+def test_words_credited_is_zero_for_a_save_at_the_same_place() -> None:
+    assert words_credited(_BOOK, prior_anchor="c1s1", target_idx=1) == 0
+
+
+def test_words_credited_is_zero_without_a_prior_position() -> None:
+    # I-PU-5: opening a book at the halfway mark must not claim half the book as read
+    # today — with no baseline there is no evidence any ground was covered.
+    assert words_credited(_BOOK, prior_anchor=None, target_idx=3) == 0
+
+
+def test_words_credited_is_zero_when_the_prior_anchor_no_longer_resolves() -> None:
+    # The corpus was replaced under the stored position: the old offset means nothing
+    # against the current index, so it earns nothing.
+    assert words_credited(_BOOK, prior_anchor="gone", target_idx=3) == 0
+
+
+def test_words_credited_resolves_a_prior_anchor_by_alias() -> None:
+    # A baseline stored under a superseded alias still locates its row (2 → offset 5),
+    # so a renormalized corpus does not silently reset the reader's baseline.
+    assert words_credited(_BOOK, prior_anchor="old-c2", target_idx=3) == 1
