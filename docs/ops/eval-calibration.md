@@ -139,3 +139,24 @@ The full re-derivation (12-case recording + 3 seed runs + retrieval
 observation) measured **well under $1** on 2026-07-18 — the golden corpus is
 tiny and the judge runs on the cheap tier. The RFC's $5–15 envelope has ample
 headroom for wider judge tiers later.
+
+## Live-run budget protocol
+
+Any paid provider run (judge passes, A/B studies, calibration sweeps) follows
+this protocol — it exists because a July 2026 study run lost ~40% of a paid
+judge pass to mid-run credit exhaustion and had to be regenerated:
+
+1. **Pre-flight estimate.** Before the first paid call, estimate the run's cost
+   (cases × calls-per-case × tokens-per-call × price) and compare it against
+   the budget ceiling. The ceiling is `LEARNY_EVAL_BUDGET_USD` when set,
+   otherwise the amount the user stated for the run; with neither, ask before
+   starting. Abort the plan (do not "start and see") when the estimate exceeds
+   the ceiling.
+2. **Checkpoint per unit.** Persist results per case/line as they complete
+   (append-only file or per-case rows), never only at run end — a failure at
+   N% must preserve N% of the work.
+3. **Resume, never regenerate.** On any interruption (credits, rate limit,
+   network), resume from the last checkpoint; regenerating completed units is
+   double-paying.
+4. **Report spend.** End the run report with actual units completed and the
+   estimate-vs-actual comparison, so the next run's pre-flight is calibrated.
