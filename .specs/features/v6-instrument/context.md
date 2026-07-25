@@ -3,7 +3,7 @@
 RFC-006 Cycle A. Decisions taken under the ship-cycle auto-decision rule: each was
 formulated as an option set with why-recommend and why-not, the recommended option
 was taken, and the reasoning is recorded here so it survives without the conversation.
-Mirrored as `AD-170`..`AD-177` in `.specs/project/STATE.md`.
+Mirrored as `AD-170`..`AD-180` in `.specs/project/STATE.md`.
 
 ---
 

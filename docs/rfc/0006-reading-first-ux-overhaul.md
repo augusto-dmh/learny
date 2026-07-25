@@ -205,7 +205,7 @@ Ordering rationale: A is independent and gates every performance claim. B is the
 |--------|-------|--------|
 | Record the pause in RFC-005's status line | Claude | DONE (this change set) |
 | Accept or amend this RFC | Augusto | NOT STARTED |
-| Run Cycle A via `learny-ship-cycle` | Augusto + Claude | NOT STARTED |
+| Run Cycle A via `learny-ship-cycle` | Augusto + Claude | DONE — cycle `v6-instrument` built on `feat/app-instrumentation`; ROADMAP has the v6 section |
 | Run Cycle B (heatmap artifact is the accepted spec) | Augusto + Claude | NOT STARTED |
 | Draft ADR-0029 for acceptance before Cycle C | Claude | NOT STARTED |
 | Cycles C, D, E in order | Augusto + Claude | NOT STARTED |

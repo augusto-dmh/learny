@@ -52,7 +52,7 @@ Phase boundary: full backend suite + ruff.
 | --- | --- | --- |
 | D1 | A dev-only route returns ranked endpoints and recent slow queries: 404 when the flag is off, 401 when unauthenticated, 200 with the documented shape when both hold, and 200 with empty collections when nothing has been recorded. The response states that it covers one process. | OBS-19..22 |
 | D2 | The dev compose override enables the flag; the production compose does not. An ops note explains how to read the surface and what it deliberately does not cover. | OBS-23, 24 |
-| D3 | `ROADMAP.md` gains the v6 section with the five RFC-006 cycles and this row marked done; RFC-006's action items for the pause record and Cycle A are updated; `STATE.md` carries `AD-170`..`AD-177` and the cycle handoff. | — |
+| D3 | `ROADMAP.md` gains the v6 section with the five RFC-006 cycles and this row marked done; RFC-006's action items for the pause record and Cycle A are updated; `STATE.md` carries `AD-170`..`AD-180` and the cycle handoff. | — |
 
 Phase boundary: full backend suite + ruff + frontend vitest.
 
