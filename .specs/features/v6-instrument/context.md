@@ -103,3 +103,46 @@ paused RFC-005. It is carried as a known baseline and raised at the merge gate.
 **Gate definition for this cycle:** no new failures against the baseline
 `1655 passed / 1 known pre-existing failure / 11 skipped` (backend, local stack up) and
 `563 passed` (frontend).
+
+---
+
+## D-9 (AD-178) — Splitting the two timing consumers, mid-cycle
+
+Phase B discovered that the spec's original OBS-08 ("the header's `dur` equals the access
+log's `duration_ms`") is only satisfiable by measuring at response *start*, which silently
+redefines a shipped observable: a streamed response's `duration_ms` would stop including
+the streamed body.
+
+**Options**
+
+1. Accept the redefinition. *Why:* one number, no ambiguity, already implemented.
+   *Why not:* Ask and Teach stream by design, and RFC-006 Cycle E's latency claims will
+   cite exactly those endpoints. The instrument would go blind precisely where the "app
+   feels slow" complaint originates.
+2. Let header and log diverge silently. *Why:* no code change. *Why not:* two numbers with
+   one name is how observability lies.
+3. **Split them deliberately and say so** ⭐ chosen. The header carries time-to-response-start
+   (the server's own share — all a browser can attribute anyway); the access log and the
+   recorder keep whole-request duration, preserving the pre-cycle meaning of `duration_ms`
+   and keeping streaming endpoints rankable by their true cost. *Why not:* two fields to
+   understand rather than one, and a second measurement point in the middleware.
+
+**Chosen:** option 3. Spec AC amended in place with the reasoning recorded, not rewritten
+to match what was built.
+
+## D-10 (AD-179) — OBS-10 was unsatisfiable as written
+
+A pure-ASGI middleware cannot put a header on a response produced by Starlette's
+`ServerErrorMiddleware`, which is always outermost. `X-Request-ID` has always had this
+same gap and it is documented in the middleware's own docstring. The AC now states the
+real boundary; Phase B pinned both headers' absence in one test so they cannot be fixed
+apart. Closing it for real means wrapping the app outside `ServerErrorMiddleware` — a
+change to `create_app`'s contract, deliberately not made inside an S-sized cycle.
+
+## D-11 (AD-180) — The settings were inert; Phase D owns the wiring
+
+Phase B found that nothing calls `set_recorder(...)` at app assembly, so
+`LEARNY_INSTRUMENT_CAPACITY` and `LEARNY_SLOW_QUERY_STATEMENT_CHARS` had no effect. Neither
+Phase A (told to wire nothing) nor Phase B (told not to touch app assembly) owned it — a
+gap in the task breakdown, not in anyone's execution. Added to the spec as OBS-26 and
+assigned to Phase D, which already touches `create_app` for the dev route.

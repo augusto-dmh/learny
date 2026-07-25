@@ -81,11 +81,14 @@ Explicitly excluded. Documented to prevent scope creep.
 
 **Acceptance Criteria**:
 
-1. WHEN any HTTP response leaves the application THEN it SHALL carry a `Server-Timing` header containing an `app` metric whose `dur` value equals the duration reported on that request's access log record.
+1. WHEN any HTTP response leaves the application THEN it SHALL carry a `Server-Timing` header containing an `app` metric whose `dur` value equals the time-to-response-start reported on that request's access log record — one measurement, two consumers, never two independent timings.
 2. WHEN a response is relayed through the Next.js API proxy THEN the `Server-Timing` header SHALL still be present on the response delivered to the browser.
-3. WHEN the request handler raises an unhandled exception THEN the response SHALL still carry `Server-Timing` and the request SHALL still be recorded, with its final status code.
+3. WHEN a response is produced by the application's own exception handlers THEN it SHALL still carry `Server-Timing`; WHEN an exception escapes to Starlette's outermost error middleware THEN the response SHALL carry neither `Server-Timing` nor `X-Request-ID` — the pre-existing, documented boundary of a pure-ASGI middleware — and the request SHALL still be recorded with its final status code.
+4. WHEN a response is streamed THEN the access log's `duration_ms` SHALL continue to measure the whole request including the streamed body, and the recorder SHALL rank on that whole-request duration, so that streaming endpoints remain rankable by what they actually cost.
 
-**Independent Test**: Call any endpoint through the test client and assert the header; call the proxy relay with an upstream response carrying the header and assert it survives.
+**Independent Test**: Call any endpoint through the test client and assert the header; call the proxy relay with an upstream response carrying the header and assert it survives; stream a response and assert the logged total exceeds the header's time-to-start.
+
+**Amendment (2026-07-25, mid-cycle).** AC-1 and AC-3 as originally written were wrong, and the correction is recorded rather than hidden. AC-1 demanded the header equal the access log's `duration_ms`, which is only satisfiable by measuring at response start — silently redefining a shipped observable so that a streamed answer's cost vanished from the log. Since Ask/Teach stream by design and RFC-006 Cycle E will cite exactly those numbers, the two consumers are now split deliberately: the header carries time-to-start (the server's own share, which is all a browser can attribute), the log and the recorder keep whole-request duration. AC-3 demanded a header on truly-unhandled exceptions, which no pure-ASGI middleware can deliver because `ServerErrorMiddleware` is always outermost; it now states the real boundary, which `X-Request-ID` has always had.
 
 ---
 
@@ -137,6 +140,7 @@ Explicitly excluded. Documented to prevent scope creep.
 4. WHEN no samples have been recorded THEN the response SHALL be 200 with empty collections, not an error.
 5. WHEN the environment contract is read THEN `.env.example` SHALL document the instrument flag, the slow-query threshold, the buffer capacity, and the statement cap.
 6. WHEN the production compose configuration is read THEN it SHALL NOT enable the dev instrument flag.
+7. WHEN the application is assembled THEN the recorder in use SHALL be built from the configured capacity and statement cap, so that `LEARNY_INSTRUMENT_CAPACITY` and `LEARNY_SLOW_QUERY_STATEMENT_CHARS` change observable behaviour instead of sitting inert.
 
 **Independent Test**: Build the app with the flag off and assert 404; with the flag on, assert 401 unauthenticated and 200 with the documented shape when authenticated.
 
@@ -181,11 +185,15 @@ Explicitly excluded. Documented to prevent scope creep.
 | OBS-22 | P1: The dev-only surface | D | Pending |
 | OBS-23 | P1: The dev-only surface | D | Pending |
 | OBS-24 | P1: The dev-only surface | D | Pending |
+| OBS-25 | P1: Server timing on the wire | B | Pending |
+| OBS-26 | P1: The dev-only surface | D | Pending |
 
-**Mapping:** OBS-01..07 = recorder ACs 1–7; OBS-08..10 = server-timing ACs 1–3;
+**Mapping:** OBS-01..07 = recorder ACs 1–7; OBS-08..10 + OBS-25 = server-timing ACs 1–4;
 OBS-11..15 = slow-query ACs 1–5; OBS-16..18 = Celery ACs 1–3; OBS-19..24 = surface ACs 1–6.
+OBS-26 = the configured recorder is actually injected at app assembly, so the capacity and
+statement-cap settings are live rather than inert (gap found in Phase B, assigned to D).
 
-**Coverage:** 24 total, 24 mapped to phases, 0 unmapped.
+**Coverage:** 26 total, 26 mapped to phases, 0 unmapped.
 
 ---
 
