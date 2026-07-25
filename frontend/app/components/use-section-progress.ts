@@ -21,6 +21,14 @@
  * with `getElementById` — a CSS selector could not match it. Where geometry is
  * unavailable (server render, jsdom, a section not yet laid out) the fraction is
  * zero, which leaves the figure exactly as it behaved before: step by step.
+ *
+ * Measuring is deferred to the next animation frame, and a burst of scroll
+ * events collapses into that one frame. A scroll event fires far more often than
+ * the screen redraws, and each measurement reads layout and can re-render the
+ * whole reader — work no reader could ever see the result of, on the one surface
+ * this app exists to keep smooth. A frame is also the honest granularity: the
+ * figure cannot update more often than the screen does. The pending frame is
+ * cancelled on cleanup, so nothing measures a section the reader has left.
  */
 
 import { useEffect, useState } from "react";
@@ -36,7 +44,9 @@ export function useSectionProgress(
     if (!anchor) {
       return;
     }
+    let frame: number | null = null;
     function measure() {
+      frame = null;
       const rect = document.getElementById(anchor!)?.getBoundingClientRect?.();
       if (!rect || rect.height <= 0) {
         setFraction(0);
@@ -44,13 +54,26 @@ export function useSectionProgress(
       }
       setFraction(clamp((headerOffset - rect.top) / rect.height));
     }
+    function schedule() {
+      // Already waiting on a frame: this event's position will be read by that
+      // one. Every event in a frame therefore costs a single measurement.
+      if (frame !== null) {
+        return;
+      }
+      frame = requestAnimationFrame(measure);
+    }
+    // The first measurement is immediate: the reader arrives mid-section on a
+    // deep link and the figure must be right on the first paint, not a frame later.
     measure();
     // Capture-phase, so a scrolling container is heard as well as the page.
-    window.addEventListener("scroll", measure, true);
-    window.addEventListener("resize", measure);
+    window.addEventListener("scroll", schedule, true);
+    window.addEventListener("resize", schedule);
     return () => {
-      window.removeEventListener("scroll", measure, true);
-      window.removeEventListener("resize", measure);
+      if (frame !== null) {
+        cancelAnimationFrame(frame);
+      }
+      window.removeEventListener("scroll", schedule, true);
+      window.removeEventListener("resize", schedule);
     };
   }, [anchor, headerOffset]);
 

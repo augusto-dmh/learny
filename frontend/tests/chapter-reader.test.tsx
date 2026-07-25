@@ -1211,8 +1211,13 @@ describe("ChapterFlow live progress (PAGE-16/17/18)", () => {
     );
 
     // Read into the section so the shown percentage is an interpolated one...
+    // (measurement lands on the next animation frame, as the sibling tests await too)
     placeSection(container, S1, -444, 1000);
-    expect(screen.getByTestId("reading-progress").textContent).toContain("25%");
+    await waitFor(() =>
+      expect(screen.getByTestId("reading-progress").textContent).toContain(
+        "25%",
+      ),
+    );
 
     // ...then move on, and let the scroll-idle write land.
     obs.emit({ [S1]: false, [S2]: true });
