@@ -242,6 +242,16 @@ describe("StudyHeatmap layout (PAGE-19/20/21/23/26)", () => {
 
     expect(ringed).toHaveLength(1);
     expect(ringed[0].getAttribute("data-day")).toBe("2026-07-20");
+
+    // The ring itself, not just the hook that marks it: "locatable" is the whole
+    // point, so the visual treatment has to be asserted or it can be deleted
+    // without anything noticing. Matched on the colour class because every cell
+    // already carries `inset-ring-1` for its hairline edge.
+    expect(ringed[0].className).toContain("ring-muted-foreground");
+    const other = Array.from(
+      container.querySelectorAll('[data-testid="heatmap-cell"]'),
+    ).find((cell) => cell.getAttribute("data-day") !== "2026-07-20")!;
+    expect(other.className).not.toContain("ring-muted-foreground");
   });
 
   it("gives real cells a hairline edge and leaves placeholders blank", () => {

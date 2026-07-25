@@ -1159,6 +1159,37 @@ describe("ChapterFlow live progress (PAGE-16/17/18)", () => {
     );
   });
 
+  it("holds the figure at 100% when the server's word sums do not add up", async () => {
+    // The clamp's only live branch: a corpus whose chapter offsets overrun the
+    // book total (a superseded or partially rebuilt corpus) would otherwise
+    // render a percentage above 100. Nothing else in the reader notices this,
+    // so without this assertion the clamp can be deleted silently.
+    const overrun: ChapterView = {
+      ...chapter,
+      words_before_chapter: 900,
+      chapter_word_count: 500,
+      total_word_count: 1000,
+    };
+    const { container } = render(
+      <ChapterFlow
+        sourceId="s1"
+        csrf="csrf-xyz"
+        chapter={overrun}
+        scrollTarget={S1}
+      />,
+    );
+    await screen.findByText("Ada Lovelace wrote the first algorithm.");
+
+    // Deep into the chapter: 900 + most of 500 read is well past the 1000 total.
+    placeSection(container, S1, -9000, 1000);
+    await waitFor(() =>
+      expect(screen.getByTestId("reading-progress").textContent).toContain(
+        "100% read",
+      ),
+    );
+    expect(screen.getByTestId("ink-line-fill").style.width).toBe("100%");
+  });
+
   it("keeps the position save carrying the anchor alone", async () => {
     // The live figure is presentation: the reader stores a place in the book,
     // and the percent recorded against it stays the server's.
