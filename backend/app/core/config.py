@@ -223,6 +223,23 @@ class Settings(BaseSettings):
     # local adapter has no limit, so truncation is a no-op there.
     notes_embedding_max_chars: int = 32000
 
+    # App instrumentation (RFC-006 Cycle A). ``dev_instrument_enabled`` gates the
+    # dev-only surface that *exposes* recorded timings, never the recording itself:
+    # collection is a bounded in-memory append, and gating it would leave a running
+    # process undiagnosable without a restart that discards the evidence being
+    # chased (AD-173). It defaults false and is absent from the production compose.
+    # ``instrument_capacity`` is the sample count kept per process (requests and
+    # slow-query entries are bounded separately by it) and
+    # ``slow_query_statement_chars`` caps the captured statement text; both mirror
+    # the recorder's process defaults in ``app.core.instrumentation``. A statement
+    # counts as slow at or above ``slow_query_ms`` — set to zero or below every
+    # statement qualifies, deliberately, so the path is exercisable without
+    # sleeping (AD-175).
+    dev_instrument_enabled: bool = False
+    instrument_capacity: int = 500
+    slow_query_ms: int = 200
+    slow_query_statement_chars: int = 2000
+
 
 @lru_cache
 def get_settings() -> Settings:
