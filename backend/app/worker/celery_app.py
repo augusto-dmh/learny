@@ -11,6 +11,7 @@ from celery import Celery
 
 from app.core.config import get_settings
 from app.core.logging import configure_logging
+from app.worker.instrumentation import install_task_duration_signals
 
 _settings = get_settings()
 
@@ -39,3 +40,6 @@ celery_app.conf.update(
 )
 
 configure_logging()
+# Every task reports its duration through Celery's own signals, so no task needs
+# instrumentation code of its own (AD-176).
+install_task_duration_signals()
