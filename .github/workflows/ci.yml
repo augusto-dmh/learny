@@ -4,7 +4,8 @@
 #   backend-test — pytest against real Postgres(pgvector)+Redis service containers;
 #                  the suite's own bootstrap applies Alembic migrations, so every
 #                  run also proves migrations work from an empty database.
-#   lint         — ruff check (the project's lint gate; formatting is not enforced).
+#   lint         — ruff check + ruff format --check (formatting enforced since the
+#                  repo-wide reformat) + architecture boundary fitness check.
 #   frontend     — vitest, tsc, and the production Next.js build.
 #   compose-smoke— builds the compose topology and boots it to a healthy API.
 name: CI
@@ -90,6 +91,11 @@ jobs:
         with:
           src: backend
           # Lint with the exact ruff the lockfile pins, not a floating latest.
+          version-file: backend/uv.lock
+      - uses: astral-sh/ruff-action@v3
+        with:
+          src: backend
+          args: format --check
           version-file: backend/uv.lock
       # Architecture fitness: provider-SDK isolation and layer boundaries as
       # executable rules (stdlib-only script), not just review prose.

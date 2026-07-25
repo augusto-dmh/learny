@@ -13,9 +13,8 @@ test-frontend:
 
 test: test-backend test-frontend
 
-# CI parity: the lint gate is ruff check only — formatting is deliberately not enforced (see ci.yml).
 lint-backend:
-	cd backend && uv run ruff check .
+	cd backend && uv run ruff check . && uv run ruff format --check .
 
 # CI parity: the frontend static gate is tsc --noEmit (no ESLint config exists; `next lint` prompts interactively).
 lint-frontend:
