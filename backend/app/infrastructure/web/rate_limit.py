@@ -158,6 +158,24 @@ def rate_limit_teaching(request: Request) -> None:
         )
 
 
+def rate_limit_conversations(request: Request) -> None:
+    """FastAPI dependency: throttle the whole unified conversation surface (CONV-22).
+
+    Shares the same swappable limiter and per-IP+route key as ``rate_limit_auth``
+    (same ``KNOWN LIMITATION`` under the proxy topology). ADR-0029 gives the unified
+    surface **one** policy: start, rename, delete, and both turn endpoints hang off
+    this single dependency rather than a per-route family, so there is one number to
+    reason about when the Ask/Teach split retires.
+    """
+    allowed, retry_after = get_rate_limiter().hit(_client_key(request))
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many attempts. Please try again later.",
+            headers={"Retry-After": str(retry_after)},
+        )
+
+
 def rate_limit_quiz(request: Request) -> None:
     """FastAPI dependency: throttle deck generation + review submits; 429 when exceeded.
 

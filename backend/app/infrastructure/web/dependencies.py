@@ -24,6 +24,11 @@ from uuid import UUID, uuid4
 from fastapi import Depends, Request
 from sqlalchemy import Connection
 
+# The unified conversation services are reached through the module because four of
+# their names (Start/Read/List/PostConversationTurn) still collide with the legacy
+# teaching services imported below; Phase D removes the legacy set and with it the
+# need for the alias.
+from app.application import conversations as conversation_services
 from app.application.cards import (
     AcceptCard,
     AcceptNoteCard,
@@ -533,6 +538,63 @@ def get_post_teaching_turn(
         ids=uuid4,
         evidence_top_k=settings.teaching_evidence_top_k,
         history_turns=settings.teaching_history_turns,
+    )
+
+
+# --- Unified conversations (ADR-0029) ------------------------------------------
+#
+# The unified surface is wired on the request-scoped connection like every other
+# read/write path: the source repo enforces ownership, the corpus repo resolves and
+# re-resolves scope anchors, and the conversation repos persist the aggregate. The
+# evidence budget and history window come from the ``conversation_*`` settings —
+# one pair for both modes, replacing the separate Q&A and teaching numbers.
+
+
+def get_start_conversation(conn: DbConnection) -> conversation_services.StartConversation:
+    """Wire ``StartConversation`` on the request-scoped connection (CONV-05/15)."""
+    return conversation_services.StartConversation(
+        sources=SqlAlchemySourceRepository(conn),
+        corpus=SqlAlchemyCorpusRepository(conn),
+        conversations=SqlAlchemyConversationRepository(conn),
+        authorize=AuthorizeOwnership(),
+        clock=_clock,
+        ids=uuid4,
+    )
+
+
+def get_list_conversations(conn: DbConnection) -> conversation_services.ListConversations:
+    """Wire ``ListConversations`` on the request-scoped connection (CONV-06/16)."""
+    return conversation_services.ListConversations(
+        conversations=SqlAlchemyConversationRepository(conn),
+    )
+
+
+def get_read_conversation(conn: DbConnection) -> conversation_services.ReadConversation:
+    """Wire ``ReadConversation`` on the request-scoped connection (CONV-07/17)."""
+    return conversation_services.ReadConversation(
+        conversations=SqlAlchemyConversationRepository(conn),
+        turns=SqlAlchemyConversationTurnRepository(conn),
+        sources=SqlAlchemySourceRepository(conn),
+        authorize=AuthorizeOwnership(),
+    )
+
+
+def get_rename_conversation(conn: DbConnection) -> conversation_services.RenameConversation:
+    """Wire ``RenameConversation`` on the request-scoped connection (CONV-08/18)."""
+    return conversation_services.RenameConversation(
+        conversations=SqlAlchemyConversationRepository(conn),
+        sources=SqlAlchemySourceRepository(conn),
+        authorize=AuthorizeOwnership(),
+        clock=_clock,
+    )
+
+
+def get_delete_conversation(conn: DbConnection) -> conversation_services.DeleteConversation:
+    """Wire ``DeleteConversation`` on the request-scoped connection (CONV-09/19)."""
+    return conversation_services.DeleteConversation(
+        conversations=SqlAlchemyConversationRepository(conn),
+        sources=SqlAlchemySourceRepository(conn),
+        authorize=AuthorizeOwnership(),
     )
 
 
