@@ -24,16 +24,16 @@ from app.application.streaming import (
     StreamAnswer,
     hold_back_deltas,
 )
-from app.domain.entities import Evidence, QuestionAnswer, User
+from app.domain.entities import (
+    ANSWERED,
+    NOT_FOUND_IN_SOURCE,
+    Evidence,
+    QuestionAnswer,
+    User,
+)
 from app.domain.ports import AnswerGenerationPort, SourceRepository
 
 logger = logging.getLogger(__name__)
-
-# ``QuestionAnswer.status`` vocabulary (design §Data/DTOs). ``answered`` carries a
-# grounded citation set; ``not_found_in_source`` is the explicit, first-class
-# "the source cannot support this" product outcome (ADR-0003 / D-3).
-_ANSWERED = "answered"
-_NOT_FOUND_IN_SOURCE = "not_found_in_source"
 
 
 class AskQuestion:
@@ -161,7 +161,7 @@ class AskQuestion:
         else:
             text, citations = grounded
             result = QuestionAnswer(
-                status=_ANSWERED,
+                status=ANSWERED,
                 text=text,
                 citations=tuple(citations),
                 evidence_count=evidence_count,
@@ -193,7 +193,7 @@ class AskQuestion:
 
         text, citations = grounded
         return QuestionAnswer(
-            status=_ANSWERED,
+            status=ANSWERED,
             text=text,
             citations=tuple(citations),
             evidence_count=evidence_count,
@@ -203,7 +203,7 @@ class AskQuestion:
     @staticmethod
     def _not_found(evidence_count: int, model: str) -> QuestionAnswer:
         return QuestionAnswer(
-            status=_NOT_FOUND_IN_SOURCE,
+            status=NOT_FOUND_IN_SOURCE,
             text="",
             citations=(),
             evidence_count=evidence_count,
