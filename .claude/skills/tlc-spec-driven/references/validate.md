@@ -180,7 +180,7 @@ After all checks complete, the Verifier MUST:
 
 ### 10. Distill Lessons (MANDATORY when validation.md has signal)
 
-This is the closing action of validation — not a separate phase. Immediately after the report is written, turn its grounded failures into reusable, project-local guidance by following [lessons.md](lessons.md). In short: for each surviving mutant, spec-precision gap, failed/uncovered AC, or `// SPEC_DEVIATION`, record one terse general lesson via `python3 scripts/lessons.py add` (the script enforces grounding and owns all bookkeeping). A clean PASS with no signal → record nothing. Run the self-check: if there was signal but no lesson was recorded, say so in chat. See [lessons.md](lessons.md) for the exact commands, phrasing rules, scope discipline, and the no-script fallback.
+This is the closing action of validation — not a separate phase. Immediately after the report is written, turn its grounded failures into reusable, project-local guidance by following [lessons.md](lessons.md). In short: for each surviving mutant, spec-precision gap, failed/uncovered AC, or `// SPEC_DEVIATION`, record one terse general lesson via `python3 .claude/skills/tlc-spec-driven/scripts/lessons.py add` from the repo root (the script enforces grounding and owns all bookkeeping). A clean PASS with no signal → record nothing. Run the self-check: if there was signal but no lesson was recorded, say so in chat. See [lessons.md](lessons.md) for the exact commands, phrasing rules, scope discipline, and the no-script fallback.
 
 ---
 
@@ -347,4 +347,4 @@ Update spec.md requirement statuses:
 - **Max 3 diagnostic iterations** — Prevents infinite investigation loops
 - **Update traceability** — Every verified requirement updates spec.md status
 - **Always write the report file** — `.specs/features/[feature]/validation.md` is the persisted evidence artifact
-- **Distill after writing** — turn grounded failures into lessons via `scripts/lessons.py` ([lessons.md](lessons.md)); clean PASS → no lesson
+- **Distill after writing** — turn grounded failures into lessons via `.claude/skills/tlc-spec-driven/scripts/lessons.py` ([lessons.md](lessons.md)); clean PASS → no lesson
