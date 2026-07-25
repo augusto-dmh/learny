@@ -20,9 +20,16 @@
  * The backend returns only days that had activity (a sparse list), so the grid is
  * densified here: the 84-day window ending at the viewer's local today, with a row
  * looked up per day and absent days left empty.
+ *
+ * The grid is laid out on fixed tracks. Declaring seven rows without a column
+ * track left the implicit columns at `auto`, so they stretched to whatever width
+ * the card offered and the cells read as scattered squares; the column track, the
+ * cell size, and the start alignment are what make it a compact block. The two
+ * axes and the legend hang off the same tracks, so they stay in step with the
+ * cells at any width.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 
 import {
   getStudyDays,
@@ -43,6 +50,13 @@ import { useHomeSettings } from "./use-home-settings";
 /** The heatmap window: 12 weeks, rendered as a week-aligned grid (AD-156). */
 const HEATMAP_WINDOW_DAYS = 84;
 
+/** The window in weeks — one grid column per week, and the graph's own label. */
+const HEATMAP_WINDOW_WEEKS = HEATMAP_WINDOW_DAYS / 7;
+
+/** Cell edge and gutter, in px: the fixed tracks the grid is laid out on. */
+const CELL_PX = 15;
+const GAP_PX = 4;
+
 /** Shading class per intensity level; level 0 is the plain empty cell (I-7). */
 const LEVEL_CLASS: Record<number, string> = {
   0: "bg-muted",
@@ -51,6 +65,76 @@ const LEVEL_CLASS: Record<number, string> = {
   3: "bg-chart-4",
   4: "bg-chart-5",
 };
+
+/** The five levels, low to high — the order the Less→More key names them in. */
+const LEVELS = [0, 1, 2, 3, 4];
+
+const MONTHS = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+];
+
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+/**
+ * The weekday rows that carry a label. Naming every other row keeps the axis
+ * readable without crowding it; the unlabelled rows still render a spacer so the
+ * axis stays in step with the cell grid.
+ */
+const WEEKDAY_LABEL_ROWS = [1, 3, 5];
+
+/**
+ * The cell grid: fixed rows *and* a fixed implicit column track, start-aligned so
+ * the block keeps its natural width instead of stretching across the card.
+ */
+const CELLS_GRID_STYLE: CSSProperties = {
+  display: "grid",
+  gridAutoFlow: "column",
+  gridTemplateRows: `repeat(7, ${CELL_PX}px)`,
+  gridAutoColumns: `${CELL_PX}px`,
+  gap: `${GAP_PX}px`,
+  justifyContent: "start",
+};
+
+/** The month axis: the same column track as the cells, so labels sit over them. */
+const MONTHS_AXIS_STYLE: CSSProperties = {
+  display: "grid",
+  gridAutoFlow: "column",
+  gridAutoColumns: `${CELL_PX}px`,
+  gap: `${GAP_PX}px`,
+  justifyContent: "start",
+  height: "14px",
+};
+
+/** The weekday axis: the same row track as the cells, so labels sit beside them. */
+const WEEKDAYS_AXIS_STYLE: CSSProperties = {
+  display: "grid",
+  gridTemplateRows: `repeat(7, ${CELL_PX}px)`,
+  gap: `${GAP_PX}px`,
+  paddingRight: "4px",
+};
+
+const CELL_SIZE_STYLE: CSSProperties = {
+  width: `${CELL_PX}px`,
+  height: `${CELL_PX}px`,
+};
+
+/** The hairline that gives an unshaded cell definition without giving it colour. */
+const CELL_BASE_CLASS = "rounded-[3px] inset-ring-1 inset-ring-foreground/5";
+
+/** The quiet mono voice both axes and the legend speak in. */
+const AXIS_TEXT_CLASS =
+  "font-mono text-[10.5px] tracking-[0.04em] text-muted-foreground";
 
 /** A card's async state: still loading, failed, or resolved with its payload. */
 type Loadable<T> =
@@ -79,8 +163,12 @@ type HeatmapCell = {
   key: string;
   /** The ISO day for a real cell, or `null` for a week-alignment placeholder. */
   day: string | null;
+  /** Zero-based month, for placing each month label over its own column. */
+  month: number;
   total: number;
   level: number;
+  /** Whether this cell is the viewer's local today, which the grid rings. */
+  today: boolean;
   placeholder: boolean;
 };
 
@@ -95,32 +183,79 @@ function buildCells(days: StudyDayView[], today: Date): HeatmapCell[] {
     totals.set(row.day, row.reviews_count + row.reading_updates);
   }
 
+  const todayKey = localDayKey(today);
   const start = new Date(today);
   start.setDate(start.getDate() - (HEATMAP_WINDOW_DAYS - 1));
 
   const cells: HeatmapCell[] = [];
   // Leading placeholders push the first real day into its weekday row (Sun = 0).
   for (let i = 0; i < start.getDay(); i += 1) {
-    cells.push({ key: `pad-start-${i}`, day: null, total: 0, level: 0, placeholder: true });
+    cells.push({
+      key: `pad-start-${i}`,
+      day: null,
+      month: 0,
+      total: 0,
+      level: 0,
+      today: false,
+      placeholder: true,
+    });
   }
   for (let i = 0; i < HEATMAP_WINDOW_DAYS; i += 1) {
     const d = new Date(start);
     d.setDate(start.getDate() + i);
     const key = localDayKey(d);
     const total = totals.get(key) ?? 0;
-    cells.push({ key, day: key, total, level: intensityLevel(total), placeholder: false });
+    cells.push({
+      key,
+      day: key,
+      month: d.getMonth(),
+      total,
+      level: intensityLevel(total),
+      today: key === todayKey,
+      placeholder: false,
+    });
   }
   // Trailing placeholders complete the final week column.
   while (cells.length % 7 !== 0) {
     cells.push({
       key: `pad-end-${cells.length}`,
       day: null,
+      month: 0,
       total: 0,
       level: 0,
+      today: false,
       placeholder: true,
     });
   }
   return cells;
+}
+
+type MonthLabel = { key: string; column: number; label: string };
+
+/**
+ * Place a month label over the column where that month's first day lands. The
+ * final column is skipped: a label there would name a month the grid has barely
+ * started, with no column left to carry it.
+ */
+function monthLabels(cells: HeatmapCell[]): MonthLabel[] {
+  const columns = cells.length / 7;
+  const labels: MonthLabel[] = [];
+  let labelled = -1;
+  for (let column = 0; column < columns; column += 1) {
+    const first = cells
+      .slice(column * 7, column * 7 + 7)
+      .find((cell) => !cell.placeholder);
+    if (!first || first.month === labelled) continue;
+    labelled = first.month;
+    if (column < columns - 1) {
+      labels.push({
+        key: `${first.month}-${column}`,
+        column: column + 1,
+        label: MONTHS[first.month],
+      });
+    }
+  }
+  return labels;
 }
 
 /**
@@ -136,26 +271,89 @@ export function StudyHeatmap({
   today?: Date;
 }) {
   const cells = buildCells(days, today);
+  const months = monthLabels(cells);
+
   return (
-    <div
-      data-testid="study-heatmap"
-      aria-label="study activity heatmap"
-      className="grid grid-flow-col grid-rows-[repeat(7,minmax(0,1fr))] gap-1"
-    >
-      {cells.map((cell) =>
-        cell.placeholder ? (
-          <div key={cell.key} aria-hidden data-placeholder className="h-3 w-3 rounded-sm" />
-        ) : (
+    <div data-testid="study-heatmap" className="space-y-2">
+      <div className="overflow-x-auto pb-0.5">
+        <div
+          role="group"
+          aria-label={`study activity heatmap, last ${HEATMAP_WINDOW_WEEKS} weeks`}
+          className="grid grid-cols-[auto_auto] justify-start gap-1.5"
+        >
+          <span aria-hidden />
+          <div aria-hidden data-testid="heatmap-months" style={MONTHS_AXIS_STYLE}>
+            {months.map((month) => (
+              <span
+                key={month.key}
+                data-month-column={month.column}
+                style={{ gridColumn: month.column }}
+                className={`${AXIS_TEXT_CLASS} self-end whitespace-nowrap`}
+              >
+                {month.label}
+              </span>
+            ))}
+          </div>
           <div
-            key={cell.key}
-            data-testid="heatmap-cell"
-            data-day={cell.day ?? undefined}
-            data-level={cell.level}
-            title={cell.total > 0 ? `${cell.total} on ${cell.day}` : undefined}
-            className={`h-3 w-3 rounded-sm ${LEVEL_CLASS[cell.level]}`}
-          />
-        ),
-      )}
+            aria-hidden
+            data-testid="heatmap-weekdays"
+            style={WEEKDAYS_AXIS_STYLE}
+          >
+            {WEEKDAYS.map((name, row) => (
+              <span
+                key={name}
+                className={`${AXIS_TEXT_CLASS} text-right leading-[15px]`}
+              >
+                {WEEKDAY_LABEL_ROWS.includes(row) ? name : ""}
+              </span>
+            ))}
+          </div>
+          <div data-testid="heatmap-cells" style={CELLS_GRID_STYLE}>
+            {cells.map((cell) =>
+              cell.placeholder ? (
+                <div
+                  key={cell.key}
+                  aria-hidden
+                  data-placeholder
+                  style={CELL_SIZE_STYLE}
+                  className="rounded-[3px]"
+                />
+              ) : (
+                <div
+                  key={cell.key}
+                  data-testid="heatmap-cell"
+                  data-day={cell.day ?? undefined}
+                  data-level={cell.level}
+                  data-today={cell.today ? "true" : undefined}
+                  title={cell.total > 0 ? `${cell.total} on ${cell.day}` : undefined}
+                  style={CELL_SIZE_STYLE}
+                  className={`${CELL_BASE_CLASS} ${LEVEL_CLASS[cell.level]}${
+                    cell.today ? " ring-1 ring-muted-foreground" : ""
+                  }`}
+                />
+              ),
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div
+        className={`flex items-center justify-between gap-[18px] ${AXIS_TEXT_CLASS}`}
+      >
+        <span>Last {HEATMAP_WINDOW_WEEKS} weeks</span>
+        <span data-testid="heatmap-legend" className="flex items-center gap-1">
+          <span>Less</span>
+          {LEVELS.map((level) => (
+            <i
+              key={level}
+              aria-hidden
+              data-legend-level={level}
+              className={`block h-[11px] w-[11px] rounded-[2px] inset-ring-1 inset-ring-foreground/5 ${LEVEL_CLASS[level]}`}
+            />
+          ))}
+          <span>More</span>
+        </span>
+      </div>
     </div>
   );
 }

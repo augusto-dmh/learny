@@ -129,6 +129,148 @@ describe("StudyHeatmap grid (HOME-13, I-7)", () => {
   });
 });
 
+describe("StudyHeatmap layout (PAGE-19/20/21/23/26)", () => {
+  const today = new Date(2026, 6, 20); // 2026-07-20 local, a Monday
+
+  function graph() {
+    const { container } = render(<StudyHeatmap days={[]} today={today} />);
+    return container;
+  }
+
+  it("lays the cells on a fixed column track instead of stretching to the card", () => {
+    const grid = graph().querySelector<HTMLElement>(
+      '[data-testid="heatmap-cells"]',
+    )!;
+
+    // The defect was an implicit `auto` column track: seven rows were declared and
+    // nothing constrained the columns, so they grew to the card's width.
+    expect(grid.style.gridAutoFlow).toBe("column");
+    expect(grid.style.gridAutoColumns).toBe("15px");
+    expect(grid.style.gridAutoColumns).not.toBe("auto");
+    expect(grid.style.gridTemplateRows).toBe("repeat(7, 15px)");
+    expect(grid.style.gap).toBe("4px");
+    // Start alignment is what keeps the block at its natural width.
+    expect(grid.style.justifyContent).toBe("start");
+  });
+
+  it("hangs both axes off the same tracks as the cells", () => {
+    const container = graph();
+    const months = container.querySelector<HTMLElement>(
+      '[data-testid="heatmap-months"]',
+    )!;
+    const weekdays = container.querySelector<HTMLElement>(
+      '[data-testid="heatmap-weekdays"]',
+    )!;
+
+    // Month labels ride the cells' column track; weekday labels ride its row track.
+    expect(months.style.gridAutoColumns).toBe("15px");
+    expect(months.style.gap).toBe("4px");
+    expect(weekdays.style.gridTemplateRows).toBe("repeat(7, 15px)");
+    expect(weekdays.style.gap).toBe("4px");
+  });
+
+  it("names the weekday rows Mon/Wed/Fri and hides the axis from assistive tech", () => {
+    const weekdays = graph().querySelector('[data-testid="heatmap-weekdays"]')!;
+    const rows = [...weekdays.children].map((row) => row.textContent);
+
+    // One entry per weekday row so the axis stays in step with the grid, with
+    // every other row named (Sunday first, matching the grid's row order).
+    expect(rows).toEqual(["", "Mon", "", "Wed", "", "Fri", ""]);
+    expect(weekdays.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it("places each month's label over the column its first day lands in", () => {
+    // The window ending 2026-07-20 opens on 2026-04-28, so the grid spans
+    // April → July and each of the four months is named once.
+    const months = graph().querySelector('[data-testid="heatmap-months"]')!;
+    const labels = [...months.children].map((el) => [
+      el.textContent,
+      el.getAttribute("data-month-column"),
+    ]);
+
+    // Each month is named once, over the column holding its first day: April in
+    // the opening column, then May, June, and July as each one starts.
+    expect(labels).toEqual([
+      ["Apr", "1"],
+      ["May", "2"],
+      ["Jun", "7"],
+      ["Jul", "11"],
+    ]);
+  });
+
+  it("does not label the final column, which has no column left to carry it", () => {
+    // 2026-01-04 is a Sunday, so January opens the window's last column — a label
+    // there would hang off the end of the axis, so it is dropped.
+    const { container } = render(
+      <StudyHeatmap days={[]} today={new Date(2026, 0, 4)} />,
+    );
+    const months = container.querySelector('[data-testid="heatmap-months"]')!;
+    const cells = container.querySelectorAll('[data-testid="heatmap-cell"]');
+    const columns =
+      (cells.length + container.querySelectorAll("[data-placeholder]").length) / 7;
+
+    expect([...months.children].map((el) => el.textContent)).toEqual([
+      "Oct",
+      "Nov",
+      "Dec",
+    ]);
+    for (const label of months.children) {
+      expect(Number(label.getAttribute("data-month-column"))).toBeLessThan(
+        columns,
+      );
+    }
+  });
+
+  it("names the five levels with a Less→More key and labels the window", () => {
+    const container = graph();
+    const legend = container.querySelector('[data-testid="heatmap-legend"]')!;
+
+    expect(legend.textContent).toBe("Less" + "More");
+    expect(
+      [...legend.querySelectorAll("[data-legend-level]")].map((el) =>
+        el.getAttribute("data-legend-level"),
+      ),
+    ).toEqual(["0", "1", "2", "3", "4"]);
+    // The window the graph covers is stated, not left to be counted.
+    expect(container.textContent).toContain("Last 12 weeks");
+  });
+
+  it("rings today's cell and only today's", () => {
+    const container = graph();
+    const ringed = container.querySelectorAll('[data-today="true"]');
+
+    expect(ringed).toHaveLength(1);
+    expect(ringed[0].getAttribute("data-day")).toBe("2026-07-20");
+  });
+
+  it("gives real cells a hairline edge and leaves placeholders blank", () => {
+    const container = graph();
+    const cell = container.querySelector('[data-testid="heatmap-cell"]')!;
+    const placeholder = container.querySelector("[data-placeholder]")!;
+
+    // An unshaded day still has definition; a week-alignment placeholder has none.
+    expect(cell.className).toContain("inset-ring");
+    expect(placeholder.className).not.toContain("inset-ring");
+    expect(placeholder.className).not.toContain("bg-");
+  });
+
+  it("keeps the existing test hooks and the 84-day window", () => {
+    const container = graph();
+
+    expect(screen.getByTestId("study-heatmap")).toBeTruthy();
+    expect(container.querySelectorAll('[data-testid="heatmap-cell"]')).toHaveLength(
+      84,
+    );
+    for (const cell of container.querySelectorAll('[data-testid="heatmap-cell"]')) {
+      expect(cell.getAttribute("data-day")).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect(cell.getAttribute("data-level")).toBe("0");
+    }
+    expect(
+      container.querySelectorAll("[data-placeholder]").length,
+    ).toBeGreaterThan(0);
+  });
+});
+
 describe("StudyStats streak line (HOME-12, I-4)", () => {
   it("renders the adherence count from the server value, not a client recomputation", async () => {
     // Only one day row, but the server says 9 studied — a client that recomputed
