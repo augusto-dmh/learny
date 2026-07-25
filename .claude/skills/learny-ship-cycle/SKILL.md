@@ -19,9 +19,17 @@ Runs one roadmap cycle from "what's the next PR?" to merged, replacing the previ
 
 **Resume contract:** on any session start or post-interruption message (a bare "continue" suffices — do not ask what to do), read `.specs/.ship-status`; if it shows a mid-stage cycle, run Stage Detection and resume immediately in that same turn.
 
+## Run modes (optional skill argument)
+
+- `once` (default) — stop at the Stage 7 merge gate for the single approval.
+- `auto` — this invocation is the user's standing merge approval: when the Stage 7 report is clean (Verifier PASS, gates green, comments cleaned), merge without asking, run Stage 8, and start the next cycle. Still stop for a Verifier FAIL, an escalation-rule decision, or a dirty report.
+- `until <roadmap row>` — like `auto`, but stop after the named row merges.
+
+The mode holds for the whole invocation; do not re-ask it mid-run.
+
 ## Stage Detection (always run first)
 
-The pipeline is resumable. Determine the current stage before doing anything:
+The pipeline is resumable. Check `.specs/.ship-status` first — if it shows an in-flight cycle (possibly from another session), resume that cycle rather than starting a new one; two concurrent cycles on one repo is always a mistake. Then determine the current stage:
 
 | Observation | Resume at |
 |---|---|
@@ -89,7 +97,7 @@ Re-fetch both endpoints and verify zero remain. If a submitted *review* (not a c
 
 ## Stage 7 — Merge Gate (the one user prompt)
 
-Present a compact ship report: cycle, PR number, Verifier result, triage counts (real/false, fixed/won't-fix), fix commits, gate results, comment cleanup status. Then ask the user (AskUserQuestion): merge now or hold.
+Present a compact ship report: cycle, PR number, Verifier result, triage counts (real/false, fixed/won't-fix), fix commits, gate results, comment cleanup status. In `once` mode, ask the user (AskUserQuestion): merge now or hold. In `auto`/`until` mode with a clean report, merge without asking.
 
 On approval: `gh pr merge {N} --merge` (merge commit, matching PRs #4–#9), then `git checkout main && git pull` and delete the local feature branch.
 
