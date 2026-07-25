@@ -129,3 +129,17 @@ Each mutation was injected in the working tree, the target suite run, then rever
 
 Nothing above touches an invariant, a stored value, or the wire contract. Every invariant carries
 a sensor that fires.
+
+## Post-verification — gaps 1 and 2 closed
+
+Both surviving mutants were closed by the orchestrator after this report was written; gap 3 was a
+decision rather than a defect and is recorded as AD-192.
+
+| Gap | Sensor added | Mutant re-run |
+| --- | --- | --- |
+| 1 — PAGE-16 clamp unsensored | `chapter-reader.test.tsx::holds the figure at 100% when the server's word sums do not add up` — renders a chapter whose offsets overrun the book total (`words_before_chapter 900 + chapter_word_count 500 > total_word_count 1000`), the clamp's only live branch | **KILLED.** Removing the `Math.min/Math.max` wrapper fails this test and only this test. |
+| 2 — PAGE-23 ring asserted only via `data-today` | `study-heatmap.test.tsx::rings today's cell and only today's` extended to assert the ring class on today's cell and its absence on another. Matched on `ring-muted-foreground`, not `ring-1` — every cell already carries `inset-ring-1` for its hairline edge, so the looser match would pass on any cell and sense nothing | **KILLED.** Blanking the conditional class fails this test and only this test. |
+
+Both mutations were injected together, confirmed to fail exactly the two named tests (2 failed /
+79 passed), then reverted; `git diff` over `frontend/app/` is empty. Post-fix gate: frontend
+**605 passed / 61 files**, `tsc --noEmit` clean.

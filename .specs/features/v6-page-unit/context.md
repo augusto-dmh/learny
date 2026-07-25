@@ -100,6 +100,33 @@ provider lock, and every one had a defensible recommendation).
   *Why:* small numbers, no dependency on the book-level offset.
   *Why not:* "page 3" would then be ambiguous across the book, defeating the point of the unit.
 
+## AD-192 — The heatmap frame is `role="group"`, not the artifact's `role="img"`
+
+Raised as a SPEC_DEVIATION by the phase worker and independently flagged by the Verifier. The
+approved artifact specifies `role="img"` with `aria-label="study activity heatmap, last 12 weeks"`
+on the graph frame **and** `tabIndex=0` on active cells. Those two cannot both be honoured: ARIA
+treats a `role="img"` subtree as presentational, so focusable descendants inside it are an
+authoring error — PAGE-22's keyboard path would be built on a subtree assistive tech is told to
+flatten.
+
+- **(a) `role="group"`, approved label kept verbatim, each active cell named individually
+  (`role="img"` + `aria-label="Mon, Jul 20: 7 reviews · 9 pages"`). — CHOSEN**
+  *Why:* keeps every word of the approved label, makes the keyboard affordance real rather than
+  nominal, and gives a screen-reader user exactly the content the visual tooltip shows. Empty days
+  get neither role nor name, so silent grace (I-7) survives in the accessibility tree too.
+  *Why not:* it is a visible divergence from a driver-approved artifact, so it must be surfaced at
+  the merge gate rather than buried.
+- **(b) Honour `role="img"` literally and drop the cell tab stops.**
+  *Why:* literal fidelity to the approved artifact.
+  *Why not:* silently deletes PAGE-22's keyboard requirement, which the same artifact asks for.
+- **(c) Honour both literally.**
+  *Why:* nothing is "changed".
+  *Why not:* ships a known-invalid ARIA structure — focusable content inside a presentational
+  subtree — which is worse than either coherent choice.
+
+**Consequence, stated for the merge gate:** the shipped markup differs from the approved artifact
+at exactly one attribute. No test asserted either role, so nothing was weakened to accommodate it.
+
 ## AD-191 — `pages` is a required field on the client mirror type; the protected fixtures widen
 
 Discovered mid-Execute: `frontend/tests/study-heatmap.test.tsx` builds `StudyDayView` fixtures

@@ -1,1 +1,1 @@
-v6-page-unit | Stage 1 Plan+Build | feat/page-unit | 2026-07-25T11:07:13-03:00 | Phase A DONE (4 commits, gate green, 6 sensors); Phase B reader running; C queued
+v6-page-unit | Stage 1 Plan+Build (Verify) | feat/page-unit | 2026-07-25T11:53:46-03:00 | all 3 phases built+gates green (1785 backend / 604 frontend); Verifier running
