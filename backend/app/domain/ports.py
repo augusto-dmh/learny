@@ -568,17 +568,30 @@ class AnswerGenerationPort(Protocol):
 
     model: str
 
-    def generate(self, *, question: str, evidence: Sequence[Evidence]) -> GeneratedAnswer:
+    def generate(
+        self,
+        *,
+        question: str,
+        evidence: Sequence[Evidence],
+        history: Sequence[HistoryTurn] = (),
+    ) -> GeneratedAnswer:
         """Generate an answer grounded in ``evidence``.
 
-        Returns ``found=False`` when the evidence cannot support an answer;
-        raises for operational failure (the application service maps any raise
-        to :class:`~app.application.errors.AnswerGenerationFailed`, QA-17).
+        ``history`` is the bounded prior conversation (oldest first) an answer turn
+        in a conversation carries, so a follow-up question resolves against what was
+        already said; it defaults to empty, which is the single-shot ask. Returns
+        ``found=False`` when the evidence cannot support an answer; raises for
+        operational failure (the application service maps any raise to
+        :class:`~app.application.errors.AnswerGenerationFailed`, QA-17).
         """
         ...
 
     def generate_stream(
-        self, *, question: str, evidence: Sequence[Evidence]
+        self,
+        *,
+        question: str,
+        evidence: Sequence[Evidence],
+        history: Sequence[HistoryTurn] = (),
     ) -> Iterator[AnswerStreamEvent]:
         """Stream the same answer as :meth:`generate`, incrementally (GEN-12).
 

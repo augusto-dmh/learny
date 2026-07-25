@@ -28,6 +28,7 @@ from app.domain.entities import (
     DerivedNoteLink,
     Evidence,
     GeneratedAnswer,
+    HistoryTurn,
     IngestionEvent,
     IngestionJob,
     Note,
@@ -595,18 +596,33 @@ class FakeAnswerGeneration:
         self.calls: list[dict[str, object]] = []
         self.stream_calls: list[dict[str, object]] = []
         self.stream_closed = False
+        # The bounded history is captured alongside ``calls`` (parallel lists) so the
+        # historical ``calls`` shape the Q&A suite asserts verbatim stays unchanged.
+        self.history_calls: list[list[HistoryTurn]] = []
 
-    def generate(self, *, question: str, evidence: Sequence[Evidence]) -> GeneratedAnswer:
+    def generate(
+        self,
+        *,
+        question: str,
+        evidence: Sequence[Evidence],
+        history: Sequence[HistoryTurn] = (),
+    ) -> GeneratedAnswer:
         self.calls.append({"question": question, "evidence": list(evidence)})
+        self.history_calls.append(list(history))
         if self._error is not None:
             raise self._error
         assert self._answer is not None, "no preset answer configured"
         return self._answer
 
     def generate_stream(
-        self, *, question: str, evidence: Sequence[Evidence]
+        self,
+        *,
+        question: str,
+        evidence: Sequence[Evidence],
+        history: Sequence[HistoryTurn] = (),
     ) -> Iterator[AnswerStreamEvent]:
         self.stream_calls.append({"question": question, "evidence": list(evidence)})
+        self.history_calls.append(list(history))
         if self._error is not None:
             raise self._error
         assert self._answer is not None, "no preset answer configured"

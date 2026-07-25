@@ -51,6 +51,47 @@ def test_same_input_generates_identically() -> None:
     assert first == second
 
 
+def test_first_turn_output_is_unchanged_by_the_history_parameter() -> None:
+    # I-CM-8: the deterministic answer is a function of the evidence alone. A turn
+    # with no history produces exactly the text and citations the ask path has always
+    # produced ("alpha\n\nbeta", both chunks — pinned by the Q&A suite), and history
+    # never shifts it, so goldens stay stable as conversations gain memory.
+    adapter = DeterministicAnswerAdapter()
+    evidence = [_evidence("alpha"), _evidence("beta")]
+
+    without_argument = adapter.generate(question="what?", evidence=evidence)
+    empty_history = adapter.generate(question="what?", evidence=evidence, history=[])
+    with_history = adapter.generate(
+        question="what?",
+        evidence=evidence,
+        history=[HistoryTurn(message="earlier", response_text="reply")],
+    )
+
+    assert without_argument.text == "alpha\n\nbeta"
+    assert without_argument.cited_chunk_ids == (evidence[0].chunk_id, evidence[1].chunk_id)
+    assert empty_history == without_argument
+    assert with_history == without_argument
+
+
+def test_streamed_first_turn_output_is_unchanged_by_the_history_parameter() -> None:
+    # I-CM-8 on the streaming path: same deltas, same authoritative answer.
+    adapter = DeterministicAnswerAdapter()
+    evidence = [_evidence("alpha"), _evidence("beta")]
+
+    without_argument = list(adapter.generate_stream(question="q", evidence=evidence))
+    with_history = list(
+        adapter.generate_stream(
+            question="q",
+            evidence=evidence,
+            history=[HistoryTurn(message="earlier", response_text="reply")],
+        )
+    )
+
+    assert without_argument == with_history
+    assert without_argument[0] == AnswerTextDelta(text="alpha\n\nbeta")
+    assert isinstance(without_argument[-1], AnswerCompleted)
+
+
 def test_cited_ids_are_the_used_evidence_ids() -> None:
     # QA-06: composed only from provided evidence; cited ids ⊆ evidence ids.
     adapter = DeterministicAnswerAdapter()
