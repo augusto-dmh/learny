@@ -191,9 +191,9 @@ def test_teaching_errors_map_to_expected_status_codes() -> None:
 
     from app.application.errors import (
         ConversationNotFound,
+        ConversationTargetUnavailable,
         ConversationTurnConflict,
-        InvalidTeachingTarget,
-        TeachingTargetGone,
+        InvalidConversationScope,
     )
     from app.infrastructure.web.error_handlers import register_error_handlers
 
@@ -206,11 +206,11 @@ def test_teaching_errors_map_to_expected_status_codes() -> None:
 
     @app.get("/invalid-target")
     def _invalid_target() -> None:
-        raise InvalidTeachingTarget("Target does not exist in this source.")
+        raise InvalidConversationScope("Target does not exist in this source.")
 
     @app.get("/target-gone")
     def _target_gone() -> None:
-        raise TeachingTargetGone("The teaching target no longer exists.")
+        raise ConversationTargetUnavailable("The teaching target no longer exists.")
 
     @app.get("/turn-conflict")
     def _turn_conflict() -> None:

@@ -19,10 +19,10 @@ from uuid import UUID
 from app.application.errors import (
     AnswerGenerationFailed,
     ConversationNotFound,
-    InvalidTeachingTarget,
+    ConversationTargetUnavailable,
+    InvalidConversationScope,
     NotAuthorized,
     SourceNotReady,
-    TeachingTargetGone,
 )
 from app.application.grounding import ground
 from app.application.identity import AuthorizeOwnership
@@ -93,7 +93,7 @@ class StartConversation:
     ``SourceNotFound``, 404). A source whose ``status != "ready"`` raises
     ``SourceNotReady`` before the corpus is read (TEACH-03). The ``target_anchor``
     is resolved against the corpus structure; no matching section raises
-    ``InvalidTeachingTarget`` (TEACH-04). The resolved section's anchor,
+    ``InvalidConversationScope`` (TEACH-04). The resolved section's anchor,
     ``section_path`` and title are snapshotted onto the persisted session so it
     renders without re-reading the corpus (the anchor is re-resolved per turn).
     """
@@ -132,7 +132,7 @@ class StartConversation:
         section = next((s for s in sections if s.anchor == target_anchor), None)
         if section is None:
             # The anchor matches no section of the current corpus (TEACH-04).
-            raise InvalidTeachingTarget("Target does not exist in this source.")
+            raise InvalidConversationScope("Target does not exist in this source.")
 
         now = self._clock.now()
         session = Conversation(
@@ -226,7 +226,7 @@ class PostConversationTurn:
     resolved via the session's parent source and collapses missing + non-owner to
     ``ConversationNotFound`` (404, TEACH-06 semantics); a source that is no
     longer ``ready`` raises ``SourceNotReady`` (409, TEACH-15) and a target anchor
-    that no longer resolves raises ``TeachingTargetGone`` (409, TEACH-16).
+    that no longer resolves raises ``ConversationTargetUnavailable`` (409, TEACH-16).
 
     Retrieval is restricted to the target section and its descendants (prefix
     match on ``section_path``), so no citation can reference a chunk outside the
@@ -305,7 +305,9 @@ class PostConversationTurn:
         sections = structure.sections if structure is not None else ()
         target = next((s for s in sections if s.anchor == session.target_anchor), None)
         if target is None:
-            raise TeachingTargetGone("The teaching target no longer exists; start a new session.")
+            raise ConversationTargetUnavailable(
+                "The teaching target no longer exists; start a new session."
+            )
         depth = len(target.section_path)
         subtree_anchors = [
             s.anchor for s in sections if s.section_path[:depth] == target.section_path

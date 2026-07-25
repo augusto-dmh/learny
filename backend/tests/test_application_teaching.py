@@ -24,11 +24,11 @@ from app.application import teaching as teaching_module
 from app.application.errors import (
     AnswerGenerationFailed,
     ConversationNotFound,
+    ConversationTargetUnavailable,
     ConversationTurnConflict,
-    InvalidTeachingTarget,
+    InvalidConversationScope,
     SourceNotFound,
     SourceNotReady,
-    TeachingTargetGone,
 )
 from app.application.identity import AuthorizeOwnership
 from app.application.streaming import StreamDelta, StreamTurn
@@ -524,7 +524,7 @@ def test_start_not_ready_raises_before_reading_corpus() -> None:
 
 
 def test_start_unknown_anchor_raises_invalid_target() -> None:
-    # TEACH-04: an anchor matching no section → InvalidTeachingTarget (422).
+    # TEACH-04: an anchor matching no section → InvalidConversationScope (422).
     owner = _user()
     sources = FakeSourceRepository()
     source = _owned_source(owner.id)
@@ -532,12 +532,12 @@ def test_start_unknown_anchor_raises_invalid_target() -> None:
     corpus = FakeCorpus(_structure(_section("ch1.xhtml#core", ("Chapter 1",))))
     service = _start(sources=sources, corpus=corpus, sessions=FakeConversationRepository())
 
-    with pytest.raises(InvalidTeachingTarget):
+    with pytest.raises(InvalidConversationScope):
         service(user=owner, source_id=source.id, target_anchor="does-not-exist")
 
 
 def test_start_no_corpus_raises_invalid_target() -> None:
-    # Edge: a ready source without a corpus resolves no section → InvalidTeachingTarget.
+    # Edge: a ready source without a corpus resolves no section → InvalidConversationScope.
     owner = _user()
     sources = FakeSourceRepository()
     source = _owned_source(owner.id)
@@ -548,7 +548,7 @@ def test_start_no_corpus_raises_invalid_target() -> None:
         sessions=FakeConversationRepository(),
     )
 
-    with pytest.raises(InvalidTeachingTarget):
+    with pytest.raises(InvalidConversationScope):
         service(user=owner, source_id=source.id, target_anchor="ch1.xhtml#core")
 
 
@@ -1028,7 +1028,7 @@ def test_turn_source_not_ready_raises_before_retrieval() -> None:
 
 def test_turn_target_gone_raises_before_retrieval() -> None:
     # TEACH-16: the stored target_anchor no longer resolves in the current corpus
-    # → TeachingTargetGone, no retrieval.
+    # → ConversationTargetUnavailable, no retrieval.
     target = _section("ch1.xhtml#core", ("Chapter 1",))
     owner, source, session, sessions, sources = _seeded(target=target)
     retrieve = FakeScopedRetrieveEvidence([])
@@ -1041,7 +1041,7 @@ def test_turn_target_gone_raises_before_retrieval() -> None:
         generation=FakeTeachingGeneration(),
     )
 
-    with pytest.raises(TeachingTargetGone):
+    with pytest.raises(ConversationTargetUnavailable):
         service(user=owner, session_id=session.id, message="q")
 
     assert retrieve.calls == []
@@ -1201,7 +1201,7 @@ def test_stream_target_gone_raises_before_any_yield() -> None:
         generation=FakeTeachingGeneration(),
     )
 
-    with pytest.raises(TeachingTargetGone):
+    with pytest.raises(ConversationTargetUnavailable):
         service.stream(user=owner, session_id=session.id, message="q")
 
     assert retrieve.calls == []

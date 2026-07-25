@@ -6,7 +6,7 @@ of their ready sources, reads a session's full cited conversation, lists a
 source's sessions, and posts cited turns. The handlers own input validation (422)
 and let application errors propagate to the global handlers
 (``ConversationNotFound`` → 404, ``SourceNotReady`` → 409,
-``InvalidTeachingTarget`` → 422, ``TeachingTargetGone`` → 409,
+``InvalidConversationScope`` → 422, ``ConversationTargetUnavailable`` → 409,
 ``ConversationTurnConflict`` → 409, ``AnswerGenerationFailed`` → 502), mirroring the
 questions endpoint.
 
@@ -69,7 +69,7 @@ class StartSessionRequest(BaseModel):
 
     ``target_anchor`` must be non-blank; whether it resolves to a section of the
     source's corpus is the service's decision (an unknown anchor →
-    ``InvalidTeachingTarget`` → 422). A missing/blank field or bad ``source_id``
+    ``InvalidConversationScope`` → 422). A missing/blank field or bad ``source_id``
     UUID is a Pydantic validation error → 422 before the service runs.
     """
 
@@ -236,7 +236,7 @@ def start_teaching_session(
 
     ``StartConversation`` authorizes ownership (missing/non-owner →
     ``SourceNotFound`` → 404), enforces readiness (``SourceNotReady`` → 409), and
-    resolves the target anchor (unknown → ``InvalidTeachingTarget`` → 422).
+    resolves the target anchor (unknown → ``InvalidConversationScope`` → 422).
     """
     session = service(user=user, source_id=body.source_id, target_anchor=body.target_anchor)
     return SessionView.from_session(session)
@@ -272,7 +272,7 @@ def post_teaching_turn(
 
     ``PostConversationTurn`` resolves the session + owner (missing/non-owner →
     ``ConversationNotFound`` → 404), enforces readiness (``SourceNotReady`` →
-    409) and the target's continued existence (``TeachingTargetGone`` → 409),
+    409) and the target's continued existence (``ConversationTargetUnavailable`` → 409),
     retrieves target-scoped evidence, and either composes a grounded answer or the
     explicit not-found outcome; a generation failure surfaces as
     ``AnswerGenerationFailed`` → 502 with nothing persisted, and a turn-index race

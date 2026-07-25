@@ -136,21 +136,32 @@ class ConversationNotFound(Exception):
     """
 
 
-class InvalidTeachingTarget(Exception):
-    """The requested ``target_anchor`` matches no section of the corpus (TEACH-04).
+class InvalidConversationScope(Exception):
+    """A requested scope anchor matches no section of the corpus (CONV-05, TEACH-04).
 
-    Raised by ``StartConversation`` after ownership and readiness pass but the
-    anchor resolves to no section; the web layer maps it to 422.
+    Raised when starting a conversation after ownership and readiness pass but one
+    of the given scope anchors resolves to no section (alias-aware); the web layer
+    maps it to 422, so nothing is created. The legacy teaching start raises the
+    same error for its single target anchor.
     """
 
 
-class TeachingTargetGone(Exception):
-    """A session's ``target_anchor`` no longer resolves in the current corpus.
+class ConversationTargetUnavailable(Exception):
+    """A teach-mode turn has no resolvable target section (CONV-12, TEACH-16).
 
-    Re-ingestion (AD-018) can replace the corpus and drop the section the session
-    was anchored to; a new turn then has no target subtree to scope. Raised by
-    ``PostConversationTurn``; the web layer maps it to 409 with a readable detail so
-    the reader starts a new session (TEACH-16).
+    Either the conversation is whole-book (nothing in particular to teach) or
+    re-ingestion (AD-018) replaced the corpus and dropped the section the target
+    was snapshotted from. Raised by the turn path before anything is persisted;
+    the web layer maps it to 409 with a readable detail so the reader picks a
+    section or starts a new conversation.
+    """
+
+
+class InvalidConversationTitle(Exception):
+    """A conversation title is blank or longer than the allowed maximum (CONV-08).
+
+    Raised by the start and rename paths after trimming; the web layer maps it to
+    422 and the stored title is left untouched.
     """
 
 
