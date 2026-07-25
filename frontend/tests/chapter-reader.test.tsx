@@ -1111,6 +1111,95 @@ describe("ChapterFlow progress (RD-11)", () => {
   });
 });
 
+describe("ChapterFlow live progress (PAGE-16/17/18)", () => {
+  /** Report `top`/`height` for the section element, as a scrolled layout would. */
+  function placeSection(container: HTMLElement, anchor: string, top: number, height: number) {
+    const section = container.querySelector<HTMLElement>(
+      `[data-section-anchor="${anchor}"]`,
+    )!;
+    section.getBoundingClientRect = () =>
+      ({ top, height, bottom: top + height, left: 0, right: 0, width: 0, x: 0, y: top }) as DOMRect;
+    fireEvent.scroll(window);
+  }
+
+  it("moves the percentage as the reader scrolls within one section", async () => {
+    const { container } = render(
+      <ChapterFlow
+        sourceId="s1"
+        csrf="csrf-xyz"
+        chapter={chapter}
+        scrollTarget={S1}
+      />,
+    );
+    await screen.findByText("Ada Lovelace wrote the first algorithm.");
+
+    // Section one is the section being read, at its very top: (100 + 0) / 1000.
+    const progress = screen.getByTestId("reading-progress");
+    expect(progress.textContent).toBe("10% read · 3 min left");
+
+    // The reader scrolls halfway through that same section — no section change,
+    // no new observation, just reading. Half of section one's 300 words are
+    // behind them: (100 + 150) / 1000 = 25%, and 350 words of chapter left.
+    placeSection(container, S1, -444, 1000);
+    await waitFor(() =>
+      expect(screen.getByTestId("reading-progress").textContent).toBe(
+        "25% read · 2 min left",
+      ),
+    );
+    // The ink line reads the same live value, never a second opinion.
+    expect(screen.getByTestId("ink-line-fill").style.width).toBe("25%");
+
+    // Scrolled past the section entirely: the figure stops at that section's
+    // end rather than running past it — (100 + 300) / 1000 = 40%.
+    placeSection(container, S1, -9000, 1000);
+    await waitFor(() =>
+      expect(screen.getByTestId("reading-progress").textContent).toBe(
+        "40% read · 1 min left",
+      ),
+    );
+  });
+
+  it("keeps the position save carrying the anchor alone", async () => {
+    // The live figure is presentation: the reader stores a place in the book,
+    // and the percent recorded against it stays the server's.
+    const POSITION_URL = "/api/sources/s1/reading-position";
+    const fetchMock = routedFetch({
+      [`PUT ${POSITION_URL}`]: () =>
+        jsonResponse(200, { anchor: S2, percent: 40, updated_at: "now" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const obs = fakeObserver();
+    const { container } = render(
+      <ChapterFlow
+        sourceId="s1"
+        csrf="csrf-xyz"
+        chapter={chapter}
+        scrollTarget={S1}
+        observerFactory={obs.factory}
+      />,
+    );
+
+    // Read into the section so the shown percentage is an interpolated one...
+    placeSection(container, S1, -444, 1000);
+    expect(screen.getByTestId("reading-progress").textContent).toContain("25%");
+
+    // ...then move on, and let the scroll-idle write land.
+    obs.emit({ [S1]: false, [S2]: true });
+    await waitFor(
+      () =>
+        expect(
+          fetchMock.mock.calls.some(([url]) => url === POSITION_URL),
+        ).toBe(true),
+      { timeout: 5000 },
+    );
+
+    const put = fetchMock.mock.calls.find(([url]) => url === POSITION_URL)!;
+    expect(JSON.parse((put[1] as RequestInit).body as string)).toEqual({
+      anchor: S2,
+    });
+  });
+});
+
 describe("ChapterFlow create card (CAP-01/08)", () => {
   const SUGGEST_URL = "/api/sources/s1/cards/suggestions";
   const CARDS_URL = "/api/sources/s1/cards";

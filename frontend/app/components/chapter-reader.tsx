@@ -59,6 +59,7 @@ import { readUrl } from "@/app/lib/read-url";
 import { useKeyShortcuts } from "@/app/components/use-key-shortcuts";
 import { useReadingSettings } from "@/app/components/use-reading-settings";
 import { useRecedingChrome } from "@/app/components/use-receding-chrome";
+import { useSectionProgress } from "@/app/components/use-section-progress";
 import {
   useScrollPosition,
   type ObserverFactory,
@@ -405,21 +406,37 @@ export function ChapterFlow({
   });
 
   // Live progress from the current section's word offset (RD-11): whole-book
-  // percent read, and chapter minutes-left at 220 wpm.
+  // percent read, and chapter minutes-left at 220 wpm. The word offset is exact
+  // at every section boundary — it is the same sum the server's stored percent
+  // is — and the fraction of the current section the reader has scrolled past
+  // fills in the distance between two boundaries, so the figure moves while
+  // they read instead of jumping a section at a time.
+  const sectionFraction = useSectionProgress(currentAnchor, READER_CHROME_HEIGHT);
   const currentIndex = currentAnchor
     ? chapter.sections.findIndex((section) => section.anchor === currentAnchor)
     : -1;
-  const wordsReadInChapter =
+  const wordsBeforeSection =
     currentIndex > 0
       ? chapter.sections
           .slice(0, currentIndex)
           .reduce((sum, section) => sum + section.word_count, 0)
       : 0;
+  const wordsReadInChapter =
+    wordsBeforeSection +
+    (currentIndex >= 0
+      ? chapter.sections[currentIndex].word_count * sectionFraction
+      : 0);
   const bookPercent =
     chapter.total_word_count > 0
-      ? ((chapter.words_before_chapter + wordsReadInChapter) /
-          chapter.total_word_count) *
-        100
+      ? Math.min(
+          100,
+          Math.max(
+            0,
+            ((chapter.words_before_chapter + wordsReadInChapter) /
+              chapter.total_word_count) *
+              100,
+          ),
+        )
       : 0;
   const chapterMinutesLeft = minutesLeft(
     chapter.chapter_word_count - wordsReadInChapter,
