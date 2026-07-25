@@ -41,6 +41,8 @@ PR titles follow the same Conventional Commit format as commits and summarize th
 
 Never add authorship or tooling attribution to commits or pull requests. Commit messages and PR bodies must not contain `Co-Authored-By` trailers, "Generated with" lines, model names, or any other identification of an AI assistant or the tool used to produce the change.
 
+Write PR-body and issue paragraphs as single unwrapped lines. Never hard-wrap prose at a column width — GitHub renders the wraps literally, squeezing the text into a narrow left column.
+
 ## Self-Contained History
 
 Commit messages, PR titles, and PR bodies must be understandable by an outside reader with no access to Learny's internal planning. They must NOT contain internal references:
