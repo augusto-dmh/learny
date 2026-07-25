@@ -254,9 +254,7 @@ def test_reembed_resumes_after_a_partial_completion(
     _assert_hnsw_index_rebuilt(db_engine)
 
 
-def test_reembed_recreates_hnsw_index_and_retrieval_serves(
-    reembed_env, db_engine: Engine
-) -> None:
+def test_reembed_recreates_hnsw_index_and_retrieval_serves(reembed_env, db_engine: Engine) -> None:
     # EMB-18: the HNSW index exists after the reembed's drop+recreate cycle and the
     # semantic arm still serves a retrieval call.
     source = reembed_env(valid_book())

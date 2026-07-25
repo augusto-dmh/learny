@@ -177,9 +177,7 @@ def test_anchor_resolves_through_alias(db_conn: Connection) -> None:
         db_conn,
         checksum=_CHECKSUM,
         created_at=datetime(2026, 1, 1, tzinfo=UTC),
-        sections=[
-            {"anchor": "ch2-new.xhtml", "aliases": ["ch2-old.xhtml"], "chunks": ["gamma"]}
-        ],
+        sections=[{"anchor": "ch2-new.xhtml", "aliases": ["ch2-old.xhtml"], "chunks": ["gamma"]}],
     )
 
     # The case cites the pre-reingest anchor, kept resolvable as an alias (AD-085).

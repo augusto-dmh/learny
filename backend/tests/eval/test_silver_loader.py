@@ -96,9 +96,7 @@ def test_bad_checksum_raises(tmp_path: Path) -> None:
 
 def test_uppercase_checksum_raises(tmp_path: Path) -> None:
     # sha256 hex is lowercase; an uppercase 64-char value is rejected, not coerced.
-    _assert_raises_on(
-        tmp_path, field="source_checksum", case=_valid_case(source_checksum="A" * 64)
-    )
+    _assert_raises_on(tmp_path, field="source_checksum", case=_valid_case(source_checksum="A" * 64))
 
 
 def test_empty_anchors_raises(tmp_path: Path) -> None:

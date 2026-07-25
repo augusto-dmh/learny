@@ -88,9 +88,7 @@ def test_returns_only_the_callers_notes_and_anchors() -> None:
     views, by_source = ExportVault(notes=repo)(user=caller)
 
     assert [v.note.id for v in views] == [mine.id]
-    assert all(
-        anchor.note_id == mine.id for anchors in by_source.values() for anchor in anchors
-    )
+    assert all(anchor.note_id == mine.id for anchors in by_source.values() for anchor in anchors)
 
 
 def test_user_with_no_notes_yields_empty_collections() -> None:

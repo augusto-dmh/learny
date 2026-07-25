@@ -83,9 +83,7 @@ def test_build_guard_requires_green_ci_on_main() -> None:
     assert "github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'" in guard
     # A fork whose branch is named `main` passes the head_branch check, so the
     # guard must also require the triggering run to belong to this repository.
-    assert (
-        "github.event.workflow_run.head_repository.full_name == github.repository" in guard
-    )
+    assert "github.event.workflow_run.head_repository.full_name == github.repository" in guard
 
 
 # --- DEP-04: non-cancelling concurrency ------------------------------------------
@@ -168,9 +166,7 @@ def test_deploy_shares_the_build_guard() -> None:
     # The deploy job's manual path must be main-only too, and — like the build job —
     # only for a run that originated from this repository, never a fork.
     assert "github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'" in guard
-    assert (
-        "github.event.workflow_run.head_repository.full_name == github.repository" in guard
-    )
+    assert "github.event.workflow_run.head_repository.full_name == github.repository" in guard
 
 
 # --- DEP-11: absent VPS secrets → green skip with a notice ----------------------

@@ -111,9 +111,7 @@ def upgrade() -> None:
         ),
         sa.PrimaryKeyConstraint("quiz_item_id", name="pk_quiz_item_scheduling"),
     )
-    op.create_index(
-        "ix_quiz_item_scheduling_due", "quiz_item_scheduling", ["due"]
-    )
+    op.create_index("ix_quiz_item_scheduling_due", "quiz_item_scheduling", ["due"])
 
     op.create_table(
         "review_log",
@@ -141,15 +139,9 @@ def upgrade() -> None:
         # queued | running | succeeded | failed.
         sa.Column("status", sa.Text(), nullable=False),
         sa.Column("attempts", sa.Integer(), server_default=sa.text("0"), nullable=False),
-        sa.Column(
-            "generated_count", sa.Integer(), server_default=sa.text("0"), nullable=False
-        ),
-        sa.Column(
-            "discarded_count", sa.Integer(), server_default=sa.text("0"), nullable=False
-        ),
-        sa.Column(
-            "failed_sections", sa.Integer(), server_default=sa.text("0"), nullable=False
-        ),
+        sa.Column("generated_count", sa.Integer(), server_default=sa.text("0"), nullable=False),
+        sa.Column("discarded_count", sa.Integer(), server_default=sa.text("0"), nullable=False),
+        sa.Column("failed_sections", sa.Integer(), server_default=sa.text("0"), nullable=False),
         sa.Column("last_error", sa.Text(), nullable=True),
         sa.Column(
             "created_at",
@@ -171,9 +163,7 @@ def upgrade() -> None:
         ),
         sa.PrimaryKeyConstraint("id", name="pk_quiz_generation_jobs"),
     )
-    op.create_index(
-        "ix_quiz_generation_jobs_source_id", "quiz_generation_jobs", ["source_id"]
-    )
+    op.create_index("ix_quiz_generation_jobs_source_id", "quiz_generation_jobs", ["source_id"])
 
 
 def downgrade() -> None:

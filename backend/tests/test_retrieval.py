@@ -406,9 +406,7 @@ def test_anchor_scope_does_not_bypass_source_scope(db_conn: Connection) -> None:
         c.id for c in SqlAlchemyEmbeddingIndexRepository(db_conn).chunks_for_source(source_b.id)
     }
 
-    results = _search(
-        db_conn, source_a.id, "photosynthesis sunlight energy", anchors=["ch1.xhtml"]
-    )
+    results = _search(db_conn, source_a.id, "photosynthesis sunlight energy", anchors=["ch1.xhtml"])
 
     assert results, "expected the in-scope source-A chunk"
     assert all(e.source_id == source_a.id for e in results)

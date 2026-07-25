@@ -178,9 +178,7 @@ def throttled_notes_client(  # noqa: ANN201
 
 
 def _register(client: TestClient, email: str) -> str:
-    resp = client.post(
-        "/api/auth/register", json={"email": email, "password": TEST_PASSWORD}
-    )
+    resp = client.post("/api/auth/register", json={"email": email, "password": TEST_PASSWORD})
     assert resp.status_code == 201, resp.text
     return resp.json()["id"]
 
@@ -206,9 +204,7 @@ def _post_note(
     return client.post("/api/notes", json=body, headers=headers)
 
 
-def _patch_note(
-    client: TestClient, note_id: object, body: dict, *, csrf: str | None
-):
+def _patch_note(client: TestClient, note_id: object, body: dict, *, csrf: str | None):
     headers: dict[str, str] = {}
     if csrf is not None:
         headers["X-CSRF-Token"] = csrf
@@ -222,9 +218,7 @@ def _delete_note(client: TestClient, note_id: object, *, csrf: str | None):
     return client.delete(f"/api/notes/{note_id}", headers=headers)
 
 
-def _post_highlight(
-    client: TestClient, source_id: object, body: dict, *, csrf: str | None
-):
+def _post_highlight(client: TestClient, source_id: object, body: dict, *, csrf: str | None):
     headers: dict[str, str] = {}
     if csrf is not None:
         headers["X-CSRF-Token"] = csrf
@@ -301,9 +295,7 @@ def _seed_corpus(db_conn: Connection, source_id: UUID, *, anchor: str, block_htm
 # --- Create (NF-05/09) ---------------------------------------------------------
 
 
-def test_create_note_returns_201_with_detail(
-    notes_client: TestClient, db_conn: Connection
-) -> None:
+def test_create_note_returns_201_with_detail(notes_client: TestClient, db_conn: Connection) -> None:
     _register(notes_client, "note-create@example.com")
     csrf = _csrf(notes_client)
 
@@ -366,9 +358,7 @@ def test_create_note_untrusted_origin_returns_403(
 ) -> None:
     _register(notes_client, "note-origin@example.com")
     csrf = _csrf(notes_client)
-    resp = _post_note(
-        notes_client, {"title": "X"}, csrf=csrf, origin="http://evil.example.com"
-    )
+    resp = _post_note(notes_client, {"title": "X"}, csrf=csrf, origin="http://evil.example.com")
     assert resp.status_code == 403, resp.text
 
 
@@ -435,9 +425,7 @@ def test_list_notes_unauthenticated_returns_401(
 # --- Get (NF-05/10) ------------------------------------------------------------
 
 
-def test_get_note_returns_200_detail(
-    notes_client: TestClient, db_conn: Connection
-) -> None:
+def test_get_note_returns_200_detail(notes_client: TestClient, db_conn: Connection) -> None:
     _register(notes_client, "note-get@example.com")
     csrf = _csrf(notes_client)
     note = _created_note(notes_client, csrf, title="Readable", body_markdown="body")
@@ -511,9 +499,7 @@ def test_update_note_over_cap_body_returns_422(
     assert resp.status_code == 422, resp.text
 
 
-def test_update_note_non_owned_returns_404(
-    notes_client: TestClient, db_conn: Connection
-) -> None:
+def test_update_note_non_owned_returns_404(notes_client: TestClient, db_conn: Connection) -> None:
     _register(notes_client, "note-update-owner@example.com")
     note = _created_note(notes_client, _csrf(notes_client), title="Owned")
 
@@ -696,9 +682,7 @@ def test_update_promoted_note_title_only_enqueues_no_refresh(
     assert enq.refresh_calls == []
 
 
-def test_delete_note_enqueues_nothing(
-    notes_client: TestClient, db_conn: Connection
-) -> None:
+def test_delete_note_enqueues_nothing(notes_client: TestClient, db_conn: Connection) -> None:
     """Deleting a note enqueues no index work — its index rows die with it (NL-07)."""
     _register(notes_client, "note-embed-delete@example.com")
     csrf = _csrf(notes_client)
@@ -715,9 +699,7 @@ def test_delete_note_enqueues_nothing(
 # --- Delete (NF-05) ------------------------------------------------------------
 
 
-def test_delete_note_returns_204_then_404(
-    notes_client: TestClient, db_conn: Connection
-) -> None:
+def test_delete_note_returns_204_then_404(notes_client: TestClient, db_conn: Connection) -> None:
     _register(notes_client, "note-delete@example.com")
     csrf = _csrf(notes_client)
     note = _created_note(notes_client, csrf, title="Doomed")
@@ -729,9 +711,7 @@ def test_delete_note_returns_204_then_404(
     assert notes_client.get(f"/api/notes/{note['id']}").status_code == 404
 
 
-def test_delete_note_non_owned_returns_404(
-    notes_client: TestClient, db_conn: Connection
-) -> None:
+def test_delete_note_non_owned_returns_404(notes_client: TestClient, db_conn: Connection) -> None:
     _register(notes_client, "note-delete-owner@example.com")
     note = _created_note(notes_client, _csrf(notes_client), title="Owned")
 
@@ -754,9 +734,7 @@ def test_delete_note_missing_csrf_returns_403(
 # --- Backlinks (NF-10) ---------------------------------------------------------
 
 
-def test_backlinks_returns_inbound_links(
-    notes_client: TestClient, db_conn: Connection
-) -> None:
+def test_backlinks_returns_inbound_links(notes_client: TestClient, db_conn: Connection) -> None:
     _register(notes_client, "note-backlinks@example.com")
     csrf = _csrf(notes_client)
     target = _created_note(notes_client, csrf, title="Target")
@@ -770,9 +748,7 @@ def test_backlinks_returns_inbound_links(
     assert rows[0]["title"] == "Link"
 
 
-def test_backlinks_unknown_note_returns_404(
-    notes_client: TestClient, db_conn: Connection
-) -> None:
+def test_backlinks_unknown_note_returns_404(notes_client: TestClient, db_conn: Connection) -> None:
     _register(notes_client, "note-backlinks-404@example.com")
     _csrf(notes_client)
     resp = notes_client.get(f"/api/notes/{uuid4()}/backlinks")

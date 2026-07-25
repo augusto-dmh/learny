@@ -145,9 +145,7 @@ def test_skipped_and_broken_lines_counted_as_other_not_scored():
     assert agg.error_count == 0
     assert agg.silver.scored == 1
     # Full accounting: every input line is scored, error, or other.
-    accounted = (
-        agg.golden.scored + agg.silver.scored + agg.error_count + agg.other_count
-    )
+    accounted = agg.golden.scored + agg.silver.scored + agg.error_count + agg.other_count
     assert agg.line_count == accounted
 
 
@@ -323,9 +321,7 @@ def _arm(
         citation_valid_rate=None,
         not_found_discipline=None,
     )
-    return ModelAggregate(
-        line_count=1, error_count=0, other_count=0, golden=golden, silver=silver
-    )
+    return ModelAggregate(line_count=1, error_count=0, other_count=0, golden=golden, silver=silver)
 
 
 def test_generation_moves_when_opus_better_on_two_and_worse_on_none():

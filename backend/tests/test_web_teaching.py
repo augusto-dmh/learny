@@ -192,9 +192,7 @@ def _post_turn(
         headers["X-CSRF-Token"] = csrf
     if origin is not None:
         headers["Origin"] = origin
-    return client.post(
-        f"/api/teaching-sessions/{session_id}/turns", json=body, headers=headers
-    )
+    return client.post(f"/api/teaching-sessions/{session_id}/turns", json=body, headers=headers)
 
 
 def _seed_turn(
@@ -273,9 +271,7 @@ def test_start_missing_and_non_owned_source_return_identical_404(
     csrf = _csrf(auth_client)
 
     non_owned = _start(auth_client, {"source_id": owned_id, "target_anchor": _ANCHOR}, csrf=csrf)
-    missing = _start(
-        auth_client, {"source_id": str(uuid4()), "target_anchor": _ANCHOR}, csrf=csrf
-    )
+    missing = _start(auth_client, {"source_id": str(uuid4()), "target_anchor": _ANCHOR}, csrf=csrf)
 
     assert non_owned.status_code == 404, non_owned.text
     assert missing.status_code == 404, missing.text
@@ -285,9 +281,7 @@ def test_start_missing_and_non_owned_source_return_identical_404(
 # --- 409 readiness (TEACH-03) --------------------------------------------------
 
 
-def test_start_not_ready_source_returns_409(
-    auth_client: TestClient, db_conn: Connection
-) -> None:
+def test_start_not_ready_source_returns_409(auth_client: TestClient, db_conn: Connection) -> None:
     # TEACH-03: an owned source whose status != "ready" → 409.
     user_id = _register(auth_client, "notready@example.com")
     csrf = _csrf(auth_client)
@@ -301,22 +295,16 @@ def test_start_not_ready_source_returns_409(
 # --- 422 unknown anchor / malformed body (TEACH-04) ----------------------------
 
 
-def test_start_unknown_anchor_returns_422(
-    auth_client: TestClient, db_conn: Connection
-) -> None:
+def test_start_unknown_anchor_returns_422(auth_client: TestClient, db_conn: Connection) -> None:
     # TEACH-04: a target anchor that matches no section of the corpus → 422.
     source_id, csrf = _seed_ready_source(auth_client, db_conn, "unknown@example.com")
 
-    resp = _start(
-        auth_client, {"source_id": source_id, "target_anchor": "nope.xhtml"}, csrf=csrf
-    )
+    resp = _start(auth_client, {"source_id": source_id, "target_anchor": "nope.xhtml"}, csrf=csrf)
 
     assert resp.status_code == 422, resp.text
 
 
-def test_start_missing_source_id_returns_422(
-    auth_client: TestClient, db_conn: Connection
-) -> None:
+def test_start_missing_source_id_returns_422(auth_client: TestClient, db_conn: Connection) -> None:
     # A body without source_id is rejected with 422 before the service runs.
     _register(auth_client, "malformed@example.com")
     csrf = _csrf(auth_client)
@@ -329,9 +317,7 @@ def test_start_missing_source_id_returns_422(
 # --- 401 / 403 auth + CSRF (TEACH-23) ------------------------------------------
 
 
-def test_start_unauthenticated_returns_401(
-    auth_client: TestClient, db_conn: Connection
-) -> None:
+def test_start_unauthenticated_returns_401(auth_client: TestClient, db_conn: Connection) -> None:
     # TEACH-23: no session → 401.
     source_id, _ = _seed_ready_source(auth_client, db_conn, "unauth@example.com")
     auth_client.cookies.clear()
@@ -339,18 +325,14 @@ def test_start_unauthenticated_returns_401(
     assert resp.status_code == 401, resp.text
 
 
-def test_start_missing_csrf_returns_403(
-    auth_client: TestClient, db_conn: Connection
-) -> None:
+def test_start_missing_csrf_returns_403(auth_client: TestClient, db_conn: Connection) -> None:
     # TEACH-23: a state-changing POST without the CSRF token → 403.
     source_id, _ = _seed_ready_source(auth_client, db_conn, "nocsrf@example.com")
     resp = _start(auth_client, {"source_id": source_id, "target_anchor": _ANCHOR}, csrf=None)
     assert resp.status_code == 403, resp.text
 
 
-def test_start_untrusted_origin_returns_403(
-    auth_client: TestClient, db_conn: Connection
-) -> None:
+def test_start_untrusted_origin_returns_403(auth_client: TestClient, db_conn: Connection) -> None:
     # TEACH-23: an untrusted Origin on a state-changing POST → 403.
     source_id, csrf = _seed_ready_source(auth_client, db_conn, "origin@example.com")
     resp = _start(
@@ -549,9 +531,7 @@ def test_start_rate_limit_returns_429_with_retry_after(
     throttled_teaching_client: TestClient, db_conn: Connection
 ) -> None:
     # TEACH-18: once the window is exceeded, the endpoint returns 429 + Retry-After.
-    source_id, csrf = _seed_ready_source(
-        throttled_teaching_client, db_conn, "rl@example.com"
-    )
+    source_id, csrf = _seed_ready_source(throttled_teaching_client, db_conn, "rl@example.com")
     # First 3 starts pass the limiter (201).
     for _ in range(3):
         resp = _start(
@@ -622,9 +602,7 @@ def test_post_turn_answered_is_persisted_and_read_back(
     _embed_all(db_conn, UUID(source_id))
     session = _seed_session(db_conn, UUID(source_id))
 
-    posted = _post_turn(
-        auth_client, session.id, {"message": "photosynthesis sunlight"}, csrf=csrf
-    )
+    posted = _post_turn(auth_client, session.id, {"message": "photosynthesis sunlight"}, csrf=csrf)
     assert posted.status_code == 201, posted.text
 
     read = auth_client.get(f"/api/teaching-sessions/{session.id}")
@@ -666,9 +644,7 @@ def test_post_turn_no_evidence_returns_201_not_found(
 # --- POST turns: 422 bounds (TEACH-08) -----------------------------------------
 
 
-def test_post_turn_blank_message_returns_422(
-    auth_client: TestClient, db_conn: Connection
-) -> None:
+def test_post_turn_blank_message_returns_422(auth_client: TestClient, db_conn: Connection) -> None:
     # TEACH-08: an empty message is rejected with 422 before the service runs.
     source_id, csrf = _seed_ready_source(auth_client, db_conn, "turn-blank@example.com")
     session = _seed_session(db_conn, UUID(source_id))
@@ -735,9 +711,7 @@ def test_post_turn_not_ready_source_returns_409(
     assert resp.status_code == 409, resp.text
 
 
-def test_post_turn_target_gone_returns_409(
-    auth_client: TestClient, db_conn: Connection
-) -> None:
+def test_post_turn_target_gone_returns_409(auth_client: TestClient, db_conn: Connection) -> None:
     # TEACH-16: a session whose target anchor no longer resolves in the current
     # corpus → 409 with a readable detail.
     source_id, csrf = _seed_ready_source(auth_client, db_conn, "turn-gone@example.com")
@@ -776,8 +750,8 @@ def test_post_turn_generation_failure_returns_502_and_persists_nothing(
         ) -> GeneratedAnswer:
             raise RuntimeError("provider-secret-internal-detail")
 
-    auth_client.app.dependency_overrides[get_teaching_generation] = (
-        lambda: _RaisingTeachingAdapter()
+    auth_client.app.dependency_overrides[get_teaching_generation] = lambda: (
+        _RaisingTeachingAdapter()
     )
     try:
         resp = _post_turn(
@@ -798,9 +772,7 @@ def test_post_turn_generation_failure_returns_502_and_persists_nothing(
 # --- POST turns: 403 CSRF / 429 rate limit (TEACH-18/23) -----------------------
 
 
-def test_post_turn_missing_csrf_returns_403(
-    auth_client: TestClient, db_conn: Connection
-) -> None:
+def test_post_turn_missing_csrf_returns_403(auth_client: TestClient, db_conn: Connection) -> None:
     # TEACH-23: a state-changing turn POST without the CSRF token → 403.
     source_id, _ = _seed_ready_source(auth_client, db_conn, "turn-csrf@example.com")
     session = _seed_session(db_conn, UUID(source_id))
@@ -813,9 +785,7 @@ def test_post_turn_rate_limit_returns_429(
 ) -> None:
     # TEACH-18: once the window is exceeded, the turn endpoint returns 429. Corpus
     # is not embedded, so each accepted turn is a 201 not-found (turn_index 0..2).
-    source_id, csrf = _seed_ready_source(
-        throttled_teaching_client, db_conn, "turn-rl@example.com"
-    )
+    source_id, csrf = _seed_ready_source(throttled_teaching_client, db_conn, "turn-rl@example.com")
     session = _seed_session(db_conn, UUID(source_id))
     for _ in range(3):
         resp = _post_turn(
@@ -920,9 +890,7 @@ def test_turn_stream_not_found_emits_status_and_persists_not_found(
     source_id, csrf = _seed_ready_source(auth_client, db_conn, "tstream-nf@example.com")
     session = _seed_session(db_conn, UUID(source_id))  # corpus present, NOT embedded
 
-    resp = _turn_stream(
-        auth_client, session.id, {"message": "zzzqqq unmatchable token"}, csrf=csrf
-    )
+    resp = _turn_stream(auth_client, session.id, {"message": "zzzqqq unmatchable token"}, csrf=csrf)
 
     assert resp.status_code == 200, resp.text
     parts = _parse_ui_stream(resp.text)
@@ -966,9 +934,7 @@ def test_turn_stream_blank_message_returns_plain_422(
     assert "start" not in resp.text
 
 
-def test_turn_stream_missing_csrf_returns_403(
-    auth_client: TestClient, db_conn: Connection
-) -> None:
+def test_turn_stream_missing_csrf_returns_403(auth_client: TestClient, db_conn: Connection) -> None:
     source_id, _ = _seed_ready_source(auth_client, db_conn, "tstream-403@example.com")
     session = _seed_session(db_conn, UUID(source_id))
     resp = _turn_stream(auth_client, session.id, {"message": "hi"}, csrf=None)
@@ -1028,8 +994,8 @@ def test_turn_stream_mid_stream_failure_emits_error_part_and_persists_nothing(
             yield AnswerTextDelta(text="partial ")
             raise RuntimeError("provider-secret-internal-detail")
 
-    auth_client.app.dependency_overrides[get_teaching_generation] = (
-        lambda: _MidStreamRaisingTeachingAdapter()
+    auth_client.app.dependency_overrides[get_teaching_generation] = lambda: (
+        _MidStreamRaisingTeachingAdapter()
     )
     try:
         resp = _turn_stream(

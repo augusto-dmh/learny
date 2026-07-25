@@ -100,9 +100,7 @@ def _replace(db_conn: Connection, source_id: UUID, records: list[CorpusSectionRe
     )
 
 
-def _note(
-    db_conn: Connection, user_id: UUID, *, title: str = "Note", body: str = ""
-) -> UUID:
+def _note(db_conn: Connection, user_id: UUID, *, title: str = "Note", body: str = "") -> UUID:
     now = datetime.now(UTC)
     note = Note(
         id=uuid4(),
@@ -220,9 +218,7 @@ def test_reading_position_upsert_then_get_roundtrips(db_conn: Connection) -> Non
     repo = SqlAlchemyReadingPositionRepository(db_conn)
     when = datetime(2026, 7, 19, 12, 0, 0, tzinfo=UTC)
 
-    stored = repo.upsert(
-        user_id, source_id, anchor="a1", percent=Decimal("42.50"), updated_at=when
-    )
+    stored = repo.upsert(user_id, source_id, anchor="a1", percent=Decimal("42.50"), updated_at=when)
     assert stored.anchor == "a1"
     assert stored.percent == Decimal("42.50")
     assert stored.updated_at == when

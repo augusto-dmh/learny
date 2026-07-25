@@ -47,10 +47,7 @@ def upgrade() -> None:
 
     # The resolved Postgres regconfig for the chunk's language; 'simple' is the safe
     # default (no stemming, no stop words) for absent/unknown languages.
-    op.execute(
-        "ALTER TABLE corpus_chunks "
-        "ADD COLUMN search_config text NOT NULL DEFAULT 'simple'"
-    )
+    op.execute("ALTER TABLE corpus_chunks ADD COLUMN search_config text NOT NULL DEFAULT 'simple'")
 
     # Swap the generated (hardcoded-english) search_vector for a plain, trigger-fed
     # one so the config can vary per row.
@@ -95,8 +92,7 @@ def upgrade() -> None:
     op.execute("UPDATE corpus_chunks SET search_config = 'simple'")
 
     op.execute(
-        "CREATE INDEX ix_corpus_chunks_search_vector "
-        "ON corpus_chunks USING GIN (search_vector)"
+        "CREATE INDEX ix_corpus_chunks_search_vector ON corpus_chunks USING GIN (search_vector)"
     )
 
 
@@ -117,8 +113,7 @@ def downgrade() -> None:
         """
     )
     op.execute(
-        "CREATE INDEX ix_corpus_chunks_search_vector "
-        "ON corpus_chunks USING GIN (search_vector)"
+        "CREATE INDEX ix_corpus_chunks_search_vector ON corpus_chunks USING GIN (search_vector)"
     )
 
     op.execute("ALTER TABLE corpus_chunks DROP COLUMN search_config")

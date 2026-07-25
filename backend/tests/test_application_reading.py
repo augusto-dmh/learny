@@ -223,9 +223,7 @@ def test_read_chapter_resume_loads_the_stored_position_chapter() -> None:
     corpus = FakeCorpusRepository()
     _seed_book(corpus, source.id)
     positions = FakeReadingPositionRepository()
-    positions.upsert(
-        user.id, source.id, anchor="c2", percent=Decimal("50.00"), updated_at=_NOW
-    )
+    positions.upsert(user.id, source.id, anchor="c2", percent=Decimal("50.00"), updated_at=_NOW)
 
     content, stored = _read_chapter(sources, corpus, positions)(
         user=user, source_id=source.id, anchor=None
@@ -261,9 +259,7 @@ def test_read_chapter_stale_stored_anchor_falls_back_without_writing() -> None:
     corpus = FakeCorpusRepository()
     _seed_book(corpus, source.id)
     positions = FakeReadingPositionRepository()
-    positions.upsert(
-        user.id, source.id, anchor="gone", percent=Decimal("77.00"), updated_at=_NOW
-    )
+    positions.upsert(user.id, source.id, anchor="gone", percent=Decimal("77.00"), updated_at=_NOW)
     positions.upsert_calls.clear()
 
     content, stored = _read_chapter(sources, corpus, positions)(
@@ -348,9 +344,7 @@ def test_save_reading_position_unknown_anchor_404s_and_stores_nothing() -> None:
     positions = FakeReadingPositionRepository()
 
     with pytest.raises(CorpusNotFound):
-        _save_position(sources, corpus, positions)(
-            user=user, source_id=source.id, anchor="missing"
-        )
+        _save_position(sources, corpus, positions)(user=user, source_id=source.id, anchor="missing")
     assert positions.upsert_calls == []
 
 
@@ -379,9 +373,7 @@ def test_save_reading_position_non_owner_raises_source_not_found() -> None:
     positions = FakeReadingPositionRepository()
 
     with pytest.raises(SourceNotFound):
-        _save_position(sources, corpus, positions)(
-            user=intruder, source_id=source.id, anchor="c1"
-        )
+        _save_position(sources, corpus, positions)(user=intruder, source_id=source.id, anchor="c1")
     assert positions.upsert_calls == []
 
 
@@ -399,7 +391,11 @@ def _seeded_reader() -> tuple[User, Source, FakeSourceRepository, FakeCorpusRepo
 
 
 def _save_position_at(
-    now, study, sources, corpus, positions  # noqa: ANN001
+    now,
+    study,
+    sources,
+    corpus,
+    positions,  # noqa: ANN001
 ) -> SaveReadingPosition:
     return SaveReadingPosition(
         sources=sources,
@@ -471,9 +467,7 @@ def test_save_reading_position_bad_anchor_credits_no_study_day() -> None:
 
 
 def _list_highlights(sources, notes) -> ListSourceHighlights:  # noqa: ANN001
-    return ListSourceHighlights(
-        sources=sources, notes=notes, authorize=AuthorizeOwnership()
-    )
+    return ListSourceHighlights(sources=sources, notes=notes, authorize=AuthorizeOwnership())
 
 
 def test_list_source_highlights_returns_owner_highlights() -> None:
@@ -529,6 +523,4 @@ def test_list_source_highlights_non_owner_raises_source_not_found() -> None:
     sources.add(source)
 
     with pytest.raises(SourceNotFound):
-        _list_highlights(sources, FakeNoteRepository())(
-            user=intruder, source_id=source.id
-        )
+        _list_highlights(sources, FakeNoteRepository())(user=intruder, source_id=source.id)

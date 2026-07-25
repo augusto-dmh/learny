@@ -56,10 +56,7 @@ def _is_sensitive_key(key: object) -> bool:
 def _redact(value: object) -> object:
     """Return ``value`` with any sensitive keys masked, recursively."""
     if isinstance(value, Mapping):
-        return {
-            k: (REDACTED if _is_sensitive_key(k) else _redact(v))
-            for k, v in value.items()
-        }
+        return {k: (REDACTED if _is_sensitive_key(k) else _redact(v)) for k, v in value.items()}
     # Strings/bytes are sequences but must be left intact (they are values, not
     # containers of key/value pairs).
     if isinstance(value, str | bytes):

@@ -265,9 +265,10 @@ def test_deleted_note_disappears_immediately(db_conn: Connection) -> None:
     _two_topic_book(db_conn, source.id)
     note_id = _seed_note(db_conn, user.id, title="Temp", body=_NOTE_FACT)
     query = "zolgensma gene therapy dose cost"
-    assert any(e.note_id == note_id for e in _search(
-        db_conn, source.id, query, user_id=user.id, include_notes=True
-    ))
+    assert any(
+        e.note_id == note_id
+        for e in _search(db_conn, source.id, query, user_id=user.id, include_notes=True)
+    )
 
     SqlAlchemyNoteRepository(db_conn).delete(note_id)
 

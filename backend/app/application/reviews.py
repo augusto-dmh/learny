@@ -47,6 +47,7 @@ def _owned_item(items: QuizItemRepository, user: User, item_id: UUID) -> QuizIte
         raise QuizItemNotFound("Quiz item not found.")
     return item
 
+
 # Due-queue bounds (A-6 / QUIZ-13): default page size and the hard cap the service
 # enforces regardless of the requested limit (the web layer 422s over the cap first).
 DEFAULT_DUE_LIMIT = 20

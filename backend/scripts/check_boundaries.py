@@ -51,9 +51,7 @@ def main() -> int:
                     f" or app/eval/ — {line.strip()}"
                 )
             if in_domain and (DOMAIN_FORBIDDEN.match(line) or DOMAIN_OUTWARD.match(line)):
-                violations.append(
-                    f"{rel}:{lineno}: domain layer imports outward — {line.strip()}"
-                )
+                violations.append(f"{rel}:{lineno}: domain layer imports outward — {line.strip()}")
             if in_ported_layer and INFRA_IMPORT.match(line):
                 violations.append(
                     f"{rel}:{lineno}: {rel.split('/')[1]} layer imports app.infrastructure"

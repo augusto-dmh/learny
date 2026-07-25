@@ -72,9 +72,7 @@ def _judge(payloads: list[dict]) -> tuple[Judge, _FakeClient]:
 
 def _faithfulness_payload(*supported: bool) -> dict:
     return {
-        "claims": [
-            {"claim": f"claim {i}", "supported": flag} for i, flag in enumerate(supported)
-        ]
+        "claims": [{"claim": f"claim {i}", "supported": flag} for i, flag in enumerate(supported)]
     }
 
 
@@ -119,9 +117,9 @@ def test_relevancy_parses_integer_score() -> None:
     score = judge.relevancy(question="q", answer="a")
 
     assert score == 4
-    assert client.messages.calls[0]["output_config"]["format"]["schema"]["properties"][
-        "score"
-    ]["enum"] == [1, 2, 3, 4, 5]
+    assert client.messages.calls[0]["output_config"]["format"]["schema"]["properties"]["score"][
+        "enum"
+    ] == [1, 2, 3, 4, 5]
 
 
 # --- JSONL result schema (GEN-21) ----------------------------------------------
@@ -152,9 +150,7 @@ def test_run_eval_writes_jsonl_line_per_case_with_full_schema(tmp_path: Path) ->
         ]
     )
 
-    lines = run_eval(
-        _inputs(2), judge=judge, max_cases=10, results_dir=tmp_path, gate=False
-    )
+    lines = run_eval(_inputs(2), judge=judge, max_cases=10, results_dir=tmp_path, gate=False)
 
     assert len(lines) == 2
     # Exactly one JSONL file was written, one line per case.
@@ -194,9 +190,7 @@ def test_run_eval_caps_at_max_cases(tmp_path: Path) -> None:
         [_faithfulness_payload(True), {"score": 5}, _faithfulness_payload(True), {"score": 5}]
     )
 
-    lines = run_eval(
-        _inputs(5), judge=judge, max_cases=2, results_dir=tmp_path, gate=False
-    )
+    lines = run_eval(_inputs(5), judge=judge, max_cases=2, results_dir=tmp_path, gate=False)
 
     assert len(lines) == 2
     assert len(client.messages.calls) == 4  # never touched the remaining three cases
@@ -209,9 +203,7 @@ def test_gate_off_is_report_only_even_below_threshold(tmp_path: Path) -> None:
     # A wholly unfaithful, irrelevant case must not raise when the gate is off.
     judge, _ = _judge([_faithfulness_payload(False), {"score": 1}])
 
-    lines = run_eval(
-        _inputs(1), judge=judge, max_cases=10, results_dir=tmp_path, gate=False
-    )
+    lines = run_eval(_inputs(1), judge=judge, max_cases=10, results_dir=tmp_path, gate=False)
 
     assert lines[0]["faithfulness"] == 0.0
     assert lines[0]["relevancy"] == 1
@@ -267,9 +259,7 @@ def test_gate_passes_on_baseline_aggregates(tmp_path: Path) -> None:
     # good aggregates, where the single-failure cases cannot see it).
     judge, _ = _judge([_faithfulness_payload(True), {"score": 5}])
 
-    lines = run_eval(
-        _inputs(1), judge=judge, max_cases=10, results_dir=tmp_path, gate=True
-    )
+    lines = run_eval(_inputs(1), judge=judge, max_cases=10, results_dir=tmp_path, gate=True)
 
     assert lines[0]["faithfulness"] == 1.0
     assert lines[0]["relevancy"] == 5
@@ -296,9 +286,7 @@ def test_relevancy_rubric_carries_one_worked_exemplar_per_score() -> None:
     from app.eval.judge import RELEVANCY_PROMPT_PATH
 
     rubric = RELEVANCY_PROMPT_PATH.read_text(encoding="utf-8")
-    exemplified = sorted(
-        int(m) for m in re.findall(r"(?mi)^#+\s*Score ([1-5]) example\b", rubric)
-    )
+    exemplified = sorted(int(m) for m in re.findall(r"(?mi)^#+\s*Score ([1-5]) example\b", rubric))
     assert exemplified == [1, 2, 3, 4, 5]
 
 
@@ -342,12 +330,9 @@ def test_live_judge_scores_one_case() -> None:
     from app.core.config import get_settings
 
     settings = get_settings()
-    judge = Judge(
-        api_key=os.environ["LEARNY_ANTHROPIC_API_KEY"], model=settings.judge_model
-    )
+    judge = Judge(api_key=os.environ["LEARNY_ANTHROPIC_API_KEY"], model=settings.judge_model)
     evidence = (
-        "Ocean tides rise and fall because the moon's gravity pulls seawater "
-        "across the planet."
+        "Ocean tides rise and fall because the moon's gravity pulls seawater across the planet."
     )
     grounded = EvalInput(
         case_id="live-tides",

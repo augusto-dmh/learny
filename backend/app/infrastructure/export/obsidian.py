@@ -64,14 +64,10 @@ def build_vault(
 
     ordered_sources = [
         (source_id, sorted(anchors, key=lambda a: (a.created_at, str(a.id))))
-        for source_id, anchors in sorted(
-            highlights_by_source.items(), key=lambda kv: str(kv[0])
-        )
+        for source_id, anchors in sorted(highlights_by_source.items(), key=lambda kv: str(kv[0]))
         if anchors
     ]
-    book_names = _dedupe(
-        [_sanitize(anchors[0].source_title) for _, anchors in ordered_sources]
-    )
+    book_names = _dedupe([_sanitize(anchors[0].source_title) for _, anchors in ordered_sources])
     for (_source_id, anchors), name in zip(ordered_sources, book_names, strict=True):
         for anchor in anchors:
             anchor_to_book[anchor.id] = name

@@ -92,9 +92,7 @@ class Snapshot:
             model=data["model"],
             question=data["question"],
             evidence=tuple(
-                SnapshotEvidence(
-                    chunk_id=e["chunk_id"], snippet=e["snippet"], anchor=e["anchor"]
-                )
+                SnapshotEvidence(chunk_id=e["chunk_id"], snippet=e["snippet"], anchor=e["anchor"])
                 for e in data["evidence"]
             ),
             answer=SnapshotAnswer(
@@ -146,9 +144,7 @@ def build_snapshot(
         model=generated.model,
         question=case.question,
         evidence=tuple(
-            SnapshotEvidence(
-                chunk_id=str(item.chunk_id), snippet=item.snippet, anchor=item.anchor
-            )
+            SnapshotEvidence(chunk_id=str(item.chunk_id), snippet=item.snippet, anchor=item.anchor)
             for item in evidence
         ),
         answer=SnapshotAnswer(

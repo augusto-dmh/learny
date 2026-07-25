@@ -79,9 +79,7 @@ router = APIRouter(tags=["notes"])
 
 # Create/update commit in this UoW factory before the after-commit embed enqueue
 # (AD-016), mirroring the ingestion/deck start paths; tests override both.
-NoteUowFactory = Annotated[
-    Callable[[], AbstractContextManager[Connection]], Depends(get_note_uow)
-]
+NoteUowFactory = Annotated[Callable[[], AbstractContextManager[Connection]], Depends(get_note_uow)]
 NoteEnqueuer = Annotated[NoteIndexEnqueuer, Depends(get_note_index_enqueuer)]
 
 
@@ -443,7 +441,4 @@ def get_source_highlights(
     Owner-scoped like the other source reads (``SourceNotFound`` → 404); every status is
     returned so the reader paints the ``active`` quotes and lists the rest.
     """
-    return [
-        SourceHighlightView.from_highlight(h)
-        for h in service(user=user, source_id=source_id)
-    ]
+    return [SourceHighlightView.from_highlight(h) for h in service(user=user, source_id=source_id)]

@@ -30,9 +30,7 @@ class ExportVault:
     def __init__(self, *, notes: NoteRepository) -> None:
         self._notes = notes
 
-    def __call__(
-        self, *, user: User
-    ) -> tuple[list[NoteView], dict[UUID, list[NoteAnchor]]]:
+    def __call__(self, *, user: User) -> tuple[list[NoteView], dict[UUID, list[NoteAnchor]]]:
         summaries = self._notes.list_summaries(user.id)
         anchors = self._notes.anchors_for_user(user.id)
         by_note: dict[UUID, list[NoteAnchor]] = {}

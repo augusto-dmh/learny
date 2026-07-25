@@ -258,8 +258,6 @@ def test_continue_without_a_corpus_yields_an_empty_chapter_title() -> None:
 
 def test_continue_returns_none_when_the_user_has_no_positions() -> None:
     user = _user()
-    service = ContinueReading(
-        positions=_FakeRecentPositions(None), corpus=FakeCorpusRepository()
-    )
+    service = ContinueReading(positions=_FakeRecentPositions(None), corpus=FakeCorpusRepository())
 
     assert service(user=user) is None

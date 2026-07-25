@@ -124,8 +124,7 @@ def _chunk_text_by_anchor(db_conn: Connection, source_id: UUID) -> dict[str, str
         source_id, min_chars=get_settings().quiz_min_section_chars
     )
     return {
-        section.anchor: "\n".join(text for _cid, text in section.chunks)
-        for section in sections
+        section.anchor: "\n".join(text for _cid, text in section.chunks) for section in sections
     }
 
 
@@ -153,9 +152,9 @@ def test_golden_deck_persists_only_grounded_items(db_conn: Connection) -> None:
         assert item.anchor in chunk_text, f"item anchor {item.anchor} not an eligible section"
         assert quote_in_text(item.source_excerpt, chunk_text[item.anchor])
         # chunk_hash pins the snapshot to that exact chunk's bytes (QUIZ-06).
-        assert item.chunk_hash == hashlib.sha256(
-            chunk_text[item.anchor].encode("utf-8")
-        ).hexdigest()
+        assert (
+            item.chunk_hash == hashlib.sha256(chunk_text[item.anchor].encode("utf-8")).hexdigest()
+        )
         # (2) cloze mask validity: answer appears in the excerpt and the question
         # carries the blank (QUIZ-07).
         if item.item_type == QuizItemType.CLOZE:
@@ -183,9 +182,7 @@ def test_pipeline_discards_candidate_whose_quote_is_not_in_the_chunk(
     run = _run_deck(jobs, items)
 
     # A real chunk from the first eligible golden section — the id both candidates cite.
-    section = items.sections_for_generation(
-        source.id, min_chars=settings.quiz_min_section_chars
-    )[0]
+    section = items.sections_for_generation(source.id, min_chars=settings.quiz_min_section_chars)[0]
     chunk_id, chunk_text = section.chunks[0]
     grounded_quote = chunk_text.split(".")[0].strip() + "."  # a verbatim leading sentence
 
@@ -206,9 +203,7 @@ def test_pipeline_discards_candidate_whose_quote_is_not_in_the_chunk(
 
     job = jobs.add(_queued_job(source.id))
     run.begin(job.id)
-    final_job = run.finalize(
-        job.id, QuizDeckResult(candidates=(control, poisoned), errors=())
-    )
+    final_job = run.finalize(job.id, QuizDeckResult(candidates=(control, poisoned), errors=()))
 
     assert final_job is not None
     # The control persists; the poisoned candidate is discarded and never reaches the DB.

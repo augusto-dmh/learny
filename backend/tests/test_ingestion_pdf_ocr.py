@@ -114,9 +114,7 @@ def test_textless_pdf_retries_exactly_once_with_ocr_langs(monkeypatch) -> None:
     fake = _FakeDocling(results=[_empty_doc(), _text_doc()])
     fake.install(monkeypatch)
 
-    book = _parser(ocr_enabled=True, ocr_langs=("en", "pt")).parse(
-        b"%PDF", filename="scan.pdf"
-    )
+    book = _parser(ocr_enabled=True, ocr_langs=("en", "pt")).parse(b"%PDF", filename="scan.pdf")
 
     assert [options.do_ocr for options in fake.calls] == [False, True]
     assert fake.calls[1].do_table_structure is True

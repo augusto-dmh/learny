@@ -97,9 +97,7 @@ class AnswerResponse(BaseModel):
             answer_status=result.status,
             answer=result.text,
             citations=[EvidenceView.from_evidence(c) for c in result.citations],
-            retrieval=RetrievalDiagnostics(
-                strategy="hybrid", evidence_count=result.evidence_count
-            ),
+            retrieval=RetrievalDiagnostics(strategy="hybrid", evidence_count=result.evidence_count),
             model=result.model,
         )
 

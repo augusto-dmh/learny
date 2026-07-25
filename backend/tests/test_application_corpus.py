@@ -400,9 +400,7 @@ def test_build_corpus_runs_structure_normalization() -> None:
     # ING-12: the surviving block's page span rolls up into its chunk.
     assert record.chunks[0].page_span == (5, 6)
     # ING-07: the normalization counts event carries exactly what the pass changed.
-    normalized = next(
-        e for e in events.list_for_job(job.id) if e.type == "corpus_normalized"
-    )
+    normalized = next(e for e in events.list_for_job(job.id) if e.type == "corpus_normalized")
     assert normalized.message == (
         "titles_replaced=1 sections_merged=2 depths_adjusted=0 noise_blocks_stripped=4"
     )

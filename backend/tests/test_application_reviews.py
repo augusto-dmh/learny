@@ -67,9 +67,7 @@ class _CapturingItemRepo:
     def due_for_user(
         self, user_id, *, now, limit, source_id=None
     ) -> tuple[int, list[DueReviewItem]]:  # noqa: ANN001
-        self.calls.append(
-            {"user_id": user_id, "now": now, "limit": limit, "source_id": source_id}
-        )
+        self.calls.append({"user_id": user_id, "now": now, "limit": limit, "source_id": source_id})
         return self._result
 
 
@@ -235,9 +233,7 @@ def test_submit_review_without_duration_logs_null(db_conn: Connection) -> None:
     _service(db_conn, now=_NOW)(user=user, item_id=item.id, rating=2)
 
     rows = db_conn.execute(
-        select(review_log.c.review_duration_ms).where(
-            review_log.c.quiz_item_id == item.id
-        )
+        select(review_log.c.review_duration_ms).where(review_log.c.quiz_item_id == item.id)
     ).all()
     assert [r.review_duration_ms for r in rows] == [None]
 
@@ -266,9 +262,7 @@ def test_submit_review_rejects_non_active_item(db_conn: Connection, status: str)
         _service(db_conn, now=_NOW)(user=user, item_id=item.id, rating=3)
 
     logged = db_conn.execute(
-        select(func.count()).select_from(review_log).where(
-            review_log.c.quiz_item_id == item.id
-        )
+        select(func.count()).select_from(review_log).where(review_log.c.quiz_item_id == item.id)
     ).scalar_one()
     assert logged == 0
 
@@ -294,9 +288,7 @@ def test_submit_review_non_owner_raises_not_found(db_conn: Connection) -> None:
         _service(db_conn, now=_NOW)(user=intruder, item_id=item.id, rating=3)
 
     logged = db_conn.execute(
-        select(func.count()).select_from(review_log).where(
-            review_log.c.quiz_item_id == item.id
-        )
+        select(func.count()).select_from(review_log).where(review_log.c.quiz_item_id == item.id)
     ).scalar_one()
     assert logged == 0
 
@@ -335,15 +327,13 @@ def test_submit_review_credits_a_study_day_in_the_same_transaction(
     )
 
     logged = db_conn.execute(
-        select(func.count()).select_from(review_log).where(
-            review_log.c.quiz_item_id == item.id
-        )
+        select(func.count()).select_from(review_log).where(review_log.c.quiz_item_id == item.id)
     ).scalar_one()
     assert logged == 1
     rows = db_conn.execute(
-        select(
-            study_days.c.day, study_days.c.reviews_count, study_days.c.reading_updates
-        ).where(study_days.c.user_id == user.id)
+        select(study_days.c.day, study_days.c.reviews_count, study_days.c.reading_updates).where(
+            study_days.c.user_id == user.id
+        )
     ).all()
     assert [(r.day, r.reviews_count, r.reading_updates) for r in rows] == [
         (local_day(_NEAR_MIDNIGHT, "Asia/Tokyo"), 1, 0)
@@ -390,15 +380,11 @@ def test_submit_review_rolls_back_the_review_when_the_study_credit_fails(
         service(user=user, item_id=item.id, rating=3)
 
     logged = db_conn.execute(
-        select(func.count()).select_from(review_log).where(
-            review_log.c.quiz_item_id == item.id
-        )
+        select(func.count()).select_from(review_log).where(review_log.c.quiz_item_id == item.id)
     ).scalar_one()
     assert logged == 0
     days = db_conn.execute(
-        select(func.count()).select_from(study_days).where(
-            study_days.c.user_id == user.id
-        )
+        select(func.count()).select_from(study_days).where(study_days.c.user_id == user.id)
     ).scalar_one()
     assert days == 0
 
@@ -452,8 +438,12 @@ def _persisted_note_card(
     repo.create_scheduling(
         item.id,
         SchedulingSnapshot(
-            state=1, step=0, stability=None, difficulty=None,
-            due=due or (now - timedelta(hours=1)), last_review=None,
+            state=1,
+            step=0,
+            stability=None,
+            difficulty=None,
+            due=due or (now - timedelta(hours=1)),
+            last_review=None,
         ),
     )
     if flagged_at is not None:
@@ -501,19 +491,22 @@ def test_reset_returns_fresh_state_clears_badge_and_preserves_log(
     )
     repo = SqlAlchemyQuizItemRepository(db_conn)
     # Give the card a review history and an advanced schedule to reset away from.
-    repo.append_log(
-        item.id, ReviewLogEntry(rating=3, reviewed_at=_NOW, review_duration_ms=800)
-    )
+    repo.append_log(item.id, ReviewLogEntry(rating=3, reviewed_at=_NOW, review_duration_ms=800))
     repo.update_scheduling(
         item.id,
         SchedulingSnapshot(
-            state=2, step=1, stability=9.0, difficulty=5.0,
-            due=_NOW + timedelta(days=5), last_review=_NOW,
+            state=2,
+            step=1,
+            stability=9.0,
+            difficulty=5.0,
+            due=_NOW + timedelta(days=5),
+            last_review=_NOW,
         ),
     )
     log_before = db_conn.execute(
-        select(review_log.c.rating, review_log.c.reviewed_at, review_log.c.review_duration_ms)
-        .where(review_log.c.quiz_item_id == item.id)
+        select(
+            review_log.c.rating, review_log.c.reviewed_at, review_log.c.review_duration_ms
+        ).where(review_log.c.quiz_item_id == item.id)
     ).all()
 
     before = datetime.now(UTC)
@@ -534,8 +527,9 @@ def test_reset_returns_fresh_state_clears_badge_and_preserves_log(
     # Badge cleared, review log untouched.
     assert repo.get_by_id(item.id).note_changed_at is None
     log_after = db_conn.execute(
-        select(review_log.c.rating, review_log.c.reviewed_at, review_log.c.review_duration_ms)
-        .where(review_log.c.quiz_item_id == item.id)
+        select(
+            review_log.c.rating, review_log.c.reviewed_at, review_log.c.review_duration_ms
+        ).where(review_log.c.quiz_item_id == item.id)
     ).all()
     assert log_after == log_before
     assert len(log_after) == 1

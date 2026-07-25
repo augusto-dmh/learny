@@ -53,8 +53,7 @@ _NOW = datetime(2026, 7, 19, 12, 0, 0, tzinfo=UTC)
 
 _CHUNK_ID = uuid4()
 _SECTION_TEXT = (
-    "The mitochondria is the powerhouse of the cell. "
-    "Chloroplasts capture light in plants."
+    "The mitochondria is the powerhouse of the cell. Chloroplasts capture light in plants."
 )
 _QUOTE = "The mitochondria is the powerhouse of the cell."
 
@@ -112,25 +111,15 @@ class FakeCardItemRepository:
             self._by_key[key] = item
         else:
             existing = self._by_key[key]
-            self._by_key[key] = replace(
-                item, id=existing.id, created_at=existing.created_at
-            )
-        self.embeddings[self._by_key[key].id] = (
-            list(embedding) if embedding is not None else None
-        )
+            self._by_key[key] = replace(item, id=existing.id, created_at=existing.created_at)
+        self.embeddings[self._by_key[key].id] = list(embedding) if embedding is not None else None
         return inserted
 
-    def get_by_anchor_and_key(
-        self, note_anchor_id: UUID, content_key: str
-    ) -> QuizItem | None:
+    def get_by_anchor_and_key(self, note_anchor_id: UUID, content_key: str) -> QuizItem | None:
         # Scoped to highlight origin: a deck row sharing the key is never returned.
-        return self._by_key.get(
-            (QuizItemOrigin.HIGHLIGHT, note_anchor_id, content_key)
-        )
+        return self._by_key.get((QuizItemOrigin.HIGHLIGHT, note_anchor_id, content_key))
 
-    def get_by_note_and_key(
-        self, note_id: UUID, content_key: str
-    ) -> QuizItem | None:
+    def get_by_note_and_key(self, note_id: UUID, content_key: str) -> QuizItem | None:
         # Scoped to note origin (NL-15): the service-level dedup behind re-promotion.
         return next(
             (
@@ -144,20 +133,14 @@ class FakeCardItemRepository:
         )
 
     def get_by_id(self, item_id: UUID) -> QuizItem | None:
-        return next(
-            (item for item in self._by_key.values() if item.id == item_id), None
-        )
+        return next((item for item in self._by_key.values() if item.id == item_id), None)
 
-    def update_text(
-        self, item_id: UUID, *, question: str, answer: str, content_key: str
-    ) -> None:
+    def update_text(self, item_id: UUID, *, question: str, answer: str, content_key: str) -> None:
         self.update_text_calls += 1
         for key, item in list(self._by_key.items()):
             if item.id != item_id:
                 continue
-            updated = replace(
-                item, question=question, answer=answer, content_key=content_key
-            )
+            updated = replace(item, question=question, answer=answer, content_key=content_key)
             del self._by_key[key]
             self._by_key[self._identity(updated)] = updated
 
@@ -428,9 +411,7 @@ class _World:
 def test_suggestions_are_scoped_to_the_highlighted_quote() -> None:
     world = _World(candidates=[_candidate()])
 
-    result = world.suggest(
-        user=_OWNER, source_id=world.source.id, note_anchor_id=world.anchor.id
-    )
+    result = world.suggest(user=_OWNER, source_id=world.source.id, note_anchor_id=world.anchor.id)
 
     assert len(result) == 1
     section, quote, limit = world.generation.calls[0]
@@ -441,14 +422,10 @@ def test_suggestions_are_scoped_to_the_highlighted_quote() -> None:
 
 def test_suggestions_are_capped_at_the_configured_maximum() -> None:
     # An adapter that over-returns must not widen the chip row (CAP-02).
-    over_eager = [
-        _candidate(question=f"Question {index}?") for index in range(6)
-    ]
+    over_eager = [_candidate(question=f"Question {index}?") for index in range(6)]
     world = _World(candidates=over_eager, max_suggestions=3)
 
-    result = world.suggest(
-        user=_OWNER, source_id=world.source.id, note_anchor_id=world.anchor.id
-    )
+    result = world.suggest(user=_OWNER, source_id=world.source.id, note_anchor_id=world.anchor.id)
 
     assert len(result) == 3
 
@@ -457,9 +434,7 @@ def test_nothing_is_persisted_by_generating_suggestions() -> None:
     # Suggestions are ephemeral (AD-134): generating writes no note and no anchor.
     world = _World(candidates=[_candidate()])
 
-    world.suggest(
-        user=_OWNER, source_id=world.source.id, note_anchor_id=world.anchor.id
-    )
+    world.suggest(user=_OWNER, source_id=world.source.id, note_anchor_id=world.anchor.id)
 
     assert world.notes.anchors_for_source(world.source.id) == [world.anchor]
 
@@ -476,9 +451,7 @@ def test_candidate_whose_quote_is_absent_from_the_section_is_discarded() -> None
     )
     world = _World(candidates=[grounded, fabricated])
 
-    result = world.suggest(
-        user=_OWNER, source_id=world.source.id, note_anchor_id=world.anchor.id
-    )
+    result = world.suggest(user=_OWNER, source_id=world.source.id, note_anchor_id=world.anchor.id)
 
     assert [c.question for c in result] == [grounded.question]
 
@@ -503,9 +476,7 @@ def test_cloze_candidate_with_an_invalid_mask_is_discarded() -> None:
     )
     world = _World(candidates=[valid, wrong_span, no_blank])
 
-    result = world.suggest(
-        user=_OWNER, source_id=world.source.id, note_anchor_id=world.anchor.id
-    )
+    result = world.suggest(user=_OWNER, source_id=world.source.id, note_anchor_id=world.anchor.id)
 
     assert [c.answer for c in result] == ["mitochondria"]
 
@@ -513,9 +484,7 @@ def test_cloze_candidate_with_an_invalid_mask_is_discarded() -> None:
 def test_candidate_of_an_unsupported_type_is_discarded() -> None:
     world = _World(candidates=[_candidate(item_type="multiple_choice")])
 
-    result = world.suggest(
-        user=_OWNER, source_id=world.source.id, note_anchor_id=world.anchor.id
-    )
+    result = world.suggest(user=_OWNER, source_id=world.source.id, note_anchor_id=world.anchor.id)
 
     assert result == []
 
@@ -523,22 +492,16 @@ def test_candidate_of_an_unsupported_type_is_discarded() -> None:
 def test_candidate_with_empty_text_is_discarded() -> None:
     world = _World(candidates=[_candidate(question="   "), _candidate(answer="")])
 
-    result = world.suggest(
-        user=_OWNER, source_id=world.source.id, note_anchor_id=world.anchor.id
-    )
+    result = world.suggest(user=_OWNER, source_id=world.source.id, note_anchor_id=world.anchor.id)
 
     assert result == []
 
 
 def test_zero_surviving_candidates_is_an_empty_list_not_an_error() -> None:
     # "No cards for this passage" is an outcome, not a failure (spec edge case).
-    world = _World(
-        candidates=[_candidate(anchor_quote="Nothing in this book says that.")]
-    )
+    world = _World(candidates=[_candidate(anchor_quote="Nothing in this book says that.")])
 
-    result = world.suggest(
-        user=_OWNER, source_id=world.source.id, note_anchor_id=world.anchor.id
-    )
+    result = world.suggest(user=_OWNER, source_id=world.source.id, note_anchor_id=world.anchor.id)
 
     assert result == []
 
@@ -546,9 +509,7 @@ def test_zero_surviving_candidates_is_an_empty_list_not_an_error() -> None:
 def test_generator_returning_nothing_is_an_empty_list_not_an_error() -> None:
     world = _World(candidates=[])
 
-    result = world.suggest(
-        user=_OWNER, source_id=world.source.id, note_anchor_id=world.anchor.id
-    )
+    result = world.suggest(user=_OWNER, source_id=world.source.id, note_anchor_id=world.anchor.id)
 
     assert result == []
 
@@ -571,9 +532,7 @@ def test_anchor_whose_note_belongs_to_another_user_is_not_found() -> None:
     foreign = world.notes.add_anchor(_anchor(stranger_note.id, world.source.id))
 
     with pytest.raises(QuizItemNotFound):
-        world.suggest(
-            user=_OWNER, source_id=world.source.id, note_anchor_id=foreign.id
-        )
+        world.suggest(user=_OWNER, source_id=world.source.id, note_anchor_id=foreign.id)
 
     assert world.generation.calls == []
 
@@ -582,32 +541,24 @@ def test_anchor_belonging_to_a_different_source_is_not_found() -> None:
     world = _World(candidates=[_candidate()])
     other_source = _source(_OWNER.id)
     world.sources.add(other_source)
-    foreign = world.notes.add_anchor(
-        replace(_anchor(uuid4(), other_source.id), id=uuid4())
-    )
+    foreign = world.notes.add_anchor(replace(_anchor(uuid4(), other_source.id), id=uuid4()))
 
     with pytest.raises(QuizItemNotFound):
-        world.suggest(
-            user=_OWNER, source_id=world.source.id, note_anchor_id=foreign.id
-        )
+        world.suggest(user=_OWNER, source_id=world.source.id, note_anchor_id=foreign.id)
 
 
 def test_unknown_anchor_is_not_found() -> None:
     world = _World(candidates=[_candidate()])
 
     with pytest.raises(QuizItemNotFound):
-        world.suggest(
-            user=_OWNER, source_id=world.source.id, note_anchor_id=uuid4()
-        )
+        world.suggest(user=_OWNER, source_id=world.source.id, note_anchor_id=uuid4())
 
 
 def test_anchor_whose_section_no_longer_resolves_is_a_stale_target() -> None:
     world = _World(candidates=[_candidate()], anchor_resolves=False)
 
     with pytest.raises(StaleCaptureTarget):
-        world.suggest(
-            user=_OWNER, source_id=world.source.id, note_anchor_id=world.anchor.id
-        )
+        world.suggest(user=_OWNER, source_id=world.source.id, note_anchor_id=world.anchor.id)
 
 
 def test_another_users_source_is_not_found_and_generates_nothing() -> None:
@@ -726,9 +677,7 @@ def test_accepted_card_snapshots_its_citation_from_the_highlight() -> None:
     assert item.anchor == world.anchor.anchor
     assert item.section_path == world.anchor.section_path
     assert item.source_excerpt == _QUOTE
-    assert item.chunk_hash == hashlib.sha256(
-        normalize_text(_QUOTE).encode("utf-8")
-    ).hexdigest()
+    assert item.chunk_hash == hashlib.sha256(normalize_text(_QUOTE).encode("utf-8")).hexdigest()
     assert item.status == QuizItemStatus.ACTIVE
     assert item.generation_meta == {"model": "fake-generation@1"}
 
@@ -753,9 +702,7 @@ def test_discarding_a_suggestion_persists_nothing() -> None:
     # Discard is the absence of an accept: nothing is written for it (CAP-07).
     world = _World(candidates=[_candidate()])
 
-    world.suggest(
-        user=_OWNER, source_id=world.source.id, note_anchor_id=world.anchor.id
-    )
+    world.suggest(user=_OWNER, source_id=world.source.id, note_anchor_id=world.anchor.id)
 
     assert world.items.list_all() == []
 
@@ -1565,9 +1512,7 @@ def test_refresh_rewrites_a_matched_changed_card_and_flags_it() -> None:
     world = _RefreshWorld(
         note_candidates=[_note_candidate(question="Reworded?", answer="Reworded answer")],
     )
-    card = world.seed_card(
-        question="Original?", answer="Original answer", embedding=_MATCH_VECTOR
-    )
+    card = world.seed_card(question="Original?", answer="Original answer", embedding=_MATCH_VECTOR)
 
     world.refresh(note_id=world.note.id)
 
@@ -1588,9 +1533,7 @@ def test_refresh_leaves_a_matched_identical_card_untouched() -> None:
     world = _RefreshWorld(
         note_candidates=[_note_candidate(question="Same?", answer="Same answer")],
     )
-    card = world.seed_card(
-        question="Same?", answer="Same answer", embedding=_MATCH_VECTOR
-    )
+    card = world.seed_card(question="Same?", answer="Same answer", embedding=_MATCH_VECTOR)
 
     world.refresh(note_id=world.note.id)
 
@@ -1605,9 +1548,7 @@ def test_refresh_flags_an_unmatched_card_without_rewriting_it() -> None:
         note_candidates=[_note_candidate(question="Reworded?", answer="X")],
         suggestion_vector=_ORTHOGONAL_VECTOR,
     )
-    card = world.seed_card(
-        question="Original?", answer="Original answer", embedding=_MATCH_VECTOR
-    )
+    card = world.seed_card(question="Original?", answer="Original answer", embedding=_MATCH_VECTOR)
 
     world.refresh(note_id=world.note.id)
 
@@ -1637,9 +1578,7 @@ def test_refresh_never_creates_or_deletes_cards() -> None:
             _note_candidate(question="Second?", answer="B"),
         ],
     )
-    card = world.seed_card(
-        question="Original?", answer="A", embedding=_MATCH_VECTOR
-    )
+    card = world.seed_card(question="Original?", answer="A", embedding=_MATCH_VECTOR)
 
     world.refresh(note_id=world.note.id)
 
@@ -1652,9 +1591,7 @@ def test_refresh_reads_the_newest_body() -> None:
     world = _RefreshWorld()
     world.seed_card(question="Q?", answer="A", embedding=_MATCH_VECTOR)
     new_body = "A completely rewritten note body sentence."
-    world.notes.update(
-        world.note.id, title="Memory", body_markdown=new_body, updated_at=_NOW
-    )
+    world.notes.update(world.note.id, title="Memory", body_markdown=new_body, updated_at=_NOW)
 
     world.refresh(note_id=world.note.id)
 
@@ -1679,9 +1616,7 @@ def test_refresh_recomputes_the_excerpt_from_the_current_body() -> None:
         excerpt_chars=10,
         body=_NOTE_QUOTE + " " + "x" * 500,  # long, still contains the anchor quote
     )
-    card = world.seed_card(
-        question="Original?", answer="A", embedding=_MATCH_VECTOR
-    )
+    card = world.seed_card(question="Original?", answer="A", embedding=_MATCH_VECTOR)
 
     world.refresh(note_id=world.note.id)
 

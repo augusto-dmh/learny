@@ -36,9 +36,7 @@ _MODEL = "local-extractive"
 _MAX_SNIPPETS = 3
 
 
-def _extractive_answer(
-    evidence: Sequence[Evidence], *, model: str
-) -> GeneratedAnswer:
+def _extractive_answer(evidence: Sequence[Evidence], *, model: str) -> GeneratedAnswer:
     """Compose a grounded answer from the top evidence snippets, citing those chunks.
 
     Empty evidence → ``found=False`` empty result (defensive; the services
@@ -49,20 +47,14 @@ def _extractive_answer(
     identically (design §Components).
     """
     if not evidence:
-        return GeneratedAnswer(
-            text="", cited_chunk_ids=(), model=model, found=False
-        )
+        return GeneratedAnswer(text="", cited_chunk_ids=(), model=model, found=False)
     selected = list(evidence[:_MAX_SNIPPETS])
     text = "\n\n".join(item.snippet for item in selected)
     cited = tuple(item.chunk_id for item in selected)
-    return GeneratedAnswer(
-        text=text, cited_chunk_ids=cited, model=model, found=True
-    )
+    return GeneratedAnswer(text=text, cited_chunk_ids=cited, model=model, found=True)
 
 
-def _extractive_stream(
-    evidence: Sequence[Evidence], *, model: str
-) -> Iterator[AnswerStreamEvent]:
+def _extractive_stream(evidence: Sequence[Evidence], *, model: str) -> Iterator[AnswerStreamEvent]:
     """Stream the extractive answer as one full-text delta then the completed event.
 
     Trivially chunked (the whole extractive text in a single delta) so the
@@ -90,9 +82,7 @@ class DeterministicAnswerAdapter:
     # port is deliberately not invoked (QA-04/QA-13).
     model = _MODEL
 
-    def generate(
-        self, *, question: str, evidence: Sequence[Evidence]
-    ) -> GeneratedAnswer:
+    def generate(self, *, question: str, evidence: Sequence[Evidence]) -> GeneratedAnswer:
         """Compose an answer from the top evidence snippets, citing those chunks."""
         return _extractive_answer(evidence, model=self.model)
 

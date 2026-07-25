@@ -83,9 +83,7 @@ def test_answerability_prompt_loads_and_is_versioned() -> None:
 
 
 def test_answerability_parses_structured_result() -> None:
-    judge, client = _judge(
-        [{"answerable": True, "score": 5, "reason": "the excerpt states it"}]
-    )
+    judge, client = _judge([{"answerable": True, "score": 5, "reason": "the excerpt states it"}])
 
     result = judge.answerability(
         question="What pulls seawater?", answer="the moon's gravity", excerpt="e"
@@ -106,9 +104,7 @@ def test_answerability_parses_structured_result() -> None:
 
 
 def test_answerability_maps_negative_judgement() -> None:
-    judge, _ = _judge(
-        [{"answerable": False, "score": 1, "reason": "needs outside knowledge"}]
-    )
+    judge, _ = _judge([{"answerable": False, "score": 1, "reason": "needs outside knowledge"}])
 
     result = judge.answerability(question="q", answer="a", excerpt="unrelated")
 
@@ -169,9 +165,7 @@ def test_run_answerability_eval_writes_jsonl_line_per_item(tmp_path: Path) -> No
 
 
 def test_run_answerability_eval_caps_at_max_cases(tmp_path: Path) -> None:
-    judge, client = _judge(
-        [{"answerable": True, "score": 5, "reason": "r"} for _ in range(2)]
-    )
+    judge, client = _judge([{"answerable": True, "score": 5, "reason": "r"} for _ in range(2)])
 
     lines = run_answerability_eval(_inputs(5), judge=judge, max_cases=2, results_dir=tmp_path)
 
@@ -220,9 +214,7 @@ def test_live_answerability_scores_golden_items() -> None:
     from app.core.config import get_settings
 
     settings = get_settings()
-    judge = Judge(
-        api_key=os.environ["LEARNY_ANTHROPIC_API_KEY"], model=settings.judge_model
-    )
+    judge = Judge(api_key=os.environ["LEARNY_ANTHROPIC_API_KEY"], model=settings.judge_model)
     inputs = _golden_answerability_inputs()
     assert inputs  # the golden book yields items to judge
 

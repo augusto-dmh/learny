@@ -100,9 +100,7 @@ class FakeQuizItemRepository:
         self._embeddings[item.id] = embedding
         self.scheduling[item.id] = _INITIAL
 
-    def sections_for_generation(
-        self, source_id: UUID, *, min_chars: int
-    ) -> list[QuizSection]:
+    def sections_for_generation(self, source_id: UUID, *, min_chars: int) -> list[QuizSection]:
         return list(self._sections)
 
     def existing_embeddings(self, source_id: UUID) -> list[tuple[UUID, list[float]]]:
@@ -119,9 +117,7 @@ class FakeQuizItemRepository:
             self._items[key] = item
         else:
             existing = self._items[key]
-            self._items[key] = replace(
-                item, id=existing.id, created_at=existing.created_at
-            )
+            self._items[key] = replace(item, id=existing.id, created_at=existing.created_at)
         target_id = self._items[key].id
         if embedding is not None:
             self._embeddings[target_id] = list(embedding)
@@ -401,9 +397,7 @@ def test_collect_returns_none_while_pending() -> None:
     from app.domain.entities import QuizDeckHandle
 
     assert (
-        _run_service(jobs, items, generation=generation).collect(
-            QuizDeckHandle(provider="fake")
-        )
+        _run_service(jobs, items, generation=generation).collect(QuizDeckHandle(provider="fake"))
         is None
     )
 
@@ -518,9 +512,7 @@ def test_finalize_discards_non_free_recall_or_cloze_type() -> None:
         anchor_quote="mitochondria is the powerhouse of the cell",
     )
 
-    done = _run_service(jobs, items).finalize(
-        job.id, QuizDeckResult(candidates=(mcq,), errors=())
-    )
+    done = _run_service(jobs, items).finalize(job.id, QuizDeckResult(candidates=(mcq,), errors=()))
 
     assert (done.generated_count, done.discarded_count) == (0, 1)
     assert items.list_for_source(job.source_id) == []
@@ -534,9 +526,7 @@ def test_finalize_discards_near_duplicate_within_run_at_threshold() -> None:
     job = jobs.add(_job(uuid4(), status=QuizJobStatus.RUNNING))
     first = _free_recall("Q one?", "A one", "mitochondria is the powerhouse")
     second = _free_recall("Q two?", "A two", "makes energy")
-    embed = FakeEmbedding(
-        {"Q one?\nA one": [1.0, 0.0], "Q two?\nA two": _unit_at(0.9)}
-    )
+    embed = FakeEmbedding({"Q one?\nA one": [1.0, 0.0], "Q two?\nA two": _unit_at(0.9)})
     assert _cosine([1.0, 0.0], _unit_at(0.9)) == pytest.approx(0.9)
 
     done = _run_service(jobs, items, embeddings=embed, threshold=0.9).finalize(
@@ -552,9 +542,7 @@ def test_finalize_keeps_below_threshold_candidate() -> None:
     job = jobs.add(_job(uuid4(), status=QuizJobStatus.RUNNING))
     first = _free_recall("Q one?", "A one", "mitochondria is the powerhouse")
     second = _free_recall("Q two?", "A two", "makes energy")
-    embed = FakeEmbedding(
-        {"Q one?\nA one": [1.0, 0.0], "Q two?\nA two": _unit_at(0.8)}
-    )
+    embed = FakeEmbedding({"Q one?\nA one": [1.0, 0.0], "Q two?\nA two": _unit_at(0.8)})
 
     done = _run_service(jobs, items, embeddings=embed, threshold=0.9).finalize(
         job.id, QuizDeckResult(candidates=(first, second), errors=())
@@ -612,9 +600,7 @@ def test_finalize_reupsert_preserves_scheduling_and_count() -> None:
     after_first = items.create_scheduling_calls
 
     # A second pass (redelivery / regeneration) over the same source + candidate.
-    job2 = jobs.add(
-        replace(_job(job1.source_id, status=QuizJobStatus.RUNNING), created_at=_NOW)
-    )
+    job2 = jobs.add(replace(_job(job1.source_id, status=QuizJobStatus.RUNNING), created_at=_NOW))
     second = _run_service(jobs, items).finalize(job2.id, result)
 
     # Same accepted count both runs; no duplicate item; scheduling never re-created
@@ -629,9 +615,7 @@ def test_finalize_zero_candidates_succeeds_with_zero_counts() -> None:
     jobs, items = FakeQuizJobRepository(), FakeQuizItemRepository([])
     job = jobs.add(_job(uuid4(), status=QuizJobStatus.RUNNING))
 
-    done = _run_service(jobs, items).finalize(
-        job.id, QuizDeckResult(candidates=(), errors=())
-    )
+    done = _run_service(jobs, items).finalize(job.id, QuizDeckResult(candidates=(), errors=()))
 
     assert done.status == QuizJobStatus.SUCCEEDED
     assert (done.generated_count, done.discarded_count, done.failed_sections) == (0, 0, 0)
@@ -702,6 +686,6 @@ def test_list_quiz_items_hides_non_owner() -> None:
     stranger = User(id=uuid4(), email="s@x.com", created_at=_NOW)
 
     with pytest.raises(SourceNotFound):
-        ListQuizItems(
-            sources=sources, items=items, jobs=jobs, authorize=AuthorizeOwnership()
-        )(user=stranger, source_id=source.id)
+        ListQuizItems(sources=sources, items=items, jobs=jobs, authorize=AuthorizeOwnership())(
+            user=stranger, source_id=source.id
+        )

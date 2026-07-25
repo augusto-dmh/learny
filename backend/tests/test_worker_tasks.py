@@ -411,9 +411,7 @@ def test_celery_enqueuer_routes_pdf_to_ingest_pdf_queue() -> None:
         )
 
     # PDF is routed to the dedicated isolated queue; payload is still ids-only.
-    apply_async.assert_called_once_with(
-        args=[str(source_id), str(job_id)], queue="ingest-pdf"
-    )
+    apply_async.assert_called_once_with(args=[str(source_id), str(job_id)], queue="ingest-pdf")
 
 
 # --- Corpus build through the real step (T9 integration) ------------------------
@@ -698,9 +696,7 @@ def _record_for(handler: _TraceRecordingHandler, message: str) -> logging.LogRec
     return hits[0]
 
 
-def test_run_ingestion_success_logs_trace_fields_and_duration(
-    seed, db_engine: Engine
-) -> None:
+def test_run_ingestion_success_logs_trace_fields_and_duration(seed, db_engine: Engine) -> None:
     ctx = seed(IngestionStatus.QUEUED)
     with _capture_worker_logs() as handler:
         with patch("app.worker.tasks._build_step", lambda conn: NoOpIngestionStep()):
@@ -713,9 +709,7 @@ def test_run_ingestion_success_logs_trace_fields_and_duration(
     assert rec.duration_ms >= 0.0
 
 
-def test_run_ingestion_failure_logs_trace_fields_and_duration(
-    seed, db_engine: Engine
-) -> None:
+def test_run_ingestion_failure_logs_trace_fields_and_duration(seed, db_engine: Engine) -> None:
     ctx = seed(IngestionStatus.QUEUED)
     with _capture_worker_logs() as handler:
         with patch(
@@ -731,9 +725,7 @@ def test_run_ingestion_failure_logs_trace_fields_and_duration(
     assert rec.duration_ms >= 0.0
 
 
-def test_run_ingestion_populates_trace_context_during_the_task(
-    seed, db_engine: Engine
-) -> None:
+def test_run_ingestion_populates_trace_context_during_the_task(seed, db_engine: Engine) -> None:
     """The task binds job/source into the trace context that the filter stamps
     onto *every* downstream log record — not just the ones passing ``extra=``
     (PROD-14 correlation seam). A no-op ``bind_trace`` leaves this empty."""

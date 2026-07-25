@@ -66,11 +66,7 @@ def test_parses_born_digital_pdf_into_sections_with_page_spans() -> None:
     assert book.sections
     assert any(section.title == "Chapter One" for section in book.sections)
     assert all(section.anchor.startswith("pdf:") for section in book.sections)
-    assert any(
-        block.page_span == (1, 1)
-        for section in book.sections
-        for block in section.blocks
-    )
+    assert any(block.page_span == (1, 1) for section in book.sections for block in section.blocks)
 
 
 def test_same_bytes_parse_to_identical_anchors() -> None:
@@ -147,10 +143,15 @@ def _scanned_pdf(text: str = "CAPITULO UM") -> bytes:
         b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
         b"/Contents 4 0 R /Resources << /XObject << /Im1 5 0 R >> >> >>",
         b"<< /Length " + str(len(content)).encode() + b" >>\nstream\n" + content + b"endstream",
-        b"<< /Type /XObject /Subtype /Image /Width " + str(width).encode()
-        + b" /Height " + str(height).encode()
+        b"<< /Type /XObject /Subtype /Image /Width "
+        + str(width).encode()
+        + b" /Height "
+        + str(height).encode()
         + b" /ColorSpace /DeviceGray /BitsPerComponent 8 /Length "
-        + str(len(raster)).encode() + b" >>\nstream\n" + raster + b"\nendstream",
+        + str(len(raster)).encode()
+        + b" >>\nstream\n"
+        + raster
+        + b"\nendstream",
     ]
     pdf = b"%PDF-1.4\n"
     offsets: list[int] = []
@@ -179,9 +180,7 @@ def test_scanned_pdf_ingests_via_the_ocr_retry() -> None:
     assert book.sections
     assert all(section.anchor.startswith("pdf:") for section in book.sections)
     texts = " ".join(
-        block.html_fragment
-        for section in book.sections
-        for block in section.blocks
+        block.html_fragment for section in book.sections for block in section.blocks
     ).lower()
     assert "capitulo" in texts
 

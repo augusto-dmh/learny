@@ -44,18 +44,14 @@ EPUB_TYPE = "application/epub+zip"
 
 
 def _register(client: TestClient, email: str) -> str:
-    resp = client.post(
-        "/api/auth/register", json={"email": email, "password": TEST_PASSWORD}
-    )
+    resp = client.post("/api/auth/register", json={"email": email, "password": TEST_PASSWORD})
     assert resp.status_code == 201, resp.text
     return resp.json()["id"]
 
 
 def _login(client: TestClient, email: str) -> None:
     client.cookies.clear()
-    resp = client.post(
-        "/api/auth/login", json={"email": email, "password": TEST_PASSWORD}
-    )
+    resp = client.post("/api/auth/login", json={"email": email, "password": TEST_PASSWORD})
     assert resp.status_code == 200, resp.text
 
 
@@ -166,9 +162,7 @@ def test_start_true_race_integrity_error_returns_409(
 
         return _call
 
-    monkeypatch.setattr(
-        "app.infrastructure.web.ingestion.build_start_ingestion", _raising_start
-    )
+    monkeypatch.setattr("app.infrastructure.web.ingestion.build_start_ingestion", _raising_start)
 
     resp = _start(ingestion_client, source_id, csrf=csrf)
 
@@ -208,8 +202,8 @@ def test_start_enqueue_failure_returns_502_and_compensates(
 
     # A broker that raises on enqueue → 502; the just-created job is compensated
     # to terminal ``failed`` and no active job may remain (ING-11).
-    ingestion_client.app.dependency_overrides[get_ingestion_enqueuer] = (
-        lambda: FakeIngestionEnqueuer(error=RuntimeError("broker down"))
+    ingestion_client.app.dependency_overrides[get_ingestion_enqueuer] = lambda: (
+        FakeIngestionEnqueuer(error=RuntimeError("broker down"))
     )
 
     resp = _start(ingestion_client, source_id, csrf=csrf)
@@ -224,9 +218,7 @@ def test_start_enqueue_failure_returns_502_and_compensates(
     assert _source_status(db_conn, source_id) == "failed"
 
     # No active job remains → a restart is not blocked.
-    latest = SqlAlchemyIngestionJobRepository(db_conn).get_latest_for_source(
-        UUID(source_id)
-    )
+    latest = SqlAlchemyIngestionJobRepository(db_conn).get_latest_for_source(UUID(source_id))
     assert latest is not None and latest.status == IngestionStatus.FAILED
 
     # A ``failed`` event is durable and readable.
@@ -272,9 +264,7 @@ def test_start_unauthenticated_returns_401(
     assert _job_count(db_conn, source_id) == 0
 
 
-def test_start_missing_csrf_returns_403(
-    ingestion_client: TestClient, db_conn: Connection
-) -> None:
+def test_start_missing_csrf_returns_403(ingestion_client: TestClient, db_conn: Connection) -> None:
     _register(ingestion_client, "nocsrf@example.com")
     source_id = _create_source(ingestion_client, _csrf(ingestion_client))
 
@@ -284,9 +274,7 @@ def test_start_missing_csrf_returns_403(
     assert _job_count(db_conn, source_id) == 0
 
 
-def test_start_invalid_csrf_returns_403(
-    ingestion_client: TestClient, db_conn: Connection
-) -> None:
+def test_start_invalid_csrf_returns_403(ingestion_client: TestClient, db_conn: Connection) -> None:
     _register(ingestion_client, "badcsrf@example.com")
     source_id = _create_source(ingestion_client, _csrf(ingestion_client))
 
@@ -303,9 +291,7 @@ def test_start_untrusted_origin_returns_403(
     csrf = _csrf(ingestion_client)
     source_id = _create_source(ingestion_client, csrf)
 
-    resp = _start(
-        ingestion_client, source_id, csrf=csrf, origin="http://evil.example.com"
-    )
+    resp = _start(ingestion_client, source_id, csrf=csrf, origin="http://evil.example.com")
 
     assert resp.status_code == 403, resp.text
     assert _job_count(db_conn, source_id) == 0
@@ -327,9 +313,7 @@ def _drive_to_succeeded(conn: Connection, user, source_id: str) -> None:
         "jobs": SqlAlchemyIngestionJobRepository(conn),
         "events": SqlAlchemyIngestionEventRepository(conn),
     }
-    start = StartIngestion(
-        **common, authorize=AuthorizeOwnership(), clock=clock, ids=uuid4
-    )
+    start = StartIngestion(**common, authorize=AuthorizeOwnership(), clock=clock, ids=uuid4)
     job, _, _ = start(user=user, source_id=UUID(source_id))
     run = RunIngestion(**common, step=NoOpIngestionStep(), clock=clock, ids=uuid4)
     clock.advance(timedelta(seconds=1))

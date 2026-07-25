@@ -412,9 +412,7 @@ def test_read_returns_latest_job_with_ordered_events() -> None:
     job, _, _ = start(user=owner, source_id=source.id)
     run.begin_run(job.id)
     run.complete(job.id)
-    read = ReadIngestion(
-        sources=sources, jobs=jobs, events=events, authorize=AuthorizeOwnership()
-    )
+    read = ReadIngestion(sources=sources, jobs=jobs, events=events, authorize=AuthorizeOwnership())
 
     latest, logged = read(user=owner, source_id=source.id)
 
@@ -436,9 +434,7 @@ def test_read_no_job_raises_ingestion_not_found() -> None:
     )
     owner = _user()
     source = _stored_source(sources, owner)
-    read = ReadIngestion(
-        sources=sources, jobs=jobs, events=events, authorize=AuthorizeOwnership()
-    )
+    read = ReadIngestion(sources=sources, jobs=jobs, events=events, authorize=AuthorizeOwnership())
 
     with pytest.raises(IngestionNotFound):
         read(user=owner, source_id=source.id)
@@ -454,9 +450,7 @@ def test_read_non_owner_raises_source_not_found() -> None:
     owner = _user("owner@example.com")
     source = _stored_source(sources, owner)
     intruder = _user("intruder@example.com")
-    read = ReadIngestion(
-        sources=sources, jobs=jobs, events=events, authorize=AuthorizeOwnership()
-    )
+    read = ReadIngestion(sources=sources, jobs=jobs, events=events, authorize=AuthorizeOwnership())
 
     with pytest.raises(SourceNotFound):
         read(user=intruder, source_id=source.id)
@@ -469,9 +463,7 @@ def test_read_missing_source_raises_source_not_found() -> None:
         FakeIngestionJobRepository(),
         FakeIngestionEventRepository(),
     )
-    read = ReadIngestion(
-        sources=sources, jobs=jobs, events=events, authorize=AuthorizeOwnership()
-    )
+    read = ReadIngestion(sources=sources, jobs=jobs, events=events, authorize=AuthorizeOwnership())
 
     with pytest.raises(SourceNotFound):
         read(user=_user(), source_id=uuid4())

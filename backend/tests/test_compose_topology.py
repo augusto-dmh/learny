@@ -182,9 +182,7 @@ def test_runtime_stage_installs_no_dev_extra() -> None:
 def test_runtime_stage_runs_as_a_non_root_user() -> None:
     stage = _dockerfile_stage("runtime")
     users = [
-        line.split(maxsplit=1)[1].strip()
-        for line in stage.splitlines()
-        if line.startswith("USER ")
+        line.split(maxsplit=1)[1].strip() for line in stage.splitlines() if line.startswith("USER ")
     ]
     assert users, "runtime stage must set a USER"
     assert users[-1] not in {"root", "0"}

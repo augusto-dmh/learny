@@ -86,9 +86,7 @@ def vault_client(db_conn: Connection, monkeypatch: pytest.MonkeyPatch):  # noqa:
 
 
 def _register(client: TestClient, email: str) -> str:
-    resp = client.post(
-        "/api/auth/register", json={"email": email, "password": TEST_PASSWORD}
-    )
+    resp = client.post("/api/auth/register", json={"email": email, "password": TEST_PASSWORD})
     assert resp.status_code == 201, resp.text
     return resp.json()["id"]
 
@@ -154,9 +152,7 @@ def test_export_returns_the_callers_vault_zip(
     vault_client: TestClient, db_conn: Connection
 ) -> None:
     _register(vault_client, "vault-owner@example.com")
-    note_id = _create_note(
-        vault_client, title="Cited", body="See [[Other]] — a thought.\n"
-    )
+    note_id = _create_note(vault_client, title="Cited", body="See [[Other]] — a thought.\n")
     anchor = _seed_anchor(
         db_conn, note_id=note_id, source_title="The Book", quote_exact="a passage"
     )
@@ -205,8 +201,6 @@ def test_export_empty_vault_is_a_valid_skeleton_zip(
         assert "Learny/Notes/" in set(archive.namelist())
 
 
-def test_export_unauthenticated_returns_401(
-    vault_client: TestClient, db_conn: Connection
-) -> None:
+def test_export_unauthenticated_returns_401(vault_client: TestClient, db_conn: Connection) -> None:
     vault_client.cookies.clear()
     assert vault_client.get("/api/export/vault").status_code == 401

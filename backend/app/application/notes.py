@@ -210,9 +210,7 @@ class UpdateNote:
         _validate_body(body_markdown, self._max_body_chars)
         body_changed = existing.body_markdown != body_markdown
         now = self._clock.now()
-        self._notes.update(
-            note_id, title=title, body_markdown=body_markdown, updated_at=now
-        )
+        self._notes.update(note_id, title=title, body_markdown=body_markdown, updated_at=now)
         _rewrite_indexes(
             self._notes,
             note_id=note_id,
@@ -253,12 +251,8 @@ class ListNotes:
     def __init__(self, *, notes: NoteRepository) -> None:
         self._notes = notes
 
-    def __call__(
-        self, *, user: User, tag: str | None = None
-    ) -> list[NoteSummary]:
-        return self._notes.list_summaries(
-            user.id, tag=tag.strip().lower() if tag else None
-        )
+    def __call__(self, *, user: User, tag: str | None = None) -> list[NoteSummary]:
+        return self._notes.list_summaries(user.id, tag=tag.strip().lower() if tag else None)
 
 
 class GetBacklinks:
@@ -342,9 +336,7 @@ class CaptureHighlight:
         ]
         binding = resolve(blocks, quote_exact, quote_prefix, quote_suffix)
         if binding is None:
-            raise StaleCaptureTarget(
-                "The selected passage no longer matches the source."
-            )
+            raise StaleCaptureTarget("The selected passage no longer matches the source.")
         _validate_body(body_markdown, self._max_body_chars)
 
         now = self._clock.now()
@@ -511,9 +503,7 @@ class ReconcileNoteAnchors:
                             NoteAnchorStatus.ACTIVE,
                         )
             # Tier 2: quote-with-context still resolves inside the resolved section.
-            binding = resolve(
-                blocks, anchor.quote_exact, anchor.quote_prefix, anchor.quote_suffix
-            )
+            binding = resolve(blocks, anchor.quote_exact, anchor.quote_prefix, anchor.quote_suffix)
             if binding is not None:
                 return (
                     section.anchor,
@@ -527,9 +517,7 @@ class ReconcileNoteAnchors:
 
         # Tier 3: the quote resolves elsewhere in the document → relocate (alias-aware).
         for section, blocks in prepared:
-            binding = resolve(
-                blocks, anchor.quote_exact, anchor.quote_prefix, anchor.quote_suffix
-            )
+            binding = resolve(blocks, anchor.quote_exact, anchor.quote_prefix, anchor.quote_suffix)
             if binding is not None:
                 return (
                     section.anchor,
@@ -542,11 +530,7 @@ class ReconcileNoteAnchors:
                 )
 
         # Tier 4: section still resolves but quote gone → stale; section gone → orphaned.
-        status = (
-            NoteAnchorStatus.STALE
-            if located is not None
-            else NoteAnchorStatus.ORPHANED
-        )
+        status = NoteAnchorStatus.STALE if located is not None else NoteAnchorStatus.ORPHANED
         return (
             anchor.anchor,
             anchor.section_path,

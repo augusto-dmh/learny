@@ -40,8 +40,7 @@ def build_quiz_adapter(settings: Settings) -> QuizGenerationPort:
     if provider == "anthropic":
         if not settings.anthropic_api_key:
             raise ValueError(
-                "LEARNY_ANTHROPIC_API_KEY is required when the generation "
-                "provider is 'anthropic'"
+                "LEARNY_ANTHROPIC_API_KEY is required when the generation provider is 'anthropic'"
             )
         return AnthropicQuizAdapter(
             api_key=settings.anthropic_api_key,

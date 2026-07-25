@@ -199,15 +199,9 @@ class ReadChapter:
 
         first_row = index[chapter.start]
         last_row = index[chapter.end - 1]
-        sections = self._corpus.get_sections_span(
-            source_id, first_row.position, last_row.position
-        )
+        sections = self._corpus.get_sections_span(source_id, first_row.position, last_row.position)
 
-        prev_anchor = (
-            index[chapters[chapter_index - 1].start].anchor
-            if chapter_index > 0
-            else None
-        )
+        prev_anchor = index[chapters[chapter_index - 1].start].anchor if chapter_index > 0 else None
         next_anchor = (
             index[chapters[chapter_index + 1].start].anchor
             if chapter_index < len(chapters) - 1
@@ -220,12 +214,8 @@ class ReadChapter:
             chapter_count=len(chapters),
             prev_anchor=prev_anchor,
             next_anchor=next_anchor,
-            words_before_chapter=sum(
-                index[i].word_count for i in range(chapter.start)
-            ),
-            chapter_word_count=sum(
-                index[i].word_count for i in range(chapter.start, chapter.end)
-            ),
+            words_before_chapter=sum(index[i].word_count for i in range(chapter.start)),
+            chapter_word_count=sum(index[i].word_count for i in range(chapter.start, chapter.end)),
             total_word_count=sum(row.word_count for row in index),
             sections=sections,
         )

@@ -214,9 +214,7 @@ class Judge:
         )
         return json.loads(_first_text(message))
 
-    def faithfulness(
-        self, *, question: str, evidence: str, answer: str
-    ) -> FaithfulnessResult:
+    def faithfulness(self, *, question: str, evidence: str, answer: str) -> FaithfulnessResult:
         """Extract the answer's claims and label each SUPPORTED/UNSUPPORTED."""
         data = self._judge(
             system=FAITHFULNESS_PROMPT_PATH.read_text(encoding="utf-8"),
@@ -224,8 +222,7 @@ class Judge:
             schema=_FAITHFULNESS_SCHEMA,
         )
         claims = tuple(
-            Claim(claim=item["claim"], supported=bool(item["supported"]))
-            for item in data["claims"]
+            Claim(claim=item["claim"], supported=bool(item["supported"])) for item in data["claims"]
         )
         return FaithfulnessResult(claims=claims)
 
@@ -238,9 +235,7 @@ class Judge:
         )
         return int(data["score"])
 
-    def answerability(
-        self, *, question: str, answer: str, excerpt: str
-    ) -> AnswerabilityResult:
+    def answerability(self, *, question: str, answer: str, excerpt: str) -> AnswerabilityResult:
         """Judge whether a quiz item is answerable from its cited excerpt (QUIZ-24)."""
         data = self._judge(
             system=ANSWERABILITY_PROMPT_PATH.read_text(encoding="utf-8"),
@@ -271,10 +266,7 @@ def _relevancy_user(question: str, answer: str) -> str:
 
 
 def _answerability_user(question: str, answer: str, excerpt: str) -> str:
-    return (
-        f"QUIZ QUESTION:\n{question}\n\nANSWER:\n{answer}\n\n"
-        f"SOURCE EXCERPT:\n{excerpt}"
-    )
+    return f"QUIZ QUESTION:\n{question}\n\nANSWER:\n{answer}\n\nSOURCE EXCERPT:\n{excerpt}"
 
 
 def prompt_hash() -> str:
@@ -399,9 +391,7 @@ def run_answerability_eval(
     return lines
 
 
-def _write_jsonl(
-    lines: Sequence[dict[str, Any]], *, results_dir: Path, git_sha: str
-) -> Path:
+def _write_jsonl(lines: Sequence[dict[str, Any]], *, results_dir: Path, git_sha: str) -> Path:
     results_dir.mkdir(parents=True, exist_ok=True)
     date = datetime.now(UTC).strftime("%Y-%m-%d")
     path = results_dir / f"{date}-{git_sha}.jsonl"
@@ -421,6 +411,4 @@ def _assert_aggregates(lines: Sequence[dict[str, Any]]) -> None:
     assert mean_faithfulness >= FAITHFULNESS_MIN, (
         f"mean faithfulness {mean_faithfulness:.3f} < {FAITHFULNESS_MIN}"
     )
-    assert mean_relevancy >= RELEVANCY_MIN, (
-        f"mean relevancy {mean_relevancy:.3f} < {RELEVANCY_MIN}"
-    )
+    assert mean_relevancy >= RELEVANCY_MIN, f"mean relevancy {mean_relevancy:.3f} < {RELEVANCY_MIN}"

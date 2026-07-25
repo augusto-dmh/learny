@@ -33,9 +33,7 @@ EPUB_TYPE = "application/epub+zip"
 
 
 def _register(client: TestClient, email: str) -> str:
-    resp = client.post(
-        "/api/auth/register", json={"email": email, "password": TEST_PASSWORD}
-    )
+    resp = client.post("/api/auth/register", json={"email": email, "password": TEST_PASSWORD})
     assert resp.status_code == 201, resp.text
     return resp.json()["id"]
 
@@ -154,9 +152,7 @@ def test_structure_returns_200_with_nested_tree_and_values(
     assert chapter2["children"] == []
 
 
-def test_structure_get_requires_no_csrf(
-    sources_client: TestClient, db_conn: Connection
-) -> None:
+def test_structure_get_requires_no_csrf(sources_client: TestClient, db_conn: Connection) -> None:
     _register(sources_client, "nocsrf@example.com")
     csrf = _csrf(sources_client)
     source_id = _create_source(sources_client, csrf)
@@ -288,9 +284,7 @@ def test_section_unauthenticated_returns_401(sources_client: TestClient) -> None
 
 def test_section_missing_source_returns_404(sources_client: TestClient) -> None:
     _register(sources_client, "sec-missing@example.com")
-    resp = sources_client.get(
-        f"/api/sources/{uuid4()}/section", params={"anchor": SECTION_ANCHOR}
-    )
+    resp = sources_client.get(f"/api/sources/{uuid4()}/section", params={"anchor": SECTION_ANCHOR})
     assert resp.status_code == 404, resp.text
 
 
@@ -330,9 +324,7 @@ def test_section_empty_or_missing_anchor_returns_422(
     csrf = _csrf(sources_client)
     source_id = _create_source(sources_client, csrf)
 
-    empty = sources_client.get(
-        f"/api/sources/{source_id}/section", params={"anchor": ""}
-    )
+    empty = sources_client.get(f"/api/sources/{source_id}/section", params={"anchor": ""})
     assert empty.status_code == 422, empty.text
 
     missing = sources_client.get(f"/api/sources/{source_id}/section")

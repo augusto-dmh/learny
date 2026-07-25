@@ -32,9 +32,7 @@ from tests.golden_expected import GOLDEN_SECTION_ANCHORS
 # --- The three invariants as pure checkers (shared by real-data + mutant paths) ---
 
 
-def cited_ids_subset_of_retrieved(
-    cited_ids: Set[UUID], retrieved_ids: Set[UUID]
-) -> bool:
+def cited_ids_subset_of_retrieved(cited_ids: Set[UUID], retrieved_ids: Set[UUID]) -> bool:
     """(a) Every cited chunk id must be one of the retrieved evidence ids."""
     return cited_ids <= retrieved_ids
 
@@ -112,9 +110,7 @@ def test_generation_invariants_hold_over_snapshots(snapshot: Snapshot) -> None:
     retrieved_ids = {e.chunk_id for e in snapshot.evidence}
     corpus_anchors = {e.anchor for e in snapshot.evidence}
     cited_ids = set(snapshot.answer.cited_chunk_ids)
-    cited_anchors = {
-        e.anchor for e in snapshot.evidence if e.chunk_id in cited_ids
-    }
+    cited_anchors = {e.anchor for e in snapshot.evidence if e.chunk_id in cited_ids}
     status = "answered" if snapshot.answer.found else "not_found_in_source"
 
     assert cited_ids_subset_of_retrieved(cited_ids, retrieved_ids)

@@ -127,18 +127,14 @@ def _capture_source_logs(level: int):
 
 
 def _register(client: TestClient, email: str) -> str:
-    resp = client.post(
-        "/api/auth/register", json={"email": email, "password": TEST_PASSWORD}
-    )
+    resp = client.post("/api/auth/register", json={"email": email, "password": TEST_PASSWORD})
     assert resp.status_code == 201, resp.text
     return resp.json()["id"]
 
 
 def _login(client: TestClient, email: str) -> None:
     client.cookies.clear()
-    resp = client.post(
-        "/api/auth/login", json={"email": email, "password": TEST_PASSWORD}
-    )
+    resp = client.post("/api/auth/login", json={"email": email, "password": TEST_PASSWORD})
     assert resp.status_code == 200, resp.text
 
 
@@ -194,9 +190,7 @@ def test_upload_valid_epub_persists_row_and_object(
     # Secret-free summary: no internal storage/integrity fields leak (AC1).
     assert "object_key" not in body and "checksum" not in body
 
-    row = db_conn.execute(
-        select(sources).where(sources.c.id == body["id"])
-    ).one()
+    row = db_conn.execute(select(sources).where(sources.c.id == body["id"])).one()
     assert str(row.user_id) == user_id
     assert row.status == "uploaded"
     assert row.checksum  # sha256 hex persisted
@@ -228,9 +222,7 @@ def test_upload_valid_pdf_persists_row_and_object(
     assert body["content_type"] == PDF_TYPE
     assert body["status"] == "uploaded"
 
-    row = db_conn.execute(
-        select(sources).where(sources.c.id == body["id"])
-    ).one()
+    row = db_conn.execute(select(sources).where(sources.c.id == body["id"])).one()
     # The object key carries the .pdf extension (parser dispatch depends on it).
     assert row.object_key == f"sources/{user_id}/{body['id']}.pdf"
     assert _storage.get_object(row.object_key) == PDF_BYTES
@@ -331,9 +323,7 @@ def test_upload_wrong_content_type_returns_415(
     assert _source_rows(db_conn) == []
 
 
-def test_upload_oversize_returns_413(
-    sources_client: TestClient, db_conn: Connection
-) -> None:
+def test_upload_oversize_returns_413(sources_client: TestClient, db_conn: Connection) -> None:
     _register(sources_client, "big@example.com")
     resp = _upload(
         sources_client,
@@ -344,27 +334,21 @@ def test_upload_oversize_returns_413(
     assert _source_rows(db_conn) == []
 
 
-def test_upload_empty_title_returns_422(
-    sources_client: TestClient, db_conn: Connection
-) -> None:
+def test_upload_empty_title_returns_422(sources_client: TestClient, db_conn: Connection) -> None:
     _register(sources_client, "notitle@example.com")
     resp = _upload(sources_client, csrf=_csrf(sources_client), title="   ")
     assert resp.status_code == 422, resp.text
     assert _source_rows(db_conn) == []
 
 
-def test_upload_zero_byte_file_returns_422(
-    sources_client: TestClient, db_conn: Connection
-) -> None:
+def test_upload_zero_byte_file_returns_422(sources_client: TestClient, db_conn: Connection) -> None:
     _register(sources_client, "empty@example.com")
     resp = _upload(sources_client, csrf=_csrf(sources_client), data=b"")
     assert resp.status_code == 422, resp.text
     assert _source_rows(db_conn) == []
 
 
-def test_upload_no_file_part_returns_422(
-    sources_client: TestClient, db_conn: Connection
-) -> None:
+def test_upload_no_file_part_returns_422(sources_client: TestClient, db_conn: Connection) -> None:
     _register(sources_client, "nofile@example.com")
     resp = _upload(sources_client, csrf=_csrf(sources_client), include_file=False)
     assert resp.status_code == 422, resp.text
@@ -381,18 +365,14 @@ def test_upload_unauthenticated_returns_401(
     assert _source_rows(db_conn) == []
 
 
-def test_upload_missing_csrf_returns_403(
-    sources_client: TestClient, db_conn: Connection
-) -> None:
+def test_upload_missing_csrf_returns_403(sources_client: TestClient, db_conn: Connection) -> None:
     _register(sources_client, "nocsrf@example.com")
     resp = _upload(sources_client, csrf=None)
     assert resp.status_code == 403, resp.text
     assert _source_rows(db_conn) == []
 
 
-def test_upload_invalid_csrf_returns_403(
-    sources_client: TestClient, db_conn: Connection
-) -> None:
+def test_upload_invalid_csrf_returns_403(sources_client: TestClient, db_conn: Connection) -> None:
     _register(sources_client, "badcsrf@example.com")
     _csrf(sources_client)  # a real token exists, but we send a wrong one
     resp = _upload(sources_client, csrf="not-the-session-token")
@@ -466,9 +446,7 @@ def test_upload_insert_failure_after_store_returns_5xx_and_persists_nothing(
             max_bytes=settings.epub_max_bytes,
         )
 
-    sources_client.app.dependency_overrides[get_create_source] = (
-        _create_source_with_failing_insert
-    )
+    sources_client.app.dependency_overrides[get_create_source] = _create_source_with_failing_insert
     lenient_client = TestClient(
         sources_client.app,
         cookies=sources_client.cookies,
@@ -496,8 +474,7 @@ def test_upload_logs_source_created_with_ids(sources_client: TestClient) -> None
     created = [
         r
         for r in records.records
-        if getattr(r, "user_id", None) == user_id
-        and getattr(r, "source_id", None) == source_id
+        if getattr(r, "user_id", None) == user_id and getattr(r, "source_id", None) == source_id
     ]
     assert created, "expected a source-created log carrying user_id + source_id"
     # SRC-10: the lifecycle log carries ids only, never storage/integrity secrets.

@@ -167,13 +167,9 @@ def test_deleting_a_source_leaves_notes_and_anchors_intact(db_conn: Connection) 
 
     db_conn.execute(sa_delete(sources).where(sources.c.id == source.id))
 
-    surviving_note = db_conn.execute(
-        select(notes.c.id).where(notes.c.id == note_id)
-    ).one_or_none()
+    surviving_note = db_conn.execute(select(notes.c.id).where(notes.c.id == note_id)).one_or_none()
     surviving_anchor = db_conn.execute(
-        select(note_anchors.c.id, note_anchors.c.source_id).where(
-            note_anchors.c.id == anchor_id
-        )
+        select(note_anchors.c.id, note_anchors.c.source_id).where(note_anchors.c.id == anchor_id)
     ).one_or_none()
     assert surviving_note is not None
     assert surviving_anchor is not None
@@ -253,16 +249,11 @@ def test_deleting_a_note_cascades_its_anchors_tags_and_links(db_conn: Connection
         is None
     )
     assert (
-        db_conn.execute(
-            select(note_links.c.id).where(note_links.c.id == link_id)
-        ).one_or_none()
+        db_conn.execute(select(note_links.c.id).where(note_links.c.id == link_id)).one_or_none()
         is None
     )
     # The tag itself is user-owned, not note-owned — it survives the note delete.
-    assert (
-        db_conn.execute(select(tags.c.id).where(tags.c.id == tag_id)).one_or_none()
-        is not None
-    )
+    assert db_conn.execute(select(tags.c.id).where(tags.c.id == tag_id)).one_or_none() is not None
 
 
 # --- Repository adapter behaviour (NF-04) ---------------------------------------
@@ -465,9 +456,7 @@ def test_update_anchor_reconciliation_writes_only_payload_and_status(db_conn: Co
         status=NoteAnchorStatus.ACTIVE,
     )
 
-    row = db_conn.execute(
-        select(note_anchors).where(note_anchors.c.id == anchor.id)
-    ).one()
+    row = db_conn.execute(select(note_anchors).where(note_anchors.c.id == anchor.id)).one()
     assert row.anchor == "chapter02.xhtml#sec-9"
     assert row.block_ordinal == 7
     assert tuple(row.section_path) == ("Chapter 2",)
@@ -557,9 +546,7 @@ def test_blocks_for_section_returns_the_addressed_section_blocks(db_conn: Connec
         language="en",
         schema_version=1,
         sections=[
-            _corpus_record(
-                position=0, anchor="ch1", title="One", block_texts=["alpha", "beta"]
-            ),
+            _corpus_record(position=0, anchor="ch1", title="One", block_texts=["alpha", "beta"]),
             _corpus_record(position=1, anchor="ch2", title="Two", block_texts=["gamma"]),
         ],
     )
@@ -590,9 +577,7 @@ def test_blocks_for_reconcile_returns_all_sections_in_reading_order(db_conn: Con
                 block_texts=["alpha"],
                 aliases=("old-ch1",),
             ),
-            _corpus_record(
-                position=1, anchor="ch2", title="Two", block_texts=["gamma", "delta"]
-            ),
+            _corpus_record(position=1, anchor="ch2", title="Two", block_texts=["gamma", "delta"]),
         ],
     )
 

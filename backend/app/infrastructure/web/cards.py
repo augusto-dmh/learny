@@ -223,9 +223,7 @@ def suggest_cards(
     is not quoted verbatim from it. A section the highlight no longer binds to →
     ``StaleCaptureTarget`` → 409. Nothing is persisted on this path.
     """
-    candidates = service(
-        user=user, source_id=source_id, note_anchor_id=body.note_anchor_id
-    )
+    candidates = service(user=user, source_id=source_id, note_anchor_id=body.note_anchor_id)
     return CardSuggestionsView(
         suggestions=[CardSuggestionView.from_candidate(c) for c in candidates]
     )
@@ -289,9 +287,7 @@ def update_card(
     (``CardNotEditable`` → 409), and rejects empty/over-long text (422). The row's id,
     its scheduling, and its review log are left untouched.
     """
-    item = service(
-        user=user, item_id=item_id, question=body.question, answer=body.answer
-    )
+    item = service(user=user, item_id=item_id, question=body.question, answer=body.answer)
     return CardView.from_item(item)
 
 

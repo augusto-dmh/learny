@@ -174,9 +174,7 @@ class DeterministicQuizAdapter:
             provider="local", batch_id=None, payload={"candidates": candidates, "errors": []}
         )
 
-    def suggest_cards(
-        self, section: QuizSection, quote: str, limit: int
-    ) -> list[QuizCandidate]:
+    def suggest_cards(self, section: QuizSection, quote: str, limit: int) -> list[QuizCandidate]:
         """Derive candidates from ``quote`` itself, capped at ``limit`` (AD-134).
 
         The deck path's construction narrowed to the passage the student highlighted:
@@ -191,9 +189,7 @@ class DeterministicQuizAdapter:
             return []
         return _candidates_from(quote.strip(), chunk_id, section.title)[:limit]
 
-    def suggest_note_cards(
-        self, note_body: str, context: str, limit: int
-    ) -> list[QuizCandidate]:
+    def suggest_note_cards(self, note_body: str, context: str, limit: int) -> list[QuizCandidate]:
         """Derive candidates from the note body's leading sentence, capped (NL-08).
 
         Deterministic and grounded by construction (the sentence is verbatim from the

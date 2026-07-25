@@ -20,9 +20,7 @@ _LONG_TEXT = " ".join(["word"] * 40)  # 40 words: keeps a heading-less section a
 
 
 def _block(position: int, block_type: str, html_fragment: str) -> ParsedBlock:
-    return ParsedBlock(
-        position=position, block_type=block_type, html_fragment=html_fragment
-    )
+    return ParsedBlock(position=position, block_type=block_type, html_fragment=html_fragment)
 
 
 def _heading(position: int, level: int, text: str) -> ParsedBlock:
@@ -62,9 +60,7 @@ def _section(
 
 
 def _book(*sections: ParsedSection) -> ParsedBook:
-    return ParsedBook(
-        title="A Book", authors=("Author",), language="en", sections=sections
-    )
+    return ParsedBook(title="A Book", authors=("Author",), language="en", sections=sections)
 
 
 # --- Fixtures reused across specific assertions and the idempotency property ---
@@ -74,15 +70,27 @@ def clean_book() -> ParsedBook:
     """An already-clean, correctly-nested book (ING-08 regression sensor)."""
     return _book(
         _section(
-            0, "Introduction", 0, ("Introduction",), "intro.html",
+            0,
+            "Introduction",
+            0,
+            ("Introduction",),
+            "intro.html",
             (_heading(0, 1, "Introduction"), _long_para(1)),
         ),
         _section(
-            1, "Origins", 1, ("Introduction", "Origins"), "origins.html",
+            1,
+            "Origins",
+            1,
+            ("Introduction", "Origins"),
+            "origins.html",
             (_heading(2, 2, "Origins"), _long_para(3)),
         ),
         _section(
-            2, "Aftermath", 0, ("Aftermath",), "aftermath.html",
+            2,
+            "Aftermath",
+            0,
+            ("Aftermath",),
+            "aftermath.html",
             (_heading(4, 1, "Aftermath"), _long_para(5)),
         ),
     )
@@ -91,15 +99,27 @@ def clean_book() -> ParsedBook:
 def generic_title_book() -> ParsedBook:
     return _book(
         _section(
-            0, "part0034", 0, ("part0034",), "part0034.html",
+            0,
+            "part0034",
+            0,
+            ("part0034",),
+            "part0034.html",
             (_heading(0, 1, "The Real Chapter"), _long_para(1)),
         ),
         _section(
-            1, "wrap0000", 0, ("wrap0000",), "wrap0000.html",
+            1,
+            "wrap0000",
+            0,
+            ("wrap0000",),
+            "wrap0000.html",
             (_para(2, "A Styled Heading"), _long_para(3)),
         ),
         _section(
-            2, "text0002", 0, ("text0002",), "text0002.html",
+            2,
+            "text0002",
+            0,
+            ("text0002",),
+            "text0002.html",
             (_long_para(4),),
         ),
     )
@@ -116,18 +136,30 @@ def flat_toc_book() -> ParsedBook:
 def gutenberg_book() -> ParsedBook:
     return _book(
         _section(
-            0, "The Front", 0, ("The Front",), "front.html",
+            0,
+            "The Front",
+            0,
+            ("The Front",),
+            "front.html",
             (
                 _para(0, "Some license boilerplate before the book."),
                 _para(1, "*** START OF THE PROJECT GUTENBERG EBOOK MY BOOK ***"),
             ),
         ),
         _section(
-            1, "The Story", 0, ("The Story",), "body.html",
+            1,
+            "The Story",
+            0,
+            ("The Story",),
+            "body.html",
             (_heading(2, 1, "Chapter One"), _long_para(3)),
         ),
         _section(
-            2, "The Back", 0, ("The Back",), "back.html",
+            2,
+            "The Back",
+            0,
+            ("The Back",),
+            "back.html",
             (
                 _para(4, "*** END OF THE PROJECT GUTENBERG EBOOK MY BOOK ***"),
                 _para(5, "Trailing license text after the book."),
@@ -139,7 +171,11 @@ def gutenberg_book() -> ParsedBook:
 def trivial_merge_book() -> ParsedBook:
     return _book(
         _section(
-            0, "Chapter", 0, ("Chapter",), "chapter.html",
+            0,
+            "Chapter",
+            0,
+            ("Chapter",),
+            "chapter.html",
             (_heading(0, 1, "Chapter"), _long_para(1)),
         ),
         _section(1, "Plate", 0, ("Plate",), "plate.html", (_image(2),)),
@@ -221,13 +257,23 @@ def test_generic_title_count_reported() -> None:
 
 
 @pytest.mark.parametrize(
-    "title", ["part0034", "wrap0000", "split_12", "index3", "text0001", "chapter5",
-              "ch2", "0034", "", "   "],
+    "title",
+    [
+        "part0034",
+        "wrap0000",
+        "split_12",
+        "index3",
+        "text0001",
+        "chapter5",
+        "ch2",
+        "0034",
+        "",
+        "   ",
+    ],
 )
 def test_generic_titles_are_replaced(title: str) -> None:
     book = _book(
-        _section(0, title, 0, (title,), "file.html",
-                 (_heading(0, 1, "Canonical Heading"),))
+        _section(0, title, 0, (title,), "file.html", (_heading(0, 1, "Canonical Heading"),))
     )
     result = normalize_book(book)
     assert result.book.sections[0].title == "Canonical Heading"
@@ -236,8 +282,9 @@ def test_generic_titles_are_replaced(title: str) -> None:
 @pytest.mark.parametrize("title", ["Introduction", "Chapter One", "The Wrap Up", "Part Two"])
 def test_meaningful_titles_are_kept(title: str) -> None:
     book = _book(
-        _section(0, title, 0, (title,), "c1.html",
-                 (_heading(0, 1, "Canonical Heading"), _long_para(1)))
+        _section(
+            0, title, 0, (title,), "c1.html", (_heading(0, 1, "Canonical Heading"), _long_para(1))
+        )
     )
     result = normalize_book(book)
     assert result.book.sections[0].title == title
@@ -245,8 +292,14 @@ def test_meaningful_titles_are_kept(title: str) -> None:
 
 def test_title_matching_href_stem_is_generic() -> None:
     book = _book(
-        _section(0, "introduction", 0, ("introduction",), "introduction.html",
-                 (_heading(0, 1, "A Warm Welcome"),))
+        _section(
+            0,
+            "introduction",
+            0,
+            ("introduction",),
+            "introduction.html",
+            (_heading(0, 1, "A Warm Welcome"),),
+        )
     )
     result = normalize_book(book)
     assert result.book.sections[0].title == "A Warm Welcome"
@@ -307,8 +360,7 @@ def test_flat_toc_heading_less_section_keeps_predecessor_depth() -> None:
 def test_depth_jump_is_clamped_to_parent_plus_one() -> None:
     book = _book(
         _section(0, "Top", 0, ("Top",), "a.html", (_heading(0, 1, "Top"), _long_para(1))),
-        _section(1, "Deep", 2, ("Top", "Deep"), "b.html",
-                 (_heading(2, 3, "Deep"), _long_para(3))),
+        _section(1, "Deep", 2, ("Top", "Deep"), "b.html", (_heading(2, 3, "Deep"), _long_para(3))),
     )
     result = normalize_book(book)
     assert [s.depth for s in result.book.sections] == [0, 1]
@@ -317,8 +369,7 @@ def test_depth_jump_is_clamped_to_parent_plus_one() -> None:
 def test_depth_adjustment_count_reported() -> None:
     book = _book(
         _section(0, "Top", 0, ("Top",), "a.html", (_heading(0, 1, "Top"), _long_para(1))),
-        _section(1, "Deep", 2, ("Top", "Deep"), "b.html",
-                 (_heading(2, 3, "Deep"), _long_para(3))),
+        _section(1, "Deep", 2, ("Top", "Deep"), "b.html", (_heading(2, 3, "Deep"), _long_para(3))),
     )
     result = normalize_book(book)
     assert result.counts.depths_adjusted == 1
@@ -344,8 +395,7 @@ def test_merged_section_content_moves_into_survivor() -> None:
 def test_leading_trivial_section_merges_forward_with_alias() -> None:
     book = _book(
         _section(0, "Cover", 0, ("Cover",), "cover.html", (_para(0, "brief cover"),)),
-        _section(1, "Main", 0, ("Main",), "main.html",
-                 (_heading(1, 1, "Main"), _long_para(2))),
+        _section(1, "Main", 0, ("Main",), "main.html", (_heading(1, 1, "Main"), _long_para(2))),
     )
     result = normalize_book(book)
     assert len(result.book.sections) == 1
@@ -360,10 +410,22 @@ def test_caption_heavy_figure_section_is_trivial_by_image_rule() -> None:
     # branch of ING-05 is what makes this section trivial.
     caption = " ".join(["figure"] * 40)
     book = _book(
-        _section(0, "Chapter", 0, ("Chapter",), "chapter.html",
-                 (_heading(0, 1, "Chapter"), _long_para(1))),
-        _section(1, "Plate", 0, ("Plate",), "plate.html",
-                 (_block(2, "figure", f"<figure><figcaption>{caption}</figcaption></figure>"),)),
+        _section(
+            0,
+            "Chapter",
+            0,
+            ("Chapter",),
+            "chapter.html",
+            (_heading(0, 1, "Chapter"), _long_para(1)),
+        ),
+        _section(
+            1,
+            "Plate",
+            0,
+            ("Plate",),
+            "plate.html",
+            (_block(2, "figure", f"<figure><figcaption>{caption}</figcaption></figure>"),),
+        ),
     )
     result = normalize_book(book)
     assert len(result.book.sections) == 1
@@ -386,8 +448,7 @@ def test_merge_count_reported() -> None:
 
 def test_aliases_accumulate_dedup_and_canonical_wins() -> None:
     book = _book(
-        _section(0, "Keep", 0, ("Keep",), "keep.html",
-                 (_heading(0, 1, "Keep"), _long_para(1))),
+        _section(0, "Keep", 0, ("Keep",), "keep.html", (_heading(0, 1, "Keep"), _long_para(1))),
         _section(2, "One", 0, ("One",), "a1.html", (_para(2, "tiny"),)),
         _section(3, "Two", 0, ("Two",), "a2.html", (_para(3, "tiny"),)),
         _section(4, "Dup", 0, ("Dup",), "a1.html", (_para(4, "tiny"),)),
@@ -403,11 +464,7 @@ def test_aliases_accumulate_dedup_and_canonical_wins() -> None:
 
 def test_gutenberg_markers_strip_outside_content() -> None:
     result = normalize_book(gutenberg_book())
-    texts = [
-        block.html_fragment
-        for section in result.book.sections
-        for block in section.blocks
-    ]
+    texts = [block.html_fragment for section in result.book.sections for block in section.blocks]
     assert not any("boilerplate" in text for text in texts)
     assert not any("Trailing license" in text for text in texts)
     assert not any("PROJECT GUTENBERG" in text for text in texts)
@@ -421,8 +478,9 @@ def test_gutenberg_strip_count_reported() -> None:
 
 def test_no_gutenberg_markers_strips_nothing() -> None:
     book = _book(
-        _section(0, "Chapter", 0, ("Chapter",), "c.html",
-                 (_heading(0, 1, "Chapter"), _long_para(1)))
+        _section(
+            0, "Chapter", 0, ("Chapter",), "c.html", (_heading(0, 1, "Chapter"), _long_para(1))
+        )
     )
     result = normalize_book(book)
     assert result.counts.noise_blocks_stripped == 0
@@ -431,16 +489,21 @@ def test_no_gutenberg_markers_strips_nothing() -> None:
 
 def test_start_marker_without_end_strips_nothing() -> None:
     book = _book(
-        _section(0, "Chapter", 0, ("Chapter",), "c.html",
-                 (_para(0, "*** START OF THE PROJECT GUTENBERG EBOOK X ***"),
-                  _heading(1, 1, "Chapter"), _long_para(2)))
+        _section(
+            0,
+            "Chapter",
+            0,
+            ("Chapter",),
+            "c.html",
+            (
+                _para(0, "*** START OF THE PROJECT GUTENBERG EBOOK X ***"),
+                _heading(1, 1, "Chapter"),
+                _long_para(2),
+            ),
+        )
     )
     result = normalize_book(book)
-    texts = [
-        block.html_fragment
-        for section in result.book.sections
-        for block in section.blocks
-    ]
+    texts = [block.html_fragment for section in result.book.sections for block in section.blocks]
     assert result.counts.noise_blocks_stripped == 0
     assert any("START OF THE PROJECT GUTENBERG" in text for text in texts)
 
@@ -451,8 +514,14 @@ def test_start_marker_without_end_strips_nothing() -> None:
 def test_clamp_enforces_parent_plus_one_invariant_across_jumps() -> None:
     depths = [0, 3, 5, 1]
     sections = tuple(
-        _section(i, f"L{i}", depth, ("L0",), f"s{i}.html",
-                 (_heading(i, min(depth + 1, 6), f"L{i}"), _long_para(100 + i)))
+        _section(
+            i,
+            f"L{i}",
+            depth,
+            ("L0",),
+            f"s{i}.html",
+            (_heading(i, min(depth + 1, 6), f"L{i}"), _long_para(100 + i)),
+        )
         for i, depth in enumerate(depths)
     )
     result = normalize_book(ParsedBook("B", (), "en", sections))

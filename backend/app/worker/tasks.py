@@ -300,9 +300,7 @@ def _run_ingestion_body(  # noqa: ANN001, ANN202 — mirrors the bound task ``se
     # 3. Terminal success: succeeded + source ready + ``succeeded`` event.
     with get_engine().begin() as conn:
         _build_run_ingestion(conn).complete(jid)
-    logger.info(
-        "ingestion.run: succeeded", extra={**log, "duration_ms": _elapsed_ms(start)}
-    )
+    logger.info("ingestion.run: succeeded", extra={**log, "duration_ms": _elapsed_ms(start)})
 
 
 # HNSW index over the semantic arm's ``embedding`` column. The bulk reembed drops
