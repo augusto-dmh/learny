@@ -1,6 +1,6 @@
 # RFC-005: Evidence-Gated Hardening with a Product Beachhead
 
-- **Status**: Draft — work-in-window authorized (2026-07-24); formal acceptance pending the RFC-004 dogfood retrospective (~2026-08-04)
+- **Status**: Draft, **PAUSED after Cycle A** (2026-07-24) — superseded in sequence by [RFC-006](0006-reading-first-ux-overhaul.md) (reading-first UX overhaul), by driver decision. Cycle A shipped (PR #47); Cycles B–F stay queued unmodified and resume when RFC-006 completes or pauses. Cycle E (worker liveness) remains pullable forward if worker pain bites mid-RFC-006. ADR-0028 stays reserved for the decline-faithfulness convention. Formal acceptance remains pending the RFC-004 dogfood retrospective (~2026-08-04)
 - **Date**: 2026-07-24
 - **Driver**: Augusto
 - **Approvers**: Augusto
