@@ -19,9 +19,9 @@ from app.domain.entities import (
     SENTINEL,
     AnswerStreamEvent,
     AnswerTextDelta,
+    ConversationTurn,
     GeneratedAnswer,
     QuestionAnswer,
-    TeachingTurn,
 )
 
 
@@ -41,9 +41,9 @@ class StreamAnswer:
 
 @dataclass(frozen=True)
 class StreamTurn:
-    """The terminal teaching outcome — the persisted :class:`TeachingTurn`."""
+    """The terminal teaching outcome — the persisted :class:`ConversationTurn`."""
 
-    turn: TeachingTurn
+    turn: ConversationTurn
 
 
 # The Q&A stream yields zero or more deltas then exactly one terminal answer; the

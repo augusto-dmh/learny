@@ -46,6 +46,9 @@ from app.domain.entities import (
     ChapterIndexRow,
     ChapterSection,
     ChunkToEmbed,
+    Conversation,
+    ConversationSummary,
+    ConversationTurn,
     CorpusSectionRecord,
     CorpusStructure,
     DerivedNoteLink,
@@ -75,9 +78,6 @@ from app.domain.entities import (
     SourceHighlight,
     StructureSection,
     StudyDay,
-    TeachingSession,
-    TeachingSessionSummary,
-    TeachingTurn,
     User,
 )
 from app.infrastructure.db.metadata import (
@@ -875,19 +875,23 @@ class SqlAlchemyTeachingSessionRepository:
     def __init__(self, connection: Connection) -> None:
         self._conn = connection
 
-    def add(self, session: TeachingSession) -> TeachingSession:
+    def add(self, session: Conversation) -> Conversation:
         self._conn.execute(
             insert(conversations).values(
                 id=session.id,
                 source_id=session.source_id,
-                # A teaching session is the scoped, notes-free conversation the old
-                # panel has always created (ADR-0029 backfill mapping); the unified
-                # services widen these three.
-                title=session.target_title,
-                scope_anchors=[session.target_anchor],
-                include_notes=False,
+                title=session.title,
+                scope_anchors=list(session.scope_anchors),
+                include_notes=session.include_notes,
                 target_anchor=session.target_anchor,
-                target_section_path=list(session.target_section_path),
+                # The target trio is all-or-nothing: a whole-book conversation stores
+                # NULL for the path rather than an empty list that would read back as
+                # a target with no section path.
+                target_section_path=(
+                    None
+                    if session.target_section_path is None
+                    else list(session.target_section_path)
+                ),
                 target_title=session.target_title,
                 created_at=session.created_at,
                 updated_at=session.updated_at,
@@ -895,13 +899,13 @@ class SqlAlchemyTeachingSessionRepository:
         )
         return session
 
-    def get_by_id(self, session_id: UUID) -> TeachingSession | None:
+    def get_by_id(self, session_id: UUID) -> Conversation | None:
         row = self._conn.execute(
             select(conversations).where(conversations.c.id == session_id)
         ).one_or_none()
-        return _to_teaching_session(row) if row is not None else None
+        return _to_conversation(row) if row is not None else None
 
-    def list_for_source(self, source_id: UUID) -> list[TeachingSessionSummary]:
+    def list_for_source(self, source_id: UUID) -> list[ConversationSummary]:
         turn_count = (
             select(func.count())
             .select_from(conversation_turns)
@@ -910,12 +914,17 @@ class SqlAlchemyTeachingSessionRepository:
             .label("turn_count")
         )
         rows = self._conn.execute(
-            select(conversations, turn_count)
+            select(conversations, turn_count, sources.c.title.label("source_title"))
+            .select_from(conversations.join(sources, conversations.c.source_id == sources.c.id))
             .where(conversations.c.source_id == source_id)
             .order_by(conversations.c.created_at.desc())
         ).all()
         return [
-            TeachingSessionSummary(session=_to_teaching_session(row), turn_count=row.turn_count)
+            ConversationSummary(
+                conversation=_to_conversation(row),
+                turn_count=row.turn_count,
+                source_title=row.source_title,
+            )
             for row in rows
         ]
 
@@ -935,17 +944,15 @@ class SqlAlchemyTeachingTurnRepository:
     def __init__(self, connection: Connection) -> None:
         self._conn = connection
 
-    def add(self, turn: TeachingTurn) -> TeachingTurn:
+    def add(self, turn: ConversationTurn) -> ConversationTurn:
         try:
             self._conn.execute(
                 insert(conversation_turns).values(
                     id=turn.id,
-                    conversation_id=turn.session_id,
+                    conversation_id=turn.conversation_id,
                     turn_index=turn.turn_index,
                     message=turn.message,
-                    # Every turn this repository writes today came from the teaching
-                    # path; the unified turn service chooses the mode per turn.
-                    mode="teach",
+                    mode=turn.mode,
                     answer_status=turn.answer_status,
                     answer_text=turn.answer_text,
                     model=turn.model,
@@ -975,7 +982,7 @@ class SqlAlchemyTeachingTurnRepository:
             self._conn.execute(insert(conversation_turn_citations), citation_rows)
         return turn
 
-    def list_for_session(self, session_id: UUID) -> list[TeachingTurn]:
+    def list_for_session(self, session_id: UUID) -> list[ConversationTurn]:
         # All turns share the session's source, so one lookup recovers the source
         # for every citation's Evidence (not stored per-citation).
         source_id = self._conn.execute(
@@ -1022,12 +1029,12 @@ class SqlAlchemyTeachingTurnRepository:
                     )
                 )
         seen: set[UUID] = set()
-        result: list[TeachingTurn] = []
+        result: list[ConversationTurn] = []
         for row in rows:
             if row.id in seen:
                 continue
             seen.add(row.id)
-            result.append(_to_teaching_turn(row, tuple(turns[row.id])))
+            result.append(_to_conversation_turn(row, tuple(turns[row.id])))
         return result
 
     def recent_history(self, session_id: UUID, limit: int) -> tuple[int, list[HistoryTurn]]:
@@ -2213,24 +2220,30 @@ def _to_ingestion_event(row) -> IngestionEvent:  # noqa: ANN001
     )
 
 
-def _to_teaching_session(row) -> TeachingSession:  # noqa: ANN001
-    return TeachingSession(
+def _to_conversation(row) -> Conversation:  # noqa: ANN001
+    return Conversation(
         id=row.id,
         source_id=row.source_id,
+        title=row.title,
+        scope_anchors=tuple(row.scope_anchors),
+        include_notes=row.include_notes,
         target_anchor=row.target_anchor,
-        target_section_path=tuple(row.target_section_path),
+        target_section_path=(
+            None if row.target_section_path is None else tuple(row.target_section_path)
+        ),
         target_title=row.target_title,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
 
 
-def _to_teaching_turn(row, citations: tuple[Evidence, ...]) -> TeachingTurn:  # noqa: ANN001
-    return TeachingTurn(
+def _to_conversation_turn(row, citations: tuple[Evidence, ...]) -> ConversationTurn:  # noqa: ANN001
+    return ConversationTurn(
         id=row.id,
-        session_id=row.conversation_id,
+        conversation_id=row.conversation_id,
         turn_index=row.turn_index,
         message=row.message,
+        mode=row.mode,
         answer_status=row.answer_status,
         answer_text=row.answer_text,
         model=row.model,

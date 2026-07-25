@@ -48,7 +48,7 @@ def _terminal(event: StreamAnswer | StreamTurn) -> tuple[list[Evidence], str]:
 
     The Q&A stream ends with a :class:`~app.application.streaming.StreamAnswer`
     (a ``QuestionAnswer``); the teaching stream ends with a
-    :class:`~app.application.streaming.StreamTurn` (the persisted ``TeachingTurn``).
+    :class:`~app.application.streaming.StreamTurn` (the persisted ``ConversationTurn``).
     Both carry the same citation snapshots and an ``answered`` /
     ``not_found_in_source`` status, projected identically for the client.
     """

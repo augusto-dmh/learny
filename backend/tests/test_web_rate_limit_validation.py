@@ -190,8 +190,8 @@ def test_teaching_errors_map_to_expected_status_codes() -> None:
     from fastapi.testclient import TestClient
 
     from app.application.errors import (
+        ConversationNotFound,
         InvalidTeachingTarget,
-        TeachingSessionNotFound,
         TeachingTargetGone,
         TeachingTurnConflict,
     )
@@ -202,7 +202,7 @@ def test_teaching_errors_map_to_expected_status_codes() -> None:
 
     @app.get("/session-not-found")
     def _session_not_found() -> None:
-        raise TeachingSessionNotFound("Teaching session not found.")
+        raise ConversationNotFound("Teaching session not found.")
 
     @app.get("/invalid-target")
     def _invalid_target() -> None:

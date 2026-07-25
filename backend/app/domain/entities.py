@@ -478,44 +478,73 @@ class QuestionAnswer:
     model: str
 
 
-# --- Teaching sessions aggregate (Cycle 7, design §Components) -------------------
-# A session anchors a bounded conversation to one corpus section of a source; its
-# turns pair a user message with a generated response and carry citation snapshots
-# so history survives corpus re-ingestion (AD-033).
+# --- Conversations aggregate (ADR-0029; originally the Cycle 7 teaching sessions) ---
+# A conversation is one grounded exchange about a book, defined by two axes: its
+# *scope* (which sections retrieval may see) and each turn's *mode* (how the reply
+# behaves). Its turns pair a user message with a generated response and carry
+# citation snapshots so history survives corpus re-ingestion (AD-033).
+
+
+# How a turn was generated (ADR-0029). ``answer`` replies as cited Q&A; ``teach``
+# replies as structured teaching against a target section. One conversation may
+# interleave the two, so this is a per-turn property, never a conversation-level one.
+MODE_ANSWER = "answer"
+MODE_TEACH = "teach"
+
+# The ``answer_status`` vocabulary shared by the Q&A and conversation paths.
+# ``answered`` carries a grounded citation set. The two not-found verdicts stay
+# distinct because scope is a promise (ADR-0029): ``not_found_in_scope`` says the
+# reader's own selection could not support the answer — which a client can offer to
+# widen — while ``not_found_in_source`` is the whole-book verdict. Collapsing them
+# would let a scoped conversation look like it had searched the whole book.
+ANSWERED = "answered"
+NOT_FOUND_IN_SOURCE = "not_found_in_source"
+NOT_FOUND_IN_SCOPE = "not_found_in_scope"
 
 
 @dataclass(frozen=True)
-class TeachingSession:
-    """A teaching conversation anchored to one corpus section (TEACH-01).
+class Conversation:
+    """A grounded conversation about one source (ADR-0029).
 
-    The target is captured as a snapshot — the stable citation ``target_anchor``
-    plus its ``target_section_path`` and ``target_title`` — so the session renders
-    without re-reading the corpus (the anchor is re-resolved per turn, TEACH-16).
+    ``scope_anchors`` are the section anchors retrieval may see, in the order the
+    reader gave them; the empty tuple is the single spelling of "the whole book".
+    ``include_notes`` is the one explicit notes choice for the conversation.
+
+    The teach target is captured as a snapshot — the stable citation
+    ``target_anchor`` plus its ``target_section_path`` and ``target_title`` — so it
+    renders without re-reading the corpus (the anchor is re-resolved per turn,
+    TEACH-16). All three are ``None`` together on a whole-book conversation, which
+    teaches nothing in particular.
     """
 
     id: UUID
     source_id: UUID
-    target_anchor: str
-    target_section_path: tuple[str, ...]
-    target_title: str
+    title: str
+    scope_anchors: tuple[str, ...]
+    include_notes: bool
+    target_anchor: str | None
+    target_section_path: tuple[str, ...] | None
+    target_title: str | None
     created_at: datetime
     updated_at: datetime
 
 
 @dataclass(frozen=True)
-class TeachingTurn:
+class ConversationTurn:
     """One user message paired with its generated response (TEACH-07).
 
-    ``answer_status`` is ``"answered"`` or ``"not_found_in_source"``; a not-found
-    turn is still persisted with empty ``answer_text`` and no ``citations``
-    (TEACH-14). ``citations`` are grounded :class:`Evidence` snapshots whose rank
-    is their tuple position (``page_span`` is ``None`` for EPUB, A-9).
+    ``mode`` is :data:`MODE_ANSWER` or :data:`MODE_TEACH`; ``answer_status`` is one
+    of :data:`ANSWERED`, :data:`NOT_FOUND_IN_SOURCE`, or :data:`NOT_FOUND_IN_SCOPE`.
+    A not-found turn is still persisted with empty ``answer_text`` and no
+    ``citations`` (TEACH-14). ``citations`` are grounded :class:`Evidence` snapshots
+    whose rank is their tuple position (``page_span`` is ``None`` for EPUB, A-9).
     """
 
     id: UUID
-    session_id: UUID
+    conversation_id: UUID
     turn_index: int
     message: str
+    mode: str
     answer_status: str
     answer_text: str
     model: str
@@ -538,11 +567,17 @@ class HistoryTurn:
 
 
 @dataclass(frozen=True)
-class TeachingSessionSummary:
-    """A session plus its turn count for the per-source list read model (TEACH-21)."""
+class ConversationSummary:
+    """A conversation plus what a list row needs beside it (TEACH-21, CONV-06).
 
-    session: TeachingSession
+    ``source_title`` rides along because the global list spans every source the
+    caller owns, and a row that names only the conversation would not say which
+    book it is about. ``turn_count`` is the conversation's total, not a page of it.
+    """
+
+    conversation: Conversation
     turn_count: int
+    source_title: str
 
 
 # --- Active recall aggregate (Cycle E, RFC-002; design §Domain) ------------------

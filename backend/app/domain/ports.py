@@ -28,6 +28,9 @@ from app.domain.entities import (
     ChapterIndexRow,
     ChapterSection,
     ChunkToEmbed,
+    Conversation,
+    ConversationSummary,
+    ConversationTurn,
     CorpusSectionRecord,
     CorpusStructure,
     DerivedNoteLink,
@@ -58,9 +61,6 @@ from app.domain.entities import (
     Source,
     SourceHighlight,
     StudyDay,
-    TeachingSession,
-    TeachingSessionSummary,
-    TeachingTurn,
     User,
 )
 
@@ -593,30 +593,30 @@ class AnswerGenerationPort(Protocol):
 
 @runtime_checkable
 class TeachingSessionRepository(Protocol):
-    """Persistence port for :class:`~app.domain.entities.TeachingSession`.
+    """Persistence port for :class:`~app.domain.entities.Conversation`.
 
     Ownership is reachable only via the parent source (AD-014) — the application
     service does the authorization; these methods key on ids.
     """
 
-    def add(self, session: TeachingSession) -> TeachingSession:
+    def add(self, session: Conversation) -> Conversation:
         """Persist a new teaching session."""
         ...
 
-    def get_by_id(self, session_id: UUID) -> TeachingSession | None:
+    def get_by_id(self, session_id: UUID) -> Conversation | None:
         """Return the session with ``session_id``, or ``None`` if absent."""
         ...
 
-    def list_for_source(self, source_id: UUID) -> list[TeachingSessionSummary]:
+    def list_for_source(self, source_id: UUID) -> list[ConversationSummary]:
         """Return ``source_id``'s sessions with turn counts, newest first (TEACH-21)."""
         ...
 
 
 @runtime_checkable
 class TeachingTurnRepository(Protocol):
-    """Persistence port for :class:`~app.domain.entities.TeachingTurn`."""
+    """Persistence port for :class:`~app.domain.entities.ConversationTurn`."""
 
-    def add(self, turn: TeachingTurn) -> TeachingTurn:
+    def add(self, turn: ConversationTurn) -> ConversationTurn:
         """Persist a turn and its citation snapshots (rank = tuple position).
 
         Raises :class:`~app.application.errors.TeachingTurnConflict` when the
@@ -625,7 +625,7 @@ class TeachingTurnRepository(Protocol):
         """
         ...
 
-    def list_for_session(self, session_id: UUID) -> list[TeachingTurn]:
+    def list_for_session(self, session_id: UUID) -> list[ConversationTurn]:
         """Return a session's turns by ``turn_index`` ascending, citations loaded."""
         ...
 

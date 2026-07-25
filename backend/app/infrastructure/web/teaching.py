@@ -5,7 +5,7 @@ Thin FastAPI adapter over the framework-free teaching services (assembled in
 of their ready sources, reads a session's full cited conversation, lists a
 source's sessions, and posts cited turns. The handlers own input validation (422)
 and let application errors propagate to the global handlers
-(``TeachingSessionNotFound`` → 404, ``SourceNotReady`` → 409,
+(``ConversationNotFound`` → 404, ``SourceNotReady`` → 409,
 ``InvalidTeachingTarget`` → 422, ``TeachingTargetGone`` → 409,
 ``TeachingTurnConflict`` → 409, ``AnswerGenerationFailed`` → 502), mirroring the
 questions endpoint.
@@ -32,16 +32,16 @@ from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel, Field, field_validator
 
 from app.application.teaching import (
-    ListTeachingSessions,
-    PostTeachingTurn,
-    ReadTeachingSession,
-    StartTeachingSession,
+    ListConversations,
+    PostConversationTurn,
+    ReadConversation,
+    StartConversation,
 )
 from app.core.config import get_settings
 from app.domain.entities import (
-    TeachingSession,
-    TeachingSessionSummary,
-    TeachingTurn,
+    Conversation,
+    ConversationSummary,
+    ConversationTurn,
     User,
 )
 from app.infrastructure.web.csrf import enforce_csrf, enforce_origin
@@ -114,7 +114,7 @@ class TargetView(BaseModel):
     title: str
 
     @classmethod
-    def from_session(cls, session: TeachingSession) -> TargetView:
+    def from_session(cls, session: Conversation) -> TargetView:
         return cls(
             anchor=session.target_anchor,
             section_path=list(session.target_section_path),
@@ -131,7 +131,7 @@ class SessionView(BaseModel):
     created_at: datetime
 
     @classmethod
-    def from_session(cls, session: TeachingSession) -> SessionView:
+    def from_session(cls, session: Conversation) -> SessionView:
         return cls(
             id=session.id,
             source_id=session.source_id,
@@ -158,7 +158,7 @@ class TurnView(BaseModel):
     created_at: datetime
 
     @classmethod
-    def from_turn(cls, turn: TeachingTurn) -> TurnView:
+    def from_turn(cls, turn: ConversationTurn) -> TurnView:
         return cls(
             turn_index=turn.turn_index,
             message=turn.message,
@@ -185,7 +185,9 @@ class SessionDetailView(BaseModel):
     turns: list[TurnView]
 
     @classmethod
-    def from_session(cls, session: TeachingSession, turns: list[TeachingTurn]) -> SessionDetailView:
+    def from_session(
+        cls, session: Conversation, turns: list[ConversationTurn]
+    ) -> SessionDetailView:
         return cls(
             id=session.id,
             source_id=session.source_id,
@@ -204,11 +206,11 @@ class SessionSummaryView(BaseModel):
     turn_count: int
 
     @classmethod
-    def from_summary(cls, summary: TeachingSessionSummary) -> SessionSummaryView:
+    def from_summary(cls, summary: ConversationSummary) -> SessionSummaryView:
         return cls(
-            id=summary.session.id,
-            target=TargetView.from_session(summary.session),
-            created_at=summary.session.created_at,
+            id=summary.conversation.id,
+            target=TargetView.from_session(summary.conversation),
+            created_at=summary.conversation.created_at,
             turn_count=summary.turn_count,
         )
 
@@ -227,12 +229,12 @@ class SessionSummaryView(BaseModel):
 )
 def start_teaching_session(
     user: Annotated[User, Depends(get_authenticated_user)],
-    service: Annotated[StartTeachingSession, Depends(get_start_teaching_session)],
+    service: Annotated[StartConversation, Depends(get_start_teaching_session)],
     body: StartSessionRequest,
 ) -> SessionView:
     """Start a session anchored to a section of an owned ready source (201).
 
-    ``StartTeachingSession`` authorizes ownership (missing/non-owner →
+    ``StartConversation`` authorizes ownership (missing/non-owner →
     ``SourceNotFound`` → 404), enforces readiness (``SourceNotReady`` → 409), and
     resolves the target anchor (unknown → ``InvalidTeachingTarget`` → 422).
     """
@@ -244,7 +246,7 @@ def start_teaching_session(
 def read_teaching_session(
     session_id: UUID,
     user: Annotated[User, Depends(get_authenticated_user)],
-    service: Annotated[ReadTeachingSession, Depends(get_read_teaching_session)],
+    service: Annotated[ReadConversation, Depends(get_read_teaching_session)],
 ) -> SessionDetailView:
     """Return an owned session with its ordered cited conversation (200; 404)."""
     session, turns = service(user=user, session_id=session_id)
@@ -263,13 +265,13 @@ def read_teaching_session(
 def post_teaching_turn(
     session_id: UUID,
     user: Annotated[User, Depends(get_authenticated_user)],
-    service: Annotated[PostTeachingTurn, Depends(get_post_teaching_turn)],
+    service: Annotated[PostConversationTurn, Depends(get_post_teaching_turn)],
     body: TurnRequest,
 ) -> TurnView:
     """Run and persist one cited teaching turn (201); 422/404/409/429/502 per ACs.
 
-    ``PostTeachingTurn`` resolves the session + owner (missing/non-owner →
-    ``TeachingSessionNotFound`` → 404), enforces readiness (``SourceNotReady`` →
+    ``PostConversationTurn`` resolves the session + owner (missing/non-owner →
+    ``ConversationNotFound`` → 404), enforces readiness (``SourceNotReady`` →
     409) and the target's continued existence (``TeachingTargetGone`` → 409),
     retrieves target-scoped evidence, and either composes a grounded answer or the
     explicit not-found outcome; a generation failure surfaces as
@@ -296,13 +298,13 @@ def post_teaching_turn(
 def post_teaching_turn_stream(
     session_id: UUID,
     user: Annotated[User, Depends(get_authenticated_user)],
-    service: Annotated[PostTeachingTurn, Depends(get_post_teaching_turn)],
+    service: Annotated[PostConversationTurn, Depends(get_post_teaching_turn)],
     body: TurnRequest,
 ):
     """Stream one cited teaching turn as UI Message Stream v1 SSE frames (GEN-14).
 
     The SSE sibling of :func:`post_teaching_turn`: identical request schema and
-    auth/CSRF/Origin/rate-limit dependencies. ``PostTeachingTurn.stream`` runs all
+    auth/CSRF/Origin/rate-limit dependencies. ``PostConversationTurn.stream`` runs all
     guards **eagerly** here, so ownership (404), readiness / target-gone (409),
     validation (422) and rate-limit (429) surface as the same plain HTTP errors as
     the JSON endpoint before any SSE byte is sent. The turn is persisted only on
@@ -322,7 +324,7 @@ def post_teaching_turn_stream(
 def list_teaching_sessions(
     source_id: UUID,
     user: Annotated[User, Depends(get_authenticated_user)],
-    service: Annotated[ListTeachingSessions, Depends(get_list_teaching_sessions)],
+    service: Annotated[ListConversations, Depends(get_list_teaching_sessions)],
 ) -> list[SessionSummaryView]:
     """Return an owned source's sessions, newest first (200; 404 missing/non-owner)."""
     return [SessionSummaryView.from_summary(s) for s in service(user=user, source_id=source_id)]

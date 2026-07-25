@@ -17,6 +17,9 @@ from sqlalchemy.exc import IntegrityError
 
 from app.application.errors import TeachingTurnConflict
 from app.domain.entities import (
+    MODE_TEACH,
+    Conversation,
+    ConversationTurn,
     CorpusSectionRecord,
     Evidence,
     HistoryTurn,
@@ -29,8 +32,6 @@ from app.domain.entities import (
     PasswordCredential,
     SectionChunk,
     Source,
-    TeachingSession,
-    TeachingTurn,
     User,
 )
 from app.infrastructure.db.metadata import (
@@ -1377,11 +1378,14 @@ def _new_teaching_session(
     section_path: tuple[str, ...] = ("Chapter 1",),
     title: str = "Chapter 1",
     created_at: datetime | None = None,
-) -> TeachingSession:
+) -> Conversation:
     now = created_at or datetime.now(UTC)
-    return TeachingSession(
+    return Conversation(
         id=uuid4(),
         source_id=source_id,
+        title=title,
+        scope_anchors=(anchor,),
+        include_notes=False,
         target_anchor=anchor,
         target_section_path=section_path,
         target_title=title,
@@ -1443,7 +1447,7 @@ def test_teaching_session_list_for_source_is_newest_first(db_conn: Connection) -
     repo.add(newer)
 
     listed = repo.list_for_source(source.id)
-    assert [s.session.id for s in listed] == [newer.id, older.id]
+    assert [s.conversation.id for s in listed] == [newer.id, older.id]
 
 
 def test_teaching_session_list_includes_turn_count(db_conn: Connection) -> None:
@@ -1458,7 +1462,7 @@ def test_teaching_session_list_includes_turn_count(db_conn: Connection) -> None:
     _insert_turn(db_conn, with_turns.id, 0)
     _insert_turn(db_conn, with_turns.id, 1)
 
-    summaries = {s.session.id: s.turn_count for s in repo.list_for_source(source.id)}
+    summaries = {s.conversation.id: s.turn_count for s in repo.list_for_source(source.id)}
     assert summaries[with_turns.id] == 2
     assert summaries[without_turns.id] == 0
 
@@ -1474,16 +1478,16 @@ def test_teaching_session_list_is_source_scoped(db_conn: Connection) -> None:
     for session in (a1, a2, b1):
         repo.add(session)
 
-    a_ids = {s.session.id for s in repo.list_for_source(source_a.id)}
+    a_ids = {s.conversation.id for s in repo.list_for_source(source_a.id)}
     assert a_ids == {a1.id, a2.id}
     assert b1.id not in a_ids
-    assert [s.session.id for s in repo.list_for_source(source_b.id)] == [b1.id]
+    assert [s.conversation.id for s in repo.list_for_source(source_b.id)] == [b1.id]
 
 
 # ---- Teaching turn repository (TEACH-07/14/17/20) -------------------------
 
 
-def _persisted_session(db_conn: Connection, source_id: UUID) -> TeachingSession:
+def _persisted_session(db_conn: Connection, source_id: UUID) -> Conversation:
     session = _new_teaching_session(source_id)
     return SqlAlchemyTeachingSessionRepository(db_conn).add(session)
 
@@ -1517,12 +1521,13 @@ def _new_turn(
     answer_text: str = "an answer",
     model: str = "local-extractive",
     citations: tuple[Evidence, ...] = (),
-) -> TeachingTurn:
-    return TeachingTurn(
+) -> ConversationTurn:
+    return ConversationTurn(
         id=uuid4(),
-        session_id=session_id,
+        conversation_id=session_id,
         turn_index=turn_index,
         message=message,
+        mode=MODE_TEACH,
         answer_status=answer_status,
         answer_text=answer_text,
         model=model,

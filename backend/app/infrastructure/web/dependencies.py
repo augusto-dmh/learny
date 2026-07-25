@@ -66,10 +66,10 @@ from app.application.reviews import GetDueQueue, ResetSchedule, SubmitReview
 from app.application.sources import CreateSource, GetSource, ListSources
 from app.application.study import ContinueReading, GetStudySummary
 from app.application.teaching import (
-    ListTeachingSessions,
-    PostTeachingTurn,
-    ReadTeachingSession,
-    StartTeachingSession,
+    ListConversations,
+    PostConversationTurn,
+    ReadConversation,
+    StartConversation,
 )
 from app.application.vault import ExportVault
 from app.core.config import Settings, get_settings
@@ -463,9 +463,9 @@ def get_ask_question(conn: DbConnection, generation: AnswerGeneration) -> AskQue
 # The turn service adds the scoped retrieval product and the teaching generator.
 
 
-def get_start_teaching_session(conn: DbConnection) -> StartTeachingSession:
-    """Wire ``StartTeachingSession`` on the request-scoped connection (TEACH-01..04)."""
-    return StartTeachingSession(
+def get_start_teaching_session(conn: DbConnection) -> StartConversation:
+    """Wire ``StartConversation`` on the request-scoped connection (TEACH-01..04)."""
+    return StartConversation(
         sources=SqlAlchemySourceRepository(conn),
         corpus=SqlAlchemyCorpusRepository(conn),
         sessions=SqlAlchemyTeachingSessionRepository(conn),
@@ -475,9 +475,9 @@ def get_start_teaching_session(conn: DbConnection) -> StartTeachingSession:
     )
 
 
-def get_read_teaching_session(conn: DbConnection) -> ReadTeachingSession:
-    """Wire ``ReadTeachingSession`` on the request-scoped connection (TEACH-05/06/20)."""
-    return ReadTeachingSession(
+def get_read_teaching_session(conn: DbConnection) -> ReadConversation:
+    """Wire ``ReadConversation`` on the request-scoped connection (TEACH-05/06/20)."""
+    return ReadConversation(
         sessions=SqlAlchemyTeachingSessionRepository(conn),
         turns=SqlAlchemyTeachingTurnRepository(conn),
         sources=SqlAlchemySourceRepository(conn),
@@ -485,9 +485,9 @@ def get_read_teaching_session(conn: DbConnection) -> ReadTeachingSession:
     )
 
 
-def get_list_teaching_sessions(conn: DbConnection) -> ListTeachingSessions:
-    """Wire ``ListTeachingSessions`` on the request-scoped connection (TEACH-21)."""
-    return ListTeachingSessions(
+def get_list_teaching_sessions(conn: DbConnection) -> ListConversations:
+    """Wire ``ListConversations`` on the request-scoped connection (TEACH-21)."""
+    return ListConversations(
         sources=SqlAlchemySourceRepository(conn),
         sessions=SqlAlchemyTeachingSessionRepository(conn),
         authorize=AuthorizeOwnership(),
@@ -509,8 +509,10 @@ def get_teaching_generation() -> TeachingGenerationPort:
 TeachingGeneration = Annotated[TeachingGenerationPort, Depends(get_teaching_generation)]
 
 
-def get_post_teaching_turn(conn: DbConnection, generation: TeachingGeneration) -> PostTeachingTurn:
-    """Wire ``PostTeachingTurn`` on the request-scoped connection (TEACH-07..17, 19, 24).
+def get_post_teaching_turn(
+    conn: DbConnection, generation: TeachingGeneration
+) -> PostConversationTurn:
+    """Wire ``PostConversationTurn`` on the request-scoped connection (TEACH-07..17, 19, 24).
 
     Composes the teaching repos, the source repo (ownership + readiness), the
     corpus repo (target re-resolution + subtree), the Phase-6 retrieval product
@@ -519,7 +521,7 @@ def get_post_teaching_turn(conn: DbConnection, generation: TeachingGeneration) -
     ``generation`` via ``Depends`` keeps it test-overridable.
     """
     settings = get_settings()
-    return PostTeachingTurn(
+    return PostConversationTurn(
         sessions=SqlAlchemyTeachingSessionRepository(conn),
         turns=SqlAlchemyTeachingTurnRepository(conn),
         sources=SqlAlchemySourceRepository(conn),

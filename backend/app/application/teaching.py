@@ -5,7 +5,7 @@ anchored to a corpus section, reading a session's full conversation, and listing
 a source's sessions. Ownership is enforced exactly like the Q&A path —
 ``authorized_source`` collapses a missing source and a non-owner to
 ``SourceNotFound`` (404) for the source-rooted services, and the session-rooted
-read collapses the same way to ``TeachingSessionNotFound`` so a session's
+read collapses the same way to ``ConversationNotFound`` so a session's
 existence is never disclosed. No FastAPI / SQLAlchemy / provider-SDK type crosses
 this boundary (ADR-0007/0009).
 """
@@ -18,10 +18,10 @@ from uuid import UUID
 
 from app.application.errors import (
     AnswerGenerationFailed,
+    ConversationNotFound,
     InvalidTeachingTarget,
     NotAuthorized,
     SourceNotReady,
-    TeachingSessionNotFound,
     TeachingTargetGone,
 )
 from app.application.grounding import ground
@@ -34,13 +34,16 @@ from app.application.streaming import (
     hold_back_deltas,
 )
 from app.domain.entities import (
+    ANSWERED,
+    MODE_TEACH,
+    NOT_FOUND_IN_SOURCE,
+    Conversation,
+    ConversationSummary,
+    ConversationTurn,
     Evidence,
     HistoryTurn,
     Source,
     StructureSection,
-    TeachingSession,
-    TeachingSessionSummary,
-    TeachingTurn,
     User,
 )
 from app.domain.ports import (
@@ -54,12 +57,6 @@ from app.domain.ports import (
 
 logger = logging.getLogger(__name__)
 
-# ``TeachingTurn.answer_status`` vocabulary (mirrors the Q&A ``status`` values):
-# ``answered`` carries a grounded citation set; ``not_found_in_source`` is the
-# explicit "the target cannot support this" outcome, still persisted (TEACH-14).
-_ANSWERED = "answered"
-_NOT_FOUND_IN_SOURCE = "not_found_in_source"
-
 
 def authorized_session(
     *,
@@ -68,8 +65,8 @@ def authorized_session(
     sessions: TeachingSessionRepository,
     sources: SourceRepository,
     authorize: AuthorizeOwnership,
-) -> tuple[TeachingSession, Source]:
-    """Resolve a session the caller owns, or raise ``TeachingSessionNotFound``.
+) -> tuple[Conversation, Source]:
+    """Resolve a session the caller owns, or raise ``ConversationNotFound``.
 
     Mirrors ``authorized_source`` for the session-rooted services: a missing
     session, a missing parent source, and a non-owner all collapse to the same
@@ -78,18 +75,18 @@ def authorized_session(
     """
     session = sessions.get_by_id(session_id)
     if session is None:
-        raise TeachingSessionNotFound("Teaching session not found.")
+        raise ConversationNotFound("Teaching session not found.")
     source = sources.get_by_id(session.source_id)
     if source is None:
-        raise TeachingSessionNotFound("Teaching session not found.")
+        raise ConversationNotFound("Teaching session not found.")
     try:
         authorize(user=user, owner_id=source.user_id)
     except NotAuthorized as exc:
-        raise TeachingSessionNotFound("Teaching session not found.") from exc
+        raise ConversationNotFound("Teaching session not found.") from exc
     return session, source
 
 
-class StartTeachingSession:
+class StartConversation:
     """Create a session anchored to a section of an owned, ready source (TEACH-01).
 
     Ownership is enforced first via ``authorized_source`` (missing + non-owner →
@@ -118,7 +115,7 @@ class StartTeachingSession:
         self._clock = clock
         self._ids = ids
 
-    def __call__(self, *, user: User, source_id: UUID, target_anchor: str) -> TeachingSession:
+    def __call__(self, *, user: User, source_id: UUID, target_anchor: str) -> Conversation:
         source = authorized_source(
             user=user,
             source_id=source_id,
@@ -138,9 +135,14 @@ class StartTeachingSession:
             raise InvalidTeachingTarget("Target does not exist in this source.")
 
         now = self._clock.now()
-        session = TeachingSession(
+        session = Conversation(
             id=self._ids(),
             source_id=source_id,
+            # A teaching session is the conversation scoped to exactly its target,
+            # named after it, with notes off (AD-147's teaching default).
+            title=section.title,
+            scope_anchors=(section.anchor,),
+            include_notes=False,
             target_anchor=section.anchor,
             target_section_path=section.section_path,
             target_title=section.title,
@@ -150,11 +152,11 @@ class StartTeachingSession:
         return self._sessions.add(session)
 
 
-class ReadTeachingSession:
+class ReadConversation:
     """Return an owned session with its full ordered conversation (TEACH-05).
 
     A missing session, and a session whose parent source is not the caller's,
-    both collapse to ``TeachingSessionNotFound`` (404) so existence is never
+    both collapse to ``ConversationNotFound`` (404) so existence is never
     disclosed (TEACH-06). Turns come back ``turn_index``-ascending with their
     citation snapshots (the repository's contract), so re-ingestion never breaks
     history (TEACH-20).
@@ -175,7 +177,7 @@ class ReadTeachingSession:
 
     def __call__(
         self, *, user: User, session_id: UUID
-    ) -> tuple[TeachingSession, list[TeachingTurn]]:
+    ) -> tuple[Conversation, list[ConversationTurn]]:
         session, _ = authorized_session(
             user=user,
             session_id=session_id,
@@ -186,7 +188,7 @@ class ReadTeachingSession:
         return session, self._turns.list_for_session(session_id)
 
 
-class ListTeachingSessions:
+class ListConversations:
     """Return an owned source's sessions, newest first (TEACH-21).
 
     Ownership is enforced via ``authorized_source`` (missing + non-owner →
@@ -205,7 +207,7 @@ class ListTeachingSessions:
         self._sessions = sessions
         self._authorize = authorize
 
-    def __call__(self, *, user: User, source_id: UUID) -> list[TeachingSessionSummary]:
+    def __call__(self, *, user: User, source_id: UUID) -> list[ConversationSummary]:
         authorized_source(
             user=user,
             source_id=source_id,
@@ -215,14 +217,14 @@ class ListTeachingSessions:
         return self._sessions.list_for_source(source_id)
 
 
-class PostTeachingTurn:
+class PostConversationTurn:
     """Run one cited teaching turn scoped to the session's target subtree.
 
     Mirrors the Q&A answer path with three teaching additions: the target subtree
     scopes retrieval, bounded prior history reaches the generation port, and the
     turn (either outcome) is persisted with its citation snapshots. Ownership is
     resolved via the session's parent source and collapses missing + non-owner to
-    ``TeachingSessionNotFound`` (404, TEACH-06 semantics); a source that is no
+    ``ConversationNotFound`` (404, TEACH-06 semantics); a source that is no
     longer ``ready`` raises ``SourceNotReady`` (409, TEACH-15) and a target anchor
     that no longer resolves raises ``TeachingTargetGone`` (409, TEACH-16).
 
@@ -336,7 +338,7 @@ class PostTeachingTurn:
         session_id: UUID,
         message: str,
         include_notes: bool = False,
-    ) -> TeachingTurn:
+    ) -> ConversationTurn:
         target, history, evidence, turn_index = self._preflight(
             user=user,
             session_id=session_id,
@@ -371,12 +373,13 @@ class PostTeachingTurn:
                 )
             else:
                 text, citations = grounded
-                turn = TeachingTurn(
+                turn = ConversationTurn(
                     id=self._ids(),
-                    session_id=session_id,
+                    conversation_id=session_id,
                     turn_index=turn_index,
                     message=message,
-                    answer_status=_ANSWERED,
+                    mode=MODE_TEACH,
+                    answer_status=ANSWERED,
                     answer_text=text,
                     model=generated.model,
                     evidence_count=len(evidence),
@@ -465,12 +468,13 @@ class PostTeachingTurn:
             )
         else:
             text, citations = grounded
-            turn = TeachingTurn(
+            turn = ConversationTurn(
                 id=self._ids(),
-                session_id=session_id,
+                conversation_id=session_id,
                 turn_index=turn_index,
                 message=message,
-                answer_status=_ANSWERED,
+                mode=MODE_TEACH,
+                answer_status=ANSWERED,
                 answer_text=text,
                 model=answer.model,
                 evidence_count=len(evidence),
@@ -487,15 +491,16 @@ class PostTeachingTurn:
         message: str,
         evidence_count: int,
         model: str,
-    ) -> TeachingTurn:
+    ) -> ConversationTurn:
         # Persisted like an answered turn but with empty text and no citations
         # (TEACH-14).
-        return TeachingTurn(
+        return ConversationTurn(
             id=self._ids(),
-            session_id=session_id,
+            conversation_id=session_id,
             turn_index=turn_index,
             message=message,
-            answer_status=_NOT_FOUND_IN_SOURCE,
+            mode=MODE_TEACH,
+            answer_status=NOT_FOUND_IN_SOURCE,
             answer_text="",
             model=model,
             evidence_count=evidence_count,

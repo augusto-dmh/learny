@@ -31,7 +31,10 @@ from fastapi.testclient import TestClient
 from sqlalchemy import Connection
 
 from app.domain.entities import (
+    MODE_TEACH,
     AnswerTextDelta,
+    Conversation,
+    ConversationTurn,
     CorpusSectionRecord,
     Evidence,
     GeneratedAnswer,
@@ -39,8 +42,6 @@ from app.domain.entities import (
     ParsedSection,
     SectionChunk,
     Source,
-    TeachingSession,
-    TeachingTurn,
 )
 from app.infrastructure.db.repositories import (
     SqlAlchemyCorpusRepository,
@@ -155,11 +156,14 @@ def _seed_session(
     *,
     anchor: str = _ANCHOR,
     created_at: datetime | None = None,
-) -> TeachingSession:
+) -> Conversation:
     now = created_at or datetime.now(UTC)
-    session = TeachingSession(
+    session = Conversation(
         id=uuid4(),
         source_id=source_id,
+        title=_TITLE,
+        scope_anchors=(anchor,),
+        include_notes=False,
         target_anchor=anchor,
         target_section_path=_SECTION_PATH,
         target_title=_TITLE,
@@ -197,19 +201,20 @@ def _post_turn(
 
 def _seed_turn(
     db_conn: Connection,
-    session: TeachingSession,
+    session: Conversation,
     *,
     turn_index: int,
     message: str,
     answer_status: str,
     answer_text: str,
     citations: tuple[Evidence, ...] = (),
-) -> TeachingTurn:
-    turn = TeachingTurn(
+) -> ConversationTurn:
+    turn = ConversationTurn(
         id=uuid4(),
-        session_id=session.id,
+        conversation_id=session.id,
         turn_index=turn_index,
         message=message,
+        mode=MODE_TEACH,
         answer_status=answer_status,
         answer_text=answer_text,
         model=_MODEL,
@@ -1037,13 +1042,14 @@ def test_post_turn_defaults_include_notes_false_and_forwards_explicit_choice(
     class _SpyService:
         def __call__(  # noqa: ANN001
             self, *, user, session_id, message, include_notes=False
-        ) -> TeachingTurn:
+        ) -> ConversationTurn:
             seen.append(include_notes)
-            return TeachingTurn(
+            return ConversationTurn(
                 id=uuid4(),
-                session_id=session_id,
+                conversation_id=session_id,
                 turn_index=0,
                 message=message,
+                mode=MODE_TEACH,
                 answer_status="not_found_in_source",
                 answer_text="",
                 model=_MODEL,

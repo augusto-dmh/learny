@@ -1,7 +1,7 @@
 """C-phase gate (unit) — teaching-session application services.
 
-Drives ``StartTeachingSession`` / ``ReadTeachingSession`` / ``ListTeachingSessions``
-(and, below, ``PostTeachingTurn``) over in-memory fakes and the real
+Drives ``StartConversation`` / ``ReadConversation`` / ``ListConversations``
+(and, below, ``PostConversationTurn``) over in-memory fakes and the real
 ``AuthorizeOwnership`` primitive, so the orchestration is asserted in isolation.
 The teaching fakes live here rather than in ``tests/fakes.py`` because the turn
 path needs a retrieval double that records the ``anchors`` scope, which the Q&A
@@ -23,34 +23,35 @@ import pytest
 from app.application import teaching as teaching_module
 from app.application.errors import (
     AnswerGenerationFailed,
+    ConversationNotFound,
     InvalidTeachingTarget,
     SourceNotFound,
     SourceNotReady,
-    TeachingSessionNotFound,
     TeachingTargetGone,
     TeachingTurnConflict,
 )
 from app.application.identity import AuthorizeOwnership
 from app.application.streaming import StreamDelta, StreamTurn
 from app.application.teaching import (
-    ListTeachingSessions,
-    PostTeachingTurn,
-    ReadTeachingSession,
-    StartTeachingSession,
+    ListConversations,
+    PostConversationTurn,
+    ReadConversation,
+    StartConversation,
 )
 from app.domain.entities import (
+    MODE_TEACH,
     AnswerCompleted,
     AnswerStreamEvent,
     AnswerTextDelta,
+    Conversation,
+    ConversationSummary,
+    ConversationTurn,
     CorpusStructure,
     Evidence,
     GeneratedAnswer,
     HistoryTurn,
     Source,
     StructureSection,
-    TeachingSession,
-    TeachingSessionSummary,
-    TeachingTurn,
     User,
 )
 from app.domain.ports import TeachingGenerationPort
@@ -133,10 +134,13 @@ def _session(
     target_anchor: str = "ch1.xhtml#core",
     target_section_path: tuple[str, ...] = ("Chapter 1",),
     created_at: datetime = _NOW,
-) -> TeachingSession:
-    return TeachingSession(
+) -> Conversation:
+    return Conversation(
         id=session_id or uuid4(),
         source_id=source_id,
+        title="Chapter 1",
+        scope_anchors=(target_anchor,),
+        include_notes=False,
         target_anchor=target_anchor,
         target_section_path=target_section_path,
         target_title="Chapter 1",
@@ -152,12 +156,13 @@ def _turn(
     status: str = "answered",
     text: str = "answer",
     citations: tuple[Evidence, ...] = (),
-) -> TeachingTurn:
-    return TeachingTurn(
+) -> ConversationTurn:
+    return ConversationTurn(
         id=uuid4(),
-        session_id=session_id,
+        conversation_id=session_id,
         turn_index=turn_index,
         message=f"message {turn_index}",
+        mode=MODE_TEACH,
         answer_status=status,
         answer_text=text,
         model=_MODEL,
@@ -210,21 +215,25 @@ class FakeTeachingSessionRepository:
     """In-memory ``TeachingSessionRepository``: newest-first list with turn counts."""
 
     def __init__(self) -> None:
-        self._by_id: dict[UUID, TeachingSession] = {}
+        self._by_id: dict[UUID, Conversation] = {}
         self.turn_counts: dict[UUID, int] = {}
 
-    def add(self, session: TeachingSession) -> TeachingSession:
+    def add(self, session: Conversation) -> Conversation:
         self._by_id[session.id] = session
         return session
 
-    def get_by_id(self, session_id: UUID) -> TeachingSession | None:
+    def get_by_id(self, session_id: UUID) -> Conversation | None:
         return self._by_id.get(session_id)
 
-    def list_for_source(self, source_id: UUID) -> list[TeachingSessionSummary]:
+    def list_for_source(self, source_id: UUID) -> list[ConversationSummary]:
         owned = [s for s in self._by_id.values() if s.source_id == source_id]
         owned.sort(key=lambda s: s.created_at, reverse=True)
         return [
-            TeachingSessionSummary(session=s, turn_count=self.turn_counts.get(s.id, 0))
+            ConversationSummary(
+                conversation=s,
+                turn_count=self.turn_counts.get(s.id, 0),
+                source_title="Book",
+            )
             for s in owned
         ]
 
@@ -239,22 +248,23 @@ class FakeTeachingTurnRepository:
     """
 
     def __init__(self, *, fail_add: bool = False) -> None:
-        self._turns: list[TeachingTurn] = []
+        self._turns: list[ConversationTurn] = []
         self._fail_add = fail_add
         self.add_calls = 0
 
-    def add(self, turn: TeachingTurn) -> TeachingTurn:
+    def add(self, turn: ConversationTurn) -> ConversationTurn:
         self.add_calls += 1
         if self._fail_add or any(
-            t.session_id == turn.session_id and t.turn_index == turn.turn_index for t in self._turns
+            t.conversation_id == turn.conversation_id and t.turn_index == turn.turn_index
+            for t in self._turns
         ):
             raise TeachingTurnConflict("Another turn was just added; retry.")
         self._turns.append(turn)
         return turn
 
-    def list_for_session(self, session_id: UUID) -> list[TeachingTurn]:
+    def list_for_session(self, session_id: UUID) -> list[ConversationTurn]:
         return sorted(
-            (t for t in self._turns if t.session_id == session_id),
+            (t for t in self._turns if t.conversation_id == session_id),
             key=lambda t: t.turn_index,
         )
 
@@ -389,8 +399,8 @@ class FakeTeachingGeneration:
 
 def _start(
     *, sources, corpus, sessions, ids=uuid4, clock: FakeClock | None = None
-) -> StartTeachingSession:
-    return StartTeachingSession(
+) -> StartConversation:
+    return StartConversation(
         sources=sources,
         corpus=corpus,
         sessions=sessions,
@@ -400,8 +410,8 @@ def _start(
     )
 
 
-def _read(*, sessions, turns, sources) -> ReadTeachingSession:
-    return ReadTeachingSession(
+def _read(*, sessions, turns, sources) -> ReadConversation:
+    return ReadConversation(
         sessions=sessions,
         turns=turns,
         sources=sources,
@@ -409,8 +419,8 @@ def _read(*, sessions, turns, sources) -> ReadTeachingSession:
     )
 
 
-def _list(*, sources, sessions) -> ListTeachingSessions:
-    return ListTeachingSessions(sources=sources, sessions=sessions, authorize=AuthorizeOwnership())
+def _list(*, sources, sessions) -> ListConversations:
+    return ListConversations(sources=sources, sessions=sessions, authorize=AuthorizeOwnership())
 
 
 def _post(
@@ -425,8 +435,8 @@ def _post(
     clock: FakeClock | None = None,
     evidence_top_k: int = _TOP_K,
     history_turns: int = _HISTORY_TURNS,
-) -> PostTeachingTurn:
-    return PostTeachingTurn(
+) -> PostConversationTurn:
+    return PostConversationTurn(
         sessions=sessions,
         turns=turns,
         sources=sources,
@@ -441,7 +451,7 @@ def _post(
     )
 
 
-# --- StartTeachingSession (TEACH-01..04) ---------------------------------------
+# --- StartConversation (TEACH-01..04) ---------------------------------------
 
 
 def test_start_creates_session_with_target_snapshot() -> None:
@@ -542,7 +552,7 @@ def test_start_no_corpus_raises_invalid_target() -> None:
         service(user=owner, source_id=source.id, target_anchor="ch1.xhtml#core")
 
 
-# --- ReadTeachingSession (TEACH-05, 06) ----------------------------------------
+# --- ReadConversation (TEACH-05, 06) ----------------------------------------
 
 
 def test_read_returns_session_and_turns_ordered_with_citations() -> None:
@@ -574,7 +584,7 @@ def test_read_returns_session_and_turns_ordered_with_citations() -> None:
 
 
 def test_read_missing_session_raises_not_found() -> None:
-    # TEACH-06: an unknown session id → TeachingSessionNotFound (404).
+    # TEACH-06: an unknown session id → ConversationNotFound (404).
     owner = _user()
     sources = FakeSourceRepository()
     service = _read(
@@ -583,7 +593,7 @@ def test_read_missing_session_raises_not_found() -> None:
         sources=sources,
     )
 
-    with pytest.raises(TeachingSessionNotFound):
+    with pytest.raises(ConversationNotFound):
         service(user=owner, session_id=uuid4())
 
 
@@ -598,11 +608,11 @@ def test_read_non_owner_raises_not_found() -> None:
     sessions.add(session)
     service = _read(sessions=sessions, turns=FakeTeachingTurnRepository(), sources=sources)
 
-    with pytest.raises(TeachingSessionNotFound):
+    with pytest.raises(ConversationNotFound):
         service(user=other, session_id=session.id)
 
 
-# --- ListTeachingSessions (TEACH-21, TEACH-02 semantics) -----------------------
+# --- ListConversations (TEACH-21, TEACH-02 semantics) -----------------------
 
 
 def test_list_returns_only_owner_sessions_newest_first_with_counts() -> None:
@@ -627,7 +637,7 @@ def test_list_returns_only_owner_sessions_newest_first_with_counts() -> None:
 
     result = service(user=owner, source_id=source.id)
 
-    assert [s.session for s in result] == [newer, older]
+    assert [s.conversation for s in result] == [newer, older]
     assert [s.turn_count for s in result] == [5, 2]
 
 
@@ -651,7 +661,7 @@ def test_list_non_owner_raises_source_not_found() -> None:
         service(user=other, source_id=source.id)
 
 
-# --- PostTeachingTurn (TEACH-07, 09..17, 19, 24) -------------------------------
+# --- PostConversationTurn (TEACH-07, 09..17, 19, 24) -------------------------------
 
 
 def _seeded(*, target: StructureSection, status: str = "ready"):
@@ -1069,7 +1079,7 @@ def test_turn_missing_session_raises_not_found() -> None:
         generation=FakeTeachingGeneration(),
     )
 
-    with pytest.raises(TeachingSessionNotFound):
+    with pytest.raises(ConversationNotFound):
         service(user=_user(), session_id=uuid4(), message="q")
 
 
@@ -1088,7 +1098,7 @@ def test_turn_non_owner_raises_not_found() -> None:
         generation=FakeTeachingGeneration(),
     )
 
-    with pytest.raises(TeachingSessionNotFound):
+    with pytest.raises(ConversationNotFound):
         service(user=other, session_id=session.id, message="q")
 
     assert retrieve.calls == []
@@ -1133,7 +1143,7 @@ def test_turn_emits_one_content_free_completion_log(
     assert "the secret answer body" not in message
 
 
-# --- PostTeachingTurn.stream (GEN-13, streaming half) --------------------------
+# --- PostConversationTurn.stream (GEN-13, streaming half) --------------------------
 #
 # Derived from the C3 Done-when: guards raise before any yield; the sentinel
 # hold-back suppresses a whole-reply sentinel; not-found surfaces via sentinel and
@@ -1153,7 +1163,7 @@ def test_stream_missing_session_raises_before_any_yield() -> None:
         generation=FakeTeachingGeneration(),
     )
 
-    with pytest.raises(TeachingSessionNotFound):
+    with pytest.raises(ConversationNotFound):
         service.stream(user=_user(), session_id=uuid4(), message="q")
 
     assert retrieve.calls == []
