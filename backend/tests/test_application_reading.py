@@ -417,7 +417,7 @@ def test_save_reading_position_credits_a_reading_study_day() -> None:
         user=user, source_id=source.id, anchor="c1"
     )
 
-    assert study.record_calls == [(user.id, date(2026, 7, 19), 0, 1)]
+    assert study.record_calls == [(user.id, date(2026, 7, 19), 0, 1, 0)]
 
 
 def test_save_reading_position_uses_client_timezone_for_the_study_day() -> None:
@@ -431,7 +431,7 @@ def test_save_reading_position_uses_client_timezone_for_the_study_day() -> None:
         user=user, source_id=source.id, anchor="c1", client_tz="Asia/Tokyo"
     )
 
-    assert study.record_calls == [(user.id, date(2026, 7, 20), 0, 1)]
+    assert study.record_calls == [(user.id, date(2026, 7, 20), 0, 1, 0)]
 
 
 def test_save_reading_position_garbage_timezone_falls_back_to_utc() -> None:
@@ -444,7 +444,7 @@ def test_save_reading_position_garbage_timezone_falls_back_to_utc() -> None:
         user=user, source_id=source.id, anchor="c1", client_tz="Mars/Olympus"
     )
 
-    assert study.record_calls == [(user.id, date(2026, 7, 19), 0, 1)]
+    assert study.record_calls == [(user.id, date(2026, 7, 19), 0, 1, 0)]
 
 
 def test_save_reading_position_bad_anchor_credits_no_study_day() -> None:

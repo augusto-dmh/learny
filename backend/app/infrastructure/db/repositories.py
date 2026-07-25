@@ -2057,7 +2057,8 @@ class SqlAlchemyStudyDayRepository:
     """``StudyDayRepository`` backed by ``study_days`` (HOME-07/08/10, AD-151/153).
 
     ``record`` is a single ``INSERT ... ON CONFLICT (user_id, day) DO UPDATE`` that adds
-    the passed deltas to the stored counters — concurrency-safe by construction (two
+    the passed deltas — the per-kind counters and the day's ``words_advanced`` reading
+    volume — to the stored values; concurrency-safe by construction (two
     same-day writes never conflict; the second takes the atomic increment path), so N
     same-day events leave exactly one row with counters equal to the totals. ``window``
     reads the caller's rows in a day range for the adherence/heatmap surface. Operates on
@@ -2074,12 +2075,14 @@ class SqlAlchemyStudyDayRepository:
         *,
         reviews: int = 0,
         reading_updates: int = 0,
+        words_advanced: int = 0,
     ) -> None:
         stmt = pg_insert(study_days).values(
             user_id=user_id,
             day=day,
             reviews_count=reviews,
             reading_updates=reading_updates,
+            words_advanced=words_advanced,
         )
         stmt = stmt.on_conflict_do_update(
             index_elements=[study_days.c.user_id, study_days.c.day],
@@ -2088,6 +2091,7 @@ class SqlAlchemyStudyDayRepository:
                 # concurrent commits both count.
                 "reviews_count": study_days.c.reviews_count + stmt.excluded.reviews_count,
                 "reading_updates": study_days.c.reading_updates + stmt.excluded.reading_updates,
+                "words_advanced": study_days.c.words_advanced + stmt.excluded.words_advanced,
             },
         )
         self._conn.execute(stmt)
@@ -2099,6 +2103,7 @@ class SqlAlchemyStudyDayRepository:
                 study_days.c.day,
                 study_days.c.reviews_count,
                 study_days.c.reading_updates,
+                study_days.c.words_advanced,
             )
             .where(study_days.c.user_id == user_id)
             .where(study_days.c.day >= start)
@@ -2111,6 +2116,7 @@ class SqlAlchemyStudyDayRepository:
                 day=row.day,
                 reviews_count=row.reviews_count,
                 reading_updates=row.reading_updates,
+                words_advanced=row.words_advanced,
             )
             for row in rows
         ]

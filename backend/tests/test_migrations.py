@@ -1773,7 +1773,10 @@ def test_migration_0015_creates_study_days(monkeypatch) -> None:
     ``reviews_count``/``reading_updates`` (INTEGER NOT NULL DEFAULT 0) and a CASCADE FK to
     ``users``. An inserted row defaults both counters to 0; the FK cascade is exercised for
     real (deleting the user removes their study days). Down one step to 0014 drops the
-    table; ``users`` survives."""
+    table; ``users`` survives.
+
+    Upgrades to ``0015_study_days`` rather than ``head`` so the assertions describe the
+    table this revision creates, not whatever later revisions have since added to it."""
     monkeypatch.setenv("LEARNY_DATABASE_URL", TEST_DB_URL)
     cfg = _alembic_config(TEST_DB_URL)
 
@@ -1792,7 +1795,7 @@ def test_migration_0015_creates_study_days(monkeypatch) -> None:
     finally:
         engine.dispose()
 
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, "0015_study_days")
     engine = create_engine(TEST_DB_URL)
     try:
         inspector = inspect(engine)
@@ -1847,6 +1850,106 @@ def test_migration_0015_creates_study_days(monkeypatch) -> None:
         tables = set(inspect(engine).get_table_names())
         assert "study_days" not in tables
         assert "users" in tables
+    finally:
+        engine.dispose()
+
+    # Drop everything to clear the committed seed rows; the module fixture restores head.
+    command.downgrade(cfg, "base")
+
+
+@pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
+def test_migration_0016_adds_reading_volume_without_touching_the_corpus(monkeypatch) -> None:
+    """0016 up: adds ``study_days.words_advanced`` (INTEGER NOT NULL DEFAULT 0).
+
+    A study-day row written before the counter existed takes 0 with no backfill and
+    keeps its existing counters untouched, so no already-shaded heatmap cell changes.
+    The corpus tables gain nothing: pages come from word counts that are already stored,
+    so no ingested book needs re-processing. Down one step to 0015 drops the column and
+    leaves the rows intact.
+    """
+    monkeypatch.setenv("LEARNY_DATABASE_URL", TEST_DB_URL)
+    cfg = _alembic_config(TEST_DB_URL)
+
+    # Land on 0015 (pre-words_advanced) so the upgrade below is the one under test, and
+    # seed a study day the way a running deployment would have before this revision.
+    command.upgrade(cfg, "head")
+    command.downgrade(cfg, "0015_study_days")
+
+    corpus_tables = ("corpus_documents", "corpus_sections", "corpus_blocks", "corpus_chunks")
+    user_id = uuid.uuid4()
+    engine = create_engine(TEST_DB_URL)
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("INSERT INTO users (id, email) VALUES (:id, :email)"),
+                {"id": user_id, "email": f"{user_id}@example.test"},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO study_days (user_id, day, reviews_count, reading_updates) "
+                    "VALUES (:uid, DATE '2026-07-21', 3, 2)"
+                ),
+                {"uid": user_id},
+            )
+        inspector = inspect(engine)
+        corpus_before = {t: {c["name"] for c in inspector.get_columns(t)} for t in corpus_tables}
+    finally:
+        engine.dispose()
+
+    command.upgrade(cfg, "head")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        inspector = inspect(engine)
+        columns = {c["name"]: c for c in inspector.get_columns("study_days")}
+        assert "words_advanced" in columns
+        assert columns["words_advanced"]["nullable"] is False
+
+        # No corpus table gained a column: pages are retroactive, derived from the word
+        # counts every already-ingested book carries.
+        corpus_after = {t: {c["name"] for c in inspector.get_columns(t)} for t in corpus_tables}
+        assert corpus_after == corpus_before
+
+        # The pre-existing row takes 0 without a backfill and keeps its counters.
+        with engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT reviews_count, reading_updates, words_advanced "
+                    "FROM study_days WHERE user_id = :uid"
+                ),
+                {"uid": user_id},
+            ).one()
+        assert (row.reviews_count, row.reading_updates, row.words_advanced) == (3, 2, 0)
+
+        # A fresh row that names no words also defaults to 0.
+        with engine.begin() as conn:
+            conn.execute(
+                text("INSERT INTO study_days (user_id, day) VALUES (:uid, DATE '2026-07-22')"),
+                {"uid": user_id},
+            )
+        with engine.connect() as conn:
+            fresh = conn.execute(
+                text(
+                    "SELECT words_advanced FROM study_days "
+                    "WHERE user_id = :uid AND day = DATE '2026-07-22'"
+                ),
+                {"uid": user_id},
+            ).scalar_one()
+        assert fresh == 0
+    finally:
+        engine.dispose()
+
+    # Down one step to 0015: the column drops; the rows survive.
+    command.downgrade(cfg, "0015_study_days")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        columns = {c["name"] for c in inspect(engine).get_columns("study_days")}
+        assert "words_advanced" not in columns
+        with engine.connect() as conn:
+            surviving = conn.execute(
+                text("SELECT count(*) FROM study_days WHERE user_id = :uid"),
+                {"uid": user_id},
+            ).scalar_one()
+        assert surviving == 2
     finally:
         engine.dispose()
 

@@ -1034,12 +1034,18 @@ class StudyDay:
     ``reading_updates`` are incremented atomically as reviews are submitted and reading
     positions saved (AD-151). Adherence ("Studied X of the last 14 days") and the heatmap
     are derived from these rows at read time — no streak/adherence value is ever stored.
+
+    ``words_advanced`` is the reading *volume* the day earned: the words newly covered,
+    summed losslessly across the day's saves so nothing is rounded away per save
+    (AD-183). The pages a reader is shown are derived from it at read time against the
+    configured quantum; the raw word figure is an implementation detail of the rollup.
     """
 
     user_id: UUID
     day: date
     reviews_count: int
     reading_updates: int
+    words_advanced: int = 0
 
 
 @dataclass(frozen=True)

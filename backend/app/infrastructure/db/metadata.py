@@ -702,11 +702,12 @@ reading_positions = Table(
 # --- Study-day rollup (RFC-004 Cycle E; design §Components) -----------------------
 # One row per (user, user-local day) durably recording study activity: a submitted
 # review bumps ``reviews_count``, a saved reading position bumps ``reading_updates``
-# (AD-151, per-kind counters). Written by an atomic ``INSERT ... ON CONFLICT (user_id,
+# (AD-151, per-kind counters) and adds the words it newly covered to ``words_advanced``
+# (AD-183). Written by an atomic ``INSERT ... ON CONFLICT (user_id,
 # day) DO UPDATE`` counter increment inside the triggering write's transaction (AD-153),
 # so recorded activity and its day credit cannot diverge. The FK cascades — this is the
-# durable study record, disposable only with the user. Adherence and the heatmap derive
-# from these rows at read time; nothing derived is ever stored.
+# durable study record, disposable only with the user. Adherence, the heatmap and the
+# per-day pages figure derive from these rows at read time; nothing derived is stored.
 
 study_days = Table(
     "study_days",
@@ -720,4 +721,7 @@ study_days = Table(
     Column("day", Date, nullable=False, primary_key=True),
     Column("reviews_count", Integer, nullable=False, server_default="0"),
     Column("reading_updates", Integer, nullable=False, server_default="0"),
+    # Words, not pages: a day's small advances accumulate losslessly and the page
+    # quantum stays a read-time presentation constant (AD-183).
+    Column("words_advanced", Integer, nullable=False, server_default="0"),
 )

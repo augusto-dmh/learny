@@ -5,6 +5,8 @@ Exercises ``SqlAlchemyStudyDayRepository`` against Postgres:
 - ``record`` inserts a new ``(user_id, day)`` row and, on a repeat, takes the atomic
   ON CONFLICT increment path — N same-day events leave exactly one row whose counters
   equal the totals (HOME-10 / I-2), including under two genuinely concurrent sessions.
+  The day's ``words_advanced`` reading volume accumulates the same way, and a caller
+  that names no words leaves it untouched.
 - ``window`` returns the caller's rows in an inclusive day range, day-ordered, and never
   another user's rows (HOME-15 / I-5).
 """
@@ -76,6 +78,73 @@ def test_record_different_days_are_separate_rows(db_conn: Connection) -> None:
     assert rows == [
         StudyDay(user_id=user_id, day=date(2026, 7, 20), reviews_count=1, reading_updates=0),
         StudyDay(user_id=user_id, day=date(2026, 7, 21), reviews_count=0, reading_updates=1),
+    ]
+
+
+# --- record: the day's reading volume (PAGE-06) ---------------------------------
+
+
+def test_record_stores_the_words_advanced_it_is_given(db_conn: Connection) -> None:
+    user_id = _add_user(db_conn, "study-words@example.com")
+    repo = SqlAlchemyStudyDayRepository(db_conn)
+    day = date(2026, 7, 21)
+
+    repo.record(user_id, day, reading_updates=1, words_advanced=420)
+
+    rows = repo.window(user_id, start=day, end=day)
+    assert rows == [
+        StudyDay(
+            user_id=user_id,
+            day=day,
+            reviews_count=0,
+            reading_updates=1,
+            words_advanced=420,
+        )
+    ]
+
+
+def test_record_accumulates_words_advanced_across_a_days_saves(db_conn: Connection) -> None:
+    # AD-183: a day's small advances sum losslessly, so partial pages are never rounded
+    # away per save — three saves under one page each still total more than one page.
+    user_id = _add_user(db_conn, "study-words-sum@example.com")
+    repo = SqlAlchemyStudyDayRepository(db_conn)
+    day = date(2026, 7, 21)
+
+    repo.record(user_id, day, reading_updates=1, words_advanced=100)
+    repo.record(user_id, day, reading_updates=1, words_advanced=100)
+    repo.record(user_id, day, reading_updates=1, words_advanced=150)
+
+    rows = repo.window(user_id, start=day, end=day)
+    assert rows == [
+        StudyDay(
+            user_id=user_id,
+            day=day,
+            reviews_count=0,
+            reading_updates=3,
+            words_advanced=350,
+        )
+    ]
+
+
+def test_record_without_words_leaves_the_days_volume_untouched(db_conn: Connection) -> None:
+    # I-PU-7 at the repository: a review credits no reading volume, and it cannot
+    # disturb the volume a reading save already earned on the same day.
+    user_id = _add_user(db_conn, "study-words-review@example.com")
+    repo = SqlAlchemyStudyDayRepository(db_conn)
+    day = date(2026, 7, 21)
+
+    repo.record(user_id, day, reading_updates=1, words_advanced=300)
+    repo.record(user_id, day, reviews=1)
+
+    rows = repo.window(user_id, start=day, end=day)
+    assert rows == [
+        StudyDay(
+            user_id=user_id,
+            day=day,
+            reviews_count=1,
+            reading_updates=1,
+            words_advanced=300,
+        )
     ]
 
 
