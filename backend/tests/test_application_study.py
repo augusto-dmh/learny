@@ -124,6 +124,24 @@ def test_summary_uses_client_timezone_for_today() -> None:
     assert summary.studied_last_14 == 1
 
 
+def test_summary_carries_each_days_reading_volume() -> None:
+    # The rollup's stored words reach the read model untouched, so the surface that
+    # serves pages resolves them against the quantum rather than the rollup rounding
+    # early — and a day with no reading still reports zero, never a missing figure.
+    user = _user()
+    study = FakeStudyDayRepository()
+    study.record(user.id, date(2026, 7, 20), reviews=1)
+    study.record(user.id, date(2026, 7, 21), reading_updates=1, words_advanced=420)
+    service = GetStudySummary(study_days=study, clock=FakeClock(_NOON))
+
+    summary = service(user=user, window=84, tz=None)
+
+    assert [(d.day, d.words_advanced) for d in summary.days] == [
+        (date(2026, 7, 20), 0),
+        (date(2026, 7, 21), 420),
+    ]
+
+
 def test_summary_empty_for_a_user_with_no_activity() -> None:
     # Brand-new-user edge: empty window, adherence 0.
     user = _user()

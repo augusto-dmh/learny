@@ -182,9 +182,82 @@ def test_study_days_returns_window_rows_and_studied_last_14(
         "day": today.isoformat(),
         "reviews_count": 1,
         "reading_updates": 0,
+        "pages": 0,
     }
     # Only the two days within the last 14 count; the 20-days-ago one does not.
     assert body["studied_last_14"] == 2
+
+
+def test_study_days_serves_pages_derived_from_the_stored_words(
+    study_client: TestClient, db_conn: Connection
+) -> None:
+    # PAGE-09: the client is served pages, resolved server-side from the words the rollup
+    # stored — 550 words is two pages at 275, and 274 words is not yet a page. The raw
+    # word figure stays an implementation detail: it never appears on the wire.
+    user_id = _register(study_client, "study-pages@example.com")
+    today = datetime.now(UTC).date()
+    repo = SqlAlchemyStudyDayRepository(db_conn)
+    repo.record(UUID(user_id), today - timedelta(days=1), reading_updates=1, words_advanced=274)
+    repo.record(UUID(user_id), today, reading_updates=2, words_advanced=550)
+
+    resp = study_client.get("/api/study/days")
+
+    assert resp.status_code == 200, resp.text
+    days = resp.json()["days"]
+    assert [d["pages"] for d in days] == [0, 2]
+    assert set(days[0]) == {"day", "reviews_count", "reading_updates", "pages"}
+
+
+def test_study_days_pages_follow_the_settings_quantum(
+    study_client: TestClient, db_conn: Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # I-PU-2: one definition of the page. The same stored words report a different page
+    # count when the backend setting changes, so nothing downstream carries its own 275.
+    from app.core.config import get_settings
+
+    user_id = _register(study_client, "study-pages-quantum@example.com")
+    today = datetime.now(UTC).date()
+    SqlAlchemyStudyDayRepository(db_conn).record(
+        UUID(user_id), today, reading_updates=1, words_advanced=600
+    )
+
+    at_default = study_client.get("/api/study/days")
+    assert at_default.status_code == 200, at_default.text
+    assert at_default.json()["days"][0]["pages"] == 2
+
+    monkeypatch.setenv("LEARNY_WORDS_PER_PAGE", "300")
+    get_settings.cache_clear()
+    retuned = study_client.get("/api/study/days")
+
+    assert retuned.status_code == 200, retuned.text
+    assert retuned.json()["days"][0]["pages"] == 2  # 600 // 300
+
+    monkeypatch.setenv("LEARNY_WORDS_PER_PAGE", "150")
+    get_settings.cache_clear()
+    finer = study_client.get("/api/study/days")
+
+    assert finer.status_code == 200, finer.text
+    assert finer.json()["days"][0]["pages"] == 4
+
+
+def test_study_days_reading_volume_leaves_the_shading_counters_alone(
+    study_client: TestClient, db_conn: Connection
+) -> None:
+    # I-PU-7 / PAGE-10: the heatmap shades by reviews_count + reading_updates. Two days
+    # with identical activity report identical counters however much reading volume they
+    # carry, so no cell changes level because the words counter arrived.
+    user_id = _register(study_client, "study-shading@example.com")
+    today = datetime.now(UTC).date()
+    repo = SqlAlchemyStudyDayRepository(db_conn)
+    repo.record(UUID(user_id), today - timedelta(days=1), reviews=2, reading_updates=1)
+    repo.record(UUID(user_id), today, reviews=2, reading_updates=1, words_advanced=99_000)
+
+    resp = study_client.get("/api/study/days")
+
+    assert resp.status_code == 200, resp.text
+    days = resp.json()["days"]
+    assert [(d["reviews_count"], d["reading_updates"]) for d in days] == [(2, 1), (2, 1)]
+    assert [d["pages"] for d in days] == [0, 360]
 
 
 @pytest.mark.parametrize("window", [6, 0, 366, 400])

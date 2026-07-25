@@ -286,6 +286,10 @@ class ChapterView(BaseModel):
     are the adjacent chapters' anchors (null at a book edge). The word sums let the client
     compute whole-book percent and chapter minutes-left; ``reading_position`` is the stored
     position (or null) so the reader can show progress immediately.
+
+    ``words_per_page`` is the server's page quantum. The reader marks its page boundaries
+    against it and numbers them from ``words_before_chapter``, so the page unit has exactly
+    one definition (backend settings) and no client carries the number itself.
     """
 
     chapter_title: str
@@ -297,11 +301,18 @@ class ChapterView(BaseModel):
     words_before_chapter: int
     chapter_word_count: int
     total_word_count: int
+    words_per_page: int
     sections: list[ChapterSectionView]
     reading_position: ReadingPositionView | None
 
     @classmethod
-    def from_content(cls, content: ChapterContent, position: ReadingPosition | None) -> ChapterView:
+    def from_content(
+        cls,
+        content: ChapterContent,
+        position: ReadingPosition | None,
+        *,
+        words_per_page: int,
+    ) -> ChapterView:
         return cls(
             chapter_title=content.chapter_title,
             chapter_anchor=content.chapter_anchor,
@@ -312,6 +323,7 @@ class ChapterView(BaseModel):
             words_before_chapter=content.words_before_chapter,
             chapter_word_count=content.chapter_word_count,
             total_word_count=content.total_word_count,
+            words_per_page=words_per_page,
             sections=[
                 ChapterSectionView(
                     anchor=section.anchor,
@@ -333,15 +345,17 @@ def get_source_chapter(
     source_id: UUID,
     user: Annotated[User, Depends(get_authenticated_user)],
     service: Annotated[ReadChapter, Depends(get_read_chapter)],
+    settings: AppSettings,
     anchor: Annotated[str | None, Query()] = None,
 ) -> ChapterView:
     """Return the chapter containing ``anchor`` — or the resume chapter when omitted (200).
 
     404 missing/non-owner/no-corpus/unknown-anchor (identical to ``/section``); with no
     ``anchor`` the server resumes the stored position's chapter, or the first chapter.
+    The page quantum rides along from settings so the reader never carries its own copy.
     """
     content, position = service(user=user, source_id=source_id, anchor=anchor)
-    return ChapterView.from_content(content, position)
+    return ChapterView.from_content(content, position, words_per_page=settings.words_per_page)
 
 
 class ReadingPositionWriteRequest(BaseModel):

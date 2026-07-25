@@ -22,6 +22,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import Connection, select
 
 from app.application.dates import local_day
+from app.application.reading import page_at
 from app.domain.entities import (
     CorpusSectionRecord,
     ParsedSection,
@@ -165,6 +166,19 @@ def _seed_book(db_conn: Connection, source_id: UUID) -> None:
     )
 
 
+def _seed_paged_book(db_conn: Connection, source_id: UUID) -> None:
+    """Two chapters of 600 words each — long enough to span several pages."""
+    prose = " ".join(f"w{i}" for i in range(600))
+    SqlAlchemyCorpusRepository(db_conn).replace(
+        source_id,
+        title="A Long Book",
+        authors=(),
+        language="en",
+        schema_version=1,
+        sections=[_record(0, 0, "p1", prose), _record(1, 0, "p2", prose)],
+    )
+
+
 # --- GET chapter ---------------------------------------------------------------
 
 
@@ -189,6 +203,7 @@ def test_get_chapter_returns_200_with_shape_and_sections(
         "words_before_chapter",
         "chapter_word_count",
         "total_word_count",
+        "words_per_page",
         "sections",
         "reading_position",
     }
@@ -204,6 +219,50 @@ def test_get_chapter_returns_200_with_shape_and_sections(
     assert body["sections"][0]["word_count"] == 3
     assert body["sections"][0]["markdown"] == "a b c"
     assert body["reading_position"] is None
+
+
+def test_get_chapter_carries_the_page_size_from_settings(
+    reading_client: TestClient, db_conn: Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # PAGE-02 / I-PU-2: the reader is told how many words make a page instead of holding
+    # its own copy of the number. Changing the backend setting changes what the reader
+    # receives — which no duplicated client-side constant could do.
+    from app.core.config import get_settings
+
+    user_id = _register(reading_client, "chapter-pagesize@example.com")
+    source_id = _persist_source(db_conn, user_id)
+    _seed_book(db_conn, source_id)
+
+    default = reading_client.get(f"/api/sources/{source_id}/chapter", params={"anchor": "c1"})
+    assert default.status_code == 200, default.text
+    assert default.json()["words_per_page"] == 275
+
+    monkeypatch.setenv("LEARNY_WORDS_PER_PAGE", "300")
+    get_settings.cache_clear()
+    retuned = reading_client.get(f"/api/sources/{source_id}/chapter", params={"anchor": "c1"})
+
+    assert retuned.status_code == 200, retuned.text
+    assert retuned.json()["words_per_page"] == 300
+
+
+def test_get_chapter_page_size_accompanies_the_chapters_word_offset(
+    reading_client: TestClient, db_conn: Connection
+) -> None:
+    # PAGE-04: a chapter's first page follows from the words before it and the quantum
+    # the same response carries, so a later chapter opens where the book's numbering has
+    # reached — page 3 here, not page 1 — with no extra request and no client constant.
+    user_id = _register(reading_client, "chapter-pagenum@example.com")
+    source_id = _persist_source(db_conn, user_id)
+    _seed_paged_book(db_conn, source_id)
+
+    first = reading_client.get(f"/api/sources/{source_id}/chapter", params={"anchor": "p1"})
+    second = reading_client.get(f"/api/sources/{source_id}/chapter", params={"anchor": "p2"})
+
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+    assert page_at(first.json()["words_before_chapter"], first.json()["words_per_page"]) == 1
+    assert second.json()["words_before_chapter"] == 600
+    assert page_at(second.json()["words_before_chapter"], second.json()["words_per_page"]) == 3
 
 
 def test_get_chapter_alias_anchor_returns_canonical_chapter(
