@@ -35,7 +35,14 @@
 import { List } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import {
+  Fragment,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 
 import {
   CapturePopover,
@@ -52,6 +59,7 @@ import { readUrl } from "@/app/lib/read-url";
 import { useKeyShortcuts } from "@/app/components/use-key-shortcuts";
 import { useReadingSettings } from "@/app/components/use-reading-settings";
 import { useRecedingChrome } from "@/app/components/use-receding-chrome";
+import { useSectionProgress } from "@/app/components/use-section-progress";
 import {
   useScrollPosition,
   type ObserverFactory,
@@ -59,7 +67,8 @@ import {
 import { CardSuggestions } from "@/app/components/notes/card-suggestions";
 import { fetchAuthState } from "@/app/lib/auth";
 import { CardError, suggestCards, type CardSuggestion } from "@/app/lib/cards";
-import { paintHighlights } from "@/app/lib/highlight-paint";
+import { paintHighlights, SCAFFOLD_ATTRIBUTE } from "@/app/lib/highlight-paint";
+import { paginateSection, sectionOffsets } from "@/app/lib/pages";
 import { type PendingPanelRequest } from "@/app/lib/panel";
 import { captureHighlight, NoteError } from "@/app/lib/notes";
 import {
@@ -88,6 +97,15 @@ const STALE_CAPTURE_MESSAGE =
 
 /** Pixels below the popover's top edge to drop the suggestion row, clearing the verbs. */
 const SUGGESTIONS_OFFSET = 44;
+
+/**
+ * The height of the reader's sticky chrome, in pixels — one value with two
+ * consumers. The bar is laid out at exactly this height, and every section
+ * reserves exactly this much scroll margin, so a jumped-to heading can never
+ * land underneath the bar. Sizing the bar and guessing its height separately is
+ * what let the two drift apart and slid the prose under the header.
+ */
+const READER_CHROME_HEIGHT = 56;
 
 type LoadState =
   | { kind: "loading" }
@@ -333,6 +351,12 @@ export function ChapterFlow({
     () => chapter.sections.map((section) => section.anchor),
     [chapter.sections],
   );
+  // The book-global word offset of each section's first word, so a section's
+  // page rules continue the book's numbering rather than restarting per chapter.
+  const offsets = useMemo(
+    () => sectionOffsets(chapter.sections, chapter.words_before_chapter),
+    [chapter.sections, chapter.words_before_chapter],
+  );
   const [flashAnchor, setFlashAnchor] = useState<string | null>(scrollTarget);
   // The below-lg table of contents collapses behind the top-bar toggle (RD-25).
   const [tocOpen, setTocOpen] = useState(false);
@@ -378,21 +402,37 @@ export function ChapterFlow({
   });
 
   // Live progress from the current section's word offset (RD-11): whole-book
-  // percent read, and chapter minutes-left at 220 wpm.
+  // percent read, and chapter minutes-left at 220 wpm. The word offset is exact
+  // at every section boundary — it is the same sum the server's stored percent
+  // is — and the fraction of the current section the reader has scrolled past
+  // fills in the distance between two boundaries, so the figure moves while
+  // they read instead of jumping a section at a time.
+  const sectionFraction = useSectionProgress(currentAnchor, READER_CHROME_HEIGHT);
   const currentIndex = currentAnchor
     ? chapter.sections.findIndex((section) => section.anchor === currentAnchor)
     : -1;
-  const wordsReadInChapter =
+  const wordsBeforeSection =
     currentIndex > 0
       ? chapter.sections
           .slice(0, currentIndex)
           .reduce((sum, section) => sum + section.word_count, 0)
       : 0;
+  const wordsReadInChapter =
+    wordsBeforeSection +
+    (currentIndex >= 0
+      ? chapter.sections[currentIndex].word_count * sectionFraction
+      : 0);
   const bookPercent =
     chapter.total_word_count > 0
-      ? ((chapter.words_before_chapter + wordsReadInChapter) /
-          chapter.total_word_count) *
-        100
+      ? Math.min(
+          100,
+          Math.max(
+            0,
+            ((chapter.words_before_chapter + wordsReadInChapter) /
+              chapter.total_word_count) *
+              100,
+          ),
+        )
       : 0;
   const chapterMinutesLeft = minutesLeft(
     chapter.chapter_word_count - wordsReadInChapter,
@@ -659,11 +699,14 @@ export function ChapterFlow({
 
   return (
     <div>
-      <div className="sticky top-0 z-20">
+      <div
+        className="sticky top-0 z-20 flex flex-col"
+        style={{ height: READER_CHROME_HEIGHT }}
+      >
         <div
           data-testid="reader-top-bar"
           className={cn(
-            "flex items-center justify-between gap-4 border-b bg-background/80 px-4 py-2 backdrop-blur transition-transform duration-200 motion-reduce:transition-none",
+            "flex flex-1 items-center justify-between gap-4 border-b bg-background/80 px-4 backdrop-blur transition-transform duration-200 motion-reduce:transition-none",
             chromeHidden && "-translate-y-full",
           )}
         >
@@ -720,12 +763,17 @@ export function ChapterFlow({
               "--reading-leading": `${leading}`,
             } as CSSProperties
           }
-          className="prose-reading relative mx-auto max-w-2xl bg-background py-6 text-foreground"
+          className="prose-reading book-column relative mx-auto max-w-2xl bg-background text-foreground"
         >
-          {chapter.sections.map((section) => (
+          <h1 data-testid="reading-chapter-title" className="chapter-running-title">
+            {chapter.chapter_title}
+          </h1>
+          {chapter.sections.map((section, index) => (
             <FlowSection
               key={section.anchor}
               section={section}
+              wordsBefore={offsets[index]}
+              wordsPerPage={chapter.words_per_page}
               flashing={flashAnchor === section.anchor}
               highlights={highlightsByAnchor.get(section.anchor) ?? NO_HIGHLIGHTS}
               onMouseUp={() => handleMouseUp(section)}
@@ -807,20 +855,35 @@ export function ChapterFlow({
  * unchanged, and the effect only repaints when the content or the highlight set
  * actually changes. `paintHighlights` is idempotent (unwrap-first), so even a
  * repaint yields the same DOM.
+ *
+ * The section's prose is laid out in runs separated by page rules
+ * (`paginateSection`), so the reader can see where one page ends and the next
+ * begins. `wordsBefore` is the section's book-global word offset, which is what
+ * makes those page numbers the book's rather than the chapter's.
  */
 function FlowSection({
   section,
+  wordsBefore,
+  wordsPerPage,
   flashing,
   highlights,
   onMouseUp,
 }: {
   section: ChapterSectionView;
+  wordsBefore: number;
+  wordsPerPage: number;
   flashing: boolean;
   highlights: SourceHighlightView[];
   onMouseUp: () => void;
 }) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const breadcrumb = section.section_path.join(" › ");
+  // Stable across the re-renders live progress causes, so the memoized Markdown
+  // subtrees never re-render and the painted highlights survive.
+  const runs = useMemo(
+    () => paginateSection(section.markdown, { wordsBefore, wordsPerPage }),
+    [section.markdown, wordsBefore, wordsPerPage],
+  );
 
   useEffect(() => {
     const body = bodyRef.current;
@@ -834,7 +897,9 @@ function FlowSection({
       id={section.anchor}
       data-section-anchor={section.anchor}
       onMouseUp={onMouseUp}
-      className="scroll-mt-16"
+      // The same height the sticky chrome is laid out at, so a section jumped to
+      // stops clear of it rather than under it.
+      style={{ scrollMarginTop: READER_CHROME_HEIGHT }}
     >
       <div
         data-section-heading={section.anchor}
@@ -846,10 +911,41 @@ function FlowSection({
         ) : null}
         <h2 className="text-2xl font-semibold">{section.title}</h2>
       </div>
-      <div ref={bodyRef}>
-        <MessageResponse>{section.markdown}</MessageResponse>
+      <div ref={bodyRef} className="book-prose">
+        {runs.map((run, index) => (
+          <Fragment key={index}>
+            <MessageResponse>{run.markdown}</MessageResponse>
+            {run.pageAfter === null ? null : <PageRule page={run.pageAfter} />}
+          </Fragment>
+        ))}
       </div>
     </section>
+  );
+}
+
+/**
+ * The page turn made visible: a hairline across the column carrying the number
+ * of the page that starts below it.
+ *
+ * It is furniture, not text — hidden from assistive technology, unselectable,
+ * and marked as scaffolding so the highlight painter reads straight past it
+ * (a counted label would shift every offset after it).
+ */
+function PageRule({ page }: { page: number }) {
+  return (
+    <div
+      aria-hidden
+      data-testid="page-rule"
+      data-page={page}
+      {...{ [SCAFFOLD_ATTRIBUTE]: "true" }}
+      className="my-8 flex select-none items-center gap-3"
+    >
+      <span className="h-px flex-1 bg-border" />
+      <span className="font-mono text-[10px] tracking-[0.1em] whitespace-nowrap text-muted-foreground">
+        p. {page}
+      </span>
+      <span className="h-px flex-1 bg-border" />
+    </div>
   );
 }
 

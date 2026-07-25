@@ -843,6 +843,8 @@ class FakeReadingPositionRepository:
 
     ``upsert`` overwrites any stored position for the ``(user_id, source_id)`` key and
     records each call so a test can assert nothing was written on the 404 path.
+    ``get_for_update`` returns the same row as ``get`` — a single-threaded dict has no
+    concurrency to hold against; the lock it stands for is exercised against Postgres.
     """
 
     def __init__(self) -> None:
@@ -850,6 +852,9 @@ class FakeReadingPositionRepository:
         self.upsert_calls: list[tuple[UUID, UUID]] = []
 
     def get(self, user_id: UUID, source_id: UUID) -> ReadingPosition | None:
+        return self._by_key.get((user_id, source_id))
+
+    def get_for_update(self, user_id: UUID, source_id: UUID) -> ReadingPosition | None:
         return self._by_key.get((user_id, source_id))
 
     def upsert(
@@ -877,7 +882,7 @@ class FakeStudyDayRepository:
 
     def __init__(self) -> None:
         self._rows: dict[tuple[UUID, date], StudyDay] = {}
-        self.record_calls: list[tuple[UUID, date, int, int]] = []
+        self.record_calls: list[tuple[UUID, date, int, int, int]] = []
 
     def record(
         self,
@@ -886,16 +891,19 @@ class FakeStudyDayRepository:
         *,
         reviews: int = 0,
         reading_updates: int = 0,
+        words_advanced: int = 0,
     ) -> None:
-        self.record_calls.append((user_id, day, reviews, reading_updates))
+        self.record_calls.append((user_id, day, reviews, reading_updates, words_advanced))
         existing = self._rows.get((user_id, day))
         base_reviews = existing.reviews_count if existing else 0
         base_reading = existing.reading_updates if existing else 0
+        base_words = existing.words_advanced if existing else 0
         self._rows[(user_id, day)] = StudyDay(
             user_id=user_id,
             day=day,
             reviews_count=base_reviews + reviews,
             reading_updates=base_reading + reading_updates,
+            words_advanced=base_words + words_advanced,
         )
 
     def window(self, user_id: UUID, *, start: date, end: date) -> list[StudyDay]:

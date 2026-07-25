@@ -21,9 +21,11 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Header, Query
 from pydantic import BaseModel
 
+from app.application.reading import pages_from_words
 from app.application.study import ContinueReading, GetStudySummary
 from app.domain.entities import ContinuePoint, StudySummary, User
 from app.infrastructure.web.dependencies import (
+    AppSettings,
     get_authenticated_user,
     get_continue_reading,
     get_study_summary,
@@ -33,11 +35,19 @@ router = APIRouter(tags=["study"])
 
 
 class StudyDayView(BaseModel):
-    """One user-local day of activity with its per-kind counters (HOME-11)."""
+    """One user-local day of activity with its per-kind counters (HOME-11).
+
+    ``reviews_count`` and ``reading_updates`` are unchanged — they are what the heatmap
+    shades by. ``pages`` is the day's reading volume, resolved server-side from the words
+    the rollup stored against the configured quantum: the stored word figure is an
+    implementation detail of the rollup, so the client is served pages and never has to
+    know how many words make one.
+    """
 
     day: date
     reviews_count: int
     reading_updates: int
+    pages: int
 
 
 class StudySummaryView(BaseModel):
@@ -47,13 +57,14 @@ class StudySummaryView(BaseModel):
     studied_last_14: int
 
     @classmethod
-    def from_summary(cls, summary: StudySummary) -> StudySummaryView:
+    def from_summary(cls, summary: StudySummary, *, words_per_page: int) -> StudySummaryView:
         return cls(
             days=[
                 StudyDayView(
                     day=d.day,
                     reviews_count=d.reviews_count,
                     reading_updates=d.reading_updates,
+                    pages=pages_from_words(d.words_advanced, words_per_page),
                 )
                 for d in summary.days
             ],
@@ -85,6 +96,7 @@ class ContinueReadingView(BaseModel):
 def get_study_days(
     user: Annotated[User, Depends(get_authenticated_user)],
     service: Annotated[GetStudySummary, Depends(get_study_summary)],
+    settings: AppSettings,
     window: Annotated[int, Query(ge=7, le=365)] = 84,
     client_tz: Annotated[str | None, Header(alias="X-Client-Timezone")] = None,
 ) -> StudySummaryView:
@@ -92,10 +104,11 @@ def get_study_days(
 
     ``window`` defaults to 84 (12 weeks) and is bounded 7..365 by Pydantic — out of
     range → 422. The day boundary follows the optional ``X-Client-Timezone`` header
-    (silent UTC fallback). Everything is derived at read time; nothing is stored.
+    (silent UTC fallback). Everything is derived at read time — including each day's
+    pages, resolved from its stored words against the settings quantum; nothing is stored.
     """
     summary = service(user=user, window=window, tz=client_tz)
-    return StudySummaryView.from_summary(summary)
+    return StudySummaryView.from_summary(summary, words_per_page=settings.words_per_page)
 
 
 @router.get("/api/reading/continue")

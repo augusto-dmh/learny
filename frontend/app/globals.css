@@ -185,6 +185,42 @@ html:not(.dark) [data-appearance="paper"] {
   }
 
   /*
+   * The book column: the approved reading column. Deliberately silent about
+   * type size and line height — those stay on `--reading-size` /
+   * `--reading-leading` above, which the Aa popover owns, so the column spec
+   * expresses itself *through* the reader's controls rather than over them.
+   * The generous foot room is what stops the last paragraph sitting against
+   * the viewport floor.
+   */
+  .book-column {
+    padding: 40px 32px 200px;
+  }
+
+  /*
+   * The running chapter title at the head of the column: a quiet label in the
+   * book's own serif, not a competing heading.
+   */
+  .chapter-running-title {
+    font-family: var(--font-serif);
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted-foreground);
+    margin: 0 0 28px;
+  }
+
+  /*
+   * Paragraph rhythm for the served prose. Scoped to the book's own text so it
+   * cannot reach the reader's chrome (breadcrumbs, popovers) sharing the
+   * column, and expressed in `em` so it breathes with whichever type size the
+   * reader chose.
+   */
+  .book-prose p {
+    margin: 0 0 1.15em;
+  }
+
+  /*
    * Inline highlight marks the reader paints over existing highlight anchors
    * (RD-28/29). The warm marker wash comes from the identity `--highlight-yellow`
    * token (both modes); the text colour is inherited so the prose ink is

@@ -55,6 +55,8 @@ export type ChapterView = {
   words_before_chapter: number;
   chapter_word_count: number;
   total_word_count: number;
+  /** The server's page quantum — the reader never carries a words-per-page of its own. */
+  words_per_page: number;
   sections: ChapterSectionView[];
   reading_position: ReadingPositionView | null;
 };

@@ -60,6 +60,14 @@ export function findQuoteOffset(
 /** The marker class carried by every painted highlight (styled in globals.css). */
 const HIGHLIGHT_CLASS = "reader-highlight";
 
+/**
+ * The attribute marking reader scaffolding — the page rules the reader draws
+ * between the book's blocks. Their labels are the reader's own furniture, not
+ * the book's text: counting them would shift every offset after them and paint
+ * a highlight onto the wrong words, so the painter never reads inside them.
+ */
+export const SCAFFOLD_ATTRIBUTE = "data-reader-scaffold";
+
 /** The subset of a source highlight the painter needs (see `SourceHighlightView`). */
 export type PaintableHighlight = {
   note_id: string;
@@ -105,14 +113,36 @@ export function paintHighlights(
   }
 }
 
-/** Concatenate every text node under `root` in document order. */
-function textOf(root: HTMLElement): string {
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-  let text = "";
+/**
+ * Every text node of the book's prose under `root`, in document order, with
+ * reader scaffolding skipped whole — one traversal both readers of the text
+ * (measuring and wrapping) share, so their offsets can never disagree.
+ */
+function proseTextNodes(root: HTMLElement): Text[] {
+  const walker = document.createTreeWalker(
+    root,
+    NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
+    {
+      acceptNode: (node) =>
+        node.nodeType === Node.ELEMENT_NODE
+          ? (node as Element).hasAttribute(SCAFFOLD_ATTRIBUTE)
+            ? NodeFilter.FILTER_REJECT
+            : NodeFilter.FILTER_SKIP
+          : NodeFilter.FILTER_ACCEPT,
+    },
+  );
+  const nodes: Text[] = [];
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-    text += node.nodeValue ?? "";
+    nodes.push(node as Text);
   }
-  return text;
+  return nodes;
+}
+
+/** Concatenate the prose text under `root` in document order. */
+function textOf(root: HTMLElement): string {
+  return proseTextNodes(root)
+    .map((node) => node.nodeValue ?? "")
+    .join("");
 }
 
 /**
@@ -122,14 +152,13 @@ function textOf(root: HTMLElement): string {
  * where the prose is not a single text node.
  */
 function wrapRange(root: HTMLElement, start: number, end: number, noteId: string): void {
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   // Snapshot the text nodes and their offsets before mutating: splitText below
   // changes the tree, and we only ever wrap nodes captured up front.
   const nodes: { node: Text; start: number; end: number }[] = [];
   let offset = 0;
-  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+  for (const node of proseTextNodes(root)) {
     const length = node.nodeValue?.length ?? 0;
-    nodes.push({ node: node as Text, start: offset, end: offset + length });
+    nodes.push({ node, start: offset, end: offset + length });
     offset += length;
   }
   for (const { node, start: nodeStart, end: nodeEnd } of nodes) {

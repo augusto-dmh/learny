@@ -51,6 +51,7 @@ const chapter: ChapterView = {
   words_before_chapter: 100,
   chapter_word_count: 500,
   total_word_count: 1000,
+  words_per_page: 275,
   sections: [
     { anchor: S1, title: "One", section_path: ["One"], markdown: "First.", word_count: 300 },
     { anchor: S2, title: "Two", section_path: ["Two"], markdown: "Second.", word_count: 200 },
@@ -119,6 +120,28 @@ describe("ink-line progress (RD-30)", () => {
     expect(screen.getByTestId("reader-top-bar").className).toContain(
       "motion-reduce:transition-none",
     );
+  });
+});
+
+describe("sticky header offset (PAGE-15)", () => {
+  it("reserves exactly the sticky chrome's height above every section", () => {
+    const { container } = render(
+      <ChapterFlow sourceId="s1" csrf="c" chapter={chapter} scrollTarget={null} />,
+    );
+
+    // The chrome is laid out at a known height...
+    const chrome = screen.getByTestId("reader-top-bar").parentElement!;
+    expect(chrome.style.height).not.toBe("");
+    // ...and each section reserves that same height, so a jumped-to heading
+    // stops below the bar instead of sliding under it. A guess kept next to the
+    // bar rather than derived from it is what drifts.
+    const sections = Array.from(
+      container.querySelectorAll<HTMLElement>("[data-section-anchor]"),
+    );
+    expect(sections.length).toBeGreaterThan(0);
+    for (const section of sections) {
+      expect(section.style.scrollMarginTop).toBe(chrome.style.height);
+    }
   });
 });
 

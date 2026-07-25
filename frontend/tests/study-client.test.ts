@@ -33,8 +33,8 @@ const hero: ContinueReadingView = {
 
 const summary: StudySummaryView = {
   days: [
-    { day: "2026-07-18", reviews_count: 2, reading_updates: 1 },
-    { day: "2026-07-19", reviews_count: 0, reading_updates: 3 },
+    { day: "2026-07-18", reviews_count: 2, reading_updates: 1, pages: 4 },
+    { day: "2026-07-19", reviews_count: 0, reading_updates: 3, pages: 11 },
   ],
   studied_last_14: 12,
 };
@@ -147,6 +147,7 @@ describe("getStudyDays (HOME-09/11)", () => {
       day: "2026-07-18",
       reviews_count: 2,
       reading_updates: 1,
+      pages: 4,
     });
   });
 

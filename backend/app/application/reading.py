@@ -1,8 +1,8 @@
 """Reader-core application logic (RFC-004 Cycle B, design §Components).
 
 The pure core the chapter-flow reader is built on: chapter partitioning, anchor
-resolution, and whole-book percent math over the flat ``ChapterIndexRow`` read
-model. Framework-free (ADR-007/009) — no FastAPI/SQLAlchemy/SDK imports — so the
+resolution, and whole-book percent and page math over the flat ``ChapterIndexRow``
+read model. Framework-free (ADR-007/009) — no FastAPI/SQLAlchemy/SDK imports — so the
 progress math is unit-testable without a database, and the SQL read models stay
 flat (the structure-endpoint precedent; no recursive queries).
 
@@ -89,6 +89,18 @@ def locate(index: Sequence[ChapterIndexRow], anchor: str) -> int | None:
     return alias_hit
 
 
+def words_before_row(index: Sequence[ChapterIndexRow], row_idx: int) -> int:
+    """Return how many of the book's words precede ``row_idx``.
+
+    The "words before a point" idiom every progress figure is built on: ``percent_at``
+    divides it by the book total, ``page_at`` divides it by the page quantum, and the
+    per-day reading credit differences two of them. A ``row_idx`` at or past the end of
+    the index sums the whole book (the slice clamps) — the end of the book is the point
+    with every word before it.
+    """
+    return sum(row.word_count for row in index[:row_idx])
+
+
 def percent_at(index: Sequence[ChapterIndexRow], row_idx: int) -> Decimal:
     """Return the whole-book percent *before* ``row_idx`` (design §Data Models, RD-16).
 
@@ -99,8 +111,62 @@ def percent_at(index: Sequence[ChapterIndexRow], row_idx: int) -> Decimal:
     total = sum(row.word_count for row in index)
     if total == 0:
         return Decimal("0.00")
-    words_before = sum(row.word_count for row in index[:row_idx])
-    return (Decimal(words_before) * 100 / Decimal(total)).quantize(_PERCENT_QUANTUM)
+    return (Decimal(words_before_row(index, row_idx)) * 100 / Decimal(total)).quantize(
+        _PERCENT_QUANTUM
+    )
+
+
+def page_at(words_before: int, words_per_page: int) -> int:
+    """Return the 1-based page number of the point with ``words_before`` words before it.
+
+    Page 1 begins at the book's first word and chapters continue the count rather than
+    restarting (AD-189), so a chapter's first page follows from its
+    ``words_before_chapter`` and a page number is a stable, book-wide locator. The
+    arithmetic is integer over the word counts already stored per section — a page is
+    never derived from the percent, which answers a different question and would
+    disagree at the rounding. A non-positive quantum (a misconfigured setting) reads as
+    page 1 rather than raising on a read path.
+    """
+    if words_per_page <= 0:
+        return 1
+    return max(words_before, 0) // words_per_page + 1
+
+
+def pages_from_words(words: int, words_per_page: int) -> int:
+    """Return the whole pages contained in ``words``, flooring the remainder.
+
+    The per-day reading volume. Words are stored losslessly so a day's many small
+    advances accumulate before anything is rounded (AD-183); the rounding happens once,
+    here, and it floors — a figure reporting how much someone read never rounds up.
+    """
+    if words_per_page <= 0:
+        return 0
+    return max(words, 0) // words_per_page
+
+
+def words_credited(
+    index: Sequence[ChapterIndexRow], *, prior_anchor: str | None, target_idx: int
+) -> int:
+    """Return the words a move from ``prior_anchor`` to ``target_idx`` newly covers.
+
+    The reading volume one position save earns, and deliberately conservative on every
+    edge, because it feeds a durable counter nothing else recomputes:
+
+    - **Forward only.** The difference of the two points' word offsets, floored at zero,
+      so re-reading or scrolling back credits nothing rather than a negative (I-PU-4).
+    - **No baseline, no claim.** No prior stored position credits zero (AD-184): opening
+      a book at the halfway mark is indistinguishable from having read half of it, and
+      claiming half a book from one click is a durable, uncorrectable inflation.
+    - **A prior anchor that no longer resolves** (the corpus was replaced) also credits
+      zero — the old offset means nothing against the new index — and the caller still
+      saves the position.
+    """
+    if prior_anchor is None:
+        return 0
+    prior_idx = locate(index, prior_anchor)
+    if prior_idx is None:
+        return 0
+    return max(words_before_row(index, target_idx) - words_before_row(index, prior_idx), 0)
 
 
 def _chapter_of(chapters: Sequence[Chapter], row_idx: int) -> int:
@@ -237,6 +303,13 @@ class SaveReadingPosition:
     the two commit together (I-1). It runs only on the success path — a bad anchor 404s
     before anything is stored and earns no study credit. A missing/invalid ``client_tz``
     degrades to UTC (HOME-09), never an error.
+
+    The same credit carries the day's reading *volume*: the words between the position
+    being replaced and the new one (``words_credited`` — forward-only, and zero without a
+    usable baseline). The prior row is therefore read before the upsert overwrites it, and
+    read under a lock (``get_for_update``): the volume is *derived* from that row, so two
+    saves reading it concurrently would each credit the same distance and leave the day
+    overstated for good. Reading a chapter takes no such lock — only the save path does.
     """
 
     def __init__(
@@ -270,6 +343,17 @@ class SaveReadingPosition:
         if target_idx is None:
             raise CorpusNotFound("No section for this anchor.")
 
+        # Read the baseline before the upsert replaces it, and hold it: the credit is the
+        # distance from this row, so two saves that read it at the same time would both
+        # claim the same distance and inflate the day permanently. A superseded corpus can
+        # leave the stored anchor unresolvable, which credits zero without failing the save.
+        prior = self._positions.get_for_update(user.id, source_id)
+        advance = words_credited(
+            index,
+            prior_anchor=prior.anchor if prior is not None else None,
+            target_idx=target_idx,
+        )
+
         now = self._clock.now()
         percent = percent_at(index, target_idx)
         position = self._positions.upsert(
@@ -279,7 +363,12 @@ class SaveReadingPosition:
             percent=percent,
             updated_at=now,
         )
-        self._study_days.record(user.id, local_day(now, client_tz), reading_updates=1)
+        self._study_days.record(
+            user.id,
+            local_day(now, client_tz),
+            reading_updates=1,
+            words_advanced=advance,
+        )
         return position
 
 

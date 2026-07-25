@@ -9,17 +9,30 @@ spec ACs and edge cases:
 - ``locate`` (mirrors ``get_section``): canonical match, alias match, an alias-vs-
   canonical collision (canonical wins), duplicate anchors (lowest position), and a miss.
 - ``percent_at`` (RD-16): position math, 2-decimal quantization, and a zero-total book.
+- ``words_before_row``, ``page_at`` and ``pages_from_words``: the page unit derived from
+  the word counts already stored per section, with no DB and no HTTP. ``page_at`` is also
+  held to ``contracts/page-boundaries.json``, the shared table the reader's own
+  implementation of the same rule is held to — so the two cannot drift apart with both
+  suites green.
+- ``words_credited``: the forward-only reading volume one position save earns, at every
+  edge (advance, retreat, no baseline, a baseline that no longer resolves).
 """
 
 from __future__ import annotations
 
+import json
 from decimal import Decimal
+from pathlib import Path
 
 from app.application.reading import (
     Chapter,
     locate,
+    page_at,
+    pages_from_words,
     partition,
     percent_at,
+    words_before_row,
+    words_credited,
 )
 from app.domain.entities import ChapterIndexRow
 
@@ -126,3 +139,175 @@ def test_percent_at_quantizes_to_two_decimals() -> None:
 def test_percent_at_zero_total_is_zero_not_division_error() -> None:
     index = (_row(0, 0, "a", words=0), _row(1, 0, "b", words=0))
     assert percent_at(index, 1) == Decimal("0.00")
+
+
+# --- words_before_row ----------------------------------------------------------
+
+
+def test_words_before_row_sums_the_preceding_rows() -> None:
+    index = (_row(0, 0, "a", words=3), _row(1, 0, "b", words=2), _row(2, 0, "c", words=4))
+    assert [words_before_row(index, i) for i in range(4)] == [0, 3, 5, 9]
+
+
+def test_words_before_row_past_the_end_is_the_whole_book() -> None:
+    index = (_row(0, 0, "a", words=3), _row(1, 0, "b", words=2))
+    assert words_before_row(index, 99) == 5
+
+
+# --- page_at (PAGE-03/PAGE-04, AD-189) ------------------------------------------
+
+
+def test_page_at_starts_at_page_one_at_the_first_word() -> None:
+    assert page_at(0, 275) == 1
+
+
+def test_page_at_advances_one_page_per_quantum() -> None:
+    # The first 275 words are page 1; the 276th word opens page 2 (PAGE-04).
+    assert page_at(274, 275) == 1
+    assert page_at(275, 275) == 2
+    assert page_at(549, 275) == 2
+    assert page_at(550, 275) == 3
+
+
+def test_page_at_continues_the_books_numbering_into_a_later_chapter() -> None:
+    # A chapter opening 5500 words into the book starts on page 21, not page 1 — the
+    # count is book-global, so a page number locates a passage across the whole book.
+    assert page_at(5500, 275) == 21
+
+
+def test_page_at_follows_the_quantum_it_is_given() -> None:
+    # The quantum is a parameter, never a constant baked into the derivation: the same
+    # point in the same book pages differently under a different words-per-page.
+    assert page_at(600, 275) == 3
+    assert page_at(600, 300) == 3
+    assert page_at(600, 200) == 4
+
+
+def test_page_at_does_not_depend_on_the_length_of_the_book() -> None:
+    # A page is words-before divided by the quantum, never a rounding of the percent:
+    # the same offset in a short and a long book is the same page, though the two are
+    # at wildly different percentages of their books.
+    short_book = (_row(0, 0, "a", words=550), _row(1, 0, "b", words=550))
+    long_book = (_row(0, 0, "a", words=550), _row(1, 0, "b", words=99450))
+
+    assert page_at(words_before_row(short_book, 1), 275) == 3
+    assert page_at(words_before_row(long_book, 1), 275) == 3
+    assert percent_at(short_book, 1) != percent_at(long_book, 1)
+
+
+def test_page_numbers_derive_from_the_stored_word_counts_alone() -> None:
+    # I-PU-1: a book ingested long ago gains pages from nothing but the per-section
+    # word counts already in its corpus — no new field, no re-processing, no DB access.
+    index = (
+        _row(0, 0, "c1", words=300),
+        _row(1, 0, "c2", words=300),
+        _row(2, 0, "c3", words=300),
+    )
+    assert [page_at(words_before_row(index, i), 275) for i in range(3)] == [1, 2, 3]
+
+
+def test_page_at_degrades_to_page_one_for_a_non_positive_quantum() -> None:
+    # A misconfigured setting must not raise on a read path — zero and negative alike.
+    assert page_at(1000, 0) == 1
+    assert page_at(1000, -275) == 1
+
+
+def test_page_at_clamps_a_negative_offset_to_the_first_page() -> None:
+    # No point in a book has words before it counted backwards; a negative offset must
+    # not divide into page 0 or a negative page.
+    assert page_at(-5, 275) == 1
+    assert page_at(-500, 275) == 1
+
+
+# --- The shared boundary contract (contracts/page-boundaries.json) --------------
+
+# ``page_at`` is the definitional reference for the page unit, but nothing in the server
+# renders a page: every number a reader sees comes from the client's own implementation
+# of the same rule. Two hand-written mirrors drift, so the boundary cases live outside
+# both stacks and both assert them. Adding a case here binds the client too, and vice
+# versa — see contracts/README.md.
+
+_CONTRACT = json.loads(
+    (Path(__file__).resolve().parents[2] / "contracts" / "page-boundaries.json").read_text(
+        encoding="utf-8"
+    )
+)
+
+
+def test_page_at_matches_every_shared_boundary_case() -> None:
+    cases = _CONTRACT["cases"]
+    # A contract nobody reads proves nothing: fail loudly if the file empties out.
+    assert len(cases) >= 12
+    actual = [(c["words_before"], c["words_per_page"], page_at(*_inputs(c))) for c in cases]
+    expected = [(c["words_before"], c["words_per_page"], c["page"]) for c in cases]
+    assert actual == expected
+
+
+def _inputs(case: dict) -> tuple[int, int]:
+    return case["words_before"], case["words_per_page"]
+
+
+# --- pages_from_words (PAGE-09) -------------------------------------------------
+
+
+def test_pages_from_words_counts_whole_pages_and_floors_the_remainder() -> None:
+    assert pages_from_words(0, 275) == 0
+    assert pages_from_words(274, 275) == 0
+    assert pages_from_words(275, 275) == 1
+    assert pages_from_words(549, 275) == 1
+    assert pages_from_words(550, 275) == 2
+
+
+def test_pages_from_words_never_reports_a_negative_figure() -> None:
+    assert pages_from_words(-500, 275) == 0
+
+
+def test_pages_from_words_degrades_to_zero_for_a_non_positive_quantum() -> None:
+    # The guard is the shipped contract: a misconfigured quantum reports no reading
+    # rather than raising on the study window, for zero and for a negative alike.
+    assert pages_from_words(1000, 0) == 0
+    assert pages_from_words(1000, -275) == 0
+
+
+# --- words_credited (PAGE-07, I-PU-4/I-PU-5) ------------------------------------
+
+# Word offsets 0, 3, 5, 6 (counts 3, 2, 1, 4); "c2" also answers to "old-c2".
+_BOOK = (
+    _row(0, 0, "c1", words=3),
+    _row(1, 1, "c1s1", words=2),
+    _row(2, 0, "c2", aliases=("old-c2",), words=1),
+    _row(3, 1, "c2s1", words=4),
+)
+
+
+def test_words_credited_is_the_ground_covered_since_the_prior_position() -> None:
+    # Moving from row 1 (3 words in) to row 3 (6 words in) covers 3 words.
+    assert words_credited(_BOOK, prior_anchor="c1s1", target_idx=3) == 3
+
+
+def test_words_credited_is_zero_when_the_reader_moves_backwards() -> None:
+    # I-PU-4: re-reading credits nothing — never a negative that would eat the day's
+    # earlier progress.
+    assert words_credited(_BOOK, prior_anchor="c2s1", target_idx=1) == 0
+
+
+def test_words_credited_is_zero_for_a_save_at_the_same_place() -> None:
+    assert words_credited(_BOOK, prior_anchor="c1s1", target_idx=1) == 0
+
+
+def test_words_credited_is_zero_without_a_prior_position() -> None:
+    # I-PU-5: opening a book at the halfway mark must not claim half the book as read
+    # today — with no baseline there is no evidence any ground was covered.
+    assert words_credited(_BOOK, prior_anchor=None, target_idx=3) == 0
+
+
+def test_words_credited_is_zero_when_the_prior_anchor_no_longer_resolves() -> None:
+    # The corpus was replaced under the stored position: the old offset means nothing
+    # against the current index, so it earns nothing.
+    assert words_credited(_BOOK, prior_anchor="gone", target_idx=3) == 0
+
+
+def test_words_credited_resolves_a_prior_anchor_by_alias() -> None:
+    # A baseline stored under a superseded alias still locates its row (2 → offset 5),
+    # so a renormalized corpus does not silently reset the reader's baseline.
+    assert words_credited(_BOOK, prior_anchor="old-c2", target_idx=3) == 1

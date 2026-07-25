@@ -1176,7 +1176,27 @@ class ReadingPositionRepository(Protocol):
     """
 
     def get(self, user_id: UUID, source_id: UUID) -> ReadingPosition | None:
-        """Return the caller's stored position for ``source_id``, or ``None`` if none."""
+        """Return the caller's stored position for ``source_id``, or ``None`` if none.
+
+        The plain read, taking no lock: opening a chapter must not serialize against
+        anything, and reading is by far the commoner call.
+        """
+        ...
+
+    def get_for_update(self, user_id: UUID, source_id: UUID) -> ReadingPosition | None:
+        """Return the caller's stored position, holding it against concurrent writers.
+
+        The read a writer needs. A caller that *derives* its write from the stored
+        position — the reading credit is the distance from it — cannot use ``get``:
+        two concurrent savers would both read the same prior position and both credit
+        the same distance, and an atomic increment on the far side does nothing about
+        a stale read on this one. This method holds the row for the rest of the
+        caller's transaction, so the second saver reads the first one's result and
+        credits only what it actually added. Contention is one user on one book.
+
+        A position that does not exist yet cannot be held, which costs nothing: with
+        no prior position there is no distance to derive and nothing to double.
+        """
         ...
 
     def upsert(
@@ -1222,8 +1242,14 @@ class StudyDayRepository(Protocol):
         *,
         reviews: int = 0,
         reading_updates: int = 0,
+        words_advanced: int = 0,
     ) -> None:
-        """Add the passed deltas to ``(user_id, day)``, inserting the row if absent."""
+        """Add the passed deltas to ``(user_id, day)``, inserting the row if absent.
+
+        Every delta defaults to zero so each caller names only the kinds of activity it
+        witnessed: a submitted review credits ``reviews``, a saved reading position
+        credits ``reading_updates`` and the ``words_advanced`` it newly covered.
+        """
         ...
 
     def window(self, user_id: UUID, *, start: date, end: date) -> list[StudyDay]:

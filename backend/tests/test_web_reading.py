@@ -22,6 +22,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import Connection, select
 
 from app.application.dates import local_day
+from app.application.reading import page_at
 from app.domain.entities import (
     CorpusSectionRecord,
     ParsedSection,
@@ -165,6 +166,19 @@ def _seed_book(db_conn: Connection, source_id: UUID) -> None:
     )
 
 
+def _seed_paged_book(db_conn: Connection, source_id: UUID) -> None:
+    """Two chapters of 600 words each — long enough to span several pages."""
+    prose = " ".join(f"w{i}" for i in range(600))
+    SqlAlchemyCorpusRepository(db_conn).replace(
+        source_id,
+        title="A Long Book",
+        authors=(),
+        language="en",
+        schema_version=1,
+        sections=[_record(0, 0, "p1", prose), _record(1, 0, "p2", prose)],
+    )
+
+
 # --- GET chapter ---------------------------------------------------------------
 
 
@@ -189,6 +203,7 @@ def test_get_chapter_returns_200_with_shape_and_sections(
         "words_before_chapter",
         "chapter_word_count",
         "total_word_count",
+        "words_per_page",
         "sections",
         "reading_position",
     }
@@ -204,6 +219,50 @@ def test_get_chapter_returns_200_with_shape_and_sections(
     assert body["sections"][0]["word_count"] == 3
     assert body["sections"][0]["markdown"] == "a b c"
     assert body["reading_position"] is None
+
+
+def test_get_chapter_carries_the_page_size_from_settings(
+    reading_client: TestClient, db_conn: Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # PAGE-02 / I-PU-2: the reader is told how many words make a page instead of holding
+    # its own copy of the number. Changing the backend setting changes what the reader
+    # receives — which no duplicated client-side constant could do.
+    from app.core.config import get_settings
+
+    user_id = _register(reading_client, "chapter-pagesize@example.com")
+    source_id = _persist_source(db_conn, user_id)
+    _seed_book(db_conn, source_id)
+
+    default = reading_client.get(f"/api/sources/{source_id}/chapter", params={"anchor": "c1"})
+    assert default.status_code == 200, default.text
+    assert default.json()["words_per_page"] == 275
+
+    monkeypatch.setenv("LEARNY_WORDS_PER_PAGE", "300")
+    get_settings.cache_clear()
+    retuned = reading_client.get(f"/api/sources/{source_id}/chapter", params={"anchor": "c1"})
+
+    assert retuned.status_code == 200, retuned.text
+    assert retuned.json()["words_per_page"] == 300
+
+
+def test_get_chapter_page_size_accompanies_the_chapters_word_offset(
+    reading_client: TestClient, db_conn: Connection
+) -> None:
+    # PAGE-04: a chapter's first page follows from the words before it and the quantum
+    # the same response carries, so a later chapter opens where the book's numbering has
+    # reached — page 3 here, not page 1 — with no extra request and no client constant.
+    user_id = _register(reading_client, "chapter-pagenum@example.com")
+    source_id = _persist_source(db_conn, user_id)
+    _seed_paged_book(db_conn, source_id)
+
+    first = reading_client.get(f"/api/sources/{source_id}/chapter", params={"anchor": "p1"})
+    second = reading_client.get(f"/api/sources/{source_id}/chapter", params={"anchor": "p2"})
+
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+    assert page_at(first.json()["words_before_chapter"], first.json()["words_per_page"]) == 1
+    assert second.json()["words_before_chapter"] == 600
+    assert page_at(second.json()["words_before_chapter"], second.json()["words_per_page"]) == 3
 
 
 def test_get_chapter_alias_anchor_returns_canonical_chapter(
@@ -401,6 +460,54 @@ def test_put_reading_position_credits_a_reading_study_day(
         )
     ).all()
     assert [(r.reviews_count, r.reading_updates) for r in rows] == [(0, 1)]
+
+
+def test_put_reading_position_credits_the_words_covered_since_the_last_save(
+    reading_client: TestClient, db_conn: Connection
+) -> None:
+    # PAGE-07 end to end: c1s1 sits 3 words into the book and c2s1 6 words in, so the
+    # second save credits 3 words to the same day — and the words land in the same row
+    # as the reading_updates count, written by the request that stored the position.
+    user_id = _register(reading_client, "rp-words@example.com")
+    csrf = _csrf(reading_client)
+    source_id = _persist_source(db_conn, user_id)
+    _seed_book(db_conn, source_id)
+
+    assert _put_position(reading_client, source_id, "c1s1", csrf=csrf).status_code == 200
+    assert _put_position(reading_client, source_id, "c2s1", csrf=csrf).status_code == 200
+
+    rows = db_conn.execute(
+        select(study_days.c.reading_updates, study_days.c.words_advanced).where(
+            study_days.c.user_id == UUID(user_id)
+        )
+    ).all()
+    assert [(r.reading_updates, r.words_advanced) for r in rows] == [(2, 3)]
+
+
+def test_put_reading_position_rejected_save_stores_and_credits_nothing(
+    reading_client: TestClient, db_conn: Connection
+) -> None:
+    # I-PU-6: the credit rides the same transaction as the position upsert and only on
+    # the success path — a 404'd anchor leaves no position row and no study day at all,
+    # not a study day with zero words.
+    user_id = _register(reading_client, "rp-words-404@example.com")
+    csrf = _csrf(reading_client)
+    source_id = _persist_source(db_conn, user_id)
+    _seed_book(db_conn, source_id)
+
+    resp = _put_position(reading_client, source_id, "missing", csrf=csrf)
+
+    assert resp.status_code == 404, resp.text
+    assert (
+        db_conn.execute(
+            select(reading_positions.c.anchor).where(reading_positions.c.source_id == source_id)
+        ).all()
+        == []
+    )
+    assert (
+        db_conn.execute(select(study_days.c.day).where(study_days.c.user_id == UUID(user_id))).all()
+        == []
+    )
 
 
 def test_put_reading_position_garbage_timezone_succeeds_and_credits_utc_day(
