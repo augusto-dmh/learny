@@ -32,7 +32,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import Connection
 
-from app.core.instrumentation import get_recorder, set_recorder
+from app.core.instrumentation import InstrumentRecorder, get_recorder, set_recorder
 from tests.conftest import TEST_ORIGIN, requires_db
 
 pytestmark = requires_db
@@ -292,6 +292,24 @@ def test_configured_statement_cap_truncates_what_the_surface_returns(
     (entry,) = client.get(INSTRUMENT_PATH).json()["slow_queries"]
 
     assert entry["statement"] == "SELECT xxx"
+
+
+def test_the_surface_reads_the_recorder_it_is_given(build_client: ClientBuilder) -> None:
+    # The recorder is the handler's collaborator, so it arrives as a dependency:
+    # overriding it is how a caller substitutes one, and a handler that reached
+    # into module state instead would ignore the override entirely.
+    client = build_client(enabled=True)
+    _register(client, "instrument-injected@example.com")
+    substitute = InstrumentRecorder()
+    substitute.record_query(statement="SELECT from_the_injected_recorder", duration_ms=1.0)
+    client.app.dependency_overrides[get_recorder] = lambda: substitute
+
+    body = client.get(INSTRUMENT_PATH).json()
+
+    assert [entry["statement"] for entry in body["slow_queries"]] == [
+        "SELECT from_the_injected_recorder"
+    ]
+    assert body["endpoints"] == []
 
 
 def test_reported_capacity_is_the_configured_one(build_client: ClientBuilder) -> None:

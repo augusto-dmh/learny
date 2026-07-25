@@ -38,10 +38,17 @@ identifier, so the property is inherited rather than re-implemented here.
 
 from __future__ import annotations
 
+from typing import Annotated
+
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from app.core.instrumentation import EndpointStat, QuerySample, get_recorder
+from app.core.instrumentation import (
+    EndpointStat,
+    InstrumentRecorder,
+    QuerySample,
+    get_recorder,
+)
 from app.infrastructure.web.dependencies import get_authenticated_user
 
 router = APIRouter(tags=["instrument"])
@@ -99,15 +106,22 @@ class InstrumentView(BaseModel):
 
 
 @router.get("/api/dev/instrument", dependencies=[Depends(get_authenticated_user)])
-def read_instrument() -> InstrumentView:
+def read_instrument(
+    recorder: Annotated[InstrumentRecorder, Depends(get_recorder)],
+) -> InstrumentView:
     """Return the ranked endpoints and the captured slow statements.
 
     Both collections are empty when nothing has been recorded — an idle process is
     a 200 with nothing in it, never an error. The slow-query list is bounded by the
     recorder's own capacity rather than a second limit invented here, so the one
     configured number is the one that governs.
+
+    The recorder is declared as a dependency like every other collaborator in this
+    layer, rather than fetched from module state inside the body: it is what the
+    handler reads, so it belongs in the signature, and it stays reachable through
+    ``app.dependency_overrides``. The producers (the ASGI middleware, the
+    SQLAlchemy event) have no injection point and go on using the free functions.
     """
-    recorder = get_recorder()
     snapshot = recorder.snapshot()
     return InstrumentView(
         scope=SCOPE_NOTICE,
