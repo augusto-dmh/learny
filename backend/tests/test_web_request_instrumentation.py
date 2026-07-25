@@ -1,10 +1,13 @@
-"""B1 gate — the request middleware feeds the timing recorder (unit, OBS-01/02/07).
+"""B1/B2 gate — the request middleware feeds the timing recorder and the wire
+(unit, OBS-01/02/07/08/10).
 
-Every case derives from the spec's "One timing recorder" acceptance criteria as
-they apply to the HTTP producer: what a completed request contributes (route
-template, method, status, duration), what an unmatched request contributes (one
-constant placeholder, never the raw path), and the containment property — a
-recorder that fails must leave the response it measures exactly as it was.
+Every case derives from the spec's "One timing recorder" and "Server timing on
+the wire" acceptance criteria as they apply to the HTTP producer: what a
+completed request contributes (route template, method, status, duration), what
+an unmatched request contributes (one constant placeholder, never the raw path),
+that the browser receives the same duration the access log reports, and the
+containment property — a recorder that fails must leave the response it measures
+exactly as it was.
 
 The parametrized-route case is also the framework sensor: the route template is
 read from the ASGI ``scope`` the router populates, so if a future Starlette or
@@ -17,6 +20,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterator
 
+import httpx
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
@@ -98,6 +102,15 @@ def _access_record(handler: _RecordingHandler) -> logging.LogRecord:
     hits = [r for r in handler.records if r.getMessage() == "http.request"]
     assert len(hits) == 1, f"expected one access record, got {len(hits)}"
     return hits[0]
+
+
+def _app_metric_dur(response: httpx.Response) -> float:
+    """Return the ``dur`` of the single ``app`` metric in ``Server-Timing``."""
+    entries = [entry.strip() for entry in response.headers["Server-Timing"].split(",")]
+    app_metrics = [entry for entry in entries if entry.split(";")[0].strip() == "app"]
+    assert len(app_metrics) == 1, f"expected one app metric, got {entries}"
+    params = dict(param.split("=", 1) for param in app_metrics[0].split(";")[1:])
+    return float(params["dur"])
 
 
 # --- OBS-01: a completed request is recorded by its route template ------------
@@ -208,3 +221,68 @@ def test_unhandled_exception_is_still_recorded_with_its_final_status(
     (sample,) = recorder.recent_requests()
     assert sample.route == "/boom"
     assert sample.status_code == 500
+
+
+# --- OBS-08: the browser sees the server's share of the request --------------
+
+
+def test_response_carries_a_server_timing_app_metric(recorder: InstrumentRecorder) -> None:
+    client = TestClient(_build_app())
+
+    response = client.get(f"/items/{SECRET_ID}")
+
+    assert _app_metric_dur(response) >= 0.0
+
+
+def test_server_timing_reports_the_duration_the_access_log_reports(
+    captured: _RecordingHandler,
+) -> None:
+    # One measurement, two consumers: the header may not carry a second,
+    # independently taken number.
+    client = TestClient(_build_app())
+
+    response = client.get(f"/items/{SECRET_ID}")
+
+    assert _app_metric_dur(response) == _access_record(captured).duration_ms
+
+
+def test_server_timing_leaves_the_request_id_header_intact() -> None:
+    client = TestClient(_build_app())
+
+    response = client.get(f"/items/{SECRET_ID}", headers={"X-Request-ID": "abc-123"})
+
+    assert response.headers["X-Request-ID"] == "abc-123"
+    assert response.headers["Server-Timing"]
+
+
+# --- OBS-10: errors are timed on the wire too --------------------------------
+
+
+def test_handled_error_response_carries_server_timing(
+    recorder: InstrumentRecorder, captured: _RecordingHandler
+) -> None:
+    client = TestClient(_build_app())
+
+    response = client.get("/http-error")
+
+    assert response.status_code == 404
+    assert _app_metric_dur(response) == _access_record(captured).duration_ms
+    assert recorder.recent_requests()[0].status_code == 404
+
+
+def test_unhandled_exception_response_shares_the_documented_header_gap(
+    recorder: InstrumentRecorder,
+) -> None:
+    # A truly unhandled exception is turned into a 500 by Starlette's outermost
+    # ServerErrorMiddleware, which sends outside this middleware. That response
+    # carries neither correlation header — a single documented gap, pinned here
+    # so the two headers can only ever be fixed together. The request is still
+    # timed and recorded, which is what the diagnosis path depends on.
+    client = TestClient(_build_app(), raise_server_exceptions=False)
+
+    response = client.get("/boom")
+
+    assert response.status_code == 500
+    assert "Server-Timing" not in response.headers
+    assert "X-Request-ID" not in response.headers
+    assert recorder.recent_requests()[0].status_code == 500

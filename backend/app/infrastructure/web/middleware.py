@@ -12,13 +12,26 @@ the handler emits. It:
   unhandled 500s alike;
 - records that same duration on the in-process instrument, keyed on the *route
   template* — never the raw path, which would leak resource identifiers into a
-  surface with weaker access control than the resources they name.
+  surface with weaker access control than the resources they name;
+- reports that same duration to the browser as ``Server-Timing: app;dur=…``, so
+  devtools can split server time from network and render time.
+
+**One measurement, three consumers.** The header has to be written before the
+response starts, while the access record is emitted after the request finishes,
+so the request is timed once — at ``http.response.start`` — and that single
+number is what the header, the access record, and the instrument all carry.
+``duration_ms`` is therefore the server's own share: the time from receiving the
+request to starting its response, which for a streamed response deliberately
+excludes the time spent streaming the body. Only when no response ever starts
+does the ``finally`` measure instead, so the record is never lost.
 
 Accepted gap: a *truly unhandled* exception is turned into a 500 by Starlette's
 outermost ``ServerErrorMiddleware`` (outside this middleware), so the response it
-produces does not carry the ``X-Request-ID`` header. Every handled response
+produces carries neither the ``X-Request-ID`` nor the ``Server-Timing`` header —
+it is not sent through this middleware's ``send``. Every handled response
 (including exception-handler-mapped 4xx/5xx) is produced inside this middleware
-and does get the header. The access log still fires for the unhandled case.
+and does get both. The access log and the instrument record still fire for the
+unhandled case, with its final status.
 """
 
 from __future__ import annotations
@@ -40,7 +53,14 @@ from app.core.tracing import (
 )
 
 _REQUEST_ID_HEADER = "X-Request-ID"
+_SERVER_TIMING_HEADER = "Server-Timing"
+_SERVER_TIMING_METRIC = "app"
 _access_logger = logging.getLogger("app.request")
+
+
+def _elapsed_ms(start: float) -> float:
+    """Return the milliseconds elapsed since ``start``, rounded to microseconds."""
+    return round((time.perf_counter() - start) * 1000, 3)
 
 
 def _inbound_request_id(scope: Scope) -> str | None:
@@ -86,12 +106,19 @@ class RequestContextMiddleware:
         )
         start = time.perf_counter()
         status_holder = {"code": 500}  # default if the response never starts
+        timing_holder: dict[str, float] = {}  # filled when the response starts
 
-        send_wrapper = self._make_send_wrapper(send, request_id, status_holder)
+        send_wrapper = self._make_send_wrapper(
+            send, request_id, status_holder, timing_holder, start
+        )
         try:
             await self.app(scope, receive, send_wrapper)
         finally:
-            duration_ms = round((time.perf_counter() - start) * 1000, 3)
+            duration_ms = timing_holder.get("duration_ms")
+            if duration_ms is None:
+                # No response ever started (the unhandled-exception gap above):
+                # measure here so the record still fires.
+                duration_ms = _elapsed_ms(start)
             _access_logger.info(
                 "http.request",
                 extra={"status_code": status_holder["code"], "duration_ms": duration_ms},
@@ -109,13 +136,22 @@ class RequestContextMiddleware:
 
     @staticmethod
     def _make_send_wrapper(
-        send: Send, request_id: str, status_holder: dict[str, int]
+        send: Send,
+        request_id: str,
+        status_holder: dict[str, int],
+        timing_holder: dict[str, float],
+        start: float,
     ) -> Callable[[Message], Awaitable[None]]:
         async def send_wrapper(message: Message) -> None:
             if message["type"] == "http.response.start":
                 status_holder["code"] = message["status"]
+                duration_ms = _elapsed_ms(start)
+                timing_holder["duration_ms"] = duration_ms
                 headers = MutableHeaders(raw=message.setdefault("headers", []))
                 headers[_REQUEST_ID_HEADER] = request_id
+                # ``Server-Timing`` is a list header: append so a metric a
+                # handler set for itself survives alongside ours.
+                headers.append(_SERVER_TIMING_HEADER, f"{_SERVER_TIMING_METRIC};dur={duration_ms}")
             await send(message)
 
         return send_wrapper
