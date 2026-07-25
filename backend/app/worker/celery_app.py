@@ -10,6 +10,7 @@ from __future__ import annotations
 from celery import Celery
 
 from app.core.config import get_settings
+from app.core.instrumentation import InstrumentRecorder, set_recorder
 from app.core.logging import configure_logging
 from app.worker.instrumentation import install_task_duration_signals
 
@@ -40,6 +41,21 @@ celery_app.conf.update(
 )
 
 configure_logging()
+# This module is the worker's composition root, the counterpart of ``create_app``,
+# so the instrument's bounds are built from settings here too. Every ``get_engine()``
+# call installs the slow-query listener, and the tasks make ~20 of them, so this
+# process feeds the recorder exactly as the API does — without this, its capacity
+# and statement cap would sit at the module defaults while the runbook documents
+# both as per-process settings (the threshold, read at engine build time, is the
+# one that *was* honoured here, which is what hid the asymmetry). Assembly time is
+# where settings may safely be read; import time is not, and the settings this
+# module already reads for the broker are the same single read (lesson L-007).
+set_recorder(
+    InstrumentRecorder(
+        capacity=_settings.instrument_capacity,
+        statement_max_chars=_settings.slow_query_statement_chars,
+    )
+)
 # Every task reports its duration through Celery's own signals, so no task needs
 # instrumentation code of its own (AD-176).
 install_task_duration_signals()
