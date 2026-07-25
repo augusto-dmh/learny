@@ -35,7 +35,14 @@
 import { List } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import {
+  Fragment,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 
 import {
   CapturePopover,
@@ -59,7 +66,8 @@ import {
 import { CardSuggestions } from "@/app/components/notes/card-suggestions";
 import { fetchAuthState } from "@/app/lib/auth";
 import { CardError, suggestCards, type CardSuggestion } from "@/app/lib/cards";
-import { paintHighlights } from "@/app/lib/highlight-paint";
+import { paintHighlights, SCAFFOLD_ATTRIBUTE } from "@/app/lib/highlight-paint";
+import { paginateSection } from "@/app/lib/pages";
 import { type PendingPanelRequest } from "@/app/lib/panel";
 import { captureHighlight, NoteError } from "@/app/lib/notes";
 import {
@@ -333,6 +341,16 @@ export function ChapterFlow({
     () => chapter.sections.map((section) => section.anchor),
     [chapter.sections],
   );
+  // The book-global word offset of each section's first word, so a section's
+  // page rules continue the book's numbering rather than restarting per chapter.
+  const sectionOffsets = useMemo(() => {
+    let running = chapter.words_before_chapter;
+    return chapter.sections.map((section) => {
+      const before = running;
+      running += section.word_count;
+      return before;
+    });
+  }, [chapter.sections, chapter.words_before_chapter]);
   const [flashAnchor, setFlashAnchor] = useState<string | null>(scrollTarget);
   // The below-lg table of contents collapses behind the top-bar toggle (RD-25).
   const [tocOpen, setTocOpen] = useState(false);
@@ -725,10 +743,12 @@ export function ChapterFlow({
           <h1 data-testid="reading-chapter-title" className="chapter-running-title">
             {chapter.chapter_title}
           </h1>
-          {chapter.sections.map((section) => (
+          {chapter.sections.map((section, index) => (
             <FlowSection
               key={section.anchor}
               section={section}
+              wordsBefore={sectionOffsets[index]}
+              wordsPerPage={chapter.words_per_page}
               flashing={flashAnchor === section.anchor}
               highlights={highlightsByAnchor.get(section.anchor) ?? NO_HIGHLIGHTS}
               onMouseUp={() => handleMouseUp(section)}
@@ -810,20 +830,35 @@ export function ChapterFlow({
  * unchanged, and the effect only repaints when the content or the highlight set
  * actually changes. `paintHighlights` is idempotent (unwrap-first), so even a
  * repaint yields the same DOM.
+ *
+ * The section's prose is laid out in runs separated by page rules
+ * (`paginateSection`), so the reader can see where one page ends and the next
+ * begins. `wordsBefore` is the section's book-global word offset, which is what
+ * makes those page numbers the book's rather than the chapter's.
  */
 function FlowSection({
   section,
+  wordsBefore,
+  wordsPerPage,
   flashing,
   highlights,
   onMouseUp,
 }: {
   section: ChapterSectionView;
+  wordsBefore: number;
+  wordsPerPage: number;
   flashing: boolean;
   highlights: SourceHighlightView[];
   onMouseUp: () => void;
 }) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const breadcrumb = section.section_path.join(" › ");
+  // Stable across the re-renders live progress causes, so the memoized Markdown
+  // subtrees never re-render and the painted highlights survive.
+  const runs = useMemo(
+    () => paginateSection(section.markdown, { wordsBefore, wordsPerPage }),
+    [section.markdown, wordsBefore, wordsPerPage],
+  );
 
   useEffect(() => {
     const body = bodyRef.current;
@@ -850,9 +885,40 @@ function FlowSection({
         <h2 className="text-2xl font-semibold">{section.title}</h2>
       </div>
       <div ref={bodyRef} className="book-prose">
-        <MessageResponse>{section.markdown}</MessageResponse>
+        {runs.map((run, index) => (
+          <Fragment key={index}>
+            <MessageResponse>{run.markdown}</MessageResponse>
+            {run.pageAfter === null ? null : <PageRule page={run.pageAfter} />}
+          </Fragment>
+        ))}
       </div>
     </section>
+  );
+}
+
+/**
+ * The page turn made visible: a hairline across the column carrying the number
+ * of the page that starts below it.
+ *
+ * It is furniture, not text — hidden from assistive technology, unselectable,
+ * and marked as scaffolding so the highlight painter reads straight past it
+ * (a counted label would shift every offset after it).
+ */
+function PageRule({ page }: { page: number }) {
+  return (
+    <div
+      aria-hidden
+      data-testid="page-rule"
+      data-page={page}
+      {...{ [SCAFFOLD_ATTRIBUTE]: "true" }}
+      className="my-8 flex select-none items-center gap-3"
+    >
+      <span className="h-px flex-1 bg-border" />
+      <span className="font-mono text-[10px] tracking-[0.1em] whitespace-nowrap text-muted-foreground">
+        p. {page}
+      </span>
+      <span className="h-px flex-1 bg-border" />
+    </div>
   );
 }
 

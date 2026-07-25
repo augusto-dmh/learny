@@ -205,6 +205,7 @@ const chapterOne: ChapterView = {
   words_before_chapter: 0,
   chapter_word_count: 100,
   total_word_count: 200,
+  words_per_page: 275,
   sections: [
     { anchor: A, title: "S1", section_path: ["S1"], markdown: "First.", word_count: 60 },
     { anchor: B, title: "S2", section_path: ["S2"], markdown: "Second.", word_count: 40 },

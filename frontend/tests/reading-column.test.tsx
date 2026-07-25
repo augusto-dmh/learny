@@ -86,6 +86,7 @@ const chapter: ChapterView = {
   words_before_chapter: 0,
   chapter_word_count: 200,
   total_word_count: 400,
+  words_per_page: 275,
   sections: [
     {
       anchor: S1,
