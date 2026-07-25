@@ -458,6 +458,59 @@ export function StudyHeatmap({
 }
 
 /**
+ * The adherence figures, set in the approved tabular mono. The big number is the
+ * server's `studied_last_14` and nothing else — wrapping it in a span changes how
+ * it looks, never what it says, so the sentence still reads `Studied N of the last
+ * 14 days` character for character (I-4).
+ */
+const FIGURE_CLASS =
+  "font-mono text-[34px] leading-none font-medium tracking-[-0.03em] tabular-nums text-foreground";
+const FIGURE_SM_CLASS = "font-mono text-[15px] tabular-nums text-foreground";
+const TOTAL_VALUE_CLASS =
+  "font-mono text-[17px] leading-[1.1] tabular-nums text-foreground";
+const TOTAL_LABEL_CLASS =
+  "font-mono text-[10.5px] tracking-[0.07em] text-muted-foreground uppercase";
+
+/**
+ * The readout above the graph: how many of the last fourteen days were studied,
+ * and what the window added up to. The two totals are a plain sum of the rows the
+ * graph is already showing — the adherence count beside them is never summed here,
+ * it is the server's figure rendered as it arrived.
+ */
+function StudyReadout({ summary }: { summary: StudySummaryView }) {
+  const reviews = summary.days.reduce((n, day) => n + day.reviews_count, 0);
+  const pages = summary.days.reduce((n, day) => n + day.pages, 0);
+
+  return (
+    <div className="space-y-4">
+      <p
+        data-testid="streak-line"
+        className="max-w-[22ch] text-sm leading-[1.35] text-muted-foreground"
+      >
+        Studied{" "}
+        <span data-testid="adherence-figure" className={FIGURE_CLASS}>
+          {summary.studied_last_14}
+        </span>{" "}
+        of the last <span className={FIGURE_SM_CLASS}>14</span> days
+      </p>
+      <div
+        data-testid="study-totals"
+        className="flex gap-[26px] border-t border-border pt-4"
+      >
+        <span data-testid="total-reviews" className="flex flex-col">
+          <span className={TOTAL_VALUE_CLASS}>{reviews}</span>
+          <span className={TOTAL_LABEL_CLASS}>reviews</span>
+        </span>
+        <span data-testid="total-pages" className="flex flex-col">
+          <span className={TOTAL_VALUE_CLASS}>{pages}</span>
+          <span className={TOTAL_LABEL_CLASS}>pages</span>
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/**
  * The adherence stats block: the streak line and heatmap behind a hide toggle,
  * fed by its own study fetch. The toggle stays put when the block is hidden so the
  * viewer can bring it back; the choice persists device-locally (HOME-14).
@@ -511,9 +564,7 @@ export function StudyStats() {
             </p>
           ) : (
             <>
-              <p data-testid="streak-line" className="text-sm text-muted-foreground">
-                Studied {state.data.studied_last_14} of the last 14 days
-              </p>
+              <StudyReadout summary={state.data} />
               <StudyHeatmap days={state.data.days} />
             </>
           )}

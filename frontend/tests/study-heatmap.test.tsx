@@ -428,6 +428,64 @@ describe("StudyStats new-user state (spec edge)", () => {
   });
 });
 
+describe("StudyStats readout (PAGE-24/25, I-PU-8)", () => {
+  // The pages figures are deliberately unrelated to the counters: a readout that
+  // derived pages from activity, or from a quantum of its own, would disagree.
+  const summary: StudySummaryView = {
+    days: [
+      { day: "2026-07-20", reviews_count: 7, reading_updates: 2, pages: 9 },
+      { day: "2026-07-19", reviews_count: 3, reading_updates: 1, pages: 24 },
+      { day: "2026-07-18", reviews_count: 0, reading_updates: 2, pages: 7 },
+    ],
+    studied_last_14: 11,
+  };
+
+  it("sets the adherence figures in tabular mono without touching the sentence", async () => {
+    stubStudyFetch(jsonResponse(200, summary));
+
+    render(<StudyStats />);
+
+    // The styling wraps the digits; the sentence reads exactly as it always has.
+    expect((await screen.findByTestId("streak-line")).textContent).toBe(
+      "Studied 11 of the last 14 days",
+    );
+    const figure = screen.getByTestId("adherence-figure");
+    expect(figure.textContent).toBe("11");
+    expect(figure.className).toContain("font-mono");
+    expect(figure.className).toContain("tabular-nums");
+  });
+
+  it("totals the window's reviews and its pages beside the adherence figure", async () => {
+    stubStudyFetch(jsonResponse(200, summary));
+
+    render(<StudyStats />);
+    await screen.findByTestId("streak-line");
+
+    // 7 + 3 + 0 reviews, and the server's 9 + 24 + 7 pages.
+    const reviews = screen.getByTestId("total-reviews");
+    expect(reviews.children[0].textContent).toBe("10");
+    expect(reviews.children[1].textContent).toBe("reviews");
+    const pages = screen.getByTestId("total-pages");
+    expect(pages.children[0].textContent).toBe("40");
+    expect(pages.children[1].textContent).toBe("pages");
+  });
+
+  it("reads zero for both totals when the window is empty, and says nothing more", async () => {
+    stubStudyFetch(
+      jsonResponse(200, { days: [], studied_last_14: 0 } satisfies StudySummaryView),
+    );
+
+    const { container } = render(<StudyStats />);
+    await screen.findByTestId("streak-line");
+
+    expect(screen.getByTestId("total-reviews").children[0].textContent).toBe("0");
+    expect(screen.getByTestId("total-pages").children[0].textContent).toBe("0");
+    // A new user's empty window is stated plainly — no encouragement, no warning.
+    expect(container.textContent ?? "").not.toMatch(WARNING_TEXT);
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+});
+
 describe("StudyStats hide toggle (HOME-14)", () => {
   it("shows the block by default, hides it on toggle, and keeps it hidden across a remount", async () => {
     stubStudyFetch(
