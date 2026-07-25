@@ -8,7 +8,19 @@ directly (bypassing the ``get_settings`` lru-cache) so each case is isolated.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from app.core.config import Settings
+from app.core.instrumentation import InstrumentRecorder
+
+_ENV_EXAMPLE = Path(__file__).resolve().parents[1] / ".env.example"
+
+_INSTRUMENT_VARS = (
+    "LEARNY_DEV_INSTRUMENT_ENABLED",
+    "LEARNY_INSTRUMENT_CAPACITY",
+    "LEARNY_SLOW_QUERY_MS",
+    "LEARNY_SLOW_QUERY_STATEMENT_CHARS",
+)
 
 
 def test_embedding_settings_defaults(monkeypatch) -> None:
@@ -176,3 +188,56 @@ def test_notes_settings_env_override(monkeypatch) -> None:
     settings = Settings(_env_file=None)
 
     assert settings.notes_max_body_chars == 500
+
+
+def test_instrument_settings_defaults(monkeypatch) -> None:
+    # The dev surface is off unless deliberately enabled, and the recorder bounds
+    # plus the slow-query threshold carry their documented defaults. The env is
+    # neutralized first: Settings(_env_file=None) still reads os.environ, so a
+    # local .env exported into the shell would otherwise mask the field defaults.
+    for name in _INSTRUMENT_VARS:
+        monkeypatch.delenv(name, raising=False)
+
+    settings = Settings(_env_file=None)
+
+    assert settings.dev_instrument_enabled is False
+    assert settings.instrument_capacity == 500
+    assert settings.slow_query_ms == 200
+    assert settings.slow_query_statement_chars == 2000
+
+
+def test_instrument_settings_env_override(monkeypatch) -> None:
+    monkeypatch.setenv("LEARNY_DEV_INSTRUMENT_ENABLED", "true")
+    monkeypatch.setenv("LEARNY_INSTRUMENT_CAPACITY", "50")
+    monkeypatch.setenv("LEARNY_SLOW_QUERY_MS", "0")
+    monkeypatch.setenv("LEARNY_SLOW_QUERY_STATEMENT_CHARS", "80")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.dev_instrument_enabled is True
+    assert settings.instrument_capacity == 50
+    # Zero is a legitimate threshold — every statement qualifies, no implicit floor.
+    assert settings.slow_query_ms == 0
+    assert settings.slow_query_statement_chars == 80
+
+
+def test_instrument_defaults_match_the_recorder_process_defaults(monkeypatch) -> None:
+    # The recorder cannot read settings (an import-time get_settings() call primes
+    # the lru-cache Alembic later reads), so its process defaults are written out
+    # separately. They must not drift from the documented configuration.
+    for name in _INSTRUMENT_VARS:
+        monkeypatch.delenv(name, raising=False)
+    settings = Settings(_env_file=None)
+    recorder = InstrumentRecorder()
+
+    assert recorder.capacity == settings.instrument_capacity
+    assert recorder.statement_max_chars == settings.slow_query_statement_chars
+
+
+def test_env_example_documents_the_instrument_contract() -> None:
+    # The environment contract is a deliverable: an operator must be able to read
+    # the flag, the threshold, the buffer capacity and the statement cap off it.
+    contract = _ENV_EXAMPLE.read_text()
+
+    for name in _INSTRUMENT_VARS:
+        assert f"\n{name}=" in contract, f"{name} is missing from .env.example"

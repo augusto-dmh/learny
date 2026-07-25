@@ -16,6 +16,7 @@ from pgvector.psycopg import register_vector
 from sqlalchemy import Engine, create_engine, event
 
 from app.core.config import get_settings
+from app.infrastructure.db.instrumentation import install_slow_query_listener
 
 logger = logging.getLogger(__name__)
 
@@ -31,9 +32,15 @@ def get_engine() -> Engine:
     is absent — we swallow that so the connection still opens; queries that actually
     need the vector type then fail explicitly. Migrations use their own engine
     (``env.py``), so they are unaffected.
+
+    Slow-statement capture is attached here, which is what makes *the application's*
+    engine the instrumented one. The engines built for tests and for Alembic are
+    separate objects and stay uninstrumented on purpose: nothing should time the
+    migration run, and a test that wants capture must reach for this function.
     """
     settings = get_settings()
     engine = create_engine(settings.database_url, pool_pre_ping=True, future=True)
+    install_slow_query_listener(engine, threshold_ms=settings.slow_query_ms)
 
     @event.listens_for(engine, "connect")
     def _register_vector(dbapi_conn, _record):  # noqa: ANN001, ANN202

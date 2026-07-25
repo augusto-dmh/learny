@@ -86,21 +86,41 @@ Cycle F interleaves after RFC-004 Cycle C.
 | `v4-home-ia` | E | Two-card Home, streak/heatmap, nav collapse | Done (PR #44) |
 | `v4-polish-gate` | F | Restyle completion + 14-day dogfood gate | Polish shipped (PR #45); dogfood window open 2026-07-21, retrospective closes the RFC |
 
-## v5 (RFC-005 — Draft)
+## v5 (RFC-005 — Draft, PAUSED after Cycle A)
 
 v5 is proposed in [RFC-005](../../docs/rfc/0005-evidence-gated-hardening-roadmap.md)
 (**Draft, work-in-window authorized 2026-07-24**): evidence-gated hardening plus one
-product beachhead, written into the open RFC-004 dogfood window. Cycles A–E are ungated
-backend/eval/ops debt authorized to start now under Draft (they touch no surface the
-dogfooding author sees); Cycle F builds now but holds its deploy until after the
-retrospective. Formal acceptance is pending the RFC-004 dogfood retrospective (~2026-08-04),
-which also seeds a sibling RFC-006 for the dogfood-gated reader visuals. Targets v0.5.0.
+product beachhead, written into the open RFC-004 dogfood window. Cycle A shipped; then
+the 2026-07-24 dogfood session produced thirteen UX findings and the driver **paused
+RFC-005 after Cycle A**, giving the window to RFC-006 (below). Cycles B–F stay queued
+and unmodified — nothing in RFC-006 touches the eval stack, the workers, or retrieval
+ranking — and resume when RFC-006 completes or pauses in turn. **None of them is the
+next cycle to run.** The one exception: Cycle E (worker liveness) may be pulled forward
+between any two RFC-006 cycles if worker pain bites. Formal acceptance remains pending
+the RFC-004 dogfood retrospective (~2026-08-04). Targets v0.5.0.
 
 | tlc Cycle | RFC-005 Cycle | Scope | Status |
 |---|---|---|---|
 | `v5-offline-suite-honesty` | A | conftest provider pin (offline-suite leak) + teach-panel resume deflake | Done (PR #47) |
-| `v5-opus-judge-recalibration` | B | Decline-faithfulness contract (ADR-0028) + Opus judge re-derivation → flip-or-stay | Not started |
-| `v5-generation-denoise` | C | Multi-run Sonnet-vs-Opus A/B, per-metric variance | Not started |
-| `v5-eval-dashboard` | D | Read-only render of the nightly eval JSONL (compact, cuttable) | Not started |
-| `v5-worker-recovery-hardening` | E | Celery worker liveness/heartbeat + WAL/PITR restore drill | Not started |
-| `v5-spoiler-safe-retrieval` | F | Position-scoped retrieval (build now, deploy after the retrospective) | Not started (deploy dogfood-gated) |
+| `v5-opus-judge-recalibration` | B | Decline-faithfulness contract (ADR-0028) + Opus judge re-derivation → flip-or-stay | Paused (queued behind RFC-006) |
+| `v5-generation-denoise` | C | Multi-run Sonnet-vs-Opus A/B, per-metric variance | Paused (queued behind RFC-006) |
+| `v5-eval-dashboard` | D | Read-only render of the nightly eval JSONL (compact, cuttable) | Paused (queued behind RFC-006) |
+| `v5-worker-recovery-hardening` | E | Celery worker liveness/heartbeat + WAL/PITR restore drill | Paused (pullable forward if worker pain bites) |
+| `v5-spoiler-safe-retrieval` | F | Position-scoped retrieval (build now, deploy after the retrospective) | Paused (deploy also dogfood-gated) |
+
+## v6 (RFC-006 — Draft)
+
+v6 is proposed in [RFC-006](../../docs/rfc/0006-reading-first-ux-overhaul.md)
+(**Draft, proposed 2026-07-24**), which holds the window RFC-005 gave up: the reader
+becomes the hub, the two missing foundations (a page unit and one grounded-conversation
+model) get built, and the app finally measures itself. Source evidence: thirteen dogfood
+findings from the 2026-07-24 session, recorded in the RFC. Ordering is foundations-first
+and C precedes D by the driver's explicit call; ADR-0029 must be accepted before Cycle C.
+
+| tlc Cycle | RFC-006 Cycle | Scope | Status |
+|---|---|---|---|
+| `v6-instrument` | A | Request/query/task timings, `Server-Timing`, dev-only surface | Done (PR pending) |
+| `v6-page-unit` | B | Page unit (~275 words), reader typography, live progress, study heatmap | Not started |
+| `v6-conversation-model` | C | Unified scoped conversations per ADR-0029 (backend-first) | Not started (ADR-0029 first) |
+| `v6-workspace` | D | Reader as hub: contents rail, four-tab dock, route redirects, re-scoped notes/review | Not started |
+| `v6-answer-experience` | E | Thinking + streaming states, inline citations, app-wide loading pattern | Not started |

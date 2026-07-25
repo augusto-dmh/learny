@@ -7,6 +7,10 @@ self-hosted, provider-neutral agent that reads host metrics from read-only bind
 mounts and per-container metrics from the docker socket. No external SaaS, no
 data leaves the VPS.
 
+Netdata answers "is the box healthy". For "which endpoint or SQL statement is
+slow", see [instrumentation.md](instrumentation.md) — an in-process,
+development-first instrument with a different scope and different caveats.
+
 > Production invocation used throughout this doc:
 > `docker compose -f docker-compose.yml -f docker-compose.prod.yml <cmd>`.
 > (The local override is not loaded in production — see AD-042.)

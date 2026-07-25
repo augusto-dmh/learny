@@ -104,6 +104,20 @@ def test_web_prod_runs_built_app_not_dev_server(prod: dict) -> None:
     assert prod["web"]["build"].get("target") == "prod"
 
 
+def test_prod_never_enables_the_dev_instrument_surface(prod: dict) -> None:
+    # The dev instrument route ranks endpoints and shows SQL statement text. It
+    # is mounted only when the flag is true, and the production invocation must
+    # not be the thing that turns it on — for api or for any other service.
+    for svc in _ALL_SERVICES:
+        env = prod[svc].get("environment", {})
+        assert "LEARNY_DEV_INSTRUMENT_ENABLED" not in env, svc
+
+
+def test_local_override_enables_the_dev_instrument_surface() -> None:
+    local = _services(_BASE, _OVERRIDE)
+    assert local["api"]["environment"]["LEARNY_DEV_INSTRUMENT_ENABLED"] == "true"
+
+
 def test_local_override_restores_infra_ports() -> None:
     local = _services(_BASE, _OVERRIDE)
     for svc in _INFRA:
