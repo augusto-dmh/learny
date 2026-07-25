@@ -123,6 +123,28 @@ describe("ink-line progress (RD-30)", () => {
   });
 });
 
+describe("sticky header offset (PAGE-15)", () => {
+  it("reserves exactly the sticky chrome's height above every section", () => {
+    const { container } = render(
+      <ChapterFlow sourceId="s1" csrf="c" chapter={chapter} scrollTarget={null} />,
+    );
+
+    // The chrome is laid out at a known height...
+    const chrome = screen.getByTestId("reader-top-bar").parentElement!;
+    expect(chrome.style.height).not.toBe("");
+    // ...and each section reserves that same height, so a jumped-to heading
+    // stops below the bar instead of sliding under it. A guess kept next to the
+    // bar rather than derived from it is what drifts.
+    const sections = Array.from(
+      container.querySelectorAll<HTMLElement>("[data-section-anchor]"),
+    );
+    expect(sections.length).toBeGreaterThan(0);
+    for (const section of sections) {
+      expect(section.style.scrollMarginTop).toBe(chrome.style.height);
+    }
+  });
+});
+
 describe("return chip lifecycle (RD-24)", () => {
   const resumed: ChapterView = {
     ...chapter,

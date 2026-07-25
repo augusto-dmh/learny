@@ -97,6 +97,15 @@ const STALE_CAPTURE_MESSAGE =
 /** Pixels below the popover's top edge to drop the suggestion row, clearing the verbs. */
 const SUGGESTIONS_OFFSET = 44;
 
+/**
+ * The height of the reader's sticky chrome, in pixels — one value with two
+ * consumers. The bar is laid out at exactly this height, and every section
+ * reserves exactly this much scroll margin, so a jumped-to heading can never
+ * land underneath the bar. Sizing the bar and guessing its height separately is
+ * what let the two drift apart and slid the prose under the header.
+ */
+const READER_CHROME_HEIGHT = 56;
+
 type LoadState =
   | { kind: "loading" }
   | { kind: "signed-out" }
@@ -677,11 +686,14 @@ export function ChapterFlow({
 
   return (
     <div>
-      <div className="sticky top-0 z-20">
+      <div
+        className="sticky top-0 z-20 flex flex-col"
+        style={{ height: READER_CHROME_HEIGHT }}
+      >
         <div
           data-testid="reader-top-bar"
           className={cn(
-            "flex items-center justify-between gap-4 border-b bg-background/80 px-4 py-2 backdrop-blur transition-transform duration-200 motion-reduce:transition-none",
+            "flex flex-1 items-center justify-between gap-4 border-b bg-background/80 px-4 backdrop-blur transition-transform duration-200 motion-reduce:transition-none",
             chromeHidden && "-translate-y-full",
           )}
         >
@@ -872,7 +884,9 @@ function FlowSection({
       id={section.anchor}
       data-section-anchor={section.anchor}
       onMouseUp={onMouseUp}
-      className="scroll-mt-16"
+      // The same height the sticky chrome is laid out at, so a section jumped to
+      // stops clear of it rather than under it.
+      style={{ scrollMarginTop: READER_CHROME_HEIGHT }}
     >
       <div
         data-section-heading={section.anchor}
