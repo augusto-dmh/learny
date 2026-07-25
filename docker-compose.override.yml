@@ -32,6 +32,11 @@ services:
       LEARNY_DATABASE_URL: postgresql+psycopg://learny:learny@db:5432/learny
       LEARNY_STORAGE_ACCESS_KEY: learny
       LEARNY_STORAGE_SECRET_KEY: learny-dev-secret
+      # Mounts the dev instrument route (docs/ops/instrumentation.md). This file
+      # is not loaded in production, and the prod overlay never sets the flag, so
+      # the surface exists only here. Local runs a single API worker, which is
+      # what makes its view of the traffic complete.
+      LEARNY_DEV_INSTRUMENT_ENABLED: "true"
     # Optional local AI-provider keys (git-ignored; see backend/.env.example).
     # `required: false` keeps a keyless clone booting deterministic adapters.
     env_file:

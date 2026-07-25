@@ -16,6 +16,7 @@ _BACKUPS = _OPS / "backups.md"
 _ROLLBACK = _OPS / "rollback.md"
 _DEPLOY = _OPS / "deploy.md"
 _MONITORING = _OPS / "monitoring.md"
+_INSTRUMENTATION = _OPS / "instrumentation.md"
 
 
 @pytest.fixture
@@ -36,6 +37,11 @@ def deploy() -> str:
 @pytest.fixture
 def monitoring() -> str:
     return _MONITORING.read_text()
+
+
+@pytest.fixture
+def instrumentation() -> str:
+    return _INSTRUMENTATION.read_text()
 
 
 def test_runbooks_exist() -> None:
@@ -165,6 +171,100 @@ def test_monitoring_documents_the_trust_boundary(monitoring: str) -> None:
     lowered = monitoring.lower()
     assert "unauthenticated" in lowered
     assert "docker" in lowered
+
+
+# --- app instrumentation runbook (OBS-24) ---------------------------------------
+# The half of this note that earns its keep is the boundary half: a reader who
+# quotes a number from a one-process, restart-volatile buffer as if it covered the
+# deployment is worse off than one who never opened it. Pin how to reach the
+# surface, both gates, the settings, and every stated limit.
+
+
+def test_instrumentation_runbook_exists() -> None:
+    assert _INSTRUMENTATION.is_file()
+
+
+def test_instrumentation_documents_how_to_reach_the_surface(instrumentation: str) -> None:
+    assert "GET /api/dev/instrument" in instrumentation
+    # Through the Next.js proxy, which is what carries the session cookie.
+    assert "http://localhost:3000/api/dev/instrument" in instrumentation
+
+
+def test_instrumentation_documents_both_gates(instrumentation: str) -> None:
+    assert "LEARNY_DEV_INSTRUMENT_ENABLED" in instrumentation
+    assert "404" in instrumentation  # flag off
+    assert "401" in instrumentation  # enabled but unauthenticated
+
+
+def test_instrumentation_documents_the_settings(instrumentation: str) -> None:
+    for var in (
+        "LEARNY_INSTRUMENT_CAPACITY",
+        "LEARNY_SLOW_QUERY_MS",
+        "LEARNY_SLOW_QUERY_STATEMENT_CHARS",
+    ):
+        assert var in instrumentation
+
+
+def test_instrumentation_documents_the_single_process_scope(instrumentation: str) -> None:
+    lowered = instrumentation.lower()
+    # Prod runs several API workers, so the surface is one worker's slice; local
+    # runs a single worker, where it is complete.
+    assert "LEARNY_API_WORKERS" in instrumentation
+    assert "single" in lowered and "worker" in lowered
+    assert "restart" in lowered
+
+
+def test_instrumentation_documents_that_celery_durations_are_logs_only(
+    instrumentation: str,
+) -> None:
+    assert "task.duration" in instrumentation
+    assert "different process" in instrumentation.lower()
+
+
+def test_instrumentation_documents_the_two_timing_semantics(instrumentation: str) -> None:
+    # The header is the server's share; the log and the ranking are the whole
+    # request, so streaming endpoints stay rankable by what they cost.
+    assert "Server-Timing" in instrumentation
+    assert "response_start_ms" in instrumentation
+    assert "duration_ms" in instrumentation
+    assert "time to response start" in instrumentation.lower()
+
+
+def test_instrumentation_documents_the_unhandled_exception_header_gap(
+    instrumentation: str,
+) -> None:
+    assert "ServerErrorMiddleware" in instrumentation
+    assert "X-Request-ID" in instrumentation
+
+
+def test_instrumentation_documents_that_failed_statements_are_not_captured(
+    instrumentation: str,
+) -> None:
+    assert "after_cursor_execute" in instrumentation
+    assert "database error is not captured" in instrumentation
+
+
+def test_instrumentation_documents_the_log_levels_and_the_truncation_asymmetry(
+    instrumentation: str,
+) -> None:
+    assert "WARNING" in instrumentation
+    lowered = instrumentation.lower()
+    assert "untruncated" in lowered
+    assert "one warning per statement" in lowered
+
+
+def test_instrumentation_documents_why_production_does_not_expose_it(
+    instrumentation: str,
+) -> None:
+    lowered = instrumentation.lower()
+    assert "production" in lowered
+    assert "statement text" in lowered
+
+
+def test_monitoring_points_at_the_instrumentation_runbook(monitoring: str) -> None:
+    # Two tools, two questions — an operator landing on the host-metrics runbook
+    # must be able to find the app-level one.
+    assert "instrumentation.md" in monitoring
 
 
 def test_rollback_documents_independent_image_revert(rollback: str) -> None:
