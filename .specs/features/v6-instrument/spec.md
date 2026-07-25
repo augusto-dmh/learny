@@ -161,39 +161,40 @@ Explicitly excluded. Documented to prevent scope creep.
 
 | Requirement ID | Story | Phase | Status |
 | --- | --- | --- | --- |
-| OBS-01 | P1: One timing recorder | A | Pending |
-| OBS-02 | P1: One timing recorder | A | Pending |
-| OBS-03 | P1: One timing recorder | A | Pending |
-| OBS-04 | P1: One timing recorder | A | Pending |
-| OBS-05 | P1: One timing recorder | A | Pending |
-| OBS-06 | P1: One timing recorder | B | Pending |
-| OBS-07 | P1: One timing recorder | B | Pending |
-| OBS-08 | P1: Server timing on the wire | B | Pending |
-| OBS-09 | P1: Server timing on the wire | B | Pending |
-| OBS-10 | P1: Server timing on the wire | B | Pending |
-| OBS-11 | P1: Slow query capture | C | Pending |
-| OBS-12 | P1: Slow query capture | C | Pending |
-| OBS-13 | P1: Slow query capture | C | Pending |
-| OBS-14 | P1: Slow query capture | C | Pending |
-| OBS-15 | P1: Slow query capture | C | Pending |
-| OBS-16 | P1: Uniform Celery task durations | C | Pending |
-| OBS-17 | P1: Uniform Celery task durations | C | Pending |
-| OBS-18 | P1: Uniform Celery task durations | C | Pending |
-| OBS-19 | P1: The dev-only surface | D | Pending |
-| OBS-20 | P1: The dev-only surface | D | Pending |
-| OBS-21 | P1: The dev-only surface | D | Pending |
-| OBS-22 | P1: The dev-only surface | D | Pending |
-| OBS-23 | P1: The dev-only surface | D | Pending |
-| OBS-24 | P1: The dev-only surface | D | Pending |
-| OBS-25 | P1: Server timing on the wire | B | Pending |
-| OBS-26 | P1: The dev-only surface | D | Pending |
+| OBS-01 | P1: One timing recorder | A | Verified |
+| OBS-02 | P1: One timing recorder | A | Verified |
+| OBS-03 | P1: One timing recorder | A | Verified |
+| OBS-04 | P1: One timing recorder | A | Verified |
+| OBS-05 | P1: One timing recorder | A | Verified |
+| OBS-06 | P1: One timing recorder | B | Verified |
+| OBS-07 | P1: One timing recorder | B | Verified |
+| OBS-08 | P1: Server timing on the wire | B | Verified |
+| OBS-09 | P1: Server timing on the wire | B | Verified |
+| OBS-10 | P1: Server timing on the wire | B | Verified |
+| OBS-11 | P1: Slow query capture | C | Verified |
+| OBS-12 | P1: Slow query capture | C | Verified |
+| OBS-13 | P1: Slow query capture | C | Verified |
+| OBS-14 | P1: Slow query capture | C | Verified |
+| OBS-15 | P1: Slow query capture | C | Verified |
+| OBS-16 | P1: Uniform Celery task durations | C | Verified |
+| OBS-17 | P1: Uniform Celery task durations | C | Verified |
+| OBS-18 | P1: Uniform Celery task durations | C | Verified |
+| OBS-19 | P1: The dev-only surface | D | Verified |
+| OBS-20 | P1: The dev-only surface | D | Verified |
+| OBS-21 | P1: The dev-only surface | D | Verified |
+| OBS-22 | P1: The dev-only surface | D | Verified |
+| OBS-23 | P1: The dev-only surface | D | Verified |
+| OBS-24 | P1: The dev-only surface | D | Verified |
+| OBS-25 | P1: Server timing on the wire | B | Verified |
+| OBS-26 | P1: The dev-only surface | D | Verified |
 
 **Mapping:** OBS-01..07 = recorder ACs 1–7; OBS-08..10 + OBS-25 = server-timing ACs 1–4;
 OBS-11..15 = slow-query ACs 1–5; OBS-16..18 = Celery ACs 1–3; OBS-19..24 = surface ACs 1–6.
 OBS-26 = the configured recorder is actually injected at app assembly, so the capacity and
 statement-cap settings are live rather than inert (gap found in Phase B, assigned to D).
 
-**Coverage:** 26 total, 26 mapped to phases, 0 unmapped.
+**Coverage:** 26 total, 26 mapped to phases, 0 unmapped, **26 verified** — see `validation.md`
+for the per-criterion evidence and the mutation sensor behind each one.
 
 ---
 
