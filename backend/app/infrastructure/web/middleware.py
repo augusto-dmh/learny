@@ -9,7 +9,10 @@ the handler emits. It:
   request method/path into a fresh trace scope, and echoes it on the response;
 - emits exactly one structured ``http.request`` access record — carrying status
   and duration — in a ``finally`` so it fires for success, handled errors, and
-  unhandled 500s alike.
+  unhandled 500s alike;
+- records that same duration on the in-process instrument, keyed on the *route
+  template* — never the raw path, which would leak resource identifiers into a
+  surface with weaker access control than the resources they name.
 
 Accepted gap: a *truly unhandled* exception is turned into a 500 by Starlette's
 outermost ``ServerErrorMiddleware`` (outside this middleware), so the response it
@@ -27,6 +30,7 @@ from collections.abc import Awaitable, Callable
 from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from app.core.instrumentation import record_request
 from app.core.tracing import (
     bind_trace,
     new_request_id,
@@ -45,6 +49,21 @@ def _inbound_request_id(scope: Scope) -> str | None:
         if name == b"x-request-id":
             return sanitize_request_id(value.decode("latin-1"))
     return None
+
+
+def _route_template(scope: Scope) -> str | None:
+    """Return the matched route's template (``/api/sources/{source_id}``), or ``None``.
+
+    The router publishes the matched route into ``scope["route"]`` *while* it
+    routes — i.e. during the downstream call — so this is only meaningful once
+    ``self.app`` has returned. Read defensively: anything that is not a route
+    object carrying a string ``path`` yields ``None``, which the recorder buckets
+    under its own placeholder. The raw ``scope["path"]`` is never substituted, so
+    if a future framework release stops populating the key the instrument loses
+    resolution rather than leaking identifiers.
+    """
+    path = getattr(scope.get("route"), "path", None)
+    return path if isinstance(path, str) else None
 
 
 class RequestContextMiddleware:
@@ -76,6 +95,15 @@ class RequestContextMiddleware:
             _access_logger.info(
                 "http.request",
                 extra={"status_code": status_holder["code"], "duration_ms": duration_ms},
+            )
+            # One measurement, two consumers. ``record_request`` contains its own
+            # failures, so the instrument cannot change the outcome it measures
+            # and this call needs no guard of its own.
+            record_request(
+                method=scope.get("method", ""),
+                route=_route_template(scope),
+                status_code=status_holder["code"],
+                duration_ms=duration_ms,
             )
             reset_trace(token)
 
