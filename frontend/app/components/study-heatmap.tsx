@@ -29,7 +29,7 @@
  * cells at any width.
  */
 
-import { useEffect, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useState, type CSSProperties } from "react";
 
 import {
   getStudyDays,
@@ -163,8 +163,13 @@ type HeatmapCell = {
   key: string;
   /** The ISO day for a real cell, or `null` for a week-alignment placeholder. */
   day: string | null;
+  /** The day as a reader says it: `Tue, Jul 21`. */
+  label: string;
   /** Zero-based month, for placing each month label over its own column. */
   month: number;
+  reviews: number;
+  /** The day's reading volume as the server floored it — never derived here. */
+  pages: number;
   total: number;
   level: number;
   /** Whether this cell is the viewer's local today, which the grid rings. */
@@ -172,15 +177,21 @@ type HeatmapCell = {
   placeholder: boolean;
 };
 
+/** The fields a placeholder has nothing to say about. */
+const BLANK_CELL = { label: "", month: 0, reviews: 0, pages: 0 };
+
 /**
  * Densify the sparse day rows into the `HEATMAP_WINDOW_DAYS`-day window ending at
  * `today`, padded fore and aft to whole weeks so the grid renders as clean weekday
  * columns. Absent days become level-0 empty cells (silent grace).
+ *
+ * Shading stays a function of `reviews_count + reading_updates` alone; the pages
+ * figure rides along for the tooltip and moves no cell's level.
  */
 function buildCells(days: StudyDayView[], today: Date): HeatmapCell[] {
-  const totals = new Map<string, number>();
+  const rows = new Map<string, StudyDayView>();
   for (const row of days) {
-    totals.set(row.day, row.reviews_count + row.reading_updates);
+    rows.set(row.day, row);
   }
 
   const todayKey = localDayKey(today);
@@ -193,7 +204,7 @@ function buildCells(days: StudyDayView[], today: Date): HeatmapCell[] {
     cells.push({
       key: `pad-start-${i}`,
       day: null,
-      month: 0,
+      ...BLANK_CELL,
       total: 0,
       level: 0,
       today: false,
@@ -204,11 +215,15 @@ function buildCells(days: StudyDayView[], today: Date): HeatmapCell[] {
     const d = new Date(start);
     d.setDate(start.getDate() + i);
     const key = localDayKey(d);
-    const total = totals.get(key) ?? 0;
+    const row = rows.get(key);
+    const total = row ? row.reviews_count + row.reading_updates : 0;
     cells.push({
       key,
       day: key,
+      label: `${WEEKDAYS[d.getDay()]}, ${MONTHS[d.getMonth()]} ${d.getDate()}`,
       month: d.getMonth(),
+      reviews: row?.reviews_count ?? 0,
+      pages: row?.pages ?? 0,
       total,
       level: intensityLevel(total),
       today: key === todayKey,
@@ -220,7 +235,7 @@ function buildCells(days: StudyDayView[], today: Date): HeatmapCell[] {
     cells.push({
       key: `pad-end-${cells.length}`,
       day: null,
-      month: 0,
+      ...BLANK_CELL,
       total: 0,
       level: 0,
       today: false,
@@ -258,10 +273,25 @@ function monthLabels(cells: HeatmapCell[]): MonthLabel[] {
   return labels;
 }
 
+/** `2 reviews`, `1 review` — a count with its word, pluralized. */
+function countWord(n: number, word: string): string {
+  return `${n} ${word}${n === 1 ? "" : "s"}`;
+}
+
+/** A day's activity as the readout says it: `7 reviews · 9 pages`. */
+function activitySummary(cell: HeatmapCell): string {
+  return `${countWord(cell.reviews, "review")} · ${countWord(cell.pages, "page")}`;
+}
+
+/** The floating readout: what a day holds, anchored over the cell it describes. */
+type Tooltip = { summary: string; day: string; left: number; top: number };
+
 /**
- * The week-aligned activity grid. Active days are shaded by their activity total;
- * zero-activity days are plain empty cells with no title or warning (I-7). `today`
- * is injectable for deterministic tests; it defaults to the current instant.
+ * The week-aligned activity grid. Active days are shaded by their activity total
+ * and carry a readout on hover *and* on keyboard focus; zero-activity days are
+ * plain empty cells — no tooltip, no title, not focusable, nothing to answer for
+ * (I-7). `today` is injectable for deterministic tests; it defaults to the current
+ * instant.
  */
 export function StudyHeatmap({
   days,
@@ -272,6 +302,28 @@ export function StudyHeatmap({
 }) {
   const cells = buildCells(days, today);
   const months = monthLabels(cells);
+  const [tooltip, setTooltip] = useState<Tooltip | null>(null);
+
+  const hideTooltip = useCallback(() => setTooltip(null), []);
+
+  const showTooltip = useCallback((el: HTMLElement, cell: HeatmapCell) => {
+    const rect = el.getBoundingClientRect();
+    setTooltip({
+      summary: activitySummary(cell),
+      day: cell.label,
+      left: rect.left + rect.width / 2,
+      top: rect.top - 8,
+    });
+  }, []);
+
+  // The readout is pinned to the viewport, so any scroll slides the cell out from
+  // under it; it goes away rather than pointing at the wrong day. Capture picks up
+  // scrolls in every container between the cell and the window.
+  useEffect(() => {
+    if (!tooltip) return;
+    window.addEventListener("scroll", hideTooltip, true);
+    return () => window.removeEventListener("scroll", hideTooltip, true);
+  }, [tooltip, hideTooltip]);
 
   return (
     <div data-testid="study-heatmap" className="space-y-2">
@@ -309,30 +361,53 @@ export function StudyHeatmap({
             ))}
           </div>
           <div data-testid="heatmap-cells" style={CELLS_GRID_STYLE}>
-            {cells.map((cell) =>
-              cell.placeholder ? (
-                <div
-                  key={cell.key}
-                  aria-hidden
-                  data-placeholder
-                  style={CELL_SIZE_STYLE}
-                  className="rounded-[3px]"
-                />
-              ) : (
+            {cells.map((cell) => {
+              if (cell.placeholder) {
+                return (
+                  <div
+                    key={cell.key}
+                    aria-hidden
+                    data-placeholder
+                    style={CELL_SIZE_STYLE}
+                    className="rounded-[3px]"
+                  />
+                );
+              }
+              // Only a day with something on it answers to a pointer or the tab
+              // key; an empty day is a shape, not a control (I-7).
+              const active = cell.total > 0;
+              return (
                 <div
                   key={cell.key}
                   data-testid="heatmap-cell"
                   data-day={cell.day ?? undefined}
                   data-level={cell.level}
+                  data-active={active ? "true" : undefined}
                   data-today={cell.today ? "true" : undefined}
-                  title={cell.total > 0 ? `${cell.total} on ${cell.day}` : undefined}
+                  role={active ? "img" : undefined}
+                  aria-label={
+                    active ? `${cell.label}: ${activitySummary(cell)}` : undefined
+                  }
+                  tabIndex={active ? 0 : undefined}
+                  onMouseEnter={
+                    active ? (e) => showTooltip(e.currentTarget, cell) : undefined
+                  }
+                  onMouseLeave={active ? hideTooltip : undefined}
+                  onFocus={
+                    active ? (e) => showTooltip(e.currentTarget, cell) : undefined
+                  }
+                  onBlur={active ? hideTooltip : undefined}
                   style={CELL_SIZE_STYLE}
                   className={`${CELL_BASE_CLASS} ${LEVEL_CLASS[cell.level]}${
                     cell.today ? " ring-1 ring-muted-foreground" : ""
+                  }${
+                    active
+                      ? " outline-ring hover:outline-2 hover:outline-offset-1 focus-visible:outline-2 focus-visible:outline-offset-1"
+                      : ""
                   }`}
                 />
-              ),
-            )}
+              );
+            })}
           </div>
         </div>
       </div>
@@ -354,6 +429,30 @@ export function StudyHeatmap({
           <span>More</span>
         </span>
       </div>
+
+      {tooltip && (
+        <div
+          role="tooltip"
+          aria-hidden
+          data-testid="heatmap-tooltip"
+          style={{
+            position: "fixed",
+            left: tooltip.left,
+            top: tooltip.top,
+            transform: "translate(-50%, -100%)",
+            pointerEvents: "none",
+            zIndex: 20,
+          }}
+          className="animate-in fade-in-0 rounded-[4px] bg-foreground px-[9px] py-1.5 font-mono text-[11.5px] leading-[1.45] whitespace-nowrap text-background shadow-lg motion-reduce:animate-none"
+        >
+          <span data-testid="tooltip-activity" className="block">
+            {tooltip.summary}
+          </span>
+          <span data-testid="tooltip-day" className="block opacity-[0.68]">
+            {tooltip.day}
+          </span>
+        </div>
+      )}
     </div>
   );
 }

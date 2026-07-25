@@ -19,6 +19,7 @@
  */
 
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -65,10 +66,10 @@ describe("StudyHeatmap grid (HOME-13, I-7)", () => {
   const today = new Date(2026, 6, 20); // 2026-07-20 local
 
   const days = [
-    { day: "2026-07-20", reviews_count: 2, reading_updates: 1 }, // total 3 → level 2
-    { day: "2026-07-17", reviews_count: 1, reading_updates: 0 }, // total 1 → level 1
-    { day: "2026-07-15", reviews_count: 4, reading_updates: 1 }, // total 5 → level 3
-    { day: "2026-07-13", reviews_count: 5, reading_updates: 3 }, // total 8 → level 4
+    { day: "2026-07-20", reviews_count: 2, reading_updates: 1, pages: 9 }, // total 3 → level 2
+    { day: "2026-07-17", reviews_count: 1, reading_updates: 0, pages: 0 }, // total 1 → level 1
+    { day: "2026-07-15", reviews_count: 4, reading_updates: 1, pages: 1 }, // total 5 → level 3
+    { day: "2026-07-13", reviews_count: 5, reading_updates: 3, pages: 24 }, // total 8 → level 4
   ];
 
   it("renders the full window and shades active days by activity total", () => {
@@ -97,9 +98,9 @@ describe("StudyHeatmap grid (HOME-13, I-7)", () => {
 
   it("caps the shading at the top level and keeps the boundary totals distinct", () => {
     const boundaryDays = [
-      { day: "2026-07-20", reviews_count: 6, reading_updates: 0 }, // total 6 → level 3 (top of band)
-      { day: "2026-07-19", reviews_count: 7, reading_updates: 0 }, // total 7 → level 4
-      { day: "2026-07-18", reviews_count: 40, reading_updates: 2 }, // total 42 → still level 4
+      { day: "2026-07-20", reviews_count: 6, reading_updates: 0, pages: 0 }, // total 6 → level 3 (top of band)
+      { day: "2026-07-19", reviews_count: 7, reading_updates: 0, pages: 0 }, // total 7 → level 4
+      { day: "2026-07-18", reviews_count: 40, reading_updates: 2, pages: 0 }, // total 42 → still level 4
     ];
     const { container } = render(<StudyHeatmap days={boundaryDays} today={today} />);
 
@@ -271,12 +272,130 @@ describe("StudyHeatmap layout (PAGE-19/20/21/23/26)", () => {
   });
 });
 
+describe("StudyHeatmap tooltip (PAGE-22, I-7)", () => {
+  const today = new Date(2026, 6, 20); // 2026-07-20 local, a Monday
+
+  // One busy day, one single-count day (to pin pluralization), and a day whose
+  // pages figure is nothing like its activity total — a client deriving pages from
+  // the counters, or from a words-per-page constant of its own, would disagree.
+  const days = [
+    { day: "2026-07-20", reviews_count: 7, reading_updates: 2, pages: 9 },
+    { day: "2026-07-14", reviews_count: 1, reading_updates: 0, pages: 1 },
+  ];
+
+  function cellFor(container: HTMLElement, day: string) {
+    return container.querySelector<HTMLElement>(`[data-day="${day}"]`)!;
+  }
+
+  it("shows the day's reviews, pages, and date on hover", () => {
+    const { container } = render(<StudyHeatmap days={days} today={today} />);
+
+    expect(screen.queryByTestId("heatmap-tooltip")).toBeNull();
+    fireEvent.mouseEnter(cellFor(container, "2026-07-20"));
+
+    expect(screen.getByTestId("tooltip-activity").textContent).toBe(
+      "7 reviews · 9 pages",
+    );
+    expect(screen.getByTestId("tooltip-day").textContent).toBe("Mon, Jul 20");
+  });
+
+  it("shows the same readout on keyboard focus, not only on hover", () => {
+    const { container } = render(<StudyHeatmap days={days} today={today} />);
+    const cell = cellFor(container, "2026-07-20");
+
+    // The cell is reachable by tab, and reaching it says what the day holds.
+    expect(cell.getAttribute("tabindex")).toBe("0");
+    fireEvent.focus(cell);
+
+    expect(screen.getByTestId("tooltip-activity").textContent).toBe(
+      "7 reviews · 9 pages",
+    );
+    expect(screen.getByTestId("tooltip-day").textContent).toBe("Mon, Jul 20");
+  });
+
+  it("counts of one read in the singular", () => {
+    const { container } = render(<StudyHeatmap days={days} today={today} />);
+
+    fireEvent.mouseEnter(cellFor(container, "2026-07-14"));
+
+    expect(screen.getByTestId("tooltip-activity").textContent).toBe(
+      "1 review · 1 page",
+    );
+  });
+
+  it("takes the readout away on mouse leave, on blur, and on scroll", () => {
+    const { container } = render(<StudyHeatmap days={days} today={today} />);
+    const cell = cellFor(container, "2026-07-20");
+
+    fireEvent.mouseEnter(cell);
+    fireEvent.mouseLeave(cell);
+    expect(screen.queryByTestId("heatmap-tooltip")).toBeNull();
+
+    fireEvent.focus(cell);
+    fireEvent.blur(cell);
+    expect(screen.queryByTestId("heatmap-tooltip")).toBeNull();
+
+    // A scroll slides the cell out from under a viewport-pinned readout.
+    fireEvent.focus(cell);
+    expect(screen.getByTestId("heatmap-tooltip")).toBeTruthy();
+    fireEvent.scroll(window);
+    expect(screen.queryByTestId("heatmap-tooltip")).toBeNull();
+  });
+
+  it("leaves empty days silent: no readout, no title, and no way to focus one", () => {
+    const { container } = render(<StudyHeatmap days={days} today={today} />);
+    const empty = cellFor(container, "2026-07-19");
+
+    expect(empty.getAttribute("data-level")).toBe("0");
+    expect(empty.getAttribute("title")).toBeNull();
+    expect(empty.getAttribute("tabindex")).toBeNull();
+    expect(empty.getAttribute("data-active")).toBeNull();
+    expect(empty.getAttribute("aria-label")).toBeNull();
+
+    // Hovering one says nothing at all — there is nothing to answer for (I-7).
+    fireEvent.mouseEnter(empty);
+    expect(screen.queryByTestId("heatmap-tooltip")).toBeNull();
+    expect(container.textContent ?? "").not.toMatch(WARNING_TEXT);
+  });
+
+  it("keeps the readout out of the tab order and off the focused cell", () => {
+    const { container } = render(<StudyHeatmap days={days} today={today} />);
+    const cell = cellFor(container, "2026-07-20");
+
+    act(() => cell.focus());
+    const tooltip = screen.getByTestId("heatmap-tooltip");
+
+    // Decoration, not a stop: the cell keeps focus and the readout can't take it.
+    expect(document.activeElement).toBe(cell);
+    expect(tooltip.getAttribute("aria-hidden")).toBe("true");
+    expect(tooltip.querySelector("[tabindex]")).toBeNull();
+    expect(tooltip.getAttribute("tabindex")).toBeNull();
+  });
+
+  it("carries the pages the server sent without touching any cell's shading", () => {
+    const { container } = render(<StudyHeatmap days={days} today={today} />);
+
+    // 7 + 2 = 9 activity → level 4; the day's 9 pages leave that untouched, and
+    // the 1-review day stays level 1 despite its own page count.
+    expect(cellFor(container, "2026-07-20").getAttribute("data-level")).toBe("4");
+    expect(cellFor(container, "2026-07-14").getAttribute("data-level")).toBe("1");
+
+    // And the figure shown is the server's, not one derived from the counters.
+    fireEvent.mouseEnter(cellFor(container, "2026-07-20"));
+    expect(screen.getByTestId("tooltip-activity").textContent).toContain(
+      "9 pages",
+    );
+  });
+});
+
 describe("StudyStats streak line (HOME-12, I-4)", () => {
   it("renders the adherence count from the server value, not a client recomputation", async () => {
     // Only one day row, but the server says 9 studied — a client that recomputed
     // from the rows would print 1.
     const summary: StudySummaryView = {
-      days: [{ day: "2026-07-20", reviews_count: 1, reading_updates: 0 }],
+      days: [
+        { day: "2026-07-20", reviews_count: 1, reading_updates: 0, pages: 3 },
+      ],
       studied_last_14: 9,
     };
     stubStudyFetch(jsonResponse(200, summary));

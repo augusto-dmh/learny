@@ -22,11 +22,20 @@
 /** The tz header the day boundary rides on (HOME-09). */
 const CLIENT_TIMEZONE_HEADER = "X-Client-Timezone";
 
-/** One user-local day of activity, mirroring the backend `StudyDayView`. */
+/**
+ * One user-local day of activity, mirroring the backend `StudyDayView`.
+ *
+ * `pages` is the day's reading volume, already floored server-side against the
+ * words-per-page quantum — the raw word figure never crosses the wire, so nothing
+ * here needs to know how many words make a page. It is required because the server
+ * always sends it: typing it as optional would understate the contract and turn a
+ * wire regression into a silently wrong figure instead of a failed build.
+ */
 export type StudyDayView = {
   day: string;
   reviews_count: number;
   reading_updates: number;
+  pages: number;
 };
 
 /** The adherence read model, mirroring the backend `StudySummaryView`. */
