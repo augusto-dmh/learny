@@ -250,6 +250,44 @@ def test_words_per_page_env_override(monkeypatch) -> None:
     assert settings.words_per_page == 300
 
 
+def test_conversation_settings_defaults() -> None:
+    # One policy for every grounded conversation: the evidence budget handed to
+    # scoped retrieval, the prior turns a generation port sees, and the message
+    # length the web validator enforces.
+    settings = Settings(_env_file=None)
+
+    assert settings.conversation_evidence_top_k == 8
+    assert settings.conversation_history_turns == 6
+    assert settings.conversation_message_max_chars == 2000
+
+
+def test_conversation_settings_env_override(monkeypatch) -> None:
+    monkeypatch.setenv("LEARNY_CONVERSATION_EVIDENCE_TOP_K", "5")
+    monkeypatch.setenv("LEARNY_CONVERSATION_HISTORY_TURNS", "2")
+    monkeypatch.setenv("LEARNY_CONVERSATION_MESSAGE_MAX_CHARS", "500")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.conversation_evidence_top_k == 5
+    assert settings.conversation_history_turns == 2
+    assert settings.conversation_message_max_chars == 500
+
+
+def test_deprecated_qa_and_teaching_knobs_still_validate(monkeypatch) -> None:
+    # The legacy endpoints outlive their knobs by one cycle. Dropping these fields
+    # would make a deployed env file that still sets them fail to validate at boot,
+    # so they stay declared until those endpoints retire.
+    monkeypatch.setenv("LEARNY_QA_EVIDENCE_TOP_K", "3")
+    monkeypatch.setenv("LEARNY_TEACHING_EVIDENCE_TOP_K", "4")
+    monkeypatch.setenv("LEARNY_TEACHING_HISTORY_TURNS", "1")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.qa_evidence_top_k == 3
+    assert settings.teaching_evidence_top_k == 4
+    assert settings.teaching_history_turns == 1
+
+
 def test_env_example_documents_the_instrument_contract() -> None:
     # The environment contract is a deliverable: an operator must be able to read
     # the flag, the threshold, the buffer capacity and the statement cap off it.

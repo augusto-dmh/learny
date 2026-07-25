@@ -149,6 +149,9 @@ class Settings(BaseSettings):
     # and the server-controlled evidence budget. ``qa_evidence_top_k`` is the
     # ``top_k`` handed to Phase-6 retrieval; keep it ≤ ``retrieval_max_top_k``.
     qa_question_max_chars: int = 2000
+    # Deprecated: superseded by ``conversation_evidence_top_k``. Kept declared so
+    # deployed env files carrying it keep validating; it retires with the legacy
+    # questions endpoints.
     qa_evidence_top_k: int = 8
 
     # Teaching sessions (Phase 8) — message length bound enforced by the web
@@ -156,8 +159,20 @@ class Settings(BaseSettings):
     # (keep ≤ ``retrieval_max_top_k``), and the number of prior turns passed to the
     # generation port as bounded context (TEACH-12).
     teaching_message_max_chars: int = 2000
+    # Deprecated: superseded by the ``conversation_*`` pair below, for the same
+    # reason as ``qa_evidence_top_k``.
     teaching_evidence_top_k: int = 8
     teaching_history_turns: int = 6
+
+    # Conversations (ADR-0029) — one policy for every grounded conversation,
+    # replacing the separate Q&A and teaching knobs above. The evidence budget is
+    # the ``top_k`` handed to scoped retrieval (keep ≤ ``retrieval_max_top_k``);
+    # ``conversation_history_turns`` bounds the prior turns a generation port sees;
+    # ``conversation_message_max_chars`` is the message length bound the web
+    # validator enforces.
+    conversation_evidence_top_k: int = 8
+    conversation_history_turns: int = 6
+    conversation_message_max_chars: int = 2000
 
     # Generation (ADR-0020) — the provider SDK and model names live only in the
     # answer/teaching adapters; these knobs stay LEARNY_-prefixed and never
