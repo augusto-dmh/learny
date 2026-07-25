@@ -91,6 +91,10 @@ jobs:
           src: backend
           # Lint with the exact ruff the lockfile pins, not a floating latest.
           version-file: backend/uv.lock
+      # Architecture fitness: provider-SDK isolation and layer boundaries as
+      # executable rules (stdlib-only script), not just review prose.
+      - name: Check architecture boundaries
+        run: python3 backend/scripts/check_boundaries.py
 
   frontend:
     runs-on: ubuntu-latest

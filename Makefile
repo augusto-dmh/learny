@@ -1,6 +1,6 @@
 # Canonical verification vocabulary — same names locally, in agent sessions, and in docs.
 
-.PHONY: infra test test-backend test-frontend lint lint-backend lint-frontend check
+.PHONY: infra test test-backend test-frontend lint lint-backend lint-frontend fitness check
 
 infra: ## Start the local services DB/golden tests depend on
 	docker compose up -d db minio redis
@@ -21,6 +21,9 @@ lint-backend:
 lint-frontend:
 	cd frontend && npx tsc --noEmit
 
-lint: lint-backend lint-frontend
+fitness: ## Architecture boundaries (provider-SDK isolation, layering)
+	python3 backend/scripts/check_boundaries.py
+
+lint: lint-backend lint-frontend fitness
 
 check: lint test
