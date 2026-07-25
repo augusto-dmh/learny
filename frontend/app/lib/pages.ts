@@ -20,6 +20,30 @@
  * defers to the next paragraph that can and takes its page number from there.
  */
 
+/**
+ * The book-global word offset of each section's first word.
+ *
+ * A chapter arrives with the words that precede *it*; each of its sections then
+ * starts wherever the previous one ended. That running sum is what makes a
+ * section's page rules continue the book rather than restart at every heading,
+ * so it belongs beside the arithmetic it feeds — the offsets are the input
+ * `pageAt` and `paginateSection` are given.
+ *
+ * The result is positional: entry `i` is section `i`'s offset, so the caller
+ * indexes it alongside the sections it rendered.
+ */
+export function sectionOffsets(
+  sections: readonly { word_count: number }[],
+  wordsBeforeChapter: number,
+): number[] {
+  let running = wordsBeforeChapter;
+  return sections.map((section) => {
+    const before = running;
+    running += section.word_count;
+    return before;
+  });
+}
+
 /** The 1-based page number of the point with `wordsBefore` words before it. */
 export function pageAt(wordsBefore: number, wordsPerPage: number): number {
   if (wordsPerPage <= 0) {

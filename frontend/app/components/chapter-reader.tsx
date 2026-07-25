@@ -68,7 +68,7 @@ import { CardSuggestions } from "@/app/components/notes/card-suggestions";
 import { fetchAuthState } from "@/app/lib/auth";
 import { CardError, suggestCards, type CardSuggestion } from "@/app/lib/cards";
 import { paintHighlights, SCAFFOLD_ATTRIBUTE } from "@/app/lib/highlight-paint";
-import { paginateSection } from "@/app/lib/pages";
+import { paginateSection, sectionOffsets } from "@/app/lib/pages";
 import { type PendingPanelRequest } from "@/app/lib/panel";
 import { captureHighlight, NoteError } from "@/app/lib/notes";
 import {
@@ -353,14 +353,10 @@ export function ChapterFlow({
   );
   // The book-global word offset of each section's first word, so a section's
   // page rules continue the book's numbering rather than restarting per chapter.
-  const sectionOffsets = useMemo(() => {
-    let running = chapter.words_before_chapter;
-    return chapter.sections.map((section) => {
-      const before = running;
-      running += section.word_count;
-      return before;
-    });
-  }, [chapter.sections, chapter.words_before_chapter]);
+  const offsets = useMemo(
+    () => sectionOffsets(chapter.sections, chapter.words_before_chapter),
+    [chapter.sections, chapter.words_before_chapter],
+  );
   const [flashAnchor, setFlashAnchor] = useState<string | null>(scrollTarget);
   // The below-lg table of contents collapses behind the top-bar toggle (RD-25).
   const [tocOpen, setTocOpen] = useState(false);
@@ -776,7 +772,7 @@ export function ChapterFlow({
             <FlowSection
               key={section.anchor}
               section={section}
-              wordsBefore={sectionOffsets[index]}
+              wordsBefore={offsets[index]}
               wordsPerPage={chapter.words_per_page}
               flashing={flashAnchor === section.anchor}
               highlights={highlightsByAnchor.get(section.anchor) ?? NO_HIGHLIGHTS}

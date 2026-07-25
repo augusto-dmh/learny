@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-import { countWords, pageAt } from "../app/lib/pages";
+import { countWords, pageAt, sectionOffsets } from "../app/lib/pages";
 
 /**
  * The page unit's arithmetic, on its own.
@@ -65,6 +65,36 @@ describe("pageAt", () => {
   it("reads page one for a non-positive quantum rather than dividing by it", () => {
     expect(pageAt(1000, 0)).toBe(1);
     expect(pageAt(1000, -275)).toBe(1);
+  });
+});
+
+describe("sectionOffsets", () => {
+  it("starts each section where the previous one ended", () => {
+    const sections = [{ word_count: 300 }, { word_count: 50 }, { word_count: 120 }];
+    expect(sectionOffsets(sections, 0)).toEqual([0, 300, 350]);
+  });
+
+  it("continues from the words before the chapter rather than from zero", () => {
+    // This is what keeps page numbers book-global: chapter two's first section
+    // does not start the count again.
+    const sections = [{ word_count: 300 }, { word_count: 50 }];
+    expect(sectionOffsets(sections, 5000)).toEqual([5000, 5300]);
+  });
+
+  it("gives a chapter's first section the chapter's own offset", () => {
+    expect(sectionOffsets([{ word_count: 10 }], 275)).toEqual([275]);
+    // ...which is the page the reader sees the chapter open on.
+    expect(pageAt(sectionOffsets([{ word_count: 10 }], 275)[0], 275)).toBe(2);
+  });
+
+  it("carries a section with no words without swallowing the offset", () => {
+    const sections = [{ word_count: 0 }, { word_count: 40 }, { word_count: 0 }];
+    expect(sectionOffsets(sections, 100)).toEqual([100, 100, 140]);
+  });
+
+  it("has one entry per section, positionally", () => {
+    expect(sectionOffsets([], 700)).toEqual([]);
+    expect(sectionOffsets([{ word_count: 1 }, { word_count: 2 }], 0)).toHaveLength(2);
   });
 });
 
