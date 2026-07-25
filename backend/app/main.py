@@ -79,9 +79,13 @@ def create_app() -> FastAPI:
             statement_max_chars=settings.slow_query_statement_chars,
         )
     )
+    exposed = instrument_surface_exposed(settings)
     # Outermost user middleware: wraps routing + exception handling so handled
-    # responses carry the request id and every request is access-logged.
-    app.add_middleware(RequestContextMiddleware)
+    # responses carry the request id and every request is access-logged. The
+    # ``Server-Timing`` header is the one part of the instrument that leaves the
+    # process, so it ships on the same switch as the surface — never on a
+    # production process. The access record keeps its timing field either way.
+    app.add_middleware(RequestContextMiddleware, server_timing_enabled=exposed)
     register_error_handlers(app)
     app.include_router(health_router)
     app.include_router(auth_router)
@@ -99,7 +103,7 @@ def create_app() -> FastAPI:
     # off — or with it set on a production process — the dev instrument path
     # matches no route at all: 404, and absent from the OpenAPI schema.
     # Authentication gates it independently once it is mounted.
-    if instrument_surface_exposed(settings):
+    if exposed:
         app.include_router(instrument_router)
     return app
 

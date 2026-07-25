@@ -63,8 +63,18 @@ means nothing has been recorded since the last restart.
 
 ## Read the browser's own split
 
-Every response the application produces carries `Server-Timing: app;dur=<ms>`,
-visible in the browser devtools network panel. It survives the Next.js proxy.
+With the instrument enabled, every response the application produces carries
+`Server-Timing: app;dur=<ms>`, visible in the browser devtools network panel. It
+survives the Next.js proxy.
+
+The header ships on the same switch as the surface — `LEARNY_DEV_INSTRUMENT_ENABLED`,
+refused on a production process — so **there is no server-timing split in
+production**. It is the only part of the instrument that leaves the process and
+the only one an anonymous caller can read: `/api/auth/*` maintains uniform login
+timing in application code (a dummy password hash on the missing-account path),
+and a microsecond server-side reading with network jitter already removed is
+exactly the signal that defence exists to withhold. In production the log is the
+instrument, and it reports the same number as `response_start_ms`.
 
 That number is the **time to response start** — the server's own share, which is
 all a browser can attribute to us. It is deliberately *not* the same number as
@@ -111,7 +121,7 @@ long strings.
 
 | Variable | Default | Effect |
 |---|---|---|
-| `LEARNY_DEV_INSTRUMENT_ENABLED` | `false` | Mounts `GET /api/dev/instrument`. Set only in the local override; refused on a `production` process |
+| `LEARNY_DEV_INSTRUMENT_ENABLED` | `false` | Mounts `GET /api/dev/instrument` **and** emits the `Server-Timing` header. Set only in the local override; refused on a `production` process |
 | `LEARNY_INSTRUMENT_CAPACITY` | `500` | Samples retained per buffer, per process. Oldest are discarded |
 | `LEARNY_SLOW_QUERY_MS` | `200` | A statement counts as slow at or **above** this. Zero or below captures every statement |
 | `LEARNY_SLOW_QUERY_STATEMENT_CHARS` | `2000` | Cap on captured statement text (recorder only) |

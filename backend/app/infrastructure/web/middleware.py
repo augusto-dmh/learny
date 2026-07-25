@@ -13,8 +13,25 @@ the handler emits. It:
 - records that same duration on the in-process instrument, keyed on the *route
   template* — never the raw path, which would leak resource identifiers into a
   surface with weaker access control than the resources they name;
-- reports the server's own share to the browser as ``Server-Timing: app;dur=…``,
-  so devtools can split server time from network and render time.
+- reports the server's own share to the browser as ``Server-Timing: app;dur=…``
+  **when the instrument is enabled**, so devtools can split server time from
+  network and render time.
+
+**The header ships on the same switch as the dev surface.** It is the one part of
+the instrument that leaves the process, and it is readable by anonymous callers:
+``AuthenticateUser`` deliberately hashes a dummy password to keep login timing
+uniform, and that uniformity is imperfect (looking the credential up is an extra
+round trip that only happens when the email exists). Microsecond server-side
+timing, with network jitter already removed, hands away exactly the property the
+application layer spends code defending — so it is emitted only where the
+instrument is deliberately on, which is never a production process. Whether to
+emit is decided by the composition root and passed in at construction:
+``create_app`` reads settings at assembly time, which is where settings may
+safely be read, and this module reads none (an import-time ``get_settings`` primes
+the settings cache and pins a stale database URL for Alembic — lesson L-007).
+
+The access record reports ``response_start_ms`` either way. Only the wire
+exposure is gated; nothing about diagnosis changes.
 
 **Two intervals, named apart.** A header must be written before the response
 starts; the access record is emitted after the request finishes. Rather than
@@ -95,10 +112,17 @@ def _route_template(scope: Scope) -> str | None:
 
 
 class RequestContextMiddleware:
-    """Bind a per-request trace scope and emit a structured access log."""
+    """Bind a per-request trace scope and emit a structured access log.
 
-    def __init__(self, app: ASGIApp) -> None:
+    ``server_timing_enabled`` decides whether responses carry the
+    ``Server-Timing`` header. It defaults to off so a composition root that never
+    considered the question does not publish timings by accident; ``create_app``
+    passes the instrument's own switch.
+    """
+
+    def __init__(self, app: ASGIApp, *, server_timing_enabled: bool = False) -> None:
         self.app = app
+        self.server_timing_enabled = server_timing_enabled
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -117,7 +141,12 @@ class RequestContextMiddleware:
         timing_holder: dict[str, float] = {}  # filled when the response starts
 
         send_wrapper = self._make_send_wrapper(
-            send, request_id, status_holder, timing_holder, start
+            send,
+            request_id,
+            status_holder,
+            timing_holder,
+            start,
+            server_timing_enabled=self.server_timing_enabled,
         )
         try:
             await self.app(scope, receive, send_wrapper)
@@ -152,22 +181,27 @@ class RequestContextMiddleware:
         status_holder: dict[str, int],
         timing_holder: dict[str, float],
         start: float,
+        *,
+        server_timing_enabled: bool,
     ) -> Callable[[Message], Awaitable[None]]:
         async def send_wrapper(message: Message) -> None:
             if message["type"] == "http.response.start":
                 status_holder["code"] = message["status"]
                 # Taken once here and reported both on the wire and in the
                 # access record, so the browser's number is never a second,
-                # independent measurement.
+                # independent measurement. The reading is taken — and logged —
+                # whether or not it is published: gating the header must not
+                # cost the access record a field.
                 response_start_ms = _elapsed_ms(start)
                 timing_holder["response_start_ms"] = response_start_ms
                 headers = MutableHeaders(raw=message.setdefault("headers", []))
                 headers[_REQUEST_ID_HEADER] = request_id
-                # ``Server-Timing`` is a list header: append so a metric a
-                # handler set for itself survives alongside ours.
-                headers.append(
-                    _SERVER_TIMING_HEADER, f"{_SERVER_TIMING_METRIC};dur={response_start_ms}"
-                )
+                if server_timing_enabled:
+                    # ``Server-Timing`` is a list header: append so a metric a
+                    # handler set for itself survives alongside ours.
+                    headers.append(
+                        _SERVER_TIMING_HEADER, f"{_SERVER_TIMING_METRIC};dur={response_start_ms}"
+                    )
             await send(message)
 
         return send_wrapper

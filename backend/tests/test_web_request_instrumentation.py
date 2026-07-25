@@ -86,9 +86,9 @@ def recorder() -> Iterator[InstrumentRecorder]:
         set_recorder(previous)
 
 
-def _build_app() -> FastAPI:
+def _build_app(*, server_timing_enabled: bool = True) -> FastAPI:
     app = FastAPI()
-    app.add_middleware(RequestContextMiddleware)
+    app.add_middleware(RequestContextMiddleware, server_timing_enabled=server_timing_enabled)
 
     @app.get("/items/{item_id}")
     def item(item_id: str) -> dict[str, str]:
@@ -240,6 +240,10 @@ def test_unhandled_exception_is_still_recorded_with_its_final_status(
 
 
 # --- OBS-08: the browser sees the server's share of the request --------------
+#
+# ...when the instrument is enabled, and only then. The header is the one part of
+# the instrument that leaves the process and the only one an anonymous caller can
+# read, so the disabled case below is as much the criterion as the enabled one.
 
 
 def test_response_carries_a_server_timing_app_metric(recorder: InstrumentRecorder) -> None:
@@ -260,6 +264,37 @@ def test_server_timing_reports_the_time_to_response_start_the_access_log_reports
     response = client.get(f"/items/{SECRET_ID}")
 
     assert _app_metric_dur(response) == _access_record(captured).response_start_ms
+
+
+def test_a_disabled_instrument_emits_no_server_timing(
+    recorder: InstrumentRecorder, captured: _RecordingHandler
+) -> None:
+    # Login endpoints defend their timing uniformity in application code; a
+    # microsecond server-side reading handed to an anonymous caller undoes that,
+    # so a disabled instrument publishes nothing on the wire.
+    client = TestClient(_build_app(server_timing_enabled=False))
+
+    response = client.get(f"/items/{SECRET_ID}")
+
+    assert response.status_code == 200
+    assert "Server-Timing" not in response.headers
+
+
+def test_a_disabled_instrument_still_records_the_time_to_response_start(
+    recorder: InstrumentRecorder, captured: _RecordingHandler
+) -> None:
+    # Only the wire exposure is gated: the access record keeps the same field, so
+    # nothing about diagnosis depends on the header being published.
+    client = TestClient(_build_app(server_timing_enabled=False))
+
+    response = client.get(f"/items/{SECRET_ID}")
+
+    record = _access_record(captured)
+    assert isinstance(record.response_start_ms, float)
+    assert record.response_start_ms >= 0.0
+    assert record.duration_ms >= record.response_start_ms
+    assert response.headers["X-Request-ID"]
+    assert recorder.recent_requests()[0].duration_ms == record.duration_ms
 
 
 def test_server_timing_leaves_the_request_id_header_intact() -> None:

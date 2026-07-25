@@ -228,6 +228,10 @@ def test_instrumentation_documents_the_two_timing_semantics(instrumentation: str
     assert "response_start_ms" in instrumentation
     assert "duration_ms" in instrumentation
     assert "time to response start" in instrumentation.lower()
+    # The header ships on the instrument's switch, so a production deployment
+    # sees none of it — a reader looking for the split must not be left hunting.
+    collapsed = " ".join(instrumentation.lower().split())
+    assert "no server-timing split in production" in collapsed
 
 
 def test_instrumentation_documents_the_unhandled_exception_header_gap(

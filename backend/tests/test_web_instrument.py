@@ -301,6 +301,39 @@ def test_reported_capacity_is_the_configured_one(build_client: ClientBuilder) ->
     assert client.get(INSTRUMENT_PATH).json()["capacity"] == 7
 
 
+# --- OBS-08: the header ships on the same switch as the surface ---------------
+#
+# The surface was double-gated while the header — the only part of the instrument
+# that leaves the process, and the only one an anonymous caller can read — shipped
+# on every response in every environment. These assert the assembled application,
+# not the middleware in isolation, because the switch is what the composition root
+# hands it.
+
+
+def test_a_disabled_instrument_serves_no_server_timing_header(
+    build_client: ClientBuilder,
+) -> None:
+    client = build_client(enabled=False)
+
+    assert "Server-Timing" not in client.get("/healthz").headers
+
+
+def test_an_enabled_instrument_serves_the_server_timing_header(
+    build_client: ClientBuilder,
+) -> None:
+    client = build_client(enabled=True)
+
+    assert client.get("/healthz").headers["Server-Timing"].startswith("app;dur=")
+
+
+def test_a_production_process_serves_no_server_timing_header_even_with_the_flag_set(
+    build_client: ClientBuilder,
+) -> None:
+    client = build_client(enabled=True, LEARNY_ENVIRONMENT="production")
+
+    assert "Server-Timing" not in client.get("/healthz").headers
+
+
 # --- Existing behaviour: mounting the surface adds a route and removes none ---
 
 
