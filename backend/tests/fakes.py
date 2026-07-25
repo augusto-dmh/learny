@@ -843,6 +843,8 @@ class FakeReadingPositionRepository:
 
     ``upsert`` overwrites any stored position for the ``(user_id, source_id)`` key and
     records each call so a test can assert nothing was written on the 404 path.
+    ``get_for_update`` returns the same row as ``get`` — a single-threaded dict has no
+    concurrency to hold against; the lock it stands for is exercised against Postgres.
     """
 
     def __init__(self) -> None:
@@ -850,6 +852,9 @@ class FakeReadingPositionRepository:
         self.upsert_calls: list[tuple[UUID, UUID]] = []
 
     def get(self, user_id: UUID, source_id: UUID) -> ReadingPosition | None:
+        return self._by_key.get((user_id, source_id))
+
+    def get_for_update(self, user_id: UUID, source_id: UUID) -> ReadingPosition | None:
         return self._by_key.get((user_id, source_id))
 
     def upsert(

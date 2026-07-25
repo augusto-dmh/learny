@@ -1971,7 +1971,23 @@ class SqlAlchemyReadingPositionRepository:
         self._conn = connection
 
     def get(self, user_id: UUID, source_id: UUID) -> ReadingPosition | None:
-        row = self._conn.execute(
+        return self._select(user_id, source_id, for_update=False)
+
+    def get_for_update(self, user_id: UUID, source_id: UUID) -> ReadingPosition | None:
+        """The same read under ``SELECT ... FOR UPDATE`` (see the port).
+
+        Holds the ``(user_id, source_id)`` row until the caller's transaction ends, so a
+        second saver of the same book blocks here and then, under READ COMMITTED, re-reads
+        the row the first one left — it derives its credit from the new position rather
+        than from the stale one it would otherwise have seen. No row means no lock, which
+        is harmless: without a prior position nothing is derived from it.
+        """
+        return self._select(user_id, source_id, for_update=True)
+
+    def _select(
+        self, user_id: UUID, source_id: UUID, *, for_update: bool
+    ) -> ReadingPosition | None:
+        stmt = (
             select(
                 reading_positions.c.anchor,
                 reading_positions.c.percent,
@@ -1979,7 +1995,10 @@ class SqlAlchemyReadingPositionRepository:
             )
             .where(reading_positions.c.user_id == user_id)
             .where(reading_positions.c.source_id == source_id)
-        ).one_or_none()
+        )
+        if for_update:
+            stmt = stmt.with_for_update()
+        row = self._conn.execute(stmt).one_or_none()
         if row is None:
             return None
         return ReadingPosition(anchor=row.anchor, percent=row.percent, updated_at=row.updated_at)

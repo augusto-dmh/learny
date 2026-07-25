@@ -306,7 +306,10 @@ class SaveReadingPosition:
 
     The same credit carries the day's reading *volume*: the words between the position
     being replaced and the new one (``words_credited`` — forward-only, and zero without a
-    usable baseline). The prior row is therefore read before the upsert overwrites it.
+    usable baseline). The prior row is therefore read before the upsert overwrites it, and
+    read under a lock (``get_for_update``): the volume is *derived* from that row, so two
+    saves reading it concurrently would each credit the same distance and leave the day
+    overstated for good. Reading a chapter takes no such lock — only the save path does.
     """
 
     def __init__(
@@ -340,9 +343,11 @@ class SaveReadingPosition:
         if target_idx is None:
             raise CorpusNotFound("No section for this anchor.")
 
-        # Read the baseline before the upsert replaces it; a superseded corpus can leave
-        # the stored anchor unresolvable, which credits zero without failing the save.
-        prior = self._positions.get(user.id, source_id)
+        # Read the baseline before the upsert replaces it, and hold it: the credit is the
+        # distance from this row, so two saves that read it at the same time would both
+        # claim the same distance and inflate the day permanently. A superseded corpus can
+        # leave the stored anchor unresolvable, which credits zero without failing the save.
+        prior = self._positions.get_for_update(user.id, source_id)
         advance = words_credited(
             index,
             prior_anchor=prior.anchor if prior is not None else None,
