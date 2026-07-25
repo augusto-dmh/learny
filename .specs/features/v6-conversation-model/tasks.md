@@ -15,6 +15,8 @@ task; no internal IDs and no tooling attribution in commit messages.
 
 Phase gate: full backend suite + `ruff check` + `ruff format --check`; record baseline counts.
 
+**Phase A: DONE** — commits `8766b212` (A1, migration+metadata together so every commit stays green), `f2b54f72` (A2), `2e1b59b0` (A3), `b3354237` (A4), `97e1990d` (follow-up: qa.py reads status constants from the domain). Baseline 1789/1/11 → 1808/1/11 (+19); ruff + `make lint` clean. Sensors: I-CM-1 `test_migrations.py:2129`, I-CM-2 `:2143` + `test_repositories.py:1868`, backfill round-trip `:2056`. Deviations recorded in the Phase A report (notable: **downgrade drops whole-book conversations** — unrepresentable in the 0016 shape; documented in the migration docstring and pinned by test).
+
 ## Phase B — Unified services and generation history · Opus
 
 | # | Task | Requirements | Gate |
@@ -24,6 +26,8 @@ Phase gate: full backend suite + `ruff check` + `ruff format --check`; record ba
 | B3 | `AnswerGenerationPort.history` + Anthropic answer history assembly + local signature widening; byte-stability pin | CONV-14, CONV-26, I-CM-8 | `pytest tests/test_answering_anthropic.py tests/test_answering_local.py tests/test_generation_invariants.py` |
 
 Phase gate: full backend suite + ruff.
+
+**Phase B: DONE** — commits `0a6f5d40` (B1), `a3daf2ff` (B2), `c1c7afaa` (B3). 1808/1/11 → 1866/1/11 (+58); ruff + `make lint` clean; carried failure unchanged. Sensors: I-CM-3 `test_application_conversations.py:1130` (vanished scope keeps its anchor, never `None`) + `:1199` (`not_found_in_scope`) + `:1061` (only an empty scope gets `anchors=None`); I-CM-5 `:1652` (cancel persists nothing) + `:1606` (stream == buffered turn); I-CM-2 `:1520`/`:1540`; I-CM-6 `:834`/`:897`/`:931`/`:1703`; I-CM-7 `:1375`/`:1398`; I-CM-8 `test_answering_local.py:54`/`:76`; history request shape `test_answering_anthropic.py:169`/`:188`/`:220`/`:234`. Five implementation mutations run against the new suite: four caught, the fifth (dropping the whole-book teach guard) is redundant with the target re-resolution and yields the same error. Decisions: `InvalidTeachingTarget`→`InvalidConversationScope`, `TeachingTargetGone`→`ConversationTargetUnavailable` (renamed, same status mapping), new `InvalidConversationTitle`→422; legacy `teaching.py`/`qa.py` left as-is this phase (Phase D folds them into the legacy presenters and removes the duplication).
 
 ## Phase C — Unified web surface · Opus
 
