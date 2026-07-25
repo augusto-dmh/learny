@@ -10,6 +10,19 @@ Learny is a learning application that starts as robust book teaching and may exp
 - v3 work is driven by [RFC-003](docs/rfc/0003-learny-v3-roadmap.md) (Accepted 2026-07-17): cycles A–F covering ops maturity (backups/monitoring), eval maturity (real baselines + judge gate), scanned-PDF OCR, and the research-gated flagship — notes & second-brain workflows on the canonical corpus.
 - Provider direction is locked by ADR-0019 (OpenAI `text-embedding-3-large@1536`) and ADR-0020 (Anthropic Claude for generation). Do not introduce new provider SDKs outside an accepted cycle.
 
+## Working in This Repo (Operational)
+
+- Quickstart: `docker compose up --build` from the repo root — app at http://localhost:3000, API docs at http://localhost:8000/docs, MinIO console at http://localhost:9001. No API keys required for the deterministic adapters.
+- Docker runs via Docker Desktop's WSL2 integration — if `docker` commands fail, probe `docker info` and tell the user to start Docker Desktop instead of debugging further.
+- Backend tests: `cd /home/augusto/projects/learny/backend && uv run pytest`. DB/golden tests need `LEARNY_TEST_DATABASE_URL` set AND both services up: `docker compose up -d db minio`. Lint/format: `uv run ruff check .` and `uv run ruff format --check .`.
+- Frontend tests: `cd /home/augusto/projects/learny/frontend && npm test`. Lint: `npm run lint`.
+- `jq` is not installed on this machine — use `python3` for JSON processing.
+- Bash cwd resets between calls: always use absolute paths (or one `cd /home/augusto/projects/learny/... && ...` compound), and run git from the repo root. Read any existing file before Edit/Write.
+- Before writing ad-hoc SQL, check real column names in `backend/app/infrastructure/db/metadata.py` (or `\d <table>` via psql) — do not guess schema.
+- To wait on CI or any external condition, use `gh pr checks <N> --watch` in a background task or a Monitor until-loop — never `sleep N && cmd` (the harness blocks it).
+- Any AskUserQuestion must mark a recommended option and give why-recommend AND why-not for every option presented.
+- On 2+ consecutive provider 5xx/529 errors (Anthropic, GitHub), check the provider's status page before retrying; on a confirmed outage, park with one long wakeup instead of retry loops. These rules apply to subagents too — include them in delegated briefs.
+
 ## Durable Decisions
 
 - Use ADRs for accepted architectural decisions.
@@ -55,6 +68,8 @@ Only read documents relevant to the current task. Do not load all project docume
 
 - General project orientation: read `CLAUDE.md`.
 - Skill and workflow questions: read `SKILLS.md`.
+- Ship a roadmap cycle end-to-end: `learny-ship-cycle`. Check `.specs/.ship-status` first — if it shows a mid-stage cycle, resume it instead of starting fresh.
+- Retrieval/chunking/query or embedding work: `pgvector-hybrid-search` skill. Background jobs: `celery-workers`. EPUB/corpus ingestion: `epub-ingestion`. FastAPI endpoints: `fastapi`.
 - Accepted architectural decisions: read the relevant file under `docs/adr/`.
 - Open proposals and trade-offs: read the relevant file under `docs/rfc/`.
 - Research recovery: avoid reading archived research by default. Read `docs/research/YYYY-MM-DD/` only when the user explicitly asks to recover prior research evidence.
