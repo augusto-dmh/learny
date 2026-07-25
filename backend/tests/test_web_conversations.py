@@ -32,10 +32,11 @@ repositories on the shared rolled-back ``db_conn``.
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import Connection
 
@@ -64,7 +65,7 @@ from app.infrastructure.db.repositories import (
     SqlAlchemySourceRepository,
 )
 from app.infrastructure.embeddings import DeterministicEmbeddingAdapter
-from tests.conftest import TEST_PASSWORD, requires_db
+from tests.conftest import TEST_ORIGIN, TEST_PASSWORD, requires_db
 
 pytestmark = requires_db
 
@@ -1361,3 +1362,134 @@ def test_turn_endpoints_stay_synchronous_handlers() -> None:
 
     assert not inspect.iscoroutinefunction(post_conversation_turn_stream)
     assert not inspect.iscoroutinefunction(post_conversation_turn)
+
+
+# --- Rate limit: one policy for the whole surface (CONV-22) --------------------
+
+
+@pytest.fixture
+def throttled_conversations_client(  # noqa: ANN201
+    db_conn: Connection, monkeypatch: pytest.MonkeyPatch
+):
+    """Like ``auth_client`` but with a deliberately tight conversations limiter.
+
+    Mirrors ``throttled_teaching_client``: 3 attempts per long window so the 4th
+    call trips the ``rate_limit_conversations`` 429 branch deterministically. The
+    per-IP+route key means the register/csrf setup calls consume separate buckets
+    and never eat the conversation budget.
+    """
+    from app.core.config import get_settings
+    from app.infrastructure.web.dependencies import get_db_connection
+    from app.infrastructure.web.rate_limit import (
+        InMemoryFixedWindowRateLimiter,
+        get_rate_limiter,
+        set_rate_limiter,
+    )
+    from app.main import create_app
+
+    monkeypatch.setenv("LEARNY_SESSION_COOKIE_SECURE", "false")
+    monkeypatch.setenv("LEARNY_CSRF_TRUSTED_ORIGINS", TEST_ORIGIN)
+    get_settings.cache_clear()
+
+    previous = get_rate_limiter()
+    set_rate_limiter(InMemoryFixedWindowRateLimiter(max_attempts=3, window_seconds=300))
+
+    app = create_app()
+
+    def _override() -> Iterator[Connection]:
+        yield db_conn
+
+    app.dependency_overrides[get_db_connection] = _override
+    with TestClient(app, headers={"Origin": TEST_ORIGIN}) as c:
+        yield c
+    app.dependency_overrides.clear()
+    set_rate_limiter(previous)
+    get_settings.cache_clear()
+
+
+def test_start_rate_limit_returns_429_with_retry_after(
+    throttled_conversations_client: TestClient, db_conn: Connection
+) -> None:
+    # CONV-22: past the window the start endpoint rejects with 429 and tells the
+    # client when to come back.
+    source_id, csrf = _seed_ready_source(
+        throttled_conversations_client, db_conn, "rl-start@example.com"
+    )
+    for _ in range(3):
+        resp = _start(
+            throttled_conversations_client,
+            {"source_id": source_id, "include_notes": False},
+            csrf=csrf,
+        )
+        assert resp.status_code == 201, resp.text
+
+    throttled = _start(
+        throttled_conversations_client,
+        {"source_id": source_id, "include_notes": False},
+        csrf=csrf,
+    )
+
+    assert throttled.status_code == 429, throttled.text
+    assert "retry-after" in {k.lower() for k in throttled.headers}
+    assert int(throttled.headers["retry-after"]) >= 1
+
+
+def test_turn_rate_limit_returns_429(
+    throttled_conversations_client: TestClient, db_conn: Connection
+) -> None:
+    # CONV-22: the same policy governs the turn endpoint (corpus is not embedded, so
+    # each accepted turn is a cheap not-found).
+    source_id, csrf = _seed_ready_source(
+        throttled_conversations_client, db_conn, "rl-turn@example.com"
+    )
+    conversation = _seed_conversation(db_conn, UUID(source_id))
+    body = {"message": "zzzqqq unmatchable", "mode": MODE_ANSWER}
+    for _ in range(3):
+        resp = _post_turn(throttled_conversations_client, conversation.id, body, csrf=csrf)
+        assert resp.status_code == 201, resp.text
+
+    throttled = _post_turn(throttled_conversations_client, conversation.id, body, csrf=csrf)
+    assert throttled.status_code == 429, throttled.text
+
+
+def test_turn_stream_rate_limit_returns_429_before_any_frame(
+    throttled_conversations_client: TestClient, db_conn: Connection
+) -> None:
+    # CONV-22: the streaming sibling is throttled by the same policy, and the
+    # rejection is a plain 429 — no SSE frame is ever opened.
+    source_id, csrf = _seed_ready_source(
+        throttled_conversations_client, db_conn, "rl-stream@example.com"
+    )
+    conversation = _seed_conversation(db_conn, UUID(source_id))
+    body = {"message": "zzzqqq unmatchable", "mode": MODE_ANSWER}
+    for _ in range(3):
+        resp = _turn_stream(throttled_conversations_client, conversation.id, body, csrf=csrf)
+        assert resp.status_code == 200, resp.text
+
+    throttled = _turn_stream(throttled_conversations_client, conversation.id, body, csrf=csrf)
+    assert throttled.status_code == 429, throttled.text
+    assert "start" not in throttled.text
+
+
+def test_every_mutating_conversation_route_carries_the_one_policy() -> None:
+    # CONV-22 / ADR-0029: one policy for the whole unified surface. Asserted over the
+    # route inventory rather than per endpoint, so a route added later cannot quietly
+    # ship without the limiter — or with a second limiter beside it.
+    from app.infrastructure.web.conversations import router
+    from app.infrastructure.web.csrf import enforce_csrf, enforce_origin
+    from app.infrastructure.web.rate_limit import rate_limit_conversations
+
+    routes = [route for route in router.routes if route.path.startswith("/api/conversations")]
+    assert len(routes) == len(router.routes) == 7
+
+    mutating = {"POST", "PATCH", "DELETE", "PUT"}
+    for route in routes:
+        declared = [dependency.dependency for dependency in route.dependencies]
+        if route.methods & mutating:
+            assert declared == [
+                rate_limit_conversations,
+                enforce_origin,
+                enforce_csrf,
+            ], f"{sorted(route.methods)} {route.path}"
+        else:
+            assert declared == [], f"{sorted(route.methods)} {route.path}"

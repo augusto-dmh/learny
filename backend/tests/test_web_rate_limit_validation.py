@@ -20,6 +20,7 @@ from starlette.requests import Request
 from app.infrastructure.web.rate_limit import (
     InMemoryFixedWindowRateLimiter,
     get_rate_limiter,
+    rate_limit_conversations,
     rate_limit_questions,
     rate_limit_teaching,
     set_rate_limiter,
@@ -174,6 +175,40 @@ def test_rate_limit_teaching_throttles_after_window() -> None:
         # The 4th attempt trips the limit.
         with pytest.raises(HTTPException) as exc_info:
             rate_limit_teaching(request)
+        assert exc_info.value.status_code == 429
+        assert "Retry-After" in exc_info.value.headers
+        assert int(exc_info.value.headers["Retry-After"]) >= 1
+    finally:
+        set_rate_limiter(previous)
+
+
+def _conversations_request() -> Request:
+    """Minimal ASGI request scope for the conversations route (client IP + path key)."""
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/conversations",
+            "headers": [],
+            "query_string": b"",
+            "client": ("1.2.3.4", 12345),
+        }
+    )
+
+
+def test_rate_limit_conversations_throttles_after_window() -> None:
+    # CONV-22: the unified surface has one policy, and past its window the
+    # dependency rejects with 429 + a Retry-After header, via the same swappable
+    # limiter keyed by client IP + route path. Exercised directly here against a
+    # deliberately tight limiter; the endpoints are covered in the router suite.
+    previous = get_rate_limiter()
+    set_rate_limiter(InMemoryFixedWindowRateLimiter(max_attempts=3, window_seconds=300))
+    try:
+        request = _conversations_request()
+        for _ in range(3):
+            assert rate_limit_conversations(request) is None
+        with pytest.raises(HTTPException) as exc_info:
+            rate_limit_conversations(request)
         assert exc_info.value.status_code == 429
         assert "Retry-After" in exc_info.value.headers
         assert int(exc_info.value.headers["Retry-After"]) >= 1
