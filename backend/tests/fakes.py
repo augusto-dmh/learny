@@ -546,9 +546,11 @@ class FakeRetrieveEvidence:
         self.results: list[Evidence] = results if results is not None else []
         self._error = error
         self.calls: list[dict[str, object]] = []
-        # The notes toggle is captured alongside ``calls`` (parallel list) so the
-        # historical ``calls`` shape the Q&A suite asserts verbatim stays unchanged.
+        # The notes toggle and the anchor scope are captured alongside ``calls``
+        # (parallel lists) so the historical ``calls`` shape the Q&A suite asserts
+        # verbatim stays unchanged.
         self.include_notes_calls: list[bool] = []
+        self.anchor_calls: list[tuple[str, ...] | None] = []
 
     def __call__(
         self,
@@ -557,10 +559,12 @@ class FakeRetrieveEvidence:
         source_id: UUID,
         query: str,
         top_k: int | None = None,
+        anchors: Sequence[str] | None = None,
         include_notes: bool = False,
     ) -> list[Evidence]:
         self.calls.append({"user": user, "source_id": source_id, "query": query, "top_k": top_k})
         self.include_notes_calls.append(include_notes)
+        self.anchor_calls.append(None if anchors is None else tuple(anchors))
         if self._error is not None:
             raise self._error
         return self.results

@@ -1,9 +1,11 @@
 """Questions router — owner-scoped cited Q&A over a ready source (Phase 7).
 
 Thin FastAPI adapter over the framework-free ``AskQuestion`` service (assembled
-in ``dependencies``). A signed-in owner POSTs a question for one of their ready
-sources and gets back a grounded, cited answer — or an explicit
-``not_found_in_source`` outcome. The handler owns input validation (422) and
+in ``dependencies``), which since ADR-0029 runs each ask as the first turn of a new
+whole-book conversation — persisted, and so no longer lost on reload — while this
+wire stays exactly as the current UI knows it. A signed-in owner POSTs a question
+for one of their ready sources and gets back a grounded, cited answer — or an
+explicit ``not_found_in_source`` outcome. The handler owns input validation (422) and
 lets application errors propagate to the global handlers (``SourceNotFound`` →
 404, ``SourceNotReady`` → 409, ``AnswerGenerationFailed`` → 502), mirroring the
 retrieval endpoint.
@@ -31,6 +33,10 @@ from app.infrastructure.web.csrf import enforce_csrf, enforce_origin
 from app.infrastructure.web.dependencies import (
     get_ask_question,
     get_authenticated_user,
+)
+from app.infrastructure.web.legacy_status import (
+    collapse_stream_status,
+    legacy_answer_status,
 )
 from app.infrastructure.web.rate_limit import rate_limit_questions
 from app.infrastructure.web.retrieval import EvidenceView
@@ -82,7 +88,10 @@ class AnswerResponse(BaseModel):
     ``citations`` reuses the retrieval endpoint's ``EvidenceView`` (the same
     citation-only projection); it is non-empty and grounded for ``answered`` and
     empty for ``not_found_in_source``. ``retrieval`` and ``model`` appear on both
-    outcomes so the UI and future evaluation always see diagnostics (QA-04).
+    outcomes so the UI and future evaluation always see diagnostics (QA-04). A
+    question is asked of the whole book, so its miss is already the whole-book
+    verdict; the collapse below is the same guarantee the teaching wire makes
+    (AD-196), not a second behaviour.
     """
 
     answer_status: str
@@ -94,7 +103,7 @@ class AnswerResponse(BaseModel):
     @classmethod
     def from_question_answer(cls, result: QuestionAnswer) -> AnswerResponse:
         return cls(
-            answer_status=result.status,
+            answer_status=legacy_answer_status(result.status),
             answer=result.text,
             citations=[EvidenceView.from_evidence(c) for c in result.citations],
             retrieval=RetrievalDiagnostics(strategy="hybrid", evidence_count=result.evidence_count),
@@ -162,4 +171,4 @@ def ask_question_stream(
         question=body.question,
         include_notes=body.include_notes,
     )
-    return to_sse_response(events)
+    return to_sse_response(collapse_stream_status(events))

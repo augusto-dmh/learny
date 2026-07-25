@@ -446,20 +446,23 @@ def get_answer_generation() -> AnswerGenerationPort:
 AnswerGeneration = Annotated[AnswerGenerationPort, Depends(get_answer_generation)]
 
 
-def get_ask_question(conn: DbConnection, generation: AnswerGeneration) -> AskQuestion:
+def get_ask_question(
+    conn: DbConnection,
+    answer_generation: AnswerGeneration,
+    teaching_generation: TeachingGeneration,
+) -> AskQuestion:
     """Wire ``AskQuestion`` on the request-scoped connection (QA-01..04, 07..08).
 
-    Composes the source repo (ownership + readiness), the existing
-    ``get_retrieve_evidence`` product (Phase-6 retrieval consumed whole), the
-    process-wide answer generator, and the server-controlled ``qa_evidence_top_k``
-    budget. Injecting ``generation`` via ``Depends`` keeps it test-overridable.
+    Composes the two unified services an ask is made of — starting the whole-book
+    conversation and taking its first answer turn — plus the conversation repo the
+    failure path discards through. Both generation ports are injected via
+    ``Depends`` because the unified turn service composes both; overriding the
+    answer port in tests keeps working exactly as before.
     """
     return AskQuestion(
-        sources=SqlAlchemySourceRepository(conn),
-        authorize=AuthorizeOwnership(),
-        retrieve=get_retrieve_evidence(conn),
-        generation=generation,
-        evidence_top_k=get_settings().qa_evidence_top_k,
+        start=get_start_conversation(conn),
+        post=get_post_conversation_turn(conn, answer_generation, teaching_generation),
+        conversations=SqlAlchemyConversationRepository(conn),
     )
 
 
