@@ -9,6 +9,8 @@ spec ACs and edge cases:
 - ``locate`` (mirrors ``get_section``): canonical match, alias match, an alias-vs-
   canonical collision (canonical wins), duplicate anchors (lowest position), and a miss.
 - ``percent_at`` (RD-16): position math, 2-decimal quantization, and a zero-total book.
+- ``words_before_row``, ``page_at`` and ``pages_from_words``: the page unit derived from
+  the word counts already stored per section, with no DB and no HTTP.
 """
 
 from __future__ import annotations
@@ -18,8 +20,11 @@ from decimal import Decimal
 from app.application.reading import (
     Chapter,
     locate,
+    page_at,
+    pages_from_words,
     partition,
     percent_at,
+    words_before_row,
 )
 from app.domain.entities import ChapterIndexRow
 
@@ -126,3 +131,92 @@ def test_percent_at_quantizes_to_two_decimals() -> None:
 def test_percent_at_zero_total_is_zero_not_division_error() -> None:
     index = (_row(0, 0, "a", words=0), _row(1, 0, "b", words=0))
     assert percent_at(index, 1) == Decimal("0.00")
+
+
+# --- words_before_row ----------------------------------------------------------
+
+
+def test_words_before_row_sums_the_preceding_rows() -> None:
+    index = (_row(0, 0, "a", words=3), _row(1, 0, "b", words=2), _row(2, 0, "c", words=4))
+    assert [words_before_row(index, i) for i in range(4)] == [0, 3, 5, 9]
+
+
+def test_words_before_row_past_the_end_is_the_whole_book() -> None:
+    index = (_row(0, 0, "a", words=3), _row(1, 0, "b", words=2))
+    assert words_before_row(index, 99) == 5
+
+
+# --- page_at (PAGE-03/PAGE-04, AD-189) ------------------------------------------
+
+
+def test_page_at_starts_at_page_one_at_the_first_word() -> None:
+    assert page_at(0, 275) == 1
+
+
+def test_page_at_advances_one_page_per_quantum() -> None:
+    # The first 275 words are page 1; the 276th word opens page 2 (PAGE-04).
+    assert page_at(274, 275) == 1
+    assert page_at(275, 275) == 2
+    assert page_at(549, 275) == 2
+    assert page_at(550, 275) == 3
+
+
+def test_page_at_continues_the_books_numbering_into_a_later_chapter() -> None:
+    # A chapter opening 5500 words into the book starts on page 21, not page 1 — the
+    # count is book-global, so a page number locates a passage across the whole book.
+    assert page_at(5500, 275) == 21
+
+
+def test_page_at_follows_the_quantum_it_is_given() -> None:
+    # The quantum is a parameter, never a constant baked into the derivation: the same
+    # point in the same book pages differently under a different words-per-page.
+    assert page_at(600, 275) == 3
+    assert page_at(600, 300) == 3
+    assert page_at(600, 200) == 4
+
+
+def test_page_at_does_not_depend_on_the_length_of_the_book() -> None:
+    # A page is words-before divided by the quantum, never a rounding of the percent:
+    # the same offset in a short and a long book is the same page, though the two are
+    # at wildly different percentages of their books.
+    short_book = (_row(0, 0, "a", words=550), _row(1, 0, "b", words=550))
+    long_book = (_row(0, 0, "a", words=550), _row(1, 0, "b", words=99450))
+
+    assert page_at(words_before_row(short_book, 1), 275) == 3
+    assert page_at(words_before_row(long_book, 1), 275) == 3
+    assert percent_at(short_book, 1) != percent_at(long_book, 1)
+
+
+def test_page_numbers_derive_from_the_stored_word_counts_alone() -> None:
+    # I-PU-1: a book ingested long ago gains pages from nothing but the per-section
+    # word counts already in its corpus — no new field, no re-processing, no DB access.
+    index = (
+        _row(0, 0, "c1", words=300),
+        _row(1, 0, "c2", words=300),
+        _row(2, 0, "c3", words=300),
+    )
+    assert [page_at(words_before_row(index, i), 275) for i in range(3)] == [1, 2, 3]
+
+
+def test_page_at_degrades_to_page_one_for_a_non_positive_quantum() -> None:
+    # A misconfigured setting must not raise on a read path.
+    assert page_at(1000, 0) == 1
+
+
+# --- pages_from_words (PAGE-09) -------------------------------------------------
+
+
+def test_pages_from_words_counts_whole_pages_and_floors_the_remainder() -> None:
+    assert pages_from_words(0, 275) == 0
+    assert pages_from_words(274, 275) == 0
+    assert pages_from_words(275, 275) == 1
+    assert pages_from_words(549, 275) == 1
+    assert pages_from_words(550, 275) == 2
+
+
+def test_pages_from_words_never_reports_a_negative_figure() -> None:
+    assert pages_from_words(-500, 275) == 0
+
+
+def test_pages_from_words_degrades_to_zero_for_a_non_positive_quantum() -> None:
+    assert pages_from_words(1000, 0) == 0

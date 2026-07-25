@@ -234,6 +234,22 @@ def test_instrument_defaults_match_the_recorder_process_defaults(monkeypatch) ->
     assert recorder.statement_max_chars == settings.slow_query_statement_chars
 
 
+def test_words_per_page_default() -> None:
+    # PAGE-01: the page quantum is a backend setting with the documented default, and
+    # it is the only definition of the unit — nothing else may carry the number.
+    settings = Settings(_env_file=None)
+
+    assert settings.words_per_page == 275
+
+
+def test_words_per_page_env_override(monkeypatch) -> None:
+    monkeypatch.setenv("LEARNY_WORDS_PER_PAGE", "300")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.words_per_page == 300
+
+
 def test_env_example_documents_the_instrument_contract() -> None:
     # The environment contract is a deliverable: an operator must be able to read
     # the flag, the threshold, the buffer capacity and the statement cap off it.

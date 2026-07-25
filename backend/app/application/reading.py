@@ -1,8 +1,8 @@
 """Reader-core application logic (RFC-004 Cycle B, design §Components).
 
 The pure core the chapter-flow reader is built on: chapter partitioning, anchor
-resolution, and whole-book percent math over the flat ``ChapterIndexRow`` read
-model. Framework-free (ADR-007/009) — no FastAPI/SQLAlchemy/SDK imports — so the
+resolution, and whole-book percent and page math over the flat ``ChapterIndexRow``
+read model. Framework-free (ADR-007/009) — no FastAPI/SQLAlchemy/SDK imports — so the
 progress math is unit-testable without a database, and the SQL read models stay
 flat (the structure-endpoint precedent; no recursive queries).
 
@@ -89,6 +89,18 @@ def locate(index: Sequence[ChapterIndexRow], anchor: str) -> int | None:
     return alias_hit
 
 
+def words_before_row(index: Sequence[ChapterIndexRow], row_idx: int) -> int:
+    """Return how many of the book's words precede ``row_idx``.
+
+    The "words before a point" idiom every progress figure is built on: ``percent_at``
+    divides it by the book total, ``page_at`` divides it by the page quantum, and the
+    per-day reading credit differences two of them. A ``row_idx`` at or past the end of
+    the index sums the whole book (the slice clamps) — the end of the book is the point
+    with every word before it.
+    """
+    return sum(row.word_count for row in index[:row_idx])
+
+
 def percent_at(index: Sequence[ChapterIndexRow], row_idx: int) -> Decimal:
     """Return the whole-book percent *before* ``row_idx`` (design §Data Models, RD-16).
 
@@ -99,8 +111,37 @@ def percent_at(index: Sequence[ChapterIndexRow], row_idx: int) -> Decimal:
     total = sum(row.word_count for row in index)
     if total == 0:
         return Decimal("0.00")
-    words_before = sum(row.word_count for row in index[:row_idx])
-    return (Decimal(words_before) * 100 / Decimal(total)).quantize(_PERCENT_QUANTUM)
+    return (Decimal(words_before_row(index, row_idx)) * 100 / Decimal(total)).quantize(
+        _PERCENT_QUANTUM
+    )
+
+
+def page_at(words_before: int, words_per_page: int) -> int:
+    """Return the 1-based page number of the point with ``words_before`` words before it.
+
+    Page 1 begins at the book's first word and chapters continue the count rather than
+    restarting (AD-189), so a chapter's first page follows from its
+    ``words_before_chapter`` and a page number is a stable, book-wide locator. The
+    arithmetic is integer over the word counts already stored per section — a page is
+    never derived from the percent, which answers a different question and would
+    disagree at the rounding. A non-positive quantum (a misconfigured setting) reads as
+    page 1 rather than raising on a read path.
+    """
+    if words_per_page <= 0:
+        return 1
+    return max(words_before, 0) // words_per_page + 1
+
+
+def pages_from_words(words: int, words_per_page: int) -> int:
+    """Return the whole pages contained in ``words``, flooring the remainder.
+
+    The per-day reading volume. Words are stored losslessly so a day's many small
+    advances accumulate before anything is rounded (AD-183); the rounding happens once,
+    here, and it floors — a figure reporting how much someone read never rounds up.
+    """
+    if words_per_page <= 0:
+        return 0
+    return max(words, 0) // words_per_page
 
 
 def _chapter_of(chapters: Sequence[Chapter], row_idx: int) -> int:

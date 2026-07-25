@@ -236,6 +236,15 @@ class Settings(BaseSettings):
     slow_query_ms: int = 200
     slow_query_statement_chars: int = 2000
 
+    # The page unit (RFC-006 Cycle B). An EPUB reflows, so a book has no intrinsic
+    # page; ``words_per_page`` defines one. Pages are derived from the word counts
+    # already stored per corpus section, so every book that has ever been ingested
+    # gains pages retroactively — no corpus column, no re-processing. This is the
+    # single definition of the quantum: the reader receives it on the chapter
+    # response instead of hard-coding it, and the per-day pages figure on the study
+    # window resolves to the same value.
+    words_per_page: int = 275
+
 
 @lru_cache
 def get_settings() -> Settings:
