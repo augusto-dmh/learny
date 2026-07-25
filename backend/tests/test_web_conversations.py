@@ -914,6 +914,77 @@ def test_post_turn_in_scoped_conversation_reports_not_found_in_scope(
     assert body["evidence_count"] == 0
 
 
+def test_scoped_turn_never_cites_evidence_outside_its_scope(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # I-CM-3 end-to-end: scope is a promise the database keeps. The same question is
+    # asked twice over the same embedded corpus — the whole-book conversation cites
+    # the sibling section that answers it, and the scoped one never can, because the
+    # anchors reach retrieval on every turn. Drop the scoping and the second half of
+    # this test starts citing the first half's evidence.
+    genetics = "mendel crossed pea plants and found dominant inherited traits"
+    user_id = _register(auth_client, "scope-promise@example.com")
+    csrf = _csrf(auth_client)
+    source_id = _persist_source(db_conn, user_id)
+    SqlAlchemyCorpusRepository(db_conn).replace(
+        source_id,
+        title=_BOOK_TITLE,
+        authors=("Author",),
+        language="en",
+        schema_version=1,
+        sections=(
+            _section(
+                position=0,
+                title=_TITLE,
+                depth=0,
+                section_path=_SECTION_PATH,
+                anchor=_ANCHOR,
+                text=_PHOTO,
+            ),
+            _section(
+                position=1,
+                title="Genetics",
+                depth=0,
+                section_path=("Genetics",),
+                anchor="gen.xhtml",
+                text=genetics,
+            ),
+        ),
+    )
+    _embed_all(db_conn, source_id)
+
+    scoped = _start(
+        auth_client,
+        {"source_id": str(source_id), "scope_anchors": [_ANCHOR], "include_notes": False},
+        csrf=csrf,
+    )
+    whole_book = _start(
+        auth_client,
+        {"source_id": str(source_id), "scope_anchors": [], "include_notes": False},
+        csrf=csrf,
+    )
+    assert scoped.status_code == 201, scoped.text
+    assert whole_book.status_code == 201, whole_book.text
+
+    question = "mendel pea plants dominant inherited traits"
+    in_scope = _post_turn(
+        auth_client, scoped.json()["id"], {"message": question, "mode": MODE_ANSWER}, csrf=csrf
+    )
+    over_book = _post_turn(
+        auth_client, whole_book.json()["id"], {"message": question, "mode": MODE_ANSWER}, csrf=csrf
+    )
+
+    assert over_book.status_code == 201, over_book.text
+    assert "gen.xhtml" in {c["anchor"] for c in over_book.json()["citations"]}, (
+        "the evidence is reachable when nothing is scoped away"
+    )
+
+    assert in_scope.status_code == 201, in_scope.text
+    assert {c["anchor"] for c in in_scope.json()["citations"]} <= {_ANCHOR}, (
+        "a scoped turn never cites outside its scope"
+    )
+
+
 def test_post_turn_in_whole_book_conversation_reports_not_found_in_source(
     auth_client: TestClient, db_conn: Connection
 ) -> None:

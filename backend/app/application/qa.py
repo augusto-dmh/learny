@@ -19,7 +19,6 @@ _discard`). Deleted with the legacy endpoints when the UI moves to
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from uuid import UUID
@@ -40,8 +39,6 @@ from app.domain.entities import (
     User,
 )
 from app.domain.ports import ConversationRepository
-
-logger = logging.getLogger(__name__)
 
 # How much of the question becomes the conversation's title (AD-195). A hard
 # character cut, deliberately not a word boundary: the reader recognizes their own

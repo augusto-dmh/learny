@@ -1065,6 +1065,20 @@ def test_turn_stream_mid_stream_failure_emits_error_part_and_persists_nothing(
     assert read.json()["turns"] == []
 
 
+def test_legacy_stream_endpoints_stay_synchronous_handlers() -> None:
+    # The streaming contract (``to_sse_response``): a coroutine handler would run the
+    # eager guards, query embedding and retrieval on the event loop and block every
+    # concurrent request, and no functional test would notice. The legacy endpoints
+    # are held to it as long as they exist.
+    import inspect
+
+    from app.infrastructure.web.questions import ask_question_stream
+    from app.infrastructure.web.teaching import post_teaching_turn_stream
+
+    assert not inspect.iscoroutinefunction(post_teaching_turn_stream)
+    assert not inspect.iscoroutinefunction(ask_question_stream)
+
+
 # --- include_notes default (AD-147 / NL-04) ------------------------------------
 
 
