@@ -14,8 +14,7 @@ Learny is a learning application that starts as robust book teaching and may exp
 
 - Quickstart: `docker compose up --build` from the repo root — app at http://localhost:3000, API docs at http://localhost:8000/docs, MinIO console at http://localhost:9001. No API keys required for the deterministic adapters.
 - Docker runs via Docker Desktop's WSL2 integration — if `docker` commands fail, probe `docker info` and tell the user to start Docker Desktop instead of debugging further.
-- Backend tests: `cd /home/augusto/projects/learny/backend && uv run pytest`. DB/golden tests need `LEARNY_TEST_DATABASE_URL` set AND both services up: `docker compose up -d db minio`. Lint/format: `uv run ruff check .` and `uv run ruff format --check .`.
-- Frontend tests: `cd /home/augusto/projects/learny/frontend && npm test`. Lint: `npm run lint`.
+- Verification vocabulary (root `Makefile` — use these names): `make infra` (starts `db`+`minio`+`redis`), `make test-backend` (= `cd backend && uv run pytest`), `make test-frontend` (= `cd frontend && npm test`), `make lint` (backend `ruff check`, frontend `tsc --noEmit` — CI parity; ruff formatting and ESLint are deliberately not gates), `make check` (lint + all tests). DB/golden tests need `make infra` first; `LEARNY_TEST_DATABASE_URL` comes from `.claude/settings.json`.
 - `jq` is not installed on this machine — use `python3` for JSON processing.
 - Bash cwd resets between calls: always use absolute paths (or one `cd /home/augusto/projects/learny/... && ...` compound), and run git from the repo root. Read any existing file before Edit/Write.
 - Before writing ad-hoc SQL, check real column names in `backend/app/infrastructure/db/metadata.py` (or `\d <table>` via psql) — do not guess schema.
