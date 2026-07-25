@@ -4,7 +4,7 @@ description: 'Multi-agent PR reviewer for Learny. Use when — and only when —
 license: CC-BY-4.0
 metadata:
   author: Learny contributors
-  version: 1.0.0
+  version: 1.1.0
 ---
 
 # PR Review — Orchestration Protocol
@@ -17,7 +17,7 @@ Learny stack (ADR-004): Python/FastAPI backend, React/Next.js frontend, PostgreS
 
 1. Get PR number from context or ask the user.
 2. Identify repo: `gh repo view --json nameWithOwner -q .nameWithOwner`
-3. Fetch diff: `gh pr diff {PR_NUMBER}`
+3. Fetch diff: `gh pr diff {PR_NUMBER}` — save it to a scratchpad file for the subagents. If it exceeds ~200KB, split it per-file or per-directory (`split -b 200k` as a last resort) and hand subagents the chunk list: a Read of a 256KB+ file fails, and six subagents each burning that failed Read is the observed cost.
 4. Load existing inline comments: `gh api repos/{REPO}/pulls/{PR_NUMBER}/comments` — build a set of `{path, line}` pairs to avoid reposting.
 5. Read PR intent: `gh pr view {PR_NUMBER} --json title,body,headRefName`
 6. Derive the feature slug from the branch name: strip the Conventional Commit prefix (`feat/`, `fix/`, `docs/`, …) and any leading issue number, leaving a kebab summary (e.g. `feat/scaffold-and-identity` → `scaffold-and-identity`). This slug is the fuzzy key for locating the matching spec under `.specs/features/`.
@@ -51,6 +51,8 @@ Send **one message** with **six Task tool calls** — all launched simultaneousl
 9. **No AI attribution:** Never add tooling/authorship attribution (`Co-Authored-By`, "Generated with", model names) to any comment body — consistent with `learny-finalize` hygiene rules.
 10. **Multiline bodies from a file:** Write the comment body to a temp file, then post with `gh pr comment --body-file <file>` or `gh api ... -F body=@<file>`. Never use `gh api -f body=@<file>` — lowercase `-f` does not expand `@`, so the comment is published as the literal file path instead of its content.
 11. **PR-level comments must be issue comments, never reviews.** Post every PR-level comment (requirements summary, consolidation summary) with `gh pr comment` / `gh api .../issues/comments`, not `gh pr review`. Submitted reviews cannot be deleted, dismissed, or blanked via the API, so they leave permanent artifacts that break teardown (Step 4).
+12. **Oversized inputs:** never Read the shared diff file whole when it may exceed the 256KB cap — use the per-file chunks from Step 1, or `offset`/`limit`/grep.
+13. **Completion contract:** a subagent's work ends only when its findings are posted to the PR (or its summary comment updated) and a compact final text summary is returned. Never go idle without posting — an idle with nothing posted is treated as a stall: the orchestrator checks comment counts, nudges once, then re-dispatches a fresh subagent.
 
 ---
 
