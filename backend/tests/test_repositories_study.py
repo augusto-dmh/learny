@@ -47,9 +47,7 @@ def test_record_inserts_a_new_day_row_with_the_passed_counters(
     repo.record(user_id, day, reviews=1)
 
     rows = repo.window(user_id, start=day, end=day)
-    assert rows == [
-        StudyDay(user_id=user_id, day=day, reviews_count=1, reading_updates=0)
-    ]
+    assert rows == [StudyDay(user_id=user_id, day=day, reviews_count=1, reading_updates=0)]
 
 
 def test_record_same_day_events_sum_into_one_row(db_conn: Connection) -> None:
@@ -64,9 +62,7 @@ def test_record_same_day_events_sum_into_one_row(db_conn: Connection) -> None:
     repo.record(user_id, day, reading_updates=1)
 
     rows = repo.window(user_id, start=day, end=day)
-    assert rows == [
-        StudyDay(user_id=user_id, day=day, reviews_count=2, reading_updates=1)
-    ]
+    assert rows == [StudyDay(user_id=user_id, day=day, reviews_count=2, reading_updates=1)]
 
 
 def test_record_different_days_are_separate_rows(db_conn: Connection) -> None:
@@ -117,9 +113,7 @@ def test_window_is_scoped_to_the_caller_in_sql(db_conn: Connection) -> None:
 
     rows = repo.window(caller, start=day, end=day)
 
-    assert rows == [
-        StudyDay(user_id=caller, day=day, reviews_count=1, reading_updates=0)
-    ]
+    assert rows == [StudyDay(user_id=caller, day=day, reviews_count=1, reading_updates=0)]
 
 
 # --- concurrency: two sessions on the same (user, day) (HOME-10, I-2) -----------
@@ -161,9 +155,9 @@ def test_record_two_concurrent_sessions_increment_exactly_once(
 
         with db_engine.connect() as conn:
             row = conn.execute(
-                select(
-                    study_days.c.reviews_count, study_days.c.reading_updates
-                ).where(study_days.c.user_id == user_id)
+                select(study_days.c.reviews_count, study_days.c.reading_updates).where(
+                    study_days.c.user_id == user_id
+                )
             ).one()
         assert (row.reviews_count, row.reading_updates) == (2, 0)
     finally:

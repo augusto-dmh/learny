@@ -76,8 +76,7 @@ def test_only_free_recall_and_cloze_types() -> None:
     section, _ = _section(_TEXT)
     result = _collect(DeterministicQuizAdapter(), [section])
     assert all(
-        c.item_type in {QuizItemType.FREE_RECALL, QuizItemType.CLOZE}
-        for c in result.candidates
+        c.item_type in {QuizItemType.FREE_RECALL, QuizItemType.CLOZE} for c in result.candidates
     )
 
 
@@ -149,10 +148,7 @@ def test_suggest_cards_are_scoped_to_the_quote_not_the_section() -> None:
 def test_suggest_cards_only_free_recall_and_cloze_types() -> None:
     section, _ = _section(_TEXT)
     candidates = DeterministicQuizAdapter().suggest_cards(section, _TEXT, 5)
-    assert all(
-        c.item_type in {QuizItemType.FREE_RECALL, QuizItemType.CLOZE}
-        for c in candidates
-    )
+    assert all(c.item_type in {QuizItemType.FREE_RECALL, QuizItemType.CLOZE} for c in candidates)
 
 
 def test_suggest_cards_for_a_quote_absent_from_the_section_yields_none() -> None:

@@ -685,10 +685,7 @@ def test_migration_0007_downgrade_restores_generated_search_vector(monkeypatch) 
             ).scalar_one()
             # The trigger is gone.
             trigger = conn.execute(
-                text(
-                    "SELECT 1 FROM pg_trigger "
-                    "WHERE tgname = 'trg_corpus_chunks_search_vector'"
-                )
+                text("SELECT 1 FROM pg_trigger WHERE tgname = 'trg_corpus_chunks_search_vector'")
             ).scalar()
             gin_def = conn.execute(
                 text(
@@ -954,22 +951,23 @@ def test_migration_0010_creates_notes_tables(monkeypatch) -> None:
 
         # Within-aggregate cascades: notes→users, anchors/tags/links→notes, tags→notes_tags.
         notes_fk = next(
-            fk for fk in inspector.get_foreign_keys("notes")
+            fk
+            for fk in inspector.get_foreign_keys("notes")
             if fk["constrained_columns"] == ["user_id"]
         )
         assert notes_fk["referred_table"] == "users"
         assert notes_fk["options"].get("ondelete") == "CASCADE"
 
         anchor_note_fk = next(
-            fk for fk in inspector.get_foreign_keys("note_anchors")
+            fk
+            for fk in inspector.get_foreign_keys("note_anchors")
             if fk["constrained_columns"] == ["note_id"]
         )
         assert anchor_note_fk["referred_table"] == "notes"
         assert anchor_note_fk["options"].get("ondelete") == "CASCADE"
 
         note_tag_fks = {
-            tuple(fk["constrained_columns"]): fk
-            for fk in inspector.get_foreign_keys("note_tags")
+            tuple(fk["constrained_columns"]): fk for fk in inspector.get_foreign_keys("note_tags")
         }
         assert note_tag_fks[("note_id",)]["options"].get("ondelete") == "CASCADE"
         assert note_tag_fks[("tag_id",)]["referred_table"] == "tags"
@@ -978,8 +976,7 @@ def test_migration_0010_creates_notes_tables(monkeypatch) -> None:
         # note_links: outbound cascade from its note; target set NULL when the target
         # note is deleted so the inbound link survives with its text.
         link_fks = {
-            tuple(fk["constrained_columns"]): fk
-            for fk in inspector.get_foreign_keys("note_links")
+            tuple(fk["constrained_columns"]): fk for fk in inspector.get_foreign_keys("note_links")
         }
         assert link_fks[("note_id",)]["options"].get("ondelete") == "CASCADE"
         assert link_fks[("target_note_id",)]["referred_table"] == "notes"
@@ -1001,9 +998,7 @@ def test_migration_0010_creates_notes_tables(monkeypatch) -> None:
     engine = create_engine(TEST_DB_URL)
     try:
         remaining = set(inspect(engine).get_table_names())
-        assert not (
-            {"notes", "note_anchors", "tags", "note_tags", "note_links"} & remaining
-        )
+        assert not ({"notes", "note_anchors", "tags", "note_tags", "note_links"} & remaining)
         block_columns = {c["name"] for c in inspect(engine).get_columns("corpus_blocks")}
         assert "content_hash" not in block_columns
     finally:
@@ -1100,8 +1095,7 @@ def test_migration_0011_backfills_word_count_and_creates_reading_positions(
             stored = dict(
                 conn.execute(
                     text(
-                        "SELECT position, word_count FROM corpus_sections "
-                        "WHERE document_id = :did"
+                        "SELECT position, word_count FROM corpus_sections WHERE document_id = :did"
                     ),
                     {"did": document_id},
                 ).all()
@@ -1145,9 +1139,7 @@ def test_migration_0011_backfills_word_count_and_creates_reading_positions(
                 {"uid": user_id, "sid": source_id},
             )
         with engine.begin() as conn:
-            conn.execute(
-                text("DELETE FROM sources WHERE id = :sid"), {"sid": source_id}
-            )
+            conn.execute(text("DELETE FROM sources WHERE id = :sid"), {"sid": source_id})
         with engine.connect() as conn:
             remaining = conn.execute(
                 text("SELECT count(*) FROM reading_positions WHERE source_id = :sid"),
@@ -1304,9 +1296,7 @@ def test_migration_0012_adds_card_origin_and_note_provenance(monkeypatch) -> Non
             conn.execute(text("DELETE FROM notes WHERE id = :id"), {"id": note_id})
         with engine.connect() as conn:
             row = conn.execute(
-                text(
-                    "SELECT note_anchor_id, source_excerpt FROM quiz_items WHERE id = :id"
-                ),
+                text("SELECT note_anchor_id, source_excerpt FROM quiz_items WHERE id = :id"),
                 {"id": card_id},
             ).one()
         assert row.note_anchor_id is None  # link severed, not the row
@@ -1504,16 +1494,10 @@ def test_migration_0013_indexes_notes_for_hybrid_search(monkeypatch) -> None:
         # search_vector — the same index shapes the corpus arms use (AD-020).
         with engine.connect() as conn:
             hnsw_def = conn.execute(
-                text(
-                    "SELECT indexdef FROM pg_indexes "
-                    "WHERE indexname = 'ix_notes_embedding_hnsw'"
-                )
+                text("SELECT indexdef FROM pg_indexes WHERE indexname = 'ix_notes_embedding_hnsw'")
             ).scalar_one()
             gin_def = conn.execute(
-                text(
-                    "SELECT indexdef FROM pg_indexes "
-                    "WHERE indexname = 'ix_notes_search_vector'"
-                )
+                text("SELECT indexdef FROM pg_indexes WHERE indexname = 'ix_notes_search_vector'")
             ).scalar_one()
         assert "hnsw" in hnsw_def and "vector_cosine_ops" in hnsw_def
         assert "m='16'" in hnsw_def.replace(" ", "") or "m=16" in hnsw_def.replace(" ", "")
@@ -1547,10 +1531,7 @@ def test_migration_0013_indexes_notes_for_hybrid_search(monkeypatch) -> None:
         # BEFORE UPDATE OF title, body_markdown: editing the body recomputes the vector.
         with engine.begin() as conn:
             conn.execute(
-                text(
-                    "UPDATE notes SET body_markdown = 'mitochondria respiration' "
-                    "WHERE id = :id"
-                ),
+                text("UPDATE notes SET body_markdown = 'mitochondria respiration' WHERE id = :id"),
                 {"id": note_id},
             )
             updated_sv = conn.execute(
@@ -1742,9 +1723,7 @@ def test_migration_0014_adds_card_ownership_and_note_provenance(monkeypatch) -> 
             conn.execute(text("DELETE FROM notes WHERE id = :id"), {"id": note_id})
         with engine.connect() as conn:
             row = conn.execute(
-                text(
-                    "SELECT source_id, note_id, source_excerpt FROM quiz_items WHERE id = :id"
-                ),
+                text("SELECT source_id, note_id, source_excerpt FROM quiz_items WHERE id = :id"),
                 {"id": note_card_id},
             ).one()
         assert row.source_id is None
@@ -1839,17 +1818,12 @@ def test_migration_0015_creates_study_days(monkeypatch) -> None:
         # An inserted row with no counters supplied defaults both to 0.
         with engine.begin() as conn:
             conn.execute(
-                text(
-                    "INSERT INTO study_days (user_id, day) VALUES (:uid, DATE '2026-07-21')"
-                ),
+                text("INSERT INTO study_days (user_id, day) VALUES (:uid, DATE '2026-07-21')"),
                 {"uid": user_id},
             )
         with engine.connect() as conn:
             row = conn.execute(
-                text(
-                    "SELECT reviews_count, reading_updates FROM study_days "
-                    "WHERE user_id = :uid"
-                ),
+                text("SELECT reviews_count, reading_updates FROM study_days WHERE user_id = :uid"),
                 {"uid": user_id},
             ).one()
         assert (row.reviews_count, row.reading_updates) == (0, 0)

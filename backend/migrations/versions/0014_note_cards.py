@@ -104,16 +104,12 @@ def downgrade() -> None:
 
     op.drop_column("quiz_items", "note_changed_at")
     op.drop_index("ix_quiz_items_note_id", table_name="quiz_items")
-    op.drop_constraint(
-        "fk_quiz_items_note_id_notes", "quiz_items", type_="foreignkey"
-    )
+    op.drop_constraint("fk_quiz_items_note_id_notes", "quiz_items", type_="foreignkey")
     op.drop_column("quiz_items", "note_id")
 
     op.drop_constraint("ck_quiz_items_source_or_note", "quiz_items", type_="check")
     op.alter_column("quiz_items", "source_id", nullable=False)
 
     op.drop_index("ix_quiz_items_user_id", table_name="quiz_items")
-    op.drop_constraint(
-        "fk_quiz_items_user_id_users", "quiz_items", type_="foreignkey"
-    )
+    op.drop_constraint("fk_quiz_items_user_id_users", "quiz_items", type_="foreignkey")
     op.drop_column("quiz_items", "user_id")

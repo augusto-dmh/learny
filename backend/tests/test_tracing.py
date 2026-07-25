@@ -44,7 +44,7 @@ def test_sanitize_request_id_truncates_to_128() -> None:
 
 def test_sanitize_request_id_strips_unsafe_chars() -> None:
     # Newline / space / quote would allow log injection — must be removed.
-    assert sanitize_request_id("ab c\nd\te\"f/g") == "abcdefg"
+    assert sanitize_request_id('ab c\nd\te"f/g') == "abcdefg"
 
 
 def test_sanitize_request_id_empty_and_none_yield_none() -> None:

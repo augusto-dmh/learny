@@ -247,9 +247,7 @@ _HYBRID_WITH_NOTES_TEMPLATE = """
 
 _HYBRID_SQL_WITH_NOTES = text(_HYBRID_WITH_NOTES_TEMPLATE.format(anchor_filter=""))
 _HYBRID_SQL_ANCHORED_WITH_NOTES = text(
-    _HYBRID_WITH_NOTES_TEMPLATE.format(
-        anchor_filter="\n            AND cc.anchor = ANY(:anchors)"
-    )
+    _HYBRID_WITH_NOTES_TEMPLATE.format(anchor_filter="\n            AND cc.anchor = ANY(:anchors)")
 )
 
 
@@ -306,9 +304,7 @@ class SqlAlchemyRetrievalRepository:
             statement = _HYBRID_SQL_WITH_NOTES if use_notes else _HYBRID_SQL
         else:
             # Bound as a list — psycopg adapts it to a Postgres array for = ANY(...).
-            statement = (
-                _HYBRID_SQL_ANCHORED_WITH_NOTES if use_notes else _HYBRID_SQL_ANCHORED
-            )
+            statement = _HYBRID_SQL_ANCHORED_WITH_NOTES if use_notes else _HYBRID_SQL_ANCHORED
             params["anchors"] = list(anchors)
         rows = self._conn.execute(statement, params).all()
         return [_to_evidence(row) for row in rows]

@@ -629,13 +629,17 @@ def test_corpus_replace_sets_language_search_config(
         sections=(record,),
     )
 
-    configs = db_conn.execute(
-        select(corpus_chunks.c.search_config)
-        .select_from(corpus_chunks)
-        .join(corpus_sections, corpus_chunks.c.section_id == corpus_sections.c.id)
-        .join(corpus_documents, corpus_sections.c.document_id == corpus_documents.c.id)
-        .where(corpus_documents.c.source_id == source.id)
-    ).scalars().all()
+    configs = (
+        db_conn.execute(
+            select(corpus_chunks.c.search_config)
+            .select_from(corpus_chunks)
+            .join(corpus_sections, corpus_chunks.c.section_id == corpus_sections.c.id)
+            .join(corpus_documents, corpus_sections.c.document_id == corpus_documents.c.id)
+            .where(corpus_documents.c.source_id == source.id)
+        )
+        .scalars()
+        .all()
+    )
     assert configs == [expected_config, expected_config]
 
 
@@ -675,17 +679,17 @@ def test_corpus_replace_persists_zero_block_section(db_conn: Connection) -> None
     assert section.markdown == ""
     assert (
         db_conn.execute(
-            select(func.count()).select_from(corpus_blocks).where(
-                corpus_blocks.c.section_id == section.id
-            )
+            select(func.count())
+            .select_from(corpus_blocks)
+            .where(corpus_blocks.c.section_id == section.id)
         ).scalar_one()
         == 0
     )
     assert (
         db_conn.execute(
-            select(func.count()).select_from(corpus_chunks).where(
-                corpus_chunks.c.section_id == section.id
-            )
+            select(func.count())
+            .select_from(corpus_chunks)
+            .where(corpus_chunks.c.section_id == section.id)
         ).scalar_one()
         == 0
     )
@@ -1607,9 +1611,7 @@ def test_teaching_turn_recent_history_counts_and_bounds(db_conn: Connection) -> 
             turn_index=0,
             message="message 0",
             answer_text="answer 0",
-            citations=(
-                _citation(source.id, anchor="ch.xhtml#a", snippet="alpha", score=0.5),
-            ),
+            citations=(_citation(source.id, anchor="ch.xhtml#a", snippet="alpha", score=0.5),),
         )
     )
     repo.add(
@@ -1621,9 +1623,7 @@ def test_teaching_turn_recent_history_counts_and_bounds(db_conn: Connection) -> 
             answer_text="",
         )
     )
-    repo.add(
-        _new_turn(session.id, turn_index=2, message="message 2", answer_text="answer 2")
-    )
+    repo.add(_new_turn(session.id, turn_index=2, message="message 2", answer_text="answer 2"))
 
     total, history = repo.recent_history(session.id, 2)
     assert total == 3
@@ -1694,9 +1694,14 @@ def test_teaching_turn_citations_survive_corpus_deletion(db_conn: Connection) ->
 
     # Simulate re-ingestion: deleting the corpus document cascades its chunks away.
     db_conn.execute(sa_delete(corpus_documents).where(corpus_documents.c.source_id == source.id))
-    assert db_conn.execute(
-        select(func.count()).select_from(corpus_chunks).where(corpus_chunks.c.id == live_chunk_id)
-    ).scalar_one() == 0
+    assert (
+        db_conn.execute(
+            select(func.count())
+            .select_from(corpus_chunks)
+            .where(corpus_chunks.c.id == live_chunk_id)
+        ).scalar_one()
+        == 0
+    )
 
     # The citation snapshot is intact even though the live chunk is gone.
     listed = repo.list_for_session(session.id)

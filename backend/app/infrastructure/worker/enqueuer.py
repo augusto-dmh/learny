@@ -24,9 +24,7 @@ class CeleryIngestionEnqueuer:
     the adapter so ``apply_async`` never leaks into application code (AD-016).
     """
 
-    def enqueue_ingestion(
-        self, *, source_id: UUID, job_id: UUID, content_type: str
-    ) -> None:
+    def enqueue_ingestion(self, *, source_id: UUID, job_id: UUID, content_type: str) -> None:
         # Imported locally so the module import graph stays acyclic: the task
         # module wires this cycle's adapters, and the web composition root imports
         # this enqueuer.

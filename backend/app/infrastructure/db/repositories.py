@@ -127,16 +127,12 @@ class SqlAlchemyUserRepository:
         return user
 
     def get_by_id(self, user_id: UUID) -> User | None:
-        row = self._conn.execute(
-            select(users).where(users.c.id == user_id)
-        ).one_or_none()
+        row = self._conn.execute(select(users).where(users.c.id == user_id)).one_or_none()
         return _to_user(row) if row is not None else None
 
     def get_by_email(self, email: str) -> User | None:
         # citext makes this comparison case-insensitive at the DB level.
-        row = self._conn.execute(
-            select(users).where(users.c.email == email)
-        ).one_or_none()
+        row = self._conn.execute(select(users).where(users.c.email == email)).one_or_none()
         return _to_user(row) if row is not None else None
 
 
@@ -217,9 +213,7 @@ class SqlAlchemySessionRepository:
 
     def touch(self, session_id: UUID, last_seen_at: datetime) -> None:
         self._conn.execute(
-            update(sessions)
-            .where(sessions.c.id == session_id)
-            .values(last_seen_at=last_seen_at)
+            update(sessions).where(sessions.c.id == session_id).values(last_seen_at=last_seen_at)
         )
 
     def delete(self, session_id: UUID) -> None:
@@ -264,9 +258,7 @@ class SqlAlchemySourceRepository:
         return [_to_source(row) for row in rows]
 
     def get_by_id(self, source_id: UUID) -> Source | None:
-        row = self._conn.execute(
-            select(sources).where(sources.c.id == source_id)
-        ).one_or_none()
+        row = self._conn.execute(select(sources).where(sources.c.id == source_id)).one_or_none()
         return _to_source(row) if row is not None else None
 
     def set_status(self, source_id: UUID, status: str, updated_at: datetime) -> None:
@@ -438,9 +430,7 @@ class SqlAlchemyCorpusRepository:
                         # Positionally aligned with ``section.blocks`` (NF-02); NULL
                         # when the build did not compute a hash for this block.
                         "content_hash": (
-                            record.block_hashes[index]
-                            if index < len(record.block_hashes)
-                            else None
+                            record.block_hashes[index] if index < len(record.block_hashes) else None
                         ),
                     }
                 )
@@ -657,9 +647,7 @@ class SqlAlchemyCorpusRepository:
             for pos in ordered_positions
         ]
 
-    def expand_anchors(
-        self, source_id: UUID, anchors: Sequence[str]
-    ) -> tuple[str, ...]:
+    def expand_anchors(self, source_id: UUID, anchors: Sequence[str]) -> tuple[str, ...]:
         # Grow a set of section anchors to include every alias that resolves to the
         # same sections (AD-085), so teaching-scoped retrieval filtered by a target
         # anchor still reaches evidence after normalization merged a section away.
@@ -852,9 +840,7 @@ class SqlAlchemyEmbeddingIndexRepository:
         ).all()
         return [ChunkToEmbed(id=row.id, text=row.text) for row in rows]
 
-    def set_embeddings(
-        self, items: Sequence[tuple[UUID, list[float]]], *, model: str
-    ) -> None:
+    def set_embeddings(self, items: Sequence[tuple[UUID, list[float]]], *, model: str) -> None:
         """Write each ``(chunk_id, vector)`` plus ``model`` to ``corpus_chunks``.
 
         One ``executemany`` ``update`` keyed on the chunk id sets ``embedding`` and
@@ -923,9 +909,7 @@ class SqlAlchemyTeachingSessionRepository:
             .order_by(teaching_sessions.c.created_at.desc())
         ).all()
         return [
-            TeachingSessionSummary(
-                session=_to_teaching_session(row), turn_count=row.turn_count
-            )
+            TeachingSessionSummary(session=_to_teaching_session(row), turn_count=row.turn_count)
             for row in rows
         ]
 
@@ -963,9 +947,7 @@ class SqlAlchemyTeachingTurnRepository:
         except IntegrityError as exc:
             # The only unique on this insert is (session_id, turn_index): a racing
             # writer already claimed this index (TEACH-17).
-            raise TeachingTurnConflict(
-                "another turn already claimed this turn index"
-            ) from exc
+            raise TeachingTurnConflict("another turn already claimed this turn index") from exc
 
         citation_rows = [
             {
@@ -988,9 +970,7 @@ class SqlAlchemyTeachingTurnRepository:
         # All turns share the session's source, so one lookup recovers the source
         # for every citation's Evidence (not stored per-citation).
         source_id = self._conn.execute(
-            select(teaching_sessions.c.source_id).where(
-                teaching_sessions.c.id == session_id
-            )
+            select(teaching_sessions.c.source_id).where(teaching_sessions.c.id == session_id)
         ).scalar_one_or_none()
         if source_id is None:
             return []
@@ -1041,9 +1021,7 @@ class SqlAlchemyTeachingTurnRepository:
             result.append(_to_teaching_turn(row, tuple(turns[row.id])))
         return result
 
-    def recent_history(
-        self, session_id: UUID, limit: int
-    ) -> tuple[int, list[HistoryTurn]]:
+    def recent_history(self, session_id: UUID, limit: int) -> tuple[int, list[HistoryTurn]]:
         # Two cheap statements, no citation join: the turn path needs only the
         # count (the next turn_index) and the bounded (message, answer_text)
         # pairs, oldest first.
@@ -1078,9 +1056,7 @@ class SqlAlchemyQuizItemRepository:
     def __init__(self, connection: Connection) -> None:
         self._conn = connection
 
-    def sections_for_generation(
-        self, source_id: UUID, *, min_chars: int
-    ) -> list[QuizSection]:
+    def sections_for_generation(self, source_id: UUID, *, min_chars: int) -> list[QuizSection]:
         """Return ``source_id``'s eligible leaf sections (≥ ``min_chars`` text, A-3).
 
         A section is a *leaf* when no other section's ``section_path`` strictly extends
@@ -1089,9 +1065,7 @@ class SqlAlchemyQuizItemRepository:
         whose summed chunk text is shorter than ``min_chars`` (stub sections) are skipped.
         """
         document_id = self._conn.execute(
-            select(corpus_documents.c.id).where(
-                corpus_documents.c.source_id == source_id
-            )
+            select(corpus_documents.c.id).where(corpus_documents.c.source_id == source_id)
         ).scalar_one_or_none()
         if document_id is None:
             return []
@@ -1224,9 +1198,7 @@ class SqlAlchemyQuizItemRepository:
         user_id = (
             item.user_id
             if item.user_id is not None
-            else select(sources.c.user_id)
-            .where(sources.c.id == item.source_id)
-            .scalar_subquery()
+            else select(sources.c.user_id).where(sources.c.id == item.source_id).scalar_subquery()
         )
         stmt = pg_insert(quiz_items).values(
             id=item.id,
@@ -1277,9 +1249,7 @@ class SqlAlchemyQuizItemRepository:
         stmt = stmt.returning(literal_column("(xmax = 0)").label("inserted"))
         return bool(self._conn.execute(stmt).scalar_one())
 
-    def get_by_anchor_and_key(
-        self, note_anchor_id: UUID, content_key: str
-    ) -> QuizItem | None:
+    def get_by_anchor_and_key(self, note_anchor_id: UUID, content_key: str) -> QuizItem | None:
         """Return the highlight card already accepted for this anchor + fingerprint.
 
         The read behind the idempotent re-accept path: scoped to ``highlight`` origin so
@@ -1293,9 +1263,7 @@ class SqlAlchemyQuizItemRepository:
         ).one_or_none()
         return _to_quiz_item(row) if row is not None else None
 
-    def get_by_note_and_key(
-        self, note_id: UUID, content_key: str
-    ) -> QuizItem | None:
+    def get_by_note_and_key(self, note_id: UUID, content_key: str) -> QuizItem | None:
         """Return the note card already promoted from this note + fingerprint (NL-15).
 
         The read behind the idempotent re-promotion path: scoped to ``note`` origin so a
@@ -1378,14 +1346,10 @@ class SqlAlchemyQuizItemRepository:
     def clear_note_changed(self, item_id: UUID) -> None:
         """Clear ``note_changed_at`` — the explicit schedule reset's badge retire (NL-12)."""
         self._conn.execute(
-            update(quiz_items)
-            .where(quiz_items.c.id == item_id)
-            .values(note_changed_at=None)
+            update(quiz_items).where(quiz_items.c.id == item_id).values(note_changed_at=None)
         )
 
-    def update_text(
-        self, item_id: UUID, *, question: str, answer: str, content_key: str
-    ) -> None:
+    def update_text(self, item_id: UUID, *, question: str, answer: str, content_key: str) -> None:
         """Rewrite a card's text and its fingerprint, keeping its identity (CAP-12).
 
         Touches these three fields plus ``updated_at`` and nothing else — the row's
@@ -1403,9 +1367,7 @@ class SqlAlchemyQuizItemRepository:
             )
         )
 
-    def create_scheduling(
-        self, quiz_item_id: UUID, snapshot: SchedulingSnapshot
-    ) -> None:
+    def create_scheduling(self, quiz_item_id: UUID, snapshot: SchedulingSnapshot) -> None:
         """Insert the initial scheduling row for a newly created item (QUIZ-09)."""
         self._conn.execute(
             insert(quiz_item_scheduling).values(
@@ -1422,15 +1384,11 @@ class SqlAlchemyQuizItemRepository:
     def get_scheduling(self, quiz_item_id: UUID) -> SchedulingSnapshot | None:
         """Return the item's current scheduling snapshot, or ``None`` if absent."""
         row = self._conn.execute(
-            select(quiz_item_scheduling).where(
-                quiz_item_scheduling.c.quiz_item_id == quiz_item_id
-            )
+            select(quiz_item_scheduling).where(quiz_item_scheduling.c.quiz_item_id == quiz_item_id)
         ).one_or_none()
         return _to_scheduling(row) if row is not None else None
 
-    def update_scheduling(
-        self, quiz_item_id: UUID, snapshot: SchedulingSnapshot
-    ) -> None:
+    def update_scheduling(self, quiz_item_id: UUID, snapshot: SchedulingSnapshot) -> None:
         """Replace the item's scheduling snapshot after a review (QUIZ-12)."""
         self._conn.execute(
             update(quiz_item_scheduling)
@@ -1550,9 +1508,7 @@ class SqlAlchemyQuizItemRepository:
                 func.coalesce(sources.c.title, "Your notes").label("source_title"),
                 quiz_item_scheduling.c.due.label("due"),
                 func.coalesce(notes.c.id, notes_via_id.c.id).label("provenance_note_id"),
-                func.coalesce(notes.c.title, notes_via_id.c.title).label(
-                    "provenance_note_title"
-                ),
+                func.coalesce(notes.c.title, notes_via_id.c.title).label("provenance_note_title"),
                 note_changed,
             )
             .select_from(join)
@@ -1716,9 +1672,7 @@ class SqlAlchemyNoteRepository:
         return note
 
     def get_by_id(self, note_id: UUID) -> Note | None:
-        row = self._conn.execute(
-            select(notes).where(notes.c.id == note_id)
-        ).one_or_none()
+        row = self._conn.execute(select(notes).where(notes.c.id == note_id)).one_or_none()
         return _to_note(row) if row is not None else None
 
     def update(
@@ -1744,9 +1698,7 @@ class SqlAlchemyNoteRepository:
     def delete(self, note_id: UUID) -> None:
         self._conn.execute(sa_delete(notes).where(notes.c.id == note_id))
 
-    def list_summaries(
-        self, user_id: UUID, *, tag: str | None = None
-    ) -> list[NoteSummary]:
+    def list_summaries(self, user_id: UUID, *, tag: str | None = None) -> list[NoteSummary]:
         query = select(notes).where(notes.c.user_id == user_id)
         if tag is not None:
             query = query.where(
@@ -1756,9 +1708,7 @@ class SqlAlchemyNoteRepository:
                     .where(tags.c.user_id == user_id, tags.c.name == tag)
                 )
             )
-        rows = self._conn.execute(
-            query.order_by(notes.c.updated_at.desc(), notes.c.id)
-        ).all()
+        rows = self._conn.execute(query.order_by(notes.c.updated_at.desc(), notes.c.id)).all()
         note_list = [_to_note(row) for row in rows]
         if not note_list:
             return []
@@ -1826,9 +1776,7 @@ class SqlAlchemyNoteRepository:
             result.append(Backlink(note_id=row.id, title=row.title))
         return result
 
-    def resolve_titles(
-        self, user_id: UUID, titles: Sequence[str]
-    ) -> dict[str, UUID]:
+    def resolve_titles(self, user_id: UUID, titles: Sequence[str]) -> dict[str, UUID]:
         wanted = [title.lower() for title in titles]
         if not wanted:
             return {}
@@ -1855,23 +1803,14 @@ class SqlAlchemyNoteRepository:
             return
         self._conn.execute(
             pg_insert(tags)
-            .values(
-                [
-                    {"id": uuid4(), "user_id": user_id, "name": name}
-                    for name in unique_names
-                ]
-            )
+            .values([{"id": uuid4(), "user_id": user_id, "name": name} for name in unique_names])
             .on_conflict_do_nothing(index_elements=["user_id", "name"])
         )
         rows = self._conn.execute(
-            select(tags.c.id).where(
-                tags.c.user_id == user_id, tags.c.name.in_(unique_names)
-            )
+            select(tags.c.id).where(tags.c.user_id == user_id, tags.c.name.in_(unique_names))
         ).all()
         self._conn.execute(
-            insert(note_tags).values(
-                [{"note_id": note_id, "tag_id": row.id} for row in rows]
-            )
+            insert(note_tags).values([{"note_id": note_id, "tag_id": row.id} for row in rows])
         )
 
     def set_links(self, note_id: UUID, links: Sequence[DerivedNoteLink]) -> None:
@@ -1938,9 +1877,7 @@ class SqlAlchemyNoteRepository:
         ).all()
         return [_to_note_anchor(row) for row in rows]
 
-    def highlights_for_source(
-        self, user_id: UUID, source_id: UUID
-    ) -> tuple[SourceHighlight, ...]:
+    def highlights_for_source(self, user_id: UUID, source_id: UUID) -> tuple[SourceHighlight, ...]:
         # Owner-scoped highlights for inline painting: a note anchor belongs to its
         # note's owner, so join notes and filter by user_id (unlike ``anchors_for_source``
         # which spans all owners for reconciliation). Projects the quote-with-context +
@@ -1961,9 +1898,9 @@ class SqlAlchemyNoteRepository:
                 # bare highlight (body saved as '') reads as bodyless in the rail. The
                 # trim set is explicit: btrim defaults to spaces only, which would count
                 # a body of blank lines as prose.
-                (
-                    func.length(func.btrim(notes.c.body_markdown, " \t\r\n\f\v")) > 0
-                ).label("has_body"),
+                (func.length(func.btrim(notes.c.body_markdown, " \t\r\n\f\v")) > 0).label(
+                    "has_body"
+                ),
             )
             .join(notes, note_anchors.c.note_id == notes.c.id)
             .where(notes.c.user_id == user_id)
@@ -2045,9 +1982,7 @@ class SqlAlchemyReadingPositionRepository:
         ).one_or_none()
         if row is None:
             return None
-        return ReadingPosition(
-            anchor=row.anchor, percent=row.percent, updated_at=row.updated_at
-        )
+        return ReadingPosition(anchor=row.anchor, percent=row.percent, updated_at=row.updated_at)
 
     def upsert(
         self,
@@ -2078,9 +2013,7 @@ class SqlAlchemyReadingPositionRepository:
             reading_positions.c.updated_at,
         )
         row = self._conn.execute(stmt).one()
-        return ReadingPosition(
-            anchor=row.anchor, percent=row.percent, updated_at=row.updated_at
-        )
+        return ReadingPosition(anchor=row.anchor, percent=row.percent, updated_at=row.updated_at)
 
     def most_recent_for_user(self, user_id: UUID) -> RecentReadingPosition | None:
         """Return the caller's single most-recently-updated position, or ``None`` (HOME-01/04).
@@ -2100,9 +2033,7 @@ class SqlAlchemyReadingPositionRepository:
                 reading_positions.c.updated_at,
             )
             .select_from(
-                reading_positions.join(
-                    sources, reading_positions.c.source_id == sources.c.id
-                )
+                reading_positions.join(sources, reading_positions.c.source_id == sources.c.id)
             )
             .where(reading_positions.c.user_id == user_id)
             .order_by(
@@ -2156,15 +2087,12 @@ class SqlAlchemyStudyDayRepository:
                 # Atomic increment against the stored value (not a read-then-write), so
                 # concurrent commits both count.
                 "reviews_count": study_days.c.reviews_count + stmt.excluded.reviews_count,
-                "reading_updates": study_days.c.reading_updates
-                + stmt.excluded.reading_updates,
+                "reading_updates": study_days.c.reading_updates + stmt.excluded.reading_updates,
             },
         )
         self._conn.execute(stmt)
 
-    def window(
-        self, user_id: UUID, *, start: date, end: date
-    ) -> list[StudyDay]:
+    def window(self, user_id: UUID, *, start: date, end: date) -> list[StudyDay]:
         rows = self._conn.execute(
             select(
                 study_days.c.user_id,

@@ -65,9 +65,7 @@ class Settings(BaseSettings):
     def trusted_origins(self) -> tuple[str, ...]:
         """Parsed, normalized tuple of trusted origins (scheme://host[:port])."""
         return tuple(
-            o.strip().rstrip("/")
-            for o in self.csrf_trusted_origins.split(",")
-            if o.strip()
+            o.strip().rstrip("/") for o in self.csrf_trusted_origins.split(",") if o.strip()
         )
 
     # Object storage (S3-compatible; MinIO locally, AD-011). Secrets env-only.
@@ -103,9 +101,7 @@ class Settings(BaseSettings):
         A malformed value that leaves no usable entries falls back to the
         default pair rather than configuring the OCR engine with zero languages.
         """
-        langs = tuple(
-            part.strip() for part in self.pdf_ocr_langs.split(",") if part.strip()
-        )
+        langs = tuple(part.strip() for part in self.pdf_ocr_langs.split(",") if part.strip())
         return langs or ("en", "pt")
 
     # Corpus chunking (A-5) — max characters per retrieval chunk before packing

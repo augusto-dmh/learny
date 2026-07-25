@@ -41,11 +41,7 @@ def pack_chunks(
     """
     path = tuple(section_path)
     spans = list(page_spans) if page_spans is not None else [None] * len(block_texts)
-    blocks = [
-        (text, span)
-        for text, span in zip(block_texts, spans, strict=True)
-        if text.strip()
-    ]
+    blocks = [(text, span) for text, span in zip(block_texts, spans, strict=True) if text.strip()]
 
     chunk_texts: list[str] = []
     chunk_spans: list[list[tuple[int, int] | None]] = []
@@ -83,9 +79,7 @@ def pack_chunks(
             anchor=anchor,
             page_span=_roll_up_spans(spans_for_chunk),
         )
-        for index, (text, spans_for_chunk) in enumerate(
-            zip(chunk_texts, chunk_spans, strict=True)
-        )
+        for index, (text, spans_for_chunk) in enumerate(zip(chunk_texts, chunk_spans, strict=True))
     )
 
 

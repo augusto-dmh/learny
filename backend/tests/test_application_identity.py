@@ -157,9 +157,9 @@ def test_current_user_skips_touch_within_interval(ports) -> None:
     original_last_seen = result.issued.session.last_seen_at
     # Advance less than the touch interval: the read must NOT write last_seen_at.
     ports["clock"].advance(SESSION_TOUCH_INTERVAL - timedelta(seconds=1))
-    CurrentUser(
-        users=ports["users"], sessions=ports["sessions"], clock=ports["clock"]
-    )(raw_token=result.issued.raw_token)
+    CurrentUser(users=ports["users"], sessions=ports["sessions"], clock=ports["clock"])(
+        raw_token=result.issued.raw_token
+    )
     stored = ports["sessions"].get_by_raw_token(result.issued.raw_token)
     assert stored.last_seen_at == original_last_seen
 
@@ -168,25 +168,25 @@ def test_current_user_touches_once_interval_elapsed(ports) -> None:
     result = _register(ports)
     # Advance past the touch interval: the read refreshes last_seen_at to now.
     ports["clock"].advance(SESSION_TOUCH_INTERVAL + timedelta(seconds=1))
-    CurrentUser(
-        users=ports["users"], sessions=ports["sessions"], clock=ports["clock"]
-    )(raw_token=result.issued.raw_token)
+    CurrentUser(users=ports["users"], sessions=ports["sessions"], clock=ports["clock"])(
+        raw_token=result.issued.raw_token
+    )
     stored = ports["sessions"].get_by_raw_token(result.issued.raw_token)
     assert stored.last_seen_at == ports["clock"].now()
 
 
 def test_current_user_no_token_is_unauthenticated(ports) -> None:
     with pytest.raises(NotAuthenticated):
-        CurrentUser(
-            users=ports["users"], sessions=ports["sessions"], clock=ports["clock"]
-        )(raw_token=None)
+        CurrentUser(users=ports["users"], sessions=ports["sessions"], clock=ports["clock"])(
+            raw_token=None
+        )
 
 
 def test_current_user_unknown_token_is_unauthenticated(ports) -> None:
     with pytest.raises(NotAuthenticated):
-        CurrentUser(
-            users=ports["users"], sessions=ports["sessions"], clock=ports["clock"]
-        )(raw_token="nope")
+        CurrentUser(users=ports["users"], sessions=ports["sessions"], clock=ports["clock"])(
+            raw_token="nope"
+        )
 
 
 def test_current_user_expired_token_is_unauthenticated_and_revoked(ports) -> None:

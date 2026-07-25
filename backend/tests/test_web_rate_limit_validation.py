@@ -30,9 +30,7 @@ pytestmark = requires_db
 
 
 @pytest.fixture
-def throttled_client(
-    db_conn: Connection, monkeypatch: pytest.MonkeyPatch
-) -> Iterator[TestClient]:
+def throttled_client(db_conn: Connection, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     """Like ``auth_client`` but with a deliberately tight rate limiter."""
     from app.core.config import get_settings
     from app.infrastructure.web.dependencies import get_db_connection

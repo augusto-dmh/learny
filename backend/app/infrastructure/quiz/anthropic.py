@@ -93,9 +93,7 @@ def _items_schema(chunk_ids: Sequence[str]) -> dict[str, Any]:
 def _section_prompt(section: QuizSection) -> str:
     """Render the section's text (chunks labeled by id) plus the item-writing instruction."""
     path = " > ".join(section.section_path)
-    chunks_text = "\n\n".join(
-        f"[chunk {chunk_id}]\n{text}" for chunk_id, text in section.chunks
-    )
+    chunks_text = "\n\n".join(f"[chunk {chunk_id}]\n{text}" for chunk_id, text in section.chunks)
     return (
         "You are writing active-recall study items for one section of a book.\n"
         f"Section: {path}\n\n"
@@ -111,9 +109,7 @@ def _section_prompt(section: QuizSection) -> str:
 def _quote_prompt(section: QuizSection, quote: str, limit: int) -> str:
     """Render the section's text plus the instruction to write items for one quote."""
     path = " > ".join(section.section_path)
-    chunks_text = "\n\n".join(
-        f"[chunk {chunk_id}]\n{text}" for chunk_id, text in section.chunks
-    )
+    chunks_text = "\n\n".join(f"[chunk {chunk_id}]\n{text}" for chunk_id, text in section.chunks)
     return (
         "You are writing active-recall study items for one passage a student "
         "highlighted while reading.\n"
@@ -183,9 +179,7 @@ def _note_items_schema() -> dict[str, Any]:
 
 def _note_prompt(note_body: str, context: str, limit: int) -> str:
     """Render the note body (+ book context when anchored) plus the item-writing task."""
-    context_block = (
-        f"\n\nBook context this note refers to:\n{context}" if context.strip() else ""
-    )
+    context_block = f"\n\nBook context this note refers to:\n{context}" if context.strip() else ""
     return (
         "You are writing active-recall study items from a reader's own note.\n"
         f"Note:\n{note_body}{context_block}\n\n"
@@ -236,9 +230,7 @@ class AnthropicQuizAdapter(AnthropicAdapterBase):
                     "params": {
                         "model": self._model,
                         "max_tokens": self._max_tokens,
-                        "messages": [
-                            {"role": "user", "content": _section_prompt(section)}
-                        ],
+                        "messages": [{"role": "user", "content": _section_prompt(section)}],
                         "output_config": {
                             "format": {
                                 "type": "json_schema",
@@ -260,9 +252,7 @@ class AnthropicQuizAdapter(AnthropicAdapterBase):
             payload={"sections": section_meta},
         )
 
-    def suggest_cards(
-        self, section: QuizSection, quote: str, limit: int
-    ) -> list[QuizCandidate]:
+    def suggest_cards(self, section: QuizSection, quote: str, limit: int) -> list[QuizCandidate]:
         """Issue one Messages call for ``quote`` and return at most ``limit`` candidates.
 
         Synchronous by design (AD-134) — the student is waiting — but structurally the
@@ -279,9 +269,7 @@ class AnthropicQuizAdapter(AnthropicAdapterBase):
             model=self._model,
             max_tokens=self._max_tokens,
             messages=[{"role": "user", "content": _quote_prompt(section, quote, limit)}],
-            output_config={
-                "format": {"type": "json_schema", "schema": _items_schema(chunk_ids)}
-            },
+            output_config={"format": {"type": "json_schema", "schema": _items_schema(chunk_ids)}},
             # Bounded per call rather than on the shared client, which the streaming
             # answer path also uses and where a long read is legitimate. This one is a
             # student waiting on a popover, and it occupies a threadpool slot while it
@@ -296,9 +284,7 @@ class AnthropicQuizAdapter(AnthropicAdapterBase):
             raise ValueError(f"suggestion response was not usable: {exc}") from exc
         return candidates[:limit]
 
-    def suggest_note_cards(
-        self, note_body: str, context: str, limit: int
-    ) -> list[QuizCandidate]:
+    def suggest_note_cards(self, note_body: str, context: str, limit: int) -> list[QuizCandidate]:
         """Issue one Messages call for a note and return at most ``limit`` candidates.
 
         Synchronous by design (AD-134) — the reader is waiting — and structurally the
@@ -314,9 +300,7 @@ class AnthropicQuizAdapter(AnthropicAdapterBase):
             model=self._model,
             max_tokens=self._max_tokens,
             messages=[{"role": "user", "content": _note_prompt(note_body, context, limit)}],
-            output_config={
-                "format": {"type": "json_schema", "schema": _note_items_schema()}
-            },
+            output_config={"format": {"type": "json_schema", "schema": _note_items_schema()}},
             timeout=_SUGGEST_TIMEOUT_S,
         )
         try:

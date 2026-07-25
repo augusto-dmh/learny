@@ -36,13 +36,9 @@ def validate_email(email: str) -> str:
 def validate_password(password: str) -> str:
     """Return the password unchanged if it meets policy, else raise."""
     if len(password) < MIN_PASSWORD_LENGTH:
-        raise ValidationError(
-            f"Password must be at least {MIN_PASSWORD_LENGTH} characters."
-        )
+        raise ValidationError(f"Password must be at least {MIN_PASSWORD_LENGTH} characters.")
     if len(password) > MAX_PASSWORD_LENGTH:
-        raise ValidationError(
-            f"Password must be at most {MAX_PASSWORD_LENGTH} characters."
-        )
+        raise ValidationError(f"Password must be at most {MAX_PASSWORD_LENGTH} characters.")
     return password
 
 
@@ -95,18 +91,10 @@ def validate_source_upload(
     """
     extension = extension_of(filename)
     if extension is None:
-        raise InvalidSourceUpload(
-            "extension", "Only EPUB and PDF files are supported."
-        )
+        raise InvalidSourceUpload("extension", "Only EPUB and PDF files are supported.")
     if content_type != SUPPORTED_FORMATS[extension]:
-        raise InvalidSourceUpload(
-            "content_type", "The file type does not match its extension."
-        )
-    cap = (
-        pdf_max_bytes
-        if extension == PDF_EXTENSION and pdf_max_bytes is not None
-        else max_bytes
-    )
+        raise InvalidSourceUpload("content_type", "The file type does not match its extension.")
+    cap = pdf_max_bytes if extension == PDF_EXTENSION and pdf_max_bytes is not None else max_bytes
     if byte_size <= 0:
         raise InvalidSourceUpload("empty", "The uploaded file is empty.")
     if byte_size > cap:
@@ -115,6 +103,4 @@ def validate_source_upload(
     if not stripped:
         raise InvalidSourceUpload("title", "A title is required.")
     if len(stripped) > MAX_TITLE_LENGTH:
-        raise InvalidSourceUpload(
-            "title", f"Title must be at most {MAX_TITLE_LENGTH} characters."
-        )
+        raise InvalidSourceUpload("title", f"Title must be at most {MAX_TITLE_LENGTH} characters.")

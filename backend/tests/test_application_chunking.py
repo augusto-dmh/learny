@@ -16,9 +16,7 @@ _ANCHOR = "book01.xhtml#b1"
 
 
 def _pack(blocks: list[str], *, max_chars: int):  # noqa: ANN202
-    return pack_chunks(
-        blocks, max_chars=max_chars, section_path=_PATH, anchor=_ANCHOR
-    )
+    return pack_chunks(blocks, max_chars=max_chars, section_path=_PATH, anchor=_ANCHOR)
 
 
 def test_packs_whole_blocks_under_cap_joined_by_blank_line() -> None:

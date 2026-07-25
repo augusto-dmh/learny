@@ -228,9 +228,7 @@ class RunIngestion:
         self._append_event(job.id, IngestionEventType.FAILED, error, now)
         return failed
 
-    def _append_event(
-        self, job_id: UUID, event_type: str, message: str | None, now
-    ) -> None:  # noqa: ANN001 — ``now`` is the injected clock's datetime
+    def _append_event(self, job_id: UUID, event_type: str, message: str | None, now) -> None:  # noqa: ANN001 — ``now`` is the injected clock's datetime
         self._events.append(
             IngestionEvent(
                 id=self._ids(),
@@ -258,9 +256,7 @@ class ReadIngestion:
         self._events = events
         self._authorize = authorize
 
-    def __call__(
-        self, *, user: User, source_id: UUID
-    ) -> tuple[IngestionJob, list[IngestionEvent]]:
+    def __call__(self, *, user: User, source_id: UUID) -> tuple[IngestionJob, list[IngestionEvent]]:
         authorized_source(
             user=user,
             source_id=source_id,

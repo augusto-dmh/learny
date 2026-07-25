@@ -225,43 +225,33 @@ def test_study_days_never_returns_another_users_rows(
     assert body["studied_last_14"] == 1
 
 
-def test_study_days_empty_for_a_new_user(
-    study_client: TestClient, db_conn: Connection
-) -> None:
+def test_study_days_empty_for_a_new_user(study_client: TestClient, db_conn: Connection) -> None:
     _register(study_client, "study-empty@example.com")
     resp = study_client.get("/api/study/days")
     assert resp.status_code == 200, resp.text
     assert resp.json() == {"days": [], "studied_last_14": 0}
 
 
-def test_study_days_read_persists_nothing(
-    study_client: TestClient, db_conn: Connection
-) -> None:
+def test_study_days_read_persists_nothing(study_client: TestClient, db_conn: Connection) -> None:
     # I-4: studied_last_14 is derived at read time — a GET creates no rows and is stable.
     user_id = _register(study_client, "study-noderive@example.com")
     today = datetime.now(UTC).date()
     _seed_study_days(db_conn, user_id, [today, today - timedelta(days=1)])
     before = db_conn.execute(
-        select(func.count()).select_from(study_days).where(
-            study_days.c.user_id == UUID(user_id)
-        )
+        select(func.count()).select_from(study_days).where(study_days.c.user_id == UUID(user_id))
     ).scalar_one()
 
     first = study_client.get("/api/study/days")
     second = study_client.get("/api/study/days")
 
     after = db_conn.execute(
-        select(func.count()).select_from(study_days).where(
-            study_days.c.user_id == UUID(user_id)
-        )
+        select(func.count()).select_from(study_days).where(study_days.c.user_id == UUID(user_id))
     ).scalar_one()
     assert first.json() == second.json()  # stable, recomputed identically
     assert before == after == 2  # the reads wrote nothing
 
 
-def test_study_days_requires_authentication(
-    study_client: TestClient, db_conn: Connection
-) -> None:
+def test_study_days_requires_authentication(study_client: TestClient, db_conn: Connection) -> None:
     study_client.cookies.clear()
     resp = study_client.get("/api/study/days")
     assert resp.status_code == 401, resp.text
@@ -327,9 +317,7 @@ def test_continue_never_returns_another_users_position(
     assert resp.json()["source_title"] == "Caller Book"
 
 
-def test_continue_requires_authentication(
-    study_client: TestClient, db_conn: Connection
-) -> None:
+def test_continue_requires_authentication(study_client: TestClient, db_conn: Connection) -> None:
     study_client.cookies.clear()
     resp = study_client.get("/api/reading/continue")
     assert resp.status_code == 401, resp.text

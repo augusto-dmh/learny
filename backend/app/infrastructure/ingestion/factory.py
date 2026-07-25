@@ -29,16 +29,12 @@ def build_parser(content_type: str) -> DocumentParserPort:
     → a terminal ``InvalidDocumentError`` so a misrouted task never retry-loops.
     """
     if content_type == EPUB_CONTENT_TYPE:
-        return EbooklibEpubParser(
-            max_uncompressed_bytes=get_settings().epub_max_uncompressed_bytes
-        )
+        return EbooklibEpubParser(max_uncompressed_bytes=get_settings().epub_max_uncompressed_bytes)
     if content_type == PDF_CONTENT_TYPE:
         try:
             import docling  # noqa: F401 — availability probe for the pdf extra
         except ImportError as exc:
-            raise InvalidDocumentError(
-                "pdf support not installed in this worker"
-            ) from exc
+            raise InvalidDocumentError("pdf support not installed in this worker") from exc
         from app.infrastructure.ingestion.docling_pdf import DoclingPdfParser
 
         settings = get_settings()

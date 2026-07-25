@@ -148,14 +148,10 @@ class AskQuestion:
         evidence_count = len(evidence)
         if not evidence:
             # No supporting evidence → not found; the port is never invoked (QA-13).
-            yield StreamAnswer(
-                self._not_found(evidence_count, self._generation.model)
-            )
+            yield StreamAnswer(self._not_found(evidence_count, self._generation.model))
             return
 
-        stream = self._generation.generate_stream(
-            question=question, evidence=evidence
-        )
+        stream = self._generation.generate_stream(question=question, evidence=evidence)
         # Hold-back yields presentable deltas and returns the authoritative answer.
         answer = yield from hold_back_deltas(stream)
 
@@ -173,9 +169,7 @@ class AskQuestion:
             )
         yield StreamAnswer(result)
 
-    def _answer(
-        self, *, question: str, evidence: list[Evidence]
-    ) -> QuestionAnswer:
+    def _answer(self, *, question: str, evidence: list[Evidence]) -> QuestionAnswer:
         evidence_count = len(evidence)
         if not evidence:
             # No supporting evidence → not found; the port is never invoked
@@ -183,9 +177,7 @@ class AskQuestion:
             return self._not_found(evidence_count, self._generation.model)
 
         try:
-            generated = self._generation.generate(
-                question=question, evidence=evidence
-            )
+            generated = self._generation.generate(question=question, evidence=evidence)
         except Exception as exc:  # any port failure maps to 502 (QA-17)
             # Learny-owned failure with a generic message; the web layer returns a
             # body that leaks no provider/internal detail (QA-17).

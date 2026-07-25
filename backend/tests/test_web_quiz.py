@@ -264,9 +264,7 @@ def test_deck_post_unauthenticated_returns_401(
     assert resp.status_code == 401, resp.text
 
 
-def test_deck_post_missing_csrf_returns_403(
-    quiz_client: TestClient, db_conn: Connection
-) -> None:
+def test_deck_post_missing_csrf_returns_403(quiz_client: TestClient, db_conn: Connection) -> None:
     source_id, _ = _seed_ready_source(quiz_client, db_conn, "deck-nocsrf@example.com")
     resp = _post_deck(quiz_client, source_id, csrf=None)
     assert resp.status_code == 403, resp.text
@@ -345,7 +343,7 @@ def throttled_quiz_client(  # noqa: ANN201
 
     enqueuer = FakeQuizDeckEnqueuer()
     app.dependency_overrides[get_db_connection] = _override_conn
-    app.dependency_overrides[get_quiz_uow] = lambda: (lambda: _shared_uow())
+    app.dependency_overrides[get_quiz_uow] = lambda: lambda: _shared_uow()
     app.dependency_overrides[get_quiz_deck_enqueuer] = lambda: enqueuer
     with TestClient(app, headers={"Origin": TEST_ORIGIN}) as c:
         yield c
@@ -424,9 +422,7 @@ def test_overview_missing_and_non_owned_return_404(
     assert missing.status_code == 404, missing.text
 
 
-def test_overview_unauthenticated_returns_401(
-    quiz_client: TestClient, db_conn: Connection
-) -> None:
+def test_overview_unauthenticated_returns_401(quiz_client: TestClient, db_conn: Connection) -> None:
     source_id, _ = _seed_ready_source(quiz_client, db_conn, "overview-401@example.com")
     quiz_client.cookies.clear()
     resp = quiz_client.get(f"/api/sources/{source_id}/quiz")
@@ -494,9 +490,7 @@ def test_due_deck_card_is_queued_with_null_provenance(
     assert view["provenance"] is None
 
 
-def test_due_over_max_limit_returns_422(
-    quiz_client: TestClient, db_conn: Connection
-) -> None:
+def test_due_over_max_limit_returns_422(quiz_client: TestClient, db_conn: Connection) -> None:
     _seed_ready_source(quiz_client, db_conn, "due-limit@example.com")
     resp = quiz_client.get("/api/reviews/due", params={"limit": 101})
     assert resp.status_code == 422, resp.text
@@ -530,15 +524,11 @@ def test_due_unauthenticated_returns_401(quiz_client: TestClient, db_conn: Conne
 # --- Review POST (QUIZ-12) -----------------------------------------------------
 
 
-def test_review_advances_scheduling_and_logs(
-    quiz_client: TestClient, db_conn: Connection
-) -> None:
+def test_review_advances_scheduling_and_logs(quiz_client: TestClient, db_conn: Connection) -> None:
     source_id, csrf = _seed_ready_source(quiz_client, db_conn, "review@example.com")
     item = _seed_item(db_conn, UUID(source_id))
 
-    resp = _post_review(
-        quiz_client, item.id, {"rating": 3, "review_duration_ms": 4200}, csrf=csrf
-    )
+    resp = _post_review(quiz_client, item.id, {"rating": 3, "review_duration_ms": 4200}, csrf=csrf)
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -594,17 +584,13 @@ def test_review_garbage_timezone_succeeds_and_credits_utc_day(
     item = _seed_item(db_conn, UUID(source_id))
 
     before = datetime.now(UTC)
-    resp = _post_review(
-        quiz_client, item.id, {"rating": 3}, csrf=csrf, client_tz="Mars/Olympus"
-    )
+    resp = _post_review(quiz_client, item.id, {"rating": 3}, csrf=csrf, client_tz="Mars/Olympus")
     after = datetime.now(UTC)
 
     assert resp.status_code == 200, resp.text
     user_id = SqlAlchemySourceRepository(db_conn).get_by_id(UUID(source_id)).user_id
     row = db_conn.execute(
-        select(study_days.c.day, study_days.c.reviews_count).where(
-            study_days.c.user_id == user_id
-        )
+        select(study_days.c.day, study_days.c.reviews_count).where(study_days.c.user_id == user_id)
     ).one()
     assert row.reviews_count == 1
     assert row.day in {local_day(before, None), local_day(after, None)}
@@ -647,18 +633,14 @@ def test_review_missing_and_non_owned_return_404(
     assert non_owned.json() == missing.json()
 
 
-def test_review_missing_csrf_returns_403(
-    quiz_client: TestClient, db_conn: Connection
-) -> None:
+def test_review_missing_csrf_returns_403(quiz_client: TestClient, db_conn: Connection) -> None:
     source_id, _ = _seed_ready_source(quiz_client, db_conn, "review-csrf@example.com")
     item = _seed_item(db_conn, UUID(source_id))
     resp = _post_review(quiz_client, item.id, {"rating": 3}, csrf=None)
     assert resp.status_code == 403, resp.text
 
 
-def test_review_untrusted_origin_returns_403(
-    quiz_client: TestClient, db_conn: Connection
-) -> None:
+def test_review_untrusted_origin_returns_403(quiz_client: TestClient, db_conn: Connection) -> None:
     source_id, csrf = _seed_ready_source(quiz_client, db_conn, "review-origin@example.com")
     item = _seed_item(db_conn, UUID(source_id))
     resp = _post_review(
@@ -727,8 +709,12 @@ def _seed_note_card(
     repo.create_scheduling(
         item.id,
         SchedulingSnapshot(
-            state=1, step=0, stability=None, difficulty=None,
-            due=due or (now - timedelta(hours=1)), last_review=None,
+            state=1,
+            step=0,
+            stability=None,
+            difficulty=None,
+            due=due or (now - timedelta(hours=1)),
+            last_review=None,
         ),
     )
     if flagged_at is not None:
@@ -799,9 +785,7 @@ def test_reset_fresh_schedule_and_clears_badge(
     assert row["note_changed"] is False
 
 
-def test_reset_non_active_item_returns_409(
-    quiz_client: TestClient, db_conn: Connection
-) -> None:
+def test_reset_non_active_item_returns_409(quiz_client: TestClient, db_conn: Connection) -> None:
     user_id = _register(quiz_client, "reset-stale@example.com")
     csrf = _csrf(quiz_client)
     item, _note_id = _seed_note_card(db_conn, user_id, status=QuizItemStatus.STALE)
@@ -811,9 +795,7 @@ def test_reset_non_active_item_returns_409(
     assert resp.status_code == 409, resp.text
 
 
-def test_reset_non_owner_returns_404(
-    quiz_client: TestClient, db_conn: Connection
-) -> None:
+def test_reset_non_owner_returns_404(quiz_client: TestClient, db_conn: Connection) -> None:
     owner_id = _register(quiz_client, "reset-owner@example.com")
     _csrf(quiz_client)
     item, _note_id = _seed_note_card(db_conn, owner_id)
@@ -825,9 +807,7 @@ def test_reset_non_owner_returns_404(
     assert resp.status_code == 404, resp.text
 
 
-def test_reset_missing_csrf_returns_403(
-    quiz_client: TestClient, db_conn: Connection
-) -> None:
+def test_reset_missing_csrf_returns_403(quiz_client: TestClient, db_conn: Connection) -> None:
     user_id = _register(quiz_client, "reset-nocsrf@example.com")
     _csrf(quiz_client)
     item, _note_id = _seed_note_card(db_conn, user_id)
@@ -837,9 +817,7 @@ def test_reset_missing_csrf_returns_403(
     assert resp.status_code == 403, resp.text
 
 
-def test_reset_without_a_session_returns_401(
-    quiz_client: TestClient, db_conn: Connection
-) -> None:
+def test_reset_without_a_session_returns_401(quiz_client: TestClient, db_conn: Connection) -> None:
     user_id = _register(quiz_client, "reset-unauth@example.com")
     csrf = _csrf(quiz_client)
     item, _note_id = _seed_note_card(db_conn, user_id)

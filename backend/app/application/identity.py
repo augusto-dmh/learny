@@ -152,18 +152,14 @@ class AuthenticateUser:
         normalized_email = validate_email(email)
 
         user = self._users.get_by_email(normalized_email)
-        credential = (
-            self._credentials.get_by_user_id(user.id) if user is not None else None
-        )
+        credential = self._credentials.get_by_user_id(user.id) if user is not None else None
 
         # Always verify against *some* hash to keep timing uniform and avoid
         # leaking whether the email exists. When the credential is absent, use a
         # dummy hash sourced from the hasher port so it always matches the active
         # adapter's format (the encoding never leaks into this layer).
         stored_hash = (
-            credential.password_hash
-            if credential is not None
-            else self._hasher.dummy_hash()
+            credential.password_hash if credential is not None else self._hasher.dummy_hash()
         )
         if not self._hasher.verify(password, stored_hash) or user is None:
             raise InvalidCredentials("Invalid email or password.")

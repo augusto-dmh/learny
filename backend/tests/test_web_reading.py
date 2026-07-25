@@ -227,14 +227,10 @@ def test_get_chapter_unknown_anchor_and_non_owner_return_identical_404(
     source_id = _persist_source(db_conn, user_id)
     _seed_book(db_conn, source_id)
 
-    unknown = reading_client.get(
-        f"/api/sources/{source_id}/chapter", params={"anchor": "missing"}
-    )
+    unknown = reading_client.get(f"/api/sources/{source_id}/chapter", params={"anchor": "missing"})
 
     _register(reading_client, "chapter-intruder@example.com")  # become a different user
-    non_owned = reading_client.get(
-        f"/api/sources/{source_id}/chapter", params={"anchor": "c1"}
-    )
+    non_owned = reading_client.get(f"/api/sources/{source_id}/chapter", params={"anchor": "c1"})
     missing = reading_client.get(f"/api/sources/{uuid4()}/chapter", params={"anchor": "c1"})
 
     assert unknown.status_code == 404, unknown.text
@@ -313,9 +309,7 @@ def test_put_reading_position_alias_stores_canonical(
     assert resp.json()["anchor"] == "c2"
     # The persisted row carries the canonical anchor, not the alias.
     stored = db_conn.execute(
-        select(reading_positions.c.anchor).where(
-            reading_positions.c.source_id == source_id
-        )
+        select(reading_positions.c.anchor).where(reading_positions.c.source_id == source_id)
     ).scalar_one()
     assert stored == "c2"
 
@@ -332,9 +326,7 @@ def test_put_reading_position_bad_anchor_404s_and_stores_nothing(
 
     assert resp.status_code == 404, resp.text
     count = db_conn.execute(
-        select(reading_positions.c.anchor).where(
-            reading_positions.c.source_id == source_id
-        )
+        select(reading_positions.c.anchor).where(reading_positions.c.source_id == source_id)
     ).all()
     assert count == []
 
@@ -460,10 +452,14 @@ def test_put_reading_position_body_is_unchanged_by_the_timezone_header(
 
     assert without.status_code == 200, without.text
     assert with_header.status_code == 200, with_header.text
-    assert set(without.json()) == set(with_header.json()) == {
-        "anchor",
-        "percent",
-        "updated_at",
-    }
+    assert (
+        set(without.json())
+        == set(with_header.json())
+        == {
+            "anchor",
+            "percent",
+            "updated_at",
+        }
+    )
     assert without.json()["anchor"] == with_header.json()["anchor"] == "c1s1"
     assert without.json()["percent"] == with_header.json()["percent"] == 30.0

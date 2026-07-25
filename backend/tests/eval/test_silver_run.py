@@ -266,9 +266,7 @@ def test_writer_never_mutates_a_prior_results_file(tmp_path: Path) -> None:
     )
     first_bytes = first.read_bytes()
 
-    second = write_silver_results(
-        [{"a": 9}], results_dir=tmp_path, git_sha="deadbee", now=_FIXED
-    )
+    second = write_silver_results([{"a": 9}], results_dir=tmp_path, git_sha="deadbee", now=_FIXED)
 
     # Same date + sha, yet a distinct file — a rerun never appends to a prior one.
     assert first != second

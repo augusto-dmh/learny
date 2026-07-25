@@ -105,9 +105,7 @@ def cards_client(db_conn: Connection, monkeypatch: pytest.MonkeyPatch):  # noqa:
 
 
 def _register(client: TestClient, email: str) -> str:
-    resp = client.post(
-        "/api/auth/register", json={"email": email, "password": TEST_PASSWORD}
-    )
+    resp = client.post("/api/auth/register", json={"email": email, "password": TEST_PASSWORD})
     assert resp.status_code == 201, resp.text
     return resp.json()["id"]
 
@@ -150,9 +148,7 @@ def _post_card(
     csrf: str | None,
     origin: str | None = None,
 ):
-    return client.post(
-        f"/api/sources/{source_id}/cards", json=body, headers=_headers(csrf, origin)
-    )
+    return client.post(f"/api/sources/{source_id}/cards", json=body, headers=_headers(csrf, origin))
 
 
 def _patch_card(
@@ -163,9 +159,7 @@ def _patch_card(
     csrf: str | None,
     origin: str | None = None,
 ):
-    return client.patch(
-        f"/api/quiz-items/{item_id}", json=body, headers=_headers(csrf, origin)
-    )
+    return client.patch(f"/api/quiz-items/{item_id}", json=body, headers=_headers(csrf, origin))
 
 
 # --- Seeding -------------------------------------------------------------------
@@ -338,9 +332,7 @@ def test_suggestions_are_capped_at_the_configured_maximum(
     assert len(suggestions) <= get_settings().quiz_max_suggestions
 
 
-def test_suggestions_persist_nothing(
-    cards_client: TestClient, db_conn: Connection
-) -> None:
+def test_suggestions_persist_nothing(cards_client: TestClient, db_conn: Connection) -> None:
     # CAP-A2/AD-134: suggestions are ephemeral — only acceptance writes a row.
     source_id, anchor_id, csrf = _seed_highlighted_source(
         cards_client, db_conn, "sugg-ephemeral@example.com"
@@ -536,9 +528,7 @@ def test_accept_empty_question_or_answer_returns_422(
     assert SqlAlchemyQuizItemRepository(db_conn).list_for_source(source_id) == []
 
 
-def test_accept_over_long_text_returns_422(
-    cards_client: TestClient, db_conn: Connection
-) -> None:
+def test_accept_over_long_text_returns_422(cards_client: TestClient, db_conn: Connection) -> None:
     source_id, anchor_id, csrf = _seed_highlighted_source(
         cards_client, db_conn, "accept-toolong@example.com"
     )
@@ -580,9 +570,7 @@ def test_accept_cross_owner_anchor_returns_404_and_writes_nothing(
     assert SqlAlchemyQuizItemRepository(db_conn).list_for_source(other_source) == []
 
 
-def test_accept_missing_csrf_returns_403(
-    cards_client: TestClient, db_conn: Connection
-) -> None:
+def test_accept_missing_csrf_returns_403(cards_client: TestClient, db_conn: Connection) -> None:
     source_id, anchor_id, _ = _seed_highlighted_source(
         cards_client, db_conn, "accept-nocsrf@example.com"
     )
@@ -594,9 +582,7 @@ def test_accept_missing_csrf_returns_403(
     assert resp.status_code == 403, resp.text
 
 
-def test_accept_untrusted_origin_returns_403(
-    cards_client: TestClient, db_conn: Connection
-) -> None:
+def test_accept_untrusted_origin_returns_403(cards_client: TestClient, db_conn: Connection) -> None:
     source_id, anchor_id, csrf = _seed_highlighted_source(
         cards_client, db_conn, "accept-origin@example.com"
     )
@@ -651,9 +637,7 @@ def test_patch_of_a_deck_origin_card_returns_409(
     source_id = _persist_source(db_conn, user_id)
     item = _seed_deck_item(db_conn, source_id)
 
-    resp = _patch_card(
-        cards_client, item.id, {"question": "Reworded?", "answer": "No"}, csrf=csrf
-    )
+    resp = _patch_card(cards_client, item.id, {"question": "Reworded?", "answer": "No"}, csrf=csrf)
 
     assert resp.status_code == 409, resp.text
     stored = SqlAlchemyQuizItemRepository(db_conn).get_by_id(item.id)
@@ -687,9 +671,7 @@ def test_patch_missing_and_non_owned_return_identical_404(
     assert non_owned.json() == missing.json()
 
 
-def test_patch_empty_text_returns_422(
-    cards_client: TestClient, db_conn: Connection
-) -> None:
+def test_patch_empty_text_returns_422(cards_client: TestClient, db_conn: Connection) -> None:
     source_id, anchor_id, csrf = _seed_highlighted_source(
         cards_client, db_conn, "patch-empty@example.com"
     )
@@ -784,9 +766,7 @@ def test_deleting_the_origin_note_leaves_the_card_due_with_null_provenance(
     )
     assert created.status_code == 201, created.text
 
-    deleted = cards_client.delete(
-        f"/api/notes/{note_id}", headers={"X-CSRF-Token": csrf}
-    )
+    deleted = cards_client.delete(f"/api/notes/{note_id}", headers={"X-CSRF-Token": csrf})
     assert deleted.status_code == 204, deleted.text
 
     resp = cards_client.get("/api/reviews/due")
@@ -850,9 +830,7 @@ def test_suggestions_are_throttled_on_the_quiz_limiter(
     )
     for _ in range(3):
         _post_suggestions(throttled_cards_client, source_id, anchor_id, csrf=csrf)
-    throttled = _post_suggestions(
-        throttled_cards_client, source_id, anchor_id, csrf=csrf
-    )
+    throttled = _post_suggestions(throttled_cards_client, source_id, anchor_id, csrf=csrf)
     assert throttled.status_code == 429, throttled.text
     assert "retry-after" in {k.lower() for k in throttled.headers}
 
@@ -894,8 +872,6 @@ def test_patch_is_throttled_on_the_quiz_limiter(
     assert "retry-after" in {k.lower() for k in throttled.headers}
 
 
-
-
 # --- Note promotion (NL-08, NL-09, NL-15) --------------------------------------
 
 # A note body whose leading sentence has a maskable word, so the deterministic adapter
@@ -935,9 +911,7 @@ def _post_note_suggest(
     csrf: str | None,
     origin: str | None = None,
 ):
-    return client.post(
-        f"/api/notes/{note_id}/cards/suggest", headers=_headers(csrf, origin)
-    )
+    return client.post(f"/api/notes/{note_id}/cards/suggest", headers=_headers(csrf, origin))
 
 
 def _post_note_card(
@@ -948,9 +922,7 @@ def _post_note_card(
     csrf: str | None,
     origin: str | None = None,
 ):
-    return client.post(
-        f"/api/notes/{note_id}/cards", json=body, headers=_headers(csrf, origin)
-    )
+    return client.post(f"/api/notes/{note_id}/cards", json=body, headers=_headers(csrf, origin))
 
 
 def _note_accept_body(**overrides) -> dict:
@@ -1017,9 +989,7 @@ def test_note_promote_roundtrips_into_the_due_queue(
     assert rows[card["id"]]["source_id"] is None
 
 
-def test_note_re_promote_is_idempotent(
-    cards_client: TestClient, db_conn: Connection
-) -> None:
+def test_note_re_promote_is_idempotent(cards_client: TestClient, db_conn: Connection) -> None:
     # NL-15: promoting the same text from one note twice returns the existing card.
     user_id = _register(cards_client, "owner-note-idem@example.com")
     csrf = _csrf(cards_client)
@@ -1036,9 +1006,7 @@ def test_note_re_promote_is_idempotent(
     assert sum(1 for r in due.json()["items"] if r["id"] == first.json()["id"]) == 1
 
 
-def test_note_promote_persists_edited_text(
-    cards_client: TestClient, db_conn: Connection
-) -> None:
+def test_note_promote_persists_edited_text(cards_client: TestClient, db_conn: Connection) -> None:
     user_id = _register(cards_client, "owner-note-edit@example.com")
     csrf = _csrf(cards_client)
     note_id = _persist_note(db_conn, user_id)
@@ -1085,9 +1053,7 @@ def test_note_suggest_for_an_unknown_note_is_404(cards_client: TestClient) -> No
     assert resp.status_code == 404, resp.text
 
 
-def test_note_promote_rejects_over_long_text(
-    cards_client: TestClient, db_conn: Connection
-) -> None:
+def test_note_promote_rejects_over_long_text(cards_client: TestClient, db_conn: Connection) -> None:
     user_id = _register(cards_client, "owner-note-long@example.com")
     csrf = _csrf(cards_client)
     note_id = _persist_note(db_conn, user_id)
@@ -1110,9 +1076,7 @@ def test_note_suggest_without_a_session_is_401(
     assert resp.status_code == 401, resp.text
 
 
-def test_note_suggest_without_csrf_is_403(
-    cards_client: TestClient, db_conn: Connection
-) -> None:
+def test_note_suggest_without_csrf_is_403(cards_client: TestClient, db_conn: Connection) -> None:
     user_id = _register(cards_client, "owner-note-csrf1@example.com")
     _csrf(cards_client)  # establish the CSRF cookie; the request omits the header
     note_id = _persist_note(db_conn, user_id)

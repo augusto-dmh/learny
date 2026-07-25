@@ -119,9 +119,7 @@ def create_source(
         # row was persisted (the service raised before ``sources.add``).
         logger.warning("source upload storage failure", extra={"user_id": str(user.id)})
         raise
-    logger.info(
-        "source created", extra={"user_id": str(user.id), "source_id": str(source.id)}
-    )
+    logger.info("source created", extra={"user_id": str(user.id), "source_id": str(source.id)})
     return SourceSummary.from_entity(source)
 
 
@@ -248,9 +246,7 @@ def get_source_section(
     service: Annotated[ReadSection, Depends(get_read_section)],
 ) -> SectionContentView:
     """Return one owned section by anchor (200); 404 missing/non-owner/no-corpus/unknown-anchor."""
-    return SectionContentView.from_content(
-        service(user=user, source_id=source_id, anchor=anchor)
-    )
+    return SectionContentView.from_content(service(user=user, source_id=source_id, anchor=anchor))
 
 
 class ReadingPositionView(BaseModel):
@@ -305,9 +301,7 @@ class ChapterView(BaseModel):
     reading_position: ReadingPositionView | None
 
     @classmethod
-    def from_content(
-        cls, content: ChapterContent, position: ReadingPosition | None
-    ) -> ChapterView:
+    def from_content(cls, content: ChapterContent, position: ReadingPosition | None) -> ChapterView:
         return cls(
             chapter_title=content.chapter_title,
             chapter_anchor=content.chapter_anchor,
@@ -329,9 +323,7 @@ class ChapterView(BaseModel):
                 for section in content.sections
             ],
             reading_position=(
-                ReadingPositionView.from_position(position)
-                if position is not None
-                else None
+                ReadingPositionView.from_position(position) if position is not None else None
             ),
         )
 
@@ -376,7 +368,5 @@ def put_reading_position(
     optional ``X-Client-Timezone`` header sets the study-day boundary (silent UTC
     fallback); it does not affect the response body.
     """
-    position = service(
-        user=user, source_id=source_id, anchor=body.anchor, client_tz=client_tz
-    )
+    position = service(user=user, source_id=source_id, anchor=body.anchor, client_tz=client_tz)
     return ReadingPositionView.from_position(position)

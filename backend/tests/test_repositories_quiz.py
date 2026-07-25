@@ -205,9 +205,7 @@ def test_upsert_same_content_key_updates_content_and_returns_false(
     assert inserted is False
     # Exactly one row for this (source, content_key) — no duplicate minted.
     total = db_conn.execute(
-        select(func.count())
-        .select_from(quiz_items)
-        .where(quiz_items.c.source_id == source.id)
+        select(func.count()).select_from(quiz_items).where(quiz_items.c.source_id == source.id)
     ).scalar_one()
     assert total == 1
     stored = repo.get_by_id(original.id)  # the original row survives the upsert
@@ -234,8 +232,9 @@ def test_reupsert_preserves_scheduling_and_review_log(db_conn: Connection) -> No
     )
     scheduling_before = repo.get_scheduling(item.id)
     log_before = db_conn.execute(
-        select(review_log.c.rating, review_log.c.reviewed_at, review_log.c.review_duration_ms)
-        .where(review_log.c.quiz_item_id == item.id)
+        select(
+            review_log.c.rating, review_log.c.reviewed_at, review_log.c.review_duration_ms
+        ).where(review_log.c.quiz_item_id == item.id)
     ).all()
 
     # Re-upsert the same item with changed content.
@@ -246,8 +245,9 @@ def test_reupsert_preserves_scheduling_and_review_log(db_conn: Connection) -> No
 
     assert repo.get_scheduling(item.id) == scheduling_before
     log_after = db_conn.execute(
-        select(review_log.c.rating, review_log.c.reviewed_at, review_log.c.review_duration_ms)
-        .where(review_log.c.quiz_item_id == item.id)
+        select(
+            review_log.c.rating, review_log.c.reviewed_at, review_log.c.review_duration_ms
+        ).where(review_log.c.quiz_item_id == item.id)
     ).all()
     assert log_after == log_before
     assert [(row.rating, row.review_duration_ms) for row in log_after] == [(3, 4200)]
@@ -1064,16 +1064,16 @@ def test_update_text_leaves_scheduling_and_review_log_byte_identical(
     reviewed = datetime(2026, 7, 19, 9, tzinfo=UTC)
     repo.create_scheduling(
         item.id,
-        _snapshot(due=due, state=2, step=1, stability=7.25, difficulty=4.5,
-                  last_review=reviewed),
+        _snapshot(due=due, state=2, step=1, stability=7.25, difficulty=4.5, last_review=reviewed),
     )
     repo.append_log(
         item.id, ReviewLogEntry(rating=3, reviewed_at=reviewed, review_duration_ms=1200)
     )
     before = repo.get_scheduling(item.id)
     log_before = db_conn.execute(
-        select(review_log.c.rating, review_log.c.reviewed_at, review_log.c.review_duration_ms)
-        .where(review_log.c.quiz_item_id == item.id)
+        select(
+            review_log.c.rating, review_log.c.reviewed_at, review_log.c.review_duration_ms
+        ).where(review_log.c.quiz_item_id == item.id)
     ).all()
 
     repo.update_text(
@@ -1091,8 +1091,9 @@ def test_update_text_leaves_scheduling_and_review_log_byte_identical(
     assert after.difficulty == 4.5
     assert after.last_review == reviewed
     log_after = db_conn.execute(
-        select(review_log.c.rating, review_log.c.reviewed_at, review_log.c.review_duration_ms)
-        .where(review_log.c.quiz_item_id == item.id)
+        select(
+            review_log.c.rating, review_log.c.reviewed_at, review_log.c.review_duration_ms
+        ).where(review_log.c.quiz_item_id == item.id)
     ).all()
     assert log_after == log_before
     assert len(log_after) == 1
@@ -1147,16 +1148,16 @@ def test_update_note_card_rewrites_content_and_flags_leaving_schedule_and_log(
     reviewed = datetime(2026, 7, 19, 9, tzinfo=UTC)
     repo.create_scheduling(
         item.id,
-        _snapshot(due=due, state=2, step=1, stability=7.25, difficulty=4.5,
-                  last_review=reviewed),
+        _snapshot(due=due, state=2, step=1, stability=7.25, difficulty=4.5, last_review=reviewed),
     )
     repo.append_log(
         item.id, ReviewLogEntry(rating=3, reviewed_at=reviewed, review_duration_ms=1200)
     )
     before = repo.get_scheduling(item.id)
     log_before = db_conn.execute(
-        select(review_log.c.rating, review_log.c.reviewed_at, review_log.c.review_duration_ms)
-        .where(review_log.c.quiz_item_id == item.id)
+        select(
+            review_log.c.rating, review_log.c.reviewed_at, review_log.c.review_duration_ms
+        ).where(review_log.c.quiz_item_id == item.id)
     ).all()
 
     changed_at = datetime(2026, 7, 20, 8, tzinfo=UTC)
@@ -1181,8 +1182,9 @@ def test_update_note_card_rewrites_content_and_flags_leaving_schedule_and_log(
     after = repo.get_scheduling(item.id)
     assert after == before
     log_after = db_conn.execute(
-        select(review_log.c.rating, review_log.c.reviewed_at, review_log.c.review_duration_ms)
-        .where(review_log.c.quiz_item_id == item.id)
+        select(
+            review_log.c.rating, review_log.c.reviewed_at, review_log.c.review_duration_ms
+        ).where(review_log.c.quiz_item_id == item.id)
     ).all()
     assert log_after == log_before
     assert len(log_after) == 1
@@ -1229,9 +1231,7 @@ def _seed_due_note_card(db_conn: Connection, note, user_id: UUID):  # noqa: ANN2
     repo = SqlAlchemyQuizItemRepository(db_conn)
     item = _note_item(user_id, note.id)
     repo.upsert(item, embedding=None)
-    repo.create_scheduling(
-        item.id, _snapshot(due=datetime.now(UTC) - timedelta(minutes=1))
-    )
+    repo.create_scheduling(item.id, _snapshot(due=datetime.now(UTC) - timedelta(minutes=1)))
     return repo, repo.get_by_id(item.id)
 
 
@@ -1269,8 +1269,9 @@ def test_due_for_user_badge_retires_after_review(db_conn: Connection) -> None:
     # derived against last_review, so it retires with no stored clear (NL-12).
     repo.update_scheduling(
         item.id,
-        _snapshot(due=datetime.now(UTC) + timedelta(days=1), last_review=flagged
-                  + timedelta(hours=1)),
+        _snapshot(
+            due=datetime.now(UTC) + timedelta(days=1), last_review=flagged + timedelta(hours=1)
+        ),
     )
 
     _total, due = repo.due_for_user(

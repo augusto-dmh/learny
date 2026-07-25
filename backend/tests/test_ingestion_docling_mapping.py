@@ -130,9 +130,9 @@ def test_anchor_follows_ad086_scheme_and_is_deterministic() -> None:
     assert first.sections[0].anchor == "pdf:chapter-one/b0000-" + first.sections[0].anchor[-16:]
     assert [s.anchor for s in first.sections] == [s.anchor for s in second.sections]
     assert [s.section_path for s in first.sections] == [s.section_path for s in second.sections]
-    assert [
-        (b.block_type, b.html_fragment) for b in first.sections[0].blocks
-    ] == [(b.block_type, b.html_fragment) for b in second.sections[0].blocks]
+    assert [(b.block_type, b.html_fragment) for b in first.sections[0].blocks] == [
+        (b.block_type, b.html_fragment) for b in second.sections[0].blocks
+    ]
 
 
 def test_repeated_heading_titles_get_unique_anchors() -> None:

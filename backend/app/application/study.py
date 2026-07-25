@@ -36,9 +36,7 @@ class GetStudySummary:
     ``window`` bounds (7..365) are enforced by the web layer before this runs.
     """
 
-    def __init__(
-        self, *, study_days: StudyDayRepository, clock: Clock
-    ) -> None:
+    def __init__(self, *, study_days: StudyDayRepository, clock: Clock) -> None:
         self._study_days = study_days
         self._clock = clock
 

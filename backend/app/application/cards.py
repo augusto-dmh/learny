@@ -170,9 +170,7 @@ class SuggestCards:
         self._authorize = authorize
         self._max_suggestions = max_suggestions
 
-    def __call__(
-        self, *, user: User, source_id: UUID, note_anchor_id: UUID
-    ) -> list[QuizCandidate]:
+    def __call__(self, *, user: User, source_id: UUID, note_anchor_id: UUID) -> list[QuizCandidate]:
         authorized_source(
             user=user,
             source_id=source_id,
@@ -335,9 +333,7 @@ class UpdateCard:
         self._authorize = authorize
         self._max_card_chars = max_card_chars
 
-    def __call__(
-        self, *, user: User, item_id: UUID, question: str, answer: str
-    ) -> QuizItem:
+    def __call__(self, *, user: User, item_id: UUID, question: str, answer: str) -> QuizItem:
         item = self._items.get_by_id(item_id)
         if item is None:
             raise QuizItemNotFound("Quiz item not found.")
@@ -365,9 +361,7 @@ class UpdateCard:
         if item.note_anchor_id is not None:
             clash = self._items.get_by_anchor_and_key(item.note_anchor_id, key)
             if clash is not None and clash.id != item.id:
-                raise CardAlreadyExists(
-                    "Another card from this highlight already has that text."
-                )
+                raise CardAlreadyExists("Another card from this highlight already has that text.")
 
         self._items.update_text(
             item.id,
@@ -641,15 +635,11 @@ class RefreshNoteCards:
         )
         survivors = [c for c in candidates if note_card_passes_qc(c, note.body_markdown)]
         embeddings = (
-            self._embeddings.embed_documents(
-                [f"{c.question}\n{c.answer}" for c in survivors]
-            )
+            self._embeddings.embed_documents([f"{c.question}\n{c.answer}" for c in survivors])
             if survivors
             else []
         )
-        suggestions = [
-            (cand, list(emb)) for cand, emb in zip(survivors, embeddings, strict=True)
-        ]
+        suggestions = [(cand, list(emb)) for cand, emb in zip(survivors, embeddings, strict=True)]
 
         matches = _greedy_note_matches(live, suggestions, self._match_threshold)
         now = self._clock.now()

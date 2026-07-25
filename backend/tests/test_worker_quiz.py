@@ -200,9 +200,7 @@ def _section_record(
             depth=len(section_path),
             section_path=section_path,
             anchor=anchor,
-            blocks=(
-                ParsedBlock(position=0, block_type="paragraph", html_fragment="<p/>"),
-            ),
+            blocks=(ParsedBlock(position=0, block_type="paragraph", html_fragment="<p/>"),),
         ),
         markdown=text,
         chunks=(

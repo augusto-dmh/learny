@@ -390,9 +390,7 @@ def get_list_source_highlights(conn: DbConnection) -> ListSourceHighlights:
 
 def get_study_summary(conn: DbConnection) -> GetStudySummary:
     """Wire ``GetStudySummary`` on the request-scoped connection (HOME-11)."""
-    return GetStudySummary(
-        study_days=SqlAlchemyStudyDayRepository(conn), clock=_clock
-    )
+    return GetStudySummary(study_days=SqlAlchemyStudyDayRepository(conn), clock=_clock)
 
 
 def get_continue_reading(conn: DbConnection) -> ContinueReading:
@@ -511,9 +509,7 @@ def get_teaching_generation() -> TeachingGenerationPort:
 TeachingGeneration = Annotated[TeachingGenerationPort, Depends(get_teaching_generation)]
 
 
-def get_post_teaching_turn(
-    conn: DbConnection, generation: TeachingGeneration
-) -> PostTeachingTurn:
+def get_post_teaching_turn(conn: DbConnection, generation: TeachingGeneration) -> PostTeachingTurn:
     """Wire ``PostTeachingTurn`` on the request-scoped connection (TEACH-07..17, 19, 24).
 
     Composes the teaching repos, the source repo (ownership + readiness), the

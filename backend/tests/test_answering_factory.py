@@ -49,9 +49,7 @@ def test_anthropic_provider_builds_claude_adapter_from_settings() -> None:
 
 
 def test_anthropic_provider_with_empty_key_fails_fast() -> None:
-    settings = Settings(
-        _env_file=None, generation_provider="anthropic", anthropic_api_key=""
-    )
+    settings = Settings(_env_file=None, generation_provider="anthropic", anthropic_api_key="")
 
     with pytest.raises(ValueError, match="LEARNY_ANTHROPIC_API_KEY is required"):
         build_answer_adapter(settings)
@@ -92,9 +90,7 @@ def test_anthropic_provider_builds_claude_teaching_adapter_from_settings() -> No
 
 
 def test_anthropic_teaching_provider_with_empty_key_fails_fast() -> None:
-    settings = Settings(
-        _env_file=None, generation_provider="anthropic", anthropic_api_key=""
-    )
+    settings = Settings(_env_file=None, generation_provider="anthropic", anthropic_api_key="")
 
     with pytest.raises(ValueError, match="LEARNY_ANTHROPIC_API_KEY is required"):
         build_teaching_adapter(settings)

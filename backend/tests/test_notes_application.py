@@ -145,9 +145,7 @@ def test_create_note_ignores_a_self_link() -> None:
     notes = FakeNoteRepository()
     user = _user()
 
-    view = _create(notes)(
-        user=user, title="Self", body_markdown="I reference [[Self]].", tags=[]
-    )
+    view = _create(notes)(user=user, title="Self", body_markdown="I reference [[Self]].", tags=[])
 
     assert notes.links_for_note(view.note.id) == []
 
@@ -476,9 +474,7 @@ def _anchor_section(
         anchor=anchor,
         section_path=tuple(section_path),
         anchor_aliases=tuple(aliases),
-        blocks=(
-            AnchorBlockSnapshot(ordinal=0, content_hash=content_hash, html_fragment=text),
-        ),
+        blocks=(AnchorBlockSnapshot(ordinal=0, content_hash=content_hash, html_fragment=text),),
     )
 
 

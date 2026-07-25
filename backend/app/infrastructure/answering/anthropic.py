@@ -91,9 +91,7 @@ def _build_documents(
     return documents, chunk_ids
 
 
-def _parse_message(
-    message: Any, chunk_ids: Sequence[UUID], *, model: str
-) -> GeneratedAnswer:
+def _parse_message(message: Any, chunk_ids: Sequence[UUID], *, model: str) -> GeneratedAnswer:
     """Parse a Claude message into a ``GeneratedAnswer`` (shared by both adapters).
 
     Concatenates every ``text`` block into the answer text and walks their
@@ -120,12 +118,8 @@ def _parse_message(
                     cited.append(chunk_id)
     text = "".join(text_parts)
     if text.strip() == SENTINEL:
-        return GeneratedAnswer(
-            text="", cited_chunk_ids=(), model=model, found=False
-        )
-    return GeneratedAnswer(
-        text=text, cited_chunk_ids=tuple(cited), model=model, found=True
-    )
+        return GeneratedAnswer(text="", cited_chunk_ids=(), model=model, found=False)
+    return GeneratedAnswer(text=text, cited_chunk_ids=tuple(cited), model=model, found=True)
 
 
 def _log_call(message: Any, *, model: str, found: bool) -> None:
@@ -244,9 +238,7 @@ class AnthropicAnswerAdapter(AnthropicAdapterBase):
     is built lazily by the shared base so an injected fake needs no key/network.
     """
 
-    def generate(
-        self, *, question: str, evidence: Sequence[Evidence]
-    ) -> GeneratedAnswer:
+    def generate(self, *, question: str, evidence: Sequence[Evidence]) -> GeneratedAnswer:
         """Generate a cited answer grounded in ``evidence`` (single-shot call)."""
         documents, chunk_ids = _build_documents(evidence)
         message = self._get_client().messages.create(
@@ -313,9 +305,7 @@ class AnthropicTeachingAdapter(AnthropicAdapterBase):
         documents, chunk_ids = _build_documents(evidence)
         messages = _build_history_messages(history)
         section = " > ".join(target_section_path)
-        turn_text = (
-            f"I am currently studying this section: {section}.\n\n{message}"
-        )
+        turn_text = f"I am currently studying this section: {section}.\n\n{message}"
         messages.append(
             {
                 "role": "user",

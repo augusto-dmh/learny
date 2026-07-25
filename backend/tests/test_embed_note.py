@@ -162,9 +162,7 @@ def test_embed_note_missing_note_is_a_noop(embed_env, db_engine: Engine) -> None
     _embed(None, str(missing))  # must not raise
 
     with db_engine.connect() as conn:
-        count = conn.execute(
-            select(notes.c.id).where(notes.c.id == missing)
-        ).all()
+        count = conn.execute(select(notes.c.id).where(notes.c.id == missing)).all()
     assert count == []  # no row was created by the no-op
 
 

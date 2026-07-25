@@ -79,9 +79,7 @@ class IngestionSummary(BaseModel):
     events: list[IngestionEventView]
 
     @classmethod
-    def from_entities(
-        cls, job: IngestionJob, events: list[IngestionEvent]
-    ) -> IngestionSummary:
+    def from_entities(cls, job: IngestionJob, events: list[IngestionEvent]) -> IngestionSummary:
         return cls(
             id=job.id,
             status=job.status,
@@ -93,9 +91,7 @@ class IngestionSummary(BaseModel):
         )
 
 
-UowFactory = Annotated[
-    Callable[[], AbstractContextManager[Connection]], Depends(get_ingestion_uow)
-]
+UowFactory = Annotated[Callable[[], AbstractContextManager[Connection]], Depends(get_ingestion_uow)]
 Enqueuer = Annotated[IngestionEnqueuer, Depends(get_ingestion_enqueuer)]
 
 
@@ -121,9 +117,7 @@ def start_ingestion(
     # is composed without the handler touching a persistence adapter.
     with uow_factory() as conn:
         try:
-            job, events, content_type = build_start_ingestion(conn)(
-                user=user, source_id=source_id
-            )
+            job, events, content_type = build_start_ingestion(conn)(user=user, source_id=source_id)
         except IntegrityError as exc:
             raise ActiveIngestionExists("Ingestion is already in progress.") from exc
 
@@ -131,9 +125,7 @@ def start_ingestion(
     # dequeue a row that does not yet exist. The content type selects the queue so
     # a PDF parse lands on the isolated worker, not the default one (ING-17).
     try:
-        enqueuer.enqueue_ingestion(
-            source_id=source_id, job_id=job.id, content_type=content_type
-        )
+        enqueuer.enqueue_ingestion(source_id=source_id, job_id=job.id, content_type=content_type)
     except Exception as exc:  # noqa: BLE001 — any enqueue failure compensates → 502
         # UoW2: no worker will ever run this job, so drive it terminal ``failed``
         # (source ``failed`` + ``failed`` event). Terminal ⇒ it leaves the active

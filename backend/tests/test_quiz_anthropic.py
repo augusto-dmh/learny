@@ -86,9 +86,7 @@ class _FakeClient:
         self.messages = _FakeMessages(batches, reply)
 
 
-def _adapter(
-    batches: _FakeBatches, *, reply: str | None = None
-) -> AnthropicQuizAdapter:
+def _adapter(batches: _FakeBatches, *, reply: str | None = None) -> AnthropicQuizAdapter:
     return AnthropicQuizAdapter(
         api_key="sk-test",
         model="claude-haiku-4-5",

@@ -79,9 +79,7 @@ def to_ui_message_stream(
     except AnswerGenerationFailed:
         # Provider failed after headers were sent: surface the generic error as a
         # protocol part (never the wrapped detail) and terminate the stream.
-        yield ServerSentEvent(
-            data={"type": "error", "errorText": ANSWER_GENERATION_FAILED_DETAIL}
-        )
+        yield ServerSentEvent(data={"type": "error", "errorText": ANSWER_GENERATION_FAILED_DETAIL})
         yield ServerSentEvent(raw_data="[DONE]")
         return
 
@@ -89,14 +87,10 @@ def to_ui_message_stream(
     yield ServerSentEvent(
         data={
             "type": "data-citations",
-            "data": [
-                EvidenceView.from_evidence(c).model_dump(mode="json") for c in citations
-            ],
+            "data": [EvidenceView.from_evidence(c).model_dump(mode="json") for c in citations],
         }
     )
-    yield ServerSentEvent(
-        data={"type": "data-answer-status", "data": {"status": status}}
-    )
+    yield ServerSentEvent(data={"type": "data-answer-status", "data": {"status": status}})
     yield ServerSentEvent(data={"type": "finish"})
     yield ServerSentEvent(raw_data="[DONE]")
 

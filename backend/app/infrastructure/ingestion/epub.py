@@ -72,9 +72,7 @@ class EbooklibEpubParser:
     inside the worker. Violations are terminal ``InvalidDocumentError`` (CORP-06).
     """
 
-    def __init__(
-        self, *, max_uncompressed_bytes: int = _DEFAULT_MAX_UNCOMPRESSED_BYTES
-    ) -> None:
+    def __init__(self, *, max_uncompressed_bytes: int = _DEFAULT_MAX_UNCOMPRESSED_BYTES) -> None:
         self._max_uncompressed_bytes = max_uncompressed_bytes
 
     def parse(self, source_bytes: bytes, *, filename: str) -> ParsedBook:
@@ -126,7 +124,6 @@ class EbooklibEpubParser:
             language=language,
             sections=tuple(sections),
         )
-
 
     def _reject_oversized_archive(self, source_bytes: bytes, filename: str) -> None:
         """Fail terminally when the archive declares more than the inflation cap."""

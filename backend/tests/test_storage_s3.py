@@ -162,9 +162,7 @@ def test_get_missing_key_still_raises_object_not_found() -> None:
 def test_get_with_unreachable_endpoint_raises_storage_unavailable() -> None:
     # FND-03: the fault escapes from bucket-ensure, before get_object itself runs.
     with pytest.raises(StorageUnavailable):
-        _adapter_with(head_bucket=_unreachable_endpoint_error()).get_object(
-            "sources/a-book.epub"
-        )
+        _adapter_with(head_bucket=_unreachable_endpoint_error()).get_object("sources/a-book.epub")
 
 
 def test_put_with_unreachable_endpoint_raises_storage_unavailable() -> None:
@@ -196,9 +194,9 @@ def test_bucket_create_failure_raises_storage_unavailable() -> None:
     missing = ClientError({"Error": {"Code": "404", "Message": "no bucket"}}, "HeadBucket")
 
     with pytest.raises(StorageUnavailable):
-        _adapter_with(
-            head_bucket=missing, create_bucket=_unreachable_endpoint_error()
-        ).get_object("sources/a-book.epub")
+        _adapter_with(head_bucket=missing, create_bucket=_unreachable_endpoint_error()).get_object(
+            "sources/a-book.epub"
+        )
 
 
 def test_missing_bucket_is_created_and_the_operation_proceeds() -> None:

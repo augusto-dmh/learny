@@ -20,9 +20,7 @@ from sqlalchemy import Connection, Engine, create_engine
 
 TEST_DB_URL = os.environ.get("LEARNY_TEST_DATABASE_URL")
 
-requires_db = pytest.mark.skipif(
-    TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set"
-)
+requires_db = pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:

@@ -129,12 +129,8 @@ def _tier_aggregate(tier: str, lines: list[dict[str, Any]]) -> TierAggregate:
     """Build one tier's :class:`TierAggregate` from its scored lines."""
     answered = [line for line in lines if line.get("found", True)]
     not_found_expected = [line for line in lines if line.get("expected_not_found", False)]
-    not_found_correct = [
-        line for line in not_found_expected if not line.get("found", True)
-    ]
-    discipline = (
-        len(not_found_correct) / len(not_found_expected) if not_found_expected else None
-    )
+    not_found_correct = [line for line in not_found_expected if not line.get("found", True)]
+    discipline = len(not_found_correct) / len(not_found_expected) if not_found_expected else None
     return TierAggregate(
         tier=tier,
         scored=len(lines),
@@ -143,9 +139,7 @@ def _tier_aggregate(tier: str, lines: list[dict[str, Any]]) -> TierAggregate:
         not_found_correct=len(not_found_correct),
         mean_faithfulness=_mean(float(line["faithfulness"]) for line in lines),
         mean_relevancy=_mean(float(line["relevancy"]) for line in answered),
-        citation_valid_rate=_mean(
-            1.0 if line["citation_valid"] else 0.0 for line in lines
-        ),
+        citation_valid_rate=_mean(1.0 if line["citation_valid"] else 0.0 for line in lines),
         not_found_discipline=discipline,
     )
 
@@ -205,14 +199,11 @@ def _pair_key(line: dict[str, Any]) -> tuple[str, str]:
 def _passes_gate(line: dict[str, Any]) -> bool:
     """Whether one judged line clears the per-case gate on both metrics."""
     return (
-        float(line["faithfulness"]) >= FAITHFULNESS_MIN
-        and int(line["relevancy"]) >= RELEVANCY_MIN
+        float(line["faithfulness"]) >= FAITHFULNESS_MIN and int(line["relevancy"]) >= RELEVANCY_MIN
     )
 
 
-def judge_agreement(
-    a: Sequence[dict[str, Any]], b: Sequence[dict[str, Any]]
-) -> Agreement:
+def judge_agreement(a: Sequence[dict[str, Any]], b: Sequence[dict[str, Any]]) -> Agreement:
     """Compare judge ``a`` vs judge ``b`` over the cases both scored.
 
     Lines are paired by (case_id, generation_model); unpaired lines on either side

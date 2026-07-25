@@ -44,9 +44,7 @@ def _executed_lines(text: str) -> list[str]:
     must not satisfy an assertion — pin it on the line the shell actually runs.
     """
     return [
-        line
-        for line in text.splitlines()
-        if line.strip() and not line.lstrip().startswith("#")
+        line for line in text.splitlines() if line.strip() and not line.lstrip().startswith("#")
     ]
 
 
@@ -351,9 +349,7 @@ def test_ci_backup_run_asserts_the_offsite_notice() -> None:
 
 def test_ci_drops_the_marker_before_restoring() -> None:
     scripts = _compose_smoke_scripts()
-    assert scripts.index("DROP TABLE backup_marker") < scripts.index(
-        "restore.sh --latest --yes"
-    )
+    assert scripts.index("DROP TABLE backup_marker") < scripts.index("restore.sh --latest --yes")
 
 
 def test_ci_restores_from_the_latest_dump_with_yes() -> None:

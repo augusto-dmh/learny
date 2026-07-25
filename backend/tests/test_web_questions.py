@@ -173,9 +173,7 @@ def _seed_note(db_conn: Connection, user_id: str, *, title: str, body: str) -> U
     )
     repo.add(note)
     adapter = DeterministicEmbeddingAdapter()
-    repo.set_embedding(
-        note.id, embedding=adapter.embed_documents([body])[0], model=adapter.model
-    )
+    repo.set_embedding(note.id, embedding=adapter.embed_documents([body])[0], model=adapter.model)
     return note.id
 
 
@@ -381,18 +379,14 @@ def test_ask_missing_question_field_returns_422(
     assert "answer_status" not in resp.json()
 
 
-def test_ask_whitespace_question_returns_422(
-    auth_client: TestClient, db_conn: Connection
-) -> None:
+def test_ask_whitespace_question_returns_422(auth_client: TestClient, db_conn: Connection) -> None:
     # QA-09: a whitespace-only question is rejected with 422 (trimmed → empty).
     source_id, csrf = _seed_owned_embedded_source(auth_client, db_conn, "ws@example.com")
     resp = _ask(auth_client, source_id, {"question": "   "}, csrf=csrf)
     assert resp.status_code == 422, resp.text
 
 
-def test_ask_over_long_question_returns_422(
-    auth_client: TestClient, db_conn: Connection
-) -> None:
+def test_ask_over_long_question_returns_422(auth_client: TestClient, db_conn: Connection) -> None:
     # QA-10: a trimmed question longer than LEARNY_QA_QUESTION_MAX_CHARS → 422.
     from app.core.config import get_settings
 
@@ -402,9 +396,7 @@ def test_ask_over_long_question_returns_422(
     assert resp.status_code == 422, resp.text
 
 
-def test_ask_exactly_max_chars_is_accepted(
-    auth_client: TestClient, db_conn: Connection
-) -> None:
+def test_ask_exactly_max_chars_is_accepted(auth_client: TestClient, db_conn: Connection) -> None:
     # Edge case: a trimmed question of exactly LEARNY_QA_QUESTION_MAX_CHARS chars
     # is accepted (bound is inclusive) — reaches the service (200), not 422.
     from app.core.config import get_settings
@@ -531,9 +523,7 @@ def _ask_stream(
         headers["X-CSRF-Token"] = csrf
     if origin is not None:
         headers["Origin"] = origin
-    return client.post(
-        f"/api/sources/{source_id}/questions/stream", json=body, headers=headers
-    )
+    return client.post(f"/api/sources/{source_id}/questions/stream", json=body, headers=headers)
 
 
 def _parse_ui_stream(text: str) -> list:
@@ -674,9 +664,7 @@ def test_ask_stream_blank_question_returns_plain_422(
     assert "start" not in resp.text
 
 
-def test_ask_stream_missing_csrf_returns_403(
-    auth_client: TestClient, db_conn: Connection
-) -> None:
+def test_ask_stream_missing_csrf_returns_403(auth_client: TestClient, db_conn: Connection) -> None:
     # GEN-14: the stream endpoint carries the same CSRF/Origin dependencies — a
     # state-changing POST without the token → 403 before any SSE byte.
     source_id, _ = _seed_owned_embedded_source(auth_client, db_conn, "s403@example.com")
@@ -723,9 +711,7 @@ def test_ask_stream_mid_stream_failure_emits_error_part(
             yield AnswerTextDelta(text="partial ")
             raise RuntimeError("provider-secret-internal-detail")
 
-    auth_client.app.dependency_overrides[get_answer_generation] = (
-        lambda: _MidStreamRaisingAdapter()
-    )
+    auth_client.app.dependency_overrides[get_answer_generation] = lambda: _MidStreamRaisingAdapter()
     try:
         resp = _ask_stream(
             auth_client, source_id, {"question": "photosynthesis sunlight"}, csrf=csrf
@@ -926,9 +912,9 @@ def test_ask_stream_note_citation_carries_origin_and_note_identity(
 
     assert resp.status_code == 200, resp.text
     parts = _parse_ui_stream(resp.text)
-    citations = next(
-        p for p in parts if isinstance(p, dict) and p["type"] == "data-citations"
-    )["data"]
+    citations = next(p for p in parts if isinstance(p, dict) and p["type"] == "data-citations")[
+        "data"
+    ]
     note_cits = [c for c in citations if c.get("origin") == "note"]
     assert len(note_cits) == 1
     assert note_cits[0]["note_id"] == str(note_id)

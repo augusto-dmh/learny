@@ -44,9 +44,7 @@ def test_anthropic_provider_builds_batch_adapter_on_quiz_model() -> None:
 
 
 def test_anthropic_provider_with_empty_key_fails_fast() -> None:
-    settings = Settings(
-        _env_file=None, generation_provider="anthropic", anthropic_api_key=""
-    )
+    settings = Settings(_env_file=None, generation_provider="anthropic", anthropic_api_key="")
 
     with pytest.raises(ValueError, match="LEARNY_ANTHROPIC_API_KEY is required"):
         build_quiz_adapter(settings)

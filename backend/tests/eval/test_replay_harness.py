@@ -52,9 +52,7 @@ def test_cases_load_with_required_fields() -> None:
     assert len(cases) >= 10, "expected ~10-15 hand-authored cases"
     assert all(isinstance(c, EvalCase) for c in cases)
     assert all(c.case_id and c.question for c in cases)
-    assert all(
-        c.expected_status in {"answered", "not_found_in_source"} for c in cases
-    )
+    assert all(c.expected_status in {"answered", "not_found_in_source"} for c in cases)
     # Case ids are unique (they name the snapshot files).
     ids = [c.case_id for c in cases]
     assert len(ids) == len(set(ids))
@@ -97,9 +95,7 @@ def test_snapshot_build_and_roundtrip() -> None:
 def test_written_snapshot_has_sorted_keys_and_no_volatile_fields(tmp_path: Path) -> None:
     case = EvalCase(case_id="tides", question="Q?", expected_status="answered")
     evidence = [_evidence("gamma", "ch3.xhtml")]
-    generated = GeneratedAnswer(
-        text="", cited_chunk_ids=(), model="m", found=False
-    )
+    generated = GeneratedAnswer(text="", cited_chunk_ids=(), model="m", found=False)
 
     path = write_snapshot(build_snapshot(case, evidence, generated), tmp_path)
 
@@ -151,9 +147,7 @@ def test_record_snapshots_writes_one_reviewable_json_per_case(tmp_path: Path) ->
     reloaded = {s.case_id: s for s in load_snapshots(tmp_path)}
     assert reloaded["a"].answer.found is True
     assert reloaded["a"].answer.text == "Answer a."
-    assert reloaded["a"].answer.cited_chunk_ids == (
-        str(evidence_by_case["a"][0].chunk_id),
-    )
+    assert reloaded["a"].answer.cited_chunk_ids == (str(evidence_by_case["a"][0].chunk_id),)
     assert reloaded["a"].model == "fake-model"
     assert reloaded["b"].answer.found is False
     assert reloaded["b"].answer.cited_chunk_ids == ()
@@ -193,7 +187,8 @@ def _recording_enabled(request: pytest.FixtureRequest) -> None:
 
 @pytest.mark.live
 def test_record_generation_rewrites_snapshots(
-    _recording_enabled: None, db_conn  # noqa: ANN001 — sqlalchemy Connection fixture
+    _recording_enabled: None,
+    db_conn,  # noqa: ANN001 — sqlalchemy Connection fixture
 ) -> None:
     # Live path: build + embed the golden book, retrieve per case, run the real
     # Anthropic answer adapter, and rewrite the committed snapshots (reviewed in
@@ -224,9 +219,7 @@ def test_record_generation_rewrites_snapshots(
         evidence_for=lambda case: retrieve(
             db_conn, source.id, case.question, top_k=settings.qa_evidence_top_k
         ),
-        generate=lambda question, evidence: adapter.generate(
-            question=question, evidence=evidence
-        ),
+        generate=lambda question, evidence: adapter.generate(question=question, evidence=evidence),
         snapshots_dir=SNAPSHOTS_DIR,
     )
 

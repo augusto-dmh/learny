@@ -32,8 +32,7 @@ def _as_expected(section: ParsedSection) -> fx.ExpectedSection:
         section_path=section.section_path,
         anchor=section.anchor,
         blocks=tuple(
-            fx.ExpectedBlock(b.position, b.block_type, b.html_fragment)
-            for b in section.blocks
+            fx.ExpectedBlock(b.position, b.block_type, b.html_fragment) for b in section.blocks
         ),
     )
 

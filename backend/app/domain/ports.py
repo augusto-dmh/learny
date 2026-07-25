@@ -264,9 +264,7 @@ class IngestionEnqueuer(Protocol):
     worker (ING-17); the queue message itself still carries only ids.
     """
 
-    def enqueue_ingestion(
-        self, *, source_id: UUID, job_id: UUID, content_type: str
-    ) -> None:
+    def enqueue_ingestion(self, *, source_id: UUID, job_id: UUID, content_type: str) -> None:
         """Enqueue the background ingestion task for ``job_id`` / ``source_id``.
 
         ``content_type`` is the source's stored type, used only to pick the queue.
@@ -420,9 +418,7 @@ class CorpusRepository(Protocol):
         """
         ...
 
-    def expand_anchors(
-        self, source_id: UUID, anchors: Sequence[str]
-    ) -> tuple[str, ...]:
+    def expand_anchors(self, source_id: UUID, anchors: Sequence[str]) -> tuple[str, ...]:
         """Grow ``anchors`` to include the aliases of the sections they resolve to (AD-085).
 
         Returns the input anchors plus, for every section whose canonical anchor is in
@@ -504,9 +500,7 @@ class EmbeddingIndexRepository(Protocol):
         """
         ...
 
-    def set_embeddings(
-        self, items: Sequence[tuple[UUID, list[float]]], *, model: str
-    ) -> None:
+    def set_embeddings(self, items: Sequence[tuple[UUID, list[float]]], *, model: str) -> None:
         """Write each ``(chunk_id, vector)`` plus ``model`` to ``corpus_chunks``.
 
         Persists the vector and the active adapter's stable ``model`` identity into
@@ -574,9 +568,7 @@ class AnswerGenerationPort(Protocol):
 
     model: str
 
-    def generate(
-        self, *, question: str, evidence: Sequence[Evidence]
-    ) -> GeneratedAnswer:
+    def generate(self, *, question: str, evidence: Sequence[Evidence]) -> GeneratedAnswer:
         """Generate an answer grounded in ``evidence``.
 
         Returns ``found=False`` when the evidence cannot support an answer;
@@ -637,9 +629,7 @@ class TeachingTurnRepository(Protocol):
         """Return a session's turns by ``turn_index`` ascending, citations loaded."""
         ...
 
-    def recent_history(
-        self, session_id: UUID, limit: int
-    ) -> tuple[int, list[HistoryTurn]]:
+    def recent_history(self, session_id: UUID, limit: int) -> tuple[int, list[HistoryTurn]]:
         """Return the turn count and the last ``limit`` history pairs, oldest first.
 
         The turn path needs only the total (the next ``turn_index``) and the
@@ -740,9 +730,7 @@ class QuizGenerationPort(Protocol):
         """
         ...
 
-    def suggest_cards(
-        self, section: QuizSection, quote: str, limit: int
-    ) -> list[QuizCandidate]:
+    def suggest_cards(self, section: QuizSection, quote: str, limit: int) -> list[QuizCandidate]:
         """Return at most ``limit`` candidates scoped to ``quote`` within ``section``.
 
         The foreground counterpart of the batched deck path (AD-134): the student is
@@ -755,9 +743,7 @@ class QuizGenerationPort(Protocol):
         """
         ...
 
-    def suggest_note_cards(
-        self, note_body: str, context: str, limit: int
-    ) -> list[QuizCandidate]:
+    def suggest_note_cards(self, note_body: str, context: str, limit: int) -> list[QuizCandidate]:
         """Return at most ``limit`` candidates grounded in ``note_body`` (NL-08).
 
         The note→quiz counterpart of :meth:`suggest_cards`: the note *is* the source, so
@@ -887,18 +873,14 @@ class QuizItemRepository(Protocol):
         """
         ...
 
-    def get_by_anchor_and_key(
-        self, note_anchor_id: UUID, content_key: str
-    ) -> QuizItem | None:
+    def get_by_anchor_and_key(self, note_anchor_id: UUID, content_key: str) -> QuizItem | None:
         """Return the ``highlight`` card already stored for this anchor + fingerprint.
 
         ``None`` when the student has not accepted this text from this highlight yet.
         """
         ...
 
-    def get_by_note_and_key(
-        self, note_id: UUID, content_key: str
-    ) -> QuizItem | None:
+    def get_by_note_and_key(self, note_id: UUID, content_key: str) -> QuizItem | None:
         """Return the ``note`` card already promoted from this note + fingerprint (NL-15).
 
         The service-level dedup behind idempotent re-promotion (note cards carry no
@@ -965,9 +947,7 @@ class QuizItemRepository(Protocol):
         """
         ...
 
-    def update_text(
-        self, item_id: UUID, *, question: str, answer: str, content_key: str
-    ) -> None:
+    def update_text(self, item_id: UUID, *, question: str, answer: str, content_key: str) -> None:
         """Rewrite a card's text and fingerprint, keeping its identity (CAP-12).
 
         Never touches the item's scheduling snapshot or its review log, so editing a
@@ -1085,9 +1065,7 @@ class NoteRepository(Protocol):
         """Delete a note; its anchors/tags/links cascade, inbound links SET NULL (NF-01)."""
         ...
 
-    def list_summaries(
-        self, user_id: UUID, *, tag: str | None = None
-    ) -> list[NoteSummary]:
+    def list_summaries(self, user_id: UUID, *, tag: str | None = None) -> list[NoteSummary]:
         """Return the user's notes (newest-edited first) with tags and anchor statuses.
 
         When ``tag`` (already lowercased) is given, only notes carrying that tag are
@@ -1107,9 +1085,7 @@ class NoteRepository(Protocol):
         """Return the distinct notes whose wikilinks resolve to ``note_id`` (NF-10)."""
         ...
 
-    def resolve_titles(
-        self, user_id: UUID, titles: Sequence[str]
-    ) -> dict[str, UUID]:
+    def resolve_titles(self, user_id: UUID, titles: Sequence[str]) -> dict[str, UUID]:
         """Map each lowercased title to the user's earliest note of that title (NF-05).
 
         The wikilink resolver: a ``[[title]]`` matches case-insensitively; ties resolve
@@ -1155,9 +1131,7 @@ class NoteRepository(Protocol):
         """
         ...
 
-    def highlights_for_source(
-        self, user_id: UUID, source_id: UUID
-    ) -> tuple[SourceHighlight, ...]:
+    def highlights_for_source(self, user_id: UUID, source_id: UUID) -> tuple[SourceHighlight, ...]:
         """Return the caller's highlights on ``source_id`` for inline painting (RD-28).
 
         Scoped to ``(user_id, source_id)`` — a note anchor belongs to its note's owner,

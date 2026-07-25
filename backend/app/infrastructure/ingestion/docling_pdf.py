@@ -76,9 +76,7 @@ class DoclingPdfParser:
     adapter stays a plain composition-root object.
     """
 
-    def __init__(
-        self, ocr_enabled: bool = True, ocr_langs: tuple[str, ...] = ("en", "pt")
-    ) -> None:
+    def __init__(self, ocr_enabled: bool = True, ocr_langs: tuple[str, ...] = ("en", "pt")) -> None:
         self._ocr_enabled = ocr_enabled
         self._ocr_langs = ocr_langs
 
@@ -90,9 +88,7 @@ class DoclingPdfParser:
             raise InvalidDocumentError(f"PDF {filename!r} has no extractable text")
         return _to_parsed_book(document, filename=filename)
 
-    def _convert(
-        self, source_bytes: bytes, *, filename: str, do_ocr: bool
-    ) -> DoclingDocument:
+    def _convert(self, source_bytes: bytes, *, filename: str, do_ocr: bool) -> DoclingDocument:
         """Run one Docling conversion, mapping any failure to a terminal error.
 
         ``docling`` is imported here (not at module load) so this module still
@@ -142,9 +138,7 @@ def _to_parsed_book(document: DoclingDocument, *, filename: str) -> ParsedBook:
     spans come from each item's provenance; anchors follow the AD-086 scheme.
     """
     raw = _collect_sections(document, filename)
-    sections = tuple(
-        _finalize_section(section, index) for index, section in enumerate(raw)
-    )
+    sections = tuple(_finalize_section(section, index) for index, section in enumerate(raw))
     return ParsedBook(
         title=_book_title(document),
         authors=(),
@@ -228,9 +222,7 @@ def _heading_of(item: object) -> tuple[str, int] | None:
     return None
 
 
-def _block_of(
-    item: object, position: int, document: DoclingDocument
-) -> ParsedBlock | None:
+def _block_of(item: object, position: int, document: DoclingDocument) -> ParsedBlock | None:
     """Map a Docling item to a typed ``ParsedBlock``, or ``None`` to skip it."""
     if isinstance(item, (TitleItem, SectionHeaderItem)):
         level = 1 if isinstance(item, TitleItem) else min(item.level, _MAX_HEADING_LEVEL)

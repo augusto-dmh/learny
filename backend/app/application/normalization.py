@@ -49,9 +49,7 @@ _IMAGE_BLOCK_TYPES = frozenset({"img", "figure"})
 # A title is generic when it is the filename-stem pattern family (``part0034``,
 # ``wrap0000``, ``chapter5``, bare ``0034`` …), matches the anchor's href stem,
 # or is empty.
-_GENERIC_TITLE = re.compile(
-    r"^(part|split|index|text|wrap|ch(apter)?)?[_-]?\d+$", re.IGNORECASE
-)
+_GENERIC_TITLE = re.compile(r"^(part|split|index|text|wrap|ch(apter)?)?[_-]?\d+$", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -112,12 +110,10 @@ def _heuristics_for(language: str | None) -> LanguageHeuristics:
         return _NEUTRAL_HEURISTICS
     primary = language.split("-", 1)[0].lower()
     return _HEURISTICS.get(primary, _NEUTRAL_HEURISTICS)
-_GUTENBERG_START = re.compile(
-    r"\*\*\*\s*START OF TH(E|IS) PROJECT GUTENBERG EBOOK", re.IGNORECASE
-)
-_GUTENBERG_END = re.compile(
-    r"\*\*\*\s*END OF TH(E|IS) PROJECT GUTENBERG EBOOK", re.IGNORECASE
-)
+
+
+_GUTENBERG_START = re.compile(r"\*\*\*\s*START OF TH(E|IS) PROJECT GUTENBERG EBOOK", re.IGNORECASE)
+_GUTENBERG_END = re.compile(r"\*\*\*\s*END OF TH(E|IS) PROJECT GUTENBERG EBOOK", re.IGNORECASE)
 _TAG = re.compile(r"<[^>]+>")
 _HEADING_LEVEL = re.compile(r"<\s*h([1-6])", re.IGNORECASE)
 
@@ -179,9 +175,7 @@ def _strip_gutenberg(
     """Drop blocks outside the Gutenberg START/END markers (ING-06)."""
     flat = [(si, bi) for si, sec in enumerate(sections) for bi in range(len(sec.blocks))]
     texts = [_block_text(sections[si].blocks[bi]) for si, bi in flat]
-    start = next(
-        (i for i, text in enumerate(texts) if _GUTENBERG_START.search(text)), None
-    )
+    start = next((i for i, text in enumerate(texts) if _GUTENBERG_START.search(text)), None)
     if start is None:
         return sections, 0
     end = next(
@@ -196,9 +190,7 @@ def _strip_gutenberg(
     result = [
         replace(
             sec,
-            blocks=tuple(
-                block for bi, block in enumerate(sec.blocks) if (si, bi) in keep
-            ),
+            blocks=tuple(block for bi, block in enumerate(sec.blocks) if (si, bi) in keep),
         )
         for si, sec in enumerate(sections)
     ]
@@ -241,21 +233,15 @@ def _absorb_backward(survivor: ParsedSection, merged: ParsedSection) -> ParsedSe
     return replace(
         survivor,
         blocks=survivor.blocks + merged.blocks,
-        anchor_aliases=_extend_aliases(
-            survivor, (merged.anchor, *merged.anchor_aliases)
-        ),
+        anchor_aliases=_extend_aliases(survivor, (merged.anchor, *merged.anchor_aliases)),
     )
 
 
-def _absorb_forward(
-    survivor: ParsedSection, leading: list[ParsedSection]
-) -> ParsedSection:
+def _absorb_forward(survivor: ParsedSection, leading: list[ParsedSection]) -> ParsedSection:
     """Prepend leading trivial sections' content and anchors into ``survivor``."""
     prefix = tuple(block for section in leading for block in section.blocks)
     new_anchors = [
-        anchor
-        for section in leading
-        for anchor in (section.anchor, *section.anchor_aliases)
+        anchor for section in leading for anchor in (section.anchor, *section.anchor_aliases)
     ]
     return replace(
         survivor,
@@ -293,9 +279,7 @@ def _infer_flat_hierarchy(
     distinct = sorted({level for level in levels if level is not None})
     if len(distinct) >= 2:
         rank = {level: index for index, level in enumerate(distinct)}
-        ranks: list[int | None] = [
-            rank[level] if level is not None else None for level in levels
-        ]
+        ranks: list[int | None] = [rank[level] if level is not None else None for level in levels]
     else:
         ranks = [_keyword_rank(section.title, heuristics) for section in sections]
         if len({r for r in ranks if r is not None}) < 2:

@@ -118,9 +118,7 @@ class StartTeachingSession:
         self._clock = clock
         self._ids = ids
 
-    def __call__(
-        self, *, user: User, source_id: UUID, target_anchor: str
-    ) -> TeachingSession:
+    def __call__(self, *, user: User, source_id: UUID, target_anchor: str) -> TeachingSession:
         source = authorized_source(
             user=user,
             source_id=source_id,
@@ -207,9 +205,7 @@ class ListTeachingSessions:
         self._sessions = sessions
         self._authorize = authorize
 
-    def __call__(
-        self, *, user: User, source_id: UUID
-    ) -> list[TeachingSessionSummary]:
+    def __call__(self, *, user: User, source_id: UUID) -> list[TeachingSessionSummary]:
         authorized_source(
             user=user,
             source_id=source_id,
@@ -305,13 +301,9 @@ class PostTeachingTurn:
         # anchor (the target itself), so retrieval scoping is never empty.
         structure = self._corpus.get_structure(session.source_id)
         sections = structure.sections if structure is not None else ()
-        target = next(
-            (s for s in sections if s.anchor == session.target_anchor), None
-        )
+        target = next((s for s in sections if s.anchor == session.target_anchor), None)
         if target is None:
-            raise TeachingTargetGone(
-                "The teaching target no longer exists; start a new session."
-            )
+            raise TeachingTargetGone("The teaching target no longer exists; start a new session.")
         depth = len(target.section_path)
         subtree_anchors = [
             s.anchor for s in sections if s.section_path[:depth] == target.section_path
@@ -319,17 +311,13 @@ class PostTeachingTurn:
         # Expand the subtree to the anchors normalization merged away (AD-085) so
         # evidence from a section a re-ingest folded into the subtree is still in
         # scope (ING-23); the retrieval port signature is unchanged.
-        scoped_anchors = self._corpus.expand_anchors(
-            session.source_id, subtree_anchors
-        )
+        scoped_anchors = self._corpus.expand_anchors(session.source_id, subtree_anchors)
 
         # Bounded conversation context: the last ``history_turns`` message/response
         # pairs (response empty for a not-found turn), all of them when fewer exist
         # (TEACH-12). ``recent_history`` skips the citation payloads that
         # ``list_for_session`` loads — the turn path never uses them.
-        total_turns, history = self._turns.recent_history(
-            session_id, self._history_turns
-        )
+        total_turns, history = self._turns.recent_history(session_id, self._history_turns)
 
         evidence = self._retrieve(
             user=user,
@@ -359,9 +347,7 @@ class PostTeachingTurn:
         if not evidence:
             # No scoped evidence → not-found; the port is never invoked, and the
             # model identity comes from the port attribute (TEACH-11 / TEACH-24).
-            turn = self._not_found_turn(
-                session_id, turn_index, message, 0, self._generation.model
-            )
+            turn = self._not_found_turn(session_id, turn_index, message, 0, self._generation.model)
         else:
             try:
                 generated = self._generation.generate(
@@ -458,9 +444,7 @@ class PostTeachingTurn:
         if not evidence:
             # No scoped evidence → not-found, persisted with empty text/citations;
             # the port is never invoked (TEACH-11 / TEACH-14).
-            turn = self._not_found_turn(
-                session_id, turn_index, message, 0, self._generation.model
-            )
+            turn = self._not_found_turn(session_id, turn_index, message, 0, self._generation.model)
             yield StreamTurn(self._turns.add(turn))
             return
 

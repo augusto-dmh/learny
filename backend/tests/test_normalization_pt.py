@@ -62,9 +62,7 @@ def test_pt_hierarchy_needs_both_ranks_to_fire() -> None:
     # than inventing nesting.
     book = replace(
         _pt_flat_book(),
-        sections=tuple(
-            _section(i, f"Capítulo {i + 1}", f"c{i}.xhtml") for i in range(4)
-        ),
+        sections=tuple(_section(i, f"Capítulo {i + 1}", f"c{i}.xhtml") for i in range(4)),
     )
 
     result = normalize_book(book)

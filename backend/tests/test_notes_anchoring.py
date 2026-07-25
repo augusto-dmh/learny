@@ -68,9 +68,7 @@ def test_multi_block_selection_binds_to_the_first_block() -> None:
 
 def test_prefix_suffix_disambiguate_a_repeated_quote() -> None:
     # "the cat" occurs twice; the context picks the second occurrence.
-    blocks = [
-        AnchorBlock(ordinal=0, content_hash="h0", text="The cat sat. The cat ran.")
-    ]
+    blocks = [AnchorBlock(ordinal=0, content_hash="h0", text="The cat sat. The cat ran.")]
 
     binding = resolve(blocks, quote="the cat", prefix="sat.", suffix="ran")
 
@@ -80,9 +78,7 @@ def test_prefix_suffix_disambiguate_a_repeated_quote() -> None:
 
 
 def test_repeated_quote_without_context_binds_the_first_occurrence() -> None:
-    blocks = [
-        AnchorBlock(ordinal=0, content_hash="h0", text="the cat sat. the cat ran.")
-    ]
+    blocks = [AnchorBlock(ordinal=0, content_hash="h0", text="the cat sat. the cat ran.")]
 
     binding = resolve(blocks, quote="the cat")
 

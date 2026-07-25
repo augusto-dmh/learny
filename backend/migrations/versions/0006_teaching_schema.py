@@ -107,9 +107,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id", name="pk_teaching_turn_citations"),
         sa.UniqueConstraint("turn_id", "rank", name="uq_teaching_turn_citations_turn_id"),
     )
-    op.create_index(
-        "ix_teaching_turn_citations_turn_id", "teaching_turn_citations", ["turn_id"]
-    )
+    op.create_index("ix_teaching_turn_citations_turn_id", "teaching_turn_citations", ["turn_id"])
 
 
 def downgrade() -> None:

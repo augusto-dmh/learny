@@ -129,6 +129,6 @@ def test_domain_has_no_outward_imports() -> None:
     for path in domain_dir.rglob("*.py"):
         source = path.read_text(encoding="utf-8")
         for token in forbidden:
-            assert (
-                f"import {token}" not in source and f"from {token}" not in source
-            ), f"{path.name} imports forbidden module {token}"
+            assert f"import {token}" not in source and f"from {token}" not in source, (
+                f"{path.name} imports forbidden module {token}"
+            )

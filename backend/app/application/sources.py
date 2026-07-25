@@ -113,9 +113,7 @@ class ListSources:
 class GetSource:
     """Return one owned source, or raise ``SourceNotFound`` (404, no disclosure)."""
 
-    def __init__(
-        self, *, sources: SourceRepository, authorize: AuthorizeOwnership
-    ) -> None:
+    def __init__(self, *, sources: SourceRepository, authorize: AuthorizeOwnership) -> None:
         self._sources = sources
         self._authorize = authorize
 

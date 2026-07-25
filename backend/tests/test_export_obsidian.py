@@ -120,9 +120,7 @@ def test_empty_vault_is_a_valid_zip_with_skeleton() -> None:
 def test_entries_use_stored_compression_for_determinism() -> None:
     note = _note()
     with zipfile.ZipFile(io.BytesIO(build_vault([_view(note)], {}))) as archive:
-        assert all(
-            info.compress_type == zipfile.ZIP_STORED for info in archive.infolist()
-        )
+        assert all(info.compress_type == zipfile.ZIP_STORED for info in archive.infolist())
 
 
 # --- NL-20 scoping (builder serializes only what it is given) -------------------
@@ -166,9 +164,7 @@ def test_identical_note_titles_de_collide_deterministically() -> None:
         "Learny/Notes/Same (3).md",
     }
     # The suffix assignment is stable across builds regardless of input order.
-    assert _entries(build_vault(notes, {})) == _entries(
-        build_vault(list(reversed(notes)), {})
-    )
+    assert _entries(build_vault(notes, {})) == _entries(build_vault(list(reversed(notes)), {}))
 
 
 # --- NL-17 book files: callouts, block ids, ordering, orphans -------------------
@@ -176,9 +172,7 @@ def test_identical_note_titles_de_collide_deterministically() -> None:
 
 def test_book_highlight_renders_as_callout_with_block_id() -> None:
     note = _note()
-    anchor = _anchor(
-        note_id=note.id, section_path=("Chapter 1", "Intro"), quote_exact="a passage"
-    )
+    anchor = _anchor(note_id=note.id, section_path=("Chapter 1", "Intro"), quote_exact="a passage")
     data = build_vault([_view(note, (anchor,))], {anchor.source_id: [anchor]})
 
     book = _entries(data)["Learny/Books/The Book.md"]
@@ -192,9 +186,7 @@ def test_highlights_order_by_position_in_the_book() -> None:
     source_id = uuid4()
     later = _anchor(note_id=note.id, source_id=source_id, block_ordinal=9, quote_exact="LATER")
     earlier = _anchor(note_id=note.id, source_id=source_id, block_ordinal=1, quote_exact="EARLIER")
-    data = build_vault(
-        [_view(note, (later, earlier))], {source_id: [later, earlier]}
-    )
+    data = build_vault([_view(note, (later, earlier))], {source_id: [later, earlier]})
 
     book = _entries(data)["Learny/Books/The Book.md"]
     assert book.index("EARLIER") < book.index("LATER")
@@ -261,9 +253,7 @@ def test_note_frontmatter_uses_only_learny_keys() -> None:
     text = _entries(data)["Learny/Notes/Ideas.md"]
     front = text.split("---\n", 2)[1]
     keys = [
-        line.split(":", 1)[0]
-        for line in front.splitlines()
-        if line and not line.startswith(" ")
+        line.split(":", 1)[0] for line in front.splitlines() if line and not line.startswith(" ")
     ]
     assert keys == [
         "learny-id",

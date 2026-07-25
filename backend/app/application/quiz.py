@@ -201,18 +201,14 @@ class RunDeckGeneration:
         Zero eligible sections is not an error: the adapter starts a pass over an empty
         section list and ``finalize`` records a zero-count success (spec edge case).
         """
-        sections = self._items.sections_for_generation(
-            source_id, min_chars=self._min_section_chars
-        )
+        sections = self._items.sections_for_generation(source_id, min_chars=self._min_section_chars)
         return self._generation.begin_deck(sections)
 
     def collect(self, handle: QuizDeckHandle) -> QuizDeckResult | None:
         """Return the pass's result, or ``None`` while the batch is still pending (QUIZ-05)."""
         return self._generation.collect_deck(handle)
 
-    def finalize(
-        self, job_id: UUID, result: QuizDeckResult
-    ) -> QuizGenerationJob | None:
+    def finalize(self, job_id: UUID, result: QuizDeckResult) -> QuizGenerationJob | None:
         """Ground, dedup, and persist the pass's candidates; record success (QUIZ-06..09).
 
         Per candidate, in order: schema sanity → verbatim quote in the referenced chunk
@@ -315,9 +311,7 @@ class RunDeckGeneration:
             return None
         return self._jobs.update(job.failed(self._clock.now(), error))
 
-    def _chunk_index(
-        self, source_id: UUID
-    ) -> dict[UUID, tuple[tuple[str, ...], str, str]]:
+    def _chunk_index(self, source_id: UUID) -> dict[UUID, tuple[tuple[str, ...], str, str]]:
         """Map each eligible-section chunk id → its ``(section_path, anchor, text)``.
 
         The grounding index: a candidate's ``source_chunk_id`` must resolve here (the
@@ -360,13 +354,9 @@ class RunDeckGeneration:
             return None
         return located
 
-    def _is_duplicate(
-        self, embedding: list[float], targets: list[list[float]]
-    ) -> bool:
+    def _is_duplicate(self, embedding: list[float], targets: list[list[float]]) -> bool:
         """Return whether ``embedding`` is within the dedup threshold of any target (QUIZ-08)."""
-        return any(
-            _cosine(embedding, target) >= self._dedup_threshold for target in targets
-        )
+        return any(_cosine(embedding, target) >= self._dedup_threshold for target in targets)
 
 
 class ListQuizItems:
@@ -457,9 +447,7 @@ class ReconcileQuizItems:
     fast path (the corpus is not even read).
     """
 
-    def __init__(
-        self, *, items: QuizItemRepository, corpus: CorpusRepository
-    ) -> None:
+    def __init__(self, *, items: QuizItemRepository, corpus: CorpusRepository) -> None:
         self._items = items
         self._corpus = corpus
 

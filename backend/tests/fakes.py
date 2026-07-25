@@ -304,9 +304,7 @@ class FakeIngestionEnqueuer:
         self._error = error
         self.calls: list[tuple[UUID, UUID, str]] = []
 
-    def enqueue_ingestion(
-        self, *, source_id: UUID, job_id: UUID, content_type: str
-    ) -> None:
+    def enqueue_ingestion(self, *, source_id: UUID, job_id: UUID, content_type: str) -> None:
         self.calls.append((source_id, job_id, content_type))
         if self._error is not None:
             raise self._error
@@ -444,9 +442,7 @@ class FakeCorpusRepository:
     def get_chapter_index(self, source_id: UUID) -> tuple[ChapterIndexRow, ...] | None:
         if source_id not in self._records_by_source:
             return None
-        records = sorted(
-            self._records_by_source[source_id], key=lambda r: r.section.position
-        )
+        records = sorted(self._records_by_source[source_id], key=lambda r: r.section.position)
         return tuple(
             ChapterIndexRow(
                 position=record.section.position,
@@ -526,9 +522,7 @@ class FakeEmbeddingIndexRepository:
     def chunks_for_source(self, source_id: UUID) -> list[ChunkToEmbed]:
         return list(self._chunks.get(source_id, []))
 
-    def set_embeddings(
-        self, items: Sequence[tuple[UUID, list[float]]], *, model: str
-    ) -> None:
+    def set_embeddings(self, items: Sequence[tuple[UUID, list[float]]], *, model: str) -> None:
         recorded = [(chunk_id, vector) for chunk_id, vector in items]
         self.set_calls.append(recorded)
         self.set_models.append(model)
@@ -564,9 +558,7 @@ class FakeRetrieveEvidence:
         top_k: int | None = None,
         include_notes: bool = False,
     ) -> list[Evidence]:
-        self.calls.append(
-            {"user": user, "source_id": source_id, "query": query, "top_k": top_k}
-        )
+        self.calls.append({"user": user, "source_id": source_id, "query": query, "top_k": top_k})
         self.include_notes_calls.append(include_notes)
         if self._error is not None:
             raise self._error
@@ -604,9 +596,7 @@ class FakeAnswerGeneration:
         self.stream_calls: list[dict[str, object]] = []
         self.stream_closed = False
 
-    def generate(
-        self, *, question: str, evidence: Sequence[Evidence]
-    ) -> GeneratedAnswer:
+    def generate(self, *, question: str, evidence: Sequence[Evidence]) -> GeneratedAnswer:
         self.calls.append({"question": question, "evidence": list(evidence)})
         if self._error is not None:
             raise self._error
@@ -652,9 +642,7 @@ class FakeAnchorCorpus:
     anchors first, then aliases, mirroring the real repository.
     """
 
-    def __init__(
-        self, sections_by_source: dict[UUID, list[AnchorSection]] | None = None
-    ) -> None:
+    def __init__(self, sections_by_source: dict[UUID, list[AnchorSection]] | None = None) -> None:
         self._by_source: dict[UUID, list[AnchorSection]] = sections_by_source or {}
 
     def set_sections(self, source_id: UUID, sections: list[AnchorSection]) -> None:
@@ -717,15 +705,11 @@ class FakeNoteRepository:
         # Inbound links to the deleted note lose their resolved target (SET NULL).
         for source_note_id, links in self._links_by_note.items():
             self._links_by_note[source_note_id] = [
-                replace(link, target_note_id=None)
-                if link.target_note_id == note_id
-                else link
+                replace(link, target_note_id=None) if link.target_note_id == note_id else link
                 for link in links
             ]
 
-    def list_summaries(
-        self, user_id: UUID, *, tag: str | None = None
-    ) -> list[NoteSummary]:
+    def list_summaries(self, user_id: UUID, *, tag: str | None = None) -> list[NoteSummary]:
         owned = [n for n in self._notes.values() if n.user_id == user_id]
         if tag is not None:
             owned = [n for n in owned if tag in self._tags_by_note.get(n.id, [])]
@@ -771,16 +755,10 @@ class FakeNoteRepository:
         result.sort(key=lambda b: str(b.note_id))
         return result
 
-    def resolve_titles(
-        self, user_id: UUID, titles: Sequence[str]
-    ) -> dict[str, UUID]:
+    def resolve_titles(self, user_id: UUID, titles: Sequence[str]) -> dict[str, UUID]:
         wanted = {t.lower() for t in titles}
         candidates = sorted(
-            (
-                n
-                for n in self._notes.values()
-                if n.user_id == user_id and n.title.lower() in wanted
-            ),
+            (n for n in self._notes.values() if n.user_id == user_id and n.title.lower() in wanted),
             key=lambda n: (n.created_at, str(n.id)),
         )
         resolved: dict[str, UUID] = {}
@@ -811,9 +789,7 @@ class FakeNoteRepository:
             key=lambda a: (a.created_at, str(a.id)),
         )
 
-    def highlights_for_source(
-        self, user_id: UUID, source_id: UUID
-    ) -> tuple[SourceHighlight, ...]:
+    def highlights_for_source(self, user_id: UUID, source_id: UUID) -> tuple[SourceHighlight, ...]:
         anchors = sorted(
             (a for a in self._anchors.values() if a.source_id == source_id),
             key=lambda a: (a.created_at, str(a.id)),
@@ -828,8 +804,7 @@ class FakeNoteRepository:
                 status=anchor.status,
             )
             for anchor in anchors
-            if (note := self._notes.get(anchor.note_id)) is not None
-            and note.user_id == user_id
+            if (note := self._notes.get(anchor.note_id)) is not None and note.user_id == user_id
         )
 
     def update_anchor_reconciliation(
@@ -859,13 +834,8 @@ class FakeNoteRepository:
 
     def orphan_anchors_for_source(self, source_id: UUID) -> None:
         for anchor_id, anchor in list(self._anchors.items()):
-            if (
-                anchor.source_id == source_id
-                and anchor.status != NoteAnchorStatus.ORPHANED
-            ):
-                self._anchors[anchor_id] = replace(
-                    anchor, status=NoteAnchorStatus.ORPHANED
-                )
+            if anchor.source_id == source_id and anchor.status != NoteAnchorStatus.ORPHANED:
+                self._anchors[anchor_id] = replace(anchor, status=NoteAnchorStatus.ORPHANED)
 
 
 class FakeReadingPositionRepository:
@@ -983,7 +953,5 @@ class FakeRetrievalPort:
                 "anchors": anchors,
             }
         )
-        self.note_scope_calls.append(
-            {"user_id": user_id, "include_notes": include_notes}
-        )
+        self.note_scope_calls.append({"user_id": user_id, "include_notes": include_notes})
         return self.results

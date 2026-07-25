@@ -143,15 +143,11 @@ def _parse_case(entry: object, index: int) -> SilverCase:
 
     checksum = entry.get("source_checksum")
     if not isinstance(checksum, str) or not _CHECKSUM_RE.fullmatch(checksum):
-        raise SilverCaseError(
-            case_id, "source_checksum", "64-char lowercase sha256 hex required"
-        )
+        raise SilverCaseError(case_id, "source_checksum", "64-char lowercase sha256 hex required")
 
     anchors = entry.get("expected_anchors")
     if not isinstance(anchors, list) or not anchors:
-        raise SilverCaseError(
-            case_id, "expected_anchors", "at least one anchor required"
-        )
+        raise SilverCaseError(case_id, "expected_anchors", "at least one anchor required")
     if not all(isinstance(a, str) and a.strip() for a in anchors):
         raise SilverCaseError(
             case_id, "expected_anchors", "every anchor must be a non-empty string"
@@ -163,9 +159,7 @@ def _parse_case(entry: object, index: int) -> SilverCase:
 
     language = entry.get("language")
     if language not in SILVER_LANGUAGES:
-        raise SilverCaseError(
-            case_id, "language", f"must be one of {SILVER_LANGUAGES}"
-        )
+        raise SilverCaseError(case_id, "language", f"must be one of {SILVER_LANGUAGES}")
 
     return SilverCase(
         case_id=case_id,
@@ -215,9 +209,7 @@ class BrokenCase:
     source_id: str
 
 
-def resolve_case(
-    conn: Connection, case: SilverCase
-) -> ResolvedCase | SkippedCase | BrokenCase:
+def resolve_case(conn: Connection, case: SilverCase) -> ResolvedCase | SkippedCase | BrokenCase:
     """Resolve ``case`` against ``conn`` by source checksum then expected anchor(s).
 
     Checksum miss -> :class:`SkippedCase` (book absent). Checksum hit but an
@@ -270,9 +262,7 @@ def resolve_case(
             if chunk_id not in chunk_ids:
                 chunk_ids.append(chunk_id)
 
-    return ResolvedCase(
-        case=case, source_id=str(source_id), expected_chunk_ids=tuple(chunk_ids)
-    )
+    return ResolvedCase(case=case, source_id=str(source_id), expected_chunk_ids=tuple(chunk_ids))
 
 
 # --- Per-case execution + JSONL results ----------------------------------------

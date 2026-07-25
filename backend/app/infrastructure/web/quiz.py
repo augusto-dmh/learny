@@ -293,9 +293,7 @@ class SchedulingView(BaseModel):
         )
 
 
-UowFactory = Annotated[
-    Callable[[], AbstractContextManager[Connection]], Depends(get_quiz_uow)
-]
+UowFactory = Annotated[Callable[[], AbstractContextManager[Connection]], Depends(get_quiz_uow)]
 DeckEnqueuer = Annotated[QuizDeckEnqueuer, Depends(get_quiz_deck_enqueuer)]
 
 
@@ -462,7 +460,5 @@ def export_quiz_deck(
     return Response(
         content=data,
         media_type="application/octet-stream",
-        headers={
-            "Content-Disposition": f'attachment; filename="{_export_filename(title)}"'
-        },
+        headers={"Content-Disposition": f'attachment; filename="{_export_filename(title)}"'},
     )

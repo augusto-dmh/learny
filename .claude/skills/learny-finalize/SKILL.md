@@ -41,6 +41,8 @@ PR titles follow the same Conventional Commit format as commits and summarize th
 
 Never add authorship or tooling attribution to commits or pull requests. Commit messages and PR bodies must not contain `Co-Authored-By` trailers, "Generated with" lines, model names, or any other identification of an AI assistant or the tool used to produce the change.
 
+Write PR-body and issue paragraphs as single unwrapped lines. Never hard-wrap prose at a column width — GitHub renders the wraps literally, squeezing the text into a narrow left column.
+
 ## Self-Contained History
 
 Commit messages, PR titles, and PR bodies must be understandable by an outside reader with no access to Learny's internal planning. They must NOT contain internal references:
@@ -83,10 +85,11 @@ Fix validation errors before continuing.
 ### Step 3: Verify The Change
 
 1. Run the narrowest relevant checks for the changed files.
-2. For docs-only or skill-only changes, run `git diff --check` and any relevant helper script validation.
-3. For future app code, run the project-specific test, lint, type, formatting, and build commands documented in `CLAUDE.md`.
-4. Report any verification that could not run.
-5. Do not publish changes with known failing verification unless the user explicitly accepts that risk.
+2. When the change touches backend Python, run `cd backend && uv run ruff format .` and re-stage any files it touches BEFORE committing, then confirm with `make lint-backend` — CI enforces `ruff format --check`, so an unformatted commit fails the pipeline.
+3. For docs-only or skill-only changes, run `git diff --check` and any relevant helper script validation.
+4. For app code, run the project-specific test, lint, type, and build commands documented in `CLAUDE.md` (the `make` verification vocabulary).
+5. Report any verification that could not run.
+6. Do not publish changes with known failing verification unless the user explicitly accepts that risk.
 
 ### Step 4: Commit Intentionally
 

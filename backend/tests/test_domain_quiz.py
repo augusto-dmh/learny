@@ -255,8 +255,8 @@ def test_job_started_transitions_to_running_and_increments_attempts() -> None:
 
 def test_job_succeeded_records_counts() -> None:
     now = datetime(2026, 7, 16, 2, tzinfo=UTC)
-    done = _job().started(now).succeeded(
-        now, generated_count=5, discarded_count=2, failed_sections=1
+    done = (
+        _job().started(now).succeeded(now, generated_count=5, discarded_count=2, failed_sections=1)
     )
     assert done.status == QuizJobStatus.SUCCEEDED
     assert done.generated_count == 5

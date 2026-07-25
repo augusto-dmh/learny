@@ -59,9 +59,7 @@ def _free_recall_suggestion():  # noqa: ANN202
 
 
 def _embedding_of(question: str, answer: str) -> list[float]:
-    return build_embedding_adapter(get_settings()).embed_documents(
-        [f"{question}\n{answer}"]
-    )[0]
+    return build_embedding_adapter(get_settings()).embed_documents([f"{question}\n{answer}"])[0]
 
 
 @pytest.fixture
@@ -109,9 +107,7 @@ def refresh_env(db_engine: Engine, monkeypatch: pytest.MonkeyPatch):  # noqa: AN
                 anchor=f"note:{note.id}",
                 source_excerpt=body,
                 chunk_hash="e" * 64,
-                content_key=content_key(
-                    QuizItemType.FREE_RECALL, card_question, card_answer
-                ),
+                content_key=content_key(QuizItemType.FREE_RECALL, card_question, card_answer),
                 status=QuizItemStatus.ACTIVE,
                 generation_meta={},
                 created_at=now,
@@ -120,9 +116,7 @@ def refresh_env(db_engine: Engine, monkeypatch: pytest.MonkeyPatch):  # noqa: AN
             # Store the *suggestion's* embedding so the greedy match pairs them, while the
             # card's text stays stale — the rewrite path.
             target = _free_recall_suggestion()
-            repo.upsert(
-                item, embedding=_embedding_of(target.question, target.answer)
-            )
+            repo.upsert(item, embedding=_embedding_of(target.question, target.answer))
             repo.create_scheduling(
                 item_id,
                 SchedulingSnapshot(
@@ -177,9 +171,7 @@ def _card_row(engine: Engine, item_id: UUID):  # noqa: ANN202
         ).one()
 
 
-def test_refresh_rewrites_matched_card_and_preserves_memory(
-    refresh_env, db_engine: Engine
-) -> None:
+def test_refresh_rewrites_matched_card_and_preserves_memory(refresh_env, db_engine: Engine) -> None:
     # The card's text is stale but its embedding matches the regenerated suggestion.
     note_id, item_id, target = refresh_env(
         card_question="A stale question?", card_answer="A stale answer"

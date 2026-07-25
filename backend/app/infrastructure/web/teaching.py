@@ -185,9 +185,7 @@ class SessionDetailView(BaseModel):
     turns: list[TurnView]
 
     @classmethod
-    def from_session(
-        cls, session: TeachingSession, turns: list[TeachingTurn]
-    ) -> SessionDetailView:
+    def from_session(cls, session: TeachingSession, turns: list[TeachingTurn]) -> SessionDetailView:
         return cls(
             id=session.id,
             source_id=session.source_id,
@@ -238,9 +236,7 @@ def start_teaching_session(
     ``SourceNotFound`` → 404), enforces readiness (``SourceNotReady`` → 409), and
     resolves the target anchor (unknown → ``InvalidTeachingTarget`` → 422).
     """
-    session = service(
-        user=user, source_id=body.source_id, target_anchor=body.target_anchor
-    )
+    session = service(user=user, source_id=body.source_id, target_anchor=body.target_anchor)
     return SessionView.from_session(session)
 
 

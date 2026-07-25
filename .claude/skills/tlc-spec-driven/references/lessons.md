@@ -2,7 +2,7 @@
 
 **Purpose**: Turn verification failures into reusable, project-local guidance that actually changes future behavior — without the lessons file rotting into a dead log.
 
-**The split that keeps it alive**: the agent (you) supplies *judgment* — read the failure, phrase the lesson, cite its grounding. The script `scripts/lessons.py` owns everything *mechanical* — IDs, recurrence counting across distinct features, candidate→confirmed promotion, pruning, demotion, and rendering. Hand-kept bookkeeping is exactly what rots, so it is not your job; the script's job.
+**The split that keeps it alive**: the agent (you) supplies *judgment* — read the failure, phrase the lesson, cite its grounding. The script `.claude/skills/tlc-spec-driven/scripts/lessons.py` (invoke it with that path from the repo root — it lives inside this skill, NOT in a repo-level `scripts/`) owns everything *mechanical* — IDs, recurrence counting across distinct features, candidate→confirmed promotion, pruning, demotion, and rendering. Hand-kept bookkeeping is exactly what rots, so it is not your job; the script's job.
 
 **What feeds it**: only the execution signals already produced by the Verifier in [validate.md](validate.md) and written to `.specs/features/[feature]/validation.md`. No signal → no lesson. This is the hard gate: a lesson with no grounding in a real verification outcome is an opinion, and the script refuses it.
 
@@ -16,7 +16,7 @@
 | ---- | ----- | ------- |
 | `.specs/lessons.json` | script | Canonical machine state. Never hand-edit. |
 | `.specs/LESSONS.md` | script (rendered) | Human/agent-readable playbook. Read it; never write it by hand. |
-| `scripts/lessons.py` | package | The only way to mutate lessons. |
+| `.claude/skills/tlc-spec-driven/scripts/lessons.py` | package | The only way to mutate lessons. Always invoke with this repo-root-relative path — `python3 scripts/lessons.py` fails with exit 2. |
 
 `confirmed` lessons are the playbook the agent loads. `candidate` lessons are tracked but NOT trusted until corroborated across `promote_threshold` distinct features (default 2). `quarantined` lessons failed when applied and are ignored.
 
@@ -45,7 +45,7 @@ If `validation.md` is a clean PASS with no surviving mutants, no spec-precision 
 For each signal, phrase the lesson as **one terse, actionable, codebase-general sentence** — a rule a future feature could apply, not a restatement of this bug. Then call the script:
 
 ```bash
-python3 scripts/lessons.py add \
+python3 .claude/skills/tlc-spec-driven/scripts/lessons.py add \
   --feature "[feature folder name]" \
   --signal  "[signal value from table above]" \
   --source  "[file:line | AC id | mutant id | SPEC_DEVIATION ref from validation.md]" \
@@ -56,6 +56,7 @@ python3 scripts/lessons.py add \
 **Phrasing rules** (they make recurrences actually merge — dedup is exact-after-normalization, not semantic):
 
 - Write the general rule, not the incident. ✅ `"Assert the exact persisted status value, not just that a status field exists"` ❌ `"The subscription test on line 88 was too weak"`.
+- **Altitude test before saving**: could this exact sentence recur on an *unrelated* feature? If the sentence names a specific module, fixture, file, or one-off ordering story, lift it one level to the class of mistake — the specifics belong in `--source`, not in the text. A lesson that can only ever match its own incident can never reach the promote threshold, which defeats the layer (this project accumulated 15 candidates and promoted 0 for exactly this reason).
 - Be canonical and terse. Two lessons that mean the same thing must read the same way, or the script counts them as different and neither gets promoted.
 - One lesson per signal. Don't bundle.
 
@@ -70,7 +71,7 @@ After distilling, if `validation.md` contained any FAIL, surviving mutant, spec-
 If a `confirmed` lesson was loaded for this feature (see READ below) and the *same* failure recurred anyway, the guidance is not working:
 
 ```bash
-python3 scripts/lessons.py penalize --id L-NNN
+python3 .claude/skills/tlc-spec-driven/scripts/lessons.py penalize --id L-NNN
 ```
 
 Two penalties quarantine it. Use sparingly and only on real repeats.
@@ -85,11 +86,11 @@ At the start of **Specify** (and again at **Design** for Large/Complex), load th
 
 ```bash
 # All confirmed lessons:
-python3 scripts/lessons.py list --status confirmed
+python3 .claude/skills/tlc-spec-driven/scripts/lessons.py list --status confirmed
 
 # Or filter by the area this feature touches:
-python3 scripts/lessons.py list --status confirmed --scope billing
-python3 scripts/lessons.py list --status confirmed --query "idempotency"
+python3 .claude/skills/tlc-spec-driven/scripts/lessons.py list --status confirmed --scope billing
+python3 .claude/skills/tlc-spec-driven/scripts/lessons.py list --status confirmed --query "idempotency"
 ```
 
 Apply the returned lessons as guidance while writing the spec / design. Do **not** load `candidate` or `quarantined` lessons as guidance — they are not trusted. Keep the loaded set small; this runs inside the <40k token budget.
