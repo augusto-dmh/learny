@@ -17,6 +17,13 @@ level:
 - ``PATCH  /api/conversations/{id}`` — rename with the 1..200 trimmed bound
   (CONV-18).
 - ``DELETE /api/conversations/{id}`` — 204, and a second delete → 404 (CONV-19).
+- ``POST   /api/conversations/{id}/turns`` — a turn in either mode → 201 with its
+  citations; unknown mode / over-limit message → 422; a teach turn without a
+  resolvable target → 409; a taken turn index → 409; a failed generation → 502
+  with nothing persisted (CONV-20).
+- ``POST   /api/conversations/{id}/turns/stream`` — the full UI Message Stream
+  frame sequence, ``not_found_in_scope`` on the status frame, and a mid-stream
+  failure rendered as the error frame (CONV-21).
 
 Seeding mirrors ``test_web_teaching``: sources and corpus through the real
 repositories on the shared rolled-back ``db_conn``.
@@ -24,6 +31,8 @@ repositories on the shared rolled-back ``db_conn``.
 
 from __future__ import annotations
 
+import json
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -35,10 +44,14 @@ from app.domain.entities import (
     MODE_ANSWER,
     MODE_TEACH,
     NOT_FOUND_IN_SCOPE,
+    NOT_FOUND_IN_SOURCE,
+    AnswerTextDelta,
     Conversation,
     ConversationTurn,
     CorpusSectionRecord,
     Evidence,
+    GeneratedAnswer,
+    HistoryTurn,
     ParsedSection,
     SectionChunk,
     Source,
@@ -47,8 +60,10 @@ from app.infrastructure.db.repositories import (
     SqlAlchemyConversationRepository,
     SqlAlchemyConversationTurnRepository,
     SqlAlchemyCorpusRepository,
+    SqlAlchemyEmbeddingIndexRepository,
     SqlAlchemySourceRepository,
 )
+from app.infrastructure.embeddings import DeterministicEmbeddingAdapter
 from tests.conftest import TEST_PASSWORD, requires_db
 
 pytestmark = requires_db
@@ -761,3 +776,588 @@ def test_delete_unauthenticated_returns_401(auth_client: TestClient, db_conn: Co
     conversation = _seed_conversation(db_conn, UUID(source_id))
     auth_client.cookies.clear()
     assert _delete(auth_client, conversation.id, csrf="x").status_code == 401
+
+
+# --- POST /api/conversations/{id}/turns (CONV-20) ------------------------------
+
+
+def _post_turn(
+    client: TestClient,
+    conversation_id: object,
+    body: dict,
+    *,
+    csrf: str | None,
+    origin: str | None = None,
+):
+    return client.post(
+        f"/api/conversations/{conversation_id}/turns", json=body, headers=_headers(csrf, origin)
+    )
+
+
+def _turn_stream(
+    client: TestClient,
+    conversation_id: object,
+    body: dict,
+    *,
+    csrf: str | None,
+    origin: str | None = None,
+):
+    return client.post(
+        f"/api/conversations/{conversation_id}/turns/stream",
+        json=body,
+        headers=_headers(csrf, origin),
+    )
+
+
+def _embed_all(db_conn: Connection, source_id: UUID) -> None:
+    index = SqlAlchemyEmbeddingIndexRepository(db_conn)
+    adapter = DeterministicEmbeddingAdapter()
+    chunks = index.chunks_for_source(source_id)
+    vectors = adapter.embed_documents([c.text for c in chunks])
+    index.set_embeddings(
+        list(zip((c.id for c in chunks), vectors, strict=True)), model=adapter.model
+    )
+
+
+_TURN_FIELDS = {
+    "turn_index",
+    "message",
+    "mode",
+    "answer_status",
+    "text",
+    "citations",
+    "evidence_count",
+    "model",
+    "created_at",
+}
+
+
+def test_post_answer_turn_returns_201_with_mode_and_citations(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # CONV-20: an answer-mode turn in a scoped conversation → 201 carrying the mode
+    # it ran in, the grounded citations, and the adapter's model identity.
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "turn-answer@example.com")
+    _embed_all(db_conn, UUID(source_id))
+    conversation = _seed_conversation(db_conn, UUID(source_id))
+
+    resp = _post_turn(
+        auth_client,
+        conversation.id,
+        {"message": "photosynthesis sunlight energy", "mode": MODE_ANSWER},
+        csrf=csrf,
+    )
+
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert set(body) == _TURN_FIELDS
+    assert body["turn_index"] == 0
+    assert body["mode"] == MODE_ANSWER
+    assert body["answer_status"] == ANSWERED
+    # The scope is the section and its subtree, so the answer is drawn from it.
+    assert _PHOTO in body["text"]
+    assert body["model"] == _MODEL
+    assert body["evidence_count"] >= 1
+    assert {c["anchor"] for c in body["citations"]} <= {_ANCHOR, _OTHER_ANCHOR}
+    assert body["citations"][0]["source_id"] == source_id
+
+    # Persisted: the conversation reads back with that turn.
+    read = auth_client.get(f"/api/conversations/{conversation.id}")
+    assert [t["turn_index"] for t in read.json()["turns"]] == [0]
+    assert read.json()["turns"][0]["mode"] == MODE_ANSWER
+
+
+def test_post_teach_turn_returns_201_in_teach_mode(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # CONV-20: the same conversation answers in teach mode when the turn asks for
+    # it — the mode is a per-turn choice, not a property of the conversation.
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "turn-teach@example.com")
+    _embed_all(db_conn, UUID(source_id))
+    conversation = _seed_conversation(db_conn, UUID(source_id))
+
+    resp = _post_turn(
+        auth_client,
+        conversation.id,
+        {"message": "photosynthesis sunlight energy", "mode": MODE_TEACH},
+        csrf=csrf,
+    )
+
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["mode"] == MODE_TEACH
+    assert body["answer_status"] == ANSWERED
+    assert body["citations"]
+
+
+def test_post_turn_in_scoped_conversation_reports_not_found_in_scope(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # CONV-20 / I-CM-3: when a scoped conversation finds nothing, the verdict names
+    # the reader's own selection rather than the book.
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "turn-scope-nf@example.com")
+    conversation = _seed_conversation(db_conn, UUID(source_id))  # corpus NOT embedded
+
+    resp = _post_turn(
+        auth_client,
+        conversation.id,
+        {"message": "zzzqqq nonsensical unmatchable token", "mode": MODE_ANSWER},
+        csrf=csrf,
+    )
+
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["answer_status"] == NOT_FOUND_IN_SCOPE
+    assert body["text"] == ""
+    assert body["citations"] == []
+    assert body["evidence_count"] == 0
+
+
+def test_post_turn_in_whole_book_conversation_reports_not_found_in_source(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # CONV-20 / I-CM-3: a whole-book conversation keeps the original verdict —
+    # nothing was scoped away, so the book itself came up short.
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "turn-book-nf@example.com")
+    conversation = _seed_conversation(db_conn, UUID(source_id), scope=(), target_anchor=None)
+
+    resp = _post_turn(
+        auth_client,
+        conversation.id,
+        {"message": "zzzqqq nonsensical unmatchable token", "mode": MODE_ANSWER},
+        csrf=csrf,
+    )
+
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["answer_status"] == NOT_FOUND_IN_SOURCE
+
+
+def test_post_turn_unknown_and_missing_mode_return_422(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # CONV-20: only the two named modes are accepted, and the mode is required —
+    # a turn never runs in a mode the caller did not ask for.
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "turn-mode@example.com")
+    conversation = _seed_conversation(db_conn, UUID(source_id))
+
+    unknown = _post_turn(
+        auth_client, conversation.id, {"message": "explain", "mode": "summarize"}, csrf=csrf
+    )
+    absent = _post_turn(auth_client, conversation.id, {"message": "explain"}, csrf=csrf)
+
+    assert unknown.status_code == 422, unknown.text
+    assert absent.status_code == 422, absent.text
+    assert auth_client.get(f"/api/conversations/{conversation.id}").json()["turns"] == []
+
+
+def test_post_turn_blank_and_over_long_messages_return_422(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # CONV-20: the message bound is the conversation setting, applied to the
+    # trimmed value.
+    from app.core.config import get_settings
+
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "turn-msg@example.com")
+    conversation = _seed_conversation(db_conn, UUID(source_id))
+    over = "a" * (get_settings().conversation_message_max_chars + 1)
+
+    blank = _post_turn(
+        auth_client, conversation.id, {"message": "   ", "mode": MODE_ANSWER}, csrf=csrf
+    )
+    oversize = _post_turn(
+        auth_client, conversation.id, {"message": over, "mode": MODE_ANSWER}, csrf=csrf
+    )
+
+    assert blank.status_code == 422, blank.text
+    assert oversize.status_code == 422, oversize.text
+
+
+def test_teach_turn_in_whole_book_conversation_returns_409(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # I-CM-7 / AD-201: a whole-book conversation teaches nothing in particular, so a
+    # teach turn is a state conflict — a valid request against the wrong state.
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "teach-book@example.com")
+    conversation = _seed_conversation(db_conn, UUID(source_id), scope=(), target_anchor=None)
+
+    resp = _post_turn(
+        auth_client, conversation.id, {"message": "teach me", "mode": MODE_TEACH}, csrf=csrf
+    )
+
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"]
+    assert auth_client.get(f"/api/conversations/{conversation.id}").json()["turns"] == []
+
+
+def test_teach_turn_with_vanished_target_returns_409(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # I-CM-7: a re-ingest that dropped the taught section → 409, nothing persisted.
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "teach-gone@example.com")
+    conversation = _seed_conversation(
+        db_conn, UUID(source_id), scope=("vanished.xhtml",), target_anchor="vanished.xhtml"
+    )
+
+    resp = _post_turn(
+        auth_client, conversation.id, {"message": "teach me", "mode": MODE_TEACH}, csrf=csrf
+    )
+
+    assert resp.status_code == 409, resp.text
+
+
+def test_answer_turn_survives_a_vanished_scope_anchor(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # Edge case: an answer turn proceeds against the surviving anchors instead of
+    # widening to the whole book — the vanished anchor simply matches nothing.
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "answer-gone@example.com")
+    _embed_all(db_conn, UUID(source_id))
+    conversation = _seed_conversation(
+        db_conn, UUID(source_id), scope=("vanished.xhtml",), target_anchor="vanished.xhtml"
+    )
+
+    resp = _post_turn(
+        auth_client,
+        conversation.id,
+        {"message": "photosynthesis sunlight energy", "mode": MODE_ANSWER},
+        csrf=csrf,
+    )
+
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["answer_status"] == NOT_FOUND_IN_SCOPE
+    assert resp.json()["citations"] == []
+
+
+def test_post_turn_missing_and_non_owned_conversation_return_identical_404(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    source_id, _ = _seed_ready_source(auth_client, db_conn, "turn-owner@example.com")
+    conversation = _seed_conversation(db_conn, UUID(source_id))
+
+    _register(auth_client, "turn-intruder@example.com")
+    csrf = _csrf(auth_client)
+
+    non_owned = _post_turn(
+        auth_client, conversation.id, {"message": "hi", "mode": MODE_ANSWER}, csrf=csrf
+    )
+    missing = _post_turn(auth_client, uuid4(), {"message": "hi", "mode": MODE_ANSWER}, csrf=csrf)
+
+    assert non_owned.status_code == 404, non_owned.text
+    assert missing.status_code == 404, missing.text
+    assert non_owned.json() == missing.json()
+
+
+def test_post_turn_not_ready_source_returns_409(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    user_id = _register(auth_client, "turn-notready@example.com")
+    csrf = _csrf(auth_client)
+    source_id = _persist_source(db_conn, user_id, status="uploaded")
+    _seed_corpus(db_conn, source_id)
+    conversation = _seed_conversation(db_conn, source_id)
+
+    resp = _post_turn(
+        auth_client, conversation.id, {"message": "hi", "mode": MODE_ANSWER}, csrf=csrf
+    )
+
+    assert resp.status_code == 409, resp.text
+
+
+def test_post_turn_claiming_a_taken_index_returns_409(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # I-CM-2: the (conversation_id, turn_index) unique is the arbiter — a writer whose
+    # next index is already taken loses with a conflict, never a gap or a duplicate.
+    # A seeded turn at index 1 with no index 0 puts the next computed index straight
+    # onto a taken one. The failed insert aborts this transaction, so nothing is read
+    # back afterwards.
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "turn-conflict@example.com")
+    conversation = _seed_conversation(db_conn, UUID(source_id))
+    _seed_turn(
+        db_conn,
+        conversation,
+        turn_index=1,
+        message="already here",
+        mode=MODE_ANSWER,
+        answer_status=NOT_FOUND_IN_SCOPE,
+        answer_text="",
+    )
+
+    resp = _post_turn(
+        auth_client,
+        conversation.id,
+        {"message": "zzzqqq unmatchable", "mode": MODE_ANSWER},
+        csrf=csrf,
+    )
+
+    assert resp.status_code == 409, resp.text
+
+
+def test_post_turn_generation_failure_returns_502_and_persists_nothing(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # CONV-20: a failing generation port → 502 with a generic body that leaks no
+    # internal detail, and no turn row.
+    from app.infrastructure.web.dependencies import get_answer_generation
+
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "turn-502@example.com")
+    _embed_all(db_conn, UUID(source_id))
+    conversation = _seed_conversation(db_conn, UUID(source_id))
+
+    class _RaisingAnswerAdapter:
+        model = _MODEL
+
+        def generate(
+            self,
+            *,
+            question: str,
+            evidence: Sequence[Evidence],
+            history: Sequence[HistoryTurn] = (),
+        ) -> GeneratedAnswer:
+            raise RuntimeError("provider-secret-internal-detail")
+
+    auth_client.app.dependency_overrides[get_answer_generation] = lambda: _RaisingAnswerAdapter()
+    try:
+        resp = _post_turn(
+            auth_client,
+            conversation.id,
+            {"message": "photosynthesis sunlight", "mode": MODE_ANSWER},
+            csrf=csrf,
+        )
+    finally:
+        auth_client.app.dependency_overrides.pop(get_answer_generation, None)
+
+    assert resp.status_code == 502, resp.text
+    assert "provider-secret-internal-detail" not in resp.text
+    assert auth_client.get(f"/api/conversations/{conversation.id}").json()["turns"] == []
+
+
+def test_post_turn_missing_csrf_returns_403(auth_client: TestClient, db_conn: Connection) -> None:
+    source_id, _ = _seed_ready_source(auth_client, db_conn, "turn-403@example.com")
+    conversation = _seed_conversation(db_conn, UUID(source_id))
+    resp = _post_turn(
+        auth_client, conversation.id, {"message": "hi", "mode": MODE_ANSWER}, csrf=None
+    )
+    assert resp.status_code == 403, resp.text
+
+
+def test_post_turn_unauthenticated_returns_401(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    source_id, _ = _seed_ready_source(auth_client, db_conn, "turn-401@example.com")
+    conversation = _seed_conversation(db_conn, UUID(source_id))
+    auth_client.cookies.clear()
+    resp = _post_turn(
+        auth_client, conversation.id, {"message": "hi", "mode": MODE_ANSWER}, csrf="x"
+    )
+    assert resp.status_code == 401, resp.text
+
+
+# --- POST /api/conversations/{id}/turns/stream (CONV-21) -----------------------
+
+
+def _parse_ui_stream(text: str) -> list:
+    parts: list = []
+    for line in text.splitlines():
+        if line.startswith("data: "):
+            payload = line[len("data: ") :]
+            parts.append(payload if payload == "[DONE]" else json.loads(payload))
+    return parts
+
+
+def _part_types(parts: list) -> list[str]:
+    return [p["type"] if isinstance(p, dict) else p for p in parts]
+
+
+def test_turn_stream_emits_the_full_frame_sequence_and_persists_the_turn(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # CONV-21: the answered stream emits start → text-start → deltas → text-end →
+    # data-citations → data-answer-status → finish → [DONE], with the protocol
+    # header, and persists the turn on completion.
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "stream-ok@example.com")
+    _embed_all(db_conn, UUID(source_id))
+    conversation = _seed_conversation(db_conn, UUID(source_id))
+
+    resp = _turn_stream(
+        auth_client,
+        conversation.id,
+        {"message": "photosynthesis sunlight energy", "mode": MODE_ANSWER},
+        csrf=csrf,
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["x-vercel-ai-ui-message-stream"] == "v1"
+    parts = _parse_ui_stream(resp.text)
+    assert _part_types(parts) == [
+        "start",
+        "text-start",
+        "text-delta",
+        "text-end",
+        "data-citations",
+        "data-answer-status",
+        "finish",
+        "[DONE]",
+    ]
+    delta = next(p for p in parts if isinstance(p, dict) and p["type"] == "text-delta")
+    assert _PHOTO in delta["delta"]
+    citations = next(p for p in parts if isinstance(p, dict) and p["type"] == "data-citations")
+    assert {c["anchor"] for c in citations["data"]} <= {_ANCHOR, _OTHER_ANCHOR}
+    answer_status = next(
+        p for p in parts if isinstance(p, dict) and p["type"] == "data-answer-status"
+    )
+    assert answer_status["data"] == {"status": ANSWERED}
+
+    read = auth_client.get(f"/api/conversations/{conversation.id}")
+    turns = read.json()["turns"]
+    assert len(turns) == 1
+    assert turns[0]["answer_status"] == ANSWERED
+    assert turns[0]["mode"] == MODE_ANSWER
+
+
+def test_turn_stream_carries_not_found_in_scope_in_the_status_frame(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # CONV-21: the scoped not-found verdict reaches the client on the wire, so a UI
+    # can offer to widen the scope rather than claim the book has nothing.
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "stream-scope@example.com")
+    conversation = _seed_conversation(db_conn, UUID(source_id))  # corpus NOT embedded
+
+    resp = _turn_stream(
+        auth_client,
+        conversation.id,
+        {"message": "zzzqqq unmatchable token", "mode": MODE_ANSWER},
+        csrf=csrf,
+    )
+
+    assert resp.status_code == 200, resp.text
+    parts = _parse_ui_stream(resp.text)
+    assert "text-delta" not in _part_types(parts)
+    answer_status = next(
+        p for p in parts if isinstance(p, dict) and p["type"] == "data-answer-status"
+    )
+    assert answer_status["data"] == {"status": NOT_FOUND_IN_SCOPE}
+
+    read = auth_client.get(f"/api/conversations/{conversation.id}")
+    assert read.json()["turns"][0]["answer_status"] == NOT_FOUND_IN_SCOPE
+
+
+def test_turn_stream_mid_stream_failure_emits_the_error_frame_and_persists_nothing(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # CONV-21: a provider failure after the first delta is rendered as a protocol
+    # error part followed by [DONE] — no finish frame — and persists nothing.
+    from app.infrastructure.web.dependencies import get_answer_generation
+
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "stream-mid@example.com")
+    _embed_all(db_conn, UUID(source_id))
+    conversation = _seed_conversation(db_conn, UUID(source_id))
+
+    class _MidStreamRaisingAnswerAdapter:
+        model = _MODEL
+
+        def generate(
+            self,
+            *,
+            question: str,
+            evidence: Sequence[Evidence],
+            history: Sequence[HistoryTurn] = (),
+        ) -> GeneratedAnswer:
+            raise AssertionError("stream path must not call generate")
+
+        def generate_stream(
+            self,
+            *,
+            question: str,
+            evidence: Sequence[Evidence],
+            history: Sequence[HistoryTurn] = (),
+        ):
+            yield AnswerTextDelta(text="partial ")
+            raise RuntimeError("provider-secret-internal-detail")
+
+    auth_client.app.dependency_overrides[get_answer_generation] = lambda: (
+        _MidStreamRaisingAnswerAdapter()
+    )
+    try:
+        resp = _turn_stream(
+            auth_client,
+            conversation.id,
+            {"message": "photosynthesis sunlight", "mode": MODE_ANSWER},
+            csrf=csrf,
+        )
+    finally:
+        auth_client.app.dependency_overrides.pop(get_answer_generation, None)
+
+    assert resp.status_code == 200, resp.text
+    parts = _parse_ui_stream(resp.text)
+    types = _part_types(parts)
+    assert types[-2:] == ["error", "[DONE]"]
+    assert "finish" not in types
+    error_part = next(p for p in parts if isinstance(p, dict) and p["type"] == "error")
+    assert error_part["errorText"] == "Answer generation failed. Please try again."
+    assert "provider-secret-internal-detail" not in resp.text
+
+    assert auth_client.get(f"/api/conversations/{conversation.id}").json()["turns"] == []
+
+
+def test_turn_stream_pre_stream_guards_return_plain_http(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # CONV-21: ownership, mode/message validation and the teach invariant are all
+    # decided before any SSE byte, so the client sees plain HTTP errors.
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "stream-guard@example.com")
+    conversation = _seed_conversation(db_conn, UUID(source_id), scope=(), target_anchor=None)
+
+    missing = _turn_stream(auth_client, uuid4(), {"message": "hi", "mode": MODE_ANSWER}, csrf=csrf)
+    blank = _turn_stream(
+        auth_client, conversation.id, {"message": "  ", "mode": MODE_ANSWER}, csrf=csrf
+    )
+    unknown_mode = _turn_stream(
+        auth_client, conversation.id, {"message": "hi", "mode": "summarize"}, csrf=csrf
+    )
+    teach_conflict = _turn_stream(
+        auth_client, conversation.id, {"message": "hi", "mode": MODE_TEACH}, csrf=csrf
+    )
+
+    assert missing.status_code == 404, missing.text
+    assert "start" not in missing.text
+    assert blank.status_code == 422, blank.text
+    assert unknown_mode.status_code == 422, unknown_mode.text
+    assert teach_conflict.status_code == 409, teach_conflict.text
+    assert "start" not in teach_conflict.text
+
+
+def test_turn_stream_missing_csrf_returns_403(auth_client: TestClient, db_conn: Connection) -> None:
+    source_id, _ = _seed_ready_source(auth_client, db_conn, "stream-403@example.com")
+    conversation = _seed_conversation(db_conn, UUID(source_id))
+    resp = _turn_stream(
+        auth_client, conversation.id, {"message": "hi", "mode": MODE_ANSWER}, csrf=None
+    )
+    assert resp.status_code == 403, resp.text
+
+
+def test_turn_stream_unauthenticated_returns_401(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    source_id, _ = _seed_ready_source(auth_client, db_conn, "stream-401@example.com")
+    conversation = _seed_conversation(db_conn, UUID(source_id))
+    auth_client.cookies.clear()
+    resp = _turn_stream(
+        auth_client, conversation.id, {"message": "hi", "mode": MODE_ANSWER}, csrf="x"
+    )
+    assert resp.status_code == 401, resp.text
+
+
+def test_turn_endpoints_stay_synchronous_handlers() -> None:
+    # The streaming contract (``to_sse_response``): a coroutine handler would run the
+    # eager guards, query embedding and retrieval on the event loop and block every
+    # concurrent request, and no functional test would notice. Pin the shape.
+    import inspect
+
+    from app.infrastructure.web.conversations import (
+        post_conversation_turn,
+        post_conversation_turn_stream,
+    )
+
+    assert not inspect.iscoroutinefunction(post_conversation_turn_stream)
+    assert not inspect.iscoroutinefunction(post_conversation_turn)

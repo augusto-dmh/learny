@@ -598,6 +598,35 @@ def get_delete_conversation(conn: DbConnection) -> conversation_services.DeleteC
     )
 
 
+def get_post_conversation_turn(
+    conn: DbConnection,
+    answer_generation: AnswerGeneration,
+    teaching_generation: TeachingGeneration,
+) -> conversation_services.PostConversationTurn:
+    """Wire ``PostConversationTurn`` on the request-scoped connection (CONV-10..14, 20/21).
+
+    Both generation ports are composed because the mode is a per-turn choice: one
+    service answers and teaches, and which port it reaches is decided per request,
+    not per wiring. Injecting them via ``Depends`` keeps both test-overridable, and
+    the evidence budget / history window come from the ``conversation_*`` settings.
+    """
+    settings = get_settings()
+    return conversation_services.PostConversationTurn(
+        conversations=SqlAlchemyConversationRepository(conn),
+        turns=SqlAlchemyConversationTurnRepository(conn),
+        sources=SqlAlchemySourceRepository(conn),
+        corpus=SqlAlchemyCorpusRepository(conn),
+        retrieve=get_retrieve_evidence(conn),
+        answer_generation=answer_generation,
+        teaching_generation=teaching_generation,
+        authorize=AuthorizeOwnership(),
+        clock=_clock,
+        ids=uuid4,
+        evidence_top_k=settings.conversation_evidence_top_k,
+        history_turns=settings.conversation_history_turns,
+    )
+
+
 # --- Active recall (Cycle E) ---------------------------------------------------
 #
 # The deck POST mirrors the ingestion start path: the queued job must be committed

@@ -4,7 +4,8 @@ Thin FastAPI adapter over the unified services in ``app.application.conversation
 (assembled in ``dependencies``). One resource covers what the Ask and Teach panels
 split between them: a conversation is a scope (the section anchors retrieval may
 see, empty meaning the whole book) plus per-turn modes, and it can be started,
-listed across every source the caller owns, read, renamed, and deleted.
+listed across every source the caller owns, read, renamed, deleted, and continued
+with a turn — buffered or streamed.
 
 The handlers own input validation (422) and let application errors propagate to the
 global handlers (``SourceNotFound``/``ConversationNotFound`` → 404,
@@ -22,6 +23,10 @@ Contract (also consumed by the Next.js proxy):
   (CONV-17).
 - ``PATCH  /api/conversations/{id}`` ``{title}`` → 200 renamed conversation (CONV-18).
 - ``DELETE /api/conversations/{id}`` → 204 (CONV-19).
+- ``POST   /api/conversations/{id}/turns`` ``{message, mode}`` → 201 cited turn
+  (CONV-20).
+- ``POST   /api/conversations/{id}/turns/stream`` → 200 UI Message Stream v1 SSE
+  (CONV-21).
 
 Every mutating route carries auth + Origin/CSRF enforcement and the single
 ``rate_limit_conversations`` policy that governs the whole unified surface
@@ -41,11 +46,15 @@ from app.application.conversations import (
     TITLE_MAX_CHARS,
     DeleteConversation,
     ListConversations,
+    PostConversationTurn,
     ReadConversation,
     RenameConversation,
     StartConversation,
 )
+from app.core.config import get_settings
 from app.domain.entities import (
+    MODE_ANSWER,
+    MODE_TEACH,
     Conversation,
     ConversationSummary,
     ConversationTurn,
@@ -56,14 +65,20 @@ from app.infrastructure.web.dependencies import (
     get_authenticated_user,
     get_delete_conversation,
     get_list_conversations,
+    get_post_conversation_turn,
     get_read_conversation,
     get_rename_conversation,
     get_start_conversation,
 )
 from app.infrastructure.web.rate_limit import rate_limit_conversations
 from app.infrastructure.web.retrieval import EvidenceView
+from app.infrastructure.web.ui_message_stream import to_sse_response
 
 router = APIRouter(tags=["conversations"])
+
+#: The turn modes a client may ask for, named by the domain so the wire vocabulary
+#: and the dispatch inside the service can never drift apart.
+CONVERSATION_MODES = (MODE_ANSWER, MODE_TEACH)
 
 
 # --- Request bodies ------------------------------------------------------------
@@ -125,6 +140,38 @@ class RenameConversationRequest(BaseModel):
     @classmethod
     def _title_bounds(cls, value: str) -> str:
         return _bounded_title(value)
+
+
+class TurnRequest(BaseModel):
+    """Turn request body (CONV-20).
+
+    ``message`` must be non-blank after stripping and, once trimmed, at most
+    ``LEARNY_CONVERSATION_MESSAGE_MAX_CHARS`` chars (inclusive); the validator
+    returns the **trimmed** value, so the service receives a normalized message.
+    ``mode`` must name one of the two turn modes — an unknown mode is a 422 before
+    the service runs, so the service's own guard is never the thing a client meets.
+    """
+
+    message: str = Field(min_length=1)
+    mode: str
+
+    @field_validator("message")
+    @classmethod
+    def _message_bounds(cls, value: str) -> str:
+        trimmed = value.strip()
+        if not trimmed:
+            raise ValueError("message must not be empty or whitespace-only")
+        max_chars = get_settings().conversation_message_max_chars
+        if len(trimmed) > max_chars:
+            raise ValueError(f"message must be at most {max_chars} characters")
+        return trimmed
+
+    @field_validator("mode")
+    @classmethod
+    def _known_mode(cls, value: str) -> str:
+        if value not in CONVERSATION_MODES:
+            raise ValueError(f"mode must be one of: {', '.join(CONVERSATION_MODES)}")
+        return value
 
 
 # --- Response views ------------------------------------------------------------
@@ -353,3 +400,73 @@ def delete_conversation(
     """
     service(user=user, conversation_id=conversation_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/api/conversations/{conversation_id}/turns",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[
+        Depends(rate_limit_conversations),
+        Depends(enforce_origin),
+        Depends(enforce_csrf),
+    ],
+)
+def post_conversation_turn(
+    conversation_id: UUID,
+    user: Annotated[User, Depends(get_authenticated_user)],
+    service: Annotated[PostConversationTurn, Depends(get_post_conversation_turn)],
+    body: TurnRequest,
+) -> ConversationTurnView:
+    """Run and persist one grounded turn (201); 404/409/422/429/502 per the ACs.
+
+    ``PostConversationTurn`` resolves the conversation + owner (missing/non-owner →
+    ``ConversationNotFound`` → 404), enforces readiness (``SourceNotReady`` → 409)
+    and — for a teach turn — that the conversation still has a resolvable target
+    (``ConversationTargetUnavailable`` → 409), retrieves evidence within the
+    conversation's scope, and either composes a grounded answer or the explicit
+    not-found outcome. A generation failure surfaces as ``AnswerGenerationFailed`` →
+    502 with nothing persisted, and a turn-index race loses with
+    ``ConversationTurnConflict`` → 409.
+    """
+    turn = service(
+        user=user,
+        conversation_id=conversation_id,
+        message=body.message,
+        mode=body.mode,
+    )
+    return ConversationTurnView.from_turn(turn)
+
+
+@router.post(
+    "/api/conversations/{conversation_id}/turns/stream",
+    dependencies=[
+        Depends(rate_limit_conversations),
+        Depends(enforce_origin),
+        Depends(enforce_csrf),
+    ],
+)
+def post_conversation_turn_stream(
+    conversation_id: UUID,
+    user: Annotated[User, Depends(get_authenticated_user)],
+    service: Annotated[PostConversationTurn, Depends(get_post_conversation_turn)],
+    body: TurnRequest,
+):
+    """Stream one grounded turn as UI Message Stream v1 SSE frames (CONV-21).
+
+    The SSE sibling of :func:`post_conversation_turn`: identical request schema and
+    auth/CSRF/Origin/rate-limit dependencies. ``PostConversationTurn.stream`` runs
+    all guards **eagerly** here, so ownership (404), readiness / target-gone (409),
+    validation (422) and rate-limit (429) surface as the same plain HTTP errors as
+    the JSON endpoint before any SSE byte is sent. The turn is persisted only on
+    stream completion, so a mid-stream failure (rendered as a protocol ``error``
+    part) or a client disconnect persists nothing. The handler stays synchronous and
+    returns the response instance so the frame generator runs in the threadpool —
+    see the contract on ``to_sse_response``.
+    """
+    events = service.stream(
+        user=user,
+        conversation_id=conversation_id,
+        message=body.message,
+        mode=body.mode,
+    )
+    return to_sse_response(events)
