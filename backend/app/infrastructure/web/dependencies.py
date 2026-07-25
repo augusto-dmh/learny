@@ -92,6 +92,8 @@ from app.infrastructure.answering import (
 from app.infrastructure.clock import SystemClock
 from app.infrastructure.db.engine import get_engine
 from app.infrastructure.db.repositories import (
+    SqlAlchemyConversationRepository,
+    SqlAlchemyConversationTurnRepository,
     SqlAlchemyCorpusRepository,
     SqlAlchemyCredentialRepository,
     SqlAlchemyIngestionEventRepository,
@@ -103,8 +105,6 @@ from app.infrastructure.db.repositories import (
     SqlAlchemySessionRepository,
     SqlAlchemySourceRepository,
     SqlAlchemyStudyDayRepository,
-    SqlAlchemyTeachingSessionRepository,
-    SqlAlchemyTeachingTurnRepository,
     SqlAlchemyUserRepository,
 )
 from app.infrastructure.db.retrieval import SqlAlchemyRetrievalRepository
@@ -468,7 +468,7 @@ def get_start_teaching_session(conn: DbConnection) -> StartConversation:
     return StartConversation(
         sources=SqlAlchemySourceRepository(conn),
         corpus=SqlAlchemyCorpusRepository(conn),
-        sessions=SqlAlchemyTeachingSessionRepository(conn),
+        sessions=SqlAlchemyConversationRepository(conn),
         authorize=AuthorizeOwnership(),
         clock=_clock,
         ids=uuid4,
@@ -478,8 +478,8 @@ def get_start_teaching_session(conn: DbConnection) -> StartConversation:
 def get_read_teaching_session(conn: DbConnection) -> ReadConversation:
     """Wire ``ReadConversation`` on the request-scoped connection (TEACH-05/06/20)."""
     return ReadConversation(
-        sessions=SqlAlchemyTeachingSessionRepository(conn),
-        turns=SqlAlchemyTeachingTurnRepository(conn),
+        sessions=SqlAlchemyConversationRepository(conn),
+        turns=SqlAlchemyConversationTurnRepository(conn),
         sources=SqlAlchemySourceRepository(conn),
         authorize=AuthorizeOwnership(),
     )
@@ -489,7 +489,7 @@ def get_list_teaching_sessions(conn: DbConnection) -> ListConversations:
     """Wire ``ListConversations`` on the request-scoped connection (TEACH-21)."""
     return ListConversations(
         sources=SqlAlchemySourceRepository(conn),
-        sessions=SqlAlchemyTeachingSessionRepository(conn),
+        sessions=SqlAlchemyConversationRepository(conn),
         authorize=AuthorizeOwnership(),
     )
 
@@ -522,8 +522,8 @@ def get_post_teaching_turn(
     """
     settings = get_settings()
     return PostConversationTurn(
-        sessions=SqlAlchemyTeachingSessionRepository(conn),
-        turns=SqlAlchemyTeachingTurnRepository(conn),
+        sessions=SqlAlchemyConversationRepository(conn),
+        turns=SqlAlchemyConversationTurnRepository(conn),
         sources=SqlAlchemySourceRepository(conn),
         corpus=SqlAlchemyCorpusRepository(conn),
         retrieve=get_retrieve_evidence(conn),

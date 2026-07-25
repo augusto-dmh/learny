@@ -191,9 +191,9 @@ def test_teaching_errors_map_to_expected_status_codes() -> None:
 
     from app.application.errors import (
         ConversationNotFound,
+        ConversationTurnConflict,
         InvalidTeachingTarget,
         TeachingTargetGone,
-        TeachingTurnConflict,
     )
     from app.infrastructure.web.error_handlers import register_error_handlers
 
@@ -214,7 +214,7 @@ def test_teaching_errors_map_to_expected_status_codes() -> None:
 
     @app.get("/turn-conflict")
     def _turn_conflict() -> None:
-        raise TeachingTurnConflict("another turn already claimed this turn index")
+        raise ConversationTurnConflict("another turn already claimed this turn index")
 
     client = TestClient(app, raise_server_exceptions=False)
 

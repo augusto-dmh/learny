@@ -48,11 +48,11 @@ from app.domain.entities import (
 )
 from app.domain.ports import (
     Clock,
+    ConversationRepository,
+    ConversationTurnRepository,
     CorpusRepository,
     SourceRepository,
     TeachingGenerationPort,
-    TeachingSessionRepository,
-    TeachingTurnRepository,
 )
 
 logger = logging.getLogger(__name__)
@@ -62,7 +62,7 @@ def authorized_session(
     *,
     user: User,
     session_id: UUID,
-    sessions: TeachingSessionRepository,
+    sessions: ConversationRepository,
     sources: SourceRepository,
     authorize: AuthorizeOwnership,
 ) -> tuple[Conversation, Source]:
@@ -103,7 +103,7 @@ class StartConversation:
         *,
         sources: SourceRepository,
         corpus: CorpusRepository,
-        sessions: TeachingSessionRepository,
+        sessions: ConversationRepository,
         authorize: AuthorizeOwnership,
         clock: Clock,
         ids: Callable[[], UUID],
@@ -165,8 +165,8 @@ class ReadConversation:
     def __init__(
         self,
         *,
-        sessions: TeachingSessionRepository,
-        turns: TeachingTurnRepository,
+        sessions: ConversationRepository,
+        turns: ConversationTurnRepository,
         sources: SourceRepository,
         authorize: AuthorizeOwnership,
     ) -> None:
@@ -185,7 +185,7 @@ class ReadConversation:
             sources=self._sources,
             authorize=self._authorize,
         )
-        return session, self._turns.list_for_session(session_id)
+        return session, self._turns.list_for_conversation(session_id)
 
 
 class ListConversations:
@@ -200,7 +200,7 @@ class ListConversations:
         self,
         *,
         sources: SourceRepository,
-        sessions: TeachingSessionRepository,
+        sessions: ConversationRepository,
         authorize: AuthorizeOwnership,
     ) -> None:
         self._sources = sources
@@ -214,7 +214,7 @@ class ListConversations:
             sources=self._sources,
             authorize=self._authorize,
         )
-        return self._sessions.list_for_source(source_id)
+        return self._sessions.list_for_source_with_target(source_id)
 
 
 class PostConversationTurn:
@@ -237,15 +237,15 @@ class PostConversationTurn:
     and the not-found outcome is still persisted with empty text and no citations
     (TEACH-14). ``turn_index`` is the count of prior turns; the repository's
     ``(session_id, turn_index)`` unique makes the DB the race arbiter — the loser's
-    ``TeachingTurnConflict`` propagates (TEACH-17). Exactly one content-free log
+    ``ConversationTurnConflict`` propagates (TEACH-17). Exactly one content-free log
     line records each completed turn (TEACH-19). Framework-free (ADR-0007/0009).
     """
 
     def __init__(
         self,
         *,
-        sessions: TeachingSessionRepository,
-        turns: TeachingTurnRepository,
+        sessions: ConversationRepository,
+        turns: ConversationTurnRepository,
         sources: SourceRepository,
         corpus: CorpusRepository,
         retrieve: RetrieveEvidence,
@@ -318,7 +318,7 @@ class PostConversationTurn:
         # Bounded conversation context: the last ``history_turns`` message/response
         # pairs (response empty for a not-found turn), all of them when fewer exist
         # (TEACH-12). ``recent_history`` skips the citation payloads that
-        # ``list_for_session`` loads — the turn path never uses them.
+        # ``list_for_conversation`` loads — the turn path never uses them.
         total_turns, history = self._turns.recent_history(session_id, self._history_turns)
 
         evidence = self._retrieve(

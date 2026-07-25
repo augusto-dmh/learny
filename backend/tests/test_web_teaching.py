@@ -44,11 +44,11 @@ from app.domain.entities import (
     Source,
 )
 from app.infrastructure.db.repositories import (
+    SqlAlchemyConversationRepository,
+    SqlAlchemyConversationTurnRepository,
     SqlAlchemyCorpusRepository,
     SqlAlchemyEmbeddingIndexRepository,
     SqlAlchemySourceRepository,
-    SqlAlchemyTeachingSessionRepository,
-    SqlAlchemyTeachingTurnRepository,
 )
 from app.infrastructure.embeddings import DeterministicEmbeddingAdapter
 from tests.conftest import TEST_ORIGIN, TEST_PASSWORD, requires_db
@@ -170,7 +170,7 @@ def _seed_session(
         created_at=now,
         updated_at=now,
     )
-    return SqlAlchemyTeachingSessionRepository(db_conn).add(session)
+    return SqlAlchemyConversationRepository(db_conn).add(session)
 
 
 def _embed_all(db_conn: Connection, source_id: UUID) -> None:
@@ -222,7 +222,7 @@ def _seed_turn(
         citations=citations,
         created_at=datetime.now(UTC),
     )
-    return SqlAlchemyTeachingTurnRepository(db_conn).add(turn)
+    return SqlAlchemyConversationTurnRepository(db_conn).add(turn)
 
 
 def _citation(source_id: UUID) -> Evidence:

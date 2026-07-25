@@ -26,6 +26,7 @@ from app.application.errors import (
     CardAlreadyExists,
     CardNotEditable,
     ConversationNotFound,
+    ConversationTurnConflict,
     CorpusNotFound,
     EmailAlreadyExists,
     EnqueueFailed,
@@ -46,7 +47,6 @@ from app.application.errors import (
     StaleCaptureTarget,
     StorageUnavailable,
     TeachingTargetGone,
-    TeachingTurnConflict,
     ValidationError,
 )
 
@@ -85,7 +85,7 @@ _STATUS_BY_ERROR = {
     ConversationNotFound: status.HTTP_404_NOT_FOUND,
     InvalidTeachingTarget: _HTTP_422,
     TeachingTargetGone: status.HTTP_409_CONFLICT,
-    TeachingTurnConflict: status.HTTP_409_CONFLICT,
+    ConversationTurnConflict: status.HTTP_409_CONFLICT,
     QuizDeckConflict: status.HTTP_409_CONFLICT,
     QuizItemNotFound: status.HTTP_404_NOT_FOUND,
     QuizItemNotReviewable: status.HTTP_409_CONFLICT,

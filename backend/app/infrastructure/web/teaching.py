@@ -7,7 +7,7 @@ source's sessions, and posts cited turns. The handlers own input validation (422
 and let application errors propagate to the global handlers
 (``ConversationNotFound`` → 404, ``SourceNotReady`` → 409,
 ``InvalidTeachingTarget`` → 422, ``TeachingTargetGone`` → 409,
-``TeachingTurnConflict`` → 409, ``AnswerGenerationFailed`` → 502), mirroring the
+``ConversationTurnConflict`` → 409, ``AnswerGenerationFailed`` → 502), mirroring the
 questions endpoint.
 
 Contract (also consumed by the Next.js proxy):
@@ -276,7 +276,7 @@ def post_teaching_turn(
     retrieves target-scoped evidence, and either composes a grounded answer or the
     explicit not-found outcome; a generation failure surfaces as
     ``AnswerGenerationFailed`` → 502 with nothing persisted, and a turn-index race
-    loses with ``TeachingTurnConflict`` → 409.
+    loses with ``ConversationTurnConflict`` → 409.
     """
     turn = service(
         user=user,

@@ -154,7 +154,7 @@ class TeachingTargetGone(Exception):
     """
 
 
-class TeachingTurnConflict(Exception):
+class ConversationTurnConflict(Exception):
     """Two turns raced for one ``(session_id, turn_index)`` (TEACH-17).
 
     The turn repository translates the unique-index violation into this error;
