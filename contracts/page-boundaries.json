@@ -1,0 +1,94 @@
+{
+  "name": "page-boundaries",
+  "about": "Where a page number turns. The book has no intrinsic page, so the number is derived: a word offset and a quantum in, a 1-based page out. That derivation exists twice — once on the server, as the definitional reference, and once in the reader, which is what a person actually sees. Two hand-written mirrors drift. These cases are the contract between them: both suites assert every one, so a change on either side that breaks agreement fails a test rather than quietly shipping two different books.",
+  "read_by": [
+    "backend/tests/test_reading_pure.py",
+    "frontend/tests/pages.test.ts"
+  ],
+  "cases": [
+    {
+      "words_before": 0,
+      "words_per_page": 275,
+      "page": 1,
+      "why": "The book's first word opens page 1, not page 0."
+    },
+    {
+      "words_before": 1,
+      "words_per_page": 275,
+      "page": 1,
+      "why": "One word in is still the first page."
+    },
+    {
+      "words_before": 274,
+      "words_per_page": 275,
+      "page": 1,
+      "why": "The last word of the first page."
+    },
+    {
+      "words_before": 275,
+      "words_per_page": 275,
+      "page": 2,
+      "why": "The exact quantum boundary turns the page."
+    },
+    {
+      "words_before": 276,
+      "words_per_page": 275,
+      "page": 2,
+      "why": "Just past the boundary, still the page it opened."
+    },
+    {
+      "words_before": 549,
+      "words_per_page": 275,
+      "page": 2,
+      "why": "The last word of the second page."
+    },
+    {
+      "words_before": 550,
+      "words_per_page": 275,
+      "page": 3,
+      "why": "The second boundary; the count never resets."
+    },
+    {
+      "words_before": 5500,
+      "words_per_page": 275,
+      "page": 21,
+      "why": "Deep into the book — numbering is book-global, so a later chapter continues rather than restarting."
+    },
+    {
+      "words_before": 100,
+      "words_per_page": 25,
+      "page": 5,
+      "why": "A chapter that starts mid-page: its first word is not a page's first word."
+    },
+    {
+      "words_before": 600,
+      "words_per_page": 200,
+      "page": 4,
+      "why": "The quantum is the server's, not a constant; a different one moves every boundary."
+    },
+    {
+      "words_before": -5,
+      "words_per_page": 275,
+      "page": 1,
+      "why": "A negative offset cannot exist in a book; it clamps to the first page rather than producing page 0."
+    },
+    {
+      "words_before": 1000,
+      "words_per_page": 0,
+      "page": 1,
+      "why": "A misconfigured quantum reads as page 1 rather than dividing by zero on a read path."
+    },
+    {
+      "words_before": 1000,
+      "words_per_page": -275,
+      "page": 1,
+      "why": "A negative quantum degrades the same way — the guard is on non-positive, not on zero alone."
+    },
+    {
+      "words_before": -5,
+      "words_per_page": 0,
+      "page": 1,
+      "why": "Both guards at once still yield the first page, never a negative or a zero."
+    }
+  ]
+}

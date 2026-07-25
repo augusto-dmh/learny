@@ -10,14 +10,19 @@ spec ACs and edge cases:
   canonical collision (canonical wins), duplicate anchors (lowest position), and a miss.
 - ``percent_at`` (RD-16): position math, 2-decimal quantization, and a zero-total book.
 - ``words_before_row``, ``page_at`` and ``pages_from_words``: the page unit derived from
-  the word counts already stored per section, with no DB and no HTTP.
+  the word counts already stored per section, with no DB and no HTTP. ``page_at`` is also
+  held to ``contracts/page-boundaries.json``, the shared table the reader's own
+  implementation of the same rule is held to — so the two cannot drift apart with both
+  suites green.
 - ``words_credited``: the forward-only reading volume one position save earns, at every
   edge (advance, retreat, no baseline, a baseline that no longer resolves).
 """
 
 from __future__ import annotations
 
+import json
 from decimal import Decimal
+from pathlib import Path
 
 from app.application.reading import (
     Chapter,
@@ -202,8 +207,44 @@ def test_page_numbers_derive_from_the_stored_word_counts_alone() -> None:
 
 
 def test_page_at_degrades_to_page_one_for_a_non_positive_quantum() -> None:
-    # A misconfigured setting must not raise on a read path.
+    # A misconfigured setting must not raise on a read path — zero and negative alike.
     assert page_at(1000, 0) == 1
+    assert page_at(1000, -275) == 1
+
+
+def test_page_at_clamps_a_negative_offset_to_the_first_page() -> None:
+    # No point in a book has words before it counted backwards; a negative offset must
+    # not divide into page 0 or a negative page.
+    assert page_at(-5, 275) == 1
+    assert page_at(-500, 275) == 1
+
+
+# --- The shared boundary contract (contracts/page-boundaries.json) --------------
+
+# ``page_at`` is the definitional reference for the page unit, but nothing in the server
+# renders a page: every number a reader sees comes from the client's own implementation
+# of the same rule. Two hand-written mirrors drift, so the boundary cases live outside
+# both stacks and both assert them. Adding a case here binds the client too, and vice
+# versa — see contracts/README.md.
+
+_CONTRACT = json.loads(
+    (Path(__file__).resolve().parents[2] / "contracts" / "page-boundaries.json").read_text(
+        encoding="utf-8"
+    )
+)
+
+
+def test_page_at_matches_every_shared_boundary_case() -> None:
+    cases = _CONTRACT["cases"]
+    # A contract nobody reads proves nothing: fail loudly if the file empties out.
+    assert len(cases) >= 12
+    actual = [(c["words_before"], c["words_per_page"], page_at(*_inputs(c))) for c in cases]
+    expected = [(c["words_before"], c["words_per_page"], c["page"]) for c in cases]
+    assert actual == expected
+
+
+def _inputs(case: dict) -> tuple[int, int]:
+    return case["words_before"], case["words_per_page"]
 
 
 # --- pages_from_words (PAGE-09) -------------------------------------------------
