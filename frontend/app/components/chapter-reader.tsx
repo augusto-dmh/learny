@@ -720,8 +720,11 @@ export function ChapterFlow({
               "--reading-leading": `${leading}`,
             } as CSSProperties
           }
-          className="prose-reading relative mx-auto max-w-2xl bg-background py-6 text-foreground"
+          className="prose-reading book-column relative mx-auto max-w-2xl bg-background text-foreground"
         >
+          <h1 data-testid="reading-chapter-title" className="chapter-running-title">
+            {chapter.chapter_title}
+          </h1>
           {chapter.sections.map((section) => (
             <FlowSection
               key={section.anchor}
@@ -846,7 +849,7 @@ function FlowSection({
         ) : null}
         <h2 className="text-2xl font-semibold">{section.title}</h2>
       </div>
-      <div ref={bodyRef}>
+      <div ref={bodyRef} className="book-prose">
         <MessageResponse>{section.markdown}</MessageResponse>
       </div>
     </section>
