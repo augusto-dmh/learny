@@ -263,7 +263,10 @@ def test_pages_from_words_never_reports_a_negative_figure() -> None:
 
 
 def test_pages_from_words_degrades_to_zero_for_a_non_positive_quantum() -> None:
+    # The guard is the shipped contract: a misconfigured quantum reports no reading
+    # rather than raising on the study window, for zero and for a negative alike.
     assert pages_from_words(1000, 0) == 0
+    assert pages_from_words(1000, -275) == 0
 
 
 # --- words_credited (PAGE-07, I-PU-4/I-PU-5) ------------------------------------

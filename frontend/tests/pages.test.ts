@@ -2,7 +2,12 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-import { countWords, pageAt, sectionOffsets } from "../app/lib/pages";
+import {
+  countWords,
+  pageAt,
+  paginateSection,
+  sectionOffsets,
+} from "../app/lib/pages";
 
 /**
  * The page unit's arithmetic, on its own.
@@ -65,6 +70,34 @@ describe("pageAt", () => {
   it("reads page one for a non-positive quantum rather than dividing by it", () => {
     expect(pageAt(1000, 0)).toBe(1);
     expect(pageAt(1000, -275)).toBe(1);
+  });
+});
+
+describe("paginateSection with a misconfigured quantum", () => {
+  // The quantum is a server setting, and "it must be positive" is defended in four
+  // places across the two stacks. The guards are what ships, so the guards are what
+  // is pinned: a bad setting must degrade to an unpaged book, never throw or divide
+  // by zero on a read path.
+  const markdown = ["one two three", "four five six", "seven eight nine"].join(
+    "\n\n",
+  );
+
+  it("serves the section untouched rather than dividing by zero", () => {
+    expect(paginateSection(markdown, { wordsBefore: 0, wordsPerPage: 0 })).toEqual([
+      { markdown, pageAfter: null },
+    ]);
+  });
+
+  it("serves the section untouched for a negative quantum too", () => {
+    expect(paginateSection(markdown, { wordsBefore: 0, wordsPerPage: -25 })).toEqual([
+      { markdown, pageAfter: null },
+    ]);
+  });
+
+  it("still serves the section untouched from a negative offset", () => {
+    expect(paginateSection(markdown, { wordsBefore: -100, wordsPerPage: 0 })).toEqual([
+      { markdown, pageAfter: null },
+    ]);
   });
 });
 

@@ -352,6 +352,34 @@ describe("StudyHeatmap tooltip (PAGE-22, I-7)", () => {
     expect(screen.queryByTestId("heatmap-tooltip")).toBeNull();
   });
 
+  it("announces the grid as one named group, not eighty-four loose shapes", () => {
+    // The name is the decision, not an implementation detail: a screen reader
+    // meeting the grid has to be told what it is and how far back it goes. It
+    // changed owner and wording in this cycle without failing anything.
+    const { container } = render(<StudyHeatmap days={days} today={today} />);
+
+    const group = screen.getByRole("group", {
+      name: "study activity heatmap, last 12 weeks",
+    });
+    expect(group.contains(cellFor(container, "2026-07-20"))).toBe(true);
+  });
+
+  it("gives every active day a name that stands on its own", () => {
+    // The readout is a hover/focus affordance; the name is what a screen reader
+    // reads without one, so it has to carry the same facts: which day, and what
+    // was done on it.
+    const { container } = render(<StudyHeatmap days={days} today={today} />);
+
+    expect(
+      screen.getByRole("img", { name: "Mon, Jul 20: 7 reviews · 9 pages" }),
+    ).toBe(cellFor(container, "2026-07-20"));
+    expect(
+      screen.getByRole("img", { name: "Tue, Jul 14: 1 review · 1 page" }),
+    ).toBe(cellFor(container, "2026-07-14"));
+    // Exactly the days with something on them — the empty ones are not images.
+    expect(screen.getAllByRole("img")).toHaveLength(days.length);
+  });
+
   it("leaves empty days silent: no readout, no title, and no way to focus one", () => {
     const { container } = render(<StudyHeatmap days={days} today={today} />);
     const empty = cellFor(container, "2026-07-19");
@@ -361,6 +389,9 @@ describe("StudyHeatmap tooltip (PAGE-22, I-7)", () => {
     expect(empty.getAttribute("tabindex")).toBeNull();
     expect(empty.getAttribute("data-active")).toBeNull();
     expect(empty.getAttribute("aria-label")).toBeNull();
+    // Neither name nor role: a day with nothing on it is a shape, not something a
+    // screen reader should stop on and announce.
+    expect(empty.getAttribute("role")).toBeNull();
 
     // Hovering one says nothing at all — there is nothing to answer for (I-7).
     fireEvent.mouseEnter(empty);
