@@ -119,7 +119,7 @@ and C precedes D by the driver's explicit call; ADR-0029 must be accepted before
 
 | tlc Cycle | RFC-006 Cycle | Scope | Status |
 |---|---|---|---|
-| `v6-instrument` | A | Request/query/task timings, `Server-Timing`, dev-only surface | Done (PR pending) |
+| `v6-instrument` | A | Request/query/task timings, `Server-Timing`, dev-only surface | Done (PR #49) |
 | `v6-page-unit` | B | Page unit (~275 words), reader typography, live progress, study heatmap | Not started |
 | `v6-conversation-model` | C | Unified scoped conversations per ADR-0029 (backend-first) | Not started (ADR-0029 first) |
 | `v6-workspace` | D | Reader as hub: contents rail, four-tab dock, route redirects, re-scoped notes/review | Not started |
