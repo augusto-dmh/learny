@@ -1,12 +1,20 @@
 """C-phase gate (unit) — teaching-session application services.
 
-Drives ``StartConversation`` / ``ReadConversation`` / ``ListConversations``
-(and, below, ``PostConversationTurn``) over in-memory fakes and the real
-``AuthorizeOwnership`` primitive, so the orchestration is asserted in isolation.
+Drives the legacy teaching seam — ``StartTeachingSession`` /
+``ReadTeachingSession`` / ``ListTeachingSessions`` / ``PostTeachingTurn`` — over
+in-memory fakes and the real ``AuthorizeOwnership`` primitive, so the orchestration
+is asserted in isolation. Since ADR-0029 those adapters run on the unified
+conversation services, which the builders below compose for real (only the ports
+and repositories are doubles): every TEACH acceptance criterion is therefore
+asserted end-to-end through the seam the legacy router calls, and a drift between
+the unified mechanics and what teaching promises fails here.
+
 The teaching fakes live here rather than in ``tests/fakes.py`` because the turn
 path needs a retrieval double that records the ``anchors`` scope, which the Q&A
 fake deliberately does not (its ``calls`` shape is asserted verbatim by the Q&A
-suite). Each test maps to a TEACH acceptance criterion.
+suite). A session is scoped to its target, so a miss reaches this layer as
+``not_found_in_scope``; the legacy wire's collapse to ``not_found_in_source`` is
+the router's, asserted in ``test_web_teaching``.
 """
 
 from __future__ import annotations
@@ -15,11 +23,13 @@ import ast
 import inspect
 import logging
 from collections.abc import Iterator, Sequence
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
 
+from app.application import conversations as conversation_services
 from app.application import teaching as teaching_module
 from app.application.errors import (
     AnswerGenerationFailed,
@@ -33,13 +43,14 @@ from app.application.errors import (
 from app.application.identity import AuthorizeOwnership
 from app.application.streaming import StreamDelta, StreamTurn
 from app.application.teaching import (
-    ListConversations,
-    PostConversationTurn,
-    ReadConversation,
-    StartConversation,
+    ListTeachingSessions,
+    PostTeachingTurn,
+    ReadTeachingSession,
+    StartTeachingSession,
 )
 from app.domain.entities import (
     MODE_TEACH,
+    NOT_FOUND_IN_SCOPE,
     AnswerCompleted,
     AnswerStreamEvent,
     AnswerTextDelta,
@@ -212,11 +223,21 @@ class FakeCorpus:
 
 
 class FakeConversationRepository:
-    """In-memory ``ConversationRepository``: newest-first list with turn counts."""
+    """In-memory ``ConversationRepository``: newest-first list with turn counts.
+
+    ``touched`` records the activity bumps a persisted turn makes (CONV-13).
+    """
 
     def __init__(self) -> None:
         self._by_id: dict[UUID, Conversation] = {}
         self.turn_counts: dict[UUID, int] = {}
+        self.touched: list[UUID] = []
+
+    def touch(self, conversation_id: UUID, now: datetime) -> None:
+        self.touched.append(conversation_id)
+        stored = self._by_id.get(conversation_id)
+        if stored is not None:
+            self._by_id[conversation_id] = replace(stored, updated_at=now)
 
     def add(self, session: Conversation) -> Conversation:
         self._by_id[session.id] = session
@@ -226,7 +247,13 @@ class FakeConversationRepository:
         return self._by_id.get(session_id)
 
     def list_for_source_with_target(self, source_id: UUID) -> list[ConversationSummary]:
-        owned = [s for s in self._by_id.values() if s.source_id == source_id]
+        # Mirrors the repository contract: only conversations carrying a teach
+        # target belong to the legacy panel (CONV-23).
+        owned = [
+            s
+            for s in self._by_id.values()
+            if s.source_id == source_id and s.target_anchor is not None
+        ]
         owned.sort(key=lambda s: s.created_at, reverse=True)
         return [
             ConversationSummary(
@@ -397,30 +424,54 @@ class FakeTeachingGeneration:
 # --- service builders ----------------------------------------------------------
 
 
+class _AnswerPortMustNotRun:
+    """``AnswerGenerationPort`` double that fails if teaching ever reaches it.
+
+    The unified turn service composes both generation ports and dispatches on the
+    turn's mode; the legacy seam fixes that mode to ``teach``, so every call below
+    must land on the teaching port. This double turns a dispatch regression into a
+    failure instead of a silently different answer.
+    """
+
+    model = "answer-port-must-not-run"
+
+    def generate(self, **kwargs: object) -> GeneratedAnswer:
+        raise AssertionError("teaching must not reach the answer generation port")
+
+    def generate_stream(self, **kwargs: object) -> Iterator[AnswerStreamEvent]:
+        raise AssertionError("teaching must not reach the answer generation port")
+
+
 def _start(
     *, sources, corpus, sessions, ids=uuid4, clock: FakeClock | None = None
-) -> StartConversation:
-    return StartConversation(
-        sources=sources,
-        corpus=corpus,
-        sessions=sessions,
-        authorize=AuthorizeOwnership(),
-        clock=clock or FakeClock(_NOW),
-        ids=ids,
+) -> StartTeachingSession:
+    return StartTeachingSession(
+        start=conversation_services.StartConversation(
+            sources=sources,
+            corpus=corpus,
+            conversations=sessions,
+            authorize=AuthorizeOwnership(),
+            clock=clock or FakeClock(_NOW),
+            ids=ids,
+        )
     )
 
 
-def _read(*, sessions, turns, sources) -> ReadConversation:
-    return ReadConversation(
-        sessions=sessions,
-        turns=turns,
-        sources=sources,
-        authorize=AuthorizeOwnership(),
+def _read(*, sessions, turns, sources) -> ReadTeachingSession:
+    return ReadTeachingSession(
+        read=conversation_services.ReadConversation(
+            conversations=sessions,
+            turns=turns,
+            sources=sources,
+            authorize=AuthorizeOwnership(),
+        )
     )
 
 
-def _list(*, sources, sessions) -> ListConversations:
-    return ListConversations(sources=sources, sessions=sessions, authorize=AuthorizeOwnership())
+def _list(*, sources, sessions) -> ListTeachingSessions:
+    return ListTeachingSessions(
+        sources=sources, conversations=sessions, authorize=AuthorizeOwnership()
+    )
 
 
 def _post(
@@ -435,19 +486,22 @@ def _post(
     clock: FakeClock | None = None,
     evidence_top_k: int = _TOP_K,
     history_turns: int = _HISTORY_TURNS,
-) -> PostConversationTurn:
-    return PostConversationTurn(
-        sessions=sessions,
-        turns=turns,
-        sources=sources,
-        corpus=corpus,
-        retrieve=retrieve,
-        generation=generation,
-        authorize=AuthorizeOwnership(),
-        clock=clock or FakeClock(_NOW),
-        ids=ids,
-        evidence_top_k=evidence_top_k,
-        history_turns=history_turns,
+) -> PostTeachingTurn:
+    return PostTeachingTurn(
+        post=conversation_services.PostConversationTurn(
+            conversations=sessions,
+            turns=turns,
+            sources=sources,
+            corpus=corpus,
+            retrieve=retrieve,
+            answer_generation=_AnswerPortMustNotRun(),
+            teaching_generation=generation,
+            authorize=AuthorizeOwnership(),
+            clock=clock or FakeClock(_NOW),
+            ids=ids,
+            evidence_top_k=evidence_top_k,
+            history_turns=history_turns,
+        )
     )
 
 
@@ -478,6 +532,24 @@ def test_start_creates_session_with_target_snapshot() -> None:
     assert result.target_title == "Core Idea"
     assert result.created_at == _NOW
     assert sessions.get_by_id(session_id) == result
+
+
+def test_start_scopes_the_session_to_its_target_with_notes_off() -> None:
+    # CONV-23: a teaching session is the conversation scoped to exactly its target,
+    # named after it, with notes off (AD-147) — the mapping the legacy start owns.
+    owner = _user()
+    sources = FakeSourceRepository()
+    source = _owned_source(owner.id)
+    sources.add(source)
+    target = _section("ch1.xhtml#core", ("Chapter 1", "Core Idea"), title="Core Idea")
+    sessions = FakeConversationRepository()
+    service = _start(sources=sources, corpus=FakeCorpus(_structure(target)), sessions=sessions)
+
+    result = service(user=owner, source_id=source.id, target_anchor="ch1.xhtml#core")
+
+    assert result.scope_anchors == ("ch1.xhtml#core",)
+    assert result.include_notes is False
+    assert result.title == "Core Idea"
 
 
 def test_start_missing_source_raises_source_not_found() -> None:
@@ -583,6 +655,29 @@ def test_read_returns_session_and_turns_ordered_with_citations() -> None:
     assert got_turns[0].citations == (cite,)
 
 
+def test_read_target_less_conversation_reports_not_found() -> None:
+    # CONV-23: a whole-book conversation is not a teaching session; reading one
+    # through the legacy endpoint is indistinguishable from it not existing (and can
+    # never reach the views, which require the target snapshot).
+    owner = _user()
+    sources = FakeSourceRepository()
+    source = _owned_source(owner.id)
+    sources.add(source)
+    sessions = FakeConversationRepository()
+    whole_book = replace(
+        _session(source.id),
+        scope_anchors=(),
+        target_anchor=None,
+        target_section_path=None,
+        target_title=None,
+    )
+    sessions.add(whole_book)
+    service = _read(sessions=sessions, turns=FakeConversationTurnRepository(), sources=sources)
+
+    with pytest.raises(ConversationNotFound):
+        service(user=owner, session_id=whole_book.id)
+
+
 def test_read_missing_session_raises_not_found() -> None:
     # TEACH-06: an unknown session id → ConversationNotFound (404).
     owner = _user()
@@ -639,6 +734,32 @@ def test_list_returns_only_owner_sessions_newest_first_with_counts() -> None:
 
     assert [s.conversation for s in result] == [newer, older]
     assert [s.turn_count for s in result] == [5, 2]
+
+
+def test_list_excludes_conversations_without_a_teach_target() -> None:
+    # CONV-23: a whole-book conversation (what a question creates) is not a teaching
+    # session — the old panel never shows it.
+    owner = _user()
+    sources = FakeSourceRepository()
+    source = _owned_source(owner.id)
+    sources.add(source)
+    sessions = FakeConversationRepository()
+    taught = _session(source.id, created_at=_NOW)
+    sessions.add(taught)
+    sessions.add(
+        replace(
+            _session(source.id, created_at=_NOW + timedelta(hours=1)),
+            scope_anchors=(),
+            target_anchor=None,
+            target_section_path=None,
+            target_title=None,
+        )
+    )
+    service = _list(sources=sources, sessions=sessions)
+
+    result = service(user=owner, source_id=source.id)
+
+    assert [s.conversation for s in result] == [taught]
 
 
 def test_list_missing_source_raises_source_not_found() -> None:
@@ -776,6 +897,9 @@ def test_turn_forwards_include_notes_to_retrieve() -> None:
     service.stream(user=owner, session_id=session.id, message="q", include_notes=False)
 
     assert [c["include_notes"] for c in retrieve.calls] == [True, False]
+    # AD-147: the request's choice overrides for that request only — the session's
+    # own stored choice (notes off, set at start) is never rewritten.
+    assert sessions.get_by_id(session.id).include_notes is False
 
 
 def test_turn_expands_subtree_retrieval_through_anchor_aliases() -> None:
@@ -894,7 +1018,7 @@ def test_turn_empty_evidence_not_found_without_invoking_port() -> None:
     result = service(user=owner, session_id=session.id, message="q")
 
     assert generation.calls == []
-    assert result.answer_status == "not_found_in_source"
+    assert result.answer_status == NOT_FOUND_IN_SCOPE
     assert result.answer_text == ""
     assert result.citations == ()
     assert result.evidence_count == 0
@@ -926,7 +1050,7 @@ def test_turn_ungrounded_citations_not_found_persisted() -> None:
 
     result = service(user=owner, session_id=session.id, message="q")
 
-    assert result.answer_status == "not_found_in_source"
+    assert result.answer_status == NOT_FOUND_IN_SCOPE
     assert result.answer_text == ""
     assert result.citations == ()
     assert result.evidence_count == 1
@@ -952,7 +1076,7 @@ def test_turn_found_false_not_found() -> None:
 
     result = service(user=owner, session_id=session.id, message="q")
 
-    assert result.answer_status == "not_found_in_source"
+    assert result.answer_status == NOT_FOUND_IN_SCOPE
     assert result.citations == ()
 
 
@@ -978,7 +1102,7 @@ def test_turn_blank_text_not_found() -> None:
 
     result = service(user=owner, session_id=session.id, message="q")
 
-    assert result.answer_status == "not_found_in_source"
+    assert result.answer_status == NOT_FOUND_IN_SCOPE
     assert result.citations == ()
 
 
@@ -1129,14 +1253,15 @@ def test_turn_emits_one_content_free_completion_log(
         generation=generation,
     )
 
-    with caplog.at_level(logging.INFO, logger="app.application.teaching"):
+    with caplog.at_level(logging.INFO, logger="app.application.conversations"):
         service(user=owner, session_id=session.id, message="my private message text")
 
-    records = [r for r in caplog.records if r.name == "app.application.teaching"]
+    records = [r for r in caplog.records if r.name == "app.application.conversations"]
     assert len(records) == 1
     message = records[0].getMessage()
     assert "outcome=answered" in message
-    assert f"session_id={session.id}" in message
+    assert f"conversation_id={session.id}" in message
+    assert f"mode={MODE_TEACH}" in message
     assert "evidence_count=1" in message
     assert f"model={_MODEL}" in message
     assert "my private message text" not in message
@@ -1267,7 +1392,7 @@ def test_stream_empty_evidence_persists_not_found_without_invoking_port() -> Non
     assert [e for e in events if isinstance(e, StreamDelta)] == []
     terminal = events[-1]
     assert isinstance(terminal, StreamTurn)
-    assert terminal.turn.answer_status == "not_found_in_source"
+    assert terminal.turn.answer_status == NOT_FOUND_IN_SCOPE
     assert terminal.turn.answer_text == ""
     assert terminal.turn.citations == ()
     assert terminal.turn.evidence_count == 0
@@ -1296,9 +1421,9 @@ def test_stream_whole_reply_sentinel_persists_not_found() -> None:
 
     assert [e for e in events if isinstance(e, StreamDelta)] == []
     terminal = events[-1]
-    assert terminal.turn.answer_status == "not_found_in_source"
+    assert terminal.turn.answer_status == NOT_FOUND_IN_SCOPE
     assert terminal.turn.citations == ()
-    assert turns.list_for_conversation(session.id)[0].answer_status == "not_found_in_source"
+    assert turns.list_for_conversation(session.id)[0].answer_status == NOT_FOUND_IN_SCOPE
 
 
 def test_stream_ungrounded_citations_persist_not_found() -> None:
@@ -1325,7 +1450,7 @@ def test_stream_ungrounded_citations_persist_not_found() -> None:
 
     assert [d.text for d in events if isinstance(d, StreamDelta)] == ["ungrounded prose"]
     terminal = events[-1]
-    assert terminal.turn.answer_status == "not_found_in_source"
+    assert terminal.turn.answer_status == NOT_FOUND_IN_SCOPE
     assert terminal.turn.answer_text == ""
     assert terminal.turn.citations == ()
     assert terminal.turn.evidence_count == 1

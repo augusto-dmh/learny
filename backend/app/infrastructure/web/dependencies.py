@@ -24,17 +24,20 @@ from uuid import UUID, uuid4
 from fastapi import Depends, Request
 from sqlalchemy import Connection
 
-# The unified conversation services are reached through the module because four of
-# their names (Start/Read/List/PostConversationTurn) still collide with the legacy
-# teaching services imported below; Phase D removes the legacy set and with it the
-# need for the alias.
-from app.application import conversations as conversation_services
 from app.application.cards import (
     AcceptCard,
     AcceptNoteCard,
     SuggestCards,
     SuggestNoteCards,
     UpdateCard,
+)
+from app.application.conversations import (
+    DeleteConversation,
+    ListConversations,
+    PostConversationTurn,
+    ReadConversation,
+    RenameConversation,
+    StartConversation,
 )
 from app.application.corpus import ReadSection, ReadSourceStructure
 from app.application.identity import (
@@ -71,10 +74,10 @@ from app.application.reviews import GetDueQueue, ResetSchedule, SubmitReview
 from app.application.sources import CreateSource, GetSource, ListSources
 from app.application.study import ContinueReading, GetStudySummary
 from app.application.teaching import (
-    ListConversations,
-    PostConversationTurn,
-    ReadConversation,
-    StartConversation,
+    ListTeachingSessions,
+    PostTeachingTurn,
+    ReadTeachingSession,
+    StartTeachingSession,
 )
 from app.application.vault import ExportVault
 from app.core.config import Settings, get_settings
@@ -460,41 +463,34 @@ def get_ask_question(conn: DbConnection, generation: AnswerGeneration) -> AskQue
     )
 
 
-# --- Teaching sessions (Phase 8) -----------------------------------------------
+# --- Teaching sessions (Phase 8; compatibility since ADR-0029) -----------------
 #
-# The session start/read/list services are wired on the request-scoped connection,
-# exactly like the Q&A path: the source repo enforces ownership, the corpus repo
-# resolves the target section, and the teaching repos persist/read the aggregate.
-# The turn service adds the scoped retrieval product and the teaching generator.
+# The legacy teaching services are adapters over the unified conversation services
+# below — same request-scoped connection, same repositories, no second stack. Each
+# is wired from the unified getter it delegates to, so the two surfaces can never
+# drift apart in wiring; they disappear together when the panel re-points.
 
 
-def get_start_teaching_session(conn: DbConnection) -> StartConversation:
-    """Wire ``StartConversation`` on the request-scoped connection (TEACH-01..04)."""
-    return StartConversation(
+def get_start_teaching_session(conn: DbConnection) -> StartTeachingSession:
+    """Wire ``StartTeachingSession`` on the request-scoped connection (TEACH-01..04)."""
+    return StartTeachingSession(start=get_start_conversation(conn))
+
+
+def get_read_teaching_session(conn: DbConnection) -> ReadTeachingSession:
+    """Wire ``ReadTeachingSession`` on the request-scoped connection (TEACH-05/06/20)."""
+    return ReadTeachingSession(read=get_read_conversation(conn))
+
+
+def get_list_teaching_sessions(conn: DbConnection) -> ListTeachingSessions:
+    """Wire ``ListTeachingSessions`` on the request-scoped connection (TEACH-21).
+
+    The one legacy read that is not a unified service: the old panel is rooted at a
+    source (404 when it is not the caller's) and shows only conversations with a
+    teach target (CONV-23).
+    """
+    return ListTeachingSessions(
         sources=SqlAlchemySourceRepository(conn),
-        corpus=SqlAlchemyCorpusRepository(conn),
-        sessions=SqlAlchemyConversationRepository(conn),
-        authorize=AuthorizeOwnership(),
-        clock=_clock,
-        ids=uuid4,
-    )
-
-
-def get_read_teaching_session(conn: DbConnection) -> ReadConversation:
-    """Wire ``ReadConversation`` on the request-scoped connection (TEACH-05/06/20)."""
-    return ReadConversation(
-        sessions=SqlAlchemyConversationRepository(conn),
-        turns=SqlAlchemyConversationTurnRepository(conn),
-        sources=SqlAlchemySourceRepository(conn),
-        authorize=AuthorizeOwnership(),
-    )
-
-
-def get_list_teaching_sessions(conn: DbConnection) -> ListConversations:
-    """Wire ``ListConversations`` on the request-scoped connection (TEACH-21)."""
-    return ListConversations(
-        sources=SqlAlchemySourceRepository(conn),
-        sessions=SqlAlchemyConversationRepository(conn),
+        conversations=SqlAlchemyConversationRepository(conn),
         authorize=AuthorizeOwnership(),
     )
 
@@ -515,29 +511,19 @@ TeachingGeneration = Annotated[TeachingGenerationPort, Depends(get_teaching_gene
 
 
 def get_post_teaching_turn(
-    conn: DbConnection, generation: TeachingGeneration
-) -> PostConversationTurn:
-    """Wire ``PostConversationTurn`` on the request-scoped connection (TEACH-07..17, 19, 24).
+    conn: DbConnection,
+    answer_generation: AnswerGeneration,
+    teaching_generation: TeachingGeneration,
+) -> PostTeachingTurn:
+    """Wire ``PostTeachingTurn`` on the request-scoped connection (TEACH-07..17, 19, 24).
 
-    Composes the teaching repos, the source repo (ownership + readiness), the
-    corpus repo (target re-resolution + subtree), the Phase-6 retrieval product
-    (scoped by the target subtree anchors), the process-wide teaching generator,
-    and the server-controlled evidence-budget / history-turns settings. Injecting
-    ``generation`` via ``Depends`` keeps it test-overridable.
+    Delegates to the unified turn service, which reaches the teaching generator for
+    the ``teach`` mode this adapter fixes. Both ports are injected via ``Depends``
+    because the unified service composes both; overriding either in tests keeps
+    working exactly as before.
     """
-    settings = get_settings()
-    return PostConversationTurn(
-        sessions=SqlAlchemyConversationRepository(conn),
-        turns=SqlAlchemyConversationTurnRepository(conn),
-        sources=SqlAlchemySourceRepository(conn),
-        corpus=SqlAlchemyCorpusRepository(conn),
-        retrieve=get_retrieve_evidence(conn),
-        generation=generation,
-        authorize=AuthorizeOwnership(),
-        clock=_clock,
-        ids=uuid4,
-        evidence_top_k=settings.teaching_evidence_top_k,
-        history_turns=settings.teaching_history_turns,
+    return PostTeachingTurn(
+        post=get_post_conversation_turn(conn, answer_generation, teaching_generation)
     )
 
 
@@ -550,9 +536,9 @@ def get_post_teaching_turn(
 # one pair for both modes, replacing the separate Q&A and teaching numbers.
 
 
-def get_start_conversation(conn: DbConnection) -> conversation_services.StartConversation:
+def get_start_conversation(conn: DbConnection) -> StartConversation:
     """Wire ``StartConversation`` on the request-scoped connection (CONV-05/15)."""
-    return conversation_services.StartConversation(
+    return StartConversation(
         sources=SqlAlchemySourceRepository(conn),
         corpus=SqlAlchemyCorpusRepository(conn),
         conversations=SqlAlchemyConversationRepository(conn),
@@ -562,16 +548,16 @@ def get_start_conversation(conn: DbConnection) -> conversation_services.StartCon
     )
 
 
-def get_list_conversations(conn: DbConnection) -> conversation_services.ListConversations:
+def get_list_conversations(conn: DbConnection) -> ListConversations:
     """Wire ``ListConversations`` on the request-scoped connection (CONV-06/16)."""
-    return conversation_services.ListConversations(
+    return ListConversations(
         conversations=SqlAlchemyConversationRepository(conn),
     )
 
 
-def get_read_conversation(conn: DbConnection) -> conversation_services.ReadConversation:
+def get_read_conversation(conn: DbConnection) -> ReadConversation:
     """Wire ``ReadConversation`` on the request-scoped connection (CONV-07/17)."""
-    return conversation_services.ReadConversation(
+    return ReadConversation(
         conversations=SqlAlchemyConversationRepository(conn),
         turns=SqlAlchemyConversationTurnRepository(conn),
         sources=SqlAlchemySourceRepository(conn),
@@ -579,9 +565,9 @@ def get_read_conversation(conn: DbConnection) -> conversation_services.ReadConve
     )
 
 
-def get_rename_conversation(conn: DbConnection) -> conversation_services.RenameConversation:
+def get_rename_conversation(conn: DbConnection) -> RenameConversation:
     """Wire ``RenameConversation`` on the request-scoped connection (CONV-08/18)."""
-    return conversation_services.RenameConversation(
+    return RenameConversation(
         conversations=SqlAlchemyConversationRepository(conn),
         sources=SqlAlchemySourceRepository(conn),
         authorize=AuthorizeOwnership(),
@@ -589,9 +575,9 @@ def get_rename_conversation(conn: DbConnection) -> conversation_services.RenameC
     )
 
 
-def get_delete_conversation(conn: DbConnection) -> conversation_services.DeleteConversation:
+def get_delete_conversation(conn: DbConnection) -> DeleteConversation:
     """Wire ``DeleteConversation`` on the request-scoped connection (CONV-09/19)."""
-    return conversation_services.DeleteConversation(
+    return DeleteConversation(
         conversations=SqlAlchemyConversationRepository(conn),
         sources=SqlAlchemySourceRepository(conn),
         authorize=AuthorizeOwnership(),
@@ -602,7 +588,7 @@ def get_post_conversation_turn(
     conn: DbConnection,
     answer_generation: AnswerGeneration,
     teaching_generation: TeachingGeneration,
-) -> conversation_services.PostConversationTurn:
+) -> PostConversationTurn:
     """Wire ``PostConversationTurn`` on the request-scoped connection (CONV-10..14, 20/21).
 
     Both generation ports are composed because the mode is a per-turn choice: one
@@ -611,7 +597,7 @@ def get_post_conversation_turn(
     the evidence budget / history window come from the ``conversation_*`` settings.
     """
     settings = get_settings()
-    return conversation_services.PostConversationTurn(
+    return PostConversationTurn(
         conversations=SqlAlchemyConversationRepository(conn),
         turns=SqlAlchemyConversationTurnRepository(conn),
         sources=SqlAlchemySourceRepository(conn),

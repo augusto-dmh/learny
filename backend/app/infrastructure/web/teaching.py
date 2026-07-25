@@ -1,10 +1,13 @@
 """Teaching router — owner-scoped teaching sessions over a ready source (Phase 8).
 
-Thin FastAPI adapter over the framework-free teaching services (assembled in
-``dependencies``). A signed-in owner starts a session anchored to a section of one
-of their ready sources, reads a session's full cited conversation, lists a
-source's sessions, and posts cited turns. The handlers own input validation (422)
-and let application errors propagate to the global handlers
+Thin FastAPI adapter over the compatibility services in
+``app/application/teaching.py``, which run the old teaching vocabulary on the
+unified conversation model (ADR-0029) — the wire below is frozen exactly as the
+current panel knows it, including the scoped-miss collapse the views apply. A
+signed-in owner starts a session anchored to a section of one of their ready
+sources, reads a session's full cited conversation, lists a source's sessions, and
+posts cited turns. The handlers own input validation (422) and let application
+errors propagate to the global handlers
 (``ConversationNotFound`` → 404, ``SourceNotReady`` → 409,
 ``InvalidConversationScope`` → 422, ``ConversationTargetUnavailable`` → 409,
 ``ConversationTurnConflict`` → 409, ``AnswerGenerationFailed`` → 502), mirroring the
@@ -32,10 +35,10 @@ from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel, Field, field_validator
 
 from app.application.teaching import (
-    ListConversations,
-    PostConversationTurn,
-    ReadConversation,
-    StartConversation,
+    ListTeachingSessions,
+    PostTeachingTurn,
+    ReadTeachingSession,
+    StartTeachingSession,
 )
 from app.core.config import get_settings
 from app.domain.entities import (
@@ -51,6 +54,10 @@ from app.infrastructure.web.dependencies import (
     get_post_teaching_turn,
     get_read_teaching_session,
     get_start_teaching_session,
+)
+from app.infrastructure.web.legacy_status import (
+    collapse_stream_status,
+    legacy_answer_status,
 )
 from app.infrastructure.web.rate_limit import rate_limit_teaching
 from app.infrastructure.web.retrieval import EvidenceView
@@ -107,7 +114,12 @@ class TurnRequest(BaseModel):
 
 
 class TargetView(BaseModel):
-    """The session's target section snapshot (TEACH-01)."""
+    """The session's target section snapshot (TEACH-01).
+
+    Only conversations carrying a teach target reach this view: the read service
+    reports a target-less conversation as absent and the per-source list filters
+    them out, so the snapshot is never null here.
+    """
 
     anchor: str
     section_path: list[str]
@@ -145,7 +157,9 @@ class TurnView(BaseModel):
 
     ``answer_status`` is ``answered`` or ``not_found_in_source``; ``text`` is empty
     and ``citations`` empty for the not-found outcome (TEACH-14). ``citations``
-    reuses the retrieval endpoint's ``EvidenceView`` citation-only projection.
+    reuses the retrieval endpoint's ``EvidenceView`` citation-only projection. A
+    session is scoped to its target, so a miss is stored as ``not_found_in_scope``
+    and collapsed here to the one verdict this wire knows (AD-196).
     """
 
     turn_index: int
@@ -162,7 +176,7 @@ class TurnView(BaseModel):
         return cls(
             turn_index=turn.turn_index,
             message=turn.message,
-            answer_status=turn.answer_status,
+            answer_status=legacy_answer_status(turn.answer_status),
             text=turn.answer_text,
             citations=[EvidenceView.from_evidence(c) for c in turn.citations],
             evidence_count=turn.evidence_count,
@@ -229,7 +243,7 @@ class SessionSummaryView(BaseModel):
 )
 def start_teaching_session(
     user: Annotated[User, Depends(get_authenticated_user)],
-    service: Annotated[StartConversation, Depends(get_start_teaching_session)],
+    service: Annotated[StartTeachingSession, Depends(get_start_teaching_session)],
     body: StartSessionRequest,
 ) -> SessionView:
     """Start a session anchored to a section of an owned ready source (201).
@@ -246,7 +260,7 @@ def start_teaching_session(
 def read_teaching_session(
     session_id: UUID,
     user: Annotated[User, Depends(get_authenticated_user)],
-    service: Annotated[ReadConversation, Depends(get_read_teaching_session)],
+    service: Annotated[ReadTeachingSession, Depends(get_read_teaching_session)],
 ) -> SessionDetailView:
     """Return an owned session with its ordered cited conversation (200; 404)."""
     session, turns = service(user=user, session_id=session_id)
@@ -265,7 +279,7 @@ def read_teaching_session(
 def post_teaching_turn(
     session_id: UUID,
     user: Annotated[User, Depends(get_authenticated_user)],
-    service: Annotated[PostConversationTurn, Depends(get_post_teaching_turn)],
+    service: Annotated[PostTeachingTurn, Depends(get_post_teaching_turn)],
     body: TurnRequest,
 ) -> TurnView:
     """Run and persist one cited teaching turn (201); 422/404/409/429/502 per ACs.
@@ -298,7 +312,7 @@ def post_teaching_turn(
 def post_teaching_turn_stream(
     session_id: UUID,
     user: Annotated[User, Depends(get_authenticated_user)],
-    service: Annotated[PostConversationTurn, Depends(get_post_teaching_turn)],
+    service: Annotated[PostTeachingTurn, Depends(get_post_teaching_turn)],
     body: TurnRequest,
 ):
     """Stream one cited teaching turn as UI Message Stream v1 SSE frames (GEN-14).
@@ -317,14 +331,14 @@ def post_teaching_turn_stream(
         message=body.message,
         include_notes=body.include_notes,
     )
-    return to_sse_response(events)
+    return to_sse_response(collapse_stream_status(events))
 
 
 @router.get("/api/sources/{source_id}/teaching-sessions")
 def list_teaching_sessions(
     source_id: UUID,
     user: Annotated[User, Depends(get_authenticated_user)],
-    service: Annotated[ListConversations, Depends(get_list_teaching_sessions)],
+    service: Annotated[ListTeachingSessions, Depends(get_list_teaching_sessions)],
 ) -> list[SessionSummaryView]:
     """Return an owned source's sessions, newest first (200; 404 missing/non-owner)."""
     return [SessionSummaryView.from_summary(s) for s in service(user=user, source_id=source_id)]

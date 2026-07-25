@@ -646,6 +646,29 @@ def test_post_turn_no_evidence_returns_201_not_found(
     assert body["model"] == _MODEL
 
 
+def test_post_turn_scoped_miss_is_stored_as_scope_verdict_and_collapsed_on_the_wire(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # CONV-23 / AD-196: a session is scoped to its target, so a miss is stored as
+    # ``not_found_in_scope`` — visible on the unified surface — while the legacy wire
+    # keeps saying ``not_found_in_source``, the only verdict it has ever spoken.
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "turn-collapse@example.com")
+    session = _seed_session(db_conn, UUID(source_id))  # corpus present, NOT embedded
+
+    posted = _post_turn(auth_client, session.id, {"message": "zzzqqq unmatchable token"}, csrf=csrf)
+    assert posted.status_code == 201, posted.text
+    assert posted.json()["answer_status"] == "not_found_in_source"
+
+    # The same turn read back through the legacy endpoint is collapsed too...
+    legacy = auth_client.get(f"/api/teaching-sessions/{session.id}")
+    assert legacy.json()["turns"][0]["answer_status"] == "not_found_in_source"
+
+    # ...while the stored turn kept the precise verdict.
+    unified = auth_client.get(f"/api/conversations/{session.id}")
+    assert unified.status_code == 200, unified.text
+    assert unified.json()["turns"][0]["answer_status"] == "not_found_in_scope"
+
+
 # --- POST turns: 422 bounds (TEACH-08) -----------------------------------------
 
 
@@ -905,6 +928,25 @@ def test_turn_stream_not_found_emits_status_and_persists_not_found(
 
     read = auth_client.get(f"/api/teaching-sessions/{session.id}")
     assert read.json()["turns"][0]["answer_status"] == "not_found_in_source"
+
+
+def test_turn_stream_scoped_miss_collapses_the_status_frame(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # AD-196 (SSE half): the ``data-answer-status`` frame carries the collapsed
+    # verdict, while the turn the stream persisted kept ``not_found_in_scope``.
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "tstream-collapse@example.com")
+    session = _seed_session(db_conn, UUID(source_id))  # corpus present, NOT embedded
+
+    resp = _turn_stream(auth_client, session.id, {"message": "zzzqqq unmatchable"}, csrf=csrf)
+
+    assert resp.status_code == 200, resp.text
+    parts = _parse_ui_stream(resp.text)
+    status = next(p for p in parts if isinstance(p, dict) and p["type"] == "data-answer-status")
+    assert status["data"] == {"status": "not_found_in_source"}
+
+    unified = auth_client.get(f"/api/conversations/{session.id}")
+    assert unified.json()["turns"][0]["answer_status"] == "not_found_in_scope"
 
 
 def test_turn_stream_missing_session_returns_plain_404(
