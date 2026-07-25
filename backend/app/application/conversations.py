@@ -18,32 +18,53 @@ provider-SDK type crosses this boundary (ADR-0007/0009).
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from dataclasses import dataclass
 from uuid import UUID
 
 from app.application.errors import (
+    AnswerGenerationFailed,
     ConversationNotFound,
+    ConversationTargetUnavailable,
     InvalidConversationScope,
     InvalidConversationTitle,
     NotAuthorized,
     SourceNotReady,
 )
+from app.application.grounding import ground
 from app.application.identity import AuthorizeOwnership
 from app.application.ingestion import SOURCE_STATUS_READY, authorized_source
+from app.application.retrieval import RetrieveEvidence
+from app.application.streaming import (
+    StreamTurn,
+    TurnStreamEvent,
+    hold_back_deltas,
+)
 from app.domain.entities import (
+    ANSWERED,
+    MODE_ANSWER,
+    MODE_TEACH,
+    NOT_FOUND_IN_SCOPE,
+    NOT_FOUND_IN_SOURCE,
+    AnswerStreamEvent,
     Conversation,
     ConversationSummary,
     ConversationTurn,
+    Evidence,
+    GeneratedAnswer,
+    HistoryTurn,
     Source,
     StructureSection,
     User,
 )
 from app.domain.ports import (
+    AnswerGenerationPort,
     Clock,
     ConversationRepository,
     ConversationTurnRepository,
     CorpusRepository,
     SourceRepository,
+    TeachingGenerationPort,
 )
 
 logger = logging.getLogger(__name__)
@@ -348,3 +369,401 @@ class DeleteConversation:
         )
         if not self._conversations.delete(conversation_id):
             raise ConversationNotFound("Conversation not found.")
+
+
+@dataclass(frozen=True)
+class _TurnPlan:
+    """Everything the guards resolved for one turn, before any generation runs.
+
+    Produced by the turn path's shared preflight so the buffered and streaming
+    paths run byte-identical guards, retrieval, and history (I-CM-5). ``target`` is
+    the resolved teach target on a teach turn and ``None`` on an answer turn;
+    ``turn_index`` is the count of prior turns, the index this turn claims.
+    """
+
+    conversation: Conversation
+    target: StructureSection | None
+    history: list[HistoryTurn]
+    evidence: list[Evidence]
+    turn_index: int
+
+
+class PostConversationTurn:
+    """Run one grounded turn in an owned conversation (CONV-10..14).
+
+    The conversation's *scope* decides what retrieval may see and the turn's *mode*
+    decides how the reply behaves, so one service covers both product shapes. The
+    guards are the teaching path's, generalized: ownership collapses to
+    ``ConversationNotFound`` (404), a source that is no longer ``ready`` raises
+    ``SourceNotReady`` (409), and a teach turn without a resolvable target raises
+    ``ConversationTargetUnavailable`` (409) before anything is retrieved or written.
+
+    Scope is a promise (ADR-0029). It is re-expanded **per turn** against the live
+    corpus — each scoped anchor to its section's subtree, then through
+    ``expand_anchors`` for the anchors normalization merged away — and a scoped turn
+    passes those anchors to retrieval every time. A scope anchor whose section a
+    re-ingest dropped keeps its raw anchor in the set rather than being discarded, so
+    a scoped turn can return nothing but can never silently widen to the whole book
+    (I-CM-3). Whole-book conversations pass ``anchors=None``, which is the only way
+    the whole source is searched. Notes are never anchor-filtered (engine semantics):
+    the conversation's stored ``include_notes`` gates them, and
+    ``include_notes_override`` lets a legacy request override it for that request
+    only, never changing what is stored (AD-147).
+
+    Generation is mode-dispatched: ``answer`` goes to the
+    :class:`~app.domain.ports.AnswerGenerationPort` with the bounded prior history,
+    ``teach`` to the :class:`~app.domain.ports.TeachingGenerationPort` with the
+    target's section path and that same history. Either way the port's answer passes
+    through the shared grounding guard (AD-027), any port raise becomes
+    ``AnswerGenerationFailed`` with nothing persisted, and the turn — answered or
+    not-found — is persisted **only after grounding** with the next ``turn_index``,
+    its citations in evidence-rank order (I-CM-5). The not-found verdict follows the
+    scope: a scoped conversation reports ``not_found_in_scope`` (the reader's own
+    selection came up short, which a client can offer to widen), a whole-book one
+    ``not_found_in_source``. The ``(conversation_id, turn_index)`` unique is the race
+    arbiter — the loser's ``ConversationTurnConflict`` propagates (I-CM-2) — and a
+    persisted turn bumps the conversation's ``updated_at`` (CONV-13). Exactly one
+    content-free log line records each completed turn. Framework-free (ADR-0007/0009).
+    """
+
+    def __init__(
+        self,
+        *,
+        conversations: ConversationRepository,
+        turns: ConversationTurnRepository,
+        sources: SourceRepository,
+        corpus: CorpusRepository,
+        retrieve: RetrieveEvidence,
+        answer_generation: AnswerGenerationPort,
+        teaching_generation: TeachingGenerationPort,
+        authorize: AuthorizeOwnership,
+        clock: Clock,
+        ids: Callable[[], UUID],
+        evidence_top_k: int,
+        history_turns: int,
+    ) -> None:
+        self._conversations = conversations
+        self._turns = turns
+        self._sources = sources
+        self._corpus = corpus
+        self._retrieve = retrieve
+        self._answer_generation = answer_generation
+        self._teaching_generation = teaching_generation
+        self._authorize = authorize
+        self._clock = clock
+        self._ids = ids
+        self._evidence_top_k = evidence_top_k
+        self._history_turns = history_turns
+
+    def __call__(
+        self,
+        *,
+        user: User,
+        conversation_id: UUID,
+        message: str,
+        mode: str,
+        include_notes_override: bool | None = None,
+    ) -> ConversationTurn:
+        plan = self._preflight(
+            user=user,
+            conversation_id=conversation_id,
+            message=message,
+            mode=mode,
+            include_notes_override=include_notes_override,
+        )
+
+        if not plan.evidence:
+            # Nothing in scope to answer from → not-found; the port is never invoked,
+            # so the model identity comes from the port attribute.
+            turn = self._not_found_turn(plan, message, mode, 0, self._port(mode).model)
+        else:
+            try:
+                generated = self._generate(mode=mode, message=message, plan=plan)
+            except Exception as exc:  # any port failure maps to 502
+                raise AnswerGenerationFailed("Answer generation failed.") from exc
+
+            grounded = ground(generated, plan.evidence)
+            if grounded is None:
+                # found=false / blank text / nothing survives grounding.
+                turn = self._not_found_turn(
+                    plan, message, mode, len(plan.evidence), generated.model
+                )
+            else:
+                turn = self._answered_turn(plan, message, mode, grounded, generated.model)
+
+        return self._persist(plan, turn, mode)
+
+    def stream(
+        self,
+        *,
+        user: User,
+        conversation_id: UUID,
+        message: str,
+        mode: str,
+        include_notes_override: bool | None = None,
+    ) -> Iterator[TurnStreamEvent]:
+        """Run one turn incrementally, persisting only on stream completion.
+
+        The shared guards + scoped retrieval run **eagerly** (before this returns), so
+        the turn's HTTP error outcomes (404/409) surface before any SSE bytes. The
+        generation stream then drives the sentinel hold-back and the same grounding
+        guard, and the turn is persisted and yielded as the terminal
+        :class:`~app.application.streaming.StreamTurn` only after grounding completes
+        — so a consumer disconnect mid-stream persists nothing, and the persisted turn
+        is identical to the buffered path's (I-CM-5).
+        """
+        plan = self._preflight(
+            user=user,
+            conversation_id=conversation_id,
+            message=message,
+            mode=mode,
+            include_notes_override=include_notes_override,
+        )
+        return self._turn_stream(plan=plan, message=message, mode=mode)
+
+    def _turn_stream(
+        self, *, plan: _TurnPlan, message: str, mode: str
+    ) -> Iterator[TurnStreamEvent]:
+        if not plan.evidence:
+            turn = self._not_found_turn(plan, message, mode, 0, self._port(mode).model)
+            yield StreamTurn(self._persist(plan, turn, mode))
+            return
+
+        stream = self._generate_stream(mode=mode, message=message, plan=plan)
+        # Hold-back yields presentable deltas and returns the authoritative answer;
+        # nothing is persisted until it completes (so cancellation persists nothing).
+        answer = yield from hold_back_deltas(stream)
+
+        grounded = ground(answer, plan.evidence)
+        if grounded is None:
+            turn = self._not_found_turn(plan, message, mode, len(plan.evidence), answer.model)
+        else:
+            turn = self._answered_turn(plan, message, mode, grounded, answer.model)
+        yield StreamTurn(self._persist(plan, turn, mode))
+
+    def _preflight(
+        self,
+        *,
+        user: User,
+        conversation_id: UUID,
+        message: str,
+        mode: str,
+        include_notes_override: bool | None,
+    ) -> _TurnPlan:
+        """Run the shared turn guards, scope expansion, history, and retrieval.
+
+        Both the buffered and the streaming path run this identically before any
+        generation, so the same error outcomes surface (for the stream, before any
+        SSE bytes) and both see the same evidence and history.
+        """
+        if mode not in (MODE_ANSWER, MODE_TEACH):
+            raise ValueError(f"Unknown conversation mode: {mode!r}")
+
+        conversation, source = authorized_conversation(
+            user=user,
+            conversation_id=conversation_id,
+            conversations=self._conversations,
+            sources=self._sources,
+            authorize=self._authorize,
+        )
+        if source.status != SOURCE_STATUS_READY:
+            # A stale-ready race resolves here on the next turn.
+            raise SourceNotReady("Source is not ready for conversations.")
+
+        structure = self._corpus.get_structure(conversation.source_id)
+        sections = structure.sections if structure is not None else ()
+        by_anchor = {section.anchor: section for section in sections}
+
+        # The teach invariant is checked before retrieval so a turn that cannot be
+        # taught costs nothing and persists nothing (I-CM-7).
+        target = self._resolve_target(conversation, by_anchor) if mode == MODE_TEACH else None
+        anchors = self._scoped_anchors(conversation, sections, by_anchor)
+
+        # Bounded conversation context: the last ``history_turns`` message/response
+        # pairs (response empty for a not-found turn), all of them when fewer exist.
+        # ``recent_history`` skips the citation payloads ``list_for_conversation``
+        # loads — the turn path never uses them — and its count is the next index.
+        turn_index, history = self._turns.recent_history(conversation_id, self._history_turns)
+
+        include_notes = (
+            conversation.include_notes if include_notes_override is None else include_notes_override
+        )
+        evidence = self._retrieve(
+            user=user,
+            source_id=conversation.source_id,
+            query=message,
+            top_k=self._evidence_top_k,
+            anchors=anchors,
+            include_notes=include_notes,
+        )
+        return _TurnPlan(
+            conversation=conversation,
+            target=target,
+            history=history,
+            evidence=evidence,
+            turn_index=turn_index,
+        )
+
+    def _resolve_target(
+        self, conversation: Conversation, by_anchor: dict[str, StructureSection]
+    ) -> StructureSection:
+        """Re-resolve the teach target against the current corpus (I-CM-7)."""
+        if not conversation.scope_anchors or conversation.target_anchor is None:
+            raise ConversationTargetUnavailable(
+                "This conversation covers the whole book; scope one to a section to teach it."
+            )
+        target = resolve_section(
+            conversation.target_anchor,
+            by_anchor=by_anchor,
+            corpus=self._corpus,
+            source_id=conversation.source_id,
+        )
+        if target is None:
+            # Re-ingestion (AD-018) replaced the corpus and dropped the section.
+            raise ConversationTargetUnavailable(
+                "The section this conversation teaches no longer exists; start a new one."
+            )
+        return target
+
+    def _scoped_anchors(
+        self,
+        conversation: Conversation,
+        sections: Sequence[StructureSection],
+        by_anchor: dict[str, StructureSection],
+    ) -> tuple[str, ...] | None:
+        """Expand the stored scope to the anchors retrieval may see this turn.
+
+        ``None`` — the whole source — is returned for, and only for, a conversation
+        with an empty scope. A scoped conversation contributes each anchor's section
+        *and its descendants* (``section_path`` prefix match), then the whole set goes
+        through ``expand_anchors`` so evidence from a section normalization merged
+        away is still reachable (AD-085). An anchor that resolves to nothing is kept
+        as itself: it matches no chunk, which is the honest outcome, where dropping it
+        could empty the set and silently widen the search (I-CM-3).
+        """
+        if not conversation.scope_anchors:
+            return None
+        base: list[str] = []
+        seen: set[str] = set()
+        for anchor in conversation.scope_anchors:
+            section = resolve_section(
+                anchor,
+                by_anchor=by_anchor,
+                corpus=self._corpus,
+                source_id=conversation.source_id,
+            )
+            if section is None:
+                candidates: list[str] = [anchor]
+            else:
+                depth = len(section.section_path)
+                candidates = [
+                    s.anchor for s in sections if s.section_path[:depth] == section.section_path
+                ]
+            for candidate in candidates:
+                if candidate not in seen:
+                    seen.add(candidate)
+                    base.append(candidate)
+        return self._corpus.expand_anchors(conversation.source_id, base)
+
+    def _port(self, mode: str) -> AnswerGenerationPort | TeachingGenerationPort:
+        """The generation port this mode speaks to (read for its model identity)."""
+        return self._teaching_generation if mode == MODE_TEACH else self._answer_generation
+
+    def _generate(self, *, mode: str, message: str, plan: _TurnPlan) -> GeneratedAnswer:
+        if mode == MODE_TEACH:
+            assert plan.target is not None  # the preflight resolved it or raised
+            return self._teaching_generation.generate(
+                message=message,
+                target_section_path=plan.target.section_path,
+                history=plan.history,
+                evidence=plan.evidence,
+            )
+        return self._answer_generation.generate(
+            question=message,
+            evidence=plan.evidence,
+            history=plan.history,
+        )
+
+    def _generate_stream(
+        self, *, mode: str, message: str, plan: _TurnPlan
+    ) -> Iterator[AnswerStreamEvent]:
+        if mode == MODE_TEACH:
+            assert plan.target is not None  # the preflight resolved it or raised
+            return self._teaching_generation.generate_stream(
+                message=message,
+                target_section_path=plan.target.section_path,
+                history=plan.history,
+                evidence=plan.evidence,
+            )
+        return self._answer_generation.generate_stream(
+            question=message,
+            evidence=plan.evidence,
+            history=plan.history,
+        )
+
+    def _answered_turn(
+        self,
+        plan: _TurnPlan,
+        message: str,
+        mode: str,
+        grounded: tuple[str, list[Evidence]],
+        model: str,
+    ) -> ConversationTurn:
+        text, citations = grounded
+        return ConversationTurn(
+            id=self._ids(),
+            conversation_id=plan.conversation.id,
+            turn_index=plan.turn_index,
+            message=message,
+            mode=mode,
+            answer_status=ANSWERED,
+            answer_text=text,
+            model=model,
+            evidence_count=len(plan.evidence),
+            citations=tuple(citations),
+            created_at=self._clock.now(),
+        )
+
+    def _not_found_turn(
+        self,
+        plan: _TurnPlan,
+        message: str,
+        mode: str,
+        evidence_count: int,
+        model: str,
+    ) -> ConversationTurn:
+        # Persisted like an answered turn but with empty text and no citations. The
+        # verdict names what was actually searched: the reader's scope, or the book.
+        status = NOT_FOUND_IN_SCOPE if plan.conversation.scope_anchors else NOT_FOUND_IN_SOURCE
+        return ConversationTurn(
+            id=self._ids(),
+            conversation_id=plan.conversation.id,
+            turn_index=plan.turn_index,
+            message=message,
+            mode=mode,
+            answer_status=status,
+            answer_text="",
+            model=model,
+            evidence_count=evidence_count,
+            citations=(),
+            created_at=self._clock.now(),
+        )
+
+    def _persist(self, plan: _TurnPlan, turn: ConversationTurn, mode: str) -> ConversationTurn:
+        """Write the turn, bump the conversation's activity, and log the outcome.
+
+        The DB unique is the turn-index race arbiter; a conflict propagates as a 409
+        for the losing writer — nothing is bumped or logged for it.
+        """
+        persisted = self._turns.add(turn)
+        self._conversations.touch(plan.conversation.id, self._clock.now())
+        logger.info(
+            "conversation turn completed outcome=%s conversation_id=%s mode=%s "
+            "evidence_count=%s model=%s",
+            persisted.answer_status,
+            plan.conversation.id,
+            mode,
+            persisted.evidence_count,
+            persisted.model,
+        )
+        return persisted
