@@ -2,14 +2,18 @@
 OBS-19..22, OBS-26).
 
 Every case derives from the spec's "The dev-only surface" acceptance criteria:
-what the flag decides, what authentication decides, what an enabled and
-authenticated read returns, what an idle process returns, and — the gap Phase B
-found — that the configured bounds actually govern the recorder the surface
-reads, instead of being documented settings that change nothing.
+what the flag decides, what a production process decides regardless of the flag,
+what authentication decides, what an enabled and authenticated read returns, what
+an idle process returns, and — the gap Phase B found — that the configured bounds
+actually govern the recorder the surface reads, instead of being documented
+settings that change nothing.
 
-The two gates are exercised independently on purpose. A single test that turned
-the flag on *and* authenticated would pass with either gate removed; one test per
-gate is what makes each of them a sensor.
+The gates are exercised independently on purpose. A single test that turned the
+flag on *and* authenticated would pass with either gate removed; one test per
+gate is what makes each of them a sensor. The production case is the sensor for
+the refusal itself: it configures the process exactly as the production overlay
+does *and* sets the flag, which is the state a leaked ``.env`` or an
+operator-authored secrets file can produce, and asserts nothing is mounted.
 
 The surface renders only what the recorder holds, so "no identifier reaches the
 surface" is pinned here as a property of the whole path (a real parametrized
@@ -19,6 +23,7 @@ body) rather than re-tested as recorder behaviour.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Iterator
 from contextlib import ExitStack
 from uuid import uuid4
@@ -36,6 +41,9 @@ pytestmark = requires_db
 ClientBuilder = Callable[..., TestClient]
 
 INSTRUMENT_PATH = "/api/dev/instrument"
+
+#: Logger the composition root records a refused instrument flag on.
+INSTRUMENT_LOGGER = "app.instrument"
 
 #: Stands in for a resource identifier a raw path would carry into the surface.
 SECRET_ID = uuid4()
@@ -125,6 +133,51 @@ def test_surface_is_absent_from_the_schema_when_the_flag_is_off(
 
     assert INSTRUMENT_PATH not in off.get("/openapi.json").json()["paths"]
     assert INSTRUMENT_PATH in on.get("/openapi.json").json()["paths"]
+
+
+# --- OBS-19: a production process refuses the surface even with the flag set --
+
+
+def test_surface_is_absent_when_the_process_is_configured_as_production(
+    build_client: ClientBuilder,
+) -> None:
+    # The state this refuses is reachable: the production api service loads an
+    # operator-authored env file and Settings reads .env, so the flag can be set
+    # on a production process without any compose change. The refusal must be the
+    # application's, not a YAML omission's.
+    client = build_client(enabled=True, LEARNY_ENVIRONMENT="production")
+    _register(client, "instrument-production@example.com")
+
+    assert client.get(INSTRUMENT_PATH).status_code == 404
+    assert INSTRUMENT_PATH not in client.get("/openapi.json").json()["paths"]
+
+
+def test_refusing_a_set_flag_in_production_is_logged(
+    build_client: ClientBuilder, caplog: pytest.LogCaptureFixture
+) -> None:
+    # A silent refusal is a misconfiguration nobody finds; the warning is what
+    # makes an operator's set-but-ignored flag visible.
+    logging.getLogger(INSTRUMENT_LOGGER).disabled = False
+    with caplog.at_level(logging.WARNING, logger=INSTRUMENT_LOGGER):
+        build_client(enabled=True, LEARNY_ENVIRONMENT="production")
+
+    refusals = [
+        record
+        for record in caplog.records
+        if record.name == INSTRUMENT_LOGGER and record.levelno == logging.WARNING
+    ]
+    assert refusals, "a refused instrument flag must be logged"
+    assert getattr(refusals[0], "environment", None) == "production"
+
+
+def test_a_non_production_process_with_the_flag_set_logs_no_refusal(
+    build_client: ClientBuilder, caplog: pytest.LogCaptureFixture
+) -> None:
+    logging.getLogger(INSTRUMENT_LOGGER).disabled = False
+    with caplog.at_level(logging.WARNING, logger=INSTRUMENT_LOGGER):
+        build_client(enabled=True)
+
+    assert [record for record in caplog.records if record.name == INSTRUMENT_LOGGER] == []
 
 
 # --- OBS-20: enabling it does not remove the need to authenticate -------------

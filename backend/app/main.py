@@ -7,9 +7,11 @@ boundary and is the single composition root for HTTP.
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import FastAPI
 
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.core.instrumentation import InstrumentRecorder, set_recorder
 from app.core.logging import configure_logging
 from app.infrastructure.web.auth import router as auth_router
@@ -27,6 +29,38 @@ from app.infrastructure.web.sources import router as sources_router
 from app.infrastructure.web.study import router as study_router
 from app.infrastructure.web.teaching import router as teaching_router
 from app.infrastructure.web.vault import router as vault_router
+
+#: ``LEARNY_ENVIRONMENT`` value that marks a process as production.
+PRODUCTION_ENVIRONMENT = "production"
+
+_logger = logging.getLogger("app.instrument")
+
+
+def instrument_surface_exposed(settings: Settings) -> bool:
+    """Whether this process may expose the instrument: flag set AND not production.
+
+    The flag alone used to decide it, which left production safe only because the
+    production compose omits the variable — while the same service also loads an
+    operator-authored env file and ``Settings`` reads ``.env``, so either can turn
+    it on with nothing failing. Refusal is therefore a property of the application
+    rather than of a YAML file: a process configured as production never exposes
+    process-wide SQL statement text and a full route inventory, whatever its
+    environment hands it. A flag that is set and refused is logged, so the
+    misconfiguration is visible instead of silent.
+
+    Collection is untouched: what is refused is *exposure*. Production diagnosis
+    remains the structured log, which carries both the durations and every slow
+    statement.
+    """
+    if not settings.dev_instrument_enabled:
+        return False
+    if settings.environment.strip().lower() == PRODUCTION_ENVIRONMENT:
+        _logger.warning(
+            "instrument.surface.refused",
+            extra={"environment": settings.environment},
+        )
+        return False
+    return True
 
 
 def create_app() -> FastAPI:
@@ -61,10 +95,11 @@ def create_app() -> FastAPI:
     app.include_router(cards_router)
     app.include_router(vault_router)
     app.include_router(study_router)
-    # Mounted only when deliberately enabled, so with the flag off the dev
-    # instrument path matches no route at all — 404, and absent from the OpenAPI
-    # schema. Authentication gates it independently once it is mounted.
-    if settings.dev_instrument_enabled:
+    # Mounted only when this process may expose the instrument, so with the flag
+    # off — or with it set on a production process — the dev instrument path
+    # matches no route at all: 404, and absent from the OpenAPI schema.
+    # Authentication gates it independently once it is mounted.
+    if instrument_surface_exposed(settings):
         app.include_router(instrument_router)
     return app
 

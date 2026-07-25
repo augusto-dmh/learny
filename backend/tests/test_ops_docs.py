@@ -259,6 +259,10 @@ def test_instrumentation_documents_why_production_does_not_expose_it(
     lowered = instrumentation.lower()
     assert "production" in lowered
     assert "statement text" in lowered
+    # The refusal is the application's, not the compose file's omission: the
+    # runbook must say which setting refuses it, since that is what an operator
+    # would otherwise have to discover from a 404.
+    assert "LEARNY_ENVIRONMENT=production" in instrumentation
 
 
 def test_monitoring_points_at_the_instrumentation_runbook(monitoring: str) -> None:

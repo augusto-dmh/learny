@@ -31,12 +31,16 @@ browser sends your session cookie:
 http://localhost:3000/api/dev/instrument
 ```
 
-Two independent gates guard it, and both must hold:
+Three independent gates guard it, and all must hold:
 
 - `LEARNY_DEV_INSTRUMENT_ENABLED` must be true. The route is *mounted* only when
   it is, so with the flag off the path matches nothing (**404**) and does not
   appear in `/openapi.json`. `docker-compose.override.yml` sets it for the local
   `api` service; nothing in the production overlay does.
+- The process must not be production. `LEARNY_ENVIRONMENT=production` refuses the
+  mount even with the flag set, and logs a `WARNING` on
+  `app.instrument` (`instrument.surface.refused`) so a set-but-ignored flag is
+  visible rather than silent. See "Why it is not exposed in production" below.
 - You must be signed in. An enabled surface with no valid session answers
   **401**. Turning the flag on does not remove the need to authenticate.
 
@@ -107,7 +111,7 @@ long strings.
 
 | Variable | Default | Effect |
 |---|---|---|
-| `LEARNY_DEV_INSTRUMENT_ENABLED` | `false` | Mounts `GET /api/dev/instrument`. Set only in the local override |
+| `LEARNY_DEV_INSTRUMENT_ENABLED` | `false` | Mounts `GET /api/dev/instrument`. Set only in the local override; refused on a `production` process |
 | `LEARNY_INSTRUMENT_CAPACITY` | `500` | Samples retained per buffer, per process. Oldest are discarded |
 | `LEARNY_SLOW_QUERY_MS` | `200` | A statement counts as slow at or **above** this. Zero or below captures every statement |
 | `LEARNY_SLOW_QUERY_STATEMENT_CHARS` | `2000` | Cap on captured statement text (recorder only) |
@@ -146,16 +150,22 @@ consequence, not a defect:
 
 ## Why it is not exposed in production
 
-The surface renders SQL statement text and an endpoint inventory. It is gated by
-a flag *and* a session, and the production overlay sets neither the flag nor
-anything that would — `test_compose_prod.py` asserts that no production service
-carries `LEARNY_DEV_INSTRUMENT_ENABLED`, so a regression fails CI rather than the
-deployment.
+The surface renders SQL statement text and an endpoint inventory to any
+authenticated account — there is no admin role to narrow it to. The production
+overlay sets neither the flag nor anything that would, and `test_compose_prod.py`
+asserts that no production service carries `LEARNY_DEV_INSTRUMENT_ENABLED`, so a
+regression there fails CI rather than the deployment.
 
-If you ever do need it against production, prefer reading the structured logs
-(above), which cross process boundaries and are already collected. Turning the
-flag on there would expose statement text to every authenticated user of that
-process, and would still only show one worker.
+That omission is not what makes production safe, because it is not the only way
+the flag can arrive: the production `api` service also loads an
+operator-authored `secrets/api.env`, and `Settings` reads `.env` from the working
+directory. So the refusal lives in the application instead. A process running
+with `LEARNY_ENVIRONMENT=production` does not mount the route at all, whatever
+set the flag, and logs the refusal at `WARNING` so the misconfiguration surfaces.
+
+Collection is unaffected by any of this — only exposure is refused. In
+production, the instrument is the structured log (above): it carries the same
+durations and every slow statement, and it crosses process boundaries.
 
 ## No identifier reaches the surface
 

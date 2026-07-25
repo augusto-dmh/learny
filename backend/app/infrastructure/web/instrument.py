@@ -8,10 +8,12 @@ recorder already holds.
 **Two independent gates, both required.**
 
 - ``LEARNY_DEV_INSTRUMENT_ENABLED`` decides whether the route exists at all. The
-  router is included by :func:`app.main.create_app` only when the flag is true, so
-  with the flag off the path matches nothing: 404, and no entry in the OpenAPI
-  schema either. A diagnostic route that is merely *guarded* is still a standing
-  surface; one that is never mounted is not (AD-172).
+  router is included by :func:`app.main.create_app` only when the flag is true
+  *and* the process is not configured as production, so with the flag off — or
+  with it set on a production process — the path matches nothing: 404, and no
+  entry in the OpenAPI schema either. A diagnostic route that is merely *guarded*
+  is still a standing surface; one that is never mounted is not (AD-172), and a
+  production process refuses to mount it whatever its environment says (AD-181).
 - ``get_authenticated_user`` decides whether a caller may read it. Defense in
   depth at negligible cost — the browser reaches this through the existing
   same-origin proxy carrying its session cookie, so it costs no convenience
