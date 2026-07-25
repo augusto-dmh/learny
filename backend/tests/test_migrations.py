@@ -68,9 +68,9 @@ def test_migration_metadata_compiles() -> None:
         "corpus_sections",
         "corpus_blocks",
         "corpus_chunks",
-        "teaching_sessions",
-        "teaching_turns",
-        "teaching_turn_citations",
+        "conversations",
+        "conversation_turns",
+        "conversation_turn_citations",
         "quiz_items",
         "quiz_item_scheduling",
         "review_log",
@@ -505,11 +505,17 @@ def test_migration_0005_downgrade_removes_retrieval_columns_indexes(monkeypatch)
 @pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
 def test_migration_0006_creates_teaching_tables(monkeypatch) -> None:
     """0006 creates the teaching aggregate with cascade FKs, a no-FK snapshot
-    chunk_id, the turn-index/citation-rank uniques, and FK indexes."""
+    chunk_id, the turn-index/citation-rank uniques, and FK indexes.
+
+    Asserted at revision 0006 rather than at head: 0017 renames this aggregate into
+    ``conversations`` (its own test owns the renamed shape), so the teaching-era names
+    below only exist on the way there.
+    """
     monkeypatch.setenv("LEARNY_DATABASE_URL", TEST_DB_URL)
     cfg = _alembic_config(TEST_DB_URL)
 
     command.upgrade(cfg, "head")
+    command.downgrade(cfg, "0006_teaching_schema")
     engine = create_engine(TEST_DB_URL)
     try:
         inspector = inspect(engine)
@@ -1974,6 +1980,307 @@ def test_migration_0016_adds_reading_volume_without_touching_the_corpus(monkeypa
                 {"uid": user_id},
             ).scalar_one()
         assert surviving == 2
+    finally:
+        engine.dispose()
+
+    # Drop everything to clear the committed seed rows; the module fixture restores head.
+    command.downgrade(cfg, "base")
+
+
+def _seed_teaching_session(engine, *, target_anchor: str, target_title: str):
+    """Seed a users→source→teaching_session→turn→citation chain at revision 0016.
+
+    Returns ``(user_id, source_id, session_id, turn_id, citation_chunk_id)``. The
+    citation's ``chunk_id`` names no existing chunk on purpose — it is a snapshot
+    reference with no foreign key (AD-033), and the insert succeeding is that fact.
+    """
+    user_id = uuid.uuid4()
+    source_id = uuid.uuid4()
+    session_id = uuid.uuid4()
+    turn_id = uuid.uuid4()
+    citation_chunk_id = uuid.uuid4()
+    with engine.begin() as conn:
+        conn.execute(
+            text("INSERT INTO users (id, email) VALUES (:id, :email)"),
+            {"id": user_id, "email": f"{user_id}@example.test"},
+        )
+        conn.execute(
+            text(
+                "INSERT INTO sources "
+                "(id, user_id, title, filename, content_type, byte_size, checksum, object_key) "
+                "VALUES (:id, :uid, 'Bk', 'f.epub', 'application/epub+zip', 1, 'c', :key)"
+            ),
+            {"id": source_id, "uid": user_id, "key": f"sources/{source_id}.epub"},
+        )
+        conn.execute(
+            text(
+                "INSERT INTO teaching_sessions "
+                "(id, source_id, target_anchor, target_section_path, target_title) "
+                "VALUES (:id, :sid, :anchor, :path, :title)"
+            ),
+            {
+                "id": session_id,
+                "sid": source_id,
+                "anchor": target_anchor,
+                "path": f'["{target_title}"]',
+                "title": target_title,
+            },
+        )
+        conn.execute(
+            text(
+                "INSERT INTO teaching_turns "
+                "(id, session_id, turn_index, message, answer_status, answer_text, model, "
+                " evidence_count) "
+                "VALUES (:id, :sess, 0, 'explain', 'answered', 'because', 'local-extractive', 1)"
+            ),
+            {"id": turn_id, "sess": session_id},
+        )
+        conn.execute(
+            text(
+                "INSERT INTO teaching_turn_citations "
+                "(id, turn_id, rank, chunk_id, section_path, anchor, snippet, score) "
+                "VALUES (:id, :turn, 0, :chunk, :path, :anchor, 'snip', 0.5)"
+            ),
+            {
+                "id": uuid.uuid4(),
+                "turn": turn_id,
+                "chunk": citation_chunk_id,
+                "path": f'["{target_title}"]',
+                "anchor": target_anchor,
+            },
+        )
+    return user_id, source_id, session_id, turn_id, citation_chunk_id
+
+
+@pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
+def test_migration_0017_generalizes_teaching_into_conversations(monkeypatch) -> None:
+    """0017 up: the teaching aggregate becomes ``conversations`` without losing data.
+
+    A session seeded at 0016 comes out the other side as a conversation scoped to
+    exactly the section it taught — ``scope_anchors`` a real JSON array holding the
+    target anchor (not the anchor as a quoted scalar), ``title`` its target title,
+    ``include_notes`` false — with its turn recorded as ``mode = 'teach'``. The
+    ``target_*`` snapshot loosens to nullable so a whole-book conversation can exist,
+    while the two structural promises survive the rename: the citation snapshot still
+    carries no foreign key into the corpus, and ``(conversation_id, turn_index)`` still
+    arbitrates the turn-order race. Because Postgres leaves a renamed table's indexes
+    and constraints under their old names, this also pins that every dependent
+    identifier was renamed to what the application's metadata declares — otherwise the
+    schema and the code would silently disagree on every constraint name. Down one step
+    to 0016 restores the teaching shape with the seeded row intact.
+    """
+    monkeypatch.setenv("LEARNY_DATABASE_URL", TEST_DB_URL)
+    cfg = _alembic_config(TEST_DB_URL)
+
+    # Land on 0016 (pre-rename) and seed the way a running deployment would have.
+    command.upgrade(cfg, "head")
+    command.downgrade(cfg, "0016_reading_volume")
+
+    engine = create_engine(TEST_DB_URL)
+    try:
+        _user_id, source_id, session_id, turn_id, citation_chunk_id = _seed_teaching_session(
+            engine, target_anchor="ch2.xhtml", target_title="Chapter Two"
+        )
+    finally:
+        engine.dispose()
+
+    command.upgrade(cfg, "head")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        inspector = inspect(engine)
+        tables = set(inspector.get_table_names())
+        assert {"conversations", "conversation_turns", "conversation_turn_citations"} <= tables
+        assert not ({"teaching_sessions", "teaching_turns", "teaching_turn_citations"} & tables)
+
+        # The added columns are NOT NULL; the target snapshot is now optional.
+        columns = {c["name"]: c for c in inspector.get_columns("conversations")}
+        assert columns["title"]["nullable"] is False
+        assert columns["scope_anchors"]["nullable"] is False
+        assert columns["include_notes"]["nullable"] is False
+        assert columns["target_anchor"]["nullable"] is True
+        assert columns["target_section_path"]["nullable"] is True
+        assert columns["target_title"]["nullable"] is True
+        turn_columns = {c["name"]: c for c in inspector.get_columns("conversation_turns")}
+        assert turn_columns["mode"]["nullable"] is False
+        assert "conversation_id" in turn_columns
+        assert "session_id" not in turn_columns
+
+        # Backfill: the seeded session is now a conversation scoped to its own target.
+        with engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT title, scope_anchors, include_notes, target_anchor, target_title, "
+                    "       jsonb_typeof(scope_anchors) AS scope_kind "
+                    "FROM conversations WHERE id = :id"
+                ),
+                {"id": session_id},
+            ).one()
+            turn_mode = conn.execute(
+                text("SELECT mode FROM conversation_turns WHERE id = :id"), {"id": turn_id}
+            ).scalar_one()
+        assert row.title == "Chapter Two"
+        # A JSON array of one anchor — not the anchor stored as a quoted string.
+        assert row.scope_kind == "array"
+        assert row.scope_anchors == ["ch2.xhtml"]
+        assert row.include_notes is False
+        assert (row.target_anchor, row.target_title) == ("ch2.xhtml", "Chapter Two")
+        assert turn_mode == "teach"
+
+        # I-CM-1: the citation snapshot still names no corpus row through a foreign
+        # key, so the seeded citation survives with a chunk_id that never existed.
+        citation_fk_columns = [
+            fk["constrained_columns"]
+            for fk in inspector.get_foreign_keys("conversation_turn_citations")
+        ]
+        assert ["chunk_id"] not in citation_fk_columns
+        with engine.connect() as conn:
+            surviving_chunk_id = conn.execute(
+                text("SELECT chunk_id FROM conversation_turn_citations WHERE turn_id = :id"),
+                {"id": turn_id},
+            ).scalar_one()
+        assert surviving_chunk_id == citation_chunk_id
+
+        # I-CM-2: the turn-order arbiter survived the rename — a second turn claiming
+        # the same index is rejected by the database, not by application luck.
+        turn_uniques = {
+            uc["name"]: uc["column_names"]
+            for uc in inspector.get_unique_constraints("conversation_turns")
+        }
+        assert turn_uniques["uq_conversation_turns_conversation_id"] == [
+            "conversation_id",
+            "turn_index",
+        ]
+        with pytest.raises(IntegrityError):
+            with engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "INSERT INTO conversation_turns "
+                        "(id, conversation_id, turn_index, message, mode, answer_status, "
+                        " answer_text, model, evidence_count) "
+                        "VALUES (:id, :conv, 0, 'again', 'answer', 'answered', 'x', 'm', 0)"
+                    ),
+                    {"id": uuid.uuid4(), "conv": session_id},
+                )
+
+        # Postgres keeps a renamed table's dependent identifiers under their old names,
+        # so every one of them is renamed explicitly to what the metadata declares.
+        session_fk = next(
+            fk
+            for fk in inspector.get_foreign_keys("conversations")
+            if fk["constrained_columns"] == ["source_id"]
+        )
+        assert session_fk["name"] == "fk_conversations_source_id_sources"
+        assert session_fk["referred_table"] == "sources"
+        assert session_fk["options"].get("ondelete") == "CASCADE"
+        turn_fk = next(
+            fk
+            for fk in inspector.get_foreign_keys("conversation_turns")
+            if fk["constrained_columns"] == ["conversation_id"]
+        )
+        assert turn_fk["name"] == "fk_conversation_turns_conversation_id_conversations"
+        assert turn_fk["referred_table"] == "conversations"
+        assert turn_fk["options"].get("ondelete") == "CASCADE"
+        citation_fk = next(
+            fk
+            for fk in inspector.get_foreign_keys("conversation_turn_citations")
+            if fk["constrained_columns"] == ["turn_id"]
+        )
+        assert citation_fk["name"] == "fk_conversation_turn_citations_turn_id_conversation_turns"
+        assert citation_fk["referred_table"] == "conversation_turns"
+        citation_uniques = {
+            uc["name"] for uc in inspector.get_unique_constraints("conversation_turn_citations")
+        }
+        assert "uq_conversation_turn_citations_turn_id" in citation_uniques
+        for table, expected_index in (
+            ("conversations", "ix_conversations_source_id"),
+            ("conversation_turns", "ix_conversation_turns_conversation_id"),
+            ("conversation_turn_citations", "ix_conversation_turn_citations_turn_id"),
+        ):
+            index_names = {ix["name"] for ix in inspector.get_indexes(table)}
+            assert expected_index in index_names
+            # Nothing was left behind under a teaching-era name.
+            assert not any("teaching" in name for name in index_names)
+        for table, expected_pk in (
+            ("conversations", "pk_conversations"),
+            ("conversation_turns", "pk_conversation_turns"),
+            ("conversation_turn_citations", "pk_conversation_turn_citations"),
+        ):
+            assert inspector.get_pk_constraint(table)["name"] == expected_pk
+
+        # CONV-02: the migrated database and the metadata the repositories read
+        # through agree, column for column, on all three tables.
+        from app.infrastructure.db.metadata import (
+            conversation_turn_citations,
+            conversation_turns,
+            conversations,
+        )
+
+        for table in (conversations, conversation_turns, conversation_turn_citations):
+            reflected = {c["name"]: c["nullable"] for c in inspector.get_columns(table.name)}
+            assert reflected == {c.name: c.nullable for c in table.columns}
+
+        # A whole-book conversation — the shape the rename exists to allow — is now
+        # storable: no target, empty scope.
+        whole_book_id = uuid.uuid4()
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO conversations "
+                    "(id, source_id, title, scope_anchors, include_notes) "
+                    "VALUES (:id, :sid, 'What is this book about?', '[]'::jsonb, true)"
+                ),
+                {"id": whole_book_id, "sid": source_id},
+            )
+        with engine.connect() as conn:
+            stored_scope = conn.execute(
+                text("SELECT scope_anchors FROM conversations WHERE id = :id"),
+                {"id": whole_book_id},
+            ).scalar_one()
+        assert stored_scope == []
+    finally:
+        engine.dispose()
+
+    # Down one step to 0016: the teaching shape returns and the seeded session with it.
+    command.downgrade(cfg, "0016_reading_volume")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        inspector = inspect(engine)
+        tables = set(inspector.get_table_names())
+        assert {"teaching_sessions", "teaching_turns", "teaching_turn_citations"} <= tables
+        assert not ({"conversations", "conversation_turns", "conversation_turn_citations"} & tables)
+
+        columns = {c["name"]: c for c in inspector.get_columns("teaching_sessions")}
+        assert columns["target_anchor"]["nullable"] is False
+        assert columns["target_section_path"]["nullable"] is False
+        assert columns["target_title"]["nullable"] is False
+        assert not ({"title", "scope_anchors", "include_notes"} & set(columns))
+        turn_columns = {c["name"] for c in inspector.get_columns("teaching_turns")}
+        assert "mode" not in turn_columns
+        assert "session_id" in turn_columns
+
+        turn_uniques = {
+            uc["name"]: uc["column_names"]
+            for uc in inspector.get_unique_constraints("teaching_turns")
+        }
+        assert turn_uniques["uq_teaching_turns_session_id"] == ["session_id", "turn_index"]
+
+        with engine.connect() as conn:
+            restored = conn.execute(
+                text("SELECT target_anchor, target_title FROM teaching_sessions WHERE id = :id"),
+                {"id": session_id},
+            ).one()
+            turn_message = conn.execute(
+                text("SELECT message FROM teaching_turns WHERE id = :id"), {"id": turn_id}
+            ).scalar_one()
+            # The whole-book conversation cannot be expressed by the 0016 shape, so the
+            # downgrade drops it rather than inventing a target for it.
+            targetless = conn.execute(
+                text("SELECT count(*) FROM teaching_sessions WHERE source_id = :sid"),
+                {"sid": source_id},
+            ).scalar_one()
+        assert (restored.target_anchor, restored.target_title) == ("ch2.xhtml", "Chapter Two")
+        assert turn_message == "explain"
+        assert targetless == 1
     finally:
         engine.dispose()
 

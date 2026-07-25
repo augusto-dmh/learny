@@ -81,6 +81,9 @@ from app.domain.entities import (
     User,
 )
 from app.infrastructure.db.metadata import (
+    conversation_turn_citations,
+    conversation_turns,
+    conversations,
     corpus_blocks,
     corpus_chunks,
     corpus_documents,
@@ -100,9 +103,6 @@ from app.infrastructure.db.metadata import (
     sources,
     study_days,
     tags,
-    teaching_sessions,
-    teaching_turn_citations,
-    teaching_turns,
     user_credentials,
     users,
 )
@@ -865,11 +865,11 @@ class SqlAlchemyEmbeddingIndexRepository:
 
 
 class SqlAlchemyTeachingSessionRepository:
-    """``TeachingSessionRepository`` backed by the ``teaching_sessions`` table.
+    """``TeachingSessionRepository`` backed by the ``conversations`` table.
 
     Source-keyed: authorization (ownership) is the application service's job
     (AD-014). ``list_for_source`` returns newest first with each session's turn
-    count (TEACH-21) via a correlated count over ``teaching_turns``.
+    count (TEACH-21) via a correlated count over ``conversation_turns``.
     """
 
     def __init__(self, connection: Connection) -> None:
@@ -877,9 +877,15 @@ class SqlAlchemyTeachingSessionRepository:
 
     def add(self, session: TeachingSession) -> TeachingSession:
         self._conn.execute(
-            insert(teaching_sessions).values(
+            insert(conversations).values(
                 id=session.id,
                 source_id=session.source_id,
+                # A teaching session is the scoped, notes-free conversation the old
+                # panel has always created (ADR-0029 backfill mapping); the unified
+                # services widen these three.
+                title=session.target_title,
+                scope_anchors=[session.target_anchor],
+                include_notes=False,
                 target_anchor=session.target_anchor,
                 target_section_path=list(session.target_section_path),
                 target_title=session.target_title,
@@ -891,22 +897,22 @@ class SqlAlchemyTeachingSessionRepository:
 
     def get_by_id(self, session_id: UUID) -> TeachingSession | None:
         row = self._conn.execute(
-            select(teaching_sessions).where(teaching_sessions.c.id == session_id)
+            select(conversations).where(conversations.c.id == session_id)
         ).one_or_none()
         return _to_teaching_session(row) if row is not None else None
 
     def list_for_source(self, source_id: UUID) -> list[TeachingSessionSummary]:
         turn_count = (
             select(func.count())
-            .select_from(teaching_turns)
-            .where(teaching_turns.c.session_id == teaching_sessions.c.id)
+            .select_from(conversation_turns)
+            .where(conversation_turns.c.conversation_id == conversations.c.id)
             .scalar_subquery()
             .label("turn_count")
         )
         rows = self._conn.execute(
-            select(teaching_sessions, turn_count)
-            .where(teaching_sessions.c.source_id == source_id)
-            .order_by(teaching_sessions.c.created_at.desc())
+            select(conversations, turn_count)
+            .where(conversations.c.source_id == source_id)
+            .order_by(conversations.c.created_at.desc())
         ).all()
         return [
             TeachingSessionSummary(session=_to_teaching_session(row), turn_count=row.turn_count)
@@ -915,10 +921,10 @@ class SqlAlchemyTeachingSessionRepository:
 
 
 class SqlAlchemyTeachingTurnRepository:
-    """``TeachingTurnRepository`` backed by ``teaching_turns`` + citations.
+    """``TeachingTurnRepository`` backed by ``conversation_turns`` + citations.
 
     ``add`` inserts the turn then its citation snapshot rows (rank = tuple
-    position), translating the ``(session_id, turn_index)`` unique violation to
+    position), translating the ``(conversation_id, turn_index)`` unique violation to
     :class:`~app.application.errors.TeachingTurnConflict` — the turn-index race
     loser (TEACH-17). Citations are denormalized snapshots with no chunk FK, so
     they survive a corpus replace (AD-033); ``chunk_id.page_span`` and the source
@@ -932,11 +938,14 @@ class SqlAlchemyTeachingTurnRepository:
     def add(self, turn: TeachingTurn) -> TeachingTurn:
         try:
             self._conn.execute(
-                insert(teaching_turns).values(
+                insert(conversation_turns).values(
                     id=turn.id,
-                    session_id=turn.session_id,
+                    conversation_id=turn.session_id,
                     turn_index=turn.turn_index,
                     message=turn.message,
+                    # Every turn this repository writes today came from the teaching
+                    # path; the unified turn service chooses the mode per turn.
+                    mode="teach",
                     answer_status=turn.answer_status,
                     answer_text=turn.answer_text,
                     model=turn.model,
@@ -945,7 +954,7 @@ class SqlAlchemyTeachingTurnRepository:
                 )
             )
         except IntegrityError as exc:
-            # The only unique on this insert is (session_id, turn_index): a racing
+            # The only unique on this insert is (conversation_id, turn_index): a racing
             # writer already claimed this index (TEACH-17).
             raise TeachingTurnConflict("another turn already claimed this turn index") from exc
 
@@ -963,36 +972,36 @@ class SqlAlchemyTeachingTurnRepository:
             for rank, citation in enumerate(turn.citations)
         ]
         if citation_rows:
-            self._conn.execute(insert(teaching_turn_citations), citation_rows)
+            self._conn.execute(insert(conversation_turn_citations), citation_rows)
         return turn
 
     def list_for_session(self, session_id: UUID) -> list[TeachingTurn]:
         # All turns share the session's source, so one lookup recovers the source
         # for every citation's Evidence (not stored per-citation).
         source_id = self._conn.execute(
-            select(teaching_sessions.c.source_id).where(teaching_sessions.c.id == session_id)
+            select(conversations.c.source_id).where(conversations.c.id == session_id)
         ).scalar_one_or_none()
         if source_id is None:
             return []
 
         rows = self._conn.execute(
             select(
-                teaching_turns,
-                teaching_turn_citations.c.rank,
-                teaching_turn_citations.c.chunk_id,
-                teaching_turn_citations.c.section_path,
-                teaching_turn_citations.c.anchor,
-                teaching_turn_citations.c.snippet,
-                teaching_turn_citations.c.score,
+                conversation_turns,
+                conversation_turn_citations.c.rank,
+                conversation_turn_citations.c.chunk_id,
+                conversation_turn_citations.c.section_path,
+                conversation_turn_citations.c.anchor,
+                conversation_turn_citations.c.snippet,
+                conversation_turn_citations.c.score,
             )
             .select_from(
-                teaching_turns.outerjoin(
-                    teaching_turn_citations,
-                    teaching_turns.c.id == teaching_turn_citations.c.turn_id,
+                conversation_turns.outerjoin(
+                    conversation_turn_citations,
+                    conversation_turns.c.id == conversation_turn_citations.c.turn_id,
                 )
             )
-            .where(teaching_turns.c.session_id == session_id)
-            .order_by(teaching_turns.c.turn_index, teaching_turn_citations.c.rank)
+            .where(conversation_turns.c.conversation_id == session_id)
+            .order_by(conversation_turns.c.turn_index, conversation_turn_citations.c.rank)
         ).all()
 
         # Group the flat join back into turns (turn_index asc) with their
@@ -1027,13 +1036,13 @@ class SqlAlchemyTeachingTurnRepository:
         # pairs, oldest first.
         total = self._conn.execute(
             select(func.count())
-            .select_from(teaching_turns)
-            .where(teaching_turns.c.session_id == session_id)
+            .select_from(conversation_turns)
+            .where(conversation_turns.c.conversation_id == session_id)
         ).scalar_one()
         rows = self._conn.execute(
-            select(teaching_turns.c.message, teaching_turns.c.answer_text)
-            .where(teaching_turns.c.session_id == session_id)
-            .order_by(teaching_turns.c.turn_index.desc())
+            select(conversation_turns.c.message, conversation_turns.c.answer_text)
+            .where(conversation_turns.c.conversation_id == session_id)
+            .order_by(conversation_turns.c.turn_index.desc())
             .limit(limit)
         ).all()
         history = [
@@ -2219,7 +2228,7 @@ def _to_teaching_session(row) -> TeachingSession:  # noqa: ANN001
 def _to_teaching_turn(row, citations: tuple[Evidence, ...]) -> TeachingTurn:  # noqa: ANN001
     return TeachingTurn(
         id=row.id,
-        session_id=row.session_id,
+        session_id=row.conversation_id,
         turn_index=row.turn_index,
         message=row.message,
         answer_status=row.answer_status,

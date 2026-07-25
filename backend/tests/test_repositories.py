@@ -34,12 +34,12 @@ from app.domain.entities import (
     User,
 )
 from app.infrastructure.db.metadata import (
+    conversation_turns,
     corpus_blocks,
     corpus_chunks,
     corpus_documents,
     corpus_sections,
     sources,
-    teaching_turns,
 )
 from app.infrastructure.db.repositories import (
     SqlAlchemyCorpusRepository,
@@ -1394,11 +1394,12 @@ def _insert_turn(db_conn: Connection, session_id: UUID, turn_index: int) -> None
     """Insert a minimal turn row so a session's turn_count is non-zero (B2 owns
     the turn repository; this exercises only the count in ``list_for_source``)."""
     db_conn.execute(
-        insert(teaching_turns).values(
+        insert(conversation_turns).values(
             id=uuid4(),
-            session_id=session_id,
+            conversation_id=session_id,
             turn_index=turn_index,
             message="m",
+            mode="teach",
             answer_status="answered",
             answer_text="a",
             model="local-extractive",
