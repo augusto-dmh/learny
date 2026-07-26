@@ -234,16 +234,36 @@ class StartConversation:
         structure = self._corpus.get_structure(source_id)
         sections = structure.sections if structure is not None else ()
         by_anchor = {section.anchor: section for section in sections}
-        head: StructureSection | None = None
-        for anchor in scope:
-            section = resolve_section(
-                anchor, by_anchor=by_anchor, corpus=self._corpus, source_id=source_id
-            )
-            if section is None:
-                raise InvalidConversationScope("Scope does not exist in this source.")
-            if head is None:
-                head = section
+        # Only the head needs to be resolved to a section (it becomes the target
+        # snapshot); the rest only need to exist, which is a batched question.
+        head = resolve_section(
+            scope[0], by_anchor=by_anchor, corpus=self._corpus, source_id=source_id
+        )
+        if head is None:
+            raise InvalidConversationScope("Scope does not exist in this source.")
+        self._reject_unresolvable(source_id, scope[1:], by_anchor)
         return head
+
+    def _reject_unresolvable(
+        self, source_id: UUID, anchors: tuple[str, ...], by_anchor: dict[str, StructureSection]
+    ) -> None:
+        """Fail the start unless every anchor addresses a live section (CONV-05).
+
+        Asked in batch rather than once per anchor. One expansion over the anchors
+        the canonical map missed reaches exactly the sections those anchors can
+        address — a live section comes back precisely when it carries one of them as
+        an alias — and a second expansion over those sections yields every alias they
+        answer to. An anchor resolves if and only if it appears there, so the verdict
+        is the same one :func:`resolve_section` gives per anchor, at two queries for
+        the whole scope instead of one per anchor.
+        """
+        misses = [anchor for anchor in anchors if anchor not in by_anchor]
+        if not misses:
+            return
+        reached = [c for c in self._corpus.expand_anchors(source_id, misses) if c in by_anchor]
+        aliases = set(self._corpus.expand_anchors(source_id, reached)) if reached else set()
+        if not set(misses) <= aliases:
+            raise InvalidConversationScope("Scope does not exist in this source.")
 
     @staticmethod
     def _default_title(head: StructureSection | None, source: Source) -> str:
@@ -575,9 +595,16 @@ class PostConversationTurn:
             # A stale-ready race resolves here on the next turn.
             raise SourceNotReady("Source is not ready for conversations.")
 
-        structure = self._corpus.get_structure(conversation.source_id)
-        sections = structure.sections if structure is not None else ()
-        by_anchor = {section.anchor: section for section in sections}
+        # The corpus map is only read by the two callees that can use it: a teach
+        # turn resolves its target through it, and a scoped turn expands its scope
+        # through it. A whole-book answer turn — every legacy ask — would discard the
+        # whole table of contents, so it never loads it.
+        sections: Sequence[StructureSection] = ()
+        by_anchor: dict[str, StructureSection] = {}
+        if mode == MODE_TEACH or conversation.scope_anchors:
+            structure = self._corpus.get_structure(conversation.source_id)
+            sections = structure.sections if structure is not None else ()
+            by_anchor = {section.anchor: section for section in sections}
 
         # The teach invariant is checked before retrieval so a turn that cannot be
         # taught costs nothing and persists nothing (I-CM-7).
@@ -645,29 +672,48 @@ class PostConversationTurn:
         away is still reachable (AD-085). An anchor that resolves to nothing is kept
         as itself: it matches no chunk, which is the honest outcome, where dropping it
         could empty the set and silently widen the search (I-CM-3).
+
+        The anchors the canonical map misses are expanded **in one call** rather than
+        one per anchor: the sections that expansion reaches are exactly the sections
+        those anchors address, so their subtrees are the same set a per-anchor walk
+        would collect. Each miss is also kept as itself, which costs nothing — an
+        anchor an alias resolved is one the closing expansion would have added back
+        anyway — and keeps a miss that resolved to nothing in the set.
         """
         if not conversation.scope_anchors:
             return None
         base: list[str] = []
         seen: set[str] = set()
+
+        def add(anchor: str) -> None:
+            if anchor not in seen:
+                seen.add(anchor)
+                base.append(anchor)
+
+        def add_subtree(section: StructureSection) -> None:
+            depth = len(section.section_path)
+            for s in sections:
+                if s.section_path[:depth] == section.section_path:
+                    add(s.anchor)
+
+        misses = [a for a in conversation.scope_anchors if a not in by_anchor]
+        aliased = (
+            [
+                c
+                for c in self._corpus.expand_anchors(conversation.source_id, misses)
+                if c in by_anchor
+            ]
+            if misses
+            else []
+        )
         for anchor in conversation.scope_anchors:
-            section = resolve_section(
-                anchor,
-                by_anchor=by_anchor,
-                corpus=self._corpus,
-                source_id=conversation.source_id,
-            )
+            section = by_anchor.get(anchor)
             if section is None:
-                candidates: list[str] = [anchor]
+                add(anchor)
             else:
-                depth = len(section.section_path)
-                candidates = [
-                    s.anchor for s in sections if s.section_path[:depth] == section.section_path
-                ]
-            for candidate in candidates:
-                if candidate not in seen:
-                    seen.add(candidate)
-                    base.append(candidate)
+                add_subtree(section)
+        for canonical in aliased:
+            add_subtree(by_anchor[canonical])
         return self._corpus.expand_anchors(conversation.source_id, base)
 
     def _port(self, mode: str) -> AnswerGenerationPort | TeachingGenerationPort:

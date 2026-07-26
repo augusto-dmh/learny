@@ -665,6 +665,61 @@ def test_start_collapses_repeated_scope_anchors_in_the_order_given() -> None:
     assert started.target_anchor == "ch2.xhtml"
 
 
+def test_start_validates_aliased_scope_anchors_in_batch() -> None:
+    # CONV-05 AC1/AC2: a scope of anchors a re-ingest turned into aliases still
+    # resolves, and the check does not grow a query per anchor — the head is
+    # resolved and the rest are validated together.
+    user, source, sources = _owned_world()
+    corpus = FakeCorpus(
+        _structure(
+            _section("ch1.xhtml", ("Chapter 1",), title="Chapter 1"),
+            _section("ch2.xhtml", ("Chapter 2",), title="Chapter 2"),
+            _section("ch3.xhtml", ("Chapter 3",), title="Chapter 3"),
+        ),
+        alias_expansions={
+            "old1.xhtml": ("ch1.xhtml",),
+            "old2.xhtml": ("ch2.xhtml",),
+            "old3.xhtml": ("ch3.xhtml",),
+            "ch2.xhtml": ("old2.xhtml",),
+            "ch3.xhtml": ("old3.xhtml",),
+        },
+    )
+    conversations = FakeConversationRepository(sources)
+
+    started = _start(sources=sources, corpus=corpus, conversations=conversations)(
+        user=user,
+        source_id=source.id,
+        scope_anchors=["old1.xhtml", "old2.xhtml", "old3.xhtml"],
+        include_notes=False,
+    )
+
+    assert started.target_anchor == "ch1.xhtml"
+    # One expansion resolves the head, two validate the remaining anchors.
+    assert len(corpus.expand_anchors_calls) == 3
+
+
+def test_start_rejects_a_scope_whose_later_anchor_resolves_to_nothing() -> None:
+    # CONV-05 AC2: the batched check is the per-anchor verdict — an anchor past the
+    # head that addresses nothing still fails the whole start, even when its
+    # neighbours resolve.
+    user, source, sources = _owned_world()
+    corpus = FakeCorpus(
+        _structure(_section("ch1.xhtml", ("Chapter 1",))),
+        alias_expansions={"old1.xhtml": ("ch1.xhtml",), "ch1.xhtml": ("old1.xhtml",)},
+    )
+    conversations = FakeConversationRepository(sources)
+
+    with pytest.raises(InvalidConversationScope):
+        _start(sources=sources, corpus=corpus, conversations=conversations)(
+            user=user,
+            source_id=source.id,
+            scope_anchors=["ch1.xhtml", "old1.xhtml", "ghost.xhtml"],
+            include_notes=False,
+        )
+
+    assert conversations.list_for_user(user.id) == []
+
+
 def test_start_rejects_an_unresolvable_scope_anchor_and_creates_nothing() -> None:
     # CONV-05 AC2: any anchor that resolves to no section fails the whole start with
     # the 422-mapped error — a conversation must never silently drop part of its scope.
@@ -1103,6 +1158,10 @@ def test_whole_book_turn_is_the_only_one_that_searches_the_whole_source() -> Non
 
     assert retrieve.calls[0]["anchors"] is None
     assert corpus.expand_anchors_calls == []
+    # CONV-11: neither the scope expansion nor the teach target can use the table of
+    # contents on a whole-book answer turn, so it is never loaded — every legacy ask
+    # takes this path.
+    assert corpus.get_structure_calls == 0
 
 
 def test_scope_is_expanded_again_on_every_turn() -> None:
@@ -1150,6 +1209,56 @@ def test_multi_anchor_scope_unions_every_subtree_in_the_given_order() -> None:
 
     # Given order, subtrees expanded, the repeated anchor deduped.
     assert retrieve.calls[0]["anchors"] == ["ch2.xhtml", "ch1.xhtml", "ch1.xhtml#core"]
+
+
+def test_an_aliased_scope_costs_one_expansion_per_turn_not_one_per_anchor() -> None:
+    # CONV-10: after a re-ingest merged sections away, every stored anchor is an
+    # alias — the case the fallback exists for is also its worst case. The misses are
+    # expanded together, so a turn's expansion count does not grow with the scope.
+    user, source, sources = _owned_world()
+    corpus = FakeCorpus(
+        _structure(
+            _section("ch1.xhtml", ("Chapter 1",)),
+            _section("ch2.xhtml", ("Chapter 2",)),
+            _section("ch3.xhtml", ("Chapter 3",)),
+        ),
+        alias_expansions={
+            "old1.xhtml": ("ch1.xhtml",),
+            "old2.xhtml": ("ch2.xhtml",),
+            "old3.xhtml": ("ch3.xhtml",),
+        },
+    )
+    conversations = FakeConversationRepository(sources)
+    conversation = conversations.add(
+        _conversation(
+            source.id,
+            scope_anchors=("old1.xhtml", "old2.xhtml", "old3.xhtml"),
+            target_anchor="old1.xhtml",
+        )
+    )
+    retrieve = FakeScopedRetrieveEvidence([])
+
+    _post(
+        conversations=conversations,
+        turns=FakeConversationTurnRepository(),
+        sources=sources,
+        corpus=corpus,
+        retrieve=retrieve,
+    )(user=user, conversation_id=conversation.id, message="q", mode=MODE_ANSWER)
+
+    # One expansion for all three misses, then the closing expansion of the result.
+    assert len(corpus.expand_anchors_calls) == 2
+    assert corpus.expand_anchors_calls[0] == ["old1.xhtml", "old2.xhtml", "old3.xhtml"]
+    # Every aliased anchor's live section is in scope, and the sibling that no scope
+    # anchor addresses is not.
+    assert set(retrieve.calls[0]["anchors"]) == {
+        "old1.xhtml",
+        "old2.xhtml",
+        "old3.xhtml",
+        "ch1.xhtml",
+        "ch2.xhtml",
+        "ch3.xhtml",
+    }
 
 
 def test_a_scoped_turn_never_widens_when_its_section_disappeared() -> None:
