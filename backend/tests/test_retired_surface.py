@@ -9,6 +9,11 @@ Deleting a wire is only half the claim: a router that is still constructed but n
 longer included would leave the modules in the tree and the endpoints one line from
 returning. So both halves are asserted — the paths answer 404 for a caller who owns
 everything they name, and the modules are not importable at all.
+
+The settings those surfaces were tuned by retire with them, and there the required
+behaviour is the opposite: an environment that still carries them must boot, so that
+a machine restarted after this change comes back up rather than failing on a
+variable that no longer means anything.
 """
 
 from __future__ import annotations
@@ -17,6 +22,7 @@ import importlib.util
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import Connection
 
@@ -65,6 +71,27 @@ def test_the_app_declares_no_route_on_a_retired_path() -> None:
     assert templates, "the route inventory must not be empty, or this proves nothing"
     assert not [path for path in templates if "teaching-sessions" in path]
     assert not [path for path in templates if path.endswith(("/questions", "/questions/stream"))]
+
+
+def test_the_app_boots_with_every_retired_variable_still_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Retiring a knob must never take a deployment down on the next restart: a
+    # machine whose environment file still carries all three comes up and serves.
+    from app.core.config import get_settings
+    from app.main import create_app
+
+    for name in ("LEARNY_QA_EVIDENCE_TOP_K", "LEARNY_TEACHING_EVIDENCE_TOP_K"):
+        monkeypatch.setenv(name, "12")
+    monkeypatch.setenv("LEARNY_TEACHING_HISTORY_TURNS", "12")
+    get_settings.cache_clear()
+    try:
+        with TestClient(create_app()) as client:
+            resp = client.get("/healthz")
+    finally:
+        get_settings.cache_clear()
+
+    assert resp.status_code == 200, resp.text
 
 
 @requires_db

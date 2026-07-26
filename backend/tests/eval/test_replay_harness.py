@@ -217,7 +217,7 @@ def test_record_generation_rewrites_snapshots(
     written = record_snapshots(
         load_cases(),
         evidence_for=lambda case: retrieve(
-            db_conn, source.id, case.question, top_k=settings.qa_evidence_top_k
+            db_conn, source.id, case.question, top_k=settings.conversation_evidence_top_k
         ),
         generate=lambda question, evidence: adapter.generate(
             message=question, mode=MODE_ANSWER, evidence=evidence

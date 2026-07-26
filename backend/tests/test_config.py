@@ -297,26 +297,33 @@ def test_env_example_documents_the_conversation_contract() -> None:
         assert f"\n{name}=" in contract, f"{name} is missing from .env.example"
 
 
-def test_deprecated_qa_and_teaching_knobs_still_validate(monkeypatch) -> None:
-    # The legacy endpoints outlive their knobs by one cycle: the fields stay declared
-    # until those endpoints retire, so the names stay documented and a deployment
-    # that still sets one can be noticed (see the warning test below).
+def test_retired_knobs_are_no_longer_fields(monkeypatch) -> None:
+    # The three per-surface budgets the unified conversation settings replaced are
+    # gone, not merely unread — a declared field is a value someone can still reach
+    # for and believe in.
+    for name in ("qa_evidence_top_k", "teaching_evidence_top_k", "teaching_history_turns"):
+        assert name not in Settings.model_fields, name
+
+
+def test_a_deployment_still_setting_a_retired_variable_boots(monkeypatch) -> None:
+    # Retiring a knob must not take a running deployment down: the variable is
+    # simply ignored, and every live setting resolves as it would have anyway.
     monkeypatch.setenv("LEARNY_QA_EVIDENCE_TOP_K", "3")
     monkeypatch.setenv("LEARNY_TEACHING_EVIDENCE_TOP_K", "4")
     monkeypatch.setenv("LEARNY_TEACHING_HISTORY_TURNS", "1")
 
     settings = Settings(_env_file=None)
 
-    assert settings.qa_evidence_top_k == 3
-    assert settings.teaching_evidence_top_k == 4
-    assert settings.teaching_history_turns == 1
+    assert settings.conversation_evidence_top_k == 8
+    assert settings.conversation_history_turns == 6
 
 
 def test_setting_a_retired_knob_warns_once_naming_the_value_in_force(monkeypatch, caplog) -> None:
     # The dangerous failure here is silence: a deployment that tuned one of these
     # still validates, still boots, and quietly serves the new default instead. One
     # warning per variable actually set, naming it and the value now in force, is
-    # what reaches the person running the deploy.
+    # what reaches the person running the deploy. The variables are read from the
+    # environment, so removing the fields did not remove the diagnostic with them.
     monkeypatch.setenv("LEARNY_TEACHING_HISTORY_TURNS", "12")
     monkeypatch.setenv("LEARNY_QA_EVIDENCE_TOP_K", "12")
 

@@ -94,7 +94,7 @@ def test_silver_tier_runs_over_the_local_corpus() -> None:
                                 conn,
                                 UUID(r.source_id),
                                 r.case.question,
-                                top_k=settings.qa_evidence_top_k,
+                                top_k=settings.conversation_evidence_top_k,
                             ),
                             generate=lambda q, ev: adapter.generate(
                                 message=q, mode=MODE_ANSWER, evidence=ev
