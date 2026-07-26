@@ -164,12 +164,19 @@ per-surface implicit default.
 | legacy application adapters + legacy wording contextmanagers | `app/application/teaching.py`, `app/application/qa.py` |
 | `ConversationRepository.list_for_source_with_target` | port `ports.py:636`, impl `repositories.py:923` |
 | `qa_evidence_top_k`, `teaching_evidence_top_k`, `teaching_history_turns` | `app/core/config.py:178,187,188` |
+| `qa_question_max_chars`, `teaching_message_max_chars` | `app/core/config.py` — see below |
 
-`teaching_message_max_chars` is **actively read** and is not part of this deletion.
+The two `*_max_chars` knobs were planned to survive: they were read by the legacy
+request models, so the plan reserved them as "actively read, not part of this
+deletion". Re-pointing the panels onto `/api/conversations` left nothing reading
+either one — the unified surface bounds a turn with `conversation_message_max_chars`
+— so a reserved knob would have been a live-looking field no code consults. Both are
+therefore deleted alongside the other three, and both are covered by the retired-knob
+warning below. Five knobs are retired in total, not three.
 
 ### The retired-knob warning survives, re-based on environment names
 
-Settings are `extra="ignore"` (`config.py:45`), so deleting the three fields already
+Settings are `extra="ignore"` (`config.py:45`), so deleting the fields already
 satisfies WSC-08 AC-4 — a deployment that still sets `LEARNY_TEACHING_HISTORY_TURNS`
 boots fine. But `_warn_about_retired_knobs` (L293) iterates `model_fields_set`, so with
 the fields gone it would silently stop firing, and the operator's dead tuning becomes
