@@ -412,6 +412,53 @@ describe("TeachPanel on the conversation surface (RA-10)", () => {
   });
 });
 
+describe("TeachPanel scope misses", () => {
+  it("says the answer may be elsewhere in the book when the scope comes up empty", async () => {
+    const stream = sseStream();
+    vi.stubGlobal("fetch", routedFetch(baseHandlers(() => stream.response)));
+
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
+    await startSession();
+    sendMessage("something from another chapter");
+
+    await stream.push({ type: "start", messageId: "m1" });
+    await stream.push({ type: "text-start", id: "t1" });
+    await stream.push({ type: "text-end", id: "t1" });
+    await stream.push({ type: "data-citations", data: [] });
+    await stream.push({
+      type: "data-answer-status",
+      data: { status: "not_found_in_scope" },
+    });
+    await stream.push({ type: "finish" });
+    await stream.done();
+
+    // The reader is told the scope came up short, not that the book did.
+    const notFound = await screen.findByTestId("not-found");
+    expect(notFound.textContent).toMatch(/elsewhere in the book/i);
+    expect(notFound.textContent).not.toMatch(/^That was not found in this book\./);
+    expect(screen.queryByRole("button", { name: /^Citation:/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Save to note" })).toBeNull();
+  });
+
+  it("restores a stored scope miss with the same scope-specific wording", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/sources/s1/structure": () => jsonResponse(200, structure),
+        [`GET ${READ_URL}`]: () => jsonResponse(200, restoredDetail),
+      }),
+    );
+    writeActiveConversation("s1", "teach", "conv2");
+
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
+    await screen.findByText("It is about early computing.");
+
+    expect(screen.getByTestId("not-found").textContent).toMatch(
+      /elsewhere in the book/i,
+    );
+  });
+});
+
 describe("TeachPanel thread restore (RA-10)", () => {
   it("restores the pointed-at conversation with its full cited history", async () => {
     const fetchMock = routedFetch({
