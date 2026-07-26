@@ -14,6 +14,7 @@ the retrieval double must record the ``anchors`` scope every turn is called with
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator, Sequence
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
@@ -42,10 +43,11 @@ from app.application.errors import (
     SourceNotReady,
 )
 from app.application.identity import AuthorizeOwnership
-from app.application.streaming import StreamTurn
+from app.application.streaming import StreamDelta, StreamTurn, TurnStreamEvent
 from app.domain.entities import (
     MODE_ANSWER,
     MODE_TEACH,
+    SENTINEL,
     AnswerCompleted,
     AnswerStreamEvent,
     AnswerTextDelta,
@@ -1394,6 +1396,73 @@ def test_scoped_turn_that_fails_grounding_is_not_found_in_scope() -> None:
     assert (turn.answer_text, turn.citations, turn.evidence_count) == ("", (), 1)
 
 
+def test_a_turn_cites_only_the_evidence_the_generator_referenced() -> None:
+    # AD-027: grounding keeps the cited *subset* and nothing else. Retrieval put three
+    # passages in front of the generator and it referenced two of them, so the turn
+    # attributes those two — a turn that cited the passage the generator never used
+    # would credit the book for something it did not say.
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    top = _evidence(source.id, "top", anchor="ch1.xhtml", score=0.9)
+    unused = _evidence(source.id, "unused", anchor="ch1.xhtml#core", score=0.6)
+    last = _evidence(source.id, "last", anchor="ch1.xhtml#core", score=0.2)
+    generation = FakeGeneration(
+        answer=GeneratedAnswer(
+            text="grounded",
+            # Out of rank order, and with one id that was never retrieved at all.
+            cited_chunk_ids=(last.chunk_id, uuid4(), top.chunk_id),
+            model=_MODEL,
+            found=True,
+        )
+    )
+
+    turn = _post(
+        conversations=conversations,
+        turns=FakeConversationTurnRepository(),
+        sources=sources,
+        corpus=corpus,
+        retrieve=FakeScopedRetrieveEvidence([top, unused, last]),
+        generation=generation,
+    )(user=user, conversation_id=conversation.id, message="q", mode=MODE_ANSWER)
+
+    assert turn.answer_status == "answered"
+    # Exactly the cited subset, back in evidence-rank order; the retrieved-but-uncited
+    # passage and the unretrieved id are both absent.
+    assert turn.citations == (top, last)
+    # The count still reports everything retrieval offered, cited or not.
+    assert turn.evidence_count == 3
+
+
+@pytest.mark.parametrize("text", ["", "   \n\t"])
+def test_a_turn_whose_answer_text_is_blank_is_not_found_despite_its_citations(text: str) -> None:
+    # AD-027: a reply with citations but nothing to read is not an answer. Without the
+    # blank-text guard the turn persists as answered with empty text and citations
+    # attached, which a reader sees as a blank answer over real passages.
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
+    turns = FakeConversationTurnRepository()
+    generation = FakeGeneration(
+        answer=GeneratedAnswer(
+            text=text,
+            cited_chunk_ids=(evidence[0].chunk_id,),
+            model=_MODEL,
+            found=True,
+        )
+    )
+
+    turn = _post(
+        conversations=conversations,
+        turns=turns,
+        sources=sources,
+        corpus=corpus,
+        retrieve=FakeScopedRetrieveEvidence(evidence),
+        generation=generation,
+    )(user=user, conversation_id=conversation.id, message="q", mode=MODE_ANSWER)
+
+    assert turn.answer_status == "not_found_in_scope"
+    assert (turn.answer_text, turn.citations) == ("", ())
+    assert turns.list_for_conversation(conversation.id) == [turn]
+
+
 # --- Turn path: mode dispatch (CONV-10 AC2, CONV-14) ----------------------------
 
 
@@ -1790,6 +1859,108 @@ def test_generation_failure_persists_nothing() -> None:
     assert conversations.touch_calls == []
 
 
+# --- Turn path: the completion log (CONV-13) ------------------------------------
+
+_LOGGER = "app.application.conversations"
+_PRIVATE_MESSAGE = "why does the narrator resent his brother?"
+_PRIVATE_ANSWER = "because the will left the orchard to the younger son"
+
+
+def _completion_records(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [r.getMessage() for r in caplog.records if r.name == _LOGGER]
+
+
+def test_an_answered_turn_logs_once_carrying_ids_and_counts_only(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # A completed turn leaves exactly one operational record — outcome, ids, counts,
+    # model — and never the reader's question or the book's prose. Logs are read,
+    # shipped, and retained far from the reader who wrote the question.
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
+    generation = FakeGeneration(answer=_answered(*evidence, text=_PRIVATE_ANSWER))
+
+    with caplog.at_level(logging.INFO, logger=_LOGGER):
+        _post(
+            conversations=conversations,
+            turns=FakeConversationTurnRepository(),
+            sources=sources,
+            corpus=corpus,
+            retrieve=FakeScopedRetrieveEvidence(evidence),
+            generation=generation,
+        )(user=user, conversation_id=conversation.id, message=_PRIVATE_MESSAGE, mode=MODE_ANSWER)
+
+    records = _completion_records(caplog)
+    assert len(records) == 1
+    line = records[0]
+    assert "outcome=answered" in line
+    assert f"conversation_id={conversation.id}" in line
+    assert f"source_id={source.id}" in line
+    assert f"mode={MODE_ANSWER}" in line
+    assert "evidence_count=1" in line
+    assert f"model={_MODEL}" in line
+    assert _PRIVATE_MESSAGE not in line
+    assert _PRIVATE_ANSWER not in line
+
+
+def test_a_not_found_turn_logs_once_and_still_carries_no_content(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # The outcome differs; the privacy property does not. A turn that found nothing
+    # still logs once and still keeps the reader's question out of the record.
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+
+    with caplog.at_level(logging.INFO, logger=_LOGGER):
+        _post(
+            conversations=conversations,
+            turns=FakeConversationTurnRepository(),
+            sources=sources,
+            corpus=corpus,
+            retrieve=FakeScopedRetrieveEvidence([]),
+        )(user=user, conversation_id=conversation.id, message=_PRIVATE_MESSAGE, mode=MODE_ANSWER)
+
+    records = _completion_records(caplog)
+    assert len(records) == 1
+    line = records[0]
+    assert "outcome=not_found_in_scope" in line
+    assert f"conversation_id={conversation.id}" in line
+    assert "evidence_count=0" in line
+    assert _PRIVATE_MESSAGE not in line
+
+
+def test_a_streamed_turn_logs_the_same_single_content_free_line(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # The streaming path persists through the same writer, so it owes the same one
+    # record — and the deltas it already sent the reader must not reappear in it.
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
+    generation = FakeGeneration(answer=_answered(*evidence, text=_PRIVATE_ANSWER))
+
+    with caplog.at_level(logging.INFO, logger=_LOGGER):
+        list(
+            _post(
+                conversations=conversations,
+                turns=FakeConversationTurnRepository(),
+                sources=sources,
+                corpus=corpus,
+                retrieve=FakeScopedRetrieveEvidence(evidence),
+                generation=generation,
+            ).stream(
+                user=user,
+                conversation_id=conversation.id,
+                message=_PRIVATE_MESSAGE,
+                mode=MODE_ANSWER,
+            )
+        )
+
+    records = _completion_records(caplog)
+    assert len(records) == 1
+    assert "outcome=answered" in records[0]
+    assert _PRIVATE_MESSAGE not in records[0]
+    assert _PRIVATE_ANSWER not in records[0]
+
+
 # --- Turn path: streaming (CONV-10 AC6, I-CM-5) ---------------------------------
 
 
@@ -1906,6 +2077,134 @@ def test_stream_without_evidence_persists_the_scoped_not_found_turn() -> None:
     assert events[-1].turn.answer_status == "not_found_in_scope"
     assert generation.stream_calls == []
     assert turns.list_for_conversation(conversation.id) == [events[-1].turn]
+
+
+# --- Turn path: the streaming sentinel hold-back (design §6) --------------------
+#
+# The provider signals "I cannot ground this" by emitting the sentinel as its whole
+# reply. Deltas arrive before that verdict is known, so the hold-back buffers any run
+# that is still a prefix of the sentinel and only releases it once the reply proves to
+# be something else. The three cases below are the three ways that resolves.
+
+
+def _deltas(events: list[TurnStreamEvent]) -> list[str]:
+    return [e.text for e in events if isinstance(e, StreamDelta)]
+
+
+def test_stream_never_shows_a_reader_the_whole_reply_sentinel() -> None:
+    # The sentinel arrives split across deltas and none of it reaches the reader; the
+    # turn lands as the not-found verdict rather than as an answer reading
+    # "NOT_FOUND_IN_SOURCE".
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
+    generation = FakeGeneration(
+        answer=GeneratedAnswer(text="", cited_chunk_ids=(), model=_MODEL, found=False),
+        deltas=[SENTINEL[:9], SENTINEL[9:]],
+    )
+
+    events = list(
+        _post(
+            conversations=conversations,
+            turns=FakeConversationTurnRepository(),
+            sources=sources,
+            corpus=corpus,
+            retrieve=FakeScopedRetrieveEvidence(evidence),
+            generation=generation,
+        ).stream(user=user, conversation_id=conversation.id, message="q", mode=MODE_ANSWER)
+    )
+
+    assert _deltas(events) == []
+    assert events[-1].turn.answer_status == "not_found_in_scope"
+    assert events[-1].turn.answer_text == ""
+
+
+def test_stream_flushes_a_divergent_sentinel_prefix_as_one_delta() -> None:
+    # A reply that opens like the sentinel and then turns out to be prose: the buffered
+    # run is released as a *single* delta — not re-split into the chunks the provider
+    # happened to send — and everything after it passes straight through.
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
+    text = SENTINEL[:9] + " markers appear until"
+    generation = FakeGeneration(
+        answer=_answered(*evidence, text=text + " the third chapter"),
+        deltas=[SENTINEL[:9], " markers appear until", " the third chapter"],
+    )
+
+    events = list(
+        _post(
+            conversations=conversations,
+            turns=FakeConversationTurnRepository(),
+            sources=sources,
+            corpus=corpus,
+            retrieve=FakeScopedRetrieveEvidence(evidence),
+            generation=generation,
+        ).stream(user=user, conversation_id=conversation.id, message="q", mode=MODE_ANSWER)
+    )
+
+    assert _deltas(events) == [text, " the third chapter"]
+    assert events[-1].turn.answer_status == "answered"
+
+
+def test_stream_flushes_a_short_answer_that_merely_looked_like_the_sentinel() -> None:
+    # A genuine answer short enough to be a proper prefix of the sentinel is held to
+    # the end — nothing later proves it is not the sentinel — and flushed once on
+    # completion. Without that flush the reader is shown an empty answered turn.
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
+    short = SENTINEL[:3]
+    generation = FakeGeneration(answer=_answered(*evidence, text=short), deltas=[short])
+
+    events = list(
+        _post(
+            conversations=conversations,
+            turns=FakeConversationTurnRepository(),
+            sources=sources,
+            corpus=corpus,
+            retrieve=FakeScopedRetrieveEvidence(evidence),
+            generation=generation,
+        ).stream(user=user, conversation_id=conversation.id, message="q", mode=MODE_ANSWER)
+    )
+
+    assert _deltas(events) == [short]
+    assert events[-1].turn.answer_status == "answered"
+    assert events[-1].turn.answer_text == short
+
+
+def test_stream_that_ends_without_a_completed_event_is_a_generation_failure() -> None:
+    # Port contract: a generation stream ends with exactly one completed event. One
+    # that just stops surfaces as a generation failure with nothing persisted, never
+    # as a silently empty answer built from the deltas already sent.
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
+    turns = FakeConversationTurnRepository()
+
+    class _NeverCompletes(FakeGeneration):
+        def generate_stream(
+            self,
+            *,
+            message: str,
+            mode: str,
+            evidence: Sequence[Evidence],
+            history: Sequence[HistoryTurn] = (),
+            target_section_path: tuple[str, ...] | None = None,
+        ) -> Iterator[AnswerStreamEvent]:
+            yield AnswerTextDelta(text="partial ")
+            yield AnswerTextDelta(text="answer")
+
+    with pytest.raises(AnswerGenerationFailed):
+        list(
+            _post(
+                conversations=conversations,
+                turns=turns,
+                sources=sources,
+                corpus=corpus,
+                retrieve=FakeScopedRetrieveEvidence(evidence),
+                generation=_NeverCompletes(),
+            ).stream(user=user, conversation_id=conversation.id, message="q", mode=MODE_ANSWER)
+        )
+
+    assert turns.add_calls == 0
+    assert conversations.touch_calls == []
 
 
 # --- Turn path: ownership and readiness (I-CM-6) --------------------------------
