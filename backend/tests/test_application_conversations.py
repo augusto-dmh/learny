@@ -262,6 +262,12 @@ class FakeConversationRepository:
                 continue
             if source_id is not None and conversation.source_id != source_id:
                 continue
+            # The port does not list a conversation with no turn in it (an aborted
+            # first message leaves one), so neither does the fake — a double that
+            # returned rows the real read filters out would let a caller rely on
+            # something no reader can see.
+            if not self.turn_counts.get(conversation.id, 0):
+                continue
             owned.append(conversation)
         # The id tiebreaker is the real query's, not decoration: without it two
         # conversations sharing an ``updated_at`` have no fixed order and a paging
@@ -787,6 +793,15 @@ def test_start_against_a_not_ready_source_creates_nothing() -> None:
 # --- List (CONV-06) -------------------------------------------------------------
 
 
+def _with_a_turn(
+    conversations: FakeConversationRepository, conversation: Conversation
+) -> Conversation:
+    """Store a conversation the list will return — one with a turn in it."""
+    stored = conversations.add(conversation)
+    conversations.turn_counts[stored.id] = 1
+    return stored
+
+
 def test_list_returns_the_callers_conversations_newest_activity_first() -> None:
     # CONV-06 AC3: the global list spans every source the caller owns, ordered by
     # ``updated_at`` desc, each row carrying its source title and turn count.
@@ -801,13 +816,14 @@ def test_list_returns_the_callers_conversations_newest_activity_first() -> None:
         _whole_book_conversation(first_source.id, updated_at=_NOW - timedelta(hours=2))
     )
     fresh = conversations.add(_whole_book_conversation(second_source.id, updated_at=_NOW))
+    conversations.turn_counts[stale.id] = 1
     conversations.turn_counts[fresh.id] = 3
 
     rows = _list(conversations=conversations)(user=user)
 
     assert [row.conversation.id for row in rows] == [fresh.id, stale.id]
     assert [row.source_title for row in rows] == ["Book Two", "Book One"]
-    assert [row.turn_count for row in rows] == [3, 0]
+    assert [row.turn_count for row in rows] == [3, 1]
 
 
 def test_list_filters_by_source_when_asked() -> None:
@@ -818,8 +834,8 @@ def test_list_filters_by_source_when_asked() -> None:
     sources.add(kept)
     sources.add(other)
     conversations = FakeConversationRepository(sources)
-    mine = conversations.add(_whole_book_conversation(kept.id))
-    conversations.add(_whole_book_conversation(other.id))
+    mine = _with_a_turn(conversations, _whole_book_conversation(kept.id))
+    _with_a_turn(conversations, _whole_book_conversation(other.id))
 
     rows = _list(conversations=conversations)(user=user, source_id=kept.id)
 
@@ -836,8 +852,9 @@ def test_list_pages_the_callers_history_and_bounds_it_by_default() -> None:
     sources.add(source)
     conversations = FakeConversationRepository(sources)
     seeded = [
-        conversations.add(
-            _whole_book_conversation(source.id, updated_at=_NOW - timedelta(minutes=i))
+        _with_a_turn(
+            conversations,
+            _whole_book_conversation(source.id, updated_at=_NOW - timedelta(minutes=i)),
         )
         for i in range(DEFAULT_PAGE_LIMIT + 2)
     ]
@@ -857,7 +874,7 @@ def test_list_never_returns_another_users_conversations() -> None:
     owner, source, sources = _owned_world()
     intruder = _user()
     conversations = FakeConversationRepository(sources)
-    conversations.add(_whole_book_conversation(source.id))
+    _with_a_turn(conversations, _whole_book_conversation(source.id))
 
     assert _list(conversations=conversations)(user=intruder) == []
     assert len(_list(conversations=conversations)(user=owner)) == 1

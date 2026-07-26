@@ -1471,6 +1471,18 @@ def _persisted_user_with_sources(db_conn: Connection, email: str, count: int) ->
     return user.id, owned
 
 
+def _listed(db_conn: Connection, repo, conversation: Conversation, *, mode: str = "teach"):  # noqa: ANN001, ANN202
+    """Persist a conversation with one turn — the only kind the list returns.
+
+    A conversation with no turn never had a first message land in it, so the list
+    leaves it out; seeding bare conversations would make a list fixture assert
+    about rows no reader can reach.
+    """
+    saved = repo.add(conversation)
+    _insert_turn(db_conn, saved.id, 0, mode=mode)
+    return saved
+
+
 def test_conversation_list_for_user_spans_sources_newest_activity_first(
     db_conn: Connection,
 ) -> None:
@@ -1481,11 +1493,15 @@ def test_conversation_list_for_user_spans_sources_newest_activity_first(
     )
     repo = SqlAlchemyConversationRepository(db_conn)
     base = datetime.now(UTC)
-    stale = repo.add(_new_teaching_session(source_a.id, created_at=base + timedelta(minutes=5)))
-    active = repo.add(
+    stale = _listed(
+        db_conn, repo, _new_teaching_session(source_a.id, created_at=base + timedelta(minutes=5))
+    )
+    active = _listed(
+        db_conn,
+        repo,
         _whole_book_conversation(
             source_b.id, created_at=base, updated_at=base + timedelta(minutes=10)
-        )
+        ),
     )
 
     listed = repo.list_for_user(user_id, limit=_PAGE)
@@ -1497,7 +1513,7 @@ def test_conversation_list_for_user_spans_sources_newest_activity_first(
         active.id: source_b.title,
         stale.id: source_a.title,
     }
-    assert all(s.turn_count == 0 for s in listed)
+    assert all(s.turn_count == 1 for s in listed)
 
 
 def test_conversation_list_for_user_filters_by_source_and_excludes_other_owners(
@@ -1508,9 +1524,9 @@ def test_conversation_list_for_user_filters_by_source_and_excludes_other_owners(
     )
     other_source = _persisted_source(db_conn, "conv-list-other@example.com")
     repo = SqlAlchemyConversationRepository(db_conn)
-    mine_a = repo.add(_new_teaching_session(source_a.id))
-    mine_b = repo.add(_new_teaching_session(source_b.id))
-    theirs = repo.add(_new_teaching_session(other_source.id))
+    mine_a = _listed(db_conn, repo, _new_teaching_session(source_a.id))
+    mine_b = _listed(db_conn, repo, _new_teaching_session(source_b.id))
+    theirs = _listed(db_conn, repo, _new_teaching_session(other_source.id))
 
     everything = {s.conversation.id for s in repo.list_for_user(user_id, limit=_PAGE)}
     narrowed = [
@@ -1534,6 +1550,25 @@ def test_conversation_list_for_user_counts_turns(db_conn: Connection) -> None:
     (summary,) = repo.list_for_user(user_id, limit=_PAGE)
 
     assert summary.turn_count == 2
+
+
+def test_conversation_with_no_turn_is_not_listed(db_conn: Connection) -> None:
+    # A conversation is created a moment before its first message streams into it,
+    # so a message that failed, was stopped, or was abandoned when the tab closed
+    # can leave one behind holding nothing. The reader never meant to make it and
+    # cannot use it, and the browser that would have deleted it may be gone — so the
+    # list is where "a failed first message leaves nothing to find" is kept.
+    user_id, (source,) = _persisted_user_with_sources(db_conn, "conv-list-orphan@example.com", 1)
+    repo = SqlAlchemyConversationRepository(db_conn)
+    orphan = repo.add(_whole_book_conversation(source.id, title="Never sent"))
+    real = _listed(db_conn, repo, _whole_book_conversation(source.id, title="Answered"))
+
+    listed = repo.list_for_user(user_id, limit=_PAGE)
+
+    assert [s.conversation.id for s in listed] == [real.id]
+    # It is hidden from the list, not deleted: a turn landing late still brings the
+    # conversation back, which is what makes this safe to do without a sweeper.
+    assert repo.get_by_id(orphan.id) is not None
 
 
 def test_conversation_list_row_carries_the_mode_of_its_newest_turn(
@@ -1567,7 +1602,11 @@ def test_conversation_list_for_user_returns_only_the_requested_window(
     base = datetime.now(UTC)
     # Seeded oldest-first, so the expected page order is the reverse of this list.
     seeded = [
-        repo.add(_whole_book_conversation(source.id, updated_at=base + timedelta(minutes=i)))
+        _listed(
+            db_conn,
+            repo,
+            _whole_book_conversation(source.id, updated_at=base + timedelta(minutes=i)),
+        )
         for i in range(5)
     ]
     newest_first = [c.id for c in reversed(seeded)]
@@ -1596,7 +1635,10 @@ def test_conversation_paging_a_tie_heavy_list_visits_every_row_exactly_once(
     user_id, (source,) = _persisted_user_with_sources(db_conn, "conv-page-ties@example.com", 1)
     repo = SqlAlchemyConversationRepository(db_conn)
     tied_at = datetime.now(UTC)
-    seeded = [repo.add(_whole_book_conversation(source.id, updated_at=tied_at)) for _ in range(7)]
+    seeded = [
+        _listed(db_conn, repo, _whole_book_conversation(source.id, updated_at=tied_at))
+        for _ in range(7)
+    ]
     # The fixture is only a sensor if the rows really are tied.
     assert len({c.updated_at for c in seeded}) == 1
 

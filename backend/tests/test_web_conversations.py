@@ -282,6 +282,28 @@ def _seed_turn(
     return SqlAlchemyConversationTurnRepository(db_conn).add(turn)
 
 
+def _seed_listed_conversation(
+    db_conn: Connection, source_id: UUID, *, mode: str = MODE_ANSWER, **kwargs
+) -> Conversation:
+    """A conversation with one turn in it — the only kind the list returns.
+
+    A conversation with no turn is one whose first message never landed, so the
+    list does not return it; a list fixture built out of bare conversations would
+    be making claims about rows no reader can reach.
+    """
+    conversation = _seed_conversation(db_conn, source_id, **kwargs)
+    _seed_turn(
+        db_conn,
+        conversation,
+        turn_index=0,
+        message="a first message",
+        mode=mode,
+        answer_status=ANSWERED,
+        answer_text=_PHOTO,
+    )
+    return conversation
+
+
 def _seed_note(db_conn: Connection, user_id: str, *, title: str, body: str) -> UUID:
     """Insert an embedded note for ``user_id`` (its search_vector is trigger-fed)."""
     repo = SqlAlchemyNoteRepository(db_conn)
@@ -545,10 +567,10 @@ def test_list_returns_newest_activity_first_with_source_title_and_turn_count(
     # descending, and names the book each conversation is about.
     source_id, _ = _seed_ready_source(auth_client, db_conn, "list@example.com")
     base = datetime.now(UTC)
-    stale = _seed_conversation(
+    stale = _seed_listed_conversation(
         db_conn, UUID(source_id), title="Older", created_at=base, updated_at=base
     )
-    active = _seed_conversation(
+    active = _seed_listed_conversation(
         db_conn,
         UUID(source_id),
         title="Newer",
@@ -558,7 +580,7 @@ def test_list_returns_newest_activity_first_with_source_title_and_turn_count(
     _seed_turn(
         db_conn,
         active,
-        turn_index=0,
+        turn_index=1,
         message="explain photosynthesis",
         mode=MODE_ANSWER,
         answer_status=ANSWERED,
@@ -585,11 +607,11 @@ def test_list_returns_newest_activity_first_with_source_title_and_turn_count(
     assert body[0]["source_title"] == _BOOK_TITLE
     assert body[0]["title"] == "Newer"
     assert body[0]["scope_anchors"] == [_ANCHOR]
-    assert body[0]["turn_count"] == 1
+    assert body[0]["turn_count"] == 2
     # Where the thread resumes travels with the row (RA-01): a client that had to
     # fetch the conversation to find out would pay for every turn and citation in it.
     assert body[0]["last_turn_mode"] == MODE_ANSWER
-    assert body[1]["turn_count"] == 0
+    assert body[1]["turn_count"] == 1
 
 
 def test_list_row_reports_the_mode_the_thread_was_last_answered_in(
@@ -616,6 +638,26 @@ def test_list_row_reports_the_mode_the_thread_was_last_answered_in(
     assert [row["last_turn_mode"] for row in resp.json()] == [MODE_TEACH]
 
 
+def test_list_omits_a_conversation_whose_first_message_never_landed(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # WSC-13: a conversation is created just before its first message streams into
+    # it, so a stopped, failed, or abandoned first message can leave one holding
+    # nothing. The client deletes the ones it can, but a tab that is gone cannot —
+    # and the promise is that the dock has nothing to show for it either way.
+    source_id, _ = _seed_ready_source(auth_client, db_conn, "list-orphan@example.com")
+    orphan = _seed_conversation(db_conn, UUID(source_id), title="Never sent")
+    real = _seed_listed_conversation(db_conn, UUID(source_id), title="Answered")
+
+    resp = auth_client.get("/api/conversations", params={"source_id": source_id})
+
+    assert resp.status_code == 200, resp.text
+    assert [row["id"] for row in resp.json()] == [str(real.id)]
+    # Unlisted, not unreachable: the owner can still read and delete it by id, so a
+    # turn arriving late brings it back rather than finding it destroyed.
+    assert auth_client.get(f"/api/conversations/{orphan.id}").status_code == 200
+
+
 def test_list_filters_by_source_and_excludes_other_users(
     auth_client: TestClient, db_conn: Connection
 ) -> None:
@@ -623,11 +665,11 @@ def test_list_filters_by_source_and_excludes_other_users(
     # unreachable, and narrowing by a source the caller does not own discloses
     # nothing (an empty list, not a 404).
     owned_id, _ = _seed_ready_source(auth_client, db_conn, "list-owner@example.com")
-    mine = _seed_conversation(db_conn, UUID(owned_id), title="Mine")
+    mine = _seed_listed_conversation(db_conn, UUID(owned_id), title="Mine")
 
     intruder_id = _register(auth_client, "list-intruder@example.com")
     other_source = _persist_source(db_conn, intruder_id)
-    _seed_conversation(db_conn, other_source, title="Theirs")
+    _seed_listed_conversation(db_conn, other_source, title="Theirs")
 
     theirs = auth_client.get("/api/conversations")
     assert [row["title"] for row in theirs.json()] == ["Theirs"]
@@ -654,7 +696,7 @@ def test_list_without_pagination_returns_a_bounded_default_page(
     source_id, _ = _seed_ready_source(auth_client, db_conn, "list-default@example.com")
     base = datetime.now(UTC)
     seeded = [
-        _seed_conversation(
+        _seed_listed_conversation(
             db_conn,
             UUID(source_id),
             title=f"Conversation {i}",
@@ -680,7 +722,7 @@ def test_list_limit_and_offset_return_that_window_of_the_order(
     source_id, _ = _seed_ready_source(auth_client, db_conn, "list-window@example.com")
     base = datetime.now(UTC)
     seeded = [
-        _seed_conversation(
+        _seed_listed_conversation(
             db_conn,
             UUID(source_id),
             title=f"Conversation {i}",
@@ -711,7 +753,9 @@ def test_list_paged_to_the_end_returns_every_conversation_exactly_once(
     source_id, _ = _seed_ready_source(auth_client, db_conn, "list-walk@example.com")
     tied_at = datetime.now(UTC)
     seeded = [
-        _seed_conversation(db_conn, UUID(source_id), title=f"Conversation {i}", updated_at=tied_at)
+        _seed_listed_conversation(
+            db_conn, UUID(source_id), title=f"Conversation {i}", updated_at=tied_at
+        )
         for i in range(7)
     ]
     # The fixture is only a sensor if the rows really are tied.

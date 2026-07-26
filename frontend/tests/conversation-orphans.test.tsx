@@ -62,7 +62,12 @@ function fakeServer(turnStream: (init: RequestInit) => Response) {
   const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
     const method = init?.method ?? "GET";
     if (method === "GET" && url.startsWith("/api/conversations?source_id=s1")) {
-      return jsonResponse(200, [...conversations.values()]);
+      // As the real list does: a conversation with no turn in it is not listed,
+      // whatever the client did or failed to do about deleting it.
+      return jsonResponse(
+        200,
+        [...conversations.values()].filter((row) => Number(row.turn_count) > 0),
+      );
     }
     if (method === "POST" && url === CREATE_URL) {
       conversations.set("conv1", {
@@ -73,6 +78,7 @@ function fakeServer(turnStream: (init: RequestInit) => Response) {
         scope_anchors: [],
         include_notes: true,
         turn_count: 0,
+        last_turn_mode: null,
         created_at: "now",
         updated_at: "now",
       });
@@ -118,11 +124,23 @@ function abortableStream(init: RequestInit) {
       controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
-  return { response, push };
+  const close = () =>
+    act(async () => {
+      controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+      controller.close();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  return { response, push, close };
 }
 
-/** A complete, answered turn on a stream that needs no abort handling. */
-function completedStream() {
+/**
+ * A complete, answered turn on a stream that needs no abort handling.
+ *
+ * ``onPersisted`` runs as the last frame goes out, which is when the server would
+ * have stored the turn — so a list read taken any earlier still sees a
+ * conversation with nothing in it, exactly as a real one would mid-stream.
+ */
+function completedStream(onPersisted: () => void = () => {}) {
   const encoder = new TextEncoder();
   const frames = [
     { type: "start", messageId: "m1" },
@@ -138,6 +156,7 @@ function completedStream() {
       for (const frame of frames) {
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(frame)}\n\n`));
       }
+      onPersisted();
       controller.enqueue(encoder.encode("data: [DONE]\n\n"));
       controller.close();
     },
@@ -226,13 +245,67 @@ describe("a first message that never lands", () => {
     expect(readActiveConversation("s1", "ask")).toBeNull();
   });
 
+  it("lists the thread once its first message has landed, and not before", async () => {
+    let stream: ReturnType<typeof abortableStream> | null = null;
+    const { conversations } = fakeServer((init) => {
+      stream = abortableStream(init);
+      return stream.response;
+    });
+    renderDock();
+    await screen.findByText("No conversations yet.");
+
+    ask("a question I will let finish");
+    await waitFor(() => expect(stream).not.toBeNull());
+    await stream!.push({ type: "start", messageId: "m1" });
+    await stream!.push({ type: "text-start", id: "t1" });
+    await stream!.push({ type: "text-delta", id: "t1", delta: "An answer." });
+
+    // Mid-stream the conversation exists but holds no turn, and it may yet be
+    // discarded — so there is nothing for the dock to offer the reader.
+    await waitFor(() => expect(document.body.textContent).toContain("An answer."));
+    expect(
+      screen.queryByRole("button", { name: "Resume Untitled conversation" }),
+    ).toBeNull();
+
+    // The turn lands; from here the thread is something to come back to.
+    const stored = conversations.get("conv1")!;
+    conversations.set("conv1", {
+      ...stored,
+      turn_count: 1,
+      last_turn_mode: "answer",
+    });
+    await stream!.push({ type: "text-end", id: "t1" });
+    await stream!.push({ type: "data-citations", data: [] });
+    await stream!.push({ type: "data-answer-status", data: { status: "answered" } });
+    await stream!.push({ type: "finish" });
+    await stream!.close();
+
+    // The dock reads its list again, so the reader can find the thread without
+    // reloading the page.
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Resume Untitled conversation" }),
+      ).toBeTruthy(),
+    );
+  });
+
   it("keeps the thread when a later message fails", async () => {
     let turns = 0;
     const { conversations, fetchMock } = fakeServer(() => {
       turns += 1;
-      return turns === 1
-        ? completedStream()
-        : jsonResponse(429, { detail: "Too many requests." });
+      if (turns > 1) {
+        return jsonResponse(429, { detail: "Too many requests." });
+      }
+      // The turn this stream carries is one the server keeps, so the conversation
+      // stops being empty — which is what makes it something the dock can list.
+      return completedStream(() => {
+        const stored = conversations.get("conv1")!;
+        conversations.set("conv1", {
+          ...stored,
+          turn_count: 1,
+          last_turn_mode: "answer",
+        });
+      });
     });
     renderDock();
     await screen.findByText("No conversations yet.");

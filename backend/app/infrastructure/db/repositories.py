@@ -23,6 +23,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import (
     Connection,
     bindparam,
+    exists,
     func,
     insert,
     literal_column,
@@ -917,7 +918,22 @@ class SqlAlchemyConversationRepository:
     ) -> list[ConversationSummary]:
         # Ownership is the join, not a post-filter: another user's conversations are
         # unreachable by this query (I-5).
-        statement = self._summary_select().where(sources.c.user_id == user_id)
+        #
+        # A conversation with no turn is never listed. One is created a moment before
+        # its first message streams into it, so a message that fails, is stopped, or
+        # is abandoned when the tab closes can leave one behind with nothing in it.
+        # The client deletes the ones it can, but a browser that is gone cannot
+        # apologize — so the promise that a failed first message leaves nothing to
+        # find is kept here, where it holds no matter what the browser managed to do.
+        # Nothing else creates a conversation, so there is no empty one a reader is
+        # meant to see.
+        statement = (
+            self._summary_select()
+            .where(sources.c.user_id == user_id)
+            .where(
+                exists(select(1).where(conversation_turns.c.conversation_id == conversations.c.id))
+            )
+        )
         if source_id is not None:
             statement = statement.where(conversations.c.source_id == source_id)
         rows = self._conn.execute(

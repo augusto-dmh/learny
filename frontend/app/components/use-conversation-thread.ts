@@ -57,6 +57,7 @@ export function useConversationThread({
   start,
   initialMessages,
   onConversationStarted,
+  onConversationKept,
   onConversationDiscarded,
   onRequireAuth,
 }: {
@@ -70,6 +71,8 @@ export function useConversationThread({
   initialMessages: LearnyUIMessage[];
   /** Called once a first message has a conversation to stream into. */
   onConversationStarted?: (conversationId: string) => void;
+  /** Called when a first message lands, which is when its conversation is real. */
+  onConversationKept?: () => void;
   /** Called when a provisional conversation is discarded. */
   onConversationDiscarded?: () => void;
   onRequireAuth?: () => void;
@@ -149,8 +152,13 @@ export function useConversationThread({
         void discardProvisional();
         return;
       }
-      // The first message landed, so its conversation is real from here on.
-      provisionalRef.current = null;
+      // The first message landed, so its conversation is real from here on — and
+      // only now is there a thread for the dock to list. Announcing it at creation
+      // instead would offer the reader a row that may be about to be discarded.
+      if (provisionalRef.current) {
+        provisionalRef.current = null;
+        onConversationKept?.();
+      }
     },
   });
 

@@ -178,6 +178,12 @@ export function AskPanel({
     [sourceId, onConversationsChanged],
   );
 
+  // A first message that lands is when the thread becomes something to find
+  // again, so that is when the dock is told to re-read its list.
+  const handleKept = useCallback(() => {
+    onConversationsChanged?.();
+  }, [onConversationsChanged]);
+
   const handleDiscarded = useCallback(() => {
     writeActiveConversation(sourceId, SURFACE, null);
     onConversationsChanged?.();
@@ -201,6 +207,7 @@ export function AskPanel({
       onShowInBook={onShowInBook}
       onRequireAuth={onRequireAuth}
       onConversationStarted={handleStarted}
+      onConversationKept={handleKept}
       onConversationDiscarded={handleDiscarded}
     />
   );
@@ -218,6 +225,7 @@ function AskChat({
   onShowInBook,
   onRequireAuth,
   onConversationStarted,
+  onConversationKept,
   onConversationDiscarded,
 }: {
   sourceId: string;
@@ -232,6 +240,7 @@ function AskChat({
   onShowInBook?: (anchor: string) => void;
   onRequireAuth?: () => void;
   onConversationStarted: (conversationId: string) => void;
+  onConversationKept: () => void;
   onConversationDiscarded: () => void;
 }) {
   // A quote the reader chose to "Ask about": it rides along, once, with the next
@@ -281,6 +290,7 @@ function AskChat({
       start,
       initialMessages,
       onConversationStarted: handleStarted,
+      onConversationKept,
       onConversationDiscarded: handleDiscarded,
       onRequireAuth,
     });

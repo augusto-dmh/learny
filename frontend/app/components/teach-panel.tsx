@@ -203,6 +203,12 @@ export function TeachPanel({
     [sourceId, onConversationsChanged],
   );
 
+  // A first message that lands is when the thread becomes something to find
+  // again, so that is when the dock is told to re-read its list.
+  const handleKept = useCallback(() => {
+    onConversationsChanged?.();
+  }, [onConversationsChanged]);
+
   const handleDiscarded = useCallback(() => {
     writeActiveConversation(sourceId, SURFACE, null);
     onConversationsChanged?.();
@@ -244,6 +250,7 @@ export function TeachPanel({
         onShowInBook={onShowInBook}
         onRequireAuth={onRequireAuth}
         onConversationStarted={handleStarted}
+        onConversationKept={handleKept}
         onConversationDiscarded={handleDiscarded}
       />
     );
@@ -294,6 +301,7 @@ function TeachChat({
   onShowInBook,
   onRequireAuth,
   onConversationStarted,
+  onConversationKept,
   onConversationDiscarded,
 }: {
   sourceId: string;
@@ -307,6 +315,7 @@ function TeachChat({
   onShowInBook?: (anchor: string) => void;
   onRequireAuth?: () => void;
   onConversationStarted: (conversationId: string) => void;
+  onConversationKept: () => void;
   onConversationDiscarded: () => void;
 }) {
   // The notes choice belongs to the conversation, so it is fixed when the thread
@@ -358,6 +367,7 @@ function TeachChat({
       start,
       initialMessages,
       onConversationStarted: handleStarted,
+      onConversationKept,
       onConversationDiscarded: handleDiscarded,
       onRequireAuth,
     });

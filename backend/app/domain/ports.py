@@ -649,6 +649,13 @@ class ConversationRepository(Protocol):
         filtered out afterwards. Ordered by ``updated_at`` descending, so a
         conversation rises the moment a turn lands in it.
 
+        A conversation with **no turn** is never returned. One exists for a moment
+        before its first message lands in it, so a message that fails or is stopped
+        can leave one holding nothing — something no reader asked for and none can
+        use. Keeping it out of the list is this port's promise rather than the
+        client's, because the client that would clean up may be a tab that is
+        already closed. It is hidden, not deleted: a late turn brings it back.
+
         ``limit`` is required — a caller must say how much history it wants, so no
         path can ask for all of it — and ``offset`` skips that many rows of the same
         order, past the end being an empty page rather than an error. Paging this way
