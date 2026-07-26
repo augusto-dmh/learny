@@ -73,6 +73,35 @@ def test_the_app_declares_no_route_on_a_retired_path() -> None:
     assert not [path for path in templates if path.endswith(("/questions", "/questions/stream"))]
 
 
+def test_no_throttle_outlives_the_routes_it_guarded() -> None:
+    # A limiter dependency that no route depends on is the quietest residue a
+    # retirement can leave: it imports, it is covered by its own unit test, and it
+    # throttles nothing. Worse, its name still advertises a wire that answers 404,
+    # so a reader looking for how questions are throttled finds a live-looking
+    # answer. Every throttle the module offers must be reachable from a route of
+    # the assembled app, which also means a new one cannot ship unwired.
+    from app.infrastructure.web import rate_limit
+    from app.main import create_app
+
+    def _dependency_calls(dependant: object) -> set[object]:
+        calls = {getattr(dependant, "call", None)}
+        for sub in getattr(dependant, "dependencies", []):
+            calls |= _dependency_calls(sub)
+        return calls
+
+    wired: set[object] = set()
+    for route in declared_routes(create_app()):
+        dependant = getattr(route, "dependant", None)
+        if dependant is not None:
+            wired |= _dependency_calls(dependant)
+
+    offered = {
+        getattr(rate_limit, name) for name in dir(rate_limit) if name.startswith("rate_limit_")
+    }
+    assert offered, "the module must offer throttles, or this proves nothing"
+    assert offered <= wired, f"unwired throttles: {sorted(t.__name__ for t in offered - wired)}"
+
+
 def test_the_app_boots_with_every_retired_variable_still_set(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
