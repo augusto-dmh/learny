@@ -8,7 +8,7 @@ Cycle C built the unified conversation model and `/api/conversations`, but nothi
 uses it: the Ask and Teach panels still talk to the frozen legacy endpoints, so the
 product still behaves as if Q&A evaporates and teaching sessions are unmanageable.
 Meanwhile the compatibility layer — two web modules, two application adapter modules,
-a status-collapsing presenter, a legacy repository method, and three retired settings
+a status-collapsing presenter, a legacy repository method, and five retired settings
 knobs — is dead weight that forces every conversation change to be made twice and
 keeps two generation ports alive that describe one capability.
 
@@ -46,7 +46,7 @@ keeps two generation ports alive that describe one capability.
 | `not_found_in_scope` becomes wire-visible | Frontend renders it as a distinct, scope-aware message | The collapse presenter (AD-196) exists only for the frozen wire; deleting it is the point of retirement. The status vocabulary was always domain truth | y — ADR-0029 |
 | Pagination shape | `limit`/`offset` with bounded `limit` | Matches the shipped `GET /api/reviews/due` convention (`limit: int = 20, ge=1, le=100`); the `(updated_at DESC, id DESC)` index already makes the order total, so offset paging is stable (D-4) | y — convention |
 | Ask conversations appear in the dock list | Yes — the list is per-book and mode-agnostic | Persisting Q&A is worthless if it is unreachable; `list_for_user(source_id=...)` already returns both modes. The old `target_anchor IS NOT NULL` filter existed only to keep ask threads out of the *legacy* teach panel and dies with it | y — ADR-0029 |
-| Retired-knob machinery | Delete the three knobs **and** `_RETIRED_KNOBS` + `_warn_about_retired_knobs` if it is left with nothing to warn about | The warning loop's only purpose was easing this exact removal; leaving dead scaffolding is the thing this cycle exists to stop | n — design detail |
+| Retired-knob machinery | Delete the retired knobs **and** `_RETIRED_KNOBS` + `_warn_about_retired_knobs` if it is left with nothing to warn about | The warning loop's only purpose was easing this exact removal; leaving dead scaffolding is the thing this cycle exists to stop | n — design detail |
 
 **Open questions:** none — all resolved or logged above.
 
@@ -122,8 +122,8 @@ move". Once P1-1 lands, every day the layer survives is duplicated work.
 
 1. WHEN a request hits `POST/GET /api/teaching-sessions*`, `GET /api/sources/{id}/teaching-sessions`, or `POST /api/sources/{id}/questions[/stream]` THEN the system SHALL respond 404.
 2. WHEN the codebase is searched after this cycle THEN the legacy web modules, the legacy application adapter modules, the status-collapse presenter, and `ConversationRepository.list_for_source_with_target` SHALL NOT exist.
-3. WHEN the settings module is loaded THEN the three superseded knobs SHALL NOT exist as fields.
-4. WHEN a deployment still sets one of those three environment variables THEN startup SHALL NOT fail.
+3. WHEN the settings module is loaded THEN the five superseded knobs SHALL NOT exist as fields.
+4. WHEN a deployment still sets one of those five environment variables THEN startup SHALL NOT fail.
 5. WHEN the suite runs THEN no test SHALL exercise a legacy route, and every behavior those tests protected that still exists SHALL be asserted against the unified surface.
 
 **Independent Test**: `grep` finds no legacy module; the app boots with the retired env vars set; the legacy paths 404.

@@ -61,7 +61,7 @@ each phase boundary and once before any push.
 | D2 | Delete the legacy web modules and the status-collapse presenter; the legacy paths 404 | WSC-07, I-D1 |
 | D3 | Delete the legacy application adapters and their wording contextmanagers | WSC-07 |
 | D4 | Delete `ConversationRepository.list_for_source_with_target` from port and implementation | WSC-08 |
-| D5 | Delete the three superseded settings fields; re-base the retired-knob warning on environment-variable names; app boots with all three variables set | WSC-08, I-D2, AD-210 |
+| D5 | Delete the five superseded settings fields; re-base the retired-knob warning on environment-variable names; app boots with all five variables set | WSC-08, I-D2, AD-210 |
 | D6 | Delete the legacy wire-freeze tests, each only after its behavior is asserted on the unified surface | WSC-09 |
 | D7 | Sensor: every surviving mutating conversation route carries a rate limiter | WSC-15, I-D3 |
 | D8 | Sensor: deleting a conversation removes its turns and citations | WSC-06, I-D5 |

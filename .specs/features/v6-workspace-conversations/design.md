@@ -210,7 +210,7 @@ asserted on the unified surface** — or writing that assertion.
 ### Invariants
 
 - **I-D1** Every legacy path returns 404; no legacy module remains in the tree.
-- **I-D2** The app boots with all three retired environment variables set.
+- **I-D2** The app boots with all five retired environment variables set.
 - **I-D3** Every surviving mutating conversation route still carries a rate limiter —
   deleting the legacy limiter dependencies must leave no route unthrottled (WSC-15).
 - **I-D4** Teach-target staleness → 409 and unresolvable scope → 422 still hold

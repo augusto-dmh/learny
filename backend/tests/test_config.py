@@ -297,6 +297,16 @@ def test_env_example_documents_the_conversation_contract() -> None:
         assert f"\n{name}=" in contract, f"{name} is missing from .env.example"
 
 
+def test_env_example_names_every_retired_variable() -> None:
+    # The contract is where an operator reads what a name does, so a retired one has
+    # to be named there too — otherwise the only thing saying it stopped working is
+    # a log line they see once, at a startup they may not be watching.
+    contract = _ENV_EXAMPLE.read_text()
+
+    for name in _RETIRED_KNOBS:
+        assert name in contract, f"{name} is retired but .env.example never says so"
+
+
 def test_retired_knobs_are_no_longer_fields(monkeypatch) -> None:
     # The per-surface budgets and length bounds the unified conversation settings
     # replaced are gone, not merely unread — a declared field is a value someone can
