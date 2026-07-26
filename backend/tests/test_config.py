@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from app.core.config import Settings
+from app.core.config import _RETIRED_KNOBS, Settings
 from app.core.instrumentation import InstrumentRecorder
 
 _ENV_EXAMPLE = Path(__file__).resolve().parents[1] / ".env.example"
@@ -298,24 +298,42 @@ def test_env_example_documents_the_conversation_contract() -> None:
 
 
 def test_retired_knobs_are_no_longer_fields(monkeypatch) -> None:
-    # The three per-surface budgets the unified conversation settings replaced are
-    # gone, not merely unread — a declared field is a value someone can still reach
-    # for and believe in.
-    for name in ("qa_evidence_top_k", "teaching_evidence_top_k", "teaching_history_turns"):
+    # The per-surface budgets and length bounds the unified conversation settings
+    # replaced are gone, not merely unread — a declared field is a value someone can
+    # still reach for and believe in.
+    for name in (
+        "qa_evidence_top_k",
+        "teaching_evidence_top_k",
+        "teaching_history_turns",
+        "qa_question_max_chars",
+        "teaching_message_max_chars",
+    ):
         assert name not in Settings.model_fields, name
+
+
+def test_every_retired_variable_names_a_setting_that_still_exists(monkeypatch) -> None:
+    # The warning tells an operator which setting decides the value now. A successor
+    # that was itself renamed away would turn that advice into an AttributeError at
+    # startup — on the one code path that only runs for the deployments already
+    # holding a stale variable.
+    settings = Settings(_env_file=None)
+
+    for env_var, successor in _RETIRED_KNOBS.items():
+        assert successor in Settings.model_fields, f"{env_var} -> {successor}"
+        assert getattr(settings, successor) is not None
 
 
 def test_a_deployment_still_setting_a_retired_variable_boots(monkeypatch) -> None:
     # Retiring a knob must not take a running deployment down: the variable is
     # simply ignored, and every live setting resolves as it would have anyway.
-    monkeypatch.setenv("LEARNY_QA_EVIDENCE_TOP_K", "3")
-    monkeypatch.setenv("LEARNY_TEACHING_EVIDENCE_TOP_K", "4")
-    monkeypatch.setenv("LEARNY_TEACHING_HISTORY_TURNS", "1")
+    for env_var in _RETIRED_KNOBS:
+        monkeypatch.setenv(env_var, "3")
 
     settings = Settings(_env_file=None)
 
     assert settings.conversation_evidence_top_k == 8
     assert settings.conversation_history_turns == 6
+    assert settings.conversation_message_max_chars == 2000
 
 
 def test_setting_a_retired_knob_warns_once_naming_the_value_in_force(monkeypatch, caplog) -> None:

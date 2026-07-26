@@ -106,13 +106,15 @@ def test_the_app_boots_with_every_retired_variable_still_set(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Retiring a knob must never take a deployment down on the next restart: a
-    # machine whose environment file still carries all three comes up and serves.
-    from app.core.config import get_settings
+    # machine whose environment file still carries every one of them comes up and
+    # serves. The list is read off the settings module, so a knob retired later is
+    # covered without this test being remembered.
+    from app.core.config import _RETIRED_KNOBS, get_settings
     from app.main import create_app
 
-    for name in ("LEARNY_QA_EVIDENCE_TOP_K", "LEARNY_TEACHING_EVIDENCE_TOP_K"):
+    assert _RETIRED_KNOBS, "no retired knobs would make this test prove nothing"
+    for name in _RETIRED_KNOBS:
         monkeypatch.setenv(name, "12")
-    monkeypatch.setenv("LEARNY_TEACHING_HISTORY_TURNS", "12")
     get_settings.cache_clear()
     try:
         with TestClient(create_app()) as client:

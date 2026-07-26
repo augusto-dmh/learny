@@ -25,6 +25,8 @@ _RETIRED_KNOBS = {
     "LEARNY_QA_EVIDENCE_TOP_K": "conversation_evidence_top_k",
     "LEARNY_TEACHING_EVIDENCE_TOP_K": "conversation_evidence_top_k",
     "LEARNY_TEACHING_HISTORY_TURNS": "conversation_history_turns",
+    "LEARNY_QA_QUESTION_MAX_CHARS": "conversation_message_max_chars",
+    "LEARNY_TEACHING_MESSAGE_MAX_CHARS": "conversation_message_max_chars",
 }
 
 
@@ -161,12 +163,6 @@ class Settings(BaseSettings):
     retrieval_notes_lexical_limit: int = 5
     retrieval_notes_weight: float = 1.0
     retrieval_notes_snippet_chars: int = 2000
-
-    # Question and message length bounds predating the unified surface. The
-    # conversation bound below is what the live turn validator enforces; these two
-    # remain declared for the surfaces that still name them.
-    qa_question_max_chars: int = 2000
-    teaching_message_max_chars: int = 2000
 
     # Conversations (ADR-0029) — one policy for every grounded conversation,
     # replacing the separate Q&A and teaching knobs it retired. The evidence budget is
