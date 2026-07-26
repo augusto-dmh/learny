@@ -2064,3 +2064,47 @@ def test_every_mutating_conversation_route_carries_the_one_policy() -> None:
             ], f"{sorted(route.methods)} {route.path}"
         else:
             assert declared == [], f"{sorted(route.methods)} {route.path}"
+
+
+def test_no_mutating_conversation_route_answers_while_the_budget_is_spent() -> None:
+    # WSC-15: the retired surface carried its own limiter dependencies, and they went
+    # with it. What has to survive that deletion is not a declaration but an effect,
+    # so this drives the assembled application with an exhausted limiter and requires
+    # a 429 from every mutating route the conversations router declares — proving
+    # both that the app mounts them all and that the throttle is actually reached.
+    #
+    # The route set is read off the router, never listed here, so a route added later
+    # is covered the day it is declared. No session is established: a throttled route
+    # rejects before it asks who is calling, so an unthrottled one answers 401/403/422
+    # and fails this test rather than passing it by a different door.
+    from app.infrastructure.web.conversations import router
+    from app.infrastructure.web.rate_limit import (
+        InMemoryFixedWindowRateLimiter,
+        get_rate_limiter,
+        set_rate_limiter,
+    )
+    from app.main import create_app
+    from tests.conftest import declared_routes
+
+    app = create_app()
+    declared = {route.path for route in router.routes}
+    mounted = [route for route in declared_routes(app) if route.path in declared]
+    assert {route.path for route in mounted} == declared
+
+    mutating = sorted(
+        (method, route.path)
+        for route in mounted
+        for method in route.methods & {"POST", "PATCH", "PUT", "DELETE"}
+    )
+    assert mutating, "the surface must declare mutating routes, or this proves nothing"
+
+    previous = get_rate_limiter()
+    set_rate_limiter(InMemoryFixedWindowRateLimiter(max_attempts=0, window_seconds=300))
+    try:
+        with TestClient(app) as client:
+            for method, template in mutating:
+                path = template.replace("{conversation_id}", str(uuid4()))
+                resp = client.request(method, path, json={}, headers={"Origin": TEST_ORIGIN})
+                assert resp.status_code == 429, f"{method} {template} -> {resp.status_code}"
+    finally:
+        set_rate_limiter(previous)
