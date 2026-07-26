@@ -34,6 +34,10 @@ import {
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { AskPanel } from "../app/components/ask-panel";
+import {
+  readActiveConversation,
+  writeActiveConversation,
+} from "../app/lib/active-conversation";
 
 // AI Elements' Conversation (stick-to-bottom) and the citation Popover reach for
 // ResizeObserver and pointer-capture APIs jsdom lacks; stub them.
@@ -378,6 +382,107 @@ describe("AskPanel on the conversation surface", () => {
     await Promise.resolve();
     expect(callsTo(fetchMock, CREATE_URL)).toHaveLength(0);
     expect(callsTo(fetchMock, STREAM_URL)).toHaveLength(0);
+  });
+});
+
+describe("AskPanel thread restore", () => {
+  const READ_URL = "/api/conversations/conv1";
+
+  it("restores an active thread's turns from the server after a reload", async () => {
+    // First visit: ask a question and let the turn land, so this book's Ask
+    // surface is left pointing at the conversation the server created.
+    const stream = sseStream();
+    vi.stubGlobal("fetch", routedFetch(baseHandlers(() => stream.response)));
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+    ask("Who wrote the first algorithm?");
+    await streamAnswer(stream, [citation]);
+    await waitFor(() =>
+      expect(document.body.textContent).toContain("Ada Lovelace did."),
+    );
+
+    // The reload: a brand-new tree with nothing carried over from the last one.
+    cleanup();
+    vi.restoreAllMocks();
+
+    // The server is the only place the thread exists, and what it holds is not
+    // what the previous tree rendered — so anything replayed from the browser
+    // would be visibly wrong.
+    const restored = {
+      ...conversation,
+      turns: [
+        {
+          turn_index: 0,
+          message: "Who wrote the first algorithm?",
+          mode: "answer",
+          answer_status: "answered",
+          text: "The server's copy of the answer.",
+          citations: [citation],
+          evidence_count: 6,
+          model: "local-extractive",
+          created_at: "now",
+        },
+      ],
+    };
+    const fetchMock = routedFetch({
+      [`GET ${READ_URL}`]: () => jsonResponse(200, restored),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+
+    // The thread comes back, read from the server.
+    expect(
+      await screen.findByText("The server's copy of the answer."),
+    ).toBeTruthy();
+    expect(screen.getByText("Who wrote the first algorithm?")).toBeTruthy();
+    expect(callsTo(fetchMock, READ_URL)).toHaveLength(1);
+    // A restored thread is a thread, so the empty state is gone.
+    expect(screen.queryByLabelText("suggested prompts")).toBeNull();
+    // Its citations come back with it.
+    expect(
+      screen.getByRole("button", { name: "Citation: Chapter 1 › Core Idea" }),
+    ).toBeTruthy();
+  });
+
+  it("continues the restored conversation instead of creating a new one", async () => {
+    const restored = { ...conversation, turns: [] };
+    const stream = sseStream();
+    const fetchMock = routedFetch({
+      [`GET ${READ_URL}`]: () => jsonResponse(200, restored),
+      ...baseHandlers(() => stream.response),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    writeActiveConversation("s1", "ask", "conv1");
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+    await waitFor(() => expect(callsTo(fetchMock, READ_URL)).toHaveLength(1));
+
+    ask("a follow-up after the reload");
+    await waitFor(() => expect(callsTo(fetchMock, STREAM_URL)).toHaveLength(1));
+
+    // The restored conversation is continued; nothing new is created.
+    expect(callsTo(fetchMock, CREATE_URL)).toHaveLength(0);
+    expect(bodyOf(callsTo(fetchMock, STREAM_URL)[0])).toEqual({
+      message: "a follow-up after the reload",
+      mode: "answer",
+    });
+  });
+
+  it("starts a fresh thread when the remembered conversation is gone", async () => {
+    const fetchMock = routedFetch({
+      [`GET ${READ_URL}`]: () =>
+        jsonResponse(404, { detail: "Conversation not found." }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    writeActiveConversation("s1", "ask", "conv1");
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+
+    // A pointer that outlived its conversation is not an error the reader sees —
+    // it simply means there is no thread to come back to.
+    expect(await screen.findByLabelText("suggested prompts")).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(readActiveConversation("s1", "ask")).toBeNull();
   });
 });
 
