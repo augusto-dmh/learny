@@ -149,18 +149,6 @@ class FakeConversationTurnRepository:
         return len(turns), history
 
 
-class _TeachingPortMustNotRun:
-    """Teaching port double: an ask is an answer-mode turn and never reaches it."""
-
-    model = "teaching-port-must-not-run"
-
-    def generate(self, **kwargs: object) -> GeneratedAnswer:
-        raise AssertionError("the answer path must not reach the teaching port")
-
-    def generate_stream(self, **kwargs: object) -> Iterator[AnswerStreamEvent]:
-        raise AssertionError("the answer path must not reach the teaching port")
-
-
 def _ask(
     *,
     sources: FakeSourceRepository,
@@ -188,8 +176,7 @@ def _ask(
             sources=sources,
             corpus=corpus,
             retrieve=retrieve,
-            answer_generation=generation,
-            teaching_generation=_TeachingPortMustNotRun(),
+            generation=generation,
             authorize=AuthorizeOwnership(),
             clock=FakeClock(_NOW),
             ids=uuid4,

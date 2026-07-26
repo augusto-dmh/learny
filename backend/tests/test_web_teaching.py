@@ -800,7 +800,7 @@ def test_post_turn_generation_failure_returns_502_and_persists_nothing(
     # TEACH-13: the generation port raising → 502 with a generic body that leaks no
     # internal detail, and NO turn row is persisted (reading the session back shows
     # an empty conversation).
-    from app.infrastructure.web.dependencies import get_teaching_generation
+    from app.infrastructure.web.dependencies import get_answer_generation
 
     source_id, csrf = _seed_ready_source(auth_client, db_conn, "turn-boom@example.com")
     _embed_all(db_conn, UUID(source_id))
@@ -820,7 +820,7 @@ def test_post_turn_generation_failure_returns_502_and_persists_nothing(
         ) -> GeneratedAnswer:
             raise RuntimeError("provider-secret-internal-detail")
 
-    auth_client.app.dependency_overrides[get_teaching_generation] = lambda: (
+    auth_client.app.dependency_overrides[get_answer_generation] = lambda: (
         _RaisingTeachingAdapter()
     )
     try:
@@ -828,7 +828,7 @@ def test_post_turn_generation_failure_returns_502_and_persists_nothing(
             auth_client, session.id, {"message": "photosynthesis sunlight"}, csrf=csrf
         )
     finally:
-        auth_client.app.dependency_overrides.pop(get_teaching_generation, None)
+        auth_client.app.dependency_overrides.pop(get_answer_generation, None)
 
     assert resp.status_code == 502, resp.text
     assert "provider-secret-internal-detail" not in resp.text
@@ -1053,7 +1053,7 @@ def test_turn_stream_mid_stream_failure_emits_error_part_and_persists_nothing(
 ) -> None:
     # GEN-16/17: a provider failure after the first delta is rendered as a protocol
     # error part; the turn is persisted only on completion, so nothing is persisted.
-    from app.infrastructure.web.dependencies import get_teaching_generation
+    from app.infrastructure.web.dependencies import get_answer_generation
 
     source_id, csrf = _seed_ready_source(auth_client, db_conn, "tstream-mid@example.com")
     _embed_all(db_conn, UUID(source_id))
@@ -1085,7 +1085,7 @@ def test_turn_stream_mid_stream_failure_emits_error_part_and_persists_nothing(
             yield AnswerTextDelta(text="partial ")
             raise RuntimeError("provider-secret-internal-detail")
 
-    auth_client.app.dependency_overrides[get_teaching_generation] = lambda: (
+    auth_client.app.dependency_overrides[get_answer_generation] = lambda: (
         _MidStreamRaisingTeachingAdapter()
     )
     try:
@@ -1093,7 +1093,7 @@ def test_turn_stream_mid_stream_failure_emits_error_part_and_persists_nothing(
             auth_client, session.id, {"message": "photosynthesis sunlight"}, csrf=csrf
         )
     finally:
-        auth_client.app.dependency_overrides.pop(get_teaching_generation, None)
+        auth_client.app.dependency_overrides.pop(get_answer_generation, None)
 
     assert resp.status_code == 200, resp.text
     parts = _parse_ui_stream(resp.text)

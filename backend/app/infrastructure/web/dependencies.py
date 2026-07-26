@@ -594,9 +594,8 @@ def get_post_conversation_turn(
 ) -> PostConversationTurn:
     """Wire ``PostConversationTurn`` on the request-scoped connection (CONV-10..14, 20/21).
 
-    Both generation ports are composed because the mode is a per-turn choice: one
-    service answers and teaches, and which port it reaches is decided per request,
-    not per wiring. Injecting them via ``Depends`` keeps both test-overridable, and
+    One generation port serves both modes — the mode is a per-turn argument, not a
+    per-wiring choice. Injecting it via ``Depends`` keeps it test-overridable, and
     the evidence budget / history window come from the ``conversation_*`` settings.
     """
     settings = get_settings()
@@ -606,8 +605,7 @@ def get_post_conversation_turn(
         sources=SqlAlchemySourceRepository(conn),
         corpus=SqlAlchemyCorpusRepository(conn),
         retrieve=get_retrieve_evidence(conn),
-        answer_generation=answer_generation,
-        teaching_generation=teaching_generation,
+        generation=answer_generation,
         authorize=AuthorizeOwnership(),
         clock=_clock,
         ids=uuid4,

@@ -208,21 +208,6 @@ def retrieve(
     )
 
 
-class _TeachingPortMustNotRun:
-    """Teaching port stand-in: an ask is an answer-mode turn and never reaches it."""
-
-    model = "teaching-port-must-not-run"
-
-    def generate(self, **kwargs: object) -> object:
-        raise AssertionError("the answer path must not reach the teaching port")
-
-    def generate_stream(self, **kwargs: object) -> object:
-        raise AssertionError("the answer path must not reach the teaching port")
-
-
-_TEACHING_UNUSED = _TeachingPortMustNotRun()
-
-
 def answer(db_conn: Connection, user: User, source: Source, question: str) -> QuestionAnswer:
     """Answer ``question`` over ``source`` through the real cited-answer path.
 
@@ -261,8 +246,7 @@ def answer(db_conn: Connection, user: User, source: Source, question: str) -> Qu
             sources=SqlAlchemySourceRepository(db_conn),
             corpus=SqlAlchemyCorpusRepository(db_conn),
             retrieve=retrieve_evidence,
-            answer_generation=DeterministicGenerationAdapter(),
-            teaching_generation=_TEACHING_UNUSED,
+            generation=DeterministicGenerationAdapter(),
             authorize=AuthorizeOwnership(),
             clock=FakeClock(_EPOCH),
             ids=uuid4,

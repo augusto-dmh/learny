@@ -435,9 +435,10 @@ class PostConversationTurn:
     ``include_notes_override`` lets a legacy request override it for that request
     only, never changing what is stored (AD-147).
 
-    Generation goes to the :class:`~app.domain.ports.GenerationPort` with the mode,
-    the bounded prior history, and — for ``teach`` — the target's section path.
-    Either way the port's answer passes
+    Generation goes to the one :class:`~app.domain.ports.GenerationPort` with the
+    mode, the bounded prior history, and — for ``teach`` — the target's section
+    path. There is no port to choose and so no branch that chooses one, and the
+    model identity a turn records has a single type. The port's answer passes
     through the shared grounding guard (AD-027), any port raise becomes
     ``AnswerGenerationFailed`` with nothing persisted, and the turn — answered or
     not-found — is persisted **only after grounding** with the next ``turn_index``,
@@ -458,8 +459,7 @@ class PostConversationTurn:
         sources: SourceRepository,
         corpus: CorpusRepository,
         retrieve: RetrieveEvidence,
-        answer_generation: GenerationPort,
-        teaching_generation: GenerationPort,
+        generation: GenerationPort,
         authorize: AuthorizeOwnership,
         clock: Clock,
         ids: Callable[[], UUID],
@@ -471,8 +471,7 @@ class PostConversationTurn:
         self._sources = sources
         self._corpus = corpus
         self._retrieve = retrieve
-        self._answer_generation = answer_generation
-        self._teaching_generation = teaching_generation
+        self._generation = generation
         self._authorize = authorize
         self._clock = clock
         self._ids = ids
@@ -499,7 +498,7 @@ class PostConversationTurn:
         if not plan.evidence:
             # Nothing in scope to answer from → not-found; the port is never invoked,
             # so the model identity comes from the port attribute.
-            turn = self._not_found_turn(plan, message, mode, 0, self._port(mode).model)
+            turn = self._not_found_turn(plan, message, mode, 0, self._generation.model)
         else:
             try:
                 generated = self._generate(mode=mode, message=message, plan=plan)
@@ -549,7 +548,7 @@ class PostConversationTurn:
         self, *, plan: _TurnPlan, message: str, mode: str
     ) -> Iterator[TurnStreamEvent]:
         if not plan.evidence:
-            turn = self._not_found_turn(plan, message, mode, 0, self._port(mode).model)
+            turn = self._not_found_turn(plan, message, mode, 0, self._generation.model)
             yield StreamTurn(self._persist(plan, turn, mode))
             return
 
@@ -718,10 +717,6 @@ class PostConversationTurn:
             add_subtree(by_anchor[canonical])
         return self._corpus.expand_anchors(conversation.source_id, base)
 
-    def _port(self, mode: str) -> GenerationPort:
-        """The generation port this mode speaks to (read for its model identity)."""
-        return self._teaching_generation if mode == MODE_TEACH else self._answer_generation
-
     def _target_path(self, mode: str, plan: _TurnPlan) -> tuple[str, ...] | None:
         """The teach target's section path, or ``None`` when this turn answers.
 
@@ -735,7 +730,7 @@ class PostConversationTurn:
         return plan.target.section_path
 
     def _generate(self, *, mode: str, message: str, plan: _TurnPlan) -> GeneratedAnswer:
-        return self._port(mode).generate(
+        return self._generation.generate(
             message=message,
             mode=mode,
             evidence=plan.evidence,
@@ -746,7 +741,7 @@ class PostConversationTurn:
     def _generate_stream(
         self, *, mode: str, message: str, plan: _TurnPlan
     ) -> Iterator[AnswerStreamEvent]:
-        return self._port(mode).generate_stream(
+        return self._generation.generate_stream(
             message=message,
             mode=mode,
             evidence=plan.evidence,

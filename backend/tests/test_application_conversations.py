@@ -390,68 +390,13 @@ def _recorded(
     }
 
 
-class FakeAnswerGenerationWithHistory:
-    """``GenerationPort`` double recording the history it was called with."""
+class FakeGeneration:
+    """``GenerationPort`` double: preset answer or raise, recording every call.
 
-    def __init__(
-        self,
-        *,
-        answer: GeneratedAnswer | None = None,
-        error: Exception | None = None,
-        deltas: Sequence[str] | None = None,
-        model: str = _MODEL,
-    ) -> None:
-        self._answer = answer
-        self._error = error
-        self._deltas = deltas
-        self.model = model
-        self.calls: list[dict[str, object]] = []
-        self.stream_calls: list[dict[str, object]] = []
-        self.stream_closed = False
-
-    def generate(
-        self,
-        *,
-        message: str,
-        mode: str,
-        evidence: Sequence[Evidence],
-        history: Sequence[HistoryTurn] = (),
-        target_section_path: tuple[str, ...] | None = None,
-    ) -> GeneratedAnswer:
-        self.calls.append(_recorded(message, mode, evidence, history, target_section_path))
-        if self._error is not None:
-            raise self._error
-        assert self._answer is not None, "no preset answer configured"
-        return self._answer
-
-    def generate_stream(
-        self,
-        *,
-        message: str,
-        mode: str,
-        evidence: Sequence[Evidence],
-        history: Sequence[HistoryTurn] = (),
-        target_section_path: tuple[str, ...] | None = None,
-    ) -> Iterator[AnswerStreamEvent]:
-        self.stream_calls.append(_recorded(message, mode, evidence, history, target_section_path))
-        if self._error is not None:
-            raise self._error
-        assert self._answer is not None, "no preset answer configured"
-        texts = (
-            list(self._deltas)
-            if self._deltas is not None
-            else ([self._answer.text] if self._answer.text else [])
-        )
-        try:
-            for text in texts:
-                yield AnswerTextDelta(text=text)
-            yield AnswerCompleted(answer=self._answer)
-        finally:
-            self.stream_closed = True
-
-
-class FakeTeachingGeneration:
-    """``GenerationPort`` double for the teach path: preset answer or raise, records calls."""
+    Records the message, the mode, the evidence, the bounded history, and the target
+    section path each call was handed, so a test can assert not just *that* the port
+    ran but *how* the turn reached it.
+    """
 
     def __init__(
         self,
@@ -1042,8 +987,7 @@ def _post(
     sources,
     corpus,
     retrieve,
-    answer_generation=None,
-    teaching_generation=None,
+    generation=None,
     clock=None,
     ids=uuid4,
 ) -> PostConversationTurn:
@@ -1053,8 +997,7 @@ def _post(
         sources=sources,
         corpus=corpus,
         retrieve=retrieve,
-        answer_generation=answer_generation or FakeAnswerGenerationWithHistory(),
-        teaching_generation=teaching_generation or FakeTeachingGeneration(),
+        generation=generation or FakeGeneration(),
         authorize=AuthorizeOwnership(),
         clock=clock or FakeClock(_NOW),
         ids=ids,
@@ -1120,7 +1063,7 @@ def test_scoped_turn_retrieves_through_the_expanded_scope_subtree() -> None:
     )
     evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
     retrieve = FakeScopedRetrieveEvidence(evidence)
-    generation = FakeAnswerGenerationWithHistory(answer=_answered(*evidence))
+    generation = FakeGeneration(answer=_answered(*evidence))
 
     _post(
         conversations=conversations,
@@ -1128,7 +1071,7 @@ def test_scoped_turn_retrieves_through_the_expanded_scope_subtree() -> None:
         sources=sources,
         corpus=corpus,
         retrieve=retrieve,
-        answer_generation=generation,
+        generation=generation,
     )(user=user, conversation_id=conversation.id, message="what is anchoring?", mode=MODE_ANSWER)
 
     assert retrieve.calls == [
@@ -1160,7 +1103,7 @@ def test_whole_book_turn_is_the_only_one_that_searches_the_whole_source() -> Non
         sources=sources,
         corpus=corpus,
         retrieve=retrieve,
-        answer_generation=FakeAnswerGenerationWithHistory(answer=_answered(*evidence)),
+        generation=FakeGeneration(answer=_answered(*evidence)),
     )(user=user, conversation_id=conversation.id, message="what is anchoring?", mode=MODE_ANSWER)
 
     assert retrieve.calls[0]["anchors"] is None
@@ -1183,7 +1126,7 @@ def test_scope_is_expanded_again_on_every_turn() -> None:
         sources=sources,
         corpus=corpus,
         retrieve=retrieve,
-        answer_generation=FakeAnswerGenerationWithHistory(answer=_answered(*evidence)),
+        generation=FakeGeneration(answer=_answered(*evidence)),
     )
 
     post(user=user, conversation_id=conversation.id, message="first", mode=MODE_ANSWER)
@@ -1342,7 +1285,7 @@ def test_scoped_turn_without_evidence_is_not_found_in_scope_and_skips_generation
     # the whole-book one, and the generation port is never invoked.
     user, source, sources, corpus, conversations, conversation = _scoped_world()
     turns = FakeConversationTurnRepository()
-    generation = FakeAnswerGenerationWithHistory()
+    generation = FakeGeneration()
 
     turn = _post(
         conversations=conversations,
@@ -1350,7 +1293,7 @@ def test_scoped_turn_without_evidence_is_not_found_in_scope_and_skips_generation
         sources=sources,
         corpus=corpus,
         retrieve=FakeScopedRetrieveEvidence([]),
-        answer_generation=generation,
+        generation=generation,
     )(user=user, conversation_id=conversation.id, message="q", mode=MODE_ANSWER)
 
     assert turn.answer_status == "not_found_in_scope"
@@ -1358,6 +1301,29 @@ def test_scoped_turn_without_evidence_is_not_found_in_scope_and_skips_generation
     assert turn.model == _MODEL
     assert generation.calls == []
     assert turns.list_for_conversation(conversation.id) == [turn]
+
+
+def test_the_one_generator_supplies_the_model_identity_in_either_mode() -> None:
+    # CONV-11: the service holds a single generation collaborator, so the identity a
+    # turn records is that generator's whatever the mode. This path never invokes
+    # generation, so the identity can only have been read off the injected port —
+    # which is the read that used to force a union of two port types.
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    generation = FakeGeneration(model="the-only-generator")
+    post = _post(
+        conversations=conversations,
+        turns=FakeConversationTurnRepository(),
+        sources=sources,
+        corpus=corpus,
+        retrieve=FakeScopedRetrieveEvidence([]),
+        generation=generation,
+    )
+
+    answered = post(user=user, conversation_id=conversation.id, message="q", mode=MODE_ANSWER)
+    taught = post(user=user, conversation_id=conversation.id, message="q", mode=MODE_TEACH)
+
+    assert (answered.model, taught.model) == ("the-only-generator", "the-only-generator")
+    assert generation.calls == []
 
 
 def test_whole_book_turn_without_evidence_stays_not_found_in_source() -> None:
@@ -1392,7 +1358,7 @@ def test_scoped_turn_that_fails_grounding_is_not_found_in_scope() -> None:
         sources=sources,
         corpus=corpus,
         retrieve=FakeScopedRetrieveEvidence(evidence),
-        answer_generation=FakeAnswerGenerationWithHistory(answer=ungrounded),
+        generation=FakeGeneration(answer=ungrounded),
     )(user=user, conversation_id=conversation.id, message="q", mode=MODE_ANSWER)
 
     assert turn.answer_status == "not_found_in_scope"
@@ -1424,7 +1390,7 @@ def test_answer_mode_sends_the_bounded_history_to_the_answer_port() -> None:
             )
         )
     evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
-    generation = FakeAnswerGenerationWithHistory(answer=_answered(*evidence))
+    generation = FakeGeneration(answer=_answered(*evidence))
 
     _post(
         conversations=conversations,
@@ -1432,7 +1398,7 @@ def test_answer_mode_sends_the_bounded_history_to_the_answer_port() -> None:
         sources=sources,
         corpus=corpus,
         retrieve=FakeScopedRetrieveEvidence(evidence),
-        answer_generation=generation,
+        generation=generation,
     )(user=user, conversation_id=conversation.id, message="and now?", mode=MODE_ANSWER)
 
     assert turns.history_calls[-1] == (conversation.id, _HISTORY_TURNS)
@@ -1471,7 +1437,7 @@ def test_history_keeps_not_found_turns_with_an_empty_response() -> None:
         )
     )
     evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
-    generation = FakeAnswerGenerationWithHistory(answer=_answered(*evidence))
+    generation = FakeGeneration(answer=_answered(*evidence))
 
     _post(
         conversations=conversations,
@@ -1479,19 +1445,19 @@ def test_history_keeps_not_found_turns_with_an_empty_response() -> None:
         sources=sources,
         corpus=corpus,
         retrieve=FakeScopedRetrieveEvidence(evidence),
-        answer_generation=generation,
+        generation=generation,
     )(user=user, conversation_id=conversation.id, message="retry", mode=MODE_ANSWER)
 
     assert generation.calls[0]["history"] == [HistoryTurn(message="unanswerable", response_text="")]
 
 
-def test_teach_mode_sends_the_target_section_path_and_history_to_the_teaching_port() -> None:
-    # CONV-10 AC2: teach mode dispatches to the teaching port exactly as the teaching
-    # path does today, with the re-resolved target's section path.
+def test_teach_mode_sends_the_mode_target_section_path_and_history_to_the_port() -> None:
+    # CONV-10 AC2: a teach turn reaches the one generation port carrying the teach
+    # mode and the re-resolved target's section path, exactly what the teaching path
+    # sent when it had a port of its own.
     user, source, sources, corpus, conversations, conversation = _scoped_world()
     evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
-    teaching = FakeTeachingGeneration(answer=_answered(*evidence))
-    answering = FakeAnswerGenerationWithHistory()
+    generation = FakeGeneration(answer=_answered(*evidence))
 
     turn = _post(
         conversations=conversations,
@@ -1499,11 +1465,10 @@ def test_teach_mode_sends_the_target_section_path_and_history_to_the_teaching_po
         sources=sources,
         corpus=corpus,
         retrieve=FakeScopedRetrieveEvidence(evidence),
-        answer_generation=answering,
-        teaching_generation=teaching,
+        generation=generation,
     )(user=user, conversation_id=conversation.id, message="teach me", mode="teach")
 
-    assert teaching.calls == [
+    assert generation.calls == [
         {
             "message": "teach me",
             "mode": MODE_TEACH,
@@ -1512,7 +1477,6 @@ def test_teach_mode_sends_the_target_section_path_and_history_to_the_teaching_po
             "target_section_path": ("Chapter 1",),
         }
     ]
-    assert answering.calls == []
     assert turn.mode == "teach"
 
 
@@ -1608,7 +1572,7 @@ def test_answer_turn_proceeds_when_a_scoped_section_disappeared() -> None:
         sources=sources,
         corpus=corpus,
         retrieve=FakeScopedRetrieveEvidence(evidence),
-        answer_generation=FakeAnswerGenerationWithHistory(answer=_answered(*evidence)),
+        generation=FakeGeneration(answer=_answered(*evidence)),
     )(user=user, conversation_id=conversation.id, message="q", mode=MODE_ANSWER)
 
     assert turn.answer_status == "answered"
@@ -1639,7 +1603,7 @@ def test_answered_turn_is_persisted_with_the_next_index_and_ranked_citations() -
     )
     top = _evidence(source.id, "top", anchor="ch1.xhtml", score=0.9)
     second = _evidence(source.id, "second", anchor="ch1.xhtml#core", score=0.4)
-    generation = FakeAnswerGenerationWithHistory(
+    generation = FakeGeneration(
         answer=GeneratedAnswer(
             text="grounded",
             # Cited out of rank order: grounding restores evidence rank.
@@ -1655,7 +1619,7 @@ def test_answered_turn_is_persisted_with_the_next_index_and_ranked_citations() -
         sources=sources,
         corpus=corpus,
         retrieve=FakeScopedRetrieveEvidence([top, second]),
-        answer_generation=generation,
+        generation=generation,
     )(user=user, conversation_id=conversation.id, message="q", mode=MODE_ANSWER)
 
     assert turn.turn_index == 1
@@ -1699,7 +1663,7 @@ def test_a_turn_index_race_surfaces_as_a_conflict() -> None:
             sources=sources,
             corpus=corpus,
             retrieve=FakeScopedRetrieveEvidence(evidence),
-            answer_generation=FakeAnswerGenerationWithHistory(answer=_answered(*evidence)),
+            generation=FakeGeneration(answer=_answered(*evidence)),
         )(user=user, conversation_id=conversation.id, message="q", mode=MODE_ANSWER)
 
     assert conversations.touch_calls == []
@@ -1716,7 +1680,7 @@ def test_a_turn_index_race_surfaces_as_a_conflict_while_streaming() -> None:
         sources=sources,
         corpus=corpus,
         retrieve=FakeScopedRetrieveEvidence(evidence),
-        answer_generation=FakeAnswerGenerationWithHistory(answer=_answered(*evidence)),
+        generation=FakeGeneration(answer=_answered(*evidence)),
     )
 
     with pytest.raises(ConversationTurnConflict):
@@ -1736,7 +1700,7 @@ def test_generation_failure_persists_nothing() -> None:
             sources=sources,
             corpus=corpus,
             retrieve=FakeScopedRetrieveEvidence(evidence),
-            answer_generation=FakeAnswerGenerationWithHistory(error=RuntimeError("provider down")),
+            generation=FakeGeneration(error=RuntimeError("provider down")),
         )(user=user, conversation_id=conversation.id, message="q", mode=MODE_ANSWER)
 
     assert turns.add_calls == 0
@@ -1749,9 +1713,7 @@ def test_generation_failure_persists_nothing() -> None:
 def test_stream_yields_the_deltas_then_the_persisted_turn() -> None:
     user, source, sources, corpus, conversations, conversation = _scoped_world()
     evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
-    generation = FakeAnswerGenerationWithHistory(
-        answer=_answered(*evidence, text="one two"), deltas=["one ", "two"]
-    )
+    generation = FakeGeneration(answer=_answered(*evidence, text="one two"), deltas=["one ", "two"])
     turns = FakeConversationTurnRepository()
 
     events = list(
@@ -1761,7 +1723,7 @@ def test_stream_yields_the_deltas_then_the_persisted_turn() -> None:
             sources=sources,
             corpus=corpus,
             retrieve=FakeScopedRetrieveEvidence(evidence),
-            answer_generation=generation,
+            generation=generation,
         ).stream(user=user, conversation_id=conversation.id, message="q", mode=MODE_ANSWER)
     )
 
@@ -1777,7 +1739,7 @@ def test_stream_and_buffered_paths_persist_identical_turns() -> None:
         user, source, sources, corpus, conversations, conversation = _scoped_world()
         evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
         # Both paths see the same conversation id and evidence ids.
-        generation = FakeAnswerGenerationWithHistory(answer=_answered(*evidence, text="reply"))
+        generation = FakeGeneration(answer=_answered(*evidence, text="reply"))
         turns = FakeConversationTurnRepository()
         post = _post(
             conversations=conversations,
@@ -1785,7 +1747,7 @@ def test_stream_and_buffered_paths_persist_identical_turns() -> None:
             sources=sources,
             corpus=corpus,
             retrieve=FakeScopedRetrieveEvidence(evidence),
-            answer_generation=generation,
+            generation=generation,
         )
         if streamed:
             events = list(
@@ -1822,9 +1784,7 @@ def test_stream_cancelled_before_completion_persists_nothing() -> None:
     # mid-stream leaves no turn and no activity bump behind.
     user, source, sources, corpus, conversations, conversation = _scoped_world()
     evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
-    generation = FakeAnswerGenerationWithHistory(
-        answer=_answered(*evidence, text="one two"), deltas=["one ", "two"]
-    )
+    generation = FakeGeneration(answer=_answered(*evidence, text="one two"), deltas=["one ", "two"])
     turns = FakeConversationTurnRepository()
 
     stream = _post(
@@ -1833,7 +1793,7 @@ def test_stream_cancelled_before_completion_persists_nothing() -> None:
         sources=sources,
         corpus=corpus,
         retrieve=FakeScopedRetrieveEvidence(evidence),
-        answer_generation=generation,
+        generation=generation,
     ).stream(user=user, conversation_id=conversation.id, message="q", mode=MODE_ANSWER)
     next(stream)
     stream.close()
@@ -1845,7 +1805,7 @@ def test_stream_cancelled_before_completion_persists_nothing() -> None:
 
 def test_stream_without_evidence_persists_the_scoped_not_found_turn() -> None:
     user, source, sources, corpus, conversations, conversation = _scoped_world()
-    generation = FakeAnswerGenerationWithHistory()
+    generation = FakeGeneration()
     turns = FakeConversationTurnRepository()
 
     events = list(
@@ -1855,7 +1815,7 @@ def test_stream_without_evidence_persists_the_scoped_not_found_turn() -> None:
             sources=sources,
             corpus=corpus,
             retrieve=FakeScopedRetrieveEvidence([]),
-            answer_generation=generation,
+            generation=generation,
         ).stream(user=user, conversation_id=conversation.id, message="q", mode=MODE_ANSWER)
     )
 

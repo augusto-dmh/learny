@@ -428,24 +428,6 @@ class FakeTeachingGeneration:
 # --- service builders ----------------------------------------------------------
 
 
-class _AnswerPortMustNotRun:
-    """``AnswerGenerationPort`` double that fails if teaching ever reaches it.
-
-    The unified turn service composes both generation ports and dispatches on the
-    turn's mode; the legacy seam fixes that mode to ``teach``, so every call below
-    must land on the teaching port. This double turns a dispatch regression into a
-    failure instead of a silently different answer.
-    """
-
-    model = "answer-port-must-not-run"
-
-    def generate(self, **kwargs: object) -> GeneratedAnswer:
-        raise AssertionError("teaching must not reach the answer generation port")
-
-    def generate_stream(self, **kwargs: object) -> Iterator[AnswerStreamEvent]:
-        raise AssertionError("teaching must not reach the answer generation port")
-
-
 def _start(
     *, sources, corpus, sessions, ids=uuid4, clock: FakeClock | None = None
 ) -> StartTeachingSession:
@@ -498,8 +480,7 @@ def _post(
             sources=sources,
             corpus=corpus,
             retrieve=retrieve,
-            answer_generation=_AnswerPortMustNotRun(),
-            teaching_generation=generation,
+            generation=generation,
             authorize=AuthorizeOwnership(),
             clock=clock or FakeClock(_NOW),
             ids=ids,
@@ -1029,6 +1010,9 @@ def test_turn_passes_bounded_history_last_n() -> None:
         HistoryTurn(message="message 2", response_text="r2"),
     ]
     assert generation.calls[0]["target_section_path"] == ("Chapter 1",)
+    # The legacy seam fixes the mode, so the one generation port is always handed
+    # ``teach`` here — a dispatch regression would be a silently different answer.
+    assert generation.calls[0]["mode"] == MODE_TEACH
     assert result.turn_index == 3
 
 

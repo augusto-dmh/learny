@@ -9,8 +9,10 @@ caller or adapter has to infer the mode from whether a target is present.
 from __future__ import annotations
 
 import inspect
+import typing
 
 import app.domain.ports as ports_module
+from app.application.conversations import PostConversationTurn
 from app.domain.ports import GenerationPort
 
 
@@ -30,3 +32,14 @@ def test_generation_takes_mode_explicitly_with_an_optional_target() -> None:
         parameters = inspect.signature(method).parameters
         assert parameters["mode"].default is inspect.Parameter.empty
         assert parameters["target_section_path"].default is None
+
+
+def test_the_turn_service_takes_exactly_one_generator_of_a_single_type() -> None:
+    # The union that reading a turn's model identity used to force came from the
+    # service holding two differently typed generators. It holds one, annotated with
+    # the one port and nothing else.
+    hints = typing.get_type_hints(PostConversationTurn.__init__)
+    generators = [name for name, hint in hints.items() if hint is GenerationPort]
+
+    assert generators == ["generation"]
+    assert typing.get_origin(hints["generation"]) is None
