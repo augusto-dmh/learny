@@ -460,24 +460,6 @@ class AnswerCompleted:
 AnswerStreamEvent = AnswerTextDelta | AnswerCompleted
 
 
-@dataclass(frozen=True)
-class QuestionAnswer:
-    """The application service's cited-answer result (QA-01..04, 13..16).
-
-    ``status`` is one of ``"answered"`` or ``"not_found_in_source"``. Citations
-    are grounded :class:`Evidence` items (no separate citation entity). The
-    not-found contract is exact: ``status == "not_found_in_source"`` implies
-    ``text == ""`` and ``citations == ()``. ``evidence_count`` and ``model`` are
-    diagnostics carried on both outcomes (QA-04).
-    """
-
-    status: str
-    text: str
-    citations: tuple[Evidence, ...]
-    evidence_count: int
-    model: str
-
-
 # --- Conversations aggregate (ADR-0029; originally the Cycle 7 teaching sessions) ---
 # A conversation is one grounded exchange about a book, defined by two axes: its
 # *scope* (which sections retrieval may see) and each turn's *mode* (how the reply

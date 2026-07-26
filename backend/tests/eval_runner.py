@@ -26,14 +26,14 @@ from sqlalchemy import Connection
 from app.application.conversations import PostConversationTurn, StartConversation
 from app.application.corpus import BuildCorpus
 from app.application.identity import AuthorizeOwnership
-from app.application.qa import AskQuestion
 from app.application.retrieval import RetrieveEvidence
 from app.core.config import get_settings
 from app.domain.entities import (
+    MODE_ANSWER,
+    ConversationTurn,
     CorpusSectionRecord,
     Evidence,
     IngestionJob,
-    QuestionAnswer,
     Source,
     User,
 )
@@ -130,7 +130,7 @@ def seed_source(db_conn: Connection, *, email: str) -> tuple[User, Source]:
     """Persist an owner + a ready source so a corpus can be built under it.
 
     Mirrors ``test_retrieval._persisted_source`` but returns the owner too, since
-    the citation golden drives ``AskQuestion`` (which authorizes by user).
+    the citation golden drives the conversation services (which authorize by user).
     """
     user = User(id=uuid4(), email=email, created_at=_EPOCH)
     SqlAlchemyUserRepository(db_conn).add(user)
@@ -208,16 +208,17 @@ def retrieve(
     )
 
 
-def answer(db_conn: Connection, user: User, source: Source, question: str) -> QuestionAnswer:
+def answer(db_conn: Connection, user: User, source: Source, question: str) -> ConversationTurn:
     """Answer ``question`` over ``source`` through the real cited-answer path.
 
-    Wires ``AskQuestion`` exactly as the request handler does — the unified start
-    and turn services over the real repositories, real ``RetrieveEvidence`` on the
-    hybrid retrieval + deterministic embeddings, the deterministic extractive answer
-    adapter, and the settings-sourced evidence budget — so the golden citation check
-    exercises the shared grounding guard, not a fake. Each call persists its
-    conversation and turn like the endpoint does; callers run inside the test
-    transaction, which is rolled back.
+    Wires the start and turn services exactly as the request handler does — the real
+    repositories, real ``RetrieveEvidence`` on the hybrid retrieval + deterministic
+    embeddings, the deterministic extractive generation adapter, and the
+    settings-sourced evidence budget — so the golden citation check exercises the
+    shared grounding guard, not a fake. A question is asked of the whole book, so
+    the conversation opened for it carries the empty scope and its miss is the
+    whole-book verdict. Each call persists its conversation and turn like the
+    endpoint does; callers run inside the test transaction, which is rolled back.
     """
     settings = get_settings()
     retrieve_evidence = RetrieveEvidence(
@@ -231,31 +232,39 @@ def answer(db_conn: Connection, user: User, source: Source, question: str) -> Qu
         ef_search=settings.hnsw_ef_search,
         default_top_k=settings.retrieval_top_k,
     )
-    ask = AskQuestion(
-        start=StartConversation(
-            sources=SqlAlchemySourceRepository(db_conn),
-            corpus=SqlAlchemyCorpusRepository(db_conn),
-            conversations=SqlAlchemyConversationRepository(db_conn),
-            authorize=AuthorizeOwnership(),
-            clock=FakeClock(_EPOCH),
-            ids=uuid4,
-        ),
-        post=PostConversationTurn(
-            conversations=SqlAlchemyConversationRepository(db_conn),
-            turns=SqlAlchemyConversationTurnRepository(db_conn),
-            sources=SqlAlchemySourceRepository(db_conn),
-            corpus=SqlAlchemyCorpusRepository(db_conn),
-            retrieve=retrieve_evidence,
-            generation=DeterministicGenerationAdapter(),
-            authorize=AuthorizeOwnership(),
-            clock=FakeClock(_EPOCH),
-            ids=uuid4,
-            evidence_top_k=settings.conversation_evidence_top_k,
-            history_turns=settings.conversation_history_turns,
-        ),
+    start = StartConversation(
+        sources=SqlAlchemySourceRepository(db_conn),
+        corpus=SqlAlchemyCorpusRepository(db_conn),
         conversations=SqlAlchemyConversationRepository(db_conn),
+        authorize=AuthorizeOwnership(),
+        clock=FakeClock(_EPOCH),
+        ids=uuid4,
     )
-    return ask(user=user, source_id=source.id, question=question)
+    post = PostConversationTurn(
+        conversations=SqlAlchemyConversationRepository(db_conn),
+        turns=SqlAlchemyConversationTurnRepository(db_conn),
+        sources=SqlAlchemySourceRepository(db_conn),
+        corpus=SqlAlchemyCorpusRepository(db_conn),
+        retrieve=retrieve_evidence,
+        generation=DeterministicGenerationAdapter(),
+        authorize=AuthorizeOwnership(),
+        clock=FakeClock(_EPOCH),
+        ids=uuid4,
+        evidence_top_k=settings.conversation_evidence_top_k,
+        history_turns=settings.conversation_history_turns,
+    )
+    conversation = start(
+        user=user,
+        source_id=source.id,
+        scope_anchors=(),
+        include_notes=False,
+    )
+    return post(
+        user=user,
+        conversation_id=conversation.id,
+        message=question,
+        mode=MODE_ANSWER,
+    )
 
 
 def _throwaway_source() -> Source:

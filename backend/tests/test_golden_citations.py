@@ -1,8 +1,8 @@
 """C1 gate (integration) — citation grounding golden checks (EVAL-07/08).
 
 Builds + embeds the golden book in the live pgvector test DB and drives the real
-``AskQuestion`` (real retrieval + deterministic extractive adapter + shared
-grounding guard, now over a persisted conversation). Answerable questions must
+cited-answer path (real retrieval + deterministic extractive adapter + shared
+grounding guard, over a persisted conversation). Answerable questions must
 cite their target and only real source passages; an unsupported question must
 yield the grounded not-found outcome; and the answer itself must still be, byte
 for byte, the adapter's composition of the evidence retrieved (I-CM-8). Skips
@@ -52,7 +52,7 @@ def test_answer_cites_target_and_only_source_passages(db_conn: Connection, case)
 
     result = answer(db_conn, user, source, case.question)
 
-    assert result.status == "answered"
+    assert result.answer_status == "answered"
     assert result.citations, "an answered result must carry citations"
     cited_anchors = {citation.anchor for citation in result.citations}
     assert case.expected_anchor in cited_anchors
@@ -86,7 +86,7 @@ def test_answer_text_is_still_the_adapter_composition_of_its_evidence(
     expected = DeterministicGenerationAdapter().generate(
         message=case.question, mode=MODE_ANSWER, evidence=evidence
     )
-    assert result.text == expected.text
+    assert result.answer_text == expected.text
     assert tuple(c.chunk_id for c in result.citations) == expected.cited_chunk_ids
 
 
@@ -99,5 +99,5 @@ def test_unsupported_question_is_grounded_not_found(db_conn: Connection) -> None
 
     result = answer(db_conn, user, source, UNSUPPORTED_QUESTION)
 
-    assert result.status == "not_found_in_source"
+    assert result.answer_status == "not_found_in_source"
     assert result.citations == ()

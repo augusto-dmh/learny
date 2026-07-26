@@ -24,11 +24,15 @@ from app.domain.entities import Source
 from app.infrastructure.db.repositories import SqlAlchemySourceRepository
 from tests.conftest import TEST_PASSWORD, declared_routes, requires_db
 
-#: Modules that only ever existed to keep the retired wires speaking.
+#: Modules that only ever existed to keep the retired wires speaking — the two
+#: routers, the presenter that collapsed the scoped verdict for them, and the
+#: application adapters that translated their vocabulary onto the unified services.
 RETIRED_MODULES = (
     "app.infrastructure.web.teaching",
     "app.infrastructure.web.questions",
     "app.infrastructure.web.legacy_status",
+    "app.application.teaching",
+    "app.application.qa",
 )
 
 

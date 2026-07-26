@@ -57,7 +57,6 @@ from app.application.notes import (
     ListNotes,
     UpdateNote,
 )
-from app.application.qa import AskQuestion
 from app.application.quiz import (
     ExportQuizDeck,
     ListQuizItems,
@@ -73,12 +72,6 @@ from app.application.retrieval import RetrieveEvidence
 from app.application.reviews import GetDueQueue, ResetSchedule, SubmitReview
 from app.application.sources import CreateSource, GetSource, ListSources
 from app.application.study import ContinueReading, GetStudySummary
-from app.application.teaching import (
-    ListTeachingSessions,
-    PostTeachingTurn,
-    ReadTeachingSession,
-    StartTeachingSession,
-)
 from app.application.vault import ExportVault
 from app.core.config import Settings, get_settings
 from app.core.tracing import bind_trace
@@ -442,71 +435,6 @@ def get_generation() -> GenerationPort:
 
 
 Generation = Annotated[GenerationPort, Depends(get_generation)]
-
-
-def get_ask_question(
-    conn: DbConnection,
-    generation: Generation,
-) -> AskQuestion:
-    """Wire ``AskQuestion`` on the request-scoped connection (QA-01..04, 07..08).
-
-    Composes the two unified services an ask is made of — starting the whole-book
-    conversation and taking its first answer turn — plus the conversation repo the
-    failure path discards through. The generator is injected via ``Depends`` so
-    overriding it in tests keeps working exactly as before.
-    """
-    return AskQuestion(
-        start=get_start_conversation(conn),
-        post=get_post_conversation_turn(conn, generation),
-        conversations=SqlAlchemyConversationRepository(conn),
-    )
-
-
-# --- Teaching sessions (Phase 8; compatibility since ADR-0029) -----------------
-#
-# The legacy teaching services are adapters over the unified conversation services
-# below — same request-scoped connection, same repositories, no second stack. Each
-# is wired from the unified getter it delegates to, so the two surfaces can never
-# drift apart in wiring; they disappear together when the panel re-points.
-
-
-def get_start_teaching_session(conn: DbConnection) -> StartTeachingSession:
-    """Wire ``StartTeachingSession`` on the request-scoped connection (TEACH-01..04)."""
-    return StartTeachingSession(start=get_start_conversation(conn))
-
-
-def get_read_teaching_session(conn: DbConnection) -> ReadTeachingSession:
-    """Wire ``ReadTeachingSession`` on the request-scoped connection (TEACH-05/06/20)."""
-    return ReadTeachingSession(read=get_read_conversation(conn))
-
-
-def get_list_teaching_sessions(conn: DbConnection) -> ListTeachingSessions:
-    """Wire ``ListTeachingSessions`` on the request-scoped connection (TEACH-21).
-
-    The one legacy read that is not a unified service: the old panel is rooted at a
-    source (404 when it is not the caller's) and shows only conversations with a
-    teach target (CONV-23).
-    """
-    return ListTeachingSessions(
-        sources=SqlAlchemySourceRepository(conn),
-        conversations=SqlAlchemyConversationRepository(conn),
-        authorize=AuthorizeOwnership(),
-    )
-
-
-def get_post_teaching_turn(
-    conn: DbConnection,
-    generation: Generation,
-) -> PostTeachingTurn:
-    """Wire ``PostTeachingTurn`` on the request-scoped connection (TEACH-07..17, 19, 24).
-
-    Delegates to the unified turn service, which is handed the same one generator
-    every other path gets and the ``teach`` mode this adapter fixes.
-    """
-    return PostTeachingTurn(
-        post=get_post_conversation_turn(conn, generation),
-        conversations=SqlAlchemyConversationRepository(conn),
-    )
 
 
 # --- Unified conversations (ADR-0029) ------------------------------------------

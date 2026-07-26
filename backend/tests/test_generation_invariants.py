@@ -83,8 +83,7 @@ def test_generation_invariants_hold_over_golden_book(db_conn: Connection) -> Non
 
     from app.core.config import get_settings
 
-    # The budget the answer path actually spends since ADR-0029 (the deprecated
-    # ``qa_evidence_top_k`` no longer governs it), so the comparison set here is the
+    # The budget the answer path actually spends, so the comparison set here is the
     # evidence the answer really saw.
     top_k = get_settings().conversation_evidence_top_k
 
@@ -98,7 +97,7 @@ def test_generation_invariants_hold_over_golden_book(db_conn: Connection) -> Non
 
         assert cited_ids_subset_of_retrieved(cited_ids, retrieved_ids), case.case_id
         assert cited_anchors_resolve(cited_anchors, GOLDEN_SECTION_ANCHORS), case.case_id
-        assert answered_implies_citation(result.status, cited_ids), case.case_id
+        assert answered_implies_citation(result.answer_status, cited_ids), case.case_id
 
 
 # --- Committed replay snapshots (skips when none are committed) ------------------

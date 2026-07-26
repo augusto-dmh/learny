@@ -1,19 +1,20 @@
 """UI Message Stream v1 presenter — the only module that knows the SSE wire format.
 
 Maps Learny's protocol-free application stream events (``StreamDelta`` and the
-terminal ``StreamAnswer`` / ``StreamTurn``) onto Vercel's UI Message Stream v1
-parts so Cycle D's ``useChat`` frontend renders tokens, citations, and the answer
-status as they arrive. The protocol vocabulary lives *only* here (design §7): the
-domain and application layers never learn the wire format, and the JSON endpoints
-are untouched.
+terminal ``StreamTurn``) onto Vercel's UI Message Stream v1 parts so the
+``useChat`` frontend renders tokens, citations, and the answer status as they
+arrive. The protocol vocabulary lives *only* here (design §7): the domain and
+application layers never learn the wire format, and the JSON endpoints are
+untouched.
 
 Frame order (per response): ``start`` → ``text-start`` → ``text-delta``×N →
 ``text-end`` → ``data-citations`` (the grounded citations, same ``EvidenceView``
 projection as the JSON endpoint) → ``data-answer-status`` (``answered`` |
-``not_found_in_source``) → ``finish`` → the terminal ``[DONE]``. Message/part ids
-are per-response ``uuid4``. A mid-stream ``AnswerGenerationFailed`` (the provider
-failing after headers were already sent) is rendered as a protocol ``error`` part
-carrying the same generic message as the buffered 502, then the stream terminates.
+``not_found_in_scope`` | ``not_found_in_source``) → ``finish`` → the terminal
+``[DONE]``. Message/part ids are per-response ``uuid4``. A mid-stream
+``AnswerGenerationFailed`` (the provider failing after headers were already sent)
+is rendered as a protocol ``error`` part carrying the same generic message as the
+buffered 502, then the stream terminates.
 """
 
 from __future__ import annotations
@@ -27,8 +28,6 @@ from fastapi.sse import EventSourceResponse, ServerSentEvent, format_sse_event
 
 from app.application.errors import AnswerGenerationFailed
 from app.application.streaming import (
-    AskStreamEvent,
-    StreamAnswer,
     StreamDelta,
     StreamTurn,
     TurnStreamEvent,
@@ -43,22 +42,18 @@ UI_MESSAGE_STREAM_HEADER_NAME = "x-vercel-ai-ui-message-stream"
 UI_MESSAGE_STREAM_PROTOCOL = "v1"
 
 
-def _terminal(event: StreamAnswer | StreamTurn) -> tuple[list[Evidence], str]:
+def _terminal(event: StreamTurn) -> tuple[list[Evidence], str]:
     """Read the grounded citations and answer status from the terminal event.
 
-    The Q&A stream ends with a :class:`~app.application.streaming.StreamAnswer`
-    (a ``QuestionAnswer``); the teaching stream ends with a
-    :class:`~app.application.streaming.StreamTurn` (the persisted ``ConversationTurn``).
-    Both carry the same citation snapshots and an ``answered`` /
-    ``not_found_in_source`` status, projected identically for the client.
+    A turn stream ends with a :class:`~app.application.streaming.StreamTurn` — the
+    persisted ``ConversationTurn`` — carrying the citation snapshots and the status
+    the buffered response reports, projected identically for the client.
     """
-    if isinstance(event, StreamAnswer):
-        return list(event.result.citations), event.result.status
     return list(event.turn.citations), event.turn.answer_status
 
 
 def to_ui_message_stream(
-    events: Iterator[AskStreamEvent | TurnStreamEvent],
+    events: Iterator[TurnStreamEvent],
 ) -> Iterator[ServerSentEvent]:
     """Render application stream events as UI Message Stream v1 SSE frames."""
     message_id = uuid4().hex
@@ -74,7 +69,7 @@ def to_ui_message_stream(
                 yield ServerSentEvent(
                     data={"type": "text-delta", "id": text_id, "delta": event.text}
                 )
-            else:  # terminal StreamAnswer / StreamTurn — carries citations + status
+            else:  # the terminal StreamTurn — carries citations + status
                 citations, status = _terminal(event)
     except AnswerGenerationFailed:
         # Provider failed after headers were sent: surface the generic error as a
@@ -113,7 +108,7 @@ def _to_wire(frame: ServerSentEvent) -> bytes:
 
 
 def to_sse_response(
-    events: Iterator[AskStreamEvent | TurnStreamEvent],
+    events: Iterator[TurnStreamEvent],
 ) -> EventSourceResponse:
     """Wrap the frame stream in a directly-returned ``EventSourceResponse``.
 

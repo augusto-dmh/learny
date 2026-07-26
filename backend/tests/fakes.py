@@ -534,8 +534,8 @@ class FakeEmbeddingIndexRepository:
 class FakeRetrieveEvidence:
     """``RetrieveEvidence`` double: records calls, returns preset evidence or raises.
 
-    Lets ``AskQuestion`` tests assert the readiness/ownership guards short-circuit
-    before retrieval (``calls == []``) and that the trimmed question plus the
+    Lets turn-service tests assert the readiness/ownership guards short-circuit
+    before retrieval (``calls == []``) and that the trimmed message plus the
     settings-sourced ``top_k`` reach retrieval, without wiring the real
     embedding/retrieval ports.
     """

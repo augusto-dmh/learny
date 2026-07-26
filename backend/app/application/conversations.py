@@ -4,7 +4,7 @@ One conversation is one grounded exchange about a book, defined by two axes: its
 *scope* (the section anchors retrieval may see — empty means the whole book) and
 each turn's *mode* (``answer`` replies as cited Q&A, ``teach`` as structured
 teaching against the conversation's target section). These services generalize the
-teaching-session mechanics that proved out in ``app/application/teaching.py``:
+mechanics the separate ask and teaching paths each proved out before them:
 ownership collapses missing and unowned to one error, the scope is re-expanded per
 turn against the live corpus, and a turn is persisted only after grounding.
 
