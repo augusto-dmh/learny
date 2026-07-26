@@ -24,7 +24,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 
 import { ChapterReader } from "../app/components/chapter-reader";
 import { CitationList } from "../app/components/citations";
-import { type Citation } from "../app/lib/questions";
+import { type Citation } from "../app/lib/citations";
 import { type ChapterView } from "../app/lib/reading";
 
 // The reader reads the anchor via `useSearchParams` and uses `useRouter` for the

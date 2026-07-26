@@ -30,7 +30,7 @@
 import Link from "next/link";
 import { BookOpenIcon, StickyNoteIcon } from "lucide-react";
 
-import { type Citation } from "@/app/lib/questions";
+import { type Citation } from "@/app/lib/citations";
 import { readUrl } from "@/app/lib/read-url";
 import {
   Popover,

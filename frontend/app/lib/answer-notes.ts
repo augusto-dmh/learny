@@ -19,7 +19,7 @@ import {
   createNote,
   NoteError,
 } from "./notes";
-import { type Citation } from "./questions";
+import { type Citation } from "./citations";
 import { readUrl } from "./read-url";
 
 /**

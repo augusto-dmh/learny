@@ -23,7 +23,7 @@
  * failure.
  */
 
-import { type Citation } from "./questions";
+import { type Citation } from "./citations";
 import { StreamRequestError } from "./streaming";
 
 /** How a single turn is answered. Conversations are not typed by mode. */

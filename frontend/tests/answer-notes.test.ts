@@ -16,7 +16,7 @@ import {
   saveAnswerAsNote,
 } from "../app/lib/answer-notes";
 import { NoteError } from "../app/lib/notes";
-import { type Citation } from "../app/lib/questions";
+import { type Citation } from "../app/lib/citations";
 
 function citation(overrides: Partial<Citation> = {}): Citation {
   return {

@@ -3,23 +3,23 @@
  *
  * The one protocol-aware client module: it configures the Vercel AI SDK
  * `useChat` transport to POST through the same-origin Next.js proxy (`/api/...`,
- * ADR-017) to the Cycle-C UI Message Stream v1 SSE endpoints, mirroring how the
- * backend isolates the wire format in `ui_message_stream.py`. It reshapes each
- * request to Learny's contracts (`{question}` / `{message}` — only the latest
- * user message, never the AI-SDK message history, since the server owns history
- * or is stateless) and echoes the session-bound CSRF token in `X-CSRF-Token`
- * (AD-007). The HttpOnly session cookie rides along automatically
- * (`credentials: "same-origin"`), so this code never reads or holds the token.
+ * ADR-017) to the UI Message Stream v1 SSE endpoint, mirroring how the backend
+ * isolates the wire format in `ui_message_stream.py`. It reshapes each request to
+ * Learny's contract (`{message, mode}` — only the latest user message, never the
+ * AI-SDK message history, since the server owns the history) and echoes the
+ * session-bound CSRF token in `X-CSRF-Token` (AD-007). The HttpOnly session cookie
+ * rides along automatically (`credentials: "same-origin"`), so this code never
+ * reads or holds the token.
  *
  * FastAPI stays authoritative for auth, ownership, readiness, and generation;
- * these helpers just carry the question/message in and surface the streamed
- * tokens, citations, answer status, and readable errors out.
+ * these helpers just carry the message in and surface the streamed tokens,
+ * citations, answer status, and readable errors out.
  */
 
 import { DefaultChatTransport, type UIMessage } from "ai";
 
 import type { ConversationAnswerStatus, ConversationMode } from "./conversations";
-import { type Citation } from "./questions";
+import { type Citation } from "./citations";
 
 /**
  * The answer outcome a surface reports, mirroring the backend status. The
@@ -146,65 +146,6 @@ const streamingFetch: typeof fetch = async (input, init) => {
   }
   return response;
 };
-
-/**
- * Transport for a source's streaming Q&A: POSTs `{question: <latest user text>}`
- * to `/api/sources/{id}/questions/stream` with the CSRF header (FE-06).
- *
- * `includeNotes` carries the reader's explicit include-my-notes choice (NL-04): it
- * is added to the body only when defined, so an unchosen preference omits the flag
- * and the server applies its own default (Q&A on).
- */
-export function createQuestionTransport(
-  sourceId: string,
-  csrfToken: string,
-  includeNotes?: boolean,
-): DefaultChatTransport<LearnyUIMessage> {
-  const api = `/api/sources/${sourceId}/questions/stream`;
-  return new DefaultChatTransport<LearnyUIMessage>({
-    api,
-    credentials: "same-origin",
-    fetch: streamingFetch,
-    prepareSendMessagesRequest: ({ messages }) => ({
-      api,
-      body: {
-        question: latestUserText(messages),
-        ...(includeNotes !== undefined ? { include_notes: includeNotes } : {}),
-      },
-      headers: { "X-CSRF-Token": csrfToken },
-    }),
-  });
-}
-
-/**
- * Transport for a teaching session's streaming turns: POSTs
- * `{message: <latest user text>}` to `/api/teaching-sessions/{id}/turns/stream`
- * with the CSRF header (FE-12).
- *
- * `includeNotes` carries the reader's explicit include-my-notes choice (NL-04): it
- * is added to the body only when defined, so an unchosen preference omits the flag
- * and the server applies its own default (teaching off).
- */
-export function createTurnTransport(
-  sessionId: string,
-  csrfToken: string,
-  includeNotes?: boolean,
-): DefaultChatTransport<LearnyUIMessage> {
-  const api = `/api/teaching-sessions/${sessionId}/turns/stream`;
-  return new DefaultChatTransport<LearnyUIMessage>({
-    api,
-    credentials: "same-origin",
-    fetch: streamingFetch,
-    prepareSendMessagesRequest: ({ messages }) => ({
-      api,
-      body: {
-        message: latestUserText(messages),
-        ...(includeNotes !== undefined ? { include_notes: includeNotes } : {}),
-      },
-      headers: { "X-CSRF-Token": csrfToken },
-    }),
-  });
-}
 
 /**
  * Transport for a conversation's streaming turns on the unified surface: POSTs
