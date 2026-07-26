@@ -295,6 +295,9 @@ def test_start_not_ready_source_returns_409(auth_client: TestClient, db_conn: Co
     resp = _start(auth_client, {"source_id": str(source_id), "target_anchor": _ANCHOR}, csrf=csrf)
 
     assert resp.status_code == 409, resp.text
+    # The detail is part of the frozen wire, not just the status: this is the
+    # teaching wording, not the unified surface's "conversations" phrasing.
+    assert resp.json() == {"detail": "Source is not ready for teaching."}
 
 
 # --- 422 unknown anchor / malformed body (TEACH-04) ----------------------------
@@ -307,6 +310,7 @@ def test_start_unknown_anchor_returns_422(auth_client: TestClient, db_conn: Conn
     resp = _start(auth_client, {"source_id": source_id, "target_anchor": "nope.xhtml"}, csrf=csrf)
 
     assert resp.status_code == 422, resp.text
+    assert resp.json() == {"detail": "Target does not exist in this source."}
 
 
 def test_start_missing_source_id_returns_422(auth_client: TestClient, db_conn: Connection) -> None:
@@ -436,6 +440,7 @@ def test_read_missing_and_non_owned_session_return_identical_404(
     assert non_owned.status_code == 404, non_owned.text
     assert missing.status_code == 404, missing.text
     assert non_owned.json() == missing.json()
+    assert missing.json() == {"detail": "Teaching session not found."}
 
 
 # --- 200 list (TEACH-21) -------------------------------------------------------
@@ -721,6 +726,8 @@ def test_post_turn_missing_and_non_owned_session_return_404(
 
     assert non_owned.status_code == 404, non_owned.text
     assert missing.status_code == 404, missing.text
+    assert non_owned.json() == missing.json()
+    assert missing.json() == {"detail": "Teaching session not found."}
 
 
 # --- POST turns: 409 readiness / target-gone (TEACH-15/16) ---------------------
@@ -737,6 +744,7 @@ def test_post_turn_not_ready_source_returns_409(
 
     resp = _post_turn(auth_client, session.id, {"message": "hi"}, csrf=csrf)
     assert resp.status_code == 409, resp.text
+    assert resp.json() == {"detail": "Source is not ready for teaching."}
 
 
 def test_post_turn_target_gone_returns_409(auth_client: TestClient, db_conn: Connection) -> None:
@@ -747,7 +755,7 @@ def test_post_turn_target_gone_returns_409(auth_client: TestClient, db_conn: Con
 
     resp = _post_turn(auth_client, session.id, {"message": "hi"}, csrf=csrf)
     assert resp.status_code == 409, resp.text
-    assert resp.json()["detail"]
+    assert resp.json() == {"detail": "The teaching target no longer exists; start a new session."}
 
 
 def test_post_turn_on_a_conversation_a_question_created_returns_404(

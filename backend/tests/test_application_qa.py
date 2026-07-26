@@ -542,6 +542,18 @@ def test_ask_persists_the_question_as_a_whole_book_conversation_with_turn_zero()
     assert turn.answer_status == "answered"
     # A whole-book conversation is the only thing that searches the whole source.
     assert retrieve.anchor_calls == [None]
+    # An ask never continues a conversation: the port sees no prior turns, which is
+    # what makes the answer byte-identical to the pre-cycle single-shot ask. The
+    # deterministic adapter ignores history by construction, so only the port's
+    # argument can record this.
+    assert generation.history_calls == [[]]
+
+    service(user=owner, source_id=source.id, question="and what is respiration")
+
+    # A second ask opens a second conversation rather than reusing the first, so its
+    # history is empty too.
+    assert len(conversations.by_id) == 2
+    assert generation.history_calls == [[], []]
 
 
 def test_ask_titles_the_conversation_with_the_first_80_characters() -> None:
@@ -647,6 +659,44 @@ def test_stream_consumer_disconnect_leaves_no_conversation_behind() -> None:
 
     assert conversations.by_id == {}
     assert turns.turns == []
+
+
+def test_stream_that_completes_keeps_its_conversation_and_turn_zero() -> None:
+    # CONV-24/25 on the path the shipped Ask panel actually uses. The three sensors
+    # around it all assert the *discard* half, which leaves the answered flag unpinned
+    # in the direction that matters: if the terminal event ever stopped matching, the
+    # reader would still see a correct answer and the conversation behind it would be
+    # deleted on the way out, with the suite green.
+    owner = _user()
+    sources = FakeSourceRepository()
+    source = _owned_source(owner.id)
+    sources.add(source)
+    e0 = _evidence(source.id, "passage", score=0.9)
+    conversations = FakeConversationRepository()
+    turns = FakeConversationTurnRepository()
+    generation = FakeAnswerGeneration(
+        answer=GeneratedAnswer(
+            text="one two", cited_chunk_ids=(e0.chunk_id,), model=_MODEL, found=True
+        ),
+        deltas=["one ", "two"],
+    )
+    service = _ask(
+        sources=sources,
+        retrieve=FakeRetrieveEvidence(results=[e0]),
+        generation=generation,
+        conversations=conversations,
+        turns=turns,
+    )
+
+    events = list(service.stream(user=owner, source_id=source.id, question="what is one two"))
+
+    assert isinstance(events[-1], StreamAnswer)
+    assert events[-1].result.status == "answered"
+    conversation = conversations.only()
+    assert conversation.title == "what is one two"
+    assert len(turns.turns) == 1
+    assert turns.turns[0].conversation_id == conversation.id
+    assert turns.turns[0].turn_index == 0
 
 
 def test_a_discard_that_itself_fails_is_logged_and_never_masks_the_original(

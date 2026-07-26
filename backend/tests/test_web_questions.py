@@ -408,6 +408,32 @@ def test_ask_stream_mid_stream_failure_leaves_no_conversation_behind(
     assert auth_client.get("/api/conversations").json() == []
 
 
+def test_ask_stream_that_completes_keeps_its_conversation(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # CONV-24/25 on the path the shipped Ask panel uses. Its three siblings all
+    # assert the discard half; without this one, a streamed ask could answer the
+    # reader correctly and delete the conversation behind it on the way out with the
+    # whole suite green.
+    source_id, csrf = _seed_owned_embedded_source(auth_client, db_conn, "stream-keep@example.com")
+
+    resp = _ask_stream(
+        auth_client, source_id, {"question": "photosynthesis sunlight energy"}, csrf=csrf
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert "error" not in _part_types(_parse_ui_stream(resp.text))
+    conversations = auth_client.get("/api/conversations").json()
+    assert len(conversations) == 1
+    assert conversations[0]["title"] == "photosynthesis sunlight energy"
+    assert conversations[0]["scope_anchors"] == []
+    assert conversations[0]["turn_count"] == 1
+
+    turns = auth_client.get(f"/api/conversations/{conversations[0]['id']}").json()["turns"]
+    assert len(turns) == 1
+    assert (turns[0]["turn_index"], turns[0]["mode"]) == (0, "answer")
+
+
 # --- 401 / 403 auth + CSRF (QA-11) ---------------------------------------------
 
 

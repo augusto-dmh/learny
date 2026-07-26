@@ -1452,6 +1452,32 @@ def test_turn_stream_pre_stream_guards_return_plain_http(
     assert "start" not in teach_conflict.text
 
 
+def test_turn_stream_missing_and_non_owned_conversation_return_identical_404(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # I-CM-6 on the last route that lacked the pair. The missing half alone cannot
+    # fail in the case that matters: an id that does not exist 404s off the
+    # repository lookup even if the owner check were skipped. This is also the route
+    # where a bypass is worst — it would stream another reader's book as SSE frames
+    # before anything else noticed.
+    source_id, _ = _seed_ready_source(auth_client, db_conn, "stream-owner@example.com")
+    conversation = _seed_conversation(db_conn, UUID(source_id))
+
+    _register(auth_client, "stream-intruder@example.com")
+    csrf = _csrf(auth_client)
+
+    non_owned = _turn_stream(
+        auth_client, conversation.id, {"message": "hi", "mode": MODE_ANSWER}, csrf=csrf
+    )
+    missing = _turn_stream(auth_client, uuid4(), {"message": "hi", "mode": MODE_ANSWER}, csrf=csrf)
+
+    assert non_owned.status_code == 404, non_owned.text
+    assert missing.status_code == 404, missing.text
+    assert non_owned.json() == missing.json()
+    # Not one frame of the owner's book went out first.
+    assert "start" not in non_owned.text
+
+
 def test_turn_stream_missing_csrf_returns_403(auth_client: TestClient, db_conn: Connection) -> None:
     source_id, _ = _seed_ready_source(auth_client, db_conn, "stream-403@example.com")
     conversation = _seed_conversation(db_conn, UUID(source_id))
