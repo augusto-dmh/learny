@@ -285,6 +285,56 @@ describe("ReaderPanel conversation list", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
+  it("reaches an older conversation than one page holds", async () => {
+    const firstPage = Array.from({ length: 20 }, (_, index) =>
+      summary(`c${index}`, `Thread ${index}`, 1),
+    );
+    const secondPage = [summary("c20", "The oldest thread", 1)];
+    const fetchMock = vi.fn(async (url: string) =>
+      jsonResponse(200, url.includes("offset=20") ? secondPage : firstPage),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    renderPanel();
+
+    // The dock asks for one bounded page, and says there is more behind it.
+    const more = await screen.findByRole("button", {
+      name: "Show older conversations",
+    });
+    const [firstUrl] = fetchMock.mock.calls[0] as unknown as [string];
+    expect(firstUrl).toContain("limit=20");
+    expect(firstUrl).toContain("offset=0");
+    expect(
+      screen.queryByRole("button", { name: "Resume The oldest thread" }),
+    ).toBeNull();
+
+    await act(async () => {
+      fireEvent.click(more);
+    });
+
+    // The 21st thread is reachable, and the page already read stays on screen.
+    const [nextUrl] = fetchMock.mock.calls[1] as unknown as [string];
+    expect(nextUrl).toContain("offset=20");
+    expect(
+      screen.getByRole("button", { name: "Resume The oldest thread" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Resume Thread 0" })).toBeTruthy();
+
+    // That page came back short, so there is nothing left to offer.
+    expect(
+      screen.queryByRole("button", { name: "Show older conversations" }),
+    ).toBeNull();
+  });
+
+  it("offers no next page when a book's conversations fit in one", async () => {
+    stubServer([summary("conv1", "Ada Lovelace", 1)]);
+    renderPanel();
+
+    await screen.findByRole("button", { name: "Resume Ada Lovelace" });
+    expect(
+      screen.queryByRole("button", { name: "Show older conversations" }),
+    ).toBeNull();
+  });
+
   it("resumes an asked conversation in the Ask panel without switching tabs", async () => {
     const onModeChange = vi.fn();
     stubServer([summary("conv1", "Ada Lovelace", 1)], {

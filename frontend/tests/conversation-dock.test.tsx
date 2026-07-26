@@ -56,7 +56,8 @@ function routedFetch(handlers: Record<string, Handler>) {
   });
 }
 
-const LIST_URL = "/api/conversations?source_id=s1";
+// The dock asks for one bounded page, so the window is part of the URL.
+const LIST_URL = "/api/conversations?source_id=s1&limit=20&offset=0";
 const CONVERSATION_URL = "/api/conversations/conv1";
 
 const summary = {

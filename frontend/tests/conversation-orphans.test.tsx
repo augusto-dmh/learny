@@ -41,7 +41,7 @@ beforeAll(() => {
   Element.prototype.scrollIntoView = () => {};
 });
 
-const LIST_URL = "/api/conversations?source_id=s1";
+
 const CREATE_URL = "/api/conversations";
 const CONVERSATION_URL = "/api/conversations/conv1";
 const STREAM_URL = "/api/conversations/conv1/turns/stream";
@@ -61,7 +61,7 @@ function fakeServer(turnStream: (init: RequestInit) => Response) {
   const conversations = new Map<string, Record<string, unknown>>();
   const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
     const method = init?.method ?? "GET";
-    if (method === "GET" && url === LIST_URL) {
+    if (method === "GET" && url.startsWith("/api/conversations?source_id=s1")) {
       return jsonResponse(200, [...conversations.values()]);
     }
     if (method === "POST" && url === CREATE_URL) {

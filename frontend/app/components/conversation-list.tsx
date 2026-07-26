@@ -13,6 +13,12 @@
  * because this is the only screen that shows a conversation as an object rather
  * than as a conversation you are having. A book with no conversations says so
  * rather than showing an empty box.
+ *
+ * The list is paged, because the server's is: a request without a window gets
+ * one bounded page, so a reader whose book has more threads than that would have
+ * no way to reach the older ones. A full page therefore offers to load the next
+ * one, and pages accumulate — this is the only screen where an old conversation
+ * can be found again.
  */
 
 import { Check, Pencil, Trash2, X } from "lucide-react";
@@ -26,6 +32,9 @@ import {
 } from "@/app/lib/conversations";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+
+/** How many rows one request asks for; a full page means there may be more. */
+const PAGE_SIZE = 20;
 
 export function ConversationList({
   sourceId,
@@ -50,17 +59,23 @@ export function ConversationList({
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [draftTitle, setDraftTitle] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
+  // A page that came back full is the only evidence there is more to fetch.
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     setError(null);
-    void listConversations(sourceId)
+    void listConversations(sourceId, { limit: PAGE_SIZE, offset: 0 })
       .then((listed) => {
-        if (!cancelled) setRows(listed);
+        if (cancelled) return;
+        setRows(listed);
+        setHasMore(listed.length === PAGE_SIZE);
       })
       .catch((err: unknown) => {
         if (cancelled) return;
         setRows([]);
+        setHasMore(false);
         setError(
           err instanceof Error
             ? err.message
@@ -71,6 +86,31 @@ export function ConversationList({
       cancelled = true;
     };
   }, [sourceId, refreshToken]);
+
+  const handleShowMore = useCallback(async () => {
+    const loaded = rows ?? [];
+    setLoadingMore(true);
+    setError(null);
+    try {
+      const next = await listConversations(sourceId, {
+        limit: PAGE_SIZE,
+        offset: loaded.length,
+      });
+      // A thread whose activity moved it into an earlier page can come back on a
+      // later one; keeping the first copy leaves the reader one row per thread.
+      const seen = new Set(loaded.map((row) => row.id));
+      setRows([...loaded, ...next.filter((row) => !seen.has(row.id))]);
+      setHasMore(next.length === PAGE_SIZE);
+    } catch (err: unknown) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Could not load your conversations.",
+      );
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [rows, sourceId]);
 
   const handleRename = useCallback(
     async (conversationId: string) => {
@@ -226,6 +266,19 @@ export function ConversationList({
           ))}
         </ul>
       )}
+
+      {rows !== null && rows.length > 0 && hasMore ? (
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          className="w-full"
+          disabled={loadingMore}
+          onClick={() => void handleShowMore()}
+        >
+          {loadingMore ? "Loading…" : "Show older conversations"}
+        </Button>
+      ) : null}
     </section>
   );
 }
