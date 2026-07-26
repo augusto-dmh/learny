@@ -93,8 +93,7 @@ from app.domain.ports import (
     StoragePort,
 )
 from app.infrastructure.answering import (
-    build_answer_adapter,
-    build_teaching_adapter,
+    build_generation_adapter,
 )
 from app.infrastructure.clock import SystemClock
 from app.infrastructure.db.engine import get_engine
@@ -431,36 +430,34 @@ def get_retrieve_evidence(conn: DbConnection) -> RetrieveEvidence:
     )
 
 
-# Process-wide answer generator, selected from settings at first use (ADR-0020).
-# ``local`` (default) stays deterministic and network-free; ``anthropic`` builds the
-# Claude adapter. Cached like ``get_settings`` so the provider is resolved once per
-# process, and overridable in tests via ``dependency_overrides[get_answer_generation]``
-# exactly like before.
+# Process-wide generator, selected from settings at first use (ADR-0020). One
+# generator serves both modes: ``local`` (default) stays deterministic and
+# network-free; ``anthropic`` builds the Claude adapter. Cached like ``get_settings``
+# so the provider is resolved once per process, and overridable in tests via
+# ``dependency_overrides[get_generation]``.
 @lru_cache
-def get_answer_generation() -> GenerationPort:
-    """FastAPI dependency: the settings-selected answer generator (overridable in tests)."""
-    return build_answer_adapter(get_settings())
+def get_generation() -> GenerationPort:
+    """FastAPI dependency: the settings-selected generator (overridable in tests)."""
+    return build_generation_adapter(get_settings())
 
 
-AnswerGeneration = Annotated[GenerationPort, Depends(get_answer_generation)]
+Generation = Annotated[GenerationPort, Depends(get_generation)]
 
 
 def get_ask_question(
     conn: DbConnection,
-    answer_generation: AnswerGeneration,
-    teaching_generation: TeachingGeneration,
+    generation: Generation,
 ) -> AskQuestion:
     """Wire ``AskQuestion`` on the request-scoped connection (QA-01..04, 07..08).
 
     Composes the two unified services an ask is made of — starting the whole-book
     conversation and taking its first answer turn — plus the conversation repo the
-    failure path discards through. Both generation ports are injected via
-    ``Depends`` because the unified turn service composes both; overriding the
-    answer port in tests keeps working exactly as before.
+    failure path discards through. The generator is injected via ``Depends`` so
+    overriding it in tests keeps working exactly as before.
     """
     return AskQuestion(
         start=get_start_conversation(conn),
-        post=get_post_conversation_turn(conn, answer_generation, teaching_generation),
+        post=get_post_conversation_turn(conn, generation),
         conversations=SqlAlchemyConversationRepository(conn),
     )
 
@@ -497,35 +494,17 @@ def get_list_teaching_sessions(conn: DbConnection) -> ListTeachingSessions:
     )
 
 
-# Process-wide teaching generator, selected from settings at first use (ADR-0020),
-# governed by the same ``LEARNY_GENERATION_PROVIDER`` switch as the answer path (D-2):
-# ``local`` (default) stays deterministic and network-free; ``anthropic`` builds the
-# Claude teaching adapter. Cached like ``get_answer_generation`` so the provider is
-# resolved once per process, and overridable in tests via
-# ``dependency_overrides[get_teaching_generation]`` exactly as before.
-@lru_cache
-def get_teaching_generation() -> GenerationPort:
-    """FastAPI dependency: the settings-selected teaching generator (overridable in tests)."""
-    return build_teaching_adapter(get_settings())
-
-
-TeachingGeneration = Annotated[GenerationPort, Depends(get_teaching_generation)]
-
-
 def get_post_teaching_turn(
     conn: DbConnection,
-    answer_generation: AnswerGeneration,
-    teaching_generation: TeachingGeneration,
+    generation: Generation,
 ) -> PostTeachingTurn:
     """Wire ``PostTeachingTurn`` on the request-scoped connection (TEACH-07..17, 19, 24).
 
-    Delegates to the unified turn service, which reaches the teaching generator for
-    the ``teach`` mode this adapter fixes. Both ports are injected via ``Depends``
-    because the unified service composes both; overriding either in tests keeps
-    working exactly as before.
+    Delegates to the unified turn service, which is handed the same one generator
+    every other path gets and the ``teach`` mode this adapter fixes.
     """
     return PostTeachingTurn(
-        post=get_post_conversation_turn(conn, answer_generation, teaching_generation),
+        post=get_post_conversation_turn(conn, generation),
         conversations=SqlAlchemyConversationRepository(conn),
     )
 
@@ -589,8 +568,7 @@ def get_delete_conversation(conn: DbConnection) -> DeleteConversation:
 
 def get_post_conversation_turn(
     conn: DbConnection,
-    answer_generation: AnswerGeneration,
-    teaching_generation: TeachingGeneration,
+    generation: Generation,
 ) -> PostConversationTurn:
     """Wire ``PostConversationTurn`` on the request-scoped connection (CONV-10..14, 20/21).
 
@@ -605,7 +583,7 @@ def get_post_conversation_turn(
         sources=SqlAlchemySourceRepository(conn),
         corpus=SqlAlchemyCorpusRepository(conn),
         retrieve=get_retrieve_evidence(conn),
-        generation=answer_generation,
+        generation=generation,
         authorize=AuthorizeOwnership(),
         clock=_clock,
         ids=uuid4,
@@ -846,7 +824,7 @@ def get_capture_highlight(conn: DbConnection) -> CaptureHighlight:
 
 
 # Process-wide quiz generator and embedder, resolved once at first use like
-# ``get_answer_generation``. Building these per request would mint a provider SDK
+# ``get_generation``. Building these per request would mint a provider SDK
 # client — and its own HTTPS connection pool — on every card call, paying a fresh TLS
 # handshake on the path where the student is watching a popover, and leaking the pool
 # afterwards. Overridable in tests via ``dependency_overrides`` exactly as before.

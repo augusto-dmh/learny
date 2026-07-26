@@ -336,7 +336,7 @@ def test_ask_generation_failure_leaves_no_conversation_behind(
 ) -> None:
     # A failed ask keeps the pre-cycle promise of persisting nothing: no empty
     # conversation is left in the reader's list.
-    from app.infrastructure.web.dependencies import get_answer_generation
+    from app.infrastructure.web.dependencies import get_generation
 
     source_id, csrf = _seed_owned_embedded_source(auth_client, db_conn, "nolitter@example.com")
 
@@ -354,11 +354,11 @@ def test_ask_generation_failure_leaves_no_conversation_behind(
         ) -> GeneratedAnswer:
             raise RuntimeError("provider-secret-internal-detail")
 
-    auth_client.app.dependency_overrides[get_answer_generation] = lambda: _RaisingAdapter()
+    auth_client.app.dependency_overrides[get_generation] = lambda: _RaisingAdapter()
     try:
         resp = _ask(auth_client, source_id, {"question": "photosynthesis sunlight"}, csrf=csrf)
     finally:
-        auth_client.app.dependency_overrides.pop(get_answer_generation, None)
+        auth_client.app.dependency_overrides.pop(get_generation, None)
 
     assert resp.status_code == 502, resp.text
     assert auth_client.get("/api/conversations").json() == []
@@ -369,7 +369,7 @@ def test_ask_stream_mid_stream_failure_leaves_no_conversation_behind(
 ) -> None:
     # The streaming half: the provider dies after the headers went out, and still
     # nothing is left behind.
-    from app.infrastructure.web.dependencies import get_answer_generation
+    from app.infrastructure.web.dependencies import get_generation
 
     source_id, csrf = _seed_owned_embedded_source(
         auth_client, db_conn, "nolitter-stream@example.com"
@@ -401,13 +401,13 @@ def test_ask_stream_mid_stream_failure_leaves_no_conversation_behind(
             yield AnswerTextDelta(text="partial ")
             raise RuntimeError("provider-secret-internal-detail")
 
-    auth_client.app.dependency_overrides[get_answer_generation] = lambda: _MidStreamRaisingAdapter()
+    auth_client.app.dependency_overrides[get_generation] = lambda: _MidStreamRaisingAdapter()
     try:
         resp = _ask_stream(
             auth_client, source_id, {"question": "photosynthesis sunlight"}, csrf=csrf
         )
     finally:
-        auth_client.app.dependency_overrides.pop(get_answer_generation, None)
+        auth_client.app.dependency_overrides.pop(get_generation, None)
 
     assert resp.status_code == 200, resp.text
     assert "error" in _part_types(_parse_ui_stream(resp.text))
@@ -572,7 +572,7 @@ def test_ask_generation_failure_returns_502_generic(
 ) -> None:
     # QA-17: the generation port raising → 502 with a generic body that leaks no
     # provider/internal detail (the raised message must not appear in the body).
-    from app.infrastructure.web.dependencies import get_answer_generation
+    from app.infrastructure.web.dependencies import get_generation
 
     source_id, csrf = _seed_owned_embedded_source(auth_client, db_conn, "boom@example.com")
 
@@ -590,11 +590,11 @@ def test_ask_generation_failure_returns_502_generic(
         ) -> GeneratedAnswer:
             raise RuntimeError("provider-secret-internal-detail")
 
-    auth_client.app.dependency_overrides[get_answer_generation] = lambda: _RaisingAdapter()
+    auth_client.app.dependency_overrides[get_generation] = lambda: _RaisingAdapter()
     try:
         resp = _ask(auth_client, source_id, {"question": "photosynthesis sunlight"}, csrf=csrf)
     finally:
-        auth_client.app.dependency_overrides.pop(get_answer_generation, None)
+        auth_client.app.dependency_overrides.pop(get_generation, None)
 
     assert resp.status_code == 502, resp.text
     assert resp.json() == {"detail": "Answer generation failed. Please try again."}
@@ -862,7 +862,7 @@ def test_ask_stream_mid_stream_failure_emits_error_part(
     # GEN-16: a provider failure after the first delta (headers already sent) is
     # rendered as a protocol error part with the generic message, then terminates —
     # no data-citations/finish, and no internal detail leaks.
-    from app.infrastructure.web.dependencies import get_answer_generation
+    from app.infrastructure.web.dependencies import get_generation
 
     source_id, csrf = _seed_owned_embedded_source(auth_client, db_conn, "s-mid@example.com")
 
@@ -892,13 +892,13 @@ def test_ask_stream_mid_stream_failure_emits_error_part(
             yield AnswerTextDelta(text="partial ")
             raise RuntimeError("provider-secret-internal-detail")
 
-    auth_client.app.dependency_overrides[get_answer_generation] = lambda: _MidStreamRaisingAdapter()
+    auth_client.app.dependency_overrides[get_generation] = lambda: _MidStreamRaisingAdapter()
     try:
         resp = _ask_stream(
             auth_client, source_id, {"question": "photosynthesis sunlight"}, csrf=csrf
         )
     finally:
-        auth_client.app.dependency_overrides.pop(get_answer_generation, None)
+        auth_client.app.dependency_overrides.pop(get_generation, None)
 
     assert resp.status_code == 200, resp.text
     parts = _parse_ui_stream(resp.text)
@@ -980,7 +980,7 @@ def test_ask_include_notes_gates_note_evidence_and_distinct_citation(
     # while book citations render byte-identically. With notes off, no note content
     # appears in the port's evidence or the citations (asserted against a capturing
     # generation port).
-    from app.infrastructure.web.dependencies import get_answer_generation
+    from app.infrastructure.web.dependencies import get_generation
 
     user_id = _register(auth_client, "asknote@example.com")
     csrf = _csrf(auth_client)
@@ -1018,7 +1018,7 @@ def test_ask_include_notes_gates_note_evidence_and_distinct_citation(
             )
 
     cap = _CitingCapture()
-    auth_client.app.dependency_overrides[get_answer_generation] = lambda: cap
+    auth_client.app.dependency_overrides[get_generation] = lambda: cap
     try:
         on = _ask(
             auth_client, str(source_id), {"question": "photosynthesis sunlight energy"}, csrf=csrf
@@ -1032,7 +1032,7 @@ def test_ask_include_notes_gates_note_evidence_and_distinct_citation(
         )
         off_origins = [e.origin for e in cap.evidence_seen]
     finally:
-        auth_client.app.dependency_overrides.pop(get_answer_generation, None)
+        auth_client.app.dependency_overrides.pop(get_generation, None)
 
     # Notes on: the note reached the port and returns as a distinct note citation.
     assert on.status_code == 200, on.text
@@ -1060,7 +1060,7 @@ def test_ask_stream_note_citation_carries_origin_and_note_identity(
 ) -> None:
     # NL-03: the streamed data-citations part carries the same distinct note
     # citation (origin='note' + identity) as the JSON path, book citations unchanged.
-    from app.infrastructure.web.dependencies import get_answer_generation
+    from app.infrastructure.web.dependencies import get_generation
 
     user_id = _register(auth_client, "askstreamnote@example.com")
     csrf = _csrf(auth_client)
@@ -1107,13 +1107,13 @@ def test_ask_stream_note_citation_carries_origin_and_note_identity(
                 )
             )
 
-    auth_client.app.dependency_overrides[get_answer_generation] = lambda: _CitingStreamCapture()
+    auth_client.app.dependency_overrides[get_generation] = lambda: _CitingStreamCapture()
     try:
         resp = _ask_stream(
             auth_client, str(source_id), {"question": "photosynthesis sunlight energy"}, csrf=csrf
         )
     finally:
-        auth_client.app.dependency_overrides.pop(get_answer_generation, None)
+        auth_client.app.dependency_overrides.pop(get_generation, None)
 
     assert resp.status_code == 200, resp.text
     parts = _parse_ui_stream(resp.text)

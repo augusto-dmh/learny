@@ -17,8 +17,7 @@ from app.core.config import get_settings
 from app.infrastructure.answering import (
     AnthropicGenerationAdapter,
     DeterministicGenerationAdapter,
-    build_answer_adapter,
-    build_teaching_adapter,
+    build_generation_adapter,
 )
 from app.infrastructure.embeddings import (
     DeterministicEmbeddingAdapter,
@@ -49,8 +48,7 @@ def test_offline_suite_pins_local_providers() -> None:
 def test_default_factories_are_deterministic() -> None:
     """AC-5: every factory returns the network-free adapter in the default context."""
     settings = get_settings()
-    assert isinstance(build_answer_adapter(settings), DeterministicGenerationAdapter)
-    assert isinstance(build_teaching_adapter(settings), DeterministicGenerationAdapter)
+    assert isinstance(build_generation_adapter(settings), DeterministicGenerationAdapter)
     assert isinstance(build_quiz_adapter(settings), DeterministicQuizAdapter)
     assert isinstance(build_embedding_adapter(settings), DeterministicEmbeddingAdapter)
 
@@ -64,8 +62,7 @@ def test_explicit_generation_override_reaches_real_branch(
     get_settings.cache_clear()
 
     settings = get_settings()
-    assert isinstance(build_answer_adapter(settings), AnthropicGenerationAdapter)
-    assert isinstance(build_teaching_adapter(settings), AnthropicGenerationAdapter)
+    assert isinstance(build_generation_adapter(settings), AnthropicGenerationAdapter)
     assert isinstance(build_quiz_adapter(settings), AnthropicQuizAdapter)
 
 

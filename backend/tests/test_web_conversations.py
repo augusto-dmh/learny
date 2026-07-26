@@ -1223,7 +1223,7 @@ def test_post_turn_generation_failure_returns_502_and_persists_nothing(
 ) -> None:
     # CONV-20: a failing generation port → 502 with a generic body that leaks no
     # internal detail, and no turn row.
-    from app.infrastructure.web.dependencies import get_answer_generation
+    from app.infrastructure.web.dependencies import get_generation
 
     source_id, csrf = _seed_ready_source(auth_client, db_conn, "turn-502@example.com")
     _embed_all(db_conn, UUID(source_id))
@@ -1243,7 +1243,7 @@ def test_post_turn_generation_failure_returns_502_and_persists_nothing(
         ) -> GeneratedAnswer:
             raise RuntimeError("provider-secret-internal-detail")
 
-    auth_client.app.dependency_overrides[get_answer_generation] = lambda: _RaisingAnswerAdapter()
+    auth_client.app.dependency_overrides[get_generation] = lambda: _RaisingAnswerAdapter()
     try:
         resp = _post_turn(
             auth_client,
@@ -1252,7 +1252,7 @@ def test_post_turn_generation_failure_returns_502_and_persists_nothing(
             csrf=csrf,
         )
     finally:
-        auth_client.app.dependency_overrides.pop(get_answer_generation, None)
+        auth_client.app.dependency_overrides.pop(get_generation, None)
 
     assert resp.status_code == 502, resp.text
     assert "provider-secret-internal-detail" not in resp.text
@@ -1374,7 +1374,7 @@ def test_turn_stream_mid_stream_failure_emits_the_error_frame_and_persists_nothi
 ) -> None:
     # CONV-21: a provider failure after the first delta is rendered as a protocol
     # error part followed by [DONE] — no finish frame — and persists nothing.
-    from app.infrastructure.web.dependencies import get_answer_generation
+    from app.infrastructure.web.dependencies import get_generation
 
     source_id, csrf = _seed_ready_source(auth_client, db_conn, "stream-mid@example.com")
     _embed_all(db_conn, UUID(source_id))
@@ -1406,9 +1406,7 @@ def test_turn_stream_mid_stream_failure_emits_the_error_frame_and_persists_nothi
             yield AnswerTextDelta(text="partial ")
             raise RuntimeError("provider-secret-internal-detail")
 
-    auth_client.app.dependency_overrides[get_answer_generation] = lambda: (
-        _MidStreamRaisingAnswerAdapter()
-    )
+    auth_client.app.dependency_overrides[get_generation] = lambda: _MidStreamRaisingAnswerAdapter()
     try:
         resp = _turn_stream(
             auth_client,
@@ -1417,7 +1415,7 @@ def test_turn_stream_mid_stream_failure_emits_the_error_frame_and_persists_nothi
             csrf=csrf,
         )
     finally:
-        auth_client.app.dependency_overrides.pop(get_answer_generation, None)
+        auth_client.app.dependency_overrides.pop(get_generation, None)
 
     assert resp.status_code == 200, resp.text
     parts = _parse_ui_stream(resp.text)
