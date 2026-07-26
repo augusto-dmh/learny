@@ -7,6 +7,15 @@ teaching session is scoped, so its misses now arrive here as the first. These
 presenters collapse the scoped verdict on the way out — in the JSON bodies and in
 the ``data-answer-status`` SSE frame alike — while the stored turn and the unified
 surface keep the precise value. Deleted with the legacy endpoints.
+
+Placement rule for the compatibility shim, whose two halves sit in different layers
+on purpose. A *value* the unified model knows and the frozen wire does not is
+projected here, at the transport edge, because the routers choose it per response
+and nothing below them should know the old vocabulary. A *message* attached to an
+error travels on the error's own type through the global handlers, so it is authored
+where the error is raised — ``_teaching_wording`` / ``_questions_wording`` in
+``app/application/{teaching,qa}.py`` — rather than being rebuilt here from a type map
+the handlers would have to consult. Both halves die with the endpoints.
 """
 
 from __future__ import annotations

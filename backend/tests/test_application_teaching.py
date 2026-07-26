@@ -501,7 +501,8 @@ def _post(
             ids=ids,
             evidence_top_k=evidence_top_k,
             history_turns=history_turns,
-        )
+        ),
+        conversations=sessions,
     )
 
 
@@ -676,6 +677,63 @@ def test_read_target_less_conversation_reports_not_found() -> None:
 
     with pytest.raises(ConversationNotFound):
         service(user=owner, session_id=whole_book.id)
+
+
+def test_turn_on_a_target_less_conversation_reports_the_session_missing() -> None:
+    # CONV-23: the legacy surface's three paths agree about a conversation a question
+    # created — the read reports it absent, the list leaves it out, and a turn posted
+    # against it is absent too. Reporting "the teaching target no longer exists" for
+    # an id this surface says does not exist would be wrong twice over: it never had
+    # a target, and it is not a session.
+    owner = _user()
+    sources = FakeSourceRepository()
+    source = _owned_source(owner.id)
+    sources.add(source)
+    sessions = FakeConversationRepository()
+    whole_book = replace(
+        _session(source.id),
+        scope_anchors=(),
+        target_anchor=None,
+        target_section_path=None,
+        target_title=None,
+    )
+    sessions.add(whole_book)
+    turns = FakeConversationTurnRepository()
+    service = _post(
+        sessions=sessions,
+        turns=turns,
+        sources=sources,
+        corpus=FakeCorpus(_structure(_section("ch1.xhtml", ("Chapter 1",)))),
+        retrieve=FakeScopedRetrieveEvidence([]),
+        generation=FakeTeachingGeneration(),
+    )
+
+    with pytest.raises(ConversationNotFound):
+        service(user=owner, session_id=whole_book.id, message="teach me")
+    with pytest.raises(ConversationNotFound):
+        service.stream(user=owner, session_id=whole_book.id, message="teach me")
+
+    assert turns.add_calls == 0
+
+
+def test_turn_whose_target_disappeared_still_reports_the_target_gone() -> None:
+    # The other half: a session that *had* a target and lost it to a re-ingest is a
+    # different answer — it existed, so the panel is told the target is gone (409),
+    # not that the session never was.
+    target = _section("ch1.xhtml#core", ("Chapter 1", "Core"))
+    owner, source, session, sessions, sources = _seeded(target=target)
+    service = _post(
+        sessions=sessions,
+        turns=FakeConversationTurnRepository(),
+        sources=sources,
+        # A corpus replace dropped the taught section.
+        corpus=FakeCorpus(_structure(_section("ch9.xhtml", ("Chapter 9",)))),
+        retrieve=FakeScopedRetrieveEvidence([]),
+        generation=FakeTeachingGeneration(),
+    )
+
+    with pytest.raises(ConversationTargetUnavailable):
+        service(user=owner, session_id=session.id, message="teach me")
 
 
 def test_read_missing_session_raises_not_found() -> None:

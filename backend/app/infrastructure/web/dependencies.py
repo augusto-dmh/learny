@@ -526,7 +526,8 @@ def get_post_teaching_turn(
     working exactly as before.
     """
     return PostTeachingTurn(
-        post=get_post_conversation_turn(conn, answer_generation, teaching_generation)
+        post=get_post_conversation_turn(conn, answer_generation, teaching_generation),
+        conversations=SqlAlchemyConversationRepository(conn),
     )
 
 

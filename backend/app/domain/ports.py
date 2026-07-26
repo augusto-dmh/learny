@@ -638,6 +638,13 @@ class ConversationRepository(Protocol):
 
         The legacy per-source teaching list: conversations with no target were never
         started from the Teach panel, so they stay out of it until that panel retires.
+
+        One rule — *a teaching session is a conversation with a target* — applied in
+        three places, and this is the one that owns it: the filter stays in SQL
+        beside the legacy ``created_at`` ordering so the frozen list wire and its
+        query remain one unit to delete. ``ReadTeachingSession`` and
+        ``PostTeachingTurn`` in ``app/application/teaching.py`` apply the same rule to
+        a single conversation; all of them retire with the panel.
         """
         ...
 

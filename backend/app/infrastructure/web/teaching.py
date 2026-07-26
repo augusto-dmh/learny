@@ -34,6 +34,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel, Field, field_validator
 
+from app.application.errors import ConversationNotFound
 from app.application.teaching import (
     ListTeachingSessions,
     PostTeachingTurn,
@@ -117,8 +118,13 @@ class TargetView(BaseModel):
     """The session's target section snapshot (TEACH-01).
 
     Only conversations carrying a teach target reach this view: the read service
-    reports a target-less conversation as absent and the per-source list filters
-    them out, so the snapshot is never null here.
+    reports a target-less conversation as absent, the per-source list filters them
+    out, and the turn adapter refuses one. Rather than trust those guarantees from
+    three other layers, the view reads the target through
+    ``Conversation.teach_target`` — the whole trio or nothing — and turns nothing
+    into the absence this surface already reports, so a fourth caller that forgets
+    the guard gets the same 404 as everyone else instead of a 500 from
+    dereferencing a null snapshot.
     """
 
     anchor: str
@@ -127,11 +133,11 @@ class TargetView(BaseModel):
 
     @classmethod
     def from_session(cls, session: Conversation) -> TargetView:
-        return cls(
-            anchor=session.target_anchor,
-            section_path=list(session.target_section_path),
-            title=session.target_title,
-        )
+        target = session.teach_target
+        if target is None:
+            raise ConversationNotFound("Teaching session not found.")
+        anchor, section_path, title = target
+        return cls(anchor=anchor, section_path=list(section_path), title=title)
 
 
 class SessionView(BaseModel):

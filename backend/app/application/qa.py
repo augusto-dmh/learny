@@ -59,6 +59,10 @@ def _questions_wording() -> Iterator[None]:
     reads, which is part of the frozen wire. Readiness is the only error the ask
     path can reach whose wording differs: a whole-book conversation has no scope to
     reject and no target to lose.
+
+    Wording lives with the error it re-raises rather than beside the scoped-status
+    collapse in ``app/infrastructure/web/legacy_status.py``; that module's docstring
+    states the rule for both halves of the shim.
     """
     try:
         yield

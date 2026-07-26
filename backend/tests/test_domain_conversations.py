@@ -122,3 +122,20 @@ def test_summary_names_the_book_a_conversation_belongs_to() -> None:
 
     assert summary.conversation is conversation
     assert (summary.turn_count, summary.source_title) == (3, "A Book")
+
+
+def test_teach_target_is_the_whole_trio_or_nothing() -> None:
+    # The three target columns are written together and are all-or-nothing in the
+    # database. This is where that invariant is expressed, so a consumer gets every
+    # part of the snapshot or an explicit absence — never a trio it has to guard
+    # field by field before dereferencing.
+    scoped = _conversation()
+    whole_book = _conversation(
+        scope_anchors=(),
+        target_anchor=None,
+        target_section_path=None,
+        target_title=None,
+    )
+
+    assert scoped.teach_target == ("ch2.xhtml", ("Chapter Two",), "Chapter Two")
+    assert whole_book.teach_target is None

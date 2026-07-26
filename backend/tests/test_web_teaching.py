@@ -750,6 +750,39 @@ def test_post_turn_target_gone_returns_409(auth_client: TestClient, db_conn: Con
     assert resp.json()["detail"]
 
 
+def test_post_turn_on_a_conversation_a_question_created_returns_404(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # CONV-23: since ADR-0029 every question asked persists a whole-book conversation,
+    # and this surface's rule is that such a conversation is not a teaching session —
+    # GET reports it missing and the per-source list leaves it out. A turn posted
+    # against one answers the same way, rather than claiming a teaching target it
+    # never had has been lost.
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "turn-whole-book@example.com")
+    whole_book = Conversation(
+        id=uuid4(),
+        source_id=UUID(source_id),
+        title="What is this book about?",
+        scope_anchors=(),
+        include_notes=True,
+        target_anchor=None,
+        target_section_path=None,
+        target_title=None,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+    SqlAlchemyConversationRepository(db_conn).add(whole_book)
+
+    resp = _post_turn(auth_client, whole_book.id, {"message": "hi"}, csrf=csrf)
+    read = auth_client.get(f"/api/teaching-sessions/{whole_book.id}")
+
+    assert resp.status_code == 404, resp.text
+    assert resp.json() == {"detail": "Teaching session not found."}
+    # The same answer the read gives, byte for byte.
+    assert read.status_code == 404
+    assert read.json() == resp.json()
+
+
 # --- POST turns: 502 generation failure, no persist (TEACH-13) -----------------
 
 

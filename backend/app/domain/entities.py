@@ -528,6 +528,20 @@ class Conversation:
     created_at: datetime
     updated_at: datetime
 
+    @property
+    def teach_target(self) -> tuple[str, tuple[str, ...], str] | None:
+        """The target snapshot as one value: the whole trio, or ``None``.
+
+        The three columns are written together and are all-or-nothing in the
+        database, but a caller reading them one at a time has to know that. This is
+        where the invariant is expressed, so a consumer that needs the target gets
+        either every part of it or an explicit absence — never a half-populated trio
+        it has to guard against itself.
+        """
+        if self.target_anchor is None:
+            return None
+        return self.target_anchor, self.target_section_path or (), self.target_title or ""
+
 
 @dataclass(frozen=True)
 class ConversationTurn:
