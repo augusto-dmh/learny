@@ -19,6 +19,7 @@ from uuid import UUID
 
 import pytest
 
+from app.domain.entities import MODE_ANSWER
 from tests.eval.silver import (
     BrokenCase,
     ResolvedCase,
@@ -47,13 +48,13 @@ def test_silver_tier_runs_over_the_local_corpus() -> None:
 
     from app.core.config import get_settings
     from app.eval.judge import Judge, prompt_hash
-    from app.infrastructure.answering.anthropic import AnthropicAnswerAdapter
+    from app.infrastructure.answering.anthropic import AnthropicGenerationAdapter
     from tests.eval_runner import retrieve as retrieve_evidence
 
     settings = get_settings()
     api_key = os.environ["LEARNY_ANTHROPIC_API_KEY"]
     cases = load_silver_cases()
-    adapter = AnthropicAnswerAdapter(
+    adapter = AnthropicGenerationAdapter(
         api_key=api_key,
         model=settings.generation_model,
         max_tokens=settings.generation_max_tokens,
@@ -95,7 +96,9 @@ def test_silver_tier_runs_over_the_local_corpus() -> None:
                                 r.case.question,
                                 top_k=settings.qa_evidence_top_k,
                             ),
-                            generate=lambda q, ev: adapter.generate(question=q, evidence=ev),
+                            generate=lambda q, ev: adapter.generate(
+                                message=q, mode=MODE_ANSWER, evidence=ev
+                            ),
                             judge=judge_call,
                         )
                     )

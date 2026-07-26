@@ -15,8 +15,7 @@ import pytest
 
 from app.core.config import get_settings
 from app.infrastructure.answering import (
-    AnthropicAnswerAdapter,
-    AnthropicTeachingAdapter,
+    AnthropicGenerationAdapter,
     DeterministicGenerationAdapter,
     build_answer_adapter,
     build_teaching_adapter,
@@ -65,8 +64,8 @@ def test_explicit_generation_override_reaches_real_branch(
     get_settings.cache_clear()
 
     settings = get_settings()
-    assert isinstance(build_answer_adapter(settings), AnthropicAnswerAdapter)
-    assert isinstance(build_teaching_adapter(settings), AnthropicTeachingAdapter)
+    assert isinstance(build_answer_adapter(settings), AnthropicGenerationAdapter)
+    assert isinstance(build_teaching_adapter(settings), AnthropicGenerationAdapter)
     assert isinstance(build_quiz_adapter(settings), AnthropicQuizAdapter)
 
 

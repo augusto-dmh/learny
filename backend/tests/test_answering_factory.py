@@ -15,8 +15,7 @@ import pytest
 
 from app.core.config import Settings
 from app.infrastructure.answering import (
-    AnthropicAnswerAdapter,
-    AnthropicTeachingAdapter,
+    AnthropicGenerationAdapter,
     DeterministicGenerationAdapter,
     build_answer_adapter,
     build_teaching_adapter,
@@ -42,7 +41,7 @@ def test_anthropic_provider_builds_claude_adapter_from_settings() -> None:
 
     adapter = build_answer_adapter(settings)
 
-    assert isinstance(adapter, AnthropicAnswerAdapter)
+    assert isinstance(adapter, AnthropicGenerationAdapter)
     # Identity reflects the settings-supplied model id (no network call).
     assert adapter.model == "claude-sonnet-4-6"
 
@@ -83,7 +82,7 @@ def test_anthropic_provider_builds_claude_teaching_adapter_from_settings() -> No
 
     adapter = build_teaching_adapter(settings)
 
-    assert isinstance(adapter, AnthropicTeachingAdapter)
+    assert isinstance(adapter, AnthropicGenerationAdapter)
     # Identity reflects the settings-supplied model id (no network call).
     assert adapter.model == "claude-sonnet-4-6"
 

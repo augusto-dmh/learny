@@ -12,10 +12,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from app.infrastructure.answering.anthropic import (
-    AnthropicAnswerAdapter,
-    AnthropicTeachingAdapter,
-)
+from app.infrastructure.answering.anthropic import AnthropicGenerationAdapter
 from app.infrastructure.answering.local import DeterministicGenerationAdapter
 
 if TYPE_CHECKING:
@@ -23,8 +20,7 @@ if TYPE_CHECKING:
     from app.domain.ports import GenerationPort
 
 __all__ = [
-    "AnthropicAnswerAdapter",
-    "AnthropicTeachingAdapter",
+    "AnthropicGenerationAdapter",
     "DeterministicGenerationAdapter",
     "build_answer_adapter",
     "build_teaching_adapter",
@@ -49,7 +45,7 @@ def build_answer_adapter(settings: Settings) -> GenerationPort:
             raise ValueError(
                 "LEARNY_ANTHROPIC_API_KEY is required when the generation provider is 'anthropic'"
             )
-        return AnthropicAnswerAdapter(
+        return AnthropicGenerationAdapter(
             api_key=settings.anthropic_api_key,
             model=settings.generation_model,
             max_tokens=settings.generation_max_tokens,
@@ -75,7 +71,7 @@ def build_teaching_adapter(settings: Settings) -> GenerationPort:
             raise ValueError(
                 "LEARNY_ANTHROPIC_API_KEY is required when the generation provider is 'anthropic'"
             )
-        return AnthropicTeachingAdapter(
+        return AnthropicGenerationAdapter(
             api_key=settings.anthropic_api_key,
             model=settings.generation_model,
             max_tokens=settings.generation_max_tokens,

@@ -19,7 +19,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.domain.entities import Evidence, GeneratedAnswer
+from app.domain.entities import MODE_ANSWER, Evidence, GeneratedAnswer
 from tests.eval.harness import (
     EvalCase,
     Snapshot,
@@ -194,7 +194,7 @@ def test_record_generation_rewrites_snapshots(
     # Anthropic answer adapter, and rewrite the committed snapshots (reviewed in
     # the diff). Skipped unless --record-generation and a key are both present.
     from app.core.config import get_settings
-    from app.infrastructure.answering.anthropic import AnthropicAnswerAdapter
+    from app.infrastructure.answering.anthropic import AnthropicGenerationAdapter
     from tests.eval.harness import SNAPSHOTS_DIR
     from tests.eval_runner import (
         build_corpus_in_db,
@@ -208,7 +208,7 @@ def test_record_generation_rewrites_snapshots(
     _, source = seed_source(db_conn, email=f"record-{uuid4()}@example.com")
     build_corpus_in_db(db_conn, source, golden_book())
     embed_source(db_conn, source.id)
-    adapter = AnthropicAnswerAdapter(
+    adapter = AnthropicGenerationAdapter(
         api_key=os.environ["LEARNY_ANTHROPIC_API_KEY"],
         model=settings.generation_model,
         max_tokens=settings.generation_max_tokens,
@@ -219,7 +219,9 @@ def test_record_generation_rewrites_snapshots(
         evidence_for=lambda case: retrieve(
             db_conn, source.id, case.question, top_k=settings.qa_evidence_top_k
         ),
-        generate=lambda question, evidence: adapter.generate(question=question, evidence=evidence),
+        generate=lambda question, evidence: adapter.generate(
+            message=question, mode=MODE_ANSWER, evidence=evidence
+        ),
         snapshots_dir=SNAPSHOTS_DIR,
     )
 
