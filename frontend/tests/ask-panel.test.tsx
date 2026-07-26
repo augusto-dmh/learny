@@ -385,6 +385,43 @@ describe("AskPanel on the conversation surface", () => {
   });
 });
 
+describe("AskPanel notes scope (NL-04)", () => {
+  it("carries the reader's notes choice into the conversation it creates", async () => {
+    const fetchMock = routedFetch(baseHandlers(() => sseStream().response));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+
+    // The control reflects the Q&A default (on) before any choice.
+    const toggle = screen.getByRole("checkbox", { name: "Search my notes too" });
+    expect((toggle as HTMLInputElement).checked).toBe(true);
+
+    // Turning it off is carried into the conversation the question creates.
+    fireEvent.click(toggle);
+    ask("a question");
+
+    await waitFor(() => expect(callsTo(fetchMock, CREATE_URL)).toHaveLength(1));
+    expect(bodyOf(callsTo(fetchMock, CREATE_URL)[0])).toMatchObject({
+      include_notes: false,
+    });
+  });
+
+  it("states the choice on the wire even when the reader never touched it", async () => {
+    const fetchMock = routedFetch(baseHandlers(() => sseStream().response));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+    ask("a question");
+
+    // The server has no default to fall back on, so the flag is never omitted.
+    await waitFor(() => expect(callsTo(fetchMock, CREATE_URL)).toHaveLength(1));
+    expect(bodyOf(callsTo(fetchMock, CREATE_URL)[0])).toHaveProperty(
+      "include_notes",
+      true,
+    );
+  });
+});
+
 describe("AskPanel thread restore", () => {
   const READ_URL = "/api/conversations/conv1";
 
