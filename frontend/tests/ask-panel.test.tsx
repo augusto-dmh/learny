@@ -523,6 +523,83 @@ describe("AskPanel thread restore", () => {
   });
 });
 
+describe("AskPanel when the conversation cannot be created", () => {
+  /**
+   * Only the create leg is routed: a stream attempt would mean the panel tried
+   * to post a turn into a conversation the server never made, and `routedFetch`
+   * fails loudly on it.
+   */
+  function failingCreate(status: number, detail: string) {
+    const fetchMock = routedFetch({
+      [`POST ${CREATE_URL}`]: () => jsonResponse(status, { detail }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  it("tells the reader a book that is still processing is not ready (409)", async () => {
+    const fetchMock = failingCreate(409, "Source is not ready.");
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+    ask("a question about a book still being ingested");
+
+    // The failure is on screen, in the reader's terms.
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(/still processing/i);
+
+    // And the panel is usable again rather than left spinning: the control is
+    // back to Submit, there is no streaming caret, and the input is not disabled.
+    expect(screen.getByRole("button", { name: "Submit" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+    expect(screen.queryByTestId("streaming-caret")).toBeNull();
+    expect(
+      (screen.getByPlaceholderText(/ask a question/i) as HTMLTextAreaElement)
+        .disabled,
+    ).toBe(false);
+
+    // Nothing was created, so nothing is pointed at and nothing needs cleaning up.
+    expect(callsTo(fetchMock, CREATE_URL)).toHaveLength(1);
+    expect(fetchMock.mock.calls).toHaveLength(1);
+    expect(readActiveConversation("s1", "ask")).toBeNull();
+  });
+
+  it("shows a readable throttle message when the create is throttled (429)", async () => {
+    failingCreate(429, "Too many requests.");
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+    ask("a question");
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(/too many requests/i);
+    expect(screen.getByRole("button", { name: "Submit" })).toBeTruthy();
+  });
+
+  it("says the book could not be found when the create 404s", async () => {
+    failingCreate(404, "Source not found.");
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+    ask("a question about a book that is gone");
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(/could not be found/i);
+    expect(screen.getByRole("button", { name: "Submit" })).toBeTruthy();
+  });
+
+  it("routes an expired session on the create leg to onRequireAuth (401)", async () => {
+    failingCreate(401, "Not authenticated.");
+
+    const onRequireAuth = vi.fn();
+    render(
+      <AskPanel sourceId="s1" csrf="csrf-xyz" onRequireAuth={onRequireAuth} />,
+    );
+    ask("a question");
+
+    // Same contract as a 401 mid-stream: a redirect, not an inline banner.
+    await waitFor(() => expect(onRequireAuth).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+});
+
 describe("AskPanel auth (RA-07)", () => {
   it("routes a 401 turn stream to onRequireAuth without a banner", async () => {
     vi.stubGlobal(

@@ -380,6 +380,36 @@ describe("TeachPanel on the conversation surface (RA-10)", () => {
     expect(alert.textContent).toMatch(/too many requests/i);
   });
 
+  it("keeps the reader in the session when the conversation cannot be created", async () => {
+    // Only the structure and the create leg are routed: a stream attempt would
+    // mean a turn was posted into a conversation the server never made, and
+    // `routedFetch` fails loudly on it.
+    const fetchMock = routedFetch({
+      "GET /api/sources/s1/structure": () => jsonResponse(200, structure),
+      [`POST ${CREATE_URL}`]: () =>
+        jsonResponse(409, { detail: "Source is not ready." }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
+    await startSession();
+    sendMessage("teach me this section");
+
+    // The failure is readable, and the panel is usable again rather than left
+    // spinning on a message that never went anywhere.
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(/still processing/i);
+    expect(screen.getByRole("button", { name: "Submit" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+    expect(
+      (screen.getByPlaceholderText(/send a message/i) as HTMLTextAreaElement)
+        .disabled,
+    ).toBe(false);
+
+    // Nothing was created, so there is nothing to point at or clean up.
+    expect(callsTo(fetchMock, CREATE_URL)).toHaveLength(1);
+  });
+
   it("settles a mid-stream error part to a banner with partial text retained", async () => {
     const stream = sseStream();
     vi.stubGlobal(
