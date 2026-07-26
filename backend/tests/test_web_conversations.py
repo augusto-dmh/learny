@@ -42,7 +42,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import Connection
+from sqlalchemy import Connection, func, select
 
 from app.application.conversations import DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT
 from app.domain.entities import (
@@ -64,6 +64,7 @@ from app.domain.entities import (
     SectionChunk,
     Source,
 )
+from app.infrastructure.db.metadata import conversation_turn_citations, conversation_turns
 from app.infrastructure.db.repositories import (
     SqlAlchemyConversationRepository,
     SqlAlchemyConversationTurnRepository,
@@ -948,6 +949,59 @@ def test_delete_returns_204_and_removes_the_conversation_with_its_turns(
 
     second = _delete(auth_client, conversation.id, csrf=csrf)
     assert second.status_code == 404, second.text
+
+
+def test_delete_leaves_no_turn_or_citation_row_behind(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # WSC-06: "its turns SHALL no longer be retrievable" is not satisfied by a
+    # conversation row that vanishes while its children stay. An orphan turn keeps
+    # the reader's message and the passages it quoted in the database after they
+    # asked for the thread to be gone, and no API call can see it any more — so the
+    # rows are counted in their own tables. A second conversation is deleted around,
+    # proving the removal is scoped to the one asked for rather than a wipe.
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "delete-rows@example.com")
+    doomed = _seed_conversation(db_conn, UUID(source_id))
+    kept = _seed_conversation(db_conn, UUID(source_id))
+    for conversation in (doomed, kept):
+        for index, message in enumerate(("explain", "and then?")):
+            _seed_turn(
+                db_conn,
+                conversation,
+                turn_index=index,
+                message=message,
+                mode=MODE_TEACH,
+                answer_status=ANSWERED,
+                answer_text=_PHOTO,
+                citations=(_citation(UUID(source_id)), _citation(UUID(source_id))),
+            )
+
+    def _turn_ids(conversation_id: UUID) -> set[UUID]:
+        rows = db_conn.execute(
+            select(conversation_turns.c.id).where(
+                conversation_turns.c.conversation_id == conversation_id
+            )
+        ).all()
+        return {row.id for row in rows}
+
+    def _citation_count(turn_ids: set[UUID]) -> int:
+        if not turn_ids:
+            return 0
+        return db_conn.execute(
+            select(func.count()).where(conversation_turn_citations.c.turn_id.in_(turn_ids))
+        ).scalar_one()
+
+    doomed_turns = _turn_ids(doomed.id)
+    kept_turns = _turn_ids(kept.id)
+    assert len(doomed_turns) == 2
+    assert _citation_count(doomed_turns) == 4
+
+    assert _delete(auth_client, doomed.id, csrf=csrf).status_code == 204
+
+    assert _turn_ids(doomed.id) == set()
+    assert _citation_count(doomed_turns) == 0
+    assert _turn_ids(kept.id) == kept_turns
+    assert _citation_count(kept_turns) == 4
 
 
 def test_delete_missing_and_non_owned_return_identical_404(
