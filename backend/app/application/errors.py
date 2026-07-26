@@ -157,6 +157,16 @@ class ConversationTargetUnavailable(Exception):
     """
 
 
+class InvalidConversationMode(Exception):
+    """A turn was asked for in a mode that does not exist (CONV-20, ADR-0029).
+
+    The turn service is a public application service with callers beyond the
+    router, so it names its own failure rather than trusting each caller to have
+    validated first; the web layer maps it to 422, the same answer a client gets
+    from the router's own mode validator.
+    """
+
+
 class InvalidConversationTitle(Exception):
     """A conversation title is blank or longer than the allowed maximum (CONV-08).
 

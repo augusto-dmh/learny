@@ -1261,6 +1261,7 @@ def test_turn_emits_one_content_free_completion_log(
     message = records[0].getMessage()
     assert "outcome=answered" in message
     assert f"conversation_id={session.id}" in message
+    assert f"source_id={source.id}" in message
     assert f"mode={MODE_TEACH}" in message
     assert "evidence_count=1" in message
     assert f"model={_MODEL}" in message

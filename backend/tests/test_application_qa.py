@@ -98,9 +98,10 @@ def _evidence(source_id: UUID, snippet: str, *, score: float) -> Evidence:
 class FakeConversationRepository:
     """In-memory ``ConversationRepository`` for the conversation an ask opens."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, delete_fails: bool = False) -> None:
         self.by_id: dict[UUID, Conversation] = {}
         self.touched: list[UUID] = []
+        self._delete_fails = delete_fails
 
     def add(self, conversation: Conversation) -> Conversation:
         self.by_id[conversation.id] = conversation
@@ -110,6 +111,8 @@ class FakeConversationRepository:
         return self.by_id.get(conversation_id)
 
     def delete(self, conversation_id: UUID) -> bool:
+        if self._delete_fails:
+            raise RuntimeError("connection gone")
         return self.by_id.pop(conversation_id, None) is not None
 
     def touch(self, conversation_id: UUID, now: datetime) -> None:
@@ -646,6 +649,37 @@ def test_stream_consumer_disconnect_leaves_no_conversation_behind() -> None:
     assert turns.turns == []
 
 
+def test_a_discard_that_itself_fails_is_logged_and_never_masks_the_original(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # The cleanup stays best-effort — the failure that brought us here is the one
+    # worth raising — but a cleanup that fails leaves a turn-less conversation in the
+    # reader's list that the code believes it deleted. One content-free line makes it
+    # explainable.
+    owner = _user()
+    sources = FakeSourceRepository()
+    source = _owned_source(owner.id)
+    sources.add(source)
+    e0 = _evidence(source.id, "passage", score=0.9)
+    conversations = FakeConversationRepository(delete_fails=True)
+    service = _ask(
+        sources=sources,
+        retrieve=FakeRetrieveEvidence(results=[e0]),
+        generation=FakeAnswerGeneration(error=RuntimeError("provider down")),
+        conversations=conversations,
+    )
+
+    with caplog.at_level(logging.WARNING, logger="app.application.qa"):
+        with pytest.raises(AnswerGenerationFailed):
+            service(user=owner, source_id=source.id, question="my private question text")
+
+    warnings = [r for r in caplog.records if r.name == "app.application.qa"]
+    assert len(warnings) == 1
+    message = warnings[0].getMessage()
+    assert f"conversation_id={conversations.only().id}" in message
+    assert "my private question text" not in message
+
+
 def test_ask_emits_one_content_free_completion_log(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -680,6 +714,9 @@ def test_ask_emits_one_content_free_completion_log(
     message = records[0].getMessage()
     assert "outcome=answered" in message
     assert f"conversation_id={conversations.only().id}" in message
+    # The book the work was done against: "which source is producing these
+    # outcomes?" stays one grep rather than a join per log line.
+    assert f"source_id={source.id}" in message
     assert "evidence_count=1" in message
     assert f"model={_MODEL}" in message
     assert "my private question text" not in message
@@ -712,6 +749,7 @@ def test_ask_emits_one_content_free_completion_log_on_not_found(
     message = records[0].getMessage()
     assert "outcome=not_found_in_source" in message
     assert f"conversation_id={conversations.only().id}" in message
+    assert f"source_id={source.id}" in message
     assert "evidence_count=0" in message
     assert f"model={_MODEL}" in message
     assert "my private question text" not in message

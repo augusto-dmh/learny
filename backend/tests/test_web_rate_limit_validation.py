@@ -217,10 +217,12 @@ def test_rate_limit_conversations_throttles_after_window() -> None:
 
 
 def test_teaching_errors_map_to_expected_status_codes() -> None:
-    # TEACH error contract: the four teaching errors added this cycle translate to
-    # their documented HTTP status codes through ``register_error_handlers`` — no
-    # disclosure (404), unknown target (422), target gone / turn race (409). The
-    # readable service message is surfaced as the body ``detail`` (no leak).
+    # Conversation error contract: every error of the conversation vocabulary
+    # translates to its documented HTTP status through ``register_error_handlers`` —
+    # no disclosure (404), unknown scope / bad title / unknown mode (422), target gone
+    # and turn race (409). The readable service message is surfaced as the body
+    # ``detail`` (no leak). One table, so an error added without a mapping shows up
+    # here as a 500 rather than in production.
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
@@ -228,7 +230,9 @@ def test_teaching_errors_map_to_expected_status_codes() -> None:
         ConversationNotFound,
         ConversationTargetUnavailable,
         ConversationTurnConflict,
+        InvalidConversationMode,
         InvalidConversationScope,
+        InvalidConversationTitle,
     )
     from app.infrastructure.web.error_handlers import register_error_handlers
 
@@ -251,6 +255,14 @@ def test_teaching_errors_map_to_expected_status_codes() -> None:
     def _turn_conflict() -> None:
         raise ConversationTurnConflict("another turn already claimed this turn index")
 
+    @app.get("/invalid-title")
+    def _invalid_title() -> None:
+        raise InvalidConversationTitle("Title must be at most 200 characters.")
+
+    @app.get("/invalid-mode")
+    def _invalid_mode() -> None:
+        raise InvalidConversationMode("Unknown conversation mode: 'shout'")
+
     client = TestClient(app, raise_server_exceptions=False)
 
     assert client.get("/session-not-found").status_code == 404
@@ -261,3 +273,15 @@ def test_teaching_errors_map_to_expected_status_codes() -> None:
     assert gone.json() == {"detail": "The teaching target no longer exists."}
 
     assert client.get("/turn-conflict").status_code == 409
+
+    # Neither of these is reachable over HTTP today — the routers' own validators
+    # reject a blank/oversize title and an unknown mode first — which is exactly why
+    # the mapping needs a sensor: the day a validator relaxes, a missing entry here
+    # is a 500 instead of a 422.
+    bad_title = client.get("/invalid-title")
+    assert bad_title.status_code == 422
+    assert bad_title.json() == {"detail": "Title must be at most 200 characters."}
+
+    bad_mode = client.get("/invalid-mode")
+    assert bad_mode.status_code == 422
+    assert bad_mode.json() == {"detail": "Unknown conversation mode: 'shout'"}

@@ -19,8 +19,9 @@ _discard`). Deleted with the legacy endpoints when the UI moves to
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager
 from uuid import UUID
 
 from app.application.conversations import PostConversationTurn, StartConversation
@@ -39,6 +40,8 @@ from app.domain.entities import (
     User,
 )
 from app.domain.ports import ConversationRepository
+
+logger = logging.getLogger(__name__)
 
 # How much of the question becomes the conversation's title (AD-195). A hard
 # character cut, deliberately not a word boundary: the reader recognizes their own
@@ -181,10 +184,16 @@ class AskQuestion:
 
     def _discard(self, conversation: Conversation) -> None:
         """Remove a conversation whose one turn never landed (nothing else can have)."""
-        with suppress(Exception):
-            # Best effort: the failure that brought us here is the one worth raising,
-            # and in a request this write is being rolled back around us anyway.
+        try:
             self._conversations.delete(conversation.id)
+        except Exception:  # noqa: BLE001 - best effort; the original failure is the one to raise
+            # The failure that brought us here is the one worth raising, and inside a
+            # request this write is being rolled back around us anyway. But the
+            # streaming path's cleanup can run after the response began and after the
+            # request-scoped connection went back — exactly when the rollback is not
+            # guaranteed to cover it — so one content-free line makes the leftover
+            # conversation explainable instead of mysterious.
+            logger.warning("ask discard failed conversation_id=%s", conversation.id)
 
 
 def _as_answer(turn: ConversationTurn) -> QuestionAnswer:

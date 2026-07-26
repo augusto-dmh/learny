@@ -26,6 +26,7 @@ from app.application.errors import (
     AnswerGenerationFailed,
     ConversationNotFound,
     ConversationTargetUnavailable,
+    InvalidConversationMode,
     InvalidConversationScope,
     InvalidConversationTitle,
     NotAuthorized,
@@ -582,7 +583,10 @@ class PostConversationTurn:
         SSE bytes) and both see the same evidence and history.
         """
         if mode not in (MODE_ANSWER, MODE_TEACH):
-            raise ValueError(f"Unknown conversation mode: {mode!r}")
+            # A named error rather than a bare ValueError: this is a public service
+            # with callers beyond the router, so a bad mode is the 422 the boundary
+            # already publishes rather than an unhandled 500.
+            raise InvalidConversationMode(f"Unknown conversation mode: {mode!r}")
 
         conversation, source = authorized_conversation(
             user=user,
@@ -809,10 +813,11 @@ class PostConversationTurn:
         persisted = self._turns.add(turn)
         self._conversations.touch(plan.conversation.id, self._clock.now())
         logger.info(
-            "conversation turn completed outcome=%s conversation_id=%s mode=%s "
+            "conversation turn completed outcome=%s conversation_id=%s source_id=%s mode=%s "
             "evidence_count=%s model=%s",
             persisted.answer_status,
             plan.conversation.id,
+            plan.conversation.source_id,
             mode,
             persisted.evidence_count,
             persisted.model,

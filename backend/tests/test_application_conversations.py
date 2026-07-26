@@ -34,6 +34,7 @@ from app.application.errors import (
     ConversationNotFound,
     ConversationTargetUnavailable,
     ConversationTurnConflict,
+    InvalidConversationMode,
     InvalidConversationScope,
     InvalidConversationTitle,
     SourceNotFound,
@@ -1504,6 +1505,30 @@ def test_teach_mode_sends_the_target_section_path_and_history_to_the_teaching_po
     ]
     assert answering.calls == []
     assert turn.mode == "teach"
+
+
+def test_an_unknown_mode_is_rejected_from_the_published_error_vocabulary() -> None:
+    # CONV-20: the turn service is public — the router is not its only caller — so a
+    # mode it does not know is a named 422-mapped error rather than a bare ValueError
+    # escaping as a 500, and nothing is retrieved or persisted for it.
+    user, source, sources = _owned_world()
+    corpus = FakeCorpus(_structure(_section("ch1.xhtml", ("Chapter 1",))))
+    conversations = FakeConversationRepository(sources)
+    conversation = conversations.add(_whole_book_conversation(source.id))
+    retrieve = FakeScopedRetrieveEvidence([])
+    turns = FakeConversationTurnRepository()
+
+    with pytest.raises(InvalidConversationMode):
+        _post(
+            conversations=conversations,
+            turns=turns,
+            sources=sources,
+            corpus=corpus,
+            retrieve=retrieve,
+        )(user=user, conversation_id=conversation.id, message="q", mode="shout")
+
+    assert retrieve.calls == []
+    assert turns.add_calls == 0
 
 
 def test_teach_turn_on_a_whole_book_conversation_is_a_state_conflict() -> None:
