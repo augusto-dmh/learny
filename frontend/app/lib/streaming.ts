@@ -18,16 +18,21 @@
 
 import { DefaultChatTransport, type UIMessage } from "ai";
 
+import type { ConversationAnswerStatus, ConversationMode } from "./conversations";
 import { type Citation } from "./questions";
-import { type TeachingTurnView } from "./teaching";
 
-/** The answer outcome both surfaces report, mirroring the backend status. */
-export type AnswerStatus = "answered" | "not_found_in_source";
+/**
+ * The answer outcome a surface reports, mirroring the backend status. The
+ * unified surface carries all three values on the wire, `not_found_in_scope`
+ * included — a scoped conversation coming up empty is a different fact from the
+ * whole book coming up empty, and the reader is told which.
+ */
+export type AnswerStatus = ConversationAnswerStatus;
 
 /**
  * The typed data parts Learny's stream carries alongside the streamed text,
  * matching `ui_message_stream.py`: `data-citations` (the grounded citation
- * snapshots) and `data-answer-status` (`answered` | `not_found_in_source`).
+ * snapshots) and `data-answer-status`.
  */
 export type LearnyDataParts = {
   citations: Citation[];
@@ -201,6 +206,46 @@ export function createTurnTransport(
   });
 }
 
+/**
+ * Transport for a conversation's streaming turns on the unified surface: POSTs
+ * `{message: <latest user text>, mode}` to
+ * `/api/conversations/{id}/turns/stream` with the CSRF header.
+ *
+ * Starting a conversation and posting its first turn are two calls, so the id is
+ * resolved **lazily**: `resolveConversationId` is awaited on every send and is
+ * free to create the conversation the first time and return the same id
+ * afterwards. That keeps the create-then-stream split inside the transport
+ * instead of forcing every surface to special-case its first message.
+ *
+ * `mode` is passed explicitly — it is never inferred from the conversation's
+ * scope, because a chapter-scoped conversation may still be answering rather
+ * than teaching. The notes choice is *not* sent per turn: it belongs to the
+ * conversation and is fixed when it is created.
+ */
+export function createConversationTransport({
+  mode,
+  csrfToken,
+  resolveConversationId,
+}: {
+  mode: ConversationMode;
+  csrfToken: string;
+  resolveConversationId: () => Promise<string>;
+}): DefaultChatTransport<LearnyUIMessage> {
+  return new DefaultChatTransport<LearnyUIMessage>({
+    api: "/api/conversations",
+    credentials: "same-origin",
+    fetch: streamingFetch,
+    prepareSendMessagesRequest: async ({ messages }) => {
+      const conversationId = await resolveConversationId();
+      return {
+        api: `/api/conversations/${conversationId}/turns/stream`,
+        body: { message: latestUserText(messages), mode },
+        headers: { "X-CSRF-Token": csrfToken },
+      };
+    },
+  });
+}
+
 /** The concatenated text of the most recent user message (the just-sent one). */
 function latestUserText(messages: LearnyUIMessage[]): string {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
@@ -216,15 +261,26 @@ function latestUserText(messages: LearnyUIMessage[]): string {
 }
 
 /**
- * Seed persisted teaching turns into `useChat` messages so a resumed session
- * renders identically to live-streamed turns (FE-12). Each turn becomes a user
- * message (its prompt) followed by an assistant message carrying the response
- * text, the citation snapshots, and the answer status — the same part shape the
- * live stream assembles.
+ * The fields a stored turn must carry to be replayed into the chat. Declared
+ * structurally rather than as one surface's response type so this helper stays
+ * usable by whichever surface persists turns.
  */
-export function turnsToUIMessages(
-  turns: TeachingTurnView[],
-): LearnyUIMessage[] {
+export type PersistedTurn = {
+  turn_index: number;
+  message: string;
+  answer_status: AnswerStatus;
+  text: string;
+  citations: Citation[];
+};
+
+/**
+ * Seed persisted turns into `useChat` messages so a restored thread renders
+ * identically to live-streamed turns (FE-12). Each turn becomes a user message
+ * (its prompt) followed by an assistant message carrying the response text, the
+ * citation snapshots, and the answer status — the same part shape the live
+ * stream assembles.
+ */
+export function turnsToUIMessages(turns: PersistedTurn[]): LearnyUIMessage[] {
   const messages: LearnyUIMessage[] = [];
   for (const turn of turns) {
     messages.push({
