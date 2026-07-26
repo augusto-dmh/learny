@@ -40,6 +40,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import Connection
 
+from app.application.conversations import DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT
 from app.domain.entities import (
     ANSWERED,
     MODE_ANSWER,
@@ -576,6 +577,81 @@ def test_list_filters_by_source_and_excludes_other_users(
     assert login.status_code == 200, login.text
     owned = auth_client.get("/api/conversations", params={"source_id": owned_id})
     assert [row["id"] for row in owned.json()] == [str(mine.id)]
+
+
+def test_list_without_pagination_returns_a_bounded_default_page(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # CONV-16: a reader with more history than one page gets one page — the newest
+    # of it — rather than everything they have ever asked.
+    source_id, _ = _seed_ready_source(auth_client, db_conn, "list-default@example.com")
+    base = datetime.now(UTC)
+    seeded = [
+        _seed_conversation(
+            db_conn,
+            UUID(source_id),
+            title=f"Conversation {i}",
+            updated_at=base + timedelta(minutes=i),
+        )
+        for i in range(DEFAULT_PAGE_LIMIT + 3)
+    ]
+
+    resp = auth_client.get("/api/conversations")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert len(body) == DEFAULT_PAGE_LIMIT
+    newest_first = [str(c.id) for c in reversed(seeded)]
+    assert [row["id"] for row in body] == newest_first[:DEFAULT_PAGE_LIMIT]
+
+
+def test_list_limit_and_offset_return_that_window_of_the_order(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # CONV-16: the page a caller names is the window it gets, taken from the same
+    # newest-activity order the unparameterized read uses.
+    source_id, _ = _seed_ready_source(auth_client, db_conn, "list-window@example.com")
+    base = datetime.now(UTC)
+    seeded = [
+        _seed_conversation(
+            db_conn,
+            UUID(source_id),
+            title=f"Conversation {i}",
+            updated_at=base + timedelta(minutes=i),
+        )
+        for i in range(5)
+    ]
+    newest_first = [str(c.id) for c in reversed(seeded)]
+
+    window = auth_client.get("/api/conversations", params={"limit": 2, "offset": 1})
+    past_the_end = auth_client.get("/api/conversations", params={"limit": 2, "offset": 5})
+
+    assert window.status_code == 200, window.text
+    assert [row["id"] for row in window.json()] == newest_first[1:3]
+    # Walking off the end is an empty page, not an error: a caller paging to the end
+    # of its history stops on an empty answer.
+    assert past_the_end.status_code == 200, past_the_end.text
+    assert past_the_end.json() == []
+
+
+def test_list_rejects_a_page_outside_its_bounds(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # CONV-16: the bounds are the endpoint's own — a caller cannot ask for zero rows,
+    # for more than the cap, or for a negative window start.
+    source_id, _ = _seed_ready_source(auth_client, db_conn, "list-bounds@example.com")
+    _seed_conversation(db_conn, UUID(source_id))
+
+    assert auth_client.get("/api/conversations", params={"limit": 0}).status_code == 422
+    assert (
+        auth_client.get("/api/conversations", params={"limit": MAX_PAGE_LIMIT + 1}).status_code
+        == 422
+    )
+    assert auth_client.get("/api/conversations", params={"offset": -1}).status_code == 422
+    # The cap itself is allowed — the rejection is of values beyond it.
+    assert (
+        auth_client.get("/api/conversations", params={"limit": MAX_PAGE_LIMIT}).status_code == 200
+    )
 
 
 def test_list_unauthenticated_returns_401(auth_client: TestClient, db_conn: Connection) -> None:

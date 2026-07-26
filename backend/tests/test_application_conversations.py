@@ -21,6 +21,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.application.conversations import (
+    DEFAULT_PAGE_LIMIT,
     TITLE_MAX_CHARS,
     DeleteConversation,
     ListConversations,
@@ -828,6 +829,32 @@ def test_list_filters_by_source_when_asked() -> None:
     rows = _list(conversations=conversations)(user=user, source_id=kept.id)
 
     assert [row.conversation.id for row in rows] == [mine.id]
+
+
+def test_list_pages_the_callers_history_and_bounds_it_by_default() -> None:
+    # CONV-06: the service is public — the router is not its only caller — so it
+    # bounds an unnamed page itself rather than trusting every caller to, and the
+    # window a caller does name is the window it gets.
+    user = _user()
+    sources = FakeSourceRepository()
+    source = _owned_source(user.id, title="Book One")
+    sources.add(source)
+    conversations = FakeConversationRepository(sources)
+    seeded = [
+        conversations.add(
+            _whole_book_conversation(source.id, updated_at=_NOW - timedelta(minutes=i))
+        )
+        for i in range(DEFAULT_PAGE_LIMIT + 2)
+    ]
+    service = _list(conversations=conversations)
+
+    default_page = service(user=user)
+    window = service(user=user, limit=2, offset=1)
+
+    assert [row.conversation.id for row in default_page] == [
+        c.id for c in seeded[:DEFAULT_PAGE_LIMIT]
+    ]
+    assert [row.conversation.id for row in window] == [c.id for c in seeded[1:3]]
 
 
 def test_list_never_returns_another_users_conversations() -> None:
