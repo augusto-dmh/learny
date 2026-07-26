@@ -122,5 +122,13 @@ and C precedes D by the driver's explicit call; ADR-0029 must be accepted before
 | `v6-instrument` | A | Request/query/task timings, `Server-Timing`, dev-only surface | Done (PR #49) |
 | `v6-page-unit` | B | Page unit (~275 words), reader typography, live progress, study heatmap | Done (PR #51) |
 | `v6-conversation-model` | C | Unified scoped conversations per ADR-0029 (backend-first) | Done (PR #52) — ADR-0029 shipped in the PR |
-| `v6-workspace` | D | Reader as hub: contents rail, four-tab dock, route redirects, re-scoped notes/review | Not started |
+| `v6-workspace-conversations` | D (1 of 2) | Ask/Teach re-pointed onto the unified conversation API, dock conversation management, legacy surface retired, generation ports converged, list pagination | In progress |
+| `v6-workspace-notes` | D (2 of 2) | Dock Notes + Review tabs, notes-by-source filter, `/notes` re-scoped per book, notes provenance (title-only creation retired) | Not started |
 | `v6-answer-experience` | E | Thinking + streaming states, inline citations, app-wide loading pattern | Not started |
+
+Cycle D was split at spec time, as RFC-006 §Cycle D authorized. Three of its listed
+deliverables were already shipped by earlier cycles — the `/ask` and `/teach` route
+redirects (RFC-004 Cycle C), the contents rail (`TocPanel`), and the per-source
+due-cards filter — so the remainder divides along two disjoint axes rather than the
+RFC's literal "dock + redirects / notes & review" seam. Rationale and the rejected
+alternatives: AD-203.
