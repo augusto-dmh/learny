@@ -203,25 +203,25 @@ RFC-006 assigns to this cycle and it rides the same component.
 
 | Requirement ID | Story | Phase | Status |
 | --- | --- | --- | --- |
-| WSC-01 | P1: Unified API | Design | Pending |
-| WSC-02 | P1: Unified API (persistence across reload) | Design | Pending |
-| WSC-03 | P1: Unified API (stream parity) | Design | Pending |
-| WSC-04 | P1: Unified API (scope-miss surfaced) | Design | Pending |
-| WSC-05 | P1: Dock management (list + resume) | Design | Pending |
-| WSC-06 | P1: Dock management (rename + delete + empty) | Design | Pending |
-| WSC-07 | P1: Legacy deletion (routes 404) | Design | Pending |
-| WSC-08 | P1: Legacy deletion (modules + knobs gone, boot survives) | Design | Pending |
-| WSC-09 | P1: Legacy deletion (coverage re-anchored, not lost) | Design | Pending |
-| WSC-10 | P1: One port (convergence + output parity) | Design | Pending |
-| WSC-11 | P2: Copy + explicit notes choice | Design | Pending |
-| WSC-12 | P2: Pagination | Design | Pending |
-| WSC-13 | Edge: partial-failure / no orphan turn | Design | Pending |
-| WSC-14 | Edge: 409/422 state-transition integrity preserved | Design | Pending |
-| WSC-15 | Edge: no surviving route loses its rate limiter | Design | Pending |
+| WSC-01 | P1: Unified API | Execute | Verified |
+| WSC-02 | P1: Unified API (persistence across reload) | Execute | Verified |
+| WSC-03 | P1: Unified API (stream parity) | Execute | Verified |
+| WSC-04 | P1: Unified API (scope-miss surfaced) | Execute | Verified |
+| WSC-05 | P1: Dock management (list + resume) | Execute | Verified |
+| WSC-06 | P1: Dock management (rename + delete + empty) | Execute | Verified |
+| WSC-07 | P1: Legacy deletion (routes 404) | Execute | Verified |
+| WSC-08 | P1: Legacy deletion (modules + knobs gone, boot survives) | Execute | Verified |
+| WSC-09 | P1: Legacy deletion (coverage re-anchored, not lost) | Execute | Verified |
+| WSC-10 | P1: One port (convergence + output parity) | Execute | Verified |
+| WSC-11 | P2: Copy + explicit notes choice | Execute | Verified |
+| WSC-12 | P2: Pagination | Execute | Verified |
+| WSC-13 | Edge: partial-failure / no orphan turn | Execute | Verified |
+| WSC-14 | Edge: 409/422 state-transition integrity preserved | Execute | Verified |
+| WSC-15 | Edge: no surviving route loses its rate limiter | Execute | Verified |
 
 **ID format:** `WSC-NN`
 
-**Coverage:** 15 total, 0 mapped to tasks, 15 unmapped ⚠️ (resolved in Tasks)
+**Coverage:** 15 total, 15 mapped to tasks, 0 unmapped — all Verified (round 2 PASS).
 
 ---
 
