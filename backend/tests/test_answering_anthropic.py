@@ -28,7 +28,7 @@ from app.domain.entities import (
     Evidence,
     HistoryTurn,
 )
-from app.domain.ports import AnswerGenerationPort, TeachingGenerationPort
+from app.domain.ports import GenerationPort
 from app.infrastructure.answering import anthropic as anthropic_module
 from app.infrastructure.answering.anthropic import (
     AnthropicAnswerAdapter,
@@ -745,11 +745,11 @@ def test_teaching_stream_maps_deltas_and_carries_cached_system() -> None:
 
 def test_anthropic_adapters_conform_to_their_port_protocols() -> None:
     # GEN-12: with generate_stream added, the Anthropic adapters satisfy the
-    # runtime-checkable generation ports structurally.
+    # runtime-checkable generation port structurally.
     answer = AnthropicAnswerAdapter(api_key="x", model=_MODEL, max_tokens=_MAX_TOKENS)
     teaching = AnthropicTeachingAdapter(api_key="x", model=_MODEL, max_tokens=_MAX_TOKENS)
-    assert isinstance(answer, AnswerGenerationPort)
-    assert isinstance(teaching, TeachingGenerationPort)
+    assert isinstance(answer, GenerationPort)
+    assert isinstance(teaching, GenerationPort)
 
 
 # --- Live smoke (GEN-20) — real provider, skipped offline / without a key -------

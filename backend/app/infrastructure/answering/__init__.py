@@ -1,7 +1,7 @@
-"""Answer-generation adapters (implement ``AnswerGenerationPort``, ADR-0007/0020).
+"""Generation adapters (implement ``GenerationPort``, ADR-0007/0020).
 
 The provider SDK, model name, and citation format live only inside these
-adapters; callers depend on ``AnswerGenerationPort`` and receive a Learny-owned
+adapters; callers depend on ``GenerationPort`` and receive a Learny-owned
 ``GeneratedAnswer``. The default is a deterministic, network-free extractive
 adapter (AD-024) that makes the answer path testable offline;
 ``build_answer_adapter`` selects the concrete adapter from settings at the
@@ -23,7 +23,7 @@ from app.infrastructure.answering.local import (
 
 if TYPE_CHECKING:
     from app.core.config import Settings
-    from app.domain.ports import AnswerGenerationPort, TeachingGenerationPort
+    from app.domain.ports import GenerationPort
 
 __all__ = [
     "AnthropicAnswerAdapter",
@@ -35,7 +35,7 @@ __all__ = [
 ]
 
 
-def build_answer_adapter(settings: Settings) -> AnswerGenerationPort:
+def build_answer_adapter(settings: Settings) -> GenerationPort:
     """Return the answer adapter named by ``settings.generation_provider``.
 
     ``local`` (default) → the deterministic, network-free adapter (CI/local needs
@@ -61,7 +61,7 @@ def build_answer_adapter(settings: Settings) -> AnswerGenerationPort:
     raise ValueError(f"unknown generation provider: {provider}")
 
 
-def build_teaching_adapter(settings: Settings) -> TeachingGenerationPort:
+def build_teaching_adapter(settings: Settings) -> GenerationPort:
     """Return the teaching adapter named by ``settings.generation_provider``.
 
     The teaching sibling of :func:`build_answer_adapter` — one provider switch

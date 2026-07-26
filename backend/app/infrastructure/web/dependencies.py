@@ -84,14 +84,13 @@ from app.core.config import Settings, get_settings
 from app.core.tracing import bind_trace
 from app.domain.entities import Session, User
 from app.domain.ports import (
-    AnswerGenerationPort,
     EmbeddingPort,
+    GenerationPort,
     IngestionEnqueuer,
     NoteIndexEnqueuer,
     QuizDeckEnqueuer,
     QuizGenerationPort,
     StoragePort,
-    TeachingGenerationPort,
 )
 from app.infrastructure.answering import (
     build_answer_adapter,
@@ -438,12 +437,12 @@ def get_retrieve_evidence(conn: DbConnection) -> RetrieveEvidence:
 # process, and overridable in tests via ``dependency_overrides[get_answer_generation]``
 # exactly like before.
 @lru_cache
-def get_answer_generation() -> AnswerGenerationPort:
+def get_answer_generation() -> GenerationPort:
     """FastAPI dependency: the settings-selected answer generator (overridable in tests)."""
     return build_answer_adapter(get_settings())
 
 
-AnswerGeneration = Annotated[AnswerGenerationPort, Depends(get_answer_generation)]
+AnswerGeneration = Annotated[GenerationPort, Depends(get_answer_generation)]
 
 
 def get_ask_question(
@@ -505,12 +504,12 @@ def get_list_teaching_sessions(conn: DbConnection) -> ListTeachingSessions:
 # resolved once per process, and overridable in tests via
 # ``dependency_overrides[get_teaching_generation]`` exactly as before.
 @lru_cache
-def get_teaching_generation() -> TeachingGenerationPort:
+def get_teaching_generation() -> GenerationPort:
     """FastAPI dependency: the settings-selected teaching generator (overridable in tests)."""
     return build_teaching_adapter(get_settings())
 
 
-TeachingGeneration = Annotated[TeachingGenerationPort, Depends(get_teaching_generation)]
+TeachingGeneration = Annotated[GenerationPort, Depends(get_teaching_generation)]
 
 
 def get_post_teaching_turn(

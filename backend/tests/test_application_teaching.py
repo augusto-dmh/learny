@@ -65,7 +65,7 @@ from app.domain.entities import (
     StructureSection,
     User,
 )
-from app.domain.ports import TeachingGenerationPort
+from app.domain.ports import GenerationPort
 from tests.fakes import FakeClock, FakeSourceRepository
 
 _NOW = datetime(2026, 7, 11, 12, 0, 0, tzinfo=UTC)
@@ -1569,10 +1569,10 @@ def test_stream_port_failure_wraps_and_persists_nothing() -> None:
     assert turns.list_for_conversation(session.id) == []
 
 
-def test_teaching_fake_conforms_to_the_teaching_port_protocol() -> None:
-    # GEN-12: the runtime-checkable teaching port now includes ``generate_stream``;
-    # the local teaching fake satisfies it structurally.
-    assert isinstance(FakeTeachingGeneration(), TeachingGenerationPort)
+def test_teaching_fake_conforms_to_the_generation_port_protocol() -> None:
+    # GEN-12: the runtime-checkable port includes ``generate_stream``; the local
+    # teaching fake satisfies it structurally.
+    assert isinstance(FakeTeachingGeneration(), GenerationPort)
 
 
 def test_teaching_module_imports_no_web_or_provider_sdk() -> None:

@@ -121,7 +121,7 @@ class AnswerGenerationFailed(Exception):
     """The answer-generation port raised an operational failure (QA-17).
 
     The Q&A service wraps any exception from
-    :meth:`~app.domain.ports.AnswerGenerationPort.generate` in this error; the
+    :meth:`~app.domain.ports.GenerationPort.generate` in this error; the
     web layer maps it to 502 with a generic body that leaks no provider or
     internal detail. Nothing is persisted, so there is no state to roll back.
     """

@@ -59,13 +59,12 @@ from app.domain.entities import (
     User,
 )
 from app.domain.ports import (
-    AnswerGenerationPort,
     Clock,
     ConversationRepository,
     ConversationTurnRepository,
     CorpusRepository,
+    GenerationPort,
     SourceRepository,
-    TeachingGenerationPort,
 )
 
 logger = logging.getLogger(__name__)
@@ -436,10 +435,9 @@ class PostConversationTurn:
     ``include_notes_override`` lets a legacy request override it for that request
     only, never changing what is stored (AD-147).
 
-    Generation is mode-dispatched: ``answer`` goes to the
-    :class:`~app.domain.ports.AnswerGenerationPort` with the bounded prior history,
-    ``teach`` to the :class:`~app.domain.ports.TeachingGenerationPort` with the
-    target's section path and that same history. Either way the port's answer passes
+    Generation goes to the :class:`~app.domain.ports.GenerationPort` with the mode,
+    the bounded prior history, and — for ``teach`` — the target's section path.
+    Either way the port's answer passes
     through the shared grounding guard (AD-027), any port raise becomes
     ``AnswerGenerationFailed`` with nothing persisted, and the turn — answered or
     not-found — is persisted **only after grounding** with the next ``turn_index``,
@@ -460,8 +458,8 @@ class PostConversationTurn:
         sources: SourceRepository,
         corpus: CorpusRepository,
         retrieve: RetrieveEvidence,
-        answer_generation: AnswerGenerationPort,
-        teaching_generation: TeachingGenerationPort,
+        answer_generation: GenerationPort,
+        teaching_generation: GenerationPort,
         authorize: AuthorizeOwnership,
         clock: Clock,
         ids: Callable[[], UUID],
@@ -720,7 +718,7 @@ class PostConversationTurn:
             add_subtree(by_anchor[canonical])
         return self._corpus.expand_anchors(conversation.source_id, base)
 
-    def _port(self, mode: str) -> AnswerGenerationPort | TeachingGenerationPort:
+    def _port(self, mode: str) -> GenerationPort:
         """The generation port this mode speaks to (read for its model identity)."""
         return self._teaching_generation if mode == MODE_TEACH else self._answer_generation
 

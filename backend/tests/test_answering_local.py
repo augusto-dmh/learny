@@ -20,7 +20,7 @@ from app.domain.entities import (
     Evidence,
     HistoryTurn,
 )
-from app.domain.ports import AnswerGenerationPort, TeachingGenerationPort
+from app.domain.ports import GenerationPort
 from app.infrastructure.answering import DeterministicAnswerAdapter
 from app.infrastructure.answering import local as local_module
 from app.infrastructure.answering.local import DeterministicTeachingAdapter
@@ -324,13 +324,13 @@ def test_teaching_stream_yields_full_text_delta_then_one_authoritative_completed
 
 
 def test_deterministic_adapters_conform_to_their_port_protocols() -> None:
-    # GEN-12: the runtime-checkable ports now include ``generate_stream``; the
-    # deterministic adapters satisfy them structurally.
-    assert isinstance(DeterministicAnswerAdapter(), AnswerGenerationPort)
-    assert isinstance(DeterministicTeachingAdapter(), TeachingGenerationPort)
+    # GEN-12: the runtime-checkable port includes ``generate_stream``; the
+    # deterministic adapters satisfy it structurally.
+    assert isinstance(DeterministicAnswerAdapter(), GenerationPort)
+    assert isinstance(DeterministicTeachingAdapter(), GenerationPort)
 
 
 def test_answer_fake_conforms_to_the_answer_port_protocol() -> None:
     from tests.fakes import FakeAnswerGeneration
 
-    assert isinstance(FakeAnswerGeneration(), AnswerGenerationPort)
+    assert isinstance(FakeAnswerGeneration(), GenerationPort)

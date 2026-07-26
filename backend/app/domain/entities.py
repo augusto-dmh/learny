@@ -410,7 +410,7 @@ class GeneratedAnswer:
     """The raw output of the answer-generation port (QA-05, ADR-0007 §4).
 
     A Learny-owned result so no provider response shape crosses the
-    :class:`~app.domain.ports.AnswerGenerationPort` boundary. ``cited_chunk_ids``
+    :class:`~app.domain.ports.GenerationPort` boundary. ``cited_chunk_ids``
     are the chunk ids the adapter drew on; the application service grounds them
     against the retrieved evidence. ``found`` is ``False`` when the evidence
     cannot support an answer (``text`` empty, ``cited_chunk_ids`` empty).
