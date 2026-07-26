@@ -111,6 +111,26 @@ export function ReaderPanel({
     [sourceId, mode, onModeChange],
   );
 
+  // Deleting the conversation a panel is showing cannot leave that panel
+  // rendering a thread the server no longer has, so the surface pointing at it
+  // is cleared and told to re-read — which lands it on its empty state.
+  const handleDeleted = useCallback(
+    (conversationId: string) => {
+      for (const surface of ["ask", "teach"] as PanelMode[]) {
+        if (readActiveConversation(sourceId, surface) !== conversationId) {
+          continue;
+        }
+        writeActiveConversation(sourceId, surface, null);
+        setActiveIds((current) => ({ ...current, [surface]: null }));
+        setRevisions((current) => ({
+          ...current,
+          [surface]: current[surface] + 1,
+        }));
+      }
+    },
+    [sourceId],
+  );
+
   const handleNew = useCallback(() => {
     writeActiveConversation(sourceId, mode, null);
     setActiveIds((current) => ({ ...current, [mode]: null }));
@@ -157,10 +177,12 @@ export function ReaderPanel({
 
       <ConversationList
         sourceId={sourceId}
+        csrf={csrf}
         refreshToken={listToken}
         activeConversationId={activeIds[mode]}
         onResume={handleResume}
         onNew={handleNew}
+        onDeleted={handleDeleted}
       />
 
       <div className="min-h-0 flex-1 p-3">
