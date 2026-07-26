@@ -203,6 +203,50 @@ describe("renaming a conversation from the dock", () => {
   });
 });
 
+describe("when the conversation list cannot be loaded", () => {
+  it("tells the reader instead of showing an empty book, and stays usable", async () => {
+    renderDock({
+      [`GET ${LIST_URL}`]: () =>
+        jsonResponse(500, { detail: "Your conversations could not be loaded." }),
+    });
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("could not be loaded");
+    // A failed load is not the same as a book with no threads, and the reader
+    // can still start one.
+    expect(screen.getByRole("button", { name: "New conversation" })).toBeTruthy();
+  });
+
+  it("keeps the page already read when the next one fails", async () => {
+    const firstPage = Array.from({ length: 20 }, (_, index) => ({
+      ...summary,
+      id: `c${index}`,
+      title: `Thread ${index}`,
+    }));
+    renderDock({
+      [`GET ${LIST_URL}`]: () => jsonResponse(200, firstPage),
+      "GET /api/conversations?source_id=s1&limit=20&offset=20": () =>
+        jsonResponse(500, { detail: "The older ones could not be loaded." }),
+    });
+
+    const more = await screen.findByRole("button", {
+      name: "Show older conversations",
+    });
+    await act(async () => {
+      fireEvent.click(more);
+    });
+
+    // The failure is readable, what was already read stays, and the reader can
+    // try again.
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("The older ones could not be loaded.");
+    expect(screen.getByRole("button", { name: "Resume Thread 0" })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Show older conversations" }),
+    ).toBeTruthy();
+  });
+});
+
 describe("deleting a conversation from the dock", () => {
   it("removes it from the list", async () => {
     const fetchMock = renderDock({
@@ -222,6 +266,32 @@ describe("deleting a conversation from the dock", () => {
       expect(screen.queryByRole("button", { name: "Resume Ada Lovelace" })).toBeNull(),
     );
     expect(screen.getByText("No conversations yet.")).toBeTruthy();
+  });
+
+  it("keeps the conversation, and the panel showing it, when the delete fails", async () => {
+    writeActiveConversation("s1", "ask", "conv1");
+    renderDock({
+      [`GET ${LIST_URL}`]: () => jsonResponse(200, [summary]),
+      [`GET ${CONVERSATION_URL}`]: () => jsonResponse(200, detail),
+      [`DELETE ${CONVERSATION_URL}`]: () =>
+        jsonResponse(500, { detail: "That conversation could not be deleted." }),
+    });
+
+    expect(await screen.findByText("Ada Lovelace did.")).toBeTruthy();
+    const deleteButton = await screen.findByRole("button", {
+      name: "Delete Ada Lovelace",
+    });
+    await act(async () => {
+      fireEvent.click(deleteButton);
+    });
+
+    // The reader is told, and nothing is removed on the strength of a request
+    // the server refused: the row and the open thread are both still there.
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("could not be deleted");
+    expect(screen.getByRole("button", { name: "Resume Ada Lovelace" })).toBeTruthy();
+    expect(screen.getByText("Ada Lovelace did.")).toBeTruthy();
+    expect(readActiveConversation("s1", "ask")).toBe("conv1");
   });
 
   it("returns the panel to its empty state when the open conversation is deleted", async () => {
