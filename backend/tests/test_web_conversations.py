@@ -634,6 +634,41 @@ def test_list_limit_and_offset_return_that_window_of_the_order(
     assert past_the_end.json() == []
 
 
+def test_list_paged_to_the_end_returns_every_conversation_exactly_once(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # CONV-16: the dock walks this list a page at a time. Conversations touched in
+    # the same instant share an ``updated_at``, which alone cannot order them, so a
+    # walk over a tie-heavy list is where a reader would silently lose a thread —
+    # or be shown one twice — between two pages.
+    source_id, _ = _seed_ready_source(auth_client, db_conn, "list-walk@example.com")
+    tied_at = datetime.now(UTC)
+    seeded = [
+        _seed_conversation(db_conn, UUID(source_id), title=f"Conversation {i}", updated_at=tied_at)
+        for i in range(7)
+    ]
+    # The fixture is only a sensor if the rows really are tied.
+    assert len({c.updated_at for c in seeded}) == 1
+
+    walked: list[str] = []
+    offset = 0
+    while True:
+        page = auth_client.get("/api/conversations", params={"limit": 3, "offset": offset})
+        assert page.status_code == 200, page.text
+        rows = page.json()
+        if not rows:
+            break
+        walked.extend(row["id"] for row in rows)
+        offset += 3
+
+    assert len(walked) == len(seeded), "a page either repeated a conversation or dropped one"
+    assert set(walked) == {str(c.id) for c in seeded}
+    # And the walk is the order itself: asking for the whole list in one page spells
+    # out the same sequence the windows did, which a partial order would not.
+    whole = auth_client.get("/api/conversations", params={"limit": MAX_PAGE_LIMIT})
+    assert [row["id"] for row in whole.json()] == walked
+
+
 def test_list_rejects_a_page_outside_its_bounds(
     auth_client: TestClient, db_conn: Connection
 ) -> None:

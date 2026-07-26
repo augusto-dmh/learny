@@ -1628,6 +1628,35 @@ def test_conversation_list_for_user_returns_only_the_requested_window(
     assert past_the_end == []
 
 
+def test_conversation_paging_a_tie_heavy_list_visits_every_row_exactly_once(
+    db_conn: Connection,
+) -> None:
+    # CONV-06: conversations touched in the same instant — a batch of turns landing
+    # together does this — share an ``updated_at``, and ``updated_at`` alone cannot
+    # order them. Walking the list in windows must still visit each exactly once:
+    # under a partial order the database is free to re-shuffle tied rows between two
+    # queries, so a row can be handed out twice while another is never seen at all.
+    user_id, (source,) = _persisted_user_with_sources(db_conn, "conv-page-ties@example.com", 1)
+    repo = SqlAlchemyConversationRepository(db_conn)
+    tied_at = datetime.now(UTC)
+    seeded = [repo.add(_whole_book_conversation(source.id, updated_at=tied_at)) for _ in range(7)]
+    # The fixture is only a sensor if the rows really are tied.
+    assert len({c.updated_at for c in seeded}) == 1
+
+    walked: list[UUID] = []
+    offset = 0
+    while page := repo.list_for_user(user_id, limit=3, offset=offset):
+        walked.extend(s.conversation.id for s in page)
+        offset += 3
+
+    assert len(walked) == len(seeded), "a window either repeated a row or dropped one"
+    assert set(walked) == {c.id for c in seeded}
+    # The walk is the order itself, not merely the same set: reading the whole list
+    # in one page yields exactly the sequence the windows spelled out.
+    whole = repo.list_for_user(user_id, limit=_PAGE)
+    assert [s.conversation.id for s in whole] == walked
+
+
 def test_conversation_rename_changes_title_and_bumps_activity(db_conn: Connection) -> None:
     source = _persisted_source(db_conn, "conv-rename@example.com")
     repo = SqlAlchemyConversationRepository(db_conn)
