@@ -22,6 +22,11 @@ Backfill maps every existing teaching session onto the new model exactly as it b
 existing turn ``mode = 'teach'``. The added columns are filled before they are tightened
 to NOT NULL, so no row is ever left with a fabricated value.
 
+Two guards come with the widening. A CHECK keeps the target snapshot all-or-nothing now
+that the NOT NULLs no longer say it, and an index on ``(updated_at DESC, id DESC)`` serves
+the cross-source list's ordering, which from this release grows by a row per question
+asked.
+
 Downgrade restores the 0016 shape. Conversations that have no teach target cannot be
 expressed by that shape at all — its ``target_*`` columns are NOT NULL — so they are
 deleted (with their turns and citations, by cascade) before the columns are re-tightened.
@@ -128,6 +133,25 @@ def upgrade() -> None:
     )
     op.alter_column("conversations", "target_title", existing_type=sa.Text(), nullable=True)
 
+    # The trio is all-or-nothing now that it is nullable, which is what the NOT NULLs
+    # used to say. Every backfilled row carries a full target, so this holds on the
+    # existing data without a repair step.
+    # The bare name is what the metadata's ``ck_%(table_name)s_%(constraint_name)s``
+    # convention expands to ``ck_conversations_target_all_or_nothing``.
+    op.create_check_constraint(
+        "target_all_or_nothing",
+        "conversations",
+        "(target_anchor IS NULL) = (target_section_path IS NULL) "
+        "AND (target_anchor IS NULL) = (target_title IS NULL)",
+    )
+
+    # The cross-source list orders by (updated_at desc, id desc); from this release
+    # every question asked adds a row, so the ordering gets its own index rather than
+    # a sort over the user's whole set.
+    op.execute(
+        "CREATE INDEX ix_conversations_updated_at_id ON conversations (updated_at DESC, id DESC)"
+    )
+
     op.add_column("conversation_turns", sa.Column("mode", sa.Text(), nullable=True))
     op.execute("UPDATE conversation_turns SET mode = 'teach'")
     op.alter_column("conversation_turns", "mode", nullable=False)
@@ -135,6 +159,9 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_column("conversation_turns", "mode")
+
+    op.drop_index("ix_conversations_updated_at_id", table_name="conversations")
+    op.execute("ALTER TABLE conversations DROP CONSTRAINT ck_conversations_target_all_or_nothing")
 
     # The 0016 shape cannot hold a targetless conversation; its turns and citations go
     # with it through the existing cascades.

@@ -340,10 +340,27 @@ conversations = Table(
     # teach target renders without re-reading the corpus (resolve is per-turn). NULL
     # for a whole-book conversation, which teaches nothing in particular.
     Column("target_anchor", Text, nullable=True),
-    Column("target_section_path", JSONB, nullable=True),
+    # ``none_as_null`` so an absent target is SQL NULL rather than a JSON ``null``
+    # literal, which is what the two sibling columns store and what the all-or-nothing
+    # CHECK below reads. Without it the two spellings of "no target" disagree in SQL
+    # while reading back identically in Python.
+    Column("target_section_path", JSONB(none_as_null=True), nullable=True),
     Column("target_title", Text, nullable=True),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    # The cross-source list reads newest activity first with ``id`` as the tiebreak
+    # that makes the order total. Every question asked writes a row here, so the
+    # ordering is indexed to match rather than left to a sort over the user's set.
+    Index("ix_conversations_updated_at_id", text("updated_at DESC"), text("id DESC")),
+    # The target snapshot is three columns or none. Before 0017 the trio was NOT NULL,
+    # which said so; now that a whole-book conversation may have no target, this is
+    # what keeps a half-populated row impossible — one would pass the legacy list's
+    # ``target_anchor IS NOT NULL`` filter and then fail to render.
+    CheckConstraint(
+        "(target_anchor IS NULL) = (target_section_path IS NULL) "
+        "AND (target_anchor IS NULL) = (target_title IS NULL)",
+        name="target_all_or_nothing",
+    ),
 )
 
 conversation_turns = Table(

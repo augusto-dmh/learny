@@ -11,7 +11,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import Connection, func, insert, select, update
+from sqlalchemy import Connection, func, insert, select, text, update
 from sqlalchemy import delete as sa_delete
 from sqlalchemy.exc import IntegrityError
 
@@ -1679,6 +1679,14 @@ def test_conversation_round_trips_a_whole_book_shape(db_conn: Connection) -> Non
         None,
     )
     assert fetched.include_notes is True
+    # In SQL too, not just in Python: an absent section path is NULL rather than a
+    # JSON ``null`` literal, which reads back identically but is a different value to
+    # every query — including the all-or-nothing CHECK on the trio.
+    stored_path_is_null = db_conn.execute(
+        text("SELECT target_section_path IS NULL FROM conversations WHERE id = :id"),
+        {"id": stored.id},
+    ).scalar_one()
+    assert stored_path_is_null is True
 
 
 def test_conversation_round_trips_a_multi_anchor_scope_in_order(db_conn: Connection) -> None:

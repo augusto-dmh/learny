@@ -2219,6 +2219,34 @@ def test_migration_0017_generalizes_teaching_into_conversations(monkeypatch) -> 
             reflected = {c["name"]: c["nullable"] for c in inspector.get_columns(table.name)}
             assert reflected == {c.name: c.nullable for c in table.columns}
 
+        # The target snapshot is all-or-nothing in the database, not by convention:
+        # the NOT NULLs used to say so, and this says it now that a whole-book
+        # conversation may carry no target at all. A half-populated row would pass
+        # the legacy list's ``target_anchor IS NOT NULL`` filter and then fail to
+        # render, so the database refuses it.
+        check_names = {cc["name"] for cc in inspector.get_check_constraints("conversations")}
+        assert "ck_conversations_target_all_or_nothing" in check_names
+        with pytest.raises(IntegrityError):
+            with engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "INSERT INTO conversations "
+                        "(id, source_id, title, scope_anchors, include_notes, target_anchor) "
+                        "VALUES (:id, :sid, 'Half a target', '[\"ch2.xhtml\"]'::jsonb, "
+                        "        false, 'ch2.xhtml')"
+                    ),
+                    {"id": uuid.uuid4(), "sid": source_id},
+                )
+
+        # CONV-06: the cross-source list's ordering has an index, so it stays cheap as
+        # the table grows by a row per question asked.
+        ordering_index = next(
+            ix
+            for ix in inspector.get_indexes("conversations")
+            if ix["name"] == "ix_conversations_updated_at_id"
+        )
+        assert ordering_index["column_names"] == ["updated_at", "id"]
+
         # A whole-book conversation — the shape the rename exists to allow — is now
         # storable: no target, empty scope.
         whole_book_id = uuid.uuid4()
