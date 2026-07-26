@@ -569,11 +569,19 @@ class ConversationSummary:
     ``source_title`` rides along because the global list spans every source the
     caller owns, and a row that names only the conversation would not say which
     book it is about. ``turn_count`` is the conversation's total, not a page of it.
+
+    ``last_turn_mode`` is the mode of the conversation's most recent turn, or
+    ``None`` when it has none. Mode is a property of a turn, never of the
+    conversation — one thread may hold both — so the latest turn is the one that
+    speaks for the thread: it is the exchange a reader is continuing from, and the
+    one their next message follows. A list row carries it so resuming a thread does
+    not have to read the whole thread to find out where it belongs.
     """
 
     conversation: Conversation
     turn_count: int
     source_title: str
+    last_turn_mode: str | None
 
 
 # --- Active recall aggregate (Cycle E, RFC-002; design §Domain) ------------------

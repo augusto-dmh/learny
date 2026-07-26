@@ -869,9 +869,9 @@ class SqlAlchemyConversationRepository:
 
     The aggregate carries no ``user_id`` (AD-014), so the two list reads reach the
     owner by joining ``sources``; ``list_for_user`` scopes to the caller in SQL, and
-    every read carries the source title and a correlated turn count so a list row is
-    complete without a second query. Both orderings break ties on ``id`` so equal
-    timestamps still produce one stable order.
+    every read carries the source title, a correlated turn count, and the newest
+    turn's mode, so a list row is complete without a second query. Both orderings
+    break ties on ``id`` so equal timestamps still produce one stable order.
     """
 
     def __init__(self, connection: Connection) -> None:
@@ -960,9 +960,21 @@ class SqlAlchemyConversationRepository:
             .scalar_subquery()
             .label("turn_count")
         )
-        return select(conversations, turn_count, sources.c.title.label("source_title")).select_from(
-            conversations.join(sources, conversations.c.source_id == sources.c.id)
+        # The mode of the newest turn, which is the one that speaks for the thread.
+        # Read here rather than by the caller: a list row that made a reader fetch a
+        # whole conversation to learn where it resumes would cost every citation of
+        # every turn to answer one word.
+        last_turn_mode = (
+            select(conversation_turns.c.mode)
+            .where(conversation_turns.c.conversation_id == conversations.c.id)
+            .order_by(conversation_turns.c.turn_index.desc())
+            .limit(1)
+            .scalar_subquery()
+            .label("last_turn_mode")
         )
+        return select(
+            conversations, turn_count, last_turn_mode, sources.c.title.label("source_title")
+        ).select_from(conversations.join(sources, conversations.c.source_id == sources.c.id))
 
 
 class SqlAlchemyConversationTurnRepository:
@@ -2279,6 +2291,7 @@ def _to_conversation_summary(row) -> ConversationSummary:  # noqa: ANN001
         conversation=_to_conversation(row),
         turn_count=row.turn_count,
         source_title=row.source_title,
+        last_turn_mode=row.last_turn_mode,
     )
 
 

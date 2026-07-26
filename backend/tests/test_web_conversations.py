@@ -578,6 +578,7 @@ def test_list_returns_newest_activity_first_with_source_title_and_turn_count(
         "scope_anchors",
         "include_notes",
         "turn_count",
+        "last_turn_mode",
         "created_at",
         "updated_at",
     }
@@ -585,7 +586,34 @@ def test_list_returns_newest_activity_first_with_source_title_and_turn_count(
     assert body[0]["title"] == "Newer"
     assert body[0]["scope_anchors"] == [_ANCHOR]
     assert body[0]["turn_count"] == 1
+    # Where the thread resumes travels with the row (RA-01): a client that had to
+    # fetch the conversation to find out would pay for every turn and citation in it.
+    assert body[0]["last_turn_mode"] == MODE_ANSWER
     assert body[1]["turn_count"] == 0
+
+
+def test_list_row_reports_the_mode_the_thread_was_last_answered_in(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # A scoped conversation carries anchors whichever way its turns were answered,
+    # so scope cannot say where it resumes — only the newest turn can. This row is
+    # scoped *and* taught, the case that separates the two.
+    source_id, _ = _seed_ready_source(auth_client, db_conn, "list-mode@example.com")
+    conversation = _seed_conversation(db_conn, UUID(source_id), title="Taught")
+    _seed_turn(
+        db_conn,
+        conversation,
+        turn_index=0,
+        message="teach me this",
+        mode=MODE_TEACH,
+        answer_status=ANSWERED,
+        answer_text=_PHOTO,
+    )
+
+    resp = auth_client.get("/api/conversations")
+
+    assert resp.status_code == 200, resp.text
+    assert [row["last_turn_mode"] for row in resp.json()] == [MODE_TEACH]
 
 
 def test_list_filters_by_source_and_excludes_other_users(

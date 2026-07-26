@@ -1398,7 +1398,9 @@ def _new_teaching_session(
     )
 
 
-def _insert_turn(db_conn: Connection, session_id: UUID, turn_index: int) -> None:
+def _insert_turn(
+    db_conn: Connection, session_id: UUID, turn_index: int, mode: str = "teach"
+) -> None:
     """Insert a minimal turn row so a session's turn_count is non-zero (B2 owns
     the turn repository; this exercises only the count in the list reads)."""
     db_conn.execute(
@@ -1407,7 +1409,7 @@ def _insert_turn(db_conn: Connection, session_id: UUID, turn_index: int) -> None
             conversation_id=session_id,
             turn_index=turn_index,
             message="m",
-            mode="teach",
+            mode=mode,
             answer_status="answered",
             answer_text="a",
             model="local-extractive",
@@ -1532,6 +1534,27 @@ def test_conversation_list_for_user_counts_turns(db_conn: Connection) -> None:
     (summary,) = repo.list_for_user(user_id, limit=_PAGE)
 
     assert summary.turn_count == 2
+
+
+def test_conversation_list_row_carries_the_mode_of_its_newest_turn(
+    db_conn: Connection,
+) -> None:
+    # Mode belongs to a turn, so a thread that was asked and then taught has both.
+    # The row reports the newest one — the exchange a reader resumes from — and is
+    # not swayed by an earlier turn of the other mode, which is exactly the case a
+    # client that guessed from scope or from the first turn would get wrong.
+    user_id, (source,) = _persisted_user_with_sources(db_conn, "conv-list-mode@example.com", 1)
+    repo = SqlAlchemyConversationRepository(db_conn)
+    mixed = repo.add(_whole_book_conversation(source.id, title="Mixed"))
+    _insert_turn(db_conn, mixed.id, 0, mode="answer")
+    _insert_turn(db_conn, mixed.id, 1, mode="teach")
+    asked = repo.add(_whole_book_conversation(source.id, title="Asked"))
+    _insert_turn(db_conn, asked.id, 0, mode="answer")
+
+    by_id = {s.conversation.id: s for s in repo.list_for_user(user_id, limit=_PAGE)}
+
+    assert by_id[mixed.id].last_turn_mode == "teach"
+    assert by_id[asked.id].last_turn_mode == "answer"
 
 
 def test_conversation_list_for_user_returns_only_the_requested_window(

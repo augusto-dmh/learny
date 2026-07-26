@@ -227,6 +227,7 @@ class FakeConversationRepository:
         self._by_id: dict[UUID, Conversation] = {}
         self._sources = sources
         self.turn_counts: dict[UUID, int] = {}
+        self.last_turn_modes: dict[UUID, str] = {}
         self.touch_calls: list[tuple[UUID, datetime]] = []
 
     def add(self, conversation: Conversation) -> Conversation:
@@ -242,6 +243,7 @@ class FakeConversationRepository:
             conversation=conversation,
             turn_count=self.turn_counts.get(conversation.id, 0),
             source_title=source.title if source is not None else "Book",
+            last_turn_mode=self.last_turn_modes.get(conversation.id),
         )
 
     def list_for_user(

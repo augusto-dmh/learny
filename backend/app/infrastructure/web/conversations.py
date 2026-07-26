@@ -294,6 +294,13 @@ class ConversationSummaryView(BaseModel):
     ``source_title`` rides along because the list spans every source the caller
     owns: a row that named only the conversation would not say which book it is
     about.
+
+    ``last_turn_mode`` is the mode of the newest turn, or ``null`` for a
+    conversation with none. Mode belongs to a turn, so a conversation has no single
+    one; the newest turn is the exchange a reader resumes from, which makes it the
+    row's answer to "where does this thread continue?". A client reads it instead of
+    inferring the answer from scope — a chapter-scoped conversation whose turns were
+    asked is an Ask thread — and instead of fetching the whole conversation to look.
     """
 
     id: UUID
@@ -303,6 +310,7 @@ class ConversationSummaryView(BaseModel):
     scope_anchors: list[str]
     include_notes: bool
     turn_count: int
+    last_turn_mode: str | None
     created_at: datetime
     updated_at: datetime
 
@@ -317,6 +325,7 @@ class ConversationSummaryView(BaseModel):
             scope_anchors=list(conversation.scope_anchors),
             include_notes=conversation.include_notes,
             turn_count=summary.turn_count,
+            last_turn_mode=summary.last_turn_mode,
             created_at=conversation.created_at,
             updated_at=conversation.updated_at,
         )

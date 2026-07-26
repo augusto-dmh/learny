@@ -63,6 +63,7 @@ function summary(
   title: string,
   turnCount: number,
   scopeAnchors: string[] = [],
+  lastTurnMode: "answer" | "teach" | null = "answer",
 ) {
   return {
     id,
@@ -72,6 +73,7 @@ function summary(
     scope_anchors: scopeAnchors,
     include_notes: false,
     turn_count: turnCount,
+    last_turn_mode: lastTurnMode,
     created_at: "now",
     updated_at: "now",
   };
@@ -84,39 +86,18 @@ function stubList(rows: unknown[] = []) {
   return fetchMock;
 }
 
-/** One stored turn — the only place a conversation records how it is answered. */
-function turn(mode: "answer" | "teach") {
-  return {
-    turn_index: 0,
-    message: "a message",
-    mode,
-    answer_status: "answered",
-    text: "a reply",
-    citations: [],
-    evidence_count: 2,
-    model: "local-extractive",
-    created_at: "now",
-  };
-}
-
 /**
- * The list plus each conversation's stored turns, so a resume reads the mode the
- * server actually recorded rather than anything the row's shape suggests.
+ * The list, and nothing else: a resume reads the mode off the row it was given,
+ * so any other request the shell makes is one it should not be making. Fetching
+ * the conversation to learn where it resumes would drag every turn and every
+ * citation across, and the panel then loads the same payload again.
  */
-function stubServer(
-  rows: ReturnType<typeof summary>[],
-  turnsById: Record<string, ReturnType<typeof turn>[]> = {},
-) {
+function stubServer(rows: ReturnType<typeof summary>[]) {
   const fetchMock = vi.fn(async (url: string) => {
-    if (url.startsWith("/api/conversations?")) {
-      return jsonResponse(200, rows);
-    }
-    const id = url.slice("/api/conversations/".length);
-    const row = rows.find((candidate) => candidate.id === id);
-    if (!row) {
+    if (!url.startsWith("/api/conversations?")) {
       throw new Error(`unexpected fetch: ${url}`);
     }
-    return jsonResponse(200, { ...row, turns: turnsById[id] ?? [] });
+    return jsonResponse(200, rows);
   });
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
@@ -337,9 +318,7 @@ describe("ReaderPanel conversation list", () => {
 
   it("resumes an asked conversation in the Ask panel without switching tabs", async () => {
     const onModeChange = vi.fn();
-    stubServer([summary("conv1", "Ada Lovelace", 1)], {
-      conv1: [turn("answer")],
-    });
+    const fetchMock = stubServer([summary("conv1", "Ada Lovelace", 1)]);
     renderPanel("ask", onModeChange);
 
     const before = screen.getByTestId("ask-panel-body").dataset.revision;
@@ -352,13 +331,15 @@ describe("ReaderPanel conversation list", () => {
     expect(readActiveConversation("s1", "ask")).toBe("conv1");
     expect(screen.getByTestId("ask-panel-body").dataset.revision).not.toBe(before);
     expect(onModeChange).not.toHaveBeenCalled();
+    // The row already said where the thread resumes, so the click cost nothing:
+    // only the list load was ever fetched. Reading the conversation here would
+    // pull every turn and citation the panel is about to load for itself.
+    expect(fetchMock.mock.calls).toHaveLength(1);
   });
 
   it("resumes a taught conversation in the Teach panel", async () => {
     const onModeChange = vi.fn();
-    stubServer([summary("conv2", "Chapter 2", 3, ["c2.xhtml"])], {
-      conv2: [turn("teach")],
-    });
+    stubServer([summary("conv2", "Chapter 2", 3, ["c2.xhtml"], "teach")]);
     renderPanel("ask", onModeChange);
 
     const row = await screen.findByRole("button", { name: "Resume Chapter 2" });
@@ -377,9 +358,7 @@ describe("ReaderPanel conversation list", () => {
     const onModeChange = vi.fn();
     // A question can be asked inside one chapter: the conversation carries scope
     // anchors and is still an Ask thread, because scope is not mode.
-    stubServer([summary("conv3", "About chapter 2", 2, ["c2.xhtml"])], {
-      conv3: [turn("answer")],
-    });
+    stubServer([summary("conv3", "About chapter 2", 2, ["c2.xhtml"], "answer")]);
     renderPanel("ask", onModeChange);
 
     const row = await screen.findByRole("button", {
@@ -395,15 +374,9 @@ describe("ReaderPanel conversation list", () => {
     expect(readActiveConversation("s1", "teach")).toBeNull();
   });
 
-  it("leaves the reader on the current tab when the thread cannot be read", async () => {
+  it("leaves the reader on the current tab when no turn speaks for the thread", async () => {
     const onModeChange = vi.fn();
-    const rows = [summary("conv1", "Ada Lovelace", 1)];
-    const fetchMock = vi.fn(async (url: string) =>
-      url.startsWith("/api/conversations?")
-        ? jsonResponse(200, rows)
-        : jsonResponse(500, { detail: "boom" }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
+    stubServer([summary("conv1", "Ada Lovelace", 0, [], null)]);
     renderPanel("ask", onModeChange);
 
     const row = await screen.findByRole("button", { name: "Resume Ada Lovelace" });
@@ -418,9 +391,7 @@ describe("ReaderPanel conversation list", () => {
   });
 
   it("starts a fresh thread on request without touching the other surface", async () => {
-    stubServer([summary("conv1", "Ada Lovelace", 1)], {
-      conv1: [turn("answer")],
-    });
+    stubServer([summary("conv1", "Ada Lovelace", 1)]);
     renderPanel();
 
     const row = await screen.findByRole("button", { name: "Resume Ada Lovelace" });

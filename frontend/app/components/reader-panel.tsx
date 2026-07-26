@@ -18,16 +18,13 @@
  */
 
 import { X } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import {
   readActiveConversation,
   writeActiveConversation,
 } from "@/app/lib/active-conversation";
-import {
-  getConversation,
-  type ConversationSummaryView,
-} from "@/app/lib/conversations";
+import { type ConversationSummaryView } from "@/app/lib/conversations";
 import { type PendingPanelRequest } from "@/app/lib/panel";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -54,24 +51,22 @@ const MODES: { value: PanelMode; label: string }[] = [
  * recorded on every turn, so it is read rather than inferred — the same rule the
  * generation adapters keep on the other side of the wire.
  *
- * A conversation the server cannot hand over, or one with no turn to speak for
- * it, leaves the reader on the tab they are already on: there is nothing that
- * says otherwise, and guessing is what this exists to avoid.
+ * The list row carries it, so this is a decision, not a request: fetching the
+ * conversation to read one word would pull every turn and every citation, and
+ * the panel then loads the same payload again to restore the thread.
+ *
+ * A conversation with no turn to speak for it leaves the reader on the tab they
+ * are already on: there is nothing that says otherwise, and guessing is what
+ * this exists to avoid.
  */
-async function panelFor(
+function panelFor(
   summary: ConversationSummaryView,
   fallback: PanelMode,
-): Promise<PanelMode> {
-  try {
-    const detail = await getConversation(summary.id);
-    const last = detail.turns.at(-1);
-    if (!last) {
-      return fallback;
-    }
-    return last.mode === "teach" ? "teach" : "ask";
-  } catch {
+): PanelMode {
+  if (!summary.last_turn_mode) {
     return fallback;
   }
+  return summary.last_turn_mode === "teach" ? "teach" : "ask";
 }
 
 export function ReaderPanel({
@@ -124,29 +119,22 @@ export function ReaderPanel({
     setListToken((token) => token + 1);
   }, [syncActiveIds]);
 
-  // Which panel continues a thread is answered by the server, so a resume is
-  // asynchronous; a second click while the first is still resolving wins, or the
-  // reader would land on whichever request happened to finish last.
-  const resumeToken = useRef(0);
-
+  // Which panel continues a thread is on the row the reader clicked, so a resume
+  // resolves in the click that asked for it — no request to race, and no window
+  // in which a second click could land the reader wherever the slower fetch
+  // finished.
   const handleResume = useCallback(
     (summary: ConversationSummaryView) => {
-      resumeToken.current += 1;
-      const token = resumeToken.current;
-      void panelFor(summary, mode).then((target) => {
-        if (resumeToken.current !== token) {
-          return;
-        }
-        writeActiveConversation(sourceId, target, summary.id);
-        setActiveIds((current) => ({ ...current, [target]: summary.id }));
-        setRevisions((current) => ({
-          ...current,
-          [target]: current[target] + 1,
-        }));
-        if (target !== mode) {
-          onModeChange(target);
-        }
-      });
+      const target = panelFor(summary, mode);
+      writeActiveConversation(sourceId, target, summary.id);
+      setActiveIds((current) => ({ ...current, [target]: summary.id }));
+      setRevisions((current) => ({
+        ...current,
+        [target]: current[target] + 1,
+      }));
+      if (target !== mode) {
+        onModeChange(target);
+      }
     },
     [sourceId, mode, onModeChange],
   );

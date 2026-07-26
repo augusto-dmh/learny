@@ -76,6 +76,12 @@ export type ConversationDetailView = ConversationView & {
 export type ConversationSummaryView = ConversationView & {
   source_title: string;
   turn_count: number;
+  /**
+   * The mode of the conversation's newest turn — where the thread resumes — or
+   * `null` when it has no turn to speak for it. Mode belongs to a turn, so a
+   * conversation has no single one; the newest is the exchange being continued.
+   */
+  last_turn_mode: ConversationMode | null;
 };
 
 /**
