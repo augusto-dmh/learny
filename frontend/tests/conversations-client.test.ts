@@ -164,6 +164,22 @@ describe("getConversation", () => {
     expect((err as ConversationRequestError).status).toBe(404);
     expect((err as Error).message).toBe("Conversation not found.");
   });
+
+  it("falls back to a readable message when the error body is not parseable", async () => {
+    // A gateway or proxy failure answers with HTML, not the backend's JSON.
+    const fetchMock = vi.fn(
+      async () => new Response("<html>gateway</html>", { status: 502 }),
+    );
+    const err = await getConversation(
+      "conv1",
+      fetchMock as unknown as typeof fetch,
+    ).catch((e: unknown) => e);
+
+    // The caller still gets the typed failure and the status, never the parse error.
+    expect(err).toBeInstanceOf(ConversationRequestError);
+    expect((err as ConversationRequestError).status).toBe(502);
+    expect((err as Error).message).toBe("Could not load that conversation.");
+  });
 });
 
 describe("renameConversation", () => {
