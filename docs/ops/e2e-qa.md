@@ -107,12 +107,16 @@ Checks:
 
 ## Phase 5 — Cited Q&A
 
-UI: http://localhost:3000/sources/{id}/ask. Or:
+UI: the reader's Ask panel at http://localhost:3000/sources/{id}/read. Or:
 
 ```bash
 curl -s -b $JAR -H "X-CSRF-Token: $CSRF" -H 'Content-Type: application/json' \
-  -d '{"question":"<something the book actually discusses>"}' \
-  $BASE/api/sources/$SOURCE_ID/questions | python3 -m json.tool
+  -d "{\"source_id\":\"$SOURCE_ID\",\"include_notes\":false}" \
+  $BASE/api/conversations                          # → 201 {id,...} whole-book scope
+CONVERSATION_ID=<id>
+curl -s -b $JAR -H "X-CSRF-Token: $CSRF" -H 'Content-Type: application/json' \
+  -d '{"message":"<something the book actually discusses>","mode":"answer"}' \
+  $BASE/api/conversations/$CONVERSATION_ID/turns | python3 -m json.tool
 ```
 
 Checks:
@@ -121,39 +125,41 @@ Checks:
 - `citations[]` present with `section_path`, `anchor`, `snippet`; anchors match entries from `/structure`.
 - Off-topic question ("what is the capital of Mars?") → `answer_status: "not_found_in_source"`, no fabricated citations.
 - Raw retrieval: `POST /api/sources/{id}/retrieve {"query":"..."}` → fused evidence list with scores.
-- Question on a source that is still `uploaded`/`processing` → 409.
+- Turn posted against a source that is still `uploaded`/`processing` → 409.
+- Reload the reader → the thread is still there (it is read back from `GET /api/conversations/{id}`, not from browser state).
 
-**Pass:** on-topic questions cite real anchors; off-topic questions refuse rather than hallucinate.
+**Pass:** on-topic questions cite real anchors; off-topic questions refuse rather than hallucinate; the thread survives a reload.
 
-## Phase 6 — Teaching sessions
+## Phase 6 — Teaching a section
 
-UI: http://localhost:3000/sources/{id}/teach. Or:
+UI: the reader's Teach panel at http://localhost:3000/sources/{id}/read. Or:
 
 ```bash
 ANCHOR=<an anchor from /structure>
 curl -s -b $JAR -H "X-CSRF-Token: $CSRF" -H 'Content-Type: application/json' \
-  -d "{\"source_id\":\"$SOURCE_ID\",\"target_anchor\":\"$ANCHOR\"}" \
-  $BASE/api/teaching-sessions                      # → 201 {id,...}
-SESSION_ID=<id>
+  -d "{\"source_id\":\"$SOURCE_ID\",\"scope_anchors\":[\"$ANCHOR\"],\"include_notes\":false}" \
+  $BASE/api/conversations                          # → 201 {id,...} scoped to that section
+CONVERSATION_ID=<id>
 curl -s -b $JAR -H "X-CSRF-Token: $CSRF" -H 'Content-Type: application/json' \
-  -d '{"message":"explain this section to me"}' \
-  $BASE/api/teaching-sessions/$SESSION_ID/turns    # → 201 cited turn
-curl -s -b $JAR $BASE/api/teaching-sessions/$SESSION_ID   # full session + ordered turns
-curl -s -b $JAR $BASE/api/sources/$SOURCE_ID/teaching-sessions  # session list
+  -d '{"message":"explain this section to me","mode":"teach"}' \
+  $BASE/api/conversations/$CONVERSATION_ID/turns   # → 201 cited turn
+curl -s -b $JAR $BASE/api/conversations/$CONVERSATION_ID   # conversation + ordered turns
+curl -s -b $JAR "$BASE/api/conversations?source_id=$SOURCE_ID"  # this book's conversations
 ```
 
 Checks:
 
-- Turn citations stay within the target anchor's subtree (scoped retrieval).
-- Multiple turns keep order; reloading the session page shows full history.
-- Citation persistence: re-run ingestion (Phase 4) then reload the old session → turns and citations still render (denormalized snapshots survive corpus replacement).
+- Turn citations stay within the scope anchor's subtree (scoped retrieval); a message the section cannot support returns `not_found_in_scope`, distinct from the whole-book `not_found_in_source`.
+- Multiple turns keep order; reopening the conversation from the dock shows full history.
+- Rename (`PATCH /api/conversations/{id}` `{"title":"..."}`) and delete (`DELETE`) both take effect in the dock list without a reload.
+- Citation persistence: re-run ingestion (Phase 4) then reopen the old conversation → turns and citations still render (denormalized snapshots survive corpus replacement).
 
-**Pass:** sessions create, turns cite within scope, history survives re-ingestion.
+**Pass:** conversations create, turns cite within scope, the list manages them, history survives re-ingestion.
 
 ## Phase 7 — Authorization & abuse
 
 1. Register a second user (fresh cookie jar `/tmp/qa-cookies2`).
-2. As user 2: `GET /api/sources/{user1_source_id}` → 404 (not 403 — no existence leak). Same for structure, ingestion, questions, teaching session by id.
+2. As user 2: `GET /api/sources/{user1_source_id}` → 404 (not 403 — no existence leak). Same for structure, ingestion, and `GET /api/conversations/{user1_conversation_id}`.
 3. CSRF: replay a write with cookie but wrong/missing `X-CSRF-Token` → 403. With a forged `Origin: https://evil.example` header → 403.
 4. Rate limits: hammer `POST /api/auth/login` with bad credentials in a loop → 429 after the threshold.
 
