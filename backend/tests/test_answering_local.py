@@ -1,11 +1,15 @@
-"""B1 gate — deterministic, network-free answer adapter (unit).
+"""B1 gate — deterministic, network-free generation adapter (unit).
 
-Derived from QA-06 and the task Done-when: same question + evidence → identical
+Derived from QA-06 and the task Done-when: same message + evidence → identical
 result (deterministic, no network); the answer is composed only from the provided
 evidence snippets and cites exactly those chunks (cited ids ⊆ evidence ids); at
 most three snippets are used even with more evidence; a single evidence item
 works; empty evidence → ``found=False`` empty result; and the adapter module
 imports no provider SDK (ADR-0007 — no SDK leak).
+
+Since the ports converged, one adapter serves both modes, so every behaviour here
+is asserted in each mode, and the extractive output is pinned to frozen literal
+prose and citations so a mode-dispatching adapter cannot quietly shift it.
 """
 
 from __future__ import annotations
@@ -14,18 +18,26 @@ import ast
 import inspect
 from uuid import uuid4
 
+import pytest
+
 from app.domain.entities import (
+    MODE_ANSWER,
+    MODE_TEACH,
     AnswerCompleted,
     AnswerTextDelta,
     Evidence,
+    GeneratedAnswer,
     HistoryTurn,
 )
 from app.domain.ports import GenerationPort
-from app.infrastructure.answering import DeterministicAnswerAdapter
+from app.infrastructure.answering import DeterministicGenerationAdapter
 from app.infrastructure.answering import local as local_module
-from app.infrastructure.answering.local import DeterministicTeachingAdapter
 
 _MODEL = "local-extractive"
+
+# Both modes, so every behaviour below is asserted for the answer path and the
+# teach path of the one converged adapter.
+_MODES = pytest.mark.parametrize("mode", [MODE_ANSWER, MODE_TEACH])
 
 
 def _evidence(snippet: str) -> Evidence:
@@ -40,31 +52,101 @@ def _evidence(snippet: str) -> Evidence:
     )
 
 
-def test_same_input_generates_identically() -> None:
-    # QA-06: deterministic — same question + evidence twice → equal results.
-    adapter = DeterministicAnswerAdapter()
+def _target(mode: str) -> tuple[str, ...] | None:
+    """The target a turn in ``mode`` carries — the teach path supplies one."""
+    return ("Chapter 1",) if mode == MODE_TEACH else None
+
+
+def _generate(adapter: DeterministicGenerationAdapter, mode: str, evidence: list[Evidence], **kw):
+    return adapter.generate(
+        message="what?",
+        mode=mode,
+        evidence=evidence,
+        target_section_path=_target(mode),
+        **kw,
+    )
+
+
+def _generate_stream(
+    adapter: DeterministicGenerationAdapter, mode: str, evidence: list[Evidence], **kw
+):
+    return adapter.generate_stream(
+        message="what?",
+        mode=mode,
+        evidence=evidence,
+        target_section_path=_target(mode),
+        **kw,
+    )
+
+
+# --- Output parity across the convergence (I-A1) -------------------------------
+
+
+def test_extractive_output_is_the_frozen_prose_and_citations_in_both_modes() -> None:
+    # The convergence must not shift a single byte of generated prose or any
+    # citation: the extractive answer is still the top three snippets in retrieval
+    # order joined by blank lines, citing exactly those chunks, in either mode.
+    adapter = DeterministicGenerationAdapter()
+    evidence = [_evidence(f"snippet-{i}") for i in range(5)]
+    frozen = GeneratedAnswer(
+        text="snippet-0\n\nsnippet-1\n\nsnippet-2",
+        cited_chunk_ids=(evidence[0].chunk_id, evidence[1].chunk_id, evidence[2].chunk_id),
+        model=_MODEL,
+        found=True,
+    )
+    history = [HistoryTurn(message="earlier", response_text="prior")]
+
+    answered = _generate(adapter, MODE_ANSWER, evidence, history=history)
+    taught = _generate(adapter, MODE_TEACH, evidence, history=history)
+
+    assert answered == frozen
+    assert taught == frozen
+
+
+def test_streamed_extractive_output_is_the_frozen_events_in_both_modes() -> None:
+    # Same parity on the streaming path: one full-text delta carrying the frozen
+    # prose, then the authoritative completed event.
+    adapter = DeterministicGenerationAdapter()
+    evidence = [_evidence("alpha"), _evidence("beta")]
+    frozen = GeneratedAnswer(
+        text="alpha\n\nbeta",
+        cited_chunk_ids=(evidence[0].chunk_id, evidence[1].chunk_id),
+        model=_MODEL,
+        found=True,
+    )
+
+    answered = list(_generate_stream(adapter, MODE_ANSWER, evidence))
+    taught = list(_generate_stream(adapter, MODE_TEACH, evidence))
+
+    assert answered == [AnswerTextDelta(text="alpha\n\nbeta"), AnswerCompleted(answer=frozen)]
+    assert taught == answered
+
+
+# --- Extractive composition (QA-06 / AD-032) -----------------------------------
+
+
+@_MODES
+def test_same_input_generates_identically(mode: str) -> None:
+    # QA-06: deterministic — same message + evidence twice → equal results.
+    adapter = DeterministicGenerationAdapter()
     evidence = [_evidence("alpha"), _evidence("beta")]
 
-    first = adapter.generate(question="what?", evidence=evidence)
-    second = adapter.generate(question="what?", evidence=evidence)
-
-    assert first == second
+    assert _generate(adapter, mode, evidence) == _generate(adapter, mode, evidence)
 
 
-def test_first_turn_output_is_unchanged_by_the_history_parameter() -> None:
+@_MODES
+def test_first_turn_output_is_unchanged_by_the_history_parameter(mode: str) -> None:
     # I-CM-8: the deterministic answer is a function of the evidence alone. A turn
     # with no history produces exactly the text and citations the ask path has always
     # produced ("alpha\n\nbeta", both chunks — pinned by the Q&A suite), and history
     # never shifts it, so goldens stay stable as conversations gain memory.
-    adapter = DeterministicAnswerAdapter()
+    adapter = DeterministicGenerationAdapter()
     evidence = [_evidence("alpha"), _evidence("beta")]
 
-    without_argument = adapter.generate(question="what?", evidence=evidence)
-    empty_history = adapter.generate(question="what?", evidence=evidence, history=[])
-    with_history = adapter.generate(
-        question="what?",
-        evidence=evidence,
-        history=[HistoryTurn(message="earlier", response_text="reply")],
+    without_argument = _generate(adapter, mode, evidence)
+    empty_history = _generate(adapter, mode, evidence, history=[])
+    with_history = _generate(
+        adapter, mode, evidence, history=[HistoryTurn(message="earlier", response_text="reply")]
     )
 
     assert without_argument.text == "alpha\n\nbeta"
@@ -73,17 +155,16 @@ def test_first_turn_output_is_unchanged_by_the_history_parameter() -> None:
     assert with_history == without_argument
 
 
-def test_streamed_first_turn_output_is_unchanged_by_the_history_parameter() -> None:
+@_MODES
+def test_streamed_first_turn_output_is_unchanged_by_the_history_parameter(mode: str) -> None:
     # I-CM-8 on the streaming path: same deltas, same authoritative answer.
-    adapter = DeterministicAnswerAdapter()
+    adapter = DeterministicGenerationAdapter()
     evidence = [_evidence("alpha"), _evidence("beta")]
 
-    without_argument = list(adapter.generate_stream(question="q", evidence=evidence))
+    without_argument = list(_generate_stream(adapter, mode, evidence))
     with_history = list(
-        adapter.generate_stream(
-            question="q",
-            evidence=evidence,
-            history=[HistoryTurn(message="earlier", response_text="reply")],
+        _generate_stream(
+            adapter, mode, evidence, history=[HistoryTurn(message="earlier", response_text="reply")]
         )
     )
 
@@ -92,12 +173,13 @@ def test_streamed_first_turn_output_is_unchanged_by_the_history_parameter() -> N
     assert isinstance(without_argument[-1], AnswerCompleted)
 
 
-def test_cited_ids_are_the_used_evidence_ids() -> None:
+@_MODES
+def test_cited_ids_are_the_used_evidence_ids(mode: str) -> None:
     # QA-06: composed only from provided evidence; cited ids ⊆ evidence ids.
-    adapter = DeterministicAnswerAdapter()
+    adapter = DeterministicGenerationAdapter()
     evidence = [_evidence("alpha"), _evidence("beta")]
 
-    result = adapter.generate(question="q", evidence=evidence)
+    result = _generate(adapter, mode, evidence)
 
     assert result.found is True
     assert result.cited_chunk_ids == (evidence[0].chunk_id, evidence[1].chunk_id)
@@ -106,24 +188,26 @@ def test_cited_ids_are_the_used_evidence_ids() -> None:
     assert result.text == "alpha\n\nbeta"
 
 
-def test_uses_at_most_three_snippets_with_five_evidence() -> None:
+@_MODES
+def test_uses_at_most_three_snippets_with_five_evidence(mode: str) -> None:
     # Done-when: ≤ 3 snippets used, in retrieval-rank order, with 5 evidence items.
-    adapter = DeterministicAnswerAdapter()
+    adapter = DeterministicGenerationAdapter()
     evidence = [_evidence(f"snippet-{i}") for i in range(5)]
 
-    result = adapter.generate(question="q", evidence=evidence)
+    result = _generate(adapter, mode, evidence)
 
     assert result.cited_chunk_ids == tuple(e.chunk_id for e in evidence[:3])
     assert result.text == "snippet-0\n\nsnippet-1\n\nsnippet-2"
     assert result.found is True
 
 
-def test_single_evidence_item_works() -> None:
+@_MODES
+def test_single_evidence_item_works(mode: str) -> None:
     # Done-when: a lone evidence item produces a found answer citing that chunk.
-    adapter = DeterministicAnswerAdapter()
+    adapter = DeterministicGenerationAdapter()
     only = _evidence("lonely passage")
 
-    result = adapter.generate(question="q", evidence=[only])
+    result = _generate(adapter, mode, [only])
 
     assert result.found is True
     assert result.cited_chunk_ids == (only.chunk_id,)
@@ -131,11 +215,12 @@ def test_single_evidence_item_works() -> None:
     assert result.model == _MODEL
 
 
-def test_empty_evidence_returns_not_found_empty_result() -> None:
+@_MODES
+def test_empty_evidence_returns_not_found_empty_result(mode: str) -> None:
     # Done-when: empty evidence → found=False, empty text and no citations.
-    adapter = DeterministicAnswerAdapter()
+    adapter = DeterministicGenerationAdapter()
 
-    result = adapter.generate(question="q", evidence=[])
+    result = _generate(adapter, mode, [])
 
     assert result.found is False
     assert result.text == ""
@@ -143,14 +228,38 @@ def test_empty_evidence_returns_not_found_empty_result() -> None:
     assert result.model == _MODEL
 
 
+def test_prose_ignores_message_mode_target_and_history() -> None:
+    # AD-032: the deterministic prose is a function of the evidence only — varying
+    # message/mode/target/history with the same evidence yields an identical result.
+    adapter = DeterministicGenerationAdapter()
+    evidence = [_evidence("alpha"), _evidence("beta")]
+
+    first = adapter.generate(
+        message="one",
+        mode=MODE_ANSWER,
+        evidence=evidence,
+        history=[],
+        target_section_path=None,
+    )
+    second = adapter.generate(
+        message="a completely different question",
+        mode=MODE_TEACH,
+        evidence=evidence,
+        history=[HistoryTurn(message="m", response_text="r")],
+        target_section_path=("Chapter 9", "Deep Section"),
+    )
+
+    assert first == second
+
+
 def test_model_identity_readable_without_a_generate_call() -> None:
-    # QA-04/QA-13: the service reads this stable identity on the empty-evidence
-    # not-found path, where the port is never invoked.
-    assert DeterministicAnswerAdapter().model == _MODEL
+    # QA-04/QA-13, TEACH-11/TEACH-24: the turn service reads this stable identity on
+    # the empty-evidence not-found path, where the port is never invoked.
+    assert DeterministicGenerationAdapter().model == _MODEL
 
 
 def test_adapter_module_imports_no_provider_sdk() -> None:
-    # QA-06 / ADR-0007: no provider SDK leaks into the answer module.
+    # QA-06 / ADR-0007: no provider SDK leaks into the deterministic module.
     tree = ast.parse(inspect.getsource(local_module))
     imported: set[str] = set()
     for node in ast.walk(tree):
@@ -165,114 +274,27 @@ def test_adapter_module_imports_no_provider_sdk() -> None:
 
 def test_adapter_needs_no_client_argument() -> None:
     # QA-06: pure/network-free — constructs with no provider client dependency.
-    adapter = DeterministicAnswerAdapter()
+    adapter = DeterministicGenerationAdapter()
 
-    result = adapter.generate(question="q", evidence=[_evidence("passage")])
+    result = _generate(adapter, MODE_ANSWER, [_evidence("passage")])
     assert result.found is True  # produced a result, no client wired
-
-
-# --- DeterministicTeachingAdapter (TEACH-24 / AD-032) --------------------------
-
-
-def _teach(adapter: DeterministicTeachingAdapter, evidence: list[Evidence]):
-    return adapter.generate(
-        message="explain this",
-        target_section_path=("Chapter 1",),
-        history=[HistoryTurn(message="earlier", response_text="prior")],
-        evidence=evidence,
-    )
-
-
-def test_teaching_same_input_generates_identically() -> None:
-    # AD-032: deterministic — same evidence twice → equal results.
-    adapter = DeterministicTeachingAdapter()
-    evidence = [_evidence("alpha"), _evidence("beta")]
-
-    assert _teach(adapter, evidence) == _teach(adapter, evidence)
-
-
-def test_teaching_composes_top_snippets_and_cites_selected() -> None:
-    # AD-032: uses ≤ 3 snippets in retrieval order, cites exactly those chunks,
-    # composes text only from the evidence (grounded by construction).
-    adapter = DeterministicTeachingAdapter()
-    evidence = [_evidence(f"snippet-{i}") for i in range(5)]
-
-    result = _teach(adapter, evidence)
-
-    assert result.found is True
-    assert result.cited_chunk_ids == tuple(e.chunk_id for e in evidence[:3])
-    assert set(result.cited_chunk_ids).issubset({e.chunk_id for e in evidence})
-    assert result.text == "snippet-0\n\nsnippet-1\n\nsnippet-2"
-    assert result.model == _MODEL
-
-
-def test_teaching_single_evidence_item_works() -> None:
-    # A lone evidence item produces a found response citing that chunk.
-    adapter = DeterministicTeachingAdapter()
-    only = _evidence("lonely passage")
-
-    result = _teach(adapter, [only])
-
-    assert result.found is True
-    assert result.cited_chunk_ids == (only.chunk_id,)
-    assert result.text == "lonely passage"
-    assert result.model == _MODEL
-
-
-def test_teaching_empty_evidence_returns_not_found_empty_result() -> None:
-    # Done-when: empty evidence → found=False, empty text and no citations.
-    adapter = DeterministicTeachingAdapter()
-
-    result = _teach(adapter, [])
-
-    assert result.found is False
-    assert result.text == ""
-    assert result.cited_chunk_ids == ()
-    assert result.model == _MODEL
-
-
-def test_teaching_prose_ignores_message_target_and_history() -> None:
-    # AD-032: the deterministic prose is a function of the evidence only — varying
-    # message/target/history with the same evidence yields an identical result.
-    adapter = DeterministicTeachingAdapter()
-    evidence = [_evidence("alpha"), _evidence("beta")]
-
-    first = adapter.generate(
-        message="one",
-        target_section_path=("Chapter 1",),
-        history=[],
-        evidence=evidence,
-    )
-    second = adapter.generate(
-        message="a completely different question",
-        target_section_path=("Chapter 9", "Deep Section"),
-        history=[HistoryTurn(message="m", response_text="r")],
-        evidence=evidence,
-    )
-
-    assert first == second
-
-
-def test_teaching_model_identity_readable_without_a_generate_call() -> None:
-    # TEACH-11/TEACH-24: the turn service reads this stable identity on the
-    # empty-evidence not-found path, where the port is never invoked.
-    assert DeterministicTeachingAdapter().model == _MODEL
 
 
 # --- Streaming contract (GEN-12) -----------------------------------------------
 #
 # Derived from the domain stream contract (design §5) and C1 Done-when: the
-# deterministic adapters implement ``generate_stream`` as one full-text delta then
+# deterministic adapter implements ``generate_stream`` as one full-text delta then
 # exactly one AnswerCompleted (always last, authoritative — equal to the buffered
-# ``generate`` result); the stream is deterministic; and both deterministic
-# adapters plus the answer fake structurally satisfy their port Protocols.
+# ``generate`` result); the stream is deterministic; and the adapter plus the
+# generation fake structurally satisfy the port Protocol.
 
 
-def test_answer_stream_yields_full_text_delta_then_one_authoritative_completed() -> None:
-    adapter = DeterministicAnswerAdapter()
+@_MODES
+def test_stream_yields_full_text_delta_then_one_authoritative_completed(mode: str) -> None:
+    adapter = DeterministicGenerationAdapter()
     evidence = [_evidence("alpha"), _evidence("beta")]
 
-    events = list(adapter.generate_stream(question="q", evidence=evidence))
+    events = list(_generate_stream(adapter, mode, evidence))
 
     # The full extractive text arrives as a single delta, then exactly one
     # AnswerCompleted, always last.
@@ -282,55 +304,29 @@ def test_answer_stream_yields_full_text_delta_then_one_authoritative_completed()
     assert len(completed) == 1
     assert isinstance(events[-1], AnswerCompleted)
     # The completed event's answer is authoritative — identical to the buffered path.
-    assert events[-1].answer == adapter.generate(question="q", evidence=evidence)
+    assert events[-1].answer == _generate(adapter, mode, evidence)
     assert events[-1].answer.text == "alpha\n\nbeta"
     assert events[-1].answer.found is True
 
 
-def test_answer_stream_is_deterministic() -> None:
-    adapter = DeterministicAnswerAdapter()
+@_MODES
+def test_stream_is_deterministic(mode: str) -> None:
+    adapter = DeterministicGenerationAdapter()
     evidence = [_evidence("alpha")]
 
-    first = list(adapter.generate_stream(question="q", evidence=evidence))
-    second = list(adapter.generate_stream(question="q", evidence=evidence))
+    first = list(_generate_stream(adapter, mode, evidence))
+    second = list(_generate_stream(adapter, mode, evidence))
 
     assert first == second
 
 
-def test_teaching_stream_yields_full_text_delta_then_one_authoritative_completed() -> None:
-    adapter = DeterministicTeachingAdapter()
-    evidence = [_evidence("alpha"), _evidence("beta")]
-
-    events = list(
-        adapter.generate_stream(
-            message="explain",
-            target_section_path=("Chapter 1",),
-            history=[HistoryTurn(message="earlier", response_text="prior")],
-            evidence=evidence,
-        )
-    )
-
-    deltas = [e for e in events if isinstance(e, AnswerTextDelta)]
-    completed = [e for e in events if isinstance(e, AnswerCompleted)]
-    assert deltas == [AnswerTextDelta(text="alpha\n\nbeta")]
-    assert len(completed) == 1
-    assert isinstance(events[-1], AnswerCompleted)
-    assert events[-1].answer == adapter.generate(
-        message="explain",
-        target_section_path=("Chapter 1",),
-        history=[HistoryTurn(message="earlier", response_text="prior")],
-        evidence=evidence,
-    )
-
-
-def test_deterministic_adapters_conform_to_their_port_protocols() -> None:
+def test_deterministic_adapter_conforms_to_the_port_protocol() -> None:
     # GEN-12: the runtime-checkable port includes ``generate_stream``; the
-    # deterministic adapters satisfy it structurally.
-    assert isinstance(DeterministicAnswerAdapter(), GenerationPort)
-    assert isinstance(DeterministicTeachingAdapter(), GenerationPort)
+    # deterministic adapter satisfies it structurally.
+    assert isinstance(DeterministicGenerationAdapter(), GenerationPort)
 
 
-def test_answer_fake_conforms_to_the_answer_port_protocol() -> None:
+def test_generation_fake_conforms_to_the_port_protocol() -> None:
     from tests.fakes import FakeAnswerGeneration
 
     assert isinstance(FakeAnswerGeneration(), GenerationPort)

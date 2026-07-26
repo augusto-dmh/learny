@@ -17,8 +17,7 @@ from app.core.config import Settings
 from app.infrastructure.answering import (
     AnthropicAnswerAdapter,
     AnthropicTeachingAdapter,
-    DeterministicAnswerAdapter,
-    DeterministicTeachingAdapter,
+    DeterministicGenerationAdapter,
     build_answer_adapter,
     build_teaching_adapter,
 )
@@ -29,7 +28,7 @@ def test_local_provider_builds_deterministic_adapter() -> None:
 
     adapter = build_answer_adapter(settings)
 
-    assert isinstance(adapter, DeterministicAnswerAdapter)
+    assert isinstance(adapter, DeterministicGenerationAdapter)
 
 
 def test_anthropic_provider_builds_claude_adapter_from_settings() -> None:
@@ -70,7 +69,7 @@ def test_local_provider_builds_deterministic_teaching_adapter() -> None:
 
     adapter = build_teaching_adapter(settings)
 
-    assert isinstance(adapter, DeterministicTeachingAdapter)
+    assert isinstance(adapter, DeterministicGenerationAdapter)
 
 
 def test_anthropic_provider_builds_claude_teaching_adapter_from_settings() -> None:

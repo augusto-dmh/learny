@@ -346,9 +346,11 @@ def test_ask_generation_failure_leaves_no_conversation_behind(
         def generate(
             self,
             *,
-            question: str,
+            message: str,
+            mode: str,
             evidence: Sequence[Evidence],
             history: Sequence[HistoryTurn] = (),
+            target_section_path: tuple[str, ...] | None = None,
         ) -> GeneratedAnswer:
             raise RuntimeError("provider-secret-internal-detail")
 
@@ -379,18 +381,22 @@ def test_ask_stream_mid_stream_failure_leaves_no_conversation_behind(
         def generate(
             self,
             *,
-            question: str,
+            message: str,
+            mode: str,
             evidence: Sequence[Evidence],
             history: Sequence[HistoryTurn] = (),
+            target_section_path: tuple[str, ...] | None = None,
         ) -> GeneratedAnswer:
             raise AssertionError("stream path must not call generate")
 
         def generate_stream(
             self,
             *,
-            question: str,
+            message: str,
+            mode: str,
             evidence: Sequence[Evidence],
             history: Sequence[HistoryTurn] = (),
+            target_section_path: tuple[str, ...] | None = None,
         ):
             yield AnswerTextDelta(text="partial ")
             raise RuntimeError("provider-secret-internal-detail")
@@ -576,9 +582,11 @@ def test_ask_generation_failure_returns_502_generic(
         def generate(
             self,
             *,
-            question: str,
+            message: str,
+            mode: str,
             evidence: Sequence[Evidence],
             history: Sequence[HistoryTurn] = (),
+            target_section_path: tuple[str, ...] | None = None,
         ) -> GeneratedAnswer:
             raise RuntimeError("provider-secret-internal-detail")
 
@@ -864,18 +872,22 @@ def test_ask_stream_mid_stream_failure_emits_error_part(
         def generate(
             self,
             *,
-            question: str,
+            message: str,
+            mode: str,
             evidence: Sequence[Evidence],
             history: Sequence[HistoryTurn] = (),
+            target_section_path: tuple[str, ...] | None = None,
         ) -> GeneratedAnswer:
             raise AssertionError("stream path must not call generate")
 
         def generate_stream(
             self,
             *,
-            question: str,
+            message: str,
+            mode: str,
             evidence: Sequence[Evidence],
             history: Sequence[HistoryTurn] = (),
+            target_section_path: tuple[str, ...] | None = None,
         ):
             yield AnswerTextDelta(text="partial ")
             raise RuntimeError("provider-secret-internal-detail")
@@ -991,9 +1003,11 @@ def test_ask_include_notes_gates_note_evidence_and_distinct_citation(
         def generate(
             self,
             *,
-            question: str,
+            message: str,
+            mode: str,
             evidence: Sequence[Evidence],
             history: Sequence[HistoryTurn] = (),
+            target_section_path: tuple[str, ...] | None = None,
         ) -> GeneratedAnswer:
             self.evidence_seen = list(evidence)
             return GeneratedAnswer(
@@ -1066,18 +1080,22 @@ def test_ask_stream_note_citation_carries_origin_and_note_identity(
         def generate(
             self,
             *,
-            question: str,
+            message: str,
+            mode: str,
             evidence: Sequence[Evidence],
             history: Sequence[HistoryTurn] = (),
+            target_section_path: tuple[str, ...] | None = None,
         ) -> GeneratedAnswer:
             raise AssertionError("stream path must not call generate")
 
         def generate_stream(
             self,
             *,
-            question: str,
+            message: str,
+            mode: str,
             evidence: Sequence[Evidence],
             history: Sequence[HistoryTurn] = (),
+            target_section_path: tuple[str, ...] | None = None,
         ):
             yield AnswerTextDelta(text="an answer")
             yield AnswerCompleted(

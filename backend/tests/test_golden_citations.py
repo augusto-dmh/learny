@@ -17,7 +17,8 @@ import pytest
 from sqlalchemy import Connection
 
 from app.core.config import get_settings
-from app.infrastructure.answering.local import DeterministicAnswerAdapter
+from app.domain.entities import MODE_ANSWER
+from app.infrastructure.answering.local import DeterministicGenerationAdapter
 from tests.conftest import requires_db
 from tests.eval_runner import (
     answer,
@@ -82,7 +83,9 @@ def test_answer_text_is_still_the_adapter_composition_of_its_evidence(
         case.question,
         top_k=get_settings().conversation_evidence_top_k,
     )
-    expected = DeterministicAnswerAdapter().generate(question=case.question, evidence=evidence)
+    expected = DeterministicGenerationAdapter().generate(
+        message=case.question, mode=MODE_ANSWER, evidence=evidence
+    )
     assert result.text == expected.text
     assert tuple(c.chunk_id for c in result.citations) == expected.cited_chunk_ids
 

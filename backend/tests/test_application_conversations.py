@@ -44,6 +44,7 @@ from app.application.identity import AuthorizeOwnership
 from app.application.streaming import StreamTurn
 from app.domain.entities import (
     MODE_ANSWER,
+    MODE_TEACH,
     AnswerCompleted,
     AnswerStreamEvent,
     AnswerTextDelta,
@@ -372,8 +373,25 @@ class FakeScopedRetrieveEvidence:
         return self.results
 
 
+def _recorded(
+    message: str,
+    mode: str,
+    evidence: Sequence[Evidence],
+    history: Sequence[HistoryTurn],
+    target_section_path: tuple[str, ...] | None,
+) -> dict[str, object]:
+    """Every argument the converged generation port was handed, in one record."""
+    return {
+        "message": message,
+        "mode": mode,
+        "evidence": list(evidence),
+        "history": list(history),
+        "target_section_path": target_section_path,
+    }
+
+
 class FakeAnswerGenerationWithHistory:
-    """``AnswerGenerationPort`` double recording the history it was called with."""
+    """``GenerationPort`` double recording the history it was called with."""
 
     def __init__(
         self,
@@ -394,13 +412,13 @@ class FakeAnswerGenerationWithHistory:
     def generate(
         self,
         *,
-        question: str,
+        message: str,
+        mode: str,
         evidence: Sequence[Evidence],
         history: Sequence[HistoryTurn] = (),
+        target_section_path: tuple[str, ...] | None = None,
     ) -> GeneratedAnswer:
-        self.calls.append(
-            {"question": question, "evidence": list(evidence), "history": list(history)}
-        )
+        self.calls.append(_recorded(message, mode, evidence, history, target_section_path))
         if self._error is not None:
             raise self._error
         assert self._answer is not None, "no preset answer configured"
@@ -409,13 +427,13 @@ class FakeAnswerGenerationWithHistory:
     def generate_stream(
         self,
         *,
-        question: str,
+        message: str,
+        mode: str,
         evidence: Sequence[Evidence],
         history: Sequence[HistoryTurn] = (),
+        target_section_path: tuple[str, ...] | None = None,
     ) -> Iterator[AnswerStreamEvent]:
-        self.stream_calls.append(
-            {"question": question, "evidence": list(evidence), "history": list(history)}
-        )
+        self.stream_calls.append(_recorded(message, mode, evidence, history, target_section_path))
         if self._error is not None:
             raise self._error
         assert self._answer is not None, "no preset answer configured"
@@ -433,7 +451,7 @@ class FakeAnswerGenerationWithHistory:
 
 
 class FakeTeachingGeneration:
-    """``TeachingGenerationPort`` double: preset answer or raise, records calls."""
+    """``GenerationPort`` double for the teach path: preset answer or raise, records calls."""
 
     def __init__(
         self,
@@ -455,18 +473,12 @@ class FakeTeachingGeneration:
         self,
         *,
         message: str,
-        target_section_path: tuple[str, ...],
-        history: Sequence[HistoryTurn],
+        mode: str,
         evidence: Sequence[Evidence],
+        history: Sequence[HistoryTurn] = (),
+        target_section_path: tuple[str, ...] | None = None,
     ) -> GeneratedAnswer:
-        self.calls.append(
-            {
-                "message": message,
-                "target_section_path": target_section_path,
-                "history": list(history),
-                "evidence": list(evidence),
-            }
-        )
+        self.calls.append(_recorded(message, mode, evidence, history, target_section_path))
         if self._error is not None:
             raise self._error
         assert self._answer is not None, "no preset answer configured"
@@ -476,18 +488,12 @@ class FakeTeachingGeneration:
         self,
         *,
         message: str,
-        target_section_path: tuple[str, ...],
-        history: Sequence[HistoryTurn],
+        mode: str,
         evidence: Sequence[Evidence],
+        history: Sequence[HistoryTurn] = (),
+        target_section_path: tuple[str, ...] | None = None,
     ) -> Iterator[AnswerStreamEvent]:
-        self.stream_calls.append(
-            {
-                "message": message,
-                "target_section_path": target_section_path,
-                "history": list(history),
-                "evidence": list(evidence),
-            }
-        )
+        self.stream_calls.append(_recorded(message, mode, evidence, history, target_section_path))
         if self._error is not None:
             raise self._error
         assert self._answer is not None, "no preset answer configured"
@@ -1432,12 +1438,14 @@ def test_answer_mode_sends_the_bounded_history_to_the_answer_port() -> None:
     assert turns.history_calls[-1] == (conversation.id, _HISTORY_TURNS)
     assert generation.calls == [
         {
-            "question": "and now?",
+            "message": "and now?",
+            "mode": MODE_ANSWER,
             "evidence": evidence,
             "history": [
                 HistoryTurn(message="message 0", response_text="answer 0"),
                 HistoryTurn(message="message 1", response_text="answer 1"),
             ],
+            "target_section_path": None,
         }
     ]
 
@@ -1498,9 +1506,10 @@ def test_teach_mode_sends_the_target_section_path_and_history_to_the_teaching_po
     assert teaching.calls == [
         {
             "message": "teach me",
-            "target_section_path": ("Chapter 1",),
-            "history": [],
+            "mode": MODE_TEACH,
             "evidence": evidence,
+            "history": [],
+            "target_section_path": ("Chapter 1",),
         }
     ]
     assert answering.calls == []

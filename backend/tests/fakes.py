@@ -571,12 +571,13 @@ class FakeRetrieveEvidence:
 
 
 class FakeAnswerGeneration:
-    """``AnswerGenerationPort`` double: returns a preset answer or raises.
+    """``GenerationPort`` double: returns a preset answer or raises.
 
     Records each ``generate`` / ``generate_stream`` call so tests assert the port
-    was (not) invoked and that the trimmed question plus the retrieved evidence
-    reached it. ``model`` is the stable adapter identity the service reads on the
-    not-found-on-empty path (where the port is deliberately not called).
+    was (not) invoked and that the trimmed message, the mode, the target section
+    path, and the retrieved evidence reached it. ``model`` is the stable adapter
+    identity the service reads on the not-found-on-empty path (where the port is
+    deliberately not called).
 
     ``generate_stream`` yields the text deltas (``deltas`` when given, else the
     preset answer's text as one delta) then exactly one ``AnswerCompleted``; a
@@ -607,11 +608,20 @@ class FakeAnswerGeneration:
     def generate(
         self,
         *,
-        question: str,
+        message: str,
+        mode: str,
         evidence: Sequence[Evidence],
         history: Sequence[HistoryTurn] = (),
+        target_section_path: tuple[str, ...] | None = None,
     ) -> GeneratedAnswer:
-        self.calls.append({"question": question, "evidence": list(evidence)})
+        self.calls.append(
+            {
+                "message": message,
+                "mode": mode,
+                "evidence": list(evidence),
+                "target_section_path": target_section_path,
+            }
+        )
         self.history_calls.append(list(history))
         if self._error is not None:
             raise self._error
@@ -621,11 +631,20 @@ class FakeAnswerGeneration:
     def generate_stream(
         self,
         *,
-        question: str,
+        message: str,
+        mode: str,
         evidence: Sequence[Evidence],
         history: Sequence[HistoryTurn] = (),
+        target_section_path: tuple[str, ...] | None = None,
     ) -> Iterator[AnswerStreamEvent]:
-        self.stream_calls.append({"question": question, "evidence": list(evidence)})
+        self.stream_calls.append(
+            {
+                "message": message,
+                "mode": mode,
+                "evidence": list(evidence),
+                "target_section_path": target_section_path,
+            }
+        )
         self.history_calls.append(list(history))
         if self._error is not None:
             raise self._error

@@ -38,6 +38,7 @@ from app.application.identity import AuthorizeOwnership
 from app.application.qa import AskQuestion
 from app.application.streaming import StreamAnswer, StreamDelta
 from app.domain.entities import (
+    MODE_ANSWER,
     AnswerStreamEvent,
     AnswerTextDelta,
     Conversation,
@@ -330,7 +331,14 @@ def test_ask_forwards_trimmed_question_and_settings_top_k() -> None:
     assert retrieve.calls == [
         {"user": owner, "source_id": source.id, "query": "photosynthesis", "top_k": _TOP_K}
     ]
-    assert generation.calls == [{"question": "photosynthesis", "evidence": evidence}]
+    assert generation.calls == [
+        {
+            "message": "photosynthesis",
+            "mode": MODE_ANSWER,
+            "evidence": evidence,
+            "target_section_path": None,
+        }
+    ]
 
 
 def test_ask_forwards_include_notes_to_retrieve() -> None:
@@ -1035,7 +1043,13 @@ def test_stream_ending_without_completed_event_raises() -> None:
 
     class _CompletedlessGeneration(FakeAnswerGeneration):
         def generate_stream(
-            self, *, question: str, evidence: object, history: Sequence[HistoryTurn] = ()
+            self,
+            *,
+            message: str,
+            mode: str,
+            evidence: object,
+            history: Sequence[HistoryTurn] = (),
+            target_section_path: tuple[str, ...] | None = None,
         ) -> Iterator[AnswerStreamEvent]:
             yield AnswerTextDelta(text="partial ")
             yield AnswerTextDelta(text="answer")

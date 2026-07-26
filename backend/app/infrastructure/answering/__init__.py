@@ -16,10 +16,7 @@ from app.infrastructure.answering.anthropic import (
     AnthropicAnswerAdapter,
     AnthropicTeachingAdapter,
 )
-from app.infrastructure.answering.local import (
-    DeterministicAnswerAdapter,
-    DeterministicTeachingAdapter,
-)
+from app.infrastructure.answering.local import DeterministicGenerationAdapter
 
 if TYPE_CHECKING:
     from app.core.config import Settings
@@ -28,8 +25,7 @@ if TYPE_CHECKING:
 __all__ = [
     "AnthropicAnswerAdapter",
     "AnthropicTeachingAdapter",
-    "DeterministicAnswerAdapter",
-    "DeterministicTeachingAdapter",
+    "DeterministicGenerationAdapter",
     "build_answer_adapter",
     "build_teaching_adapter",
 ]
@@ -47,7 +43,7 @@ def build_answer_adapter(settings: Settings) -> GenerationPort:
     """
     provider = settings.generation_provider
     if provider == "local":
-        return DeterministicAnswerAdapter()
+        return DeterministicGenerationAdapter()
     if provider == "anthropic":
         if not settings.anthropic_api_key:
             raise ValueError(
@@ -65,15 +61,15 @@ def build_teaching_adapter(settings: Settings) -> GenerationPort:
     """Return the teaching adapter named by ``settings.generation_provider``.
 
     The teaching sibling of :func:`build_answer_adapter` — one provider switch
-    governs both ports (D-2): ``local`` (default) → the deterministic, network-free
-    teaching adapter; ``anthropic`` → the Claude teaching adapter built from the
+    governs both modes (D-2): ``local`` (default) → the deterministic, network-free
+    adapter; ``anthropic`` → the Claude teaching adapter built from the
     key/model/max-tokens settings, requiring a non-empty ``anthropic_api_key`` so a
     misconfigured provider fails fast at composition rather than as a per-request
     502. An unrecognized provider raises ``ValueError`` (GEN-02).
     """
     provider = settings.generation_provider
     if provider == "local":
-        return DeterministicTeachingAdapter()
+        return DeterministicGenerationAdapter()
     if provider == "anthropic":
         if not settings.anthropic_api_key:
             raise ValueError(

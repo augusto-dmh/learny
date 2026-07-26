@@ -37,7 +37,7 @@ from app.domain.entities import (
     Source,
     User,
 )
-from app.infrastructure.answering.local import DeterministicAnswerAdapter
+from app.infrastructure.answering.local import DeterministicGenerationAdapter
 from app.infrastructure.db.repositories import (
     SqlAlchemyConversationRepository,
     SqlAlchemyConversationTurnRepository,
@@ -261,7 +261,7 @@ def answer(db_conn: Connection, user: User, source: Source, question: str) -> Qu
             sources=SqlAlchemySourceRepository(db_conn),
             corpus=SqlAlchemyCorpusRepository(db_conn),
             retrieve=retrieve_evidence,
-            answer_generation=DeterministicAnswerAdapter(),
+            answer_generation=DeterministicGenerationAdapter(),
             teaching_generation=_TEACHING_UNUSED,
             authorize=AuthorizeOwnership(),
             clock=FakeClock(_EPOCH),

@@ -17,8 +17,7 @@ from app.core.config import get_settings
 from app.infrastructure.answering import (
     AnthropicAnswerAdapter,
     AnthropicTeachingAdapter,
-    DeterministicAnswerAdapter,
-    DeterministicTeachingAdapter,
+    DeterministicGenerationAdapter,
     build_answer_adapter,
     build_teaching_adapter,
 )
@@ -51,8 +50,8 @@ def test_offline_suite_pins_local_providers() -> None:
 def test_default_factories_are_deterministic() -> None:
     """AC-5: every factory returns the network-free adapter in the default context."""
     settings = get_settings()
-    assert isinstance(build_answer_adapter(settings), DeterministicAnswerAdapter)
-    assert isinstance(build_teaching_adapter(settings), DeterministicTeachingAdapter)
+    assert isinstance(build_answer_adapter(settings), DeterministicGenerationAdapter)
+    assert isinstance(build_teaching_adapter(settings), DeterministicGenerationAdapter)
     assert isinstance(build_quiz_adapter(settings), DeterministicQuizAdapter)
     assert isinstance(build_embedding_adapter(settings), DeterministicEmbeddingAdapter)
 

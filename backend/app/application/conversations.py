@@ -722,36 +722,36 @@ class PostConversationTurn:
         """The generation port this mode speaks to (read for its model identity)."""
         return self._teaching_generation if mode == MODE_TEACH else self._answer_generation
 
+    def _target_path(self, mode: str, plan: _TurnPlan) -> tuple[str, ...] | None:
+        """The teach target's section path, or ``None`` when this turn answers.
+
+        Read from the mode and never from the conversation's target snapshot: a
+        conversation scoped to a chapter carries a target in *either* mode (AD-194),
+        so target-presence would route scoped asks through the teaching prompt.
+        """
+        if mode != MODE_TEACH:
+            return None
+        assert plan.target is not None  # the preflight resolved it or raised
+        return plan.target.section_path
+
     def _generate(self, *, mode: str, message: str, plan: _TurnPlan) -> GeneratedAnswer:
-        if mode == MODE_TEACH:
-            assert plan.target is not None  # the preflight resolved it or raised
-            return self._teaching_generation.generate(
-                message=message,
-                target_section_path=plan.target.section_path,
-                history=plan.history,
-                evidence=plan.evidence,
-            )
-        return self._answer_generation.generate(
-            question=message,
+        return self._port(mode).generate(
+            message=message,
+            mode=mode,
             evidence=plan.evidence,
             history=plan.history,
+            target_section_path=self._target_path(mode, plan),
         )
 
     def _generate_stream(
         self, *, mode: str, message: str, plan: _TurnPlan
     ) -> Iterator[AnswerStreamEvent]:
-        if mode == MODE_TEACH:
-            assert plan.target is not None  # the preflight resolved it or raised
-            return self._teaching_generation.generate_stream(
-                message=message,
-                target_section_path=plan.target.section_path,
-                history=plan.history,
-                evidence=plan.evidence,
-            )
-        return self._answer_generation.generate_stream(
-            question=message,
+        return self._port(mode).generate_stream(
+            message=message,
+            mode=mode,
             evidence=plan.evidence,
             history=plan.history,
+            target_section_path=self._target_path(mode, plan),
         )
 
     def _answered_turn(

@@ -344,7 +344,7 @@ class FakeScopedRetrieveEvidence:
 
 
 class FakeTeachingGeneration:
-    """``TeachingGenerationPort`` double: preset answer or raise, records calls.
+    """``GenerationPort`` double for the teach path: preset answer or raise, records calls.
 
     ``generate_stream`` mirrors ``generate`` and yields the text deltas (``deltas``
     when given, else the preset answer's text as one delta) then exactly one
@@ -372,16 +372,18 @@ class FakeTeachingGeneration:
         self,
         *,
         message: str,
-        target_section_path: tuple[str, ...],
-        history: Sequence[HistoryTurn],
+        mode: str,
         evidence: Sequence[Evidence],
+        history: Sequence[HistoryTurn] = (),
+        target_section_path: tuple[str, ...] | None = None,
     ) -> GeneratedAnswer:
         self.calls.append(
             {
                 "message": message,
-                "target_section_path": target_section_path,
-                "history": list(history),
+                "mode": mode,
                 "evidence": list(evidence),
+                "history": list(history),
+                "target_section_path": target_section_path,
             }
         )
         if self._error is not None:
@@ -393,16 +395,18 @@ class FakeTeachingGeneration:
         self,
         *,
         message: str,
-        target_section_path: tuple[str, ...],
-        history: Sequence[HistoryTurn],
+        mode: str,
         evidence: Sequence[Evidence],
+        history: Sequence[HistoryTurn] = (),
+        target_section_path: tuple[str, ...] | None = None,
     ) -> Iterator[AnswerStreamEvent]:
         self.stream_calls.append(
             {
                 "message": message,
-                "target_section_path": target_section_path,
-                "history": list(history),
+                "mode": mode,
                 "evidence": list(evidence),
+                "history": list(history),
+                "target_section_path": target_section_path,
             }
         )
         if self._error is not None:

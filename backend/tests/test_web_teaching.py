@@ -813,9 +813,10 @@ def test_post_turn_generation_failure_returns_502_and_persists_nothing(
             self,
             *,
             message: str,
-            target_section_path: tuple[str, ...],
-            history: Sequence[HistoryTurn],
+            mode: str,
             evidence: Sequence[Evidence],
+            history: Sequence[HistoryTurn] = (),
+            target_section_path: tuple[str, ...] | None = None,
         ) -> GeneratedAnswer:
             raise RuntimeError("provider-secret-internal-detail")
 
@@ -1065,9 +1066,10 @@ def test_turn_stream_mid_stream_failure_emits_error_part_and_persists_nothing(
             self,
             *,
             message: str,
-            target_section_path: tuple[str, ...],
-            history: Sequence[HistoryTurn],
+            mode: str,
             evidence: Sequence[Evidence],
+            history: Sequence[HistoryTurn] = (),
+            target_section_path: tuple[str, ...] | None = None,
         ) -> GeneratedAnswer:
             raise AssertionError("stream path must not call generate")
 
@@ -1075,9 +1077,10 @@ def test_turn_stream_mid_stream_failure_emits_error_part_and_persists_nothing(
             self,
             *,
             message: str,
-            target_section_path: tuple[str, ...],
-            history: Sequence[HistoryTurn],
+            mode: str,
             evidence: Sequence[Evidence],
+            history: Sequence[HistoryTurn] = (),
+            target_section_path: tuple[str, ...] | None = None,
         ):
             yield AnswerTextDelta(text="partial ")
             raise RuntimeError("provider-secret-internal-detail")
