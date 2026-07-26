@@ -1,7 +1,7 @@
 """B2 gate (unit) — AskQuestion application service (QA-01..17).
 
 Drives ``AskQuestion`` over fakes (source repo, conversation repos, a
-``RetrieveEvidence`` double, an ``AnswerGenerationPort`` double) and the real
+``RetrieveEvidence`` double, a ``GenerationPort`` double) and the real
 ``AuthorizeOwnership`` primitive, so the orchestration is asserted in isolation.
 Since ADR-0029 an ask *is* a whole-book conversation plus its first answer turn, so
 the builder below composes the unified services for real and every criterion is

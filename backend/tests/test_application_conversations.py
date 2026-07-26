@@ -1451,6 +1451,60 @@ def test_history_keeps_not_found_turns_with_an_empty_response() -> None:
     assert generation.calls[0]["history"] == [HistoryTurn(message="unanswerable", response_text="")]
 
 
+def test_scoped_answer_turn_generates_as_an_answer_despite_its_target_snapshot() -> None:
+    # CONV-10 AC2: a conversation scoped to a chapter snapshots that chapter as its
+    # target whatever its mode (AD-194), so target-presence cannot stand in for the
+    # mode. An answer turn in such a conversation must reach the port as an answer,
+    # with no target section path, or the reader silently gets taught instead.
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    assert conversation.target_anchor is not None  # the precondition this pins
+    assert conversation.target_section_path == ("Chapter 1",)
+    evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
+    generation = FakeGeneration(answer=_answered(*evidence))
+
+    turn = _post(
+        conversations=conversations,
+        turns=FakeConversationTurnRepository(),
+        sources=sources,
+        corpus=corpus,
+        retrieve=FakeScopedRetrieveEvidence(evidence),
+        generation=generation,
+    )(user=user, conversation_id=conversation.id, message="what is anchoring?", mode=MODE_ANSWER)
+
+    assert generation.calls == [
+        {
+            "message": "what is anchoring?",
+            "mode": MODE_ANSWER,
+            "evidence": evidence,
+            "history": [],
+            "target_section_path": None,
+        }
+    ]
+    assert turn.mode == MODE_ANSWER
+
+
+def test_scoped_answer_stream_generates_as_an_answer_despite_its_target_snapshot() -> None:
+    # The streaming half of the same trap: the stream assembles its own call to the
+    # port, so it can drift from the buffered path's mode and target.
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
+    generation = FakeGeneration(answer=_answered(*evidence))
+
+    list(
+        _post(
+            conversations=conversations,
+            turns=FakeConversationTurnRepository(),
+            sources=sources,
+            corpus=corpus,
+            retrieve=FakeScopedRetrieveEvidence(evidence),
+            generation=generation,
+        ).stream(user=user, conversation_id=conversation.id, message="q", mode=MODE_ANSWER)
+    )
+
+    assert generation.stream_calls[0]["mode"] == MODE_ANSWER
+    assert generation.stream_calls[0]["target_section_path"] is None
+
+
 def test_teach_mode_sends_the_mode_target_section_path_and_history_to_the_port() -> None:
     # CONV-10 AC2: a teach turn reaches the one generation port carrying the teach
     # mode and the re-resolved target's section path, exactly what the teaching path

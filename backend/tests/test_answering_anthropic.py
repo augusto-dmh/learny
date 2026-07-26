@@ -547,6 +547,46 @@ def test_target_section_rendered_with_arrow_separator_and_message() -> None:
     assert "Please explain the loci method." in text_block["text"]
 
 
+def test_answer_mode_with_a_target_still_sends_the_answer_request() -> None:
+    # A conversation scoped to a chapter carries that chapter as its target snapshot
+    # in either mode (AD-194), so a target can accompany an answer turn. The mode is
+    # what picks the prompt: an adapter reading "teach" from the target's presence
+    # would answer scoped questions with the teaching prompt and a section header the
+    # reader never asked for.
+    adapter, client = _adapter(_FakeMessage([_FakeTextBlock("ok")]))
+
+    adapter.generate(
+        mode=MODE_ANSWER,
+        message="What is anchoring?",
+        target_section_path=("Part I", "Chapter 3"),
+        evidence=[_evidence("alpha")],
+    )
+
+    call = client.messages.calls[0]
+    assert call["system"] == [{"type": "text", "text": ANSWER_SYSTEM_PROMPT}]
+    text_block = call["messages"][0]["content"][-1]
+    assert text_block == {"type": "text", "text": "What is anchoring?"}
+
+
+def test_answer_mode_stream_with_a_target_still_sends_the_answer_request() -> None:
+    # The streaming half of the same trap, assembled through the same helper.
+    stream = _FakeStream(deltas=["ok"], final_message=_FakeMessage([_FakeTextBlock("ok")]))
+    adapter, client = _streaming_answer_adapter(stream)
+
+    list(
+        adapter.generate_stream(
+            mode=MODE_ANSWER,
+            message="What is anchoring?",
+            target_section_path=("Part I", "Chapter 3"),
+            evidence=[_evidence("alpha")],
+        )
+    )
+
+    call = client.messages.stream_calls[0]
+    assert call["system"] == [{"type": "text", "text": ANSWER_SYSTEM_PROMPT}]
+    assert call["messages"][0]["content"][-1] == {"type": "text", "text": "What is anchoring?"}
+
+
 def test_teaching_whole_reply_sentinel_is_not_found() -> None:
     adapter, _ = _teaching_adapter(_FakeMessage([_FakeTextBlock(SENTINEL)]))
 
