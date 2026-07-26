@@ -10,6 +10,7 @@
  */
 
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -79,6 +80,44 @@ function summary(
 /** The dock always loads the book's conversations; default to none. */
 function stubList(rows: unknown[] = []) {
   const fetchMock = vi.fn(async () => jsonResponse(200, rows));
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+/** One stored turn — the only place a conversation records how it is answered. */
+function turn(mode: "answer" | "teach") {
+  return {
+    turn_index: 0,
+    message: "a message",
+    mode,
+    answer_status: "answered",
+    text: "a reply",
+    citations: [],
+    evidence_count: 2,
+    model: "local-extractive",
+    created_at: "now",
+  };
+}
+
+/**
+ * The list plus each conversation's stored turns, so a resume reads the mode the
+ * server actually recorded rather than anything the row's shape suggests.
+ */
+function stubServer(
+  rows: ReturnType<typeof summary>[],
+  turnsById: Record<string, ReturnType<typeof turn>[]> = {},
+) {
+  const fetchMock = vi.fn(async (url: string) => {
+    if (url.startsWith("/api/conversations?")) {
+      return jsonResponse(200, rows);
+    }
+    const id = url.slice("/api/conversations/".length);
+    const row = rows.find((candidate) => candidate.id === id);
+    if (!row) {
+      throw new Error(`unexpected fetch: ${url}`);
+    }
+    return jsonResponse(200, { ...row, turns: turnsById[id] ?? [] });
+  });
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
 }
@@ -246,15 +285,18 @@ describe("ReaderPanel conversation list", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
-  it("resumes a whole-book conversation in the Ask panel without switching tabs", async () => {
+  it("resumes an asked conversation in the Ask panel without switching tabs", async () => {
     const onModeChange = vi.fn();
-    stubList([summary("conv1", "Ada Lovelace", 1)]);
+    stubServer([summary("conv1", "Ada Lovelace", 1)], {
+      conv1: [turn("answer")],
+    });
     renderPanel("ask", onModeChange);
 
     const before = screen.getByTestId("ask-panel-body").dataset.revision;
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Resume Ada Lovelace" }),
-    );
+    const row = await screen.findByRole("button", { name: "Resume Ada Lovelace" });
+    await act(async () => {
+      fireEvent.click(row);
+    });
 
     // The Ask panel is pointed at that conversation and told to re-read.
     expect(readActiveConversation("s1", "ask")).toBe("conv1");
@@ -262,29 +304,79 @@ describe("ReaderPanel conversation list", () => {
     expect(onModeChange).not.toHaveBeenCalled();
   });
 
-  it("resumes a section-scoped conversation in the Teach panel", async () => {
+  it("resumes a taught conversation in the Teach panel", async () => {
     const onModeChange = vi.fn();
-    stubList([summary("conv2", "Chapter 2", 3, ["c2.xhtml"])]);
+    stubServer([summary("conv2", "Chapter 2", 3, ["c2.xhtml"])], {
+      conv2: [turn("teach")],
+    });
     renderPanel("ask", onModeChange);
 
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Resume Chapter 2" }),
-    );
+    const row = await screen.findByRole("button", { name: "Resume Chapter 2" });
+    await act(async () => {
+      fireEvent.click(row);
+    });
 
-    // A scoped thread is teaching, so the dock moves to the panel that can
-    // continue it rather than leaving the reader on the wrong tab.
+    // Its turns were taught, so the dock moves to the panel that can continue it
+    // rather than leaving the reader on the wrong tab.
     expect(onModeChange).toHaveBeenCalledWith("teach");
     expect(readActiveConversation("s1", "teach")).toBe("conv2");
     expect(readActiveConversation("s1", "ask")).toBeNull();
   });
 
+  it("resumes a section-scoped asked conversation in the Ask panel", async () => {
+    const onModeChange = vi.fn();
+    // A question can be asked inside one chapter: the conversation carries scope
+    // anchors and is still an Ask thread, because scope is not mode.
+    stubServer([summary("conv3", "About chapter 2", 2, ["c2.xhtml"])], {
+      conv3: [turn("answer")],
+    });
+    renderPanel("ask", onModeChange);
+
+    const row = await screen.findByRole("button", {
+      name: "Resume About chapter 2",
+    });
+    await act(async () => {
+      fireEvent.click(row);
+    });
+
+    // Resuming it into Teach would silently change what the next message does.
+    expect(onModeChange).not.toHaveBeenCalled();
+    expect(readActiveConversation("s1", "ask")).toBe("conv3");
+    expect(readActiveConversation("s1", "teach")).toBeNull();
+  });
+
+  it("leaves the reader on the current tab when the thread cannot be read", async () => {
+    const onModeChange = vi.fn();
+    const rows = [summary("conv1", "Ada Lovelace", 1)];
+    const fetchMock = vi.fn(async (url: string) =>
+      url.startsWith("/api/conversations?")
+        ? jsonResponse(200, rows)
+        : jsonResponse(500, { detail: "boom" }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    renderPanel("ask", onModeChange);
+
+    const row = await screen.findByRole("button", { name: "Resume Ada Lovelace" });
+    await act(async () => {
+      fireEvent.click(row);
+    });
+
+    // Nothing said the thread belongs elsewhere, so the reader is not moved —
+    // and the resume still happens on the tab they are on.
+    expect(onModeChange).not.toHaveBeenCalled();
+    expect(readActiveConversation("s1", "ask")).toBe("conv1");
+  });
+
   it("starts a fresh thread on request without touching the other surface", async () => {
-    stubList([summary("conv1", "Ada Lovelace", 1)]);
+    stubServer([summary("conv1", "Ada Lovelace", 1)], {
+      conv1: [turn("answer")],
+    });
     renderPanel();
 
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Resume Ada Lovelace" }),
-    );
+    const row = await screen.findByRole("button", { name: "Resume Ada Lovelace" });
+    await act(async () => {
+      fireEvent.click(row);
+    });
     expect(readActiveConversation("s1", "ask")).toBe("conv1");
 
     const before = screen.getByTestId("ask-panel-body").dataset.revision;

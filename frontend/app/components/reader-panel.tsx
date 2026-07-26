@@ -12,19 +12,22 @@
  *
  * The conversation list is deliberately mode-agnostic and shown in both modes:
  * one book has one set of threads. Which panel resumes a given thread follows
- * from its scope — a whole-book conversation is continued as a question, a
- * section-scoped one as teaching — so the shell switches tabs when it has to
- * rather than asking the reader to guess which tab their thread is behind.
+ * from the mode its turns were answered in, so the shell switches tabs when it
+ * has to rather than asking the reader to guess which tab their thread is
+ * behind.
  */
 
 import { X } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   readActiveConversation,
   writeActiveConversation,
 } from "@/app/lib/active-conversation";
-import { type ConversationSummaryView } from "@/app/lib/conversations";
+import {
+  getConversation,
+  type ConversationSummaryView,
+} from "@/app/lib/conversations";
 import { type PendingPanelRequest } from "@/app/lib/panel";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -40,9 +43,35 @@ const MODES: { value: PanelMode; label: string }[] = [
   { value: "teach", label: "Teach" },
 ];
 
-/** Which panel continues a conversation, decided by the scope it was given. */
-function panelFor(summary: ConversationSummaryView): PanelMode {
-  return summary.scope_anchors.length > 0 ? "teach" : "ask";
+/**
+ * Which panel continues a conversation, decided by the mode its last turn was
+ * answered in.
+ *
+ * Scope is deliberately not consulted. A conversation's scope says which
+ * sections retrieval may see, not how its turns are answered: a chapter-scoped
+ * conversation whose turns were *asked* is an Ask thread, and resuming it into
+ * Teach would silently change what the reader's next message does. Mode is
+ * recorded on every turn, so it is read rather than inferred — the same rule the
+ * generation adapters keep on the other side of the wire.
+ *
+ * A conversation the server cannot hand over, or one with no turn to speak for
+ * it, leaves the reader on the tab they are already on: there is nothing that
+ * says otherwise, and guessing is what this exists to avoid.
+ */
+async function panelFor(
+  summary: ConversationSummaryView,
+  fallback: PanelMode,
+): Promise<PanelMode> {
+  try {
+    const detail = await getConversation(summary.id);
+    const last = detail.turns.at(-1);
+    if (!last) {
+      return fallback;
+    }
+    return last.mode === "teach" ? "teach" : "ask";
+  } catch {
+    return fallback;
+  }
 }
 
 export function ReaderPanel({
@@ -95,18 +124,29 @@ export function ReaderPanel({
     setListToken((token) => token + 1);
   }, [syncActiveIds]);
 
+  // Which panel continues a thread is answered by the server, so a resume is
+  // asynchronous; a second click while the first is still resolving wins, or the
+  // reader would land on whichever request happened to finish last.
+  const resumeToken = useRef(0);
+
   const handleResume = useCallback(
     (summary: ConversationSummaryView) => {
-      const target = panelFor(summary);
-      writeActiveConversation(sourceId, target, summary.id);
-      setActiveIds((current) => ({ ...current, [target]: summary.id }));
-      setRevisions((current) => ({
-        ...current,
-        [target]: current[target] + 1,
-      }));
-      if (target !== mode) {
-        onModeChange(target);
-      }
+      resumeToken.current += 1;
+      const token = resumeToken.current;
+      void panelFor(summary, mode).then((target) => {
+        if (resumeToken.current !== token) {
+          return;
+        }
+        writeActiveConversation(sourceId, target, summary.id);
+        setActiveIds((current) => ({ ...current, [target]: summary.id }));
+        setRevisions((current) => ({
+          ...current,
+          [target]: current[target] + 1,
+        }));
+        if (target !== mode) {
+          onModeChange(target);
+        }
+      });
     },
     [sourceId, mode, onModeChange],
   );
