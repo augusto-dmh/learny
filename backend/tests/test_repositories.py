@@ -1946,6 +1946,43 @@ def test_teaching_turn_duplicate_index_raises_conflict(db_conn: Connection) -> N
         repo.add(_new_turn(session.id, turn_index=0))
 
 
+def test_a_turn_cannot_be_written_into_a_conversation_that_was_deleted(
+    db_conn: Connection,
+) -> None:
+    # A turn is written only once its answer is grounded, which can be a while after
+    # the stream started — long enough for the reader to delete the conversation
+    # meanwhile. The write then has nothing to attach to, and the database refuses
+    # it outright, so no turn is left pointing at a conversation that is gone. The
+    # application does not have to win that race; it only has to not swallow the
+    # refusal, and the write raises.
+    source = _persisted_source(db_conn, "turn-after-delete@example.com")
+    conversations = SqlAlchemyConversationRepository(db_conn)
+    conversation = conversations.add(_new_teaching_session(source.id))
+    repo = SqlAlchemyConversationTurnRepository(db_conn)
+
+    assert conversations.delete(conversation.id) is True
+
+    savepoint = db_conn.begin_nested()
+    with pytest.raises(ConversationTurnConflict):
+        repo.add(
+            _new_turn(
+                conversation.id,
+                turn_index=0,
+                citations=(_citation(source.id, anchor="a.xhtml", snippet="s", score=0.5),),
+            )
+        )
+    savepoint.rollback()
+
+    assert (
+        db_conn.execute(
+            select(func.count())
+            .select_from(conversation_turns)
+            .where(conversation_turns.c.conversation_id == conversation.id)
+        ).scalar_one()
+        == 0
+    )
+
+
 def test_teaching_turn_citations_survive_corpus_deletion(db_conn: Connection) -> None:
     # TEACH-20/AD-033: citations are snapshots (no chunk FK), so a corpus replace
     # (delete-then-insert) never breaks stored history.

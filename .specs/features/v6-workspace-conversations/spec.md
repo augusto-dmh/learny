@@ -192,7 +192,7 @@ RFC-006 assigns to this cycle and it rides the same component.
 - WHEN a rename submits an empty or whitespace-only title THEN the system SHALL reject it and leave the stored title unchanged.
 - WHEN a rename submits a title longer than the stored column allows THEN the system SHALL reject it with 422 rather than truncating.
 - WHEN a reader deletes the conversation that is currently open in the dock THEN the panel SHALL return to its empty state without leaving a stale thread rendered.
-- WHEN a conversation is deleted while one of its turns is streaming THEN the stream SHALL terminate without persisting an orphan turn.
+- WHEN a conversation is deleted while one of its turns is streaming THEN the stream SHALL terminate without persisting an orphan turn. **Covered by WSC-13** — sensed at the persistence seam (`test_a_turn_cannot_be_written_into_a_conversation_that_was_deleted`): a turn is written only after grounding, and by then the row it would attach to is gone, so the write is refused rather than swallowed. What is *not* sensed end-to-end is the shape of the response the reader's open stream then receives — driving a delete between two SSE frames needs a second connection the test fixtures deliberately do not have (one transaction is shared). Recorded rather than claimed.
 - WHEN `offset` exceeds the number of conversations THEN the system SHALL return an empty page, not an error.
 - WHEN a teach conversation's target section can no longer be resolved THEN posting a turn SHALL still fail with 409 after port convergence.
 - WHEN a conversation belongs to another user THEN every conversation route SHALL fail identically to a non-existent conversation.
