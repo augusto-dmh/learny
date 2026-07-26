@@ -360,6 +360,44 @@ def test_setting_a_retired_knob_warns_once_naming_the_value_in_force(monkeypatch
     assert not any("LEARNY_TEACHING_EVIDENCE_TOP_K" in message for message in warnings)
 
 
+def test_a_retired_knob_left_in_an_env_file_warns_too(monkeypatch, caplog, tmp_path) -> None:
+    # The env file is the other place a value is read from, and ``os.environ`` cannot
+    # see it: a knob set there is *more* likely to be believed in, not less, because
+    # nothing in the file says it stopped working. A warning that only watched the
+    # process environment would go quiet exactly where the operator wrote the tuning.
+    for env_var in _RETIRED_KNOBS:
+        monkeypatch.delenv(env_var, raising=False)
+    env_file = tmp_path / ".env"
+    env_file.write_text("LEARNY_TEACHING_HISTORY_TURNS=12\nLEARNY_CONVERSATION_EVIDENCE_TOP_K=4\n")
+
+    with caplog.at_level(logging.WARNING, logger="app.core.config"):
+        settings = Settings(_env_file=env_file)
+
+    warnings = [r.getMessage() for r in caplog.records if r.name == "app.core.config"]
+    assert len(warnings) == 1
+    assert "LEARNY_TEACHING_HISTORY_TURNS" in warnings[0]
+    assert f"conversation_history_turns={settings.conversation_history_turns}" in warnings[0]
+    # The file is genuinely being read — a live knob beside the dead one took effect,
+    # which is what makes the silence about the dead one a defect.
+    assert settings.conversation_evidence_top_k == 4
+
+
+def test_a_retired_knob_in_an_env_file_the_instance_does_not_read_stays_quiet(
+    monkeypatch, caplog, tmp_path
+) -> None:
+    # The warning follows what this instance actually reads: a file it was told to
+    # ignore is not a deployment's configuration, and warning about it would train
+    # operators (and the suite) to ignore the message.
+    for env_var in _RETIRED_KNOBS:
+        monkeypatch.delenv(env_var, raising=False)
+    (tmp_path / ".env").write_text("LEARNY_TEACHING_HISTORY_TURNS=12\n")
+
+    with caplog.at_level(logging.WARNING, logger="app.core.config"):
+        Settings(_env_file=None)
+
+    assert [r for r in caplog.records if r.name == "app.core.config"] == []
+
+
 def test_an_untouched_deployment_gets_no_deprecation_warnings(caplog) -> None:
     # A deployment that never tuned these must boot quietly — a warning nobody can
     # act on is noise that teaches operators to ignore the log.

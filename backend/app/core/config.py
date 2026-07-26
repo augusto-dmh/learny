@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import logging
 import os
+from contextvars import ContextVar
 from functools import lru_cache
 
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings.sources import PydanticBaseSettingsSource
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +30,13 @@ _RETIRED_KNOBS = {
     "LEARNY_QA_QUESTION_MAX_CHARS": "conversation_message_max_chars",
     "LEARNY_TEACHING_MESSAGE_MAX_CHARS": "conversation_message_max_chars",
 }
+
+# The variable names the env file of the settings instance currently being built
+# carries. Set while its sources are assembled and read back by the retired-knob
+# warning, which runs later in the same instantiation: the env file resolved for an
+# instance (``_env_file`` may override the class default) is knowable only from the
+# source that read it, and never reaches the model itself.
+_env_file_vars: ContextVar[frozenset[str]] = ContextVar("_env_file_vars", default=frozenset())
 
 
 class Settings(BaseSettings):
@@ -267,6 +276,27 @@ class Settings(BaseSettings):
     # window resolves to the same value.
     words_per_page: int = 275
 
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        """Keep the default source precedence, remembering what the env file holds.
+
+        The env-file source is the only place that knows which file this
+        instantiation actually read, so the names it carries are captured here for
+        the retired-knob warning below. ``extra`` is ``ignore``, which means a
+        retired name in that file is dropped before any field sees it — capturing
+        the raw variable names is what keeps it visible.
+        """
+        env_file_vars = getattr(dotenv_settings, "env_vars", {})
+        _env_file_vars.set(frozenset(name.upper() for name in env_file_vars))
+        return (init_settings, env_settings, dotenv_settings, file_secret_settings)
+
     @model_validator(mode="after")
     def _warn_about_retired_knobs(self) -> Settings:
         """Say once, at startup, that a retired variable no longer does anything.
@@ -278,20 +308,22 @@ class Settings(BaseSettings):
         exactly what makes a dead tuning look like a live one. A comment in this file
         is not reachable by the person running the deploy.
 
-        Read from the environment rather than from the declared fields: the fields
+        Read from the variable names rather than from the declared fields: the fields
         are gone, and a check over ``model_fields_set`` would quietly stop firing at
-        the moment the variable became most misleading. The process environment is
-        where a deployment sets these — Compose and the VPS unit both inject them —
-        so that is what is read; a name left only in a local ``.env`` is out of
-        scope, the same way it is out of scope for how a server is configured.
+        the moment the variable became most misleading. Both places settings are read
+        from count — the process environment (Compose and the VPS unit inject them
+        there) and the ``.env`` file, which pydantic-settings loads separately and
+        which ``os.environ`` cannot see. A knob set anywhere the value *would* have
+        been read from is a knob the operator believes in.
 
         The old value is deliberately *not* inherited into the new setting: that would
         re-couple the per-surface knobs the unified settings separated, for the sake
         of a tuning this deployment never made. Naming the variable and the value now
         in force lets an operator re-tune deliberately.
         """
+        env_file_vars = _env_file_vars.get()
         for env_var, successor in _RETIRED_KNOBS.items():
-            if env_var in os.environ:
+            if env_var in os.environ or env_var in env_file_vars:
                 logger.warning(
                     "%s is retired and no longer read; %s=%s is in force. "
                     "Set LEARNY_%s to change it.",
