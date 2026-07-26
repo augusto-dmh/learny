@@ -449,9 +449,9 @@ class PostConversationTurn:
     a scoped turn can return nothing but can never silently widen to the whole book
     (I-CM-3). Whole-book conversations pass ``anchors=None``, which is the only way
     the whole source is searched. Notes are never anchor-filtered (engine semantics):
-    the conversation's stored ``include_notes`` gates them, and
-    ``include_notes_override`` lets a legacy request override it for that request
-    only, never changing what is stored (AD-147).
+    the conversation's own stored ``include_notes`` gates them, for every turn — the
+    choice is the conversation's, made once when it is started (ADR-0029), and no
+    request can bend it for one turn.
 
     Generation goes to the one :class:`~app.domain.ports.GenerationPort` with the
     mode, the bounded prior history, and — for ``teach`` — the target's section
@@ -503,14 +503,12 @@ class PostConversationTurn:
         conversation_id: UUID,
         message: str,
         mode: str,
-        include_notes_override: bool | None = None,
     ) -> ConversationTurn:
         plan = self._preflight(
             user=user,
             conversation_id=conversation_id,
             message=message,
             mode=mode,
-            include_notes_override=include_notes_override,
         )
 
         if not plan.evidence:
@@ -541,7 +539,6 @@ class PostConversationTurn:
         conversation_id: UUID,
         message: str,
         mode: str,
-        include_notes_override: bool | None = None,
     ) -> Iterator[TurnStreamEvent]:
         """Run one turn incrementally, persisting only on stream completion.
 
@@ -558,7 +555,6 @@ class PostConversationTurn:
             conversation_id=conversation_id,
             message=message,
             mode=mode,
-            include_notes_override=include_notes_override,
         )
         return self._turn_stream(plan=plan, message=message, mode=mode)
 
@@ -589,7 +585,6 @@ class PostConversationTurn:
         conversation_id: UUID,
         message: str,
         mode: str,
-        include_notes_override: bool | None,
     ) -> _TurnPlan:
         """Run the shared turn guards, scope expansion, history, and retrieval.
 
@@ -636,16 +631,13 @@ class PostConversationTurn:
         # loads — the turn path never uses them — and its count is the next index.
         turn_index, history = self._turns.recent_history(conversation_id, self._history_turns)
 
-        include_notes = (
-            conversation.include_notes if include_notes_override is None else include_notes_override
-        )
         evidence = self._retrieve(
             user=user,
             source_id=conversation.source_id,
             query=message,
             top_k=self._evidence_top_k,
             anchors=anchors,
-            include_notes=include_notes,
+            include_notes=conversation.include_notes,
         )
         return _TurnPlan(
             conversation=conversation,

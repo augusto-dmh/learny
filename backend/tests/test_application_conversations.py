@@ -1282,9 +1282,10 @@ def test_the_conversations_notes_choice_gates_the_notes_arms() -> None:
     assert retrieve.calls[0]["include_notes"] is True
 
 
-def test_notes_override_applies_to_one_request_without_changing_the_stored_choice() -> None:
-    # AD-147: the legacy presenters may override the notes choice per request; the
-    # conversation's own choice is untouched and governs the next turn.
+def test_every_turn_takes_the_notes_choice_from_the_conversation() -> None:
+    # ADR-0029: the choice is the conversation's, made once when it is started. No
+    # turn carries one of its own, so a thread cannot answer from notes on one
+    # message and without them on the next.
     user, source, sources, corpus, conversations, conversation = _scoped_world(include_notes=False)
     retrieve = FakeScopedRetrieveEvidence([])
     post = _post(
@@ -1295,17 +1296,10 @@ def test_notes_override_applies_to_one_request_without_changing_the_stored_choic
         retrieve=retrieve,
     )
 
-    post(
-        user=user,
-        conversation_id=conversation.id,
-        message="q",
-        mode=MODE_ANSWER,
-        include_notes_override=True,
-    )
+    post(user=user, conversation_id=conversation.id, message="q", mode=MODE_ANSWER)
     post(user=user, conversation_id=conversation.id, message="q2", mode=MODE_ANSWER)
 
-    assert [call["include_notes"] for call in retrieve.calls] == [True, False]
-    assert conversations.get_by_id(conversation.id).include_notes is False
+    assert [call["include_notes"] for call in retrieve.calls] == [False, False]
 
 
 # --- Turn path: statuses by scope (CONV-11, I-CM-3) -----------------------------
