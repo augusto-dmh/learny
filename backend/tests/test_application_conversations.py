@@ -265,15 +265,6 @@ class FakeConversationRepository:
         owned.sort(key=lambda c: (c.updated_at, c.id), reverse=True)
         return [self._summary(conversation) for conversation in owned[offset : offset + limit]]
 
-    def list_for_source_with_target(self, source_id: UUID) -> list[ConversationSummary]:
-        owned = [
-            c
-            for c in self._by_id.values()
-            if c.source_id == source_id and c.target_anchor is not None
-        ]
-        owned.sort(key=lambda c: c.created_at, reverse=True)
-        return [self._summary(conversation) for conversation in owned]
-
     def rename(self, conversation_id: UUID, title: str, now: datetime) -> Conversation | None:
         conversation = self._by_id.get(conversation_id)
         if conversation is None:

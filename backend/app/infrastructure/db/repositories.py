@@ -930,17 +930,6 @@ class SqlAlchemyConversationRepository:
         ).all()
         return [_to_conversation_summary(row) for row in rows]
 
-    def list_for_source_with_target(self, source_id: UUID) -> list[ConversationSummary]:
-        rows = self._conn.execute(
-            self._summary_select()
-            .where(conversations.c.source_id == source_id)
-            # Conversations with no teach target were never started from the Teach
-            # panel, so the panel does not show them.
-            .where(conversations.c.target_anchor.is_not(None))
-            .order_by(conversations.c.created_at.desc(), conversations.c.id.desc())
-        ).all()
-        return [_to_conversation_summary(row) for row in rows]
-
     def rename(self, conversation_id: UUID, title: str, now: datetime) -> Conversation | None:
         row = self._conn.execute(
             update(conversations)

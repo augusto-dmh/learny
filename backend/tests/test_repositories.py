@@ -1440,58 +1440,8 @@ def test_teaching_session_add_and_get_by_id(db_conn: Connection) -> None:
     assert repo.get_by_id(uuid4()) is None
 
 
-def test_teaching_session_list_for_source_is_newest_first(db_conn: Connection) -> None:
-    source = _persisted_source(db_conn, "teach-session-order@example.com")
-    repo = SqlAlchemyConversationRepository(db_conn)
-
-    base = datetime.now(UTC)
-    older = _new_teaching_session(source.id, created_at=base)
-    newer = _new_teaching_session(source.id, created_at=base + timedelta(minutes=1))
-    repo.add(older)
-    repo.add(newer)
-
-    listed = repo.list_for_source_with_target(source.id)
-    assert [s.conversation.id for s in listed] == [newer.id, older.id]
-
-
-def test_teaching_session_list_includes_turn_count(db_conn: Connection) -> None:
-    source = _persisted_source(db_conn, "teach-session-count@example.com")
-    repo = SqlAlchemyConversationRepository(db_conn)
-
-    base = datetime.now(UTC)
-    with_turns = _new_teaching_session(source.id, created_at=base + timedelta(minutes=1))
-    without_turns = _new_teaching_session(source.id, created_at=base)
-    repo.add(with_turns)
-    repo.add(without_turns)
-    _insert_turn(db_conn, with_turns.id, 0)
-    _insert_turn(db_conn, with_turns.id, 1)
-
-    summaries = {
-        s.conversation.id: s.turn_count for s in repo.list_for_source_with_target(source.id)
-    }
-    assert summaries[with_turns.id] == 2
-    assert summaries[without_turns.id] == 0
-
-
-def test_teaching_session_list_is_source_scoped(db_conn: Connection) -> None:
-    source_a = _persisted_source(db_conn, "teach-session-a@example.com")
-    source_b = _persisted_source(db_conn, "teach-session-b@example.com")
-    repo = SqlAlchemyConversationRepository(db_conn)
-
-    a1 = _new_teaching_session(source_a.id)
-    a2 = _new_teaching_session(source_a.id)
-    b1 = _new_teaching_session(source_b.id)
-    for session in (a1, a2, b1):
-        repo.add(session)
-
-    a_ids = {s.conversation.id for s in repo.list_for_source_with_target(source_a.id)}
-    assert a_ids == {a1.id, a2.id}
-    assert b1.id not in a_ids
-    assert [s.conversation.id for s in repo.list_for_source_with_target(source_b.id)] == [b1.id]
-
-
 def _whole_book_conversation(source_id: UUID, *, title: str = "Ask", **overrides) -> Conversation:  # noqa: ANN003
-    """A conversation with no teach target — the shape the old Teach panel never made."""
+    """A conversation with no teach target — one asked of the book as a whole."""
     now = overrides.pop("created_at", None) or datetime.now(UTC)
     return Conversation(
         id=uuid4(),
@@ -1517,22 +1467,6 @@ def _persisted_user_with_sources(db_conn: Connection, email: str, count: int) ->
         for _ in range(count)
     ]
     return user.id, owned
-
-
-def test_conversation_list_for_source_excludes_targetless_conversations(
-    db_conn: Connection,
-) -> None:
-    # A conversation started without a teach target was never started from the Teach
-    # panel, so the panel's list must not surface it (ADR-0029 retirement plan).
-    source = _persisted_source(db_conn, "conv-target-filter@example.com")
-    repo = SqlAlchemyConversationRepository(db_conn)
-    targeted = repo.add(_new_teaching_session(source.id))
-    targetless = repo.add(_whole_book_conversation(source.id))
-
-    listed = [s.conversation.id for s in repo.list_for_source_with_target(source.id)]
-
-    assert listed == [targeted.id]
-    assert targetless.id not in listed
 
 
 def test_conversation_list_for_user_spans_sources_newest_activity_first(
