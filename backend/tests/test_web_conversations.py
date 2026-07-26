@@ -1572,6 +1572,10 @@ def test_post_turn_generation_failure_returns_502_and_persists_nothing(
         auth_client.app.dependency_overrides.pop(get_generation, None)
 
     assert resp.status_code == 502, resp.text
+    # The reader is told what to do about it, in the same words the streaming twin
+    # sends: a 502 whose body was only "Internal Server Error" — or the provider's
+    # own message — is the failure this asserts against in both directions.
+    assert resp.json()["detail"] == "Answer generation failed. Please try again."
     assert "provider-secret-internal-detail" not in resp.text
     assert auth_client.get(f"/api/conversations/{conversation.id}").json()["turns"] == []
 
