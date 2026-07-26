@@ -14,13 +14,13 @@ invisible to the UI.
 
 ## Goals
 
-- [ ] One `conversations` aggregate (scope × per-turn mode) owns all grounded
+- [x] One `conversations` aggregate (scope × per-turn mode) owns all grounded
       conversations; Q&A turns persist from this release.
-- [ ] Unified management API: global list, start, read, rename, delete, turn,
+- [x] Unified management API: global list, start, read, rename, delete, turn,
       turn stream.
-- [ ] Scope enforcement in retrieval with `not_found_in_scope` distinguished
+- [x] Scope enforcement in retrieval with `not_found_in_scope` distinguished
       from `not_found_in_source`.
-- [ ] Legacy Ask/Teach endpoints keep working bit-for-bit; frontend untouched
+- [x] Legacy Ask/Teach endpoints keep working bit-for-bit; frontend untouched
       and its full suite green without edits.
 
 ## Out of Scope
@@ -244,17 +244,17 @@ unchanged on the wire so this cycle ships invisibly.
 
 | Requirement ID | Story | Phase | Status |
 |---|---|---|---|
-| CONV-01..02 | Schema | A | Pending |
-| CONV-03..04 | Schema/repos | A | Pending |
-| CONV-05..09, CONV-13 | Services (management) | B | Pending |
-| CONV-10..12, CONV-14 | Services (turns) | B | Pending |
-| CONV-15..22 | Unified web | C | Pending |
-| CONV-23..25 | Legacy compat | D | Pending |
-| CONV-26 | Goldens/stability | D | Pending |
+| CONV-01..02 | Schema | A | Verified |
+| CONV-03..04 | Schema/repos | A | Verified |
+| CONV-05..09, CONV-13 | Services (management) | B | Verified |
+| CONV-10..12, CONV-14 | Services (turns) | B | Verified |
+| CONV-15..22 | Unified web | C | Verified |
+| CONV-23..25 | Legacy compat | D | Verified |
+| CONV-26 | Goldens/stability | D | Verified |
 
 ## Success Criteria
 
-- [ ] Backend suite green (target: prior count + new coverage), ruff clean.
-- [ ] Frontend suite passes with zero edits.
-- [ ] A legacy ask question is visible in `GET /api/conversations` afterward.
-- [ ] ADR-0029 in the PR; RFC-006 action item flipped.
+- [x] Backend suite green (target: prior count + new coverage), ruff clean.
+- [x] Frontend suite passes with zero edits.
+- [x] A legacy ask question is visible in `GET /api/conversations` afterward.
+- [x] ADR-0029 in the PR; RFC-006 action item flipped.
