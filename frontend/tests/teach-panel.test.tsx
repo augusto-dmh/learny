@@ -699,5 +699,35 @@ describe("TeachPanel include-my-notes choice (NL-04)", () => {
     expect(bodyOf(callsTo(fetchMock, CREATE_URL)[0])).toMatchObject({
       include_notes: true,
     });
+
+    // From here the choice belongs to that conversation: the control reports it
+    // and stops taking input rather than offering a flip that does nothing.
+    await waitFor(() =>
+      expect((screen.getByRole("checkbox") as HTMLInputElement).disabled).toBe(
+        true,
+      ),
+    );
+    expect((screen.getByRole("checkbox") as HTMLInputElement).checked).toBe(true);
+  });
+
+  it("reports a restored session's choice rather than the reader's stored one", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/sources/s1/structure": () => jsonResponse(200, structure),
+        [`GET ${READ_URL}`]: () =>
+          jsonResponse(200, { ...restoredDetail, include_notes: true }),
+      }),
+    );
+    writeActiveConversation("s1", "teach", "conv2");
+
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
+    await screen.findByText("It is about early computing.");
+
+    // Teaching's own default is off; this thread was created with it on, and
+    // the thread is what the answers obey.
+    const toggle = screen.getByRole("checkbox") as HTMLInputElement;
+    expect(toggle.checked).toBe(true);
+    expect(toggle.disabled).toBe(true);
   });
 });

@@ -50,4 +50,19 @@ describe("IncludeNotesToggle", () => {
     rerender(<IncludeNotesToggle checked onChange={onChange} />);
     expect((screen.getByRole("checkbox") as HTMLInputElement).checked).toBe(true);
   });
+
+  it("stops taking input and explains itself once a conversation fixed the choice", () => {
+    render(<IncludeNotesToggle checked onChange={() => {}} locked />);
+
+    // Disabled, so the browser gives the reader no way to flip it.
+    const control = screen.getByRole("checkbox") as HTMLInputElement;
+    expect(control.disabled).toBe(true);
+
+    // The explanation says what the control now applies to, and what to do about it.
+    const description = document.getElementById(
+      control.getAttribute("aria-describedby")!,
+    );
+    expect(description!.textContent).toMatch(/this conversation was started/i);
+    expect(description!.textContent).toMatch(/start a new one to change it/i);
+  });
 });

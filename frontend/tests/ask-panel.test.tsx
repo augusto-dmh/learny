@@ -420,6 +420,56 @@ describe("AskPanel notes scope (NL-04)", () => {
       true,
     );
   });
+
+  it("stops taking a choice once the thread has a conversation, and says why", async () => {
+    const stream = sseStream();
+    const fetchMock = routedFetch(baseHandlers(() => stream.response));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+    const toggle = () =>
+      screen.getByRole("checkbox", {
+        name: "Search my notes too",
+      }) as HTMLInputElement;
+
+    // Before there is a conversation the choice is the reader's to make.
+    expect(toggle().disabled).toBe(false);
+    fireEvent.click(toggle());
+    ask("a question");
+    await waitFor(() => expect(callsTo(fetchMock, CREATE_URL)).toHaveLength(1));
+
+    // Once one exists the control reports what it was created with and stops
+    // being flippable — the flip would have applied to nothing.
+    await waitFor(() => expect(toggle().disabled).toBe(true));
+    expect(toggle().checked).toBe(false);
+    const description = document.getElementById(
+      toggle().getAttribute("aria-describedby")!,
+    );
+    expect(description!.textContent).toMatch(/start a new one to change it/i);
+  });
+
+  it("reports a restored conversation's choice, not the reader's stored one", async () => {
+    // The reader's preference for this surface is on; the thread they are coming
+    // back to was created with it off, and the thread is what the answer obeys.
+    const fetchMock = routedFetch({
+      "GET /api/conversations/conv1": () =>
+        jsonResponse(200, {
+          ...conversation,
+          include_notes: false,
+          turns: [],
+        }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    writeActiveConversation("s1", "ask", "conv1");
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+
+    const toggle = (await screen.findByRole("checkbox", {
+      name: "Search my notes too",
+    })) as HTMLInputElement;
+    expect(toggle.checked).toBe(false);
+    expect(toggle.disabled).toBe(true);
+  });
 });
 
 describe("AskPanel thread restore", () => {

@@ -76,6 +76,8 @@ const SURFACE = "teach";
 type TeachThread = {
   key: string;
   conversationId: string | null;
+  /** The notes choice this conversation was created with; `null` before there is one. */
+  includeNotes: boolean | null;
   targetAnchor: string;
   /** Shown when the target anchor no longer resolves against the live structure. */
   fallbackLabel: string;
@@ -144,6 +146,7 @@ export function TeachPanel({
         setThread({
           key: detail.id,
           conversationId: detail.id,
+          includeNotes: detail.include_notes,
           targetAnchor: detail.scope_anchors[0] ?? "",
           fallbackLabel: detail.title,
           initialMessages: turnsToUIMessages(detail.turns),
@@ -216,6 +219,7 @@ export function TeachPanel({
     setThread({
       key: `new-${startCountRef.current}`,
       conversationId: null,
+      includeNotes: null,
       targetAnchor: selectedAnchor,
       fallbackLabel: option?.label ?? selectedAnchor,
       initialMessages: [],
@@ -233,6 +237,7 @@ export function TeachPanel({
         sourceId={sourceId}
         csrf={csrf}
         conversationId={thread.conversationId}
+        conversationIncludeNotes={thread.includeNotes}
         targetAnchor={thread.targetAnchor}
         target={targetLabel}
         initialMessages={thread.initialMessages}
@@ -282,6 +287,7 @@ function TeachChat({
   sourceId,
   csrf,
   conversationId,
+  conversationIncludeNotes,
   targetAnchor,
   target,
   initialMessages,
@@ -293,6 +299,8 @@ function TeachChat({
   sourceId: string;
   csrf: string;
   conversationId: string | null;
+  /** The notes choice the conversation carries, or `null` before there is one. */
+  conversationIncludeNotes: boolean | null;
   targetAnchor: string;
   target: string;
   initialMessages: LearnyUIMessage[];
@@ -305,6 +313,13 @@ function TeachChat({
   // creates one and is always sent explicitly rather than left to a server guess.
   const notes = useIncludeNotes(SURFACE);
   const includeNotes = notes.includeNotes;
+
+  // Which is why the control stops taking input once a conversation exists: it
+  // then reports the choice that conversation was created with. Leaving it live
+  // would offer the reader a flip that changes nothing about this thread.
+  const [fixedNotes, setFixedNotes] = useState<boolean | null>(
+    conversationIncludeNotes,
+  );
 
   const start = useCallback(
     () =>
@@ -320,6 +335,21 @@ function TeachChat({
     [sourceId, targetAnchor, includeNotes, target, csrf],
   );
 
+  const handleStarted = useCallback(
+    (startedId: string) => {
+      setFixedNotes(includeNotes);
+      onConversationStarted(startedId);
+    },
+    [includeNotes, onConversationStarted],
+  );
+
+  // A discarded first message leaves no conversation, so the choice is the
+  // reader's again.
+  const handleDiscarded = useCallback(() => {
+    setFixedNotes(null);
+    onConversationDiscarded();
+  }, [onConversationDiscarded]);
+
   const { messages, status, isStreaming, banner, send, stop } =
     useConversationThread({
       csrf,
@@ -327,8 +357,8 @@ function TeachChat({
       conversationId,
       start,
       initialMessages,
-      onConversationStarted,
-      onConversationDiscarded,
+      onConversationStarted: handleStarted,
+      onConversationDiscarded: handleDiscarded,
       onRequireAuth,
     });
 
@@ -406,8 +436,9 @@ function TeachChat({
       ) : null}
 
       <IncludeNotesToggle
-        checked={notes.includeNotes}
+        checked={fixedNotes ?? notes.includeNotes}
         onChange={notes.setIncludeNotes}
+        locked={fixedNotes !== null}
       />
 
       <PromptInput onSubmit={handleSubmit}>

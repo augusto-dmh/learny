@@ -95,6 +95,8 @@ function askAboutPrompt(quote: string, question: string): string {
 type AskThread = {
   key: string;
   conversationId: string | null;
+  /** The notes choice this conversation was created with; `null` before there is one. */
+  includeNotes: boolean | null;
   initialMessages: LearnyUIMessage[];
 };
 
@@ -128,6 +130,7 @@ export function AskPanel({
     const fresh = () => ({
       key: `new-${revision}`,
       conversationId: null,
+      includeNotes: null,
       initialMessages: [],
     });
     const stored = readActiveConversation(sourceId, SURFACE);
@@ -143,6 +146,7 @@ export function AskPanel({
         setThread({
           key: detail.id,
           conversationId: detail.id,
+          includeNotes: detail.include_notes,
           initialMessages: turnsToUIMessages(detail.turns),
         });
       })
@@ -189,6 +193,7 @@ export function AskPanel({
       sourceId={sourceId}
       csrf={csrf}
       conversationId={thread.conversationId}
+      conversationIncludeNotes={thread.includeNotes}
       initialMessages={thread.initialMessages}
       restoreError={restoreError}
       pendingRequest={pendingRequest}
@@ -205,6 +210,7 @@ function AskChat({
   sourceId,
   csrf,
   conversationId,
+  conversationIncludeNotes,
   initialMessages,
   restoreError,
   pendingRequest,
@@ -217,6 +223,8 @@ function AskChat({
   sourceId: string;
   csrf: string;
   conversationId: string | null;
+  /** The notes choice the conversation carries, or `null` before there is one. */
+  conversationIncludeNotes: boolean | null;
   initialMessages: LearnyUIMessage[];
   restoreError: string | null;
   pendingRequest?: PendingPanelRequest | null;
@@ -234,6 +242,13 @@ function AskChat({
   const notes = useIncludeNotes(SURFACE);
   const includeNotes = notes.includeNotes;
 
+  // Which is why the control stops taking input once a conversation exists: it
+  // then reports the choice that conversation was created with. Leaving it live
+  // would offer the reader a flip that changes nothing about this thread.
+  const [fixedNotes, setFixedNotes] = useState<boolean | null>(
+    conversationIncludeNotes,
+  );
+
   const start = useCallback(
     () =>
       startConversation(
@@ -243,6 +258,21 @@ function AskChat({
     [sourceId, includeNotes, csrf],
   );
 
+  const handleStarted = useCallback(
+    (startedId: string) => {
+      setFixedNotes(includeNotes);
+      onConversationStarted(startedId);
+    },
+    [includeNotes, onConversationStarted],
+  );
+
+  // A discarded first message leaves no conversation, so the choice is the
+  // reader's again.
+  const handleDiscarded = useCallback(() => {
+    setFixedNotes(null);
+    onConversationDiscarded();
+  }, [onConversationDiscarded]);
+
   const { messages, status, isStreaming, banner, send, stop } =
     useConversationThread({
       csrf,
@@ -250,8 +280,8 @@ function AskChat({
       conversationId,
       start,
       initialMessages,
-      onConversationStarted,
-      onConversationDiscarded,
+      onConversationStarted: handleStarted,
+      onConversationDiscarded: handleDiscarded,
       onRequireAuth,
     });
 
@@ -386,8 +416,9 @@ function AskChat({
       ) : null}
 
       <IncludeNotesToggle
-        checked={notes.includeNotes}
+        checked={fixedNotes ?? notes.includeNotes}
         onChange={notes.setIncludeNotes}
+        locked={fixedNotes !== null}
       />
 
       <PromptInput onSubmit={handleSubmit}>
