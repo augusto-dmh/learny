@@ -29,7 +29,7 @@ Conventions:
 2. `docker compose ps` → all six services `healthy` (db, redis, minio, api, worker, web). Worker/web have 20–30s start periods.
 3. Liveness: `curl -fsS http://localhost:8000/healthz` → 200.
 4. Readiness: `curl -fsS http://localhost:8000/readyz` → 200 (checks Postgres).
-5. Migrations applied: `docker compose exec db psql -U learny -d learny -c '\dt'` → tables `users, sessions, sources, ingestion_jobs, ingestion_events, corpus_documents, corpus_sections, corpus_blocks, corpus_chunks, teaching_sessions, teaching_turns, teaching_turn_citations, ...`.
+5. Migrations applied: `docker compose exec db psql -U learny -d learny -c '\dt'` → tables `users, sessions, sources, ingestion_jobs, ingestion_events, corpus_documents, corpus_sections, corpus_blocks, corpus_chunks, conversations, conversation_turns, conversation_turn_citations, ...`.
 6. Frontend up: open http://localhost:3000 → landing page with login/register.
 7. Logs are clean: `docker compose logs api worker --since 2m` → no tracebacks; one structured `http.request` line per probe.
 

@@ -121,7 +121,7 @@ Card ownership moved to `quiz_items.user_id` this cycle so a note card can exist
 
 - **Backend-owned sessions** ([ADR-0015](docs/adr/0015-use-backend-owned-auth-with-http-only-cookies.md)): opaque token in an `HttpOnly` `SameSite=Lax` cookie; only its SHA hash is stored. Passwords are Argon2id.
 - **CSRF**: synchronizer token (issued by `GET /api/auth/me`, echoed as `X-CSRF-Token`, compared constant-time) plus an Origin/Referer host check on every write.
-- **Authorization**: every source, corpus record, and teaching session is owner-scoped at the query level; cross-user access resolves to 404.
+- **Authorization**: every source, corpus record, and conversation is owner-scoped at the query level; cross-user access resolves to 404.
 - **Log hygiene**: a recursive redaction filter strips password/token/secret/cookie fields from every log record before emission.
 
 ### Observability
