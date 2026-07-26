@@ -14,13 +14,13 @@ keeps two generation ports alive that describe one capability.
 
 ## Goals
 
-- [ ] The reader's Ask and Teach panels run entirely on `/api/conversations`; a Q&A
+- [x] The reader's Ask and Teach panels run entirely on `/api/conversations`; a Q&A
       thread survives a page reload.
-- [ ] A reader can find, resume, rename, and delete this book's conversations from
+- [x] A reader can find, resume, rename, and delete this book's conversations from
       the dock — the management surface finding 7 says is missing.
-- [ ] The legacy compatibility surface is deleted outright, with no behavior lost
+- [x] The legacy compatibility surface is deleted outright, with no behavior lost
       that a test still needs to protect.
-- [ ] One `GenerationPort` replaces the answer/teaching pair, and the turn service
+- [x] One `GenerationPort` replaces the answer/teaching pair, and the turn service
       stops branching on mode to pick a port.
 
 ## Out of Scope
@@ -227,8 +227,8 @@ RFC-006 assigns to this cycle and it rides the same component.
 
 ## Success Criteria
 
-- [ ] A question asked in the reader is still there after a reload.
-- [ ] This book's conversations can be listed, resumed, renamed, and deleted from the dock.
-- [ ] The legacy routes 404 and their modules are gone from the tree.
-- [ ] `TeachingGenerationPort` no longer exists and the turn service has no port-selection branch.
-- [ ] `make check` is green, with the legacy wire-freeze tests replaced — not merely deleted — by equivalent assertions on the unified surface.
+- [x] A question asked in the reader is still there after a reload.
+- [x] This book's conversations can be listed, resumed, renamed, and deleted from the dock.
+- [x] The legacy routes 404 and their modules are gone from the tree.
+- [x] `TeachingGenerationPort` no longer exists and the turn service has no port-selection branch.
+- [x] `make check` is green, with the legacy wire-freeze tests replaced — not merely deleted — by equivalent assertions on the unified surface. One local-only exception, unrelated to this cycle: `test_eval_retrieval_metrics.py::...::test_metrics_meet_thresholds` fails on this machine from HNSW recall variance and passes in CI.
