@@ -24,6 +24,10 @@ level:
 - ``POST   /api/conversations/{id}/turns/stream`` — the full UI Message Stream
   frame sequence, ``not_found_in_scope`` on the status frame, and a mid-stream
   failure rendered as the error frame (CONV-21).
+- Either shape of turn — buffered or streamed — projects a book citation as
+  exactly the citation fields, and a note citation with the origin and identity a
+  client renders distinctly, gated by the conversation's stored notes choice
+  (NL-03).
 
 Seeding mirrors ``test_web_teaching``: sources and corpus through the real
 repositories on the shared rolled-back ``db_conn``.
@@ -47,6 +51,7 @@ from app.domain.entities import (
     MODE_TEACH,
     NOT_FOUND_IN_SCOPE,
     NOT_FOUND_IN_SOURCE,
+    AnswerCompleted,
     AnswerTextDelta,
     Conversation,
     ConversationTurn,
@@ -54,6 +59,7 @@ from app.domain.entities import (
     Evidence,
     GeneratedAnswer,
     HistoryTurn,
+    Note,
     ParsedSection,
     SectionChunk,
     Source,
@@ -63,6 +69,7 @@ from app.infrastructure.db.repositories import (
     SqlAlchemyConversationTurnRepository,
     SqlAlchemyCorpusRepository,
     SqlAlchemyEmbeddingIndexRepository,
+    SqlAlchemyNoteRepository,
     SqlAlchemySourceRepository,
 )
 from app.infrastructure.embeddings import DeterministicEmbeddingAdapter
@@ -274,6 +281,24 @@ def _seed_turn(
     return SqlAlchemyConversationTurnRepository(db_conn).add(turn)
 
 
+def _seed_note(db_conn: Connection, user_id: str, *, title: str, body: str) -> UUID:
+    """Insert an embedded note for ``user_id`` (its search_vector is trigger-fed)."""
+    repo = SqlAlchemyNoteRepository(db_conn)
+    now = datetime.now(UTC)
+    note = Note(
+        id=uuid4(),
+        user_id=UUID(user_id),
+        title=title,
+        body_markdown=body,
+        created_at=now,
+        updated_at=now,
+    )
+    repo.add(note)
+    adapter = DeterministicEmbeddingAdapter()
+    repo.set_embedding(note.id, embedding=adapter.embed_documents([body])[0], model=adapter.model)
+    return note.id
+
+
 _CONVERSATION_FIELDS = {
     "id",
     "source_id",
@@ -282,6 +307,19 @@ _CONVERSATION_FIELDS = {
     "include_notes",
     "created_at",
     "updated_at",
+}
+
+#: Every field a *book* citation projects, and no more. A note citation adds three
+#: (``origin``/``note_id``/``note_title``); a book one must keep exactly these, so a
+#: client written against book citations never sees the projection widen under it.
+_CITATION_KEYS = {
+    "chunk_id",
+    "source_id",
+    "section_path",
+    "anchor",
+    "page_span",
+    "snippet",
+    "score",
 }
 
 
@@ -1077,6 +1115,11 @@ def test_post_turn_in_scoped_conversation_reports_not_found_in_scope(
     assert body["citations"] == []
     assert body["evidence_count"] == 0
 
+    # The verdict is what was stored, not a wording the response invented: reading
+    # the conversation back returns the same precise value.
+    read = auth_client.get(f"/api/conversations/{conversation.id}")
+    assert read.json()["turns"][0]["answer_status"] == NOT_FOUND_IN_SCOPE
+
 
 def test_scoped_turn_never_cites_evidence_outside_its_scope(
     auth_client: TestClient, db_conn: Connection
@@ -1208,6 +1251,36 @@ def test_post_turn_blank_and_over_long_messages_return_422(
     assert oversize.status_code == 422, oversize.text
 
 
+def test_post_turn_normalizes_the_message_at_and_within_the_bound(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # CONV-20: the bound is inclusive, and it is the *trimmed* message that is
+    # measured and stored — so padding a message neither costs a reader their turn
+    # nor rides along into the history a later turn is generated from.
+    from app.core.config import get_settings
+
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "turn-normalize@example.com")
+    conversation = _seed_conversation(db_conn, UUID(source_id))
+    at_bound = "a" * get_settings().conversation_message_max_chars
+
+    padded = _post_turn(
+        auth_client,
+        conversation.id,
+        {"message": "  photosynthesis sunlight  ", "mode": MODE_ANSWER},
+        csrf=csrf,
+    )
+    exact = _post_turn(
+        auth_client, conversation.id, {"message": at_bound, "mode": MODE_ANSWER}, csrf=csrf
+    )
+
+    assert padded.status_code == 201, padded.text
+    assert padded.json()["message"] == "photosynthesis sunlight"
+    assert exact.status_code == 201, exact.text
+
+    read = auth_client.get(f"/api/conversations/{conversation.id}")
+    assert read.json()["turns"][0]["message"] == "photosynthesis sunlight"
+
+
 def test_teach_turn_in_whole_book_conversation_returns_409(
     auth_client: TestClient, db_conn: Connection
 ) -> None:
@@ -1295,8 +1368,15 @@ def test_post_turn_not_ready_source_returns_409(
     resp = _post_turn(
         auth_client, conversation.id, {"message": "hi", "mode": MODE_ANSWER}, csrf=csrf
     )
+    streamed = _turn_stream(
+        auth_client, conversation.id, {"message": "hi", "mode": MODE_ANSWER}, csrf=csrf
+    )
 
     assert resp.status_code == 409, resp.text
+    # The streaming sibling decides readiness before the response begins, so the
+    # client meets the same plain conflict rather than a stream that opens and dies.
+    assert streamed.status_code == 409, streamed.text
+    assert "start" not in streamed.text
 
 
 def test_post_turn_claiming_a_taken_index_returns_409(
@@ -1441,6 +1521,11 @@ def test_turn_stream_emits_the_full_frame_sequence_and_persists_the_turn(
     assert _PHOTO in delta["delta"]
     citations = next(p for p in parts if isinstance(p, dict) and p["type"] == "data-citations")
     assert {c["anchor"] for c in citations["data"]} <= {_ANCHOR, _OTHER_ANCHOR}
+    # A streamed book citation projects exactly the citation fields and nothing
+    # else — a stored id or checksum leaking into the frame would show up here.
+    for citation in citations["data"]:
+        assert set(citation) == _CITATION_KEYS
+        assert citation["source_id"] == source_id
     answer_status = next(
         p for p in parts if isinstance(p, dict) and p["type"] == "data-answer-status"
     )
@@ -1470,7 +1555,19 @@ def test_turn_stream_carries_not_found_in_scope_in_the_status_frame(
 
     assert resp.status_code == 200, resp.text
     parts = _parse_ui_stream(resp.text)
-    assert "text-delta" not in _part_types(parts)
+    # A miss still frames a complete response — it simply carries no answer text and
+    # nothing to cite, so a client renders the verdict rather than an empty answer.
+    assert _part_types(parts) == [
+        "start",
+        "text-start",
+        "text-end",
+        "data-citations",
+        "data-answer-status",
+        "finish",
+        "[DONE]",
+    ]
+    citations = next(p for p in parts if isinstance(p, dict) and p["type"] == "data-citations")
+    assert citations["data"] == []
     answer_status = next(
         p for p in parts if isinstance(p, dict) and p["type"] == "data-answer-status"
     )
@@ -1627,6 +1724,211 @@ def test_turn_endpoints_stay_synchronous_handlers() -> None:
 
     assert not inspect.iscoroutinefunction(post_conversation_turn_stream)
     assert not inspect.iscoroutinefunction(post_conversation_turn)
+
+
+# --- The conversation's notes choice reaches retrieval and the citations (NL-03) --
+
+
+class _CitingCapture:
+    """A generation port that cites everything it is given and remembers what that was.
+
+    The two facts a notes assertion needs are on opposite sides of generation: what
+    retrieval fused (visible only to the port) and what came back as a citation
+    (visible only on the wire). Citing every item joins them, so one request answers
+    both.
+    """
+
+    model = _MODEL
+
+    def __init__(self) -> None:
+        self.evidence_seen: list[Evidence] = []
+
+    def generate(
+        self,
+        *,
+        message: str,
+        mode: str,
+        evidence: Sequence[Evidence],
+        history: Sequence[HistoryTurn] = (),
+        target_section_path: tuple[str, ...] | None = None,
+    ) -> GeneratedAnswer:
+        self.evidence_seen = list(evidence)
+        return GeneratedAnswer(
+            text="a composed answer",
+            cited_chunk_ids=tuple(e.chunk_id for e in evidence),
+            model=_MODEL,
+            found=True,
+        )
+
+    def generate_stream(
+        self,
+        *,
+        message: str,
+        mode: str,
+        evidence: Sequence[Evidence],
+        history: Sequence[HistoryTurn] = (),
+        target_section_path: tuple[str, ...] | None = None,
+    ):
+        self.evidence_seen = list(evidence)
+        yield AnswerTextDelta(text="a composed answer")
+        yield AnswerCompleted(
+            answer=GeneratedAnswer(
+                text="a composed answer",
+                cited_chunk_ids=tuple(e.chunk_id for e in evidence),
+                model=_MODEL,
+                found=True,
+            )
+        )
+
+
+def _note_world(
+    client: TestClient, db_conn: Connection, email: str, *, note_title: str, note_body: str
+) -> tuple[str, str, UUID]:
+    """An owned embedded book plus one embedded note of the same reader."""
+    user_id = _register(client, email)
+    csrf = _csrf(client)
+    source_id = _persist_source(db_conn, user_id)
+    _seed_corpus(db_conn, source_id)
+    _embed_all(db_conn, source_id)
+    note_id = _seed_note(db_conn, user_id, title=note_title, body=note_body)
+    return str(source_id), csrf, note_id
+
+
+def test_turn_fuses_the_readers_note_and_cites_it_distinctly(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # NL-03: a conversation created with notes on reaches the generation port with
+    # the reader's own note among its evidence, and that note comes back as a
+    # citation the client can tell apart — while the book citations beside it keep
+    # exactly the fields they always had.
+    from app.infrastructure.web.dependencies import get_generation
+
+    source_id, csrf, note_id = _note_world(
+        auth_client,
+        db_conn,
+        "conv-note-on@example.com",
+        note_title="My Insight",
+        note_body="photosynthesis and sunlight energy fascinate me every single day",
+    )
+    conversation = _seed_conversation(
+        db_conn,
+        UUID(source_id),
+        scope=(),
+        target_anchor=None,
+        include_notes=True,
+    )
+
+    capture = _CitingCapture()
+    auth_client.app.dependency_overrides[get_generation] = lambda: capture
+    try:
+        resp = _post_turn(
+            auth_client,
+            conversation.id,
+            {"message": "photosynthesis sunlight energy", "mode": MODE_ANSWER},
+            csrf=csrf,
+        )
+    finally:
+        auth_client.app.dependency_overrides.pop(get_generation, None)
+
+    assert resp.status_code == 201, resp.text
+    assert "note" in [e.origin for e in capture.evidence_seen]
+
+    citations = resp.json()["citations"]
+    note_citations = [c for c in citations if c.get("origin") == "note"]
+    assert len(note_citations) == 1
+    assert note_citations[0]["note_id"] == str(note_id)
+    assert note_citations[0]["note_title"] == "My Insight"
+
+    book_citations = [c for c in citations if c.get("origin") != "note"]
+    assert book_citations, "the book is cited alongside the note"
+    for citation in book_citations:
+        assert set(citation) == _CITATION_KEYS
+
+
+def test_turn_in_a_notes_off_conversation_never_sees_a_note(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # NL-03: the choice stored on the conversation is the whole gate — with notes
+    # off, the same note that would otherwise rank never reaches the port and never
+    # appears as a citation.
+    from app.infrastructure.web.dependencies import get_generation
+
+    source_id, csrf, _ = _note_world(
+        auth_client,
+        db_conn,
+        "conv-note-off@example.com",
+        note_title="My Insight",
+        note_body="photosynthesis and sunlight energy fascinate me every single day",
+    )
+    conversation = _seed_conversation(
+        db_conn,
+        UUID(source_id),
+        scope=(),
+        target_anchor=None,
+        include_notes=False,
+    )
+
+    capture = _CitingCapture()
+    auth_client.app.dependency_overrides[get_generation] = lambda: capture
+    try:
+        resp = _post_turn(
+            auth_client,
+            conversation.id,
+            {"message": "photosynthesis sunlight energy", "mode": MODE_ANSWER},
+            csrf=csrf,
+        )
+    finally:
+        auth_client.app.dependency_overrides.pop(get_generation, None)
+
+    assert resp.status_code == 201, resp.text
+    assert "note" not in [e.origin for e in capture.evidence_seen]
+    assert all(c.get("origin") != "note" for c in resp.json()["citations"])
+
+
+def test_turn_stream_note_citation_carries_origin_and_note_identity(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # NL-03 (SSE half): the streamed data-citations frame distinguishes a note
+    # exactly as the JSON body does, so the two rendering paths cannot drift.
+    from app.infrastructure.web.dependencies import get_generation
+
+    source_id, csrf, note_id = _note_world(
+        auth_client,
+        db_conn,
+        "conv-note-stream@example.com",
+        note_title="Stream Note",
+        note_body="photosynthesis and sunlight energy delight me endlessly",
+    )
+    conversation = _seed_conversation(
+        db_conn,
+        UUID(source_id),
+        scope=(),
+        target_anchor=None,
+        include_notes=True,
+    )
+
+    auth_client.app.dependency_overrides[get_generation] = lambda: _CitingCapture()
+    try:
+        resp = _turn_stream(
+            auth_client,
+            conversation.id,
+            {"message": "photosynthesis sunlight energy", "mode": MODE_ANSWER},
+            csrf=csrf,
+        )
+    finally:
+        auth_client.app.dependency_overrides.pop(get_generation, None)
+
+    assert resp.status_code == 200, resp.text
+    parts = _parse_ui_stream(resp.text)
+    citations = next(p for p in parts if isinstance(p, dict) and p["type"] == "data-citations")[
+        "data"
+    ]
+    note_citations = [c for c in citations if c.get("origin") == "note"]
+    assert len(note_citations) == 1
+    assert note_citations[0]["note_id"] == str(note_id)
+    assert note_citations[0]["note_title"] == "Stream Note"
+    for citation in [c for c in citations if c.get("origin") != "note"]:
+        assert set(citation) == _CITATION_KEYS
 
 
 # --- Rate limit: one policy for the whole surface (CONV-22) --------------------
