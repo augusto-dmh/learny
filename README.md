@@ -198,7 +198,8 @@ Evaluation uses **golden fixtures**: a hand-authored EPUB is run through the *re
 | Retrieval | `POST /api/sources/{id}/retrieve` (raw hybrid evidence) |
 | Q&A | `POST /api/sources/{id}/questions` (cited answer) |
 | Teaching | `POST /api/teaching-sessions`, `GET /api/teaching-sessions/{id}`, `POST /api/teaching-sessions/{id}/turns`, `GET /api/sources/{id}/teaching-sessions` |
-| Streaming | `POST /api/sources/{id}/questions/stream`, `POST /api/teaching-sessions/{id}/turns/stream` (SSE, UI Message Stream) |
+| Conversations | `POST /api/conversations` (scope + notes choice), `GET /api/conversations` (`?source_id=`), `GET`/`PATCH`/`DELETE /api/conversations/{id}`, `POST /api/conversations/{id}/turns` (`mode: answer\|teach`) — the unified surface the Q&A and Teaching rows above are being folded into |
+| Streaming | `POST /api/sources/{id}/questions/stream`, `POST /api/teaching-sessions/{id}/turns/stream`, `POST /api/conversations/{id}/turns/stream` (SSE, UI Message Stream) |
 | Quizzes | `POST /api/sources/{id}/quiz/deck` (202, async), `GET /api/sources/{id}/quiz`, `GET /api/sources/{id}/quiz/export` (.apkg) |
 | Reviews | `GET /api/reviews/due` (cross-source), `POST /api/quiz-items/{id}/reviews` (FSRS grade), `POST /api/quiz-items/{id}/schedule-reset` |
 | Notes & highlights | `POST /api/notes`, `GET /api/notes` (`?tag=`), `GET`/`PATCH`/`DELETE /api/notes/{id}`, `GET /api/notes/{id}/backlinks`, `POST`/`GET /api/sources/{id}/highlights` |

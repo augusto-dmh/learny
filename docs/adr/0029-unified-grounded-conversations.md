@@ -109,6 +109,17 @@ re-points the panels; the frontend routes `/sources/[id]/ask` and
 only conversations with a teach target (`target_anchor` non-null), keeping
 ask-created conversations out of the old Teach panel.
 
+Retirement also converges the two generation ports. `AnswerGenerationPort` and
+`TeachingGenerationPort` describe the same capability with a differently named
+message parameter, a different argument order, and `history` optional on one and
+required on the other. The unified turn service pays for that gap three times: both
+generate paths branch on mode purely to rename an argument, reading the model
+identity forces a union return type, and the composition root hands the ask path a
+teaching generator it can never reach. Converging them is deliberately *not* done
+while both wires are frozen — these are contracts the compatibility adapters depend
+on. When the panels move, they become one `GenerationPort` whose target section path
+is optional and whose message parameter has one name, and both mode branches go.
+
 ### One rate-limit policy
 
 The unified mutating endpoints share a single conversations rate-limit policy

@@ -85,6 +85,15 @@ irreversible), do **not** attempt `alembic downgrade`. Instead restore the
 database from the last tested backup (see `backups.md`) — this is also the
 migration-failure trigger below.
 
+**Reversible but lossy — `0017_conversations`:** this one is a third case, so read
+it before downgrading past it. The downgrade restores the previous schema and every
+scoped conversation intact, but that schema cannot express a conversation without a
+teach target, so those rows are **deleted** with their turns and citations. After the
+release that ships 0017, every question a reader asks is such a row — so downgrading
+across it discards the ask history, while teaching sessions survive. It is documented
+in the migration's docstring and pinned by a test. If that history matters, restore
+from the last tested backup instead of downgrading.
+
 ## Corpus / index rollback caveat (AD-018)
 
 Re-ingestion replaces a source's canonical corpus **atomically with no
