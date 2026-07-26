@@ -22,6 +22,14 @@ _INSTRUMENT_VARS = (
     "LEARNY_SLOW_QUERY_STATEMENT_CHARS",
 )
 
+_CONVERSATION_VARS = (
+    "LEARNY_CONVERSATION_EVIDENCE_TOP_K",
+    "LEARNY_CONVERSATION_HISTORY_TURNS",
+    "LEARNY_CONVERSATION_MESSAGE_MAX_CHARS",
+    "LEARNY_CONVERSATION_SCOPE_MAX_ANCHORS",
+    "LEARNY_CONVERSATION_SCOPE_ANCHOR_MAX_CHARS",
+)
+
 
 def test_embedding_settings_defaults(monkeypatch) -> None:
     # Default provider is the offline deterministic adapter — CI needs no key.
@@ -259,18 +267,33 @@ def test_conversation_settings_defaults() -> None:
     assert settings.conversation_evidence_top_k == 8
     assert settings.conversation_history_turns == 6
     assert settings.conversation_message_max_chars == 2000
+    assert settings.conversation_scope_max_anchors == 100
+    assert settings.conversation_scope_anchor_max_chars == 512
 
 
 def test_conversation_settings_env_override(monkeypatch) -> None:
     monkeypatch.setenv("LEARNY_CONVERSATION_EVIDENCE_TOP_K", "5")
     monkeypatch.setenv("LEARNY_CONVERSATION_HISTORY_TURNS", "2")
     monkeypatch.setenv("LEARNY_CONVERSATION_MESSAGE_MAX_CHARS", "500")
+    monkeypatch.setenv("LEARNY_CONVERSATION_SCOPE_MAX_ANCHORS", "3")
+    monkeypatch.setenv("LEARNY_CONVERSATION_SCOPE_ANCHOR_MAX_CHARS", "40")
 
     settings = Settings(_env_file=None)
 
     assert settings.conversation_evidence_top_k == 5
     assert settings.conversation_history_turns == 2
     assert settings.conversation_message_max_chars == 500
+    assert settings.conversation_scope_max_anchors == 3
+    assert settings.conversation_scope_anchor_max_chars == 40
+
+
+def test_env_example_documents_the_conversation_contract() -> None:
+    # An operator tuning the unified surface reads its budgets off the contract:
+    # the evidence and history knobs, the message bound, and both scope caps.
+    contract = _ENV_EXAMPLE.read_text()
+
+    for name in _CONVERSATION_VARS:
+        assert f"\n{name}=" in contract, f"{name} is missing from .env.example"
 
 
 def test_deprecated_qa_and_teaching_knobs_still_validate(monkeypatch) -> None:

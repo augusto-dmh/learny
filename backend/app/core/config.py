@@ -169,10 +169,17 @@ class Settings(BaseSettings):
     # the ``top_k`` handed to scoped retrieval (keep ≤ ``retrieval_max_top_k``);
     # ``conversation_history_turns`` bounds the prior turns a generation port sees;
     # ``conversation_message_max_chars`` is the message length bound the web
-    # validator enforces.
+    # validator enforces. The two scope bounds cap the one field a client sizes
+    # itself: a scope is re-expanded against the corpus on every turn and is stored
+    # for the conversation's life, so an unbounded list would buy durable per-turn
+    # work with one request. ``conversation_scope_max_anchors`` caps how many
+    # anchors one conversation may name and ``conversation_scope_anchor_max_chars``
+    # how long each may be; both are enforced by the web validator.
     conversation_evidence_top_k: int = 8
     conversation_history_turns: int = 6
     conversation_message_max_chars: int = 2000
+    conversation_scope_max_anchors: int = 100
+    conversation_scope_anchor_max_chars: int = 512
 
     # Generation (ADR-0020) — the provider SDK and model names live only in the
     # answer/teaching adapters; these knobs stay LEARNY_-prefixed and never

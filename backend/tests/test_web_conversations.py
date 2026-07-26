@@ -376,6 +376,59 @@ def test_start_unresolvable_scope_anchor_returns_422_and_creates_nothing(
     assert listed.json() == []
 
 
+def test_start_over_long_scope_list_and_anchor_return_422_and_create_nothing(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # CONV-15: the scope is the one field whose size the client picks, and it is
+    # re-expanded against the corpus on every turn for the conversation's life — so
+    # both its length and each anchor's length are bounded by the server's settings,
+    # like ``message`` and ``title`` are, before the corpus is ever read.
+    from app.core.config import get_settings
+
+    settings = get_settings()
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "start-scopecap@example.com")
+
+    too_many = _start(
+        auth_client,
+        {
+            "source_id": source_id,
+            "scope_anchors": [_ANCHOR] * (settings.conversation_scope_max_anchors + 1),
+            "include_notes": False,
+        },
+        csrf=csrf,
+    )
+    too_long = _start(
+        auth_client,
+        {
+            "source_id": source_id,
+            "scope_anchors": ["a" * (settings.conversation_scope_anchor_max_chars + 1)],
+            "include_notes": False,
+        },
+        csrf=csrf,
+    )
+
+    assert too_many.status_code == 422, too_many.text
+    assert too_long.status_code == 422, too_long.text
+    assert auth_client.get("/api/conversations").json() == []
+
+
+def test_start_stores_a_repeated_scope_anchor_once(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # CONV-15: a repeated anchor is collapsed before it is stored, so the scope a
+    # client reads back is the set of sections it actually named.
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "start-scopedupe@example.com")
+
+    resp = _start(
+        auth_client,
+        {"source_id": source_id, "scope_anchors": [_ANCHOR, _ANCHOR], "include_notes": False},
+        csrf=csrf,
+    )
+
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["scope_anchors"] == [_ANCHOR]
+
+
 def test_start_missing_and_non_owned_source_return_identical_404(
     auth_client: TestClient, db_conn: Connection
 ) -> None:

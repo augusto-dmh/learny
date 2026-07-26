@@ -156,8 +156,10 @@ class StartConversation:
     resolve to a live section (alias-aware) or the whole start fails with
     ``InvalidConversationScope`` (422) having created nothing — a conversation that
     silently dropped part of its scope would promise a reader something it does not
-    enforce. The scope is stored exactly as given (order preserved, duplicates
-    kept); expansion is a per-turn concern.
+    enforce. The scope is stored in the order given, with repeats collapsed to their
+    first appearance: naming a section twice means the same thing as naming it once,
+    and the duplicate would otherwise be re-resolved on every turn forever.
+    Expansion is a per-turn concern.
 
     The teach target is snapshotted from the *scope head* — the first anchor the
     reader gave — so a scoped conversation can teach without re-reading the corpus
@@ -204,7 +206,10 @@ class StartConversation:
             raise SourceNotReady("Source is not ready for conversations.")
 
         given_title = normalize_title(title)
-        scope = tuple(scope_anchors)
+        # ``dict.fromkeys`` keeps the reader's order while collapsing repeats, so the
+        # per-turn expansion is linear in the sections asked for rather than in what
+        # the client happened to send.
+        scope = tuple(dict.fromkeys(scope_anchors))
         head = self._resolve_head(source_id, scope)
 
         now = self._clock.now()

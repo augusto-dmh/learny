@@ -640,6 +640,31 @@ def test_start_resolves_a_scope_anchor_through_its_alias() -> None:
     assert started.target_title == "Chapter 1"
 
 
+def test_start_collapses_repeated_scope_anchors_in_the_order_given() -> None:
+    # CONV-05: naming a section twice means what naming it once means. The scope is
+    # re-resolved on every turn for the conversation's life, so a repeat that
+    # survived the start would be paid for forever — and the reader's order still
+    # decides the head that becomes the teach target.
+    user, source, sources = _owned_world()
+    corpus = FakeCorpus(
+        _structure(
+            _section("ch1.xhtml", ("Chapter 1",), title="Chapter 1"),
+            _section("ch2.xhtml", ("Chapter 2",), title="Chapter 2"),
+        )
+    )
+    conversations = FakeConversationRepository(sources)
+
+    started = _start(sources=sources, corpus=corpus, conversations=conversations)(
+        user=user,
+        source_id=source.id,
+        scope_anchors=["ch2.xhtml", "ch1.xhtml", "ch2.xhtml"],
+        include_notes=False,
+    )
+
+    assert started.scope_anchors == ("ch2.xhtml", "ch1.xhtml")
+    assert started.target_anchor == "ch2.xhtml"
+
+
 def test_start_rejects_an_unresolvable_scope_anchor_and_creates_nothing() -> None:
     # CONV-05 AC2: any anchor that resolves to no section fails the whole start with
     # the 422-mapped error — a conversation must never silently drop part of its scope.

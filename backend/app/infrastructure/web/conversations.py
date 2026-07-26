@@ -99,22 +99,48 @@ def _bounded_title(value: str) -> str:
     return trimmed
 
 
+def _bounded_scope(anchors: list[str]) -> list[str]:
+    """Enforce the server's bounds on a requested scope (CONV-15).
+
+    A scope is the one field on this surface whose size the client chooses, and it
+    is not a per-request cost: every anchor is resolved against the corpus when the
+    conversation starts *and re-expanded on every turn for as long as it lives*, and
+    the list is stored. So it is bounded like ``message`` and ``title`` are — by
+    server-controlled settings rather than literals — in both directions: how many
+    anchors a conversation may name, and how long each may be.
+    """
+    settings = get_settings()
+    max_anchors = settings.conversation_scope_max_anchors
+    if len(anchors) > max_anchors:
+        raise ValueError(f"scope_anchors must contain at most {max_anchors} anchors")
+    max_chars = settings.conversation_scope_anchor_max_chars
+    if any(len(anchor) > max_chars for anchor in anchors):
+        raise ValueError(f"each scope anchor must be at most {max_chars} characters")
+    return anchors
+
+
 class StartConversationRequest(BaseModel):
     """Start-conversation request body (CONV-15).
 
     ``include_notes`` is deliberately declared **without a default**: ADR-0029 makes
     the notes choice explicit per conversation, so a client that omits it is asking
     the server to guess and gets a 422 instead. ``scope_anchors`` defaults to the
-    empty list, which is the one spelling of "the whole book"; whether each anchor
-    resolves to a live section is the service's decision (an unresolvable anchor →
-    ``InvalidConversationScope`` → 422). ``title`` is optional — absent or blank
-    means "name it for me" and the service applies its default.
+    empty list, which is the one spelling of "the whole book"; its size and the
+    length of each anchor are bounded here (see :func:`_bounded_scope`), while
+    whether each anchor resolves to a live section is the service's decision (an
+    unresolvable anchor → ``InvalidConversationScope`` → 422). ``title`` is optional
+    — absent or blank means "name it for me" and the service applies its default.
     """
 
     source_id: UUID
     scope_anchors: list[str] = Field(default_factory=list)
     include_notes: bool
     title: str | None = None
+
+    @field_validator("scope_anchors")
+    @classmethod
+    def _scope_bounds(cls, value: list[str]) -> list[str]:
+        return _bounded_scope(value)
 
     @field_validator("title")
     @classmethod
