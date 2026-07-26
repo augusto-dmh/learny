@@ -158,6 +158,48 @@ def rate_limit_teaching(request: Request) -> None:
         )
 
 
+def _route_template_key(request: Request) -> str:
+    """Build a limiter key from client IP + route *template*.
+
+    Same shape as :func:`_client_key` and the same ``KNOWN LIMITATION`` about the
+    client IP under the proxy, with one difference: the bucket is named by the
+    route as declared (``/api/conversations/{conversation_id}/turns``) rather than
+    as requested. On a surface whose paths interpolate an id, the concrete path
+    would mint a fresh budget per conversation — so a client that starts N
+    conversations would get N independent turn budgets against retrieval and
+    generation, which is the expensive thing the throttle exists to protect.
+    Falls back to the concrete path when no route matched (it cannot be reached
+    through a router, but a dependency should not assume its caller).
+    """
+    client = request.client.host if request.client else "unknown"
+    route = request.scope.get("route")
+    path = getattr(route, "path", None) or request.url.path
+    return f"{client}:{path}"
+
+
+def rate_limit_conversations(request: Request) -> None:
+    """FastAPI dependency: throttle the whole unified conversation surface (CONV-22).
+
+    Shares the same swappable limiter as ``rate_limit_auth`` (same ``KNOWN
+    LIMITATION`` under the proxy topology) but keys on the route *template* — see
+    :func:`_route_template_key`.
+
+    What ADR-0029's single dependency guarantees, exactly: start, rename, delete,
+    and both turn endpoints carry one policy, so there is **one limit value** to
+    reason about across the surface, and the turn budgets are shared across all of
+    one client's conversations rather than granted per conversation. It is not one
+    bucket for the whole surface: each route template still counts separately, so
+    renaming conversations does not spend the budget for asking questions.
+    """
+    allowed, retry_after = get_rate_limiter().hit(_route_template_key(request))
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many attempts. Please try again later.",
+            headers={"Retry-After": str(retry_after)},
+        )
+
+
 def rate_limit_quiz(request: Request) -> None:
     """FastAPI dependency: throttle deck generation + review submits; 429 when exceeded.
 

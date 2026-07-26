@@ -207,8 +207,8 @@ Ordering rationale: A is independent and gates every performance claim. B is the
 | Accept or amend this RFC | Augusto | NOT STARTED |
 | Run Cycle A via `learny-ship-cycle` | Augusto + Claude | DONE — cycle `v6-instrument` built on `feat/app-instrumentation`; ROADMAP has the v6 section |
 | Run Cycle B (heatmap artifact is the accepted spec) | Augusto + Claude | DONE — cycle `v6-page-unit`, PR #51 |
-| Draft ADR-0029 for acceptance before Cycle C | Claude | NOT STARTED |
-| Cycles C, D, E in order | Augusto + Claude | NOT STARTED |
+| Draft ADR-0029 for acceptance before Cycle C | Claude | DONE — `docs/adr/0029-unified-grounded-conversations.md`, ships with Cycle C (PR #52) |
+| Cycles C, D, E in order | Augusto + Claude | C DONE (PR #52); D, E NOT STARTED |
 | Decide RFC-005 resumption point after Cycle E (or earlier if this RFC pauses) | Augusto | NOT STARTED |
 
 ## Open Questions

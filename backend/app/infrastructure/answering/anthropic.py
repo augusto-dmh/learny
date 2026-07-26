@@ -236,41 +236,72 @@ class AnthropicAnswerAdapter(AnthropicAdapterBase):
     The buffered path calls ``messages.create`` (``max_tokens`` is far below the
     SDK's non-streaming guard) with no sampling or ``thinking`` params; the client
     is built lazily by the shared base so an injected fake needs no key/network.
+    Bounded prior turns, when a conversation supplies them, render exactly as the
+    teaching adapter renders them (shared helper) ahead of the current question.
     """
 
-    def generate(self, *, question: str, evidence: Sequence[Evidence]) -> GeneratedAnswer:
-        """Generate a cited answer grounded in ``evidence`` (single-shot call)."""
+    def _build_request(
+        self,
+        *,
+        question: str,
+        history: Sequence[HistoryTurn],
+        evidence: Sequence[Evidence],
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[UUID]]:
+        """Assemble the system prompt, the message list, and the chunk map.
+
+        Shared by the buffered and streaming paths so both send the byte-identical
+        request. Bounded prior turns render as alternating user/assistant messages
+        ahead of the current question — the same shape the teaching adapter uses, so
+        a follow-up in a conversation resolves against what was already said — and
+        this turn's evidence documents plus the question stay in the final user
+        message. With no history the request is exactly the single-shot ask it has
+        always been: the frozen ``ANSWER_SYSTEM_PROMPT``, one user message, and no
+        cache breakpoint anywhere.
+        """
         documents, chunk_ids = _build_documents(evidence)
+        messages = _build_history_messages(history)
+        messages.append(
+            {
+                "role": "user",
+                "content": [*documents, {"type": "text", "text": question}],
+            }
+        )
+        system = [{"type": "text", "text": ANSWER_SYSTEM_PROMPT}]
+        return system, messages, chunk_ids
+
+    def generate(
+        self,
+        *,
+        question: str,
+        evidence: Sequence[Evidence],
+        history: Sequence[HistoryTurn] = (),
+    ) -> GeneratedAnswer:
+        """Generate a cited answer grounded in ``evidence`` (single-shot call)."""
+        system, messages, chunk_ids = self._build_request(
+            question=question, history=history, evidence=evidence
+        )
         message = self._get_client().messages.create(
             model=self._model,
             max_tokens=self._max_tokens,
-            system=[{"type": "text", "text": ANSWER_SYSTEM_PROMPT}],
-            messages=[
-                {
-                    "role": "user",
-                    "content": [*documents, {"type": "text", "text": question}],
-                }
-            ],
+            system=system,
+            messages=messages,
         )
         answer = _parse_message(message, chunk_ids, model=self._model)
         _log_call(message, model=self._model, found=answer.found)
         return answer
 
     def generate_stream(
-        self, *, question: str, evidence: Sequence[Evidence]
+        self,
+        *,
+        question: str,
+        evidence: Sequence[Evidence],
+        history: Sequence[HistoryTurn] = (),
     ) -> Iterator[AnswerStreamEvent]:
         """Stream a cited answer: text deltas, then the authoritative completed event."""
-        documents, chunk_ids = _build_documents(evidence)
-        return self._run_stream(
-            system=[{"type": "text", "text": ANSWER_SYSTEM_PROMPT}],
-            messages=[
-                {
-                    "role": "user",
-                    "content": [*documents, {"type": "text", "text": question}],
-                }
-            ],
-            chunk_ids=chunk_ids,
+        system, messages, chunk_ids = self._build_request(
+            question=question, history=history, evidence=evidence
         )
+        return self._run_stream(system=system, messages=messages, chunk_ids=chunk_ids)
 
 
 class AnthropicTeachingAdapter(AnthropicAdapterBase):

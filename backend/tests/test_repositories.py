@@ -11,12 +11,15 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import Connection, func, insert, select, update
+from sqlalchemy import Connection, func, insert, select, text, update
 from sqlalchemy import delete as sa_delete
 from sqlalchemy.exc import IntegrityError
 
-from app.application.errors import TeachingTurnConflict
+from app.application.errors import ConversationTurnConflict
 from app.domain.entities import (
+    MODE_TEACH,
+    Conversation,
+    ConversationTurn,
     CorpusSectionRecord,
     Evidence,
     HistoryTurn,
@@ -29,19 +32,19 @@ from app.domain.entities import (
     PasswordCredential,
     SectionChunk,
     Source,
-    TeachingSession,
-    TeachingTurn,
     User,
 )
 from app.infrastructure.db.metadata import (
+    conversation_turns,
     corpus_blocks,
     corpus_chunks,
     corpus_documents,
     corpus_sections,
     sources,
-    teaching_turns,
 )
 from app.infrastructure.db.repositories import (
+    SqlAlchemyConversationRepository,
+    SqlAlchemyConversationTurnRepository,
     SqlAlchemyCorpusRepository,
     SqlAlchemyCredentialRepository,
     SqlAlchemyEmbeddingIndexRepository,
@@ -49,8 +52,6 @@ from app.infrastructure.db.repositories import (
     SqlAlchemyIngestionJobRepository,
     SqlAlchemySessionRepository,
     SqlAlchemySourceRepository,
-    SqlAlchemyTeachingSessionRepository,
-    SqlAlchemyTeachingTurnRepository,
     SqlAlchemyUserRepository,
 )
 from app.infrastructure.security.tokens import generate_token, hash_token
@@ -1377,11 +1378,14 @@ def _new_teaching_session(
     section_path: tuple[str, ...] = ("Chapter 1",),
     title: str = "Chapter 1",
     created_at: datetime | None = None,
-) -> TeachingSession:
+) -> Conversation:
     now = created_at or datetime.now(UTC)
-    return TeachingSession(
+    return Conversation(
         id=uuid4(),
         source_id=source_id,
+        title=title,
+        scope_anchors=(anchor,),
+        include_notes=False,
         target_anchor=anchor,
         target_section_path=section_path,
         target_title=title,
@@ -1392,13 +1396,14 @@ def _new_teaching_session(
 
 def _insert_turn(db_conn: Connection, session_id: UUID, turn_index: int) -> None:
     """Insert a minimal turn row so a session's turn_count is non-zero (B2 owns
-    the turn repository; this exercises only the count in ``list_for_source``)."""
+    the turn repository; this exercises only the count in the list reads)."""
     db_conn.execute(
-        insert(teaching_turns).values(
+        insert(conversation_turns).values(
             id=uuid4(),
-            session_id=session_id,
+            conversation_id=session_id,
             turn_index=turn_index,
             message="m",
+            mode="teach",
             answer_status="answered",
             answer_text="a",
             model="local-extractive",
@@ -1410,7 +1415,7 @@ def _insert_turn(db_conn: Connection, session_id: UUID, turn_index: int) -> None
 
 def test_teaching_session_add_and_get_by_id(db_conn: Connection) -> None:
     source = _persisted_source(db_conn, "teach-session-add@example.com")
-    repo = SqlAlchemyTeachingSessionRepository(db_conn)
+    repo = SqlAlchemyConversationRepository(db_conn)
 
     session = _new_teaching_session(
         source.id,
@@ -1433,7 +1438,7 @@ def test_teaching_session_add_and_get_by_id(db_conn: Connection) -> None:
 
 def test_teaching_session_list_for_source_is_newest_first(db_conn: Connection) -> None:
     source = _persisted_source(db_conn, "teach-session-order@example.com")
-    repo = SqlAlchemyTeachingSessionRepository(db_conn)
+    repo = SqlAlchemyConversationRepository(db_conn)
 
     base = datetime.now(UTC)
     older = _new_teaching_session(source.id, created_at=base)
@@ -1441,13 +1446,13 @@ def test_teaching_session_list_for_source_is_newest_first(db_conn: Connection) -
     repo.add(older)
     repo.add(newer)
 
-    listed = repo.list_for_source(source.id)
-    assert [s.session.id for s in listed] == [newer.id, older.id]
+    listed = repo.list_for_source_with_target(source.id)
+    assert [s.conversation.id for s in listed] == [newer.id, older.id]
 
 
 def test_teaching_session_list_includes_turn_count(db_conn: Connection) -> None:
     source = _persisted_source(db_conn, "teach-session-count@example.com")
-    repo = SqlAlchemyTeachingSessionRepository(db_conn)
+    repo = SqlAlchemyConversationRepository(db_conn)
 
     base = datetime.now(UTC)
     with_turns = _new_teaching_session(source.id, created_at=base + timedelta(minutes=1))
@@ -1457,7 +1462,9 @@ def test_teaching_session_list_includes_turn_count(db_conn: Connection) -> None:
     _insert_turn(db_conn, with_turns.id, 0)
     _insert_turn(db_conn, with_turns.id, 1)
 
-    summaries = {s.session.id: s.turn_count for s in repo.list_for_source(source.id)}
+    summaries = {
+        s.conversation.id: s.turn_count for s in repo.list_for_source_with_target(source.id)
+    }
     assert summaries[with_turns.id] == 2
     assert summaries[without_turns.id] == 0
 
@@ -1465,7 +1472,7 @@ def test_teaching_session_list_includes_turn_count(db_conn: Connection) -> None:
 def test_teaching_session_list_is_source_scoped(db_conn: Connection) -> None:
     source_a = _persisted_source(db_conn, "teach-session-a@example.com")
     source_b = _persisted_source(db_conn, "teach-session-b@example.com")
-    repo = SqlAlchemyTeachingSessionRepository(db_conn)
+    repo = SqlAlchemyConversationRepository(db_conn)
 
     a1 = _new_teaching_session(source_a.id)
     a2 = _new_teaching_session(source_a.id)
@@ -1473,18 +1480,245 @@ def test_teaching_session_list_is_source_scoped(db_conn: Connection) -> None:
     for session in (a1, a2, b1):
         repo.add(session)
 
-    a_ids = {s.session.id for s in repo.list_for_source(source_a.id)}
+    a_ids = {s.conversation.id for s in repo.list_for_source_with_target(source_a.id)}
     assert a_ids == {a1.id, a2.id}
     assert b1.id not in a_ids
-    assert [s.session.id for s in repo.list_for_source(source_b.id)] == [b1.id]
+    assert [s.conversation.id for s in repo.list_for_source_with_target(source_b.id)] == [b1.id]
+
+
+def _whole_book_conversation(source_id: UUID, *, title: str = "Ask", **overrides) -> Conversation:  # noqa: ANN003
+    """A conversation with no teach target — the shape the old Teach panel never made."""
+    now = overrides.pop("created_at", None) or datetime.now(UTC)
+    return Conversation(
+        id=uuid4(),
+        source_id=source_id,
+        title=title,
+        scope_anchors=(),
+        include_notes=True,
+        target_anchor=None,
+        target_section_path=None,
+        target_title=None,
+        created_at=now,
+        updated_at=overrides.pop("updated_at", None) or now,
+    )
+
+
+def _persisted_user_with_sources(db_conn: Connection, email: str, count: int) -> tuple[UUID, list]:
+    """One user owning ``count`` sources — the setup a cross-source list needs."""
+    user = _new_user(email)
+    SqlAlchemyUserRepository(db_conn).add(user)
+    sources_repo = SqlAlchemySourceRepository(db_conn)
+    owned = [
+        sources_repo.add(_new_source(user.id, object_key=f"sources/{user.id}/{uuid4()}.epub"))
+        for _ in range(count)
+    ]
+    return user.id, owned
+
+
+def test_conversation_list_for_source_excludes_targetless_conversations(
+    db_conn: Connection,
+) -> None:
+    # A conversation started without a teach target was never started from the Teach
+    # panel, so the panel's list must not surface it (ADR-0029 retirement plan).
+    source = _persisted_source(db_conn, "conv-target-filter@example.com")
+    repo = SqlAlchemyConversationRepository(db_conn)
+    targeted = repo.add(_new_teaching_session(source.id))
+    targetless = repo.add(_whole_book_conversation(source.id))
+
+    listed = [s.conversation.id for s in repo.list_for_source_with_target(source.id)]
+
+    assert listed == [targeted.id]
+    assert targetless.id not in listed
+
+
+def test_conversation_list_for_user_spans_sources_newest_activity_first(
+    db_conn: Connection,
+) -> None:
+    # The global list is ordered by activity, not creation: a conversation started
+    # first but answered last belongs at the top.
+    user_id, (source_a, source_b) = _persisted_user_with_sources(
+        db_conn, "conv-list-user@example.com", 2
+    )
+    repo = SqlAlchemyConversationRepository(db_conn)
+    base = datetime.now(UTC)
+    stale = repo.add(_new_teaching_session(source_a.id, created_at=base + timedelta(minutes=5)))
+    active = repo.add(
+        _whole_book_conversation(
+            source_b.id, created_at=base, updated_at=base + timedelta(minutes=10)
+        )
+    )
+
+    listed = repo.list_for_user(user_id)
+
+    assert [s.conversation.id for s in listed] == [active.id, stale.id]
+    # Each row names its own book and carries its own total, so a list needs no
+    # follow-up query per conversation.
+    assert {s.conversation.id: s.source_title for s in listed} == {
+        active.id: source_b.title,
+        stale.id: source_a.title,
+    }
+    assert all(s.turn_count == 0 for s in listed)
+
+
+def test_conversation_list_for_user_filters_by_source_and_excludes_other_owners(
+    db_conn: Connection,
+) -> None:
+    user_id, (source_a, source_b) = _persisted_user_with_sources(
+        db_conn, "conv-list-filter@example.com", 2
+    )
+    other_source = _persisted_source(db_conn, "conv-list-other@example.com")
+    repo = SqlAlchemyConversationRepository(db_conn)
+    mine_a = repo.add(_new_teaching_session(source_a.id))
+    mine_b = repo.add(_new_teaching_session(source_b.id))
+    theirs = repo.add(_new_teaching_session(other_source.id))
+
+    everything = {s.conversation.id for s in repo.list_for_user(user_id)}
+    narrowed = [s.conversation.id for s in repo.list_for_user(user_id, source_id=source_a.id)]
+
+    assert everything == {mine_a.id, mine_b.id}
+    # Another owner's conversation is unreachable through this query, not filtered
+    # out of its results afterwards.
+    assert theirs.id not in everything
+    assert narrowed == [mine_a.id]
+
+
+def test_conversation_list_for_user_counts_turns(db_conn: Connection) -> None:
+    user_id, (source,) = _persisted_user_with_sources(db_conn, "conv-list-count@example.com", 1)
+    repo = SqlAlchemyConversationRepository(db_conn)
+    conversation = repo.add(_new_teaching_session(source.id))
+    _insert_turn(db_conn, conversation.id, 0)
+    _insert_turn(db_conn, conversation.id, 1)
+
+    (summary,) = repo.list_for_user(user_id)
+
+    assert summary.turn_count == 2
+
+
+def test_conversation_rename_changes_title_and_bumps_activity(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "conv-rename@example.com")
+    repo = SqlAlchemyConversationRepository(db_conn)
+    conversation = repo.add(_new_teaching_session(source.id))
+    later = conversation.updated_at + timedelta(minutes=3)
+
+    renamed = repo.rename(conversation.id, "My own name", later)
+
+    assert renamed is not None
+    assert renamed.title == "My own name"
+    assert renamed.updated_at == later
+    assert repo.get_by_id(conversation.id).title == "My own name"
+    # Renaming something that is not there reports absence rather than inventing a row.
+    assert repo.rename(uuid4(), "ghost", later) is None
+
+
+def test_conversation_delete_removes_turns_and_reports_absence_the_second_time(
+    db_conn: Connection,
+) -> None:
+    source = _persisted_source(db_conn, "conv-delete@example.com")
+    repo = SqlAlchemyConversationRepository(db_conn)
+    turns = SqlAlchemyConversationTurnRepository(db_conn)
+    conversation = repo.add(_new_teaching_session(source.id))
+    turns.add(
+        _new_turn(
+            conversation.id,
+            turn_index=0,
+            citations=(_citation(source.id, anchor="a.xhtml", snippet="s", score=0.5),),
+        )
+    )
+
+    assert repo.delete(conversation.id) is True
+
+    assert repo.get_by_id(conversation.id) is None
+    # Turns and their citation snapshots go with the parent through the cascade.
+    assert turns.list_for_conversation(conversation.id) == []
+    assert (
+        db_conn.execute(
+            select(func.count())
+            .select_from(conversation_turns)
+            .where(conversation_turns.c.conversation_id == conversation.id)
+        ).scalar_one()
+        == 0
+    )
+    assert repo.delete(conversation.id) is False
+
+
+def test_conversation_touch_bumps_activity_without_touching_anything_else(
+    db_conn: Connection,
+) -> None:
+    # The bump a persisted turn earns: activity moves, the conversation itself does not.
+    source = _persisted_source(db_conn, "conv-touch@example.com")
+    repo = SqlAlchemyConversationRepository(db_conn)
+    conversation = repo.add(_new_teaching_session(source.id))
+    later = conversation.updated_at + timedelta(minutes=7)
+
+    repo.touch(conversation.id, later)
+
+    bumped = repo.get_by_id(conversation.id)
+    assert bumped.updated_at == later
+    assert bumped.created_at == conversation.created_at
+    assert (bumped.title, bumped.scope_anchors, bumped.include_notes) == (
+        conversation.title,
+        conversation.scope_anchors,
+        conversation.include_notes,
+    )
+
+
+def test_conversation_round_trips_a_whole_book_shape(db_conn: Connection) -> None:
+    # Empty scope and a wholly absent target survive the write/read round trip — the
+    # target trio must not read back as a target with no section path.
+    source = _persisted_source(db_conn, "conv-whole-book@example.com")
+    repo = SqlAlchemyConversationRepository(db_conn)
+    stored = repo.add(_whole_book_conversation(source.id, title="What is this book about?"))
+
+    fetched = repo.get_by_id(stored.id)
+
+    assert fetched == stored
+    assert fetched.scope_anchors == ()
+    assert (fetched.target_anchor, fetched.target_section_path, fetched.target_title) == (
+        None,
+        None,
+        None,
+    )
+    assert fetched.include_notes is True
+    # In SQL too, not just in Python: an absent section path is NULL rather than a
+    # JSON ``null`` literal, which reads back identically but is a different value to
+    # every query — including the all-or-nothing CHECK on the trio.
+    stored_path_is_null = db_conn.execute(
+        text("SELECT target_section_path IS NULL FROM conversations WHERE id = :id"),
+        {"id": stored.id},
+    ).scalar_one()
+    assert stored_path_is_null is True
+
+
+def test_conversation_round_trips_a_multi_anchor_scope_in_order(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "conv-multi-scope@example.com")
+    repo = SqlAlchemyConversationRepository(db_conn)
+    now = datetime.now(UTC)
+    stored = repo.add(
+        Conversation(
+            id=uuid4(),
+            source_id=source.id,
+            title="Two chapters",
+            # A deliberate order that is not sorted: the stored scope is the reader's
+            # own selection, not a normalized set.
+            scope_anchors=("ch5.xhtml", "ch2.xhtml"),
+            include_notes=False,
+            target_anchor="ch5.xhtml",
+            target_section_path=("Chapter 5",),
+            target_title="Chapter 5",
+            created_at=now,
+            updated_at=now,
+        )
+    )
+
+    assert repo.get_by_id(stored.id).scope_anchors == ("ch5.xhtml", "ch2.xhtml")
 
 
 # ---- Teaching turn repository (TEACH-07/14/17/20) -------------------------
 
 
-def _persisted_session(db_conn: Connection, source_id: UUID) -> TeachingSession:
+def _persisted_session(db_conn: Connection, source_id: UUID) -> Conversation:
     session = _new_teaching_session(source_id)
-    return SqlAlchemyTeachingSessionRepository(db_conn).add(session)
+    return SqlAlchemyConversationRepository(db_conn).add(session)
 
 
 def _citation(
@@ -1516,12 +1750,13 @@ def _new_turn(
     answer_text: str = "an answer",
     model: str = "local-extractive",
     citations: tuple[Evidence, ...] = (),
-) -> TeachingTurn:
-    return TeachingTurn(
+) -> ConversationTurn:
+    return ConversationTurn(
         id=uuid4(),
-        session_id=session_id,
+        conversation_id=session_id,
         turn_index=turn_index,
         message=message,
+        mode=MODE_TEACH,
         answer_status=answer_status,
         answer_text=answer_text,
         model=model,
@@ -1534,7 +1769,7 @@ def _new_turn(
 def test_teaching_turn_add_and_list_with_ranked_citations(db_conn: Connection) -> None:
     source = _persisted_source(db_conn, "teach-turn-cites@example.com")
     session = _persisted_session(db_conn, source.id)
-    repo = SqlAlchemyTeachingTurnRepository(db_conn)
+    repo = SqlAlchemyConversationTurnRepository(db_conn)
 
     # Two citations in a deliberate order — rank is their tuple position.
     first = _citation(source.id, anchor="ch.xhtml#a", snippet="alpha", score=0.5)
@@ -1548,7 +1783,7 @@ def test_teaching_turn_add_and_list_with_ranked_citations(db_conn: Connection) -
     turn = _new_turn(session.id, turn_index=0, citations=(first, second))
     repo.add(turn)
 
-    listed = repo.list_for_session(session.id)
+    listed = repo.list_for_conversation(session.id)
     assert len(listed) == 1
     got = listed[0]
     assert got.id == turn.id
@@ -1570,7 +1805,7 @@ def test_teaching_turn_list_orders_by_turn_index_and_persists_not_found(
 ) -> None:
     source = _persisted_source(db_conn, "teach-turn-order@example.com")
     session = _persisted_session(db_conn, source.id)
-    repo = SqlAlchemyTeachingTurnRepository(db_conn)
+    repo = SqlAlchemyConversationTurnRepository(db_conn)
 
     answered = _new_turn(
         session.id,
@@ -1589,7 +1824,7 @@ def test_teaching_turn_list_orders_by_turn_index_and_persists_not_found(
     repo.add(answered)
     repo.add(not_found)
 
-    listed = repo.list_for_session(session.id)
+    listed = repo.list_for_conversation(session.id)
     assert [t.turn_index for t in listed] == [0, 1]
     assert listed[0].answer_status == "not_found_in_source"
     assert listed[0].answer_text == ""
@@ -1603,7 +1838,7 @@ def test_teaching_turn_recent_history_counts_and_bounds(db_conn: Connection) -> 
     # answer_text) pairs oldest-first, without loading citation payloads.
     source = _persisted_source(db_conn, "teach-turn-history@example.com")
     session = _persisted_session(db_conn, source.id)
-    repo = SqlAlchemyTeachingTurnRepository(db_conn)
+    repo = SqlAlchemyConversationTurnRepository(db_conn)
 
     repo.add(
         _new_turn(
@@ -1642,10 +1877,10 @@ def test_teaching_turn_duplicate_index_raises_conflict(db_conn: Connection) -> N
     # TEACH-17: the (session_id, turn_index) unique makes the racing loser 409.
     source = _persisted_source(db_conn, "teach-turn-race@example.com")
     session = _persisted_session(db_conn, source.id)
-    repo = SqlAlchemyTeachingTurnRepository(db_conn)
+    repo = SqlAlchemyConversationTurnRepository(db_conn)
 
     repo.add(_new_turn(session.id, turn_index=0))
-    with pytest.raises(TeachingTurnConflict):
+    with pytest.raises(ConversationTurnConflict):
         repo.add(_new_turn(session.id, turn_index=0))
 
 
@@ -1681,7 +1916,7 @@ def test_teaching_turn_citations_survive_corpus_deletion(db_conn: Connection) ->
     live_chunk_id = db_conn.execute(select(corpus_chunks.c.id)).scalar_one()
 
     session = _persisted_session(db_conn, source.id)
-    repo = SqlAlchemyTeachingTurnRepository(db_conn)
+    repo = SqlAlchemyConversationTurnRepository(db_conn)
     citation = _citation(
         source.id,
         anchor="ch.xhtml",
@@ -1704,6 +1939,6 @@ def test_teaching_turn_citations_survive_corpus_deletion(db_conn: Connection) ->
     )
 
     # The citation snapshot is intact even though the live chunk is gone.
-    listed = repo.list_for_session(session.id)
+    listed = repo.list_for_conversation(session.id)
     assert len(listed) == 1
     assert listed[0].citations == (citation,)

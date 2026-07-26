@@ -1,13 +1,16 @@
 """Teaching router — owner-scoped teaching sessions over a ready source (Phase 8).
 
-Thin FastAPI adapter over the framework-free teaching services (assembled in
-``dependencies``). A signed-in owner starts a session anchored to a section of one
-of their ready sources, reads a session's full cited conversation, lists a
-source's sessions, and posts cited turns. The handlers own input validation (422)
-and let application errors propagate to the global handlers
-(``TeachingSessionNotFound`` → 404, ``SourceNotReady`` → 409,
-``InvalidTeachingTarget`` → 422, ``TeachingTargetGone`` → 409,
-``TeachingTurnConflict`` → 409, ``AnswerGenerationFailed`` → 502), mirroring the
+Thin FastAPI adapter over the compatibility services in
+``app/application/teaching.py``, which run the old teaching vocabulary on the
+unified conversation model (ADR-0029) — the wire below is frozen exactly as the
+current panel knows it, including the scoped-miss collapse the views apply. A
+signed-in owner starts a session anchored to a section of one of their ready
+sources, reads a session's full cited conversation, lists a source's sessions, and
+posts cited turns. The handlers own input validation (422) and let application
+errors propagate to the global handlers
+(``ConversationNotFound`` → 404, ``SourceNotReady`` → 409,
+``InvalidConversationScope`` → 422, ``ConversationTargetUnavailable`` → 409,
+``ConversationTurnConflict`` → 409, ``AnswerGenerationFailed`` → 502), mirroring the
 questions endpoint.
 
 Contract (also consumed by the Next.js proxy):
@@ -31,6 +34,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel, Field, field_validator
 
+from app.application.errors import ConversationNotFound
 from app.application.teaching import (
     ListTeachingSessions,
     PostTeachingTurn,
@@ -39,9 +43,9 @@ from app.application.teaching import (
 )
 from app.core.config import get_settings
 from app.domain.entities import (
-    TeachingSession,
-    TeachingSessionSummary,
-    TeachingTurn,
+    Conversation,
+    ConversationSummary,
+    ConversationTurn,
     User,
 )
 from app.infrastructure.web.csrf import enforce_csrf, enforce_origin
@@ -51,6 +55,10 @@ from app.infrastructure.web.dependencies import (
     get_post_teaching_turn,
     get_read_teaching_session,
     get_start_teaching_session,
+)
+from app.infrastructure.web.legacy_status import (
+    collapse_stream_status,
+    legacy_answer_status,
 )
 from app.infrastructure.web.rate_limit import rate_limit_teaching
 from app.infrastructure.web.retrieval import EvidenceView
@@ -69,7 +77,7 @@ class StartSessionRequest(BaseModel):
 
     ``target_anchor`` must be non-blank; whether it resolves to a section of the
     source's corpus is the service's decision (an unknown anchor →
-    ``InvalidTeachingTarget`` → 422). A missing/blank field or bad ``source_id``
+    ``InvalidConversationScope`` → 422). A missing/blank field or bad ``source_id``
     UUID is a Pydantic validation error → 422 before the service runs.
     """
 
@@ -107,19 +115,29 @@ class TurnRequest(BaseModel):
 
 
 class TargetView(BaseModel):
-    """The session's target section snapshot (TEACH-01)."""
+    """The session's target section snapshot (TEACH-01).
+
+    Only conversations carrying a teach target reach this view: the read service
+    reports a target-less conversation as absent, the per-source list filters them
+    out, and the turn adapter refuses one. Rather than trust those guarantees from
+    three other layers, the view reads the target through
+    ``Conversation.teach_target`` — the whole trio or nothing — and turns nothing
+    into the absence this surface already reports, so a fourth caller that forgets
+    the guard gets the same 404 as everyone else instead of a 500 from
+    dereferencing a null snapshot.
+    """
 
     anchor: str
     section_path: list[str]
     title: str
 
     @classmethod
-    def from_session(cls, session: TeachingSession) -> TargetView:
-        return cls(
-            anchor=session.target_anchor,
-            section_path=list(session.target_section_path),
-            title=session.target_title,
-        )
+    def from_session(cls, session: Conversation) -> TargetView:
+        target = session.teach_target
+        if target is None:
+            raise ConversationNotFound("Teaching session not found.")
+        anchor, section_path, title = target
+        return cls(anchor=anchor, section_path=list(section_path), title=title)
 
 
 class SessionView(BaseModel):
@@ -131,7 +149,7 @@ class SessionView(BaseModel):
     created_at: datetime
 
     @classmethod
-    def from_session(cls, session: TeachingSession) -> SessionView:
+    def from_session(cls, session: Conversation) -> SessionView:
         return cls(
             id=session.id,
             source_id=session.source_id,
@@ -145,7 +163,9 @@ class TurnView(BaseModel):
 
     ``answer_status`` is ``answered`` or ``not_found_in_source``; ``text`` is empty
     and ``citations`` empty for the not-found outcome (TEACH-14). ``citations``
-    reuses the retrieval endpoint's ``EvidenceView`` citation-only projection.
+    reuses the retrieval endpoint's ``EvidenceView`` citation-only projection. A
+    session is scoped to its target, so a miss is stored as ``not_found_in_scope``
+    and collapsed here to the one verdict this wire knows (AD-196).
     """
 
     turn_index: int
@@ -158,11 +178,11 @@ class TurnView(BaseModel):
     created_at: datetime
 
     @classmethod
-    def from_turn(cls, turn: TeachingTurn) -> TurnView:
+    def from_turn(cls, turn: ConversationTurn) -> TurnView:
         return cls(
             turn_index=turn.turn_index,
             message=turn.message,
-            answer_status=turn.answer_status,
+            answer_status=legacy_answer_status(turn.answer_status),
             text=turn.answer_text,
             citations=[EvidenceView.from_evidence(c) for c in turn.citations],
             evidence_count=turn.evidence_count,
@@ -185,7 +205,9 @@ class SessionDetailView(BaseModel):
     turns: list[TurnView]
 
     @classmethod
-    def from_session(cls, session: TeachingSession, turns: list[TeachingTurn]) -> SessionDetailView:
+    def from_session(
+        cls, session: Conversation, turns: list[ConversationTurn]
+    ) -> SessionDetailView:
         return cls(
             id=session.id,
             source_id=session.source_id,
@@ -204,11 +226,11 @@ class SessionSummaryView(BaseModel):
     turn_count: int
 
     @classmethod
-    def from_summary(cls, summary: TeachingSessionSummary) -> SessionSummaryView:
+    def from_summary(cls, summary: ConversationSummary) -> SessionSummaryView:
         return cls(
-            id=summary.session.id,
-            target=TargetView.from_session(summary.session),
-            created_at=summary.session.created_at,
+            id=summary.conversation.id,
+            target=TargetView.from_session(summary.conversation),
+            created_at=summary.conversation.created_at,
             turn_count=summary.turn_count,
         )
 
@@ -232,9 +254,9 @@ def start_teaching_session(
 ) -> SessionView:
     """Start a session anchored to a section of an owned ready source (201).
 
-    ``StartTeachingSession`` authorizes ownership (missing/non-owner →
+    ``StartConversation`` authorizes ownership (missing/non-owner →
     ``SourceNotFound`` → 404), enforces readiness (``SourceNotReady`` → 409), and
-    resolves the target anchor (unknown → ``InvalidTeachingTarget`` → 422).
+    resolves the target anchor (unknown → ``InvalidConversationScope`` → 422).
     """
     session = service(user=user, source_id=body.source_id, target_anchor=body.target_anchor)
     return SessionView.from_session(session)
@@ -268,13 +290,13 @@ def post_teaching_turn(
 ) -> TurnView:
     """Run and persist one cited teaching turn (201); 422/404/409/429/502 per ACs.
 
-    ``PostTeachingTurn`` resolves the session + owner (missing/non-owner →
-    ``TeachingSessionNotFound`` → 404), enforces readiness (``SourceNotReady`` →
-    409) and the target's continued existence (``TeachingTargetGone`` → 409),
+    ``PostConversationTurn`` resolves the session + owner (missing/non-owner →
+    ``ConversationNotFound`` → 404), enforces readiness (``SourceNotReady`` →
+    409) and the target's continued existence (``ConversationTargetUnavailable`` → 409),
     retrieves target-scoped evidence, and either composes a grounded answer or the
     explicit not-found outcome; a generation failure surfaces as
     ``AnswerGenerationFailed`` → 502 with nothing persisted, and a turn-index race
-    loses with ``TeachingTurnConflict`` → 409.
+    loses with ``ConversationTurnConflict`` → 409.
     """
     turn = service(
         user=user,
@@ -302,7 +324,7 @@ def post_teaching_turn_stream(
     """Stream one cited teaching turn as UI Message Stream v1 SSE frames (GEN-14).
 
     The SSE sibling of :func:`post_teaching_turn`: identical request schema and
-    auth/CSRF/Origin/rate-limit dependencies. ``PostTeachingTurn.stream`` runs all
+    auth/CSRF/Origin/rate-limit dependencies. ``PostConversationTurn.stream`` runs all
     guards **eagerly** here, so ownership (404), readiness / target-gone (409),
     validation (422) and rate-limit (429) surface as the same plain HTTP errors as
     the JSON endpoint before any SSE byte is sent. The turn is persisted only on
@@ -315,7 +337,7 @@ def post_teaching_turn_stream(
         message=body.message,
         include_notes=body.include_notes,
     )
-    return to_sse_response(events)
+    return to_sse_response(collapse_stream_status(events))
 
 
 @router.get("/api/sources/{source_id}/teaching-sessions")

@@ -28,6 +28,9 @@ from app.domain.entities import (
     ChapterIndexRow,
     ChapterSection,
     ChunkToEmbed,
+    Conversation,
+    ConversationSummary,
+    ConversationTurn,
     CorpusSectionRecord,
     CorpusStructure,
     DerivedNoteLink,
@@ -58,9 +61,6 @@ from app.domain.entities import (
     Source,
     SourceHighlight,
     StudyDay,
-    TeachingSession,
-    TeachingSessionSummary,
-    TeachingTurn,
     User,
 )
 
@@ -568,17 +568,30 @@ class AnswerGenerationPort(Protocol):
 
     model: str
 
-    def generate(self, *, question: str, evidence: Sequence[Evidence]) -> GeneratedAnswer:
+    def generate(
+        self,
+        *,
+        question: str,
+        evidence: Sequence[Evidence],
+        history: Sequence[HistoryTurn] = (),
+    ) -> GeneratedAnswer:
         """Generate an answer grounded in ``evidence``.
 
-        Returns ``found=False`` when the evidence cannot support an answer;
-        raises for operational failure (the application service maps any raise
-        to :class:`~app.application.errors.AnswerGenerationFailed`, QA-17).
+        ``history`` is the bounded prior conversation (oldest first) an answer turn
+        in a conversation carries, so a follow-up question resolves against what was
+        already said; it defaults to empty, which is the single-shot ask. Returns
+        ``found=False`` when the evidence cannot support an answer; raises for
+        operational failure (the application service maps any raise to
+        :class:`~app.application.errors.AnswerGenerationFailed`, QA-17).
         """
         ...
 
     def generate_stream(
-        self, *, question: str, evidence: Sequence[Evidence]
+        self,
+        *,
+        question: str,
+        evidence: Sequence[Evidence],
+        history: Sequence[HistoryTurn] = (),
     ) -> Iterator[AnswerStreamEvent]:
         """Stream the same answer as :meth:`generate`, incrementally (GEN-12).
 
@@ -592,50 +605,90 @@ class AnswerGenerationPort(Protocol):
 
 
 @runtime_checkable
-class TeachingSessionRepository(Protocol):
-    """Persistence port for :class:`~app.domain.entities.TeachingSession`.
+class ConversationRepository(Protocol):
+    """Persistence port for :class:`~app.domain.entities.Conversation`.
 
     Ownership is reachable only via the parent source (AD-014) — the application
     service does the authorization; these methods key on ids.
     """
 
-    def add(self, session: TeachingSession) -> TeachingSession:
-        """Persist a new teaching session."""
+    def add(self, conversation: Conversation) -> Conversation:
+        """Persist a new conversation."""
         ...
 
-    def get_by_id(self, session_id: UUID) -> TeachingSession | None:
-        """Return the session with ``session_id``, or ``None`` if absent."""
+    def get_by_id(self, conversation_id: UUID) -> Conversation | None:
+        """Return the conversation with ``conversation_id``, or ``None`` if absent."""
         ...
 
-    def list_for_source(self, source_id: UUID) -> list[TeachingSessionSummary]:
-        """Return ``source_id``'s sessions with turn counts, newest first (TEACH-21)."""
+    def list_for_user(
+        self, user_id: UUID, source_id: UUID | None = None
+    ) -> list[ConversationSummary]:
+        """Return ``user_id``'s conversations, newest activity first (CONV-06).
+
+        Spans every source the caller owns unless ``source_id`` narrows it. The
+        aggregate carries no ``user_id`` (AD-014), so ownership is a join through
+        ``sources`` in SQL — another user's conversations are unreachable, not
+        filtered out afterwards. Ordered by ``updated_at`` descending, so a
+        conversation rises the moment a turn lands in it.
+        """
+        ...
+
+    def list_for_source_with_target(self, source_id: UUID) -> list[ConversationSummary]:
+        """Return ``source_id``'s conversations that have a teach target (TEACH-21).
+
+        The legacy per-source teaching list: conversations with no target were never
+        started from the Teach panel, so they stay out of it until that panel retires.
+
+        One rule — *a teaching session is a conversation with a target* — applied in
+        three places, and this is the one that owns it: the filter stays in SQL
+        beside the legacy ``created_at`` ordering so the frozen list wire and its
+        query remain one unit to delete. ``ReadTeachingSession`` and
+        ``PostTeachingTurn`` in ``app/application/teaching.py`` apply the same rule to
+        a single conversation; all of them retire with the panel.
+        """
+        ...
+
+    def rename(self, conversation_id: UUID, title: str, now: datetime) -> Conversation | None:
+        """Retitle a conversation and bump ``updated_at``; ``None`` if absent (CONV-08)."""
+        ...
+
+    def delete(self, conversation_id: UUID) -> bool:
+        """Delete a conversation with its turns and citations; ``False`` if absent.
+
+        The cascade does the child rows, so a second delete reports absence rather
+        than leaving orphans behind (CONV-09).
+        """
+        ...
+
+    def touch(self, conversation_id: UUID, now: datetime) -> None:
+        """Set ``updated_at`` to ``now`` — the activity bump a persisted turn earns."""
         ...
 
 
 @runtime_checkable
-class TeachingTurnRepository(Protocol):
-    """Persistence port for :class:`~app.domain.entities.TeachingTurn`."""
+class ConversationTurnRepository(Protocol):
+    """Persistence port for :class:`~app.domain.entities.ConversationTurn`."""
 
-    def add(self, turn: TeachingTurn) -> TeachingTurn:
+    def add(self, turn: ConversationTurn) -> ConversationTurn:
         """Persist a turn and its citation snapshots (rank = tuple position).
 
-        Raises :class:`~app.application.errors.TeachingTurnConflict` when the
-        ``(session_id, turn_index)`` unique is violated — the turn-index race
+        Raises :class:`~app.application.errors.ConversationTurnConflict` when the
+        ``(conversation_id, turn_index)`` unique is violated — the turn-index race
         loser (TEACH-17).
         """
         ...
 
-    def list_for_session(self, session_id: UUID) -> list[TeachingTurn]:
-        """Return a session's turns by ``turn_index`` ascending, citations loaded."""
+    def list_for_conversation(self, conversation_id: UUID) -> list[ConversationTurn]:
+        """Return a conversation's turns by ``turn_index`` ascending, citations loaded."""
         ...
 
-    def recent_history(self, session_id: UUID, limit: int) -> tuple[int, list[HistoryTurn]]:
+    def recent_history(self, conversation_id: UUID, limit: int) -> tuple[int, list[HistoryTurn]]:
         """Return the turn count and the last ``limit`` history pairs, oldest first.
 
         The turn path needs only the total (the next ``turn_index``) and the
         bounded ``(message, response_text)`` context — never the citation
         payloads — so this read skips the citation join that
-        ``list_for_session`` pays for.
+        ``list_for_conversation`` pays for.
         """
         ...
 

@@ -127,7 +127,7 @@ class AnswerGenerationFailed(Exception):
     """
 
 
-class TeachingSessionNotFound(Exception):
+class ConversationNotFound(Exception):
     """A teaching session does not exist or is not the caller's (TEACH-06).
 
     Mirrors :class:`SourceNotFound`: a missing session and a non-owner (reached
@@ -136,25 +136,46 @@ class TeachingSessionNotFound(Exception):
     """
 
 
-class InvalidTeachingTarget(Exception):
-    """The requested ``target_anchor`` matches no section of the corpus (TEACH-04).
+class InvalidConversationScope(Exception):
+    """A requested scope anchor matches no section of the corpus (CONV-05, TEACH-04).
 
-    Raised by ``StartTeachingSession`` after ownership and readiness pass but the
-    anchor resolves to no section; the web layer maps it to 422.
+    Raised when starting a conversation after ownership and readiness pass but one
+    of the given scope anchors resolves to no section (alias-aware); the web layer
+    maps it to 422, so nothing is created. The legacy teaching start raises the
+    same error for its single target anchor.
     """
 
 
-class TeachingTargetGone(Exception):
-    """A session's ``target_anchor`` no longer resolves in the current corpus.
+class ConversationTargetUnavailable(Exception):
+    """A teach-mode turn has no resolvable target section (CONV-12, TEACH-16).
 
-    Re-ingestion (AD-018) can replace the corpus and drop the section the session
-    was anchored to; a new turn then has no target subtree to scope. Raised by
-    ``PostTeachingTurn``; the web layer maps it to 409 with a readable detail so
-    the reader starts a new session (TEACH-16).
+    Either the conversation is whole-book (nothing in particular to teach) or
+    re-ingestion (AD-018) replaced the corpus and dropped the section the target
+    was snapshotted from. Raised by the turn path before anything is persisted;
+    the web layer maps it to 409 with a readable detail so the reader picks a
+    section or starts a new conversation.
     """
 
 
-class TeachingTurnConflict(Exception):
+class InvalidConversationMode(Exception):
+    """A turn was asked for in a mode that does not exist (CONV-20, ADR-0029).
+
+    The turn service is a public application service with callers beyond the
+    router, so it names its own failure rather than trusting each caller to have
+    validated first; the web layer maps it to 422, the same answer a client gets
+    from the router's own mode validator.
+    """
+
+
+class InvalidConversationTitle(Exception):
+    """A conversation title is blank or longer than the allowed maximum (CONV-08).
+
+    Raised by the start and rename paths after trimming; the web layer maps it to
+    422 and the stored title is left untouched.
+    """
+
+
+class ConversationTurnConflict(Exception):
     """Two turns raced for one ``(session_id, turn_index)`` (TEACH-17).
 
     The turn repository translates the unique-index violation into this error;

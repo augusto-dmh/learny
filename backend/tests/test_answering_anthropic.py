@@ -157,6 +157,99 @@ def test_document_title_falls_back_to_anchor_when_section_path_empty() -> None:
     assert doc["title"] == item.anchor
 
 
+# --- Answer-mode conversation history (CONV-14, CONV-26 AC2) -------------------
+#
+# An answer turn inside a conversation carries the bounded prior turns, so a
+# follow-up resolves against what was already said. The assembled request is
+# asserted offline against the fake client: prior turns alternate ahead of the
+# current question, the system prompt and citation mechanics are untouched, and a
+# history-less call is byte-identical to the single-shot ask that shipped before.
+
+
+def test_answer_request_without_history_is_the_single_shot_ask() -> None:
+    evidence = [_evidence("alpha")]
+    adapter, client = _adapter(_FakeMessage([_FakeTextBlock("ok")]))
+
+    adapter.generate(question="What is X?", evidence=evidence)
+
+    call = client.messages.calls[0]
+    # Exactly the pre-history request: the frozen system prompt with no breakpoint,
+    # and one user message holding the documents (shape pinned above) + the question.
+    assert call["system"] == [{"type": "text", "text": ANSWER_SYSTEM_PROMPT}]
+    messages = call["messages"]
+    assert len(messages) == 1
+    assert messages[0]["role"] == "user"
+    content = messages[0]["content"]
+    assert [block["type"] for block in content] == ["document", "text"]
+    assert content[-1] == {"type": "text", "text": "What is X?"}
+    assert all("cache_control" not in block for block in content)
+
+
+def test_answer_request_renders_history_before_the_current_question() -> None:
+    evidence = [_evidence("alpha"), _evidence("beta")]
+    history = [
+        HistoryTurn(message="Who wrote it?", response_text="Kahneman did."),
+        HistoryTurn(message="When?", response_text="In 2011."),
+    ]
+    adapter, client = _adapter(_FakeMessage([_FakeTextBlock("ok")]))
+
+    adapter.generate(question="And why?", evidence=evidence, history=history)
+
+    call = client.messages.calls[0]
+    # The system prompt is untouched by history — no interpolation, no breakpoint.
+    assert call["system"] == [{"type": "text", "text": ANSWER_SYSTEM_PROMPT}]
+    messages = call["messages"]
+    assert messages[0] == {"role": "user", "content": "Who wrote it?"}
+    assert messages[1]["role"] == "assistant"
+    assert messages[1]["content"][0]["text"] == "Kahneman did."
+    assert messages[2] == {"role": "user", "content": "When?"}
+    assert messages[3]["content"][0]["text"] == "In 2011."
+    # This turn's evidence documents and the question stay in the final user turn,
+    # with the citation mechanics unchanged.
+    final = messages[4]
+    assert final["role"] == "user"
+    documents = final["content"][:-1]
+    assert len(documents) == len(evidence)
+    for doc, item in zip(documents, evidence, strict=True):
+        assert doc["type"] == "document"
+        assert doc["source"]["data"] == item.snippet
+        assert doc["citations"] == {"enabled": True}
+    assert final["content"][-1] == {"type": "text", "text": "And why?"}
+
+
+def test_only_the_latest_answer_history_block_carries_the_cache_breakpoint() -> None:
+    history = [
+        HistoryTurn(message="q1", response_text="a1"),
+        HistoryTurn(message="q2", response_text="a2"),
+    ]
+    adapter, client = _adapter(_FakeMessage([_FakeTextBlock("ok")]))
+
+    adapter.generate(question="now", evidence=[_evidence("alpha")], history=history)
+
+    messages = client.messages.calls[0]["messages"]
+    assert "cache_control" not in messages[1]["content"][0]
+    assert messages[3]["content"][0]["cache_control"] == _CACHE_1H
+
+
+def test_answer_stream_sends_the_same_request_as_the_buffered_path() -> None:
+    # Both paths assemble the request through one helper, so history reaches the
+    # streamed answer identically — no second, drifting assembly.
+    evidence = [_evidence("alpha")]
+    history = [HistoryTurn(message="q1", response_text="a1")]
+    buffered_adapter, buffered_client = _adapter(_FakeMessage([_FakeTextBlock("ok")]))
+    stream_adapter, stream_client = _streaming_answer_adapter(
+        _FakeStream(deltas=["ok"], final_message=_FakeMessage([_FakeTextBlock("ok")]))
+    )
+
+    buffered_adapter.generate(question="q", evidence=evidence, history=history)
+    list(stream_adapter.generate_stream(question="q", evidence=evidence, history=history))
+
+    buffered_call = buffered_client.messages.calls[0]
+    streamed_call = stream_client.messages.stream_calls[0]
+    assert streamed_call["system"] == buffered_call["system"]
+    assert streamed_call["messages"] == buffered_call["messages"]
+
+
 # --- Citation mapping (GEN-05) -------------------------------------------------
 
 

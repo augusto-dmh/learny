@@ -46,6 +46,7 @@ from __future__ import annotations
 from pgvector.sqlalchemy import VECTOR
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     Column,
     Date,
@@ -307,14 +308,16 @@ corpus_chunks = Table(
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
 )
 
-# --- Teaching sessions aggregate (Cycle 7 design §Data Models) -------------------
-# A session anchors a bounded conversation to one corpus section of a ready source;
-# its turns pair a user message with a generated response, and each turn's citations
-# are denormalized snapshots (no chunk FK) so history survives corpus re-ingestion
-# (AD-033/AD-018). Turn and citation ranks are position-unique within their parent.
+# --- Conversations aggregate (ADR-0029; originally the Cycle 7 teaching sessions) ---
+# A conversation is one grounded exchange about a book: ``scope_anchors`` says which
+# sections retrieval may see (``[]`` = the whole book) and each turn records the mode
+# that produced it. Its turns pair a user message with a generated response, and each
+# turn's citations are denormalized snapshots (no chunk FK) so history survives corpus
+# re-ingestion (AD-033/AD-018). Turn and citation ranks are position-unique within
+# their parent.
 
-teaching_sessions = Table(
-    "teaching_sessions",
+conversations = Table(
+    "conversations",
     metadata,
     Column("id", UUID(as_uuid=True), primary_key=True),
     Column(
@@ -324,48 +327,78 @@ teaching_sessions = Table(
         nullable=False,
         index=True,
     ),
-    # Target snapshot: the stable citation anchor plus its section path + title, so
-    # the target renders without re-reading the corpus (target resolve is per-turn).
-    Column("target_anchor", Text, nullable=False),
-    Column("target_section_path", JSONB, nullable=False),
-    Column("target_title", Text, nullable=False),
+    # Renameable display title; defaults to the target (scoped) or source (whole-book)
+    # title at creation, so a conversation is never nameless in a list.
+    Column("title", Text, nullable=False),
+    # The section anchors retrieval is confined to, in the order given. ``[]`` is the
+    # single spelling of "whole book" — never NULL (ADR-0029).
+    Column("scope_anchors", JSONB, nullable=False),
+    # One explicit per-conversation notes choice (supersedes AD-147's per-surface
+    # defaults on the unified surface).
+    Column("include_notes", Boolean, nullable=False),
+    # Target snapshot: the stable citation anchor plus its section path + title, so a
+    # teach target renders without re-reading the corpus (resolve is per-turn). NULL
+    # for a whole-book conversation, which teaches nothing in particular.
+    Column("target_anchor", Text, nullable=True),
+    # ``none_as_null`` so an absent target is SQL NULL rather than a JSON ``null``
+    # literal, which is what the two sibling columns store and what the all-or-nothing
+    # CHECK below reads. Without it the two spellings of "no target" disagree in SQL
+    # while reading back identically in Python.
+    Column("target_section_path", JSONB(none_as_null=True), nullable=True),
+    Column("target_title", Text, nullable=True),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    # The cross-source list reads newest activity first with ``id`` as the tiebreak
+    # that makes the order total. Every question asked writes a row here, so the
+    # ordering is indexed to match rather than left to a sort over the user's set.
+    Index("ix_conversations_updated_at_id", text("updated_at DESC"), text("id DESC")),
+    # The target snapshot is three columns or none. Before 0017 the trio was NOT NULL,
+    # which said so; now that a whole-book conversation may have no target, this is
+    # what keeps a half-populated row impossible — one would pass the legacy list's
+    # ``target_anchor IS NOT NULL`` filter and then fail to render.
+    CheckConstraint(
+        "(target_anchor IS NULL) = (target_section_path IS NULL) "
+        "AND (target_anchor IS NULL) = (target_title IS NULL)",
+        name="target_all_or_nothing",
+    ),
 )
 
-teaching_turns = Table(
-    "teaching_turns",
+conversation_turns = Table(
+    "conversation_turns",
     metadata,
     Column("id", UUID(as_uuid=True), primary_key=True),
     Column(
-        "session_id",
+        "conversation_id",
         UUID(as_uuid=True),
-        ForeignKey("teaching_sessions.id", ondelete="CASCADE"),
+        ForeignKey("conversations.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     ),
-    # Zero-based position within the session; the unique below is the turn-index
+    # Zero-based position within the conversation; the unique below is the turn-index
     # race arbiter (TEACH-17).
     Column("turn_index", Integer, nullable=False),
     Column("message", Text, nullable=False),
-    # answered | not_found_in_source (TEACH-07).
+    # answer | teach — how this turn was generated (ADR-0029). String constant, no
+    # enum, matching ``answer_status`` beside it.
+    Column("mode", Text, nullable=False),
+    # answered | not_found_in_source | not_found_in_scope (TEACH-07, ADR-0029).
     Column("answer_status", Text, nullable=False),
     # Empty for not-found turns, which are still persisted (TEACH-14).
     Column("answer_text", Text, nullable=False, server_default=""),
     Column("model", Text, nullable=False),
     Column("evidence_count", Integer, nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
-    UniqueConstraint("session_id", "turn_index"),
+    UniqueConstraint("conversation_id", "turn_index"),
 )
 
-teaching_turn_citations = Table(
-    "teaching_turn_citations",
+conversation_turn_citations = Table(
+    "conversation_turn_citations",
     metadata,
     Column("id", UUID(as_uuid=True), primary_key=True),
     Column(
         "turn_id",
         UUID(as_uuid=True),
-        ForeignKey("teaching_turns.id", ondelete="CASCADE"),
+        ForeignKey("conversation_turns.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     ),

@@ -83,7 +83,10 @@ def test_generation_invariants_hold_over_golden_book(db_conn: Connection) -> Non
 
     from app.core.config import get_settings
 
-    top_k = get_settings().qa_evidence_top_k
+    # The budget the answer path actually spends since ADR-0029 (the deprecated
+    # ``qa_evidence_top_k`` no longer governs it), so the comparison set here is the
+    # evidence the answer really saw.
+    top_k = get_settings().conversation_evidence_top_k
 
     for case in load_cases():
         result = answer(db_conn, user, source, case.question)

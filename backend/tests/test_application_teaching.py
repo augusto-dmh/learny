@@ -1,12 +1,20 @@
 """C-phase gate (unit) — teaching-session application services.
 
-Drives ``StartTeachingSession`` / ``ReadTeachingSession`` / ``ListTeachingSessions``
-(and, below, ``PostTeachingTurn``) over in-memory fakes and the real
-``AuthorizeOwnership`` primitive, so the orchestration is asserted in isolation.
+Drives the legacy teaching seam — ``StartTeachingSession`` /
+``ReadTeachingSession`` / ``ListTeachingSessions`` / ``PostTeachingTurn`` — over
+in-memory fakes and the real ``AuthorizeOwnership`` primitive, so the orchestration
+is asserted in isolation. Since ADR-0029 those adapters run on the unified
+conversation services, which the builders below compose for real (only the ports
+and repositories are doubles): every TEACH acceptance criterion is therefore
+asserted end-to-end through the seam the legacy router calls, and a drift between
+the unified mechanics and what teaching promises fails here.
+
 The teaching fakes live here rather than in ``tests/fakes.py`` because the turn
 path needs a retrieval double that records the ``anchors`` scope, which the Q&A
 fake deliberately does not (its ``calls`` shape is asserted verbatim by the Q&A
-suite). Each test maps to a TEACH acceptance criterion.
+suite). A session is scoped to its target, so a miss reaches this layer as
+``not_found_in_scope``; the legacy wire's collapse to ``not_found_in_source`` is
+the router's, asserted in ``test_web_teaching``.
 """
 
 from __future__ import annotations
@@ -15,20 +23,22 @@ import ast
 import inspect
 import logging
 from collections.abc import Iterator, Sequence
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
 
+from app.application import conversations as conversation_services
 from app.application import teaching as teaching_module
 from app.application.errors import (
     AnswerGenerationFailed,
-    InvalidTeachingTarget,
+    ConversationNotFound,
+    ConversationTargetUnavailable,
+    ConversationTurnConflict,
+    InvalidConversationScope,
     SourceNotFound,
     SourceNotReady,
-    TeachingSessionNotFound,
-    TeachingTargetGone,
-    TeachingTurnConflict,
 )
 from app.application.identity import AuthorizeOwnership
 from app.application.streaming import StreamDelta, StreamTurn
@@ -39,18 +49,20 @@ from app.application.teaching import (
     StartTeachingSession,
 )
 from app.domain.entities import (
+    MODE_TEACH,
+    NOT_FOUND_IN_SCOPE,
     AnswerCompleted,
     AnswerStreamEvent,
     AnswerTextDelta,
+    Conversation,
+    ConversationSummary,
+    ConversationTurn,
     CorpusStructure,
     Evidence,
     GeneratedAnswer,
     HistoryTurn,
     Source,
     StructureSection,
-    TeachingSession,
-    TeachingSessionSummary,
-    TeachingTurn,
     User,
 )
 from app.domain.ports import TeachingGenerationPort
@@ -133,10 +145,13 @@ def _session(
     target_anchor: str = "ch1.xhtml#core",
     target_section_path: tuple[str, ...] = ("Chapter 1",),
     created_at: datetime = _NOW,
-) -> TeachingSession:
-    return TeachingSession(
+) -> Conversation:
+    return Conversation(
         id=session_id or uuid4(),
         source_id=source_id,
+        title="Chapter 1",
+        scope_anchors=(target_anchor,),
+        include_notes=False,
         target_anchor=target_anchor,
         target_section_path=target_section_path,
         target_title="Chapter 1",
@@ -152,12 +167,13 @@ def _turn(
     status: str = "answered",
     text: str = "answer",
     citations: tuple[Evidence, ...] = (),
-) -> TeachingTurn:
-    return TeachingTurn(
+) -> ConversationTurn:
+    return ConversationTurn(
         id=uuid4(),
-        session_id=session_id,
+        conversation_id=session_id,
         turn_index=turn_index,
         message=f"message {turn_index}",
+        mode=MODE_TEACH,
         answer_status=status,
         answer_text=text,
         model=_MODEL,
@@ -206,60 +222,81 @@ class FakeCorpus:
         return tuple(expanded)
 
 
-class FakeTeachingSessionRepository:
-    """In-memory ``TeachingSessionRepository``: newest-first list with turn counts."""
+class FakeConversationRepository:
+    """In-memory ``ConversationRepository``: newest-first list with turn counts.
+
+    ``touched`` records the activity bumps a persisted turn makes (CONV-13).
+    """
 
     def __init__(self) -> None:
-        self._by_id: dict[UUID, TeachingSession] = {}
+        self._by_id: dict[UUID, Conversation] = {}
         self.turn_counts: dict[UUID, int] = {}
+        self.touched: list[UUID] = []
 
-    def add(self, session: TeachingSession) -> TeachingSession:
+    def touch(self, conversation_id: UUID, now: datetime) -> None:
+        self.touched.append(conversation_id)
+        stored = self._by_id.get(conversation_id)
+        if stored is not None:
+            self._by_id[conversation_id] = replace(stored, updated_at=now)
+
+    def add(self, session: Conversation) -> Conversation:
         self._by_id[session.id] = session
         return session
 
-    def get_by_id(self, session_id: UUID) -> TeachingSession | None:
+    def get_by_id(self, session_id: UUID) -> Conversation | None:
         return self._by_id.get(session_id)
 
-    def list_for_source(self, source_id: UUID) -> list[TeachingSessionSummary]:
-        owned = [s for s in self._by_id.values() if s.source_id == source_id]
+    def list_for_source_with_target(self, source_id: UUID) -> list[ConversationSummary]:
+        # Mirrors the repository contract: only conversations carrying a teach
+        # target belong to the legacy panel (CONV-23).
+        owned = [
+            s
+            for s in self._by_id.values()
+            if s.source_id == source_id and s.target_anchor is not None
+        ]
         owned.sort(key=lambda s: s.created_at, reverse=True)
         return [
-            TeachingSessionSummary(session=s, turn_count=self.turn_counts.get(s.id, 0))
+            ConversationSummary(
+                conversation=s,
+                turn_count=self.turn_counts.get(s.id, 0),
+                source_title="Book",
+            )
             for s in owned
         ]
 
 
-class FakeTeachingTurnRepository:
-    """In-memory ``TeachingTurnRepository``: turn_index-asc reads, unique-index guard.
+class FakeConversationTurnRepository:
+    """In-memory ``ConversationTurnRepository``: turn_index-asc reads, unique-index guard.
 
-    ``fail_add`` injects a ``TeachingTurnConflict`` on the next ``add`` regardless
+    ``fail_add`` injects a ``ConversationTurnConflict`` on the next ``add`` regardless
     of contents, modelling the turn-index race loser where a concurrent writer
-    already took the computed index after this caller's ``list_for_session`` read
+    already took the computed index after this caller's ``list_for_conversation`` read
     (TEACH-17) — a consistent in-memory fake cannot otherwise reproduce the race.
     """
 
     def __init__(self, *, fail_add: bool = False) -> None:
-        self._turns: list[TeachingTurn] = []
+        self._turns: list[ConversationTurn] = []
         self._fail_add = fail_add
         self.add_calls = 0
 
-    def add(self, turn: TeachingTurn) -> TeachingTurn:
+    def add(self, turn: ConversationTurn) -> ConversationTurn:
         self.add_calls += 1
         if self._fail_add or any(
-            t.session_id == turn.session_id and t.turn_index == turn.turn_index for t in self._turns
+            t.conversation_id == turn.conversation_id and t.turn_index == turn.turn_index
+            for t in self._turns
         ):
-            raise TeachingTurnConflict("Another turn was just added; retry.")
+            raise ConversationTurnConflict("Another turn was just added; retry.")
         self._turns.append(turn)
         return turn
 
-    def list_for_session(self, session_id: UUID) -> list[TeachingTurn]:
+    def list_for_conversation(self, session_id: UUID) -> list[ConversationTurn]:
         return sorted(
-            (t for t in self._turns if t.session_id == session_id),
+            (t for t in self._turns if t.conversation_id == session_id),
             key=lambda t: t.turn_index,
         )
 
     def recent_history(self, session_id: UUID, limit: int) -> tuple[int, list[HistoryTurn]]:
-        turns = self.list_for_session(session_id)
+        turns = self.list_for_conversation(session_id)
         history = [
             HistoryTurn(message=t.message, response_text=t.answer_text) for t in turns[-limit:]
         ]
@@ -387,30 +424,54 @@ class FakeTeachingGeneration:
 # --- service builders ----------------------------------------------------------
 
 
+class _AnswerPortMustNotRun:
+    """``AnswerGenerationPort`` double that fails if teaching ever reaches it.
+
+    The unified turn service composes both generation ports and dispatches on the
+    turn's mode; the legacy seam fixes that mode to ``teach``, so every call below
+    must land on the teaching port. This double turns a dispatch regression into a
+    failure instead of a silently different answer.
+    """
+
+    model = "answer-port-must-not-run"
+
+    def generate(self, **kwargs: object) -> GeneratedAnswer:
+        raise AssertionError("teaching must not reach the answer generation port")
+
+    def generate_stream(self, **kwargs: object) -> Iterator[AnswerStreamEvent]:
+        raise AssertionError("teaching must not reach the answer generation port")
+
+
 def _start(
     *, sources, corpus, sessions, ids=uuid4, clock: FakeClock | None = None
 ) -> StartTeachingSession:
     return StartTeachingSession(
-        sources=sources,
-        corpus=corpus,
-        sessions=sessions,
-        authorize=AuthorizeOwnership(),
-        clock=clock or FakeClock(_NOW),
-        ids=ids,
+        start=conversation_services.StartConversation(
+            sources=sources,
+            corpus=corpus,
+            conversations=sessions,
+            authorize=AuthorizeOwnership(),
+            clock=clock or FakeClock(_NOW),
+            ids=ids,
+        )
     )
 
 
 def _read(*, sessions, turns, sources) -> ReadTeachingSession:
     return ReadTeachingSession(
-        sessions=sessions,
-        turns=turns,
-        sources=sources,
-        authorize=AuthorizeOwnership(),
+        read=conversation_services.ReadConversation(
+            conversations=sessions,
+            turns=turns,
+            sources=sources,
+            authorize=AuthorizeOwnership(),
+        )
     )
 
 
 def _list(*, sources, sessions) -> ListTeachingSessions:
-    return ListTeachingSessions(sources=sources, sessions=sessions, authorize=AuthorizeOwnership())
+    return ListTeachingSessions(
+        sources=sources, conversations=sessions, authorize=AuthorizeOwnership()
+    )
 
 
 def _post(
@@ -427,21 +488,25 @@ def _post(
     history_turns: int = _HISTORY_TURNS,
 ) -> PostTeachingTurn:
     return PostTeachingTurn(
-        sessions=sessions,
-        turns=turns,
-        sources=sources,
-        corpus=corpus,
-        retrieve=retrieve,
-        generation=generation,
-        authorize=AuthorizeOwnership(),
-        clock=clock or FakeClock(_NOW),
-        ids=ids,
-        evidence_top_k=evidence_top_k,
-        history_turns=history_turns,
+        post=conversation_services.PostConversationTurn(
+            conversations=sessions,
+            turns=turns,
+            sources=sources,
+            corpus=corpus,
+            retrieve=retrieve,
+            answer_generation=_AnswerPortMustNotRun(),
+            teaching_generation=generation,
+            authorize=AuthorizeOwnership(),
+            clock=clock or FakeClock(_NOW),
+            ids=ids,
+            evidence_top_k=evidence_top_k,
+            history_turns=history_turns,
+        ),
+        conversations=sessions,
     )
 
 
-# --- StartTeachingSession (TEACH-01..04) ---------------------------------------
+# --- StartConversation (TEACH-01..04) ---------------------------------------
 
 
 def test_start_creates_session_with_target_snapshot() -> None:
@@ -455,7 +520,7 @@ def test_start_creates_session_with_target_snapshot() -> None:
     corpus = FakeCorpus(
         _structure(target, _section("ch2.xhtml", ("Chapter 2",), title="Chapter 2"))
     )
-    sessions = FakeTeachingSessionRepository()
+    sessions = FakeConversationRepository()
     session_id = uuid4()
     service = _start(sources=sources, corpus=corpus, sessions=sessions, ids=lambda: session_id)
 
@@ -470,16 +535,34 @@ def test_start_creates_session_with_target_snapshot() -> None:
     assert sessions.get_by_id(session_id) == result
 
 
+def test_start_scopes_the_session_to_its_target_with_notes_off() -> None:
+    # CONV-23: a teaching session is the conversation scoped to exactly its target,
+    # named after it, with notes off (AD-147) — the mapping the legacy start owns.
+    owner = _user()
+    sources = FakeSourceRepository()
+    source = _owned_source(owner.id)
+    sources.add(source)
+    target = _section("ch1.xhtml#core", ("Chapter 1", "Core Idea"), title="Core Idea")
+    sessions = FakeConversationRepository()
+    service = _start(sources=sources, corpus=FakeCorpus(_structure(target)), sessions=sessions)
+
+    result = service(user=owner, source_id=source.id, target_anchor="ch1.xhtml#core")
+
+    assert result.scope_anchors == ("ch1.xhtml#core",)
+    assert result.include_notes is False
+    assert result.title == "Core Idea"
+
+
 def test_start_missing_source_raises_source_not_found() -> None:
     # TEACH-02: a missing source collapses to 404 (no session created).
     sources = FakeSourceRepository()
-    sessions = FakeTeachingSessionRepository()
+    sessions = FakeConversationRepository()
     service = _start(sources=sources, corpus=FakeCorpus(_structure()), sessions=sessions)
 
     with pytest.raises(SourceNotFound):
         service(user=_user(), source_id=uuid4(), target_anchor="ch1.xhtml#core")
 
-    assert sessions.list_for_source(uuid4()) == []
+    assert sessions.list_for_source_with_target(uuid4()) == []
 
 
 def test_start_non_owner_raises_source_not_found() -> None:
@@ -491,7 +574,7 @@ def test_start_non_owner_raises_source_not_found() -> None:
     service = _start(
         sources=sources,
         corpus=FakeCorpus(_structure(_section("ch1.xhtml#core", ("Chapter 1",)))),
-        sessions=FakeTeachingSessionRepository(),
+        sessions=FakeConversationRepository(),
     )
 
     with pytest.raises(SourceNotFound):
@@ -505,7 +588,7 @@ def test_start_not_ready_raises_before_reading_corpus() -> None:
     source = _owned_source(owner.id, status="processing")
     sources.add(source)
     corpus = FakeCorpus(_structure(_section("ch1.xhtml#core", ("Chapter 1",))))
-    service = _start(sources=sources, corpus=corpus, sessions=FakeTeachingSessionRepository())
+    service = _start(sources=sources, corpus=corpus, sessions=FakeConversationRepository())
 
     with pytest.raises(SourceNotReady):
         service(user=owner, source_id=source.id, target_anchor="ch1.xhtml#core")
@@ -514,20 +597,20 @@ def test_start_not_ready_raises_before_reading_corpus() -> None:
 
 
 def test_start_unknown_anchor_raises_invalid_target() -> None:
-    # TEACH-04: an anchor matching no section → InvalidTeachingTarget (422).
+    # TEACH-04: an anchor matching no section → InvalidConversationScope (422).
     owner = _user()
     sources = FakeSourceRepository()
     source = _owned_source(owner.id)
     sources.add(source)
     corpus = FakeCorpus(_structure(_section("ch1.xhtml#core", ("Chapter 1",))))
-    service = _start(sources=sources, corpus=corpus, sessions=FakeTeachingSessionRepository())
+    service = _start(sources=sources, corpus=corpus, sessions=FakeConversationRepository())
 
-    with pytest.raises(InvalidTeachingTarget):
+    with pytest.raises(InvalidConversationScope):
         service(user=owner, source_id=source.id, target_anchor="does-not-exist")
 
 
 def test_start_no_corpus_raises_invalid_target() -> None:
-    # Edge: a ready source without a corpus resolves no section → InvalidTeachingTarget.
+    # Edge: a ready source without a corpus resolves no section → InvalidConversationScope.
     owner = _user()
     sources = FakeSourceRepository()
     source = _owned_source(owner.id)
@@ -535,14 +618,14 @@ def test_start_no_corpus_raises_invalid_target() -> None:
     service = _start(
         sources=sources,
         corpus=FakeCorpus(None),
-        sessions=FakeTeachingSessionRepository(),
+        sessions=FakeConversationRepository(),
     )
 
-    with pytest.raises(InvalidTeachingTarget):
+    with pytest.raises(InvalidConversationScope):
         service(user=owner, source_id=source.id, target_anchor="ch1.xhtml#core")
 
 
-# --- ReadTeachingSession (TEACH-05, 06) ----------------------------------------
+# --- ReadConversation (TEACH-05, 06) ----------------------------------------
 
 
 def test_read_returns_session_and_turns_ordered_with_citations() -> None:
@@ -553,13 +636,13 @@ def test_read_returns_session_and_turns_ordered_with_citations() -> None:
     source = _owned_source(owner.id)
     sources.add(source)
     session = _session(source.id)
-    sessions = FakeTeachingSessionRepository()
+    sessions = FakeConversationRepository()
     sessions.add(session)
     cite = _evidence(source.id, "cited passage", anchor="ch1.xhtml#core", score=0.9)
     t0 = _turn(session.id, 0, citations=(cite,))
     t1 = _turn(session.id, 1)
     t2 = _turn(session.id, 2)
-    turns = FakeTeachingTurnRepository()
+    turns = FakeConversationTurnRepository()
     turns.add(t2)
     turns.add(t0)
     turns.add(t1)
@@ -573,17 +656,97 @@ def test_read_returns_session_and_turns_ordered_with_citations() -> None:
     assert got_turns[0].citations == (cite,)
 
 
+def test_read_target_less_conversation_reports_not_found() -> None:
+    # CONV-23: a whole-book conversation is not a teaching session; reading one
+    # through the legacy endpoint is indistinguishable from it not existing (and can
+    # never reach the views, which require the target snapshot).
+    owner = _user()
+    sources = FakeSourceRepository()
+    source = _owned_source(owner.id)
+    sources.add(source)
+    sessions = FakeConversationRepository()
+    whole_book = replace(
+        _session(source.id),
+        scope_anchors=(),
+        target_anchor=None,
+        target_section_path=None,
+        target_title=None,
+    )
+    sessions.add(whole_book)
+    service = _read(sessions=sessions, turns=FakeConversationTurnRepository(), sources=sources)
+
+    with pytest.raises(ConversationNotFound):
+        service(user=owner, session_id=whole_book.id)
+
+
+def test_turn_on_a_target_less_conversation_reports_the_session_missing() -> None:
+    # CONV-23: the legacy surface's three paths agree about a conversation a question
+    # created — the read reports it absent, the list leaves it out, and a turn posted
+    # against it is absent too. Reporting "the teaching target no longer exists" for
+    # an id this surface says does not exist would be wrong twice over: it never had
+    # a target, and it is not a session.
+    owner = _user()
+    sources = FakeSourceRepository()
+    source = _owned_source(owner.id)
+    sources.add(source)
+    sessions = FakeConversationRepository()
+    whole_book = replace(
+        _session(source.id),
+        scope_anchors=(),
+        target_anchor=None,
+        target_section_path=None,
+        target_title=None,
+    )
+    sessions.add(whole_book)
+    turns = FakeConversationTurnRepository()
+    service = _post(
+        sessions=sessions,
+        turns=turns,
+        sources=sources,
+        corpus=FakeCorpus(_structure(_section("ch1.xhtml", ("Chapter 1",)))),
+        retrieve=FakeScopedRetrieveEvidence([]),
+        generation=FakeTeachingGeneration(),
+    )
+
+    with pytest.raises(ConversationNotFound):
+        service(user=owner, session_id=whole_book.id, message="teach me")
+    with pytest.raises(ConversationNotFound):
+        service.stream(user=owner, session_id=whole_book.id, message="teach me")
+
+    assert turns.add_calls == 0
+
+
+def test_turn_whose_target_disappeared_still_reports_the_target_gone() -> None:
+    # The other half: a session that *had* a target and lost it to a re-ingest is a
+    # different answer — it existed, so the panel is told the target is gone (409),
+    # not that the session never was.
+    target = _section("ch1.xhtml#core", ("Chapter 1", "Core"))
+    owner, source, session, sessions, sources = _seeded(target=target)
+    service = _post(
+        sessions=sessions,
+        turns=FakeConversationTurnRepository(),
+        sources=sources,
+        # A corpus replace dropped the taught section.
+        corpus=FakeCorpus(_structure(_section("ch9.xhtml", ("Chapter 9",)))),
+        retrieve=FakeScopedRetrieveEvidence([]),
+        generation=FakeTeachingGeneration(),
+    )
+
+    with pytest.raises(ConversationTargetUnavailable):
+        service(user=owner, session_id=session.id, message="teach me")
+
+
 def test_read_missing_session_raises_not_found() -> None:
-    # TEACH-06: an unknown session id → TeachingSessionNotFound (404).
+    # TEACH-06: an unknown session id → ConversationNotFound (404).
     owner = _user()
     sources = FakeSourceRepository()
     service = _read(
-        sessions=FakeTeachingSessionRepository(),
-        turns=FakeTeachingTurnRepository(),
+        sessions=FakeConversationRepository(),
+        turns=FakeConversationTurnRepository(),
         sources=sources,
     )
 
-    with pytest.raises(TeachingSessionNotFound):
+    with pytest.raises(ConversationNotFound):
         service(user=owner, session_id=uuid4())
 
 
@@ -594,15 +757,15 @@ def test_read_non_owner_raises_not_found() -> None:
     source = _owned_source(owner.id)
     sources.add(source)
     session = _session(source.id)
-    sessions = FakeTeachingSessionRepository()
+    sessions = FakeConversationRepository()
     sessions.add(session)
-    service = _read(sessions=sessions, turns=FakeTeachingTurnRepository(), sources=sources)
+    service = _read(sessions=sessions, turns=FakeConversationTurnRepository(), sources=sources)
 
-    with pytest.raises(TeachingSessionNotFound):
+    with pytest.raises(ConversationNotFound):
         service(user=other, session_id=session.id)
 
 
-# --- ListTeachingSessions (TEACH-21, TEACH-02 semantics) -----------------------
+# --- ListConversations (TEACH-21, TEACH-02 semantics) -----------------------
 
 
 def test_list_returns_only_owner_sessions_newest_first_with_counts() -> None:
@@ -614,7 +777,7 @@ def test_list_returns_only_owner_sessions_newest_first_with_counts() -> None:
     other_source = _owned_source(owner.id)
     sources.add(source)
     sources.add(other_source)
-    sessions = FakeTeachingSessionRepository()
+    sessions = FakeConversationRepository()
     older = _session(source.id, created_at=_NOW)
     newer = _session(source.id, created_at=_NOW + timedelta(hours=1))
     elsewhere = _session(other_source.id, created_at=_NOW + timedelta(hours=2))
@@ -627,13 +790,39 @@ def test_list_returns_only_owner_sessions_newest_first_with_counts() -> None:
 
     result = service(user=owner, source_id=source.id)
 
-    assert [s.session for s in result] == [newer, older]
+    assert [s.conversation for s in result] == [newer, older]
     assert [s.turn_count for s in result] == [5, 2]
+
+
+def test_list_excludes_conversations_without_a_teach_target() -> None:
+    # CONV-23: a whole-book conversation (what a question creates) is not a teaching
+    # session — the old panel never shows it.
+    owner = _user()
+    sources = FakeSourceRepository()
+    source = _owned_source(owner.id)
+    sources.add(source)
+    sessions = FakeConversationRepository()
+    taught = _session(source.id, created_at=_NOW)
+    sessions.add(taught)
+    sessions.add(
+        replace(
+            _session(source.id, created_at=_NOW + timedelta(hours=1)),
+            scope_anchors=(),
+            target_anchor=None,
+            target_section_path=None,
+            target_title=None,
+        )
+    )
+    service = _list(sources=sources, sessions=sessions)
+
+    result = service(user=owner, source_id=source.id)
+
+    assert [s.conversation for s in result] == [taught]
 
 
 def test_list_missing_source_raises_source_not_found() -> None:
     # TEACH-02 semantics: a missing source → 404.
-    service = _list(sources=FakeSourceRepository(), sessions=FakeTeachingSessionRepository())
+    service = _list(sources=FakeSourceRepository(), sessions=FakeConversationRepository())
 
     with pytest.raises(SourceNotFound):
         service(user=_user(), source_id=uuid4())
@@ -645,13 +834,13 @@ def test_list_non_owner_raises_source_not_found() -> None:
     sources = FakeSourceRepository()
     source = _owned_source(owner.id)
     sources.add(source)
-    service = _list(sources=sources, sessions=FakeTeachingSessionRepository())
+    service = _list(sources=sources, sessions=FakeConversationRepository())
 
     with pytest.raises(SourceNotFound):
         service(user=other, source_id=source.id)
 
 
-# --- PostTeachingTurn (TEACH-07, 09..17, 19, 24) -------------------------------
+# --- PostConversationTurn (TEACH-07, 09..17, 19, 24) -------------------------------
 
 
 def _seeded(*, target: StructureSection, status: str = "ready"):
@@ -665,7 +854,7 @@ def _seeded(*, target: StructureSection, status: str = "ready"):
         target_anchor=target.anchor,
         target_section_path=target.section_path,
     )
-    sessions = FakeTeachingSessionRepository()
+    sessions = FakeConversationRepository()
     sessions.add(session)
     return owner, source, session, sessions, sources
 
@@ -683,7 +872,7 @@ def test_turn_answered_returns_grounded_cited_turn() -> None:
             text="the answer", cited_chunk_ids=(e0.chunk_id,), model=_MODEL, found=True
         )
     )
-    turns = FakeTeachingTurnRepository()
+    turns = FakeConversationTurnRepository()
     turn_id = uuid4()
     service = _post(
         sessions=sessions,
@@ -706,7 +895,7 @@ def test_turn_answered_returns_grounded_cited_turn() -> None:
     assert result.evidence_count == 2
     assert result.model == _MODEL
     assert result.created_at == _NOW
-    assert turns.list_for_session(session.id) == [result]
+    assert turns.list_for_conversation(session.id) == [result]
 
 
 def test_turn_scopes_retrieval_to_target_and_descendants() -> None:
@@ -723,7 +912,7 @@ def test_turn_scopes_retrieval_to_target_and_descendants() -> None:
     )
     service = _post(
         sessions=sessions,
-        turns=FakeTeachingTurnRepository(),
+        turns=FakeConversationTurnRepository(),
         sources=sources,
         corpus=FakeCorpus(_structure(target, descendant, sibling)),
         retrieve=retrieve,
@@ -755,7 +944,7 @@ def test_turn_forwards_include_notes_to_retrieve() -> None:
     retrieve = FakeScopedRetrieveEvidence([e0])
     service = _post(
         sessions=sessions,
-        turns=FakeTeachingTurnRepository(),
+        turns=FakeConversationTurnRepository(),
         sources=sources,
         corpus=FakeCorpus(_structure(target)),
         retrieve=retrieve,
@@ -766,6 +955,9 @@ def test_turn_forwards_include_notes_to_retrieve() -> None:
     service.stream(user=owner, session_id=session.id, message="q", include_notes=False)
 
     assert [c["include_notes"] for c in retrieve.calls] == [True, False]
+    # AD-147: the request's choice overrides for that request only — the session's
+    # own stored choice (notes off, set at start) is never rewritten.
+    assert sessions.get_by_id(session.id).include_notes is False
 
 
 def test_turn_expands_subtree_retrieval_through_anchor_aliases() -> None:
@@ -785,7 +977,7 @@ def test_turn_expands_subtree_retrieval_through_anchor_aliases() -> None:
     )
     service = _post(
         sessions=sessions,
-        turns=FakeTeachingTurnRepository(),
+        turns=FakeConversationTurnRepository(),
         sources=sources,
         corpus=corpus,
         retrieve=retrieve,
@@ -807,7 +999,7 @@ def test_turn_passes_bounded_history_last_n() -> None:
     # (message, response_text) pairs — response empty for a not-found turn.
     target = _section("ch1.xhtml#core", ("Chapter 1",))
     owner, source, session, sessions, sources = _seeded(target=target)
-    turns = FakeTeachingTurnRepository()
+    turns = FakeConversationTurnRepository()
     turns.add(_turn(session.id, 0, text="r0"))
     turns.add(_turn(session.id, 1, status="not_found_in_source", text=""))
     turns.add(_turn(session.id, 2, text="r2"))
@@ -840,7 +1032,7 @@ def test_turn_history_bound_exceeds_stored_passes_all() -> None:
     # TEACH-12 edge: history_turns > stored turns → all prior turns passed.
     target = _section("ch1.xhtml#core", ("Chapter 1",))
     owner, source, session, sessions, sources = _seeded(target=target)
-    turns = FakeTeachingTurnRepository()
+    turns = FakeConversationTurnRepository()
     turns.add(_turn(session.id, 0, text="r0"))
     turns.add(_turn(session.id, 1, text="r1"))
     e0 = _evidence(source.id, "s", anchor="ch1.xhtml#core", score=0.9)
@@ -871,7 +1063,7 @@ def test_turn_empty_evidence_not_found_without_invoking_port() -> None:
     target = _section("ch1.xhtml#core", ("Chapter 1",))
     owner, source, session, sessions, sources = _seeded(target=target)
     generation = FakeTeachingGeneration(model=_MODEL)
-    turns = FakeTeachingTurnRepository()
+    turns = FakeConversationTurnRepository()
     service = _post(
         sessions=sessions,
         turns=turns,
@@ -884,13 +1076,13 @@ def test_turn_empty_evidence_not_found_without_invoking_port() -> None:
     result = service(user=owner, session_id=session.id, message="q")
 
     assert generation.calls == []
-    assert result.answer_status == "not_found_in_source"
+    assert result.answer_status == NOT_FOUND_IN_SCOPE
     assert result.answer_text == ""
     assert result.citations == ()
     assert result.evidence_count == 0
     assert result.model == _MODEL
     assert result.turn_index == 0
-    assert turns.list_for_session(session.id) == [result]
+    assert turns.list_for_conversation(session.id) == [result]
 
 
 def test_turn_ungrounded_citations_not_found_persisted() -> None:
@@ -904,7 +1096,7 @@ def test_turn_ungrounded_citations_not_found_persisted() -> None:
             text="ungrounded", cited_chunk_ids=(uuid4(),), model=_MODEL, found=True
         )
     )
-    turns = FakeTeachingTurnRepository()
+    turns = FakeConversationTurnRepository()
     service = _post(
         sessions=sessions,
         turns=turns,
@@ -916,11 +1108,11 @@ def test_turn_ungrounded_citations_not_found_persisted() -> None:
 
     result = service(user=owner, session_id=session.id, message="q")
 
-    assert result.answer_status == "not_found_in_source"
+    assert result.answer_status == NOT_FOUND_IN_SCOPE
     assert result.answer_text == ""
     assert result.citations == ()
     assert result.evidence_count == 1
-    assert turns.list_for_session(session.id)[0].citations == ()
+    assert turns.list_for_conversation(session.id)[0].citations == ()
 
 
 def test_turn_found_false_not_found() -> None:
@@ -933,7 +1125,7 @@ def test_turn_found_false_not_found() -> None:
     )
     service = _post(
         sessions=sessions,
-        turns=FakeTeachingTurnRepository(),
+        turns=FakeConversationTurnRepository(),
         sources=sources,
         corpus=FakeCorpus(_structure(target)),
         retrieve=FakeScopedRetrieveEvidence([e0]),
@@ -942,7 +1134,7 @@ def test_turn_found_false_not_found() -> None:
 
     result = service(user=owner, session_id=session.id, message="q")
 
-    assert result.answer_status == "not_found_in_source"
+    assert result.answer_status == NOT_FOUND_IN_SCOPE
     assert result.citations == ()
 
 
@@ -959,7 +1151,7 @@ def test_turn_blank_text_not_found() -> None:
     )
     service = _post(
         sessions=sessions,
-        turns=FakeTeachingTurnRepository(),
+        turns=FakeConversationTurnRepository(),
         sources=sources,
         corpus=FakeCorpus(_structure(target)),
         retrieve=FakeScopedRetrieveEvidence([e0]),
@@ -968,7 +1160,7 @@ def test_turn_blank_text_not_found() -> None:
 
     result = service(user=owner, session_id=session.id, message="q")
 
-    assert result.answer_status == "not_found_in_source"
+    assert result.answer_status == NOT_FOUND_IN_SCOPE
     assert result.citations == ()
 
 
@@ -978,7 +1170,7 @@ def test_turn_port_raise_maps_to_502_and_persists_nothing() -> None:
     owner, source, session, sessions, sources = _seeded(target=target)
     e0 = _evidence(source.id, "s", anchor="ch1.xhtml#core", score=0.9)
     boom = RuntimeError("provider exploded")
-    turns = FakeTeachingTurnRepository()
+    turns = FakeConversationTurnRepository()
     service = _post(
         sessions=sessions,
         turns=turns,
@@ -993,7 +1185,7 @@ def test_turn_port_raise_maps_to_502_and_persists_nothing() -> None:
 
     assert excinfo.value.__cause__ is boom
     assert turns.add_calls == 0
-    assert turns.list_for_session(session.id) == []
+    assert turns.list_for_conversation(session.id) == []
 
 
 def test_turn_source_not_ready_raises_before_retrieval() -> None:
@@ -1003,7 +1195,7 @@ def test_turn_source_not_ready_raises_before_retrieval() -> None:
     retrieve = FakeScopedRetrieveEvidence([])
     service = _post(
         sessions=sessions,
-        turns=FakeTeachingTurnRepository(),
+        turns=FakeConversationTurnRepository(),
         sources=sources,
         corpus=FakeCorpus(_structure(target)),
         retrieve=retrieve,
@@ -1018,20 +1210,20 @@ def test_turn_source_not_ready_raises_before_retrieval() -> None:
 
 def test_turn_target_gone_raises_before_retrieval() -> None:
     # TEACH-16: the stored target_anchor no longer resolves in the current corpus
-    # → TeachingTargetGone, no retrieval.
+    # → ConversationTargetUnavailable, no retrieval.
     target = _section("ch1.xhtml#core", ("Chapter 1",))
     owner, source, session, sessions, sources = _seeded(target=target)
     retrieve = FakeScopedRetrieveEvidence([])
     service = _post(
         sessions=sessions,
-        turns=FakeTeachingTurnRepository(),
+        turns=FakeConversationTurnRepository(),
         sources=sources,
         corpus=FakeCorpus(_structure(_section("ch9.xhtml", ("Chapter 9",)))),
         retrieve=retrieve,
         generation=FakeTeachingGeneration(),
     )
 
-    with pytest.raises(TeachingTargetGone):
+    with pytest.raises(ConversationTargetUnavailable):
         service(user=owner, session_id=session.id, message="q")
 
     assert retrieve.calls == []
@@ -1047,29 +1239,29 @@ def test_turn_index_conflict_propagates() -> None:
     )
     service = _post(
         sessions=sessions,
-        turns=FakeTeachingTurnRepository(fail_add=True),
+        turns=FakeConversationTurnRepository(fail_add=True),
         sources=sources,
         corpus=FakeCorpus(_structure(target)),
         retrieve=FakeScopedRetrieveEvidence([e0]),
         generation=generation,
     )
 
-    with pytest.raises(TeachingTurnConflict):
+    with pytest.raises(ConversationTurnConflict):
         service(user=owner, session_id=session.id, message="q")
 
 
 def test_turn_missing_session_raises_not_found() -> None:
     # Turn-path ownership resolution: an unknown session id → 404 (no disclosure).
     service = _post(
-        sessions=FakeTeachingSessionRepository(),
-        turns=FakeTeachingTurnRepository(),
+        sessions=FakeConversationRepository(),
+        turns=FakeConversationTurnRepository(),
         sources=FakeSourceRepository(),
         corpus=FakeCorpus(_structure()),
         retrieve=FakeScopedRetrieveEvidence([]),
         generation=FakeTeachingGeneration(),
     )
 
-    with pytest.raises(TeachingSessionNotFound):
+    with pytest.raises(ConversationNotFound):
         service(user=_user(), session_id=uuid4(), message="q")
 
 
@@ -1081,14 +1273,14 @@ def test_turn_non_owner_raises_not_found() -> None:
     retrieve = FakeScopedRetrieveEvidence([])
     service = _post(
         sessions=sessions,
-        turns=FakeTeachingTurnRepository(),
+        turns=FakeConversationTurnRepository(),
         sources=sources,
         corpus=FakeCorpus(_structure(target)),
         retrieve=retrieve,
         generation=FakeTeachingGeneration(),
     )
 
-    with pytest.raises(TeachingSessionNotFound):
+    with pytest.raises(ConversationNotFound):
         service(user=other, session_id=session.id, message="q")
 
     assert retrieve.calls == []
@@ -1112,28 +1304,30 @@ def test_turn_emits_one_content_free_completion_log(
     )
     service = _post(
         sessions=sessions,
-        turns=FakeTeachingTurnRepository(),
+        turns=FakeConversationTurnRepository(),
         sources=sources,
         corpus=FakeCorpus(_structure(target)),
         retrieve=FakeScopedRetrieveEvidence([e0]),
         generation=generation,
     )
 
-    with caplog.at_level(logging.INFO, logger="app.application.teaching"):
+    with caplog.at_level(logging.INFO, logger="app.application.conversations"):
         service(user=owner, session_id=session.id, message="my private message text")
 
-    records = [r for r in caplog.records if r.name == "app.application.teaching"]
+    records = [r for r in caplog.records if r.name == "app.application.conversations"]
     assert len(records) == 1
     message = records[0].getMessage()
     assert "outcome=answered" in message
-    assert f"session_id={session.id}" in message
+    assert f"conversation_id={session.id}" in message
+    assert f"source_id={source.id}" in message
+    assert f"mode={MODE_TEACH}" in message
     assert "evidence_count=1" in message
     assert f"model={_MODEL}" in message
     assert "my private message text" not in message
     assert "the secret answer body" not in message
 
 
-# --- PostTeachingTurn.stream (GEN-13, streaming half) --------------------------
+# --- PostConversationTurn.stream (GEN-13, streaming half) --------------------------
 #
 # Derived from the C3 Done-when: guards raise before any yield; the sentinel
 # hold-back suppresses a whole-reply sentinel; not-found surfaces via sentinel and
@@ -1145,15 +1339,15 @@ def test_turn_emits_one_content_free_completion_log(
 def test_stream_missing_session_raises_before_any_yield() -> None:
     retrieve = FakeScopedRetrieveEvidence([])
     service = _post(
-        sessions=FakeTeachingSessionRepository(),
-        turns=FakeTeachingTurnRepository(),
+        sessions=FakeConversationRepository(),
+        turns=FakeConversationTurnRepository(),
         sources=FakeSourceRepository(),
         corpus=FakeCorpus(_structure()),
         retrieve=retrieve,
         generation=FakeTeachingGeneration(),
     )
 
-    with pytest.raises(TeachingSessionNotFound):
+    with pytest.raises(ConversationNotFound):
         service.stream(user=_user(), session_id=uuid4(), message="q")
 
     assert retrieve.calls == []
@@ -1165,7 +1359,7 @@ def test_stream_not_ready_raises_before_any_yield() -> None:
     retrieve = FakeScopedRetrieveEvidence([])
     service = _post(
         sessions=sessions,
-        turns=FakeTeachingTurnRepository(),
+        turns=FakeConversationTurnRepository(),
         sources=sources,
         corpus=FakeCorpus(_structure(target)),
         retrieve=retrieve,
@@ -1184,14 +1378,14 @@ def test_stream_target_gone_raises_before_any_yield() -> None:
     retrieve = FakeScopedRetrieveEvidence([])
     service = _post(
         sessions=sessions,
-        turns=FakeTeachingTurnRepository(),
+        turns=FakeConversationTurnRepository(),
         sources=sources,
         corpus=FakeCorpus(_structure(_section("ch9.xhtml", ("Chapter 9",)))),
         retrieve=retrieve,
         generation=FakeTeachingGeneration(),
     )
 
-    with pytest.raises(TeachingTargetGone):
+    with pytest.raises(ConversationTargetUnavailable):
         service.stream(user=owner, session_id=session.id, message="q")
 
     assert retrieve.calls == []
@@ -1208,7 +1402,7 @@ def test_stream_answered_streams_deltas_and_persists_grounded_turn() -> None:
         ),
         deltas=["the ", "answer"],
     )
-    turns = FakeTeachingTurnRepository()
+    turns = FakeConversationTurnRepository()
     turn_id = uuid4()
     service = _post(
         sessions=sessions,
@@ -1234,14 +1428,14 @@ def test_stream_answered_streams_deltas_and_persists_grounded_turn() -> None:
     assert terminal.turn.evidence_count == 2
     assert terminal.turn.model == _MODEL
     # Persisted exactly once, on completion.
-    assert turns.list_for_session(session.id) == [terminal.turn]
+    assert turns.list_for_conversation(session.id) == [terminal.turn]
 
 
 def test_stream_empty_evidence_persists_not_found_without_invoking_port() -> None:
     target = _section("ch1.xhtml#core", ("Chapter 1",))
     owner, source, session, sessions, sources = _seeded(target=target)
     generation = FakeTeachingGeneration(model=_MODEL)
-    turns = FakeTeachingTurnRepository()
+    turns = FakeConversationTurnRepository()
     service = _post(
         sessions=sessions,
         turns=turns,
@@ -1257,11 +1451,11 @@ def test_stream_empty_evidence_persists_not_found_without_invoking_port() -> Non
     assert [e for e in events if isinstance(e, StreamDelta)] == []
     terminal = events[-1]
     assert isinstance(terminal, StreamTurn)
-    assert terminal.turn.answer_status == "not_found_in_source"
+    assert terminal.turn.answer_status == NOT_FOUND_IN_SCOPE
     assert terminal.turn.answer_text == ""
     assert terminal.turn.citations == ()
     assert terminal.turn.evidence_count == 0
-    assert turns.list_for_session(session.id) == [terminal.turn]
+    assert turns.list_for_conversation(session.id) == [terminal.turn]
 
 
 def test_stream_whole_reply_sentinel_persists_not_found() -> None:
@@ -1272,7 +1466,7 @@ def test_stream_whole_reply_sentinel_persists_not_found() -> None:
         answer=GeneratedAnswer(text="", cited_chunk_ids=(), model=_MODEL, found=False),
         deltas=["NOT_FOUND", "_IN_SOURCE"],
     )
-    turns = FakeTeachingTurnRepository()
+    turns = FakeConversationTurnRepository()
     service = _post(
         sessions=sessions,
         turns=turns,
@@ -1286,9 +1480,9 @@ def test_stream_whole_reply_sentinel_persists_not_found() -> None:
 
     assert [e for e in events if isinstance(e, StreamDelta)] == []
     terminal = events[-1]
-    assert terminal.turn.answer_status == "not_found_in_source"
+    assert terminal.turn.answer_status == NOT_FOUND_IN_SCOPE
     assert terminal.turn.citations == ()
-    assert turns.list_for_session(session.id)[0].answer_status == "not_found_in_source"
+    assert turns.list_for_conversation(session.id)[0].answer_status == NOT_FOUND_IN_SCOPE
 
 
 def test_stream_ungrounded_citations_persist_not_found() -> None:
@@ -1301,7 +1495,7 @@ def test_stream_ungrounded_citations_persist_not_found() -> None:
         ),
         deltas=["ungrounded prose"],
     )
-    turns = FakeTeachingTurnRepository()
+    turns = FakeConversationTurnRepository()
     service = _post(
         sessions=sessions,
         turns=turns,
@@ -1315,7 +1509,7 @@ def test_stream_ungrounded_citations_persist_not_found() -> None:
 
     assert [d.text for d in events if isinstance(d, StreamDelta)] == ["ungrounded prose"]
     terminal = events[-1]
-    assert terminal.turn.answer_status == "not_found_in_source"
+    assert terminal.turn.answer_status == NOT_FOUND_IN_SCOPE
     assert terminal.turn.answer_text == ""
     assert terminal.turn.citations == ()
     assert terminal.turn.evidence_count == 1
@@ -1331,7 +1525,7 @@ def test_stream_consumer_close_persists_nothing_and_closes_port_stream() -> None
         ),
         deltas=["hello world"],
     )
-    turns = FakeTeachingTurnRepository()
+    turns = FakeConversationTurnRepository()
     service = _post(
         sessions=sessions,
         turns=turns,
@@ -1349,7 +1543,7 @@ def test_stream_consumer_close_persists_nothing_and_closes_port_stream() -> None
 
     assert generation.stream_closed is True
     assert turns.add_calls == 0  # nothing persisted on mid-stream cancellation
-    assert turns.list_for_session(session.id) == []
+    assert turns.list_for_conversation(session.id) == []
 
 
 def test_stream_port_failure_wraps_and_persists_nothing() -> None:
@@ -1357,7 +1551,7 @@ def test_stream_port_failure_wraps_and_persists_nothing() -> None:
     owner, source, session, sessions, sources = _seeded(target=target)
     e0 = _evidence(source.id, "s", anchor="ch1.xhtml#core", score=0.9)
     boom = RuntimeError("provider exploded")
-    turns = FakeTeachingTurnRepository()
+    turns = FakeConversationTurnRepository()
     service = _post(
         sessions=sessions,
         turns=turns,
@@ -1372,7 +1566,7 @@ def test_stream_port_failure_wraps_and_persists_nothing() -> None:
 
     assert excinfo.value.__cause__ is boom
     assert turns.add_calls == 0
-    assert turns.list_for_session(session.id) == []
+    assert turns.list_for_conversation(session.id) == []
 
 
 def test_teaching_fake_conforms_to_the_teaching_port_protocol() -> None:

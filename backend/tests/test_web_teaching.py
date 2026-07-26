@@ -31,7 +31,10 @@ from fastapi.testclient import TestClient
 from sqlalchemy import Connection
 
 from app.domain.entities import (
+    MODE_TEACH,
     AnswerTextDelta,
+    Conversation,
+    ConversationTurn,
     CorpusSectionRecord,
     Evidence,
     GeneratedAnswer,
@@ -39,15 +42,13 @@ from app.domain.entities import (
     ParsedSection,
     SectionChunk,
     Source,
-    TeachingSession,
-    TeachingTurn,
 )
 from app.infrastructure.db.repositories import (
+    SqlAlchemyConversationRepository,
+    SqlAlchemyConversationTurnRepository,
     SqlAlchemyCorpusRepository,
     SqlAlchemyEmbeddingIndexRepository,
     SqlAlchemySourceRepository,
-    SqlAlchemyTeachingSessionRepository,
-    SqlAlchemyTeachingTurnRepository,
 )
 from app.infrastructure.embeddings import DeterministicEmbeddingAdapter
 from tests.conftest import TEST_ORIGIN, TEST_PASSWORD, requires_db
@@ -155,18 +156,21 @@ def _seed_session(
     *,
     anchor: str = _ANCHOR,
     created_at: datetime | None = None,
-) -> TeachingSession:
+) -> Conversation:
     now = created_at or datetime.now(UTC)
-    session = TeachingSession(
+    session = Conversation(
         id=uuid4(),
         source_id=source_id,
+        title=_TITLE,
+        scope_anchors=(anchor,),
+        include_notes=False,
         target_anchor=anchor,
         target_section_path=_SECTION_PATH,
         target_title=_TITLE,
         created_at=now,
         updated_at=now,
     )
-    return SqlAlchemyTeachingSessionRepository(db_conn).add(session)
+    return SqlAlchemyConversationRepository(db_conn).add(session)
 
 
 def _embed_all(db_conn: Connection, source_id: UUID) -> None:
@@ -197,19 +201,20 @@ def _post_turn(
 
 def _seed_turn(
     db_conn: Connection,
-    session: TeachingSession,
+    session: Conversation,
     *,
     turn_index: int,
     message: str,
     answer_status: str,
     answer_text: str,
     citations: tuple[Evidence, ...] = (),
-) -> TeachingTurn:
-    turn = TeachingTurn(
+) -> ConversationTurn:
+    turn = ConversationTurn(
         id=uuid4(),
-        session_id=session.id,
+        conversation_id=session.id,
         turn_index=turn_index,
         message=message,
+        mode=MODE_TEACH,
         answer_status=answer_status,
         answer_text=answer_text,
         model=_MODEL,
@@ -217,7 +222,7 @@ def _seed_turn(
         citations=citations,
         created_at=datetime.now(UTC),
     )
-    return SqlAlchemyTeachingTurnRepository(db_conn).add(turn)
+    return SqlAlchemyConversationTurnRepository(db_conn).add(turn)
 
 
 def _citation(source_id: UUID) -> Evidence:
@@ -290,6 +295,9 @@ def test_start_not_ready_source_returns_409(auth_client: TestClient, db_conn: Co
     resp = _start(auth_client, {"source_id": str(source_id), "target_anchor": _ANCHOR}, csrf=csrf)
 
     assert resp.status_code == 409, resp.text
+    # The detail is part of the frozen wire, not just the status: this is the
+    # teaching wording, not the unified surface's "conversations" phrasing.
+    assert resp.json() == {"detail": "Source is not ready for teaching."}
 
 
 # --- 422 unknown anchor / malformed body (TEACH-04) ----------------------------
@@ -302,6 +310,7 @@ def test_start_unknown_anchor_returns_422(auth_client: TestClient, db_conn: Conn
     resp = _start(auth_client, {"source_id": source_id, "target_anchor": "nope.xhtml"}, csrf=csrf)
 
     assert resp.status_code == 422, resp.text
+    assert resp.json() == {"detail": "Target does not exist in this source."}
 
 
 def test_start_missing_source_id_returns_422(auth_client: TestClient, db_conn: Connection) -> None:
@@ -431,6 +440,7 @@ def test_read_missing_and_non_owned_session_return_identical_404(
     assert non_owned.status_code == 404, non_owned.text
     assert missing.status_code == 404, missing.text
     assert non_owned.json() == missing.json()
+    assert missing.json() == {"detail": "Teaching session not found."}
 
 
 # --- 200 list (TEACH-21) -------------------------------------------------------
@@ -641,6 +651,29 @@ def test_post_turn_no_evidence_returns_201_not_found(
     assert body["model"] == _MODEL
 
 
+def test_post_turn_scoped_miss_is_stored_as_scope_verdict_and_collapsed_on_the_wire(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # CONV-23 / AD-196: a session is scoped to its target, so a miss is stored as
+    # ``not_found_in_scope`` — visible on the unified surface — while the legacy wire
+    # keeps saying ``not_found_in_source``, the only verdict it has ever spoken.
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "turn-collapse@example.com")
+    session = _seed_session(db_conn, UUID(source_id))  # corpus present, NOT embedded
+
+    posted = _post_turn(auth_client, session.id, {"message": "zzzqqq unmatchable token"}, csrf=csrf)
+    assert posted.status_code == 201, posted.text
+    assert posted.json()["answer_status"] == "not_found_in_source"
+
+    # The same turn read back through the legacy endpoint is collapsed too...
+    legacy = auth_client.get(f"/api/teaching-sessions/{session.id}")
+    assert legacy.json()["turns"][0]["answer_status"] == "not_found_in_source"
+
+    # ...while the stored turn kept the precise verdict.
+    unified = auth_client.get(f"/api/conversations/{session.id}")
+    assert unified.status_code == 200, unified.text
+    assert unified.json()["turns"][0]["answer_status"] == "not_found_in_scope"
+
+
 # --- POST turns: 422 bounds (TEACH-08) -----------------------------------------
 
 
@@ -693,6 +726,8 @@ def test_post_turn_missing_and_non_owned_session_return_404(
 
     assert non_owned.status_code == 404, non_owned.text
     assert missing.status_code == 404, missing.text
+    assert non_owned.json() == missing.json()
+    assert missing.json() == {"detail": "Teaching session not found."}
 
 
 # --- POST turns: 409 readiness / target-gone (TEACH-15/16) ---------------------
@@ -709,6 +744,7 @@ def test_post_turn_not_ready_source_returns_409(
 
     resp = _post_turn(auth_client, session.id, {"message": "hi"}, csrf=csrf)
     assert resp.status_code == 409, resp.text
+    assert resp.json() == {"detail": "Source is not ready for teaching."}
 
 
 def test_post_turn_target_gone_returns_409(auth_client: TestClient, db_conn: Connection) -> None:
@@ -719,7 +755,40 @@ def test_post_turn_target_gone_returns_409(auth_client: TestClient, db_conn: Con
 
     resp = _post_turn(auth_client, session.id, {"message": "hi"}, csrf=csrf)
     assert resp.status_code == 409, resp.text
-    assert resp.json()["detail"]
+    assert resp.json() == {"detail": "The teaching target no longer exists; start a new session."}
+
+
+def test_post_turn_on_a_conversation_a_question_created_returns_404(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # CONV-23: since ADR-0029 every question asked persists a whole-book conversation,
+    # and this surface's rule is that such a conversation is not a teaching session —
+    # GET reports it missing and the per-source list leaves it out. A turn posted
+    # against one answers the same way, rather than claiming a teaching target it
+    # never had has been lost.
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "turn-whole-book@example.com")
+    whole_book = Conversation(
+        id=uuid4(),
+        source_id=UUID(source_id),
+        title="What is this book about?",
+        scope_anchors=(),
+        include_notes=True,
+        target_anchor=None,
+        target_section_path=None,
+        target_title=None,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+    SqlAlchemyConversationRepository(db_conn).add(whole_book)
+
+    resp = _post_turn(auth_client, whole_book.id, {"message": "hi"}, csrf=csrf)
+    read = auth_client.get(f"/api/teaching-sessions/{whole_book.id}")
+
+    assert resp.status_code == 404, resp.text
+    assert resp.json() == {"detail": "Teaching session not found."}
+    # The same answer the read gives, byte for byte.
+    assert read.status_code == 404
+    assert read.json() == resp.json()
 
 
 # --- POST turns: 502 generation failure, no persist (TEACH-13) -----------------
@@ -902,6 +971,25 @@ def test_turn_stream_not_found_emits_status_and_persists_not_found(
     assert read.json()["turns"][0]["answer_status"] == "not_found_in_source"
 
 
+def test_turn_stream_scoped_miss_collapses_the_status_frame(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # AD-196 (SSE half): the ``data-answer-status`` frame carries the collapsed
+    # verdict, while the turn the stream persisted kept ``not_found_in_scope``.
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "tstream-collapse@example.com")
+    session = _seed_session(db_conn, UUID(source_id))  # corpus present, NOT embedded
+
+    resp = _turn_stream(auth_client, session.id, {"message": "zzzqqq unmatchable"}, csrf=csrf)
+
+    assert resp.status_code == 200, resp.text
+    parts = _parse_ui_stream(resp.text)
+    status = next(p for p in parts if isinstance(p, dict) and p["type"] == "data-answer-status")
+    assert status["data"] == {"status": "not_found_in_source"}
+
+    unified = auth_client.get(f"/api/conversations/{session.id}")
+    assert unified.json()["turns"][0]["answer_status"] == "not_found_in_scope"
+
+
 def test_turn_stream_missing_session_returns_plain_404(
     auth_client: TestClient, db_conn: Connection
 ) -> None:
@@ -1018,6 +1106,20 @@ def test_turn_stream_mid_stream_failure_emits_error_part_and_persists_nothing(
     assert read.json()["turns"] == []
 
 
+def test_legacy_stream_endpoints_stay_synchronous_handlers() -> None:
+    # The streaming contract (``to_sse_response``): a coroutine handler would run the
+    # eager guards, query embedding and retrieval on the event loop and block every
+    # concurrent request, and no functional test would notice. The legacy endpoints
+    # are held to it as long as they exist.
+    import inspect
+
+    from app.infrastructure.web.questions import ask_question_stream
+    from app.infrastructure.web.teaching import post_teaching_turn_stream
+
+    assert not inspect.iscoroutinefunction(post_teaching_turn_stream)
+    assert not inspect.iscoroutinefunction(ask_question_stream)
+
+
 # --- include_notes default (AD-147 / NL-04) ------------------------------------
 
 
@@ -1037,13 +1139,14 @@ def test_post_turn_defaults_include_notes_false_and_forwards_explicit_choice(
     class _SpyService:
         def __call__(  # noqa: ANN001
             self, *, user, session_id, message, include_notes=False
-        ) -> TeachingTurn:
+        ) -> ConversationTurn:
             seen.append(include_notes)
-            return TeachingTurn(
+            return ConversationTurn(
                 id=uuid4(),
-                session_id=session_id,
+                conversation_id=session_id,
                 turn_index=0,
                 message=message,
+                mode=MODE_TEACH,
                 answer_status="not_found_in_source",
                 answer_text="",
                 model=_MODEL,

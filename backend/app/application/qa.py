@@ -1,72 +1,102 @@
-"""Cited question-answering service (design §AskQuestion).
+"""Compatibility layer for the pre-unification question endpoints (ADR-0029).
 
-Framework-free orchestration of the answer path: ownership → readiness →
-retrieve → short-circuit on empty → generate → grounding guard → result. It
-composes the Phase-6 ``RetrieveEvidence`` service and the Learny-owned
-``AnswerGenerationPort``; the grounding invariant (ADR-0003 / AD-027) lives here
-once so it holds for every future adapter, not per-adapter goodwill. No FastAPI /
-SQLAlchemy / provider-SDK type crosses this boundary (ADR-0007/0009).
+Asking a question is starting a whole-book conversation and taking its first
+answer-mode turn, so from this release a question is no longer thrown away when the
+page reloads: each ask persists a conversation titled after the question (AD-195),
+and it shows up in the unified list like any other. The answer path itself —
+retrieval, generation, the grounding guard, persistence — belongs to
+``app/application/conversations.py``; this only translates between the old
+vocabulary and the unified services, and projects the persisted turn back into the
+``QuestionAnswer`` the legacy endpoint has always returned.
+
+An ask that fails leaves nothing behind: the pre-cycle path persisted nothing on
+failure, and a conversation whose only turn never completed is not a conversation a
+reader would want in their list, so a failure discards it (see :meth:`AskQuestion.
+_discard`). Deleted with the legacy endpoints when the UI moves to
+``/api/conversations`` (ADR-0029's retirement plan). Framework-free
+(ADR-0007/0009).
 """
 
 from __future__ import annotations
 
 import logging
 from collections.abc import Iterator
+from contextlib import contextmanager
 from uuid import UUID
 
-from app.application.errors import AnswerGenerationFailed, SourceNotReady
-from app.application.grounding import ground
-from app.application.identity import AuthorizeOwnership
-from app.application.ingestion import SOURCE_STATUS_READY, authorized_source
-from app.application.retrieval import RetrieveEvidence
+from app.application.conversations import PostConversationTurn, StartConversation
+from app.application.errors import SourceNotReady
 from app.application.streaming import (
     AskStreamEvent,
     StreamAnswer,
-    hold_back_deltas,
+    StreamTurn,
+    TurnStreamEvent,
 )
-from app.domain.entities import Evidence, QuestionAnswer, User
-from app.domain.ports import AnswerGenerationPort, SourceRepository
+from app.domain.entities import (
+    MODE_ANSWER,
+    Conversation,
+    ConversationTurn,
+    QuestionAnswer,
+    User,
+)
+from app.domain.ports import ConversationRepository
 
 logger = logging.getLogger(__name__)
 
-# ``QuestionAnswer.status`` vocabulary (design §Data/DTOs). ``answered`` carries a
-# grounded citation set; ``not_found_in_source`` is the explicit, first-class
-# "the source cannot support this" product outcome (ADR-0003 / D-3).
-_ANSWERED = "answered"
-_NOT_FOUND_IN_SOURCE = "not_found_in_source"
+# How much of the question becomes the conversation's title (AD-195). A hard
+# character cut, deliberately not a word boundary: the reader recognizes their own
+# question from its opening either way, and a rule with no special cases is a rule
+# that cannot surprise them. The question arrives trimmed from the web layer.
+TITLE_MAX_CHARS = 80
+
+
+@contextmanager
+def _questions_wording() -> Iterator[None]:
+    """Re-raise the unified readiness error with the detail this wire has always sent.
+
+    The status code is identical either way (the global handlers map the error type,
+    not the message); what would change without this is the ``detail`` a client
+    reads, which is part of the frozen wire. Readiness is the only error the ask
+    path can reach whose wording differs: a whole-book conversation has no scope to
+    reject and no target to lose.
+
+    Wording lives with the error it re-raises rather than beside the scoped-status
+    collapse in ``app/infrastructure/web/legacy_status.py``; that module's docstring
+    states the rule for both halves of the shim.
+    """
+    try:
+        yield
+    except SourceNotReady as exc:
+        raise SourceNotReady("Source is not ready for questions.") from exc
 
 
 class AskQuestion:
-    """Answer an owner's question against a ready source with grounded citations.
+    """Answer a question as the first turn of a new whole-book conversation.
 
-    Ownership is enforced first via ``authorized_source`` (reused from ingestion):
-    a missing source and a non-owner collapse to ``SourceNotFound`` so existence
-    is never disclosed. A source whose ``status != "ready"`` raises
-    ``SourceNotReady`` before any retrieval or generation runs (QA-08). Otherwise
-    the Phase-6 ``RetrieveEvidence`` service runs with the server-controlled
-    ``evidence_top_k``; empty evidence short-circuits to ``not_found_in_source``
-    without invoking the generation port (QA-13). The port's answer is then
-    guarded — ``found`` flag, non-blank text, and a grounding filter that keeps
-    only citations referencing retrieved evidence, in evidence-rank order and
-    inherently deduped (QA-14..16, QA-02/03) — and any port exception becomes an
-    ``AnswerGenerationFailed`` (QA-17). Exactly one content-free log line records
-    each completion (QA-12).
+    The scope is empty — a question is asked of the whole book — so retrieval sees
+    the entire source and a miss is reported as ``not_found_in_source``, exactly as
+    before. ``include_notes`` is the caller's choice (the web layer defaults it on,
+    AD-147) and is stored on the conversation, so a follow-up turn on the unified
+    surface inherits what the reader asked for.
+
+    Ownership and readiness are the start service's guards, and they run before
+    anything is created: a missing/unowned source is still a 404 and a not-ready one
+    a 409, with no conversation written. Every later failure — a generation failure,
+    a stream that dies mid-flight, a consumer that disconnects — discards the
+    conversation, so the endpoint keeps its pre-cycle promise that a failed ask
+    leaves no trace.
     """
 
     def __init__(
         self,
         *,
-        sources: SourceRepository,
-        authorize: AuthorizeOwnership,
-        retrieve: RetrieveEvidence,
-        generation: AnswerGenerationPort,
-        evidence_top_k: int,
+        start: StartConversation,
+        post: PostConversationTurn,
+        conversations: ConversationRepository,
     ) -> None:
-        self._sources = sources
-        self._authorize = authorize
-        self._retrieve = retrieve
-        self._generation = generation
-        self._evidence_top_k = evidence_top_k
+        self._start = start
+        self._post = post
+        self._conversations = conversations
 
     def __call__(
         self,
@@ -76,34 +106,21 @@ class AskQuestion:
         question: str,
         include_notes: bool = False,
     ) -> QuestionAnswer:
-        source = authorized_source(
-            user=user,
-            source_id=source_id,
-            sources=self._sources,
-            authorize=self._authorize,
+        conversation = self._open(
+            user=user, source_id=source_id, question=question, include_notes=include_notes
         )
-        if source.status != SOURCE_STATUS_READY:
-            # Guard before retrieval/generation so neither runs (QA-08).
-            raise SourceNotReady("Source is not ready for questions.")
-
-        evidence = self._retrieve(
-            user=user,
-            source_id=source_id,
-            query=question,
-            top_k=self._evidence_top_k,
-            include_notes=include_notes,
-        )
-        result = self._answer(question=question, evidence=evidence)
-        # One content-free lifecycle log per completion — never the question or
-        # answer text (QA-12).
-        logger.info(
-            "qa completed outcome=%s source_id=%s evidence_count=%s model=%s",
-            result.status,
-            source_id,
-            result.evidence_count,
-            result.model,
-        )
-        return result
+        try:
+            with _questions_wording():
+                turn = self._post(
+                    user=user,
+                    conversation_id=conversation.id,
+                    message=question,
+                    mode=MODE_ANSWER,
+                )
+        except BaseException:
+            self._discard(conversation)
+            raise
+        return _as_answer(turn)
 
     def stream(
         self,
@@ -113,99 +130,82 @@ class AskQuestion:
         question: str,
         include_notes: bool = False,
     ) -> Iterator[AskStreamEvent]:
-        """Answer incrementally: the same guards + grounding as ``__call__``, streamed.
+        """Answer incrementally: the same guards and grounding as ``__call__``, streamed.
 
-        The ownership, readiness, retrieval and empty-evidence checks run **eagerly**
-        (before this returns), so the four HTTP error outcomes (404/409, plus the
-        empty short-circuit) surface as plain HTTP before any SSE bytes are sent — the
-        returned iterator yields only stream events. Non-empty evidence drives the
-        generation port's stream through the sentinel hold-back and the shared
-        grounding guard; the terminal :class:`~app.application.streaming.StreamAnswer`
-        carries the identical :class:`QuestionAnswer` the buffered path returns. A port
-        failure surfaces as ``AnswerGenerationFailed`` from within the stream (QA-17).
+        The conversation is opened and every turn guard runs **eagerly** (before this
+        returns), so ownership (404) and readiness (409) still surface as plain HTTP
+        errors before any SSE byte; only then is the frame source returned.
         """
-        source = authorized_source(
-            user=user,
-            source_id=source_id,
-            sources=self._sources,
-            authorize=self._authorize,
+        conversation = self._open(
+            user=user, source_id=source_id, question=question, include_notes=include_notes
         )
-        if source.status != SOURCE_STATUS_READY:
-            raise SourceNotReady("Source is not ready for questions.")
-
-        evidence = self._retrieve(
-            user=user,
-            source_id=source_id,
-            query=question,
-            top_k=self._evidence_top_k,
-            include_notes=include_notes,
-        )
-        return self._answer_stream(question=question, evidence=evidence)
+        try:
+            with _questions_wording():
+                events = self._post.stream(
+                    user=user,
+                    conversation_id=conversation.id,
+                    message=question,
+                    mode=MODE_ANSWER,
+                )
+        except BaseException:
+            self._discard(conversation)
+            raise
+        return self._answer_stream(conversation, events)
 
     def _answer_stream(
-        self, *, question: str, evidence: list[Evidence]
+        self, conversation: Conversation, events: Iterator[TurnStreamEvent]
     ) -> Iterator[AskStreamEvent]:
-        evidence_count = len(evidence)
-        if not evidence:
-            # No supporting evidence → not found; the port is never invoked (QA-13).
-            yield StreamAnswer(self._not_found(evidence_count, self._generation.model))
-            return
+        """Project the turn stream onto the legacy answer stream, discarding on failure.
 
-        stream = self._generation.generate_stream(question=question, evidence=evidence)
-        # Hold-back yields presentable deltas and returns the authoritative answer.
-        answer = yield from hold_back_deltas(stream)
-
-        grounded = ground(answer, evidence)
-        if grounded is None:
-            result = self._not_found(evidence_count, answer.model)
-        else:
-            text, citations = grounded
-            result = QuestionAnswer(
-                status=_ANSWERED,
-                text=text,
-                citations=tuple(citations),
-                evidence_count=evidence_count,
-                model=answer.model,
-            )
-        yield StreamAnswer(result)
-
-    def _answer(self, *, question: str, evidence: list[Evidence]) -> QuestionAnswer:
-        evidence_count = len(evidence)
-        if not evidence:
-            # No supporting evidence → not found; the port is never invoked
-            # (QA-13). Model identity comes from the port, not a generate call.
-            return self._not_found(evidence_count, self._generation.model)
-
+        The turn is persisted by the unified service only once the generation stream
+        completes, so anything that ends this generator before the terminal event —
+        a provider failure, a consumer disconnect — means there is no answer, and the
+        conversation opened for it goes with it.
+        """
+        answered = False
         try:
-            generated = self._generation.generate(question=question, evidence=evidence)
-        except Exception as exc:  # any port failure maps to 502 (QA-17)
-            # Learny-owned failure with a generic message; the web layer returns a
-            # body that leaks no provider/internal detail (QA-17).
-            raise AnswerGenerationFailed("Answer generation failed.") from exc
+            for event in events:
+                if isinstance(event, StreamTurn):
+                    answered = True
+                    yield StreamAnswer(_as_answer(event.turn))
+                else:
+                    yield event
+        finally:
+            if not answered:
+                self._discard(conversation)
 
-        # Grounding guard (AD-027), shared with the teaching turn path: keeps only
-        # citations referencing retrieved evidence, in evidence-rank order and
-        # deduped, or None when found == false (QA-14), text is blank (QA-16), or
-        # no citation survives grounding (QA-15) → the explicit not-found outcome.
-        grounded = ground(generated, evidence)
-        if grounded is None:
-            return self._not_found(evidence_count, generated.model)
+    def _open(
+        self, *, user: User, source_id: UUID, question: str, include_notes: bool
+    ) -> Conversation:
+        with _questions_wording():
+            return self._start(
+                user=user,
+                source_id=source_id,
+                scope_anchors=(),
+                include_notes=include_notes,
+                title=question[:TITLE_MAX_CHARS],
+            )
 
-        text, citations = grounded
-        return QuestionAnswer(
-            status=_ANSWERED,
-            text=text,
-            citations=tuple(citations),
-            evidence_count=evidence_count,
-            model=generated.model,
-        )
+    def _discard(self, conversation: Conversation) -> None:
+        """Remove a conversation whose one turn never landed (nothing else can have)."""
+        try:
+            self._conversations.delete(conversation.id)
+        except Exception:  # noqa: BLE001 - best effort; the original failure is the one to raise
+            # The failure that brought us here is the one worth raising, and inside a
+            # request this write is being rolled back around us anyway. But the
+            # streaming path's cleanup can run after the response began and after the
+            # request-scoped connection went back — exactly when the rollback is not
+            # guaranteed to cover it — so one content-free line makes the leftover
+            # conversation explainable instead of mysterious.
+            logger.warning("ask discard failed conversation_id=%s", conversation.id)
 
-    @staticmethod
-    def _not_found(evidence_count: int, model: str) -> QuestionAnswer:
-        return QuestionAnswer(
-            status=_NOT_FOUND_IN_SOURCE,
-            text="",
-            citations=(),
-            evidence_count=evidence_count,
-            model=model,
-        )
+
+def _as_answer(turn: ConversationTurn) -> QuestionAnswer:
+    """Project the persisted answer turn onto the legacy result shape."""
+    return QuestionAnswer(
+        status=turn.answer_status,
+        text=turn.answer_text,
+        citations=turn.citations,
+        evidence_count=turn.evidence_count,
+        model=turn.model,
+    )

@@ -74,7 +74,10 @@ class DeterministicAnswerAdapter:
     """``AnswerGenerationPort`` implementation — extractive, evidence-only.
 
     Needs no provider client: constructed with no arguments and makes no network
-    call, so the answer path is testable offline (AD-024).
+    call, so the answer path is testable offline (AD-024). Prior ``history`` is
+    accepted and ignored, like the teaching adapter's: the deterministic prose is
+    composed solely from the scoped evidence, so a first turn's output is exactly
+    what it was before conversations carried history at all.
     """
 
     # Stable model identity, readable without a ``generate`` call so the Q&A
@@ -82,12 +85,22 @@ class DeterministicAnswerAdapter:
     # port is deliberately not invoked (QA-04/QA-13).
     model = _MODEL
 
-    def generate(self, *, question: str, evidence: Sequence[Evidence]) -> GeneratedAnswer:
+    def generate(
+        self,
+        *,
+        question: str,
+        evidence: Sequence[Evidence],
+        history: Sequence[HistoryTurn] = (),
+    ) -> GeneratedAnswer:
         """Compose an answer from the top evidence snippets, citing those chunks."""
         return _extractive_answer(evidence, model=self.model)
 
     def generate_stream(
-        self, *, question: str, evidence: Sequence[Evidence]
+        self,
+        *,
+        question: str,
+        evidence: Sequence[Evidence],
+        history: Sequence[HistoryTurn] = (),
     ) -> Iterator[AnswerStreamEvent]:
         """Stream the extractive answer (one full-text delta, then completed)."""
         return _extractive_stream(evidence, model=self.model)

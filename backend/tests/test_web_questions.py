@@ -38,6 +38,7 @@ from app.domain.entities import (
     CorpusSectionRecord,
     Evidence,
     GeneratedAnswer,
+    HistoryTurn,
     Note,
     ParsedSection,
     QuestionAnswer,
@@ -283,6 +284,156 @@ def test_ask_no_supporting_evidence_returns_200_not_found(
     assert body["retrieval"] == {"strategy": "hybrid", "evidence_count": 0}
 
 
+# --- Persistence (CONV-24/25, AD-195) ------------------------------------------
+
+
+def test_ask_persists_a_conversation_visible_on_the_unified_surface(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # CONV-24/25: the question survives the answer. One whole-book conversation is
+    # created, titled after the question, and the answer is its ``answer``-mode turn
+    # 0 — reachable afterwards through GET /api/conversations.
+    source_id, csrf = _seed_owned_embedded_source(auth_client, db_conn, "persist@example.com")
+
+    asked = _ask(auth_client, source_id, {"question": "photosynthesis sunlight energy"}, csrf=csrf)
+    assert asked.status_code == 200, asked.text
+
+    listed = auth_client.get("/api/conversations")
+    assert listed.status_code == 200, listed.text
+    conversations = listed.json()
+    assert len(conversations) == 1
+    summary = conversations[0]
+    assert summary["source_id"] == source_id
+    assert summary["title"] == "photosynthesis sunlight energy"
+    assert summary["scope_anchors"] == []
+    assert summary["turn_count"] == 1
+
+    detail = auth_client.get(f"/api/conversations/{summary['id']}")
+    assert detail.status_code == 200, detail.text
+    turns = detail.json()["turns"]
+    assert len(turns) == 1
+    assert turns[0]["turn_index"] == 0
+    assert turns[0]["mode"] == "answer"
+    assert turns[0]["message"] == "photosynthesis sunlight energy"
+    assert turns[0]["answer_status"] == asked.json()["answer_status"]
+
+
+def test_ask_stays_out_of_the_teaching_panel(auth_client: TestClient, db_conn: Connection) -> None:
+    # CONV-23: a question is not a teaching session — the old panel keeps listing
+    # only what was started against a section.
+    source_id, csrf = _seed_owned_embedded_source(auth_client, db_conn, "notaudit@example.com")
+
+    asked = _ask(auth_client, source_id, {"question": "photosynthesis"}, csrf=csrf)
+    assert asked.status_code == 200, asked.text
+
+    sessions = auth_client.get(f"/api/sources/{source_id}/teaching-sessions")
+    assert sessions.status_code == 200, sessions.text
+    assert sessions.json() == []
+
+
+def test_ask_generation_failure_leaves_no_conversation_behind(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # A failed ask keeps the pre-cycle promise of persisting nothing: no empty
+    # conversation is left in the reader's list.
+    from app.infrastructure.web.dependencies import get_answer_generation
+
+    source_id, csrf = _seed_owned_embedded_source(auth_client, db_conn, "nolitter@example.com")
+
+    class _RaisingAdapter:
+        model = _MODEL
+
+        def generate(
+            self,
+            *,
+            question: str,
+            evidence: Sequence[Evidence],
+            history: Sequence[HistoryTurn] = (),
+        ) -> GeneratedAnswer:
+            raise RuntimeError("provider-secret-internal-detail")
+
+    auth_client.app.dependency_overrides[get_answer_generation] = lambda: _RaisingAdapter()
+    try:
+        resp = _ask(auth_client, source_id, {"question": "photosynthesis sunlight"}, csrf=csrf)
+    finally:
+        auth_client.app.dependency_overrides.pop(get_answer_generation, None)
+
+    assert resp.status_code == 502, resp.text
+    assert auth_client.get("/api/conversations").json() == []
+
+
+def test_ask_stream_mid_stream_failure_leaves_no_conversation_behind(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # The streaming half: the provider dies after the headers went out, and still
+    # nothing is left behind.
+    from app.infrastructure.web.dependencies import get_answer_generation
+
+    source_id, csrf = _seed_owned_embedded_source(
+        auth_client, db_conn, "nolitter-stream@example.com"
+    )
+
+    class _MidStreamRaisingAdapter:
+        model = _MODEL
+
+        def generate(
+            self,
+            *,
+            question: str,
+            evidence: Sequence[Evidence],
+            history: Sequence[HistoryTurn] = (),
+        ) -> GeneratedAnswer:
+            raise AssertionError("stream path must not call generate")
+
+        def generate_stream(
+            self,
+            *,
+            question: str,
+            evidence: Sequence[Evidence],
+            history: Sequence[HistoryTurn] = (),
+        ):
+            yield AnswerTextDelta(text="partial ")
+            raise RuntimeError("provider-secret-internal-detail")
+
+    auth_client.app.dependency_overrides[get_answer_generation] = lambda: _MidStreamRaisingAdapter()
+    try:
+        resp = _ask_stream(
+            auth_client, source_id, {"question": "photosynthesis sunlight"}, csrf=csrf
+        )
+    finally:
+        auth_client.app.dependency_overrides.pop(get_answer_generation, None)
+
+    assert resp.status_code == 200, resp.text
+    assert "error" in _part_types(_parse_ui_stream(resp.text))
+    assert auth_client.get("/api/conversations").json() == []
+
+
+def test_ask_stream_that_completes_keeps_its_conversation(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # CONV-24/25 on the path the shipped Ask panel uses. Its three siblings all
+    # assert the discard half; without this one, a streamed ask could answer the
+    # reader correctly and delete the conversation behind it on the way out with the
+    # whole suite green.
+    source_id, csrf = _seed_owned_embedded_source(auth_client, db_conn, "stream-keep@example.com")
+
+    resp = _ask_stream(
+        auth_client, source_id, {"question": "photosynthesis sunlight energy"}, csrf=csrf
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert "error" not in _part_types(_parse_ui_stream(resp.text))
+    conversations = auth_client.get("/api/conversations").json()
+    assert len(conversations) == 1
+    assert conversations[0]["title"] == "photosynthesis sunlight energy"
+    assert conversations[0]["scope_anchors"] == []
+    assert conversations[0]["turn_count"] == 1
+
+    turns = auth_client.get(f"/api/conversations/{conversations[0]['id']}").json()["turns"]
+    assert len(turns) == 1
+    assert (turns[0]["turn_index"], turns[0]["mode"]) == (0, "answer")
+
+
 # --- 401 / 403 auth + CSRF (QA-11) ---------------------------------------------
 
 
@@ -422,7 +573,13 @@ def test_ask_generation_failure_returns_502_generic(
     class _RaisingAdapter:
         model = _MODEL
 
-        def generate(self, *, question: str, evidence: Sequence[Evidence]) -> GeneratedAnswer:
+        def generate(
+            self,
+            *,
+            question: str,
+            evidence: Sequence[Evidence],
+            history: Sequence[HistoryTurn] = (),
+        ) -> GeneratedAnswer:
             raise RuntimeError("provider-secret-internal-detail")
 
     auth_client.app.dependency_overrides[get_answer_generation] = lambda: _RaisingAdapter()
@@ -704,10 +861,22 @@ def test_ask_stream_mid_stream_failure_emits_error_part(
     class _MidStreamRaisingAdapter:
         model = _MODEL
 
-        def generate(self, *, question: str, evidence: Sequence[Evidence]) -> GeneratedAnswer:
+        def generate(
+            self,
+            *,
+            question: str,
+            evidence: Sequence[Evidence],
+            history: Sequence[HistoryTurn] = (),
+        ) -> GeneratedAnswer:
             raise AssertionError("stream path must not call generate")
 
-        def generate_stream(self, *, question: str, evidence: Sequence[Evidence]):
+        def generate_stream(
+            self,
+            *,
+            question: str,
+            evidence: Sequence[Evidence],
+            history: Sequence[HistoryTurn] = (),
+        ):
             yield AnswerTextDelta(text="partial ")
             raise RuntimeError("provider-secret-internal-detail")
 
@@ -819,7 +988,13 @@ def test_ask_include_notes_gates_note_evidence_and_distinct_citation(
         def __init__(self) -> None:
             self.evidence_seen: list[Evidence] = []
 
-        def generate(self, *, question: str, evidence: Sequence[Evidence]) -> GeneratedAnswer:
+        def generate(
+            self,
+            *,
+            question: str,
+            evidence: Sequence[Evidence],
+            history: Sequence[HistoryTurn] = (),
+        ) -> GeneratedAnswer:
             self.evidence_seen = list(evidence)
             return GeneratedAnswer(
                 text="a composed answer",
@@ -888,10 +1063,22 @@ def test_ask_stream_note_citation_carries_origin_and_note_identity(
     class _CitingStreamCapture:
         model = _MODEL
 
-        def generate(self, *, question: str, evidence: Sequence[Evidence]) -> GeneratedAnswer:
+        def generate(
+            self,
+            *,
+            question: str,
+            evidence: Sequence[Evidence],
+            history: Sequence[HistoryTurn] = (),
+        ) -> GeneratedAnswer:
             raise AssertionError("stream path must not call generate")
 
-        def generate_stream(self, *, question: str, evidence: Sequence[Evidence]):
+        def generate_stream(
+            self,
+            *,
+            question: str,
+            evidence: Sequence[Evidence],
+            history: Sequence[HistoryTurn] = (),
+        ):
             yield AnswerTextDelta(text="an answer")
             yield AnswerCompleted(
                 answer=GeneratedAnswer(

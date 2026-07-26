@@ -23,6 +23,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import Connection
 
+from app.application.conversations import PostConversationTurn, StartConversation
 from app.application.corpus import BuildCorpus
 from app.application.identity import AuthorizeOwnership
 from app.application.qa import AskQuestion
@@ -38,6 +39,8 @@ from app.domain.entities import (
 )
 from app.infrastructure.answering.local import DeterministicAnswerAdapter
 from app.infrastructure.db.repositories import (
+    SqlAlchemyConversationRepository,
+    SqlAlchemyConversationTurnRepository,
     SqlAlchemyCorpusRepository,
     SqlAlchemyEmbeddingIndexRepository,
     SqlAlchemySourceRepository,
@@ -205,14 +208,31 @@ def retrieve(
     )
 
 
+class _TeachingPortMustNotRun:
+    """Teaching port stand-in: an ask is an answer-mode turn and never reaches it."""
+
+    model = "teaching-port-must-not-run"
+
+    def generate(self, **kwargs: object) -> object:
+        raise AssertionError("the answer path must not reach the teaching port")
+
+    def generate_stream(self, **kwargs: object) -> object:
+        raise AssertionError("the answer path must not reach the teaching port")
+
+
+_TEACHING_UNUSED = _TeachingPortMustNotRun()
+
+
 def answer(db_conn: Connection, user: User, source: Source, question: str) -> QuestionAnswer:
     """Answer ``question`` over ``source`` through the real cited-answer path.
 
-    Wires ``AskQuestion`` exactly as the request handler does — real source repo
-    (ownership + readiness), real ``RetrieveEvidence`` over the hybrid retrieval +
-    deterministic embeddings, the deterministic extractive answer adapter, and the
-    settings-sourced evidence budget — so the golden citation check exercises the
-    shared grounding guard, not a fake.
+    Wires ``AskQuestion`` exactly as the request handler does — the unified start
+    and turn services over the real repositories, real ``RetrieveEvidence`` on the
+    hybrid retrieval + deterministic embeddings, the deterministic extractive answer
+    adapter, and the settings-sourced evidence budget — so the golden citation check
+    exercises the shared grounding guard, not a fake. Each call persists its
+    conversation and turn like the endpoint does; callers run inside the test
+    transaction, which is rolled back.
     """
     settings = get_settings()
     retrieve_evidence = RetrieveEvidence(
@@ -227,11 +247,29 @@ def answer(db_conn: Connection, user: User, source: Source, question: str) -> Qu
         default_top_k=settings.retrieval_top_k,
     )
     ask = AskQuestion(
-        sources=SqlAlchemySourceRepository(db_conn),
-        authorize=AuthorizeOwnership(),
-        retrieve=retrieve_evidence,
-        generation=DeterministicAnswerAdapter(),
-        evidence_top_k=settings.qa_evidence_top_k,
+        start=StartConversation(
+            sources=SqlAlchemySourceRepository(db_conn),
+            corpus=SqlAlchemyCorpusRepository(db_conn),
+            conversations=SqlAlchemyConversationRepository(db_conn),
+            authorize=AuthorizeOwnership(),
+            clock=FakeClock(_EPOCH),
+            ids=uuid4,
+        ),
+        post=PostConversationTurn(
+            conversations=SqlAlchemyConversationRepository(db_conn),
+            turns=SqlAlchemyConversationTurnRepository(db_conn),
+            sources=SqlAlchemySourceRepository(db_conn),
+            corpus=SqlAlchemyCorpusRepository(db_conn),
+            retrieve=retrieve_evidence,
+            answer_generation=DeterministicAnswerAdapter(),
+            teaching_generation=_TEACHING_UNUSED,
+            authorize=AuthorizeOwnership(),
+            clock=FakeClock(_EPOCH),
+            ids=uuid4,
+            evidence_top_k=settings.conversation_evidence_top_k,
+            history_turns=settings.conversation_history_turns,
+        ),
+        conversations=SqlAlchemyConversationRepository(db_conn),
     )
     return ask(user=user, source_id=source.id, question=question)
 
