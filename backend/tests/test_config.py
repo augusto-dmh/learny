@@ -8,6 +8,7 @@ directly (bypassing the ``get_settings`` lru-cache) so each case is isolated.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from app.core.config import Settings
@@ -297,9 +298,9 @@ def test_env_example_documents_the_conversation_contract() -> None:
 
 
 def test_deprecated_qa_and_teaching_knobs_still_validate(monkeypatch) -> None:
-    # The legacy endpoints outlive their knobs by one cycle. Dropping these fields
-    # would make a deployed env file that still sets them fail to validate at boot,
-    # so they stay declared until those endpoints retire.
+    # The legacy endpoints outlive their knobs by one cycle: the fields stay declared
+    # until those endpoints retire, so the names stay documented and a deployment
+    # that still sets one can be noticed (see the warning test below).
     monkeypatch.setenv("LEARNY_QA_EVIDENCE_TOP_K", "3")
     monkeypatch.setenv("LEARNY_TEACHING_EVIDENCE_TOP_K", "4")
     monkeypatch.setenv("LEARNY_TEACHING_HISTORY_TURNS", "1")
@@ -309,6 +310,38 @@ def test_deprecated_qa_and_teaching_knobs_still_validate(monkeypatch) -> None:
     assert settings.qa_evidence_top_k == 3
     assert settings.teaching_evidence_top_k == 4
     assert settings.teaching_history_turns == 1
+
+
+def test_setting_a_retired_knob_warns_once_naming_the_value_in_force(monkeypatch, caplog) -> None:
+    # The dangerous failure here is silence: a deployment that tuned one of these
+    # still validates, still boots, and quietly serves the new default instead. One
+    # warning per variable actually set, naming it and the value now in force, is
+    # what reaches the person running the deploy.
+    monkeypatch.setenv("LEARNY_TEACHING_HISTORY_TURNS", "12")
+    monkeypatch.setenv("LEARNY_QA_EVIDENCE_TOP_K", "12")
+
+    with caplog.at_level(logging.WARNING, logger="app.core.config"):
+        settings = Settings(_env_file=None)
+
+    warnings = [r.getMessage() for r in caplog.records if r.name == "app.core.config"]
+    assert len(warnings) == 2
+    assert any(
+        "LEARNY_TEACHING_HISTORY_TURNS" in message
+        and f"conversation_history_turns={settings.conversation_history_turns}" in message
+        for message in warnings
+    )
+    assert any("LEARNY_QA_EVIDENCE_TOP_K" in message for message in warnings)
+    # The knob nobody set is not mentioned.
+    assert not any("LEARNY_TEACHING_EVIDENCE_TOP_K" in message for message in warnings)
+
+
+def test_an_untouched_deployment_gets_no_deprecation_warnings(caplog) -> None:
+    # A deployment that never tuned these must boot quietly — a warning nobody can
+    # act on is noise that teaches operators to ignore the log.
+    with caplog.at_level(logging.WARNING, logger="app.core.config"):
+        Settings(_env_file=None)
+
+    assert [r for r in caplog.records if r.name == "app.core.config"] == []
 
 
 def test_env_example_documents_the_instrument_contract() -> None:

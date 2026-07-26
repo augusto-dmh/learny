@@ -6,9 +6,29 @@ nothing here is committed with real values. See `.env.example` for the contract.
 
 from __future__ import annotations
 
+import logging
 from functools import lru_cache
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
+
+# Knobs the unified conversation settings replaced, mapped to the setting that now
+# decides the value and the environment variable an operator would have tuned. Each
+# is still declared below — see the note there — and each one that is actually set
+# earns a startup warning, because the value it used to control has moved.
+_RETIRED_KNOBS = {
+    "qa_evidence_top_k": ("LEARNY_QA_EVIDENCE_TOP_K", "conversation_evidence_top_k"),
+    "teaching_evidence_top_k": (
+        "LEARNY_TEACHING_EVIDENCE_TOP_K",
+        "conversation_evidence_top_k",
+    ),
+    "teaching_history_turns": (
+        "LEARNY_TEACHING_HISTORY_TURNS",
+        "conversation_history_turns",
+    ),
+}
 
 
 class Settings(BaseSettings):
@@ -149,9 +169,12 @@ class Settings(BaseSettings):
     # and the server-controlled evidence budget. ``qa_evidence_top_k`` is the
     # ``top_k`` handed to Phase-6 retrieval; keep it ≤ ``retrieval_max_top_k``.
     qa_question_max_chars: int = 2000
-    # Deprecated: superseded by ``conversation_evidence_top_k``. Kept declared so
-    # deployed env files carrying it keep validating; it retires with the legacy
-    # questions endpoints.
+    # Deprecated: superseded by ``conversation_evidence_top_k`` and read by nothing.
+    # It stays declared not because an env file needs it to validate — ``extra`` is
+    # ``ignore``, so an undeclared ``LEARNY_*`` var validates fine — but because a
+    # harmless declaration is the cheapest way to keep the name documented and to
+    # notice a deployment that still sets it (see ``_warn_about_retired_knobs``). It
+    # retires with the legacy questions endpoints.
     qa_evidence_top_k: int = 8
 
     # Teaching sessions (Phase 8) — message length bound enforced by the web
@@ -159,8 +182,8 @@ class Settings(BaseSettings):
     # (keep ≤ ``retrieval_max_top_k``), and the number of prior turns passed to the
     # generation port as bounded context (TEACH-12).
     teaching_message_max_chars: int = 2000
-    # Deprecated: superseded by the ``conversation_*`` pair below, for the same
-    # reason as ``qa_evidence_top_k``.
+    # Deprecated: superseded by the ``conversation_*`` pair below, on the same terms
+    # as ``qa_evidence_top_k``.
     teaching_evidence_top_k: int = 8
     teaching_history_turns: int = 6
 
@@ -266,6 +289,33 @@ class Settings(BaseSettings):
     # response instead of hard-coding it, and the per-day pages figure on the study
     # window resolves to the same value.
     words_per_page: int = 275
+
+    @model_validator(mode="after")
+    def _warn_about_retired_knobs(self) -> Settings:
+        """Say once, at startup, that a tuned deprecated knob no longer does anything.
+
+        The failure this prevents is silent: a deployment that raised
+        ``LEARNY_TEACHING_HISTORY_TURNS`` to 12 still validates, still boots, and
+        quietly serves the new default instead. The variable being accepted is
+        exactly what makes it look like it still works, and a comment in this file is
+        not reachable by the person running the deploy.
+
+        The old value is deliberately *not* inherited into the new setting: that would
+        re-couple the per-surface knobs the unified settings separated, for the sake
+        of a tuning this deployment never made. Naming the variable and the value now
+        in force lets an operator re-tune deliberately.
+        """
+        for field, (env_var, successor) in _RETIRED_KNOBS.items():
+            if field in self.model_fields_set:
+                logger.warning(
+                    "%s is deprecated and no longer read; %s=%s is in force. "
+                    "Set LEARNY_%s to change it.",
+                    env_var,
+                    successor,
+                    getattr(self, successor),
+                    successor.upper(),
+                )
+        return self
 
 
 @lru_cache
