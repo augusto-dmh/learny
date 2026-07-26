@@ -634,15 +634,28 @@ class ConversationRepository(Protocol):
         ...
 
     def list_for_user(
-        self, user_id: UUID, source_id: UUID | None = None
+        self,
+        user_id: UUID,
+        source_id: UUID | None = None,
+        *,
+        limit: int,
+        offset: int = 0,
     ) -> list[ConversationSummary]:
-        """Return ``user_id``'s conversations, newest activity first (CONV-06).
+        """Return one page of ``user_id``'s conversations, newest activity first (CONV-06).
 
         Spans every source the caller owns unless ``source_id`` narrows it. The
         aggregate carries no ``user_id`` (AD-014), so ownership is a join through
         ``sources`` in SQL — another user's conversations are unreachable, not
         filtered out afterwards. Ordered by ``updated_at`` descending, so a
         conversation rises the moment a turn lands in it.
+
+        ``limit`` is required — a caller must say how much history it wants, so no
+        path can ask for all of it — and ``offset`` skips that many rows of the same
+        order, past the end being an empty page rather than an error. Paging this way
+        is exact because the order is **total**: ``id`` descending breaks ties on
+        ``updated_at``, so two conversations touched in the same instant still hold
+        one fixed position relative to each other and neither can slip across a page
+        boundary as the caller walks the list.
         """
         ...
 

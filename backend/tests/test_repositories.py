@@ -59,6 +59,10 @@ from tests.conftest import requires_db
 
 pytestmark = requires_db
 
+# A page wider than any fixture below, so a test that is about ownership or order
+# reads the whole of what it seeded rather than accidentally testing paging.
+_PAGE = 50
+
 
 def _new_user(email: str) -> User:
     return User(id=uuid4(), email=email, created_at=datetime.now(UTC))
@@ -1548,7 +1552,7 @@ def test_conversation_list_for_user_spans_sources_newest_activity_first(
         )
     )
 
-    listed = repo.list_for_user(user_id)
+    listed = repo.list_for_user(user_id, limit=_PAGE)
 
     assert [s.conversation.id for s in listed] == [active.id, stale.id]
     # Each row names its own book and carries its own total, so a list needs no
@@ -1572,8 +1576,10 @@ def test_conversation_list_for_user_filters_by_source_and_excludes_other_owners(
     mine_b = repo.add(_new_teaching_session(source_b.id))
     theirs = repo.add(_new_teaching_session(other_source.id))
 
-    everything = {s.conversation.id for s in repo.list_for_user(user_id)}
-    narrowed = [s.conversation.id for s in repo.list_for_user(user_id, source_id=source_a.id)]
+    everything = {s.conversation.id for s in repo.list_for_user(user_id, limit=_PAGE)}
+    narrowed = [
+        s.conversation.id for s in repo.list_for_user(user_id, source_id=source_a.id, limit=_PAGE)
+    ]
 
     assert everything == {mine_a.id, mine_b.id}
     # Another owner's conversation is unreachable through this query, not filtered
@@ -1589,9 +1595,37 @@ def test_conversation_list_for_user_counts_turns(db_conn: Connection) -> None:
     _insert_turn(db_conn, conversation.id, 0)
     _insert_turn(db_conn, conversation.id, 1)
 
-    (summary,) = repo.list_for_user(user_id)
+    (summary,) = repo.list_for_user(user_id, limit=_PAGE)
 
     assert summary.turn_count == 2
+
+
+def test_conversation_list_for_user_returns_only_the_requested_window(
+    db_conn: Connection,
+) -> None:
+    # CONV-06: a page is exactly the window asked for, taken from the newest-activity
+    # order — not the whole history the caller then has to slice itself.
+    user_id, (source,) = _persisted_user_with_sources(db_conn, "conv-page-window@example.com", 1)
+    repo = SqlAlchemyConversationRepository(db_conn)
+    base = datetime.now(UTC)
+    # Seeded oldest-first, so the expected page order is the reverse of this list.
+    seeded = [
+        repo.add(_whole_book_conversation(source.id, updated_at=base + timedelta(minutes=i)))
+        for i in range(5)
+    ]
+    newest_first = [c.id for c in reversed(seeded)]
+
+    first = repo.list_for_user(user_id, limit=2)
+    second = repo.list_for_user(user_id, limit=2, offset=2)
+    last = repo.list_for_user(user_id, limit=2, offset=4)
+    past_the_end = repo.list_for_user(user_id, limit=2, offset=5)
+
+    assert [s.conversation.id for s in first] == newest_first[:2]
+    assert [s.conversation.id for s in second] == newest_first[2:4]
+    assert [s.conversation.id for s in last] == newest_first[4:]
+    # Reading past the end is an empty page, not an error — a caller walking to the
+    # end of its history stops on an empty answer.
+    assert past_the_end == []
 
 
 def test_conversation_rename_changes_title_and_bumps_activity(db_conn: Connection) -> None:

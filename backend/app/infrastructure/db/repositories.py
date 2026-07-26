@@ -908,7 +908,12 @@ class SqlAlchemyConversationRepository:
         return _to_conversation(row) if row is not None else None
 
     def list_for_user(
-        self, user_id: UUID, source_id: UUID | None = None
+        self,
+        user_id: UUID,
+        source_id: UUID | None = None,
+        *,
+        limit: int,
+        offset: int = 0,
     ) -> list[ConversationSummary]:
         # Ownership is the join, not a post-filter: another user's conversations are
         # unreachable by this query (I-5).
@@ -916,7 +921,12 @@ class SqlAlchemyConversationRepository:
         if source_id is not None:
             statement = statement.where(conversations.c.source_id == source_id)
         rows = self._conn.execute(
+            # The id tiebreaker makes this order total, which is what lets a window
+            # be taken by offset without a row ever falling between two pages;
+            # ix_conversations_updated_at_id serves exactly this ordering.
             statement.order_by(conversations.c.updated_at.desc(), conversations.c.id.desc())
+            .limit(limit)
+            .offset(offset)
         ).all()
         return [_to_conversation_summary(row) for row in rows]
 

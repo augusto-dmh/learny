@@ -65,6 +65,9 @@ _NOW = datetime(2026, 7, 25, 12, 0, 0, tzinfo=UTC)
 _MODEL = "local-extractive"
 _TOP_K = 8
 _HISTORY_TURNS = 6
+# A page wider than any fixture below, so a test that is about ownership or order
+# reads the whole of what it seeded rather than accidentally testing paging.
+_PAGE = 50
 
 
 # --- builders ------------------------------------------------------------------
@@ -239,7 +242,12 @@ class FakeConversationRepository:
         )
 
     def list_for_user(
-        self, user_id: UUID, source_id: UUID | None = None
+        self,
+        user_id: UUID,
+        source_id: UUID | None = None,
+        *,
+        limit: int,
+        offset: int = 0,
     ) -> list[ConversationSummary]:
         assert self._sources is not None, "this fake needs a source repository to join through"
         owned = []
@@ -250,8 +258,11 @@ class FakeConversationRepository:
             if source_id is not None and conversation.source_id != source_id:
                 continue
             owned.append(conversation)
-        owned.sort(key=lambda c: c.updated_at, reverse=True)
-        return [self._summary(conversation) for conversation in owned]
+        # The id tiebreaker is the real query's, not decoration: without it two
+        # conversations sharing an ``updated_at`` have no fixed order and a paging
+        # test over this fake would pass while the same walk lost rows in SQL.
+        owned.sort(key=lambda c: (c.updated_at, c.id), reverse=True)
+        return [self._summary(conversation) for conversation in owned[offset : offset + limit]]
 
     def list_for_source_with_target(self, source_id: UUID) -> list[ConversationSummary]:
         owned = [
@@ -669,7 +680,7 @@ def test_start_rejects_a_scope_whose_later_anchor_resolves_to_nothing() -> None:
             include_notes=False,
         )
 
-    assert conversations.list_for_user(user.id) == []
+    assert conversations.list_for_user(user.id, limit=_PAGE) == []
 
 
 def test_start_rejects_an_unresolvable_scope_anchor_and_creates_nothing() -> None:
@@ -687,7 +698,7 @@ def test_start_rejects_an_unresolvable_scope_anchor_and_creates_nothing() -> Non
             include_notes=False,
         )
 
-    assert conversations.list_for_user(user.id) == []
+    assert conversations.list_for_user(user.id, limit=_PAGE) == []
 
 
 def test_start_without_a_corpus_rejects_any_scope() -> None:
@@ -745,7 +756,7 @@ def test_start_rejects_an_oversize_title_and_creates_nothing() -> None:
             title="x" * (TITLE_MAX_CHARS + 1),
         )
 
-    assert conversations.list_for_user(user.id) == []
+    assert conversations.list_for_user(user.id, limit=_PAGE) == []
 
 
 def test_start_on_an_unowned_source_reports_the_source_missing() -> None:
@@ -760,7 +771,7 @@ def test_start_on_an_unowned_source_reports_the_source_missing() -> None:
             user=intruder, source_id=source.id, include_notes=False
         )
 
-    assert conversations.list_for_user(owner.id) == []
+    assert conversations.list_for_user(owner.id, limit=_PAGE) == []
 
 
 def test_start_against_a_not_ready_source_creates_nothing() -> None:
@@ -773,7 +784,7 @@ def test_start_against_a_not_ready_source_creates_nothing() -> None:
             user=user, source_id=source.id, scope_anchors=["ch1.xhtml"], include_notes=False
         )
 
-    assert conversations.list_for_user(user.id) == []
+    assert conversations.list_for_user(user.id, limit=_PAGE) == []
     assert corpus.get_structure_calls == 0
 
 

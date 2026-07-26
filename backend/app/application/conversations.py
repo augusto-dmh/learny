@@ -74,6 +74,13 @@ logger = logging.getLogger(__name__)
 # the same bound on its request models; this is the enforcement.
 TITLE_MAX_CHARS = 200
 
+# How much conversation history one unparameterized list read returns, and the most
+# any read may ask for (CONV-06). The shipped list convention — the due-review queue
+# uses the same pair — kept in one place so the endpoint's default and the service's
+# cannot drift apart.
+DEFAULT_PAGE_LIMIT = 20
+MAX_PAGE_LIMIT = 100
+
 
 def authorized_conversation(
     *,
@@ -274,12 +281,16 @@ class StartConversation:
 
 
 class ListConversations:
-    """Return the caller's conversations, newest activity first (CONV-06).
+    """Return a page of the caller's conversations, newest activity first (CONV-06).
 
     Spans every source the caller owns unless ``source_id`` narrows it. Ownership
     is the repository's join through ``sources`` (AD-014), so another user's
     conversations are unreachable rather than filtered afterwards — narrowing by a
     source the caller does not own yields an empty list, disclosing nothing.
+
+    The list is always a page: a reader who has been at this for months should not
+    pay for their whole history to draw a dock. Callers that name no page take
+    :data:`DEFAULT_PAGE_LIMIT`, and there is no way to ask for an unbounded one.
     """
 
     def __init__(
@@ -289,8 +300,15 @@ class ListConversations:
     ) -> None:
         self._conversations = conversations
 
-    def __call__(self, *, user: User, source_id: UUID | None = None) -> list[ConversationSummary]:
-        return self._conversations.list_for_user(user.id, source_id)
+    def __call__(
+        self,
+        *,
+        user: User,
+        source_id: UUID | None = None,
+        limit: int = DEFAULT_PAGE_LIMIT,
+        offset: int = 0,
+    ) -> list[ConversationSummary]:
+        return self._conversations.list_for_user(user.id, source_id, limit=limit, offset=offset)
 
 
 class ReadConversation:
