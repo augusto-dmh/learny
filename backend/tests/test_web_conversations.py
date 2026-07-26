@@ -1499,8 +1499,9 @@ def throttled_conversations_client(  # noqa: ANN201
 
     Mirrors ``throttled_teaching_client``: 3 attempts per long window so the 4th
     call trips the ``rate_limit_conversations`` 429 branch deterministically. The
-    per-IP+route key means the register/csrf setup calls consume separate buckets
-    and never eat the conversation budget.
+    key is client IP + route template, so the register/csrf setup calls consume
+    separate buckets and never eat the conversation budget, while every conversation
+    of one client shares the budget of the route it is posting to.
     """
     from app.core.config import get_settings
     from app.infrastructure.web.dependencies import get_db_connection
@@ -1562,17 +1563,20 @@ def test_turn_rate_limit_returns_429(
     throttled_conversations_client: TestClient, db_conn: Connection
 ) -> None:
     # CONV-22: the same policy governs the turn endpoint (corpus is not embedded, so
-    # each accepted turn is a cheap not-found).
+    # each accepted turn is a cheap not-found). The budget is keyed by the route
+    # template, so it is spent here across three *different* conversations — keying
+    # on the concrete path would give a client a fresh budget per conversation it
+    # starts, which is exactly the flood the throttle exists to stop.
     source_id, csrf = _seed_ready_source(
         throttled_conversations_client, db_conn, "rl-turn@example.com"
     )
-    conversation = _seed_conversation(db_conn, UUID(source_id))
+    conversations = [_seed_conversation(db_conn, UUID(source_id)) for _ in range(3)]
     body = {"message": "zzzqqq unmatchable", "mode": MODE_ANSWER}
-    for _ in range(3):
+    for conversation in conversations:
         resp = _post_turn(throttled_conversations_client, conversation.id, body, csrf=csrf)
         assert resp.status_code == 201, resp.text
 
-    throttled = _post_turn(throttled_conversations_client, conversation.id, body, csrf=csrf)
+    throttled = _post_turn(throttled_conversations_client, conversations[0].id, body, csrf=csrf)
     assert throttled.status_code == 429, throttled.text
 
 

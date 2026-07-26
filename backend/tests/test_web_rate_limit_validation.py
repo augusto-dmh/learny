@@ -216,6 +216,69 @@ def test_rate_limit_conversations_throttles_after_window() -> None:
         set_rate_limiter(previous)
 
 
+def _conversation_turn_request(conversation_id: str) -> Request:
+    """A turn request as FastAPI hands it over: concrete path plus the matched route."""
+
+    class _Route:
+        path = "/api/conversations/{conversation_id}/turns"
+
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": f"/api/conversations/{conversation_id}/turns",
+            "headers": [],
+            "query_string": b"",
+            "client": ("1.2.3.4", 12345),
+            "route": _Route(),
+        }
+    )
+
+
+def test_conversation_turn_budget_is_shared_across_a_clients_conversations() -> None:
+    # CONV-22: the turn path interpolates a conversation id, so keying on the
+    # concrete path would hand a client a fresh budget for every conversation it
+    # starts — against the retrieval and generation this throttle exists to protect.
+    # The route template is the bucket, so three turns spread over three
+    # conversations spend the same budget as three turns in one.
+    previous = get_rate_limiter()
+    set_rate_limiter(InMemoryFixedWindowRateLimiter(max_attempts=3, window_seconds=300))
+    try:
+        for conversation_id in ("aaa", "bbb", "ccc"):
+            assert rate_limit_conversations(_conversation_turn_request(conversation_id)) is None
+        with pytest.raises(HTTPException) as exc_info:
+            rate_limit_conversations(_conversation_turn_request("ddd"))
+        assert exc_info.value.status_code == 429
+    finally:
+        set_rate_limiter(previous)
+
+
+def test_conversation_routes_keep_their_own_limit_values() -> None:
+    # The single dependency means one limit *value* per route template, not one
+    # bucket for the surface: exhausting the turn budget must not lock a reader out
+    # of renaming or deleting what they already have.
+    previous = get_rate_limiter()
+    set_rate_limiter(InMemoryFixedWindowRateLimiter(max_attempts=3, window_seconds=300))
+    try:
+        for _ in range(3):
+            assert rate_limit_conversations(_conversation_turn_request("aaa")) is None
+        with pytest.raises(HTTPException):
+            rate_limit_conversations(_conversation_turn_request("aaa"))
+        assert rate_limit_conversations(_conversations_request()) is None
+    finally:
+        set_rate_limiter(previous)
+
+
+def test_the_other_limiters_still_key_on_the_concrete_path() -> None:
+    # The route-template key belongs to the conversations dependency alone: the
+    # shipped limiters keep the exact 429 behaviour they have today.
+    from app.infrastructure.web.rate_limit import _client_key
+
+    request = _conversation_turn_request("aaa")
+
+    assert _client_key(request) == "1.2.3.4:/api/conversations/aaa/turns"
+
+
 def test_teaching_errors_map_to_expected_status_codes() -> None:
     # Conversation error contract: every error of the conversation vocabulary
     # translates to its documented HTTP status through ``register_error_handlers`` —
