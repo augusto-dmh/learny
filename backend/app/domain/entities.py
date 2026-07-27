@@ -1177,11 +1177,22 @@ class NoteSummary:
 
     ``anchor_statuses`` carries one status per anchor (any order) so the list can render
     active/stale/orphaned badges without loading the anchor payloads.
+
+    ``anchor`` is the passage the row stands for: when the list is scoped to one book, a
+    note's **earliest-created** anchor on that book — the passage it came from. It is
+    ``None`` on the cross-book list, which has no single book to represent a note by.
+
+    ``page`` is that passage's book-global page number, derived server-side from the
+    book's stored word counts (AD-189). It is ``None`` when the anchor no longer resolves
+    against the corpus — an orphaned anchor keeps its row and its quote, and shows no
+    page rather than a fabricated one.
     """
 
     note: Note
     tags: tuple[str, ...]
     anchor_statuses: tuple[str, ...]
+    anchor: NoteAnchor | None = None
+    page: int | None = None
 
 
 @dataclass(frozen=True)

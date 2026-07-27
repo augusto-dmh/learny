@@ -102,8 +102,8 @@ function renderDock(handlers: Record<string, Handler>) {
     <ReaderPanel
       sourceId="s1"
       csrf="csrf-xyz"
-      mode="ask"
-      onModeChange={() => {}}
+      tab="ask"
+      onTabChange={() => {}}
       onClose={() => {}}
     />,
   );

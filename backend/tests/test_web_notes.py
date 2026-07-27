@@ -3,10 +3,14 @@
 Exercises the owner-scoped notes endpoints end-to-end through FastAPI's
 ``TestClient`` against a real Postgres, asserting the spec ACs at the route level:
 
-- ``POST   /api/notes`` — owner → 201 note detail; over-cap body → 422; no session
-  → 401; missing CSRF / untrusted Origin → 403; rate limit → 429 (NF-05/09).
+- ``POST   /api/notes`` — gone: a note cannot be created without a reading anchor,
+  and a note that predates the rule still lists, opens, edits, and deletes (WSN-09).
 - ``GET    /api/notes`` — owner → 200 summaries newest-first; ``?tag=`` filters
-  case-insensitively; no session → 401 (NF-13).
+  case-insensitively; no session → 401 (NF-13). ``?source_id=`` narrows it to one
+  book: only that book's notes, a twice-anchored one listed once with the passage it
+  came from and that passage's derived page, an orphaned anchor kept with its quote
+  and no page, composed with ``?tag=``; non-owned/unknown → identical 404, a
+  malformed id → 422 (WSN-01/02/03/10/11/15).
 - ``GET    /api/notes/{id}`` — owner → 200 detail; missing/non-owned → identical
   404; no session → 401 (NF-05/10).
 - ``PATCH  /api/notes/{id}`` — owner → 200 rewritten; over-cap body → 422;
@@ -15,15 +19,16 @@ Exercises the owner-scoped notes endpoints end-to-end through FastAPI's
   403 (NF-05).
 - ``GET    /api/notes/{id}/backlinks`` — owner → 200 inbound links; unknown → 404
   (NF-10).
-- ``POST   /api/sources/{id}/highlights`` — owned ready source → 201 note + anchor
-  jump-back fields; unknown source / unknown anchor → 404; stale selection → 409;
-  missing CSRF → 403 (NF-06/10).
+- ``POST   /api/sources/{id}/highlights`` — the one creation path: owned ready source
+  → 201 note + anchor jump-back fields, with or without a quote; unknown source /
+  unknown anchor → 404; stale selection → 409; over-cap body → 422; no session → 401;
+  missing CSRF / untrusted Origin → 403; rate limit → 429 (NF-06/09/10).
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
@@ -33,6 +38,8 @@ from sqlalchemy import Connection
 from app.application.quiz_qc import content_key
 from app.domain.entities import (
     CorpusSectionRecord,
+    Note,
+    NoteAnchor,
     ParsedBlock,
     ParsedSection,
     QuizItem,
@@ -44,6 +51,7 @@ from app.domain.entities import (
 )
 from app.infrastructure.db.repositories import (
     SqlAlchemyCorpusRepository,
+    SqlAlchemyNoteRepository,
     SqlAlchemyQuizItemRepository,
     SqlAlchemySourceRepository,
 )
@@ -55,6 +63,10 @@ pytestmark = requires_db
 # in this module stays well under it.
 NOTES_MAX_BODY = 50
 
+# A small page quantum so a seeded chapter can cross a page boundary in a few words,
+# making a book-scoped row's derived page an exact, readable number.
+NOTES_WORDS_PER_PAGE = 10
+
 
 # --- Fixtures ------------------------------------------------------------------
 
@@ -65,7 +77,9 @@ def notes_client(db_conn: Connection, monkeypatch: pytest.MonkeyPatch):  # noqa:
 
     Mirrors ``sources_client`` (shared ``db_conn``, non-Secure cookie, trusted
     Origin, generous limiter) but pins ``notes_max_body_chars`` to
-    :data:`NOTES_MAX_BODY` so the over-cap reject stays cheap. Create/update commit in
+    :data:`NOTES_MAX_BODY` so the over-cap reject stays cheap, and the page quantum to
+    :data:`NOTES_WORDS_PER_PAGE` so a book-scoped row's page is an exact small number
+    rather than one that depends on the deployment default. Create/update commit in
     a UoW factory before the after-commit embed enqueue (AD-016), so the factory is
     overridden to yield the shared ``db_conn`` *without committing* and the enqueuer is
     a recording fake (on ``app.state`` so tests can assert its calls).
@@ -89,6 +103,7 @@ def notes_client(db_conn: Connection, monkeypatch: pytest.MonkeyPatch):  # noqa:
     monkeypatch.setenv("LEARNY_SESSION_COOKIE_SECURE", "false")
     monkeypatch.setenv("LEARNY_CSRF_TRUSTED_ORIGINS", TEST_ORIGIN)
     monkeypatch.setenv("LEARNY_NOTES_MAX_BODY_CHARS", str(NOTES_MAX_BODY))
+    monkeypatch.setenv("LEARNY_WORDS_PER_PAGE", str(NOTES_WORDS_PER_PAGE))
     get_settings.cache_clear()
 
     previous_limiter = get_rate_limiter()
@@ -126,8 +141,8 @@ def throttled_notes_client(  # noqa: ANN201
     """Like ``notes_client`` but with a deliberately tight limiter (3/window).
 
     The limiter key is per-IP+route, so the register/csrf setup calls consume
-    separate buckets and never eat into the note-write budget — the 4th ``POST
-    /api/notes`` trips ``rate_limit_notes`` deterministically (NF-09).
+    separate buckets and never eat into the note-write budget — the 4th capture trips
+    ``rate_limit_notes`` deterministically (NF-09).
     """
     from contextlib import contextmanager
 
@@ -189,21 +204,6 @@ def _csrf(client: TestClient) -> str:
     return resp.json()["csrf_token"]
 
 
-def _post_note(
-    client: TestClient,
-    body: dict,
-    *,
-    csrf: str | None,
-    origin: str | None = None,
-):
-    headers: dict[str, str] = {}
-    if csrf is not None:
-        headers["X-CSRF-Token"] = csrf
-    if origin is not None:
-        headers["Origin"] = origin
-    return client.post("/api/notes", json=body, headers=headers)
-
-
 def _patch_note(client: TestClient, note_id: object, body: dict, *, csrf: str | None):
     headers: dict[str, str] = {}
     if csrf is not None:
@@ -218,18 +218,27 @@ def _delete_note(client: TestClient, note_id: object, *, csrf: str | None):
     return client.delete(f"/api/notes/{note_id}", headers=headers)
 
 
-def _post_highlight(client: TestClient, source_id: object, body: dict, *, csrf: str | None):
+def _post_highlight(
+    client: TestClient,
+    source_id: object,
+    body: dict,
+    *,
+    csrf: str | None,
+    origin: str | None = None,
+):
     headers: dict[str, str] = {}
     if csrf is not None:
         headers["X-CSRF-Token"] = csrf
+    if origin is not None:
+        headers["Origin"] = origin
     return client.post(f"/api/sources/{source_id}/highlights", json=body, headers=headers)
 
 
-def _created_note(client: TestClient, csrf: str, **fields) -> dict:
-    """Create a note through the API and return its detail body."""
-    body = {"title": "Untitled", "body_markdown": "", "tags": []}
+def _created_note(client: TestClient, csrf: str, source_id: object, **fields) -> dict:
+    """Create a note the only way the API allows — an anchored capture — and return it."""
+    body = {"anchor": "ch1", "title": "Untitled", "body_markdown": "", "tags": []}
     body.update(fields)
-    resp = _post_note(client, body, csrf=csrf)
+    resp = _post_highlight(client, source_id, body, csrf=csrf)
     assert resp.status_code == 201, resp.text
     return resp.json()
 
@@ -292,87 +301,248 @@ def _seed_corpus(db_conn: Connection, source_id: UUID, *, anchor: str, block_htm
     )
 
 
-# --- Create (NF-05/09) ---------------------------------------------------------
-
-
-def test_create_note_returns_201_with_detail(notes_client: TestClient, db_conn: Connection) -> None:
-    _register(notes_client, "note-create@example.com")
-    csrf = _csrf(notes_client)
-
-    resp = _post_note(
-        notes_client,
-        {"title": "First", "body_markdown": "hello", "tags": ["Python", "python"]},
-        csrf=csrf,
+def _capture_target(db_conn: Connection, user_id: str) -> UUID:
+    """Seed an owned, ingested source a capture can anchor a note to (anchor ``ch1``)."""
+    source_id = _persist_source(db_conn, user_id)
+    _seed_corpus(
+        db_conn,
+        source_id,
+        anchor="ch1",
+        block_html="<p>The quick brown fox jumps over the lazy dog.</p>",
     )
+    return source_id
 
-    assert resp.status_code == 201, resp.text
-    body = resp.json()
-    assert set(body) == {
-        "id",
-        "title",
-        "body_markdown",
-        "tags",
-        "anchors",
-        "created_at",
-        "updated_at",
+
+def _seed_two_chapter_corpus(
+    db_conn: Connection, source_id: UUID, *, first_chapter_words: int
+) -> None:
+    """Replace ``source_id``'s corpus with ``ch1`` then ``ch2``, ch1 the given length.
+
+    The lead chapter's length is what pushes ``ch2`` past a page boundary, so a note
+    anchored there has a page number the whole book's word counts produced.
+    """
+    texts = {
+        "ch1": " ".join(["word"] * first_chapter_words),
+        "ch2": "The quick brown fox jumps over the lazy dog.",
     }
-    assert body["title"] == "First"
-    assert body["body_markdown"] == "hello"
-    # Tags are normalized (lowercased + deduped) by the use case.
-    assert body["tags"] == ["python"]
-    assert body["anchors"] == []
-    UUID(body["id"])
-
-
-def test_create_note_over_cap_body_returns_422(
-    notes_client: TestClient, db_conn: Connection
-) -> None:
-    _register(notes_client, "note-toolong@example.com")
-    csrf = _csrf(notes_client)
-    resp = _post_note(
-        notes_client,
-        {"title": "Big", "body_markdown": "x" * (NOTES_MAX_BODY + 1)},
-        csrf=csrf,
+    records = []
+    for position, (anchor, text) in enumerate(texts.items()):
+        title = f"Chapter {position + 1}"
+        records.append(
+            CorpusSectionRecord(
+                section=ParsedSection(
+                    position=position,
+                    title=title,
+                    depth=0,
+                    section_path=(title,),
+                    anchor=anchor,
+                    blocks=(
+                        ParsedBlock(
+                            position=0, block_type="paragraph", html_fragment=f"<p>{text}</p>"
+                        ),
+                    ),
+                    anchor_aliases=(),
+                ),
+                markdown=text,
+                chunks=(
+                    SectionChunk(
+                        index=0, text=text, section_path=(title,), anchor=anchor, page_span=None
+                    ),
+                ),
+                block_hashes=(f"hash-{anchor}-0",),
+            )
+        )
+    SqlAlchemyCorpusRepository(db_conn).replace(
+        source_id,
+        title="A Book",
+        authors=(),
+        language="en",
+        schema_version=1,
+        sections=records,
     )
-    assert resp.status_code == 422, resp.text
 
 
-def test_create_note_unauthenticated_returns_401(
+def _seed_anchor(
+    db_conn: Connection,
+    note_id: object,
+    source_id: UUID,
+    *,
+    anchor: str,
+    quote_exact: str,
+    status: str = "active",
+    created: datetime | None = None,
+) -> None:
+    """Attach one more anchor to an existing note, directly (no capture route needed)."""
+    now = created or datetime.now(UTC)
+    SqlAlchemyNoteRepository(db_conn).add_anchor(
+        NoteAnchor(
+            id=uuid4(),
+            note_id=UUID(str(note_id)),
+            source_id=source_id,
+            source_title="A Book",
+            anchor=anchor,
+            section_path=("Chapter 1",),
+            block_hash=None,
+            block_ordinal=None,
+            start_offset=None,
+            end_offset=None,
+            quote_exact=quote_exact,
+            quote_prefix="",
+            quote_suffix="",
+            status=status,
+            created_at=now,
+            updated_at=now,
+        )
+    )
+
+
+def _seed_anchorless_note(db_conn: Connection, user_id: str, *, title: str, body: str = "") -> UUID:
+    """Persist a note with no anchor — the shape every note written before the rule has."""
+    now = datetime.now(UTC)
+    note = Note(
+        id=uuid4(),
+        user_id=UUID(user_id),
+        title=title,
+        body_markdown=body,
+        created_at=now,
+        updated_at=now,
+    )
+    SqlAlchemyNoteRepository(db_conn).add(note)
+    return note.id
+
+
+# --- Creation requires an anchor (WSN-08) --------------------------------------
+
+
+def test_creating_a_note_without_an_anchor_has_no_route(
     notes_client: TestClient, db_conn: Connection
 ) -> None:
-    notes_client.cookies.clear()
-    resp = _post_note(notes_client, {"title": "X"}, csrf="whatever")
-    assert resp.status_code == 401, resp.text
-
-
-def test_create_note_missing_csrf_returns_403(
-    notes_client: TestClient, db_conn: Connection
-) -> None:
-    _register(notes_client, "note-nocsrf@example.com")
-    resp = _post_note(notes_client, {"title": "X"}, csrf=None)
-    assert resp.status_code == 403, resp.text
-
-
-def test_create_note_untrusted_origin_returns_403(
-    notes_client: TestClient, db_conn: Connection
-) -> None:
-    _register(notes_client, "note-origin@example.com")
+    """The rootless create is gone: nothing can post a note that carries no passage."""
+    _register(notes_client, "note-rootless@example.com")
     csrf = _csrf(notes_client)
-    resp = _post_note(notes_client, {"title": "X"}, csrf=csrf, origin="http://evil.example.com")
+
+    resp = notes_client.post(
+        "/api/notes",
+        json={"title": "Rootless", "body_markdown": "no passage", "tags": []},
+        headers={"X-CSRF-Token": csrf},
+    )
+
+    assert resp.status_code == 405, resp.text
+    assert notes_client.get("/api/notes").json() == []
+
+
+def test_capture_untrusted_origin_returns_403(
+    notes_client: TestClient, db_conn: Connection
+) -> None:
+    user_id = _register(notes_client, "note-origin@example.com")
+    csrf = _csrf(notes_client)
+    source_id = _capture_target(db_conn, user_id)
+
+    resp = _post_highlight(
+        notes_client,
+        source_id,
+        {"anchor": "ch1", "title": "X"},
+        csrf=csrf,
+        origin="http://evil.example.com",
+    )
+
     assert resp.status_code == 403, resp.text
 
 
-def test_create_note_rate_limit_returns_429(
+def test_capture_rate_limit_returns_429(
     throttled_notes_client: TestClient, db_conn: Connection
 ) -> None:
-    _register(throttled_notes_client, "note-rl@example.com")
+    user_id = _register(throttled_notes_client, "note-rl@example.com")
     csrf = _csrf(throttled_notes_client)
+    source_id = _capture_target(db_conn, user_id)
+
     for _ in range(3):
-        resp = _post_note(throttled_notes_client, {"title": "X"}, csrf=csrf)
+        resp = _post_highlight(
+            throttled_notes_client, source_id, {"anchor": "ch1", "title": "X"}, csrf=csrf
+        )
         assert resp.status_code == 201, resp.text
-    throttled = _post_note(throttled_notes_client, {"title": "X"}, csrf=csrf)
+    throttled = _post_highlight(
+        throttled_notes_client, source_id, {"anchor": "ch1", "title": "X"}, csrf=csrf
+    )
+
     assert throttled.status_code == 429, throttled.text
     assert "retry-after" in {k.lower() for k in throttled.headers}
+
+
+# --- Notes written before the anchor rule (WSN-09, WSN-16) ---------------------
+
+
+def test_anchorless_note_still_lists_and_opens(
+    notes_client: TestClient, db_conn: Connection
+) -> None:
+    """A note with no anchor predates the rule; nothing about reading it changed."""
+    user_id = _register(notes_client, "note-legacy-read@example.com")
+    note_id = _seed_anchorless_note(db_conn, user_id, title="Old thought", body="written before")
+
+    listed = notes_client.get("/api/notes")
+    opened = notes_client.get(f"/api/notes/{note_id}")
+
+    assert listed.status_code == 200, listed.text
+    rows = listed.json()
+    assert [row["id"] for row in rows] == [str(note_id)]
+    assert rows[0]["anchor_statuses"] == []
+    assert opened.status_code == 200, opened.text
+    assert opened.json()["title"] == "Old thought"
+    assert opened.json()["body_markdown"] == "written before"
+    assert opened.json()["anchors"] == []
+
+
+def test_anchorless_note_still_edits_and_stays_anchorless(
+    notes_client: TestClient, db_conn: Connection
+) -> None:
+    """Editing one never grows it an anchor: its anchored state is fixed at creation."""
+    user_id = _register(notes_client, "note-legacy-edit@example.com")
+    csrf = _csrf(notes_client)
+    note_id = _seed_anchorless_note(db_conn, user_id, title="Old", body="first")
+
+    resp = _patch_note(
+        notes_client,
+        note_id,
+        {"title": "Reworked", "body_markdown": "second", "tags": ["kept"]},
+        csrf=csrf,
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["title"] == "Reworked"
+    assert resp.json()["body_markdown"] == "second"
+    assert resp.json()["tags"] == ["kept"]
+    assert resp.json()["anchors"] == []
+    assert notes_client.get(f"/api/notes/{note_id}").json()["anchors"] == []
+
+
+def test_anchorless_note_still_deletes(notes_client: TestClient, db_conn: Connection) -> None:
+    user_id = _register(notes_client, "note-legacy-delete@example.com")
+    csrf = _csrf(notes_client)
+    note_id = _seed_anchorless_note(db_conn, user_id, title="Old", body="going away")
+
+    resp = _delete_note(notes_client, note_id, csrf=csrf)
+
+    assert resp.status_code == 204, resp.text
+    assert notes_client.get(f"/api/notes/{note_id}").status_code == 404
+    assert notes_client.get("/api/notes").json() == []
+
+
+def test_anchorless_and_anchored_notes_list_side_by_side(
+    notes_client: TestClient, db_conn: Connection
+) -> None:
+    """The rule constrains creation only — both kinds coexist in one list."""
+    user_id = _register(notes_client, "note-legacy-mixed@example.com")
+    csrf = _csrf(notes_client)
+    legacy_id = _seed_anchorless_note(db_conn, user_id, title="Rootless")
+    source_id = _capture_target(db_conn, user_id)
+    anchored = _created_note(notes_client, csrf, source_id, title="Anchored")
+
+    rows = notes_client.get("/api/notes").json()
+
+    by_id = {row["id"]: row for row in rows}
+    assert set(by_id) == {str(legacy_id), anchored["id"]}
+    assert by_id[str(legacy_id)]["anchor_statuses"] == []
+    assert by_id[anchored["id"]]["anchor_statuses"] == ["active"]
 
 
 # --- List (NF-13) --------------------------------------------------------------
@@ -381,10 +551,11 @@ def test_create_note_rate_limit_returns_429(
 def test_list_notes_newest_edited_first_and_owner_scoped(
     notes_client: TestClient, db_conn: Connection
 ) -> None:
-    _register(notes_client, "note-list@example.com")
+    user_id = _register(notes_client, "note-list@example.com")
     csrf = _csrf(notes_client)
-    _created_note(notes_client, csrf, title="First")
-    _created_note(notes_client, csrf, title="Second")
+    source_id = _capture_target(db_conn, user_id)
+    _created_note(notes_client, csrf, source_id, title="First")
+    _created_note(notes_client, csrf, source_id, title="Second")
 
     resp = notes_client.get("/api/notes")
 
@@ -396,18 +567,23 @@ def test_list_notes_newest_edited_first_and_owner_scoped(
         "title",
         "tags",
         "anchor_statuses",
+        "anchor",
         "created_at",
         "updated_at",
     }
+    # The cross-book list has no single book to represent a note by, so it carries no
+    # passage and no page.
+    assert [r["anchor"] for r in rows] == [None, None]
 
 
 def test_list_notes_filters_by_tag_case_insensitively(
     notes_client: TestClient, db_conn: Connection
 ) -> None:
-    _register(notes_client, "note-tagfilter@example.com")
+    user_id = _register(notes_client, "note-tagfilter@example.com")
     csrf = _csrf(notes_client)
-    _created_note(notes_client, csrf, title="Tagged", tags=["python"])
-    _created_note(notes_client, csrf, title="Untagged")
+    source_id = _capture_target(db_conn, user_id)
+    _created_note(notes_client, csrf, source_id, title="Tagged", tags=["python"])
+    _created_note(notes_client, csrf, source_id, title="Untagged")
 
     resp = notes_client.get("/api/notes", params={"tag": "PYTHON"})
 
@@ -422,13 +598,158 @@ def test_list_notes_unauthenticated_returns_401(
     assert notes_client.get("/api/notes").status_code == 401
 
 
+# --- List scoped to one book (WSN-01/02/03/10/11/15) ---------------------------
+
+
+def test_list_notes_scoped_to_a_book_lists_only_its_notes_with_their_passages(
+    notes_client: TestClient, db_conn: Connection
+) -> None:
+    user_id = _register(notes_client, "note-by-book@example.com")
+    csrf = _csrf(notes_client)
+    this_book = _persist_source(db_conn, user_id, title="This Book")
+    _seed_two_chapter_corpus(db_conn, this_book, first_chapter_words=25)
+    other_book = _capture_target(db_conn, user_id)
+    _created_note(
+        notes_client,
+        csrf,
+        this_book,
+        anchor="ch2",
+        quote_exact="quick brown",
+        title="On this book",
+    )
+    _created_note(notes_client, csrf, other_book, title="On the other book")
+    _seed_anchorless_note(db_conn, user_id, title="No book at all")
+
+    resp = notes_client.get("/api/notes", params={"source_id": str(this_book)})
+
+    assert resp.status_code == 200, resp.text
+    rows = resp.json()
+    assert [row["title"] for row in rows] == ["On this book"]
+    passage = rows[0]["anchor"]
+    assert passage["anchor"] == "ch2"
+    assert passage["section_title"] == "Chapter 2"
+    assert passage["section_path"] == ["Chapter 2"]
+    assert passage["quote_exact"] == "quick brown"
+    assert passage["status"] == "active"
+    # 25 words precede chapter two; at 10 words to a page that is page 3, counted from
+    # the book's first word rather than restarted per chapter.
+    assert passage["page"] == 3
+
+
+def test_list_notes_scoped_to_a_book_lists_a_twice_anchored_note_once(
+    notes_client: TestClient, db_conn: Connection
+) -> None:
+    user_id = _register(notes_client, "note-twice-anchored@example.com")
+    csrf = _csrf(notes_client)
+    source_id = _capture_target(db_conn, user_id)
+    note = _created_note(
+        notes_client, csrf, source_id, quote_exact="quick brown", title="Twice anchored"
+    )
+    _seed_anchor(
+        db_conn,
+        note["id"],
+        source_id,
+        anchor="ch1",
+        quote_exact="the lazy dog",
+        created=datetime.now(UTC) + timedelta(hours=1),
+    )
+
+    rows = notes_client.get("/api/notes", params={"source_id": str(source_id)}).json()
+
+    assert [row["title"] for row in rows] == ["Twice anchored"]
+    # The row stands for the passage the note came from — its earliest anchor here.
+    assert rows[0]["anchor"]["quote_exact"] == "quick brown"
+
+
+def test_list_notes_scoped_to_a_book_keeps_an_orphaned_rows_quote_and_shows_no_page(
+    notes_client: TestClient, db_conn: Connection
+) -> None:
+    user_id = _register(notes_client, "note-orphan-row@example.com")
+    source_id = _capture_target(db_conn, user_id)
+    note_id = _seed_anchorless_note(db_conn, user_id, title="Outlived its section")
+    _seed_anchor(
+        db_conn,
+        note_id,
+        source_id,
+        anchor="ch-gone",
+        quote_exact="a passage the re-ingest lost",
+        status="orphaned",
+    )
+
+    rows = notes_client.get("/api/notes", params={"source_id": str(source_id)}).json()
+
+    assert [row["title"] for row in rows] == ["Outlived its section"]
+    assert rows[0]["anchor"]["quote_exact"] == "a passage the re-ingest lost"
+    assert rows[0]["anchor"]["status"] == "orphaned"
+    assert rows[0]["anchor"]["page"] is None
+
+
+def test_list_notes_scoped_to_a_book_composes_with_the_tag_filter(
+    notes_client: TestClient, db_conn: Connection
+) -> None:
+    user_id = _register(notes_client, "note-book-and-tag@example.com")
+    csrf = _csrf(notes_client)
+    source_id = _capture_target(db_conn, user_id)
+    other_book = _capture_target(db_conn, user_id)
+    _created_note(notes_client, csrf, source_id, title="Tagged here", tags=["python"])
+    _created_note(notes_client, csrf, source_id, title="Untagged here")
+    _created_note(notes_client, csrf, other_book, title="Tagged elsewhere", tags=["python"])
+
+    rows = notes_client.get(
+        "/api/notes", params={"source_id": str(source_id), "tag": "PYTHON"}
+    ).json()
+
+    assert [row["title"] for row in rows] == ["Tagged here"]
+
+
+def test_list_notes_scoped_to_a_book_with_no_notes_is_an_empty_list(
+    notes_client: TestClient, db_conn: Connection
+) -> None:
+    user_id = _register(notes_client, "note-empty-book@example.com")
+    csrf = _csrf(notes_client)
+    source_id = _capture_target(db_conn, user_id)
+    empty_book = _capture_target(db_conn, user_id)
+    _created_note(notes_client, csrf, source_id, title="Elsewhere")
+
+    resp = notes_client.get("/api/notes", params={"source_id": str(empty_book)})
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == []
+
+
+def test_list_notes_non_owned_and_unknown_source_return_identical_404(
+    notes_client: TestClient, db_conn: Connection
+) -> None:
+    owner_id = _register(notes_client, "note-book-owner@example.com")
+    source_id = _capture_target(db_conn, owner_id)
+    _created_note(notes_client, _csrf(notes_client), source_id, title="Owned")
+
+    _register(notes_client, "note-book-intruder@example.com")  # become a different user
+
+    non_owned = notes_client.get("/api/notes", params={"source_id": str(source_id)})
+    missing = notes_client.get("/api/notes", params={"source_id": str(uuid4())})
+
+    assert non_owned.status_code == 404, non_owned.text
+    assert missing.status_code == 404, missing.text
+    assert non_owned.json() == missing.json()  # no existence disclosure
+
+
+def test_list_notes_rejects_a_source_id_that_is_not_a_uuid(
+    notes_client: TestClient, db_conn: Connection
+) -> None:
+    _register(notes_client, "note-bad-source@example.com")
+
+    assert notes_client.get("/api/notes", params={"source_id": "not-a-uuid"}).status_code == 422
+
+
 # --- Get (NF-05/10) ------------------------------------------------------------
 
 
 def test_get_note_returns_200_detail(notes_client: TestClient, db_conn: Connection) -> None:
-    _register(notes_client, "note-get@example.com")
+    user_id = _register(notes_client, "note-get@example.com")
     csrf = _csrf(notes_client)
-    note = _created_note(notes_client, csrf, title="Readable", body_markdown="body")
+    source_id = _capture_target(db_conn, user_id)
+    note = _created_note(notes_client, csrf, source_id, title="Readable", body_markdown="body")
 
     resp = notes_client.get(f"/api/notes/{note['id']}")
 
@@ -440,8 +761,9 @@ def test_get_note_returns_200_detail(notes_client: TestClient, db_conn: Connecti
 def test_get_note_missing_and_non_owned_return_identical_404(
     notes_client: TestClient, db_conn: Connection
 ) -> None:
-    _register(notes_client, "note-get-owner@example.com")
-    note = _created_note(notes_client, _csrf(notes_client), title="Owned")
+    user_id = _register(notes_client, "note-get-owner@example.com")
+    source_id = _capture_target(db_conn, user_id)
+    note = _created_note(notes_client, _csrf(notes_client), source_id, title="Owned")
 
     _register(notes_client, "note-get-intruder@example.com")  # become a different user
 
@@ -466,9 +788,10 @@ def test_get_note_unauthenticated_returns_401(
 def test_update_note_rewrites_and_returns_detail(
     notes_client: TestClient, db_conn: Connection
 ) -> None:
-    _register(notes_client, "note-update@example.com")
+    user_id = _register(notes_client, "note-update@example.com")
     csrf = _csrf(notes_client)
-    note = _created_note(notes_client, csrf, title="Old", tags=["old"])
+    source_id = _capture_target(db_conn, user_id)
+    note = _created_note(notes_client, csrf, source_id, title="Old", tags=["old"])
 
     resp = _patch_note(
         notes_client,
@@ -487,9 +810,10 @@ def test_update_note_rewrites_and_returns_detail(
 def test_update_note_over_cap_body_returns_422(
     notes_client: TestClient, db_conn: Connection
 ) -> None:
-    _register(notes_client, "note-update-cap@example.com")
+    user_id = _register(notes_client, "note-update-cap@example.com")
     csrf = _csrf(notes_client)
-    note = _created_note(notes_client, csrf, title="X")
+    source_id = _capture_target(db_conn, user_id)
+    note = _created_note(notes_client, csrf, source_id, title="X")
     resp = _patch_note(
         notes_client,
         note["id"],
@@ -500,8 +824,9 @@ def test_update_note_over_cap_body_returns_422(
 
 
 def test_update_note_non_owned_returns_404(notes_client: TestClient, db_conn: Connection) -> None:
-    _register(notes_client, "note-update-owner@example.com")
-    note = _created_note(notes_client, _csrf(notes_client), title="Owned")
+    user_id = _register(notes_client, "note-update-owner@example.com")
+    source_id = _capture_target(db_conn, user_id)
+    note = _created_note(notes_client, _csrf(notes_client), source_id, title="Owned")
 
     _register(notes_client, "note-update-intruder@example.com")
     csrf = _csrf(notes_client)
@@ -512,9 +837,10 @@ def test_update_note_non_owned_returns_404(notes_client: TestClient, db_conn: Co
 def test_update_note_missing_csrf_returns_403(
     notes_client: TestClient, db_conn: Connection
 ) -> None:
-    _register(notes_client, "note-update-csrf@example.com")
+    user_id = _register(notes_client, "note-update-csrf@example.com")
     csrf = _csrf(notes_client)
-    note = _created_note(notes_client, csrf, title="X")
+    source_id = _capture_target(db_conn, user_id)
+    note = _created_note(notes_client, csrf, source_id, title="X")
     resp = _patch_note(notes_client, note["id"], {"title": "Y"}, csrf=None)
     assert resp.status_code == 403, resp.text
 
@@ -522,41 +848,15 @@ def test_update_note_missing_csrf_returns_403(
 # --- Async embed enqueue (NL-01, NL-07) ----------------------------------------
 
 
-def test_create_note_with_body_enqueues_embed_after_commit(
-    notes_client: TestClient, db_conn: Connection
-) -> None:
-    """A create with a non-empty body enqueues exactly one embed for the new note (NL-01)."""
-    _register(notes_client, "note-embed-create@example.com")
-    csrf = _csrf(notes_client)
-    enq = notes_client.app.state.note_enqueuer
-
-    note = _created_note(notes_client, csrf, title="T", body_markdown="a distinctive fact")
-
-    assert enq.embed_calls == [UUID(note["id"])]
-
-
-def test_create_note_empty_body_enqueues_nothing(
-    notes_client: TestClient, db_conn: Connection
-) -> None:
-    """An empty-body note has nothing to embed, so no embed is enqueued (NL-01)."""
-    _register(notes_client, "note-embed-empty@example.com")
-    csrf = _csrf(notes_client)
-    enq = notes_client.app.state.note_enqueuer
-
-    _created_note(notes_client, csrf, title="Bare", body_markdown="")
-
-    assert enq.embed_calls == []
-
-
 def test_update_note_body_change_enqueues_embed_after_commit(
     notes_client: TestClient, db_conn: Connection
 ) -> None:
     """Editing the body re-embeds after commit (NL-01)."""
-    _register(notes_client, "note-embed-update@example.com")
+    user_id = _register(notes_client, "note-embed-update@example.com")
     csrf = _csrf(notes_client)
+    source_id = _capture_target(db_conn, user_id)
     enq = notes_client.app.state.note_enqueuer
-    note = _created_note(notes_client, csrf, title="N", body_markdown="")
-    assert enq.embed_calls == []  # empty-body create enqueued nothing
+    note = _created_note(notes_client, csrf, source_id, title="N", body_markdown="")
 
     resp = _patch_note(
         notes_client,
@@ -569,15 +869,58 @@ def test_update_note_body_change_enqueues_embed_after_commit(
     assert enq.embed_calls == [UUID(note["id"])]
 
 
+def test_capturing_a_note_with_a_body_enqueues_its_embed(
+    notes_client: TestClient, db_conn: Connection
+) -> None:
+    """A captured note with a body is queued for embedding (NL-01).
+
+    Capture is the only way a note is born, so if it does not enqueue, no note is ever
+    embedded and the notes retrieval arm — which only sees rows whose embedding is
+    present — silently stops seeing anything created from now on.
+    """
+    user_id = _register(notes_client, "note-embed-capture@example.com")
+    csrf = _csrf(notes_client)
+    source_id = _capture_target(db_conn, user_id)
+    enq = notes_client.app.state.note_enqueuer
+
+    note = _created_note(
+        notes_client, csrf, source_id, title="Captured", body_markdown="worth embedding"
+    )
+
+    assert enq.embed_calls == [UUID(note["id"])]
+
+
+def test_capturing_a_bare_highlight_enqueues_no_embed(
+    notes_client: TestClient, db_conn: Connection
+) -> None:
+    """A capture with no body has nothing to embed, so nothing is queued (NL-01)."""
+    user_id = _register(notes_client, "note-embed-bare@example.com")
+    csrf = _csrf(notes_client)
+    source_id = _capture_target(db_conn, user_id)
+    enq = notes_client.app.state.note_enqueuer
+
+    _created_note(notes_client, csrf, source_id, title="Bare", body_markdown="")
+
+    assert enq.embed_calls == []
+
+
 def test_update_note_title_or_tags_only_enqueues_no_embed(
     notes_client: TestClient, db_conn: Connection
 ) -> None:
     """A PATCH that leaves the body byte-identical enqueues no re-embed (NL-01)."""
-    _register(notes_client, "note-embed-titleonly@example.com")
+    user_id = _register(notes_client, "note-embed-titleonly@example.com")
     csrf = _csrf(notes_client)
+    source_id = _capture_target(db_conn, user_id)
     enq = notes_client.app.state.note_enqueuer
-    note = _created_note(notes_client, csrf, title="Keep", body_markdown="stable body")
-    assert enq.embed_calls == [UUID(note["id"])]  # the create embedded once
+    note = _created_note(notes_client, csrf, source_id, title="Keep")
+    written = _patch_note(
+        notes_client,
+        note["id"],
+        {"title": "Keep", "body_markdown": "stable body", "tags": []},
+        csrf=csrf,
+    )
+    assert written.status_code == 200, written.text
+    assert enq.embed_calls == [UUID(note["id"])]  # the body edit embedded once
 
     resp = _patch_note(
         notes_client,
@@ -587,7 +930,7 @@ def test_update_note_title_or_tags_only_enqueues_no_embed(
     )
 
     assert resp.status_code == 200, resp.text
-    # No second enqueue — only the create's embed remains.
+    # No second enqueue — only the body edit's embed remains.
     assert enq.embed_calls == [UUID(note["id"])]
 
 
@@ -626,8 +969,9 @@ def test_update_promoted_note_body_change_enqueues_refresh(
     """A body edit on a note with live cards enqueues a regenerate-and-match (NL-10)."""
     user_id = _register(notes_client, "note-refresh-promoted@example.com")
     csrf = _csrf(notes_client)
+    source_id = _capture_target(db_conn, user_id)
     enq = notes_client.app.state.note_enqueuer
-    note = _created_note(notes_client, csrf, title="N", body_markdown="first body")
+    note = _created_note(notes_client, csrf, source_id, title="N", body_markdown="first body")
     _promote_note(db_conn, UUID(note["id"]), user_id)
 
     resp = _patch_note(
@@ -645,10 +989,11 @@ def test_update_unpromoted_note_body_change_enqueues_no_refresh(
     notes_client: TestClient, db_conn: Connection
 ) -> None:
     """A body edit on a note with no cards enqueues an embed but no refresh (NL-10 gate)."""
-    _register(notes_client, "note-refresh-unpromoted@example.com")
+    user_id = _register(notes_client, "note-refresh-unpromoted@example.com")
     csrf = _csrf(notes_client)
+    source_id = _capture_target(db_conn, user_id)
     enq = notes_client.app.state.note_enqueuer
-    note = _created_note(notes_client, csrf, title="N", body_markdown="first body")
+    note = _created_note(notes_client, csrf, source_id, title="N", body_markdown="first body")
 
     resp = _patch_note(
         notes_client,
@@ -667,8 +1012,9 @@ def test_update_promoted_note_title_only_enqueues_no_refresh(
     """A title/tags-only edit never regenerates cards — the body is byte-identical."""
     user_id = _register(notes_client, "note-refresh-titleonly@example.com")
     csrf = _csrf(notes_client)
+    source_id = _capture_target(db_conn, user_id)
     enq = notes_client.app.state.note_enqueuer
-    note = _created_note(notes_client, csrf, title="Keep", body_markdown="stable body")
+    note = _created_note(notes_client, csrf, source_id, title="Keep", body_markdown="stable body")
     _promote_note(db_conn, UUID(note["id"]), user_id)
 
     resp = _patch_note(
@@ -684,10 +1030,11 @@ def test_update_promoted_note_title_only_enqueues_no_refresh(
 
 def test_delete_note_enqueues_nothing(notes_client: TestClient, db_conn: Connection) -> None:
     """Deleting a note enqueues no index work — its index rows die with it (NL-07)."""
-    _register(notes_client, "note-embed-delete@example.com")
+    user_id = _register(notes_client, "note-embed-delete@example.com")
     csrf = _csrf(notes_client)
+    source_id = _capture_target(db_conn, user_id)
     enq = notes_client.app.state.note_enqueuer
-    note = _created_note(notes_client, csrf, title="Doomed", body_markdown="")
+    note = _created_note(notes_client, csrf, source_id, title="Doomed", body_markdown="")
 
     resp = _delete_note(notes_client, note["id"], csrf=csrf)
 
@@ -700,9 +1047,10 @@ def test_delete_note_enqueues_nothing(notes_client: TestClient, db_conn: Connect
 
 
 def test_delete_note_returns_204_then_404(notes_client: TestClient, db_conn: Connection) -> None:
-    _register(notes_client, "note-delete@example.com")
+    user_id = _register(notes_client, "note-delete@example.com")
     csrf = _csrf(notes_client)
-    note = _created_note(notes_client, csrf, title="Doomed")
+    source_id = _capture_target(db_conn, user_id)
+    note = _created_note(notes_client, csrf, source_id, title="Doomed")
 
     resp = _delete_note(notes_client, note["id"], csrf=csrf)
     assert resp.status_code == 204, resp.text
@@ -712,8 +1060,9 @@ def test_delete_note_returns_204_then_404(notes_client: TestClient, db_conn: Con
 
 
 def test_delete_note_non_owned_returns_404(notes_client: TestClient, db_conn: Connection) -> None:
-    _register(notes_client, "note-delete-owner@example.com")
-    note = _created_note(notes_client, _csrf(notes_client), title="Owned")
+    user_id = _register(notes_client, "note-delete-owner@example.com")
+    source_id = _capture_target(db_conn, user_id)
+    note = _created_note(notes_client, _csrf(notes_client), source_id, title="Owned")
 
     _register(notes_client, "note-delete-intruder@example.com")
     csrf = _csrf(notes_client)
@@ -724,9 +1073,10 @@ def test_delete_note_non_owned_returns_404(notes_client: TestClient, db_conn: Co
 def test_delete_note_missing_csrf_returns_403(
     notes_client: TestClient, db_conn: Connection
 ) -> None:
-    _register(notes_client, "note-delete-csrf@example.com")
+    user_id = _register(notes_client, "note-delete-csrf@example.com")
     csrf = _csrf(notes_client)
-    note = _created_note(notes_client, csrf, title="X")
+    source_id = _capture_target(db_conn, user_id)
+    note = _created_note(notes_client, csrf, source_id, title="X")
     resp = _delete_note(notes_client, note["id"], csrf=None)
     assert resp.status_code == 403, resp.text
 
@@ -735,10 +1085,11 @@ def test_delete_note_missing_csrf_returns_403(
 
 
 def test_backlinks_returns_inbound_links(notes_client: TestClient, db_conn: Connection) -> None:
-    _register(notes_client, "note-backlinks@example.com")
+    user_id = _register(notes_client, "note-backlinks@example.com")
     csrf = _csrf(notes_client)
-    target = _created_note(notes_client, csrf, title="Target")
-    linker = _created_note(notes_client, csrf, title="Link", body_markdown="[[Target]]")
+    source_id = _capture_target(db_conn, user_id)
+    target = _created_note(notes_client, csrf, source_id, title="Target")
+    linker = _created_note(notes_client, csrf, source_id, title="Link", body_markdown="[[Target]]")
 
     resp = notes_client.get(f"/api/notes/{target['id']}/backlinks")
 
@@ -794,6 +1145,62 @@ def test_capture_highlight_returns_201_with_anchor_jumpback(
     assert anchor["source_title"] == "A Book"
     assert anchor["status"] == "active"
     assert anchor["section_path"] == ["Chapter 1"]
+
+
+def test_capture_highlight_without_a_quote_returns_201_with_a_section_level_anchor(
+    notes_client: TestClient, db_conn: Connection
+) -> None:
+    user_id = _register(notes_client, "hl-noquote@example.com")
+    csrf = _csrf(notes_client)
+    source_id = _persist_source(db_conn, user_id)
+    _seed_corpus(
+        db_conn,
+        source_id,
+        anchor="ch1",
+        block_html="<p>The quick brown fox jumps over the lazy dog.</p>",
+    )
+
+    resp = _post_highlight(
+        notes_client,
+        source_id,
+        {"anchor": "ch1", "title": "About this chapter", "body_markdown": ""},
+        csrf=csrf,
+    )
+
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert len(body["anchors"]) == 1
+    anchor = body["anchors"][0]
+    assert anchor["source_id"] == str(source_id)
+    assert anchor["anchor"] == "ch1"
+    assert anchor["section_path"] == ["Chapter 1"]
+    assert anchor["quote_exact"] == ""
+    assert anchor["block_ordinal"] is None
+    assert anchor["start_offset"] is None
+    assert anchor["end_offset"] is None
+    assert anchor["status"] == "active"
+    # The note is durable, not just echoed back.
+    assert [row["id"] for row in notes_client.get("/api/notes").json()] == [body["id"]]
+
+
+def test_capture_highlight_without_a_quote_over_cap_body_persists_nothing(
+    notes_client: TestClient, db_conn: Connection
+) -> None:
+    user_id = _register(notes_client, "hl-noquote-toolong@example.com")
+    csrf = _csrf(notes_client)
+    source_id = _persist_source(db_conn, user_id)
+    _seed_corpus(db_conn, source_id, anchor="ch1", block_html="<p>Present text.</p>")
+
+    resp = _post_highlight(
+        notes_client,
+        source_id,
+        {"anchor": "ch1", "title": "h", "body_markdown": "x" * (NOTES_MAX_BODY + 1)},
+        csrf=csrf,
+    )
+
+    assert resp.status_code == 422, resp.text
+    assert notes_client.get("/api/notes").json() == []
+    assert notes_client.get(f"/api/sources/{source_id}/highlights").json() == []
 
 
 def test_capture_highlight_over_cap_body_returns_422(

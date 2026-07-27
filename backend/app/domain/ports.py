@@ -1084,11 +1084,18 @@ class NoteRepository(Protocol):
         """Delete a note; its anchors/tags/links cascade, inbound links SET NULL (NF-01)."""
         ...
 
-    def list_summaries(self, user_id: UUID, *, tag: str | None = None) -> list[NoteSummary]:
+    def list_summaries(
+        self, user_id: UUID, *, tag: str | None = None, source_id: UUID | None = None
+    ) -> list[NoteSummary]:
         """Return the user's notes (newest-edited first) with tags and anchor statuses.
 
         When ``tag`` (already lowercased) is given, only notes carrying that tag are
         returned; every returned summary still lists all of its tags (NF-13).
+
+        When ``source_id`` is given, only notes with at least one anchor on that source
+        are returned — each exactly once, however many times it is anchored there — and
+        each summary carries its earliest-created anchor on that source. The two filters
+        compose; the order is the same total ``updated_at DESC, id`` either way.
         """
         ...
 

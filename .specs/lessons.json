@@ -3,7 +3,7 @@
   "promote_threshold": 2,
   "window_days": 45,
   "quarantine_threshold": 2,
-  "next_id": 16,
+  "next_id": 17,
   "lessons": [
     {
       "id": "L-001",
@@ -274,6 +274,24 @@
       ],
       "created": "2026-07-24T16:53:30Z",
       "last_seen": "2026-07-24T16:53:30Z"
+    },
+    {
+      "id": "L-016",
+      "key": "spec_precision_gap::when an implicit requirement sweep resolves a bounds limits dimension name the concrete bound page size cap or deliberately unbounded because x bounded like the shipped list conventions names no assertion and wsn 11 shipped with the validation half sensed and the bounds half neither implemented nor tested",
+      "text": "When an implicit-requirement sweep resolves a bounds/limits dimension, name the concrete bound (page size, cap, or 'deliberately unbounded because X') — 'bounded like the shipped list conventions' names no assertion, and WSN-11 shipped with the validation half sensed and the bounds half neither implemented nor tested.",
+      "signal": "spec_precision_gap",
+      "scope": "backend/app/infrastructure/web",
+      "status": "candidate",
+      "features": [
+        "v6-workspace-notes"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "spec.md:59 (WSN-11); backend/app/infrastructure/web/notes.py:302 (backend/app/infrastructure/web)"
+      ],
+      "created": "2026-07-27T02:58:13Z",
+      "last_seen": "2026-07-27T02:58:13Z"
     }
   ]
 }

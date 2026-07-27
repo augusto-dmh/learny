@@ -19,6 +19,11 @@
  * `onRequireAuth` is a UX-only redirect for unauthenticated users, NOT the
  * security boundary — FastAPI enforces auth and per-user ownership on every
  * review call regardless of client-side routing (FR-AUTH-007, ADR-017).
+ *
+ * `onGraded` fires after each accepted grade so a host rendering this screen
+ * beside its own due figure can re-read it. Whole-page hosts ignore it; the
+ * reader's dock needs it, because there the count sits next to the queue being
+ * drained and would otherwise keep showing the number from before the session.
  */
 
 import Link from "next/link";
@@ -59,9 +64,11 @@ const EMPTY_TALLY: Tally = { 1: 0, 2: 0, 3: 0, 4: 0 };
 export function ReviewScreen({
   sourceId,
   onRequireAuth,
+  onGraded,
 }: {
   sourceId?: string;
   onRequireAuth?: () => void;
+  onGraded?: () => void;
 }) {
   const [csrf, setCsrf] = useState<string | null>(null);
   const [authed, setAuthed] = useState<boolean | null>(null);
@@ -130,6 +137,7 @@ export function ReviewScreen({
       );
       setTally((prev) => ({ ...prev, [rating]: prev[rating] + 1 }));
       setIndex((i) => i + 1);
+      onGraded?.();
     } catch (err) {
       setSubmitError(
         err instanceof Error ? err.message : "Could not submit your review.",

@@ -3,20 +3,26 @@
  *
  * Verifies each helper targets the right same-origin path with `credentials:
  * "same-origin"`, echoes the CSRF token in `X-CSRF-Token` on the state-changing
- * create/update/delete/capture calls (AD-007) and sends none on the reads, builds
- * the list query from the optional `tag` filter (percent-encoded), passes each
- * success payload (note detail with anchors, summaries with anchor statuses,
- * backlinks) through unchanged, and surfaces a typed `NoteError` on every
+ * update/delete/capture calls (AD-007) and sends none on the reads, builds
+ * the list query from the optional `tag` and `source_id` filters (percent-encoded),
+ * passes each success payload (note detail with anchors, summaries with anchor
+ * statuses, backlinks) through unchanged, and surfaces a typed `NoteError` on every
  * documented error status — mapping 409 → `stale_capture`, 422 → `body_too_long`,
  * anything else → `unknown` — preferring the backend `detail` with a readable
  * fallback for a 422 list detail or an unparseable body. No real network.
+ *
+ * It also holds the provenance gate (P3): capture is the only creation helper, and
+ * no browser-side module posts a note without a passage.
  */
+
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { describe, expect, it, vi } from "vitest";
 
 import {
   captureHighlight,
-  createNote,
   deleteNote,
   getBacklinks,
   getNote,
@@ -27,6 +33,7 @@ import {
   type NoteDetail,
   type NoteSummary,
 } from "../app/lib/notes";
+import * as notesClient from "../app/lib/notes";
 
 const anchor = {
   id: "a1",
@@ -58,8 +65,23 @@ const summary: NoteSummary = {
   title: "Ada's algorithm",
   tags: ["history"],
   anchor_statuses: ["active", "orphaned"],
+  // The cross-book list has no single book to represent the note by.
+  anchor: null,
   created_at: "now",
   updated_at: "now",
+};
+
+/** The same row as the book-scoped list returns it: with the passage it came from. */
+const bookSummary: NoteSummary = {
+  ...summary,
+  anchor: {
+    anchor: "chapter-1.xhtml#core-idea",
+    section_title: "Core Idea",
+    section_path: ["Chapter 1", "Core Idea"],
+    quote_exact: "wrote the first algorithm",
+    status: "active",
+    page: 62,
+  },
 };
 
 const backlink: Backlink = { note_id: "n2", title: "Babbage" };
@@ -77,67 +99,40 @@ function fetchMockFn(
   return vi.fn<(...args: [string, RequestInit]) => Promise<Response>>(impl);
 }
 
-describe("createNote (NF-11)", () => {
-  it("POSTs /api/notes with the CSRF token and passes the note through", async () => {
-    const fetchMock = fetchMockFn(async () => jsonResponse(201, noteDetail));
+/** Every `.ts`/`.tsx` file under `dir`, recursively. */
+function sourceFiles(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      return sourceFiles(path);
+    }
+    return /\.tsx?$/.test(entry.name) ? [path] : [];
+  });
+}
 
-    const result = await createNote(
-      { title: "Ada's algorithm", body_markdown: "A note about [[Babbage]].", tags: ["history"] },
-      "csrf-xyz",
-      fetchMock as unknown as typeof fetch,
-    );
-
-    expect(result).toEqual(noteDetail);
-    const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe("/api/notes");
-    expect(init.method).toBe("POST");
-    expect(init.credentials).toBe("same-origin");
-    const headers = new Headers(init.headers);
-    expect(headers.get("X-CSRF-Token")).toBe("csrf-xyz");
-    expect(headers.get("content-type")).toBe("application/json");
-    expect(JSON.parse(init.body as string)).toEqual({
-      title: "Ada's algorithm",
-      body_markdown: "A note about [[Babbage]].",
-      tags: ["history"],
-    });
-    // The anchor payload the detail screen renders survives the round-trip.
-    expect(result.anchors[0].status).toBe("active");
-    expect(result.anchors[0].source_id).toBe("s1");
+describe("note creation always carries a passage (P3)", () => {
+  it("exposes no helper that creates a note without an anchor", () => {
+    // Capture is the one way in; a bare-title create no longer exists.
+    expect(Object.keys(notesClient)).toContain("captureHighlight");
+    expect(
+      Object.keys(notesClient).filter((name) => name.startsWith("create")),
+    ).toEqual([]);
   });
 
-  it("raises a body_too_long NoteError on a 422 over-cap response", async () => {
-    const fetchMock = fetchMockFn(async () =>
-      jsonResponse(422, { detail: "Note body is too long." }),
-    );
+  it("has no browser-side module posting to the notes collection", () => {
+    // Read the committed source, so a second client added anywhere in the
+    // frontend fails here rather than quietly re-opening the rootless path.
+    const posts = ["app", "components", "hooks", "lib"]
+      .flatMap((dir) =>
+        sourceFiles(fileURLToPath(new URL(`../${dir}`, import.meta.url))),
+      )
+      .filter((file) =>
+        /["`]\/api\/notes["`][\s\S]{0,200}?method:\s*"POST"/.test(
+          readFileSync(file, "utf8"),
+        ),
+      );
 
-    const err = await createNote(
-      { title: "x" },
-      "csrf-xyz",
-      fetchMock as unknown as typeof fetch,
-    ).catch((e) => e);
-
-    expect(err).toBeInstanceOf(NoteError);
-    expect(err.kind).toBe("body_too_long");
-    expect(err.status).toBe(422);
-    expect(err.message).toBe("Note body is too long.");
-  });
-
-  it("falls back to a readable message when a 422 detail is a list, not a string", async () => {
-    const fetchMock = fetchMockFn(async () =>
-      jsonResponse(422, {
-        detail: [{ type: "string_type", loc: ["body", "title"], msg: "str" }],
-      }),
-    );
-
-    const err = await createNote(
-      { title: "x" },
-      "csrf-xyz",
-      fetchMock as unknown as typeof fetch,
-    ).catch((e) => e);
-
-    expect(err).toBeInstanceOf(NoteError);
-    expect(err.kind).toBe("body_too_long");
-    expect(err.message).toBe("Could not create the note.");
+    expect(posts).toEqual([]);
   });
 });
 
@@ -167,6 +162,48 @@ describe("listNotes (NF-11)", () => {
     );
 
     expect(fetchMock.mock.calls[0][0]).toBe("/api/notes?tag=deep%20work");
+  });
+
+  it("narrows the list to one book, carrying the passage each row came from", async () => {
+    const fetchMock = fetchMockFn(async () => jsonResponse(200, [bookSummary]));
+
+    const result = await listNotes(
+      { sourceId: "s1" },
+      fetchMock as unknown as typeof fetch,
+    );
+
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/notes?source_id=s1");
+    // The row's provenance survives the round-trip: where it came from, in what
+    // words, and the page the server derived.
+    expect(result[0].anchor).toEqual(bookSummary.anchor);
+  });
+
+  it("composes the book and tag filters in one request", async () => {
+    const fetchMock = fetchMockFn(async () => jsonResponse(200, [bookSummary]));
+
+    await listNotes(
+      { tag: "history", sourceId: "s1" },
+      fetchMock as unknown as typeof fetch,
+    );
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "/api/notes?tag=history&source_id=s1",
+    );
+  });
+
+  it("surfaces the 404 a book the caller does not own answers with", async () => {
+    const fetchMock = fetchMockFn(async () =>
+      jsonResponse(404, { detail: "Source not found." }),
+    );
+
+    const err = await listNotes(
+      { sourceId: "not-mine" },
+      fetchMock as unknown as typeof fetch,
+    ).catch((e) => e);
+
+    expect(err).toBeInstanceOf(NoteError);
+    expect(err.status).toBe(404);
+    expect(err.message).toBe("Source not found.");
   });
 
   it("defaults to no filter when called with no argument", async () => {
@@ -262,6 +299,25 @@ describe("updateNote (NF-11)", () => {
     expect(err).toBeInstanceOf(NoteError);
     expect(err.kind).toBe("body_too_long");
     expect(err.message).toBe("Note body is too long.");
+  });
+
+  it("falls back to a readable message when a 422 detail is a list, not a string", async () => {
+    const fetchMock = fetchMockFn(async () =>
+      jsonResponse(422, {
+        detail: [{ type: "string_type", loc: ["body", "title"], msg: "str" }],
+      }),
+    );
+
+    const err = await updateNote(
+      "n1",
+      { title: "x" },
+      "csrf-xyz",
+      fetchMock as unknown as typeof fetch,
+    ).catch((e) => e);
+
+    expect(err).toBeInstanceOf(NoteError);
+    expect(err.kind).toBe("body_too_long");
+    expect(err.message).toBe("Could not save the note.");
   });
 });
 

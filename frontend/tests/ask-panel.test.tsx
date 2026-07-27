@@ -788,15 +788,18 @@ describe("AskPanel save to note (RA-20/22)", () => {
     expect(await screen.findByTestId("save-note-status")).toBeTruthy();
   });
 
-  it("falls back to a plain note through the real notes clients on a stale capture (409)", async () => {
+  it("still saves the answer, anchored, through the real notes clients on a stale capture (409)", async () => {
     const stream = sseStream();
+    let captures = 0;
     const fetchMock = routedFetch(
       baseHandlers(() => stream.response, {
+        // The quoted capture cannot bind; the quote-less one on the same anchor can.
         [`POST ${HIGHLIGHTS_URL}`]: () =>
-          jsonResponse(409, {
-            detail: "The book changed while you were reading.",
-          }),
-        [`POST ${NOTES_URL}`]: () => jsonResponse(201, noteDetail),
+          ++captures === 1
+            ? jsonResponse(409, {
+                detail: "The book changed while you were reading.",
+              })
+            : jsonResponse(201, noteDetail),
       }),
     );
     vi.stubGlobal("fetch", fetchMock);
@@ -812,12 +815,17 @@ describe("AskPanel save to note (RA-20/22)", () => {
       fireEvent.click(saveButton);
     });
 
-    // The 409 capture conflict degrades to a plain note carrying the answer plus
-    // a jump-back link — exercised through the real lib/notes clients, not fakes.
-    await waitFor(() => expect(callsTo(fetchMock, NOTES_URL)).toHaveLength(1));
-    const body = bodyOf(callsTo(fetchMock, NOTES_URL)[0]);
+    // The answer survives the conflict and is still filed against the passage's
+    // anchor — exercised through the real lib/notes clients, not fakes.
+    await waitFor(() =>
+      expect(callsTo(fetchMock, HIGHLIGHTS_URL)).toHaveLength(2),
+    );
+    const body = bodyOf(callsTo(fetchMock, HIGHLIGHTS_URL)[1]);
     expect(body.body_markdown).toContain("Ada Lovelace did.");
-    expect(body.body_markdown).toContain("/sources/s1/read?anchor=");
+    expect(body.quote_exact).toBe("");
+    expect(body.anchor).toBe(citation.anchor);
+    // Nothing was posted to the rootless notes collection.
+    expect(callsTo(fetchMock, NOTES_URL)).toHaveLength(0);
     expect(await screen.findByTestId("save-note-status")).toBeTruthy();
   });
 

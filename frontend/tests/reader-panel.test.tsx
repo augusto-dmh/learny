@@ -1,12 +1,15 @@
 // @vitest-environment jsdom
 
 /**
- * A (RA-01/02/03) — the reader side-panel shell hosts an Ask | Teach segmented
- * control and a close control. It renders the body for the active mode, marks the
- * active tab as selected, and reports mode switches and close through its
- * callbacks (the parent turns those into URL changes). Open state and mode are
- * driven entirely by props derived from `?panel=`, so the shell itself is a pure
- * function of `mode`.
+ * A (RA-01/02/03) — the reader side-panel shell hosts the dock's tab strip and a
+ * close control. It renders the body for the active tab, marks that tab as
+ * selected, and reports tab switches and close through its callbacks (the parent
+ * turns those into URL changes). Open state and the active tab are driven entirely
+ * by props derived from `?panel=`, so the shell itself is a pure function of `tab`.
+ *
+ * The strip carries four tabs, but only Ask and Teach hold a conversation, so the
+ * conversation list is theirs alone and the per-surface thread state must survive a
+ * trip through the other two.
  */
 
 import {
@@ -19,7 +22,11 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ReaderPanel } from "../app/components/reader-panel";
+import {
+  ReaderPanel,
+  type DockTab,
+  type PanelMode,
+} from "../app/components/reader-panel";
 import { readActiveConversation } from "../app/lib/active-conversation";
 
 // The shell test covers tabs, close, and which mode's body renders — not the
@@ -79,11 +86,23 @@ function summary(
   };
 }
 
-/** The dock always loads the book's conversations; default to none. */
+/**
+ * The dock always loads the book's conversations, and — for the counts its two
+ * other tabs carry — this book's notes and due cards. Default all three to empty.
+ */
 function stubList(rows: unknown[] = []) {
-  const fetchMock = vi.fn(async () => jsonResponse(200, rows));
+  const fetchMock = vi.fn(async (url: string) =>
+    jsonResponse(200, url.startsWith("/api/conversations") ? rows : []),
+  );
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
+}
+
+/** The conversation requests the dock made, in order. */
+function conversationCalls(fetchMock: { mock: { calls: unknown[] } }) {
+  return (fetchMock.mock.calls as unknown[][])
+    .map((call) => String(call[0]))
+    .filter((url) => url.startsWith("/api/conversations"));
 }
 
 /**
@@ -94,6 +113,10 @@ function stubList(rows: unknown[] = []) {
  */
 function stubServer(rows: ReturnType<typeof summary>[]) {
   const fetchMock = vi.fn(async (url: string) => {
+    if (url.startsWith("/api/notes") || url.startsWith("/api/reviews/due")) {
+      // The tab counts, which every dock render loads.
+      return jsonResponse(200, []);
+    }
     if (!url.startsWith("/api/conversations?")) {
       throw new Error(`unexpected fetch: ${url}`);
     }
@@ -114,20 +137,20 @@ afterEach(() => {
 });
 
 describe("ReaderPanel shell (RA-01/02/03)", () => {
-  it("offers exactly the Ask and Teach modes plus a close control", () => {
+  it("offers the book's four working surfaces plus a close control", () => {
     render(
-      <ReaderPanel sourceId="s1" csrf="csrf-xyz" mode="ask" onModeChange={() => {}} onClose={() => {}} />,
+      <ReaderPanel sourceId="s1" csrf="csrf-xyz" tab="ask" onTabChange={() => {}} onClose={() => {}} />,
     );
 
-    expect(screen.getByRole("tab", { name: "Ask" })).toBeTruthy();
-    expect(screen.getByRole("tab", { name: "Teach" })).toBeTruthy();
-    expect(screen.getAllByRole("tab")).toHaveLength(2);
+    expect(
+      screen.getAllByRole("tab").map((tab) => tab.textContent?.trim()),
+    ).toEqual(["Ask", "Teach", "Notes", "Review"]);
     expect(screen.getByRole("button", { name: "Close panel" })).toBeTruthy();
   });
 
   it("renders the ask body and selects the ask tab in ask mode (RA-01)", () => {
     render(
-      <ReaderPanel sourceId="s1" csrf="csrf-xyz" mode="ask" onModeChange={() => {}} onClose={() => {}} />,
+      <ReaderPanel sourceId="s1" csrf="csrf-xyz" tab="ask" onTabChange={() => {}} onClose={() => {}} />,
     );
 
     expect(screen.getByTestId("ask-panel-body")).toBeTruthy();
@@ -142,7 +165,7 @@ describe("ReaderPanel shell (RA-01/02/03)", () => {
 
   it("renders the teach body and selects the teach tab in teach mode (RA-02)", () => {
     render(
-      <ReaderPanel sourceId="s1" csrf="csrf-xyz" mode="teach" onModeChange={() => {}} onClose={() => {}} />,
+      <ReaderPanel sourceId="s1" csrf="csrf-xyz" tab="teach" onTabChange={() => {}} onClose={() => {}} />,
     );
 
     expect(screen.getByTestId("teach-panel-body")).toBeTruthy();
@@ -155,7 +178,7 @@ describe("ReaderPanel shell (RA-01/02/03)", () => {
   it("reports the chosen mode when a tab is clicked (RA-03)", () => {
     const onModeChange = vi.fn();
     render(
-      <ReaderPanel sourceId="s1" csrf="csrf-xyz" mode="ask" onModeChange={onModeChange} onClose={() => {}} />,
+      <ReaderPanel sourceId="s1" csrf="csrf-xyz" tab="ask" onTabChange={onModeChange} onClose={() => {}} />,
     );
 
     fireEvent.click(screen.getByRole("tab", { name: "Teach" }));
@@ -165,7 +188,7 @@ describe("ReaderPanel shell (RA-01/02/03)", () => {
   it("reports a close request when the close control is clicked (RA-03)", () => {
     const onClose = vi.fn();
     render(
-      <ReaderPanel sourceId="s1" csrf="csrf-xyz" mode="ask" onModeChange={() => {}} onClose={onClose} />,
+      <ReaderPanel sourceId="s1" csrf="csrf-xyz" tab="ask" onTabChange={() => {}} onClose={onClose} />,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Close panel" }));
@@ -180,8 +203,8 @@ describe("ReaderPanel shell (RA-01/02/03)", () => {
       <ReaderPanel
         sourceId="s1"
         csrf="csrf-xyz"
-        mode="ask"
-        onModeChange={() => {}}
+        tab="ask"
+        onTabChange={() => {}}
         onClose={() => {}}
         onShowInBook={onShowInBook}
       />,
@@ -194,8 +217,8 @@ describe("ReaderPanel shell (RA-01/02/03)", () => {
       <ReaderPanel
         sourceId="s1"
         csrf="csrf-xyz"
-        mode="teach"
-        onModeChange={() => {}}
+        tab="teach"
+        onTabChange={() => {}}
         onClose={() => {}}
         onShowInBook={onShowInBook}
       />,
@@ -207,15 +230,15 @@ describe("ReaderPanel shell (RA-01/02/03)", () => {
 
 describe("ReaderPanel conversation list", () => {
   function renderPanel(
-    mode: "ask" | "teach" = "ask",
-    onModeChange: (mode: "ask" | "teach") => void = () => {},
+    mode: PanelMode = "ask",
+    onModeChange: (tab: DockTab) => void = () => {},
   ) {
     return render(
       <ReaderPanel
         sourceId="s1"
         csrf="csrf-xyz"
-        mode={mode}
-        onModeChange={onModeChange}
+        tab={mode}
+        onTabChange={onModeChange}
         onClose={() => {}}
       />,
     );
@@ -271,9 +294,12 @@ describe("ReaderPanel conversation list", () => {
       summary(`c${index}`, `Thread ${index}`, 1),
     );
     const secondPage = [summary("c20", "The oldest thread", 1)];
-    const fetchMock = vi.fn(async (url: string) =>
-      jsonResponse(200, url.includes("offset=20") ? secondPage : firstPage),
-    );
+    const fetchMock = vi.fn(async (url: string) => {
+      if (!url.startsWith("/api/conversations")) {
+        return jsonResponse(200, []);
+      }
+      return jsonResponse(200, url.includes("offset=20") ? secondPage : firstPage);
+    });
     vi.stubGlobal("fetch", fetchMock);
     renderPanel();
 
@@ -281,7 +307,7 @@ describe("ReaderPanel conversation list", () => {
     const more = await screen.findByRole("button", {
       name: "Show older conversations",
     });
-    const [firstUrl] = fetchMock.mock.calls[0] as unknown as [string];
+    const [firstUrl] = conversationCalls(fetchMock);
     expect(firstUrl).toContain("limit=20");
     expect(firstUrl).toContain("offset=0");
     expect(
@@ -293,8 +319,7 @@ describe("ReaderPanel conversation list", () => {
     });
 
     // The 21st thread is reachable, and the page already read stays on screen.
-    const [nextUrl] = fetchMock.mock.calls[1] as unknown as [string];
-    expect(nextUrl).toContain("offset=20");
+    expect(conversationCalls(fetchMock)[1]).toContain("offset=20");
     expect(
       screen.getByRole("button", { name: "Resume The oldest thread" }),
     ).toBeTruthy();
@@ -334,7 +359,7 @@ describe("ReaderPanel conversation list", () => {
     // The row already said where the thread resumes, so the click cost nothing:
     // only the list load was ever fetched. Reading the conversation here would
     // pull every turn and citation the panel is about to load for itself.
-    expect(fetchMock.mock.calls).toHaveLength(1);
+    expect(conversationCalls(fetchMock)).toHaveLength(1);
   });
 
   it("resumes a taught conversation in the Teach panel", async () => {
@@ -405,5 +430,86 @@ describe("ReaderPanel conversation list", () => {
 
     expect(readActiveConversation("s1", "ask")).toBeNull();
     expect(screen.getByTestId("ask-panel-body").dataset.revision).not.toBe(before);
+  });
+});
+
+describe("ReaderPanel tabs that hold no conversation", () => {
+  it("keeps the conversation list to the tabs that can hold a thread", async () => {
+    const fetchMock = stubList([summary("conv1", "Ada Lovelace", 1)]);
+    const { rerender } = render(
+      <ReaderPanel
+        sourceId="s1"
+        csrf="csrf-xyz"
+        tab="ask"
+        onTabChange={() => {}}
+        onClose={() => {}}
+      />,
+    );
+    await screen.findByRole("button", { name: "Resume Ada Lovelace" });
+
+    for (const tab of ["notes", "review"] as const) {
+      await act(async () => {
+        rerender(
+          <ReaderPanel
+            sourceId="s1"
+            csrf="csrf-xyz"
+            tab={tab}
+            onTabChange={() => {}}
+            onClose={() => {}}
+          />,
+        );
+      });
+
+      // Neither tab is a place a thread can be resumed or started, so the list
+      // that offers both is absent rather than decorative.
+      expect(
+        screen.queryByRole("button", { name: "Resume Ada Lovelace" }),
+      ).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: "New conversation" }),
+      ).toBeNull();
+    }
+
+    // And nothing re-asked the server for threads while they were open.
+    expect(conversationCalls(fetchMock)).toHaveLength(1);
+  });
+
+  it("leaves the open Ask thread exactly where it was after a trip through Notes", async () => {
+    stubList([summary("conv1", "Ada Lovelace", 1)]);
+    const { rerender } = render(
+      <ReaderPanel
+        sourceId="s1"
+        csrf="csrf-xyz"
+        tab="ask"
+        onTabChange={() => {}}
+        onClose={() => {}}
+      />,
+    );
+
+    const row = await screen.findByRole("button", { name: "Resume Ada Lovelace" });
+    await act(async () => {
+      fireEvent.click(row);
+    });
+    const revision = screen.getByTestId("ask-panel-body").dataset.revision;
+    expect(readActiveConversation("s1", "ask")).toBe("conv1");
+
+    for (const tab of ["notes", "review", "ask"] as const) {
+      await act(async () => {
+        rerender(
+          <ReaderPanel
+            sourceId="s1"
+            csrf="csrf-xyz"
+            tab={tab}
+            onTabChange={() => {}}
+            onClose={() => {}}
+          />,
+        );
+      });
+    }
+
+    // Back on Ask, the same thread is still the open one and the panel was never
+    // told to re-read: visiting a tab with no conversation state disturbed none.
+    expect(readActiveConversation("s1", "ask")).toBe("conv1");
+    expect(screen.getByTestId("ask-panel-body").dataset.revision).toBe(revision);
   });
 });

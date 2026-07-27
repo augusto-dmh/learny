@@ -6,9 +6,13 @@
  * Next.js proxy* (`/api/...`, ADR-017) — never cross-origin. The HttpOnly session
  * cookie rides along automatically (`credentials: "same-origin"`), so this code
  * never reads or holds the session token. The reads (list, detail, backlinks)
- * carry no token; the state-changing writes (create, update, delete, capture) echo
+ * carry no token; the state-changing writes (update, delete, capture) echo
  * the CSRF token (from `/api/auth/me`) in `X-CSRF-Token` (AD-007), mirroring
  * `quiz.ts`.
+ *
+ * A note is only ever born from a passage: `captureHighlight` is the one creation
+ * helper here, because a note without a reading anchor can no longer exist. There
+ * is deliberately no helper for a bare title.
  *
  * FastAPI remains authoritative for auth, ownership, anchor resolution, and the
  * body cap; these helpers just carry inputs in and surface the note/summary/
@@ -46,12 +50,34 @@ export type NoteDetail = {
   updated_at: string;
 };
 
-/** One row in the notes list, mirroring the backend `NoteSummaryView` (NF-13). */
+/**
+ * The passage a book-scoped note row came from, mirroring the backend
+ * `NoteRowAnchorView` (WSN-02): the note's earliest anchor on the book being
+ * listed. `page` is the book-global page number the server derived — never
+ * recomputed here — and is null when the anchor no longer resolves, so an orphaned
+ * row shows its quote with no page rather than a fabricated one.
+ */
+export type NoteRowAnchor = {
+  anchor: string;
+  section_title: string;
+  section_path: string[];
+  quote_exact: string;
+  status: string;
+  page: number | null;
+};
+
+/**
+ * One row in the notes list, mirroring the backend `NoteSummaryView` (NF-13).
+ *
+ * `anchor` is carried only when the list is scoped to one book; the cross-book
+ * list has no single book to represent a note by, so it is null there.
+ */
 export type NoteSummary = {
   id: string;
   title: string;
   tags: string[];
   anchor_statuses: string[];
+  anchor: NoteRowAnchor | null;
   created_at: string;
   updated_at: string;
 };
@@ -62,7 +88,7 @@ export type Backlink = {
   title: string;
 };
 
-/** The create/update body, mirroring the backend `NoteWriteRequest`. */
+/** The update body, mirroring the backend `NoteWriteRequest`. */
 export type NoteWrite = {
   title: string;
   body_markdown?: string;
@@ -112,37 +138,26 @@ export class NoteError extends Error {
 }
 
 /**
- * Create a whole-Markdown note (201). State-changing, so it carries the
- * session-bound CSRF token in `X-CSRF-Token` (AD-007). An over-cap body surfaces
- * as a `NoteError` with kind `body_too_long` (422).
- */
-export async function createNote(
-  body: NoteWrite,
-  csrfToken: string,
-  fetchImpl: typeof fetch = fetch,
-): Promise<NoteDetail> {
-  const res = await fetchImpl("/api/notes", {
-    method: "POST",
-    credentials: "same-origin",
-    headers: { "content-type": "application/json", "X-CSRF-Token": csrfToken },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    throw await toNoteError(res, "Could not create the note.");
-  }
-  return (await res.json()) as NoteDetail;
-}
-
-/**
  * List the caller's notes (newest-edited first), optionally filtered to one tag
- * (matched case-insensitively). Read-only GET, so no CSRF token. On a non-OK
- * response the backend `detail` is surfaced via `NoteError`.
+ * (matched case-insensitively) and/or narrowed to one book. Under `sourceId` the
+ * list holds only notes anchored to that book — a note anchored to it more than
+ * once still appears once — and every row carries the passage it came from; a
+ * source the caller does not own collapses to a 404 like every other source read.
+ * Read-only GET, so no CSRF token. On a non-OK response the backend `detail` is
+ * surfaced via `NoteError`.
  */
 export async function listNotes(
-  { tag }: { tag?: string } = {},
+  { tag, sourceId }: { tag?: string; sourceId?: string } = {},
   fetchImpl: typeof fetch = fetch,
 ): Promise<NoteSummary[]> {
-  const query = tag !== undefined ? `?tag=${encodeURIComponent(tag)}` : "";
+  const params: string[] = [];
+  if (tag !== undefined) {
+    params.push(`tag=${encodeURIComponent(tag)}`);
+  }
+  if (sourceId !== undefined) {
+    params.push(`source_id=${encodeURIComponent(sourceId)}`);
+  }
+  const query = params.length ? `?${params.join("&")}` : "";
   const res = await fetchImpl(`/api/notes${query}`, {
     method: "GET",
     credentials: "same-origin",

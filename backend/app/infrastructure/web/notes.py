@@ -1,19 +1,19 @@
 """Notes + highlights router — capture, organize, and read notes (Cycle E).
 
 Thin FastAPI adapter over the framework-free notes services (assembled in
-``dependencies``). A signed-in owner creates whole-Markdown notes, lists/filters
-them by tag, reads/edits/deletes one, reads a note's backlinks, and captures a
-highlight from the reader (create a note + one book anchor atomically). Every note
-path is one request-scoped transaction, so no commit-then-enqueue orchestration is
-needed here (unlike the deck/ingestion start paths).
+``dependencies``). A signed-in owner captures a note from a book passage (note + one
+book anchor, atomically), lists/filters them by tag, reads/edits/deletes one, and
+reads a note's backlinks. Capture and edit commit in a UoW factory before queueing the
+note's embed, the same commit-then-enqueue orchestration the deck/ingestion start paths
+use; the read/delete paths need none and stay on the request-scoped transaction.
 
 Application errors are translated to HTTP by the global handlers
 (``NoteNotFound`` → 404, ``NoteBodyTooLong`` → 422, ``StaleCaptureTarget`` → 409,
 ``SourceNotFound`` → 404, ``CorpusNotFound`` → 404).
 
 Contract (also consumed by the Next.js proxy):
-- ``POST   /api/notes`` → 201 note; auth + CSRF/Origin + limit.
-- ``GET    /api/notes`` → 200 note summaries (optional ``?tag=`` filter); auth.
+- ``GET    /api/notes`` → 200 note summaries (optional ``?tag=`` and ``?source_id=``
+  filters; a source the caller does not own → 404); auth.
 - ``GET    /api/notes/{id}`` → 200 note detail; auth.
 - ``PATCH  /api/notes/{id}`` → 200 updated note detail; auth + CSRF/Origin + limit.
 - ``DELETE /api/notes/{id}`` → 204; auth + CSRF/Origin + limit.
@@ -21,12 +21,10 @@ Contract (also consumed by the Next.js proxy):
 - ``POST   /api/sources/{source_id}/highlights`` → 201 note; auth + CSRF/Origin +
   limit.
 
-NF-09 lists an optional capture payload alongside ``POST /api/notes``. The reader's
-capture path is served by the dedicated ``POST /api/sources/{source_id}/highlights``
-route (the ``CaptureHighlight`` use case), which carries the source in the path and
-the selection payload in the body; ``POST /api/notes`` stays a plain note create
-(``CreateNote``, whose signature has no capture fields), so capture is not duplicated
-across two shapes. This matches the design's architecture diagram (CRUD vs capture).
+Capture is the **only** way to create a note: every note is born carrying the passage
+it came from, so there is no rootless create to duplicate the shape. A note that wants
+no selection captures the section instead (an empty ``quote_exact``); notes created
+before this rule keep working untouched, anchors and all.
 """
 
 from __future__ import annotations
@@ -42,7 +40,6 @@ from pydantic import BaseModel, Field
 from sqlalchemy import Connection
 
 from app.application.notes import (
-    CaptureHighlight,
     DeleteNote,
     GetBacklinks,
     GetNote,
@@ -60,11 +57,10 @@ from app.domain.entities import (
 from app.domain.ports import NoteIndexEnqueuer
 from app.infrastructure.web.csrf import enforce_csrf, enforce_origin
 from app.infrastructure.web.dependencies import (
-    build_create_note,
+    build_capture_highlight,
     build_has_note_items,
     build_update_note,
     get_authenticated_user,
-    get_capture_highlight,
     get_delete_note,
     get_get_backlinks,
     get_get_note,
@@ -87,7 +83,7 @@ NoteEnqueuer = Annotated[NoteIndexEnqueuer, Depends(get_note_index_enqueuer)]
 
 
 class NoteWriteRequest(BaseModel):
-    """Create/update body (NF-05): title plus an optional Markdown body and tags.
+    """Update body (NF-05): title plus an optional Markdown body and tags.
 
     An empty body is allowed (a note may be just a title or, after capture, a bare
     quote card). Tags are normalized (lowercased/deduped) by the use case; the body
@@ -105,10 +101,13 @@ class CaptureRequest(BaseModel):
     ``anchor`` addresses the reader section; ``quote_exact`` (+ 32-char
     ``quote_prefix``/``quote_suffix`` context) is the selection resolved server-side
     against the section's blocks. An empty ``body_markdown`` yields a bare highlight.
+
+    ``quote_exact`` is optional: omitting it captures the section itself rather than a
+    selection, so nothing is bound to a block and the anchor is section-level.
     """
 
     anchor: str
-    quote_exact: str
+    quote_exact: str = ""
     quote_prefix: str = ""
     quote_suffix: str = ""
     title: str
@@ -183,17 +182,57 @@ class NoteDetailView(BaseModel):
         )
 
 
+class NoteRowAnchorView(BaseModel):
+    """The passage a book-scoped note row came from (WSN-02).
+
+    The note's earliest anchor on the book being listed: ``anchor`` to jump back to it,
+    the section that holds it (title + full path), the stored ``quote_exact`` snapshot
+    the row renders, and the anchor's ``status``.
+
+    ``page`` is the book-global page number derived server-side from the book's word
+    counts (AD-189) — never recomputed by a client, never inferred from a percent. It is
+    ``null`` when the anchor no longer resolves, so an orphaned row shows its quote with
+    no page rather than a fabricated one.
+    """
+
+    anchor: str
+    section_title: str
+    section_path: list[str]
+    quote_exact: str
+    status: str
+    page: int | None
+
+    @classmethod
+    def from_summary(cls, summary: NoteSummary) -> NoteRowAnchorView | None:
+        anchor = summary.anchor
+        if anchor is None:
+            return None
+        return cls(
+            anchor=anchor.anchor,
+            section_title=anchor.section_path[-1] if anchor.section_path else "",
+            section_path=list(anchor.section_path),
+            quote_exact=anchor.quote_exact,
+            status=anchor.status,
+            page=summary.page,
+        )
+
+
 class NoteSummaryView(BaseModel):
     """One row in the notes list (NF-13): the note with its tags and anchor statuses.
 
     ``anchor_statuses`` lets the list render active/stale/orphaned badges without
     loading the anchor payloads.
+
+    ``anchor`` is the passage the row came from, carried only when the list is scoped to
+    one book; the cross-book list has no single book to represent a note by, so it is
+    ``null`` there (WSN-02).
     """
 
     id: UUID
     title: str
     tags: list[str]
     anchor_statuses: list[str]
+    anchor: NoteRowAnchorView | None
     created_at: datetime
     updated_at: datetime
 
@@ -204,6 +243,7 @@ class NoteSummaryView(BaseModel):
             title=summary.note.title,
             tags=list(summary.tags),
             anchor_statuses=list(summary.anchor_statuses),
+            anchor=NoteRowAnchorView.from_summary(summary),
             created_at=summary.note.created_at,
             updated_at=summary.note.updated_at,
         )
@@ -256,49 +296,23 @@ class SourceHighlightView(BaseModel):
 # --- Endpoints -----------------------------------------------------------------
 
 
-@router.post(
-    "/api/notes",
-    status_code=status.HTTP_201_CREATED,
-    dependencies=[
-        Depends(rate_limit_notes),
-        Depends(enforce_origin),
-        Depends(enforce_csrf),
-    ],
-)
-def create_note(
-    user: Annotated[User, Depends(get_authenticated_user)],
-    uow_factory: NoteUowFactory,
-    enqueuer: NoteEnqueuer,
-    body: NoteWriteRequest,
-) -> NoteDetailView:
-    """Create a whole-Markdown note for the caller and derive its indexes (201).
-
-    ``CreateNote`` validates the body cap (``NoteBodyTooLong`` → 422) then persists
-    the note and rebuilds its wikilink/tag indexes in one committed UoW; the note is
-    then embedded asynchronously (only when it has a body to embed, NL-01), enqueued
-    after commit so the worker reads a durable row (AD-016).
-    """
-    with uow_factory() as conn:
-        view = build_create_note(conn)(
-            user=user, title=body.title, body_markdown=body.body_markdown, tags=body.tags
-        )
-    if body.body_markdown:
-        enqueuer.enqueue_embed(view.note.id)
-    return NoteDetailView.from_view(view)
-
-
 @router.get("/api/notes")
 def list_notes(
     user: Annotated[User, Depends(get_authenticated_user)],
     service: Annotated[ListNotes, Depends(get_list_notes)],
     tag: Annotated[str | None, Query()] = None,
+    source_id: Annotated[UUID | None, Query()] = None,
 ) -> list[NoteSummaryView]:
-    """Return the caller's notes (newest-edited first), optionally filtered by tag (200).
+    """Return the caller's notes (newest-edited first), optionally scoped (200; 404).
 
     ``tag`` is matched case-insensitively; every returned summary still lists all of
-    its own tags.
+    its own tags. ``source_id`` narrows the list to one book: only notes anchored to it,
+    each exactly once however often it is anchored there, and each carrying the passage
+    it came from with that passage's page. A source the caller does not own is the same
+    404 as one that does not exist (``SourceNotFound``), and a source with no notes is
+    an empty list, not an error.
     """
-    summaries = service(user=user, tag=tag)
+    summaries = service(user=user, tag=tag, source_id=source_id)
     return [NoteSummaryView.from_summary(s) for s in summaries]
 
 
@@ -405,7 +419,8 @@ def get_note_backlinks(
 def capture_highlight(
     source_id: UUID,
     user: Annotated[User, Depends(get_authenticated_user)],
-    service: Annotated[CaptureHighlight, Depends(get_capture_highlight)],
+    uow_factory: NoteUowFactory,
+    enqueuer: NoteEnqueuer,
     body: CaptureRequest,
 ) -> NoteDetailView:
     """Capture a highlight from the reader: create a note + one anchor atomically (201).
@@ -414,19 +429,28 @@ def capture_highlight(
     → 404), resolves the addressed section (unknown anchor → ``CorpusNotFound`` → 404),
     and binds the selection against its blocks — if the served evidence no longer
     matches (a mid-flight re-ingest) nothing is persisted and ``StaleCaptureTarget`` →
-    409. Over-cap body → ``NoteBodyTooLong`` → 422.
+    409. Over-cap body → ``NoteBodyTooLong`` → 422. With no ``quote_exact`` there is no
+    selection to bind, so the anchor is section-level and the 409 cannot arise.
+
+    Capture is the only way a note is born, so it carries the embed enqueue: a note
+    with a body is queued for embedding once its row has committed (NL-01, AD-016).
+    Without that, a captured note would never reach the notes retrieval arm, which
+    only sees rows whose embedding is present.
     """
-    view = service(
-        user=user,
-        source_id=source_id,
-        anchor=body.anchor,
-        quote_exact=body.quote_exact,
-        quote_prefix=body.quote_prefix,
-        quote_suffix=body.quote_suffix,
-        title=body.title,
-        body_markdown=body.body_markdown,
-        tags=body.tags,
-    )
+    with uow_factory() as conn:
+        view = build_capture_highlight(conn)(
+            user=user,
+            source_id=source_id,
+            anchor=body.anchor,
+            quote_exact=body.quote_exact,
+            quote_prefix=body.quote_prefix,
+            quote_suffix=body.quote_suffix,
+            title=body.title,
+            body_markdown=body.body_markdown,
+            tags=body.tags,
+        )
+    if body.body_markdown:
+        enqueuer.enqueue_embed(view.note.id)
     return NoteDetailView.from_view(view)
 
 

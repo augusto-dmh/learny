@@ -676,16 +676,25 @@ class IdentityMarkupConverter:
 class FakeAnchorCorpus:
     """``CorpusRepository`` double for the anchoring read paths (NF-06/07).
 
-    Seeded with a source's :class:`AnchorSection` list; only the two block-level reads
-    the notes use cases call are implemented. ``blocks_for_section`` resolves canonical
-    anchors first, then aliases, mirroring the real repository.
+    Seeded with a source's :class:`AnchorSection` list; only the reads the notes use
+    cases call are implemented. ``blocks_for_section`` resolves canonical anchors first,
+    then aliases, mirroring the real repository. ``get_chapter_index`` is seeded
+    separately (the page math reads it) and answers ``None`` for a source with no
+    corpus, exactly as the real repository does.
     """
 
     def __init__(self, sections_by_source: dict[UUID, list[AnchorSection]] | None = None) -> None:
         self._by_source: dict[UUID, list[AnchorSection]] = sections_by_source or {}
+        self._index_by_source: dict[UUID, tuple[ChapterIndexRow, ...]] = {}
 
     def set_sections(self, source_id: UUID, sections: list[AnchorSection]) -> None:
         self._by_source[source_id] = sections
+
+    def set_chapter_index(self, source_id: UUID, rows: Sequence[ChapterIndexRow]) -> None:
+        self._index_by_source[source_id] = tuple(rows)
+
+    def get_chapter_index(self, source_id: UUID) -> tuple[ChapterIndexRow, ...] | None:
+        return self._index_by_source.get(source_id)
 
     def blocks_for_section(self, source_id: UUID, anchor: str) -> AnchorSection | None:
         sections = self._by_source.get(source_id, [])
@@ -748,10 +757,14 @@ class FakeNoteRepository:
                 for link in links
             ]
 
-    def list_summaries(self, user_id: UUID, *, tag: str | None = None) -> list[NoteSummary]:
+    def list_summaries(
+        self, user_id: UUID, *, tag: str | None = None, source_id: UUID | None = None
+    ) -> list[NoteSummary]:
         owned = [n for n in self._notes.values() if n.user_id == user_id]
         if tag is not None:
             owned = [n for n in owned if tag in self._tags_by_note.get(n.id, [])]
+        if source_id is not None:
+            owned = [n for n in owned if self._anchors_on(n.id, source_id)]
         owned.sort(key=lambda n: (n.updated_at, str(n.id)), reverse=True)
         return [
             NoteSummary(
@@ -760,9 +773,17 @@ class FakeNoteRepository:
                 anchor_statuses=tuple(
                     a.status for a in self._anchors.values() if a.note_id == note.id
                 ),
+                anchor=(self._anchors_on(note.id, source_id)[0] if source_id is not None else None),
             )
             for note in owned
         ]
+
+    def _anchors_on(self, note_id: UUID, source_id: UUID) -> list[NoteAnchor]:
+        """A note's anchors on one source, earliest-created first (the representative)."""
+        on_source = [
+            a for a in self._anchors.values() if a.note_id == note_id and a.source_id == source_id
+        ]
+        return sorted(on_source, key=lambda a: (a.created_at, str(a.id)))
 
     def tags_for_note(self, note_id: UUID) -> list[str]:
         return sorted(self._tags_by_note.get(note_id, []))

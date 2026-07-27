@@ -52,7 +52,11 @@ import {
 } from "@/app/components/notes/capture-popover";
 import { InkLine } from "@/app/components/ink-line";
 import { MarginRail } from "@/app/components/margin-rail";
-import { ReaderPanel, type PanelMode } from "@/app/components/reader-panel";
+import {
+  dockTabFromParam,
+  ReaderPanel,
+  type DockTab,
+} from "@/app/components/reader-panel";
 import { ReadingControls } from "@/app/components/reading-controls";
 import { ChapterNav, TocPanel } from "@/app/components/toc-panel";
 import { readUrl } from "@/app/lib/read-url";
@@ -315,15 +319,13 @@ export function ChapterFlow({
   onRequireAuth?: () => void;
 }) {
   const router = useRouter();
-  // The open panel and the current deep-link anchor are independent URL state.
-  // An unknown `panel` value renders the panel closed; toggling it or switching
-  // modes preserves the anchor and never refetches the chapter (the load effect
-  // lives in `ChapterReader` and is not keyed on `panel`).
+  // The open dock tab and the current deep-link anchor are independent URL state.
+  // A `panel` value naming no tab renders the panel closed; toggling it or
+  // switching tabs preserves the anchor and never refetches the chapter (the load
+  // effect lives in `ChapterReader` and is not keyed on `panel`).
   const searchParams = useSearchParams();
   const urlAnchor = searchParams.get("anchor");
-  const panelParam = searchParams.get("panel");
-  const panelMode: PanelMode | null =
-    panelParam === "ask" ? "ask" : panelParam === "teach" ? "teach" : null;
+  const dockTab = dockTabFromParam(searchParams.get("panel"));
   const articleRef = useRef<HTMLElement>(null);
   // Device-local reading surface: type size, spacing, and Default/Paper (RD-18).
   const reading = useReadingSettings();
@@ -389,6 +391,9 @@ export function ChapterFlow({
   // and is cleared once the panel has consumed it (RA-17/18).
   const [pendingRequest, setPendingRequest] =
     useState<PendingPanelRequest | null>(null);
+  // Bumped whenever a capture writes a note, so the dock's Notes tab — which may
+  // be the very tab the reader is looking at — shows it without a reload.
+  const [notesToken, setNotesToken] = useState(0);
 
   // Track the topmost visible section as the reader scrolls, and persist the
   // position after each scroll-idle (RD-07/13).
@@ -513,6 +518,7 @@ export function ChapterFlow({
         csrf,
       );
       setCapture(null);
+      setNotesToken((token) => token + 1);
       if (action === "highlight-note") {
         router.push(`/notes/${note.id}`);
       }
@@ -554,6 +560,7 @@ export function ChapterFlow({
         }
         setCardAnchorId(anchorId);
         setCardNoteId(note.id);
+        setNotesToken((token) => token + 1);
       }
       setSuggestions(await suggestCards(sourceId, anchorId, csrf));
     } catch (err) {
@@ -605,11 +612,11 @@ export function ChapterFlow({
     return () => window.removeEventListener("scroll", onScroll, true);
   }, [returnAnchor]);
 
-  // Opening a panel mode or switching between modes is pure URL state: replace
+  // Opening the dock or switching between its tabs is pure URL state: replace
   // the query in place (preserving the anchor) so it is deep-linkable and the
   // back button works, without a chapter refetch or a scroll reset.
-  function handlePanelModeChange(mode: PanelMode) {
-    router.replace(readUrl(sourceId, urlAnchor, { panel: mode }));
+  function handleDockTabChange(tab: DockTab) {
+    router.replace(readUrl(sourceId, urlAnchor, { panel: tab }));
   }
 
   // Closing drops the panel param, restoring full reading width; the anchor rides
@@ -627,14 +634,14 @@ export function ChapterFlow({
   function handleShowInBook(anchor: string) {
     const inChapter = sectionAnchors.includes(anchor);
     if (!inChapter) {
-      router.push(readUrl(sourceId, anchor, { panel: panelMode }));
+      router.push(readUrl(sourceId, anchor, { panel: dockTab }));
       return;
     }
     document
       .getElementById(anchor)
       ?.scrollIntoView({ behavior: "smooth", block: "start" });
     setFlashAnchor(anchor);
-    router.replace(readUrl(sourceId, anchor, { panel: panelMode }));
+    router.replace(readUrl(sourceId, anchor, { panel: dockTab }));
   }
 
   // A selection verb routes the passage into the Ask panel: stash the request,
@@ -644,7 +651,7 @@ export function ChapterFlow({
   function openAskWithPassage(request: PendingPanelRequest) {
     setPendingRequest(request);
     setCapture(null);
-    if (panelMode !== "ask") {
+    if (dockTab !== "ask") {
       router.replace(readUrl(sourceId, urlAnchor, { panel: "ask" }));
     }
   }
@@ -815,7 +822,7 @@ export function ChapterFlow({
             </div>
           ) : null}
         </article>
-        {panelMode ? null : (
+        {dockTab ? null : (
           // The panel wins the right-hand column (AD-139): the rail is ambient
           // context for reading, and two columns at once starve the measure.
           <MarginRail
@@ -824,17 +831,18 @@ export function ChapterFlow({
             onJump={handleShowInBook}
           />
         )}
-        {panelMode && csrf ? (
+        {dockTab && csrf ? (
           <ReaderPanel
             sourceId={sourceId}
             csrf={csrf}
-            mode={panelMode}
-            onModeChange={handlePanelModeChange}
+            tab={dockTab}
+            onTabChange={handleDockTabChange}
             onClose={handlePanelClose}
             pendingRequest={pendingRequest}
             onPendingConsumed={() => setPendingRequest(null)}
             onShowInBook={handleShowInBook}
             onRequireAuth={onRequireAuth}
+            notesToken={notesToken}
           />
         ) : null}
       </div>

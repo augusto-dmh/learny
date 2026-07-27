@@ -104,6 +104,12 @@ Seen once or not yet corroborated. Tracked, not trusted.
 - evidence: M3 (test_offline_provider_pin.py) (backend/tests/conftest-fixtures)
 - last seen: 2026-07-24T16:53:30Z
 
+### L-016 — When an implicit-requirement sweep resolves a bounds/limits dimension, name the concrete bound (page size, cap, or 'deliberately unbounded because X') — 'bounded like the shipped list conventions' names no assertion, and WSN-11 shipped with the validation half sensed and the bounds half neither implemented nor tested.
+- signal: `spec_precision_gap` · recurrence: 1 feature(s) · scope: `backend/app/infrastructure/web` · harmful: 0
+- features: v6-workspace-notes
+- evidence: spec.md:59 (WSN-11); backend/app/infrastructure/web/notes.py:302 (backend/app/infrastructure/web)
+- last seen: 2026-07-27T02:58:13Z
+
 ## Quarantined (failed when applied — ignore)
 
 A confirmed lesson that recurred alongside failure. Kept for the maintainer to review.

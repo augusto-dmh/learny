@@ -1,9 +1,10 @@
 """Notes use-case services (RFC-003 Cycle E; ADR-0026 §2, design §Components).
 
-Framework-free orchestration of the notes aggregate: create/update/delete/get/list
-of whole-Markdown notes and highlight capture from the reader. Nothing here imports
-FastAPI, SQLAlchemy, or Celery (ADR-007/009); the web layer (Phase C) owns the
-per-request transaction so a note and its anchor are created atomically.
+Framework-free orchestration of the notes aggregate: highlight capture from the
+reader — the one way a note is born, always carrying the passage it came from — plus
+update/delete/get/list of whole-Markdown notes. Nothing here imports FastAPI,
+SQLAlchemy, or Celery (ADR-007/009); the web layer (Phase C) owns the per-request
+transaction so a note and its anchor are created atomically.
 
 Two derived indexes are rebuilt from a note's body on every save (NF-05): the
 ``[[wikilink]]`` backlink index (title-matched case-insensitively against the user's
@@ -16,6 +17,8 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Sequence
+from dataclasses import replace
+from itertools import accumulate
 from uuid import UUID
 
 from app.application.anchoring import AnchorBlock, resolve
@@ -27,8 +30,10 @@ from app.application.errors import (
 )
 from app.application.identity import AuthorizeOwnership
 from app.application.ingestion import authorized_source
+from app.application.reading import page_at
 from app.domain.entities import (
     Backlink,
+    ChapterIndexRow,
     DerivedNoteLink,
     Note,
     NoteAnchor,
@@ -129,55 +134,6 @@ def _view(notes: NoteRepository, note: Note) -> NoteView:
     )
 
 
-class CreateNote:
-    """Create a whole-Markdown note for its owner and derive its indexes (NF-05).
-
-    Empty body allowed. The body cap (NF-04) is enforced before any write; the
-    wikilink and tag indexes are rebuilt from the body in the same transaction.
-    """
-
-    def __init__(
-        self,
-        *,
-        notes: NoteRepository,
-        clock: Clock,
-        ids: Callable[[], UUID],
-        max_body_chars: int,
-    ) -> None:
-        self._notes = notes
-        self._clock = clock
-        self._ids = ids
-        self._max_body_chars = max_body_chars
-
-    def __call__(
-        self,
-        *,
-        user: User,
-        title: str,
-        body_markdown: str,
-        tags: Sequence[str] = (),
-    ) -> NoteView:
-        _validate_body(body_markdown, self._max_body_chars)
-        now = self._clock.now()
-        note = Note(
-            id=self._ids(),
-            user_id=user.id,
-            title=title,
-            body_markdown=body_markdown,
-            created_at=now,
-            updated_at=now,
-        )
-        self._notes.add(note)
-        _rewrite_indexes(
-            self._notes,
-            note_id=note.id,
-            user_id=user.id,
-            body_markdown=body_markdown,
-            tags=tags,
-        )
-        return _view(self._notes, note)
-
-
 class UpdateNote:
     """Update an owned note and rewrite its derived indexes in the same transaction (NF-05).
 
@@ -246,13 +202,85 @@ class GetNote:
 
 
 class ListNotes:
-    """Return the caller's notes (newest-edited first), optionally filtered by tag (NF-13)."""
+    """Return the caller's notes (newest-edited first), optionally scoped (NF-13, WSN-01).
 
-    def __init__(self, *, notes: NoteRepository) -> None:
+    ``tag`` narrows the cross-book list as it always has. ``source_id`` narrows it to one
+    book: the source is authorized first — a missing source and a non-owner collapse to
+    the same ``SourceNotFound`` → 404 as every other source read (WSN-13), so the filter
+    discloses nothing — and each returned row then carries the passage it came from plus
+    that passage's page.
+
+    The page is derived here, from the book's stored per-section word counts
+    (a running word total → ``page_at``, AD-189 book-global numbering), so the one
+    definition of a page lives on the server and no client recomputes it or infers it
+    from a percent. An anchor that no longer resolves against the corpus — an orphaned
+    one, or any anchor on a book whose corpus is gone — yields no page at all; its row
+    is still returned and still carries its quote snapshot (WSN-15).
+    """
+
+    def __init__(
+        self,
+        *,
+        notes: NoteRepository,
+        sources: SourceRepository,
+        corpus: CorpusRepository,
+        authorize: AuthorizeOwnership,
+        words_per_page: int,
+    ) -> None:
         self._notes = notes
+        self._sources = sources
+        self._corpus = corpus
+        self._authorize = authorize
+        self._words_per_page = words_per_page
 
-    def __call__(self, *, user: User, tag: str | None = None) -> list[NoteSummary]:
-        return self._notes.list_summaries(user.id, tag=tag.strip().lower() if tag else None)
+    def __call__(
+        self, *, user: User, tag: str | None = None, source_id: UUID | None = None
+    ) -> list[NoteSummary]:
+        normalized_tag = tag.strip().lower() if tag else None
+        if source_id is None:
+            return self._notes.list_summaries(user.id, tag=normalized_tag)
+
+        authorized_source(
+            user=user,
+            source_id=source_id,
+            sources=self._sources,
+            authorize=self._authorize,
+        )
+        summaries = self._notes.list_summaries(user.id, tag=normalized_tag, source_id=source_id)
+        if not summaries:
+            return summaries
+        index = self._corpus.get_chapter_index(source_id) or ()
+        pages = self._pages_by_anchor(index)
+        return [
+            replace(
+                summary,
+                page=None if summary.anchor is None else pages.get(summary.anchor.anchor),
+            )
+            for summary in summaries
+        ]
+
+    def _pages_by_anchor(self, index: Sequence[ChapterIndexRow]) -> dict[str, int]:
+        """Map every anchor and alias in the book to its section's book-global page.
+
+        Built once per request rather than resolved per note: the naive form walks the
+        whole index to find each anchor and then re-sums the preceding sections' word
+        counts from scratch, so a book-scoped list costs notes × sections — and the list
+        is unbounded, which makes that product the thing that grows.
+
+        Precedence mirrors ``locate`` exactly, because the page must name the same
+        section the rest of the app would resolve: a canonical ``row.anchor`` match beats
+        any alias, and position order breaks ties on both (the index is position-ordered,
+        so the first entry written wins).
+        """
+        offsets = accumulate((row.word_count for row in index), initial=0)
+        by_alias: dict[str, int] = {}
+        by_anchor: dict[str, int] = {}
+        for row, words_before in zip(index, offsets, strict=False):
+            page = page_at(words_before, self._words_per_page)
+            by_anchor.setdefault(row.anchor, page)
+            for alias in row.anchor_aliases:
+                by_alias.setdefault(alias, page)
+        return {**by_alias, **by_anchor}
 
 
 class GetBacklinks:
@@ -280,6 +308,12 @@ class CaptureHighlight:
     replaced mid-flight — nothing is persisted and ``StaleCaptureTarget`` (409) is
     raised. Otherwise a note (empty body allowed) plus its book anchor are created and
     the note's derived indexes are rebuilt, all in the caller's transaction.
+
+    The quote is optional: with none, there is no selection to bind, so block binding is
+    skipped and the anchor is **section-level** — the block columns stay NULL and the
+    quote snapshot is empty, which is the schema's existing shape for an unbound anchor.
+    Section resolution and ownership are identical either way, and the note and its
+    anchor are still written together.
     """
 
     def __init__(
@@ -309,7 +343,7 @@ class CaptureHighlight:
         user: User,
         source_id: UUID,
         anchor: str,
-        quote_exact: str,
+        quote_exact: str = "",
         quote_prefix: str = "",
         quote_suffix: str = "",
         title: str,
@@ -326,17 +360,22 @@ class CaptureHighlight:
         if section is None:
             raise CorpusNotFound("No section for this anchor.")
 
-        blocks = [
-            AnchorBlock(
-                ordinal=block.ordinal,
-                content_hash=block.content_hash,
-                text=self._markup.to_markdown(block.html_fragment),
-            )
-            for block in section.blocks
-        ]
-        binding = resolve(blocks, quote_exact, quote_prefix, quote_suffix)
-        if binding is None:
-            raise StaleCaptureTarget("The selected passage no longer matches the source.")
+        binding = None
+        if quote_exact.strip():
+            blocks = [
+                AnchorBlock(
+                    ordinal=block.ordinal,
+                    content_hash=block.content_hash,
+                    text=self._markup.to_markdown(block.html_fragment),
+                )
+                for block in section.blocks
+            ]
+            binding = resolve(blocks, quote_exact, quote_prefix, quote_suffix)
+            if binding is None:
+                raise StaleCaptureTarget("The selected passage no longer matches the source.")
+        else:
+            # No selection: a section-level anchor keeps no quote snapshot or context.
+            quote_exact = quote_prefix = quote_suffix = ""
         _validate_body(body_markdown, self._max_body_chars)
 
         now = self._clock.now()
@@ -364,10 +403,10 @@ class CaptureHighlight:
                 source_title=source.title,
                 anchor=section.anchor,
                 section_path=section.section_path,
-                block_hash=binding.block_hash,
-                block_ordinal=binding.block_ordinal,
-                start_offset=binding.start_offset,
-                end_offset=binding.end_offset,
+                block_hash=binding.block_hash if binding else None,
+                block_ordinal=binding.block_ordinal if binding else None,
+                start_offset=binding.start_offset if binding else None,
+                end_offset=binding.end_offset if binding else None,
                 quote_exact=quote_exact,
                 quote_prefix=quote_prefix,
                 quote_suffix=quote_suffix,
@@ -408,6 +447,10 @@ class ReconcileNoteAnchors:
        rewritten to the found section's canonical anchor/path (alias-aware);
     4. else — the section still resolves but the quote is gone → ``stale``; the section
        itself is gone → ``orphaned`` (the row is kept, rendered from its quote snapshot).
+
+    A section-level anchor (captured with no quote) has nothing to rebind, so it skips
+    the cascade: it stays ``active`` — rewritten to the survivor's canonical anchor —
+    while its section resolves, and is ``orphaned``, never ``stale``, once it is gone.
 
     Only the anchor payload fields and status are ever written, and only when the outcome
     differs from the stored state (the quiz reconcile's write discipline); a note's title
@@ -487,6 +530,30 @@ class ReconcileNoteAnchors:
     ) -> _Reconciled:
         """Return the anchor's reconciled ``(anchor, path, hash, ordinal, start, end, status)``."""
         located = first_by_anchor.get(anchor.anchor) or alias_to_section.get(anchor.anchor)
+        if not anchor.quote_exact:
+            # A section-level anchor has no quote to rebind: it stays active for as long
+            # as its section resolves (rewritten to the survivor's canonical anchor), and
+            # is orphaned — never stale — once the section is gone.
+            if located is None:
+                return (
+                    anchor.anchor,
+                    anchor.section_path,
+                    None,
+                    None,
+                    None,
+                    None,
+                    NoteAnchorStatus.ORPHANED,
+                )
+            section, _ = located
+            return (
+                section.anchor,
+                section.section_path,
+                None,
+                None,
+                None,
+                None,
+                NoteAnchorStatus.ACTIVE,
+            )
         if located is not None:
             section, blocks = located
             # Tier 1: block-hash match in the resolved section (offsets provably valid).

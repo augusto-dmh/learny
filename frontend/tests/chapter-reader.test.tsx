@@ -396,6 +396,60 @@ describe("ChapterFlow capture (NF-12)", () => {
     }
   });
 
+  it("shows a note captured from the page in the open Notes tab, no reload", async () => {
+    nav.params = new URLSearchParams("panel=notes");
+    // The book has no notes until the capture writes one.
+    let rows: unknown[] = [];
+    const captured = {
+      id: "n1",
+      title: "A captured passage",
+      tags: [],
+      anchor_statuses: ["active"],
+      anchor: {
+        anchor: S2,
+        section_title: "Mechanism",
+        section_path: ["Chapter One", "Mechanism"],
+        quote_exact: "Babbage designed the analytical engine",
+        status: "active",
+        page: 3,
+      },
+      created_at: "now",
+      updated_at: "now",
+    };
+    const fetchMock = routedFetch({
+      [`POST ${HIGHLIGHTS_URL}`]: () => {
+        rows = [captured];
+        return jsonResponse(201, {
+          id: "n1",
+          title: "A captured passage",
+          body_markdown: "",
+          tags: [],
+          anchors: [],
+          created_at: "now",
+          updated_at: "now",
+        });
+      },
+      "GET /api/notes?source_id=s1": () => jsonResponse(200, rows),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderAndSelect(S2, "Babbage designed the analytical engine");
+    await screen.findByRole("dialog", { name: "Capture highlight" });
+    // The empty state arrives with the tab's own notes fetch, which is not ordered
+    // against the dialog — awaiting it is what makes the "before" of this before/after
+    // real, rather than a race the runner happens to win on a fast machine.
+    expect(await screen.findByText(/Notes on this book only\./)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Highlight" }));
+
+    // The reader never left the page, and the tab it was already looking at now
+    // holds the note — count and all.
+    expect(await screen.findByText("A captured passage")).toBeTruthy();
+    expect(screen.getByRole("tab", { name: /^Notes/ }).textContent?.trim()).toBe(
+      "Notes1",
+    );
+  });
+
   it("does not raise the popover for a selection absent from the section markdown", () => {
     renderAndSelect(S1, "a phrase that is not in the section");
 
@@ -747,7 +801,7 @@ describe("ChapterReader highlight load (RD-28)", () => {
   });
 });
 
-describe("ChapterFlow panel modes (RA-01/02/03/06)", () => {
+describe("ChapterFlow dock tabs (RA-01/02/03/06)", () => {
   it("opens the ask panel when ?panel=ask (RA-01)", async () => {
     nav.params = new URLSearchParams("panel=ask");
     render(
@@ -756,7 +810,7 @@ describe("ChapterFlow panel modes (RA-01/02/03/06)", () => {
 
     await screen.findByText("Ada Lovelace wrote the first algorithm.");
     const panel = screen.getByTestId("reader-panel");
-    expect(panel.getAttribute("data-mode")).toBe("ask");
+    expect(panel.getAttribute("data-tab")).toBe("ask");
     expect(screen.getByTestId("ask-panel-body")).toBeTruthy();
   });
 
@@ -768,7 +822,7 @@ describe("ChapterFlow panel modes (RA-01/02/03/06)", () => {
 
     await screen.findByText("Ada Lovelace wrote the first algorithm.");
     const panel = screen.getByTestId("reader-panel");
-    expect(panel.getAttribute("data-mode")).toBe("teach");
+    expect(panel.getAttribute("data-tab")).toBe("teach");
     expect(screen.getByTestId("teach-panel-body")).toBeTruthy();
   });
 
@@ -782,8 +836,82 @@ describe("ChapterFlow panel modes (RA-01/02/03/06)", () => {
     expect(screen.queryByTestId("reader-panel")).toBeNull();
   });
 
-  it("renders no panel for an unknown panel value (edge case)", async () => {
-    nav.params = new URLSearchParams("panel=notes");
+  it("opens the dock on the notes and review tabs too", async () => {
+    for (const tab of ["notes", "review"]) {
+      nav.params = new URLSearchParams(`panel=${tab}`);
+      const view = render(
+        <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+      );
+
+      await screen.findAllByText("Ada Lovelace wrote the first algorithm.");
+      expect(screen.getByTestId("reader-panel").getAttribute("data-tab")).toBe(tab);
+      view.unmount();
+    }
+  });
+
+  it("grades this book's due card in the dock, without leaving the chapter", async () => {
+    nav.params = new URLSearchParams("panel=review");
+    const due = {
+      id: "i1",
+      source_id: "s1",
+      source_title: "Ready Book",
+      item_type: "free_recall",
+      question: "Who wrote the first algorithm?",
+      answer: "Ada Lovelace",
+      citation: {
+        section_path: ["Chapter One", "Beginnings"],
+        anchor: S1,
+        source_excerpt: "Ada Lovelace wrote the first algorithm.",
+      },
+      provenance: null,
+      status: "active",
+      due: "2026-07-16T00:00:00Z",
+      note_changed: false,
+    };
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/auth/me") return authedMe.clone();
+      if (url.startsWith("/api/reviews/due")) {
+        return jsonResponse(200, { items: [due], total_due: 1 });
+      }
+      if (init?.method === "POST" && url.startsWith("/api/quiz-items/")) {
+        return jsonResponse(200, { state: 2, step: null, due: "later" });
+      }
+      // The reader's own reads (structure, highlights) settle empty.
+      return jsonResponse(200, url.includes("/structure") ? { sections: [] } : []);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+    );
+
+    await screen.findByText("Who wrote the first algorithm?");
+    // The count and the queue are two separate reads of the due endpoint, so the
+    // queue arriving says nothing about the count having arrived.
+    await waitFor(() =>
+      expect(screen.getByTestId("due-count").textContent).toBe("1"),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Reveal answer" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Good" }));
+    });
+
+    // The card was graded against the server, and the chapter the reader was
+    // reading is still on screen underneath — no navigation happened.
+    expect(
+      fetchMock.mock.calls.some(
+        ([url, init]) =>
+          String(url) === "/api/quiz-items/i1/reviews" &&
+          (init as RequestInit | undefined)?.method === "POST",
+      ),
+    ).toBe(true);
+    expect(nav.replace).not.toHaveBeenCalled();
+    expect(nav.push).not.toHaveBeenCalled();
+    expect(screen.getByText("Ada Lovelace wrote the first algorithm.")).toBeTruthy();
+  });
+
+  it("renders no panel for a value naming no tab (edge case)", async () => {
+    nav.params = new URLSearchParams("panel=nowhere");
     render(
       <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
     );
