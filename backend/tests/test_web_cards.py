@@ -68,15 +68,27 @@ def cards_client(db_conn: Connection, monkeypatch: pytest.MonkeyPatch):  # noqa:
     generous limiter) and pins ``quiz_max_card_chars`` so the over-cap reject stays
     cheap. The generation/embedding providers are pinned to the deterministic local
     adapters so the suggestion route never reaches a network provider.
+
+    These tests seed their passages by capturing highlights, and capture commits in the
+    note-write UoW before queueing the note's embed — so the factory is overridden to
+    yield the shared connection *without committing*, keeping the whole test inside its
+    one rolled-back transaction, and the enqueuer is a recording fake.
     """
+    from contextlib import contextmanager
+
     from app.core.config import get_settings
-    from app.infrastructure.web.dependencies import get_db_connection
+    from app.infrastructure.web.dependencies import (
+        get_db_connection,
+        get_note_index_enqueuer,
+        get_note_uow,
+    )
     from app.infrastructure.web.rate_limit import (
         InMemoryFixedWindowRateLimiter,
         get_rate_limiter,
         set_rate_limiter,
     )
     from app.main import create_app
+    from tests.fakes import FakeNoteIndexEnqueuer
 
     monkeypatch.setenv("LEARNY_SESSION_COOKIE_SECURE", "false")
     monkeypatch.setenv("LEARNY_CSRF_TRUSTED_ORIGINS", TEST_ORIGIN)
@@ -93,7 +105,16 @@ def cards_client(db_conn: Connection, monkeypatch: pytest.MonkeyPatch):  # noqa:
     def _override() -> Iterator[Connection]:
         yield db_conn
 
+    @contextmanager
+    def _shared_uow() -> Iterator[Connection]:
+        # Capture commits in the note-write UoW before enqueuing the embed; yielding
+        # the shared connection without committing keeps this inside the one
+        # rolled-back transaction the fixture isolates the test to.
+        yield db_conn
+
     app.dependency_overrides[get_db_connection] = _override
+    app.dependency_overrides[get_note_uow] = lambda: _shared_uow
+    app.dependency_overrides[get_note_index_enqueuer] = lambda: FakeNoteIndexEnqueuer()
     with TestClient(app, headers={"Origin": TEST_ORIGIN}) as c:
         yield c
     app.dependency_overrides.clear()
@@ -789,14 +810,21 @@ def throttled_cards_client(db_conn: Connection, monkeypatch: pytest.MonkeyPatch)
     handler, and ``rate_limit_quiz`` is what bounds that exposure. Without a test
     the dependency can be deleted from every route with the suite still green.
     """
+    from contextlib import contextmanager
+
     from app.core.config import get_settings
-    from app.infrastructure.web.dependencies import get_db_connection
+    from app.infrastructure.web.dependencies import (
+        get_db_connection,
+        get_note_index_enqueuer,
+        get_note_uow,
+    )
     from app.infrastructure.web.rate_limit import (
         InMemoryFixedWindowRateLimiter,
         get_rate_limiter,
         set_rate_limiter,
     )
     from app.main import create_app
+    from tests.fakes import FakeNoteIndexEnqueuer
 
     monkeypatch.setenv("LEARNY_SESSION_COOKIE_SECURE", "false")
     monkeypatch.setenv("LEARNY_CSRF_TRUSTED_ORIGINS", TEST_ORIGIN)
@@ -813,7 +841,16 @@ def throttled_cards_client(db_conn: Connection, monkeypatch: pytest.MonkeyPatch)
     def _override() -> Iterator[Connection]:
         yield db_conn
 
+    @contextmanager
+    def _shared_uow() -> Iterator[Connection]:
+        # Capture commits in the note-write UoW before enqueuing the embed; yielding
+        # the shared connection without committing keeps this inside the one
+        # rolled-back transaction the fixture isolates the test to.
+        yield db_conn
+
     app.dependency_overrides[get_db_connection] = _override
+    app.dependency_overrides[get_note_uow] = lambda: _shared_uow
+    app.dependency_overrides[get_note_index_enqueuer] = lambda: FakeNoteIndexEnqueuer()
     with TestClient(app, headers={"Origin": TEST_ORIGIN}) as c:
         yield c
     app.dependency_overrides.clear()
