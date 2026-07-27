@@ -122,7 +122,7 @@ and C precedes D by the driver's explicit call; ADR-0029 must be accepted before
 | `v6-instrument` | A | Request/query/task timings, `Server-Timing`, dev-only surface | Done (PR #49) |
 | `v6-page-unit` | B | Page unit (~275 words), reader typography, live progress, study heatmap | Done (PR #51) |
 | `v6-conversation-model` | C | Unified scoped conversations per ADR-0029 (backend-first) | Done (PR #52) — ADR-0029 shipped in the PR |
-| `v6-workspace-conversations` | D (1 of 2) | Ask/Teach re-pointed onto the unified conversation API, dock conversation management, legacy surface retired, generation ports converged, list pagination | In progress |
+| `v6-workspace-conversations` | D (1 of 2) | Ask/Teach re-pointed onto the unified conversation API, dock conversation management, legacy surface retired, generation ports converged, list pagination | Done (PR #53) |
 | `v6-workspace-notes` | D (2 of 2) | Dock Notes + Review tabs, notes-by-source filter, `/notes` re-scoped per book, notes provenance (title-only creation retired) | Not started |
 | `v6-answer-experience` | E | Thinking + streaming states, inline citations, app-wide loading pattern | Not started |
 
