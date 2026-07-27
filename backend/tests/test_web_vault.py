@@ -24,7 +24,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import Connection
 
-from app.domain.entities import NoteAnchor, NoteAnchorStatus
+from app.domain.entities import Note, NoteAnchor, NoteAnchorStatus
 from app.infrastructure.db.repositories import SqlAlchemyNoteRepository
 from tests.conftest import TEST_ORIGIN, TEST_PASSWORD, requires_db
 
@@ -91,20 +91,19 @@ def _register(client: TestClient, email: str) -> str:
     return resp.json()["id"]
 
 
-def _csrf(client: TestClient) -> str:
-    resp = client.get("/api/auth/me")
-    assert resp.status_code == 200, resp.text
-    return resp.json()["csrf_token"]
-
-
-def _create_note(client: TestClient, *, title: str, body: str = "") -> str:
-    resp = client.post(
-        "/api/notes",
-        json={"title": title, "body_markdown": body, "tags": []},
-        headers={"X-CSRF-Token": _csrf(client)},
+def _seed_note(db_conn: Connection, user_id: str, *, title: str, body: str = "") -> str:
+    """Persist a note row directly — the export reads the caller's notes, not a route."""
+    now = datetime.now(UTC)
+    note = Note(
+        id=uuid4(),
+        user_id=UUID(user_id),
+        title=title,
+        body_markdown=body,
+        created_at=now,
+        updated_at=now,
     )
-    assert resp.status_code == 201, resp.text
-    return resp.json()["id"]
+    SqlAlchemyNoteRepository(db_conn).add(note)
+    return str(note.id)
 
 
 def _seed_anchor(
@@ -151,8 +150,8 @@ def _entries(data: bytes) -> dict[str, str]:
 def test_export_returns_the_callers_vault_zip(
     vault_client: TestClient, db_conn: Connection
 ) -> None:
-    _register(vault_client, "vault-owner@example.com")
-    note_id = _create_note(vault_client, title="Cited", body="See [[Other]] — a thought.\n")
+    user_id = _register(vault_client, "vault-owner@example.com")
+    note_id = _seed_note(db_conn, user_id, title="Cited", body="See [[Other]] — a thought.\n")
     anchor = _seed_anchor(
         db_conn, note_id=note_id, source_title="The Book", quote_exact="a passage"
     )
@@ -175,11 +174,11 @@ def test_export_returns_the_callers_vault_zip(
 def test_export_contains_only_the_callers_data(
     vault_client: TestClient, db_conn: Connection
 ) -> None:
-    _register(vault_client, "vault-a@example.com")
-    _create_note(vault_client, title="AlphaSecret", body="mine alone")
+    user_a = _register(vault_client, "vault-a@example.com")
+    _seed_note(db_conn, user_a, title="AlphaSecret", body="mine alone")
 
-    _register(vault_client, "vault-b@example.com")  # become a different user
-    _create_note(vault_client, title="BetaOwn", body="b's note")
+    user_b = _register(vault_client, "vault-b@example.com")  # become a different user
+    _seed_note(db_conn, user_b, title="BetaOwn", body="b's note")
 
     entries = _entries(vault_client.get("/api/export/vault").content)
 

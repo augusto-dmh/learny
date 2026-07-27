@@ -1,14 +1,16 @@
 """T4 gate — notes use cases (unit, fakes; NF-04..06 + edges).
 
-Drives Create/Update/Delete/Get/List and CaptureHighlight over in-memory fakes,
-pinning: owner scoping (non-owner collapses to ``NoteNotFound``), the body cap,
-wikilink derivation (resolved / unresolved / self-link), lowercase tag normalization,
-and highlight capture (owned-source + served-section consistency, atomic note+anchor,
-empty body allowed, stale/unknown-anchor errors).
+Drives Update/Delete/Get/List and CaptureHighlight over in-memory fakes, pinning:
+owner scoping (non-owner collapses to ``NoteNotFound``), the body cap, wikilink
+derivation (resolved / unresolved / self-link), lowercase tag normalization, and
+highlight capture — the only way a note is created (owned-source + served-section
+consistency, atomic note+anchor, optional quote, empty body allowed,
+stale/unknown-anchor errors).
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -24,7 +26,6 @@ from app.application.errors import (
 from app.application.identity import AuthorizeOwnership
 from app.application.notes import (
     CaptureHighlight,
-    CreateNote,
     DeleteNote,
     GetBacklinks,
     GetNote,
@@ -35,6 +36,7 @@ from app.application.notes import (
 from app.domain.entities import (
     AnchorBlockSnapshot,
     AnchorSection,
+    Note,
     NoteAnchor,
     NoteAnchorStatus,
     Source,
@@ -70,98 +72,39 @@ def _source(user_id, *, title: str = "A Book") -> Source:  # noqa: ANN001
     )
 
 
-def _create(notes: FakeNoteRepository, *, max_body_chars: int = 100000) -> CreateNote:
-    return CreateNote(notes=notes, clock=FakeClock(), ids=uuid4, max_body_chars=max_body_chars)
+def _seed_note(
+    notes: FakeNoteRepository,
+    user: User,
+    *,
+    title: str,
+    body_markdown: str = "",
+    tags: Sequence[str] = (),
+) -> Note:
+    """Persist a note directly, standing in for one the repository already holds.
 
-
-# --- CreateNote (NF-05) ---------------------------------------------------------
-
-
-def test_create_note_persists_and_returns_the_detail_view() -> None:
-    notes = FakeNoteRepository()
-    user = _user()
-
-    view = _create(notes)(user=user, title="Reading log", body_markdown="body", tags=[])
-
-    assert view.note.title == "Reading log"
-    assert view.note.body_markdown == "body"
-    assert notes.get_by_id(view.note.id) is not None
-
-
-def test_create_note_allows_an_empty_body() -> None:
-    notes = FakeNoteRepository()
-    user = _user()
-
-    view = _create(notes)(user=user, title="Quote card", body_markdown="", tags=[])
-
-    assert view.note.body_markdown == ""
-
-
-def test_create_note_rejects_a_body_over_the_cap() -> None:
-    notes = FakeNoteRepository()
-    user = _user()
-
-    with pytest.raises(NoteBodyTooLong):
-        _create(notes, max_body_chars=10)(
-            user=user, title="Too long", body_markdown="x" * 11, tags=[]
-        )
-    # Nothing was persisted.
-    assert notes.list_summaries(user.id) == []
-
-
-def test_create_note_derives_resolved_and_unresolved_wikilinks() -> None:
-    notes = FakeNoteRepository()
-    user = _user()
-    create = _create(notes)
-    target = create(user=user, title="Target", body_markdown="", tags=[])
-
-    source = create(
-        user=user,
-        title="Source",
-        body_markdown="See [[Target]] and [[Missing]].",
-        tags=[],
-    )
-
-    links = notes.links_for_note(source.note.id)
-    by_text = {link.target_text: link.target_note_id for link in links}
-    assert by_text == {"Target": target.note.id, "Missing": None}
-
-
-def test_create_note_resolves_wikilinks_case_insensitively() -> None:
-    notes = FakeNoteRepository()
-    user = _user()
-    create = _create(notes)
-    target = create(user=user, title="My Concept", body_markdown="", tags=[])
-
-    source = create(user=user, title="Source", body_markdown="[[my concept]]", tags=[])
-
-    links = notes.links_for_note(source.note.id)
-    assert [(link.target_text, link.target_note_id) for link in links] == [
-        ("my concept", target.note.id)
-    ]
-
-
-def test_create_note_ignores_a_self_link() -> None:
-    notes = FakeNoteRepository()
-    user = _user()
-
-    view = _create(notes)(user=user, title="Self", body_markdown="I reference [[Self]].", tags=[])
-
-    assert notes.links_for_note(view.note.id) == []
-
-
-def test_create_note_normalizes_tags_lowercase_and_deduped() -> None:
-    notes = FakeNoteRepository()
-    user = _user()
-
-    view = _create(notes)(
-        user=user,
-        title="Tagged",
+    Its derived indexes are written by the real save path so a seeded body's wikilinks
+    and tags exist exactly as a save would leave them.
+    """
+    now = datetime.now(UTC)
+    note = Note(
+        id=uuid4(),
+        user_id=user.id,
+        title=title,
         body_markdown="",
-        tags=["Python", "python", " NOTES ", ""],
+        created_at=now,
+        updated_at=now,
     )
-
-    assert view.tags == ("notes", "python")
+    notes.add(note)
+    UpdateNote(notes=notes, clock=FakeClock(), max_body_chars=100000)(
+        user=user,
+        note_id=note.id,
+        title=title,
+        body_markdown=body_markdown,
+        tags=list(tags),
+    )
+    stored = notes.get_by_id(note.id)
+    assert stored is not None
+    return stored
 
 
 # --- UpdateNote (NF-05) ---------------------------------------------------------
@@ -170,14 +113,13 @@ def test_create_note_normalizes_tags_lowercase_and_deduped() -> None:
 def test_update_note_rewrites_body_tags_and_links() -> None:
     notes = FakeNoteRepository()
     user = _user()
-    create = _create(notes)
-    target = create(user=user, title="Target", body_markdown="", tags=[])
-    note = create(user=user, title="Note", body_markdown="", tags=["old"])
+    target = _seed_note(notes, user, title="Target")
+    note = _seed_note(notes, user, title="Note", tags=["old"])
 
     update = UpdateNote(notes=notes, clock=FakeClock(), max_body_chars=100000)
     view, body_changed = update(
         user=user,
-        note_id=note.note.id,
+        note_id=note.id,
         title="Note",
         body_markdown="now links [[Target]]",
         tags=["new"],
@@ -185,8 +127,8 @@ def test_update_note_rewrites_body_tags_and_links() -> None:
 
     assert view.tags == ("new",)
     assert body_changed is True  # body went from "" to non-empty
-    links = notes.links_for_note(note.note.id)
-    assert [link.target_note_id for link in links] == [target.note.id]
+    links = notes.links_for_note(note.id)
+    assert [link.target_note_id for link in links] == [target.id]
 
 
 def test_update_note_reports_body_unchanged_for_title_or_tag_only_edit() -> None:
@@ -194,12 +136,12 @@ def test_update_note_reports_body_unchanged_for_title_or_tag_only_edit() -> None
     so the web layer skips the async re-embed (NL-01: embed only when body changed)."""
     notes = FakeNoteRepository()
     user = _user()
-    note = _create(notes)(user=user, title="Note", body_markdown="stable body", tags=["a"])
+    note = _seed_note(notes, user, title="Note", body_markdown="stable body", tags=["a"])
 
     update = UpdateNote(notes=notes, clock=FakeClock(), max_body_chars=100000)
     _, body_changed = update(
         user=user,
-        note_id=note.note.id,
+        note_id=note.id,
         title="Renamed",
         body_markdown="stable body",
         tags=["a", "b"],
@@ -212,13 +154,13 @@ def test_update_note_by_non_owner_is_not_found() -> None:
     notes = FakeNoteRepository()
     owner = _user()
     other = _user()
-    note = _create(notes)(user=owner, title="Owned", body_markdown="", tags=[])
+    note = _seed_note(notes, owner, title="Owned")
 
     update = UpdateNote(notes=notes, clock=FakeClock(), max_body_chars=100000)
     with pytest.raises(NoteNotFound):
-        update(user=other, note_id=note.note.id, title="Hacked", body_markdown="", tags=[])
+        update(user=other, note_id=note.id, title="Hacked", body_markdown="", tags=[])
     # The owner's note is untouched.
-    assert notes.get_by_id(note.note.id).title == "Owned"
+    assert notes.get_by_id(note.id).title == "Owned"
 
 
 # --- DeleteNote / GetNote / ListNotes (NF-05) -----------------------------------
@@ -228,33 +170,32 @@ def test_delete_note_owner_scoped() -> None:
     notes = FakeNoteRepository()
     owner = _user()
     other = _user()
-    note = _create(notes)(user=owner, title="Owned", body_markdown="", tags=[])
+    note = _seed_note(notes, owner, title="Owned")
 
     delete = DeleteNote(notes=notes)
     with pytest.raises(NoteNotFound):
-        delete(user=other, note_id=note.note.id)
-    delete(user=owner, note_id=note.note.id)
-    assert notes.get_by_id(note.note.id) is None
+        delete(user=other, note_id=note.id)
+    delete(user=owner, note_id=note.id)
+    assert notes.get_by_id(note.id) is None
 
 
 def test_get_note_returns_tags_and_is_owner_scoped() -> None:
     notes = FakeNoteRepository()
     owner = _user()
     other = _user()
-    note = _create(notes)(user=owner, title="Owned", body_markdown="", tags=["python"])
+    note = _seed_note(notes, owner, title="Owned", tags=["python"])
 
     get = GetNote(notes=notes)
-    assert get(user=owner, note_id=note.note.id).tags == ("python",)
+    assert get(user=owner, note_id=note.id).tags == ("python",)
     with pytest.raises(NoteNotFound):
-        get(user=other, note_id=note.note.id)
+        get(user=other, note_id=note.id)
 
 
 def test_list_notes_filters_by_tag_lowercased() -> None:
     notes = FakeNoteRepository()
     user = _user()
-    create = _create(notes)
-    create(user=user, title="Tagged", body_markdown="", tags=["python"])
-    create(user=user, title="Untagged", body_markdown="", tags=[])
+    _seed_note(notes, user, title="Tagged", tags=["python"])
+    _seed_note(notes, user, title="Untagged")
 
     summaries = ListNotes(notes=notes)(user=user, tag="PYTHON")
 
@@ -267,13 +208,12 @@ def test_list_notes_filters_by_tag_lowercased() -> None:
 def test_get_backlinks_returns_the_linking_notes() -> None:
     notes = FakeNoteRepository()
     user = _user()
-    create = _create(notes)
-    target = create(user=user, title="Target", body_markdown="", tags=[])
-    linker = create(user=user, title="Linker", body_markdown="see [[Target]]", tags=[])
+    target = _seed_note(notes, user, title="Target")
+    linker = _seed_note(notes, user, title="Linker", body_markdown="see [[Target]]")
 
-    backlinks = GetBacklinks(notes=notes)(user=user, note_id=target.note.id)
+    backlinks = GetBacklinks(notes=notes)(user=user, note_id=target.id)
 
-    assert [b.note_id for b in backlinks] == [linker.note.id]
+    assert [b.note_id for b in backlinks] == [linker.id]
     assert [b.title for b in backlinks] == ["Linker"]
 
 
@@ -281,10 +221,10 @@ def test_get_backlinks_is_owner_scoped() -> None:
     notes = FakeNoteRepository()
     owner = _user()
     other = _user()
-    target = _create(notes)(user=owner, title="Owned", body_markdown="", tags=[])
+    target = _seed_note(notes, owner, title="Owned")
 
     with pytest.raises(NoteNotFound):
-        GetBacklinks(notes=notes)(user=other, note_id=target.note.id)
+        GetBacklinks(notes=notes)(user=other, note_id=target.id)
 
 
 # --- CaptureHighlight (NF-06) ---------------------------------------------------
@@ -496,7 +436,7 @@ def test_capture_highlight_note_body_derives_wikilinks() -> None:
     sources.add(source)
     notes = FakeNoteRepository()
     # A prior note the captured note's body links to.
-    _create(notes)(user=user, title="Concept", body_markdown="", tags=[])
+    _seed_note(notes, user, title="Concept")
     corpus = FakeAnchorCorpus({source.id: [_section()]})
 
     view = _capture(sources, notes, corpus)(
@@ -510,6 +450,95 @@ def test_capture_highlight_note_body_derives_wikilinks() -> None:
 
     links = notes.links_for_note(view.note.id)
     assert [link.target_text for link in links] == ["Concept"]
+
+
+def test_capture_highlight_records_resolved_and_unresolved_wikilinks() -> None:
+    user = _user()
+    source = _source(user.id)
+    sources = FakeSourceRepository()
+    sources.add(source)
+    notes = FakeNoteRepository()
+    target = _seed_note(notes, user, title="Target")
+    corpus = FakeAnchorCorpus({source.id: [_section()]})
+
+    view = _capture(sources, notes, corpus)(
+        user=user,
+        source_id=source.id,
+        anchor="ch1",
+        quote_exact="quick brown",
+        title="quick brown",
+        body_markdown="See [[Target]] and [[Missing]].",
+    )
+
+    links = notes.links_for_note(view.note.id)
+    assert {link.target_text: link.target_note_id for link in links} == {
+        "Target": target.id,
+        "Missing": None,
+    }
+
+
+def test_capture_highlight_resolves_wikilinks_case_insensitively() -> None:
+    user = _user()
+    source = _source(user.id)
+    sources = FakeSourceRepository()
+    sources.add(source)
+    notes = FakeNoteRepository()
+    target = _seed_note(notes, user, title="My Concept")
+    corpus = FakeAnchorCorpus({source.id: [_section()]})
+
+    view = _capture(sources, notes, corpus)(
+        user=user,
+        source_id=source.id,
+        anchor="ch1",
+        quote_exact="quick brown",
+        title="quick brown",
+        body_markdown="[[my concept]]",
+    )
+
+    links = notes.links_for_note(view.note.id)
+    assert [(link.target_text, link.target_note_id) for link in links] == [
+        ("my concept", target.id)
+    ]
+
+
+def test_capture_highlight_ignores_a_self_link() -> None:
+    user = _user()
+    source = _source(user.id)
+    sources = FakeSourceRepository()
+    sources.add(source)
+    notes = FakeNoteRepository()
+    corpus = FakeAnchorCorpus({source.id: [_section()]})
+
+    view = _capture(sources, notes, corpus)(
+        user=user,
+        source_id=source.id,
+        anchor="ch1",
+        quote_exact="quick brown",
+        title="Self",
+        body_markdown="I reference [[Self]].",
+    )
+
+    assert notes.links_for_note(view.note.id) == []
+
+
+def test_capture_highlight_normalizes_tags_lowercase_and_deduped() -> None:
+    user = _user()
+    source = _source(user.id)
+    sources = FakeSourceRepository()
+    sources.add(source)
+    notes = FakeNoteRepository()
+    corpus = FakeAnchorCorpus({source.id: [_section()]})
+
+    view = _capture(sources, notes, corpus)(
+        user=user,
+        source_id=source.id,
+        anchor="ch1",
+        quote_exact="quick brown",
+        title="Tagged",
+        tags=["Python", "python", " NOTES ", ""],
+    )
+
+    assert view.tags == ("notes", "python")
 
 
 # --- ReconcileNoteAnchors (NF-07) -----------------------------------------------
@@ -530,10 +559,10 @@ def _seed_anchor(
     status: str = NoteAnchorStatus.ACTIVE,
 ) -> NoteAnchor:
     now = datetime.now(UTC)
-    note = _create(notes)(user=_user(), title="anchored", body_markdown="", tags=[])
+    note = _seed_note(notes, _user(), title="anchored")
     row = NoteAnchor(
         id=uuid4(),
-        note_id=note.note.id,
+        note_id=note.id,
         source_id=source_id,
         source_title="A Book",
         anchor=anchor,

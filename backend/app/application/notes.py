@@ -1,9 +1,10 @@
 """Notes use-case services (RFC-003 Cycle E; ADR-0026 §2, design §Components).
 
-Framework-free orchestration of the notes aggregate: create/update/delete/get/list
-of whole-Markdown notes and highlight capture from the reader. Nothing here imports
-FastAPI, SQLAlchemy, or Celery (ADR-007/009); the web layer (Phase C) owns the
-per-request transaction so a note and its anchor are created atomically.
+Framework-free orchestration of the notes aggregate: highlight capture from the
+reader — the one way a note is born, always carrying the passage it came from — plus
+update/delete/get/list of whole-Markdown notes. Nothing here imports FastAPI,
+SQLAlchemy, or Celery (ADR-007/009); the web layer (Phase C) owns the per-request
+transaction so a note and its anchor are created atomically.
 
 Two derived indexes are rebuilt from a note's body on every save (NF-05): the
 ``[[wikilink]]`` backlink index (title-matched case-insensitively against the user's
@@ -127,55 +128,6 @@ def _view(notes: NoteRepository, note: Note) -> NoteView:
         tags=tuple(notes.tags_for_note(note.id)),
         anchors=tuple(notes.anchors_for_note(note.id)),
     )
-
-
-class CreateNote:
-    """Create a whole-Markdown note for its owner and derive its indexes (NF-05).
-
-    Empty body allowed. The body cap (NF-04) is enforced before any write; the
-    wikilink and tag indexes are rebuilt from the body in the same transaction.
-    """
-
-    def __init__(
-        self,
-        *,
-        notes: NoteRepository,
-        clock: Clock,
-        ids: Callable[[], UUID],
-        max_body_chars: int,
-    ) -> None:
-        self._notes = notes
-        self._clock = clock
-        self._ids = ids
-        self._max_body_chars = max_body_chars
-
-    def __call__(
-        self,
-        *,
-        user: User,
-        title: str,
-        body_markdown: str,
-        tags: Sequence[str] = (),
-    ) -> NoteView:
-        _validate_body(body_markdown, self._max_body_chars)
-        now = self._clock.now()
-        note = Note(
-            id=self._ids(),
-            user_id=user.id,
-            title=title,
-            body_markdown=body_markdown,
-            created_at=now,
-            updated_at=now,
-        )
-        self._notes.add(note)
-        _rewrite_indexes(
-            self._notes,
-            note_id=note.id,
-            user_id=user.id,
-            body_markdown=body_markdown,
-            tags=tags,
-        )
-        return _view(self._notes, note)
 
 
 class UpdateNote:

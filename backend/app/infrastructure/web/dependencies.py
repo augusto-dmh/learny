@@ -50,7 +50,6 @@ from app.application.identity import (
 from app.application.ingestion import ReadIngestion, RunIngestion, StartIngestion
 from app.application.notes import (
     CaptureHighlight,
-    CreateNote,
     DeleteNote,
     GetBacklinks,
     GetNote,
@@ -672,16 +671,6 @@ _note_index_enqueuer: NoteIndexEnqueuer = CeleryNoteIndexEnqueuer()
 def get_note_index_enqueuer() -> NoteIndexEnqueuer:
     """FastAPI dependency: the process-wide note-index enqueuer (overridable in tests)."""
     return _note_index_enqueuer
-
-
-def build_create_note(conn: Connection) -> CreateNote:
-    """Wire ``CreateNote`` on a note-write UoW connection (NF-05)."""
-    return CreateNote(
-        notes=SqlAlchemyNoteRepository(conn),
-        clock=_clock,
-        ids=uuid4,
-        max_body_chars=get_settings().notes_max_body_chars,
-    )
 
 
 def build_update_note(conn: Connection) -> UpdateNote:

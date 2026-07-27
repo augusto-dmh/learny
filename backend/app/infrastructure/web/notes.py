@@ -1,18 +1,17 @@
 """Notes + highlights router — capture, organize, and read notes (Cycle E).
 
 Thin FastAPI adapter over the framework-free notes services (assembled in
-``dependencies``). A signed-in owner creates whole-Markdown notes, lists/filters
-them by tag, reads/edits/deletes one, reads a note's backlinks, and captures a
-highlight from the reader (create a note + one book anchor atomically). Every note
-path is one request-scoped transaction, so no commit-then-enqueue orchestration is
-needed here (unlike the deck/ingestion start paths).
+``dependencies``). A signed-in owner captures a note from a book passage (note + one
+book anchor, atomically), lists/filters them by tag, reads/edits/deletes one, and
+reads a note's backlinks. Every note path is one request-scoped transaction, so no
+commit-then-enqueue orchestration is needed here (unlike the deck/ingestion start
+paths).
 
 Application errors are translated to HTTP by the global handlers
 (``NoteNotFound`` → 404, ``NoteBodyTooLong`` → 422, ``StaleCaptureTarget`` → 409,
 ``SourceNotFound`` → 404, ``CorpusNotFound`` → 404).
 
 Contract (also consumed by the Next.js proxy):
-- ``POST   /api/notes`` → 201 note; auth + CSRF/Origin + limit.
 - ``GET    /api/notes`` → 200 note summaries (optional ``?tag=`` filter); auth.
 - ``GET    /api/notes/{id}`` → 200 note detail; auth.
 - ``PATCH  /api/notes/{id}`` → 200 updated note detail; auth + CSRF/Origin + limit.
@@ -21,12 +20,10 @@ Contract (also consumed by the Next.js proxy):
 - ``POST   /api/sources/{source_id}/highlights`` → 201 note; auth + CSRF/Origin +
   limit.
 
-NF-09 lists an optional capture payload alongside ``POST /api/notes``. The reader's
-capture path is served by the dedicated ``POST /api/sources/{source_id}/highlights``
-route (the ``CaptureHighlight`` use case), which carries the source in the path and
-the selection payload in the body; ``POST /api/notes`` stays a plain note create
-(``CreateNote``, whose signature has no capture fields), so capture is not duplicated
-across two shapes. This matches the design's architecture diagram (CRUD vs capture).
+Capture is the **only** way to create a note: every note is born carrying the passage
+it came from, so there is no rootless create to duplicate the shape. A note that wants
+no selection captures the section instead (an empty ``quote_exact``); notes created
+before this rule keep working untouched, anchors and all.
 """
 
 from __future__ import annotations
@@ -60,7 +57,6 @@ from app.domain.entities import (
 from app.domain.ports import NoteIndexEnqueuer
 from app.infrastructure.web.csrf import enforce_csrf, enforce_origin
 from app.infrastructure.web.dependencies import (
-    build_create_note,
     build_has_note_items,
     build_update_note,
     get_authenticated_user,
@@ -87,7 +83,7 @@ NoteEnqueuer = Annotated[NoteIndexEnqueuer, Depends(get_note_index_enqueuer)]
 
 
 class NoteWriteRequest(BaseModel):
-    """Create/update body (NF-05): title plus an optional Markdown body and tags.
+    """Update body (NF-05): title plus an optional Markdown body and tags.
 
     An empty body is allowed (a note may be just a title or, after capture, a bare
     quote card). Tags are normalized (lowercased/deduped) by the use case; the body
@@ -257,37 +253,6 @@ class SourceHighlightView(BaseModel):
 
 
 # --- Endpoints -----------------------------------------------------------------
-
-
-@router.post(
-    "/api/notes",
-    status_code=status.HTTP_201_CREATED,
-    dependencies=[
-        Depends(rate_limit_notes),
-        Depends(enforce_origin),
-        Depends(enforce_csrf),
-    ],
-)
-def create_note(
-    user: Annotated[User, Depends(get_authenticated_user)],
-    uow_factory: NoteUowFactory,
-    enqueuer: NoteEnqueuer,
-    body: NoteWriteRequest,
-) -> NoteDetailView:
-    """Create a whole-Markdown note for the caller and derive its indexes (201).
-
-    ``CreateNote`` validates the body cap (``NoteBodyTooLong`` → 422) then persists
-    the note and rebuilds its wikilink/tag indexes in one committed UoW; the note is
-    then embedded asynchronously (only when it has a body to embed, NL-01), enqueued
-    after commit so the worker reads a durable row (AD-016).
-    """
-    with uow_factory() as conn:
-        view = build_create_note(conn)(
-            user=user, title=body.title, body_markdown=body.body_markdown, tags=body.tags
-        )
-    if body.body_markdown:
-        enqueuer.enqueue_embed(view.note.id)
-    return NoteDetailView.from_view(view)
 
 
 @router.get("/api/notes")
