@@ -18,6 +18,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import replace
+from itertools import accumulate
 from uuid import UUID
 
 from app.application.anchoring import AnchorBlock, resolve
@@ -29,7 +30,7 @@ from app.application.errors import (
 )
 from app.application.identity import AuthorizeOwnership
 from app.application.ingestion import authorized_source
-from app.application.reading import locate, page_at, words_before_row
+from app.application.reading import page_at
 from app.domain.entities import (
     Backlink,
     ChapterIndexRow,
@@ -210,7 +211,7 @@ class ListNotes:
     that passage's page.
 
     The page is derived here, from the book's stored per-section word counts
-    (``words_before_row`` → ``page_at``, AD-189 book-global numbering), so the one
+    (a running word total → ``page_at``, AD-189 book-global numbering), so the one
     definition of a page lives on the server and no client recomputes it or infers it
     from a percent. An anchor that no longer resolves against the corpus — an orphaned
     one, or any anchor on a book whose corpus is gone — yields no page at all; its row
@@ -249,18 +250,37 @@ class ListNotes:
         if not summaries:
             return summaries
         index = self._corpus.get_chapter_index(source_id) or ()
+        pages = self._pages_by_anchor(index)
         return [
-            replace(summary, page=self._page_of(index, summary.anchor)) for summary in summaries
+            replace(
+                summary,
+                page=None if summary.anchor is None else pages.get(summary.anchor.anchor),
+            )
+            for summary in summaries
         ]
 
-    def _page_of(self, index: Sequence[ChapterIndexRow], anchor: NoteAnchor | None) -> int | None:
-        """Return the anchored section's book-global page, or ``None`` when it is gone."""
-        if anchor is None:
-            return None
-        row_idx = locate(index, anchor.anchor)
-        if row_idx is None:
-            return None
-        return page_at(words_before_row(index, row_idx), self._words_per_page)
+    def _pages_by_anchor(self, index: Sequence[ChapterIndexRow]) -> dict[str, int]:
+        """Map every anchor and alias in the book to its section's book-global page.
+
+        Built once per request rather than resolved per note: the naive form walks the
+        whole index to find each anchor and then re-sums the preceding sections' word
+        counts from scratch, so a book-scoped list costs notes × sections — and the list
+        is unbounded, which makes that product the thing that grows.
+
+        Precedence mirrors ``locate`` exactly, because the page must name the same
+        section the rest of the app would resolve: a canonical ``row.anchor`` match beats
+        any alias, and position order breaks ties on both (the index is position-ordered,
+        so the first entry written wins).
+        """
+        offsets = accumulate((row.word_count for row in index), initial=0)
+        by_alias: dict[str, int] = {}
+        by_anchor: dict[str, int] = {}
+        for row, words_before in zip(index, offsets, strict=False):
+            page = page_at(words_before, self._words_per_page)
+            by_anchor.setdefault(row.anchor, page)
+            for alias in row.anchor_aliases:
+                by_alias.setdefault(alias, page)
+        return {**by_alias, **by_anchor}
 
 
 class GetBacklinks:

@@ -246,14 +246,14 @@ def _anchor_note(
     return note
 
 
-def _index_row(anchor: str, *, word_count: int) -> ChapterIndexRow:
+def _index_row(anchor: str, *, word_count: int, aliases: tuple[str, ...] = ()) -> ChapterIndexRow:
     return ChapterIndexRow(
         position=0,
         depth=0,
         title=anchor,
         section_path=(anchor,),
         anchor=anchor,
-        anchor_aliases=(),
+        anchor_aliases=aliases,
         word_count=word_count,
     )
 
@@ -326,6 +326,55 @@ def test_list_notes_scoped_to_a_book_derives_the_page_from_its_word_counts() -> 
     )[0]
 
     assert summary.page == 6
+
+
+def test_list_notes_pages_an_anchor_the_book_now_carries_only_as_an_alias() -> None:
+    """An anchor a re-ingest demoted to an alias still pages to its section."""
+    notes = FakeNoteRepository()
+    sources = FakeSourceRepository()
+    user = _user()
+    source = sources.add(_source(user.id))
+    _anchor_note(notes, user, source.id, title="Written before the re-ingest", anchor="old-ch2")
+    corpus = FakeAnchorCorpus()
+    corpus.set_chapter_index(
+        source.id,
+        [
+            _index_row("ch1", word_count=250),
+            _index_row("ch2", word_count=250, aliases=("old-ch2",)),
+        ],
+    )
+
+    summary = _list_notes(notes, sources=sources, corpus=corpus, words_per_page=100)(
+        user=user, source_id=source.id
+    )[0]
+
+    assert summary.page == 3
+
+
+def test_list_notes_pages_a_canonical_anchor_over_a_section_holding_it_as_an_alias() -> None:
+    """A canonical match wins over an alias, so the page names the section the rest of
+    the app would resolve — the precedence anchor lookup has always had."""
+    notes = FakeNoteRepository()
+    sources = FakeSourceRepository()
+    user = _user()
+    source = sources.add(_source(user.id))
+    _anchor_note(notes, user, source.id, title="On the real chapter two", anchor="ch2")
+    corpus = FakeAnchorCorpus()
+    # An earlier section carries "ch2" merely as an alias; the section whose own anchor
+    # is "ch2" is the one that must supply the page.
+    corpus.set_chapter_index(
+        source.id,
+        [
+            _index_row("ch1", word_count=250, aliases=("ch2",)),
+            _index_row("ch2", word_count=250),
+        ],
+    )
+
+    summary = _list_notes(notes, sources=sources, corpus=corpus, words_per_page=100)(
+        user=user, source_id=source.id
+    )[0]
+
+    assert summary.page == 3
 
 
 def test_list_notes_keeps_an_unresolvable_anchors_row_with_its_quote_and_no_page() -> None:
