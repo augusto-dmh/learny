@@ -39,6 +39,7 @@ import { cn } from "@/lib/utils";
 import { AskPanel } from "./ask-panel";
 import { ConversationList } from "./conversation-list";
 import { DockNotesPanel, useBookNotes } from "./dock-notes-panel";
+import { DockReviewPanel, useDueCount } from "./dock-review-panel";
 import { TeachPanel } from "./teach-panel";
 
 /** A dock surface that holds a conversation, and so has per-surface thread state. */
@@ -178,6 +179,7 @@ export function ReaderPanel({
   // Loaded by the shell, not the tab: a count on a tab is only useful before the
   // reader has opened it.
   const bookNotes = useBookNotes(sourceId, notesToken);
+  const bookDue = useDueCount(sourceId);
 
   // Which panel continues a thread is on the row the reader clicked, so a resume
   // resolves in the click that asked for it — no request to race, and no window
@@ -239,6 +241,7 @@ export function ReaderPanel({
   // Inventory, never achievement: nothing counts up, and nothing is behind.
   const counts: Partial<Record<DockTab, number | null>> = {
     notes: bookNotes.notes?.length ?? null,
+    review: bookDue.total,
   };
 
   return (
@@ -316,7 +319,13 @@ export function ReaderPanel({
           />
         ) : tab === "notes" ? (
           <DockNotesPanel {...bookNotes} onShowInBook={onShowInBook} />
-        ) : null}
+        ) : (
+          <DockReviewPanel
+            {...bookDue}
+            sourceId={sourceId}
+            onRequireAuth={onRequireAuth}
+          />
+        )}
       </div>
     </aside>
   );

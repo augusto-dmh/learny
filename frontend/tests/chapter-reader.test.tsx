@@ -848,6 +848,63 @@ describe("ChapterFlow dock tabs (RA-01/02/03/06)", () => {
     }
   });
 
+  it("grades this book's due card in the dock, without leaving the chapter", async () => {
+    nav.params = new URLSearchParams("panel=review");
+    const due = {
+      id: "i1",
+      source_id: "s1",
+      source_title: "Ready Book",
+      item_type: "free_recall",
+      question: "Who wrote the first algorithm?",
+      answer: "Ada Lovelace",
+      citation: {
+        section_path: ["Chapter One", "Beginnings"],
+        anchor: S1,
+        source_excerpt: "Ada Lovelace wrote the first algorithm.",
+      },
+      provenance: null,
+      status: "active",
+      due: "2026-07-16T00:00:00Z",
+      note_changed: false,
+    };
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/auth/me") return authedMe.clone();
+      if (url.startsWith("/api/reviews/due")) {
+        return jsonResponse(200, { items: [due], total_due: 1 });
+      }
+      if (init?.method === "POST" && url.startsWith("/api/quiz-items/")) {
+        return jsonResponse(200, { state: 2, step: null, due: "later" });
+      }
+      // The reader's own reads (structure, highlights) settle empty.
+      return jsonResponse(200, url.includes("/structure") ? { sections: [] } : []);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+    );
+
+    await screen.findByText("Who wrote the first algorithm?");
+    expect(screen.getByTestId("due-count").textContent).toBe("1");
+    fireEvent.click(screen.getByRole("button", { name: "Reveal answer" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Good" }));
+    });
+
+    // The card was graded against the server, and the chapter the reader was
+    // reading is still on screen underneath — no navigation happened.
+    expect(
+      fetchMock.mock.calls.some(
+        ([url, init]) =>
+          String(url) === "/api/quiz-items/i1/reviews" &&
+          (init as RequestInit | undefined)?.method === "POST",
+      ),
+    ).toBe(true);
+    expect(nav.replace).not.toHaveBeenCalled();
+    expect(nav.push).not.toHaveBeenCalled();
+    expect(screen.getByText("Ada Lovelace wrote the first algorithm.")).toBeTruthy();
+  });
+
   it("renders no panel for a value naming no tab (edge case)", async () => {
     nav.params = new URLSearchParams("panel=nowhere");
     render(
