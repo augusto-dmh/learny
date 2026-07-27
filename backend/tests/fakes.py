@@ -748,10 +748,14 @@ class FakeNoteRepository:
                 for link in links
             ]
 
-    def list_summaries(self, user_id: UUID, *, tag: str | None = None) -> list[NoteSummary]:
+    def list_summaries(
+        self, user_id: UUID, *, tag: str | None = None, source_id: UUID | None = None
+    ) -> list[NoteSummary]:
         owned = [n for n in self._notes.values() if n.user_id == user_id]
         if tag is not None:
             owned = [n for n in owned if tag in self._tags_by_note.get(n.id, [])]
+        if source_id is not None:
+            owned = [n for n in owned if self._anchors_on(n.id, source_id)]
         owned.sort(key=lambda n: (n.updated_at, str(n.id)), reverse=True)
         return [
             NoteSummary(
@@ -760,9 +764,17 @@ class FakeNoteRepository:
                 anchor_statuses=tuple(
                     a.status for a in self._anchors.values() if a.note_id == note.id
                 ),
+                anchor=(self._anchors_on(note.id, source_id)[0] if source_id is not None else None),
             )
             for note in owned
         ]
+
+    def _anchors_on(self, note_id: UUID, source_id: UUID) -> list[NoteAnchor]:
+        """A note's anchors on one source, earliest-created first (the representative)."""
+        on_source = [
+            a for a in self._anchors.values() if a.note_id == note_id and a.source_id == source_id
+        ]
+        return sorted(on_source, key=lambda a: (a.created_at, str(a.id)))
 
     def tags_for_note(self, note_id: UUID) -> list[str]:
         return sorted(self._tags_by_note.get(note_id, []))

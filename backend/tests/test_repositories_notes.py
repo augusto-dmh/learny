@@ -105,8 +105,9 @@ def _anchor(
     end_offset: int | None = 12,
     quote_exact: str = "a highlighted quote",
     status: str = NoteAnchorStatus.ACTIVE,
+    created: datetime | None = None,
 ) -> NoteAnchor:
-    now = datetime.now(UTC)
+    now = created or datetime.now(UTC)
     return NoteAnchor(
         id=uuid4(),
         note_id=note_id,
@@ -498,6 +499,143 @@ def test_list_summaries_filters_by_tag_and_carries_tags_and_statuses(db_conn: Co
     assert summary.note.id == tagged.id
     assert summary.tags == ("notes", "python")
     assert summary.anchor_statuses == (NoteAnchorStatus.STALE,)
+    assert summary.anchor is None
+
+
+def test_list_summaries_scoped_to_a_book_lists_only_its_notes(db_conn: Connection) -> None:
+    user = _persist_user(db_conn, "note-by-source@example.com")
+    this_book = _persist_source(db_conn, user.id)
+    other_book = _persist_source(db_conn, user.id)
+    repo = SqlAlchemyNoteRepository(db_conn)
+    on_this_book = _note(user.id, title="On this book")
+    on_other_book = _note(user.id, title="On the other book")
+    anchorless = _note(user.id, title="Anchorless")
+    for note in (on_this_book, on_other_book, anchorless):
+        repo.add(note)
+    repo.add_anchor(_anchor(on_this_book.id, this_book.id))
+    repo.add_anchor(_anchor(on_other_book.id, other_book.id))
+
+    summaries = repo.list_summaries(user.id, source_id=this_book.id)
+
+    assert [s.note.title for s in summaries] == ["On this book"]
+
+
+def test_list_summaries_lists_a_twice_anchored_note_once_with_its_earliest_passage(
+    db_conn: Connection,
+) -> None:
+    user = _persist_user(db_conn, "note-twice-anchored@example.com")
+    source = _persist_source(db_conn, user.id)
+    repo = SqlAlchemyNoteRepository(db_conn)
+    note = _note(user.id, title="Twice anchored")
+    repo.add(note)
+    earlier = datetime(2026, 7, 1, 9, 0, tzinfo=UTC)
+    repo.add_anchor(
+        _anchor(
+            note.id,
+            source.id,
+            anchor="chapter02.xhtml#sec-2",
+            quote_exact="the later passage",
+            created=earlier + timedelta(hours=1),
+        )
+    )
+    repo.add_anchor(
+        _anchor(
+            note.id,
+            source.id,
+            anchor="chapter01.xhtml#sec-1",
+            quote_exact="the passage it came from",
+            created=earlier,
+        )
+    )
+
+    summaries = repo.list_summaries(user.id, source_id=source.id)
+
+    assert len(summaries) == 1
+    anchor = summaries[0].anchor
+    assert anchor is not None
+    assert anchor.anchor == "chapter01.xhtml#sec-1"
+    assert anchor.quote_exact == "the passage it came from"
+
+
+def test_list_summaries_scoped_to_a_book_carries_the_passages_snapshot(
+    db_conn: Connection,
+) -> None:
+    user = _persist_user(db_conn, "note-passage@example.com")
+    source = _persist_source(db_conn, user.id)
+    repo = SqlAlchemyNoteRepository(db_conn)
+    note = _note(user.id, title="Annotated")
+    repo.add(note)
+    repo.add_anchor(
+        _anchor(
+            note.id,
+            source.id,
+            section_path=("Part One", "Prefácio"),
+            quote_exact="a highlighted quote",
+            status=NoteAnchorStatus.STALE,
+        )
+    )
+
+    anchor = repo.list_summaries(user.id, source_id=source.id)[0].anchor
+
+    assert anchor is not None
+    assert anchor.section_path == ("Part One", "Prefácio")
+    assert anchor.quote_exact == "a highlighted quote"
+    assert anchor.status == NoteAnchorStatus.STALE
+
+
+def test_list_summaries_book_scope_composes_with_the_tag_filter(db_conn: Connection) -> None:
+    user = _persist_user(db_conn, "note-book-and-tag@example.com")
+    source = _persist_source(db_conn, user.id)
+    other_source = _persist_source(db_conn, user.id)
+    repo = SqlAlchemyNoteRepository(db_conn)
+    tagged_here = _note(user.id, title="Tagged, this book")
+    untagged_here = _note(user.id, title="Untagged, this book")
+    tagged_elsewhere = _note(user.id, title="Tagged, other book")
+    for note in (tagged_here, untagged_here, tagged_elsewhere):
+        repo.add(note)
+    repo.set_tags(tagged_here.id, user.id, ["python"])
+    repo.set_tags(tagged_elsewhere.id, user.id, ["python"])
+    repo.add_anchor(_anchor(tagged_here.id, source.id))
+    repo.add_anchor(_anchor(untagged_here.id, source.id))
+    repo.add_anchor(_anchor(tagged_elsewhere.id, other_source.id))
+
+    summaries = repo.list_summaries(user.id, tag="python", source_id=source.id)
+
+    assert [s.note.title for s in summaries] == ["Tagged, this book"]
+
+
+def test_list_summaries_book_scope_keeps_a_total_newest_edited_first_order(
+    db_conn: Connection,
+) -> None:
+    user = _persist_user(db_conn, "note-book-order@example.com")
+    source = _persist_source(db_conn, user.id)
+    repo = SqlAlchemyNoteRepository(db_conn)
+    older = _note(user.id, title="Older", created=datetime(2026, 7, 1, 9, 0, tzinfo=UTC))
+    # Two notes edited at the very same instant: the id tiebreak is what makes the
+    # order total, so the list is stable rather than arbitrary between reads.
+    same_instant = datetime(2026, 7, 2, 9, 0, tzinfo=UTC)
+    tie_a = _note(user.id, title="Tie A", created=same_instant)
+    tie_b = _note(user.id, title="Tie B", created=same_instant)
+    for note in (older, tie_a, tie_b):
+        repo.add(note)
+        repo.add_anchor(_anchor(note.id, source.id))
+    by_id = sorted([tie_a, tie_b], key=lambda n: n.id)
+
+    summaries = repo.list_summaries(user.id, source_id=source.id)
+
+    assert [s.note.title for s in summaries] == [by_id[0].title, by_id[1].title, "Older"]
+
+
+def test_list_summaries_scoped_to_a_book_with_no_notes_is_empty(db_conn: Connection) -> None:
+    user = _persist_user(db_conn, "note-empty-book@example.com")
+    source = _persist_source(db_conn, user.id)
+    empty_book = _persist_source(db_conn, user.id)
+    repo = SqlAlchemyNoteRepository(db_conn)
+    note = _note(user.id, title="Elsewhere")
+    repo.add(note)
+    repo.add_anchor(_anchor(note.id, source.id))
+
+    assert repo.list_summaries(user.id, source_id=empty_book.id) == []
 
 
 def _corpus_record(

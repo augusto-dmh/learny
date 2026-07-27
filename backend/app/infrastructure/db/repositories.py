@@ -1779,7 +1779,9 @@ class SqlAlchemyNoteRepository:
     def delete(self, note_id: UUID) -> None:
         self._conn.execute(sa_delete(notes).where(notes.c.id == note_id))
 
-    def list_summaries(self, user_id: UUID, *, tag: str | None = None) -> list[NoteSummary]:
+    def list_summaries(
+        self, user_id: UUID, *, tag: str | None = None, source_id: UUID | None = None
+    ) -> list[NoteSummary]:
         query = select(notes).where(notes.c.user_id == user_id)
         if tag is not None:
             query = query.where(
@@ -1787,6 +1789,14 @@ class SqlAlchemyNoteRepository:
                     select(note_tags.c.note_id)
                     .join(tags, note_tags.c.tag_id == tags.c.id)
                     .where(tags.c.user_id == user_id, tags.c.name == tag)
+                )
+            )
+        if source_id is not None:
+            # A semi-join, not a join: a note anchored to the book many times still
+            # selects one row, so the list stays note-shaped and each note appears once.
+            query = query.where(
+                notes.c.id.in_(
+                    select(note_anchors.c.note_id).where(note_anchors.c.source_id == source_id)
                 )
             )
         rows = self._conn.execute(query.order_by(notes.c.updated_at.desc(), notes.c.id)).all()
@@ -1814,11 +1824,25 @@ class SqlAlchemyNoteRepository:
         for row in status_rows:
             statuses_by_note.setdefault(row.note_id, []).append(row.status)
 
+        # The representative passage, fetched like the tags and statuses above — one
+        # extra ``IN`` read after the note select, keeping the list note-shaped.
+        # ``setdefault`` over the creation order keeps the earliest anchor on the book.
+        anchors_by_note: dict[UUID, NoteAnchor] = {}
+        if source_id is not None:
+            anchor_rows = self._conn.execute(
+                select(note_anchors)
+                .where(note_anchors.c.note_id.in_(ids), note_anchors.c.source_id == source_id)
+                .order_by(note_anchors.c.created_at, note_anchors.c.id)
+            ).all()
+            for row in anchor_rows:
+                anchors_by_note.setdefault(row.note_id, _to_note_anchor(row))
+
         return [
             NoteSummary(
                 note=note,
                 tags=tuple(tags_by_note.get(note.id, [])),
                 anchor_statuses=tuple(statuses_by_note.get(note.id, [])),
+                anchor=anchors_by_note.get(note.id),
             )
             for note in note_list
         ]
