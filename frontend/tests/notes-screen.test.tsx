@@ -204,6 +204,27 @@ describe("NotesScreen (NF-13/14)", () => {
     ).toBeTruthy();
   });
 
+  it("still lists the notes when the library cannot be loaded", async () => {
+    // The picker is a convenience over the list, not a precondition for it: if the
+    // library read fails there is simply nothing to narrow by, and the notes — the
+    // thing the screen exists for — must still arrive.
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        "GET /api/sources": () => jsonResponse(500, { detail: "boom" }),
+        "GET /api/notes": () => jsonResponse(200, notes),
+      }),
+    );
+
+    render(<NotesScreen />);
+
+    expect(await screen.findByRole("link", { name: "Ada's algorithm" })).toBeTruthy();
+    // The same locator the narrowing test uses to drive the picker, so this asserts
+    // its absence rather than the absence of something that was never there.
+    expect(screen.queryByLabelText("Book")).toBeNull();
+  });
+
   it("lists notes across every book when no book is picked (P4 AC 1)", async () => {
     const fetchMock = routedFetch({
       "GET /api/auth/me": () => authedMe.clone(),

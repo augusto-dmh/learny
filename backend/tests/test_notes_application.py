@@ -517,6 +517,32 @@ def test_capture_highlight_without_a_quote_creates_a_section_level_anchor() -> N
     assert anchor.source_title == "A Book"
 
 
+def test_capture_highlight_with_a_blank_quote_is_a_section_level_anchor_too() -> None:
+    # A selection of pure whitespace is no selection. Treating it as one would send it
+    # to the block binder, which cannot match it — the capture would fail as stale, and
+    # the whitespace would be snapshotted as if it were the passage.
+    user = _user()
+    source = _source(user.id)
+    sources = FakeSourceRepository()
+    sources.add(source)
+    notes = FakeNoteRepository()
+    corpus = FakeAnchorCorpus({source.id: [_section()]})
+
+    view = _capture(sources, notes, corpus)(
+        user=user,
+        source_id=source.id,
+        anchor="ch1",
+        quote_exact="   \n  ",
+        title="A thought about this chapter",
+        body_markdown="",
+    )
+
+    anchor = view.anchors[0]
+    assert anchor.quote_exact == ""
+    assert anchor.block_hash is None
+    assert anchor.status == NoteAnchorStatus.ACTIVE
+
+
 def test_capture_highlight_without_a_quote_persists_nothing_when_the_body_is_over_cap() -> None:
     # The quote-less path keeps the note and its anchor atomic: a rejected body leaves
     # neither behind.
@@ -948,6 +974,36 @@ def test_reconcile_keeps_a_section_level_anchor_active_while_its_section_lives()
     result = notes.anchors_for_source(source_id)[0]
     assert result.status == NoteAnchorStatus.ACTIVE
     assert result.anchor == "ch1"
+
+
+def test_reconcile_rewrites_a_section_level_anchor_to_the_surviving_canonical_one() -> None:
+    # The re-ingest merged the captured anchor into a survivor that now carries it as
+    # an alias. With no quote to rebind, the short-circuit must still adopt the
+    # survivor's canonical anchor and section path — otherwise the stored anchor keeps
+    # naming a section the book no longer has, and the next reconcile orphans it.
+    notes = FakeNoteRepository()
+    source_id = uuid4()
+    _seed_section_level_anchor(notes, source_id, anchor="old-ch1")
+    corpus = FakeAnchorCorpus(
+        {
+            source_id: [
+                _anchor_section(
+                    "ch1",
+                    content_hash="h0",
+                    text="entirely rewritten",
+                    section_path=("Chapter One",),
+                    aliases=("old-ch1",),
+                ),
+            ]
+        }
+    )
+
+    _reconcile(notes, corpus)(source_id=source_id)
+
+    result = notes.anchors_for_source(source_id)[0]
+    assert result.status == NoteAnchorStatus.ACTIVE
+    assert result.anchor == "ch1"
+    assert result.section_path == ("Chapter One",)
 
 
 def test_reconcile_orphans_a_section_level_anchor_when_its_section_is_gone() -> None:
