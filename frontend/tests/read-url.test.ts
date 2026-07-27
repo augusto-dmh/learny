@@ -31,6 +31,14 @@ describe("readUrl", () => {
     );
   });
 
+  it("carries every dock tab, not only the two conversation ones", () => {
+    for (const panel of ["ask", "teach", "notes", "review"] as const) {
+      expect(readUrl("s1", null, { panel })).toBe(
+        `/sources/s1/read?panel=${panel}`,
+      );
+    }
+  });
+
   it("percent-encodes an anchor's reserved / and # exactly once", () => {
     const anchor = "part1/ch1.xhtml#core-idea";
     const url = readUrl("s1", anchor);

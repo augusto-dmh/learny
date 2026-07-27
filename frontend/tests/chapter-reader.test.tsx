@@ -747,7 +747,7 @@ describe("ChapterReader highlight load (RD-28)", () => {
   });
 });
 
-describe("ChapterFlow panel modes (RA-01/02/03/06)", () => {
+describe("ChapterFlow dock tabs (RA-01/02/03/06)", () => {
   it("opens the ask panel when ?panel=ask (RA-01)", async () => {
     nav.params = new URLSearchParams("panel=ask");
     render(
@@ -756,7 +756,7 @@ describe("ChapterFlow panel modes (RA-01/02/03/06)", () => {
 
     await screen.findByText("Ada Lovelace wrote the first algorithm.");
     const panel = screen.getByTestId("reader-panel");
-    expect(panel.getAttribute("data-mode")).toBe("ask");
+    expect(panel.getAttribute("data-tab")).toBe("ask");
     expect(screen.getByTestId("ask-panel-body")).toBeTruthy();
   });
 
@@ -768,7 +768,7 @@ describe("ChapterFlow panel modes (RA-01/02/03/06)", () => {
 
     await screen.findByText("Ada Lovelace wrote the first algorithm.");
     const panel = screen.getByTestId("reader-panel");
-    expect(panel.getAttribute("data-mode")).toBe("teach");
+    expect(panel.getAttribute("data-tab")).toBe("teach");
     expect(screen.getByTestId("teach-panel-body")).toBeTruthy();
   });
 
@@ -782,8 +782,21 @@ describe("ChapterFlow panel modes (RA-01/02/03/06)", () => {
     expect(screen.queryByTestId("reader-panel")).toBeNull();
   });
 
-  it("renders no panel for an unknown panel value (edge case)", async () => {
-    nav.params = new URLSearchParams("panel=notes");
+  it("opens the dock on the notes and review tabs too", async () => {
+    for (const tab of ["notes", "review"]) {
+      nav.params = new URLSearchParams(`panel=${tab}`);
+      const view = render(
+        <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+      );
+
+      await screen.findAllByText("Ada Lovelace wrote the first algorithm.");
+      expect(screen.getByTestId("reader-panel").getAttribute("data-tab")).toBe(tab);
+      view.unmount();
+    }
+  });
+
+  it("renders no panel for a value naming no tab (edge case)", async () => {
+    nav.params = new URLSearchParams("panel=nowhere");
     render(
       <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
     );

@@ -2,19 +2,26 @@
 
 /**
  * The reader side panel (RA-01..03/06): a fixed-width right-hand column that hosts
- * the Ask and Teach modes beside the chapter so studying never leaves the page.
+ * the book's four working surfaces beside the chapter so studying never leaves the
+ * page.
  *
- * The shell owns the mode switch (an Ask | Teach segmented control), the close
- * control, and this book's conversation list. Open state and mode are pure URL
- * state driven by `?panel=`, so the parent renders the panel only when a mode is
+ * The shell owns the tab strip (Ask | Teach | Notes | Review), the close control,
+ * and this book's conversation list. Open state and the active tab are pure URL
+ * state driven by `?panel=`, so the parent renders the panel only when a tab is
  * active — closing it simply drops the query param and restores full reading
  * width, and reading stays non-modal underneath.
  *
- * The conversation list is deliberately mode-agnostic and shown in both modes:
- * one book has one set of threads. Which panel resumes a given thread follows
- * from the mode its turns were answered in, so the shell switches tabs when it
- * has to rather than asking the reader to guess which tab their thread is
- * behind.
+ * Only two of those tabs hold a conversation. `PanelMode` stays the conversation
+ * subset — it keys the per-surface `activeIds`/`revisions` maps, where a key that
+ * can never hold a conversation would be a lie — while `DockTab` is what the strip
+ * and `?panel=` speak. The conversation list therefore renders on conversation
+ * tabs only.
+ *
+ * The conversation list is deliberately mode-agnostic and shown in both
+ * conversation tabs: one book has one set of threads. Which panel resumes a given
+ * thread follows from the mode its turns were answered in, so the shell switches
+ * tabs when it has to rather than asking the reader to guess which tab their
+ * thread is behind.
  */
 
 import { X } from "lucide-react";
@@ -33,12 +40,38 @@ import { AskPanel } from "./ask-panel";
 import { ConversationList } from "./conversation-list";
 import { TeachPanel } from "./teach-panel";
 
+/** A dock surface that holds a conversation, and so has per-surface thread state. */
 export type PanelMode = "ask" | "teach";
 
-const MODES: { value: PanelMode; label: string }[] = [
+/** Every tab in the dock's strip, and every value `?panel=` accepts. */
+export type DockTab = PanelMode | "notes" | "review";
+
+const TABS: { value: DockTab; label: string }[] = [
   { value: "ask", label: "Ask" },
   { value: "teach", label: "Teach" },
+  { value: "notes", label: "Notes" },
+  { value: "review", label: "Review" },
 ];
+
+const TAB_TITLES: Record<DockTab, string> = {
+  ask: "Ask panel",
+  teach: "Teach panel",
+  notes: "Notes panel",
+  review: "Review panel",
+};
+
+/**
+ * Whether a tab is one of the conversation surfaces — the guard that keeps the
+ * conversation state maps keyed by something that can actually hold a thread.
+ */
+export function isConversationTab(tab: DockTab): tab is PanelMode {
+  return tab === "ask" || tab === "teach";
+}
+
+/** The `?panel=` value, or null when it names no tab the dock has. */
+export function dockTabFromParam(value: string | null): DockTab | null {
+  return TABS.some((tab) => tab.value === value) ? (value as DockTab) : null;
+}
 
 /**
  * Which panel continues a conversation, decided by the mode its last turn was
@@ -72,8 +105,8 @@ function panelFor(
 export function ReaderPanel({
   sourceId,
   csrf,
-  mode,
-  onModeChange,
+  tab,
+  onTabChange,
   onClose,
   pendingRequest,
   onPendingConsumed,
@@ -82,8 +115,8 @@ export function ReaderPanel({
 }: {
   sourceId: string;
   csrf: string;
-  mode: PanelMode;
-  onModeChange: (mode: PanelMode) => void;
+  tab: DockTab;
+  onTabChange: (tab: DockTab) => void;
   onClose: () => void;
   pendingRequest?: PendingPanelRequest | null;
   onPendingConsumed?: () => void;
@@ -119,24 +152,31 @@ export function ReaderPanel({
     setListToken((token) => token + 1);
   }, [syncActiveIds]);
 
+  // Null on Notes and Review: those tabs hold no thread, so there is nothing for
+  // a resume to land in and no list rendered to ask for one.
+  const conversationTab = isConversationTab(tab) ? tab : null;
+
   // Which panel continues a thread is on the row the reader clicked, so a resume
   // resolves in the click that asked for it — no request to race, and no window
   // in which a second click could land the reader wherever the slower fetch
   // finished.
   const handleResume = useCallback(
     (summary: ConversationSummaryView) => {
-      const target = panelFor(summary, mode);
+      if (!conversationTab) {
+        return;
+      }
+      const target = panelFor(summary, conversationTab);
       writeActiveConversation(sourceId, target, summary.id);
       setActiveIds((current) => ({ ...current, [target]: summary.id }));
       setRevisions((current) => ({
         ...current,
         [target]: current[target] + 1,
       }));
-      if (target !== mode) {
-        onModeChange(target);
+      if (target !== conversationTab) {
+        onTabChange(target);
       }
     },
-    [sourceId, mode, onModeChange],
+    [sourceId, conversationTab, onTabChange],
   );
 
   // Deleting the conversation a panel is showing cannot leave that panel
@@ -160,30 +200,37 @@ export function ReaderPanel({
   );
 
   const handleNew = useCallback(() => {
-    writeActiveConversation(sourceId, mode, null);
-    setActiveIds((current) => ({ ...current, [mode]: null }));
-    setRevisions((current) => ({ ...current, [mode]: current[mode] + 1 }));
-  }, [sourceId, mode]);
+    if (!conversationTab) {
+      return;
+    }
+    const surface = conversationTab;
+    writeActiveConversation(sourceId, surface, null);
+    setActiveIds((current) => ({ ...current, [surface]: null }));
+    setRevisions((current) => ({
+      ...current,
+      [surface]: current[surface] + 1,
+    }));
+  }, [sourceId, conversationTab]);
 
   return (
     <aside
       data-testid="reader-panel"
-      data-mode={mode}
-      aria-label={mode === "ask" ? "Ask panel" : "Teach panel"}
+      data-tab={tab}
+      aria-label={TAB_TITLES[tab]}
       className="sticky top-0 flex h-[calc(100vh-3rem)] w-[26rem] shrink-0 flex-col overflow-y-auto border-l bg-background"
     >
       <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
-        <div role="tablist" aria-label="Panel mode" className="flex gap-1">
-          {MODES.map(({ value, label }) => (
+        <div role="tablist" aria-label="Dock tabs" className="flex gap-1">
+          {TABS.map(({ value, label }) => (
             <button
               key={value}
               type="button"
               role="tab"
-              aria-selected={mode === value}
-              onClick={() => onModeChange(value)}
+              aria-selected={tab === value}
+              onClick={() => onTabChange(value)}
               className={cn(
-                "rounded-md px-3 py-1 text-sm font-medium transition-colors",
-                mode === value
+                "rounded-md px-2 py-1 text-sm font-medium transition-colors",
+                tab === value
                   ? "bg-accent text-foreground"
                   : "text-muted-foreground hover:bg-accent/50",
               )}
@@ -203,18 +250,21 @@ export function ReaderPanel({
         </Button>
       </div>
 
-      <ConversationList
-        sourceId={sourceId}
-        csrf={csrf}
-        refreshToken={listToken}
-        activeConversationId={activeIds[mode]}
-        onResume={handleResume}
-        onNew={handleNew}
-        onDeleted={handleDeleted}
-      />
+      {/* Threads belong to the conversation surfaces; Notes and Review have none. */}
+      {conversationTab ? (
+        <ConversationList
+          sourceId={sourceId}
+          csrf={csrf}
+          refreshToken={listToken}
+          activeConversationId={activeIds[conversationTab]}
+          onResume={handleResume}
+          onNew={handleNew}
+          onDeleted={handleDeleted}
+        />
+      ) : null}
 
       <div className="min-h-0 flex-1 p-3">
-        {mode === "ask" ? (
+        {tab === "ask" ? (
           <AskPanel
             sourceId={sourceId}
             csrf={csrf}
@@ -225,7 +275,7 @@ export function ReaderPanel({
             onRequireAuth={onRequireAuth}
             onConversationsChanged={handleConversationsChanged}
           />
-        ) : (
+        ) : tab === "teach" ? (
           <TeachPanel
             sourceId={sourceId}
             csrf={csrf}
@@ -234,7 +284,7 @@ export function ReaderPanel({
             onRequireAuth={onRequireAuth}
             onConversationsChanged={handleConversationsChanged}
           />
-        )}
+        ) : null}
       </div>
     </aside>
   );
