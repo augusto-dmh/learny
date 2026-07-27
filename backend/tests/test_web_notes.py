@@ -6,7 +6,11 @@ Exercises the owner-scoped notes endpoints end-to-end through FastAPI's
 - ``POST   /api/notes`` — gone: a note cannot be created without a reading anchor,
   and a note that predates the rule still lists, opens, edits, and deletes (WSN-09).
 - ``GET    /api/notes`` — owner → 200 summaries newest-first; ``?tag=`` filters
-  case-insensitively; no session → 401 (NF-13).
+  case-insensitively; no session → 401 (NF-13). ``?source_id=`` narrows it to one
+  book: only that book's notes, a twice-anchored one listed once with the passage it
+  came from and that passage's derived page, an orphaned anchor kept with its quote
+  and no page, composed with ``?tag=``; non-owned/unknown → identical 404, a
+  malformed id → 422 (WSN-01/02/03/10/11/15).
 - ``GET    /api/notes/{id}`` — owner → 200 detail; missing/non-owned → identical
   404; no session → 401 (NF-05/10).
 - ``PATCH  /api/notes/{id}`` — owner → 200 rewritten; over-cap body → 422;
@@ -24,7 +28,7 @@ Exercises the owner-scoped notes endpoints end-to-end through FastAPI's
 from __future__ import annotations
 
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
@@ -35,6 +39,7 @@ from app.application.quiz_qc import content_key
 from app.domain.entities import (
     CorpusSectionRecord,
     Note,
+    NoteAnchor,
     ParsedBlock,
     ParsedSection,
     QuizItem,
@@ -58,6 +63,10 @@ pytestmark = requires_db
 # in this module stays well under it.
 NOTES_MAX_BODY = 50
 
+# A small page quantum so a seeded chapter can cross a page boundary in a few words,
+# making a book-scoped row's derived page an exact, readable number.
+NOTES_WORDS_PER_PAGE = 10
+
 
 # --- Fixtures ------------------------------------------------------------------
 
@@ -68,7 +77,9 @@ def notes_client(db_conn: Connection, monkeypatch: pytest.MonkeyPatch):  # noqa:
 
     Mirrors ``sources_client`` (shared ``db_conn``, non-Secure cookie, trusted
     Origin, generous limiter) but pins ``notes_max_body_chars`` to
-    :data:`NOTES_MAX_BODY` so the over-cap reject stays cheap. Create/update commit in
+    :data:`NOTES_MAX_BODY` so the over-cap reject stays cheap, and the page quantum to
+    :data:`NOTES_WORDS_PER_PAGE` so a book-scoped row's page is an exact small number
+    rather than one that depends on the deployment default. Create/update commit in
     a UoW factory before the after-commit embed enqueue (AD-016), so the factory is
     overridden to yield the shared ``db_conn`` *without committing* and the enqueuer is
     a recording fake (on ``app.state`` so tests can assert its calls).
@@ -92,6 +103,7 @@ def notes_client(db_conn: Connection, monkeypatch: pytest.MonkeyPatch):  # noqa:
     monkeypatch.setenv("LEARNY_SESSION_COOKIE_SECURE", "false")
     monkeypatch.setenv("LEARNY_CSRF_TRUSTED_ORIGINS", TEST_ORIGIN)
     monkeypatch.setenv("LEARNY_NOTES_MAX_BODY_CHARS", str(NOTES_MAX_BODY))
+    monkeypatch.setenv("LEARNY_WORDS_PER_PAGE", str(NOTES_WORDS_PER_PAGE))
     get_settings.cache_clear()
 
     previous_limiter = get_rate_limiter()
@@ -301,6 +313,89 @@ def _capture_target(db_conn: Connection, user_id: str) -> UUID:
     return source_id
 
 
+def _seed_two_chapter_corpus(
+    db_conn: Connection, source_id: UUID, *, first_chapter_words: int
+) -> None:
+    """Replace ``source_id``'s corpus with ``ch1`` then ``ch2``, ch1 the given length.
+
+    The lead chapter's length is what pushes ``ch2`` past a page boundary, so a note
+    anchored there has a page number the whole book's word counts produced.
+    """
+    texts = {
+        "ch1": " ".join(["word"] * first_chapter_words),
+        "ch2": "The quick brown fox jumps over the lazy dog.",
+    }
+    records = []
+    for position, (anchor, text) in enumerate(texts.items()):
+        title = f"Chapter {position + 1}"
+        records.append(
+            CorpusSectionRecord(
+                section=ParsedSection(
+                    position=position,
+                    title=title,
+                    depth=0,
+                    section_path=(title,),
+                    anchor=anchor,
+                    blocks=(
+                        ParsedBlock(
+                            position=0, block_type="paragraph", html_fragment=f"<p>{text}</p>"
+                        ),
+                    ),
+                    anchor_aliases=(),
+                ),
+                markdown=text,
+                chunks=(
+                    SectionChunk(
+                        index=0, text=text, section_path=(title,), anchor=anchor, page_span=None
+                    ),
+                ),
+                block_hashes=(f"hash-{anchor}-0",),
+            )
+        )
+    SqlAlchemyCorpusRepository(db_conn).replace(
+        source_id,
+        title="A Book",
+        authors=(),
+        language="en",
+        schema_version=1,
+        sections=records,
+    )
+
+
+def _seed_anchor(
+    db_conn: Connection,
+    note_id: object,
+    source_id: UUID,
+    *,
+    anchor: str,
+    quote_exact: str,
+    status: str = "active",
+    created: datetime | None = None,
+) -> None:
+    """Attach one more anchor to an existing note, directly (no capture route needed)."""
+    now = created or datetime.now(UTC)
+    SqlAlchemyNoteRepository(db_conn).add_anchor(
+        NoteAnchor(
+            id=uuid4(),
+            note_id=UUID(str(note_id)),
+            source_id=source_id,
+            source_title="A Book",
+            anchor=anchor,
+            section_path=("Chapter 1",),
+            block_hash=None,
+            block_ordinal=None,
+            start_offset=None,
+            end_offset=None,
+            quote_exact=quote_exact,
+            quote_prefix="",
+            quote_suffix="",
+            status=status,
+            created_at=now,
+            updated_at=now,
+        )
+    )
+
+
 def _seed_anchorless_note(db_conn: Connection, user_id: str, *, title: str, body: str = "") -> UUID:
     """Persist a note with no anchor — the shape every note written before the rule has."""
     now = datetime.now(UTC)
@@ -472,9 +567,13 @@ def test_list_notes_newest_edited_first_and_owner_scoped(
         "title",
         "tags",
         "anchor_statuses",
+        "anchor",
         "created_at",
         "updated_at",
     }
+    # The cross-book list has no single book to represent a note by, so it carries no
+    # passage and no page.
+    assert [r["anchor"] for r in rows] == [None, None]
 
 
 def test_list_notes_filters_by_tag_case_insensitively(
@@ -497,6 +596,150 @@ def test_list_notes_unauthenticated_returns_401(
 ) -> None:
     notes_client.cookies.clear()
     assert notes_client.get("/api/notes").status_code == 401
+
+
+# --- List scoped to one book (WSN-01/02/03/10/11/15) ---------------------------
+
+
+def test_list_notes_scoped_to_a_book_lists_only_its_notes_with_their_passages(
+    notes_client: TestClient, db_conn: Connection
+) -> None:
+    user_id = _register(notes_client, "note-by-book@example.com")
+    csrf = _csrf(notes_client)
+    this_book = _persist_source(db_conn, user_id, title="This Book")
+    _seed_two_chapter_corpus(db_conn, this_book, first_chapter_words=25)
+    other_book = _capture_target(db_conn, user_id)
+    _created_note(
+        notes_client,
+        csrf,
+        this_book,
+        anchor="ch2",
+        quote_exact="quick brown",
+        title="On this book",
+    )
+    _created_note(notes_client, csrf, other_book, title="On the other book")
+    _seed_anchorless_note(db_conn, user_id, title="No book at all")
+
+    resp = notes_client.get("/api/notes", params={"source_id": str(this_book)})
+
+    assert resp.status_code == 200, resp.text
+    rows = resp.json()
+    assert [row["title"] for row in rows] == ["On this book"]
+    passage = rows[0]["anchor"]
+    assert passage["anchor"] == "ch2"
+    assert passage["section_title"] == "Chapter 2"
+    assert passage["section_path"] == ["Chapter 2"]
+    assert passage["quote_exact"] == "quick brown"
+    assert passage["status"] == "active"
+    # 25 words precede chapter two; at 10 words to a page that is page 3, counted from
+    # the book's first word rather than restarted per chapter.
+    assert passage["page"] == 3
+
+
+def test_list_notes_scoped_to_a_book_lists_a_twice_anchored_note_once(
+    notes_client: TestClient, db_conn: Connection
+) -> None:
+    user_id = _register(notes_client, "note-twice-anchored@example.com")
+    csrf = _csrf(notes_client)
+    source_id = _capture_target(db_conn, user_id)
+    note = _created_note(
+        notes_client, csrf, source_id, quote_exact="quick brown", title="Twice anchored"
+    )
+    _seed_anchor(
+        db_conn,
+        note["id"],
+        source_id,
+        anchor="ch1",
+        quote_exact="the lazy dog",
+        created=datetime.now(UTC) + timedelta(hours=1),
+    )
+
+    rows = notes_client.get("/api/notes", params={"source_id": str(source_id)}).json()
+
+    assert [row["title"] for row in rows] == ["Twice anchored"]
+    # The row stands for the passage the note came from — its earliest anchor here.
+    assert rows[0]["anchor"]["quote_exact"] == "quick brown"
+
+
+def test_list_notes_scoped_to_a_book_keeps_an_orphaned_rows_quote_and_shows_no_page(
+    notes_client: TestClient, db_conn: Connection
+) -> None:
+    user_id = _register(notes_client, "note-orphan-row@example.com")
+    source_id = _capture_target(db_conn, user_id)
+    note_id = _seed_anchorless_note(db_conn, user_id, title="Outlived its section")
+    _seed_anchor(
+        db_conn,
+        note_id,
+        source_id,
+        anchor="ch-gone",
+        quote_exact="a passage the re-ingest lost",
+        status="orphaned",
+    )
+
+    rows = notes_client.get("/api/notes", params={"source_id": str(source_id)}).json()
+
+    assert [row["title"] for row in rows] == ["Outlived its section"]
+    assert rows[0]["anchor"]["quote_exact"] == "a passage the re-ingest lost"
+    assert rows[0]["anchor"]["status"] == "orphaned"
+    assert rows[0]["anchor"]["page"] is None
+
+
+def test_list_notes_scoped_to_a_book_composes_with_the_tag_filter(
+    notes_client: TestClient, db_conn: Connection
+) -> None:
+    user_id = _register(notes_client, "note-book-and-tag@example.com")
+    csrf = _csrf(notes_client)
+    source_id = _capture_target(db_conn, user_id)
+    other_book = _capture_target(db_conn, user_id)
+    _created_note(notes_client, csrf, source_id, title="Tagged here", tags=["python"])
+    _created_note(notes_client, csrf, source_id, title="Untagged here")
+    _created_note(notes_client, csrf, other_book, title="Tagged elsewhere", tags=["python"])
+
+    rows = notes_client.get(
+        "/api/notes", params={"source_id": str(source_id), "tag": "PYTHON"}
+    ).json()
+
+    assert [row["title"] for row in rows] == ["Tagged here"]
+
+
+def test_list_notes_scoped_to_a_book_with_no_notes_is_an_empty_list(
+    notes_client: TestClient, db_conn: Connection
+) -> None:
+    user_id = _register(notes_client, "note-empty-book@example.com")
+    csrf = _csrf(notes_client)
+    source_id = _capture_target(db_conn, user_id)
+    empty_book = _capture_target(db_conn, user_id)
+    _created_note(notes_client, csrf, source_id, title="Elsewhere")
+
+    resp = notes_client.get("/api/notes", params={"source_id": str(empty_book)})
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == []
+
+
+def test_list_notes_non_owned_and_unknown_source_return_identical_404(
+    notes_client: TestClient, db_conn: Connection
+) -> None:
+    owner_id = _register(notes_client, "note-book-owner@example.com")
+    source_id = _capture_target(db_conn, owner_id)
+    _created_note(notes_client, _csrf(notes_client), source_id, title="Owned")
+
+    _register(notes_client, "note-book-intruder@example.com")  # become a different user
+
+    non_owned = notes_client.get("/api/notes", params={"source_id": str(source_id)})
+    missing = notes_client.get("/api/notes", params={"source_id": str(uuid4())})
+
+    assert non_owned.status_code == 404, non_owned.text
+    assert missing.status_code == 404, missing.text
+    assert non_owned.json() == missing.json()  # no existence disclosure
+
+
+def test_list_notes_rejects_a_source_id_that_is_not_a_uuid(
+    notes_client: TestClient, db_conn: Connection
+) -> None:
+    _register(notes_client, "note-bad-source@example.com")
+
+    assert notes_client.get("/api/notes", params={"source_id": "not-a-uuid"}).status_code == 422
 
 
 # --- Get (NF-05/10) ------------------------------------------------------------

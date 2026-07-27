@@ -200,7 +200,7 @@ Evaluation uses **golden fixtures**: a hand-authored EPUB is run through the *re
 | Streaming | `POST /api/conversations/{id}/turns/stream` (SSE, UI Message Stream) |
 | Quizzes | `POST /api/sources/{id}/quiz/deck` (202, async), `GET /api/sources/{id}/quiz`, `GET /api/sources/{id}/quiz/export` (.apkg) |
 | Reviews | `GET /api/reviews/due` (cross-source), `POST /api/quiz-items/{id}/reviews` (FSRS grade), `POST /api/quiz-items/{id}/schedule-reset` |
-| Notes & highlights | `GET /api/notes` (`?tag=`), `GET`/`PATCH`/`DELETE /api/notes/{id}`, `GET /api/notes/{id}/backlinks`, `POST`/`GET /api/sources/{id}/highlights` |
+| Notes & highlights | `GET /api/notes` (`?tag=`, `?source_id=` for one book's notes, each row carrying the passage it came from), `GET`/`PATCH`/`DELETE /api/notes/{id}`, `GET /api/notes/{id}/backlinks`, `POST`/`GET /api/sources/{id}/highlights` |
 | Note review cards | `POST /api/notes/{id}/cards/suggest` (grounded suggestions), `POST /api/notes/{id}/cards` (promote) |
 | Export | `GET /api/export/vault` (Obsidian-compatible `learny-vault.zip`) |
 

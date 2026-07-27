@@ -12,7 +12,8 @@ Application errors are translated to HTTP by the global handlers
 ``SourceNotFound`` → 404, ``CorpusNotFound`` → 404).
 
 Contract (also consumed by the Next.js proxy):
-- ``GET    /api/notes`` → 200 note summaries (optional ``?tag=`` filter); auth.
+- ``GET    /api/notes`` → 200 note summaries (optional ``?tag=`` and ``?source_id=``
+  filters; a source the caller does not own → 404); auth.
 - ``GET    /api/notes/{id}`` → 200 note detail; auth.
 - ``PATCH  /api/notes/{id}`` → 200 updated note detail; auth + CSRF/Origin + limit.
 - ``DELETE /api/notes/{id}`` → 204; auth + CSRF/Origin + limit.
@@ -182,17 +183,57 @@ class NoteDetailView(BaseModel):
         )
 
 
+class NoteRowAnchorView(BaseModel):
+    """The passage a book-scoped note row came from (WSN-02).
+
+    The note's earliest anchor on the book being listed: ``anchor`` to jump back to it,
+    the section that holds it (title + full path), the stored ``quote_exact`` snapshot
+    the row renders, and the anchor's ``status``.
+
+    ``page`` is the book-global page number derived server-side from the book's word
+    counts (AD-189) — never recomputed by a client, never inferred from a percent. It is
+    ``null`` when the anchor no longer resolves, so an orphaned row shows its quote with
+    no page rather than a fabricated one.
+    """
+
+    anchor: str
+    section_title: str
+    section_path: list[str]
+    quote_exact: str
+    status: str
+    page: int | None
+
+    @classmethod
+    def from_summary(cls, summary: NoteSummary) -> NoteRowAnchorView | None:
+        anchor = summary.anchor
+        if anchor is None:
+            return None
+        return cls(
+            anchor=anchor.anchor,
+            section_title=anchor.section_path[-1] if anchor.section_path else "",
+            section_path=list(anchor.section_path),
+            quote_exact=anchor.quote_exact,
+            status=anchor.status,
+            page=summary.page,
+        )
+
+
 class NoteSummaryView(BaseModel):
     """One row in the notes list (NF-13): the note with its tags and anchor statuses.
 
     ``anchor_statuses`` lets the list render active/stale/orphaned badges without
     loading the anchor payloads.
+
+    ``anchor`` is the passage the row came from, carried only when the list is scoped to
+    one book; the cross-book list has no single book to represent a note by, so it is
+    ``null`` there (WSN-02).
     """
 
     id: UUID
     title: str
     tags: list[str]
     anchor_statuses: list[str]
+    anchor: NoteRowAnchorView | None
     created_at: datetime
     updated_at: datetime
 
@@ -203,6 +244,7 @@ class NoteSummaryView(BaseModel):
             title=summary.note.title,
             tags=list(summary.tags),
             anchor_statuses=list(summary.anchor_statuses),
+            anchor=NoteRowAnchorView.from_summary(summary),
             created_at=summary.note.created_at,
             updated_at=summary.note.updated_at,
         )
@@ -260,13 +302,18 @@ def list_notes(
     user: Annotated[User, Depends(get_authenticated_user)],
     service: Annotated[ListNotes, Depends(get_list_notes)],
     tag: Annotated[str | None, Query()] = None,
+    source_id: Annotated[UUID | None, Query()] = None,
 ) -> list[NoteSummaryView]:
-    """Return the caller's notes (newest-edited first), optionally filtered by tag (200).
+    """Return the caller's notes (newest-edited first), optionally scoped (200; 404).
 
     ``tag`` is matched case-insensitively; every returned summary still lists all of
-    its own tags.
+    its own tags. ``source_id`` narrows the list to one book: only notes anchored to it,
+    each exactly once however often it is anchored there, and each carrying the passage
+    it came from with that passage's page. A source the caller does not own is the same
+    404 as one that does not exist (``SourceNotFound``), and a source with no notes is
+    an empty list, not an error.
     """
-    summaries = service(user=user, tag=tag)
+    summaries = service(user=user, tag=tag, source_id=source_id)
     return [NoteSummaryView.from_summary(s) for s in summaries]
 
 
