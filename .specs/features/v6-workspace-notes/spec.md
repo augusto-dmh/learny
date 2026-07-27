@@ -14,10 +14,10 @@ capture machinery to fix this already exists; nothing consumes it from the dock.
 
 ## Goals
 
-- [ ] A reader can see this book's notes in the dock, each showing the passage it came from.
-- [ ] A reader can see how many cards are due from this book and start reviewing them, without leaving the book.
-- [ ] Every newly created note carries a reading anchor — the title-only path is gone.
-- [ ] `/notes` becomes the cross-book surface it claims to be: it can be filtered to one book, and it is no longer the only door to a book's notes.
+- [x] A reader can see this book's notes in the dock, each showing the passage it came from.
+- [x] A reader can see how many cards are due from this book and start reviewing them, without leaving the book.
+- [x] Every newly created note carries a reading anchor — the title-only path is gone.
+- [x] `/notes` becomes the cross-book surface it claims to be: it can be filtered to one book, and it is no longer the only door to a book's notes.
 
 ## Out of Scope
 
@@ -41,11 +41,11 @@ Every ambiguity is resolved or recorded here — nothing is left silently unclea
 
 | Assumption / decision | Chosen default | Rationale | Confirmed? |
 | --- | --- | --- | --- |
-| Where provenance is enforced | **Server-side**: note creation requires an anchor; the API rejects an anchorless create | A UI-only retirement leaves the rootless path one `curl` away and gives the invariant no sensor. The finding is about what a note *is*, which is a domain rule, not a form layout (D-2) | n — design decision |
+| Where provenance is enforced | **Server-side**: note creation requires an anchor; the API rejects an anchorless create | A UI-only retirement leaves the rootless path one `curl` away and gives the invariant no sensor. The finding is about what a note *is*, which is a domain rule, not a form layout (D-2) | y — settled in design (see `context.md`) |
 | Existing anchorless notes | Keep, readable and editable; only creation is constrained | ADR-0026: notes and anchors never cascade-destroy user prose. A migration that deleted them would destroy work to satisfy a UI rule | y — ADR-0026 |
 | Which creation paths survive | Passage selection (reader capture) **and** save-an-answer | RFC-006 §Cycle D resolves finding 6's open question explicitly in favour of "anchored, not strictly reader-only" | y — RFC-recorded |
-| What the dock Review tab does | Renders the **shipped** `ReviewScreen` scoped to this book, so grading happens in the dock | `ReviewScreen` already accepts an optional `sourceId` and passes it to `getDueReviews` (`review-screen.tsx:60,85`), so in-place review is reuse of the existing grading UI rather than a second implementation — and it delivers the artifact's "reviewable without leaving it" instead of a navigation away (D-3) | n — design decision |
-| Notes-by-source filtering shape | A `source_id` query parameter on the existing notes list endpoint, matching `GET /api/reviews/due?source_id=` | One shipped convention already answers this exact question for cards; a second shape would be gratuitous | n — pending survey confirmation of the current endpoint |
+| What the dock Review tab does | Renders the **shipped** `ReviewScreen` scoped to this book, so grading happens in the dock | `ReviewScreen` already accepts an optional `sourceId` and passes it to `getDueReviews` (`review-screen.tsx:60,85`), so in-place review is reuse of the existing grading UI rather than a second implementation — and it delivers the artifact's "reviewable without leaving it" instead of a navigation away (D-3) | y — settled in design (see `context.md`) |
+| Notes-by-source filtering shape | A `source_id` query parameter on the existing notes list endpoint, matching `GET /api/reviews/due?source_id=` | One shipped convention already answers this exact question for cards; a second shape would be gratuitous | y — confirmed: `GET /api/notes` had only a `tag` filter, so `source_id` was added there (AD-214) |
 | Tab count badges | Notes tab shows this book's note count; Review tab shows this book's due count | Both are queue counts the artifact specifies, not achievement figures — I-7 forbids streaks/badges, not inventory | y — artifact + I-7 |
 | Anchor displayed on a note row | Section title + page number + the quote snapshot | The artifact's row meta is `Prefácio · p. 62` with the quote beneath; the page unit shipped in Cycle B (AD-189, book-global numbering) | y — artifact + AD-189 |
 | Cross-book `/notes` filter control | A source picker that filters the existing list; no route change | `/notes` "keeps, re-scoped" per the artifact's route table — it stays the second-brain entry point | y — artifact |
@@ -156,34 +156,34 @@ Every ambiguity is resolved or recorded here — nothing is left silently unclea
 
 | Requirement ID | Story | Phase | Status |
 | --- | --- | --- | --- |
-| WSN-01 | P1: dock Notes tab lists this book's anchored notes | Design | Pending |
-| WSN-02 | P1: note row shows title, section, page, quote | Design | Pending |
-| WSN-03 | P1: a multi-anchored note appears once | Design | Pending |
-| WSN-04 | P1: empty state copy, verbatim | Design | Pending |
-| WSN-05 | P1/P2: tab count badges | Design | Pending |
-| WSN-06 | P2: due count + caption for this book | Design | Pending |
-| WSN-07 | P2: grading happens in the dock, reusing the shipped review screen | Design | Pending |
-| WSN-08 | P3: anchorless creation rejected, nothing persisted | Design | Pending |
-| WSN-09 | P3: legacy anchorless notes keep working | Design | Pending |
-| WSN-10 | P4: `source_id` filter on the notes list; unowned → 404 | Design | Pending |
-| WSN-11 | Bounds: `source_id` must be a well-formed UUID (422 otherwise). The list-bounds half is **withdrawn** — see the sweep row and AD-218 | Design | Pending |
-| WSN-12 | Atomicity: no half-created note under the new rule | Design | Pending |
-| WSN-13 | Authorization: owner-scoped, 404 collapse, limiter kept | Design | Pending |
-| WSN-14 | Ordering: total, stable newest-edited-first | Design | Pending |
-| WSN-15 | Orphaned anchor still renders from its quote | Design | Pending |
-| WSN-16 | Anchored/anchorless never transitions | Design | Pending |
+| WSN-01 | P1: dock Notes tab lists this book's anchored notes | Verified | Verified |
+| WSN-02 | P1: note row shows title, section, page, quote | Verified | Verified |
+| WSN-03 | P1: a multi-anchored note appears once | Verified | Verified |
+| WSN-04 | P1: empty state copy, verbatim | Verified | Verified |
+| WSN-05 | P1/P2: tab count badges | Verified | Verified |
+| WSN-06 | P2: due count + caption for this book | Verified | Verified |
+| WSN-07 | P2: grading happens in the dock, reusing the shipped review screen | Verified | Verified |
+| WSN-08 | P3: anchorless creation rejected, nothing persisted | Verified | Verified |
+| WSN-09 | P3: legacy anchorless notes keep working | Verified | Verified |
+| WSN-10 | P4: `source_id` filter on the notes list; unowned → 404 | Verified | Verified |
+| WSN-11 | Bounds: `source_id` must be a well-formed UUID (422 otherwise). The list-bounds half is **withdrawn** — see the sweep row and AD-218 | Verified | Verified |
+| WSN-12 | Atomicity: no half-created note under the new rule | Verified | Verified |
+| WSN-13 | Authorization: owner-scoped, 404 collapse, limiter kept | Verified | Verified |
+| WSN-14 | Ordering: total, stable newest-edited-first | Verified | Verified |
+| WSN-15 | Orphaned anchor still renders from its quote | Verified | Verified |
+| WSN-16 | Anchored/anchorless never transitions | Verified | Verified |
 
-**Coverage:** 16 total, 0 mapped to tasks yet (Tasks phase pending).
+**Coverage:** 16 total, all mapped to tasks and verified (WSN-11 bounds clause withdrawn — see AD-218).
 
 ---
 
 ## Success Criteria
 
-- [ ] From an open book, its notes and its due-card count are both reachable without a navigation away from the reader.
-- [ ] No API request can create a note without a reading anchor, and a test proves it.
-- [ ] Existing anchorless notes still open, render, and save.
-- [ ] `/notes` can be narrowed to a single book and still defaults to every book.
-- [ ] Backend and frontend suites green against the recorded baseline (see below); no test weakened or deleted to achieve it.
+- [x] From an open book, its notes and its due-card count are both reachable without a navigation away from the reader.
+- [x] No API request can create a note without a reading anchor, and a test proves it.
+- [x] Existing anchorless notes still open, render, and save.
+- [x] `/notes` can be narrowed to a single book and still defaults to every book.
+- [x] Backend and frontend suites green against the recorded baseline (see below); no test weakened or deleted to achieve it.
 
 ## Verification baseline (recorded 2026-07-27, clean `main` @ fcb545d6)
 

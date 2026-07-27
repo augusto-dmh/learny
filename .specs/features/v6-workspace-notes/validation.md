@@ -113,7 +113,7 @@ through Notes"` and `chapter-reader.test.tsx::"renders no panel for a value nami
 
 ## Discrimination sensor (mutation testing)
 
-Thirteen behaviour-level faults injected into the changed code, each run against only the
+Seventeen behaviour-level faults injected into the changed code, each run against only the
 relevant test file(s). **Every mutant was killed.** All mutations were reverted with
 `git checkout`; the working tree is clean and `make lint` passes on it.
 
