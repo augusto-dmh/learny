@@ -3,7 +3,8 @@
 Exercises the owner-scoped notes endpoints end-to-end through FastAPI's
 ``TestClient`` against a real Postgres, asserting the spec ACs at the route level:
 
-- ``POST   /api/notes`` — gone: a note cannot be created without a reading anchor.
+- ``POST   /api/notes`` — gone: a note cannot be created without a reading anchor,
+  and a note that predates the rule still lists, opens, edits, and deletes (WSN-09).
 - ``GET    /api/notes`` — owner → 200 summaries newest-first; ``?tag=`` filters
   case-insensitively; no session → 401 (NF-13).
 - ``GET    /api/notes/{id}`` — owner → 200 detail; missing/non-owned → identical
@@ -33,6 +34,7 @@ from sqlalchemy import Connection
 from app.application.quiz_qc import content_key
 from app.domain.entities import (
     CorpusSectionRecord,
+    Note,
     ParsedBlock,
     ParsedSection,
     QuizItem,
@@ -44,6 +46,7 @@ from app.domain.entities import (
 )
 from app.infrastructure.db.repositories import (
     SqlAlchemyCorpusRepository,
+    SqlAlchemyNoteRepository,
     SqlAlchemyQuizItemRepository,
     SqlAlchemySourceRepository,
 )
@@ -298,6 +301,21 @@ def _capture_target(db_conn: Connection, user_id: str) -> UUID:
     return source_id
 
 
+def _seed_anchorless_note(db_conn: Connection, user_id: str, *, title: str, body: str = "") -> UUID:
+    """Persist a note with no anchor — the shape every note written before the rule has."""
+    now = datetime.now(UTC)
+    note = Note(
+        id=uuid4(),
+        user_id=UUID(user_id),
+        title=title,
+        body_markdown=body,
+        created_at=now,
+        updated_at=now,
+    )
+    SqlAlchemyNoteRepository(db_conn).add(note)
+    return note.id
+
+
 # --- Creation requires an anchor (WSN-08) --------------------------------------
 
 
@@ -354,6 +372,82 @@ def test_capture_rate_limit_returns_429(
 
     assert throttled.status_code == 429, throttled.text
     assert "retry-after" in {k.lower() for k in throttled.headers}
+
+
+# --- Notes written before the anchor rule (WSN-09, WSN-16) ---------------------
+
+
+def test_anchorless_note_still_lists_and_opens(
+    notes_client: TestClient, db_conn: Connection
+) -> None:
+    """A note with no anchor predates the rule; nothing about reading it changed."""
+    user_id = _register(notes_client, "note-legacy-read@example.com")
+    note_id = _seed_anchorless_note(db_conn, user_id, title="Old thought", body="written before")
+
+    listed = notes_client.get("/api/notes")
+    opened = notes_client.get(f"/api/notes/{note_id}")
+
+    assert listed.status_code == 200, listed.text
+    rows = listed.json()
+    assert [row["id"] for row in rows] == [str(note_id)]
+    assert rows[0]["anchor_statuses"] == []
+    assert opened.status_code == 200, opened.text
+    assert opened.json()["title"] == "Old thought"
+    assert opened.json()["body_markdown"] == "written before"
+    assert opened.json()["anchors"] == []
+
+
+def test_anchorless_note_still_edits_and_stays_anchorless(
+    notes_client: TestClient, db_conn: Connection
+) -> None:
+    """Editing one never grows it an anchor: its anchored state is fixed at creation."""
+    user_id = _register(notes_client, "note-legacy-edit@example.com")
+    csrf = _csrf(notes_client)
+    note_id = _seed_anchorless_note(db_conn, user_id, title="Old", body="first")
+
+    resp = _patch_note(
+        notes_client,
+        note_id,
+        {"title": "Reworked", "body_markdown": "second", "tags": ["kept"]},
+        csrf=csrf,
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["title"] == "Reworked"
+    assert resp.json()["body_markdown"] == "second"
+    assert resp.json()["tags"] == ["kept"]
+    assert resp.json()["anchors"] == []
+    assert notes_client.get(f"/api/notes/{note_id}").json()["anchors"] == []
+
+
+def test_anchorless_note_still_deletes(notes_client: TestClient, db_conn: Connection) -> None:
+    user_id = _register(notes_client, "note-legacy-delete@example.com")
+    csrf = _csrf(notes_client)
+    note_id = _seed_anchorless_note(db_conn, user_id, title="Old", body="going away")
+
+    resp = _delete_note(notes_client, note_id, csrf=csrf)
+
+    assert resp.status_code == 204, resp.text
+    assert notes_client.get(f"/api/notes/{note_id}").status_code == 404
+    assert notes_client.get("/api/notes").json() == []
+
+
+def test_anchorless_and_anchored_notes_list_side_by_side(
+    notes_client: TestClient, db_conn: Connection
+) -> None:
+    """The rule constrains creation only — both kinds coexist in one list."""
+    user_id = _register(notes_client, "note-legacy-mixed@example.com")
+    csrf = _csrf(notes_client)
+    legacy_id = _seed_anchorless_note(db_conn, user_id, title="Rootless")
+    source_id = _capture_target(db_conn, user_id)
+    anchored = _created_note(notes_client, csrf, source_id, title="Anchored")
+
+    rows = notes_client.get("/api/notes").json()
+
+    by_id = {row["id"]: row for row in rows}
+    assert set(by_id) == {str(legacy_id), anchored["id"]}
+    assert by_id[str(legacy_id)]["anchor_statuses"] == []
+    assert by_id[anchored["id"]]["anchor_statuses"] == ["active"]
 
 
 # --- List (NF-13) --------------------------------------------------------------
