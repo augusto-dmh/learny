@@ -11,7 +11,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { CitationList } from "../app/components/citations";
-import { type Citation } from "../app/lib/questions";
+import { type Citation } from "../app/lib/citations";
 
 // Radix Popover reaches for ResizeObserver and the pointer-capture APIs that
 // jsdom does not implement; stub them so the popover can open under test.

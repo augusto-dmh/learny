@@ -4,22 +4,33 @@
  * The reader side panel (RA-01..03/06): a fixed-width right-hand column that hosts
  * the Ask and Teach modes beside the chapter so studying never leaves the page.
  *
- * This shell owns the mode switch (an Ask | Teach segmented control) and the
- * close control, and renders the active mode's body — `AskPanel` (ported) or the
- * Teach placeholder (ported in a later task). Open state and mode are pure URL
+ * The shell owns the mode switch (an Ask | Teach segmented control), the close
+ * control, and this book's conversation list. Open state and mode are pure URL
  * state driven by `?panel=`, so the parent renders the panel only when a mode is
  * active — closing it simply drops the query param and restores full reading
  * width, and reading stays non-modal underneath.
+ *
+ * The conversation list is deliberately mode-agnostic and shown in both modes:
+ * one book has one set of threads. Which panel resumes a given thread follows
+ * from the mode its turns were answered in, so the shell switches tabs when it
+ * has to rather than asking the reader to guess which tab their thread is
+ * behind.
  */
 
 import { X } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
 
+import {
+  readActiveConversation,
+  writeActiveConversation,
+} from "@/app/lib/active-conversation";
+import { type ConversationSummaryView } from "@/app/lib/conversations";
+import { type PendingPanelRequest } from "@/app/lib/panel";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-import { type PendingPanelRequest } from "@/app/lib/panel";
-
 import { AskPanel } from "./ask-panel";
+import { ConversationList } from "./conversation-list";
 import { TeachPanel } from "./teach-panel";
 
 export type PanelMode = "ask" | "teach";
@@ -28,6 +39,35 @@ const MODES: { value: PanelMode; label: string }[] = [
   { value: "ask", label: "Ask" },
   { value: "teach", label: "Teach" },
 ];
+
+/**
+ * Which panel continues a conversation, decided by the mode its last turn was
+ * answered in.
+ *
+ * Scope is deliberately not consulted. A conversation's scope says which
+ * sections retrieval may see, not how its turns are answered: a chapter-scoped
+ * conversation whose turns were *asked* is an Ask thread, and resuming it into
+ * Teach would silently change what the reader's next message does. Mode is
+ * recorded on every turn, so it is read rather than inferred — the same rule the
+ * generation adapters keep on the other side of the wire.
+ *
+ * The list row carries it, so this is a decision, not a request: fetching the
+ * conversation to read one word would pull every turn and every citation, and
+ * the panel then loads the same payload again to restore the thread.
+ *
+ * A conversation with no turn to speak for it leaves the reader on the tab they
+ * are already on: there is nothing that says otherwise, and guessing is what
+ * this exists to avoid.
+ */
+function panelFor(
+  summary: ConversationSummaryView,
+  fallback: PanelMode,
+): PanelMode {
+  if (!summary.last_turn_mode) {
+    return fallback;
+  }
+  return summary.last_turn_mode === "teach" ? "teach" : "ask";
+}
 
 export function ReaderPanel({
   sourceId,
@@ -50,6 +90,81 @@ export function ReaderPanel({
   onShowInBook?: (anchor: string) => void;
   onRequireAuth?: () => void;
 }) {
+  // Bumped per surface to tell a panel to re-read which conversation is active;
+  // creating one mid-thread deliberately does not bump anything, or the panel
+  // would remount in the middle of the message that created it.
+  const [revisions, setRevisions] = useState<Record<PanelMode, number>>({
+    ask: 0,
+    teach: 0,
+  });
+  const [listToken, setListToken] = useState(0);
+  const [activeIds, setActiveIds] = useState<Record<PanelMode, string | null>>({
+    ask: null,
+    teach: null,
+  });
+
+  const syncActiveIds = useCallback(() => {
+    setActiveIds({
+      ask: readActiveConversation(sourceId, "ask"),
+      teach: readActiveConversation(sourceId, "teach"),
+    });
+  }, [sourceId]);
+
+  useEffect(() => {
+    syncActiveIds();
+  }, [syncActiveIds]);
+
+  const handleConversationsChanged = useCallback(() => {
+    syncActiveIds();
+    setListToken((token) => token + 1);
+  }, [syncActiveIds]);
+
+  // Which panel continues a thread is on the row the reader clicked, so a resume
+  // resolves in the click that asked for it — no request to race, and no window
+  // in which a second click could land the reader wherever the slower fetch
+  // finished.
+  const handleResume = useCallback(
+    (summary: ConversationSummaryView) => {
+      const target = panelFor(summary, mode);
+      writeActiveConversation(sourceId, target, summary.id);
+      setActiveIds((current) => ({ ...current, [target]: summary.id }));
+      setRevisions((current) => ({
+        ...current,
+        [target]: current[target] + 1,
+      }));
+      if (target !== mode) {
+        onModeChange(target);
+      }
+    },
+    [sourceId, mode, onModeChange],
+  );
+
+  // Deleting the conversation a panel is showing cannot leave that panel
+  // rendering a thread the server no longer has, so the surface pointing at it
+  // is cleared and told to re-read — which lands it on its empty state.
+  const handleDeleted = useCallback(
+    (conversationId: string) => {
+      for (const surface of ["ask", "teach"] as PanelMode[]) {
+        if (readActiveConversation(sourceId, surface) !== conversationId) {
+          continue;
+        }
+        writeActiveConversation(sourceId, surface, null);
+        setActiveIds((current) => ({ ...current, [surface]: null }));
+        setRevisions((current) => ({
+          ...current,
+          [surface]: current[surface] + 1,
+        }));
+      }
+    },
+    [sourceId],
+  );
+
+  const handleNew = useCallback(() => {
+    writeActiveConversation(sourceId, mode, null);
+    setActiveIds((current) => ({ ...current, [mode]: null }));
+    setRevisions((current) => ({ ...current, [mode]: current[mode] + 1 }));
+  }, [sourceId, mode]);
+
   return (
     <aside
       data-testid="reader-panel"
@@ -87,22 +202,37 @@ export function ReaderPanel({
           <X />
         </Button>
       </div>
+
+      <ConversationList
+        sourceId={sourceId}
+        csrf={csrf}
+        refreshToken={listToken}
+        activeConversationId={activeIds[mode]}
+        onResume={handleResume}
+        onNew={handleNew}
+        onDeleted={handleDeleted}
+      />
+
       <div className="min-h-0 flex-1 p-3">
         {mode === "ask" ? (
           <AskPanel
             sourceId={sourceId}
             csrf={csrf}
+            revision={revisions.ask}
             pendingRequest={pendingRequest}
             onPendingConsumed={onPendingConsumed}
             onShowInBook={onShowInBook}
             onRequireAuth={onRequireAuth}
+            onConversationsChanged={handleConversationsChanged}
           />
         ) : (
           <TeachPanel
             sourceId={sourceId}
             csrf={csrf}
+            revision={revisions.teach}
             onShowInBook={onShowInBook}
             onRequireAuth={onRequireAuth}
+            onConversationsChanged={handleConversationsChanged}
           />
         )}
       </div>

@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from app.core.config import Settings
+from app.core.config import _RETIRED_KNOBS, Settings
 from app.core.instrumentation import InstrumentRecorder
 
 _ENV_EXAMPLE = Path(__file__).resolve().parents[1] / ".env.example"
@@ -297,26 +297,61 @@ def test_env_example_documents_the_conversation_contract() -> None:
         assert f"\n{name}=" in contract, f"{name} is missing from .env.example"
 
 
-def test_deprecated_qa_and_teaching_knobs_still_validate(monkeypatch) -> None:
-    # The legacy endpoints outlive their knobs by one cycle: the fields stay declared
-    # until those endpoints retire, so the names stay documented and a deployment
-    # that still sets one can be noticed (see the warning test below).
-    monkeypatch.setenv("LEARNY_QA_EVIDENCE_TOP_K", "3")
-    monkeypatch.setenv("LEARNY_TEACHING_EVIDENCE_TOP_K", "4")
-    monkeypatch.setenv("LEARNY_TEACHING_HISTORY_TURNS", "1")
+def test_env_example_names_every_retired_variable() -> None:
+    # The contract is where an operator reads what a name does, so a retired one has
+    # to be named there too — otherwise the only thing saying it stopped working is
+    # a log line they see once, at a startup they may not be watching.
+    contract = _ENV_EXAMPLE.read_text()
+
+    for name in _RETIRED_KNOBS:
+        assert name in contract, f"{name} is retired but .env.example never says so"
+
+
+def test_retired_knobs_are_no_longer_fields(monkeypatch) -> None:
+    # The per-surface budgets and length bounds the unified conversation settings
+    # replaced are gone, not merely unread — a declared field is a value someone can
+    # still reach for and believe in.
+    for name in (
+        "qa_evidence_top_k",
+        "teaching_evidence_top_k",
+        "teaching_history_turns",
+        "qa_question_max_chars",
+        "teaching_message_max_chars",
+    ):
+        assert name not in Settings.model_fields, name
+
+
+def test_every_retired_variable_names_a_setting_that_still_exists(monkeypatch) -> None:
+    # The warning tells an operator which setting decides the value now. A successor
+    # that was itself renamed away would turn that advice into an AttributeError at
+    # startup — on the one code path that only runs for the deployments already
+    # holding a stale variable.
+    settings = Settings(_env_file=None)
+
+    for env_var, successor in _RETIRED_KNOBS.items():
+        assert successor in Settings.model_fields, f"{env_var} -> {successor}"
+        assert getattr(settings, successor) is not None
+
+
+def test_a_deployment_still_setting_a_retired_variable_boots(monkeypatch) -> None:
+    # Retiring a knob must not take a running deployment down: the variable is
+    # simply ignored, and every live setting resolves as it would have anyway.
+    for env_var in _RETIRED_KNOBS:
+        monkeypatch.setenv(env_var, "3")
 
     settings = Settings(_env_file=None)
 
-    assert settings.qa_evidence_top_k == 3
-    assert settings.teaching_evidence_top_k == 4
-    assert settings.teaching_history_turns == 1
+    assert settings.conversation_evidence_top_k == 8
+    assert settings.conversation_history_turns == 6
+    assert settings.conversation_message_max_chars == 2000
 
 
 def test_setting_a_retired_knob_warns_once_naming_the_value_in_force(monkeypatch, caplog) -> None:
     # The dangerous failure here is silence: a deployment that tuned one of these
     # still validates, still boots, and quietly serves the new default instead. One
     # warning per variable actually set, naming it and the value now in force, is
-    # what reaches the person running the deploy.
+    # what reaches the person running the deploy. The variables are read from the
+    # environment, so removing the fields did not remove the diagnostic with them.
     monkeypatch.setenv("LEARNY_TEACHING_HISTORY_TURNS", "12")
     monkeypatch.setenv("LEARNY_QA_EVIDENCE_TOP_K", "12")
 
@@ -333,6 +368,44 @@ def test_setting_a_retired_knob_warns_once_naming_the_value_in_force(monkeypatch
     assert any("LEARNY_QA_EVIDENCE_TOP_K" in message for message in warnings)
     # The knob nobody set is not mentioned.
     assert not any("LEARNY_TEACHING_EVIDENCE_TOP_K" in message for message in warnings)
+
+
+def test_a_retired_knob_left_in_an_env_file_warns_too(monkeypatch, caplog, tmp_path) -> None:
+    # The env file is the other place a value is read from, and ``os.environ`` cannot
+    # see it: a knob set there is *more* likely to be believed in, not less, because
+    # nothing in the file says it stopped working. A warning that only watched the
+    # process environment would go quiet exactly where the operator wrote the tuning.
+    for env_var in _RETIRED_KNOBS:
+        monkeypatch.delenv(env_var, raising=False)
+    env_file = tmp_path / ".env"
+    env_file.write_text("LEARNY_TEACHING_HISTORY_TURNS=12\nLEARNY_CONVERSATION_EVIDENCE_TOP_K=4\n")
+
+    with caplog.at_level(logging.WARNING, logger="app.core.config"):
+        settings = Settings(_env_file=env_file)
+
+    warnings = [r.getMessage() for r in caplog.records if r.name == "app.core.config"]
+    assert len(warnings) == 1
+    assert "LEARNY_TEACHING_HISTORY_TURNS" in warnings[0]
+    assert f"conversation_history_turns={settings.conversation_history_turns}" in warnings[0]
+    # The file is genuinely being read — a live knob beside the dead one took effect,
+    # which is what makes the silence about the dead one a defect.
+    assert settings.conversation_evidence_top_k == 4
+
+
+def test_a_retired_knob_in_an_env_file_the_instance_does_not_read_stays_quiet(
+    monkeypatch, caplog, tmp_path
+) -> None:
+    # The warning follows what this instance actually reads: a file it was told to
+    # ignore is not a deployment's configuration, and warning about it would train
+    # operators (and the suite) to ignore the message.
+    for env_var in _RETIRED_KNOBS:
+        monkeypatch.delenv(env_var, raising=False)
+    (tmp_path / ".env").write_text("LEARNY_TEACHING_HISTORY_TURNS=12\n")
+
+    with caplog.at_level(logging.WARNING, logger="app.core.config"):
+        Settings(_env_file=None)
+
+    assert [r for r in caplog.records if r.name == "app.core.config"] == []
 
 
 def test_an_untouched_deployment_gets_no_deprecation_warnings(caplog) -> None:

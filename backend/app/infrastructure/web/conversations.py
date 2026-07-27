@@ -43,6 +43,8 @@ from fastapi import APIRouter, Depends, Query, Response, status
 from pydantic import BaseModel, Field, field_validator
 
 from app.application.conversations import (
+    DEFAULT_PAGE_LIMIT,
+    MAX_PAGE_LIMIT,
     TITLE_MAX_CHARS,
     DeleteConversation,
     ListConversations,
@@ -292,6 +294,13 @@ class ConversationSummaryView(BaseModel):
     ``source_title`` rides along because the list spans every source the caller
     owns: a row that named only the conversation would not say which book it is
     about.
+
+    ``last_turn_mode`` is the mode of the newest turn, or ``null`` for a
+    conversation with none. Mode belongs to a turn, so a conversation has no single
+    one; the newest turn is the exchange a reader resumes from, which makes it the
+    row's answer to "where does this thread continue?". A client reads it instead of
+    inferring the answer from scope — a chapter-scoped conversation whose turns were
+    asked is an Ask thread — and instead of fetching the whole conversation to look.
     """
 
     id: UUID
@@ -301,6 +310,7 @@ class ConversationSummaryView(BaseModel):
     scope_anchors: list[str]
     include_notes: bool
     turn_count: int
+    last_turn_mode: str | None
     created_at: datetime
     updated_at: datetime
 
@@ -315,6 +325,7 @@ class ConversationSummaryView(BaseModel):
             scope_anchors=list(conversation.scope_anchors),
             include_notes=conversation.include_notes,
             turn_count=summary.turn_count,
+            last_turn_mode=summary.last_turn_mode,
             created_at=conversation.created_at,
             updated_at=conversation.updated_at,
         )
@@ -360,14 +371,22 @@ def list_conversations(
     user: Annotated[User, Depends(get_authenticated_user)],
     service: Annotated[ListConversations, Depends(get_list_conversations)],
     source_id: Annotated[UUID | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_LIMIT)] = DEFAULT_PAGE_LIMIT,
+    offset: Annotated[int, Query(ge=0)] = 0,
 ) -> list[ConversationSummaryView]:
-    """Return the caller's conversations, newest activity first (200).
+    """Return a page of the caller's conversations, newest activity first (200).
 
     Spans every source the caller owns unless ``source_id`` narrows it. Ownership is
     the repository's join through ``sources``, so narrowing by a source the caller
     does not own returns an empty list rather than disclosing anything.
+
+    The answer is always one page of the ``updated_at DESC, id DESC`` order:
+    ``limit`` defaults to 20 and is capped at 100 by Pydantic — outside those bounds
+    → 422 — and ``offset`` walks the same order, an offset past the end being an
+    empty page. That order is total, so a caller paging through it sees every
+    conversation exactly once.
     """
-    summaries = service(user=user, source_id=source_id)
+    summaries = service(user=user, source_id=source_id, limit=limit, offset=offset)
     return [ConversationSummaryView.from_summary(s) for s in summaries]
 
 

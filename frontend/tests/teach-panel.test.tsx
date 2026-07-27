@@ -1,18 +1,20 @@
 // @vitest-environment jsdom
 
 /**
- * B2 (component) — the Teach panel is the teach screen's flow ported into the
- * reader side panel. It keeps parity with the old screen: it builds a target
- * picker from the structure endpoint and a resume list with turn counts (RA-10);
- * starting a session streams a cited turn's deltas progressively and POSTs
- * `{message}` to the turns stream; resuming seeds the conversation from persisted
- * turns so prior turns render with their citations; and a throttle (429), a
- * mid-stream error, or not-found settle to the same readable state contract as
- * Ask, with a 401 routed to `onRequireAuth`.
+ * The Teach panel runs on the unified conversation surface. Picking a target and
+ * sending the first message creates a conversation scoped to that target's
+ * anchor and posts the message as a taught turn; every message after it
+ * continues the same conversation. A thread this book's Teach surface is pointed
+ * at is restored from the server, with its stored turns and their citations.
  *
- * Panel-only behavior: when a session activates — on start AND on resume — the
- * panel calls `onShowInBook` exactly once with the session's target anchor, never
- * per turn (RA-11).
+ * Everything the reader sees is unchanged by that move: deltas render
+ * progressively, the terminal citations or the explicit not-found state render
+ * at the end, and a throttle (429), a mid-stream error, or a 401 settle to the
+ * same readable state contract as Ask.
+ *
+ * Panel-only behavior: when a session activates — on start AND on restore — the
+ * panel calls `onShowInBook` exactly once with the taught anchor, never per turn
+ * (RA-11).
  *
  * Auth is resolved upstream in the reader, so the panel takes the CSRF token as a
  * prop — these tests never stub `/api/auth/me`.
@@ -29,6 +31,7 @@ import {
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { TeachPanel } from "../app/components/teach-panel";
+import { writeActiveConversation } from "../app/lib/active-conversation";
 
 beforeAll(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
@@ -120,13 +123,6 @@ const structure = {
   ],
 };
 
-const chapter2Session = {
-  id: "sess1",
-  source_id: "s1",
-  target: { anchor: "c2.xhtml", section_path: ["Chapter 2"], title: "Chapter 2" },
-  created_at: "now",
-};
-
 const citation = {
   chunk_id: "c1",
   source_id: "s1",
@@ -137,23 +133,30 @@ const citation = {
   score: 0.02,
 };
 
-const summary = {
-  id: "sess1",
-  target: { anchor: "c1.xhtml", section_path: ["Chapter 1"], title: "Chapter 1" },
-  created_at: "now",
-  turn_count: 2,
-};
+const CREATE_URL = "/api/conversations";
+const READ_URL = "/api/conversations/conv2";
+const TURN_STREAM = "/api/conversations/conv2/turns/stream";
 
-/** A resumed session's stored, ordered, cited history. */
-const resumedDetail = {
-  id: "sess1",
-  source_id: "s1",
-  target: { anchor: "c1.xhtml", section_path: ["Chapter 1"], title: "Chapter 1" },
-  created_at: "now",
+function conversationScopedTo(anchor: string, title: string) {
+  return {
+    id: "conv2",
+    source_id: "s1",
+    title,
+    scope_anchors: [anchor],
+    include_notes: false,
+    created_at: "now",
+    updated_at: "now",
+  };
+}
+
+/** A restored thread's stored, ordered, cited history. */
+const restoredDetail = {
+  ...conversationScopedTo("c1.xhtml", "Chapter 1"),
   turns: [
     {
       turn_index: 0,
       message: "What is this about?",
+      mode: "teach",
       answer_status: "answered",
       text: "It is about early computing.",
       citations: [
@@ -174,7 +177,8 @@ const resumedDetail = {
     {
       turn_index: 1,
       message: "and the weather?",
-      answer_status: "not_found_in_source",
+      mode: "teach",
+      answer_status: "not_found_in_scope",
       text: "",
       citations: [],
       evidence_count: 0,
@@ -184,13 +188,28 @@ const resumedDetail = {
   ],
 };
 
-const TURN_STREAM = "/api/teaching-sessions/sess1/turns/stream";
-
-function baseHandlers(): Record<string, Handler> {
+function baseHandlers(
+  stream: () => Response,
+  extra: Record<string, Handler> = {},
+): Record<string, Handler> {
   return {
     "GET /api/sources/s1/structure": () => jsonResponse(200, structure),
-    "GET /api/sources/s1/teaching-sessions": () => jsonResponse(200, []),
+    [`POST ${CREATE_URL}`]: () =>
+      jsonResponse(201, conversationScopedTo("c2.xhtml", "Chapter 2")),
+    [`POST ${TURN_STREAM}`]: () => stream(),
+    ...extra,
   };
+}
+
+function bodyOf(call: unknown[]): Record<string, unknown> {
+  return JSON.parse((call[1] as RequestInit).body as string);
+}
+
+function callsTo(
+  fetchMock: ReturnType<typeof routedFetch>,
+  url: string,
+): unknown[][] {
+  return fetchMock.mock.calls.filter(([called]) => called === url);
 }
 
 function sendMessage(value: string) {
@@ -200,20 +219,25 @@ function sendMessage(value: string) {
   fireEvent.click(screen.getByRole("button", { name: "Submit" }));
 }
 
+/** Pick a target and enter the taught thread. */
+async function startSession(anchor = "c2.xhtml") {
+  await screen.findByLabelText("Target");
+  await screen.findByRole("option", { name: "Chapter 1" }, { timeout: 5000 });
+  fireEvent.change(screen.getByLabelText("Target"), { target: { value: anchor } });
+  fireEvent.click(screen.getByRole("button", { name: "Start session" }));
+  await screen.findByPlaceholderText(/send a message/i, {}, { timeout: 5000 });
+}
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   localStorage.clear();
 });
 
-describe("TeachPanel start + stream (RA-10)", () => {
-  it("builds the target picker, starts a session, and streams a cited turn progressively", async () => {
+describe("TeachPanel on the conversation surface (RA-10)", () => {
+  it("scopes a new conversation to the chosen target and streams a taught turn", async () => {
     const stream = sseStream();
-    const fetchMock = routedFetch({
-      ...baseHandlers(),
-      "POST /api/teaching-sessions": () => jsonResponse(201, chapter2Session),
-      [`POST ${TURN_STREAM}`]: () => stream.response,
-    });
+    const fetchMock = routedFetch(baseHandlers(() => stream.response));
     vi.stubGlobal("fetch", fetchMock);
 
     render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
@@ -221,7 +245,6 @@ describe("TeachPanel start + stream (RA-10)", () => {
     // Every flattened section (incl. the nested one as a breadcrumb) is offered.
     await screen.findByLabelText("Target");
     await screen.findByRole("option", { name: "Chapter 1" }, { timeout: 5000 });
-    expect(screen.getByRole("option", { name: "Chapter 1" })).toBeTruthy();
     expect(
       screen.getByRole("option", { name: "Chapter 1 › Section 1.1" }),
     ).toBeTruthy();
@@ -231,28 +254,27 @@ describe("TeachPanel start + stream (RA-10)", () => {
       target: { value: "c2.xhtml" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Start session" }));
-
-    // The start POST carried the chosen target anchor.
     await screen.findByPlaceholderText(/send a message/i, {}, { timeout: 5000 });
-    const startPost = fetchMock.mock.calls.find(
-      ([url]) => url === "/api/teaching-sessions",
-    )!;
-    expect(JSON.parse((startPost[1] as RequestInit).body as string)).toEqual({
-      source_id: "s1",
-      target_anchor: "c2.xhtml",
-    });
+
+    // Nothing is created until there is something to teach.
+    expect(callsTo(fetchMock, CREATE_URL)).toHaveLength(0);
 
     sendMessage("Explain this chapter.");
 
-    // The turn POSTs {message} with the CSRF header to the turns stream.
-    await waitFor(() =>
-      expect(fetchMock.mock.calls.some(([url]) => url === TURN_STREAM)).toBe(
-        true,
-      ),
-    );
-    const turnPost = fetchMock.mock.calls.find(([url]) => url === TURN_STREAM)!;
-    expect(JSON.parse((turnPost[1] as RequestInit).body as string)).toEqual({
+    // The conversation is scoped to the chosen target and named for it.
+    await waitFor(() => expect(callsTo(fetchMock, CREATE_URL)).toHaveLength(1));
+    expect(bodyOf(callsTo(fetchMock, CREATE_URL)[0])).toMatchObject({
+      source_id: "s1",
+      scope_anchors: ["c2.xhtml"],
+      title: "Chapter 2",
+    });
+
+    // The message is posted as a taught turn on that conversation.
+    await waitFor(() => expect(callsTo(fetchMock, TURN_STREAM)).toHaveLength(1));
+    const turnPost = callsTo(fetchMock, TURN_STREAM)[0];
+    expect(bodyOf(turnPost)).toEqual({
       message: "Explain this chapter.",
+      mode: "teach",
     });
     expect(
       new Headers((turnPost[1] as RequestInit).headers).get("X-CSRF-Token"),
@@ -289,22 +311,39 @@ describe("TeachPanel start + stream (RA-10)", () => {
     ).toBeTruthy();
   });
 
-  it("renders the not-found state with no citations on not_found_in_source", async () => {
-    const stream = sseStream();
-    vi.stubGlobal(
-      "fetch",
-      routedFetch({
-        ...baseHandlers(),
-        "POST /api/teaching-sessions": () => jsonResponse(201, chapter2Session),
-        [`POST ${TURN_STREAM}`]: () => stream.response,
+  it("continues the same conversation for a second message", async () => {
+    const streams: ReturnType<typeof sseStream>[] = [];
+    const fetchMock = routedFetch(
+      baseHandlers(() => {
+        const next = sseStream();
+        streams.push(next);
+        return next.response;
       }),
     );
+    vi.stubGlobal("fetch", fetchMock);
 
     render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
-    await screen.findByLabelText("Target");
-    await screen.findByRole("option", { name: "Chapter 1" }, { timeout: 5000 });
-    fireEvent.click(screen.getByRole("button", { name: "Start session" }));
-    await screen.findByPlaceholderText(/send a message/i, {}, { timeout: 5000 });
+    await startSession();
+
+    sendMessage("first message");
+    await waitFor(() => expect(streams).toHaveLength(1));
+    await streamTurn(streams[0], []);
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Submit" })).toBeTruthy(),
+    );
+
+    sendMessage("second message");
+    await waitFor(() => expect(callsTo(fetchMock, TURN_STREAM)).toHaveLength(2));
+
+    expect(callsTo(fetchMock, CREATE_URL)).toHaveLength(1);
+  });
+
+  it("renders the whole-book not-found state with no citations", async () => {
+    const stream = sseStream();
+    vi.stubGlobal("fetch", routedFetch(baseHandlers(() => stream.response)));
+
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
+    await startSession();
     sendMessage("unrelated nonsense");
 
     await stream.push({ type: "start", messageId: "m1" });
@@ -319,48 +358,71 @@ describe("TeachPanel start + stream (RA-10)", () => {
     await stream.done();
 
     const notFound = await screen.findByTestId("not-found");
-    expect(notFound.textContent).toContain("not found in this target");
+    expect(notFound.textContent).toContain("not found in this book");
     expect(screen.queryByRole("button", { name: /^Citation:/ })).toBeNull();
   });
 
   it("shows a readable throttle message when a turn stream returns 429", async () => {
     vi.stubGlobal(
       "fetch",
-      routedFetch({
-        ...baseHandlers(),
-        "POST /api/teaching-sessions": () => jsonResponse(201, chapter2Session),
-        [`POST ${TURN_STREAM}`]: () =>
-          jsonResponse(429, { detail: "Too many requests." }),
-      }),
+      routedFetch(
+        baseHandlers(() => jsonResponse(429, { detail: "Too many requests." }), {
+          [`DELETE ${READ_URL}`]: () => new Response(null, { status: 204 }),
+        }),
+      ),
     );
 
     render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
-    await screen.findByLabelText("Target");
-    await screen.findByRole("option", { name: "Chapter 1" }, { timeout: 5000 });
-    fireEvent.click(screen.getByRole("button", { name: "Start session" }));
-    await screen.findByPlaceholderText(/send a message/i, {}, { timeout: 5000 });
+    await startSession();
     sendMessage("a message");
 
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toMatch(/too many requests/i);
   });
 
+  it("keeps the reader in the session when the conversation cannot be created", async () => {
+    // Only the structure and the create leg are routed: a stream attempt would
+    // mean a turn was posted into a conversation the server never made, and
+    // `routedFetch` fails loudly on it.
+    const fetchMock = routedFetch({
+      "GET /api/sources/s1/structure": () => jsonResponse(200, structure),
+      [`POST ${CREATE_URL}`]: () =>
+        jsonResponse(409, { detail: "Source is not ready." }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
+    await startSession();
+    sendMessage("teach me this section");
+
+    // The failure is readable, and the panel is usable again rather than left
+    // spinning on a message that never went anywhere.
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(/still processing/i);
+    expect(screen.getByRole("button", { name: "Submit" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+    expect(
+      (screen.getByPlaceholderText(/send a message/i) as HTMLTextAreaElement)
+        .disabled,
+    ).toBe(false);
+
+    // Nothing was created, so there is nothing to point at or clean up.
+    expect(callsTo(fetchMock, CREATE_URL)).toHaveLength(1);
+  });
+
   it("settles a mid-stream error part to a banner with partial text retained", async () => {
     const stream = sseStream();
     vi.stubGlobal(
       "fetch",
-      routedFetch({
-        ...baseHandlers(),
-        "POST /api/teaching-sessions": () => jsonResponse(201, chapter2Session),
-        [`POST ${TURN_STREAM}`]: () => stream.response,
-      }),
+      routedFetch(
+        baseHandlers(() => stream.response, {
+          [`DELETE ${READ_URL}`]: () => new Response(null, { status: 204 }),
+        }),
+      ),
     );
 
     render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
-    await screen.findByLabelText("Target");
-    await screen.findByRole("option", { name: "Chapter 1" }, { timeout: 5000 });
-    fireEvent.click(screen.getByRole("button", { name: "Start session" }));
-    await screen.findByPlaceholderText(/send a message/i, {}, { timeout: 5000 });
+    await startSession();
     sendMessage("first try");
 
     await stream.push({ type: "start", messageId: "m1" });
@@ -380,40 +442,72 @@ describe("TeachPanel start + stream (RA-10)", () => {
   });
 });
 
-describe("TeachPanel resume (RA-10)", () => {
-  it("lists previous sessions with turn counts and resumes full cited history", async () => {
+describe("TeachPanel scope misses", () => {
+  it("says the answer may be elsewhere in the book when the scope comes up empty", async () => {
+    const stream = sseStream();
+    vi.stubGlobal("fetch", routedFetch(baseHandlers(() => stream.response)));
+
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
+    await startSession();
+    sendMessage("something from another chapter");
+
+    await stream.push({ type: "start", messageId: "m1" });
+    await stream.push({ type: "text-start", id: "t1" });
+    await stream.push({ type: "text-end", id: "t1" });
+    await stream.push({ type: "data-citations", data: [] });
+    await stream.push({
+      type: "data-answer-status",
+      data: { status: "not_found_in_scope" },
+    });
+    await stream.push({ type: "finish" });
+    await stream.done();
+
+    // The reader is told the scope came up short, not that the book did.
+    const notFound = await screen.findByTestId("not-found");
+    expect(notFound.textContent).toMatch(/elsewhere in the book/i);
+    expect(notFound.textContent).not.toMatch(/^That was not found in this book\./);
+    expect(screen.queryByRole("button", { name: /^Citation:/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Save to note" })).toBeNull();
+  });
+
+  it("restores a stored scope miss with the same scope-specific wording", async () => {
     vi.stubGlobal(
       "fetch",
       routedFetch({
         "GET /api/sources/s1/structure": () => jsonResponse(200, structure),
-        "GET /api/sources/s1/teaching-sessions": () =>
-          jsonResponse(200, [summary]),
-        "GET /api/teaching-sessions/sess1": () =>
-          jsonResponse(200, resumedDetail),
+        [`GET ${READ_URL}`]: () => jsonResponse(200, restoredDetail),
       }),
     );
+    writeActiveConversation("s1", "teach", "conv2");
+
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
+    await screen.findByText("It is about early computing.");
+
+    expect(screen.getByTestId("not-found").textContent).toMatch(
+      /elsewhere in the book/i,
+    );
+  });
+});
+
+describe("TeachPanel thread restore (RA-10)", () => {
+  it("restores the pointed-at conversation with its full cited history", async () => {
+    const fetchMock = routedFetch({
+      "GET /api/sources/s1/structure": () => jsonResponse(200, structure),
+      [`GET ${READ_URL}`]: () => jsonResponse(200, restoredDetail),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    writeActiveConversation("s1", "teach", "conv2");
 
     render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
 
-    // The resume list shows the session with its turn count.
-    await screen.findByText("Previous sessions");
-    expect(await screen.findByText(/2 turns/, {}, { timeout: 5000 })).toBeTruthy();
-
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Resume" }, { timeout: 5000 }),
-    );
-
-    // Seeded history renders both stored turns with their citation and callout.
+    // Both stored turns render with their citation and their not-found callout.
     expect(await screen.findByText("It is about early computing.")).toBeTruthy();
     expect(screen.getByText("What is this about?")).toBeTruthy();
     expect(
       screen.getByRole("button", { name: "Citation: Chapter 1 › Intro" }),
     ).toBeTruthy();
-
     expect(screen.getByText("and the weather?")).toBeTruthy();
-    expect(screen.getByTestId("not-found").textContent).toContain(
-      "not found in this target",
-    );
+    expect(screen.getByTestId("not-found")).toBeTruthy();
 
     // Ordered oldest-first: turn 0 precedes turn 1 in the DOM.
     const turns = screen.getAllByTestId("user-message");
@@ -421,6 +515,26 @@ describe("TeachPanel resume (RA-10)", () => {
       "What is this about?",
       "and the weather?",
     ]);
+
+    // The taught passage is named by the live structure, not by a stored label.
+    expect(screen.getByRole("heading", { name: "Chapter 1" })).toBeTruthy();
+  });
+
+  it("offers the target picker again when the pointed-at conversation is gone", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/sources/s1/structure": () => jsonResponse(200, structure),
+        [`GET ${READ_URL}`]: () =>
+          jsonResponse(404, { detail: "Conversation not found." }),
+      }),
+    );
+    writeActiveConversation("s1", "teach", "conv2");
+
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
+
+    expect(await screen.findByLabelText("Target")).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });
 
@@ -428,21 +542,18 @@ describe("TeachPanel auth (RA-10)", () => {
   it("routes a 401 turn stream to onRequireAuth", async () => {
     vi.stubGlobal(
       "fetch",
-      routedFetch({
-        ...baseHandlers(),
-        "POST /api/teaching-sessions": () => jsonResponse(201, chapter2Session),
-        [`POST ${TURN_STREAM}`]: () => new Response(null, { status: 401 }),
-      }),
+      routedFetch(
+        baseHandlers(() => new Response(null, { status: 401 }), {
+          [`DELETE ${READ_URL}`]: () => new Response(null, { status: 204 }),
+        }),
+      ),
     );
 
     const onRequireAuth = vi.fn();
     render(
       <TeachPanel sourceId="s1" csrf="csrf-xyz" onRequireAuth={onRequireAuth} />,
     );
-    await screen.findByLabelText("Target");
-    await screen.findByRole("option", { name: "Chapter 1" }, { timeout: 5000 });
-    fireEvent.click(screen.getByRole("button", { name: "Start session" }));
-    await screen.findByPlaceholderText(/send a message/i, {}, { timeout: 5000 });
+    await startSession();
     sendMessage("a message");
 
     await waitFor(() => expect(onRequireAuth).toHaveBeenCalledTimes(1));
@@ -459,35 +570,35 @@ const noteDetail = {
   updated_at: "now",
 };
 
+/** Stream a complete, answered turn carrying `citations` and settling the stream. */
+async function streamTurn(
+  stream: ReturnType<typeof sseStream>,
+  citations: unknown[],
+) {
+  await stream.push({ type: "start", messageId: "m1" });
+  await stream.push({ type: "text-start", id: "t1" });
+  await stream.push({ type: "text-delta", id: "t1", delta: "A lesson." });
+  await stream.push({ type: "text-end", id: "t1" });
+  await stream.push({ type: "data-citations", data: citations });
+  await stream.push({ type: "data-answer-status", data: { status: "answered" } });
+  await stream.push({ type: "finish" });
+  await stream.done();
+}
+
 describe("TeachPanel save to note (RA-20/22)", () => {
   it("saves a cited taught turn as a note and confirms success", async () => {
     const stream = sseStream();
-    const fetchMock = routedFetch({
-      ...baseHandlers(),
-      "POST /api/teaching-sessions": () => jsonResponse(201, chapter2Session),
-      [`POST ${TURN_STREAM}`]: () => stream.response,
-      "POST /api/sources/s1/highlights": () => jsonResponse(201, noteDetail),
-    });
+    const fetchMock = routedFetch(
+      baseHandlers(() => stream.response, {
+        "POST /api/sources/s1/highlights": () => jsonResponse(201, noteDetail),
+      }),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
-    await screen.findByLabelText("Target");
-    await screen.findByRole("option", { name: "Chapter 1" }, { timeout: 5000 });
-    fireEvent.click(screen.getByRole("button", { name: "Start session" }));
-    await screen.findByPlaceholderText(/send a message/i, {}, { timeout: 5000 });
+    await startSession();
     sendMessage("Explain this chapter.");
-
-    await stream.push({ type: "start", messageId: "m1" });
-    await stream.push({ type: "text-start", id: "t1" });
-    await stream.push({ type: "text-delta", id: "t1", delta: "A lesson." });
-    await stream.push({ type: "text-end", id: "t1" });
-    await stream.push({ type: "data-citations", data: [citation] });
-    await stream.push({
-      type: "data-answer-status",
-      data: { status: "answered" },
-    });
-    await stream.push({ type: "finish" });
-    await stream.done();
+    await streamTurn(stream, [citation]);
 
     const saveButton = await screen.findByRole("button", {
       name: "Save to note",
@@ -497,32 +608,22 @@ describe("TeachPanel save to note (RA-20/22)", () => {
     });
 
     await waitFor(() =>
-      expect(
-        fetchMock.mock.calls.some(
-          ([url]) => url === "/api/sources/s1/highlights",
-        ),
-      ).toBe(true),
+      expect(callsTo(fetchMock, "/api/sources/s1/highlights")).toHaveLength(1),
     );
     expect(await screen.findByTestId("save-note-status")).toBeTruthy();
   });
 
-  it("offers Save to note only on the cited turn of a resumed session", async () => {
+  it("offers Save to note only on the cited turn of a restored thread", async () => {
     vi.stubGlobal(
       "fetch",
       routedFetch({
         "GET /api/sources/s1/structure": () => jsonResponse(200, structure),
-        "GET /api/sources/s1/teaching-sessions": () =>
-          jsonResponse(200, [summary]),
-        "GET /api/teaching-sessions/sess1": () =>
-          jsonResponse(200, resumedDetail),
+        [`GET ${READ_URL}`]: () => jsonResponse(200, restoredDetail),
       }),
     );
+    writeActiveConversation("s1", "teach", "conv2");
 
     render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
-    await screen.findByText("Previous sessions");
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Resume" }, { timeout: 5000 }),
-    );
     await screen.findByText("It is about early computing.");
 
     // The answered, cited turn offers the action; the not-found turn does not.
@@ -535,45 +636,21 @@ describe("TeachPanel save to note (RA-20/22)", () => {
 describe("TeachPanel taught passage (RA-11)", () => {
   it("shows the target in the book once on start and never per turn", async () => {
     const stream = sseStream();
-    vi.stubGlobal(
-      "fetch",
-      routedFetch({
-        ...baseHandlers(),
-        "POST /api/teaching-sessions": () => jsonResponse(201, chapter2Session),
-        [`POST ${TURN_STREAM}`]: () => stream.response,
-      }),
-    );
+    vi.stubGlobal("fetch", routedFetch(baseHandlers(() => stream.response)));
 
     const onShowInBook = vi.fn();
     render(
       <TeachPanel sourceId="s1" csrf="csrf-xyz" onShowInBook={onShowInBook} />,
     );
-    await screen.findByLabelText("Target");
-    await screen.findByRole("option", { name: "Chapter 1" }, { timeout: 5000 });
-    fireEvent.change(screen.getByLabelText("Target"), {
-      target: { value: "c2.xhtml" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Start session" }));
+    await startSession();
 
-    // The book is asked to show the session's target anchor exactly once.
-    await waitFor(() =>
-      expect(onShowInBook).toHaveBeenCalledWith("c2.xhtml"),
-    );
+    // The book is asked to show the taught anchor exactly once.
+    await waitFor(() => expect(onShowInBook).toHaveBeenCalledWith("c2.xhtml"));
     expect(onShowInBook).toHaveBeenCalledTimes(1);
 
     // Streaming a full turn does not re-trigger the jump.
     sendMessage("Explain this chapter.");
-    await stream.push({ type: "start", messageId: "m1" });
-    await stream.push({ type: "text-start", id: "t1" });
-    await stream.push({ type: "text-delta", id: "t1", delta: "A lesson." });
-    await stream.push({ type: "text-end", id: "t1" });
-    await stream.push({ type: "data-citations", data: [citation] });
-    await stream.push({
-      type: "data-answer-status",
-      data: { status: "answered" },
-    });
-    await stream.push({ type: "finish" });
-    await stream.done();
+    await streamTurn(stream, [citation]);
 
     await waitFor(() =>
       expect(document.body.textContent).toContain("A lesson."),
@@ -581,69 +658,76 @@ describe("TeachPanel taught passage (RA-11)", () => {
     expect(onShowInBook).toHaveBeenCalledTimes(1);
   });
 
-  it("shows the resumed session's target in the book once", async () => {
+  it("shows a restored thread's target in the book once", async () => {
     vi.stubGlobal(
       "fetch",
       routedFetch({
         "GET /api/sources/s1/structure": () => jsonResponse(200, structure),
-        "GET /api/sources/s1/teaching-sessions": () =>
-          jsonResponse(200, [summary]),
-        "GET /api/teaching-sessions/sess1": () =>
-          jsonResponse(200, resumedDetail),
+        [`GET ${READ_URL}`]: () => jsonResponse(200, restoredDetail),
       }),
     );
+    writeActiveConversation("s1", "teach", "conv2");
 
     const onShowInBook = vi.fn();
     render(
       <TeachPanel sourceId="s1" csrf="csrf-xyz" onShowInBook={onShowInBook} />,
     );
-    await screen.findByText("Previous sessions");
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Resume" }, { timeout: 5000 }),
-    );
 
-    await waitFor(() =>
-      expect(onShowInBook).toHaveBeenCalledWith("c1.xhtml"),
-    );
+    await waitFor(() => expect(onShowInBook).toHaveBeenCalledWith("c1.xhtml"));
     expect(onShowInBook).toHaveBeenCalledTimes(1);
   });
 });
 
-describe("TeachPanel include-my-notes toggle (NL-04)", () => {
-  it("defaults the toggle off and sends the flag only after the reader turns it on", async () => {
+describe("TeachPanel include-my-notes choice (NL-04)", () => {
+  it("defaults the choice off and sends it explicitly when the conversation is created", async () => {
     const stream = sseStream();
-    const fetchMock = routedFetch({
-      ...baseHandlers(),
-      "POST /api/teaching-sessions": () => jsonResponse(201, chapter2Session),
-      [`POST ${TURN_STREAM}`]: () => stream.response,
-    });
+    const fetchMock = routedFetch(baseHandlers(() => stream.response));
     vi.stubGlobal("fetch", fetchMock);
 
     render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
+    await startSession();
 
-    // Start a session so the conversation view (and its toggle) mounts.
-    await screen.findByLabelText("Target");
-    fireEvent.change(screen.getByLabelText("Target"), {
-      target: { value: "c2.xhtml" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Start session" }));
-    await screen.findByPlaceholderText(/send a message/i, {}, { timeout: 5000 });
-
-    // The toggle reflects teaching's server default (off) before any choice.
-    const toggle = screen.getByRole("checkbox", { name: /include my notes/i });
+    // The control reflects teaching's default (off) before any choice.
+    const toggle = screen.getByRole("checkbox");
     expect((toggle as HTMLInputElement).checked).toBe(false);
 
-    // Turning it on is an explicit choice → the next turn carries the flag.
+    // Turning it on is carried into the conversation the next message creates.
     fireEvent.click(toggle);
     sendMessage("Explain this chapter.");
 
-    await waitFor(() =>
-      expect(fetchMock.mock.calls.some(([url]) => url === TURN_STREAM)).toBe(true),
-    );
-    const turnPost = fetchMock.mock.calls.find(([url]) => url === TURN_STREAM)!;
-    expect(JSON.parse((turnPost[1] as RequestInit).body as string)).toEqual({
-      message: "Explain this chapter.",
+    await waitFor(() => expect(callsTo(fetchMock, CREATE_URL)).toHaveLength(1));
+    expect(bodyOf(callsTo(fetchMock, CREATE_URL)[0])).toMatchObject({
       include_notes: true,
     });
+
+    // From here the choice belongs to that conversation: the control reports it
+    // and stops taking input rather than offering a flip that does nothing.
+    await waitFor(() =>
+      expect((screen.getByRole("checkbox") as HTMLInputElement).disabled).toBe(
+        true,
+      ),
+    );
+    expect((screen.getByRole("checkbox") as HTMLInputElement).checked).toBe(true);
+  });
+
+  it("reports a restored session's choice rather than the reader's stored one", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/sources/s1/structure": () => jsonResponse(200, structure),
+        [`GET ${READ_URL}`]: () =>
+          jsonResponse(200, { ...restoredDetail, include_notes: true }),
+      }),
+    );
+    writeActiveConversation("s1", "teach", "conv2");
+
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
+    await screen.findByText("It is about early computing.");
+
+    // Teaching's own default is off; this thread was created with it on, and
+    // the thread is what the answers obey.
+    const toggle = screen.getByRole("checkbox") as HTMLInputElement;
+    expect(toggle.checked).toBe(true);
+    expect(toggle.disabled).toBe(true);
   });
 });

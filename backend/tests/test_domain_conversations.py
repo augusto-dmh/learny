@@ -116,12 +116,17 @@ def test_conversation_and_turn_are_immutable() -> None:
 
 def test_summary_names_the_book_a_conversation_belongs_to() -> None:
     # The global list spans every source the caller owns, so a row that named only
-    # the conversation would not say which book it is about.
+    # the conversation would not say which book it is about. It also names the mode
+    # of the newest turn — the exchange the thread is continued from — because mode
+    # belongs to a turn, so the conversation itself has no single one to read.
     conversation = _conversation()
-    summary = ConversationSummary(conversation=conversation, turn_count=3, source_title="A Book")
+    summary = ConversationSummary(
+        conversation=conversation, turn_count=3, source_title="A Book", last_turn_mode=MODE_TEACH
+    )
 
     assert summary.conversation is conversation
     assert (summary.turn_count, summary.source_title) == (3, "A Book")
+    assert summary.last_turn_mode == MODE_TEACH
 
 
 def test_teach_target_is_the_whole_trio_or_nothing() -> None:

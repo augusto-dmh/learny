@@ -552,14 +552,23 @@ class RetrievalPort(Protocol):
 
 
 @runtime_checkable
-class AnswerGenerationPort(Protocol):
-    """Answer-generation port — the single seam for the answer path (QA-05).
+class GenerationPort(Protocol):
+    """Generation port — the single seam for every conversation turn (QA-05).
 
-    Provider SDKs, model names, and citation formats live only in the concrete
-    adapter (ADR-0007/0009); callers pass the trimmed question and the retrieved
-    :class:`~app.domain.entities.Evidence`, and receive a Learny-owned
-    :class:`~app.domain.entities.GeneratedAnswer`. No SQL/HTTP/SDK type crosses
-    this boundary. The default adapter is deterministic and network-free (D-1).
+    One protocol for both modes. Provider SDKs, model names, and citation formats
+    live only in the concrete adapter (ADR-0007/0009); callers pass the learner's
+    message and the retrieved :class:`~app.domain.entities.Evidence`, and receive a
+    Learny-owned :class:`~app.domain.entities.GeneratedAnswer`. No SQL/HTTP/SDK type
+    crosses this boundary. The default adapter is deterministic and network-free
+    (D-1).
+
+    ``mode`` — :data:`~app.domain.entities.MODE_ANSWER` or
+    :data:`~app.domain.entities.MODE_TEACH` — is an **explicit** argument, and the
+    only thing an adapter may dispatch its prompt construction on. In particular
+    ``target_section_path`` is not a mode signal: a conversation scoped to a chapter
+    carries a target snapshot whatever its mode, so an adapter that reads "teach"
+    from a present target would route scoped asks through the teaching prompt. It is
+    supplied for a teach turn and absent for an answer turn.
 
     ``model`` is the adapter's stable model identity. It must be readable
     without calling ``generate`` because the not-found short-circuit reports a
@@ -571,17 +580,19 @@ class AnswerGenerationPort(Protocol):
     def generate(
         self,
         *,
-        question: str,
+        message: str,
+        mode: str,
         evidence: Sequence[Evidence],
         history: Sequence[HistoryTurn] = (),
+        target_section_path: tuple[str, ...] | None = None,
     ) -> GeneratedAnswer:
-        """Generate an answer grounded in ``evidence``.
+        """Generate a response to ``message`` grounded in ``evidence``.
 
-        ``history`` is the bounded prior conversation (oldest first) an answer turn
-        in a conversation carries, so a follow-up question resolves against what was
-        already said; it defaults to empty, which is the single-shot ask. Returns
-        ``found=False`` when the evidence cannot support an answer; raises for
-        operational failure (the application service maps any raise to
+        ``history`` is the bounded prior conversation (oldest first) a turn carries,
+        so a follow-up resolves against what was already said; it defaults to empty,
+        which is the single-shot ask. Returns ``found=False`` when the evidence
+        cannot support a response; raises for operational failure (the application
+        service maps any raise to
         :class:`~app.application.errors.AnswerGenerationFailed`, QA-17).
         """
         ...
@@ -589,11 +600,13 @@ class AnswerGenerationPort(Protocol):
     def generate_stream(
         self,
         *,
-        question: str,
+        message: str,
+        mode: str,
         evidence: Sequence[Evidence],
         history: Sequence[HistoryTurn] = (),
+        target_section_path: tuple[str, ...] | None = None,
     ) -> Iterator[AnswerStreamEvent]:
-        """Stream the same answer as :meth:`generate`, incrementally (GEN-12).
+        """Stream the same response as :meth:`generate`, incrementally (GEN-12).
 
         Yields zero or more :class:`~app.domain.entities.AnswerTextDelta` then
         exactly one :class:`~app.domain.entities.AnswerCompleted` (always last),
@@ -621,30 +634,35 @@ class ConversationRepository(Protocol):
         ...
 
     def list_for_user(
-        self, user_id: UUID, source_id: UUID | None = None
+        self,
+        user_id: UUID,
+        source_id: UUID | None = None,
+        *,
+        limit: int,
+        offset: int = 0,
     ) -> list[ConversationSummary]:
-        """Return ``user_id``'s conversations, newest activity first (CONV-06).
+        """Return one page of ``user_id``'s conversations, newest activity first (CONV-06).
 
         Spans every source the caller owns unless ``source_id`` narrows it. The
         aggregate carries no ``user_id`` (AD-014), so ownership is a join through
         ``sources`` in SQL — another user's conversations are unreachable, not
         filtered out afterwards. Ordered by ``updated_at`` descending, so a
         conversation rises the moment a turn lands in it.
-        """
-        ...
 
-    def list_for_source_with_target(self, source_id: UUID) -> list[ConversationSummary]:
-        """Return ``source_id``'s conversations that have a teach target (TEACH-21).
+        A conversation with **no turn** is never returned. One exists for a moment
+        before its first message lands in it, so a message that fails or is stopped
+        can leave one holding nothing — something no reader asked for and none can
+        use. Keeping it out of the list is this port's promise rather than the
+        client's, because the client that would clean up may be a tab that is
+        already closed. It is hidden, not deleted: a late turn brings it back.
 
-        The legacy per-source teaching list: conversations with no target were never
-        started from the Teach panel, so they stay out of it until that panel retires.
-
-        One rule — *a teaching session is a conversation with a target* — applied in
-        three places, and this is the one that owns it: the filter stays in SQL
-        beside the legacy ``created_at`` ordering so the frozen list wire and its
-        query remain one unit to delete. ``ReadTeachingSession`` and
-        ``PostTeachingTurn`` in ``app/application/teaching.py`` apply the same rule to
-        a single conversation; all of them retire with the panel.
+        ``limit`` is required — a caller must say how much history it wants, so no
+        path can ask for all of it — and ``offset`` skips that many rows of the same
+        order, past the end being an empty page rather than an error. Paging this way
+        is exact because the order is **total**: ``id`` descending breaks ties on
+        ``updated_at``, so two conversations touched in the same instant still hold
+        one fixed position relative to each other and neither can slip across a page
+        boundary as the caller walks the list.
         """
         ...
 
@@ -689,58 +707,6 @@ class ConversationTurnRepository(Protocol):
         bounded ``(message, response_text)`` context — never the citation
         payloads — so this read skips the citation join that
         ``list_for_conversation`` pays for.
-        """
-        ...
-
-
-@runtime_checkable
-class TeachingGenerationPort(Protocol):
-    """Teaching-response generation port — the seam for the turn path (AD-032).
-
-    Mirrors :class:`AnswerGenerationPort`: provider SDKs, model names, and citation
-    formats live only in the adapter (ADR-0007/0009); callers pass the message, the
-    target section path, bounded prior ``history`` (TEACH-12), and the retrieved
-    :class:`~app.domain.entities.Evidence`, and receive a Learny-owned
-    :class:`~app.domain.entities.GeneratedAnswer`. The default adapter is
-    deterministic and network-free (D-1).
-
-    ``model`` is the adapter's stable model identity, readable without calling
-    ``generate`` so the not-found short-circuit can report it (TEACH-11 + TEACH-24).
-    """
-
-    model: str
-
-    def generate(
-        self,
-        *,
-        message: str,
-        target_section_path: tuple[str, ...],
-        history: Sequence[HistoryTurn],
-        evidence: Sequence[Evidence],
-    ) -> GeneratedAnswer:
-        """Generate a teaching response grounded in ``evidence``.
-
-        Returns ``found=False`` when the evidence cannot support a response;
-        raises for operational failure (the application service maps any raise
-        to :class:`~app.application.errors.AnswerGenerationFailed`, TEACH-13).
-        """
-        ...
-
-    def generate_stream(
-        self,
-        *,
-        message: str,
-        target_section_path: tuple[str, ...],
-        history: Sequence[HistoryTurn],
-        evidence: Sequence[Evidence],
-    ) -> Iterator[AnswerStreamEvent]:
-        """Stream the same teaching response as :meth:`generate`, incrementally (GEN-12).
-
-        Yields zero or more :class:`~app.domain.entities.AnswerTextDelta` then
-        exactly one :class:`~app.domain.entities.AnswerCompleted` (always last),
-        whose ``answer`` is authoritative. Closing the iterator early cancels the
-        underlying generation; raises for operational failure like
-        :meth:`generate`.
         """
         ...
 

@@ -1,7 +1,7 @@
 """Application streaming events and the provider-independent sentinel hold-back.
 
-The streaming answer/turn paths (design §6) reuse the same guards and grounding as
-their buffered siblings, but consume the generation port's
+The streaming turn path (design §6) reuses the same guards and grounding as its
+buffered sibling, but consumes the generation port's
 :class:`~app.domain.entities.AnswerStreamEvent` iterator incrementally. This module
 holds the Learny-owned, protocol-free stream events the services yield and the
 shared hold-back generator that keeps the not-found sentinel from ever streaming to
@@ -21,7 +21,6 @@ from app.domain.entities import (
     AnswerTextDelta,
     ConversationTurn,
     GeneratedAnswer,
-    QuestionAnswer,
 )
 
 
@@ -33,22 +32,13 @@ class StreamDelta:
 
 
 @dataclass(frozen=True)
-class StreamAnswer:
-    """The terminal Q&A outcome — the same :class:`QuestionAnswer` the buffered path returns."""
-
-    result: QuestionAnswer
-
-
-@dataclass(frozen=True)
 class StreamTurn:
-    """The terminal teaching outcome — the persisted :class:`ConversationTurn`."""
+    """The terminal outcome — the persisted :class:`ConversationTurn`."""
 
     turn: ConversationTurn
 
 
-# The Q&A stream yields zero or more deltas then exactly one terminal answer; the
-# teaching stream yields zero or more deltas then exactly one terminal turn.
-AskStreamEvent = StreamDelta | StreamAnswer
+# A turn stream yields zero or more deltas then exactly one terminal turn.
 TurnStreamEvent = StreamDelta | StreamTurn
 
 

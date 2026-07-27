@@ -59,6 +59,10 @@ from tests.conftest import requires_db
 
 pytestmark = requires_db
 
+# A page wider than any fixture below, so a test that is about ownership or order
+# reads the whole of what it seeded rather than accidentally testing paging.
+_PAGE = 50
+
 
 def _new_user(email: str) -> User:
     return User(id=uuid4(), email=email, created_at=datetime.now(UTC))
@@ -1394,7 +1398,9 @@ def _new_teaching_session(
     )
 
 
-def _insert_turn(db_conn: Connection, session_id: UUID, turn_index: int) -> None:
+def _insert_turn(
+    db_conn: Connection, session_id: UUID, turn_index: int, mode: str = "teach"
+) -> None:
     """Insert a minimal turn row so a session's turn_count is non-zero (B2 owns
     the turn repository; this exercises only the count in the list reads)."""
     db_conn.execute(
@@ -1403,7 +1409,7 @@ def _insert_turn(db_conn: Connection, session_id: UUID, turn_index: int) -> None
             conversation_id=session_id,
             turn_index=turn_index,
             message="m",
-            mode="teach",
+            mode=mode,
             answer_status="answered",
             answer_text="a",
             model="local-extractive",
@@ -1436,58 +1442,8 @@ def test_teaching_session_add_and_get_by_id(db_conn: Connection) -> None:
     assert repo.get_by_id(uuid4()) is None
 
 
-def test_teaching_session_list_for_source_is_newest_first(db_conn: Connection) -> None:
-    source = _persisted_source(db_conn, "teach-session-order@example.com")
-    repo = SqlAlchemyConversationRepository(db_conn)
-
-    base = datetime.now(UTC)
-    older = _new_teaching_session(source.id, created_at=base)
-    newer = _new_teaching_session(source.id, created_at=base + timedelta(minutes=1))
-    repo.add(older)
-    repo.add(newer)
-
-    listed = repo.list_for_source_with_target(source.id)
-    assert [s.conversation.id for s in listed] == [newer.id, older.id]
-
-
-def test_teaching_session_list_includes_turn_count(db_conn: Connection) -> None:
-    source = _persisted_source(db_conn, "teach-session-count@example.com")
-    repo = SqlAlchemyConversationRepository(db_conn)
-
-    base = datetime.now(UTC)
-    with_turns = _new_teaching_session(source.id, created_at=base + timedelta(minutes=1))
-    without_turns = _new_teaching_session(source.id, created_at=base)
-    repo.add(with_turns)
-    repo.add(without_turns)
-    _insert_turn(db_conn, with_turns.id, 0)
-    _insert_turn(db_conn, with_turns.id, 1)
-
-    summaries = {
-        s.conversation.id: s.turn_count for s in repo.list_for_source_with_target(source.id)
-    }
-    assert summaries[with_turns.id] == 2
-    assert summaries[without_turns.id] == 0
-
-
-def test_teaching_session_list_is_source_scoped(db_conn: Connection) -> None:
-    source_a = _persisted_source(db_conn, "teach-session-a@example.com")
-    source_b = _persisted_source(db_conn, "teach-session-b@example.com")
-    repo = SqlAlchemyConversationRepository(db_conn)
-
-    a1 = _new_teaching_session(source_a.id)
-    a2 = _new_teaching_session(source_a.id)
-    b1 = _new_teaching_session(source_b.id)
-    for session in (a1, a2, b1):
-        repo.add(session)
-
-    a_ids = {s.conversation.id for s in repo.list_for_source_with_target(source_a.id)}
-    assert a_ids == {a1.id, a2.id}
-    assert b1.id not in a_ids
-    assert [s.conversation.id for s in repo.list_for_source_with_target(source_b.id)] == [b1.id]
-
-
 def _whole_book_conversation(source_id: UUID, *, title: str = "Ask", **overrides) -> Conversation:  # noqa: ANN003
-    """A conversation with no teach target — the shape the old Teach panel never made."""
+    """A conversation with no teach target — one asked of the book as a whole."""
     now = overrides.pop("created_at", None) or datetime.now(UTC)
     return Conversation(
         id=uuid4(),
@@ -1515,20 +1471,16 @@ def _persisted_user_with_sources(db_conn: Connection, email: str, count: int) ->
     return user.id, owned
 
 
-def test_conversation_list_for_source_excludes_targetless_conversations(
-    db_conn: Connection,
-) -> None:
-    # A conversation started without a teach target was never started from the Teach
-    # panel, so the panel's list must not surface it (ADR-0029 retirement plan).
-    source = _persisted_source(db_conn, "conv-target-filter@example.com")
-    repo = SqlAlchemyConversationRepository(db_conn)
-    targeted = repo.add(_new_teaching_session(source.id))
-    targetless = repo.add(_whole_book_conversation(source.id))
+def _listed(db_conn: Connection, repo, conversation: Conversation, *, mode: str = "teach"):  # noqa: ANN001, ANN202
+    """Persist a conversation with one turn — the only kind the list returns.
 
-    listed = [s.conversation.id for s in repo.list_for_source_with_target(source.id)]
-
-    assert listed == [targeted.id]
-    assert targetless.id not in listed
+    A conversation with no turn never had a first message land in it, so the list
+    leaves it out; seeding bare conversations would make a list fixture assert
+    about rows no reader can reach.
+    """
+    saved = repo.add(conversation)
+    _insert_turn(db_conn, saved.id, 0, mode=mode)
+    return saved
 
 
 def test_conversation_list_for_user_spans_sources_newest_activity_first(
@@ -1541,14 +1493,18 @@ def test_conversation_list_for_user_spans_sources_newest_activity_first(
     )
     repo = SqlAlchemyConversationRepository(db_conn)
     base = datetime.now(UTC)
-    stale = repo.add(_new_teaching_session(source_a.id, created_at=base + timedelta(minutes=5)))
-    active = repo.add(
+    stale = _listed(
+        db_conn, repo, _new_teaching_session(source_a.id, created_at=base + timedelta(minutes=5))
+    )
+    active = _listed(
+        db_conn,
+        repo,
         _whole_book_conversation(
             source_b.id, created_at=base, updated_at=base + timedelta(minutes=10)
-        )
+        ),
     )
 
-    listed = repo.list_for_user(user_id)
+    listed = repo.list_for_user(user_id, limit=_PAGE)
 
     assert [s.conversation.id for s in listed] == [active.id, stale.id]
     # Each row names its own book and carries its own total, so a list needs no
@@ -1557,7 +1513,7 @@ def test_conversation_list_for_user_spans_sources_newest_activity_first(
         active.id: source_b.title,
         stale.id: source_a.title,
     }
-    assert all(s.turn_count == 0 for s in listed)
+    assert all(s.turn_count == 1 for s in listed)
 
 
 def test_conversation_list_for_user_filters_by_source_and_excludes_other_owners(
@@ -1568,12 +1524,14 @@ def test_conversation_list_for_user_filters_by_source_and_excludes_other_owners(
     )
     other_source = _persisted_source(db_conn, "conv-list-other@example.com")
     repo = SqlAlchemyConversationRepository(db_conn)
-    mine_a = repo.add(_new_teaching_session(source_a.id))
-    mine_b = repo.add(_new_teaching_session(source_b.id))
-    theirs = repo.add(_new_teaching_session(other_source.id))
+    mine_a = _listed(db_conn, repo, _new_teaching_session(source_a.id))
+    mine_b = _listed(db_conn, repo, _new_teaching_session(source_b.id))
+    theirs = _listed(db_conn, repo, _new_teaching_session(other_source.id))
 
-    everything = {s.conversation.id for s in repo.list_for_user(user_id)}
-    narrowed = [s.conversation.id for s in repo.list_for_user(user_id, source_id=source_a.id)]
+    everything = {s.conversation.id for s in repo.list_for_user(user_id, limit=_PAGE)}
+    narrowed = [
+        s.conversation.id for s in repo.list_for_user(user_id, source_id=source_a.id, limit=_PAGE)
+    ]
 
     assert everything == {mine_a.id, mine_b.id}
     # Another owner's conversation is unreachable through this query, not filtered
@@ -1589,9 +1547,113 @@ def test_conversation_list_for_user_counts_turns(db_conn: Connection) -> None:
     _insert_turn(db_conn, conversation.id, 0)
     _insert_turn(db_conn, conversation.id, 1)
 
-    (summary,) = repo.list_for_user(user_id)
+    (summary,) = repo.list_for_user(user_id, limit=_PAGE)
 
     assert summary.turn_count == 2
+
+
+def test_conversation_with_no_turn_is_not_listed(db_conn: Connection) -> None:
+    # A conversation is created a moment before its first message streams into it,
+    # so a message that failed, was stopped, or was abandoned when the tab closed
+    # can leave one behind holding nothing. The reader never meant to make it and
+    # cannot use it, and the browser that would have deleted it may be gone — so the
+    # list is where "a failed first message leaves nothing to find" is kept.
+    user_id, (source,) = _persisted_user_with_sources(db_conn, "conv-list-orphan@example.com", 1)
+    repo = SqlAlchemyConversationRepository(db_conn)
+    orphan = repo.add(_whole_book_conversation(source.id, title="Never sent"))
+    real = _listed(db_conn, repo, _whole_book_conversation(source.id, title="Answered"))
+
+    listed = repo.list_for_user(user_id, limit=_PAGE)
+
+    assert [s.conversation.id for s in listed] == [real.id]
+    # It is hidden from the list, not deleted: a turn landing late still brings the
+    # conversation back, which is what makes this safe to do without a sweeper.
+    assert repo.get_by_id(orphan.id) is not None
+
+
+def test_conversation_list_row_carries_the_mode_of_its_newest_turn(
+    db_conn: Connection,
+) -> None:
+    # Mode belongs to a turn, so a thread that was asked and then taught has both.
+    # The row reports the newest one — the exchange a reader resumes from — and is
+    # not swayed by an earlier turn of the other mode, which is exactly the case a
+    # client that guessed from scope or from the first turn would get wrong.
+    user_id, (source,) = _persisted_user_with_sources(db_conn, "conv-list-mode@example.com", 1)
+    repo = SqlAlchemyConversationRepository(db_conn)
+    mixed = repo.add(_whole_book_conversation(source.id, title="Mixed"))
+    _insert_turn(db_conn, mixed.id, 0, mode="answer")
+    _insert_turn(db_conn, mixed.id, 1, mode="teach")
+    asked = repo.add(_whole_book_conversation(source.id, title="Asked"))
+    _insert_turn(db_conn, asked.id, 0, mode="answer")
+
+    by_id = {s.conversation.id: s for s in repo.list_for_user(user_id, limit=_PAGE)}
+
+    assert by_id[mixed.id].last_turn_mode == "teach"
+    assert by_id[asked.id].last_turn_mode == "answer"
+
+
+def test_conversation_list_for_user_returns_only_the_requested_window(
+    db_conn: Connection,
+) -> None:
+    # CONV-06: a page is exactly the window asked for, taken from the newest-activity
+    # order — not the whole history the caller then has to slice itself.
+    user_id, (source,) = _persisted_user_with_sources(db_conn, "conv-page-window@example.com", 1)
+    repo = SqlAlchemyConversationRepository(db_conn)
+    base = datetime.now(UTC)
+    # Seeded oldest-first, so the expected page order is the reverse of this list.
+    seeded = [
+        _listed(
+            db_conn,
+            repo,
+            _whole_book_conversation(source.id, updated_at=base + timedelta(minutes=i)),
+        )
+        for i in range(5)
+    ]
+    newest_first = [c.id for c in reversed(seeded)]
+
+    first = repo.list_for_user(user_id, limit=2)
+    second = repo.list_for_user(user_id, limit=2, offset=2)
+    last = repo.list_for_user(user_id, limit=2, offset=4)
+    past_the_end = repo.list_for_user(user_id, limit=2, offset=5)
+
+    assert [s.conversation.id for s in first] == newest_first[:2]
+    assert [s.conversation.id for s in second] == newest_first[2:4]
+    assert [s.conversation.id for s in last] == newest_first[4:]
+    # Reading past the end is an empty page, not an error — a caller walking to the
+    # end of its history stops on an empty answer.
+    assert past_the_end == []
+
+
+def test_conversation_paging_a_tie_heavy_list_visits_every_row_exactly_once(
+    db_conn: Connection,
+) -> None:
+    # CONV-06: conversations touched in the same instant — a batch of turns landing
+    # together does this — share an ``updated_at``, and ``updated_at`` alone cannot
+    # order them. Walking the list in windows must still visit each exactly once:
+    # under a partial order the database is free to re-shuffle tied rows between two
+    # queries, so a row can be handed out twice while another is never seen at all.
+    user_id, (source,) = _persisted_user_with_sources(db_conn, "conv-page-ties@example.com", 1)
+    repo = SqlAlchemyConversationRepository(db_conn)
+    tied_at = datetime.now(UTC)
+    seeded = [
+        _listed(db_conn, repo, _whole_book_conversation(source.id, updated_at=tied_at))
+        for _ in range(7)
+    ]
+    # The fixture is only a sensor if the rows really are tied.
+    assert len({c.updated_at for c in seeded}) == 1
+
+    walked: list[UUID] = []
+    offset = 0
+    while page := repo.list_for_user(user_id, limit=3, offset=offset):
+        walked.extend(s.conversation.id for s in page)
+        offset += 3
+
+    assert len(walked) == len(seeded), "a window either repeated a row or dropped one"
+    assert set(walked) == {c.id for c in seeded}
+    # The walk is the order itself, not merely the same set: reading the whole list
+    # in one page yields exactly the sequence the windows spelled out.
+    whole = repo.list_for_user(user_id, limit=_PAGE)
+    assert [s.conversation.id for s in whole] == walked
 
 
 def test_conversation_rename_changes_title_and_bumps_activity(db_conn: Connection) -> None:
@@ -1882,6 +1944,43 @@ def test_teaching_turn_duplicate_index_raises_conflict(db_conn: Connection) -> N
     repo.add(_new_turn(session.id, turn_index=0))
     with pytest.raises(ConversationTurnConflict):
         repo.add(_new_turn(session.id, turn_index=0))
+
+
+def test_a_turn_cannot_be_written_into_a_conversation_that_was_deleted(
+    db_conn: Connection,
+) -> None:
+    # A turn is written only once its answer is grounded, which can be a while after
+    # the stream started — long enough for the reader to delete the conversation
+    # meanwhile. The write then has nothing to attach to, and the database refuses
+    # it outright, so no turn is left pointing at a conversation that is gone. The
+    # application does not have to win that race; it only has to not swallow the
+    # refusal, and the write raises.
+    source = _persisted_source(db_conn, "turn-after-delete@example.com")
+    conversations = SqlAlchemyConversationRepository(db_conn)
+    conversation = conversations.add(_new_teaching_session(source.id))
+    repo = SqlAlchemyConversationTurnRepository(db_conn)
+
+    assert conversations.delete(conversation.id) is True
+
+    savepoint = db_conn.begin_nested()
+    with pytest.raises(ConversationTurnConflict):
+        repo.add(
+            _new_turn(
+                conversation.id,
+                turn_index=0,
+                citations=(_citation(source.id, anchor="a.xhtml", snippet="s", score=0.5),),
+            )
+        )
+    savepoint.rollback()
+
+    assert (
+        db_conn.execute(
+            select(func.count())
+            .select_from(conversation_turns)
+            .where(conversation_turns.c.conversation_id == conversation.id)
+        ).scalar_one()
+        == 0
+    )
 
 
 def test_teaching_turn_citations_survive_corpus_deletion(db_conn: Connection) -> None:

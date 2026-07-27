@@ -1,13 +1,17 @@
 // @vitest-environment jsdom
 
 /**
- * B1 (component) — the Ask panel is the ask screen's streaming chat ported into
- * the reader side panel. It keeps parity with the old screen: it POSTs
- * `{question}` with the CSRF header to the stream URL (RA-07), renders text deltas
- * progressively, renders the terminal citations or the explicit not-found state,
- * settles a mid-stream `error` part or a non-OK start (429) to a readable banner
- * with partial text retained and the input re-enabled, swaps submit for stop while
- * streaming, never submits empty input, and routes a 401 to `onRequireAuth`.
+ * The Ask panel runs on the unified conversation surface. A question in a book
+ * with no active thread creates a whole-book conversation and posts the question
+ * as its first turn; every question after it streams straight into that same
+ * conversation, so only one conversation is ever created for a thread.
+ *
+ * Everything the reader sees is unchanged by that move: text deltas render
+ * progressively, the terminal citations or the explicit not-found state render
+ * at the end, a mid-stream `error` part or a non-OK start settles to a readable
+ * banner with partial text retained and the input re-enabled, submit swaps for
+ * stop while streaming, empty input never submits, and a 401 routes to
+ * `onRequireAuth`.
  *
  * Panel-only behavior: suggested prompts in the empty state that submit on click
  * (RA-08), a streaming caret at the tail of the in-flight answer (RA-09), and the
@@ -30,6 +34,10 @@ import {
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { AskPanel } from "../app/components/ask-panel";
+import {
+  readActiveConversation,
+  writeActiveConversation,
+} from "../app/lib/active-conversation";
 
 // AI Elements' Conversation (stick-to-bottom) and the citation Popover reach for
 // ResizeObserver and pointer-capture APIs jsdom lacks; stub them.
@@ -106,7 +114,41 @@ const citation = {
   score: 0.03,
 };
 
-const STREAM_URL = "/api/sources/s1/questions/stream";
+const CREATE_URL = "/api/conversations";
+const STREAM_URL = "/api/conversations/conv1/turns/stream";
+
+const conversation = {
+  id: "conv1",
+  source_id: "s1",
+  title: "Untitled conversation",
+  scope_anchors: [],
+  include_notes: true,
+  created_at: "now",
+  updated_at: "now",
+};
+
+/** The create + stream pair every question needs, plus anything extra. */
+function baseHandlers(
+  stream: () => Response,
+  extra: Record<string, Handler> = {},
+): Record<string, Handler> {
+  return {
+    [`POST ${CREATE_URL}`]: () => jsonResponse(201, conversation),
+    [`POST ${STREAM_URL}`]: () => stream(),
+    ...extra,
+  };
+}
+
+function bodyOf(call: unknown[]): Record<string, unknown> {
+  return JSON.parse((call[1] as RequestInit).body as string);
+}
+
+function callsTo(
+  fetchMock: ReturnType<typeof routedFetch>,
+  url: string,
+): unknown[][] {
+  return fetchMock.mock.calls.filter(([called]) => called === url);
+}
 
 function ask(value: string) {
   fireEvent.change(screen.getByPlaceholderText(/ask a question/i), {
@@ -121,29 +163,35 @@ afterEach(() => {
   localStorage.clear();
 });
 
-describe("AskPanel streaming (RA-07)", () => {
-  it("POSTs {question} with the CSRF header, streams deltas before finish, and renders citations", async () => {
+describe("AskPanel on the conversation surface", () => {
+  it("creates a whole-book conversation, posts the question as its first turn, and renders citations", async () => {
     const stream = sseStream();
-    const fetchMock = routedFetch({
-      [`POST ${STREAM_URL}`]: () => stream.response,
-    });
+    const fetchMock = routedFetch(baseHandlers(() => stream.response));
     vi.stubGlobal("fetch", fetchMock);
 
     render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
 
     ask("Who wrote the first algorithm?");
 
-    // The request went to the stream URL with the exact body and CSRF header.
-    await waitFor(() =>
-      expect(
-        fetchMock.mock.calls.some(([url]) => url === STREAM_URL),
-      ).toBe(true),
-    );
-    const call = fetchMock.mock.calls.find(([url]) => url === STREAM_URL)!;
-    expect(JSON.parse((call[1] as RequestInit).body as string)).toEqual({
-      question: "Who wrote the first algorithm?",
+    // The conversation is created for this book with whole-book scope.
+    await waitFor(() => expect(callsTo(fetchMock, CREATE_URL)).toHaveLength(1));
+    const create = callsTo(fetchMock, CREATE_URL)[0];
+    expect(bodyOf(create)).toMatchObject({
+      source_id: "s1",
+      scope_anchors: [],
     });
-    expect(new Headers((call[1] as RequestInit).headers).get("X-CSRF-Token")).toBe(
+    expect(new Headers((create[1] as RequestInit).headers).get("X-CSRF-Token")).toBe(
+      "csrf-xyz",
+    );
+
+    // The question is then posted as an answer-mode turn on that conversation.
+    await waitFor(() => expect(callsTo(fetchMock, STREAM_URL)).toHaveLength(1));
+    const turn = callsTo(fetchMock, STREAM_URL)[0];
+    expect(bodyOf(turn)).toEqual({
+      message: "Who wrote the first algorithm?",
+      mode: "answer",
+    });
+    expect(new Headers((turn[1] as RequestInit).headers).get("X-CSRF-Token")).toBe(
       "csrf-xyz",
     );
 
@@ -182,12 +230,40 @@ describe("AskPanel streaming (RA-07)", () => {
     ).toBeTruthy();
   });
 
-  it("renders the not-found state with no citations on not_found_in_source", async () => {
-    const stream = sseStream();
-    vi.stubGlobal(
-      "fetch",
-      routedFetch({ [`POST ${STREAM_URL}`]: () => stream.response }),
+  it("continues the same conversation for a follow-up instead of creating a second one", async () => {
+    const streams: ReturnType<typeof sseStream>[] = [];
+    const fetchMock = routedFetch(
+      baseHandlers(() => {
+        const next = sseStream();
+        streams.push(next);
+        return next.response;
+      }),
     );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+
+    ask("first question");
+    await waitFor(() => expect(streams).toHaveLength(1));
+    await streamAnswer(streams[0], []);
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Submit" })).toBeTruthy(),
+    );
+
+    ask("a follow-up");
+    await waitFor(() => expect(callsTo(fetchMock, STREAM_URL)).toHaveLength(2));
+
+    // Exactly one conversation exists; the follow-up rides the same one.
+    expect(callsTo(fetchMock, CREATE_URL)).toHaveLength(1);
+    expect(bodyOf(callsTo(fetchMock, STREAM_URL)[1])).toEqual({
+      message: "a follow-up",
+      mode: "answer",
+    });
+  });
+
+  it("renders the whole-book not-found state with no citations", async () => {
+    const stream = sseStream();
+    vi.stubGlobal("fetch", routedFetch(baseHandlers(() => stream.response)));
 
     render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
     ask("nonsense token");
@@ -207,7 +283,7 @@ describe("AskPanel streaming (RA-07)", () => {
     await stream.done();
 
     const notFound = await screen.findByTestId("not-found");
-    expect(notFound.textContent).toContain("not found in this source");
+    expect(notFound.textContent).toContain("not found in this book");
     // No citation chips are rendered for a not-found answer.
     expect(screen.queryByRole("button", { name: /^Citation:/ })).toBeNull();
   });
@@ -216,7 +292,11 @@ describe("AskPanel streaming (RA-07)", () => {
     const stream = sseStream();
     vi.stubGlobal(
       "fetch",
-      routedFetch({ [`POST ${STREAM_URL}`]: () => stream.response }),
+      routedFetch(
+        baseHandlers(() => stream.response, {
+          "DELETE /api/conversations/conv1": () => new Response(null, { status: 204 }),
+        }),
+      ),
     );
 
     render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
@@ -244,13 +324,14 @@ describe("AskPanel streaming (RA-07)", () => {
     ).toBe(false);
   });
 
-  it("shows a readable throttle message when the stream start returns 429", async () => {
+  it("shows a readable throttle message when the turn stream returns 429", async () => {
     vi.stubGlobal(
       "fetch",
-      routedFetch({
-        [`POST ${STREAM_URL}`]: () =>
-          jsonResponse(429, { detail: "Too many requests." }),
-      }),
+      routedFetch(
+        baseHandlers(() => jsonResponse(429, { detail: "Too many requests." }), {
+          "DELETE /api/conversations/conv1": () => new Response(null, { status: 204 }),
+        }),
+      ),
     );
 
     render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
@@ -264,11 +345,9 @@ describe("AskPanel streaming (RA-07)", () => {
     ).toBe(false);
   });
 
-  it("swaps submit for a stop control while streaming and issues only one request", async () => {
+  it("swaps submit for a stop control while streaming and issues only one turn", async () => {
     const stream = sseStream();
-    const fetchMock = routedFetch({
-      [`POST ${STREAM_URL}`]: () => stream.response,
-    });
+    const fetchMock = routedFetch(baseHandlers(() => stream.response));
     vi.stubGlobal("fetch", fetchMock);
 
     render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
@@ -283,9 +362,7 @@ describe("AskPanel streaming (RA-07)", () => {
       expect(screen.getByRole("button", { name: "Stop" })).toBeTruthy(),
     );
     expect(screen.queryByRole("button", { name: "Submit" })).toBeNull();
-    expect(
-      fetchMock.mock.calls.filter(([url]) => url === STREAM_URL),
-    ).toHaveLength(1);
+    expect(callsTo(fetchMock, STREAM_URL)).toHaveLength(1);
 
     await stream.done();
     await waitFor(() =>
@@ -294,58 +371,294 @@ describe("AskPanel streaming (RA-07)", () => {
   });
 
   it("never submits when the input is empty", async () => {
-    const fetchMock = routedFetch({
-      [`POST ${STREAM_URL}`]: () => sseStream().response,
-    });
+    const fetchMock = routedFetch(baseHandlers(() => sseStream().response));
     vi.stubGlobal("fetch", fetchMock);
 
     render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
 
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
 
-    // No stream request is issued for an empty question.
+    // Neither a conversation nor a turn is created for an empty question.
     await Promise.resolve();
-    expect(
-      fetchMock.mock.calls.some(([url]) => url === STREAM_URL),
-    ).toBe(false);
+    expect(callsTo(fetchMock, CREATE_URL)).toHaveLength(0);
+    expect(callsTo(fetchMock, STREAM_URL)).toHaveLength(0);
   });
 });
 
-describe("AskPanel include-my-notes toggle (NL-04)", () => {
-  it("defaults the toggle on and sends the flag only after the reader changes it", async () => {
+describe("AskPanel notes scope (NL-04)", () => {
+  it("carries the reader's notes choice into the conversation it creates", async () => {
+    const fetchMock = routedFetch(baseHandlers(() => sseStream().response));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+
+    // The control reflects the Q&A default (on) before any choice.
+    const toggle = screen.getByRole("checkbox", { name: "Search my notes too" });
+    expect((toggle as HTMLInputElement).checked).toBe(true);
+
+    // Turning it off is carried into the conversation the question creates.
+    fireEvent.click(toggle);
+    ask("a question");
+
+    await waitFor(() => expect(callsTo(fetchMock, CREATE_URL)).toHaveLength(1));
+    expect(bodyOf(callsTo(fetchMock, CREATE_URL)[0])).toMatchObject({
+      include_notes: false,
+    });
+  });
+
+  it("states the choice on the wire even when the reader never touched it", async () => {
+    const fetchMock = routedFetch(baseHandlers(() => sseStream().response));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+    ask("a question");
+
+    // The server has no default to fall back on, so the flag is never omitted.
+    await waitFor(() => expect(callsTo(fetchMock, CREATE_URL)).toHaveLength(1));
+    expect(bodyOf(callsTo(fetchMock, CREATE_URL)[0])).toHaveProperty(
+      "include_notes",
+      true,
+    );
+  });
+
+  it("stops taking a choice once the thread has a conversation, and says why", async () => {
+    const stream = sseStream();
+    const fetchMock = routedFetch(baseHandlers(() => stream.response));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+    const toggle = () =>
+      screen.getByRole("checkbox", {
+        name: "Search my notes too",
+      }) as HTMLInputElement;
+
+    // Before there is a conversation the choice is the reader's to make.
+    expect(toggle().disabled).toBe(false);
+    fireEvent.click(toggle());
+    ask("a question");
+    await waitFor(() => expect(callsTo(fetchMock, CREATE_URL)).toHaveLength(1));
+
+    // Once one exists the control reports what it was created with and stops
+    // being flippable — the flip would have applied to nothing.
+    await waitFor(() => expect(toggle().disabled).toBe(true));
+    expect(toggle().checked).toBe(false);
+    const description = document.getElementById(
+      toggle().getAttribute("aria-describedby")!,
+    );
+    expect(description!.textContent).toMatch(/start a new one to change it/i);
+  });
+
+  it("reports a restored conversation's choice, not the reader's stored one", async () => {
+    // The reader's preference for this surface is on; the thread they are coming
+    // back to was created with it off, and the thread is what the answer obeys.
     const fetchMock = routedFetch({
-      [`POST ${STREAM_URL}`]: () => sseStream().response,
+      "GET /api/conversations/conv1": () =>
+        jsonResponse(200, {
+          ...conversation,
+          include_notes: false,
+          turns: [],
+        }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    writeActiveConversation("s1", "ask", "conv1");
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+
+    const toggle = (await screen.findByRole("checkbox", {
+      name: "Search my notes too",
+    })) as HTMLInputElement;
+    expect(toggle.checked).toBe(false);
+    expect(toggle.disabled).toBe(true);
+  });
+});
+
+describe("AskPanel thread restore", () => {
+  const READ_URL = "/api/conversations/conv1";
+
+  it("restores an active thread's turns from the server after a reload", async () => {
+    // First visit: ask a question and let the turn land, so this book's Ask
+    // surface is left pointing at the conversation the server created.
+    const stream = sseStream();
+    vi.stubGlobal("fetch", routedFetch(baseHandlers(() => stream.response)));
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+    ask("Who wrote the first algorithm?");
+    await streamAnswer(stream, [citation]);
+    await waitFor(() =>
+      expect(document.body.textContent).toContain("Ada Lovelace did."),
+    );
+
+    // The reload: a brand-new tree with nothing carried over from the last one.
+    cleanup();
+    vi.restoreAllMocks();
+
+    // The server is the only place the thread exists, and what it holds is not
+    // what the previous tree rendered — so anything replayed from the browser
+    // would be visibly wrong.
+    const restored = {
+      ...conversation,
+      turns: [
+        {
+          turn_index: 0,
+          message: "Who wrote the first algorithm?",
+          mode: "answer",
+          answer_status: "answered",
+          text: "The server's copy of the answer.",
+          citations: [citation],
+          evidence_count: 6,
+          model: "local-extractive",
+          created_at: "now",
+        },
+      ],
+    };
+    const fetchMock = routedFetch({
+      [`GET ${READ_URL}`]: () => jsonResponse(200, restored),
     });
     vi.stubGlobal("fetch", fetchMock);
 
     render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
 
-    // The toggle reflects the Q&A server default (on) before any choice.
-    const toggle = screen.getByRole("checkbox", { name: /include my notes/i });
-    expect((toggle as HTMLInputElement).checked).toBe(true);
+    // The thread comes back, read from the server.
+    expect(
+      await screen.findByText("The server's copy of the answer."),
+    ).toBeTruthy();
+    expect(screen.getByText("Who wrote the first algorithm?")).toBeTruthy();
+    expect(callsTo(fetchMock, READ_URL)).toHaveLength(1);
+    // A restored thread is a thread, so the empty state is gone.
+    expect(screen.queryByLabelText("suggested prompts")).toBeNull();
+    // Its citations come back with it.
+    expect(
+      screen.getByRole("button", { name: "Citation: Chapter 1 › Core Idea" }),
+    ).toBeTruthy();
+  });
 
-    // Turning it off is an explicit choice → the next question carries the flag.
-    fireEvent.click(toggle);
+  it("continues the restored conversation instead of creating a new one", async () => {
+    const restored = { ...conversation, turns: [] };
+    const stream = sseStream();
+    const fetchMock = routedFetch({
+      [`GET ${READ_URL}`]: () => jsonResponse(200, restored),
+      ...baseHandlers(() => stream.response),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    writeActiveConversation("s1", "ask", "conv1");
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+    await waitFor(() => expect(callsTo(fetchMock, READ_URL)).toHaveLength(1));
+
+    ask("a follow-up after the reload");
+    await waitFor(() => expect(callsTo(fetchMock, STREAM_URL)).toHaveLength(1));
+
+    // The restored conversation is continued; nothing new is created.
+    expect(callsTo(fetchMock, CREATE_URL)).toHaveLength(0);
+    expect(bodyOf(callsTo(fetchMock, STREAM_URL)[0])).toEqual({
+      message: "a follow-up after the reload",
+      mode: "answer",
+    });
+  });
+
+  it("starts a fresh thread when the remembered conversation is gone", async () => {
+    const fetchMock = routedFetch({
+      [`GET ${READ_URL}`]: () =>
+        jsonResponse(404, { detail: "Conversation not found." }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    writeActiveConversation("s1", "ask", "conv1");
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+
+    // A pointer that outlived its conversation is not an error the reader sees —
+    // it simply means there is no thread to come back to.
+    expect(await screen.findByLabelText("suggested prompts")).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(readActiveConversation("s1", "ask")).toBeNull();
+  });
+});
+
+describe("AskPanel when the conversation cannot be created", () => {
+  /**
+   * Only the create leg is routed: a stream attempt would mean the panel tried
+   * to post a turn into a conversation the server never made, and `routedFetch`
+   * fails loudly on it.
+   */
+  function failingCreate(status: number, detail: string) {
+    const fetchMock = routedFetch({
+      [`POST ${CREATE_URL}`]: () => jsonResponse(status, { detail }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  it("tells the reader a book that is still processing is not ready (409)", async () => {
+    const fetchMock = failingCreate(409, "Source is not ready.");
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+    ask("a question about a book still being ingested");
+
+    // The failure is on screen, in the reader's terms.
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(/still processing/i);
+
+    // And the panel is usable again rather than left spinning: the control is
+    // back to Submit, there is no streaming caret, and the input is not disabled.
+    expect(screen.getByRole("button", { name: "Submit" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+    expect(screen.queryByTestId("streaming-caret")).toBeNull();
+    expect(
+      (screen.getByPlaceholderText(/ask a question/i) as HTMLTextAreaElement)
+        .disabled,
+    ).toBe(false);
+
+    // Nothing was created, so nothing is pointed at and nothing needs cleaning up.
+    expect(callsTo(fetchMock, CREATE_URL)).toHaveLength(1);
+    expect(fetchMock.mock.calls).toHaveLength(1);
+    expect(readActiveConversation("s1", "ask")).toBeNull();
+  });
+
+  it("shows a readable throttle message when the create is throttled (429)", async () => {
+    failingCreate(429, "Too many requests.");
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
     ask("a question");
 
-    await waitFor(() =>
-      expect(fetchMock.mock.calls.some(([url]) => url === STREAM_URL)).toBe(true),
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(/too many requests/i);
+    expect(screen.getByRole("button", { name: "Submit" })).toBeTruthy();
+  });
+
+  it("says the book could not be found when the create 404s", async () => {
+    failingCreate(404, "Source not found.");
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+    ask("a question about a book that is gone");
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(/could not be found/i);
+    expect(screen.getByRole("button", { name: "Submit" })).toBeTruthy();
+  });
+
+  it("routes an expired session on the create leg to onRequireAuth (401)", async () => {
+    failingCreate(401, "Not authenticated.");
+
+    const onRequireAuth = vi.fn();
+    render(
+      <AskPanel sourceId="s1" csrf="csrf-xyz" onRequireAuth={onRequireAuth} />,
     );
-    const call = fetchMock.mock.calls.find(([url]) => url === STREAM_URL)!;
-    expect(JSON.parse((call[1] as RequestInit).body as string)).toEqual({
-      question: "a question",
-      include_notes: false,
-    });
+    ask("a question");
+
+    // Same contract as a 401 mid-stream: a redirect, not an inline banner.
+    await waitFor(() => expect(onRequireAuth).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });
 
 describe("AskPanel auth (RA-07)", () => {
-  it("routes a 401 stream start to onRequireAuth without a banner", async () => {
+  it("routes a 401 turn stream to onRequireAuth without a banner", async () => {
     vi.stubGlobal(
       "fetch",
-      routedFetch({
-        [`POST ${STREAM_URL}`]: () => new Response(null, { status: 401 }),
-      }),
+      routedFetch(
+        baseHandlers(() => new Response(null, { status: 401 }), {
+          "DELETE /api/conversations/conv1": () => new Response(null, { status: 204 }),
+        }),
+      ),
     );
 
     const onRequireAuth = vi.fn();
@@ -363,9 +676,7 @@ describe("AskPanel auth (RA-07)", () => {
 describe("AskPanel suggested prompts (RA-08)", () => {
   it("shows suggested prompts only when empty and submits the clicked one", async () => {
     const stream = sseStream();
-    const fetchMock = routedFetch({
-      [`POST ${STREAM_URL}`]: () => stream.response,
-    });
+    const fetchMock = routedFetch(baseHandlers(() => stream.response));
     vi.stubGlobal("fetch", fetchMock);
 
     render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
@@ -379,14 +690,10 @@ describe("AskPanel suggested prompts (RA-08)", () => {
     fireEvent.click(prompts[0]);
 
     // Clicking a prompt submits it verbatim as a question.
-    await waitFor(() =>
-      expect(
-        fetchMock.mock.calls.some(([url]) => url === STREAM_URL),
-      ).toBe(true),
-    );
-    const call = fetchMock.mock.calls.find(([url]) => url === STREAM_URL)!;
-    expect(JSON.parse((call[1] as RequestInit).body as string)).toEqual({
-      question: chosen,
+    await waitFor(() => expect(callsTo(fetchMock, STREAM_URL)).toHaveLength(1));
+    expect(bodyOf(callsTo(fetchMock, STREAM_URL)[0])).toEqual({
+      message: chosen,
+      mode: "answer",
     });
 
     // Once a message exists the empty-state prompts are gone.
@@ -399,10 +706,7 @@ describe("AskPanel suggested prompts (RA-08)", () => {
 describe("AskPanel streaming caret (RA-09)", () => {
   it("shows a caret while the answer streams and removes it on finish", async () => {
     const stream = sseStream();
-    vi.stubGlobal(
-      "fetch",
-      routedFetch({ [`POST ${STREAM_URL}`]: () => stream.response }),
-    );
+    vi.stubGlobal("fetch", routedFetch(baseHandlers(() => stream.response)));
 
     render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
     ask("a question");
@@ -458,10 +762,11 @@ async function streamAnswer(
 describe("AskPanel save to note (RA-20/22)", () => {
   it("offers Save to note on a cited answer and confirms success", async () => {
     const stream = sseStream();
-    const fetchMock = routedFetch({
-      [`POST ${STREAM_URL}`]: () => stream.response,
-      [`POST ${HIGHLIGHTS_URL}`]: () => jsonResponse(201, noteDetail),
-    });
+    const fetchMock = routedFetch(
+      baseHandlers(() => stream.response, {
+        [`POST ${HIGHLIGHTS_URL}`]: () => jsonResponse(201, noteDetail),
+      }),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
@@ -478,23 +783,22 @@ describe("AskPanel save to note (RA-20/22)", () => {
 
     // The action drives the capture endpoint and confirms success in the UI.
     await waitFor(() =>
-      expect(
-        fetchMock.mock.calls.some(([url]) => url === HIGHLIGHTS_URL),
-      ).toBe(true),
+      expect(callsTo(fetchMock, HIGHLIGHTS_URL)).toHaveLength(1),
     );
     expect(await screen.findByTestId("save-note-status")).toBeTruthy();
   });
 
   it("falls back to a plain note through the real notes clients on a stale capture (409)", async () => {
     const stream = sseStream();
-    const fetchMock = routedFetch({
-      [`POST ${STREAM_URL}`]: () => stream.response,
-      [`POST ${HIGHLIGHTS_URL}`]: () =>
-        jsonResponse(409, {
-          detail: "The book changed while you were reading.",
-        }),
-      [`POST ${NOTES_URL}`]: () => jsonResponse(201, noteDetail),
-    });
+    const fetchMock = routedFetch(
+      baseHandlers(() => stream.response, {
+        [`POST ${HIGHLIGHTS_URL}`]: () =>
+          jsonResponse(409, {
+            detail: "The book changed while you were reading.",
+          }),
+        [`POST ${NOTES_URL}`]: () => jsonResponse(201, noteDetail),
+      }),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
@@ -510,11 +814,8 @@ describe("AskPanel save to note (RA-20/22)", () => {
 
     // The 409 capture conflict degrades to a plain note carrying the answer plus
     // a jump-back link — exercised through the real lib/notes clients, not fakes.
-    await waitFor(() =>
-      expect(fetchMock.mock.calls.some(([url]) => url === NOTES_URL)).toBe(true),
-    );
-    const notesCall = fetchMock.mock.calls.find(([url]) => url === NOTES_URL)!;
-    const body = JSON.parse((notesCall[1] as RequestInit).body as string);
+    await waitFor(() => expect(callsTo(fetchMock, NOTES_URL)).toHaveLength(1));
+    const body = bodyOf(callsTo(fetchMock, NOTES_URL)[0]);
     expect(body.body_markdown).toContain("Ada Lovelace did.");
     expect(body.body_markdown).toContain("/sources/s1/read?anchor=");
     expect(await screen.findByTestId("save-note-status")).toBeTruthy();
@@ -524,11 +825,11 @@ describe("AskPanel save to note (RA-20/22)", () => {
     const stream = sseStream();
     vi.stubGlobal(
       "fetch",
-      routedFetch({
-        [`POST ${STREAM_URL}`]: () => stream.response,
-        [`POST ${HIGHLIGHTS_URL}`]: () =>
-          jsonResponse(500, { detail: "boom" }),
-      }),
+      routedFetch(
+        baseHandlers(() => stream.response, {
+          [`POST ${HIGHLIGHTS_URL}`]: () => jsonResponse(500, { detail: "boom" }),
+        }),
+      ),
     );
 
     render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
@@ -549,10 +850,7 @@ describe("AskPanel save to note (RA-20/22)", () => {
 
   it("does not offer Save to note on a not-found answer", async () => {
     const stream = sseStream();
-    vi.stubGlobal(
-      "fetch",
-      routedFetch({ [`POST ${STREAM_URL}`]: () => stream.response }),
-    );
+    vi.stubGlobal("fetch", routedFetch(baseHandlers(() => stream.response)));
 
     render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
     ask("nonsense token");
@@ -575,10 +873,7 @@ describe("AskPanel save to note (RA-20/22)", () => {
 
   it("does not offer Save to note on an answered response with no citations", async () => {
     const stream = sseStream();
-    vi.stubGlobal(
-      "fetch",
-      routedFetch({ [`POST ${STREAM_URL}`]: () => stream.response }),
-    );
+    vi.stubGlobal("fetch", routedFetch(baseHandlers(() => stream.response)));
 
     render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
     ask("a question");
@@ -596,9 +891,7 @@ describe("AskPanel save to note (RA-20/22)", () => {
 describe("AskPanel selection verbs (RA-17/18)", () => {
   it("auto-submits the fixed Explain template for an explain pending request", async () => {
     const stream = sseStream();
-    const fetchMock = routedFetch({
-      [`POST ${STREAM_URL}`]: () => stream.response,
-    });
+    const fetchMock = routedFetch(baseHandlers(() => stream.response));
     vi.stubGlobal("fetch", fetchMock);
 
     const onPendingConsumed = vi.fn();
@@ -616,27 +909,19 @@ describe("AskPanel selection verbs (RA-17/18)", () => {
     );
 
     // The explain verb submits, one tap, with the exact fixed template.
-    await waitFor(() =>
-      expect(
-        fetchMock.mock.calls.some(([url]) => url === STREAM_URL),
-      ).toBe(true),
-    );
-    const call = fetchMock.mock.calls.find(([url]) => url === STREAM_URL)!;
-    expect(JSON.parse((call[1] as RequestInit).body as string)).toEqual({
-      question: 'Explain this passage from the book:\n\n"the selected sentence"',
+    await waitFor(() => expect(callsTo(fetchMock, STREAM_URL)).toHaveLength(1));
+    expect(bodyOf(callsTo(fetchMock, STREAM_URL)[0])).toEqual({
+      message: 'Explain this passage from the book:\n\n"the selected sentence"',
+      mode: "answer",
     });
     // The request is consumed exactly once, so it never re-submits.
     expect(onPendingConsumed).toHaveBeenCalledTimes(1);
-    expect(
-      fetchMock.mock.calls.filter(([url]) => url === STREAM_URL),
-    ).toHaveLength(1);
+    expect(callsTo(fetchMock, STREAM_URL)).toHaveLength(1);
   });
 
   it("attaches the quote as context and submits it with the typed question", async () => {
     const stream = sseStream();
-    const fetchMock = routedFetch({
-      [`POST ${STREAM_URL}`]: () => stream.response,
-    });
+    const fetchMock = routedFetch(baseHandlers(() => stream.response));
     vi.stubGlobal("fetch", fetchMock);
 
     const onPendingConsumed = vi.fn();
@@ -658,28 +943,20 @@ describe("AskPanel selection verbs (RA-17/18)", () => {
     const chip = await screen.findByTestId("ask-context-chip");
     expect(chip.textContent).toContain("a quoted passage");
     expect(onPendingConsumed).toHaveBeenCalledTimes(1);
-    expect(
-      fetchMock.mock.calls.some(([url]) => url === STREAM_URL),
-    ).toBe(false);
+    expect(callsTo(fetchMock, STREAM_URL)).toHaveLength(0);
 
     // The typed question rides along with the attached quote in the fixed shape.
     ask("What does this mean?");
-    await waitFor(() =>
-      expect(
-        fetchMock.mock.calls.some(([url]) => url === STREAM_URL),
-      ).toBe(true),
-    );
-    const call = fetchMock.mock.calls.find(([url]) => url === STREAM_URL)!;
-    expect(JSON.parse((call[1] as RequestInit).body as string)).toEqual({
-      question:
+    await waitFor(() => expect(callsTo(fetchMock, STREAM_URL)).toHaveLength(1));
+    expect(bodyOf(callsTo(fetchMock, STREAM_URL)[0])).toEqual({
+      message:
         'Regarding this passage:\n\n"a quoted passage"\n\nWhat does this mean?',
+      mode: "answer",
     });
   });
 
   it("submits a bare question after the attached passage is removed", async () => {
-    const fetchMock = routedFetch({
-      [`POST ${STREAM_URL}`]: () => sseStream().response,
-    });
+    const fetchMock = routedFetch(baseHandlers(() => sseStream().response));
     vi.stubGlobal("fetch", fetchMock);
 
     render(
@@ -705,26 +982,22 @@ describe("AskPanel selection verbs (RA-17/18)", () => {
 
     // The typed question submits unwrapped — the discarded passage never rides along.
     ask("What does this mean?");
-    await waitFor(() =>
-      expect(
-        fetchMock.mock.calls.some(([url]) => url === STREAM_URL),
-      ).toBe(true),
-    );
-    const call = fetchMock.mock.calls.find(([url]) => url === STREAM_URL)!;
-    expect(JSON.parse((call[1] as RequestInit).body as string)).toEqual({
-      question: "What does this mean?",
+    await waitFor(() => expect(callsTo(fetchMock, STREAM_URL)).toHaveLength(1));
+    expect(bodyOf(callsTo(fetchMock, STREAM_URL)[0])).toEqual({
+      message: "What does this mean?",
+      mode: "answer",
     });
   });
 
   it("does not re-attach the quote to a second question after a combined submit", async () => {
     const streams: ReturnType<typeof sseStream>[] = [];
-    const fetchMock = routedFetch({
-      [`POST ${STREAM_URL}`]: () => {
+    const fetchMock = routedFetch(
+      baseHandlers(() => {
         const next = sseStream();
         streams.push(next);
         return next.response;
-      },
-    });
+      }),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     render(
@@ -743,10 +1016,10 @@ describe("AskPanel selection verbs (RA-17/18)", () => {
     // The first typed question rides along with the attached quote.
     ask("What does this mean?");
     await waitFor(() => expect(streams).toHaveLength(1));
-    const first = fetchMock.mock.calls.find(([url]) => url === STREAM_URL)!;
-    expect(JSON.parse((first[1] as RequestInit).body as string)).toEqual({
-      question:
+    expect(bodyOf(callsTo(fetchMock, STREAM_URL)[0])).toEqual({
+      message:
         'Regarding this passage:\n\n"a quoted passage"\n\nWhat does this mean?',
+      mode: "answer",
     });
     await streamAnswer(streams[0], []);
     // Wait for the stream to settle so the input accepts a fresh submit.
@@ -756,16 +1029,10 @@ describe("AskPanel selection verbs (RA-17/18)", () => {
 
     // A second question submits bare — the quote was consumed once, not made sticky.
     ask("And now?");
-    await waitFor(() =>
-      expect(
-        fetchMock.mock.calls.filter(([url]) => url === STREAM_URL),
-      ).toHaveLength(2),
-    );
-    const second = fetchMock.mock.calls.filter(
-      ([url]) => url === STREAM_URL,
-    )[1];
-    expect(JSON.parse((second[1] as RequestInit).body as string)).toEqual({
-      question: "And now?",
+    await waitFor(() => expect(callsTo(fetchMock, STREAM_URL)).toHaveLength(2));
+    expect(bodyOf(callsTo(fetchMock, STREAM_URL)[1])).toEqual({
+      message: "And now?",
+      mode: "answer",
     });
   });
 });

@@ -236,6 +236,11 @@ Exact request/response schemas belong in implementation specs, but the MVP API s
 | `/api/teaching-sessions/{session_id}` | GET | Read session state and prior turns | Required |
 | `/api/teaching-sessions/{session_id}/turns` | POST | Add a user turn and receive a cited teaching response | Required |
 
+> The last four rows record the MVP's design and no longer describe the running
+> system. Asking and being taught were unified onto `/api/conversations`
+> ([ADR-0029](../adr/0029-unified-grounded-conversations.md)) and these paths were
+> deleted — they answer 404. `README.md` carries the current API surface.
+
 ### Example: Cited Q&A Response Shape
 
 ```json

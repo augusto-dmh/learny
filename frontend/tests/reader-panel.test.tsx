@@ -9,19 +9,31 @@
  * function of `mode`.
  */
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ReaderPanel } from "../app/components/reader-panel";
+import { readActiveConversation } from "../app/lib/active-conversation";
 
 // The shell test covers tabs, close, and which mode's body renders — not the
 // chat internals (unit-tested in ask-panel.test.tsx, which pull in AI-Elements).
 // Stub the ported bodies to their markers so the shell stays a pure unit test;
 // each stub also surfaces its `onShowInBook` prop through a button so the shell's
 // forwarding of the citation-jump callback to BOTH modes can be driven by a click.
+type StubProps = {
+  revision?: number;
+  onShowInBook?: (anchor: string) => void;
+};
 vi.mock("../app/components/ask-panel", () => ({
-  AskPanel: ({ onShowInBook }: { onShowInBook?: (anchor: string) => void }) => (
-    <div data-testid="ask-panel-body">
+  AskPanel: ({ revision, onShowInBook }: StubProps) => (
+    <div data-testid="ask-panel-body" data-revision={revision}>
       <button type="button" onClick={() => onShowInBook?.("ask#anchor")}>
         ask-show-in-book
       </button>
@@ -29,8 +41,8 @@ vi.mock("../app/components/ask-panel", () => ({
   ),
 }));
 vi.mock("../app/components/teach-panel", () => ({
-  TeachPanel: ({ onShowInBook }: { onShowInBook?: (anchor: string) => void }) => (
-    <div data-testid="teach-panel-body">
+  TeachPanel: ({ revision, onShowInBook }: StubProps) => (
+    <div data-testid="teach-panel-body" data-revision={revision}>
       <button type="button" onClick={() => onShowInBook?.("teach#anchor")}>
         teach-show-in-book
       </button>
@@ -38,7 +50,68 @@ vi.mock("../app/components/teach-panel", () => ({
   ),
 }));
 
-afterEach(cleanup);
+function jsonResponse(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+/** A conversation summary row as the list endpoint returns it. */
+function summary(
+  id: string,
+  title: string,
+  turnCount: number,
+  scopeAnchors: string[] = [],
+  lastTurnMode: "answer" | "teach" | null = "answer",
+) {
+  return {
+    id,
+    source_id: "s1",
+    source_title: "A Book",
+    title,
+    scope_anchors: scopeAnchors,
+    include_notes: false,
+    turn_count: turnCount,
+    last_turn_mode: lastTurnMode,
+    created_at: "now",
+    updated_at: "now",
+  };
+}
+
+/** The dock always loads the book's conversations; default to none. */
+function stubList(rows: unknown[] = []) {
+  const fetchMock = vi.fn(async () => jsonResponse(200, rows));
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+/**
+ * The list, and nothing else: a resume reads the mode off the row it was given,
+ * so any other request the shell makes is one it should not be making. Fetching
+ * the conversation to learn where it resumes would drag every turn and every
+ * citation across, and the panel then loads the same payload again.
+ */
+function stubServer(rows: ReturnType<typeof summary>[]) {
+  const fetchMock = vi.fn(async (url: string) => {
+    if (!url.startsWith("/api/conversations?")) {
+      throw new Error(`unexpected fetch: ${url}`);
+    }
+    return jsonResponse(200, rows);
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+beforeEach(() => {
+  stubList();
+});
+
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+  localStorage.clear();
+});
 
 describe("ReaderPanel shell (RA-01/02/03)", () => {
   it("offers exactly the Ask and Teach modes plus a close control", () => {
@@ -129,5 +202,208 @@ describe("ReaderPanel shell (RA-01/02/03)", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "teach-show-in-book" }));
     expect(onShowInBook).toHaveBeenCalledWith("teach#anchor");
+  });
+});
+
+describe("ReaderPanel conversation list", () => {
+  function renderPanel(
+    mode: "ask" | "teach" = "ask",
+    onModeChange: (mode: "ask" | "teach") => void = () => {},
+  ) {
+    return render(
+      <ReaderPanel
+        sourceId="s1"
+        csrf="csrf-xyz"
+        mode={mode}
+        onModeChange={onModeChange}
+        onClose={() => {}}
+      />,
+    );
+  }
+
+  it("lists this book's conversations with their titles and turn counts", async () => {
+    const fetchMock = stubList([
+      summary("conv2", "Chapter 2", 3, ["c2.xhtml"]),
+      summary("conv1", "Ada Lovelace", 1),
+    ]);
+    renderPanel();
+
+    // The list is narrowed to this book and shows every conversation it holds.
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Resume Chapter 2" })).toBeTruthy(),
+    );
+    const [url] = fetchMock.mock.calls[0] as unknown as [string];
+    expect(url).toContain("source_id=s1");
+
+    // Order is the server's — newest activity first — and each row carries its
+    // turn count.
+    const rows = screen.getAllByRole("button", { name: /^Resume / });
+    expect(rows.map((row) => row.textContent?.trim())).toEqual([
+      "Chapter 2 (3 turns)",
+      "Ada Lovelace (1 turns)",
+    ]);
+  });
+
+  it("shows one list holding both a scoped and a whole-book conversation", async () => {
+    stubList([
+      summary("conv2", "Chapter 2", 3, ["c2.xhtml"]),
+      summary("conv1", "Ada Lovelace", 1),
+    ]);
+    renderPanel("teach");
+
+    // A conversation started by teaching and one started by asking sit in the
+    // same list, in whichever mode the dock is showing.
+    await waitFor(() =>
+      expect(screen.getAllByRole("button", { name: /^Resume / })).toHaveLength(2),
+    );
+  });
+
+  it("says so when a book has no conversations yet", async () => {
+    stubList([]);
+    renderPanel();
+
+    expect(await screen.findByText("No conversations yet.")).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("reaches an older conversation than one page holds", async () => {
+    const firstPage = Array.from({ length: 20 }, (_, index) =>
+      summary(`c${index}`, `Thread ${index}`, 1),
+    );
+    const secondPage = [summary("c20", "The oldest thread", 1)];
+    const fetchMock = vi.fn(async (url: string) =>
+      jsonResponse(200, url.includes("offset=20") ? secondPage : firstPage),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    renderPanel();
+
+    // The dock asks for one bounded page, and says there is more behind it.
+    const more = await screen.findByRole("button", {
+      name: "Show older conversations",
+    });
+    const [firstUrl] = fetchMock.mock.calls[0] as unknown as [string];
+    expect(firstUrl).toContain("limit=20");
+    expect(firstUrl).toContain("offset=0");
+    expect(
+      screen.queryByRole("button", { name: "Resume The oldest thread" }),
+    ).toBeNull();
+
+    await act(async () => {
+      fireEvent.click(more);
+    });
+
+    // The 21st thread is reachable, and the page already read stays on screen.
+    const [nextUrl] = fetchMock.mock.calls[1] as unknown as [string];
+    expect(nextUrl).toContain("offset=20");
+    expect(
+      screen.getByRole("button", { name: "Resume The oldest thread" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Resume Thread 0" })).toBeTruthy();
+
+    // That page came back short, so there is nothing left to offer.
+    expect(
+      screen.queryByRole("button", { name: "Show older conversations" }),
+    ).toBeNull();
+  });
+
+  it("offers no next page when a book's conversations fit in one", async () => {
+    stubServer([summary("conv1", "Ada Lovelace", 1)]);
+    renderPanel();
+
+    await screen.findByRole("button", { name: "Resume Ada Lovelace" });
+    expect(
+      screen.queryByRole("button", { name: "Show older conversations" }),
+    ).toBeNull();
+  });
+
+  it("resumes an asked conversation in the Ask panel without switching tabs", async () => {
+    const onModeChange = vi.fn();
+    const fetchMock = stubServer([summary("conv1", "Ada Lovelace", 1)]);
+    renderPanel("ask", onModeChange);
+
+    const before = screen.getByTestId("ask-panel-body").dataset.revision;
+    const row = await screen.findByRole("button", { name: "Resume Ada Lovelace" });
+    await act(async () => {
+      fireEvent.click(row);
+    });
+
+    // The Ask panel is pointed at that conversation and told to re-read.
+    expect(readActiveConversation("s1", "ask")).toBe("conv1");
+    expect(screen.getByTestId("ask-panel-body").dataset.revision).not.toBe(before);
+    expect(onModeChange).not.toHaveBeenCalled();
+    // The row already said where the thread resumes, so the click cost nothing:
+    // only the list load was ever fetched. Reading the conversation here would
+    // pull every turn and citation the panel is about to load for itself.
+    expect(fetchMock.mock.calls).toHaveLength(1);
+  });
+
+  it("resumes a taught conversation in the Teach panel", async () => {
+    const onModeChange = vi.fn();
+    stubServer([summary("conv2", "Chapter 2", 3, ["c2.xhtml"], "teach")]);
+    renderPanel("ask", onModeChange);
+
+    const row = await screen.findByRole("button", { name: "Resume Chapter 2" });
+    await act(async () => {
+      fireEvent.click(row);
+    });
+
+    // Its turns were taught, so the dock moves to the panel that can continue it
+    // rather than leaving the reader on the wrong tab.
+    expect(onModeChange).toHaveBeenCalledWith("teach");
+    expect(readActiveConversation("s1", "teach")).toBe("conv2");
+    expect(readActiveConversation("s1", "ask")).toBeNull();
+  });
+
+  it("resumes a section-scoped asked conversation in the Ask panel", async () => {
+    const onModeChange = vi.fn();
+    // A question can be asked inside one chapter: the conversation carries scope
+    // anchors and is still an Ask thread, because scope is not mode.
+    stubServer([summary("conv3", "About chapter 2", 2, ["c2.xhtml"], "answer")]);
+    renderPanel("ask", onModeChange);
+
+    const row = await screen.findByRole("button", {
+      name: "Resume About chapter 2",
+    });
+    await act(async () => {
+      fireEvent.click(row);
+    });
+
+    // Resuming it into Teach would silently change what the next message does.
+    expect(onModeChange).not.toHaveBeenCalled();
+    expect(readActiveConversation("s1", "ask")).toBe("conv3");
+    expect(readActiveConversation("s1", "teach")).toBeNull();
+  });
+
+  it("leaves the reader on the current tab when no turn speaks for the thread", async () => {
+    const onModeChange = vi.fn();
+    stubServer([summary("conv1", "Ada Lovelace", 0, [], null)]);
+    renderPanel("ask", onModeChange);
+
+    const row = await screen.findByRole("button", { name: "Resume Ada Lovelace" });
+    await act(async () => {
+      fireEvent.click(row);
+    });
+
+    // Nothing said the thread belongs elsewhere, so the reader is not moved —
+    // and the resume still happens on the tab they are on.
+    expect(onModeChange).not.toHaveBeenCalled();
+    expect(readActiveConversation("s1", "ask")).toBe("conv1");
+  });
+
+  it("starts a fresh thread on request without touching the other surface", async () => {
+    stubServer([summary("conv1", "Ada Lovelace", 1)]);
+    renderPanel();
+
+    const row = await screen.findByRole("button", { name: "Resume Ada Lovelace" });
+    await act(async () => {
+      fireEvent.click(row);
+    });
+    expect(readActiveConversation("s1", "ask")).toBe("conv1");
+
+    const before = screen.getByTestId("ask-panel-body").dataset.revision;
+    fireEvent.click(screen.getByRole("button", { name: "New conversation" }));
+
+    expect(readActiveConversation("s1", "ask")).toBeNull();
+    expect(screen.getByTestId("ask-panel-body").dataset.revision).not.toBe(before);
   });
 });

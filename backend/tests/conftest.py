@@ -23,6 +23,25 @@ TEST_DB_URL = os.environ.get("LEARNY_TEST_DATABASE_URL")
 requires_db = pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
 
 
+def declared_routes(app: object) -> list:
+    """Every route the assembled application declares, included routers flattened.
+
+    ``app.routes`` holds an opaque wrapper per ``include_router`` call rather than
+    the routes themselves, so a check that reads the top level alone silently sees
+    almost nothing. Tests that assert something about *every* route — that none is
+    unthrottled, that none answers on a retired path — must walk through those
+    wrappers, or they pass by looking at an empty list.
+    """
+    flattened: list = []
+    for route in app.routes:  # type: ignore[attr-defined]
+        included = getattr(route, "original_router", None)
+        if included is not None:
+            flattened.extend(declared_routes(included))
+        else:
+            flattened.append(route)
+    return flattened
+
+
 def pytest_addoption(parser: pytest.Parser) -> None:
     """Register ``--record-generation`` for the generation replay harness (design §8).
 

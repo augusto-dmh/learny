@@ -3,45 +3,45 @@
 /**
  * Teach panel (RA-10/11) — the Teach mode body of the reader side panel.
  *
- * This is the standalone teach screen's flow ported into the panel: a target
- * picker (the section tree, from the structure client + `lib/tree`), a resume list
- * of prior sessions with their turn counts, and a session view that seeds `useChat`
- * from the session's persisted turns (`turnsToUIMessages`) and streams new turns
- * over the *unchanged* turn transport (`app/lib/streaming.ts`) — so start, resume,
- * deltas, citations, not-found, and the error banner behave exactly as they did on
- * the page (parity). Auth is resolved once upstream in `ChapterReader`; the panel
- * receives the CSRF token as a prop rather than fetching `/api/auth/me` itself.
+ * Teaching is a conversation scoped to one section: the reader picks a target,
+ * and the first message creates a conversation whose scope is that target's
+ * anchor and whose turns are taught rather than answered. Everything after runs
+ * on the same unified surface the Ask panel uses — same start, read, turn, and
+ * turn-stream — so a taught thread is persisted, resumable, and manageable like
+ * any other conversation.
  *
- * Panel-only addition: when a session activates — on start AND on resume — the
+ * Because the dock owns the per-book conversation list, the panel no longer
+ * keeps a resume list of its own; it restores whichever conversation this book's
+ * Teach surface is pointed at and otherwise offers the target picker.
+ *
+ * Panel-only addition: when a session activates — on start AND on restore — the
  * panel asks the reader to bring the taught passage into view via `onShowInBook`,
  * exactly once per activation, so the book sits on the target while teaching runs
  * beside it (RA-11).
  *
  * `onRequireAuth` is a UX-only redirect for a mid-stream 401, NOT the security
- * boundary — FastAPI enforces auth, ownership, readiness, and target scoping on
- * every call regardless of client-side routing (FR-AUTH-007, ADR-017).
+ * boundary — FastAPI enforces auth, ownership, readiness, and scope resolution
+ * on every call regardless of client-side routing (FR-AUTH-007, ADR-017).
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { useChat } from "@ai-sdk/react";
-
+import {
+  readActiveConversation,
+  writeActiveConversation,
+} from "@/app/lib/active-conversation";
+import {
+  ConversationRequestError,
+  getConversation,
+  startConversation,
+} from "@/app/lib/conversations";
 import { fetchSourceStructure, type SourceStructure } from "@/app/lib/sources";
 import {
   assistantView,
-  createTurnTransport,
   messageText,
-  StreamRequestError,
   turnsToUIMessages,
   type LearnyUIMessage,
 } from "@/app/lib/streaming";
-import {
-  getTeachingSession,
-  listTeachingSessions,
-  startTeachingSession,
-  type TeachingSessionSummary,
-  type TeachingSessionView,
-} from "@/app/lib/teaching";
 import { flattenSections } from "@/app/lib/tree";
 import { Button } from "@/components/ui/button";
 import {
@@ -64,121 +64,197 @@ import {
 
 import { CitationList } from "./citations";
 import { IncludeNotesToggle } from "./include-notes-toggle";
+import { isNotFound, NotFoundNotice } from "./not-found-notice";
 import { SaveToNoteAction } from "./save-to-note-action";
+import { useConversationThread } from "./use-conversation-thread";
 import { useIncludeNotes } from "./use-include-notes";
 
-/** A session the user has entered, plus the messages seeding its conversation. */
-type ActiveSession = {
-  session: TeachingSessionView;
+/** The surface name the active-conversation pointer is stored under. */
+const SURFACE = "teach";
+
+/** A taught thread the panel is showing: its target, and its restored turns. */
+type TeachThread = {
+  key: string;
+  conversationId: string | null;
+  /** The notes choice this conversation was created with; `null` before there is one. */
+  includeNotes: boolean | null;
+  targetAnchor: string;
+  /** Shown when the target anchor no longer resolves against the live structure. */
+  fallbackLabel: string;
   initialMessages: LearnyUIMessage[];
 };
 
 export function TeachPanel({
   sourceId,
   csrf,
+  revision = 0,
   onShowInBook,
   onRequireAuth,
+  onConversationsChanged,
 }: {
   sourceId: string;
   csrf: string;
+  /** Bumped by the dock to make the panel re-read which conversation is active. */
+  revision?: number;
   onShowInBook?: (anchor: string) => void;
   onRequireAuth?: () => void;
+  onConversationsChanged?: () => void;
 }) {
   const [structure, setStructure] = useState<SourceStructure | null>(null);
-  const [sessions, setSessions] = useState<TeachingSessionSummary[] | null>(
-    null,
-  );
   const [selectedAnchor, setSelectedAnchor] = useState("");
-  const [active, setActive] = useState<ActiveSession | null>(null);
+  const [thread, setThread] = useState<TeachThread | null>(null);
+  const [restoring, setRestoring] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [starting, setStarting] = useState(false);
-  const [resumingId, setResumingId] = useState<string | null>(null);
+  const startCountRef = useRef(0);
 
-  const load = useCallback(async () => {
-    try {
-      const [struct, list] = await Promise.all([
-        fetchSourceStructure(sourceId),
-        listTeachingSessions(sourceId),
-      ]);
-      setStructure(struct);
-      setSessions(list);
-      const options = flattenSections(struct.sections);
-      if (options.length > 0) {
-        setSelectedAnchor(options[0].anchor);
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not load this book.");
-    }
+  useEffect(() => {
+    let cancelled = false;
+    void fetchSourceStructure(sourceId)
+      .then((struct) => {
+        if (cancelled) return;
+        setStructure(struct);
+        const options = flattenSections(struct.sections);
+        if (options.length > 0) {
+          setSelectedAnchor((current) => current || options[0].anchor);
+        }
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setError(
+          err instanceof Error ? err.message : "Could not load this book.",
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [sourceId]);
 
+  // Restore the conversation this book's Teach surface is pointed at. The turns
+  // are always the server's copy; only the pointer is remembered locally.
   useEffect(() => {
-    void load();
-  }, [load]);
-
-  // Bring the taught passage into view once per session activation (start AND
-  // resume), never per turn (RA-11). The ref makes the call idempotent per session
-  // id, so a parent re-render (or a new callback identity) cannot re-trigger it.
-  const shownForSessionRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (active && shownForSessionRef.current !== active.session.id) {
-      shownForSessionRef.current = active.session.id;
-      onShowInBook?.(active.session.target.anchor);
+    let cancelled = false;
+    const stored = readActiveConversation(sourceId, SURFACE);
+    if (!stored) {
+      setThread(null);
+      setRestoring(false);
+      return;
     }
-  }, [active, onShowInBook]);
+    setRestoring(true);
+    void getConversation(stored)
+      .then((detail) => {
+        if (cancelled) return;
+        setThread({
+          key: detail.id,
+          conversationId: detail.id,
+          includeNotes: detail.include_notes,
+          targetAnchor: detail.scope_anchors[0] ?? "",
+          fallbackLabel: detail.title,
+          initialMessages: turnsToUIMessages(detail.turns),
+        });
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        if (err instanceof ConversationRequestError && err.status === 404) {
+          writeActiveConversation(sourceId, SURFACE, null);
+        } else {
+          setError(
+            err instanceof Error
+              ? err.message
+              : "Could not load that conversation.",
+          );
+        }
+        setThread(null);
+      })
+      .finally(() => {
+        if (!cancelled) setRestoring(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sourceId, revision]);
 
-  async function handleStart(event: React.FormEvent) {
+  const options = useMemo(
+    () => (structure ? flattenSections(structure.sections) : []),
+    [structure],
+  );
+
+  // The taught passage's breadcrumb, resolved against the live structure so a
+  // restored thread reads the same as a freshly started one.
+  const targetLabel = thread
+    ? (options.find((option) => option.anchor === thread.targetAnchor)?.label ??
+      thread.fallbackLabel)
+    : "";
+
+  // Bring the taught passage into view once per activation (start AND restore),
+  // never per turn (RA-11).
+  const shownForThreadRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (thread && thread.targetAnchor && shownForThreadRef.current !== thread.key) {
+      shownForThreadRef.current = thread.key;
+      onShowInBook?.(thread.targetAnchor);
+    }
+  }, [thread, onShowInBook]);
+
+  const handleStarted = useCallback(
+    (conversationId: string) => {
+      writeActiveConversation(sourceId, SURFACE, conversationId);
+      onConversationsChanged?.();
+    },
+    [sourceId, onConversationsChanged],
+  );
+
+  // A first message that lands is when the thread becomes something to find
+  // again, so that is when the dock is told to re-read its list.
+  const handleKept = useCallback(() => {
+    onConversationsChanged?.();
+  }, [onConversationsChanged]);
+
+  const handleDiscarded = useCallback(() => {
+    writeActiveConversation(sourceId, SURFACE, null);
+    onConversationsChanged?.();
+  }, [sourceId, onConversationsChanged]);
+
+  function handleStart(event: React.FormEvent) {
     event.preventDefault();
     setError(null);
     if (!selectedAnchor) {
       return;
     }
-    setStarting(true);
-    try {
-      const started = await startTeachingSession(sourceId, selectedAnchor, csrf);
-      setActive({ session: started, initialMessages: [] });
-    } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Could not start the session.",
-      );
-    } finally {
-      setStarting(false);
-    }
+    startCountRef.current += 1;
+    const option = options.find((o) => o.anchor === selectedAnchor);
+    setThread({
+      key: `new-${startCountRef.current}`,
+      conversationId: null,
+      includeNotes: null,
+      targetAnchor: selectedAnchor,
+      fallbackLabel: option?.label ?? selectedAnchor,
+      initialMessages: [],
+    });
   }
 
-  async function handleResume(summary: TeachingSessionSummary) {
-    setError(null);
-    setResumingId(summary.id);
-    try {
-      const detail = await getTeachingSession(summary.id);
-      setActive({
-        session: detail,
-        initialMessages: turnsToUIMessages(detail.turns),
-      });
-    } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Could not load that session.",
-      );
-    } finally {
-      setResumingId(null);
-    }
+  if (restoring) {
+    return <p className="text-muted-foreground">Loading…</p>;
   }
 
-  if (active !== null) {
+  if (thread !== null) {
     return (
       <TeachChat
-        key={active.session.id}
+        key={thread.key}
         sourceId={sourceId}
-        sessionId={active.session.id}
         csrf={csrf}
-        target={active.session.target.section_path.join(" › ")}
-        initialMessages={active.initialMessages}
+        conversationId={thread.conversationId}
+        conversationIncludeNotes={thread.includeNotes}
+        targetAnchor={thread.targetAnchor}
+        target={targetLabel}
+        initialMessages={thread.initialMessages}
         onShowInBook={onShowInBook}
         onRequireAuth={onRequireAuth}
+        onConversationStarted={handleStarted}
+        onConversationKept={handleKept}
+        onConversationDiscarded={handleDiscarded}
       />
     );
   }
-
-  const options = structure ? flattenSections(structure.sections) : [];
 
   return (
     <section aria-label="teach" className="space-y-6">
@@ -206,91 +282,95 @@ export function TeachPanel({
             {error}
           </p>
         ) : null}
-        <Button type="submit" disabled={starting || selectedAnchor === ""}>
-          {starting ? "Starting…" : "Start session"}
+        <Button type="submit" disabled={selectedAnchor === ""}>
+          Start session
         </Button>
       </form>
-
-      <section aria-label="previous sessions" className="space-y-2">
-        <h2 className="text-sm font-medium">Previous sessions</h2>
-        {sessions === null ? (
-          <p className="text-muted-foreground">Loading…</p>
-        ) : sessions.length === 0 ? (
-          <p className="text-muted-foreground">No sessions yet.</p>
-        ) : (
-          <ul className="space-y-2">
-            {sessions.map((summary) => (
-              <li
-                key={summary.id}
-                className="flex items-center justify-between gap-2 rounded-md border px-3 py-2 text-sm"
-              >
-                <span>
-                  {summary.target.section_path.join(" › ")}{" "}
-                  <span className="text-muted-foreground">
-                    ({summary.turn_count} turns)
-                  </span>
-                </span>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={() => void handleResume(summary)}
-                  disabled={resumingId === summary.id}
-                >
-                  {resumingId === summary.id ? "Resuming…" : "Resume"}
-                </Button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
     </section>
   );
 }
 
 function TeachChat({
   sourceId,
-  sessionId,
   csrf,
+  conversationId,
+  conversationIncludeNotes,
+  targetAnchor,
   target,
   initialMessages,
   onShowInBook,
   onRequireAuth,
+  onConversationStarted,
+  onConversationKept,
+  onConversationDiscarded,
 }: {
   sourceId: string;
-  sessionId: string;
   csrf: string;
+  conversationId: string | null;
+  /** The notes choice the conversation carries, or `null` before there is one. */
+  conversationIncludeNotes: boolean | null;
+  targetAnchor: string;
   target: string;
   initialMessages: LearnyUIMessage[];
   onShowInBook?: (anchor: string) => void;
   onRequireAuth?: () => void;
+  onConversationStarted: (conversationId: string) => void;
+  onConversationKept: () => void;
+  onConversationDiscarded: () => void;
 }) {
-  const [banner, setBanner] = useState<string | null>(null);
-  // Include-my-notes preference (NL-04): teaching defaults off; the flag rides a
-  // turn only once the reader has explicitly opted in.
-  const notes = useIncludeNotes("teach");
-  const transport = useMemo(
-    () =>
-      createTurnTransport(
-        sessionId,
-        csrf,
-        notes.chosen ? notes.includeNotes : undefined,
-      ),
-    [sessionId, csrf, notes.chosen, notes.includeNotes],
-  );
-  const { messages, sendMessage, status, stop } = useChat<LearnyUIMessage>({
-    transport,
-    messages: initialMessages,
-    onError: (err) => {
-      if (err instanceof StreamRequestError && err.status === 401) {
-        onRequireAuth?.();
-        return;
-      }
-      setBanner(err.message);
-    },
-  });
+  // The notes choice belongs to the conversation, so it is fixed when the thread
+  // creates one and is always sent explicitly rather than left to a server guess.
+  const notes = useIncludeNotes(SURFACE);
+  const includeNotes = notes.includeNotes;
 
-  const isStreaming = status === "submitted" || status === "streaming";
+  // Which is why the control stops taking input once a conversation exists: it
+  // then reports the choice that conversation was created with. Leaving it live
+  // would offer the reader a flip that changes nothing about this thread.
+  const [fixedNotes, setFixedNotes] = useState<boolean | null>(
+    conversationIncludeNotes,
+  );
+
+  const start = useCallback(
+    () =>
+      startConversation(
+        {
+          sourceId,
+          scopeAnchors: [targetAnchor],
+          includeNotes,
+          title: target,
+        },
+        csrf,
+      ),
+    [sourceId, targetAnchor, includeNotes, target, csrf],
+  );
+
+  const handleStarted = useCallback(
+    (startedId: string) => {
+      setFixedNotes(includeNotes);
+      onConversationStarted(startedId);
+    },
+    [includeNotes, onConversationStarted],
+  );
+
+  // A discarded first message leaves no conversation, so the choice is the
+  // reader's again.
+  const handleDiscarded = useCallback(() => {
+    setFixedNotes(null);
+    onConversationDiscarded();
+  }, [onConversationDiscarded]);
+
+  const { messages, status, isStreaming, banner, send, stop } =
+    useConversationThread({
+      csrf,
+      mode: "teach",
+      conversationId,
+      start,
+      initialMessages,
+      onConversationStarted: handleStarted,
+      onConversationKept,
+      onConversationDiscarded: handleDiscarded,
+      onRequireAuth,
+    });
 
   const handleSubmit = useCallback(
     (message: PromptInputMessage) => {
@@ -298,10 +378,9 @@ function TeachChat({
       if (!text || isStreaming) {
         return;
       }
-      setBanner(null);
-      void sendMessage({ text });
+      send(text);
     },
-    [isStreaming, sendMessage],
+    [isStreaming, send],
   );
 
   return (
@@ -327,7 +406,7 @@ function TeachChat({
             }
             const { text, citations, status: answerStatus } =
               assistantView(message);
-            const notFound = answerStatus === "not_found_in_source";
+            const notFound = isNotFound(answerStatus);
             const previous = messages[index - 1];
             const question =
               previous?.role === "user" ? messageText(previous) : "";
@@ -335,10 +414,8 @@ function TeachChat({
               <Message from="assistant" key={message.id}>
                 <MessageContent>
                   {text ? <MessageResponse>{text}</MessageResponse> : null}
-                  {notFound ? (
-                    <p data-testid="not-found" className="text-muted-foreground">
-                      That was not found in this target.
-                    </p>
+                  {notFound && answerStatus ? (
+                    <NotFoundNotice status={answerStatus} />
                   ) : citations ? (
                     <CitationList
                       sourceId={sourceId}
@@ -369,8 +446,9 @@ function TeachChat({
       ) : null}
 
       <IncludeNotesToggle
-        checked={notes.includeNotes}
+        checked={fixedNotes ?? notes.includeNotes}
         onChange={notes.setIncludeNotes}
+        locked={fixedNotes !== null}
       />
 
       <PromptInput onSubmit={handleSubmit}>
@@ -381,7 +459,7 @@ function TeachChat({
           />
         </PromptInputBody>
         <PromptInputFooter>
-          <PromptInputSubmit status={status} onStop={() => void stop()} />
+          <PromptInputSubmit status={status} onStop={stop} />
         </PromptInputFooter>
       </PromptInput>
     </section>

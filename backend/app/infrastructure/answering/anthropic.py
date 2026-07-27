@@ -1,13 +1,12 @@
-"""Anthropic Claude answer/teaching adapters (ADR-0020, behind Learny ports).
+"""Anthropic Claude generation adapter (ADR-0020, behind a Learny port).
 
 The ``anthropic`` SDK, the model id, and the Citations API request/response shapes
-live only in this module — callers depend on ``AnswerGenerationPort`` /
-``TeachingGenerationPort`` and receive a Learny-owned ``GeneratedAnswer``
-(ADR-0007/0009). Each retrieved chunk becomes one plain-text citations-enabled
-``document`` block, in evidence order; the response's ``document_index`` citations
-map back through the ordered chunk-id list assembled at request time — never
-through ``document_title`` (research §1). Citations are enabled on every document
-(all-or-none API rule).
+live only in this module — callers depend on ``GenerationPort`` and receive a
+Learny-owned ``GeneratedAnswer`` (ADR-0007/0009). Each retrieved chunk becomes one
+plain-text citations-enabled ``document`` block, in evidence order; the response's
+``document_index`` citations map back through the ordered chunk-id list assembled
+at request time — never through ``document_title`` (research §1). Citations are
+enabled on every document (all-or-none API rule).
 
 The SDK is imported lazily inside :meth:`_get_client` only, so the module stays
 import-light and an injected fake client needs no key or network (mirrors the
@@ -23,6 +22,7 @@ from typing import Any, Protocol
 from uuid import UUID
 
 from app.domain.entities import (
+    MODE_TEACH,
     AnswerCompleted,
     AnswerStreamEvent,
     AnswerTextDelta,
@@ -92,7 +92,7 @@ def _build_documents(
 
 
 def _parse_message(message: Any, chunk_ids: Sequence[UUID], *, model: str) -> GeneratedAnswer:
-    """Parse a Claude message into a ``GeneratedAnswer`` (shared by both adapters).
+    """Parse a Claude message into a ``GeneratedAnswer`` (shared by both modes).
 
     Concatenates every ``text`` block into the answer text and walks their
     ``citations`` arrays, resolving each ``document_index`` back to a ``chunk_id``
@@ -213,7 +213,7 @@ class AnthropicAdapterBase:
         :class:`~app.domain.entities.AnswerCompleted`. The ``with`` block guarantees
         the SDK stream is closed when the consumer closes this generator early
         (``GeneratorExit`` unwinds through it), so a client disconnect never leaks a
-        provider stream. Shared by both adapters — only ``system``/``messages`` differ.
+        provider stream. Shared by both modes — only ``system``/``messages`` differ.
         """
         with self._get_client().messages.stream(
             model=self._model,
@@ -230,142 +230,88 @@ class AnthropicAdapterBase:
         yield AnswerCompleted(answer=answer)
 
 
-class AnthropicAnswerAdapter(AnthropicAdapterBase):
-    """``AnswerGenerationPort`` implementation over Claude's Citations API.
+class AnthropicGenerationAdapter(AnthropicAdapterBase):
+    """``GenerationPort`` implementation over Claude's Citations API (AD-032).
 
-    The buffered path calls ``messages.create`` (``max_tokens`` is far below the
-    SDK's non-streaming guard) with no sampling or ``thinking`` params; the client
-    is built lazily by the shared base so an injected fake needs no key/network.
-    Bounded prior turns, when a conversation supplies them, render exactly as the
-    teaching adapter renders them (shared helper) ahead of the current question.
-    """
+    One adapter for both modes, dispatching **only on the explicit ``mode``** —
+    never on whether a target section path was supplied, which a scoped answer
+    conversation carries too (AD-194). The document builder, response parser, and
+    sentinel logic are shared; the request differs by mode in exactly two places,
+    the system prompt and the final user turn:
 
-    def _build_request(
-        self,
-        *,
-        question: str,
-        history: Sequence[HistoryTurn],
-        evidence: Sequence[Evidence],
-    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[UUID]]:
-        """Assemble the system prompt, the message list, and the chunk map.
+    - ``answer``: the frozen ``ANSWER_SYSTEM_PROMPT`` with no cache breakpoint, and
+      the question as the final user text. With no history that is the single-shot
+      ask it has always been.
+    - ``teach``: the frozen ``TEACHING_SYSTEM_PROMPT`` carrying a 1-hour
+      ``cache_control`` breakpoint, and a final user turn naming the target section
+      ahead of the learner's message.
 
-        Shared by the buffered and streaming paths so both send the byte-identical
-        request. Bounded prior turns render as alternating user/assistant messages
-        ahead of the current question — the same shape the teaching adapter uses, so
-        a follow-up in a conversation resolves against what was already said — and
-        this turn's evidence documents plus the question stay in the final user
-        message. With no history the request is exactly the single-shot ask it has
-        always been: the frozen ``ANSWER_SYSTEM_PROMPT``, one user message, and no
-        cache breakpoint anywhere.
-        """
-        documents, chunk_ids = _build_documents(evidence)
-        messages = _build_history_messages(history)
-        messages.append(
-            {
-                "role": "user",
-                "content": [*documents, {"type": "text", "text": question}],
-            }
-        )
-        system = [{"type": "text", "text": ANSWER_SYSTEM_PROMPT}]
-        return system, messages, chunk_ids
-
-    def generate(
-        self,
-        *,
-        question: str,
-        evidence: Sequence[Evidence],
-        history: Sequence[HistoryTurn] = (),
-    ) -> GeneratedAnswer:
-        """Generate a cited answer grounded in ``evidence`` (single-shot call)."""
-        system, messages, chunk_ids = self._build_request(
-            question=question, history=history, evidence=evidence
-        )
-        message = self._get_client().messages.create(
-            model=self._model,
-            max_tokens=self._max_tokens,
-            system=system,
-            messages=messages,
-        )
-        answer = _parse_message(message, chunk_ids, model=self._model)
-        _log_call(message, model=self._model, found=answer.found)
-        return answer
-
-    def generate_stream(
-        self,
-        *,
-        question: str,
-        evidence: Sequence[Evidence],
-        history: Sequence[HistoryTurn] = (),
-    ) -> Iterator[AnswerStreamEvent]:
-        """Stream a cited answer: text deltas, then the authoritative completed event."""
-        system, messages, chunk_ids = self._build_request(
-            question=question, history=history, evidence=evidence
-        )
-        return self._run_stream(system=system, messages=messages, chunk_ids=chunk_ids)
-
-
-class AnthropicTeachingAdapter(AnthropicAdapterBase):
-    """``TeachingGenerationPort`` implementation with prompt caching (AD-032).
-
-    Reuses the answer adapter's document builder, response parser, and sentinel
-    logic — the request differs only in shape. The frozen ``TEACHING_SYSTEM_PROMPT``
-    carries a 1-hour ``cache_control`` breakpoint and prior turns render as
-    alternating user/assistant messages with a second breakpoint on the latest
-    history block, so the cacheable prefix (system + settled history) is byte-stable
-    across a session while every volatile input for this turn — the retrieved
-    evidence documents, the target section, and the new learner message — sits
-    strictly *after* the prefix in the final user message (research §5).
+    Either way prior turns render as alternating user/assistant messages with a
+    second breakpoint on the latest history block, so the cacheable prefix (system +
+    settled history) is byte-stable across a session while every volatile input for
+    this turn — the retrieved evidence documents, the target section, and the new
+    message — sits strictly *after* the prefix (research §5). The buffered path
+    calls ``messages.create`` (``max_tokens`` is far below the SDK's non-streaming
+    guard) with no sampling or ``thinking`` params; the client is built lazily by the
+    shared base so an injected fake needs no key/network.
     """
 
     def _build_request(
         self,
         *,
         message: str,
-        target_section_path: tuple[str, ...],
+        mode: str,
         history: Sequence[HistoryTurn],
         evidence: Sequence[Evidence],
+        target_section_path: tuple[str, ...] | None,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[UUID]]:
-        """Assemble the cached system prompt, the message list, and the chunk map.
+        """Assemble the system prompt, the message list, and the chunk map.
 
         Shared by the buffered and streaming paths so both send the byte-identical
-        request: the frozen ``TEACHING_SYSTEM_PROMPT`` with its 1-hour cache
-        breakpoint, the alternating history (second breakpoint on the latest block),
-        and a final user turn carrying this turn's evidence documents plus the target
-        section and learner message — all volatile content strictly after the prefix.
+        request, and by both modes so only the two mode-specific pieces differ. The
+        teach turn's section header is built from the target the caller resolved;
+        the answer turn sends the message alone, whatever target the conversation
+        happens to be scoped to.
         """
         documents, chunk_ids = _build_documents(evidence)
         messages = _build_history_messages(history)
-        section = " > ".join(target_section_path)
-        turn_text = f"I am currently studying this section: {section}.\n\n{message}"
+        if mode == MODE_TEACH:
+            section = " > ".join(target_section_path or ())
+            turn_text = f"I am currently studying this section: {section}.\n\n{message}"
+            system = [
+                {
+                    "type": "text",
+                    "text": TEACHING_SYSTEM_PROMPT,
+                    "cache_control": _CACHE_CONTROL,
+                }
+            ]
+        else:
+            turn_text = message
+            system = [{"type": "text", "text": ANSWER_SYSTEM_PROMPT}]
         messages.append(
             {
                 "role": "user",
                 "content": [*documents, {"type": "text", "text": turn_text}],
             }
         )
-        system = [
-            {
-                "type": "text",
-                "text": TEACHING_SYSTEM_PROMPT,
-                "cache_control": _CACHE_CONTROL,
-            }
-        ]
         return system, messages, chunk_ids
 
     def generate(
         self,
         *,
         message: str,
-        target_section_path: tuple[str, ...],
-        history: Sequence[HistoryTurn],
+        mode: str,
         evidence: Sequence[Evidence],
+        history: Sequence[HistoryTurn] = (),
+        target_section_path: tuple[str, ...] | None = None,
     ) -> GeneratedAnswer:
-        """Generate a grounded teaching turn, caching the system + history prefix."""
+        """Generate a cited response grounded in ``evidence`` (single-shot call)."""
         system, messages, chunk_ids = self._build_request(
             message=message,
-            target_section_path=target_section_path,
+            mode=mode,
             history=history,
             evidence=evidence,
+            target_section_path=target_section_path,
         )
         response = self._get_client().messages.create(
             model=self._model,
@@ -381,15 +327,17 @@ class AnthropicTeachingAdapter(AnthropicAdapterBase):
         self,
         *,
         message: str,
-        target_section_path: tuple[str, ...],
-        history: Sequence[HistoryTurn],
+        mode: str,
         evidence: Sequence[Evidence],
+        history: Sequence[HistoryTurn] = (),
+        target_section_path: tuple[str, ...] | None = None,
     ) -> Iterator[AnswerStreamEvent]:
-        """Stream a grounded teaching turn: text deltas, then the completed event."""
+        """Stream a cited response: text deltas, then the authoritative completed event."""
         system, messages, chunk_ids = self._build_request(
             message=message,
-            target_section_path=target_section_path,
+            mode=mode,
             history=history,
             evidence=evidence,
+            target_section_path=target_section_path,
         )
         return self._run_stream(system=system, messages=messages, chunk_ids=chunk_ids)

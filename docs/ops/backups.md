@@ -14,7 +14,7 @@ S3-compatible provider without change.
 
 | Item | Where it lives | Why |
 |---|---|---|
-| PostgreSQL database `learny` | `db` service volume `db_data` | Source of truth for users, sources, ingestion jobs/events, corpus, retrieval columns, teaching sessions/turns |
+| PostgreSQL database `learny` | `db` service volume `db_data` | Source of truth for users, sources, ingestion jobs/events, corpus, retrieval columns, conversations/turns |
 | Object storage bucket `learny-sources` | `minio` service volume `minio_data` (or the managed provider) | Uploaded EPUB source files (ADR-0013) |
 | Secret env files | `./secrets/*.env` (git-ignored) | Credentials needed to bring the stack back up |
 | Compose files | repo (`docker-compose*.yml`) | Topology needed to redeploy |
@@ -173,8 +173,8 @@ Rehearse full recovery regularly so a real incident is routine:
    (above), or the manual `pg_restore` path if restoring outside the backup image.
 3. Restore the object bucket (above) into its `minio` from the offsite mirror.
 4. Bring up `api` + `worker`; confirm `GET /readyz` returns ready.
-5. Log in as a known user and open a previously-ingested source; confirm cited
-   Q&A and a teaching session return grounded answers (the corpus + objects are
+5. Log in as a known user and open a previously-ingested source; confirm a
+   conversation returns grounded answers in both modes (the corpus + objects are
    consistent).
 6. Tear the throwaway stack down.
 

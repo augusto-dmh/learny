@@ -1,24 +1,22 @@
 /**
- * D1 gate (unit) — the streaming transport reshapes each request to Learny's
- * contract (latest user message only → `{question}` / `{message}`, CSRF header,
- * the stream URL) exactly as FE-06/FE-12 require; persisted teaching turns map to
- * seeded `useChat` messages that carry the same citation + answer-status parts a
- * live stream assembles (FE-12); and every pre-stream failure maps to a readable
- * message (FE-09/FE-13).
+ * Unit gate — the streaming transport reshapes each request to Learny's contract
+ * (latest user message only → `{message, mode}`, CSRF header, the stream URL of
+ * the conversation it resolves); persisted turns map to seeded `useChat` messages
+ * carrying the same citation + answer-status parts a live stream assembles; and
+ * every pre-stream failure maps to a readable message.
  */
 
 import type { PrepareSendMessagesRequest } from "ai";
 import { describe, expect, it } from "vitest";
 
-import { type Citation } from "../app/lib/questions";
+import { type Citation } from "../app/lib/citations";
+import { type ConversationTurnView } from "../app/lib/conversations";
 import {
-  createQuestionTransport,
-  createTurnTransport,
+  createConversationTransport,
   errorMessageFor,
   turnsToUIMessages,
   type LearnyUIMessage,
 } from "../app/lib/streaming";
-import { type TeachingTurnView } from "../app/lib/teaching";
 
 type Prepared = {
   api?: string;
@@ -75,79 +73,79 @@ const citation: Citation = {
   score: 0.03,
 };
 
-describe("createQuestionTransport request shaping (D1)", () => {
-  it("POSTs the latest user text as {question} to the source stream URL with the CSRF header", async () => {
-    const transport = createQuestionTransport("s1", "csrf-xyz");
+describe("createConversationTransport request shaping", () => {
+  it("POSTs only the latest user text as {message, mode} to the resolved conversation's stream URL", async () => {
+    const transport = createConversationTransport({
+      mode: "answer",
+      csrfToken: "csrf-xyz",
+      resolveConversationId: async () => "conv1",
+    });
+
     const prepared = await callPrepare(transport, [
       userMessage("m0", "an earlier question"),
       assistantText("a0", "an earlier answer"),
       userMessage("m1", "Who wrote the first algorithm?"),
     ]);
 
-    expect(prepared.api).toBe("/api/sources/s1/questions/stream");
-    expect(prepared.body).toEqual({ question: "Who wrote the first algorithm?" });
+    // The server owns the thread's history, so replaying it in the body would ask
+    // the same turn to be answered from two different accounts of the past.
+    expect(prepared.api).toBe("/api/conversations/conv1/turns/stream");
+    expect(prepared.body).toEqual({
+      message: "Who wrote the first algorithm?",
+      mode: "answer",
+    });
     expect(prepared.headers).toEqual({ "X-CSRF-Token": "csrf-xyz" });
   });
-});
 
-describe("createTurnTransport request shaping (D1)", () => {
-  it("POSTs the latest user text as {message} to the session turns stream URL with the CSRF header", async () => {
-    const transport = createTurnTransport("sess1", "csrf-abc");
-    const prepared = await callPrepare(transport, [
-      userMessage("m1", "Explain this chapter."),
-    ]);
+  it("sends the mode it was given rather than inferring one from the conversation", async () => {
+    const prepared = await callPrepare(
+      createConversationTransport({
+        mode: "teach",
+        csrfToken: "c",
+        resolveConversationId: async () => "conv2",
+      }),
+      [userMessage("m1", "Explain this chapter.")],
+    );
 
-    expect(prepared.api).toBe("/api/teaching-sessions/sess1/turns/stream");
-    expect(prepared.body).toEqual({ message: "Explain this chapter." });
-    expect(prepared.headers).toEqual({ "X-CSRF-Token": "csrf-abc" });
+    expect(prepared.api).toBe("/api/conversations/conv2/turns/stream");
+    expect(prepared.body).toEqual({
+      message: "Explain this chapter.",
+      mode: "teach",
+    });
+  });
+
+  it("resolves the conversation on every send, so the first message can create it", async () => {
+    // Creating a conversation and posting its first turn are two calls. Resolving
+    // lazily is what lets one transport cover both without the surface holding an
+    // id it does not have yet.
+    const resolved: string[] = [];
+    let created = false;
+    const transport = createConversationTransport({
+      mode: "answer",
+      csrfToken: "c",
+      resolveConversationId: async () => {
+        created = true;
+        resolved.push("conv3");
+        return "conv3";
+      },
+    });
+
+    expect(created).toBe(false); // nothing happens at construction time
+
+    const first = await callPrepare(transport, [userMessage("m1", "first")]);
+    const second = await callPrepare(transport, [userMessage("m2", "second")]);
+
+    expect(first.api).toBe("/api/conversations/conv3/turns/stream");
+    expect(second.api).toBe("/api/conversations/conv3/turns/stream");
+    expect(resolved).toHaveLength(2);
   });
 });
 
-describe("include_notes request flag (NL-04)", () => {
-  it("omits include_notes when the question transport is given no choice", async () => {
-    const prepared = await callPrepare(createQuestionTransport("s1", "c"), [
-      userMessage("m1", "a question"),
-    ]);
-    // No explicit choice → the flag is absent and the server applies its default.
-    expect(prepared.body).toEqual({ question: "a question" });
-  });
-
-  it("carries the chosen include_notes flag on the question body when provided", async () => {
-    const on = await callPrepare(createQuestionTransport("s1", "c", true), [
-      userMessage("m1", "a question"),
-    ]);
-    expect(on.body).toEqual({ question: "a question", include_notes: true });
-
-    const off = await callPrepare(createQuestionTransport("s1", "c", false), [
-      userMessage("m1", "a question"),
-    ]);
-    expect(off.body).toEqual({ question: "a question", include_notes: false });
-  });
-
-  it("omits include_notes when the turn transport is given no choice", async () => {
-    const prepared = await callPrepare(createTurnTransport("sess1", "c"), [
-      userMessage("m1", "a message"),
-    ]);
-    expect(prepared.body).toEqual({ message: "a message" });
-  });
-
-  it("carries the chosen include_notes flag on the turn body when provided", async () => {
-    const on = await callPrepare(createTurnTransport("sess1", "c", true), [
-      userMessage("m1", "a message"),
-    ]);
-    expect(on.body).toEqual({ message: "a message", include_notes: true });
-
-    const off = await callPrepare(createTurnTransport("sess1", "c", false), [
-      userMessage("m1", "a message"),
-    ]);
-    expect(off.body).toEqual({ message: "a message", include_notes: false });
-  });
-});
-
-describe("turnsToUIMessages (D1)", () => {
-  const answered: TeachingTurnView = {
+describe("turnsToUIMessages", () => {
+  const answered: ConversationTurnView = {
     turn_index: 0,
     message: "What is this about?",
+    mode: "answer",
     answer_status: "answered",
     text: "It is about early computing.",
     citations: [citation],
@@ -155,9 +153,10 @@ describe("turnsToUIMessages (D1)", () => {
     model: "local-extractive",
     created_at: "now",
   };
-  const notFound: TeachingTurnView = {
+  const notFound: ConversationTurnView = {
     turn_index: 1,
     message: "and the weather?",
+    mode: "teach",
     answer_status: "not_found_in_source",
     text: "",
     citations: [],
@@ -207,7 +206,7 @@ describe("turnsToUIMessages (D1)", () => {
   });
 });
 
-describe("errorMessageFor (D1)", () => {
+describe("errorMessageFor", () => {
   it("maps each pre-stream failure to a distinct readable message", () => {
     expect(errorMessageFor(401)).toMatch(/sign in/i);
     expect(errorMessageFor(403)).toMatch(/verif/i);

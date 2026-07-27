@@ -24,6 +24,10 @@ level:
 - ``POST   /api/conversations/{id}/turns/stream`` — the full UI Message Stream
   frame sequence, ``not_found_in_scope`` on the status frame, and a mid-stream
   failure rendered as the error frame (CONV-21).
+- Either shape of turn — buffered or streamed — projects a book citation as
+  exactly the citation fields, and a note citation with the origin and identity a
+  client renders distinctly, gated by the conversation's stored notes choice
+  (NL-03).
 
 Seeding mirrors ``test_web_teaching``: sources and corpus through the real
 repositories on the shared rolled-back ``db_conn``.
@@ -38,14 +42,16 @@ from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import Connection
+from sqlalchemy import Connection, func, select
 
+from app.application.conversations import DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT
 from app.domain.entities import (
     ANSWERED,
     MODE_ANSWER,
     MODE_TEACH,
     NOT_FOUND_IN_SCOPE,
     NOT_FOUND_IN_SOURCE,
+    AnswerCompleted,
     AnswerTextDelta,
     Conversation,
     ConversationTurn,
@@ -53,15 +59,18 @@ from app.domain.entities import (
     Evidence,
     GeneratedAnswer,
     HistoryTurn,
+    Note,
     ParsedSection,
     SectionChunk,
     Source,
 )
+from app.infrastructure.db.metadata import conversation_turn_citations, conversation_turns
 from app.infrastructure.db.repositories import (
     SqlAlchemyConversationRepository,
     SqlAlchemyConversationTurnRepository,
     SqlAlchemyCorpusRepository,
     SqlAlchemyEmbeddingIndexRepository,
+    SqlAlchemyNoteRepository,
     SqlAlchemySourceRepository,
 )
 from app.infrastructure.embeddings import DeterministicEmbeddingAdapter
@@ -273,6 +282,46 @@ def _seed_turn(
     return SqlAlchemyConversationTurnRepository(db_conn).add(turn)
 
 
+def _seed_listed_conversation(
+    db_conn: Connection, source_id: UUID, *, mode: str = MODE_ANSWER, **kwargs
+) -> Conversation:
+    """A conversation with one turn in it — the only kind the list returns.
+
+    A conversation with no turn is one whose first message never landed, so the
+    list does not return it; a list fixture built out of bare conversations would
+    be making claims about rows no reader can reach.
+    """
+    conversation = _seed_conversation(db_conn, source_id, **kwargs)
+    _seed_turn(
+        db_conn,
+        conversation,
+        turn_index=0,
+        message="a first message",
+        mode=mode,
+        answer_status=ANSWERED,
+        answer_text=_PHOTO,
+    )
+    return conversation
+
+
+def _seed_note(db_conn: Connection, user_id: str, *, title: str, body: str) -> UUID:
+    """Insert an embedded note for ``user_id`` (its search_vector is trigger-fed)."""
+    repo = SqlAlchemyNoteRepository(db_conn)
+    now = datetime.now(UTC)
+    note = Note(
+        id=uuid4(),
+        user_id=UUID(user_id),
+        title=title,
+        body_markdown=body,
+        created_at=now,
+        updated_at=now,
+    )
+    repo.add(note)
+    adapter = DeterministicEmbeddingAdapter()
+    repo.set_embedding(note.id, embedding=adapter.embed_documents([body])[0], model=adapter.model)
+    return note.id
+
+
 _CONVERSATION_FIELDS = {
     "id",
     "source_id",
@@ -281,6 +330,19 @@ _CONVERSATION_FIELDS = {
     "include_notes",
     "created_at",
     "updated_at",
+}
+
+#: Every field a *book* citation projects, and no more. A note citation adds three
+#: (``origin``/``note_id``/``note_title``); a book one must keep exactly these, so a
+#: client written against book citations never sees the projection widen under it.
+_CITATION_KEYS = {
+    "chunk_id",
+    "source_id",
+    "section_path",
+    "anchor",
+    "page_span",
+    "snippet",
+    "score",
 }
 
 
@@ -505,10 +567,10 @@ def test_list_returns_newest_activity_first_with_source_title_and_turn_count(
     # descending, and names the book each conversation is about.
     source_id, _ = _seed_ready_source(auth_client, db_conn, "list@example.com")
     base = datetime.now(UTC)
-    stale = _seed_conversation(
+    stale = _seed_listed_conversation(
         db_conn, UUID(source_id), title="Older", created_at=base, updated_at=base
     )
-    active = _seed_conversation(
+    active = _seed_listed_conversation(
         db_conn,
         UUID(source_id),
         title="Newer",
@@ -518,7 +580,7 @@ def test_list_returns_newest_activity_first_with_source_title_and_turn_count(
     _seed_turn(
         db_conn,
         active,
-        turn_index=0,
+        turn_index=1,
         message="explain photosynthesis",
         mode=MODE_ANSWER,
         answer_status=ANSWERED,
@@ -538,14 +600,62 @@ def test_list_returns_newest_activity_first_with_source_title_and_turn_count(
         "scope_anchors",
         "include_notes",
         "turn_count",
+        "last_turn_mode",
         "created_at",
         "updated_at",
     }
     assert body[0]["source_title"] == _BOOK_TITLE
     assert body[0]["title"] == "Newer"
     assert body[0]["scope_anchors"] == [_ANCHOR]
-    assert body[0]["turn_count"] == 1
-    assert body[1]["turn_count"] == 0
+    assert body[0]["turn_count"] == 2
+    # Where the thread resumes travels with the row (RA-01): a client that had to
+    # fetch the conversation to find out would pay for every turn and citation in it.
+    assert body[0]["last_turn_mode"] == MODE_ANSWER
+    assert body[1]["turn_count"] == 1
+
+
+def test_list_row_reports_the_mode_the_thread_was_last_answered_in(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # A scoped conversation carries anchors whichever way its turns were answered,
+    # so scope cannot say where it resumes — only the newest turn can. This row is
+    # scoped *and* taught, the case that separates the two.
+    source_id, _ = _seed_ready_source(auth_client, db_conn, "list-mode@example.com")
+    conversation = _seed_conversation(db_conn, UUID(source_id), title="Taught")
+    _seed_turn(
+        db_conn,
+        conversation,
+        turn_index=0,
+        message="teach me this",
+        mode=MODE_TEACH,
+        answer_status=ANSWERED,
+        answer_text=_PHOTO,
+    )
+
+    resp = auth_client.get("/api/conversations")
+
+    assert resp.status_code == 200, resp.text
+    assert [row["last_turn_mode"] for row in resp.json()] == [MODE_TEACH]
+
+
+def test_list_omits_a_conversation_whose_first_message_never_landed(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # WSC-13: a conversation is created just before its first message streams into
+    # it, so a stopped, failed, or abandoned first message can leave one holding
+    # nothing. The client deletes the ones it can, but a tab that is gone cannot —
+    # and the promise is that the dock has nothing to show for it either way.
+    source_id, _ = _seed_ready_source(auth_client, db_conn, "list-orphan@example.com")
+    orphan = _seed_conversation(db_conn, UUID(source_id), title="Never sent")
+    real = _seed_listed_conversation(db_conn, UUID(source_id), title="Answered")
+
+    resp = auth_client.get("/api/conversations", params={"source_id": source_id})
+
+    assert resp.status_code == 200, resp.text
+    assert [row["id"] for row in resp.json()] == [str(real.id)]
+    # Unlisted, not unreachable: the owner can still read and delete it by id, so a
+    # turn arriving late brings it back rather than finding it destroyed.
+    assert auth_client.get(f"/api/conversations/{orphan.id}").status_code == 200
 
 
 def test_list_filters_by_source_and_excludes_other_users(
@@ -555,11 +665,11 @@ def test_list_filters_by_source_and_excludes_other_users(
     # unreachable, and narrowing by a source the caller does not own discloses
     # nothing (an empty list, not a 404).
     owned_id, _ = _seed_ready_source(auth_client, db_conn, "list-owner@example.com")
-    mine = _seed_conversation(db_conn, UUID(owned_id), title="Mine")
+    mine = _seed_listed_conversation(db_conn, UUID(owned_id), title="Mine")
 
     intruder_id = _register(auth_client, "list-intruder@example.com")
     other_source = _persist_source(db_conn, intruder_id)
-    _seed_conversation(db_conn, other_source, title="Theirs")
+    _seed_listed_conversation(db_conn, other_source, title="Theirs")
 
     theirs = auth_client.get("/api/conversations")
     assert [row["title"] for row in theirs.json()] == ["Theirs"]
@@ -576,6 +686,118 @@ def test_list_filters_by_source_and_excludes_other_users(
     assert login.status_code == 200, login.text
     owned = auth_client.get("/api/conversations", params={"source_id": owned_id})
     assert [row["id"] for row in owned.json()] == [str(mine.id)]
+
+
+def test_list_without_pagination_returns_a_bounded_default_page(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # CONV-16: a reader with more history than one page gets one page — the newest
+    # of it — rather than everything they have ever asked.
+    source_id, _ = _seed_ready_source(auth_client, db_conn, "list-default@example.com")
+    base = datetime.now(UTC)
+    seeded = [
+        _seed_listed_conversation(
+            db_conn,
+            UUID(source_id),
+            title=f"Conversation {i}",
+            updated_at=base + timedelta(minutes=i),
+        )
+        for i in range(DEFAULT_PAGE_LIMIT + 3)
+    ]
+
+    resp = auth_client.get("/api/conversations")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert len(body) == DEFAULT_PAGE_LIMIT
+    newest_first = [str(c.id) for c in reversed(seeded)]
+    assert [row["id"] for row in body] == newest_first[:DEFAULT_PAGE_LIMIT]
+
+
+def test_list_limit_and_offset_return_that_window_of_the_order(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # CONV-16: the page a caller names is the window it gets, taken from the same
+    # newest-activity order the unparameterized read uses.
+    source_id, _ = _seed_ready_source(auth_client, db_conn, "list-window@example.com")
+    base = datetime.now(UTC)
+    seeded = [
+        _seed_listed_conversation(
+            db_conn,
+            UUID(source_id),
+            title=f"Conversation {i}",
+            updated_at=base + timedelta(minutes=i),
+        )
+        for i in range(5)
+    ]
+    newest_first = [str(c.id) for c in reversed(seeded)]
+
+    window = auth_client.get("/api/conversations", params={"limit": 2, "offset": 1})
+    past_the_end = auth_client.get("/api/conversations", params={"limit": 2, "offset": 5})
+
+    assert window.status_code == 200, window.text
+    assert [row["id"] for row in window.json()] == newest_first[1:3]
+    # Walking off the end is an empty page, not an error: a caller paging to the end
+    # of its history stops on an empty answer.
+    assert past_the_end.status_code == 200, past_the_end.text
+    assert past_the_end.json() == []
+
+
+def test_list_paged_to_the_end_returns_every_conversation_exactly_once(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # CONV-16: the dock walks this list a page at a time. Conversations touched in
+    # the same instant share an ``updated_at``, which alone cannot order them, so a
+    # walk over a tie-heavy list is where a reader would silently lose a thread —
+    # or be shown one twice — between two pages.
+    source_id, _ = _seed_ready_source(auth_client, db_conn, "list-walk@example.com")
+    tied_at = datetime.now(UTC)
+    seeded = [
+        _seed_listed_conversation(
+            db_conn, UUID(source_id), title=f"Conversation {i}", updated_at=tied_at
+        )
+        for i in range(7)
+    ]
+    # The fixture is only a sensor if the rows really are tied.
+    assert len({c.updated_at for c in seeded}) == 1
+
+    walked: list[str] = []
+    offset = 0
+    while True:
+        page = auth_client.get("/api/conversations", params={"limit": 3, "offset": offset})
+        assert page.status_code == 200, page.text
+        rows = page.json()
+        if not rows:
+            break
+        walked.extend(row["id"] for row in rows)
+        offset += 3
+
+    assert len(walked) == len(seeded), "a page either repeated a conversation or dropped one"
+    assert set(walked) == {str(c.id) for c in seeded}
+    # And the walk is the order itself: asking for the whole list in one page spells
+    # out the same sequence the windows did, which a partial order would not.
+    whole = auth_client.get("/api/conversations", params={"limit": MAX_PAGE_LIMIT})
+    assert [row["id"] for row in whole.json()] == walked
+
+
+def test_list_rejects_a_page_outside_its_bounds(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # CONV-16: the bounds are the endpoint's own — a caller cannot ask for zero rows,
+    # for more than the cap, or for a negative window start.
+    source_id, _ = _seed_ready_source(auth_client, db_conn, "list-bounds@example.com")
+    _seed_conversation(db_conn, UUID(source_id))
+
+    assert auth_client.get("/api/conversations", params={"limit": 0}).status_code == 422
+    assert (
+        auth_client.get("/api/conversations", params={"limit": MAX_PAGE_LIMIT + 1}).status_code
+        == 422
+    )
+    assert auth_client.get("/api/conversations", params={"offset": -1}).status_code == 422
+    # The cap itself is allowed — the rejection is of values beyond it.
+    assert (
+        auth_client.get("/api/conversations", params={"limit": MAX_PAGE_LIMIT}).status_code == 200
+    )
 
 
 def test_list_unauthenticated_returns_401(auth_client: TestClient, db_conn: Connection) -> None:
@@ -801,6 +1023,59 @@ def test_delete_returns_204_and_removes_the_conversation_with_its_turns(
     assert second.status_code == 404, second.text
 
 
+def test_delete_leaves_no_turn_or_citation_row_behind(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # WSC-06: "its turns SHALL no longer be retrievable" is not satisfied by a
+    # conversation row that vanishes while its children stay. An orphan turn keeps
+    # the reader's message and the passages it quoted in the database after they
+    # asked for the thread to be gone, and no API call can see it any more — so the
+    # rows are counted in their own tables. A second conversation is deleted around,
+    # proving the removal is scoped to the one asked for rather than a wipe.
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "delete-rows@example.com")
+    doomed = _seed_conversation(db_conn, UUID(source_id))
+    kept = _seed_conversation(db_conn, UUID(source_id))
+    for conversation in (doomed, kept):
+        for index, message in enumerate(("explain", "and then?")):
+            _seed_turn(
+                db_conn,
+                conversation,
+                turn_index=index,
+                message=message,
+                mode=MODE_TEACH,
+                answer_status=ANSWERED,
+                answer_text=_PHOTO,
+                citations=(_citation(UUID(source_id)), _citation(UUID(source_id))),
+            )
+
+    def _turn_ids(conversation_id: UUID) -> set[UUID]:
+        rows = db_conn.execute(
+            select(conversation_turns.c.id).where(
+                conversation_turns.c.conversation_id == conversation_id
+            )
+        ).all()
+        return {row.id for row in rows}
+
+    def _citation_count(turn_ids: set[UUID]) -> int:
+        if not turn_ids:
+            return 0
+        return db_conn.execute(
+            select(func.count()).where(conversation_turn_citations.c.turn_id.in_(turn_ids))
+        ).scalar_one()
+
+    doomed_turns = _turn_ids(doomed.id)
+    kept_turns = _turn_ids(kept.id)
+    assert len(doomed_turns) == 2
+    assert _citation_count(doomed_turns) == 4
+
+    assert _delete(auth_client, doomed.id, csrf=csrf).status_code == 204
+
+    assert _turn_ids(doomed.id) == set()
+    assert _citation_count(doomed_turns) == 0
+    assert _turn_ids(kept.id) == kept_turns
+    assert _citation_count(kept_turns) == 4
+
+
 def test_delete_missing_and_non_owned_return_identical_404(
     auth_client: TestClient, db_conn: Connection
 ) -> None:
@@ -966,6 +1241,11 @@ def test_post_turn_in_scoped_conversation_reports_not_found_in_scope(
     assert body["citations"] == []
     assert body["evidence_count"] == 0
 
+    # The verdict is what was stored, not a wording the response invented: reading
+    # the conversation back returns the same precise value.
+    read = auth_client.get(f"/api/conversations/{conversation.id}")
+    assert read.json()["turns"][0]["answer_status"] == NOT_FOUND_IN_SCOPE
+
 
 def test_scoped_turn_never_cites_evidence_outside_its_scope(
     auth_client: TestClient, db_conn: Connection
@@ -1097,6 +1377,36 @@ def test_post_turn_blank_and_over_long_messages_return_422(
     assert oversize.status_code == 422, oversize.text
 
 
+def test_post_turn_normalizes_the_message_at_and_within_the_bound(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # CONV-20: the bound is inclusive, and it is the *trimmed* message that is
+    # measured and stored — so padding a message neither costs a reader their turn
+    # nor rides along into the history a later turn is generated from.
+    from app.core.config import get_settings
+
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "turn-normalize@example.com")
+    conversation = _seed_conversation(db_conn, UUID(source_id))
+    at_bound = "a" * get_settings().conversation_message_max_chars
+
+    padded = _post_turn(
+        auth_client,
+        conversation.id,
+        {"message": "  photosynthesis sunlight  ", "mode": MODE_ANSWER},
+        csrf=csrf,
+    )
+    exact = _post_turn(
+        auth_client, conversation.id, {"message": at_bound, "mode": MODE_ANSWER}, csrf=csrf
+    )
+
+    assert padded.status_code == 201, padded.text
+    assert padded.json()["message"] == "photosynthesis sunlight"
+    assert exact.status_code == 201, exact.text
+
+    read = auth_client.get(f"/api/conversations/{conversation.id}")
+    assert read.json()["turns"][0]["message"] == "photosynthesis sunlight"
+
+
 def test_teach_turn_in_whole_book_conversation_returns_409(
     auth_client: TestClient, db_conn: Connection
 ) -> None:
@@ -1184,8 +1494,15 @@ def test_post_turn_not_ready_source_returns_409(
     resp = _post_turn(
         auth_client, conversation.id, {"message": "hi", "mode": MODE_ANSWER}, csrf=csrf
     )
+    streamed = _turn_stream(
+        auth_client, conversation.id, {"message": "hi", "mode": MODE_ANSWER}, csrf=csrf
+    )
 
     assert resp.status_code == 409, resp.text
+    # The streaming sibling decides readiness before the response begins, so the
+    # client meets the same plain conflict rather than a stream that opens and dies.
+    assert streamed.status_code == 409, streamed.text
+    assert "start" not in streamed.text
 
 
 def test_post_turn_claiming_a_taken_index_returns_409(
@@ -1223,7 +1540,7 @@ def test_post_turn_generation_failure_returns_502_and_persists_nothing(
 ) -> None:
     # CONV-20: a failing generation port → 502 with a generic body that leaks no
     # internal detail, and no turn row.
-    from app.infrastructure.web.dependencies import get_answer_generation
+    from app.infrastructure.web.dependencies import get_generation
 
     source_id, csrf = _seed_ready_source(auth_client, db_conn, "turn-502@example.com")
     _embed_all(db_conn, UUID(source_id))
@@ -1235,13 +1552,15 @@ def test_post_turn_generation_failure_returns_502_and_persists_nothing(
         def generate(
             self,
             *,
-            question: str,
+            message: str,
+            mode: str,
             evidence: Sequence[Evidence],
             history: Sequence[HistoryTurn] = (),
+            target_section_path: tuple[str, ...] | None = None,
         ) -> GeneratedAnswer:
             raise RuntimeError("provider-secret-internal-detail")
 
-    auth_client.app.dependency_overrides[get_answer_generation] = lambda: _RaisingAnswerAdapter()
+    auth_client.app.dependency_overrides[get_generation] = lambda: _RaisingAnswerAdapter()
     try:
         resp = _post_turn(
             auth_client,
@@ -1250,9 +1569,13 @@ def test_post_turn_generation_failure_returns_502_and_persists_nothing(
             csrf=csrf,
         )
     finally:
-        auth_client.app.dependency_overrides.pop(get_answer_generation, None)
+        auth_client.app.dependency_overrides.pop(get_generation, None)
 
     assert resp.status_code == 502, resp.text
+    # The reader is told what to do about it, in the same words the streaming twin
+    # sends: a 502 whose body was only "Internal Server Error" — or the provider's
+    # own message — is the failure this asserts against in both directions.
+    assert resp.json()["detail"] == "Answer generation failed. Please try again."
     assert "provider-secret-internal-detail" not in resp.text
     assert auth_client.get(f"/api/conversations/{conversation.id}").json()["turns"] == []
 
@@ -1328,6 +1651,11 @@ def test_turn_stream_emits_the_full_frame_sequence_and_persists_the_turn(
     assert _PHOTO in delta["delta"]
     citations = next(p for p in parts if isinstance(p, dict) and p["type"] == "data-citations")
     assert {c["anchor"] for c in citations["data"]} <= {_ANCHOR, _OTHER_ANCHOR}
+    # A streamed book citation projects exactly the citation fields and nothing
+    # else — a stored id or checksum leaking into the frame would show up here.
+    for citation in citations["data"]:
+        assert set(citation) == _CITATION_KEYS
+        assert citation["source_id"] == source_id
     answer_status = next(
         p for p in parts if isinstance(p, dict) and p["type"] == "data-answer-status"
     )
@@ -1357,7 +1685,19 @@ def test_turn_stream_carries_not_found_in_scope_in_the_status_frame(
 
     assert resp.status_code == 200, resp.text
     parts = _parse_ui_stream(resp.text)
-    assert "text-delta" not in _part_types(parts)
+    # A miss still frames a complete response — it simply carries no answer text and
+    # nothing to cite, so a client renders the verdict rather than an empty answer.
+    assert _part_types(parts) == [
+        "start",
+        "text-start",
+        "text-end",
+        "data-citations",
+        "data-answer-status",
+        "finish",
+        "[DONE]",
+    ]
+    citations = next(p for p in parts if isinstance(p, dict) and p["type"] == "data-citations")
+    assert citations["data"] == []
     answer_status = next(
         p for p in parts if isinstance(p, dict) and p["type"] == "data-answer-status"
     )
@@ -1372,7 +1712,7 @@ def test_turn_stream_mid_stream_failure_emits_the_error_frame_and_persists_nothi
 ) -> None:
     # CONV-21: a provider failure after the first delta is rendered as a protocol
     # error part followed by [DONE] — no finish frame — and persists nothing.
-    from app.infrastructure.web.dependencies import get_answer_generation
+    from app.infrastructure.web.dependencies import get_generation
 
     source_id, csrf = _seed_ready_source(auth_client, db_conn, "stream-mid@example.com")
     _embed_all(db_conn, UUID(source_id))
@@ -1384,25 +1724,27 @@ def test_turn_stream_mid_stream_failure_emits_the_error_frame_and_persists_nothi
         def generate(
             self,
             *,
-            question: str,
+            message: str,
+            mode: str,
             evidence: Sequence[Evidence],
             history: Sequence[HistoryTurn] = (),
+            target_section_path: tuple[str, ...] | None = None,
         ) -> GeneratedAnswer:
             raise AssertionError("stream path must not call generate")
 
         def generate_stream(
             self,
             *,
-            question: str,
+            message: str,
+            mode: str,
             evidence: Sequence[Evidence],
             history: Sequence[HistoryTurn] = (),
+            target_section_path: tuple[str, ...] | None = None,
         ):
             yield AnswerTextDelta(text="partial ")
             raise RuntimeError("provider-secret-internal-detail")
 
-    auth_client.app.dependency_overrides[get_answer_generation] = lambda: (
-        _MidStreamRaisingAnswerAdapter()
-    )
+    auth_client.app.dependency_overrides[get_generation] = lambda: _MidStreamRaisingAnswerAdapter()
     try:
         resp = _turn_stream(
             auth_client,
@@ -1411,7 +1753,7 @@ def test_turn_stream_mid_stream_failure_emits_the_error_frame_and_persists_nothi
             csrf=csrf,
         )
     finally:
-        auth_client.app.dependency_overrides.pop(get_answer_generation, None)
+        auth_client.app.dependency_overrides.pop(get_generation, None)
 
     assert resp.status_code == 200, resp.text
     parts = _parse_ui_stream(resp.text)
@@ -1512,6 +1854,211 @@ def test_turn_endpoints_stay_synchronous_handlers() -> None:
 
     assert not inspect.iscoroutinefunction(post_conversation_turn_stream)
     assert not inspect.iscoroutinefunction(post_conversation_turn)
+
+
+# --- The conversation's notes choice reaches retrieval and the citations (NL-03) --
+
+
+class _CitingCapture:
+    """A generation port that cites everything it is given and remembers what that was.
+
+    The two facts a notes assertion needs are on opposite sides of generation: what
+    retrieval fused (visible only to the port) and what came back as a citation
+    (visible only on the wire). Citing every item joins them, so one request answers
+    both.
+    """
+
+    model = _MODEL
+
+    def __init__(self) -> None:
+        self.evidence_seen: list[Evidence] = []
+
+    def generate(
+        self,
+        *,
+        message: str,
+        mode: str,
+        evidence: Sequence[Evidence],
+        history: Sequence[HistoryTurn] = (),
+        target_section_path: tuple[str, ...] | None = None,
+    ) -> GeneratedAnswer:
+        self.evidence_seen = list(evidence)
+        return GeneratedAnswer(
+            text="a composed answer",
+            cited_chunk_ids=tuple(e.chunk_id for e in evidence),
+            model=_MODEL,
+            found=True,
+        )
+
+    def generate_stream(
+        self,
+        *,
+        message: str,
+        mode: str,
+        evidence: Sequence[Evidence],
+        history: Sequence[HistoryTurn] = (),
+        target_section_path: tuple[str, ...] | None = None,
+    ):
+        self.evidence_seen = list(evidence)
+        yield AnswerTextDelta(text="a composed answer")
+        yield AnswerCompleted(
+            answer=GeneratedAnswer(
+                text="a composed answer",
+                cited_chunk_ids=tuple(e.chunk_id for e in evidence),
+                model=_MODEL,
+                found=True,
+            )
+        )
+
+
+def _note_world(
+    client: TestClient, db_conn: Connection, email: str, *, note_title: str, note_body: str
+) -> tuple[str, str, UUID]:
+    """An owned embedded book plus one embedded note of the same reader."""
+    user_id = _register(client, email)
+    csrf = _csrf(client)
+    source_id = _persist_source(db_conn, user_id)
+    _seed_corpus(db_conn, source_id)
+    _embed_all(db_conn, source_id)
+    note_id = _seed_note(db_conn, user_id, title=note_title, body=note_body)
+    return str(source_id), csrf, note_id
+
+
+def test_turn_fuses_the_readers_note_and_cites_it_distinctly(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # NL-03: a conversation created with notes on reaches the generation port with
+    # the reader's own note among its evidence, and that note comes back as a
+    # citation the client can tell apart — while the book citations beside it keep
+    # exactly the fields they always had.
+    from app.infrastructure.web.dependencies import get_generation
+
+    source_id, csrf, note_id = _note_world(
+        auth_client,
+        db_conn,
+        "conv-note-on@example.com",
+        note_title="My Insight",
+        note_body="photosynthesis and sunlight energy fascinate me every single day",
+    )
+    conversation = _seed_conversation(
+        db_conn,
+        UUID(source_id),
+        scope=(),
+        target_anchor=None,
+        include_notes=True,
+    )
+
+    capture = _CitingCapture()
+    auth_client.app.dependency_overrides[get_generation] = lambda: capture
+    try:
+        resp = _post_turn(
+            auth_client,
+            conversation.id,
+            {"message": "photosynthesis sunlight energy", "mode": MODE_ANSWER},
+            csrf=csrf,
+        )
+    finally:
+        auth_client.app.dependency_overrides.pop(get_generation, None)
+
+    assert resp.status_code == 201, resp.text
+    assert "note" in [e.origin for e in capture.evidence_seen]
+
+    citations = resp.json()["citations"]
+    note_citations = [c for c in citations if c.get("origin") == "note"]
+    assert len(note_citations) == 1
+    assert note_citations[0]["note_id"] == str(note_id)
+    assert note_citations[0]["note_title"] == "My Insight"
+
+    book_citations = [c for c in citations if c.get("origin") != "note"]
+    assert book_citations, "the book is cited alongside the note"
+    for citation in book_citations:
+        assert set(citation) == _CITATION_KEYS
+
+
+def test_turn_in_a_notes_off_conversation_never_sees_a_note(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # NL-03: the choice stored on the conversation is the whole gate — with notes
+    # off, the same note that would otherwise rank never reaches the port and never
+    # appears as a citation.
+    from app.infrastructure.web.dependencies import get_generation
+
+    source_id, csrf, _ = _note_world(
+        auth_client,
+        db_conn,
+        "conv-note-off@example.com",
+        note_title="My Insight",
+        note_body="photosynthesis and sunlight energy fascinate me every single day",
+    )
+    conversation = _seed_conversation(
+        db_conn,
+        UUID(source_id),
+        scope=(),
+        target_anchor=None,
+        include_notes=False,
+    )
+
+    capture = _CitingCapture()
+    auth_client.app.dependency_overrides[get_generation] = lambda: capture
+    try:
+        resp = _post_turn(
+            auth_client,
+            conversation.id,
+            {"message": "photosynthesis sunlight energy", "mode": MODE_ANSWER},
+            csrf=csrf,
+        )
+    finally:
+        auth_client.app.dependency_overrides.pop(get_generation, None)
+
+    assert resp.status_code == 201, resp.text
+    assert "note" not in [e.origin for e in capture.evidence_seen]
+    assert all(c.get("origin") != "note" for c in resp.json()["citations"])
+
+
+def test_turn_stream_note_citation_carries_origin_and_note_identity(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # NL-03 (SSE half): the streamed data-citations frame distinguishes a note
+    # exactly as the JSON body does, so the two rendering paths cannot drift.
+    from app.infrastructure.web.dependencies import get_generation
+
+    source_id, csrf, note_id = _note_world(
+        auth_client,
+        db_conn,
+        "conv-note-stream@example.com",
+        note_title="Stream Note",
+        note_body="photosynthesis and sunlight energy delight me endlessly",
+    )
+    conversation = _seed_conversation(
+        db_conn,
+        UUID(source_id),
+        scope=(),
+        target_anchor=None,
+        include_notes=True,
+    )
+
+    auth_client.app.dependency_overrides[get_generation] = lambda: _CitingCapture()
+    try:
+        resp = _turn_stream(
+            auth_client,
+            conversation.id,
+            {"message": "photosynthesis sunlight energy", "mode": MODE_ANSWER},
+            csrf=csrf,
+        )
+    finally:
+        auth_client.app.dependency_overrides.pop(get_generation, None)
+
+    assert resp.status_code == 200, resp.text
+    parts = _parse_ui_stream(resp.text)
+    citations = next(p for p in parts if isinstance(p, dict) and p["type"] == "data-citations")[
+        "data"
+    ]
+    note_citations = [c for c in citations if c.get("origin") == "note"]
+    assert len(note_citations) == 1
+    assert note_citations[0]["note_id"] == str(note_id)
+    assert note_citations[0]["note_title"] == "Stream Note"
+    for citation in [c for c in citations if c.get("origin") != "note"]:
+        assert set(citation) == _CITATION_KEYS
 
 
 # --- Rate limit: one policy for the whole surface (CONV-22) --------------------
@@ -1647,3 +2194,47 @@ def test_every_mutating_conversation_route_carries_the_one_policy() -> None:
             ], f"{sorted(route.methods)} {route.path}"
         else:
             assert declared == [], f"{sorted(route.methods)} {route.path}"
+
+
+def test_no_mutating_conversation_route_answers_while_the_budget_is_spent() -> None:
+    # WSC-15: the retired surface carried its own limiter dependencies, and they went
+    # with it. What has to survive that deletion is not a declaration but an effect,
+    # so this drives the assembled application with an exhausted limiter and requires
+    # a 429 from every mutating route the conversations router declares — proving
+    # both that the app mounts them all and that the throttle is actually reached.
+    #
+    # The route set is read off the router, never listed here, so a route added later
+    # is covered the day it is declared. No session is established: a throttled route
+    # rejects before it asks who is calling, so an unthrottled one answers 401/403/422
+    # and fails this test rather than passing it by a different door.
+    from app.infrastructure.web.conversations import router
+    from app.infrastructure.web.rate_limit import (
+        InMemoryFixedWindowRateLimiter,
+        get_rate_limiter,
+        set_rate_limiter,
+    )
+    from app.main import create_app
+    from tests.conftest import declared_routes
+
+    app = create_app()
+    declared = {route.path for route in router.routes}
+    mounted = [route for route in declared_routes(app) if route.path in declared]
+    assert {route.path for route in mounted} == declared
+
+    mutating = sorted(
+        (method, route.path)
+        for route in mounted
+        for method in route.methods & {"POST", "PATCH", "PUT", "DELETE"}
+    )
+    assert mutating, "the surface must declare mutating routes, or this proves nothing"
+
+    previous = get_rate_limiter()
+    set_rate_limiter(InMemoryFixedWindowRateLimiter(max_attempts=0, window_seconds=300))
+    try:
+        with TestClient(app) as client:
+            for method, template in mutating:
+                path = template.replace("{conversation_id}", str(uuid4()))
+                resp = client.request(method, path, json={}, headers={"Origin": TEST_ORIGIN})
+                assert resp.status_code == 429, f"{method} {template} -> {resp.status_code}"
+    finally:
+        set_rate_limiter(previous)

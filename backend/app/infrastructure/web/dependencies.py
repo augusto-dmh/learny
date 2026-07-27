@@ -57,7 +57,6 @@ from app.application.notes import (
     ListNotes,
     UpdateNote,
 )
-from app.application.qa import AskQuestion
 from app.application.quiz import (
     ExportQuizDeck,
     ListQuizItems,
@@ -73,29 +72,21 @@ from app.application.retrieval import RetrieveEvidence
 from app.application.reviews import GetDueQueue, ResetSchedule, SubmitReview
 from app.application.sources import CreateSource, GetSource, ListSources
 from app.application.study import ContinueReading, GetStudySummary
-from app.application.teaching import (
-    ListTeachingSessions,
-    PostTeachingTurn,
-    ReadTeachingSession,
-    StartTeachingSession,
-)
 from app.application.vault import ExportVault
 from app.core.config import Settings, get_settings
 from app.core.tracing import bind_trace
 from app.domain.entities import Session, User
 from app.domain.ports import (
-    AnswerGenerationPort,
     EmbeddingPort,
+    GenerationPort,
     IngestionEnqueuer,
     NoteIndexEnqueuer,
     QuizDeckEnqueuer,
     QuizGenerationPort,
     StoragePort,
-    TeachingGenerationPort,
 )
 from app.infrastructure.answering import (
-    build_answer_adapter,
-    build_teaching_adapter,
+    build_generation_adapter,
 )
 from app.infrastructure.clock import SystemClock
 from app.infrastructure.db.engine import get_engine
@@ -432,103 +423,18 @@ def get_retrieve_evidence(conn: DbConnection) -> RetrieveEvidence:
     )
 
 
-# Process-wide answer generator, selected from settings at first use (ADR-0020).
-# ``local`` (default) stays deterministic and network-free; ``anthropic`` builds the
-# Claude adapter. Cached like ``get_settings`` so the provider is resolved once per
-# process, and overridable in tests via ``dependency_overrides[get_answer_generation]``
-# exactly like before.
+# Process-wide generator, selected from settings at first use (ADR-0020). One
+# generator serves both modes: ``local`` (default) stays deterministic and
+# network-free; ``anthropic`` builds the Claude adapter. Cached like ``get_settings``
+# so the provider is resolved once per process, and overridable in tests via
+# ``dependency_overrides[get_generation]``.
 @lru_cache
-def get_answer_generation() -> AnswerGenerationPort:
-    """FastAPI dependency: the settings-selected answer generator (overridable in tests)."""
-    return build_answer_adapter(get_settings())
+def get_generation() -> GenerationPort:
+    """FastAPI dependency: the settings-selected generator (overridable in tests)."""
+    return build_generation_adapter(get_settings())
 
 
-AnswerGeneration = Annotated[AnswerGenerationPort, Depends(get_answer_generation)]
-
-
-def get_ask_question(
-    conn: DbConnection,
-    answer_generation: AnswerGeneration,
-    teaching_generation: TeachingGeneration,
-) -> AskQuestion:
-    """Wire ``AskQuestion`` on the request-scoped connection (QA-01..04, 07..08).
-
-    Composes the two unified services an ask is made of — starting the whole-book
-    conversation and taking its first answer turn — plus the conversation repo the
-    failure path discards through. Both generation ports are injected via
-    ``Depends`` because the unified turn service composes both; overriding the
-    answer port in tests keeps working exactly as before.
-    """
-    return AskQuestion(
-        start=get_start_conversation(conn),
-        post=get_post_conversation_turn(conn, answer_generation, teaching_generation),
-        conversations=SqlAlchemyConversationRepository(conn),
-    )
-
-
-# --- Teaching sessions (Phase 8; compatibility since ADR-0029) -----------------
-#
-# The legacy teaching services are adapters over the unified conversation services
-# below — same request-scoped connection, same repositories, no second stack. Each
-# is wired from the unified getter it delegates to, so the two surfaces can never
-# drift apart in wiring; they disappear together when the panel re-points.
-
-
-def get_start_teaching_session(conn: DbConnection) -> StartTeachingSession:
-    """Wire ``StartTeachingSession`` on the request-scoped connection (TEACH-01..04)."""
-    return StartTeachingSession(start=get_start_conversation(conn))
-
-
-def get_read_teaching_session(conn: DbConnection) -> ReadTeachingSession:
-    """Wire ``ReadTeachingSession`` on the request-scoped connection (TEACH-05/06/20)."""
-    return ReadTeachingSession(read=get_read_conversation(conn))
-
-
-def get_list_teaching_sessions(conn: DbConnection) -> ListTeachingSessions:
-    """Wire ``ListTeachingSessions`` on the request-scoped connection (TEACH-21).
-
-    The one legacy read that is not a unified service: the old panel is rooted at a
-    source (404 when it is not the caller's) and shows only conversations with a
-    teach target (CONV-23).
-    """
-    return ListTeachingSessions(
-        sources=SqlAlchemySourceRepository(conn),
-        conversations=SqlAlchemyConversationRepository(conn),
-        authorize=AuthorizeOwnership(),
-    )
-
-
-# Process-wide teaching generator, selected from settings at first use (ADR-0020),
-# governed by the same ``LEARNY_GENERATION_PROVIDER`` switch as the answer path (D-2):
-# ``local`` (default) stays deterministic and network-free; ``anthropic`` builds the
-# Claude teaching adapter. Cached like ``get_answer_generation`` so the provider is
-# resolved once per process, and overridable in tests via
-# ``dependency_overrides[get_teaching_generation]`` exactly as before.
-@lru_cache
-def get_teaching_generation() -> TeachingGenerationPort:
-    """FastAPI dependency: the settings-selected teaching generator (overridable in tests)."""
-    return build_teaching_adapter(get_settings())
-
-
-TeachingGeneration = Annotated[TeachingGenerationPort, Depends(get_teaching_generation)]
-
-
-def get_post_teaching_turn(
-    conn: DbConnection,
-    answer_generation: AnswerGeneration,
-    teaching_generation: TeachingGeneration,
-) -> PostTeachingTurn:
-    """Wire ``PostTeachingTurn`` on the request-scoped connection (TEACH-07..17, 19, 24).
-
-    Delegates to the unified turn service, which reaches the teaching generator for
-    the ``teach`` mode this adapter fixes. Both ports are injected via ``Depends``
-    because the unified service composes both; overriding either in tests keeps
-    working exactly as before.
-    """
-    return PostTeachingTurn(
-        post=get_post_conversation_turn(conn, answer_generation, teaching_generation),
-        conversations=SqlAlchemyConversationRepository(conn),
-    )
+Generation = Annotated[GenerationPort, Depends(get_generation)]
 
 
 # --- Unified conversations (ADR-0029) ------------------------------------------
@@ -590,14 +496,12 @@ def get_delete_conversation(conn: DbConnection) -> DeleteConversation:
 
 def get_post_conversation_turn(
     conn: DbConnection,
-    answer_generation: AnswerGeneration,
-    teaching_generation: TeachingGeneration,
+    generation: Generation,
 ) -> PostConversationTurn:
     """Wire ``PostConversationTurn`` on the request-scoped connection (CONV-10..14, 20/21).
 
-    Both generation ports are composed because the mode is a per-turn choice: one
-    service answers and teaches, and which port it reaches is decided per request,
-    not per wiring. Injecting them via ``Depends`` keeps both test-overridable, and
+    One generation port serves both modes — the mode is a per-turn argument, not a
+    per-wiring choice. Injecting it via ``Depends`` keeps it test-overridable, and
     the evidence budget / history window come from the ``conversation_*`` settings.
     """
     settings = get_settings()
@@ -607,8 +511,7 @@ def get_post_conversation_turn(
         sources=SqlAlchemySourceRepository(conn),
         corpus=SqlAlchemyCorpusRepository(conn),
         retrieve=get_retrieve_evidence(conn),
-        answer_generation=answer_generation,
-        teaching_generation=teaching_generation,
+        generation=generation,
         authorize=AuthorizeOwnership(),
         clock=_clock,
         ids=uuid4,
@@ -849,7 +752,7 @@ def get_capture_highlight(conn: DbConnection) -> CaptureHighlight:
 
 
 # Process-wide quiz generator and embedder, resolved once at first use like
-# ``get_answer_generation``. Building these per request would mint a provider SDK
+# ``get_generation``. Building these per request would mint a provider SDK
 # client — and its own HTTPS connection pool — on every card call, paying a fresh TLS
 # handshake on the path where the student is watching a popover, and leaking the pool
 # afterwards. Overridable in tests via ``dependency_overrides`` exactly as before.

@@ -23,17 +23,16 @@ import pytest
 
 from app.application.grounding import ground
 from app.domain.entities import (
+    MODE_ANSWER,
+    MODE_TEACH,
     AnswerCompleted,
     AnswerTextDelta,
     Evidence,
     HistoryTurn,
 )
-from app.domain.ports import AnswerGenerationPort, TeachingGenerationPort
+from app.domain.ports import GenerationPort
 from app.infrastructure.answering import anthropic as anthropic_module
-from app.infrastructure.answering.anthropic import (
-    AnthropicAnswerAdapter,
-    AnthropicTeachingAdapter,
-)
+from app.infrastructure.answering.anthropic import AnthropicGenerationAdapter
 from app.infrastructure.answering.prompts import (
     ANSWER_SYSTEM_PROMPT,
     SENTINEL,
@@ -91,9 +90,9 @@ class _FakeClient:
         self.messages = _FakeMessagesResource(message)
 
 
-def _adapter(message: _FakeMessage) -> tuple[AnthropicAnswerAdapter, _FakeClient]:
+def _adapter(message: _FakeMessage) -> tuple[AnthropicGenerationAdapter, _FakeClient]:
     client = _FakeClient(message)
-    adapter = AnthropicAnswerAdapter(
+    adapter = AnthropicGenerationAdapter(
         api_key="unused-fake", model=_MODEL, max_tokens=_MAX_TOKENS, client=client
     )
     return adapter, client
@@ -118,7 +117,7 @@ def test_request_sends_one_citations_enabled_document_per_chunk_in_order() -> No
     evidence = [_evidence("alpha"), _evidence("beta")]
     adapter, client = _adapter(_FakeMessage([_FakeTextBlock("ok")]))
 
-    adapter.generate(question="What is X?", evidence=evidence)
+    adapter.generate(mode=MODE_ANSWER, message="What is X?", evidence=evidence)
 
     call = client.messages.calls[0]
     assert call["model"] == _MODEL
@@ -151,7 +150,7 @@ def test_document_title_falls_back_to_anchor_when_section_path_empty() -> None:
     item = _evidence("solo", section_path=())
     adapter, client = _adapter(_FakeMessage([_FakeTextBlock("ok")]))
 
-    adapter.generate(question="q", evidence=[item])
+    adapter.generate(mode=MODE_ANSWER, message="q", evidence=[item])
 
     doc = client.messages.calls[0]["messages"][0]["content"][0]
     assert doc["title"] == item.anchor
@@ -170,7 +169,7 @@ def test_answer_request_without_history_is_the_single_shot_ask() -> None:
     evidence = [_evidence("alpha")]
     adapter, client = _adapter(_FakeMessage([_FakeTextBlock("ok")]))
 
-    adapter.generate(question="What is X?", evidence=evidence)
+    adapter.generate(mode=MODE_ANSWER, message="What is X?", evidence=evidence)
 
     call = client.messages.calls[0]
     # Exactly the pre-history request: the frozen system prompt with no breakpoint,
@@ -193,7 +192,7 @@ def test_answer_request_renders_history_before_the_current_question() -> None:
     ]
     adapter, client = _adapter(_FakeMessage([_FakeTextBlock("ok")]))
 
-    adapter.generate(question="And why?", evidence=evidence, history=history)
+    adapter.generate(mode=MODE_ANSWER, message="And why?", evidence=evidence, history=history)
 
     call = client.messages.calls[0]
     # The system prompt is untouched by history — no interpolation, no breakpoint.
@@ -224,7 +223,9 @@ def test_only_the_latest_answer_history_block_carries_the_cache_breakpoint() -> 
     ]
     adapter, client = _adapter(_FakeMessage([_FakeTextBlock("ok")]))
 
-    adapter.generate(question="now", evidence=[_evidence("alpha")], history=history)
+    adapter.generate(
+        mode=MODE_ANSWER, message="now", evidence=[_evidence("alpha")], history=history
+    )
 
     messages = client.messages.calls[0]["messages"]
     assert "cache_control" not in messages[1]["content"][0]
@@ -241,8 +242,12 @@ def test_answer_stream_sends_the_same_request_as_the_buffered_path() -> None:
         _FakeStream(deltas=["ok"], final_message=_FakeMessage([_FakeTextBlock("ok")]))
     )
 
-    buffered_adapter.generate(question="q", evidence=evidence, history=history)
-    list(stream_adapter.generate_stream(question="q", evidence=evidence, history=history))
+    buffered_adapter.generate(mode=MODE_ANSWER, message="q", evidence=evidence, history=history)
+    list(
+        stream_adapter.generate_stream(
+            mode=MODE_ANSWER, message="q", evidence=evidence, history=history
+        )
+    )
 
     buffered_call = buffered_client.messages.calls[0]
     streamed_call = stream_client.messages.stream_calls[0]
@@ -262,7 +267,7 @@ def test_citations_map_by_document_index_not_title() -> None:
     )
     adapter, _ = _adapter(message)
 
-    result = adapter.generate(question="q", evidence=evidence)
+    result = adapter.generate(mode=MODE_ANSWER, message="q", evidence=evidence)
 
     assert result.found is True
     assert result.cited_chunk_ids == (evidence[1].chunk_id,)
@@ -278,7 +283,7 @@ def test_citations_dedup_keeping_first_occurrence_order() -> None:
     )
     adapter, _ = _adapter(message)
 
-    result = adapter.generate(question="q", evidence=evidence)
+    result = adapter.generate(mode=MODE_ANSWER, message="q", evidence=evidence)
 
     # First-occurrence order across blocks (1 then 0); the repeat of 1 is dropped.
     assert result.cited_chunk_ids == (evidence[1].chunk_id, evidence[0].chunk_id)
@@ -291,7 +296,7 @@ def test_whole_reply_sentinel_is_not_found_with_empty_text() -> None:
     evidence = [_evidence("alpha")]
     adapter, _ = _adapter(_FakeMessage([_FakeTextBlock(SENTINEL)]))
 
-    result = adapter.generate(question="q", evidence=evidence)
+    result = adapter.generate(mode=MODE_ANSWER, message="q", evidence=evidence)
 
     assert result.found is False
     assert result.text == ""
@@ -303,7 +308,7 @@ def test_sentinel_surrounded_by_whitespace_is_not_found() -> None:
     evidence = [_evidence("alpha")]
     adapter, _ = _adapter(_FakeMessage([_FakeTextBlock(f"  {SENTINEL}\n")]))
 
-    result = adapter.generate(question="q", evidence=evidence)
+    result = adapter.generate(mode=MODE_ANSWER, message="q", evidence=evidence)
 
     assert result.found is False
     assert result.text == ""
@@ -316,7 +321,7 @@ def test_embedded_sentinel_stays_prose() -> None:
     message = _FakeMessage([_FakeTextBlock(prose, [_FakeCitation(0)])])
     adapter, _ = _adapter(message)
 
-    result = adapter.generate(question="q", evidence=evidence)
+    result = adapter.generate(mode=MODE_ANSWER, message="q", evidence=evidence)
 
     assert result.found is True
     assert result.text == prose
@@ -334,7 +339,7 @@ def test_max_tokens_returns_partial_answer_without_raising() -> None:
     )
     adapter, _ = _adapter(message)
 
-    result = adapter.generate(question="q", evidence=evidence)
+    result = adapter.generate(mode=MODE_ANSWER, message="q", evidence=evidence)
 
     assert result.found is True
     assert result.text == "Partial answer"
@@ -345,7 +350,7 @@ def test_max_tokens_returns_partial_answer_without_raising() -> None:
 
 
 def test_model_identity_readable_without_a_generate_call() -> None:
-    adapter = AnthropicAnswerAdapter(
+    adapter = AnthropicGenerationAdapter(
         api_key="unused-fake", model=_MODEL, max_tokens=_MAX_TOKENS, client=None
     )
 
@@ -378,7 +383,7 @@ def test_out_of_range_index_yields_no_citation_and_grounds_to_not_found() -> Non
     message = _FakeMessage([_FakeTextBlock("An answer", [_FakeCitation(5)])])
     adapter, _ = _adapter(message)
 
-    result = adapter.generate(question="q", evidence=evidence)
+    result = adapter.generate(mode=MODE_ANSWER, message="q", evidence=evidence)
 
     assert result.cited_chunk_ids == ()
     assert ground(result, list(evidence)) is None
@@ -398,9 +403,9 @@ _CACHE_1H = {"type": "ephemeral", "ttl": "1h"}
 
 def _teaching_adapter(
     message: _FakeMessage,
-) -> tuple[AnthropicTeachingAdapter, _FakeClient]:
+) -> tuple[AnthropicGenerationAdapter, _FakeClient]:
     client = _FakeClient(message)
-    adapter = AnthropicTeachingAdapter(
+    adapter = AnthropicGenerationAdapter(
         api_key="unused-fake", model=_MODEL, max_tokens=_MAX_TOKENS, client=client
     )
     return adapter, client
@@ -415,6 +420,7 @@ def test_teaching_request_layout_history_evidence_and_final_turn() -> None:
     adapter, client = _teaching_adapter(_FakeMessage([_FakeTextBlock("ok")]))
 
     adapter.generate(
+        mode=MODE_TEACH,
         message="What is X?",
         target_section_path=("Chapter 1", "Section A"),
         history=history,
@@ -453,12 +459,14 @@ def test_teaching_system_prompt_is_frozen_and_byte_stable_across_calls() -> None
     adapter, client = _teaching_adapter(_FakeMessage([_FakeTextBlock("ok")]))
 
     adapter.generate(
+        mode=MODE_TEACH,
         message="first",
         target_section_path=("Ch 1", "A"),
         history=[HistoryTurn(message="q1", response_text="a1")],
         evidence=[_evidence("alpha")],
     )
     adapter.generate(
+        mode=MODE_TEACH,
         message="second",
         target_section_path=("Ch 9", "Z"),
         history=[
@@ -484,6 +492,7 @@ def test_only_latest_history_block_carries_second_breakpoint() -> None:
     adapter, client = _teaching_adapter(_FakeMessage([_FakeTextBlock("ok")]))
 
     adapter.generate(
+        mode=MODE_TEACH,
         message="now",
         target_section_path=("Ch", "A"),
         history=history,
@@ -503,6 +512,7 @@ def test_empty_history_has_only_the_system_breakpoint() -> None:
     adapter, client = _teaching_adapter(_FakeMessage([_FakeTextBlock("ok")]))
 
     adapter.generate(
+        mode=MODE_TEACH,
         message="hello",
         target_section_path=("Ch", "A"),
         history=[],
@@ -524,6 +534,7 @@ def test_target_section_rendered_with_arrow_separator_and_message() -> None:
     adapter, client = _teaching_adapter(_FakeMessage([_FakeTextBlock("ok")]))
 
     adapter.generate(
+        mode=MODE_TEACH,
         message="Please explain the loci method.",
         target_section_path=("Part I", "Chapter 3", "The Method of Loci"),
         history=[],
@@ -536,10 +547,51 @@ def test_target_section_rendered_with_arrow_separator_and_message() -> None:
     assert "Please explain the loci method." in text_block["text"]
 
 
+def test_answer_mode_with_a_target_still_sends_the_answer_request() -> None:
+    # A conversation scoped to a chapter carries that chapter as its target snapshot
+    # in either mode (AD-194), so a target can accompany an answer turn. The mode is
+    # what picks the prompt: an adapter reading "teach" from the target's presence
+    # would answer scoped questions with the teaching prompt and a section header the
+    # reader never asked for.
+    adapter, client = _adapter(_FakeMessage([_FakeTextBlock("ok")]))
+
+    adapter.generate(
+        mode=MODE_ANSWER,
+        message="What is anchoring?",
+        target_section_path=("Part I", "Chapter 3"),
+        evidence=[_evidence("alpha")],
+    )
+
+    call = client.messages.calls[0]
+    assert call["system"] == [{"type": "text", "text": ANSWER_SYSTEM_PROMPT}]
+    text_block = call["messages"][0]["content"][-1]
+    assert text_block == {"type": "text", "text": "What is anchoring?"}
+
+
+def test_answer_mode_stream_with_a_target_still_sends_the_answer_request() -> None:
+    # The streaming half of the same trap, assembled through the same helper.
+    stream = _FakeStream(deltas=["ok"], final_message=_FakeMessage([_FakeTextBlock("ok")]))
+    adapter, client = _streaming_answer_adapter(stream)
+
+    list(
+        adapter.generate_stream(
+            mode=MODE_ANSWER,
+            message="What is anchoring?",
+            target_section_path=("Part I", "Chapter 3"),
+            evidence=[_evidence("alpha")],
+        )
+    )
+
+    call = client.messages.stream_calls[0]
+    assert call["system"] == [{"type": "text", "text": ANSWER_SYSTEM_PROMPT}]
+    assert call["messages"][0]["content"][-1] == {"type": "text", "text": "What is anchoring?"}
+
+
 def test_teaching_whole_reply_sentinel_is_not_found() -> None:
     adapter, _ = _teaching_adapter(_FakeMessage([_FakeTextBlock(SENTINEL)]))
 
     result = adapter.generate(
+        mode=MODE_TEACH,
         message="unrelated question",
         target_section_path=("Ch", "A"),
         history=[],
@@ -565,6 +617,7 @@ def test_teaching_citations_map_by_document_index() -> None:
     adapter, _ = _teaching_adapter(message)
 
     result = adapter.generate(
+        mode=MODE_TEACH,
         message="teach me",
         target_section_path=("Ch", "A"),
         history=[],
@@ -646,9 +699,9 @@ class _FakeStreamingClient:
 
 def _streaming_answer_adapter(
     stream: _FakeStream,
-) -> tuple[AnthropicAnswerAdapter, _FakeStreamingClient]:
+) -> tuple[AnthropicGenerationAdapter, _FakeStreamingClient]:
     client = _FakeStreamingClient(stream)
-    adapter = AnthropicAnswerAdapter(
+    adapter = AnthropicGenerationAdapter(
         api_key="unused-fake", model=_MODEL, max_tokens=_MAX_TOKENS, client=client
     )
     return adapter, client
@@ -661,7 +714,7 @@ def test_answer_stream_maps_text_events_to_deltas_then_one_completed() -> None:
     )
     adapter, client = _streaming_answer_adapter(stream)
 
-    events = list(adapter.generate_stream(question="q", evidence=evidence))
+    events = list(adapter.generate_stream(mode=MODE_ANSWER, message="q", evidence=evidence))
 
     deltas = [e for e in events if isinstance(e, AnswerTextDelta)]
     assert deltas == [AnswerTextDelta(text="Hello "), AnswerTextDelta(text="world")]
@@ -686,10 +739,12 @@ def test_answer_stream_completed_parse_equals_buffered_parse() -> None:
     stream_adapter, _ = _streaming_answer_adapter(
         _FakeStream(deltas=["answer"], final_message=final)
     )
-    completed = list(stream_adapter.generate_stream(question="q", evidence=evidence))[-1]
+    completed = list(
+        stream_adapter.generate_stream(mode=MODE_ANSWER, message="q", evidence=evidence)
+    )[-1]
 
     buffered_adapter, _ = _adapter(final)
-    buffered = buffered_adapter.generate(question="q", evidence=evidence)
+    buffered = buffered_adapter.generate(mode=MODE_ANSWER, message="q", evidence=evidence)
 
     assert isinstance(completed, AnswerCompleted)
     assert completed.answer == buffered
@@ -704,7 +759,7 @@ def test_answer_stream_close_closes_the_sdk_stream() -> None:
     )
     adapter, _ = _streaming_answer_adapter(stream)
 
-    gen = adapter.generate_stream(question="q", evidence=[_evidence("alpha")])
+    gen = adapter.generate_stream(mode=MODE_ANSWER, message="q", evidence=[_evidence("alpha")])
     first = next(gen)
     assert first == AnswerTextDelta(text="one ")
     assert stream.closed is False  # still open mid-stream
@@ -720,12 +775,13 @@ def test_teaching_stream_maps_deltas_and_carries_cached_system() -> None:
         deltas=["Teach ", "this"], final_message=_FakeMessage([_FakeTextBlock("Teach this")])
     )
     client = _FakeStreamingClient(stream)
-    adapter = AnthropicTeachingAdapter(
+    adapter = AnthropicGenerationAdapter(
         api_key="unused-fake", model=_MODEL, max_tokens=_MAX_TOKENS, client=client
     )
 
     events = list(
         adapter.generate_stream(
+            mode=MODE_TEACH,
             message="explain",
             target_section_path=("Ch", "A"),
             history=[HistoryTurn(message="hi", response_text="hello")],
@@ -743,13 +799,91 @@ def test_teaching_stream_maps_deltas_and_carries_cached_system() -> None:
     ]
 
 
-def test_anthropic_adapters_conform_to_their_port_protocols() -> None:
-    # GEN-12: with generate_stream added, the Anthropic adapters satisfy the
-    # runtime-checkable generation ports structurally.
-    answer = AnthropicAnswerAdapter(api_key="x", model=_MODEL, max_tokens=_MAX_TOKENS)
-    teaching = AnthropicTeachingAdapter(api_key="x", model=_MODEL, max_tokens=_MAX_TOKENS)
-    assert isinstance(answer, AnswerGenerationPort)
-    assert isinstance(teaching, TeachingGenerationPort)
+def test_anthropic_adapter_conforms_to_the_port_protocol() -> None:
+    # GEN-12: with generate_stream added, the Anthropic adapter satisfies the
+    # runtime-checkable generation port structurally.
+    adapter = AnthropicGenerationAdapter(api_key="x", model=_MODEL, max_tokens=_MAX_TOKENS)
+    assert isinstance(adapter, GenerationPort)
+
+
+# --- Provider failure and timeout (QA-17 / TEACH-13) ---------------------------
+#
+# The adapter catches nothing: a provider failure — a timeout like any other —
+# leaves this boundary as the exact exception the SDK raised, in either mode and on
+# either path, and it is the application service that turns it into the 502-mapped
+# ``AnswerGenerationFailed``. An adapter that swallowed, retried, or re-wrapped a
+# provider error would silently change what the reader is told.
+
+
+class _APITimeoutError(Exception):
+    """Stand-in for the SDK's timeout error — an ordinary exception to this layer."""
+
+
+class _RaisingMessagesResource:
+    def __init__(self, error: Exception) -> None:
+        self._error = error
+        self.calls: list[dict[str, object]] = []
+
+    def create(self, **kwargs: object) -> object:
+        self.calls.append(kwargs)
+        raise self._error
+
+    def stream(self, **kwargs: object) -> object:
+        self.calls.append(kwargs)
+        raise self._error
+
+
+class _RaisingClient:
+    def __init__(self, error: Exception) -> None:
+        self.messages = _RaisingMessagesResource(error)
+
+
+@pytest.mark.parametrize("mode", [MODE_ANSWER, MODE_TEACH])
+@pytest.mark.parametrize("error", [_APITimeoutError("timed out"), RuntimeError("provider down")])
+def test_provider_failure_propagates_unwrapped_from_the_buffered_path(
+    mode: str, error: Exception
+) -> None:
+    adapter = AnthropicGenerationAdapter(
+        api_key="unused-fake",
+        model=_MODEL,
+        max_tokens=_MAX_TOKENS,
+        client=_RaisingClient(error),
+    )
+
+    with pytest.raises(type(error)) as excinfo:
+        adapter.generate(
+            message="q",
+            mode=mode,
+            evidence=[_evidence("alpha")],
+            target_section_path=("Ch", "A") if mode == MODE_TEACH else None,
+        )
+
+    assert excinfo.value is error
+
+
+@pytest.mark.parametrize("mode", [MODE_ANSWER, MODE_TEACH])
+@pytest.mark.parametrize("error", [_APITimeoutError("timed out"), RuntimeError("provider down")])
+def test_provider_failure_propagates_unwrapped_from_the_streaming_path(
+    mode: str, error: Exception
+) -> None:
+    adapter = AnthropicGenerationAdapter(
+        api_key="unused-fake",
+        model=_MODEL,
+        max_tokens=_MAX_TOKENS,
+        client=_RaisingClient(error),
+    )
+
+    stream = adapter.generate_stream(
+        message="q",
+        mode=mode,
+        evidence=[_evidence("alpha")],
+        target_section_path=("Ch", "A") if mode == MODE_TEACH else None,
+    )
+
+    with pytest.raises(type(error)) as excinfo:
+        list(stream)
+
+    assert excinfo.value is error
 
 
 # --- Live smoke (GEN-20) — real provider, skipped offline / without a key -------
@@ -773,8 +907,8 @@ _VOLCANO = "A volcano erupts when molten magma escapes upward through a vent in 
 _PRINTING = "The printing press let a workshop reproduce a page from movable metal type."
 
 
-def _live_answer_adapter() -> AnthropicAnswerAdapter:
-    return AnthropicAnswerAdapter(
+def _live_answer_adapter() -> AnthropicGenerationAdapter:
+    return AnthropicGenerationAdapter(
         api_key=os.environ["LEARNY_ANTHROPIC_API_KEY"], model=_MODEL, max_tokens=_MAX_TOKENS
     )
 
@@ -801,11 +935,12 @@ def test_live_answer_returns_cited_prose() -> None:
 @_LIVE_SKIP
 def test_live_teaching_turn_returns_cited_prose() -> None:
     evidence = [_evidence(_VOLCANO)]
-    adapter = AnthropicTeachingAdapter(
+    adapter = AnthropicGenerationAdapter(
         api_key=os.environ["LEARNY_ANTHROPIC_API_KEY"], model=_MODEL, max_tokens=_MAX_TOKENS
     )
 
     result = adapter.generate(
+        mode=MODE_TEACH,
         message="How does a volcano erupt?",
         target_section_path=("How Volcanoes Erupt",),
         history=[],

@@ -23,12 +23,10 @@ from app.infrastructure.web.ingestion import router as ingestion_router
 from app.infrastructure.web.instrument import router as instrument_router
 from app.infrastructure.web.middleware import RequestContextMiddleware
 from app.infrastructure.web.notes import router as notes_router
-from app.infrastructure.web.questions import router as questions_router
 from app.infrastructure.web.quiz import router as quiz_router
 from app.infrastructure.web.retrieval import router as retrieval_router
 from app.infrastructure.web.sources import router as sources_router
 from app.infrastructure.web.study import router as study_router
-from app.infrastructure.web.teaching import router as teaching_router
 from app.infrastructure.web.vault import router as vault_router
 
 #: ``LEARNY_ENVIRONMENT`` value that marks a process as production.
@@ -93,8 +91,6 @@ def create_app() -> FastAPI:
     app.include_router(sources_router)
     app.include_router(ingestion_router)
     app.include_router(retrieval_router)
-    app.include_router(questions_router)
-    app.include_router(teaching_router)
     app.include_router(conversations_router)
     app.include_router(quiz_router)
     app.include_router(notes_router)

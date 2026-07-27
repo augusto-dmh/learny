@@ -14,7 +14,7 @@
 import { useCallback, useState } from "react";
 
 import { saveAnswerAsNote } from "@/app/lib/answer-notes";
-import { type Citation } from "@/app/lib/questions";
+import { type Citation } from "@/app/lib/citations";
 import { Button } from "@/components/ui/button";
 
 export function SaveToNoteAction({

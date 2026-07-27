@@ -23,6 +23,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import (
     Connection,
     bindparam,
+    exists,
     func,
     insert,
     literal_column,
@@ -869,9 +870,9 @@ class SqlAlchemyConversationRepository:
 
     The aggregate carries no ``user_id`` (AD-014), so the two list reads reach the
     owner by joining ``sources``; ``list_for_user`` scopes to the caller in SQL, and
-    every read carries the source title and a correlated turn count so a list row is
-    complete without a second query. Both orderings break ties on ``id`` so equal
-    timestamps still produce one stable order.
+    every read carries the source title, a correlated turn count, and the newest
+    turn's mode, so a list row is complete without a second query. Both orderings
+    break ties on ``id`` so equal timestamps still produce one stable order.
     """
 
     def __init__(self, connection: Connection) -> None:
@@ -908,26 +909,40 @@ class SqlAlchemyConversationRepository:
         return _to_conversation(row) if row is not None else None
 
     def list_for_user(
-        self, user_id: UUID, source_id: UUID | None = None
+        self,
+        user_id: UUID,
+        source_id: UUID | None = None,
+        *,
+        limit: int,
+        offset: int = 0,
     ) -> list[ConversationSummary]:
         # Ownership is the join, not a post-filter: another user's conversations are
         # unreachable by this query (I-5).
-        statement = self._summary_select().where(sources.c.user_id == user_id)
+        #
+        # A conversation with no turn is never listed. One is created a moment before
+        # its first message streams into it, so a message that fails, is stopped, or
+        # is abandoned when the tab closes can leave one behind with nothing in it.
+        # The client deletes the ones it can, but a browser that is gone cannot
+        # apologize — so the promise that a failed first message leaves nothing to
+        # find is kept here, where it holds no matter what the browser managed to do.
+        # Nothing else creates a conversation, so there is no empty one a reader is
+        # meant to see.
+        statement = (
+            self._summary_select()
+            .where(sources.c.user_id == user_id)
+            .where(
+                exists(select(1).where(conversation_turns.c.conversation_id == conversations.c.id))
+            )
+        )
         if source_id is not None:
             statement = statement.where(conversations.c.source_id == source_id)
         rows = self._conn.execute(
+            # The id tiebreaker makes this order total, which is what lets a window
+            # be taken by offset without a row ever falling between two pages;
+            # ix_conversations_updated_at_id serves exactly this ordering.
             statement.order_by(conversations.c.updated_at.desc(), conversations.c.id.desc())
-        ).all()
-        return [_to_conversation_summary(row) for row in rows]
-
-    def list_for_source_with_target(self, source_id: UUID) -> list[ConversationSummary]:
-        rows = self._conn.execute(
-            self._summary_select()
-            .where(conversations.c.source_id == source_id)
-            # Conversations with no teach target were never started from the Teach
-            # panel, so the panel does not show them.
-            .where(conversations.c.target_anchor.is_not(None))
-            .order_by(conversations.c.created_at.desc(), conversations.c.id.desc())
+            .limit(limit)
+            .offset(offset)
         ).all()
         return [_to_conversation_summary(row) for row in rows]
 
@@ -961,9 +976,21 @@ class SqlAlchemyConversationRepository:
             .scalar_subquery()
             .label("turn_count")
         )
-        return select(conversations, turn_count, sources.c.title.label("source_title")).select_from(
-            conversations.join(sources, conversations.c.source_id == sources.c.id)
+        # The mode of the newest turn, which is the one that speaks for the thread.
+        # Read here rather than by the caller: a list row that made a reader fetch a
+        # whole conversation to learn where it resumes would cost every citation of
+        # every turn to answer one word.
+        last_turn_mode = (
+            select(conversation_turns.c.mode)
+            .where(conversation_turns.c.conversation_id == conversations.c.id)
+            .order_by(conversation_turns.c.turn_index.desc())
+            .limit(1)
+            .scalar_subquery()
+            .label("last_turn_mode")
         )
+        return select(
+            conversations, turn_count, last_turn_mode, sources.c.title.label("source_title")
+        ).select_from(conversations.join(sources, conversations.c.source_id == sources.c.id))
 
 
 class SqlAlchemyConversationTurnRepository:
@@ -2280,6 +2307,7 @@ def _to_conversation_summary(row) -> ConversationSummary:  # noqa: ANN001
         conversation=_to_conversation(row),
         turn_count=row.turn_count,
         source_title=row.source_title,
+        last_turn_mode=row.last_turn_mode,
     )
 
 

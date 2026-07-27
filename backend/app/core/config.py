@@ -7,28 +7,36 @@ nothing here is committed with real values. See `.env.example` for the contract.
 from __future__ import annotations
 
 import logging
+import os
+from contextvars import ContextVar
 from functools import lru_cache
 
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings.sources import PydanticBaseSettingsSource
 
 logger = logging.getLogger(__name__)
 
-# Knobs the unified conversation settings replaced, mapped to the setting that now
-# decides the value and the environment variable an operator would have tuned. Each
-# is still declared below — see the note there — and each one that is actually set
-# earns a startup warning, because the value it used to control has moved.
+# Environment variables the unified conversation settings replaced, mapped to the
+# setting that now decides the value. These are no longer fields: ``extra`` is
+# ``ignore``, so a deployment that still sets one boots normally — which is exactly
+# why the names are kept here. The variable being silently accepted is what makes a
+# dead tuning look like a live one, so each one still present in the environment
+# earns a startup warning.
 _RETIRED_KNOBS = {
-    "qa_evidence_top_k": ("LEARNY_QA_EVIDENCE_TOP_K", "conversation_evidence_top_k"),
-    "teaching_evidence_top_k": (
-        "LEARNY_TEACHING_EVIDENCE_TOP_K",
-        "conversation_evidence_top_k",
-    ),
-    "teaching_history_turns": (
-        "LEARNY_TEACHING_HISTORY_TURNS",
-        "conversation_history_turns",
-    ),
+    "LEARNY_QA_EVIDENCE_TOP_K": "conversation_evidence_top_k",
+    "LEARNY_TEACHING_EVIDENCE_TOP_K": "conversation_evidence_top_k",
+    "LEARNY_TEACHING_HISTORY_TURNS": "conversation_history_turns",
+    "LEARNY_QA_QUESTION_MAX_CHARS": "conversation_message_max_chars",
+    "LEARNY_TEACHING_MESSAGE_MAX_CHARS": "conversation_message_max_chars",
 }
+
+# The variable names the env file of the settings instance currently being built
+# carries. Set while its sources are assembled and read back by the retired-knob
+# warning, which runs later in the same instantiation: the env file resolved for an
+# instance (``_env_file`` may override the class default) is knowable only from the
+# source that read it, and never reaches the model itself.
+_env_file_vars: ContextVar[frozenset[str]] = ContextVar("_env_file_vars", default=frozenset())
 
 
 class Settings(BaseSettings):
@@ -165,30 +173,8 @@ class Settings(BaseSettings):
     retrieval_notes_weight: float = 1.0
     retrieval_notes_snippet_chars: int = 2000
 
-    # Cited Q&A (Phase 7) — question length bound enforced by the web validator
-    # and the server-controlled evidence budget. ``qa_evidence_top_k`` is the
-    # ``top_k`` handed to Phase-6 retrieval; keep it ≤ ``retrieval_max_top_k``.
-    qa_question_max_chars: int = 2000
-    # Deprecated: superseded by ``conversation_evidence_top_k`` and read by nothing.
-    # It stays declared not because an env file needs it to validate — ``extra`` is
-    # ``ignore``, so an undeclared ``LEARNY_*`` var validates fine — but because a
-    # harmless declaration is the cheapest way to keep the name documented and to
-    # notice a deployment that still sets it (see ``_warn_about_retired_knobs``). It
-    # retires with the legacy questions endpoints.
-    qa_evidence_top_k: int = 8
-
-    # Teaching sessions (Phase 8) — message length bound enforced by the web
-    # validator, the server-controlled evidence budget handed to scoped retrieval
-    # (keep ≤ ``retrieval_max_top_k``), and the number of prior turns passed to the
-    # generation port as bounded context (TEACH-12).
-    teaching_message_max_chars: int = 2000
-    # Deprecated: superseded by the ``conversation_*`` pair below, on the same terms
-    # as ``qa_evidence_top_k``.
-    teaching_evidence_top_k: int = 8
-    teaching_history_turns: int = 6
-
     # Conversations (ADR-0029) — one policy for every grounded conversation,
-    # replacing the separate Q&A and teaching knobs above. The evidence budget is
+    # replacing the separate Q&A and teaching knobs it retired. The evidence budget is
     # the ``top_k`` handed to scoped retrieval (keep ≤ ``retrieval_max_top_k``);
     # ``conversation_history_turns`` bounds the prior turns a generation port sees;
     # ``conversation_message_max_chars`` is the message length bound the web
@@ -290,25 +276,56 @@ class Settings(BaseSettings):
     # window resolves to the same value.
     words_per_page: int = 275
 
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        """Keep the default source precedence, remembering what the env file holds.
+
+        The env-file source is the only place that knows which file this
+        instantiation actually read, so the names it carries are captured here for
+        the retired-knob warning below. ``extra`` is ``ignore``, which means a
+        retired name in that file is dropped before any field sees it — capturing
+        the raw variable names is what keeps it visible.
+        """
+        env_file_vars = getattr(dotenv_settings, "env_vars", {})
+        _env_file_vars.set(frozenset(name.upper() for name in env_file_vars))
+        return (init_settings, env_settings, dotenv_settings, file_secret_settings)
+
     @model_validator(mode="after")
     def _warn_about_retired_knobs(self) -> Settings:
-        """Say once, at startup, that a tuned deprecated knob no longer does anything.
+        """Say once, at startup, that a retired variable no longer does anything.
 
         The failure this prevents is silent: a deployment that raised
         ``LEARNY_TEACHING_HISTORY_TURNS`` to 12 still validates, still boots, and
-        quietly serves the new default instead. The variable being accepted is
-        exactly what makes it look like it still works, and a comment in this file is
-        not reachable by the person running the deploy.
+        quietly serves the new default instead. Its startup *succeeding* is the point
+        — nothing should break because a stale variable lingers — and it is also
+        exactly what makes a dead tuning look like a live one. A comment in this file
+        is not reachable by the person running the deploy.
+
+        Read from the variable names rather than from the declared fields: the fields
+        are gone, and a check over ``model_fields_set`` would quietly stop firing at
+        the moment the variable became most misleading. Both places settings are read
+        from count — the process environment (Compose and the VPS unit inject them
+        there) and the ``.env`` file, which pydantic-settings loads separately and
+        which ``os.environ`` cannot see. A knob set anywhere the value *would* have
+        been read from is a knob the operator believes in.
 
         The old value is deliberately *not* inherited into the new setting: that would
         re-couple the per-surface knobs the unified settings separated, for the sake
         of a tuning this deployment never made. Naming the variable and the value now
         in force lets an operator re-tune deliberately.
         """
-        for field, (env_var, successor) in _RETIRED_KNOBS.items():
-            if field in self.model_fields_set:
+        env_file_vars = _env_file_vars.get()
+        for env_var, successor in _RETIRED_KNOBS.items():
+            if env_var in os.environ or env_var in env_file_vars:
                 logger.warning(
-                    "%s is deprecated and no longer read; %s=%s is in force. "
+                    "%s is retired and no longer read; %s=%s is in force. "
                     "Set LEARNY_%s to change it.",
                     env_var,
                     successor,

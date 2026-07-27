@@ -1,17 +1,17 @@
-"""Deterministic, network-free answer/teaching adapters (ADR-0007/0009).
+"""Deterministic, network-free generation adapter (ADR-0007/0009).
 
-The default generators (AD-024/AD-032, mirror of the embedding adapter's AD-019):
-pure Python, no network, no provider SDK. Both compose an extractive answer from
+The default generator (AD-024/AD-032, mirror of the embedding adapter's AD-019):
+pure Python, no network, no provider SDK. It composes an extractive answer from
 the retrieved evidence's own snippets — the top ``_MAX_SNIPPETS`` in retrieval
-rank order, joined by blank lines — and cite exactly those chunks, so the result
+rank order, joined by blank lines — and cites exactly those chunks, so the result
 is grounded by construction. Same evidence → identical result (deterministic),
-keeping golden-fixture answers stable. ``DeterministicAnswerAdapter`` serves the
-Q&A path (``AnswerGenerationPort``); ``DeterministicTeachingAdapter`` serves the
-teaching turn path (``TeachingGenerationPort``) and ignores the message, target,
-and history for its deterministic prose, drawing only on the scoped evidence.
+keeping golden-fixture answers stable. One adapter serves both modes: the
+``message``, ``mode``, ``target_section_path``, and ``history`` do not shape the
+deterministic prose, which draws only on the scoped evidence, so an answer turn
+and a teach turn over the same evidence read alike.
 
-Swapping in a real provider later is an adapter change behind the respective
-port, never a domain change (ADR-0007/0009).
+Swapping in a real provider later is an adapter change behind the port, never a
+domain change (ADR-0007/0009).
 """
 
 from __future__ import annotations
@@ -42,9 +42,8 @@ def _extractive_answer(evidence: Sequence[Evidence], *, model: str) -> Generated
     Empty evidence → ``found=False`` empty result (defensive; the services
     short-circuit before calling a generator). Otherwise the answer is the top
     ``min(_MAX_SNIPPETS, len(evidence))`` snippets in retrieval order joined by
-    blank lines, citing exactly those chunk ids, ``found=True``. Shared by both
-    deterministic adapters so the answer and teaching paths compose prose
-    identically (design §Components).
+    blank lines, citing exactly those chunk ids, ``found=True``. Both modes compose
+    prose through this one helper, as they always have.
     """
     if not evidence:
         return GeneratedAnswer(text="", cited_chunk_ids=(), model=model, found=False)
@@ -70,76 +69,43 @@ def _extractive_stream(evidence: Sequence[Evidence], *, model: str) -> Iterator[
     yield AnswerCompleted(answer=answer)
 
 
-class DeterministicAnswerAdapter:
-    """``AnswerGenerationPort`` implementation — extractive, evidence-only.
+class DeterministicGenerationAdapter:
+    """``GenerationPort`` implementation — extractive, evidence-only.
 
     Needs no provider client: constructed with no arguments and makes no network
-    call, so the answer path is testable offline (AD-024). Prior ``history`` is
-    accepted and ignored, like the teaching adapter's: the deterministic prose is
-    composed solely from the scoped evidence, so a first turn's output is exactly
-    what it was before conversations carried history at all.
+    call, so both the answer and the teach path are testable offline (AD-024). The
+    ``mode``, ``target_section_path``, and prior ``history`` are accepted and do not
+    shape the prose — it is composed solely from the scoped evidence, so a turn's
+    output is exactly what it was before the ports converged, and before
+    conversations carried history at all. A real conversational adapter dispatches
+    on ``mode`` behind this same port.
     """
 
-    # Stable model identity, readable without a ``generate`` call so the Q&A
+    # Stable model identity, readable without a ``generate`` call so the turn
     # service can surface it on the not-found-on-empty-evidence response where the
-    # port is deliberately not invoked (QA-04/QA-13).
-    model = _MODEL
-
-    def generate(
-        self,
-        *,
-        question: str,
-        evidence: Sequence[Evidence],
-        history: Sequence[HistoryTurn] = (),
-    ) -> GeneratedAnswer:
-        """Compose an answer from the top evidence snippets, citing those chunks."""
-        return _extractive_answer(evidence, model=self.model)
-
-    def generate_stream(
-        self,
-        *,
-        question: str,
-        evidence: Sequence[Evidence],
-        history: Sequence[HistoryTurn] = (),
-    ) -> Iterator[AnswerStreamEvent]:
-        """Stream the extractive answer (one full-text delta, then completed)."""
-        return _extractive_stream(evidence, model=self.model)
-
-
-class DeterministicTeachingAdapter:
-    """``TeachingGenerationPort`` implementation — extractive, evidence-only (AD-032).
-
-    Mirrors :class:`DeterministicAnswerAdapter` for the teaching turn path: no
-    provider client, no network, so the turn path is testable offline. The
-    ``message``, ``target_section_path``, and bounded ``history`` do not shape the
-    deterministic prose — the response is composed solely from the scoped evidence
-    snippets, so it is grounded by construction and golden-fixture stable. A real
-    conversational adapter will use those inputs behind this same port.
-    """
-
-    # Same identity as the Q&A default (same strategy family); a provider ADR will
-    # introduce distinct ids. Readable without a ``generate`` call so the turn
-    # service reports it on the empty-evidence not-found path (TEACH-11/TEACH-24).
+    # port is deliberately not invoked (QA-04/QA-13, TEACH-11/TEACH-24).
     model = _MODEL
 
     def generate(
         self,
         *,
         message: str,
-        target_section_path: tuple[str, ...],
-        history: Sequence[HistoryTurn],
+        mode: str,
         evidence: Sequence[Evidence],
+        history: Sequence[HistoryTurn] = (),
+        target_section_path: tuple[str, ...] | None = None,
     ) -> GeneratedAnswer:
-        """Compose a teaching response from the top scoped evidence snippets."""
+        """Compose a response from the top evidence snippets, citing those chunks."""
         return _extractive_answer(evidence, model=self.model)
 
     def generate_stream(
         self,
         *,
         message: str,
-        target_section_path: tuple[str, ...],
-        history: Sequence[HistoryTurn],
+        mode: str,
         evidence: Sequence[Evidence],
+        history: Sequence[HistoryTurn] = (),
+        target_section_path: tuple[str, ...] | None = None,
     ) -> Iterator[AnswerStreamEvent]:
-        """Stream the extractive teaching response (one full-text delta, then completed)."""
+        """Stream the extractive response (one full-text delta, then completed)."""
         return _extractive_stream(evidence, model=self.model)

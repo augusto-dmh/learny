@@ -410,7 +410,7 @@ class GeneratedAnswer:
     """The raw output of the answer-generation port (QA-05, ADR-0007 §4).
 
     A Learny-owned result so no provider response shape crosses the
-    :class:`~app.domain.ports.AnswerGenerationPort` boundary. ``cited_chunk_ids``
+    :class:`~app.domain.ports.GenerationPort` boundary. ``cited_chunk_ids``
     are the chunk ids the adapter drew on; the application service grounds them
     against the retrieved evidence. ``found`` is ``False`` when the evidence
     cannot support an answer (``text`` empty, ``cited_chunk_ids`` empty).
@@ -458,24 +458,6 @@ class AnswerCompleted:
 # :class:`AnswerCompleted` (always last, authoritative). Shared by both generation
 # ports' ``generate_stream`` so one capability has two consumption modes.
 AnswerStreamEvent = AnswerTextDelta | AnswerCompleted
-
-
-@dataclass(frozen=True)
-class QuestionAnswer:
-    """The application service's cited-answer result (QA-01..04, 13..16).
-
-    ``status`` is one of ``"answered"`` or ``"not_found_in_source"``. Citations
-    are grounded :class:`Evidence` items (no separate citation entity). The
-    not-found contract is exact: ``status == "not_found_in_source"`` implies
-    ``text == ""`` and ``citations == ()``. ``evidence_count`` and ``model`` are
-    diagnostics carried on both outcomes (QA-04).
-    """
-
-    status: str
-    text: str
-    citations: tuple[Evidence, ...]
-    evidence_count: int
-    model: str
 
 
 # --- Conversations aggregate (ADR-0029; originally the Cycle 7 teaching sessions) ---
@@ -587,11 +569,19 @@ class ConversationSummary:
     ``source_title`` rides along because the global list spans every source the
     caller owns, and a row that names only the conversation would not say which
     book it is about. ``turn_count`` is the conversation's total, not a page of it.
+
+    ``last_turn_mode`` is the mode of the conversation's most recent turn, or
+    ``None`` when it has none. Mode is a property of a turn, never of the
+    conversation — one thread may hold both — so the latest turn is the one that
+    speaks for the thread: it is the exchange a reader is continuing from, and the
+    one their next message follows. A list row carries it so resuming a thread does
+    not have to read the whole thread to find out where it belongs.
     """
 
     conversation: Conversation
     turn_count: int
     source_title: str
+    last_turn_mode: str | None
 
 
 # --- Active recall aggregate (Cycle E, RFC-002; design §Domain) ------------------
