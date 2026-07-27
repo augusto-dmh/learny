@@ -3,9 +3,9 @@
 Thin FastAPI adapter over the framework-free notes services (assembled in
 ``dependencies``). A signed-in owner captures a note from a book passage (note + one
 book anchor, atomically), lists/filters them by tag, reads/edits/deletes one, and
-reads a note's backlinks. Every note path is one request-scoped transaction, so no
-commit-then-enqueue orchestration is needed here (unlike the deck/ingestion start
-paths).
+reads a note's backlinks. Capture and edit commit in a UoW factory before queueing the
+note's embed, the same commit-then-enqueue orchestration the deck/ingestion start paths
+use; the read/delete paths need none and stay on the request-scoped transaction.
 
 Application errors are translated to HTTP by the global handlers
 (``NoteNotFound`` → 404, ``NoteBodyTooLong`` → 422, ``StaleCaptureTarget`` → 409,
@@ -40,7 +40,6 @@ from pydantic import BaseModel, Field
 from sqlalchemy import Connection
 
 from app.application.notes import (
-    CaptureHighlight,
     DeleteNote,
     GetBacklinks,
     GetNote,
@@ -58,10 +57,10 @@ from app.domain.entities import (
 from app.domain.ports import NoteIndexEnqueuer
 from app.infrastructure.web.csrf import enforce_csrf, enforce_origin
 from app.infrastructure.web.dependencies import (
+    build_capture_highlight,
     build_has_note_items,
     build_update_note,
     get_authenticated_user,
-    get_capture_highlight,
     get_delete_note,
     get_get_backlinks,
     get_get_note,
@@ -420,7 +419,8 @@ def get_note_backlinks(
 def capture_highlight(
     source_id: UUID,
     user: Annotated[User, Depends(get_authenticated_user)],
-    service: Annotated[CaptureHighlight, Depends(get_capture_highlight)],
+    uow_factory: NoteUowFactory,
+    enqueuer: NoteEnqueuer,
     body: CaptureRequest,
 ) -> NoteDetailView:
     """Capture a highlight from the reader: create a note + one anchor atomically (201).
@@ -431,18 +431,26 @@ def capture_highlight(
     matches (a mid-flight re-ingest) nothing is persisted and ``StaleCaptureTarget`` →
     409. Over-cap body → ``NoteBodyTooLong`` → 422. With no ``quote_exact`` there is no
     selection to bind, so the anchor is section-level and the 409 cannot arise.
+
+    Capture is the only way a note is born, so it carries the embed enqueue: a note
+    with a body is queued for embedding once its row has committed (NL-01, AD-016).
+    Without that, a captured note would never reach the notes retrieval arm, which
+    only sees rows whose embedding is present.
     """
-    view = service(
-        user=user,
-        source_id=source_id,
-        anchor=body.anchor,
-        quote_exact=body.quote_exact,
-        quote_prefix=body.quote_prefix,
-        quote_suffix=body.quote_suffix,
-        title=body.title,
-        body_markdown=body.body_markdown,
-        tags=body.tags,
-    )
+    with uow_factory() as conn:
+        view = build_capture_highlight(conn)(
+            user=user,
+            source_id=source_id,
+            anchor=body.anchor,
+            quote_exact=body.quote_exact,
+            quote_prefix=body.quote_prefix,
+            quote_suffix=body.quote_suffix,
+            title=body.title,
+            body_markdown=body.body_markdown,
+            tags=body.tags,
+        )
+    if body.body_markdown:
+        enqueuer.enqueue_embed(view.note.id)
     return NoteDetailView.from_view(view)
 
 

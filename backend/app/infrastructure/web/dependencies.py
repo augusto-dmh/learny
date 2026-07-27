@@ -641,15 +641,16 @@ def get_reset_schedule(conn: DbConnection) -> ResetSchedule:
 
 # --- Notes & second-brain (Cycle E) --------------------------------------------
 #
-# Create/update rebuild the note's derived link/tag indexes and then (NL-01)
-# re-embed the note asynchronously — so they own the commit-then-enqueue dance the
+# Capture/update rebuild the note's derived link/tag indexes and then (NL-01)
+# embed the note asynchronously — so they own the commit-then-enqueue dance the
 # deck/ingestion paths do: the write commits in a UoW factory (``get_note_uow``)
 # before ``NoteIndexEnqueuer`` puts the note id on the queue, so the worker always
-# reads a durable row (AD-016). The read/delete/capture paths stay on the ordinary
-# auto-committing request connection (delete needs no enqueue — index rows die with
-# the note, NL-07). The body cap is sourced from settings; capture derives each
-# block's Markdown through the same ``Bs4MarkupConverter`` the corpus build used so a
-# selection binds like-for-like.
+# reads a durable row (AD-016). Capture joined them when it became the only way a
+# note is born; the read/delete paths stay on the ordinary auto-committing request
+# connection (delete needs no enqueue — index rows die with the note, NL-07). The
+# body cap is sourced from settings; capture derives each block's Markdown through
+# the same ``Bs4MarkupConverter`` the corpus build used so a selection binds
+# like-for-like.
 
 
 def _default_note_uow() -> AbstractContextManager[Connection]:
@@ -721,13 +722,17 @@ def get_get_backlinks(conn: DbConnection) -> GetBacklinks:
     return GetBacklinks(notes=SqlAlchemyNoteRepository(conn))
 
 
-def get_capture_highlight(conn: DbConnection) -> CaptureHighlight:
-    """Wire ``CaptureHighlight`` on the request-scoped connection (NF-06).
+def build_capture_highlight(conn: Connection) -> CaptureHighlight:
+    """Wire ``CaptureHighlight`` on a note-write UoW connection (NF-06).
 
-    The note and its anchor are created in the one request transaction; the source
-    repo enforces ownership, the corpus repo resolves the addressed section, and the
-    Markdown converter derives each block's text so the selection resolves against the
-    exact content the block hash / offsets were computed from.
+    The note and its anchor are created in one transaction; the source repo enforces
+    ownership, the corpus repo resolves the addressed section, and the Markdown
+    converter derives each block's text so the selection resolves against the exact
+    content the block hash / offsets were computed from.
+
+    On the UoW factory rather than the request connection because capture is now the
+    only way a note is born, so it owns the commit-then-enqueue dance (AD-016): the
+    embed is queued only once the row is durable.
     """
     return CaptureHighlight(
         sources=SqlAlchemySourceRepository(conn),

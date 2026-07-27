@@ -869,6 +869,41 @@ def test_update_note_body_change_enqueues_embed_after_commit(
     assert enq.embed_calls == [UUID(note["id"])]
 
 
+def test_capturing_a_note_with_a_body_enqueues_its_embed(
+    notes_client: TestClient, db_conn: Connection
+) -> None:
+    """A captured note with a body is queued for embedding (NL-01).
+
+    Capture is the only way a note is born, so if it does not enqueue, no note is ever
+    embedded and the notes retrieval arm — which only sees rows whose embedding is
+    present — silently stops seeing anything created from now on.
+    """
+    user_id = _register(notes_client, "note-embed-capture@example.com")
+    csrf = _csrf(notes_client)
+    source_id = _capture_target(db_conn, user_id)
+    enq = notes_client.app.state.note_enqueuer
+
+    note = _created_note(
+        notes_client, csrf, source_id, title="Captured", body_markdown="worth embedding"
+    )
+
+    assert enq.embed_calls == [UUID(note["id"])]
+
+
+def test_capturing_a_bare_highlight_enqueues_no_embed(
+    notes_client: TestClient, db_conn: Connection
+) -> None:
+    """A capture with no body has nothing to embed, so nothing is queued (NL-01)."""
+    user_id = _register(notes_client, "note-embed-bare@example.com")
+    csrf = _csrf(notes_client)
+    source_id = _capture_target(db_conn, user_id)
+    enq = notes_client.app.state.note_enqueuer
+
+    _created_note(notes_client, csrf, source_id, title="Bare", body_markdown="")
+
+    assert enq.embed_calls == []
+
+
 def test_update_note_title_or_tags_only_enqueues_no_embed(
     notes_client: TestClient, db_conn: Connection
 ) -> None:
