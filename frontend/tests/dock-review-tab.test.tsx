@@ -132,6 +132,50 @@ describe("the dock's Review tab", () => {
     );
   });
 
+  it("re-reads the book's due count once a card has been graded", async () => {
+    // The queue is drained inside the dock, right beside the count — so unlike a
+    // whole-page review, the figure is on screen while it goes stale. The server's
+    // total drops as the card leaves the queue.
+    const cards = [
+      card("i1", "Who wrote the first algorithm?", "Ada Lovelace"),
+      card("i2", "Who built the analytical engine?", "Charles Babbage"),
+    ];
+    let remaining = cards.length;
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/auth/me") return jsonResponse(200, authedMe);
+      if (url.startsWith("/api/notes")) return jsonResponse(200, []);
+      if (url.startsWith("/api/reviews/due")) {
+        return jsonResponse(200, { items: cards, total_due: remaining });
+      }
+      if (init?.method === "POST" && url.startsWith("/api/quiz-items/")) {
+        remaining -= 1;
+        return jsonResponse(200, { state: 2, step: null, due: "later" });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderReviewTab();
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("tab", { name: /^Review/ }).textContent?.trim(),
+      ).toBe("Review2"),
+    );
+
+    await screen.findByText("Who wrote the first algorithm?");
+    fireEvent.click(screen.getByRole("button", { name: "Reveal answer" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Good" }));
+    });
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("tab", { name: /^Review/ }).textContent?.trim(),
+      ).toBe("Review1"),
+    );
+    expect(screen.getByTestId("due-count").textContent).toBe("1");
+  });
+
   it("grades a card in the dock, with the book's page never left behind", async () => {
     const fetchMock = stubBook([
       card("i1", "Who wrote the first algorithm?", "Ada Lovelace"),

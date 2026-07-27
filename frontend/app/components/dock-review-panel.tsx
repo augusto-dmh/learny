@@ -23,6 +23,8 @@ import { ReviewScreen } from "./review-screen";
 export type BookDue = {
   total: number | null;
   error: string | null;
+  /** Re-read the count — the queue is drained inside the dock, beside this figure. */
+  refresh: () => void;
 };
 
 /**
@@ -56,13 +58,14 @@ export function useDueCount(sourceId: string): BookDue {
     void load();
   }, [load]);
 
-  return { total, error };
+  return { total, error, refresh: () => void load() };
 }
 
 export function DockReviewPanel({
   sourceId,
   total,
   error,
+  refresh,
   onRequireAuth,
 }: BookDue & { sourceId: string; onRequireAuth?: () => void }) {
   if (error) {
@@ -93,7 +96,11 @@ export function DockReviewPanel({
           cards due from this book
         </p>
       </div>
-      <ReviewScreen sourceId={sourceId} onRequireAuth={onRequireAuth} />
+      <ReviewScreen
+        sourceId={sourceId}
+        onRequireAuth={onRequireAuth}
+        onGraded={refresh}
+      />
     </div>
   );
 }
