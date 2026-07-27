@@ -396,6 +396,59 @@ describe("ChapterFlow capture (NF-12)", () => {
     }
   });
 
+  it("shows a note captured from the page in the open Notes tab, no reload", async () => {
+    nav.params = new URLSearchParams("panel=notes");
+    // The book has no notes until the capture writes one.
+    let rows: unknown[] = [];
+    const captured = {
+      id: "n1",
+      title: "A captured passage",
+      tags: [],
+      anchor_statuses: ["active"],
+      anchor: {
+        anchor: S2,
+        section_title: "Mechanism",
+        section_path: ["Chapter One", "Mechanism"],
+        quote_exact: "Babbage designed the analytical engine",
+        status: "active",
+        page: 3,
+      },
+      created_at: "now",
+      updated_at: "now",
+    };
+    const fetchMock = routedFetch({
+      [`POST ${HIGHLIGHTS_URL}`]: () => {
+        rows = [captured];
+        return jsonResponse(201, {
+          id: "n1",
+          title: "A captured passage",
+          body_markdown: "",
+          tags: [],
+          anchors: [],
+          created_at: "now",
+          updated_at: "now",
+        });
+      },
+      "GET /api/notes?source_id=s1": () => jsonResponse(200, rows),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderAndSelect(S2, "Babbage designed the analytical engine");
+    await screen.findByRole("dialog", { name: "Capture highlight" });
+    expect(
+      screen.getByText(/Notes on this book only\./),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Highlight" }));
+
+    // The reader never left the page, and the tab it was already looking at now
+    // holds the note — count and all.
+    expect(await screen.findByText("A captured passage")).toBeTruthy();
+    expect(screen.getByRole("tab", { name: /^Notes/ }).textContent?.trim()).toBe(
+      "Notes1",
+    );
+  });
+
   it("does not raise the popover for a selection absent from the section markdown", () => {
     renderAndSelect(S1, "a phrase that is not in the section");
 

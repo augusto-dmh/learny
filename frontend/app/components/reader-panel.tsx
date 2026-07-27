@@ -38,6 +38,7 @@ import { cn } from "@/lib/utils";
 
 import { AskPanel } from "./ask-panel";
 import { ConversationList } from "./conversation-list";
+import { DockNotesPanel, useBookNotes } from "./dock-notes-panel";
 import { TeachPanel } from "./teach-panel";
 
 /** A dock surface that holds a conversation, and so has per-surface thread state. */
@@ -102,6 +103,21 @@ function panelFor(
   return summary.last_turn_mode === "teach" ? "teach" : "ask";
 }
 
+/**
+ * What a tab is holding, when it is holding anything. An empty queue is an empty
+ * tab, not a "0" — a zero here would be a scoreboard, and the dock keeps no score.
+ */
+function TabCount({ value }: { value?: number | null }) {
+  if (!value) {
+    return null;
+  }
+  return (
+    <span className="ml-1.5 rounded-4xl bg-secondary px-1.5 text-xs font-normal text-secondary-foreground">
+      {value}
+    </span>
+  );
+}
+
 export function ReaderPanel({
   sourceId,
   csrf,
@@ -112,6 +128,7 @@ export function ReaderPanel({
   onPendingConsumed,
   onShowInBook,
   onRequireAuth,
+  notesToken = 0,
 }: {
   sourceId: string;
   csrf: string;
@@ -122,6 +139,8 @@ export function ReaderPanel({
   onPendingConsumed?: () => void;
   onShowInBook?: (anchor: string) => void;
   onRequireAuth?: () => void;
+  /** Bumped by the reader when a passage is captured, so the Notes tab re-reads. */
+  notesToken?: number;
 }) {
   // Bumped per surface to tell a panel to re-read which conversation is active;
   // creating one mid-thread deliberately does not bump anything, or the panel
@@ -155,6 +174,10 @@ export function ReaderPanel({
   // Null on Notes and Review: those tabs hold no thread, so there is nothing for
   // a resume to land in and no list rendered to ask for one.
   const conversationTab = isConversationTab(tab) ? tab : null;
+
+  // Loaded by the shell, not the tab: a count on a tab is only useful before the
+  // reader has opened it.
+  const bookNotes = useBookNotes(sourceId, notesToken);
 
   // Which panel continues a thread is on the row the reader clicked, so a resume
   // resolves in the click that asked for it — no request to race, and no window
@@ -212,6 +235,12 @@ export function ReaderPanel({
     }));
   }, [sourceId, conversationTab]);
 
+  // What each tab is holding, so the reader can see it without opening the tab.
+  // Inventory, never achievement: nothing counts up, and nothing is behind.
+  const counts: Partial<Record<DockTab, number | null>> = {
+    notes: bookNotes.notes?.length ?? null,
+  };
+
   return (
     <aside
       data-testid="reader-panel"
@@ -236,6 +265,7 @@ export function ReaderPanel({
               )}
             >
               {label}
+              <TabCount value={counts[value]} />
             </button>
           ))}
         </div>
@@ -284,6 +314,8 @@ export function ReaderPanel({
             onRequireAuth={onRequireAuth}
             onConversationsChanged={handleConversationsChanged}
           />
+        ) : tab === "notes" ? (
+          <DockNotesPanel {...bookNotes} onShowInBook={onShowInBook} />
         ) : null}
       </div>
     </aside>

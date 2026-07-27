@@ -86,11 +86,23 @@ function summary(
   };
 }
 
-/** The dock always loads the book's conversations; default to none. */
+/**
+ * The dock always loads the book's conversations, and — for the counts its two
+ * other tabs carry — this book's notes and due cards. Default all three to empty.
+ */
 function stubList(rows: unknown[] = []) {
-  const fetchMock = vi.fn(async () => jsonResponse(200, rows));
+  const fetchMock = vi.fn(async (url: string) =>
+    jsonResponse(200, url.startsWith("/api/conversations") ? rows : []),
+  );
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
+}
+
+/** The conversation requests the dock made, in order. */
+function conversationCalls(fetchMock: { mock: { calls: unknown[] } }) {
+  return (fetchMock.mock.calls as unknown[][])
+    .map((call) => String(call[0]))
+    .filter((url) => url.startsWith("/api/conversations"));
 }
 
 /**
@@ -101,6 +113,10 @@ function stubList(rows: unknown[] = []) {
  */
 function stubServer(rows: ReturnType<typeof summary>[]) {
   const fetchMock = vi.fn(async (url: string) => {
+    if (url.startsWith("/api/notes") || url.startsWith("/api/reviews/due")) {
+      // The tab counts, which every dock render loads.
+      return jsonResponse(200, []);
+    }
     if (!url.startsWith("/api/conversations?")) {
       throw new Error(`unexpected fetch: ${url}`);
     }
@@ -278,9 +294,12 @@ describe("ReaderPanel conversation list", () => {
       summary(`c${index}`, `Thread ${index}`, 1),
     );
     const secondPage = [summary("c20", "The oldest thread", 1)];
-    const fetchMock = vi.fn(async (url: string) =>
-      jsonResponse(200, url.includes("offset=20") ? secondPage : firstPage),
-    );
+    const fetchMock = vi.fn(async (url: string) => {
+      if (!url.startsWith("/api/conversations")) {
+        return jsonResponse(200, []);
+      }
+      return jsonResponse(200, url.includes("offset=20") ? secondPage : firstPage);
+    });
     vi.stubGlobal("fetch", fetchMock);
     renderPanel();
 
@@ -288,7 +307,7 @@ describe("ReaderPanel conversation list", () => {
     const more = await screen.findByRole("button", {
       name: "Show older conversations",
     });
-    const [firstUrl] = fetchMock.mock.calls[0] as unknown as [string];
+    const [firstUrl] = conversationCalls(fetchMock);
     expect(firstUrl).toContain("limit=20");
     expect(firstUrl).toContain("offset=0");
     expect(
@@ -300,8 +319,7 @@ describe("ReaderPanel conversation list", () => {
     });
 
     // The 21st thread is reachable, and the page already read stays on screen.
-    const [nextUrl] = fetchMock.mock.calls[1] as unknown as [string];
-    expect(nextUrl).toContain("offset=20");
+    expect(conversationCalls(fetchMock)[1]).toContain("offset=20");
     expect(
       screen.getByRole("button", { name: "Resume The oldest thread" }),
     ).toBeTruthy();
@@ -341,7 +359,7 @@ describe("ReaderPanel conversation list", () => {
     // The row already said where the thread resumes, so the click cost nothing:
     // only the list load was ever fetched. Reading the conversation here would
     // pull every turn and citation the panel is about to load for itself.
-    expect(fetchMock.mock.calls).toHaveLength(1);
+    expect(conversationCalls(fetchMock)).toHaveLength(1);
   });
 
   it("resumes a taught conversation in the Teach panel", async () => {
@@ -453,11 +471,7 @@ describe("ReaderPanel tabs that hold no conversation", () => {
     }
 
     // And nothing re-asked the server for threads while they were open.
-    expect(
-      fetchMock.mock.calls.filter((call) =>
-        String((call as unknown[])[0]).startsWith("/api/conversations"),
-      ),
-    ).toHaveLength(1);
+    expect(conversationCalls(fetchMock)).toHaveLength(1);
   });
 
   it("leaves the open Ask thread exactly where it was after a trip through Notes", async () => {

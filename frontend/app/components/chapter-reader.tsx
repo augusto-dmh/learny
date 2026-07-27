@@ -391,6 +391,9 @@ export function ChapterFlow({
   // and is cleared once the panel has consumed it (RA-17/18).
   const [pendingRequest, setPendingRequest] =
     useState<PendingPanelRequest | null>(null);
+  // Bumped whenever a capture writes a note, so the dock's Notes tab — which may
+  // be the very tab the reader is looking at — shows it without a reload.
+  const [notesToken, setNotesToken] = useState(0);
 
   // Track the topmost visible section as the reader scrolls, and persist the
   // position after each scroll-idle (RD-07/13).
@@ -515,6 +518,7 @@ export function ChapterFlow({
         csrf,
       );
       setCapture(null);
+      setNotesToken((token) => token + 1);
       if (action === "highlight-note") {
         router.push(`/notes/${note.id}`);
       }
@@ -556,6 +560,7 @@ export function ChapterFlow({
         }
         setCardAnchorId(anchorId);
         setCardNoteId(note.id);
+        setNotesToken((token) => token + 1);
       }
       setSuggestions(await suggestCards(sourceId, anchorId, csrf));
     } catch (err) {
@@ -837,6 +842,7 @@ export function ChapterFlow({
             onPendingConsumed={() => setPendingRequest(null)}
             onShowInBook={handleShowInBook}
             onRequireAuth={onRequireAuth}
+            notesToken={notesToken}
           />
         ) : null}
       </div>

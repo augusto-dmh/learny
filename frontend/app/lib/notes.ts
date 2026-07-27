@@ -46,12 +46,34 @@ export type NoteDetail = {
   updated_at: string;
 };
 
-/** One row in the notes list, mirroring the backend `NoteSummaryView` (NF-13). */
+/**
+ * The passage a book-scoped note row came from, mirroring the backend
+ * `NoteRowAnchorView` (WSN-02): the note's earliest anchor on the book being
+ * listed. `page` is the book-global page number the server derived — never
+ * recomputed here — and is null when the anchor no longer resolves, so an orphaned
+ * row shows its quote with no page rather than a fabricated one.
+ */
+export type NoteRowAnchor = {
+  anchor: string;
+  section_title: string;
+  section_path: string[];
+  quote_exact: string;
+  status: string;
+  page: number | null;
+};
+
+/**
+ * One row in the notes list, mirroring the backend `NoteSummaryView` (NF-13).
+ *
+ * `anchor` is carried only when the list is scoped to one book; the cross-book
+ * list has no single book to represent a note by, so it is null there.
+ */
 export type NoteSummary = {
   id: string;
   title: string;
   tags: string[];
   anchor_statuses: string[];
+  anchor: NoteRowAnchor | null;
   created_at: string;
   updated_at: string;
 };
@@ -135,14 +157,25 @@ export async function createNote(
 
 /**
  * List the caller's notes (newest-edited first), optionally filtered to one tag
- * (matched case-insensitively). Read-only GET, so no CSRF token. On a non-OK
- * response the backend `detail` is surfaced via `NoteError`.
+ * (matched case-insensitively) and/or narrowed to one book. Under `sourceId` the
+ * list holds only notes anchored to that book — a note anchored to it more than
+ * once still appears once — and every row carries the passage it came from; a
+ * source the caller does not own collapses to a 404 like every other source read.
+ * Read-only GET, so no CSRF token. On a non-OK response the backend `detail` is
+ * surfaced via `NoteError`.
  */
 export async function listNotes(
-  { tag }: { tag?: string } = {},
+  { tag, sourceId }: { tag?: string; sourceId?: string } = {},
   fetchImpl: typeof fetch = fetch,
 ): Promise<NoteSummary[]> {
-  const query = tag !== undefined ? `?tag=${encodeURIComponent(tag)}` : "";
+  const params: string[] = [];
+  if (tag !== undefined) {
+    params.push(`tag=${encodeURIComponent(tag)}`);
+  }
+  if (sourceId !== undefined) {
+    params.push(`source_id=${encodeURIComponent(sourceId)}`);
+  }
+  const query = params.length ? `?${params.join("&")}` : "";
   const res = await fetchImpl(`/api/notes${query}`, {
     method: "GET",
     credentials: "same-origin",

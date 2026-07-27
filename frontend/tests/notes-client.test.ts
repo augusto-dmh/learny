@@ -58,8 +58,23 @@ const summary: NoteSummary = {
   title: "Ada's algorithm",
   tags: ["history"],
   anchor_statuses: ["active", "orphaned"],
+  // The cross-book list has no single book to represent the note by.
+  anchor: null,
   created_at: "now",
   updated_at: "now",
+};
+
+/** The same row as the book-scoped list returns it: with the passage it came from. */
+const bookSummary: NoteSummary = {
+  ...summary,
+  anchor: {
+    anchor: "chapter-1.xhtml#core-idea",
+    section_title: "Core Idea",
+    section_path: ["Chapter 1", "Core Idea"],
+    quote_exact: "wrote the first algorithm",
+    status: "active",
+    page: 62,
+  },
 };
 
 const backlink: Backlink = { note_id: "n2", title: "Babbage" };
@@ -167,6 +182,48 @@ describe("listNotes (NF-11)", () => {
     );
 
     expect(fetchMock.mock.calls[0][0]).toBe("/api/notes?tag=deep%20work");
+  });
+
+  it("narrows the list to one book, carrying the passage each row came from", async () => {
+    const fetchMock = fetchMockFn(async () => jsonResponse(200, [bookSummary]));
+
+    const result = await listNotes(
+      { sourceId: "s1" },
+      fetchMock as unknown as typeof fetch,
+    );
+
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/notes?source_id=s1");
+    // The row's provenance survives the round-trip: where it came from, in what
+    // words, and the page the server derived.
+    expect(result[0].anchor).toEqual(bookSummary.anchor);
+  });
+
+  it("composes the book and tag filters in one request", async () => {
+    const fetchMock = fetchMockFn(async () => jsonResponse(200, [bookSummary]));
+
+    await listNotes(
+      { tag: "history", sourceId: "s1" },
+      fetchMock as unknown as typeof fetch,
+    );
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "/api/notes?tag=history&source_id=s1",
+    );
+  });
+
+  it("surfaces the 404 a book the caller does not own answers with", async () => {
+    const fetchMock = fetchMockFn(async () =>
+      jsonResponse(404, { detail: "Source not found." }),
+    );
+
+    const err = await listNotes(
+      { sourceId: "not-mine" },
+      fetchMock as unknown as typeof fetch,
+    ).catch((e) => e);
+
+    expect(err).toBeInstanceOf(NoteError);
+    expect(err.status).toBe(404);
+    expect(err.message).toBe("Source not found.");
   });
 
   it("defaults to no filter when called with no argument", async () => {
