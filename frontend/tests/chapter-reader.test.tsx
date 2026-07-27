@@ -435,9 +435,10 @@ describe("ChapterFlow capture (NF-12)", () => {
 
     renderAndSelect(S2, "Babbage designed the analytical engine");
     await screen.findByRole("dialog", { name: "Capture highlight" });
-    expect(
-      screen.getByText(/Notes on this book only\./),
-    ).toBeTruthy();
+    // The empty state arrives with the tab's own notes fetch, which is not ordered
+    // against the dialog — awaiting it is what makes the "before" of this before/after
+    // real, rather than a race the runner happens to win on a fast machine.
+    expect(await screen.findByText(/Notes on this book only\./)).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Highlight" }));
 
@@ -885,7 +886,11 @@ describe("ChapterFlow dock tabs (RA-01/02/03/06)", () => {
     );
 
     await screen.findByText("Who wrote the first algorithm?");
-    expect(screen.getByTestId("due-count").textContent).toBe("1");
+    // The count and the queue are two separate reads of the due endpoint, so the
+    // queue arriving says nothing about the count having arrived.
+    await waitFor(() =>
+      expect(screen.getByTestId("due-count").textContent).toBe("1"),
+    );
     fireEvent.click(screen.getByRole("button", { name: "Reveal answer" }));
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Good" }));
