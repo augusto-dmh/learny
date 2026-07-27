@@ -56,7 +56,7 @@ Every ambiguity is resolved or recorded here — nothing is left silently unclea
 
 | Dimension | Resolution |
 | --- | --- |
-| Input validation & bounds | `source_id` must be a UUID the caller owns; the notes list keeps its existing body/tag validation; the dock's list is bounded like the shipped list conventions — WSN-11 |
+| Input validation & bounds | `source_id` must be a UUID the caller owns; the notes list keeps its existing body/tag validation. **Amended after verification:** the original clause ("bounded like the shipped list conventions") was unsatisfiable as written — the conventions it pointed at disagree (`reviews/due` takes `limit` default 20 `le=100`; the conversations list paginates), so it named no specific bound, and nothing in this diff bounds the list. The notes list was unbounded before this cycle and remains so; see WSN-11 and AD-218 — WSN-11 |
 | Failure / partial-failure | Anchored creation is already atomic (note + anchor in one transaction, `StaleCaptureTarget` → 409); making anchors mandatory must not introduce a half-created note — WSN-12 |
 | Idempotency / retry / duplicate | Re-submitting the same capture creates a second note (existing behaviour, unchanged); no new dedup rule is introduced — N/A beyond WSN-12 |
 | Auth boundaries & rate limits | Every new/changed route authorizes by owner and collapses missing/non-owner to 404 (the shipped disclosure rule); creation keeps its existing limiter — WSN-13 |
@@ -166,7 +166,7 @@ Every ambiguity is resolved or recorded here — nothing is left silently unclea
 | WSN-08 | P3: anchorless creation rejected, nothing persisted | Design | Pending |
 | WSN-09 | P3: legacy anchorless notes keep working | Design | Pending |
 | WSN-10 | P4: `source_id` filter on the notes list; unowned → 404 | Design | Pending |
-| WSN-11 | Bounds: `source_id` validation and list bounds | Design | Pending |
+| WSN-11 | Bounds: `source_id` must be a well-formed UUID (422 otherwise). The list-bounds half is **withdrawn** — see the sweep row and AD-218 | Design | Pending |
 | WSN-12 | Atomicity: no half-created note under the new rule | Design | Pending |
 | WSN-13 | Authorization: owner-scoped, 404 collapse, limiter kept | Design | Pending |
 | WSN-14 | Ordering: total, stable newest-edited-first | Design | Pending |
