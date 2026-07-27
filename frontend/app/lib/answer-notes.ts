@@ -5,22 +5,19 @@
  * happy path is atomic and anchored: it captures a highlight on the first
  * citation's anchor (via the existing `/sources/{id}/highlights` seam) so the note
  * carries a book anchor, using the first paragraph of that citation's snippet — the
- * verbatim corpus text — as the quote and the answer as the body. When the capture
- * can't bind — the served evidence went stale (409) or the snippet yields no quote
- * — it degrades honestly to a plain note whose body carries the answer plus a
- * jump-back link to the anchor. Any other failure propagates so the UI can show it.
+ * verbatim corpus text — as the quote and the answer as the body. When the quoted
+ * capture can't bind — the served evidence went stale (409) or the snippet yields
+ * no quote — the save still succeeds: it captures the same anchor with no quote,
+ * which the book records as a section-level passage. Either way the answer is kept
+ * and it is kept attached to where it came from. Any other failure propagates so
+ * the UI can show it.
  *
- * The `captureImpl`/`createImpl` seams default to the real `lib/notes` clients and
- * exist so the unit tests can drive both legs without a network.
+ * The `captureImpl` seam defaults to the real `lib/notes` client and exists so the
+ * unit tests can drive both legs without a network.
  */
 
-import {
-  captureHighlight,
-  createNote,
-  NoteError,
-} from "./notes";
+import { captureHighlight, NoteError } from "./notes";
 import { type Citation } from "./citations";
-import { readUrl } from "./read-url";
 
 /**
  * Client-side truncation length for a note title derived from the question. The
@@ -44,14 +41,18 @@ export function firstParagraph(text: string): string | null {
   return null;
 }
 
-/** The outcome of a save: an anchored highlight capture, or the plain-note fallback. */
-export type SaveOutcome = { outcome: "anchored" | "plain" };
+/**
+ * The outcome of a save: a capture bound to the quoted passage, or — when there
+ * is no quote to bind — one bound to the citation's section.
+ */
+export type SaveOutcome = { outcome: "anchored" | "section" };
 
 /**
  * Save a cited answer as a note. Captures an anchored highlight on the first
- * citation when a quote is available; falls back to a plain note carrying a
- * jump-back link on a stale capture (409) or an empty snippet. Callers guarantee
- * `citations` is non-empty (RA-22 hides the action otherwise).
+ * citation when a quote is available; falls back to capturing the same anchor
+ * with no quote on a stale capture (409) or an empty snippet, so the answer is
+ * never lost and never lands without a passage. Callers guarantee `citations` is
+ * non-empty (RA-22 hides the action otherwise).
  */
 export async function saveAnswerAsNote({
   sourceId,
@@ -60,7 +61,6 @@ export async function saveAnswerAsNote({
   citations,
   csrfToken,
   captureImpl = captureHighlight,
-  createImpl = createNote,
 }: {
   sourceId: string;
   question: string;
@@ -68,7 +68,6 @@ export async function saveAnswerAsNote({
   citations: Citation[];
   csrfToken: string;
   captureImpl?: typeof captureHighlight;
-  createImpl?: typeof createNote;
 }): Promise<SaveOutcome> {
   const anchor = citations[0].anchor;
   const title = question.slice(0, TITLE_MAX);
@@ -92,10 +91,13 @@ export async function saveAnswerAsNote({
     }
   }
 
-  const link = readUrl(sourceId, anchor);
-  await createImpl(
-    { title, body_markdown: `${answerText}\n\n[Open in book](${link})` },
+  // No quote to bind — either the snippet had none or the served evidence moved.
+  // An empty quote is the book's own shape for "this section, no exact words", so
+  // the answer is still filed where it came from rather than nowhere.
+  await captureImpl(
+    sourceId,
+    { anchor, quote_exact: "", title, body_markdown: answerText },
     csrfToken,
   );
-  return { outcome: "plain" };
+  return { outcome: "section" };
 }

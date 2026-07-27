@@ -1,11 +1,11 @@
 /**
- * D1 (unit) — `saveAnswerAsNote` turns a completed, cited panel answer into a
- * note. The anchored happy path (RA-20) captures a highlight on the first
- * citation's anchor with the first paragraph of its snippet as the quote, the
- * question (capped at 80 chars) as the title, and the answer as the body. The
- * fallback (RA-21) fires on a 409 stale capture OR an empty snippet paragraph:
- * it creates a plain note whose body carries the answer plus a jump-back link to
- * the anchor. Any other capture error propagates. `firstParagraph` is exercised
+ * `saveAnswerAsNote` turns a completed, cited panel answer into a note. The
+ * anchored happy path (RA-20) captures a highlight on the first citation's anchor
+ * with the first paragraph of its snippet as the quote, the question (capped at 80
+ * chars) as the title, and the answer as the body. The fallback (RA-21) fires on a
+ * 409 stale capture OR an empty snippet paragraph — and it still captures, on the
+ * same anchor with no quote, so the answer is kept and kept attached to the book
+ * (P3 AC 3). Any other capture error propagates. `firstParagraph` is exercised
  * directly for the blank-line/trim/empty rules.
  */
 
@@ -62,7 +62,6 @@ describe("firstParagraph", () => {
 describe("saveAnswerAsNote anchored capture (RA-20)", () => {
   it("captures a highlight on the first citation with the exact payload", async () => {
     const captureImpl = vi.fn().mockResolvedValue({});
-    const createImpl = vi.fn();
 
     const result = await saveAnswerAsNote({
       sourceId: "s1",
@@ -71,11 +70,10 @@ describe("saveAnswerAsNote anchored capture (RA-20)", () => {
       citations: [citation()],
       csrfToken: "csrf-xyz",
       captureImpl,
-      createImpl,
     });
 
     expect(result).toEqual({ outcome: "anchored" });
-    expect(createImpl).not.toHaveBeenCalled();
+    // The quoted capture bound, so there is no second, quote-less attempt.
     expect(captureImpl).toHaveBeenCalledTimes(1);
 
     const [sourceIdArg, body, csrfArg] = captureImpl.mock.calls[0];
@@ -100,7 +98,6 @@ describe("saveAnswerAsNote anchored capture (RA-20)", () => {
       citations: [citation()],
       csrfToken: "csrf",
       captureImpl,
-      createImpl: vi.fn(),
     });
 
     const [, body] = captureImpl.mock.calls[0];
@@ -109,12 +106,12 @@ describe("saveAnswerAsNote anchored capture (RA-20)", () => {
   });
 });
 
-describe("saveAnswerAsNote plain-note fallback (RA-21)", () => {
-  it("falls back to a plain note with a jump-back link on a stale capture", async () => {
+describe("saveAnswerAsNote section-level fallback (RA-21, P3 AC 3)", () => {
+  it("still saves the answer, on the same anchor with no quote, after a stale capture", async () => {
     const captureImpl = vi
       .fn()
-      .mockRejectedValue(new NoteError("stale_capture", 409, "stale"));
-    const createImpl = vi.fn().mockResolvedValue({});
+      .mockRejectedValueOnce(new NoteError("stale_capture", 409, "stale"))
+      .mockResolvedValue({});
 
     const result = await saveAnswerAsNote({
       sourceId: "s1",
@@ -123,24 +120,25 @@ describe("saveAnswerAsNote plain-note fallback (RA-21)", () => {
       citations: [citation()],
       csrfToken: "csrf",
       captureImpl,
-      createImpl,
     });
 
-    expect(result).toEqual({ outcome: "plain" });
-    expect(captureImpl).toHaveBeenCalledTimes(1);
-    expect(createImpl).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ outcome: "section" });
+    expect(captureImpl).toHaveBeenCalledTimes(2);
 
-    const [body, csrfArg] = createImpl.mock.calls[0];
+    // The answer is kept, and it is kept attached to where it came from.
+    const [sourceIdArg, body, csrfArg] = captureImpl.mock.calls[1];
+    expect(sourceIdArg).toBe("s1");
     expect(csrfArg).toBe("csrf");
-    expect(body.title).toBe("A question");
-    expect(body.body_markdown).toBe(
-      "The full answer body.\n\n[Open in book](/sources/s1/read?anchor=c1.xhtml%23core-idea)",
-    );
+    expect(body).toEqual({
+      anchor: "c1.xhtml#core-idea",
+      quote_exact: "",
+      title: "A question",
+      body_markdown: "The full answer body.",
+    });
   });
 
-  it("goes straight to the fallback when the snippet has no non-empty paragraph", async () => {
-    const captureImpl = vi.fn();
-    const createImpl = vi.fn().mockResolvedValue({});
+  it("goes straight to the anchor-only capture when the snippet has no paragraph", async () => {
+    const captureImpl = vi.fn().mockResolvedValue({});
 
     const result = await saveAnswerAsNote({
       sourceId: "s1",
@@ -149,16 +147,16 @@ describe("saveAnswerAsNote plain-note fallback (RA-21)", () => {
       citations: [citation({ snippet: "   \n\n  \n " })],
       csrfToken: "csrf",
       captureImpl,
-      createImpl,
     });
 
-    expect(result).toEqual({ outcome: "plain" });
-    // With no quote there is nothing to bind, so capture is never attempted.
-    expect(captureImpl).not.toHaveBeenCalled();
-    const [body] = createImpl.mock.calls[0];
-    expect(body.body_markdown).toBe(
-      "The answer.\n\n[Open in book](/sources/s1/read?anchor=c1.xhtml%23core-idea)",
-    );
+    expect(result).toEqual({ outcome: "section" });
+    // With no quote there is nothing to bind, so the quoted capture is skipped —
+    // but the note is still created, and still anchored.
+    expect(captureImpl).toHaveBeenCalledTimes(1);
+    const [, body] = captureImpl.mock.calls[0];
+    expect(body.quote_exact).toBe("");
+    expect(body.anchor).toBe("c1.xhtml#core-idea");
+    expect(body.body_markdown).toBe("The answer.");
   });
 });
 
@@ -167,7 +165,6 @@ describe("saveAnswerAsNote error propagation", () => {
     const captureImpl = vi
       .fn()
       .mockRejectedValue(new NoteError("body_too_long", 422, "too long"));
-    const createImpl = vi.fn();
 
     await expect(
       saveAnswerAsNote({
@@ -177,17 +174,16 @@ describe("saveAnswerAsNote error propagation", () => {
         citations: [citation()],
         csrfToken: "csrf",
         captureImpl,
-        createImpl,
       }),
     ).rejects.toBeInstanceOf(NoteError);
-    expect(createImpl).not.toHaveBeenCalled();
+    // A failure that is not a stale binding is not retried quote-less.
+    expect(captureImpl).toHaveBeenCalledTimes(1);
   });
 
   it("rethrows a generic error", async () => {
     const captureImpl = vi
       .fn()
       .mockRejectedValue(new Error("network down"));
-    const createImpl = vi.fn();
 
     await expect(
       saveAnswerAsNote({
@@ -197,9 +193,8 @@ describe("saveAnswerAsNote error propagation", () => {
         citations: [citation()],
         csrfToken: "csrf",
         captureImpl,
-        createImpl,
       }),
     ).rejects.toThrow("network down");
-    expect(createImpl).not.toHaveBeenCalled();
+    expect(captureImpl).toHaveBeenCalledTimes(1);
   });
 });

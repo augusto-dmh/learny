@@ -6,9 +6,13 @@
  * Next.js proxy* (`/api/...`, ADR-017) — never cross-origin. The HttpOnly session
  * cookie rides along automatically (`credentials: "same-origin"`), so this code
  * never reads or holds the session token. The reads (list, detail, backlinks)
- * carry no token; the state-changing writes (create, update, delete, capture) echo
+ * carry no token; the state-changing writes (update, delete, capture) echo
  * the CSRF token (from `/api/auth/me`) in `X-CSRF-Token` (AD-007), mirroring
  * `quiz.ts`.
+ *
+ * A note is only ever born from a passage: `captureHighlight` is the one creation
+ * helper here, because a note without a reading anchor can no longer exist. There
+ * is deliberately no helper for a bare title.
  *
  * FastAPI remains authoritative for auth, ownership, anchor resolution, and the
  * body cap; these helpers just carry inputs in and surface the note/summary/
@@ -84,7 +88,7 @@ export type Backlink = {
   title: string;
 };
 
-/** The create/update body, mirroring the backend `NoteWriteRequest`. */
+/** The update body, mirroring the backend `NoteWriteRequest`. */
 export type NoteWrite = {
   title: string;
   body_markdown?: string;
@@ -131,28 +135,6 @@ export class NoteError extends Error {
     this.kind = kind;
     this.status = status;
   }
-}
-
-/**
- * Create a whole-Markdown note (201). State-changing, so it carries the
- * session-bound CSRF token in `X-CSRF-Token` (AD-007). An over-cap body surfaces
- * as a `NoteError` with kind `body_too_long` (422).
- */
-export async function createNote(
-  body: NoteWrite,
-  csrfToken: string,
-  fetchImpl: typeof fetch = fetch,
-): Promise<NoteDetail> {
-  const res = await fetchImpl("/api/notes", {
-    method: "POST",
-    credentials: "same-origin",
-    headers: { "content-type": "application/json", "X-CSRF-Token": csrfToken },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    throw await toNoteError(res, "Could not create the note.");
-  }
-  return (await res.json()) as NoteDetail;
 }
 
 /**

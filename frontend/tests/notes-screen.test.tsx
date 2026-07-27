@@ -5,8 +5,9 @@
  * as title-linked cards with tag chips and a badge per distinct anchor status
  * (an orphaned anchor rendered distinctly and never hidden), filters the list to
  * a tag when its chip is clicked (re-fetched server-side) and clears the filter,
- * creates a note from the form and opens it, and settles nothing-yet and
- * signed-out to their own readable states.
+ * and settles nothing-yet and signed-out to their own readable states. It offers
+ * no way to mint a note: every note is born from a passage, so the title-only
+ * form is gone (P3 AC 5).
  *
  * It is also the cross-book surface (P4): unfiltered it holds every book's notes,
  * a book picker narrows it to one, and picking every book again restores the
@@ -18,11 +19,6 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { NotesScreen } from "../app/components/notes/notes-screen";
-
-const nav = vi.hoisted(() => ({ push: vi.fn() }));
-vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: nav.push, replace: vi.fn() }),
-}));
 
 beforeAll(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
@@ -91,7 +87,6 @@ const sources = [source("s1", "Notes on the Engine"), source("s2", "Memoirs")];
 
 afterEach(() => {
   cleanup();
-  nav.push.mockClear();
   vi.restoreAllMocks();
 });
 
@@ -151,33 +146,26 @@ describe("NotesScreen (NF-13/14)", () => {
     );
   });
 
-  it("creates a note from the form and opens it", async () => {
-    vi.stubGlobal(
-      "fetch",
-      routedFetch({
-        "GET /api/auth/me": () => authedMe.clone(),
-        "GET /api/sources": () => jsonResponse(200, sources),
-        "GET /api/notes": () => jsonResponse(200, []),
-        "POST /api/notes": () =>
-          jsonResponse(201, {
-            id: "n9",
-            title: "Fresh note",
-            body_markdown: "",
-            tags: [],
-            anchors: [],
-            created_at: "now",
-            updated_at: "now",
-          }),
-      }),
-    );
+  it("offers no title-only creation control (P3 AC 5)", async () => {
+    const fetchMock = routedFetch({
+      "GET /api/auth/me": () => authedMe.clone(),
+      "GET /api/sources": () => jsonResponse(200, sources),
+      "GET /api/notes": () => jsonResponse(200, notes),
+    });
+    vi.stubGlobal("fetch", fetchMock);
 
     render(<NotesScreen />);
 
-    const input = await screen.findByLabelText("Title");
-    fireEvent.change(input, { target: { value: "Fresh note" } });
-    fireEvent.click(screen.getByRole("button", { name: "Create note" }));
-
-    await waitFor(() => expect(nav.push).toHaveBeenCalledWith("/notes/n9"));
+    // Wait for the loaded screen, then look for any way to mint a note here.
+    await screen.findByRole("link", { name: "Ada's algorithm" });
+    expect(screen.queryByRole("form", { name: "create note" })).toBeNull();
+    expect(screen.queryByLabelText("Title")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Create note" })).toBeNull();
+    expect(screen.queryByText("New note")).toBeNull();
+    // And nothing the screen did posted a note.
+    expect(
+      fetchMock.mock.calls.filter(([, init]) => init?.method === "POST"),
+    ).toEqual([]);
   });
 
   it("offers an Export vault download pointing at the export endpoint (NL-16)", async () => {
@@ -209,7 +197,11 @@ describe("NotesScreen (NF-13/14)", () => {
 
     render(<NotesScreen />);
 
-    expect(await screen.findByText("No notes yet.")).toBeTruthy();
+    expect(
+      await screen.findByText(
+        "No notes yet. Open a book and select a passage to start one.",
+      ),
+    ).toBeTruthy();
   });
 
   it("lists notes across every book when no book is picked (P4 AC 1)", async () => {
