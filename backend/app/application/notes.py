@@ -280,6 +280,12 @@ class CaptureHighlight:
     replaced mid-flight — nothing is persisted and ``StaleCaptureTarget`` (409) is
     raised. Otherwise a note (empty body allowed) plus its book anchor are created and
     the note's derived indexes are rebuilt, all in the caller's transaction.
+
+    The quote is optional: with none, there is no selection to bind, so block binding is
+    skipped and the anchor is **section-level** — the block columns stay NULL and the
+    quote snapshot is empty, which is the schema's existing shape for an unbound anchor.
+    Section resolution and ownership are identical either way, and the note and its
+    anchor are still written together.
     """
 
     def __init__(
@@ -309,7 +315,7 @@ class CaptureHighlight:
         user: User,
         source_id: UUID,
         anchor: str,
-        quote_exact: str,
+        quote_exact: str = "",
         quote_prefix: str = "",
         quote_suffix: str = "",
         title: str,
@@ -326,17 +332,22 @@ class CaptureHighlight:
         if section is None:
             raise CorpusNotFound("No section for this anchor.")
 
-        blocks = [
-            AnchorBlock(
-                ordinal=block.ordinal,
-                content_hash=block.content_hash,
-                text=self._markup.to_markdown(block.html_fragment),
-            )
-            for block in section.blocks
-        ]
-        binding = resolve(blocks, quote_exact, quote_prefix, quote_suffix)
-        if binding is None:
-            raise StaleCaptureTarget("The selected passage no longer matches the source.")
+        binding = None
+        if quote_exact.strip():
+            blocks = [
+                AnchorBlock(
+                    ordinal=block.ordinal,
+                    content_hash=block.content_hash,
+                    text=self._markup.to_markdown(block.html_fragment),
+                )
+                for block in section.blocks
+            ]
+            binding = resolve(blocks, quote_exact, quote_prefix, quote_suffix)
+            if binding is None:
+                raise StaleCaptureTarget("The selected passage no longer matches the source.")
+        else:
+            # No selection: a section-level anchor keeps no quote snapshot or context.
+            quote_exact = quote_prefix = quote_suffix = ""
         _validate_body(body_markdown, self._max_body_chars)
 
         now = self._clock.now()
@@ -364,10 +375,10 @@ class CaptureHighlight:
                 source_title=source.title,
                 anchor=section.anchor,
                 section_path=section.section_path,
-                block_hash=binding.block_hash,
-                block_ordinal=binding.block_ordinal,
-                start_offset=binding.start_offset,
-                end_offset=binding.end_offset,
+                block_hash=binding.block_hash if binding else None,
+                block_ordinal=binding.block_ordinal if binding else None,
+                start_offset=binding.start_offset if binding else None,
+                end_offset=binding.end_offset if binding else None,
                 quote_exact=quote_exact,
                 quote_prefix=quote_prefix,
                 quote_suffix=quote_suffix,
@@ -408,6 +419,10 @@ class ReconcileNoteAnchors:
        rewritten to the found section's canonical anchor/path (alias-aware);
     4. else — the section still resolves but the quote is gone → ``stale``; the section
        itself is gone → ``orphaned`` (the row is kept, rendered from its quote snapshot).
+
+    A section-level anchor (captured with no quote) has nothing to rebind, so it skips
+    the cascade: it stays ``active`` — rewritten to the survivor's canonical anchor —
+    while its section resolves, and is ``orphaned``, never ``stale``, once it is gone.
 
     Only the anchor payload fields and status are ever written, and only when the outcome
     differs from the stored state (the quiz reconcile's write discipline); a note's title
@@ -487,6 +502,30 @@ class ReconcileNoteAnchors:
     ) -> _Reconciled:
         """Return the anchor's reconciled ``(anchor, path, hash, ordinal, start, end, status)``."""
         located = first_by_anchor.get(anchor.anchor) or alias_to_section.get(anchor.anchor)
+        if not anchor.quote_exact:
+            # A section-level anchor has no quote to rebind: it stays active for as long
+            # as its section resolves (rewritten to the survivor's canonical anchor), and
+            # is orphaned — never stale — once the section is gone.
+            if located is None:
+                return (
+                    anchor.anchor,
+                    anchor.section_path,
+                    None,
+                    None,
+                    None,
+                    None,
+                    NoteAnchorStatus.ORPHANED,
+                )
+            section, _ = located
+            return (
+                section.anchor,
+                section.section_path,
+                None,
+                None,
+                None,
+                None,
+                NoteAnchorStatus.ACTIVE,
+            )
         if located is not None:
             section, blocks = located
             # Tier 1: block-hash match in the resolved section (offsets provably valid).

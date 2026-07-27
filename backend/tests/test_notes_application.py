@@ -345,6 +345,96 @@ def test_capture_highlight_creates_a_note_and_anchor() -> None:
     assert view.note.body_markdown == ""  # empty body allowed
 
 
+def test_capture_highlight_without_a_quote_creates_a_section_level_anchor() -> None:
+    # A capture carrying no selection still writes the note and its anchor together;
+    # the anchor addresses the section and binds to no block.
+    user = _user()
+    source = _source(user.id)
+    sources = FakeSourceRepository()
+    sources.add(source)
+    notes = FakeNoteRepository()
+    corpus = FakeAnchorCorpus({source.id: [_section()]})
+
+    view = _capture(sources, notes, corpus)(
+        user=user,
+        source_id=source.id,
+        anchor="ch1",
+        title="A thought about this chapter",
+        body_markdown="",
+    )
+
+    assert notes.get_by_id(view.note.id) is not None
+    assert len(view.anchors) == 1
+    anchor = view.anchors[0]
+    assert anchor.anchor == "ch1"
+    assert anchor.section_path == ("Chapter 1",)
+    assert anchor.quote_exact == ""
+    assert anchor.block_hash is None
+    assert anchor.block_ordinal is None
+    assert anchor.start_offset is None
+    assert anchor.end_offset is None
+    assert anchor.status == NoteAnchorStatus.ACTIVE
+    assert anchor.source_title == "A Book"
+
+
+def test_capture_highlight_without_a_quote_persists_nothing_when_the_body_is_over_cap() -> None:
+    # The quote-less path keeps the note and its anchor atomic: a rejected body leaves
+    # neither behind.
+    user = _user()
+    source = _source(user.id)
+    sources = FakeSourceRepository()
+    sources.add(source)
+    notes = FakeNoteRepository()
+    corpus = FakeAnchorCorpus({source.id: [_section()]})
+    capture = CaptureHighlight(
+        sources=sources,
+        notes=notes,
+        corpus=corpus,
+        markup=IdentityMarkupConverter(),
+        authorize=AuthorizeOwnership(),
+        clock=FakeClock(),
+        ids=uuid4,
+        max_body_chars=10,
+    )
+
+    with pytest.raises(NoteBodyTooLong):
+        capture(user=user, source_id=source.id, anchor="ch1", title="h", body_markdown="x" * 11)
+
+    assert notes.list_summaries(user.id) == []
+    assert notes.anchors_for_source(source.id) == []
+
+
+def test_capture_highlight_without_a_quote_still_rejects_an_unknown_section() -> None:
+    user = _user()
+    source = _source(user.id)
+    sources = FakeSourceRepository()
+    sources.add(source)
+    notes = FakeNoteRepository()
+    corpus = FakeAnchorCorpus({source.id: [_section("ch1")]})
+
+    with pytest.raises(CorpusNotFound):
+        _capture(sources, notes, corpus)(
+            user=user, source_id=source.id, anchor="ch-missing", title="h"
+        )
+    assert notes.list_summaries(user.id) == []
+
+
+def test_capture_highlight_without_a_quote_still_rejects_an_unowned_source() -> None:
+    owner = _user()
+    intruder = _user()
+    source = _source(owner.id)
+    sources = FakeSourceRepository()
+    sources.add(source)
+    notes = FakeNoteRepository()
+    corpus = FakeAnchorCorpus({source.id: [_section()]})
+
+    with pytest.raises(SourceNotFound):
+        _capture(sources, notes, corpus)(
+            user=intruder, source_id=source.id, anchor="ch1", title="h"
+        )
+    assert notes.list_summaries(intruder.id) == []
+
+
 def test_capture_highlight_unknown_source_is_not_found() -> None:
     user = _user()
     sources = FakeSourceRepository()
@@ -432,7 +522,11 @@ def _seed_anchor(
     anchor: str = "ch1",
     block_hash: str | None = "h0",
     block_ordinal: int | None = 0,
+    start_offset: int | None = 0,
+    end_offset: int | None = 11,
     quote_exact: str = "quick brown",
+    quote_prefix: str = "the ",
+    quote_suffix: str = " fox",
     status: str = NoteAnchorStatus.ACTIVE,
 ) -> NoteAnchor:
     now = datetime.now(UTC)
@@ -446,11 +540,11 @@ def _seed_anchor(
         section_path=("Chapter 1",),
         block_hash=block_hash,
         block_ordinal=block_ordinal,
-        start_offset=0,
-        end_offset=11,
+        start_offset=start_offset,
+        end_offset=end_offset,
         quote_exact=quote_exact,
-        quote_prefix="the ",
-        quote_suffix=" fox",
+        quote_prefix=quote_prefix,
+        quote_suffix=quote_suffix,
         status=status,
         created_at=now,
         updated_at=now,
@@ -592,6 +686,52 @@ def test_reconcile_relocates_alias_aware_and_rewrites_anchor() -> None:
     result = notes.anchors_for_source(source_id)[0]
     assert result.status == NoteAnchorStatus.ACTIVE
     assert result.anchor == "ch1"  # rewritten from the alias to the canonical
+
+
+def _seed_section_level_anchor(notes: FakeNoteRepository, source_id, *, anchor="ch1"):  # noqa: ANN001, ANN202
+    """Seed the anchor a quote-less capture writes: section addressed, nothing bound."""
+    return _seed_anchor(
+        notes,
+        source_id,
+        anchor=anchor,
+        block_hash=None,
+        block_ordinal=None,
+        start_offset=None,
+        end_offset=None,
+        quote_exact="",
+        quote_prefix="",
+        quote_suffix="",
+    )
+
+
+def test_reconcile_keeps_a_section_level_anchor_active_while_its_section_lives() -> None:
+    # There is no quote to rebind, so a rewritten section must not make the anchor
+    # stale — the passage it names is the section, and the section is still there.
+    notes = FakeNoteRepository()
+    source_id = uuid4()
+    _seed_section_level_anchor(notes, source_id)
+    corpus = FakeAnchorCorpus(
+        {source_id: [_anchor_section("ch1", content_hash="new", text="entirely rewritten")]}
+    )
+
+    _reconcile(notes, corpus)(source_id=source_id)
+
+    result = notes.anchors_for_source(source_id)[0]
+    assert result.status == NoteAnchorStatus.ACTIVE
+    assert result.anchor == "ch1"
+
+
+def test_reconcile_orphans_a_section_level_anchor_when_its_section_is_gone() -> None:
+    notes = FakeNoteRepository()
+    source_id = uuid4()
+    _seed_section_level_anchor(notes, source_id)
+    corpus = FakeAnchorCorpus(
+        {source_id: [_anchor_section("ch9", content_hash="h9", text="unrelated content")]}
+    )
+
+    _reconcile(notes, corpus)(source_id=source_id)
+
+    assert notes.anchors_for_source(source_id)[0].status == NoteAnchorStatus.ORPHANED
 
 
 def test_reconcile_writes_only_when_the_outcome_changed() -> None:

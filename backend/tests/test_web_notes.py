@@ -796,6 +796,62 @@ def test_capture_highlight_returns_201_with_anchor_jumpback(
     assert anchor["section_path"] == ["Chapter 1"]
 
 
+def test_capture_highlight_without_a_quote_returns_201_with_a_section_level_anchor(
+    notes_client: TestClient, db_conn: Connection
+) -> None:
+    user_id = _register(notes_client, "hl-noquote@example.com")
+    csrf = _csrf(notes_client)
+    source_id = _persist_source(db_conn, user_id)
+    _seed_corpus(
+        db_conn,
+        source_id,
+        anchor="ch1",
+        block_html="<p>The quick brown fox jumps over the lazy dog.</p>",
+    )
+
+    resp = _post_highlight(
+        notes_client,
+        source_id,
+        {"anchor": "ch1", "title": "About this chapter", "body_markdown": ""},
+        csrf=csrf,
+    )
+
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert len(body["anchors"]) == 1
+    anchor = body["anchors"][0]
+    assert anchor["source_id"] == str(source_id)
+    assert anchor["anchor"] == "ch1"
+    assert anchor["section_path"] == ["Chapter 1"]
+    assert anchor["quote_exact"] == ""
+    assert anchor["block_ordinal"] is None
+    assert anchor["start_offset"] is None
+    assert anchor["end_offset"] is None
+    assert anchor["status"] == "active"
+    # The note is durable, not just echoed back.
+    assert [row["id"] for row in notes_client.get("/api/notes").json()] == [body["id"]]
+
+
+def test_capture_highlight_without_a_quote_over_cap_body_persists_nothing(
+    notes_client: TestClient, db_conn: Connection
+) -> None:
+    user_id = _register(notes_client, "hl-noquote-toolong@example.com")
+    csrf = _csrf(notes_client)
+    source_id = _persist_source(db_conn, user_id)
+    _seed_corpus(db_conn, source_id, anchor="ch1", block_html="<p>Present text.</p>")
+
+    resp = _post_highlight(
+        notes_client,
+        source_id,
+        {"anchor": "ch1", "title": "h", "body_markdown": "x" * (NOTES_MAX_BODY + 1)},
+        csrf=csrf,
+    )
+
+    assert resp.status_code == 422, resp.text
+    assert notes_client.get("/api/notes").json() == []
+    assert notes_client.get(f"/api/sources/{source_id}/highlights").json() == []
+
+
 def test_capture_highlight_over_cap_body_returns_422(
     notes_client: TestClient, db_conn: Connection
 ) -> None:

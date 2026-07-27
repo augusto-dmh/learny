@@ -105,10 +105,13 @@ class CaptureRequest(BaseModel):
     ``anchor`` addresses the reader section; ``quote_exact`` (+ 32-char
     ``quote_prefix``/``quote_suffix`` context) is the selection resolved server-side
     against the section's blocks. An empty ``body_markdown`` yields a bare highlight.
+
+    ``quote_exact`` is optional: omitting it captures the section itself rather than a
+    selection, so nothing is bound to a block and the anchor is section-level.
     """
 
     anchor: str
-    quote_exact: str
+    quote_exact: str = ""
     quote_prefix: str = ""
     quote_suffix: str = ""
     title: str
@@ -414,7 +417,8 @@ def capture_highlight(
     → 404), resolves the addressed section (unknown anchor → ``CorpusNotFound`` → 404),
     and binds the selection against its blocks — if the served evidence no longer
     matches (a mid-flight re-ingest) nothing is persisted and ``StaleCaptureTarget`` →
-    409. Over-cap body → ``NoteBodyTooLong`` → 422.
+    409. Over-cap body → ``NoteBodyTooLong`` → 422. With no ``quote_exact`` there is no
+    selection to bind, so the anchor is section-level and the 409 cannot arise.
     """
     view = service(
         user=user,
