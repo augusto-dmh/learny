@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 from uuid import UUID
 
 from app.application.anchoring import AnchorBlock, resolve
@@ -28,8 +29,10 @@ from app.application.errors import (
 )
 from app.application.identity import AuthorizeOwnership
 from app.application.ingestion import authorized_source
+from app.application.reading import locate, page_at, words_before_row
 from app.domain.entities import (
     Backlink,
+    ChapterIndexRow,
     DerivedNoteLink,
     Note,
     NoteAnchor,
@@ -198,13 +201,66 @@ class GetNote:
 
 
 class ListNotes:
-    """Return the caller's notes (newest-edited first), optionally filtered by tag (NF-13)."""
+    """Return the caller's notes (newest-edited first), optionally scoped (NF-13, WSN-01).
 
-    def __init__(self, *, notes: NoteRepository) -> None:
+    ``tag`` narrows the cross-book list as it always has. ``source_id`` narrows it to one
+    book: the source is authorized first — a missing source and a non-owner collapse to
+    the same ``SourceNotFound`` → 404 as every other source read (WSN-13), so the filter
+    discloses nothing — and each returned row then carries the passage it came from plus
+    that passage's page.
+
+    The page is derived here, from the book's stored per-section word counts
+    (``words_before_row`` → ``page_at``, AD-189 book-global numbering), so the one
+    definition of a page lives on the server and no client recomputes it or infers it
+    from a percent. An anchor that no longer resolves against the corpus — an orphaned
+    one, or any anchor on a book whose corpus is gone — yields no page at all; its row
+    is still returned and still carries its quote snapshot (WSN-15).
+    """
+
+    def __init__(
+        self,
+        *,
+        notes: NoteRepository,
+        sources: SourceRepository,
+        corpus: CorpusRepository,
+        authorize: AuthorizeOwnership,
+        words_per_page: int,
+    ) -> None:
         self._notes = notes
+        self._sources = sources
+        self._corpus = corpus
+        self._authorize = authorize
+        self._words_per_page = words_per_page
 
-    def __call__(self, *, user: User, tag: str | None = None) -> list[NoteSummary]:
-        return self._notes.list_summaries(user.id, tag=tag.strip().lower() if tag else None)
+    def __call__(
+        self, *, user: User, tag: str | None = None, source_id: UUID | None = None
+    ) -> list[NoteSummary]:
+        normalized_tag = tag.strip().lower() if tag else None
+        if source_id is None:
+            return self._notes.list_summaries(user.id, tag=normalized_tag)
+
+        authorized_source(
+            user=user,
+            source_id=source_id,
+            sources=self._sources,
+            authorize=self._authorize,
+        )
+        summaries = self._notes.list_summaries(user.id, tag=normalized_tag, source_id=source_id)
+        if not summaries:
+            return summaries
+        index = self._corpus.get_chapter_index(source_id) or ()
+        return [
+            replace(summary, page=self._page_of(index, summary.anchor)) for summary in summaries
+        ]
+
+    def _page_of(self, index: Sequence[ChapterIndexRow], anchor: NoteAnchor | None) -> int | None:
+        """Return the anchored section's book-global page, or ``None`` when it is gone."""
+        if anchor is None:
+            return None
+        row_idx = locate(index, anchor.anchor)
+        if row_idx is None:
+            return None
+        return page_at(words_before_row(index, row_idx), self._words_per_page)
 
 
 class GetBacklinks:

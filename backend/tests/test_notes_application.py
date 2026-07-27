@@ -2,9 +2,11 @@
 
 Drives Update/Delete/Get/List and CaptureHighlight over in-memory fakes, pinning:
 owner scoping (non-owner collapses to ``NoteNotFound``), the body cap, wikilink
-derivation (resolved / unresolved / self-link), lowercase tag normalization, and
-highlight capture — the only way a note is created (owned-source + served-section
-consistency, atomic note+anchor, optional quote, empty body allowed,
+derivation (resolved / unresolved / self-link), lowercase tag normalization, the
+book-scoped list (an unowned book is the same 404 as an unknown one; each row's page
+comes from the book's word counts and an unresolvable anchor keeps its row with no
+page), and highlight capture — the only way a note is created (owned-source +
+served-section consistency, atomic note+anchor, optional quote, empty body allowed,
 stale/unknown-anchor errors).
 """
 
@@ -36,6 +38,7 @@ from app.application.notes import (
 from app.domain.entities import (
     AnchorBlockSnapshot,
     AnchorSection,
+    ChapterIndexRow,
     Note,
     NoteAnchor,
     NoteAnchorStatus,
@@ -191,15 +194,163 @@ def test_get_note_returns_tags_and_is_owner_scoped() -> None:
         get(user=other, note_id=note.id)
 
 
+def _list_notes(
+    notes: FakeNoteRepository,
+    *,
+    sources: FakeSourceRepository | None = None,
+    corpus: FakeAnchorCorpus | None = None,
+    words_per_page: int = 100,
+) -> ListNotes:
+    return ListNotes(
+        notes=notes,
+        sources=sources if sources is not None else FakeSourceRepository(),
+        corpus=corpus if corpus is not None else FakeAnchorCorpus(),
+        authorize=AuthorizeOwnership(),
+        words_per_page=words_per_page,
+    )
+
+
+def _anchor_note(
+    notes: FakeNoteRepository,
+    user: User,
+    source_id,  # noqa: ANN001
+    *,
+    title: str,
+    anchor: str = "ch1",
+    quote_exact: str = "the passage it came from",
+    status: str = NoteAnchorStatus.ACTIVE,
+) -> Note:
+    """Seed one of ``user``'s notes carrying a single anchor on ``source_id``."""
+    note = _seed_note(notes, user, title=title)
+    now = datetime.now(UTC)
+    notes.add_anchor(
+        NoteAnchor(
+            id=uuid4(),
+            note_id=note.id,
+            source_id=source_id,
+            source_title="A Book",
+            anchor=anchor,
+            section_path=("Part One", "Prefácio"),
+            block_hash=None,
+            block_ordinal=None,
+            start_offset=None,
+            end_offset=None,
+            quote_exact=quote_exact,
+            quote_prefix="",
+            quote_suffix="",
+            status=status,
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    return note
+
+
+def _index_row(anchor: str, *, word_count: int) -> ChapterIndexRow:
+    return ChapterIndexRow(
+        position=0,
+        depth=0,
+        title=anchor,
+        section_path=(anchor,),
+        anchor=anchor,
+        anchor_aliases=(),
+        word_count=word_count,
+    )
+
+
 def test_list_notes_filters_by_tag_lowercased() -> None:
     notes = FakeNoteRepository()
     user = _user()
     _seed_note(notes, user, title="Tagged", tags=["python"])
     _seed_note(notes, user, title="Untagged")
 
-    summaries = ListNotes(notes=notes)(user=user, tag="PYTHON")
+    summaries = _list_notes(notes)(user=user, tag="PYTHON")
 
     assert [s.note.title for s in summaries] == ["Tagged"]
+
+
+def test_list_notes_across_books_carries_no_passage_or_page() -> None:
+    notes = FakeNoteRepository()
+    user = _user()
+    source_id = uuid4()
+    _anchor_note(notes, user, source_id, title="Anchored")
+
+    summary = _list_notes(notes)(user=user)[0]
+
+    assert summary.anchor is None
+    assert summary.page is None
+
+
+def test_list_notes_scoped_to_an_unowned_book_is_not_found() -> None:
+    notes = FakeNoteRepository()
+    sources = FakeSourceRepository()
+    owner = _user()
+    intruder = _user()
+    source = sources.add(_source(owner.id))
+    _anchor_note(notes, owner, source.id, title="Owned")
+
+    with pytest.raises(SourceNotFound):
+        _list_notes(notes, sources=sources)(user=intruder, source_id=source.id)
+
+
+def test_list_notes_scoped_to_an_unknown_book_is_the_same_not_found() -> None:
+    # The unowned and the unknown source raise the identical error, so the response
+    # cannot tell a caller that someone else's book exists.
+    notes = FakeNoteRepository()
+    user = _user()
+
+    with pytest.raises(SourceNotFound):
+        _list_notes(notes)(user=user, source_id=uuid4())
+
+
+def test_list_notes_scoped_to_a_book_derives_the_page_from_its_word_counts() -> None:
+    notes = FakeNoteRepository()
+    sources = FakeSourceRepository()
+    user = _user()
+    source = sources.add(_source(user.id))
+    _anchor_note(notes, user, source.id, title="Late in the book", anchor="ch3")
+    corpus = FakeAnchorCorpus()
+    # 250 + 250 words precede ch3; at 100 words to a page that is page 6, counted from
+    # the book's first word rather than restarted per chapter.
+    corpus.set_chapter_index(
+        source.id,
+        [
+            _index_row("ch1", word_count=250),
+            _index_row("ch2", word_count=250),
+            _index_row("ch3", word_count=250),
+        ],
+    )
+
+    summary = _list_notes(notes, sources=sources, corpus=corpus, words_per_page=100)(
+        user=user, source_id=source.id
+    )[0]
+
+    assert summary.page == 6
+
+
+def test_list_notes_keeps_an_unresolvable_anchors_row_with_its_quote_and_no_page() -> None:
+    notes = FakeNoteRepository()
+    sources = FakeSourceRepository()
+    user = _user()
+    source = sources.add(_source(user.id))
+    _anchor_note(
+        notes,
+        user,
+        source.id,
+        title="Orphaned",
+        anchor="ch-gone",
+        quote_exact="a passage that outlived its section",
+        status=NoteAnchorStatus.ORPHANED,
+    )
+    corpus = FakeAnchorCorpus()
+    corpus.set_chapter_index(source.id, [_index_row("ch1", word_count=250)])
+
+    summaries = _list_notes(notes, sources=sources, corpus=corpus)(user=user, source_id=source.id)
+
+    assert [s.note.title for s in summaries] == ["Orphaned"]
+    assert summaries[0].anchor is not None
+    assert summaries[0].anchor.quote_exact == "a passage that outlived its section"
+    assert summaries[0].page is None
 
 
 # --- GetBacklinks (NF-10) -------------------------------------------------------

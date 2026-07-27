@@ -676,16 +676,25 @@ class IdentityMarkupConverter:
 class FakeAnchorCorpus:
     """``CorpusRepository`` double for the anchoring read paths (NF-06/07).
 
-    Seeded with a source's :class:`AnchorSection` list; only the two block-level reads
-    the notes use cases call are implemented. ``blocks_for_section`` resolves canonical
-    anchors first, then aliases, mirroring the real repository.
+    Seeded with a source's :class:`AnchorSection` list; only the reads the notes use
+    cases call are implemented. ``blocks_for_section`` resolves canonical anchors first,
+    then aliases, mirroring the real repository. ``get_chapter_index`` is seeded
+    separately (the page math reads it) and answers ``None`` for a source with no
+    corpus, exactly as the real repository does.
     """
 
     def __init__(self, sections_by_source: dict[UUID, list[AnchorSection]] | None = None) -> None:
         self._by_source: dict[UUID, list[AnchorSection]] = sections_by_source or {}
+        self._index_by_source: dict[UUID, tuple[ChapterIndexRow, ...]] = {}
 
     def set_sections(self, source_id: UUID, sections: list[AnchorSection]) -> None:
         self._by_source[source_id] = sections
+
+    def set_chapter_index(self, source_id: UUID, rows: Sequence[ChapterIndexRow]) -> None:
+        self._index_by_source[source_id] = tuple(rows)
+
+    def get_chapter_index(self, source_id: UUID) -> tuple[ChapterIndexRow, ...] | None:
+        return self._index_by_source.get(source_id)
 
     def blocks_for_section(self, source_id: UUID, anchor: str) -> AnchorSection | None:
         sections = self._by_source.get(source_id, [])

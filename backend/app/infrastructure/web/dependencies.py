@@ -702,8 +702,18 @@ def get_get_note(conn: DbConnection) -> GetNote:
 
 
 def get_list_notes(conn: DbConnection) -> ListNotes:
-    """Wire ``ListNotes`` on the request-scoped connection (NF-13)."""
-    return ListNotes(notes=SqlAlchemyNoteRepository(conn))
+    """Wire ``ListNotes`` on the request-scoped connection (NF-13, WSN-01).
+
+    The source repo authorizes a book-scoped list and the corpus repo supplies the
+    chapter index each row's page is derived from, against the server's one page quantum.
+    """
+    return ListNotes(
+        notes=SqlAlchemyNoteRepository(conn),
+        sources=SqlAlchemySourceRepository(conn),
+        corpus=SqlAlchemyCorpusRepository(conn),
+        authorize=AuthorizeOwnership(),
+        words_per_page=get_settings().words_per_page,
+    )
 
 
 def get_get_backlinks(conn: DbConnection) -> GetBacklinks:
