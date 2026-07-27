@@ -7,6 +7,11 @@
  * a tag when its chip is clicked (re-fetched server-side) and clears the filter,
  * creates a note from the form and opens it, and settles nothing-yet and
  * signed-out to their own readable states.
+ *
+ * It is also the cross-book surface (P4): unfiltered it holds every book's notes,
+ * a book picker narrows it to one, and picking every book again restores the
+ * cross-book list. A book the caller does not own answers 404, which must read as
+ * a message rather than a broken screen.
  */
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -69,6 +74,21 @@ const notes = [
   summary("n2", "Babbage engine", { tags: ["history", "machines"] }),
 ];
 
+/** The caller's books, which the picker offers — "Ada's algorithm" is s1's. */
+function source(id: string, title: string) {
+  return {
+    id,
+    title,
+    filename: `${id}.epub`,
+    byte_size: 1024,
+    content_type: "application/epub+zip",
+    status: "ready",
+    created_at: "now",
+  };
+}
+
+const sources = [source("s1", "Notes on the Engine"), source("s2", "Memoirs")];
+
 afterEach(() => {
   cleanup();
   nav.push.mockClear();
@@ -81,6 +101,7 @@ describe("NotesScreen (NF-13/14)", () => {
       "fetch",
       routedFetch({
         "GET /api/auth/me": () => authedMe.clone(),
+        "GET /api/sources": () => jsonResponse(200, sources),
         "GET /api/notes": () => jsonResponse(200, notes),
       }),
     );
@@ -102,6 +123,7 @@ describe("NotesScreen (NF-13/14)", () => {
       "fetch",
       routedFetch({
         "GET /api/auth/me": () => authedMe.clone(),
+        "GET /api/sources": () => jsonResponse(200, sources),
         "GET /api/notes": () => jsonResponse(200, notes),
         "GET /api/notes?tag=history": () =>
           jsonResponse(200, [notes[0]]),
@@ -134,6 +156,7 @@ describe("NotesScreen (NF-13/14)", () => {
       "fetch",
       routedFetch({
         "GET /api/auth/me": () => authedMe.clone(),
+        "GET /api/sources": () => jsonResponse(200, sources),
         "GET /api/notes": () => jsonResponse(200, []),
         "POST /api/notes": () =>
           jsonResponse(201, {
@@ -162,6 +185,7 @@ describe("NotesScreen (NF-13/14)", () => {
       "fetch",
       routedFetch({
         "GET /api/auth/me": () => authedMe.clone(),
+        "GET /api/sources": () => jsonResponse(200, sources),
         "GET /api/notes": () => jsonResponse(200, []),
       }),
     );
@@ -178,6 +202,7 @@ describe("NotesScreen (NF-13/14)", () => {
       "fetch",
       routedFetch({
         "GET /api/auth/me": () => authedMe.clone(),
+        "GET /api/sources": () => jsonResponse(200, sources),
         "GET /api/notes": () => jsonResponse(200, []),
       }),
     );
@@ -185,6 +210,112 @@ describe("NotesScreen (NF-13/14)", () => {
     render(<NotesScreen />);
 
     expect(await screen.findByText("No notes yet.")).toBeTruthy();
+  });
+
+  it("lists notes across every book when no book is picked (P4 AC 1)", async () => {
+    const fetchMock = routedFetch({
+      "GET /api/auth/me": () => authedMe.clone(),
+      "GET /api/sources": () => jsonResponse(200, sources),
+      "GET /api/notes": () => jsonResponse(200, notes),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<NotesScreen />);
+
+    // Both books' notes are present, and the request carried no book scope.
+    expect(await screen.findByRole("link", { name: "Ada's algorithm" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Babbage engine" })).toBeTruthy();
+    const notesCalls = fetchMock.mock.calls
+      .map(([url]) => url)
+      .filter((url) => url.startsWith("/api/notes"));
+    expect(notesCalls).toEqual(["/api/notes"]);
+  });
+
+  it("narrows the list to one book and restores it when cleared (P4 AC 2, 3)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        "GET /api/sources": () => jsonResponse(200, sources),
+        "GET /api/notes": () => jsonResponse(200, notes),
+        "GET /api/notes?source_id=s1": () => jsonResponse(200, [notes[0]]),
+      }),
+    );
+
+    render(<NotesScreen />);
+
+    const picker = await screen.findByLabelText("Book");
+    fireEvent.change(picker, { target: { value: "s1" } });
+
+    // Only the picked book's notes remain.
+    await waitFor(() =>
+      expect(screen.queryByRole("link", { name: "Babbage engine" })).toBeNull(),
+    );
+    expect(screen.getByRole("link", { name: "Ada's algorithm" })).toBeTruthy();
+
+    // Picking every book again restores the cross-book list.
+    fireEvent.change(picker, { target: { value: "" } });
+    await waitFor(() =>
+      expect(screen.getByRole("link", { name: "Babbage engine" })).toBeTruthy(),
+    );
+  });
+
+  it("offers every book the caller owns in the picker", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        "GET /api/sources": () => jsonResponse(200, sources),
+        "GET /api/notes": () => jsonResponse(200, notes),
+      }),
+    );
+
+    render(<NotesScreen />);
+
+    expect(await screen.findByRole("option", { name: "All books" })).toBeTruthy();
+    expect(screen.getByRole("option", { name: "Notes on the Engine" })).toBeTruthy();
+    expect(screen.getByRole("option", { name: "Memoirs" })).toBeTruthy();
+  });
+
+  it("reads a book the caller does not own as a message, not a crash (P4 AC 4)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        "GET /api/sources": () => jsonResponse(200, sources),
+        "GET /api/notes": () => jsonResponse(200, notes),
+        "GET /api/notes?source_id=s2": () =>
+          jsonResponse(404, { detail: "Source not found." }),
+      }),
+    );
+
+    render(<NotesScreen />);
+
+    const picker = await screen.findByLabelText("Book");
+    fireEvent.change(picker, { target: { value: "s2" } });
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe("Source not found.");
+  });
+
+  it("says a picked book has nothing yet rather than nothing at all", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        "GET /api/sources": () => jsonResponse(200, sources),
+        "GET /api/notes": () => jsonResponse(200, notes),
+        "GET /api/notes?source_id=s2": () => jsonResponse(200, []),
+      }),
+    );
+
+    render(<NotesScreen />);
+
+    fireEvent.change(await screen.findByLabelText("Book"), {
+      target: { value: "s2" },
+    });
+
+    expect(await screen.findByText("No notes from this book yet.")).toBeTruthy();
   });
 
   it("redirects and shows a signed-out state when unauthenticated", async () => {
