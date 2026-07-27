@@ -167,6 +167,20 @@ describe("the dock's Notes tab", () => {
     expect(screen.queryByText(/p\./)).toBeNull();
   });
 
+  it("draws no quote block for a note taken from a section rather than a selection", async () => {
+    stubNotes([
+      note("n1", "On the whole chapter", passage("Chapter One", "", 12)),
+    ]);
+    const { container } = renderNotesTab();
+
+    // An answer saved when its citation carried no quotable words anchors the
+    // section itself, so there is no quote — and an empty bordered block is worse
+    // than none. The row still says where it came from.
+    await screen.findByText("On the whole chapter");
+    expect(screen.getByText("Chapter One · p. 12")).toBeTruthy();
+    expect(container.querySelector("blockquote")).toBeNull();
+  });
+
   it("reaches back to the passage a note came from without leaving the book", async () => {
     const onShowInBook = vi.fn();
     stubNotes([

@@ -120,7 +120,10 @@ function NoteRowPassage({
   onShowInBook?: (anchor: string) => void;
 }) {
   // A page only exists while the anchor still resolves; an orphaned one shows its
-  // section alone rather than a number the book can no longer back up.
+  // section alone rather than a number the book can no longer back up. A
+  // section-level anchor has no quote at all — an answer saved when its citation
+  // carried no quotable words, or a capture with nothing selected — so the quote
+  // block is omitted rather than drawn empty.
   const where =
     anchor.page === null
       ? anchor.section_title
@@ -139,9 +142,11 @@ function NoteRowPassage({
       ) : (
         <p className="text-xs text-muted-foreground">{where}</p>
       )}
-      <blockquote className="border-l-2 pl-2 text-xs text-muted-foreground">
-        {anchor.quote_exact}
-      </blockquote>
+      {anchor.quote_exact ? (
+        <blockquote className="border-l-2 pl-2 text-xs text-muted-foreground">
+          {anchor.quote_exact}
+        </blockquote>
+      ) : null}
     </>
   );
 }
