@@ -10,6 +10,7 @@ import logging
 import os
 from contextvars import ContextVar
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -198,10 +199,17 @@ class Settings(BaseSettings):
     # max-tokens below), so CI and local development stay offline and key-free.
     # ``anthropic_api_key`` is an env-only secret. ``judge_model`` and
     # ``eval_max_cases`` bound the offline-optional evaluation harness.
+    #
+    # ``generation_effort`` is how much thinking the model spends before answering;
+    # it is a knob rather than a constant because the right value is a live
+    # latency/cost trade-off, and a bad value is rejected at startup rather than
+    # per request. ``generation_max_tokens`` bounds thinking *and* answer together,
+    # so the budget has to hold both.
     generation_provider: str = "local"
     anthropic_api_key: str = ""
     generation_model: str = "claude-sonnet-5"
-    generation_max_tokens: int = 1024
+    generation_effort: Literal["low", "medium", "high", "xhigh", "max"] = "medium"
+    generation_max_tokens: int = 4096
     judge_model: str = "claude-haiku-4-5"
     eval_max_cases: int = 50
 

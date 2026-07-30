@@ -35,7 +35,8 @@ def test_anthropic_provider_builds_claude_adapter_from_settings() -> None:
         generation_provider="anthropic",
         anthropic_api_key="sk-ant-test",
         generation_model="claude-sonnet-4-6",
-        generation_max_tokens=1024,
+        generation_effort="xhigh",
+        generation_max_tokens=2048,
     )
 
     adapter = build_generation_adapter(settings)
@@ -43,6 +44,10 @@ def test_anthropic_provider_builds_claude_adapter_from_settings() -> None:
     assert isinstance(adapter, AnthropicGenerationAdapter)
     # Identity reflects the settings-supplied model id (no network call).
     assert adapter.model == "claude-sonnet-4-6"
+    # The thinking budget and effort the operator configured are the ones this
+    # adapter will spend — a factory that dropped either would leave the knobs inert.
+    assert adapter._max_tokens == 2048
+    assert adapter._effort == "xhigh"
 
 
 def test_anthropic_provider_with_empty_key_fails_fast() -> None:

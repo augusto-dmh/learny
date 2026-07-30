@@ -165,7 +165,8 @@ def _build_history_messages(
 class AnthropicAdapterBase:
     """Shared construction and lazy client seam for the Anthropic adapters.
 
-    Constructed with the API key, model id, and ``max_tokens``; the real
+    Constructed with the API key, model id, ``max_tokens``, and the thinking
+    ``effort`` the composition root read from settings; the real
     ``anthropic.Anthropic`` client is built lazily on first use (so the SDK import
     stays inside this module and an injected fake needs no key/network, mirroring
     the OpenAI embedding adapter). Subclasses add the port-specific ``generate``.
@@ -177,11 +178,13 @@ class AnthropicAdapterBase:
         api_key: str,
         model: str,
         max_tokens: int,
+        effort: str = "medium",
         client: _MessagesClient | None = None,
     ) -> None:
         self._api_key = api_key
         self._model = model
         self._max_tokens = max_tokens
+        self._effort = effort
         self._client = client
 
     @property
