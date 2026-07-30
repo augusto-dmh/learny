@@ -69,7 +69,7 @@ def to_ui_message_stream(
                 yield ServerSentEvent(
                     data={"type": "text-delta", "id": text_id, "delta": event.text}
                 )
-            else:  # the terminal StreamTurn — carries citations + status
+            elif isinstance(event, StreamTurn):  # terminal — carries citations + status
                 citations, status = _terminal(event)
     except AnswerGenerationFailed:
         # Provider failed after headers were sent: surface the generic error as a
