@@ -18,6 +18,7 @@ import inspect
 import json
 import logging
 import os
+import re
 from uuid import uuid4
 
 import pytest
@@ -241,7 +242,7 @@ def test_buffered_answer_ignores_thinking_blocks_in_the_reply() -> None:
 
     result = adapter.generate(mode=MODE_ANSWER, message="q", evidence=evidence)
 
-    assert result.text == "The tides follow the moon."
+    assert result.text == "The tides follow the moon.[^1]"
     assert result.cited_chunk_ids == (evidence[0].chunk_id,)
 
 
@@ -401,6 +402,162 @@ def test_citations_dedup_keeping_first_occurrence_order() -> None:
     assert result.cited_chunk_ids == (evidence[1].chunk_id, evidence[0].chunk_id)
 
 
+# --- Inline citation marks (ANSW-07) -------------------------------------------
+#
+# Derived from the citations-in-flow ACs: the answer text itself carries a ``[^n]``
+# token wherever the model attached a citation, so a mark can be rendered at the
+# point it belongs instead of a chip detached from the prose. The number is the
+# cited chunk's position in ``cited_chunk_ids`` — the two come out of one walk, so
+# these tests pin the mapping rather than the literal numbers. The API attaches
+# citations to whole text blocks and gives no character span into the reply, so a
+# block's marks sit directly after its text.
+
+
+def _marker_numbers(text: str) -> list[int]:
+    """The ``[^n]`` numbers in the order they appear in the answer text."""
+    return [int(number) for number in re.findall(r"\[\^(\d+)\]", text)]
+
+
+def test_each_cited_block_carries_its_mark_after_the_cited_text() -> None:
+    evidence = [_evidence("alpha"), _evidence("beta")]
+    message = _FakeMessage(
+        [
+            _FakeTextBlock("The tides follow the moon.", [_FakeCitation(0)]),
+            _FakeTextBlock(" Volcanoes vent magma.", [_FakeCitation(1)]),
+        ]
+    )
+    adapter, _ = _adapter(message)
+
+    result = adapter.generate(mode=MODE_ANSWER, message="q", evidence=evidence)
+
+    assert result.text == "The tides follow the moon.[^1] Volcanoes vent magma.[^2]"
+
+
+def test_mark_n_names_the_nth_citation() -> None:
+    # The load-bearing contract for the reader: activating mark n opens
+    # citations[n - 1]. Asserted through the mapping, not through fixed numbers.
+    evidence = [_evidence("alpha"), _evidence("beta"), _evidence("gamma")]
+    message = _FakeMessage(
+        [
+            _FakeTextBlock("Second first.", [_FakeCitation(2)]),
+            _FakeTextBlock(" Then the first.", [_FakeCitation(0)]),
+        ]
+    )
+    adapter, _ = _adapter(message)
+
+    result = adapter.generate(mode=MODE_ANSWER, message="q", evidence=evidence)
+
+    numbers = _marker_numbers(result.text)
+    assert numbers == [1, 2]
+    assert [result.cited_chunk_ids[n - 1] for n in numbers] == [
+        evidence[2].chunk_id,
+        evidence[0].chunk_id,
+    ]
+
+
+def test_a_chunk_cited_again_later_reuses_its_first_mark() -> None:
+    # One passage, one number, wherever it is referenced — the citation list still
+    # holds it once (first-occurrence dedupe), so the mark points at the same entry.
+    evidence = [_evidence("alpha"), _evidence("beta")]
+    message = _FakeMessage(
+        [
+            _FakeTextBlock("First.", [_FakeCitation(1), _FakeCitation(0)]),
+            _FakeTextBlock(" Second.", [_FakeCitation(1)]),
+        ]
+    )
+    adapter, _ = _adapter(message)
+
+    result = adapter.generate(mode=MODE_ANSWER, message="q", evidence=evidence)
+
+    assert result.text == "First.[^1][^2] Second.[^1]"
+    assert result.cited_chunk_ids == (evidence[1].chunk_id, evidence[0].chunk_id)
+
+
+def test_a_block_citing_one_chunk_twice_carries_one_mark() -> None:
+    # A repeated mark on the same sentence would only lead the reader to a passage
+    # the first mark already reaches.
+    evidence = [_evidence("alpha")]
+    message = _FakeMessage([_FakeTextBlock("Twice cited.", [_FakeCitation(0), _FakeCitation(0)])])
+    adapter, _ = _adapter(message)
+
+    result = adapter.generate(mode=MODE_ANSWER, message="q", evidence=evidence)
+
+    assert result.text == "Twice cited.[^1]"
+    assert result.cited_chunk_ids == (evidence[0].chunk_id,)
+
+
+def test_uncited_prose_carries_no_marks() -> None:
+    evidence = [_evidence("alpha")]
+    message = _FakeMessage(
+        [
+            _FakeTextBlock("A framing sentence."),
+            _FakeTextBlock(" The cited claim.", [_FakeCitation(0)]),
+            _FakeTextBlock(" A closing thought."),
+        ]
+    )
+    adapter, _ = _adapter(message)
+
+    result = adapter.generate(mode=MODE_ANSWER, message="q", evidence=evidence)
+
+    assert result.text == "A framing sentence. The cited claim.[^1] A closing thought."
+
+
+def test_answer_without_citations_is_marker_free() -> None:
+    adapter, _ = _adapter(_FakeMessage([_FakeTextBlock("Plain prose, no citations.")]))
+
+    result = adapter.generate(mode=MODE_ANSWER, message="q", evidence=[_evidence("alpha")])
+
+    assert result.text == "Plain prose, no citations."
+    assert result.cited_chunk_ids == ()
+
+
+def test_malformed_document_index_leaves_no_mark_behind() -> None:
+    # The skipped citation must not leave a mark either: a mark with no citation to
+    # open is a control that does nothing.
+    evidence = [_evidence("alpha")]
+    message = _FakeMessage([_FakeTextBlock("An answer", [_FakeCitation(5), _FakeCitation(0)])])
+    adapter, _ = _adapter(message)
+
+    result = adapter.generate(mode=MODE_ANSWER, message="q", evidence=evidence)
+
+    assert result.text == "An answer[^1]"
+    assert result.cited_chunk_ids == (evidence[0].chunk_id,)
+
+
+def test_sentinel_reply_stays_not_found_even_when_the_model_cites_it() -> None:
+    # Marks are written into the answer text, so the not-found comparison runs on the
+    # unmarked text: a decline the model happened to attach a citation to is still a
+    # decline, never a one-word answer with a footnote.
+    evidence = [_evidence("alpha")]
+    adapter, _ = _adapter(_FakeMessage([_FakeTextBlock(SENTINEL, [_FakeCitation(0)])]))
+
+    result = adapter.generate(mode=MODE_ANSWER, message="q", evidence=evidence)
+
+    assert result.found is False
+    assert result.text == ""
+    assert result.cited_chunk_ids == ()
+
+
+def test_teaching_answers_are_marked_by_the_same_walk() -> None:
+    # One parser serves both modes, so the teaching turn is marked identically.
+    evidence = [_evidence("alpha"), _evidence("beta")]
+    message = _FakeMessage(
+        [_FakeTextBlock("Here is the teaching.", [_FakeCitation(1), _FakeCitation(0)])]
+    )
+    adapter, _ = _teaching_adapter(message)
+
+    result = adapter.generate(
+        mode=MODE_TEACH,
+        message="teach me",
+        target_section_path=("Ch", "A"),
+        history=[],
+        evidence=evidence,
+    )
+
+    assert result.text == "Here is the teaching.[^1][^2]"
+    assert result.cited_chunk_ids == (evidence[1].chunk_id, evidence[0].chunk_id)
+
+
 # --- Sentinel / not-found (GEN-06 + edge cases) --------------------------------
 
 
@@ -436,7 +593,7 @@ def test_embedded_sentinel_stays_prose() -> None:
     result = adapter.generate(mode=MODE_ANSWER, message="q", evidence=evidence)
 
     assert result.found is True
-    assert result.text == prose
+    assert result.text == f"{prose}[^1]"
     assert result.cited_chunk_ids == (evidence[0].chunk_id,)
 
 
@@ -454,7 +611,7 @@ def test_max_tokens_returns_partial_answer_without_raising() -> None:
     result = adapter.generate(mode=MODE_ANSWER, message="q", evidence=evidence)
 
     assert result.found is True
-    assert result.text == "Partial answer"
+    assert result.text == "Partial answer[^1]"
     assert result.cited_chunk_ids == (evidence[0].chunk_id,)
 
 
@@ -741,7 +898,7 @@ def test_teaching_citations_map_by_document_index() -> None:
     )
 
     assert result.found is True
-    assert result.text == "Here is the teaching."
+    assert result.text == "Here is the teaching.[^1]"
     assert result.cited_chunk_ids == (evidence[1].chunk_id,)
 
 

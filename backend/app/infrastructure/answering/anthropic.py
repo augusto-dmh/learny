@@ -6,7 +6,10 @@ Learny-owned ``GeneratedAnswer`` (ADR-0007/0009). Each retrieved chunk becomes o
 plain-text citations-enabled ``document`` block, in evidence order; the response's
 ``document_index`` citations map back through the ordered chunk-id list assembled
 at request time — never through ``document_title`` (research §1). Citations are
-enabled on every document (all-or-none API rule).
+enabled on every document (all-or-none API rule). Cited passages are also marked
+inline in the answer text as ``[^n]`` tokens, numbered by the very walk that builds
+the citation list, so a reader's mark and the passage behind it cannot drift apart
+(AD-222).
 
 The SDK is imported lazily inside :meth:`_get_client` only, so the module stays
 import-light and an injected fake client needs no key or network (mirrors the
@@ -102,35 +105,80 @@ def _build_documents(
     return documents, chunk_ids
 
 
+class _CitationMarks:
+    """One first-occurrence walk producing both the marker numbers and the citations.
+
+    The Citations API attaches citations to whole ``text`` blocks and reports no
+    character span into the reply, so a block boundary is the only position the
+    response gives us: the marker run for a block is written directly after that
+    block's text. Numbering is the order in which cited chunks are first seen, which
+    is exactly the order ``cited_chunk_ids`` is built in — because it is the same
+    walk. Marker *n* therefore names ``cited_chunk_ids[n - 1]`` by construction
+    rather than by two pieces of code agreeing (AD-222). An out-of-range
+    ``document_index`` is skipped whole — no chunk, no citation, no marker; grounding
+    is the second line of defence (AD-027).
+    """
+
+    def __init__(self, chunk_ids: Sequence[UUID]) -> None:
+        self._chunk_ids = chunk_ids
+        self._numbers: dict[UUID, int] = {}
+        self.cited: list[UUID] = []
+
+    def run_for(self, citations: Any) -> str:
+        """Return the marker run that follows one text block's text (may be empty).
+
+        Markers keep the block's citation order. A chunk cited again later in the
+        reply reuses its first number, so one passage carries one mark everywhere it
+        is referenced; a chunk cited twice *within a single block* contributes a
+        single mark, since a repeated mark on the same sentence would only point the
+        reader at a passage that mark already reaches.
+        """
+        marks: list[str] = []
+        for citation in citations or ():
+            index = citation.document_index
+            if not 0 <= index < len(self._chunk_ids):
+                continue
+            chunk_id = self._chunk_ids[index]
+            number = self._numbers.get(chunk_id)
+            if number is None:
+                self.cited.append(chunk_id)
+                number = len(self.cited)
+                self._numbers[chunk_id] = number
+            mark = f"[^{number}]"
+            if mark not in marks:
+                marks.append(mark)
+        return "".join(marks)
+
+
 def _parse_message(message: Any, chunk_ids: Sequence[UUID], *, model: str) -> GeneratedAnswer:
     """Parse a Claude message into a ``GeneratedAnswer`` (shared by both modes).
 
-    Concatenates every ``text`` block into the answer text and walks their
-    ``citations`` arrays, resolving each ``document_index`` back to a ``chunk_id``
-    in first-occurrence order and deduped. An out-of-range index (malformed) is
-    skipped — grounding is the second line of defence (AD-027). A whole-reply
-    sentinel (after stripping) is the not-found signal → ``found=False`` with empty
-    text and citations; an embedded occurrence stays as prose. A ``max_tokens``
-    stop reason returns the partial text like any other reply (never raises).
+    Concatenates every ``text`` block into the answer text, writing each block's
+    ``[^n]`` marker run after it, and resolves the same walk's ``document_index``
+    citations into ``cited_chunk_ids`` (see :class:`_CitationMarks`). A whole-reply
+    sentinel is the not-found signal → ``found=False`` with empty text and citations;
+    an embedded occurrence stays as prose. The sentinel comparison deliberately runs
+    on the *unmarked* text, so no marker can turn a decline into an answer. A
+    ``max_tokens`` stop reason returns the partial text like any other reply (never
+    raises).
     """
+    marks = _CitationMarks(chunk_ids)
     text_parts: list[str] = []
-    cited: list[UUID] = []
-    seen: set[UUID] = set()
+    unmarked_parts: list[str] = []
     for block in message.content:
         if getattr(block, "type", None) != "text":
             continue
+        unmarked_parts.append(block.text)
         text_parts.append(block.text)
-        for citation in getattr(block, "citations", None) or ():
-            index = citation.document_index
-            if 0 <= index < len(chunk_ids):
-                chunk_id = chunk_ids[index]
-                if chunk_id not in seen:
-                    seen.add(chunk_id)
-                    cited.append(chunk_id)
-    text = "".join(text_parts)
-    if text.strip() == SENTINEL:
+        text_parts.append(marks.run_for(getattr(block, "citations", None)))
+    if "".join(unmarked_parts).strip() == SENTINEL:
         return GeneratedAnswer(text="", cited_chunk_ids=(), model=model, found=False)
-    return GeneratedAnswer(text=text, cited_chunk_ids=tuple(cited), model=model, found=True)
+    return GeneratedAnswer(
+        text="".join(text_parts),
+        cited_chunk_ids=tuple(marks.cited),
+        model=model,
+        found=True,
+    )
 
 
 def _log_call(message: Any, *, model: str, effort: str, found: bool) -> None:
