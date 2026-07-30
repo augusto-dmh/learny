@@ -24,6 +24,7 @@ from uuid import UUID
 from app.domain.entities import (
     MODE_TEACH,
     AnswerCompleted,
+    AnswerReasoningDelta,
     AnswerStreamEvent,
     AnswerTextDelta,
     Evidence,
@@ -226,8 +227,13 @@ class AnthropicAdapterBase:
         """Stream generation events, closing the SDK stream on early cancellation.
 
         Opens ``messages.stream(...)`` (the SDK context manager), mapping each
-        text-delta event to an :class:`~app.domain.entities.AnswerTextDelta`; once
-        the stream is exhausted, ``get_final_message()`` is parsed with the **same**
+        text-delta event to an :class:`~app.domain.entities.AnswerTextDelta` and
+        each thinking delta to an
+        :class:`~app.domain.entities.AnswerReasoningDelta`. Only those two event
+        types are mapped, each by name: the SDK's stream carries bookkeeping events
+        too, and a catch-all would file tomorrow's new event type into whichever
+        bucket happened to be last. Once the stream is exhausted,
+        ``get_final_message()`` is parsed with the **same**
         parser as the buffered path into the authoritative
         :class:`~app.domain.entities.AnswerCompleted`. The ``with`` block guarantees
         the SDK stream is closed when the consumer closes this generator early
@@ -243,8 +249,11 @@ class AnthropicAdapterBase:
             messages=messages,
         ) as stream:
             for event in stream:
-                if getattr(event, "type", None) == "text":
+                event_type = getattr(event, "type", None)
+                if event_type == "text":
                     yield AnswerTextDelta(text=event.text)
+                elif event_type == "thinking":
+                    yield AnswerReasoningDelta(text=event.thinking)
             final = stream.get_final_message()
         answer = _parse_message(final, chunk_ids, model=self._model)
         _log_call(final, model=self._model, effort=self._effort, found=answer.found)

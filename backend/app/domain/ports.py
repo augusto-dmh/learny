@@ -610,9 +610,11 @@ class GenerationPort(Protocol):
 
         Yields zero or more :class:`~app.domain.entities.AnswerTextDelta` then
         exactly one :class:`~app.domain.entities.AnswerCompleted` (always last),
-        whose ``answer`` is authoritative. Closing the iterator early cancels the
-        underlying generation; raises for operational failure like
-        :meth:`generate`.
+        whose ``answer`` is authoritative. A provider that reasons before answering
+        may also yield :class:`~app.domain.entities.AnswerReasoningDelta` events;
+        a consumer must tolerate their absence, since no provider is required to
+        emit them. Closing the iterator early cancels the underlying generation;
+        raises for operational failure like :meth:`generate`.
         """
         ...
 

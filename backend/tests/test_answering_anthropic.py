@@ -27,6 +27,7 @@ from app.domain.entities import (
     MODE_ANSWER,
     MODE_TEACH,
     AnswerCompleted,
+    AnswerReasoningDelta,
     AnswerTextDelta,
     Evidence,
     HistoryTurn,
@@ -760,17 +761,37 @@ class _FakeTextStreamEvent:
         self.text = text
 
 
-class _FakeStream:
-    """Fake ``MessageStream``: iterates text events, exposes the final message, closes."""
+class _FakeThinkingStreamEvent:
+    """The SDK's synthetic ``thinking`` event: a reasoning delta plus running snapshot."""
 
-    def __init__(self, deltas: list[str], final_message: _FakeMessage) -> None:
+    def __init__(self, thinking: str) -> None:
+        self.type = "thinking"
+        self.thinking = thinking
+        self.snapshot = thinking
+
+
+class _FakeOtherStreamEvent:
+    """Any event the adapter has no mapping for (bookkeeping, or a future type)."""
+
+    def __init__(self, event_type: str) -> None:
+        self.type = event_type
+
+
+class _FakeStream:
+    """Fake ``MessageStream``: iterates events, exposes the final message, closes.
+
+    A plain string in ``deltas`` is a text event; any other item is yielded as-is, so
+    a case can interleave thinking (or unmapped) events between text deltas.
+    """
+
+    def __init__(self, deltas: list[object], final_message: _FakeMessage) -> None:
         self._deltas = deltas
         self._final = final_message
         self.closed = False
 
-    def __iter__(self):  # noqa: ANN204 — yields fake text events
-        for text in self._deltas:
-            yield _FakeTextStreamEvent(text)
+    def __iter__(self):  # noqa: ANN204 — yields fake stream events
+        for delta in self._deltas:
+            yield _FakeTextStreamEvent(delta) if isinstance(delta, str) else delta
 
     def get_final_message(self) -> _FakeMessage:
         return self._final
@@ -847,6 +868,79 @@ def test_answer_stream_maps_text_events_to_deltas_then_one_completed() -> None:
     assert content[0]["type"] == "document"
     assert content[0]["citations"] == {"enabled": True}
     assert content[-1] == {"type": "text", "text": "q"}
+
+
+# --- Streamed reasoning (ANSW-02) ----------------------------------------------
+#
+# Derived from the phases ACs: thinking the provider streams reaches the caller as
+# reasoning events, in arrival order relative to the answer text, so a panel can
+# show the model reasoning instead of a blank wait. A provider that does not think
+# yields none of them, and an event the adapter has no mapping for is not quietly
+# filed as either kind.
+
+
+def test_stream_maps_thinking_events_to_reasoning_deltas_in_arrival_order() -> None:
+    evidence = [_evidence("alpha")]
+    stream = _FakeStream(
+        deltas=[
+            _FakeThinkingStreamEvent("Weighing "),
+            _FakeThinkingStreamEvent("the passages."),
+            "The tides ",
+            _FakeThinkingStreamEvent("(checking the second passage)"),
+            "follow the moon.",
+        ],
+        final_message=_FakeMessage([_FakeTextBlock("The tides follow the moon.")]),
+    )
+    adapter, _ = _streaming_answer_adapter(stream)
+
+    events = list(adapter.generate_stream(mode=MODE_ANSWER, message="q", evidence=evidence))
+
+    assert events[:-1] == [
+        AnswerReasoningDelta(text="Weighing "),
+        AnswerReasoningDelta(text="the passages."),
+        AnswerTextDelta(text="The tides "),
+        AnswerReasoningDelta(text="(checking the second passage)"),
+        AnswerTextDelta(text="follow the moon."),
+    ]
+    assert isinstance(events[-1], AnswerCompleted)
+
+
+def test_stream_without_thinking_emits_no_reasoning_events() -> None:
+    # Adaptive thinking may decide an easy question needs none; the turn then has
+    # no reasoning at all rather than an empty one.
+    stream = _FakeStream(
+        deltas=["Hello ", "world"], final_message=_FakeMessage([_FakeTextBlock("Hello world")])
+    )
+    adapter, _ = _streaming_answer_adapter(stream)
+
+    events = list(
+        adapter.generate_stream(mode=MODE_ANSWER, message="q", evidence=[_evidence("alpha")])
+    )
+
+    assert [e for e in events if isinstance(e, AnswerReasoningDelta)] == []
+
+
+def test_stream_ignores_events_that_are_neither_text_nor_thinking() -> None:
+    # The SDK's stream carries bookkeeping events (and will carry types that do not
+    # exist yet); each mapped kind is matched by name so none of them can arrive as
+    # answer text or as reasoning.
+    stream = _FakeStream(
+        deltas=[
+            _FakeOtherStreamEvent("message_start"),
+            "Hello",
+            _FakeOtherStreamEvent("signature"),
+            _FakeOtherStreamEvent("content_block_stop"),
+        ],
+        final_message=_FakeMessage([_FakeTextBlock("Hello")]),
+    )
+    adapter, _ = _streaming_answer_adapter(stream)
+
+    events = list(
+        adapter.generate_stream(mode=MODE_ANSWER, message="q", evidence=[_evidence("alpha")])
+    )
+
+    assert events[:-1] == [AnswerTextDelta(text="Hello")]
+    assert isinstance(events[-1], AnswerCompleted)
 
 
 def test_answer_stream_completed_parse_equals_buffered_parse() -> None:

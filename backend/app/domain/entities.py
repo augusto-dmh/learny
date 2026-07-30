@@ -443,6 +443,20 @@ class AnswerTextDelta:
 
 
 @dataclass(frozen=True)
+class AnswerReasoningDelta:
+    """One incremental chunk of the model's summarized reasoning (streaming path).
+
+    Reasoning is what the model works through before it answers, not part of the
+    answer: it is shown while a turn is in flight and never persisted, never
+    grounded, and never subject to the sentinel hold-back — a provider that thinks
+    out loud must not be able to delay or corrupt the not-found decision. A
+    provider that does not think emits none of these.
+    """
+
+    text: str
+
+
+@dataclass(frozen=True)
 class AnswerCompleted:
     """The terminal, authoritative result of a generation stream (streaming path, §5).
 
@@ -454,10 +468,11 @@ class AnswerCompleted:
     answer: GeneratedAnswer
 
 
-# A generation stream yields zero or more :class:`AnswerTextDelta` then exactly one
+# A generation stream yields zero or more :class:`AnswerTextDelta` — optionally
+# preceded by or interleaved with :class:`AnswerReasoningDelta` — then exactly one
 # :class:`AnswerCompleted` (always last, authoritative). Shared by both generation
 # ports' ``generate_stream`` so one capability has two consumption modes.
-AnswerStreamEvent = AnswerTextDelta | AnswerCompleted
+AnswerStreamEvent = AnswerTextDelta | AnswerReasoningDelta | AnswerCompleted
 
 
 # --- Conversations aggregate (ADR-0029; originally the Cycle 7 teaching sessions) ---
