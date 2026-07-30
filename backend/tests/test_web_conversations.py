@@ -52,6 +52,7 @@ from app.domain.entities import (
     NOT_FOUND_IN_SCOPE,
     NOT_FOUND_IN_SOURCE,
     AnswerCompleted,
+    AnswerReasoningDelta,
     AnswerTextDelta,
     Conversation,
     ConversationTurn,
@@ -1620,9 +1621,9 @@ def _part_types(parts: list) -> list[str]:
 def test_turn_stream_emits_the_full_frame_sequence_and_persists_the_turn(
     auth_client: TestClient, db_conn: Connection
 ) -> None:
-    # CONV-21: the answered stream emits start → text-start → deltas → text-end →
-    # data-citations → data-answer-status → finish → [DONE], with the protocol
-    # header, and persists the turn on completion.
+    # CONV-21: the answered stream emits start → data-phase → text-start → deltas →
+    # text-end → data-citations → data-answer-status → finish → [DONE], with the
+    # protocol header, and persists the turn on completion.
     source_id, csrf = _seed_ready_source(auth_client, db_conn, "stream-ok@example.com")
     _embed_all(db_conn, UUID(source_id))
     conversation = _seed_conversation(db_conn, UUID(source_id))
@@ -1639,6 +1640,7 @@ def test_turn_stream_emits_the_full_frame_sequence_and_persists_the_turn(
     parts = _parse_ui_stream(resp.text)
     assert _part_types(parts) == [
         "start",
+        "data-phase",
         "text-start",
         "text-delta",
         "text-end",
@@ -1647,6 +1649,8 @@ def test_turn_stream_emits_the_full_frame_sequence_and_persists_the_turn(
         "finish",
         "[DONE]",
     ]
+    phase = next(p for p in parts if isinstance(p, dict) and p["type"] == "data-phase")
+    assert phase["data"] == {"phase": "searching"}
     delta = next(p for p in parts if isinstance(p, dict) and p["type"] == "text-delta")
     assert _PHOTO in delta["delta"]
     citations = next(p for p in parts if isinstance(p, dict) and p["type"] == "data-citations")
@@ -1689,6 +1693,7 @@ def test_turn_stream_carries_not_found_in_scope_in_the_status_frame(
     # nothing to cite, so a client renders the verdict rather than an empty answer.
     assert _part_types(parts) == [
         "start",
+        "data-phase",
         "text-start",
         "text-end",
         "data-citations",
@@ -1696,6 +1701,8 @@ def test_turn_stream_carries_not_found_in_scope_in_the_status_frame(
         "finish",
         "[DONE]",
     ]
+    # The search was announced, then came up empty — no reasoning frame between them.
+    assert "reasoning-start" not in _part_types(parts)
     citations = next(p for p in parts if isinstance(p, dict) and p["type"] == "data-citations")
     assert citations["data"] == []
     answer_status = next(
@@ -1705,6 +1712,92 @@ def test_turn_stream_carries_not_found_in_scope_in_the_status_frame(
 
     read = auth_client.get(f"/api/conversations/{conversation.id}")
     assert read.json()["turns"][0]["answer_status"] == NOT_FOUND_IN_SCOPE
+
+
+def test_turn_stream_frames_reasoning_between_the_phase_and_the_answer(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # ANSW-02: a model that reasons before answering reaches the client as its own
+    # part sequence, opened and closed around the answer text rather than mixed into
+    # it — so a panel can show the thinking and then collapse it when the answer
+    # starts.
+    from app.infrastructure.web.dependencies import get_generation
+
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "stream-reasoning@example.com")
+    _embed_all(db_conn, UUID(source_id))
+    conversation = _seed_conversation(db_conn, UUID(source_id))
+
+    class _ReasoningAnswerAdapter:
+        model = _MODEL
+
+        def generate(self, **kwargs):
+            raise AssertionError("stream path must not call generate")
+
+        def generate_stream(
+            self,
+            *,
+            message: str,
+            mode: str,
+            evidence: Sequence[Evidence],
+            history: Sequence[HistoryTurn] = (),
+            target_section_path: tuple[str, ...] | None = None,
+        ):
+            text = "Sunlight drives it."
+            yield AnswerReasoningDelta(text="Weighing ")
+            yield AnswerReasoningDelta(text="the passages.")
+            yield AnswerTextDelta(text=text)
+            yield AnswerCompleted(
+                answer=GeneratedAnswer(
+                    text=text,
+                    cited_chunk_ids=(evidence[0].chunk_id,),
+                    model=_MODEL,
+                    found=True,
+                )
+            )
+
+    auth_client.app.dependency_overrides[get_generation] = lambda: _ReasoningAnswerAdapter()
+    try:
+        resp = _turn_stream(
+            auth_client,
+            conversation.id,
+            {"message": "photosynthesis sunlight energy", "mode": MODE_ANSWER},
+            csrf=csrf,
+        )
+    finally:
+        auth_client.app.dependency_overrides.pop(get_generation, None)
+
+    assert resp.status_code == 200, resp.text
+    parts = _parse_ui_stream(resp.text)
+    assert _part_types(parts) == [
+        "start",
+        "data-phase",
+        "reasoning-start",
+        "reasoning-delta",
+        "reasoning-delta",
+        "reasoning-end",
+        "text-start",
+        "text-delta",
+        "text-end",
+        "data-citations",
+        "data-answer-status",
+        "finish",
+        "[DONE]",
+    ]
+    reasoning = [p for p in parts if isinstance(p, dict) and p["type"] == "reasoning-delta"]
+    assert [p["delta"] for p in reasoning] == ["Weighing ", "the passages."]
+    # One reasoning part, distinct from the text part it precedes.
+    ids = {p["id"] for p in parts if isinstance(p, dict) and "id" in p}
+    assert len(ids) == 2
+    assert len({p["id"] for p in reasoning}) == 1
+    answer_status = next(
+        p for p in parts if isinstance(p, dict) and p["type"] == "data-answer-status"
+    )
+    assert answer_status["data"] == {"status": ANSWERED}
+
+    # Reasoning is transient: the persisted turn is the answer, not the scratchpad.
+    turns = auth_client.get(f"/api/conversations/{conversation.id}").json()["turns"]
+    assert turns[0]["text"] == "Sunlight drives it."
+    assert "Weighing" not in json.dumps(turns)
 
 
 def test_turn_stream_mid_stream_failure_emits_the_error_frame_and_persists_nothing(
