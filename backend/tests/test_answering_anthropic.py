@@ -16,6 +16,7 @@ from __future__ import annotations
 import ast
 import inspect
 import json
+import logging
 import os
 from uuid import uuid4
 
@@ -41,6 +42,11 @@ from app.infrastructure.answering.prompts import (
 
 _MODEL = "claude-sonnet-4-6"
 _MAX_TOKENS = 1024
+# Deliberately not the settings default, so an adapter that hard-coded the default
+# effort instead of spending the configured one fails these assertions.
+_EFFORT = "high"
+_SUMMARIZED_THINKING = {"type": "adaptive", "display": "summarized"}
+_LOGGER = "app.infrastructure.answering.anthropic"
 
 
 # --- Fake Anthropic client (records the create call, returns a canned message) ---
@@ -59,6 +65,14 @@ class _FakeTextBlock:
         self.type = "text"
         self.text = text
         self.citations = citations
+
+
+class _FakeThinkingBlock:
+    """A summarized-thinking block: the model's reasoning, never the answer."""
+
+    def __init__(self, thinking: str) -> None:
+        self.type = "thinking"
+        self.thinking = thinking
 
 
 class _FakeUsage:
@@ -93,7 +107,11 @@ class _FakeClient:
 def _adapter(message: _FakeMessage) -> tuple[AnthropicGenerationAdapter, _FakeClient]:
     client = _FakeClient(message)
     adapter = AnthropicGenerationAdapter(
-        api_key="unused-fake", model=_MODEL, max_tokens=_MAX_TOKENS, client=client
+        api_key="unused-fake",
+        model=_MODEL,
+        max_tokens=_MAX_TOKENS,
+        effort=_EFFORT,
+        client=client,
     )
     return adapter, client
 
@@ -154,6 +172,99 @@ def test_document_title_falls_back_to_anchor_when_section_path_empty() -> None:
 
     doc = client.messages.calls[0]["messages"][0]["content"][0]
     assert doc["title"] == item.anchor
+
+
+# --- Deliberate thinking config (ANSW-04, ANSW-06) -----------------------------
+#
+# Derived from the generation-config ACs: every request the adapter builds — either
+# path, either mode — asks for adaptive thinking with its content *summarized*
+# rather than omitted (the omission is what makes a thinking model look hung), at
+# the effort the composition root configured, inside the shared token budget. The
+# effort also reaches the log line, so the latency and spend on that same line can
+# be read against the setting that bought them.
+
+
+@pytest.mark.parametrize("mode", [MODE_ANSWER, MODE_TEACH])
+def test_buffered_request_asks_for_summarized_thinking_at_the_configured_effort(
+    mode: str,
+) -> None:
+    adapter, client = _adapter(_FakeMessage([_FakeTextBlock("ok")]))
+
+    adapter.generate(
+        mode=mode,
+        message="q",
+        evidence=[_evidence("alpha")],
+        target_section_path=("Ch", "A") if mode == MODE_TEACH else None,
+    )
+
+    call = client.messages.calls[0]
+    assert call["thinking"] == _SUMMARIZED_THINKING
+    assert call["output_config"] == {"effort": _EFFORT}
+    # The budget covers thinking and answer together, so it is part of this contract.
+    assert call["max_tokens"] == _MAX_TOKENS
+
+
+@pytest.mark.parametrize("mode", [MODE_ANSWER, MODE_TEACH])
+def test_stream_request_asks_for_summarized_thinking_at_the_configured_effort(
+    mode: str,
+) -> None:
+    stream = _FakeStream(deltas=["ok"], final_message=_FakeMessage([_FakeTextBlock("ok")]))
+    adapter, client = _streaming_answer_adapter(stream)
+
+    list(
+        adapter.generate_stream(
+            mode=mode,
+            message="q",
+            evidence=[_evidence("alpha")],
+            target_section_path=("Ch", "A") if mode == MODE_TEACH else None,
+        )
+    )
+
+    call = client.messages.stream_calls[0]
+    assert call["thinking"] == _SUMMARIZED_THINKING
+    assert call["output_config"] == {"effort": _EFFORT}
+    assert call["max_tokens"] == _MAX_TOKENS
+
+
+def test_buffered_answer_ignores_thinking_blocks_in_the_reply() -> None:
+    # Summarized thinking arrives as its own block type; it is the model's scratchpad,
+    # never part of the answer text or its citations.
+    evidence = [_evidence("alpha")]
+    message = _FakeMessage(
+        [
+            _FakeThinkingBlock("Weighing the two passages against the question."),
+            _FakeTextBlock("The tides follow the moon.", [_FakeCitation(0)]),
+        ]
+    )
+    adapter, _ = _adapter(message)
+
+    result = adapter.generate(mode=MODE_ANSWER, message="q", evidence=evidence)
+
+    assert result.text == "The tides follow the moon."
+    assert result.cited_chunk_ids == (evidence[0].chunk_id,)
+
+
+def test_buffered_call_logs_the_effort_it_spent(caplog) -> None:
+    adapter, _ = _adapter(_FakeMessage([_FakeTextBlock("ok")]))
+
+    with caplog.at_level(logging.INFO, logger=_LOGGER):
+        adapter.generate(mode=MODE_ANSWER, message="q", evidence=[_evidence("alpha")])
+
+    lines = [r.getMessage() for r in caplog.records if r.name == _LOGGER]
+    assert len(lines) == 1
+    assert f"effort={_EFFORT}" in lines[0]
+
+
+def test_streamed_call_logs_the_effort_it_spent(caplog) -> None:
+    stream = _FakeStream(deltas=["ok"], final_message=_FakeMessage([_FakeTextBlock("ok")]))
+    adapter, _ = _streaming_answer_adapter(stream)
+
+    with caplog.at_level(logging.INFO, logger=_LOGGER):
+        list(adapter.generate_stream(mode=MODE_ANSWER, message="q", evidence=[_evidence("alpha")]))
+
+    lines = [r.getMessage() for r in caplog.records if r.name == _LOGGER]
+    assert len(lines) == 1
+    assert f"effort={_EFFORT}" in lines[0]
 
 
 # --- Answer-mode conversation history (CONV-14, CONV-26 AC2) -------------------
@@ -406,7 +517,11 @@ def _teaching_adapter(
 ) -> tuple[AnthropicGenerationAdapter, _FakeClient]:
     client = _FakeClient(message)
     adapter = AnthropicGenerationAdapter(
-        api_key="unused-fake", model=_MODEL, max_tokens=_MAX_TOKENS, client=client
+        api_key="unused-fake",
+        model=_MODEL,
+        max_tokens=_MAX_TOKENS,
+        effort=_EFFORT,
+        client=client,
     )
     return adapter, client
 
@@ -702,7 +817,11 @@ def _streaming_answer_adapter(
 ) -> tuple[AnthropicGenerationAdapter, _FakeStreamingClient]:
     client = _FakeStreamingClient(stream)
     adapter = AnthropicGenerationAdapter(
-        api_key="unused-fake", model=_MODEL, max_tokens=_MAX_TOKENS, client=client
+        api_key="unused-fake",
+        model=_MODEL,
+        max_tokens=_MAX_TOKENS,
+        effort=_EFFORT,
+        client=client,
     )
     return adapter, client
 
@@ -776,7 +895,11 @@ def test_teaching_stream_maps_deltas_and_carries_cached_system() -> None:
     )
     client = _FakeStreamingClient(stream)
     adapter = AnthropicGenerationAdapter(
-        api_key="unused-fake", model=_MODEL, max_tokens=_MAX_TOKENS, client=client
+        api_key="unused-fake",
+        model=_MODEL,
+        max_tokens=_MAX_TOKENS,
+        effort=_EFFORT,
+        client=client,
     )
 
     events = list(

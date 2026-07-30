@@ -44,6 +44,13 @@ logger = logging.getLogger(__name__)
 # grows with the conversation.
 _CACHE_CONTROL = {"type": "ephemeral", "ttl": "1h"}
 
+# Adaptive is the model's own decision about how much to think; ``summarized``
+# display is what makes that thinking readable in the response at all — the
+# provider default omits the content and returns empty blocks, which is the dead
+# air a reader sees while the model reasons. Sent on both request paths so the
+# buffered and streamed calls stay one request shape.
+_THINKING = {"type": "adaptive", "display": "summarized"}
+
 
 class _MessagesClient(Protocol):
     """The narrow slice of the Anthropic client this adapter uses (test seam).
@@ -51,7 +58,10 @@ class _MessagesClient(Protocol):
     Both the real ``anthropic.Anthropic`` client and the test fake expose
     ``client.messages.create(...)`` returning a message whose ``.content`` is a
     list of blocks (``text`` blocks carry ``.text`` and an optional ``.citations``
-    list of objects with ``.document_index``).
+    list of objects with ``.document_index``; ``thinking`` blocks carry the
+    summarized reasoning and are not part of the answer). The streaming half,
+    ``client.messages.stream(...)``, yields ``text`` and ``thinking`` events. Both
+    calls accept the ``thinking`` and ``output_config`` request params.
     """
 
     messages: Any
@@ -122,13 +132,19 @@ def _parse_message(message: Any, chunk_ids: Sequence[UUID], *, model: str) -> Ge
     return GeneratedAnswer(text=text, cited_chunk_ids=tuple(cited), model=model, found=True)
 
 
-def _log_call(message: Any, *, model: str, found: bool) -> None:
-    """Emit one content-free log line per call — usage counts and outcome only."""
+def _log_call(message: Any, *, model: str, effort: str, found: bool) -> None:
+    """Emit one content-free log line per call — usage counts and outcome only.
+
+    ``effort`` rides along because the token counts on the same line are largely a
+    consequence of it: reading latency or spend without knowing which effort bought
+    it is how a knob gets tuned blind.
+    """
     usage = getattr(message, "usage", None)
     logger.info(
-        "anthropic generation model=%s input_tokens=%s output_tokens=%s "
+        "anthropic generation model=%s effort=%s input_tokens=%s output_tokens=%s "
         "cache_read_input_tokens=%s stop_reason=%s found=%s",
         model,
+        effort,
         getattr(usage, "input_tokens", None),
         getattr(usage, "output_tokens", None),
         getattr(usage, "cache_read_input_tokens", None),
@@ -221,6 +237,8 @@ class AnthropicAdapterBase:
         with self._get_client().messages.stream(
             model=self._model,
             max_tokens=self._max_tokens,
+            thinking=_THINKING,
+            output_config={"effort": self._effort},
             system=system,
             messages=messages,
         ) as stream:
@@ -229,7 +247,7 @@ class AnthropicAdapterBase:
                     yield AnswerTextDelta(text=event.text)
             final = stream.get_final_message()
         answer = _parse_message(final, chunk_ids, model=self._model)
-        _log_call(final, model=self._model, found=answer.found)
+        _log_call(final, model=self._model, effort=self._effort, found=answer.found)
         yield AnswerCompleted(answer=answer)
 
 
@@ -255,8 +273,9 @@ class AnthropicGenerationAdapter(AnthropicAdapterBase):
     this turn — the retrieved evidence documents, the target section, and the new
     message — sits strictly *after* the prefix (research §5). The buffered path
     calls ``messages.create`` (``max_tokens`` is far below the SDK's non-streaming
-    guard) with no sampling or ``thinking`` params; the client is built lazily by the
-    shared base so an injected fake needs no key/network.
+    guard) and carries the same thinking/effort config as the streamed one, with no
+    sampling params; the client is built lazily by the shared base so an injected
+    fake needs no key/network.
     """
 
     def _build_request(
@@ -319,11 +338,13 @@ class AnthropicGenerationAdapter(AnthropicAdapterBase):
         response = self._get_client().messages.create(
             model=self._model,
             max_tokens=self._max_tokens,
+            thinking=_THINKING,
+            output_config={"effort": self._effort},
             system=system,
             messages=messages,
         )
         answer = _parse_message(response, chunk_ids, model=self._model)
-        _log_call(response, model=self._model, found=answer.found)
+        _log_call(response, model=self._model, effort=self._effort, found=answer.found)
         return answer
 
     def generate_stream(
