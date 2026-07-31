@@ -245,6 +245,7 @@ Accepted architecture (locked — sourced from ADRs/TDD, not re-decided here):
 | AD-235 | Exactly 3 runs per arm (meets the RFC ≥3 floor; range rule honest at 3; wider n deferred unless the result lands overlapping-but-suggestive). | `v5-generation-denoise` context.md |
 | AD-236 | Verdict tier unchanged from AD-166: silver drives, golden reported. Silver has no expected-not-found cases, so the move bar effectively requires non-overlapping wins on both faithfulness and relevancy. | `v5-generation-denoise` context.md |
 | AD-237 | A "move" verdict ships the generation-default flip **together with** gate-threshold re-derivation from the study's opus-arm golden runs (runbook rule); a "stay" changes nothing. | `v5-generation-denoise` context.md |
+| AD-238 | **Operator halt on credit exhaustion (user decision 2026-07-31):** the study ships on 137/144 units — 2 complete runs + partial run 3 (silver 17/24) — rather than topping up API credits. Verdict `stay` computed on all lines AND cross-checked on complete runs only (both `stay`); deviation recorded in spec.md and the research doc; 7 units resumable later. Also: the first full pass was discarded (stale env judge pin → haiku-judged; Verifier catch), judge now hard-pinned in the entrypoint. | `v5-generation-denoise` spec.md deviations |
 
 ## Blockers
 

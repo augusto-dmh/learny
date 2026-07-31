@@ -35,6 +35,11 @@ The product's generation default (`claude-sonnet-5`) rests on a single-observati
 
 **Open questions:** none — all resolved or logged above.
 
+## Recorded deviations (2026-07-31, post-build)
+
+- **SPEC_DEVIATION — partial third run.** The live study scored 137/144 units: the API credit balance was exhausted during run 3's silver pass and the operator decided not to top up (AD-238). Runs 1–2 are complete (96/96); run 3 is complete on golden and 17/24 on silver. DENOISE-10's "3 runs" is therefore met as 2 complete + 1 partial; the pre-registered verdict was computed on all available lines AND cross-checked on the complete runs only — both yield `stay`. The 7 error units remain resumable (~$0.45 modeled) via the committed runner.
+- **First study pass discarded.** A stale local `LEARNY_JUDGE_MODEL` env pin judged the first full pass with Haiku; caught by the independent Verifier, artifacts discarded, judge hard-pinned in the entrypoint (`STUDY_JUDGE_MODEL` + offline pin test). The spend on that pass was wasted and is acknowledged in the research doc's spend report.
+
 ## User Stories
 
 ### P1: Noise-aware multi-run verdict (pure layer) ⭐ MVP
