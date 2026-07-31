@@ -731,6 +731,210 @@ describe("AskPanel streaming caret (RA-09)", () => {
   });
 });
 
+describe("AskPanel answer phases (ANSW-01/02/03)", () => {
+  /** The phase line, wherever in the thread it is currently rendered. */
+  function phaseLine(): HTMLElement | null {
+    return screen.queryByText(/searching the book/i);
+  }
+
+  function reasoningRegion(): HTMLElement | null {
+    return screen.queryByRole("region", { name: "reasoning" });
+  }
+
+  it("shows the search phase from submit until the model starts, then the thinking, then the answer", async () => {
+    const stream = sseStream();
+    vi.stubGlobal("fetch", routedFetch(baseHandlers(() => stream.response)));
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+    ask("Who wrote the first algorithm?");
+
+    // The wait starts at submit — before a single frame has come back, which is
+    // exactly the stretch that used to be blank.
+    await waitFor(() => expect(phaseLine()).toBeTruthy());
+    expect(phaseLine()!.textContent).toContain("Searching the book");
+
+    // The backend's own searching frame reads the same, so the phase does not
+    // flicker between the request going out and the search being announced.
+    await stream.push({ type: "start", messageId: "m1" });
+    await stream.push({ type: "data-phase", data: { phase: "searching" } });
+    expect(phaseLine()!.textContent).toContain("Searching the book");
+    expect(reasoningRegion()).toBeNull();
+
+    // The model starts thinking: the search line gives way to the live reasoning,
+    // open and streaming its text.
+    await stream.push({ type: "reasoning-start", id: "r1" });
+    await stream.push({
+      type: "reasoning-delta",
+      id: "r1",
+      delta: "The chapter on engines ",
+    });
+    await stream.push({
+      type: "reasoning-delta",
+      id: "r1",
+      delta: "names her.",
+    });
+
+    await waitFor(() => expect(reasoningRegion()).toBeTruthy());
+    expect(phaseLine()).toBeNull();
+    expect(
+      screen.getByText("The chapter on engines names her."),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: /thinking/i })).toBeTruthy();
+
+    // The answer arrives: the thinking folds away on its own, leaving the answer.
+    await stream.push({ type: "reasoning-end", id: "r1" });
+    await stream.push({ type: "text-start", id: "t1" });
+    await stream.push({ type: "text-delta", id: "t1", delta: "Ada Lovelace did." });
+
+    await waitFor(() =>
+      expect(document.body.textContent).toContain("Ada Lovelace did."),
+    );
+    expect(screen.queryByText("The chapter on engines names her.")).toBeNull();
+    expect(reasoningRegion()).toBeTruthy();
+
+    await stream.push({ type: "text-end", id: "t1" });
+    await stream.push({ type: "data-citations", data: [citation] });
+    await stream.push({
+      type: "data-answer-status",
+      data: { status: "answered" },
+    });
+    await stream.push({ type: "finish" });
+    await stream.done();
+
+    // The completed turn keeps its thinking available — collapsed, and reopenable
+    // for as long as the turn is on screen.
+    const toggle = await screen.findByRole("button", {
+      name: /thought process/i,
+    });
+    await act(async () => {
+      fireEvent.click(toggle);
+    });
+    expect(screen.getByText("The chapter on engines names her.")).toBeTruthy();
+    expect(phaseLine()).toBeNull();
+  });
+
+  it("skips the reasoning region entirely for a turn that carried no thinking", async () => {
+    const stream = sseStream();
+    vi.stubGlobal("fetch", routedFetch(baseHandlers(() => stream.response)));
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+    ask("a question");
+
+    // The local adapter — and any turn adaptive thinking skipped — streams text
+    // with no reasoning at all. There is no shell for the reader to open.
+    await streamAnswer(stream, [citation]);
+
+    await waitFor(() =>
+      expect(document.body.textContent).toContain("Ada Lovelace did."),
+    );
+    expect(reasoningRegion()).toBeNull();
+    expect(phaseLine()).toBeNull();
+  });
+
+  it("collapses a not-found turn's thinking into the not-found notice", async () => {
+    const stream = sseStream();
+    vi.stubGlobal("fetch", routedFetch(baseHandlers(() => stream.response)));
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+    ask("nonsense token");
+
+    await stream.push({ type: "start", messageId: "m1" });
+    await stream.push({ type: "data-phase", data: { phase: "searching" } });
+    await stream.push({ type: "reasoning-start", id: "r1" });
+    await stream.push({
+      type: "reasoning-delta",
+      id: "r1",
+      delta: "Nothing in the book covers this.",
+    });
+    await stream.push({ type: "reasoning-end", id: "r1" });
+    await stream.push({ type: "text-start", id: "t1" });
+    await stream.push({ type: "text-end", id: "t1" });
+    await stream.push({ type: "data-citations", data: [] });
+    await stream.push({
+      type: "data-answer-status",
+      data: { status: "not_found_in_source" },
+    });
+    await stream.push({ type: "finish" });
+    await stream.done();
+
+    // The verdict stands alone: no reasoning left beside a retraction of it.
+    const notFound = await screen.findByTestId("not-found");
+    expect(notFound.textContent).toContain("not found in this book");
+    expect(reasoningRegion()).toBeNull();
+    expect(phaseLine()).toBeNull();
+    expect(
+      screen.queryByText("Nothing in the book covers this."),
+    ).toBeNull();
+  });
+
+  it("replaces the phase line with the error state when the stream fails mid-search", async () => {
+    const stream = sseStream();
+    vi.stubGlobal(
+      "fetch",
+      routedFetch(
+        baseHandlers(() => stream.response, {
+          "DELETE /api/conversations/conv1": () =>
+            new Response(null, { status: 204 }),
+        }),
+      ),
+    );
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+    ask("a question");
+
+    await stream.push({ type: "start", messageId: "m1" });
+    await stream.push({ type: "data-phase", data: { phase: "searching" } });
+    await waitFor(() => expect(phaseLine()).toBeTruthy());
+
+    // Retrieval now runs inside the stream, so its failure arrives as an error
+    // part rather than a pre-stream status — and it must end the waiting.
+    await stream.push({
+      type: "error",
+      errorText: "Answer generation failed. Please try again.",
+    });
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(/generation failed/i);
+    await waitFor(() => expect(phaseLine()).toBeNull());
+  });
+
+  it("shows no reasoning region on a restored thread", async () => {
+    // Thinking is transient, so a thread read back from the server has none —
+    // and must not render an empty region where it used to be.
+    const restored = {
+      ...conversation,
+      turns: [
+        {
+          turn_index: 0,
+          message: "Who wrote the first algorithm?",
+          mode: "answer",
+          answer_status: "answered",
+          text: "The server's copy of the answer.",
+          citations: [citation],
+          evidence_count: 6,
+          model: "local-extractive",
+          created_at: "now",
+        },
+      ],
+    };
+    writeActiveConversation("s1", "ask", "conv1");
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/conversations/conv1": () => jsonResponse(200, restored),
+      }),
+    );
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+
+    expect(
+      await screen.findByText("The server's copy of the answer."),
+    ).toBeTruthy();
+    expect(reasoningRegion()).toBeNull();
+    expect(phaseLine()).toBeNull();
+  });
+});
+
 const noteDetail = {
   id: "n1",
   title: "note",

@@ -489,6 +489,63 @@ describe("TeachPanel scope misses", () => {
   });
 });
 
+describe("TeachPanel answer phases (ANSW-01/02)", () => {
+  it("shows the same search, thinking, and answer phases Ask does", async () => {
+    // The dock is mode-agnostic: a taught turn waits, thinks, and answers on the
+    // same unified stream, so it must read identically to an asked one.
+    const stream = sseStream();
+    vi.stubGlobal("fetch", routedFetch(baseHandlers(() => stream.response)));
+
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
+    await startSession();
+    sendMessage("Explain this chapter.");
+
+    await waitFor(() =>
+      expect(screen.queryByText(/searching the book/i)).toBeTruthy(),
+    );
+
+    await stream.push({ type: "start", messageId: "m1" });
+    await stream.push({ type: "data-phase", data: { phase: "searching" } });
+    await stream.push({ type: "reasoning-start", id: "r1" });
+    await stream.push({
+      type: "reasoning-delta",
+      id: "r1",
+      delta: "Start from the engine metaphor.",
+    });
+
+    await waitFor(() =>
+      expect(screen.queryByRole("region", { name: "reasoning" })).toBeTruthy(),
+    );
+    expect(screen.queryByText(/searching the book/i)).toBeNull();
+    expect(screen.getByText("Start from the engine metaphor.")).toBeTruthy();
+
+    await stream.push({ type: "reasoning-end", id: "r1" });
+    await stream.push({ type: "text-start", id: "t1" });
+    await stream.push({ type: "text-delta", id: "t1", delta: "A lesson." });
+
+    // The thinking folds away the moment the lesson starts.
+    await waitFor(() =>
+      expect(document.body.textContent).toContain("A lesson."),
+    );
+    expect(screen.queryByText("Start from the engine metaphor.")).toBeNull();
+    expect(screen.getByRole("button", { name: /thought process/i })).toBeTruthy();
+  });
+
+  it("shows no phase line or reasoning region for a turn that carried neither", async () => {
+    const stream = sseStream();
+    vi.stubGlobal("fetch", routedFetch(baseHandlers(() => stream.response)));
+
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
+    await startSession();
+    sendMessage("Explain this chapter.");
+    await streamTurn(stream, [citation]);
+
+    await waitFor(() => expect(document.body.textContent).toContain("A lesson."));
+    expect(screen.queryByRole("region", { name: "reasoning" })).toBeNull();
+    expect(screen.queryByText(/searching the book/i)).toBeNull();
+  });
+});
+
 describe("TeachPanel thread restore (RA-10)", () => {
   it("restores the pointed-at conversation with its full cited history", async () => {
     const fetchMock = routedFetch({

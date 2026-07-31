@@ -14,6 +14,10 @@
  * keeps a resume list of its own; it restores whichever conversation this book's
  * Teach surface is pointed at and otherwise offers the target picker.
  *
+ * A turn in flight always says what it is doing, exactly as Ask does: the phase
+ * line while the book is being searched, the model's thinking in a collapsible
+ * region while it thinks, then the streaming answer.
+ *
  * Panel-only addition: when a session activates — on start AND on restore — the
  * panel asks the reader to bring the taught passage into view via `onShowInBook`,
  * exactly once per activation, so the book sits on the target while teaching runs
@@ -62,6 +66,7 @@ import {
   type PromptInputMessage,
 } from "@/components/ai-elements/prompt-input";
 
+import { AnswerPhaseIndicator, ReasoningRegion } from "./answer-phase";
 import { CitationList } from "./citations";
 import { IncludeNotesToggle } from "./include-notes-toggle";
 import { isNotFound, NotFoundNotice } from "./not-found-notice";
@@ -404,15 +409,27 @@ function TeachChat({
                 </Message>
               );
             }
-            const { text, citations, status: answerStatus } =
+            const { text, citations, status: answerStatus, reasoning } =
               assistantView(message);
             const notFound = isNotFound(answerStatus);
             const previous = messages[index - 1];
             const question =
               previous?.role === "user" ? messageText(previous) : "";
+            // The turn is still working while it is the live one and has neither
+            // thought nor spoken yet — that is the gap the phase line fills.
+            const pending = index === messages.length - 1 && isStreaming;
             return (
               <Message from="assistant" key={message.id}>
                 <MessageContent>
+                  {reasoning && !notFound ? (
+                    <ReasoningRegion
+                      text={reasoning}
+                      thinking={pending && !text}
+                    />
+                  ) : null}
+                  {pending && !text && !reasoning ? (
+                    <AnswerPhaseIndicator />
+                  ) : null}
                   {text ? <MessageResponse>{text}</MessageResponse> : null}
                   {notFound && answerStatus ? (
                     <NotFoundNotice status={answerStatus} />
@@ -436,6 +453,11 @@ function TeachChat({
               </Message>
             );
           })}
+          {/* The message is sent but the answer's message does not exist yet:
+              the same search is already under way, so it reads the same. */}
+          {isStreaming && messages[messages.length - 1]?.role === "user" ? (
+            <AnswerPhaseIndicator />
+          ) : null}
         </ConversationContent>
       </Conversation>
 
