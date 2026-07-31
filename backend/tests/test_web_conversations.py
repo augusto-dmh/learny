@@ -1800,6 +1800,93 @@ def test_turn_stream_frames_reasoning_between_the_phase_and_the_answer(
     assert "Weighing" not in json.dumps(turns)
 
 
+def test_turn_stream_gives_each_reasoning_block_its_own_part(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # ANSW-02: adaptive thinking is interleaved — the model may think again after it
+    # has begun answering. Each block opens its own part, because reopening an id the
+    # client has already been told is finished asks it to append to a closed part.
+    from app.infrastructure.web.dependencies import get_generation
+
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "stream-interleaved@example.com")
+    _embed_all(db_conn, UUID(source_id))
+    conversation = _seed_conversation(db_conn, UUID(source_id))
+
+    class _InterleavedReasoningAdapter:
+        model = _MODEL
+
+        def generate(self, **kwargs):
+            raise AssertionError("stream path must not call generate")
+
+        def generate_stream(
+            self,
+            *,
+            message: str,
+            mode: str,
+            evidence: Sequence[Evidence],
+            history: Sequence[HistoryTurn] = (),
+            target_section_path: tuple[str, ...] | None = None,
+        ):
+            text = "Sunlight drives it. And the leaf stores it."
+            yield AnswerReasoningDelta(text="Weighing the passages.")
+            yield AnswerTextDelta(text="Sunlight drives it.")
+            yield AnswerReasoningDelta(text="Now the second half.")
+            yield AnswerTextDelta(text=" And the leaf stores it.")
+            yield AnswerCompleted(
+                answer=GeneratedAnswer(
+                    text=text,
+                    cited_chunk_ids=(evidence[0].chunk_id,),
+                    model=_MODEL,
+                    found=True,
+                )
+            )
+
+    auth_client.app.dependency_overrides[get_generation] = lambda: _InterleavedReasoningAdapter()
+    try:
+        resp = _turn_stream(
+            auth_client,
+            conversation.id,
+            {"message": "photosynthesis sunlight energy", "mode": MODE_ANSWER},
+            csrf=csrf,
+        )
+    finally:
+        auth_client.app.dependency_overrides.pop(get_generation, None)
+
+    assert resp.status_code == 200, resp.text
+    parts = _parse_ui_stream(resp.text)
+    assert _part_types(parts) == [
+        "start",
+        "data-phase",
+        "reasoning-start",
+        "reasoning-delta",
+        "reasoning-end",
+        "text-start",
+        "text-delta",
+        "reasoning-start",
+        "reasoning-delta",
+        "reasoning-end",
+        "text-delta",
+        "text-end",
+        "data-citations",
+        "data-answer-status",
+        "finish",
+        "[DONE]",
+    ]
+    starts = [p["id"] for p in parts if isinstance(p, dict) and p["type"] == "reasoning-start"]
+    ends = [p["id"] for p in parts if isinstance(p, dict) and p["type"] == "reasoning-end"]
+    assert len(set(starts)) == 2
+    # Each block is closed under the id it was opened with, in order.
+    assert ends == starts
+    # The answer itself is one part throughout — only the thinking is in two blocks.
+    text_ids = {
+        p["id"]
+        for p in parts
+        if isinstance(p, dict) and p["type"].startswith("text-") and "id" in p
+    }
+    assert len(text_ids) == 1
+    assert not text_ids & set(starts)
+
+
 def test_turn_stream_mid_stream_failure_emits_the_error_frame_and_persists_nothing(
     auth_client: TestClient, db_conn: Connection
 ) -> None:
