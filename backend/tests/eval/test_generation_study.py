@@ -26,15 +26,17 @@ import pytest
 
 from tests.eval.study import ARMS, GOLDEN
 
-# Modeled per-unit costs (USD) for the budget meter (AD-234). Anchored on the
-# 2026-07-31 recalibration's observed spend — ≈$0.31 for 72 opus judge calls
-# (36 units) → ≈$0.01 per unit's judge pair — with generation scaled from the
-# same evidence sizes at the sonnet/opus price ratio. Deliberately rounded up;
-# the research doc's spend report reconciles modeled vs actual.
-_JUDGE_USD_PER_UNIT = 0.01
+# Modeled per-unit costs (USD) for the budget meter (AD-234), 2026-07-31 prices
+# (sonnet-5 $3/$15, opus-4-8 $5/$25 per MTok). A generation unit budgets ~3k
+# evidence/prompt tokens in and ~2k out (answer + adaptive thinking, billed as
+# output); a judge unit budgets the two structured calls at ~4k in / ~0.5k out
+# — the recalibration's observed judge spend (≈$0.009/unit over 36 units) says
+# this is conservative. Deliberately rounded up; the research doc's spend
+# report reconciles modeled vs actual.
+_JUDGE_USD_PER_UNIT = 0.015
 _GENERATION_USD_PER_UNIT = {
-    "claude-sonnet-5": 0.025,
-    "claude-opus-4-8": 0.035,
+    "claude-sonnet-5": 0.035,
+    "claude-opus-4-8": 0.055,
 }
 
 
