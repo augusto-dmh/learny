@@ -514,3 +514,32 @@ def test_study_runs_with_flag_and_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LEARNY_ANTHROPIC_API_KEY", "sk-ant-set")
     config = SimpleNamespace(getoption=lambda name: True)
     assert study_skip_reason(config) is None
+
+
+def test_domain_evidence_rebuilds_adapter_ready_evidence():
+    # The live golden path feeds the real adapter, which requires full domain
+    # Evidence objects — a missing field here fails only at spend time.
+    from uuid import UUID
+
+    from tests.eval.harness import Snapshot, SnapshotAnswer
+    from tests.eval.study import domain_evidence
+
+    snapshot = Snapshot(
+        case_id="g1",
+        model="claude-sonnet-5",
+        question="What?",
+        evidence=(
+            SnapshotEvidence(
+                chunk_id="00000000-0000-0000-0000-000000000001",
+                snippet="a passage",
+                anchor="ch1.xhtml",
+            ),
+        ),
+        answer=SnapshotAnswer(text="A.", cited_chunk_ids=(), found=True),
+    )
+    [evidence] = domain_evidence(snapshot)
+    assert evidence.chunk_id == UUID("00000000-0000-0000-0000-000000000001")
+    assert evidence.snippet == "a passage"
+    assert evidence.anchor == "ch1.xhtml"
+    assert evidence.section_path == ()
+    assert evidence.page_span is None

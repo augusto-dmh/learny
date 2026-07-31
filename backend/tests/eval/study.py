@@ -258,6 +258,7 @@ def domain_evidence(snapshot: Snapshot) -> list[Evidence]:
             anchor=item.anchor,
             page_span=None,
             snippet=item.snippet,
+            score=0.0,
         )
         for item in snapshot.evidence
     ]
