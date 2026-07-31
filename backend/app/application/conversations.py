@@ -583,6 +583,15 @@ class PostConversationTurn:
         try:
             plan = self._retrieve_evidence(user=user, prep=prep, message=message)
         except Exception as exc:  # retrieval can no longer answer with a status code
+            # The reader is told only that generation failed, so this line is the
+            # sole record of *why*: without it an index outage and a programming
+            # error both leave nothing behind but a generic frame.
+            logger.exception(
+                "conversation turn retrieval failed conversation_id=%s source_id=%s mode=%s",
+                prep.conversation.id,
+                prep.conversation.source_id,
+                mode,
+            )
             raise AnswerGenerationFailed("Answer generation failed.") from exc
 
         if not plan.evidence:

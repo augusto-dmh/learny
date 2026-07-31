@@ -2234,6 +2234,45 @@ def test_retrieval_failing_inside_the_stream_becomes_the_generation_failure() ->
     assert conversations.touch_calls == []
 
 
+def test_retrieval_failing_inside_the_stream_is_logged_with_its_traceback(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # The reader is shown one generic sentence whatever broke, so the log is the
+    # only place an index outage is distinguishable from a bug in our own code.
+    # It carries the ids to find the turn and the traceback to explain it — and
+    # still not a word of what the reader asked.
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+
+    with caplog.at_level(logging.ERROR, logger=_LOGGER):
+        stream = _post(
+            conversations=conversations,
+            turns=FakeConversationTurnRepository(),
+            sources=sources,
+            corpus=corpus,
+            retrieve=FakeScopedRetrieveEvidence([], error=RuntimeError("index unavailable")),
+        ).stream(
+            user=user,
+            conversation_id=conversation.id,
+            message=_PRIVATE_MESSAGE,
+            mode=MODE_ANSWER,
+        )
+        next(stream)
+        with pytest.raises(AnswerGenerationFailed):
+            next(stream)
+
+    failures = [r for r in caplog.records if r.name == _LOGGER and r.levelno >= logging.ERROR]
+    assert len(failures) == 1
+    record = failures[0]
+    line = record.getMessage()
+    assert f"conversation_id={conversation.id}" in line
+    assert f"source_id={source.id}" in line
+    assert f"mode={MODE_ANSWER}" in line
+    assert _PRIVATE_MESSAGE not in line
+    # The cause survives: a TypeError in our own retrieval code keeps its stack.
+    assert record.exc_info is not None
+    assert isinstance(record.exc_info[1], RuntimeError)
+
+
 # --- Turn path: the streaming sentinel hold-back (design §6) --------------------
 #
 # The provider signals "I cannot ground this" by emitting the sentinel as its whole
