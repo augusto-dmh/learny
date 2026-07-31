@@ -102,7 +102,7 @@ the RFC-004 dogfood retrospective (~2026-08-04). Targets v0.5.0.
 | tlc Cycle | RFC-005 Cycle | Scope | Status |
 |---|---|---|---|
 | `v5-offline-suite-honesty` | A | conftest provider pin (offline-suite leak) + teach-panel resume deflake | Done (PR #47) |
-| `v5-opus-judge-recalibration` | B | Decline-faithfulness contract (ADR-0028) + Opus judge re-derivation → flip-or-stay | Paused (queued behind RFC-006) |
+| `v5-opus-judge-recalibration` | B | Decline-faithfulness contract (ADR-0028) + Opus judge re-derivation → flip-or-stay | Done (PR #59) — FLIP: judge default now `claude-opus-4-8`, thresholds re-pinned (0.90 / 3.1), nightly tier = the 12 replay snapshots |
 | `v5-generation-denoise` | C | Multi-run Sonnet-vs-Opus A/B, per-metric variance | Paused (queued behind RFC-006) |
 | `v5-eval-dashboard` | D | Read-only render of the nightly eval JSONL (compact, cuttable) | Paused (queued behind RFC-006) |
 | `v5-worker-recovery-hardening` | E | Celery worker liveness/heartbeat + WAL/PITR restore drill | Paused (pullable forward if worker pain bites) |
