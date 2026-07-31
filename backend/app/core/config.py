@@ -210,7 +210,7 @@ class Settings(BaseSettings):
     generation_model: str = "claude-sonnet-5"
     generation_effort: Literal["low", "medium", "high", "xhigh", "max"] = "medium"
     generation_max_tokens: int = 4096
-    judge_model: str = "claude-haiku-4-5"
+    judge_model: str = "claude-opus-4-8"
     eval_max_cases: int = 50
 
     # Active recall — quiz deck generation (RFC-002 Cycle E). The provider SDK and
