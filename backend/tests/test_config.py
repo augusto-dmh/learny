@@ -77,6 +77,7 @@ def test_generation_settings_defaults(monkeypatch) -> None:
     assert settings.generation_max_tokens == 4096
     assert settings.judge_model == "claude-opus-4-8"
     assert settings.eval_max_cases == 50
+    assert settings.eval_budget_usd == 10.0
 
 
 def test_generation_settings_env_override(monkeypatch) -> None:
@@ -88,6 +89,7 @@ def test_generation_settings_env_override(monkeypatch) -> None:
     monkeypatch.setenv("LEARNY_GENERATION_MAX_TOKENS", "2048")
     monkeypatch.setenv("LEARNY_JUDGE_MODEL", "claude-sonnet-4-6")
     monkeypatch.setenv("LEARNY_EVAL_MAX_CASES", "10")
+    monkeypatch.setenv("LEARNY_EVAL_BUDGET_USD", "2.5")
 
     settings = Settings(_env_file=None)
 
@@ -98,6 +100,7 @@ def test_generation_settings_env_override(monkeypatch) -> None:
     assert settings.generation_max_tokens == 2048
     assert settings.judge_model == "claude-sonnet-4-6"
     assert settings.eval_max_cases == 10
+    assert settings.eval_budget_usd == 2.5
 
 
 @pytest.mark.parametrize("effort", ["low", "medium", "high", "xhigh", "max"])

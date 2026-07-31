@@ -212,6 +212,11 @@ class Settings(BaseSettings):
     generation_max_tokens: int = 4096
     judge_model: str = "claude-opus-4-8"
     eval_max_cases: int = 50
+    # Modeled-cost ceiling (USD) for operator-triggered live studies: the study
+    # runner refuses to start a unit whose modeled cost would cross it (AD-234;
+    # the amount is the operator cap set at RFC-005 Cycle B). Modeled, not
+    # billed — the runbook's spend report reconciles against actual spend.
+    eval_budget_usd: float = 10.0
 
     # Active recall — quiz deck generation (RFC-002 Cycle E). The provider SDK and
     # model name live only in the quiz adapter; these knobs stay LEARNY_-prefixed and
