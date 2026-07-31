@@ -25,6 +25,7 @@ from typing import Any, Protocol
 from uuid import UUID
 
 from app.domain.entities import (
+    CITATION_MARKER_RE,
     MODE_TEACH,
     AnswerCompleted,
     AnswerReasoningDelta,
@@ -216,12 +217,24 @@ def _build_history_messages(
     breakpoint, so the cached prefix (system + settled history) grows turn over turn
     (research §5). Empty history → no messages and therefore no history breakpoint —
     only the system prompt is cached.
+
+    A stored answer carries the ``[^n]`` marks this adapter wrote into it, and those
+    are stripped here. The marks are ours, not the model's: they are the *result* of
+    the citations the API reported, and the numbering restarts every turn. Replaying
+    them would teach the model a token it never authored and cannot number correctly
+    — and a marker it imitated inside this turn's numbering range would be rendered
+    by the reader as a link to a passage the model never cited. Stripping at this one
+    choke point keeps the model's view marker-free without touching the persisted
+    answer or the stream, which must stay byte-identical (AD-222).
     """
     messages: list[dict[str, Any]] = []
     assistant_blocks: list[dict[str, Any]] = []
     for turn in history:
         messages.append({"role": "user", "content": turn.message})
-        block: dict[str, Any] = {"type": "text", "text": turn.response_text}
+        block: dict[str, Any] = {
+            "type": "text",
+            "text": CITATION_MARKER_RE.sub("", turn.response_text),
+        }
         messages.append({"role": "assistant", "content": [block]})
         assistant_blocks.append(block)
     if assistant_blocks:

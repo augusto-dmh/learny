@@ -345,6 +345,33 @@ def test_only_the_latest_answer_history_block_carries_the_cache_breakpoint() -> 
     assert messages[3]["content"][0]["cache_control"] == _CACHE_1H
 
 
+def test_history_replays_a_prior_answer_without_the_marks_we_wrote_into_it() -> None:
+    # The stored answer carries our `[^n]` marks; the model never wrote them and its
+    # numbering restarts every turn, so replaying them would teach it a token it can
+    # only get wrong — and an imitation landing inside this turn's range would be
+    # rendered to the reader as a link to a passage the model never cited. The prose
+    # around the marks is replayed exactly.
+    history = [
+        HistoryTurn(
+            message="Who wrote it?",
+            response_text="Kahneman did.[^1] He worked with Tversky.[^2][^10]",
+        )
+    ]
+    adapter, client = _adapter(_FakeMessage([_FakeTextBlock("ok")]))
+
+    adapter.generate(
+        mode=MODE_ANSWER, message="And why?", evidence=[_evidence("alpha")], history=history
+    )
+
+    block = client.messages.calls[0]["messages"][1]["content"][0]
+    assert block["text"] == "Kahneman did. He worked with Tversky."
+    # Rewriting the text does not cost the block its breakpoint — the cached prefix
+    # is still the settled history.
+    assert block["cache_control"] == _CACHE_1H
+    # The learner's own message is theirs — it is replayed untouched either way.
+    assert client.messages.calls[0]["messages"][0]["content"] == "Who wrote it?"
+
+
 def test_answer_stream_sends_the_same_request_as_the_buffered_path() -> None:
     # Both paths assemble the request through one helper, so history reaches the
     # streamed answer identically — no second, drifting assembly.
@@ -521,6 +548,27 @@ def test_malformed_document_index_leaves_no_mark_behind() -> None:
     result = adapter.generate(mode=MODE_ANSWER, message="q", evidence=evidence)
 
     assert result.text == "An answer[^1]"
+    assert result.cited_chunk_ids == (evidence[0].chunk_id,)
+
+
+def test_a_marker_the_model_itself_wrote_passes_through_the_walk_untouched() -> None:
+    # Documenting the accepted residual risk of AD-222: the walk writes marks, it does
+    # not police them. A `[^n]` that arrives inside the model's own text — quoted book
+    # prose with a footnote, or an imitation — survives into the answer alongside the
+    # marks the citations earned. Stripping every marker from model text would corrupt
+    # a legitimately quoted footnote, and the reader's renderer already leaves an
+    # out-of-range token as plain prose. What keeps this rare is that the model is
+    # never shown a marker: history is replayed stripped.
+    evidence = [_evidence("alpha")]
+    message = _FakeMessage(
+        [_FakeTextBlock('The footnote reads "see[^7] the appendix".', [_FakeCitation(0)])]
+    )
+    adapter, _ = _adapter(message)
+
+    result = adapter.generate(mode=MODE_ANSWER, message="q", evidence=evidence)
+
+    assert result.text == 'The footnote reads "see[^7] the appendix".[^1]'
+    # The model's token bought no citation — only the reported one is grounded.
     assert result.cited_chunk_ids == (evidence[0].chunk_id,)
 
 
