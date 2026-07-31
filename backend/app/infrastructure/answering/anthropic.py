@@ -57,6 +57,14 @@ _CACHE_CONTROL = {"type": "ephemeral", "ttl": "1h"}
 # buffered and streamed calls stay one request shape.
 _THINKING = {"type": "adaptive", "display": "summarized"}
 
+# Wall-clock bound for the buffered call, which returns nothing until the whole reply
+# is written and holds a threadpool slot for every second of it. Generous for thinking
+# at medium effort plus the configured token budget, and far under the SDK's ten-minute
+# default: past this the reader has a blank screen and no reason to believe anything is
+# coming. The streaming path is deliberately unbounded here — its frames prove progress
+# as they arrive, and a long teach turn is not a hung one.
+_GENERATE_TIMEOUT_S = 120.0
+
 
 class _MessagesClient(Protocol):
     """The narrow slice of the Anthropic client this adapter uses (test seam).
@@ -363,9 +371,9 @@ class AnthropicGenerationAdapter(AnthropicAdapterBase):
     this turn — the retrieved evidence documents, the target section, and the new
     message — sits strictly *after* the prefix (research §5). The buffered path
     calls ``messages.create`` (``max_tokens`` is far below the SDK's non-streaming
-    guard) and carries the same thinking/effort config as the streamed one, with no
-    sampling params; the client is built lazily by the shared base so an injected
-    fake needs no key/network.
+    guard) under :data:`_GENERATE_TIMEOUT_S` and carries the same thinking/effort
+    config as the streamed one, with no sampling params; the client is built lazily
+    by the shared base so an injected fake needs no key/network.
     """
 
     def _build_request(
@@ -432,6 +440,7 @@ class AnthropicGenerationAdapter(AnthropicAdapterBase):
             output_config={"effort": self._effort},
             system=system,
             messages=messages,
+            timeout=_GENERATE_TIMEOUT_S,
         )
         answer = _parse_message(response, chunk_ids, model=self._model)
         _log_call(response, model=self._model, effort=self._effort, found=answer.found)

@@ -204,6 +204,9 @@ def test_buffered_request_asks_for_summarized_thinking_at_the_configured_effort(
     assert call["output_config"] == {"effort": _EFFORT}
     # The budget covers thinking and answer together, so it is part of this contract.
     assert call["max_tokens"] == _MAX_TOKENS
+    # The buffered call shows nothing until it returns and holds a threadpool slot
+    # throughout, so it is bounded well under the SDK's ten-minute default.
+    assert 0 < call["timeout"] <= 180
 
 
 @pytest.mark.parametrize("mode", [MODE_ANSWER, MODE_TEACH])
@@ -226,6 +229,9 @@ def test_stream_request_asks_for_summarized_thinking_at_the_configured_effort(
     assert call["thinking"] == _SUMMARIZED_THINKING
     assert call["output_config"] == {"effort": _EFFORT}
     assert call["max_tokens"] == _MAX_TOKENS
+    # No bound on this one: its frames are the proof of progress the buffered call
+    # cannot give, and a long teach turn streaming steadily is not a hung one.
+    assert "timeout" not in call
 
 
 def test_buffered_answer_ignores_thinking_blocks_in_the_reply() -> None:
