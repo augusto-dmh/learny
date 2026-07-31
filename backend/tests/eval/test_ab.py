@@ -258,6 +258,24 @@ def test_exact_and_within_1_rates():
     assert result.within_1 == 0.75  # c1, c2, c3
 
 
+def test_judge_agreement_excludes_declined_lines_before_pairing():
+    # run_eval decline lines carry null scores (ADR-028): they must be dropped
+    # before pairing, never coerced — pairing one would crash on int(None) and a
+    # decline has no quality scores to agree on anyway.
+    a = [
+        _golden("c1", faithfulness=1.0, relevancy=4),
+        _golden("c2", faithfulness=None, relevancy=None, found=False),
+    ]
+    b = [
+        _golden("c1", faithfulness=1.0, relevancy=4),
+        _golden("c2", faithfulness=None, relevancy=None, found=False),
+    ]
+    result = judge_agreement(a, b)
+    assert result.n == 1  # only the answered pair
+    assert result.exact == 1.0
+    assert result.gate_flips == 0
+
+
 def test_gate_flip_counts_disagreement_on_passing_the_gate():
     # RELEVANCY_MIN 3.1 → relevancy 4 passes, 2 fails; FAITHFULNESS_MIN 0.90.
     a = [_jline("c1", faithfulness=1.0, relevancy=4)]  # passes
