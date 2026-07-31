@@ -8,10 +8,10 @@ Asking the book a question produces dead air: retrieval runs eagerly before the 
 
 ## Goals
 
-- [ ] Every conversation turn shows its phase: "Searching the book…" before retrieval, collapsible streamed reasoning while the model thinks, then token streaming.
-- [ ] Generation requests set `thinking` (adaptive + summarized display), `effort`, and a raised `max_tokens` deliberately, through the existing adapter — no provider SDK changes (ADR-0019/0020 hold, RFC-006 exclusion).
-- [ ] Citations appear as inline numbered marks; the passage opens in flow beneath the answer (clamped), with "Show in book" jumping the reading column — no full-height overlay.
-- [ ] One shared navigation-pending pattern applied to route transitions and navigating buttons app-wide.
+- [x] Every conversation turn shows its phase: "Searching the book…" before retrieval, collapsible streamed reasoning while the model thinks, then token streaming.
+- [x] Generation requests set `thinking` (adaptive + summarized display), `effort`, and a raised `max_tokens` deliberately, through the existing adapter — no provider SDK changes (ADR-0019/0020 hold, RFC-006 exclusion).
+- [x] Citations appear as inline numbered marks; the passage opens in flow beneath the answer (clamped), with "Show in book" jumping the reading column — no full-height overlay.
+- [x] One shared navigation-pending pattern applied to route transitions and navigating buttons app-wide.
 
 ## Out of Scope
 
@@ -120,23 +120,23 @@ Asking the book a question produces dead air: retrieval runs eagerly before the 
 
 | Requirement ID | Story | Phase | Status |
 |---|---|---|---|
-| ANSW-01 | P1: Visible answer phases (AC1 searching event) | Design | Pending |
-| ANSW-02 | P1: Visible answer phases (AC2-4 reasoning stream + UI) | Design | Pending |
-| ANSW-03 | P1: Visible answer phases (AC5-8 not-found/error/guards/restore) | Design | Pending |
-| ANSW-04 | P1: Generation config (AC1 request params) | Design | Pending |
-| ANSW-05 | P1: Generation config (AC2-3 knobs + validation) | Design | Pending |
-| ANSW-06 | P1: Generation config (AC4-5 logging + local contract) | Design | Pending |
-| ANSW-07 | P1: Citations in flow (AC1-2 inline marks + in-flow passage) | Design | Pending |
-| ANSW-08 | P1: Citations in flow (AC3-6 show-in-book/fallback/notes/restore) | Design | Pending |
-| ANSW-09 | P2: Navigation pending (AC1-3 shared pattern) | Design | Pending |
-| ANSW-10 | P2: Navigation pending (AC4 applied surfaces) | Design | Pending |
+| ANSW-01 | P1: Visible answer phases (AC1 searching event) | Execute | Verified |
+| ANSW-02 | P1: Visible answer phases (AC2-4 reasoning stream + UI) | Execute | Verified |
+| ANSW-03 | P1: Visible answer phases (AC5-8 not-found/error/guards/restore) | Execute | Verified |
+| ANSW-04 | P1: Generation config (AC1 request params) | Execute | Verified |
+| ANSW-05 | P1: Generation config (AC2-3 knobs + validation) | Execute | Verified |
+| ANSW-06 | P1: Generation config (AC4-5 logging + local contract) | Execute | Verified |
+| ANSW-07 | P1: Citations in flow (AC1-2 inline marks + in-flow passage) | Execute | Verified |
+| ANSW-08 | P1: Citations in flow (AC3-6 show-in-book/fallback/notes/restore) | Execute | Verified |
+| ANSW-09 | P2: Navigation pending (AC1-3 shared pattern) | Execute | Verified |
+| ANSW-10 | P2: Navigation pending (AC4 applied surfaces) | Execute | Verified |
 
-**Coverage:** 10 total, 0 mapped to tasks, 10 unmapped ⚠️ (mapping happens in tasks.md)
+**Coverage:** 10 total, 10 mapped to tasks, 0 unmapped — all Verified (validation.md).
 
 ## Success Criteria
 
-- [ ] No phase of a turn ever shows a blank/frozen panel: searching, reasoning, streaming, error, and not-found all have visible states.
-- [ ] Adapter requests carry explicit thinking/effort/max_tokens; effort observable in logs.
-- [ ] Full-height citation overlay is gone; inline marks + in-flow passages pass component tests.
-- [ ] Home Resume shows pending feedback on click.
-- [ ] Gates green: backend pytest, frontend vitest, ruff, tsc, boundaries.
+- [x] No phase of a turn ever shows a blank/frozen panel: searching, reasoning, streaming, error, and not-found all have visible states.
+- [x] Adapter requests carry explicit thinking/effort/max_tokens; effort observable in logs.
+- [x] Full-height citation overlay is gone; inline marks + in-flow passages pass component tests.
+- [x] Home Resume shows pending feedback on click.
+- [x] Gates green: backend pytest, frontend vitest, ruff, tsc, boundaries.
