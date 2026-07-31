@@ -4,8 +4,9 @@ Derived from GEN-21 and the D3 Done-when: faithfulness aggregates claim labels t
 a supported ratio; relevancy parses the integer score; ``run_eval`` writes one
 JSONL line per case with the full schema (case id, timestamps, model ids, prompt
 hash, scores, citation flag), caps at ``max_cases``, and is report-only unless the
-gate is on; the SDK is imported lazily. A ``live and eval`` smoke runs the real
-judge over one inline case and is skipped without a key (the nightly's judge tier).
+gate is on; the SDK is imported lazily. A ``live and eval`` test runs the real
+judge over the committed replay snapshots — the nightly judged tier (RECAL-05) —
+and is skipped without a key.
 """
 
 from __future__ import annotations
@@ -405,43 +406,51 @@ def test_judge_module_imports_no_sdk_at_module_level() -> None:
     assert "anthropic" not in top_level
 
 
-# --- Live judge smoke (nightly judge tier) — skipped without a key -------------
+# --- Live judge tier (nightly) — the committed replay snapshots ----------------
 
 
 @pytest.mark.live
 @pytest.mark.eval
 @pytest.mark.skipif(
     not os.getenv("LEARNY_ANTHROPIC_API_KEY"),
-    reason="LEARNY_ANTHROPIC_API_KEY unset — live judge smoke skipped (CI stays offline)",
+    reason="LEARNY_ANTHROPIC_API_KEY unset — live judge tier skipped (CI stays offline)",
 )
-def test_live_judge_scores_one_case() -> None:
-    # Writes to the real evals/results/ dir (the default) so the nightly run
-    # produces the results JSONL the workflow uploads as an artifact (GEN-22).
-    # Live-only, so an offline run never touches the repo tree.
+def test_live_judge_scores_replay_snapshots() -> None:
+    # The nightly judged tier IS the committed replay snapshots (RECAL-05): the
+    # gate runs on the same distribution its thresholds were derived from, and
+    # the calibration runbook's "run the live tier ≥3 times" is literally this
+    # test. Writes to the real evals/results/ dir (the default) so the nightly
+    # run produces the results JSONL the workflow uploads as an artifact
+    # (GEN-22). Live-only, so an offline run never touches the repo tree.
     from app.core.config import get_settings
+
+    from tests.eval.harness import load_snapshots, snapshot_eval_inputs
 
     settings = get_settings()
     judge = Judge(api_key=os.environ["LEARNY_ANTHROPIC_API_KEY"], model=settings.judge_model)
-    evidence = (
-        "Ocean tides rise and fall because the moon's gravity pulls seawater across the planet."
-    )
-    grounded = EvalInput(
-        case_id="live-tides",
-        question="Why do ocean tides rise and fall?",
-        evidence_text=evidence,
-        answer_text="Ocean tides rise and fall because the moon's gravity pulls seawater.",
-        generation_model=settings.generation_model,
-        citation_valid=True,
-    )
+    inputs = snapshot_eval_inputs(load_snapshots())
+    assert inputs, "no committed snapshots — the nightly judge tier would be empty"
 
-    lines = run_eval([grounded], judge=judge, max_cases=settings.eval_max_cases)
+    lines = run_eval(inputs, judge=judge, max_cases=settings.eval_max_cases)
 
-    assert len(lines) == 1
-    assert 0.0 <= lines[0]["faithfulness"] <= 1.0
-    assert lines[0]["relevancy"] in range(1, 6)
+    assert len(lines) == len(inputs)
+    declined = [line for line in lines if not line["found"]]
+    answered = [line for line in lines if line["found"]]
+    assert declined and answered  # the committed tier carries both outcome classes
+    assert all(line["faithfulness"] is None and line["relevancy"] is None for line in declined)
+    assert all(
+        0.0 <= line["faithfulness"] <= 1.0 and line["relevancy"] in range(1, 6) for line in answered
+    )
 
 
 # --- Nightly enrollment guard --------------------------------------------------
+
+
+def test_live_judge_tier_carries_the_nightly_markers() -> None:
+    # Same guard as the retrieval arm below: the `live` + `eval` markers are the
+    # sole wiring that enrolls the judge tier in the nightly selection.
+    marker_names = {mark.name for mark in test_live_judge_scores_replay_snapshots.pytestmark}
+    assert {"live", "eval"} <= marker_names
 
 
 def test_keyed_retrieval_arm_carries_the_nightly_markers() -> None:

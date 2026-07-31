@@ -23,10 +23,13 @@ from app.domain.entities import MODE_ANSWER, Evidence, GeneratedAnswer
 from tests.eval.harness import (
     EvalCase,
     Snapshot,
+    SnapshotAnswer,
+    SnapshotEvidence,
     build_snapshot,
     load_cases,
     load_snapshots,
     record_snapshots,
+    snapshot_eval_inputs,
     write_snapshot,
 )
 
@@ -172,6 +175,67 @@ def test_committed_snapshots_roundtrip_or_skip() -> None:
         # smuggle citations into a not-found case.
         if not snapshot.answer.found:
             assert snapshot.answer.cited_chunk_ids == ()
+
+
+# --- Snapshot → judge-input mapping (ADR-028 / RECAL-05) -----------------------
+
+
+def _mapping_snapshot(
+    *,
+    case_id: str = "case-x",
+    found: bool = True,
+    cited: tuple[str, ...] = ("c1",),
+) -> Snapshot:
+    return Snapshot(
+        case_id=case_id,
+        model="claude-sonnet-5",
+        question="why?",
+        evidence=(
+            SnapshotEvidence(chunk_id="c1", snippet="first passage", anchor="a1"),
+            SnapshotEvidence(chunk_id="c2", snippet="second passage", anchor="a2"),
+        ),
+        answer=SnapshotAnswer(text="because", cited_chunk_ids=cited, found=found),
+    )
+
+
+def test_snapshot_eval_inputs_map_fields_and_join_evidence() -> None:
+    (built,) = snapshot_eval_inputs([_mapping_snapshot()])
+
+    assert built.case_id == "case-x"
+    assert built.question == "why?"
+    assert built.evidence_text == "first passage\n\nsecond passage"
+    assert built.answer_text == "because"
+    assert built.generation_model == "claude-sonnet-5"
+    assert built.citation_valid is True
+    assert built.found is True
+
+
+def test_snapshot_eval_inputs_flag_citation_outside_evidence_invalid() -> None:
+    (built,) = snapshot_eval_inputs([_mapping_snapshot(cited=("c1", "ghost"))])
+
+    assert built.citation_valid is False
+
+
+def test_snapshot_eval_inputs_carry_the_declined_outcome() -> None:
+    (built,) = snapshot_eval_inputs([_mapping_snapshot(found=False, cited=())])
+
+    assert built.found is False
+    assert built.citation_valid is True
+
+
+def test_committed_snapshots_map_with_expected_found_flags() -> None:
+    snapshots = load_snapshots()
+    if not snapshots:
+        pytest.skip("no committed generation snapshots to map")
+    inputs = snapshot_eval_inputs(snapshots)
+
+    assert len(inputs) == len(snapshots)
+    # The committed tier's outcome classes are stable identity: exactly the
+    # `notfound-*` cases are declines, and every citation is contained.
+    assert {i.case_id for i in inputs if not i.found} == {
+        s.case_id for s in snapshots if s.case_id.startswith("notfound-")
+    }
+    assert all(i.citation_valid for i in inputs)
 
 
 # --- Live recording (GEN-18) — skipped offline / without the flag --------------

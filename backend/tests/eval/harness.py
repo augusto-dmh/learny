@@ -19,6 +19,7 @@ from typing import Any
 import yaml
 
 from app.domain.entities import Evidence, GeneratedAnswer
+from app.eval.judge import EvalInput
 
 _HERE = Path(__file__).resolve().parent
 CASES_PATH = _HERE / "cases.yaml"
@@ -129,6 +130,29 @@ def load_snapshots(snapshots_dir: Path = SNAPSHOTS_DIR) -> tuple[Snapshot, ...]:
         Snapshot.from_dict(json.loads(path.read_text(encoding="utf-8")))
         for path in sorted(snapshots_dir.glob("*.json"))
     )
+
+
+def snapshot_eval_inputs(snapshots: Sequence[Snapshot]) -> list[EvalInput]:
+    """Map committed snapshots to judge inputs — the nightly judged tier (ADR-028).
+
+    ``evidence_text`` joins the recorded snippets in retrieval order;
+    ``citation_valid`` re-checks the containment invariant (cited ids ⊆ retrieved
+    ids) from the snapshot itself; ``found`` carries the recorded outcome class so
+    declines are never judge-scored.
+    """
+    return [
+        EvalInput(
+            case_id=snapshot.case_id,
+            question=snapshot.question,
+            evidence_text="\n\n".join(e.snippet for e in snapshot.evidence),
+            answer_text=snapshot.answer.text,
+            generation_model=snapshot.model,
+            citation_valid=set(snapshot.answer.cited_chunk_ids)
+            <= {e.chunk_id for e in snapshot.evidence},
+            found=snapshot.answer.found,
+        )
+        for snapshot in snapshots
+    ]
 
 
 def build_snapshot(
