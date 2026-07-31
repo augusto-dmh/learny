@@ -170,6 +170,56 @@ describe("CitedAnswer passage region (ANSW-08)", () => {
     expect(screen.getByText("the first algorithm ever written")).toBeTruthy();
   });
 
+  it("keeps an inline mark's open state truthful, and points it at the passage", () => {
+    // The mark lives inside the answer body, which is memoized on its text and does
+    // not re-render when the selection changes — so its state has to arrive by a
+    // channel that reaches through that memo, or it would announce whatever it was
+    // born with forever.
+    render(
+      <CitedAnswer
+        sourceId="s1"
+        text="Ada Lovelace wrote it.[^1]"
+        citations={[first]}
+      />,
+    );
+    const mark = screen.getByRole("button", { name: "Citation 1" });
+
+    expect(mark.getAttribute("aria-expanded")).toBe("false");
+    expect(mark.getAttribute("aria-controls")).toBeNull();
+
+    fireEvent.click(mark);
+
+    const passage = screen.getByTestId("citation-passage");
+    expect(mark.getAttribute("aria-expanded")).toBe("true");
+    expect(mark.getAttribute("aria-controls")).toBe(passage.id);
+    // The chip for the same citation opened the same one region, so it says so too.
+    const chip = screen.getByRole("button", {
+      name: "Citation: Chapter 1 › Core Idea",
+    });
+    expect(chip.getAttribute("aria-controls")).toBe(passage.id);
+  });
+
+  it("closes on Escape and puts focus back on the mark that opened it", () => {
+    render(
+      <CitedAnswer
+        sourceId="s1"
+        text="Ada Lovelace wrote it.[^1]"
+        citations={[first]}
+      />,
+    );
+    const mark = screen.getByRole("button", { name: "Citation 1" });
+
+    mark.focus();
+    fireEvent.click(mark);
+    expect(screen.getByTestId("citation-passage")).toBeTruthy();
+
+    fireEvent.keyDown(document.body, { key: "Escape" });
+
+    expect(screen.queryByTestId("citation-passage")).toBeNull();
+    expect(document.activeElement).toBe(mark);
+    expect(mark.getAttribute("aria-expanded")).toBe("false");
+  });
+
   it("keeps the Open note affordance for a note-origin citation", () => {
     render(
       <CitedAnswer

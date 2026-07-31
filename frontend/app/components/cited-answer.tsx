@@ -18,7 +18,7 @@
  * marks: the stored answer carries the same tokens the stream did.
  */
 
-import { useState } from "react";
+import { createContext, useContext, useId, useMemo, useState } from "react";
 
 import {
   citationIndexFromHref,
@@ -28,6 +28,39 @@ import {
 import { MessageResponse } from "@/components/ai-elements/message";
 
 import { CitationList } from "./citations";
+
+/**
+ * What an inline mark needs to know, delivered by context rather than by props.
+ *
+ * The marks are rendered deep inside the memoized answer body, which only
+ * re-renders when the answer *text* changes — so a mark cannot be handed the
+ * current selection as a prop and stay truthful about it. Context is the one
+ * channel that reaches through that memo, which is what lets a mark carry live
+ * `aria-expanded` state instead of whichever value it happened to be born with.
+ */
+const MarkSelectionContext = createContext<{
+  selected: number | null;
+  passageId: string;
+  toggle: (index: number) => void;
+}>({ selected: null, passageId: "", toggle: () => {} });
+
+/** One numbered mark in the prose; a second activation closes what it opened. */
+function CitationMark({ index }: { index: number }) {
+  const { selected, passageId, toggle } = useContext(MarkSelectionContext);
+  const open = selected === index;
+  return (
+    <button
+      type="button"
+      aria-label={`Citation ${index}`}
+      aria-expanded={open}
+      aria-controls={open ? passageId : undefined}
+      onClick={() => toggle(index)}
+      className="mx-0.5 inline-flex items-baseline rounded-sm bg-secondary px-1 align-super text-[0.65rem] font-medium tabular-nums text-secondary-foreground transition-colors hover:bg-accent"
+    >
+      {index}
+    </button>
+  );
+}
 
 export function CitedAnswer({
   sourceId,
@@ -45,6 +78,16 @@ export function CitedAnswer({
   trailing?: React.ReactNode;
 }) {
   const [selected, setSelected] = useState<number | null>(null);
+  const passageId = useId();
+  const markSelection = useMemo(
+    () => ({
+      selected,
+      passageId,
+      toggle: (index: number) =>
+        setSelected((current) => (current === index ? null : index)),
+    }),
+    [selected, passageId],
+  );
 
   // Rewriting the markers into links is what puts the marks *in* the prose: the
   // renderer parses one document, so a mark mid-sentence stays mid-sentence.
@@ -53,7 +96,7 @@ export function CitedAnswer({
   const body = linkCitationMarkers(text, citations?.length ?? 0);
 
   return (
-    <>
+    <MarkSelectionContext.Provider value={markSelection}>
       {body ? (
         <MessageResponse
           components={{
@@ -74,23 +117,10 @@ export function CitedAnswer({
                   </a>
                 );
               }
-              // A mark renders from its number alone — never from which citation
-              // is open — because the answer body is memoized on its text and
-              // would not re-render to show a changed selection.
-              return (
-                <button
-                  type="button"
-                  aria-label={`Citation ${index}`}
-                  onClick={() =>
-                    setSelected((current) =>
-                      current === index ? null : index,
-                    )
-                  }
-                  className="mx-0.5 inline-flex items-baseline rounded-sm bg-secondary px-1 align-super text-[0.65rem] font-medium tabular-nums text-secondary-foreground transition-colors hover:bg-accent"
-                >
-                  {index}
-                </button>
-              );
+              // The mark takes no props from here: the answer body is memoized on
+              // its text, so anything passed down would freeze at the value it had
+              // when the body last rendered. It reads the selection from context.
+              return <CitationMark index={index} />;
             },
           }}
         >
@@ -105,8 +135,9 @@ export function CitedAnswer({
           onShowInBook={onShowInBook}
           selected={selected}
           onSelect={setSelected}
+          passageId={passageId}
         />
       ) : null}
-    </>
+    </MarkSelectionContext.Provider>
   );
 }

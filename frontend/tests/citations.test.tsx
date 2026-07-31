@@ -90,6 +90,71 @@ describe("CitationList (D2)", () => {
   });
 });
 
+describe("CitationList passage dismissal and wiring (ANSW-08)", () => {
+  it("closes on Escape and puts focus back on the chip that opened it", () => {
+    render(<CitationList sourceId="s1" citations={[citation]} />);
+    const chip = screen.getByRole("button", {
+      name: "Citation: Chapter 1 › Core Idea",
+    });
+
+    chip.focus();
+    fireEvent.click(chip);
+    expect(screen.getByTestId("citation-passage")).toBeTruthy();
+
+    fireEvent.keyDown(document.body, { key: "Escape" });
+
+    // Dismissed, and the reader is left where they were — not on the page body,
+    // tabbing back to the chip row they just came from.
+    expect(screen.queryByTestId("citation-passage")).toBeNull();
+    expect(document.activeElement).toBe(chip);
+  });
+
+  it("returns focus to the chip when the close button dismisses the passage", () => {
+    render(<CitationList sourceId="s1" citations={[citation]} />);
+    const chip = screen.getByRole("button", {
+      name: "Citation: Chapter 1 › Core Idea",
+    });
+
+    chip.focus();
+    fireEvent.click(chip);
+    fireEvent.click(screen.getByRole("button", { name: "Close passage" }));
+
+    // The button that took the focus is being removed, so it hands it back.
+    expect(document.activeElement).toBe(chip);
+  });
+
+  it("stays open when a click lands elsewhere on the page", () => {
+    // Deliberate: this is a region in the page, not a layer over it. Closing on
+    // any stray click would fight selecting the passage text it exists to show.
+    render(<CitationList sourceId="s1" citations={[citation]} />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Citation: Chapter 1 › Core Idea" }),
+    );
+
+    fireEvent.mouseDown(document.body);
+    fireEvent.click(document.body);
+
+    expect(screen.getByTestId("citation-passage")).toBeTruthy();
+  });
+
+  it("points the open chip at the passage region, and at nothing while closed", () => {
+    render(<CitationList sourceId="s1" citations={[citation]} />);
+    const chip = screen.getByRole("button", {
+      name: "Citation: Chapter 1 › Core Idea",
+    });
+
+    expect(chip.getAttribute("aria-expanded")).toBe("false");
+    expect(chip.getAttribute("aria-controls")).toBeNull();
+
+    fireEvent.click(chip);
+
+    const passage = screen.getByTestId("citation-passage");
+    expect(chip.getAttribute("aria-expanded")).toBe("true");
+    expect(chip.getAttribute("aria-controls")).toBe(passage.id);
+    expect(passage.id).toBeTruthy();
+  });
+});
+
 describe("CitationList as passage (RA-12)", () => {
   it("renders the verbatim passage in the reading serif and no retrieval machinery", () => {
     render(<CitationList sourceId="s1" citations={[citation]} />);

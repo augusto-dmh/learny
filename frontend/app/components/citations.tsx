@@ -25,15 +25,23 @@
  * The chip row stays even when the answer carries inline marks: it is the
  * inventory of everything the answer is grounded in, and the fallback for an
  * answer whose text has no markers at all (spec AC4).
+ *
+ * The passage is dismissible from the keyboard — Escape closes it and puts focus
+ * back on the chip or mark that opened it, so reading a citation never strands the
+ * reader somewhere they have to tab their way out of. It is *not* dismissed by a
+ * click elsewhere: this is a region in the page, not a layer over it, and closing
+ * it on any stray click would fight selecting the text it exists to show.
  */
 
 import Link from "next/link";
 import { BookOpenIcon, StickyNoteIcon, X } from "lucide-react";
-import { useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 
 import { type Citation } from "@/app/lib/citations";
 import { readUrl } from "@/app/lib/read-url";
 import { Button } from "@/components/ui/button";
+
+import { useKeyShortcuts } from "./use-key-shortcuts";
 
 /**
  * The citations attached to one answer: numbered chips, and the open passage.
@@ -49,6 +57,7 @@ export function CitationList({
   onShowInBook,
   selected: selectedProp,
   onSelect,
+  passageId: passageIdProp,
 }: {
   sourceId: string;
   citations: Citation[];
@@ -57,10 +66,17 @@ export function CitationList({
   /** The 1-based citation whose passage is open, when the caller owns selection. */
   selected?: number | null;
   onSelect?: (selected: number | null) => void;
+  /**
+   * The id the open passage carries, when the caller has controls of its own to
+   * point at it — the answer's inline marks. Defaults to this list's own.
+   */
+  passageId?: string;
 }) {
   const [ownSelected, setOwnSelected] = useState<number | null>(null);
   const selected = selectedProp === undefined ? ownSelected : selectedProp;
   const select = onSelect ?? setOwnSelected;
+  const ownPassageId = useId();
+  const passageId = passageIdProp ?? ownPassageId;
 
   if (citations.length === 0) {
     return null;
@@ -79,6 +95,7 @@ export function CitationList({
             citation={citation}
             index={index + 1}
             open={selected === index + 1}
+            passageId={passageId}
             onToggle={() => select(selected === index + 1 ? null : index + 1)}
           />
         ))}
@@ -87,6 +104,7 @@ export function CitationList({
         <CitationPassage
           sourceId={sourceId}
           citation={open}
+          passageId={passageId}
           onShowInBook={onShowInBook}
           onClose={() => select(null)}
         />
@@ -100,11 +118,13 @@ function CitationChip({
   citation,
   index,
   open,
+  passageId,
   onToggle,
 }: {
   citation: Citation;
   index: number;
   open: boolean;
+  passageId: string;
   onToggle: () => void;
 }) {
   const isNote = citation.origin === "note";
@@ -116,6 +136,9 @@ function CitationChip({
       type="button"
       aria-label={label}
       aria-expanded={open}
+      // Only while the passage exists: a control pointing at an id that is not in
+      // the document tells a screen reader about somewhere it cannot go.
+      aria-controls={open ? passageId : undefined}
       onClick={onToggle}
       className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium transition-colors ${
         open
@@ -140,18 +163,44 @@ function CitationChip({
  * A note citation reads distinctly — a "Your note — <title>" label and an "Open
  * note" link to `/notes/{id}` — and carries no into-the-book action, because the
  * passage it quotes is the reader's own (NL-03).
+ *
+ * Dismissing it — by Escape or by the close button — returns focus to whatever
+ * opened it. That is remembered as the element focused when this passage appeared,
+ * which is the chip or mark that was just activated, and it is deliberately not
+ * re-read from inside the region: the close button must not become its own
+ * invoker, or dismissing would drop focus on a node that is being removed.
  */
 function CitationPassage({
   sourceId,
   citation,
+  passageId,
   onShowInBook,
   onClose,
 }: {
   sourceId: string;
   citation: Citation;
+  passageId: string;
   onShowInBook?: (anchor: string) => void;
   onClose: () => void;
 }) {
+  const regionRef = useRef<HTMLDivElement>(null);
+  const invokerRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && !regionRef.current?.contains(active)) {
+      invokerRef.current = active;
+    }
+  }, [citation]);
+
+  const dismiss = useCallback(() => {
+    onClose();
+    invokerRef.current?.focus();
+  }, [onClose]);
+
+  // Bound only while a passage is open, so Escape means nothing to this surface
+  // the rest of the time.
+  useKeyShortcuts({ escape: dismiss }, true);
+
   const isNote = citation.origin === "note";
   const title = citation.note_title ?? "";
   const label = isNote
@@ -162,6 +211,8 @@ function CitationPassage({
 
   return (
     <div
+      ref={regionRef}
+      id={passageId}
       data-testid="citation-passage"
       className="space-y-2 rounded-md border bg-muted/30 p-3"
     >
@@ -172,7 +223,7 @@ function CitationPassage({
           variant="ghost"
           size="icon-sm"
           aria-label="Close passage"
-          onClick={onClose}
+          onClick={dismiss}
         >
           <X />
         </Button>
