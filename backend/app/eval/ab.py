@@ -77,11 +77,13 @@ class TierAggregate:
     """One tier's metrics for one generation model (``None`` mean/rate = no lines).
 
     ``scored`` counts metric-bearing lines (status ok); ``answered`` the subset the
-    model actually answered (``found``). ``mean_relevancy`` averages only the
-    answered lines (declines score 1 by construction); ``mean_faithfulness`` and
-    ``citation_valid_rate`` cover all scored lines. ``not_found_discipline`` is
-    ``not_found_correct / not_found_expected`` — the decline-when-unanswerable rate —
-    or ``None`` when the tier has no ``expected_not_found`` case.
+    model actually answered (``found``). ``mean_faithfulness`` and
+    ``mean_relevancy`` average only the answered lines — a decline is its own
+    outcome class, carried by ``not_found_discipline``, never by the quality means
+    (ADR-028). ``citation_valid_rate`` covers all scored lines.
+    ``not_found_discipline`` is ``not_found_correct / not_found_expected`` — the
+    decline-when-unanswerable rate — or ``None`` when the tier has no
+    ``expected_not_found`` case.
     """
 
     tier: str
@@ -137,7 +139,7 @@ def _tier_aggregate(tier: str, lines: list[dict[str, Any]]) -> TierAggregate:
         answered=len(answered),
         not_found_expected=len(not_found_expected),
         not_found_correct=len(not_found_correct),
-        mean_faithfulness=_mean(float(line["faithfulness"]) for line in lines),
+        mean_faithfulness=_mean(float(line["faithfulness"]) for line in answered),
         mean_relevancy=_mean(float(line["relevancy"]) for line in answered),
         citation_valid_rate=_mean(1.0 if line["citation_valid"] else 0.0 for line in lines),
         not_found_discipline=discipline,

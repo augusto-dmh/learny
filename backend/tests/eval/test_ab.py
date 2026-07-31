@@ -152,9 +152,10 @@ def test_skipped_and_broken_lines_counted_as_other_not_scored():
 # --- not-found handling (recorded decision) ------------------------------------
 
 
-def test_relevancy_mean_excludes_declined_lines():
-    # A decline (found False) scores relevancy 1 by construction; it must not drag
-    # the relevancy mean, but it still counts toward faithfulness (vacuously 1.0).
+def test_quality_means_exclude_declined_lines():
+    # A decline (found False) is its own outcome class (ADR-028): neither the
+    # relevancy mean nor the faithfulness mean may include it — its judge scores
+    # are judge-model-dependent noise, and not-found discipline carries it.
     agg = aggregate(
         [
             _silver("s1", faithfulness=1.0, relevancy=4, found=True),
@@ -163,7 +164,21 @@ def test_relevancy_mean_excludes_declined_lines():
     )
     assert agg.silver.answered == 1
     assert agg.silver.mean_relevancy == 4.0  # only the answered line
-    assert agg.silver.mean_faithfulness == 0.75  # both lines — excluding the decline would give 1.0
+    assert agg.silver.mean_faithfulness == 1.0  # only the answered line (ADR-028)
+
+
+def test_declined_lines_with_null_scores_do_not_crash_the_aggregate():
+    # run_eval decline lines carry faithfulness/relevancy null (ADR-028); the
+    # aggregate must exclude them before any numeric conversion.
+    agg = aggregate(
+        [
+            _golden("g1", faithfulness=1.0, relevancy=4),
+            _golden("g2", faithfulness=None, relevancy=None, found=False),
+        ]
+    )
+    assert agg.golden.answered == 1
+    assert agg.golden.mean_faithfulness == 1.0
+    assert agg.golden.mean_relevancy == 4.0
 
 
 def test_not_found_discipline_is_correct_declines_over_expected_not_found():
