@@ -202,4 +202,22 @@ describe("CitedAnswer passage region (ANSW-08)", () => {
     expect(link.getAttribute("href")).toBe("https://example.com/archive");
     expect(screen.getByRole("button", { name: "Citation 1" })).toBeTruthy();
   });
+
+  it("keeps a model-authored link sandboxed the way the renderer's own would be", () => {
+    // The answer text is untrusted — the model wrote it from a book anyone can
+    // upload — so overriding the renderer's anchor must not cost its hardening:
+    // a new context, with no handle back on `window.opener`.
+    render(
+      <CitedAnswer
+        sourceId="s1"
+        text="Read [more](https://example.com/elsewhere) about it.[^1]"
+        citations={[first]}
+      />,
+    );
+
+    const link = screen.getByRole("link", { name: "more" });
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(link.getAttribute("rel")).toContain("noreferrer");
+    expect(link.getAttribute("rel")).toContain("noopener");
+  });
 });

@@ -60,8 +60,16 @@ export function CitedAnswer({
             a({ href, children, ...props }) {
               const index = citationIndexFromHref(href);
               if (index === null) {
+                // Not a mark, so it is a link the model or the book authored —
+                // untrusted text either way. Keep the renderer's own hardening
+                // on it: a new context, with no handle back on `window.opener`.
                 return (
-                  <a href={href} {...props}>
+                  <a
+                    href={href}
+                    rel="noreferrer noopener"
+                    target="_blank"
+                    {...props}
+                  >
                     {children}
                   </a>
                 );
