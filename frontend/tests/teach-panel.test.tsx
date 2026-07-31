@@ -531,6 +531,48 @@ describe("TeachPanel answer phases (ANSW-01/02)", () => {
     expect(screen.getByRole("button", { name: /thought process/i })).toBeTruthy();
   });
 
+  it("collapses a not-found turn's thinking into the not-found notice", async () => {
+    // Same rule as Ask: a turn that reasoned its way to "the section does not
+    // cover this" must not leave that reasoning on screen beside the retraction
+    // of it. The gate is written per panel, so it is guarded per panel.
+    const stream = sseStream();
+    vi.stubGlobal("fetch", routedFetch(baseHandlers(() => stream.response)));
+
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
+    await startSession();
+    sendMessage("Explain the thing this chapter never mentions.");
+
+    await stream.push({ type: "start", messageId: "m1" });
+    await stream.push({ type: "data-phase", data: { phase: "searching" } });
+    await stream.push({ type: "reasoning-start", id: "r1" });
+    await stream.push({
+      type: "reasoning-delta",
+      id: "r1",
+      delta: "This section is about something else.",
+    });
+    await stream.push({ type: "reasoning-end", id: "r1" });
+    await stream.push({ type: "text-start", id: "t1" });
+    await stream.push({ type: "text-end", id: "t1" });
+    await stream.push({ type: "data-citations", data: [] });
+    await stream.push({
+      type: "data-answer-status",
+      data: { status: "not_found_in_source" },
+    });
+    await stream.push({ type: "finish" });
+    await stream.done();
+
+    const notFound = await screen.findByTestId("not-found");
+    expect(notFound.textContent).toContain("not found in this book");
+    expect(screen.queryByRole("region", { name: "reasoning" })).toBeNull();
+    expect(screen.queryByText(/searching the book/i)).toBeNull();
+    expect(
+      screen.queryByText("This section is about something else."),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /thought process/i }),
+    ).toBeNull();
+  });
+
   it("shows no phase line or reasoning region for a turn that carried neither", async () => {
     const stream = sseStream();
     vi.stubGlobal("fetch", routedFetch(baseHandlers(() => stream.response)));

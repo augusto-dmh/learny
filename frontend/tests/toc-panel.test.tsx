@@ -37,6 +37,14 @@ vi.mock("next-themes", () => ({
   useTheme: () => ({ theme: "system", resolvedTheme: "light", setTheme: vi.fn() }),
 }));
 
+// jsdom performs no App Router navigation, so `useLinkStatus` is never pending on
+// its own; this drives that one export to cover the pending branch (ANSW-10).
+const linkStatus = vi.hoisted(() => ({ pending: false }));
+vi.mock("next/link", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("next/link")>();
+  return { ...actual, useLinkStatus: () => ({ pending: linkStatus.pending }) };
+});
+
 beforeAll(() => {
   Element.prototype.scrollIntoView = vi.fn();
 });
@@ -46,6 +54,7 @@ afterEach(() => {
   localStorage.clear();
   nav.push.mockClear();
   nav.replace.mockClear();
+  linkStatus.pending = false;
 });
 
 const A = "part1/ch1.xhtml#s1";
@@ -264,6 +273,26 @@ describe("ChapterNav prev/next (RD-06)", () => {
       <ChapterNav sourceId="s1" prevAnchor={null} nextAnchor={null} />,
     );
     expect(container.firstChild).toBeNull();
+  });
+
+  it("marks each chapter control pending while its navigation is in flight (ANSW-10)", () => {
+    // Loading the next chapter is the slowest move in the reader, and it happens
+    // from the bottom of the page where nothing else on screen changes — so the
+    // feedback has to be on the control that was activated.
+    linkStatus.pending = true;
+
+    render(<ChapterNav sourceId="s1" prevAnchor={A} nextAnchor={C} />);
+
+    for (const name of [/previous chapter/i, /next chapter/i]) {
+      const link = screen.getByRole("link", { name });
+      expect(within(link).getByTestId("nav-pending")).toBeTruthy();
+    }
+  });
+
+  it("shows no pending indicator on the chapter controls while nothing is navigating", () => {
+    render(<ChapterNav sourceId="s1" prevAnchor={A} nextAnchor={C} />);
+
+    expect(screen.queryAllByTestId("nav-pending")).toHaveLength(0);
   });
 });
 
