@@ -731,6 +731,111 @@ describe("AskPanel streaming caret (RA-09)", () => {
   });
 });
 
+describe("AskPanel inline citation marks (ANSW-07/08)", () => {
+  it("hydrates the answer's markers into marks when the citations land, and opens the passage in the dock", async () => {
+    const stream = sseStream();
+    const onShowInBook = vi.fn();
+    vi.stubGlobal("fetch", routedFetch(baseHandlers(() => stream.response)));
+
+    render(
+      <AskPanel sourceId="s1" csrf="csrf-xyz" onShowInBook={onShowInBook} />,
+    );
+    ask("Who wrote the first algorithm?");
+
+    await stream.push({ type: "start", messageId: "m1" });
+    await stream.push({ type: "text-start", id: "t1" });
+    await stream.push({
+      type: "text-delta",
+      id: "t1",
+      delta: "Ada Lovelace did.[^1]",
+    });
+    await stream.push({ type: "text-end", id: "t1" });
+
+    // The citations arrive after the text, so until they do the marker has
+    // nothing behind it and reads as the plain text it is.
+    await waitFor(() =>
+      expect(document.body.textContent).toContain("Ada Lovelace did."),
+    );
+    expect(screen.queryByRole("button", { name: "Citation 1" })).toBeNull();
+
+    await stream.push({ type: "data-citations", data: [citation] });
+    await stream.push({
+      type: "data-answer-status",
+      data: { status: "answered" },
+    });
+    await stream.push({ type: "finish" });
+    await stream.done();
+
+    // They land, and the marker becomes a mark in place.
+    const mark = await screen.findByRole("button", { name: "Citation 1" });
+    expect(document.body.textContent).not.toContain("[^1]");
+
+    await act(async () => {
+      fireEvent.click(mark);
+    });
+
+    // The passage opens beneath the answer and jumps the reading column without
+    // closing the dock (RA-13/14).
+    expect(screen.getByTestId("citation-passage").textContent).toContain(
+      "Chapter 1 › Core Idea",
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /show in book/i }));
+    });
+    expect(onShowInBook).toHaveBeenCalledWith(citation.anchor);
+    expect(screen.getByPlaceholderText(/ask a question/i)).toBeTruthy();
+  });
+
+  it("renders a restored turn's marks exactly as the streamed ones", async () => {
+    // The markers are part of the stored answer text, which is what makes a
+    // reloaded thread's evidence work the same as a live one's.
+    const restored = {
+      ...conversation,
+      turns: [
+        {
+          turn_index: 0,
+          message: "Who wrote the first algorithm?",
+          mode: "answer",
+          answer_status: "answered",
+          text: "The server's copy of the answer.[^1]",
+          citations: [citation],
+          evidence_count: 6,
+          model: "local-extractive",
+          created_at: "now",
+        },
+      ],
+    };
+    const onShowInBook = vi.fn();
+    writeActiveConversation("s1", "ask", "conv1");
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/conversations/conv1": () => jsonResponse(200, restored),
+      }),
+    );
+
+    render(
+      <AskPanel sourceId="s1" csrf="csrf-xyz" onShowInBook={onShowInBook} />,
+    );
+
+    expect(
+      await screen.findByText(/The server's copy of the answer\./),
+    ).toBeTruthy();
+    expect(document.body.textContent).not.toContain("[^1]");
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Citation 1" }));
+    });
+    expect(
+      screen.getByText("the first algorithm ever written"),
+    ).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /show in book/i }));
+    });
+    expect(onShowInBook).toHaveBeenCalledWith(citation.anchor);
+  });
+});
+
 describe("AskPanel answer phases (ANSW-01/02/03)", () => {
   /** The phase line, wherever in the thread it is currently rendered. */
   function phaseLine(): HTMLElement | null {

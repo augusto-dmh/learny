@@ -17,7 +17,7 @@
  */
 
 import { captureHighlight, NoteError } from "./notes";
-import { type Citation } from "./citations";
+import { stripCitationMarkers, type Citation } from "./citations";
 
 /**
  * Client-side truncation length for a note title derived from the question. The
@@ -72,12 +72,16 @@ export async function saveAnswerAsNote({
   const anchor = citations[0].anchor;
   const title = question.slice(0, TITLE_MAX);
   const quote = firstParagraph(citations[0].snippet);
+  // The inline citation markers belong to the panel that renders them as marks;
+  // a note is prose the reader keeps, and `[^1]` in it would point at a citation
+  // list the note does not carry.
+  const body = stripCitationMarkers(answerText);
 
   if (quote !== null) {
     try {
       await captureImpl(
         sourceId,
-        { anchor, quote_exact: quote, title, body_markdown: answerText },
+        { anchor, quote_exact: quote, title, body_markdown: body },
         csrfToken,
       );
       return { outcome: "anchored" };
@@ -96,7 +100,7 @@ export async function saveAnswerAsNote({
   // the answer is still filed where it came from rather than nowhere.
   await captureImpl(
     sourceId,
-    { anchor, quote_exact: "", title, body_markdown: answerText },
+    { anchor, quote_exact: "", title, body_markdown: body },
     csrfToken,
   );
   return { outcome: "section" };

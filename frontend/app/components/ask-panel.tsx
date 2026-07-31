@@ -19,6 +19,8 @@
  * being searched, the model's thinking in a collapsible region while it thinks,
  * then the streaming answer. A turn that reasons and then finds nothing shows the
  * not-found notice alone, so no thinking is left standing next to a retraction.
+ * The answer itself carries its evidence inline — `CitedAnswer` renders the
+ * citation marks and opens the cited passage beneath the message.
  *
  * Panel-only additions: an empty-state list of suggested prompts (click ⇒ submit,
  * RA-08); a streaming caret at the tail of the in-flight answer (RA-09); and the
@@ -54,11 +56,7 @@ import {
   Conversation,
   ConversationContent,
 } from "@/components/ai-elements/conversation";
-import {
-  Message,
-  MessageContent,
-  MessageResponse,
-} from "@/components/ai-elements/message";
+import { Message, MessageContent } from "@/components/ai-elements/message";
 import {
   PromptInput,
   PromptInputBody,
@@ -70,7 +68,7 @@ import {
 import { Button } from "@/components/ui/button";
 
 import { AnswerPhaseIndicator, ReasoningRegion } from "./answer-phase";
-import { CitationList } from "./citations";
+import { CitedAnswer } from "./cited-answer";
 import { IncludeNotesToggle } from "./include-notes-toggle";
 import { isNotFound, NotFoundNotice } from "./not-found-notice";
 import { SaveToNoteAction } from "./save-to-note-action";
@@ -386,22 +384,23 @@ function AskChat({
                   {pending && !text && !reasoning ? (
                     <AnswerPhaseIndicator />
                   ) : null}
-                  {text ? <MessageResponse>{text}</MessageResponse> : null}
-                  {pending && text ? (
-                    <span
-                      data-testid="streaming-caret"
-                      aria-hidden
-                      className="ml-0.5 inline-block h-4 w-px animate-pulse bg-foreground align-text-bottom"
-                    />
-                  ) : null}
+                  <CitedAnswer
+                    sourceId={sourceId}
+                    text={text}
+                    citations={notFound ? null : citations}
+                    onShowInBook={onShowInBook}
+                    trailing={
+                      pending && text ? (
+                        <span
+                          data-testid="streaming-caret"
+                          aria-hidden
+                          className="ml-0.5 inline-block h-4 w-px animate-pulse bg-foreground align-text-bottom"
+                        />
+                      ) : null
+                    }
+                  />
                   {notFound && answerStatus ? (
                     <NotFoundNotice status={answerStatus} />
-                  ) : citations ? (
-                    <CitationList
-                      sourceId={sourceId}
-                      citations={citations}
-                      onShowInBook={onShowInBook}
-                    />
                   ) : null}
                   {!notFound && citations && citations.length > 0 ? (
                     <SaveToNoteAction

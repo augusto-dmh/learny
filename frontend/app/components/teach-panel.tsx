@@ -16,7 +16,8 @@
  *
  * A turn in flight always says what it is doing, exactly as Ask does: the phase
  * line while the book is being searched, the model's thinking in a collapsible
- * region while it thinks, then the streaming answer.
+ * region while it thinks, then the streaming answer — and the taught answer
+ * carries the same inline citation marks, opening passages in flow beneath it.
  *
  * Panel-only addition: when a session activates — on start AND on restore — the
  * panel asks the reader to bring the taught passage into view via `onShowInBook`,
@@ -52,11 +53,7 @@ import {
   Conversation,
   ConversationContent,
 } from "@/components/ai-elements/conversation";
-import {
-  Message,
-  MessageContent,
-  MessageResponse,
-} from "@/components/ai-elements/message";
+import { Message, MessageContent } from "@/components/ai-elements/message";
 import {
   PromptInput,
   PromptInputBody,
@@ -67,7 +64,7 @@ import {
 } from "@/components/ai-elements/prompt-input";
 
 import { AnswerPhaseIndicator, ReasoningRegion } from "./answer-phase";
-import { CitationList } from "./citations";
+import { CitedAnswer } from "./cited-answer";
 import { IncludeNotesToggle } from "./include-notes-toggle";
 import { isNotFound, NotFoundNotice } from "./not-found-notice";
 import { SaveToNoteAction } from "./save-to-note-action";
@@ -430,15 +427,14 @@ function TeachChat({
                   {pending && !text && !reasoning ? (
                     <AnswerPhaseIndicator />
                   ) : null}
-                  {text ? <MessageResponse>{text}</MessageResponse> : null}
+                  <CitedAnswer
+                    sourceId={sourceId}
+                    text={text}
+                    citations={notFound ? null : citations}
+                    onShowInBook={onShowInBook}
+                  />
                   {notFound && answerStatus ? (
                     <NotFoundNotice status={answerStatus} />
-                  ) : citations ? (
-                    <CitationList
-                      sourceId={sourceId}
-                      citations={citations}
-                      onShowInBook={onShowInBook}
-                    />
                   ) : null}
                   {!notFound && citations && citations.length > 0 ? (
                     <SaveToNoteAction

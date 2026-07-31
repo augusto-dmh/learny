@@ -45,7 +45,7 @@ const CHAPTER_URL = `/api/sources/s1/chapter?anchor=${ENCODED_ANCHOR}`;
 beforeAll(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
     true;
-  // The citation's Radix Popover reaches for APIs jsdom lacks.
+  // The reader reaches for APIs jsdom lacks.
   globalThis.ResizeObserver = class {
     observe() {}
     unobserve() {}
