@@ -403,6 +403,30 @@ def test_gate_defaults_to_env_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         run_eval(_inputs(1), judge=judge, max_cases=10, results_dir=tmp_path)
 
 
+def test_snapshot_tier_composes_with_run_eval_offline(tmp_path: Path) -> None:
+    # The nightly tier end-to-end, minus the network: the committed snapshots map
+    # through snapshot_eval_inputs into run_eval with a fake judge, declines make
+    # no calls and carry nulls, and passing scores clear the pinned gate.
+    from tests.eval.harness import load_snapshots, snapshot_eval_inputs
+
+    inputs = snapshot_eval_inputs(load_snapshots())
+    if not inputs:
+        pytest.skip("no committed generation snapshots to compose")
+    answered_count = sum(1 for i in inputs if i.found)
+    payloads = [p for i in inputs if i.found for p in (_faithfulness_payload(True), {"score": 4})]
+    judge, client = _judge(payloads)
+
+    lines = run_eval(inputs, judge=judge, max_cases=50, results_dir=tmp_path, gate=True)
+
+    assert len(lines) == len(inputs)
+    assert len(client.messages.calls) == answered_count * 2
+    assert all(
+        line["faithfulness"] is None and line["relevancy"] is None
+        for line in lines
+        if not line["found"]
+    )
+
+
 def test_real_client_is_built_with_a_bounded_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     # Without an explicit bound the SDK defaults (600s × 3 attempts) let the
     # 18-call nightly tier burn hours on a degraded endpoint before the workflow
