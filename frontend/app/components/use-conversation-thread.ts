@@ -138,6 +138,11 @@ export function useConversationThread({
   const { messages, sendMessage, status, stop } = useChat<LearnyUIMessage>({
     transport,
     messages: initialMessages,
+    // A thinking model streams reasoning deltas on top of the answer's, and every
+    // one of them would otherwise re-render the whole thread — which re-parses the
+    // answer's markdown and grows with the transcript. Coalescing to ~20 updates a
+    // second is still below what reads as a delay in text appearing.
+    experimental_throttle: 50,
     onError: (err) => {
       // A 401 mid-stream redirects to login (parity); everything else renders as
       // a readable banner while any partial text is retained.
