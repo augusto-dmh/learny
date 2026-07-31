@@ -3,7 +3,7 @@
   "promote_threshold": 2,
   "window_days": 45,
   "quarantine_threshold": 2,
-  "next_id": 17,
+  "next_id": 18,
   "lessons": [
     {
       "id": "L-001",
@@ -292,6 +292,24 @@
       ],
       "created": "2026-07-27T02:58:13Z",
       "last_seen": "2026-07-27T02:58:13Z"
+    },
+    {
+      "id": "L-017",
+      "key": "surviving_mutant::a get key default fallback whose only caller always writes the key is untestable through the public path pin it with a direct unit test or delete it else a mutation of the default survives",
+      "text": "A .get(key, default) fallback whose only caller always writes the key is untestable through the public path — pin it with a direct unit test or delete it, else a mutation of the default survives.",
+      "signal": "surviving_mutant",
+      "scope": "backend/tests",
+      "status": "candidate",
+      "features": [
+        "v5-opus-judge-recalibration"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "backend/app/eval/judge.py:427 (M6) (backend/tests)"
+      ],
+      "created": "2026-07-31T17:03:23Z",
+      "last_seen": "2026-07-31T17:03:23Z"
     }
   ]
 }

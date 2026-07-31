@@ -110,6 +110,12 @@ Seen once or not yet corroborated. Tracked, not trusted.
 - evidence: spec.md:59 (WSN-11); backend/app/infrastructure/web/notes.py:302 (backend/app/infrastructure/web)
 - last seen: 2026-07-27T02:58:13Z
 
+### L-017 — A .get(key, default) fallback whose only caller always writes the key is untestable through the public path — pin it with a direct unit test or delete it, else a mutation of the default survives.
+- signal: `surviving_mutant` · recurrence: 1 feature(s) · scope: `backend/tests` · harmful: 0
+- features: v5-opus-judge-recalibration
+- evidence: backend/app/eval/judge.py:427 (M6) (backend/tests)
+- last seen: 2026-07-31T17:03:23Z
+
 ## Quarantined (failed when applied — ignore)
 
 A confirmed lesson that recurred alongside failure. Kept for the maintainer to review.
