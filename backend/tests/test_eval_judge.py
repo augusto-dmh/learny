@@ -169,6 +169,7 @@ def test_run_eval_writes_jsonl_line_per_case_with_full_schema(tmp_path: Path) ->
         "faithfulness",
         "relevancy",
         "citation_valid",
+        "found",
     }
     assert first["case_id"] == "case-0"
     assert first["generation_model"] == "claude-sonnet-4-6"
@@ -179,6 +180,96 @@ def test_run_eval_writes_jsonl_line_per_case_with_full_schema(tmp_path: Path) ->
     assert first["citation_valid"] is True
     assert written[1]["faithfulness"] == pytest.approx(0.5)
     assert written[1]["relevancy"] == 3
+
+
+# --- Decline semantics (ADR-028 / RECAL-02, RECAL-03) --------------------------
+
+
+def _declined_input(case_id: str = "case-declined", *, citation_valid: bool = True) -> EvalInput:
+    return EvalInput(
+        case_id=case_id,
+        question="q-declined",
+        evidence_text="passages",
+        answer_text="",
+        generation_model="claude-sonnet-4-6",
+        citation_valid=citation_valid,
+        found=False,
+    )
+
+
+def test_run_eval_skips_judge_calls_for_declined_cases(tmp_path: Path) -> None:
+    # One answered + one declined case: only the answered case is judged
+    # (2 calls); the declined line carries null scores and found=false (ADR-028).
+    judge, client = _judge([_faithfulness_payload(True), {"score": 5}])
+
+    lines = run_eval(
+        [*_inputs(1), _declined_input()],
+        judge=judge,
+        max_cases=10,
+        results_dir=tmp_path,
+        gate=False,
+    )
+
+    assert len(lines) == 2
+    assert len(client.messages.calls) == 2
+    declined = lines[1]
+    assert declined["found"] is False
+    assert declined["faithfulness"] is None
+    assert declined["relevancy"] is None
+
+
+def test_run_eval_marks_answered_lines_found_true_by_default(tmp_path: Path) -> None:
+    # EvalInput without an explicit found flag behaves exactly as before ADR-028:
+    # judged normally, line carries found=true.
+    judge, client = _judge([_faithfulness_payload(True), {"score": 5}])
+
+    lines = run_eval(_inputs(1), judge=judge, max_cases=10, results_dir=tmp_path, gate=False)
+
+    assert lines[0]["found"] is True
+    assert len(client.messages.calls) == 2
+
+
+def test_gate_means_exclude_declined_lines(tmp_path: Path) -> None:
+    # A passing answered case plus declined cases: the gate means are computed
+    # over the answered line alone, so the run passes (ADR-028 answered-only).
+    judge, _ = _judge([_faithfulness_payload(True), {"score": 5}])
+
+    lines = run_eval(
+        [*_inputs(1), _declined_input("case-d1"), _declined_input("case-d2")],
+        judge=judge,
+        max_cases=10,
+        results_dir=tmp_path,
+        gate=True,
+    )
+
+    assert [line["found"] for line in lines] == [True, False, False]
+
+
+def test_gate_all_declined_skips_threshold_asserts(tmp_path: Path) -> None:
+    # No answered line exists, so no mean exists: the threshold asserts are
+    # skipped and the gated run passes (ADR-028 all-declined edge).
+    judge, client = _judge([])
+
+    lines = run_eval(
+        [_declined_input()], judge=judge, max_cases=10, results_dir=tmp_path, gate=True
+    )
+
+    assert len(lines) == 1
+    assert client.messages.calls == []
+
+
+def test_gate_all_declined_still_asserts_citation_validity(tmp_path: Path) -> None:
+    # The citation invariant runs over ALL lines, declines included (ADR-028).
+    judge, _ = _judge([])
+
+    with pytest.raises(AssertionError, match="citation"):
+        run_eval(
+            [_declined_input(citation_valid=False)],
+            judge=judge,
+            max_cases=10,
+            results_dir=tmp_path,
+            gate=True,
+        )
 
 
 # --- max_cases cap (GEN-21 / research §8 cost cap) -----------------------------
