@@ -1947,6 +1947,138 @@ def test_turn_stream_mid_stream_failure_emits_the_error_frame_and_persists_nothi
     assert auth_client.get(f"/api/conversations/{conversation.id}").json()["turns"] == []
 
 
+def test_turn_stream_closes_the_reasoning_part_on_a_turn_that_declines(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # ANSW-02: a turn can reason its way to "the passages do not cover this" and then
+    # write nothing. No answer text ever arrives to close the reasoning part, so the
+    # close has to come at the end of the response — otherwise the client is left with
+    # a thinking region that never finishes on the one outcome that most needs reading.
+    from app.infrastructure.web.dependencies import get_generation
+
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "stream-declined@example.com")
+    _embed_all(db_conn, UUID(source_id))
+    conversation = _seed_conversation(db_conn, UUID(source_id))
+
+    class _ReasonsThenDeclinesAdapter:
+        model = _MODEL
+
+        def generate(self, **kwargs):
+            raise AssertionError("stream path must not call generate")
+
+        def generate_stream(
+            self,
+            *,
+            message: str,
+            mode: str,
+            evidence: Sequence[Evidence],
+            history: Sequence[HistoryTurn] = (),
+            target_section_path: tuple[str, ...] | None = None,
+        ):
+            yield AnswerReasoningDelta(text="These passages are about something else.")
+            yield AnswerCompleted(
+                answer=GeneratedAnswer(text="", cited_chunk_ids=(), model=_MODEL, found=False)
+            )
+
+    auth_client.app.dependency_overrides[get_generation] = lambda: _ReasonsThenDeclinesAdapter()
+    try:
+        resp = _turn_stream(
+            auth_client,
+            conversation.id,
+            {"message": "photosynthesis sunlight energy", "mode": MODE_ANSWER},
+            csrf=csrf,
+        )
+    finally:
+        auth_client.app.dependency_overrides.pop(get_generation, None)
+
+    assert resp.status_code == 200, resp.text
+    parts = _parse_ui_stream(resp.text)
+    assert _part_types(parts) == [
+        "start",
+        "data-phase",
+        "reasoning-start",
+        "reasoning-delta",
+        "reasoning-end",
+        "text-start",
+        "text-end",
+        "data-citations",
+        "data-answer-status",
+        "finish",
+        "[DONE]",
+    ]
+    start = next(p for p in parts if isinstance(p, dict) and p["type"] == "reasoning-start")
+    end = next(p for p in parts if isinstance(p, dict) and p["type"] == "reasoning-end")
+    assert end["id"] == start["id"]
+    answer_status = next(
+        p for p in parts if isinstance(p, dict) and p["type"] == "data-answer-status"
+    )
+    assert answer_status["data"] == {"status": NOT_FOUND_IN_SCOPE}
+
+    # The verdict is persisted; the thinking that reached it is not (AD-220).
+    turns = auth_client.get(f"/api/conversations/{conversation.id}").json()["turns"]
+    assert turns[0]["answer_status"] == NOT_FOUND_IN_SCOPE
+    assert "something else" not in json.dumps(turns)
+
+
+def test_turn_stream_failing_while_reasoning_still_reaches_the_error_frame(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # CONV-21: the provider can break before the answer has begun, with only the
+    # thinking on screen. The reader still gets the readable failure rather than a
+    # stream that simply stops — the error part is the last thing before [DONE], and
+    # nothing is persisted.
+    from app.infrastructure.web.dependencies import get_generation
+
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "stream-reasoning-fail@example.com")
+    _embed_all(db_conn, UUID(source_id))
+    conversation = _seed_conversation(db_conn, UUID(source_id))
+
+    class _FailsWhileReasoningAdapter:
+        model = _MODEL
+
+        def generate(self, **kwargs):
+            raise AssertionError("stream path must not call generate")
+
+        def generate_stream(
+            self,
+            *,
+            message: str,
+            mode: str,
+            evidence: Sequence[Evidence],
+            history: Sequence[HistoryTurn] = (),
+            target_section_path: tuple[str, ...] | None = None,
+        ):
+            yield AnswerReasoningDelta(text="Weighing the passages.")
+            raise RuntimeError("provider-secret-internal-detail")
+
+    auth_client.app.dependency_overrides[get_generation] = lambda: _FailsWhileReasoningAdapter()
+    try:
+        resp = _turn_stream(
+            auth_client,
+            conversation.id,
+            {"message": "photosynthesis sunlight energy", "mode": MODE_ANSWER},
+            csrf=csrf,
+        )
+    finally:
+        auth_client.app.dependency_overrides.pop(get_generation, None)
+
+    assert resp.status_code == 200, resp.text
+    parts = _parse_ui_stream(resp.text)
+    assert _part_types(parts) == [
+        "start",
+        "data-phase",
+        "reasoning-start",
+        "reasoning-delta",
+        "error",
+        "[DONE]",
+    ]
+    error_part = next(p for p in parts if isinstance(p, dict) and p["type"] == "error")
+    assert error_part["errorText"] == "Answer generation failed. Please try again."
+    assert "provider-secret-internal-detail" not in resp.text
+
+    assert auth_client.get(f"/api/conversations/{conversation.id}").json()["turns"] == []
+
+
 def test_turn_stream_pre_stream_guards_return_plain_http(
     auth_client: TestClient, db_conn: Connection
 ) -> None:
