@@ -41,6 +41,12 @@ export type AnswerPhase = "searching";
  * matching `ui_message_stream.py`: `data-citations` (the grounded citation
  * snapshots), `data-answer-status`, and `data-phase`. The model's thinking rides
  * on the protocol's own `reasoning` parts, so it needs no entry here.
+ *
+ * `phase` is declared because the backend sends it, not because a component reads
+ * it: a panel knows it is searching from having nothing yet — no text, no
+ * reasoning, a turn in flight — which is true whether or not the frame arrives.
+ * The frame stays the protocol's own statement of what the turn is doing, and this
+ * entry is what a reader of it would attach to.
  */
 export type LearnyDataParts = {
   citations: Citation[];
@@ -60,8 +66,8 @@ export function messageText(message: LearnyUIMessage): string {
 }
 
 /**
- * Read a message's collected text, citations, answer status, reasoning, and
- * current phase from its parts.
+ * Read a message's collected text, citations, answer status, and reasoning from
+ * its parts.
  *
  * `reasoning` is the model's streamed thinking, concatenated the same way the
  * answer text is; it is empty whenever the turn carried none — the provider chose
@@ -69,20 +75,20 @@ export function messageText(message: LearnyUIMessage): string {
  * (reasoning is never persisted, AD-220). Callers key the reasoning region off
  * that emptiness, so a turn without thinking shows no empty shell.
  *
- * `phase` is the last phase announced, or `null` before any arrives.
+ * The announced phase is deliberately not projected: the panels read "searching"
+ * off a turn that is in flight with nothing to show yet, which is the same fact
+ * without a second source for it to disagree with.
  */
 export function assistantView(message: LearnyUIMessage): {
   text: string;
   citations: Citation[] | null;
   status: AnswerStatus | null;
   reasoning: string;
-  phase: AnswerPhase | null;
 } {
   let text = "";
   let citations: Citation[] | null = null;
   let status: AnswerStatus | null = null;
   let reasoning = "";
-  let phase: AnswerPhase | null = null;
   for (const part of message.parts) {
     if (part.type === "text") {
       text += part.text;
@@ -92,11 +98,9 @@ export function assistantView(message: LearnyUIMessage): {
       citations = part.data;
     } else if (part.type === "data-answer-status") {
       status = part.data.status;
-    } else if (part.type === "data-phase") {
-      phase = part.data.phase;
     }
   }
-  return { text, citations, status, reasoning, phase };
+  return { text, citations, status, reasoning };
 }
 
 /** A pre-stream HTTP failure (network unreachable, or the status code). */

@@ -2,7 +2,7 @@
  * Unit gate — the streaming transport reshapes each request to Learny's contract
  * (latest user message only → `{message, mode}`, CSRF header, the stream URL of
  * the conversation it resolves); an assistant message's parts read back as the
- * view a panel renders (text, citations, status, reasoning, phase); persisted
+ * view a panel renders (text, citations, status, reasoning); persisted
  * turns map to seeded `useChat` messages carrying the same citation +
  * answer-status parts a live stream assembles; and every pre-stream failure maps
  * to a readable message.
@@ -149,7 +149,7 @@ describe("assistantView", () => {
     return { id: "a1", role: "assistant", parts };
   }
 
-  it("collects text, citations, status, reasoning, and the announced phase", () => {
+  it("collects text, citations, status, and reasoning", () => {
     const view = assistantView(
       assistant([
         { type: "data-phase", data: { phase: "searching" } },
@@ -166,25 +166,26 @@ describe("assistantView", () => {
     // stays separate from it — the thinking is never mixed into the answer.
     expect(view.reasoning).toBe("The chapter on engines mentions it.");
     expect(view.text).toBe("Ada Lovelace wrote it.[^1]");
-    expect(view.phase).toBe("searching");
     expect(view.citations).toEqual([citation]);
     expect(view.status).toBe("answered");
   });
 
-  it("reports the phase alone while a turn is still searching", () => {
-    // The frame the backend emits before retrieval runs: a phase and nothing else.
+  it("reads a turn that has only announced its phase as having nothing yet", () => {
+    // The frame the backend emits before retrieval runs. The panels render their
+    // searching state off exactly this — a turn in flight with no text and no
+    // reasoning — rather than off the phase value, so the announcement passes
+    // through the view without becoming a second source for the same fact.
     const view = assistantView(
       assistant([{ type: "data-phase", data: { phase: "searching" } }]),
     );
 
-    expect(view.phase).toBe("searching");
     expect(view.text).toBe("");
     expect(view.reasoning).toBe("");
     expect(view.citations).toBeNull();
     expect(view.status).toBeNull();
   });
 
-  it("reports no reasoning and no phase for a turn that carried neither", () => {
+  it("reports no reasoning for a turn that carried none", () => {
     // The local adapter, an adaptive turn that chose not to think, and every
     // restored turn look like this — the caller renders no reasoning region.
     const view = assistantView(
@@ -196,7 +197,6 @@ describe("assistantView", () => {
     );
 
     expect(view.reasoning).toBe("");
-    expect(view.phase).toBeNull();
     expect(view.text).toBe("It is about early computing.");
   });
 });
@@ -284,7 +284,6 @@ describe("turnsToUIMessages", () => {
     ]);
     expect(view.text).toBe("It is about early computing.[^1]");
     expect(view.reasoning).toBe("");
-    expect(view.phase).toBeNull();
     expect(view.citations).toEqual([citation]);
   });
 });
