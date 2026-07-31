@@ -927,11 +927,42 @@ class _FakeThinkingStreamEvent:
         self.snapshot = thinking
 
 
+class _FakeContentBlockStopEvent:
+    """The SDK's ``content_block_stop``: the finished block, citations attached."""
+
+    def __init__(self, content_block: object) -> None:
+        self.type = "content_block_stop"
+        self.content_block = content_block
+
+
 class _FakeOtherStreamEvent:
     """Any event the adapter has no mapping for (bookkeeping, or a future type)."""
 
     def __init__(self, event_type: str) -> None:
         self.type = event_type
+
+
+def _stream_events_for(message: _FakeMessage) -> list[object]:
+    """Replay a final message as the event sequence the SDK's stream would fire.
+
+    Each block arrives as its deltas (text or thinking) followed by the
+    ``content_block_stop`` carrying the finished block with its citations. Text is
+    deliberately split across two deltas, so a mark inserted anywhere but the block's
+    end lands in the middle of the streamed prose and the parity check catches it.
+    Driving the streaming path from the *same* object the buffered path parses is
+    what makes that check a statement about one provider response seen two ways,
+    instead of two hand-written fixtures that were written to agree.
+    """
+    events: list[object] = []
+    for block in message.content:
+        if block.type == "text":
+            split = len(block.text) // 2
+            events.append(_FakeTextStreamEvent(block.text[:split]))
+            events.append(_FakeTextStreamEvent(block.text[split:]))
+        else:
+            events.append(_FakeThinkingStreamEvent(block.thinking))
+        events.append(_FakeContentBlockStopEvent(block))
+    return events
 
 
 class _FakeStream:
@@ -1077,7 +1108,7 @@ def test_stream_without_thinking_emits_no_reasoning_events() -> None:
     assert [e for e in events if isinstance(e, AnswerReasoningDelta)] == []
 
 
-def test_stream_ignores_events_that_are_neither_text_nor_thinking() -> None:
+def test_stream_ignores_events_it_has_no_mapping_for() -> None:
     # The SDK's stream carries bookkeeping events (and will carry types that do not
     # exist yet); each mapped kind is matched by name so none of them can arrive as
     # answer text or as reasoning.
@@ -1086,7 +1117,7 @@ def test_stream_ignores_events_that_are_neither_text_nor_thinking() -> None:
             _FakeOtherStreamEvent("message_start"),
             "Hello",
             _FakeOtherStreamEvent("signature"),
-            _FakeOtherStreamEvent("content_block_stop"),
+            _FakeOtherStreamEvent("message_delta"),
         ],
         final_message=_FakeMessage([_FakeTextBlock("Hello")]),
     )
@@ -1119,6 +1150,168 @@ def test_answer_stream_completed_parse_equals_buffered_parse() -> None:
     assert isinstance(completed, AnswerCompleted)
     assert completed.answer == buffered
     assert completed.answer.cited_chunk_ids == (evidence[1].chunk_id,)
+
+
+# --- Streamed citation marks and stream/buffered parity (ANSW-07) --------------
+#
+# A mark is answer text, so it has to reach the reader the same way the prose does —
+# and it has to land in the same place in the streamed text as in the text that gets
+# persisted, or a reader who reloads sees their marks move. The API attaches
+# citations mid-block while the buffered parser can only write a block's marks after
+# its text, so the stream emits them when the block finishes; these tests pin that
+# the two paths produce byte-identical text for the same provider response.
+
+
+def test_stream_marks_each_block_when_the_block_finishes() -> None:
+    evidence = [_evidence("alpha"), _evidence("beta")]
+    first = _FakeTextBlock("The tides follow the moon.", [_FakeCitation(0)])
+    # The second block cites a new chunk and then the one already marked [^1].
+    second = _FakeTextBlock(" Volcanoes vent magma.", [_FakeCitation(1), _FakeCitation(0)])
+    final = _FakeMessage([first, second])
+    # The first block's prose arrives in two deltas: the mark belongs after the last
+    # of them, not after whichever delta the citation happened to attach near.
+    adapter, _ = _streaming_answer_adapter(
+        _FakeStream(
+            deltas=[
+                _FakeTextStreamEvent("The tides "),
+                _FakeTextStreamEvent("follow the moon."),
+                _FakeContentBlockStopEvent(first),
+                _FakeTextStreamEvent(" Volcanoes vent magma."),
+                _FakeContentBlockStopEvent(second),
+            ],
+            final_message=final,
+        )
+    )
+
+    events = list(adapter.generate_stream(mode=MODE_ANSWER, message="q", evidence=evidence))
+
+    assert [e.text for e in events if isinstance(e, AnswerTextDelta)] == [
+        "The tides ",
+        "follow the moon.",
+        "[^1]",
+        " Volcanoes vent magma.",
+        "[^2][^1]",
+    ]
+
+
+def test_stream_emits_no_marker_delta_for_a_block_with_no_citations() -> None:
+    # An empty marker run must not become an empty delta: a frame carrying nothing
+    # is a frame the client has to learn to ignore.
+    final = _FakeMessage([_FakeThinkingBlock("Weighing it."), _FakeTextBlock("Plain prose.")])
+    adapter, _ = _streaming_answer_adapter(
+        _FakeStream(deltas=_stream_events_for(final), final_message=final)
+    )
+
+    events = list(
+        adapter.generate_stream(mode=MODE_ANSWER, message="q", evidence=[_evidence("alpha")])
+    )
+
+    texts = [e.text for e in events if isinstance(e, AnswerTextDelta)]
+    assert "".join(texts) == "Plain prose."
+    assert all(texts), "an empty marker run must not be sent as a delta"
+    assert [e.text for e in events if isinstance(e, AnswerReasoningDelta)] == ["Weighing it."]
+
+
+def test_stream_of_a_declined_turn_carries_no_marks() -> None:
+    # The not-found reply cites nothing, so nothing marks it — the hold-back never
+    # sees a marker it would have to reason about.
+    final = _FakeMessage([_FakeTextBlock(SENTINEL)])
+    adapter, _ = _streaming_answer_adapter(
+        _FakeStream(deltas=_stream_events_for(final), final_message=final)
+    )
+
+    events = list(
+        adapter.generate_stream(mode=MODE_ANSWER, message="q", evidence=[_evidence("alpha")])
+    )
+
+    assert "".join(e.text for e in events if isinstance(e, AnswerTextDelta)) == SENTINEL
+    assert isinstance(events[-1], AnswerCompleted)
+    assert events[-1].answer.found is False
+
+
+def _cited_answer_message() -> _FakeMessage:
+    return _FakeMessage([_FakeTextBlock("One claim.", [_FakeCitation(1)])])
+
+
+def _repeated_citation_message() -> _FakeMessage:
+    return _FakeMessage(
+        [
+            _FakeTextBlock("First.", [_FakeCitation(2), _FakeCitation(0)]),
+            _FakeTextBlock(" Second.", [_FakeCitation(2)]),
+            _FakeTextBlock(" Third.", [_FakeCitation(1)]),
+        ]
+    )
+
+
+def _thinking_then_answer_message() -> _FakeMessage:
+    return _FakeMessage(
+        [
+            _FakeThinkingBlock("Weighing the passages."),
+            _FakeTextBlock("A framing sentence."),
+            _FakeTextBlock(" The cited claim.", [_FakeCitation(0)]),
+        ]
+    )
+
+
+def _malformed_citation_message() -> _FakeMessage:
+    return _FakeMessage([_FakeTextBlock("An answer", [_FakeCitation(9), _FakeCitation(0)])])
+
+
+def _uncited_message() -> _FakeMessage:
+    return _FakeMessage([_FakeTextBlock("Plain prose, no citations.")])
+
+
+@pytest.mark.parametrize(
+    "build_message",
+    [
+        _cited_answer_message,
+        _repeated_citation_message,
+        _thinking_then_answer_message,
+        _malformed_citation_message,
+        _uncited_message,
+    ],
+)
+def test_streamed_text_equals_the_answer_text_that_gets_persisted(build_message) -> None:
+    # The parity invariant: concatenating what the reader watched arrive gives exactly
+    # the text stored on the turn — marks, positions and numbering included. Both
+    # paths are driven from the same message object, so a fixture cannot paper over a
+    # divergence.
+    evidence = [_evidence("alpha"), _evidence("beta"), _evidence("gamma")]
+    final = build_message()
+    stream_adapter, _ = _streaming_answer_adapter(
+        _FakeStream(deltas=_stream_events_for(final), final_message=final)
+    )
+    buffered_adapter, _ = _adapter(build_message())
+
+    events = list(stream_adapter.generate_stream(mode=MODE_ANSWER, message="q", evidence=evidence))
+    buffered = buffered_adapter.generate(mode=MODE_ANSWER, message="q", evidence=evidence)
+
+    streamed = "".join(e.text for e in events if isinstance(e, AnswerTextDelta))
+    assert streamed == buffered.text
+    assert isinstance(events[-1], AnswerCompleted)
+    assert events[-1].answer.text == streamed
+
+
+def test_teaching_stream_marks_cited_blocks_too() -> None:
+    # One stream runner serves both modes, so the teaching turn is marked identically.
+    evidence = [_evidence("alpha"), _evidence("beta")]
+    final = _FakeMessage([_FakeTextBlock("Here is the teaching.", [_FakeCitation(1)])])
+    adapter, _ = _streaming_answer_adapter(
+        _FakeStream(deltas=_stream_events_for(final), final_message=final)
+    )
+
+    events = list(
+        adapter.generate_stream(
+            mode=MODE_TEACH,
+            message="teach me",
+            target_section_path=("Ch", "A"),
+            evidence=evidence,
+        )
+    )
+
+    texts = [e.text for e in events if isinstance(e, AnswerTextDelta)]
+    assert "".join(texts) == "Here is the teaching.[^1]"
+    assert texts[-1] == "[^1]"
 
 
 def test_answer_stream_close_closes_the_sdk_stream() -> None:

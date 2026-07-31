@@ -64,8 +64,9 @@ class _MessagesClient(Protocol):
     list of blocks (``text`` blocks carry ``.text`` and an optional ``.citations``
     list of objects with ``.document_index``; ``thinking`` blocks carry the
     summarized reasoning and are not part of the answer). The streaming half,
-    ``client.messages.stream(...)``, yields ``text`` and ``thinking`` events. Both
-    calls accept the ``thinking`` and ``output_config`` request params.
+    ``client.messages.stream(...)``, yields ``text`` and ``thinking`` events plus a
+    ``content_block_stop`` carrying the finished ``content_block``. Both calls accept
+    the ``thinking`` and ``output_config`` request params.
     """
 
     messages: Any
@@ -275,19 +276,31 @@ class AnthropicAdapterBase:
         """Stream generation events, closing the SDK stream on early cancellation.
 
         Opens ``messages.stream(...)`` (the SDK context manager), mapping each
-        text-delta event to an :class:`~app.domain.entities.AnswerTextDelta` and
-        each thinking delta to an
-        :class:`~app.domain.entities.AnswerReasoningDelta`. Only those two event
-        types are mapped, each by name: the SDK's stream carries bookkeeping events
-        too, and a catch-all would file tomorrow's new event type into whichever
-        bucket happened to be last. Once the stream is exhausted,
-        ``get_final_message()`` is parsed with the **same**
-        parser as the buffered path into the authoritative
+        text-delta event to an :class:`~app.domain.entities.AnswerTextDelta`, each
+        thinking delta to an :class:`~app.domain.entities.AnswerReasoningDelta`, and
+        each finished text block to the ``[^n]`` marker run its citations earned —
+        one more :class:`~app.domain.entities.AnswerTextDelta`, because a marker is
+        just answer text. Only those event types are mapped, each by name: the SDK's
+        stream carries bookkeeping events too, and a catch-all would file tomorrow's
+        new event type into whichever bucket happened to be last.
+
+        The SDK does surface citations as they attach (a synthetic ``citation`` event
+        per ``citations_delta``), but they attach *mid-block* while the buffered
+        parser — which has no character spans to work with — can only write a block's
+        marks after its text. Emitting at the block's ``content_block_stop`` instead
+        walks the finished block exactly as :func:`_parse_message` walks the final
+        message, in the same block order with the same numbering state, so the
+        streamed text and the persisted text are equal by construction rather than by
+        two insertion rules staying in sync (AD-222). The lag is one block boundary.
+
+        Once the stream is exhausted, ``get_final_message()`` is parsed with the
+        **same** parser as the buffered path into the authoritative
         :class:`~app.domain.entities.AnswerCompleted`. The ``with`` block guarantees
         the SDK stream is closed when the consumer closes this generator early
         (``GeneratorExit`` unwinds through it), so a client disconnect never leaks a
         provider stream. Shared by both modes — only ``system``/``messages`` differ.
         """
+        marks = _CitationMarks(chunk_ids)
         with self._get_client().messages.stream(
             model=self._model,
             max_tokens=self._max_tokens,
@@ -302,6 +315,12 @@ class AnthropicAdapterBase:
                     yield AnswerTextDelta(text=event.text)
                 elif event_type == "thinking":
                     yield AnswerReasoningDelta(text=event.thinking)
+                elif event_type == "content_block_stop":
+                    block = getattr(event, "content_block", None)
+                    if getattr(block, "type", None) == "text":
+                        run = marks.run_for(getattr(block, "citations", None))
+                        if run:
+                            yield AnswerTextDelta(text=run)
             final = stream.get_final_message()
         answer = _parse_message(final, chunk_ids, model=self._model)
         _log_call(final, model=self._model, effort=self._effort, found=answer.found)

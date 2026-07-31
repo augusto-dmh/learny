@@ -2325,6 +2325,59 @@ def test_stream_flushes_a_short_answer_that_merely_looked_like_the_sentinel() ->
     assert events[-1].turn.answer_text == short
 
 
+def test_stream_passes_citation_marks_through_as_ordinary_answer_text() -> None:
+    # The adapter emits a citation mark as its own text delta, so the hold-back sees
+    # it as answer text like any other. The reader gets the marked answer intact and
+    # the persisted text matches what streamed.
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
+    text = "The tides follow the moon.[^1]"
+    generation = FakeGeneration(
+        answer=_answered(*evidence, text=text),
+        deltas=["The tides follow the moon.", "[^1]"],
+    )
+
+    events = list(
+        _post(
+            conversations=conversations,
+            turns=FakeConversationTurnRepository(),
+            sources=sources,
+            corpus=corpus,
+            retrieve=FakeScopedRetrieveEvidence(evidence),
+            generation=generation,
+        ).stream(user=user, conversation_id=conversation.id, message="q", mode=MODE_ANSWER)
+    )
+
+    assert "".join(_deltas(events)) == text
+    assert events[-1].turn.answer_text == text
+
+
+def test_a_mark_after_a_sentinel_prefix_releases_the_held_answer() -> None:
+    # An answer short enough to be a prefix of the sentinel, marked as cited: the mark
+    # is the delta that proves the reply is not the decline, so the held run is
+    # flushed rather than swallowed with it.
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
+    text = SENTINEL[:3] + "[^1]"
+    generation = FakeGeneration(
+        answer=_answered(*evidence, text=text), deltas=[SENTINEL[:3], "[^1]"]
+    )
+
+    events = list(
+        _post(
+            conversations=conversations,
+            turns=FakeConversationTurnRepository(),
+            sources=sources,
+            corpus=corpus,
+            retrieve=FakeScopedRetrieveEvidence(evidence),
+            generation=generation,
+        ).stream(user=user, conversation_id=conversation.id, message="q", mode=MODE_ANSWER)
+    )
+
+    assert _deltas(events) == [text]
+    assert events[-1].turn.answer_status == "answered"
+
+
 def test_stream_that_ends_without_a_completed_event_is_a_generation_failure() -> None:
     # Port contract: a generation stream ends with exactly one completed event. One
     # that just stops surfaces as a generation failure with nothing persisted, never
