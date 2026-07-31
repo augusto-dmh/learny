@@ -5,7 +5,7 @@
 Implement these tasks with the `tlc-spec-driven` skill: **activate it by name and follow its Execute flow and Critical Rules.** Do not search for skill files by filesystem path. If the skill cannot be activated, STOP and tell the user.
 
 **Design**: `.specs/features/v6-answer-experience/design.md`
-**Status**: Approved (auto-approved per ship-cycle protocol; decisions in context.md / AD-219…AD-224)
+**Status**: Done — T1–T12 committed (dcd9069b…76658867), Verifier PASS (validation.md: 23/23 ACs, 8/8 mutants killed); phase workers built all four phases, orchestrator verified gates inline (workers skipped reports)
 
 ---
 
