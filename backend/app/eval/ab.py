@@ -211,9 +211,7 @@ class MetricSpread:
         return max(self.values) - min(self.values)
 
 
-def metric_spread(
-    runs: Sequence[ModelAggregate], *, tier: str, metric: str
-) -> MetricSpread:
+def metric_spread(runs: Sequence[ModelAggregate], *, tier: str, metric: str) -> MetricSpread:
     """Collect one metric across a study's per-run aggregates for one tier.
 
     ``tier`` is ``"golden"`` or ``"silver"``; ``metric`` a :class:`TierAggregate`
@@ -339,6 +337,37 @@ def generation_verdict(sonnet: ModelAggregate, opus: ModelAggregate) -> str:
         if o > s:
             better += 1
         elif o < s:
+            worse += 1
+    if better >= 2 and worse == 0:
+        return "move"
+    return "stay"
+
+
+def denoised_generation_verdict(
+    sonnet_runs: Sequence[ModelAggregate], opus_runs: Sequence[ModelAggregate]
+) -> str:
+    """The multi-run stay/move verdict — :func:`generation_verdict` under noise.
+
+    Applies the AD-166 bar (silver drives; move only when at least two of the
+    three silver metrics are strictly better and none is worse) to per-run
+    spreads instead of single observations (AD-231): a metric is *better* only
+    when the two arms' per-run ranges are disjoint in Opus's favor
+    (``min(opus) > max(sonnet)``), *worse* only on the symmetric disjunction,
+    and any overlap — including identical constant values — is a tie. A metric
+    with no values on either side is incomparable: never better, never worse.
+    An arm with no runs offers no evidence, so the verdict is ``"stay"`` —
+    a sub-noise gap can never move the product default.
+    """
+    better = 0
+    worse = 0
+    for metric in _GENERATION_METRICS:
+        s = metric_spread(sonnet_runs, tier=SILVER, metric=metric)
+        o = metric_spread(opus_runs, tier=SILVER, metric=metric)
+        if s.min is None or o.min is None:
+            continue
+        if o.min > s.max:
+            better += 1
+        elif o.max < s.min:
             worse += 1
     if better >= 2 and worse == 0:
         return "move"
