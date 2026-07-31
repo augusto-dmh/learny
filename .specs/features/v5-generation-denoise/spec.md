@@ -6,8 +6,8 @@ The product's generation default (`claude-sonnet-5`) rests on a single-observati
 
 ## Goals
 
-- [ ] The Sonnet-vs-Opus generation verdict is re-derived from ≥3 full generate+judge runs per arm with per-metric variance recorded, and the resulting stay/move decision is applied (config flip on move, documented stay otherwise).
-- [ ] The study runner is committed code with per-unit checkpointing and resume — the uncommitted-driver and credit-exhaustion limitations of the 2026-07-21 study are both closed.
+- [x] The Sonnet-vs-Opus generation verdict is re-derived from ≥3 full generate+judge runs per arm with per-metric variance recorded, and the resulting stay/move decision is applied (config flip on move, documented stay otherwise).
+- [x] The study runner is committed code with per-unit checkpointing and resume — the uncommitted-driver and credit-exhaustion limitations of the 2026-07-21 study are both closed.
 
 ## Out of Scope
 
@@ -101,20 +101,20 @@ The product's generation default (`claude-sonnet-5`) rests on a single-observati
 
 | Requirement ID | Story | Phase | Status |
 |---|---|---|---|
-| DENOISE-01 | P1 pure: per-metric spread aggregation | Design | Pending |
-| DENOISE-02 | P1 pure: range-based multi-run verdict (move rule) | Design | Pending |
-| DENOISE-03 | P1 pure: overlap/incomparable/degenerate → stay | Design | Pending |
-| DENOISE-04 | P1 runner: per-unit checkpoint append + line schema | Design | Pending |
-| DENOISE-05 | P1 runner: resume skips completed, re-attempts errors | Design | Pending |
-| DENOISE-06 | P1 runner: prompt_hash/judge_model mismatch refusal | Design | Pending |
-| DENOISE-07 | P1 runner: error continuation + decline handling (ADR-028) | Design | Pending |
-| DENOISE-08 | P1 runner: artifact split (tracked golden / ignored silver) + hygiene | Design | Pending |
-| DENOISE-09 | P1 runner: opt-in only, never nightly-collected; progress lines | Design | Pending |
-| DENOISE-10 | P1 live: 2 arms × 3 runs × both tiers under opus judge | Design | Pending |
-| DENOISE-11 | P1 live: budget protocol (estimate, $10 cap, spend report) | Design | Pending |
-| DENOISE-12 | P1 live: research doc with pre-registered rule + variance tables + literal verdict | Design | Pending |
-| DENOISE-13 | P1 live: verdict consequence (stay = no change; move = flip + threshold re-derivation) | Design | Pending |
-| DENOISE-14 | P1 runner: modeled-cost budget stop (`LEARNY_EVAL_BUDGET_USD`, AD-230 closure) | Design | Pending |
+| DENOISE-01 | P1 pure: per-metric spread aggregation | Implemented | Done |
+| DENOISE-02 | P1 pure: range-based multi-run verdict (move rule) | Implemented | Done |
+| DENOISE-03 | P1 pure: overlap/incomparable/degenerate → stay | Implemented | Done |
+| DENOISE-04 | P1 runner: per-unit checkpoint append + line schema | Implemented | Done |
+| DENOISE-05 | P1 runner: resume skips completed, re-attempts errors | Implemented | Done |
+| DENOISE-06 | P1 runner: prompt_hash/judge_model mismatch refusal | Implemented | Done |
+| DENOISE-07 | P1 runner: error continuation + decline handling (ADR-028) | Implemented | Done |
+| DENOISE-08 | P1 runner: artifact split (tracked golden / ignored silver) + hygiene | Implemented | Done |
+| DENOISE-09 | P1 runner: opt-in only, never nightly-collected; progress lines | Implemented | Done |
+| DENOISE-10 | P1 live: 2 arms × 3 runs × both tiers under opus judge | Implemented | Done |
+| DENOISE-11 | P1 live: budget protocol (estimate, $10 cap, spend report) | Implemented | Done |
+| DENOISE-12 | P1 live: research doc with pre-registered rule + variance tables + literal verdict | Implemented | Done |
+| DENOISE-13 | P1 live: verdict consequence (stay = no change; move = flip + threshold re-derivation) | Implemented | Done |
+| DENOISE-14 | P1 runner: modeled-cost budget stop (`LEARNY_EVAL_BUDGET_USD`, AD-230 closure) | Implemented | Done |
 
 **Coverage:** 14 total, 0 mapped to tasks (pending), 0 unmapped.
 
