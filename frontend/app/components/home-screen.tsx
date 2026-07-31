@@ -27,6 +27,7 @@ import { getDueReviews } from "@/app/lib/quiz";
 import { readUrl } from "@/app/lib/read-url";
 import { StudyStats } from "./study-heatmap";
 import { Button } from "@/components/ui/button";
+import { LinkPendingIndicator } from "@/components/ui/nav-pending";
 import {
   Card,
   CardContent,
@@ -126,7 +127,10 @@ function ContinueHero({ state }: { state: Loadable<ContinueReadingView | null> }
               You have no book in progress yet.
             </p>
             <Button asChild>
-              <Link href="/sources">Pick a book</Link>
+              <Link href="/sources">
+                Pick a book
+                <LinkPendingIndicator />
+              </Link>
             </Button>
           </div>
         ) : (
@@ -144,7 +148,10 @@ function ContinueHero({ state }: { state: Loadable<ContinueReadingView | null> }
             </div>
             <InkLine percent={state.data.percent} />
             <Button asChild>
-              <Link href={readUrl(state.data.source_id, null)}>Resume</Link>
+              <Link href={readUrl(state.data.source_id, null)}>
+                Resume
+                <LinkPendingIndicator />
+              </Link>
             </Button>
           </div>
         )}
@@ -173,7 +180,10 @@ function DueCard({ state }: { state: Loadable<number> }) {
               You have {state.data} {state.data === 1 ? "card" : "cards"} due.
             </p>
             <Button asChild>
-              <Link href="/review">Review</Link>
+              <Link href="/review">
+                Review
+                <LinkPendingIndicator />
+              </Link>
             </Button>
           </div>
         ) : (

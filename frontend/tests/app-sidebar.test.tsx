@@ -9,10 +9,18 @@
  */
 
 import { cleanup, render, screen, within } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AppSidebar } from "../app/components/shell/app-sidebar";
 import { SidebarProvider } from "../components/ui/sidebar";
+
+// jsdom performs no App Router navigation, so `useLinkStatus` is never pending
+// on its own; this drives that one export to cover the pending branch (ANSW-10).
+const linkStatus = vi.hoisted(() => ({ pending: false }));
+vi.mock("next/link", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("next/link")>();
+  return { ...actual, useLinkStatus: () => ({ pending: linkStatus.pending }) };
+});
 
 function renderSidebar() {
   return render(
@@ -40,6 +48,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  linkStatus.pending = false;
 });
 
 describe("AppSidebar (HOME-16)", () => {
@@ -77,6 +86,23 @@ describe("AppSidebar (HOME-16)", () => {
     expect(
       screen.getByRole("link", { name: "Learny" }).getAttribute("href"),
     ).toBe("/home");
+  });
+
+  it("gives each nav link its own pending indicator while it is navigating (ANSW-10)", () => {
+    linkStatus.pending = true;
+
+    renderSidebar();
+
+    for (const name of ["Home", "Bookshelf", "Review", "Notes"]) {
+      const link = screen.getByRole("link", { name });
+      expect(within(link).getByTestId("nav-pending")).toBeTruthy();
+    }
+  });
+
+  it("shows no pending indicator while nothing is navigating", () => {
+    renderSidebar();
+
+    expect(screen.queryAllByTestId("nav-pending")).toHaveLength(0);
   });
 
   it("does not render a per-source Library group", () => {

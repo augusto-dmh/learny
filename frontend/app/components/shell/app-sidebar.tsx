@@ -11,6 +11,7 @@
 
 import Link from "next/link";
 
+import { LinkPendingIndicator } from "@/components/ui/nav-pending";
 import {
   Sidebar,
   SidebarContent,
@@ -35,6 +36,7 @@ export function AppSidebar() {
       <SidebarHeader className="px-2 py-3">
         <Link href="/home" className="text-lg font-semibold">
           Learny
+          <LinkPendingIndicator className="ml-1 align-middle" />
         </Link>
       </SidebarHeader>
       <SidebarContent>
@@ -44,7 +46,10 @@ export function AppSidebar() {
               {NAV_ITEMS.map((item) => (
                 <SidebarMenuItem key={item.href}>
                   <SidebarMenuButton asChild>
-                    <Link href={item.href}>{item.label}</Link>
+                    <Link href={item.href}>
+                      {item.label}
+                      <LinkPendingIndicator className="ml-auto" />
+                    </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
               ))}

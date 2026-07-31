@@ -5,15 +5,19 @@
  * marks the current section from live scroll state, scrolls in-flow for a
  * same-chapter click (no reload) while pushing to another chapter for a
  * cross-chapter click, and collapses behind the top-bar toggle below lg. Chapter
- * nav links to the adjacent chapters and is absent at a book edge.
+ * nav links to the adjacent chapters and is absent at a book edge. A
+ * cross-chapter click also marks the clicked entry pending until its chapter
+ * loads (ANSW-10).
  */
 
+import { Suspense, use, useEffect, useState } from "react";
 import {
   act,
   cleanup,
   fireEvent,
   render,
   screen,
+  within,
 } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -131,6 +135,74 @@ describe("TocPanel navigation (RD-23)", () => {
       "/sources/s1/read?anchor=part1%2Fch2.xhtml%23s1",
     );
     expect(onSameChapterNavigate).not.toHaveBeenCalled();
+  });
+});
+
+describe("TocPanel pending feedback (ANSW-10)", () => {
+  /** Suspends forever: stands in for the chapter the push is loading. */
+  const NEVER_LOADS = new Promise<void>(() => {});
+
+  function ChapterLoad() {
+    use(NEVER_LOADS);
+    return null;
+  }
+
+  /**
+   * The mocked router stands in for the App Router: a cross-chapter push starts
+   * a chapter load, and it is that suspended load — scheduled inside the panel's
+   * transition — which holds the transition (and so the entry) pending.
+   */
+  function TocWithChapterLoad({ loads }: { loads: boolean }) {
+    const [loading, setLoading] = useState(false);
+    useEffect(() => {
+      nav.push.mockImplementation(() => {
+        if (loads) setLoading(true);
+      });
+    }, [loads]);
+    return (
+      <>
+        <TocPanel
+          sourceId="s1"
+          currentAnchor={A}
+          chapterAnchor={A}
+          chapterSectionAnchors={[A, B]}
+          open={false}
+          onSameChapterNavigate={vi.fn()}
+          fetchStructureImpl={vi.fn().mockResolvedValue(structure)}
+        />
+        <Suspense fallback={null}>{loading ? <ChapterLoad /> : null}</Suspense>
+      </>
+    );
+  }
+
+  afterEach(() => {
+    nav.push.mockReset();
+  });
+
+  it("marks the clicked entry — and only it — pending while its chapter loads", async () => {
+    render(<TocWithChapterLoad loads />);
+
+    const entry = await screen.findByRole("button", { name: "S3" });
+    await act(async () => {
+      fireEvent.click(entry);
+    });
+
+    // The entry is still found by its own name: the indicator is decorative.
+    const clicked = screen.getByRole("button", { name: "S3" });
+    expect(within(clicked).getByTestId("nav-pending")).toBeTruthy();
+    expect(screen.queryAllByTestId("nav-pending")).toHaveLength(1);
+  });
+
+  it("leaves no entry pending when the navigation resolves at once", async () => {
+    render(<TocWithChapterLoad loads={false} />);
+
+    const entry = await screen.findByRole("button", { name: "S3" });
+    await act(async () => {
+      fireEvent.click(entry);
+    });
+
+    expect(nav.push).toHaveBeenCalledTimes(1);
+    expect(screen.queryAllByTestId("nav-pending")).toHaveLength(0);
   });
 });
 

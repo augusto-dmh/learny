@@ -45,6 +45,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { LinkPendingIndicator } from "@/components/ui/nav-pending";
 import { Spinner } from "@/components/ui/spinner";
 import {
   Tooltip,
@@ -190,6 +191,7 @@ function QuizDeckControls({
               className="text-primary underline-offset-4 hover:underline"
             >
               Review
+              <LinkPendingIndicator className="ml-1 align-middle" />
             </Link>
           ) : null}
           <a
@@ -410,18 +412,21 @@ export function LibraryScreen({
                           className="text-primary underline-offset-4 hover:underline"
                         >
                           Ask
+                          <LinkPendingIndicator className="ml-1 align-middle" />
                         </Link>
                         <Link
                           href={`/sources/${source.id}/teach`}
                           className="text-primary underline-offset-4 hover:underline"
                         >
                           Teach
+                          <LinkPendingIndicator className="ml-1 align-middle" />
                         </Link>
                         <Link
                           href={`/sources/${source.id}/read`}
                           className="text-primary underline-offset-4 hover:underline"
                         >
                           Read
+                          <LinkPendingIndicator className="ml-1 align-middle" />
                         </Link>
                       </div>
                       <QuizDeckControls

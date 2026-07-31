@@ -14,10 +14,24 @@
  * tests/sources-screen.test.tsx; here the focus is only the quiz additions.
  */
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { LibraryScreen } from "../app/components/library-screen";
+
+// jsdom performs no App Router navigation, so `useLinkStatus` is never pending
+// on its own; this drives that one export to cover the pending branch (ANSW-10).
+const linkStatus = vi.hoisted(() => ({ pending: false }));
+vi.mock("next/link", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("next/link")>();
+  return { ...actual, useLinkStatus: () => ({ pending: linkStatus.pending }) };
+});
 
 beforeAll(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
@@ -126,7 +140,45 @@ const DECK = "/api/sources/s1/quiz/deck";
 
 afterEach(() => {
   cleanup();
+  linkStatus.pending = false;
   vi.restoreAllMocks();
+});
+
+describe("LibraryScreen pending feedback (ANSW-10)", () => {
+  it("gives each entry's reading action a pending indicator while it is navigating", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        "GET /api/sources": () => jsonResponse(200, [readySource]),
+        [`GET ${QUIZ}`]: () => jsonResponse(200, deckOverview),
+      }),
+    );
+    linkStatus.pending = true;
+
+    render(<LibraryScreen />);
+
+    for (const name of ["Ask", "Teach", "Read", "Review"]) {
+      const link = await screen.findByRole("link", { name });
+      expect(within(link).getByTestId("nav-pending")).toBeTruthy();
+    }
+  });
+
+  it("shows no pending indicator while nothing is navigating", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        "GET /api/sources": () => jsonResponse(200, [readySource]),
+        [`GET ${QUIZ}`]: () => jsonResponse(200, deckOverview),
+      }),
+    );
+
+    render(<LibraryScreen />);
+
+    await screen.findByRole("link", { name: "Read" });
+    expect(screen.queryAllByTestId("nav-pending")).toHaveLength(0);
+  });
 });
 
 describe("LibraryScreen quiz-deck controls (E3)", () => {
