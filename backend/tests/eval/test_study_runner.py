@@ -543,3 +543,46 @@ def test_domain_evidence_rebuilds_adapter_ready_evidence():
     assert evidence.anchor == "ch1.xhtml"
     assert evidence.section_path == ()
     assert evidence.page_span is None
+
+
+def test_study_judge_is_the_recalibrated_opus_judge():
+    # The study's rule and the nightly thresholds are calibrated to the opus
+    # judge; a stale env pin once judged a full study with haiku. The pin is a
+    # constant, never settings, and must match the config default — a future
+    # judge flip has to change both deliberately.
+    from app.core.config import Settings
+    from tests.eval.test_generation_study import STUDY_JUDGE_MODEL
+
+    assert STUDY_JUDGE_MODEL == "claude-opus-4-8"
+    assert STUDY_JUDGE_MODEL == Settings(_env_file=None).judge_model
+
+
+def test_runner_emits_a_progress_line_per_unit(tmp_path: Path):
+    units = plan_units(["g1", "g2"], [], arms=("claude-sonnet-5",), runs=1)
+    golden_path, silver_path = _paths(tmp_path)
+    lines: list[str] = []
+    run_study(
+        units,
+        score=RecordingScorer(),
+        recorded={("golden", "g1", "claude-sonnet-5", 0): "ok"},
+        cost_model=_cost(),
+        budget_usd=100.0,
+        golden_path=golden_path,
+        silver_path=silver_path,
+        git_sha="abc1234",
+        progress=lines.append,
+    )
+    # One line per unit — the recorded one announces the skip, the scored one
+    # its status — so a live run is observable while it spends.
+    assert len(lines) == 2
+    assert "golden/g1/claude-sonnet-5/run0" in lines[0] and "skip" in lines[0]
+    assert "golden/g2/claude-sonnet-5/run0" in lines[1] and "ok" in lines[1]
+
+
+def test_resume_skips_a_recorded_broken_unit(tmp_path: Path):
+    units = plan_units(["g1", "g2"], [], arms=("claude-sonnet-5",), runs=1)
+    recorded = {("golden", "g1", "claude-sonnet-5", 0): "broken"}
+    scorer = RecordingScorer()
+    _run(units, scorer, tmp_path, recorded=recorded)
+
+    assert [u.case_id for u in scorer.calls] == ["g2"]

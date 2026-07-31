@@ -26,6 +26,13 @@ import pytest
 
 from tests.eval.study import ARMS, GOLDEN
 
+# The judge the study's pre-registered rule and the nightly thresholds are
+# calibrated to (the recalibration flip). Pinned here — NOT read from settings
+# — because a stale env pin once judged a full study with the wrong model; the
+# offline pin test ties this constant to the config default so a future judge
+# flip must update both deliberately.
+STUDY_JUDGE_MODEL = "claude-opus-4-8"
+
 # Modeled per-unit costs (USD) for the budget meter (AD-234), 2026-07-31 prices
 # (sonnet-5 $3/$15, opus-4-8 $5/$25 per MTok). A generation unit budgets ~3k
 # evidence/prompt tokens in and ~2k out (answer + adaptive thinking, billed as
@@ -89,7 +96,7 @@ def test_generation_study_runs_both_arms_over_seeded_runs(_study_enabled: None) 
 
     settings = get_settings()
     api_key = os.environ["LEARNY_ANTHROPIC_API_KEY"]
-    judge = Judge(api_key=api_key, model=settings.judge_model)
+    judge = Judge(api_key=api_key, model=STUDY_JUDGE_MODEL)
     judge_prompt_hash = prompt_hash()
     git_sha = git_sha_of_head()
 
@@ -180,7 +187,7 @@ def test_generation_study_runs_both_arms_over_seeded_runs(_study_enabled: None) 
             golden_path,
             silver_path,
             prompt_hash_value=judge_prompt_hash,
-            judge_model=settings.judge_model,
+            judge_model=STUDY_JUDGE_MODEL,
         )
         units = plan_units(sorted(golden_cases), sorted(resolutions))
         report = run_study(
