@@ -246,6 +246,17 @@ def test_gate_means_exclude_declined_lines(tmp_path: Path) -> None:
     assert [line["found"] for line in lines] == [True, False, False]
 
 
+def test_gate_treats_legacy_lines_without_found_key_as_answered() -> None:
+    # Archived JSONL lines predate the `found` field (ADR-028): the gate must
+    # treat them as answered, so a failing legacy line still trips the
+    # thresholds instead of being silently skipped.
+    from app.eval.judge import _assert_aggregates
+
+    legacy = {"faithfulness": 0.0, "relevancy": 1, "citation_valid": True}
+    with pytest.raises(AssertionError, match="faithfulness"):
+        _assert_aggregates([legacy])
+
+
 def test_gate_all_declined_skips_threshold_asserts(tmp_path: Path) -> None:
     # No answered line exists, so no mean exists: the threshold asserts are
     # skipped and the gated run passes (ADR-028 all-declined edge).
