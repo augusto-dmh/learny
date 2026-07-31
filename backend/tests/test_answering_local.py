@@ -24,6 +24,7 @@ from app.domain.entities import (
     MODE_ANSWER,
     MODE_TEACH,
     AnswerCompleted,
+    AnswerReasoningDelta,
     AnswerTextDelta,
     Evidence,
     GeneratedAnswer,
@@ -120,6 +121,19 @@ def test_streamed_extractive_output_is_the_frozen_events_in_both_modes() -> None
 
     assert answered == [AnswerTextDelta(text="alpha\n\nbeta"), AnswerCompleted(answer=frozen)]
     assert taught == answered
+
+
+@_MODES
+def test_streamed_extractive_output_carries_no_reasoning(mode: str) -> None:
+    # ANSW-06: reasoning belongs to a provider that thinks. This adapter extracts,
+    # so a turn it serves has no reasoning to show — the offline, keyless contract is
+    # unchanged by the thinking config the cloud adapter now sends.
+    adapter = DeterministicGenerationAdapter()
+    evidence = [_evidence("alpha"), _evidence("beta")]
+
+    events = list(_generate_stream(adapter, mode, evidence))
+
+    assert [e for e in events if isinstance(e, AnswerReasoningDelta)] == []
 
 
 # --- Extractive composition (QA-06 / AD-032) -----------------------------------

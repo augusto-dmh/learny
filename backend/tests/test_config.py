@@ -11,6 +11,9 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+import pytest
+from pydantic import ValidationError
+
 from app.core.config import _RETIRED_KNOBS, Settings
 from app.core.instrumentation import InstrumentRecorder
 
@@ -70,7 +73,8 @@ def test_generation_settings_defaults(monkeypatch) -> None:
     assert settings.generation_provider == "local"
     assert settings.anthropic_api_key == ""
     assert settings.generation_model == "claude-sonnet-5"
-    assert settings.generation_max_tokens == 1024
+    assert settings.generation_effort == "medium"
+    assert settings.generation_max_tokens == 4096
     assert settings.judge_model == "claude-haiku-4-5"
     assert settings.eval_max_cases == 50
 
@@ -80,6 +84,7 @@ def test_generation_settings_env_override(monkeypatch) -> None:
     monkeypatch.setenv("LEARNY_GENERATION_PROVIDER", "anthropic")
     monkeypatch.setenv("LEARNY_ANTHROPIC_API_KEY", "sk-ant-123")
     monkeypatch.setenv("LEARNY_GENERATION_MODEL", "claude-opus-4-8")
+    monkeypatch.setenv("LEARNY_GENERATION_EFFORT", "high")
     monkeypatch.setenv("LEARNY_GENERATION_MAX_TOKENS", "2048")
     monkeypatch.setenv("LEARNY_JUDGE_MODEL", "claude-sonnet-4-6")
     monkeypatch.setenv("LEARNY_EVAL_MAX_CASES", "10")
@@ -89,9 +94,27 @@ def test_generation_settings_env_override(monkeypatch) -> None:
     assert settings.generation_provider == "anthropic"
     assert settings.anthropic_api_key == "sk-ant-123"
     assert settings.generation_model == "claude-opus-4-8"
+    assert settings.generation_effort == "high"
     assert settings.generation_max_tokens == 2048
     assert settings.judge_model == "claude-sonnet-4-6"
     assert settings.eval_max_cases == 10
+
+
+@pytest.mark.parametrize("effort", ["low", "medium", "high", "xhigh", "max"])
+def test_every_documented_effort_level_is_accepted(monkeypatch, effort: str) -> None:
+    # The five levels the provider publishes are the ones an operator may set.
+    monkeypatch.setenv("LEARNY_GENERATION_EFFORT", effort)
+
+    assert Settings(_env_file=None).generation_effort == effort
+
+
+def test_unknown_generation_effort_is_rejected_at_startup(monkeypatch) -> None:
+    # A misspelled effort is a configuration error the operator must see when the
+    # process boots, not a per-request provider 400 discovered by a reader.
+    monkeypatch.setenv("LEARNY_GENERATION_EFFORT", "maximum")
+
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
 
 
 def test_quiz_settings_defaults() -> None:

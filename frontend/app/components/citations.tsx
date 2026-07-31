@@ -1,14 +1,17 @@
 "use client";
 
 /**
- * Citation list + "open in book" popover (FE-16).
+ * The citations attached to an answer: a numbered chip row, and the one cited
+ * passage the reader is currently looking at, in flow beneath it (FE-16, ANSW-07/08).
  *
- * Renders the grounded citations attached to a streamed answer or teaching turn
- * as compact chips. Clicking a chip opens a popover with the citation's
- * section-path breadcrumb, its verbatim passage, and a way into the reader at that
- * citation's anchor — turning citations into navigation, not decoration. The
- * popover never surfaces retrieval machinery (`chunk_id`, `score`): it speaks the
- * book's passage, not the index behind it (RA-12).
+ * Selecting a chip — or an inline mark in the answer text, which selects into the
+ * same region — opens that citation's passage below the answer: its section-path
+ * breadcrumb, its verbatim snippet, and a way into the reader at that citation's
+ * anchor. Turning citations into navigation, not decoration, without covering the
+ * reading column: the passage expands the message it belongs to and is clamped, so
+ * a long quote scrolls inside its own box instead of pushing the answer off screen.
+ * The passage never surfaces retrieval machinery (`chunk_id`, `score`): it speaks
+ * the book's passage, not the index behind it (RA-12).
  *
  * Inside the reader panel the caller passes `onShowInBook`, so the action becomes
  * an in-place "Show in book" button that jumps the open chapter while the answer
@@ -19,94 +22,218 @@
  * `encodeURIComponent`-encoded exactly once into the reader route's `anchor`
  * query param; the reader decodes it via `useSearchParams`.
  *
- * SPEC_DEVIATION: design named the AI Elements `InlineCitation`/`Sources`
- * compositions, but those model web sources — the card trigger derives a hostname
- * via `new URL(...)` (throws on a book anchor) and `Source` renders an external
- * `target="_blank"` link. Learny's citations are in-app book sections, so this
- * composes the vendored shadcn `Popover` primitive (owned source, AD-071) into a
- * click popover instead. Behavior matches FE-16 exactly.
+ * The chip row stays even when the answer carries inline marks: it is the
+ * inventory of everything the answer is grounded in, and the fallback for an
+ * answer whose text has no markers at all (spec AC4).
+ *
+ * The passage is dismissible from the keyboard — Escape closes it and puts focus
+ * back on the chip or mark that opened it, so reading a citation never strands the
+ * reader somewhere they have to tab their way out of. It is *not* dismissed by a
+ * click elsewhere: this is a region in the page, not a layer over it, and closing
+ * it on any stray click would fight selecting the text it exists to show.
  */
 
 import Link from "next/link";
-import { BookOpenIcon, StickyNoteIcon } from "lucide-react";
+import { BookOpenIcon, StickyNoteIcon, X } from "lucide-react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 
 import { type Citation } from "@/app/lib/citations";
 import { readUrl } from "@/app/lib/read-url";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
+import { Button } from "@/components/ui/button";
 
-/** The citations attached to one answer, as clickable "open in book" chips. */
+import { useKeyShortcuts } from "./use-key-shortcuts";
+
+/**
+ * The citations attached to one answer: numbered chips, and the open passage.
+ *
+ * Selection is the caller's when it is passed (the answer's inline marks and the
+ * chips must open the same one region, so the message that renders both owns
+ * which is open) and the list's own otherwise, so a citation list on its own is
+ * still fully usable.
+ */
 export function CitationList({
   sourceId,
   citations,
   onShowInBook,
+  selected: selectedProp,
+  onSelect,
+  passageId: passageIdProp,
 }: {
   sourceId: string;
   citations: Citation[];
   /** In-reader jump: provided → "Show in book" button; absent → reader-route link. */
   onShowInBook?: (anchor: string) => void;
+  /** The 1-based citation whose passage is open, when the caller owns selection. */
+  selected?: number | null;
+  onSelect?: (selected: number | null) => void;
+  /**
+   * The id the open passage carries, when the caller has controls of its own to
+   * point at it — the answer's inline marks. Defaults to this list's own.
+   */
+  passageId?: string;
 }) {
+  const [ownSelected, setOwnSelected] = useState<number | null>(null);
+  const selected = selectedProp === undefined ? ownSelected : selectedProp;
+  const select = onSelect ?? setOwnSelected;
+  const ownPassageId = useId();
+  const passageId = passageIdProp ?? ownPassageId;
+
   if (citations.length === 0) {
     return null;
   }
+  const open =
+    selected !== null && selected >= 1 && selected <= citations.length
+      ? citations[selected - 1]
+      : null;
+
   return (
-    <div aria-label="citations" className="mt-3 flex flex-wrap gap-1.5">
-      {citations.map((citation, index) =>
-        citation.origin === "note" ? (
-          <NoteCitationPopover
+    <div className="mt-3 space-y-2">
+      <div aria-label="citations" className="flex flex-wrap gap-1.5">
+        {citations.map((citation, index) => (
+          <CitationChip
             key={citation.chunk_id}
             citation={citation}
             index={index + 1}
+            open={selected === index + 1}
+            passageId={passageId}
+            onToggle={() => select(selected === index + 1 ? null : index + 1)}
           />
-        ) : (
-          <CitationPopover
-            key={citation.chunk_id}
-            sourceId={sourceId}
-            citation={citation}
-            index={index + 1}
-            onShowInBook={onShowInBook}
-          />
-        ),
-      )}
+        ))}
+      </div>
+      {open ? (
+        <CitationPassage
+          sourceId={sourceId}
+          citation={open}
+          passageId={passageId}
+          onShowInBook={onShowInBook}
+          onClose={() => select(null)}
+        />
+      ) : null}
     </div>
   );
 }
 
-/**
- * One note citation chip: opens a popover with the note's title, the cited
- * passage, and a link into the note itself (NL-03). Visibly distinct from a book
- * citation — a note glyph, a "Your note — <title>" label, and an "Open note" link
- * to `/notes/{id}` instead of any into-the-book action.
- */
-function NoteCitationPopover({
+/** One numbered chip; a second activation closes the passage it opened. */
+function CitationChip({
   citation,
   index,
+  open,
+  passageId,
+  onToggle,
 }: {
   citation: Citation;
   index: number;
+  open: boolean;
+  passageId: string;
+  onToggle: () => void;
 }) {
-  const title = citation.note_title ?? "";
-  const label = title ? `Your note — ${title}` : "Your note";
+  const isNote = citation.origin === "note";
+  const label = isNote
+    ? `Your note: ${citation.note_title ?? ""}`
+    : `Citation: ${citation.section_path.join(" › ")}`;
   return (
-    <Popover>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          aria-label={`Your note: ${title}`}
-          className="inline-flex items-center gap-1 rounded-full bg-secondary px-2 py-0.5 text-xs font-medium text-secondary-foreground transition-colors hover:bg-accent"
-        >
-          <span className="tabular-nums">{index}</span>
-          <StickyNoteIcon className="size-3" />
-        </button>
-      </PopoverTrigger>
-      <PopoverContent align="start" className="w-80">
+    <button
+      type="button"
+      aria-label={label}
+      aria-expanded={open}
+      // Only while the passage exists: a control pointing at an id that is not in
+      // the document tells a screen reader about somewhere it cannot go.
+      aria-controls={open ? passageId : undefined}
+      onClick={onToggle}
+      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium transition-colors ${
+        open
+          ? "bg-accent text-accent-foreground"
+          : "bg-secondary text-secondary-foreground hover:bg-accent"
+      }`}
+    >
+      <span className="tabular-nums">{index}</span>
+      {isNote ? (
+        <StickyNoteIcon className="size-3" />
+      ) : (
+        <BookOpenIcon className="size-3" />
+      )}
+    </button>
+  );
+}
+
+/**
+ * The open citation's passage, in flow beneath the answer: where it comes from,
+ * what it says, and the way into it.
+ *
+ * A note citation reads distinctly — a "Your note — <title>" label and an "Open
+ * note" link to `/notes/{id}` — and carries no into-the-book action, because the
+ * passage it quotes is the reader's own (NL-03).
+ *
+ * Dismissing it — by Escape or by the close button — returns focus to whatever
+ * opened it. That is remembered as the element focused when this passage appeared,
+ * which is the chip or mark that was just activated, and it is deliberately not
+ * re-read from inside the region: the close button must not become its own
+ * invoker, or dismissing would drop focus on a node that is being removed.
+ */
+function CitationPassage({
+  sourceId,
+  citation,
+  passageId,
+  onShowInBook,
+  onClose,
+}: {
+  sourceId: string;
+  citation: Citation;
+  passageId: string;
+  onShowInBook?: (anchor: string) => void;
+  onClose: () => void;
+}) {
+  const regionRef = useRef<HTMLDivElement>(null);
+  const invokerRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && !regionRef.current?.contains(active)) {
+      invokerRef.current = active;
+    }
+  }, [citation]);
+
+  const dismiss = useCallback(() => {
+    onClose();
+    invokerRef.current?.focus();
+  }, [onClose]);
+
+  // Bound only while a passage is open, so Escape means nothing to this surface
+  // the rest of the time.
+  useKeyShortcuts({ escape: dismiss }, true);
+
+  const isNote = citation.origin === "note";
+  const title = citation.note_title ?? "";
+  const label = isNote
+    ? title
+      ? `Your note — ${title}`
+      : "Your note"
+    : citation.section_path.join(" › ");
+
+  return (
+    <div
+      ref={regionRef}
+      id={passageId}
+      data-testid="citation-passage"
+      className="space-y-2 rounded-md border bg-muted/30 p-3"
+    >
+      <div className="flex items-start justify-between gap-2">
         <p className="text-xs font-medium text-muted-foreground">{label}</p>
-        <blockquote className="prose-reading border-l-2 border-muted pl-3 italic text-muted-foreground">
-          {citation.snippet}
-        </blockquote>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Close passage"
+          onClick={dismiss}
+        >
+          <X />
+        </Button>
+      </div>
+      {/* Clamped: a long passage scrolls in its own box rather than pushing the
+          answer it belongs to off the screen. */}
+      <blockquote className="prose-reading max-h-40 overflow-y-auto border-l-2 border-muted pl-3 italic text-muted-foreground">
+        {citation.snippet}
+      </blockquote>
+      {isNote ? (
         <Link
           href={`/notes/${citation.note_id}`}
           className="inline-flex items-center gap-1.5 text-sm text-primary underline-offset-4 hover:underline"
@@ -114,61 +241,24 @@ function NoteCitationPopover({
           <StickyNoteIcon className="size-3.5" />
           Open note
         </Link>
-      </PopoverContent>
-    </Popover>
-  );
-}
-
-/** One citation chip: opens a popover with breadcrumb, passage, and reader jump. */
-function CitationPopover({
-  sourceId,
-  citation,
-  index,
-  onShowInBook,
-}: {
-  sourceId: string;
-  citation: Citation;
-  index: number;
-  onShowInBook?: (anchor: string) => void;
-}) {
-  const breadcrumb = citation.section_path.join(" › ");
-  const href = readUrl(sourceId, citation.anchor);
-  return (
-    <Popover>
-      <PopoverTrigger asChild>
+      ) : onShowInBook ? (
         <button
           type="button"
-          aria-label={`Citation: ${breadcrumb}`}
-          className="inline-flex items-center gap-1 rounded-full bg-secondary px-2 py-0.5 text-xs font-medium text-secondary-foreground transition-colors hover:bg-accent"
+          onClick={() => onShowInBook(citation.anchor)}
+          className="inline-flex items-center gap-1.5 text-sm text-primary underline-offset-4 hover:underline"
         >
-          <span className="tabular-nums">{index}</span>
-          <BookOpenIcon className="size-3" />
+          <BookOpenIcon className="size-3.5" />
+          Show in book
         </button>
-      </PopoverTrigger>
-      <PopoverContent align="start" className="w-80">
-        <p className="text-xs font-medium text-muted-foreground">{breadcrumb}</p>
-        <blockquote className="prose-reading border-l-2 border-muted pl-3 italic text-muted-foreground">
-          {citation.snippet}
-        </blockquote>
-        {onShowInBook ? (
-          <button
-            type="button"
-            onClick={() => onShowInBook(citation.anchor)}
-            className="inline-flex items-center gap-1.5 text-sm text-primary underline-offset-4 hover:underline"
-          >
-            <BookOpenIcon className="size-3.5" />
-            Show in book
-          </button>
-        ) : (
-          <Link
-            href={href}
-            className="inline-flex items-center gap-1.5 text-sm text-primary underline-offset-4 hover:underline"
-          >
-            <BookOpenIcon className="size-3.5" />
-            Open in book
-          </Link>
-        )}
-      </PopoverContent>
-    </Popover>
+      ) : (
+        <Link
+          href={readUrl(sourceId, citation.anchor)}
+          className="inline-flex items-center gap-1.5 text-sm text-primary underline-offset-4 hover:underline"
+        >
+          <BookOpenIcon className="size-3.5" />
+          Open in book
+        </Link>
+      )}
+    </div>
   );
 }

@@ -17,16 +17,40 @@ from dataclasses import dataclass
 from app.application.errors import AnswerGenerationFailed
 from app.domain.entities import (
     SENTINEL,
+    AnswerReasoningDelta,
     AnswerStreamEvent,
     AnswerTextDelta,
     ConversationTurn,
     GeneratedAnswer,
 )
 
+# The turn is searching the book for evidence. Announced before retrieval runs, so
+# the wait for it is accounted for rather than blank.
+PHASE_SEARCHING = "searching"
+
+
+@dataclass(frozen=True)
+class StreamPhase:
+    """The work the turn is starting now — emitted *before* that work runs."""
+
+    phase: str
+
 
 @dataclass(frozen=True)
 class StreamDelta:
     """One chunk of answer text ready to present to the client (post hold-back)."""
+
+    text: str
+
+
+@dataclass(frozen=True)
+class StreamReasoningDelta:
+    """One chunk of the model's reasoning, presented as it arrives.
+
+    Distinct from :class:`StreamDelta` all the way to the wire: reasoning is shown
+    while the turn is in flight and is not the answer, so it is never held back,
+    never grounded, and never persisted.
+    """
 
     text: str
 
@@ -38,13 +62,14 @@ class StreamTurn:
     turn: ConversationTurn
 
 
-# A turn stream yields zero or more deltas then exactly one terminal turn.
-TurnStreamEvent = StreamDelta | StreamTurn
+# A turn stream opens with a phase, then yields zero or more reasoning and answer
+# deltas, then exactly one terminal turn.
+TurnStreamEvent = StreamPhase | StreamDelta | StreamReasoningDelta | StreamTurn
 
 
 def hold_back_deltas(
     stream: Iterator[AnswerStreamEvent],
-) -> Generator[StreamDelta, None, GeneratedAnswer]:
+) -> Generator[StreamDelta | StreamReasoningDelta, None, GeneratedAnswer]:
     """Yield presentable text deltas and return the authoritative completed answer.
 
     Provider-independent sentinel guard (design §6): while the accumulated text is
@@ -56,6 +81,11 @@ def hold_back_deltas(
     flushed once at completion. The exactly-one :class:`AnswerCompleted` is the
     authoritative result (its ``answer`` is returned for grounding).
 
+    Reasoning deltas are not answer text and take no part in that decision: they
+    pass straight through, even while text is still being buffered, so a model that
+    thinks before it writes is visible immediately without the sentinel guard ever
+    seeing a byte of it.
+
     Any error from the port stream becomes :class:`AnswerGenerationFailed` (the web
     presenter renders it as a protocol error part, since headers are already sent),
     and the ``finally`` closes the port stream so a consumer disconnect
@@ -66,7 +96,9 @@ def hold_back_deltas(
     answer: GeneratedAnswer | None = None
     try:
         for event in stream:
-            if isinstance(event, AnswerTextDelta):
+            if isinstance(event, AnswerReasoningDelta):
+                yield StreamReasoningDelta(text=event.text)
+            elif isinstance(event, AnswerTextDelta):
                 if not held:
                     yield StreamDelta(text=event.text)
                     continue

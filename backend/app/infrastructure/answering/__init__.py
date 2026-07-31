@@ -51,5 +51,6 @@ def build_generation_adapter(settings: Settings) -> GenerationPort:
             api_key=settings.anthropic_api_key,
             model=settings.generation_model,
             max_tokens=settings.generation_max_tokens,
+            effort=settings.generation_effort,
         )
     raise ValueError(f"unknown generation provider: {provider}")

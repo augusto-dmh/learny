@@ -37,6 +37,8 @@ from app.application.identity import AuthorizeOwnership
 from app.application.ingestion import SOURCE_STATUS_READY, authorized_source
 from app.application.retrieval import RetrieveEvidence
 from app.application.streaming import (
+    PHASE_SEARCHING,
+    StreamPhase,
     StreamTurn,
     TurnStreamEvent,
     hold_back_deltas,
@@ -415,13 +417,31 @@ class DeleteConversation:
 
 
 @dataclass(frozen=True)
+class _TurnPrep:
+    """What the guards resolved for one turn, before anything is searched for.
+
+    The half of the preflight that decides whether the turn may run at all, so both
+    paths can settle every error outcome — a 404, a 409, a bad mode — before a
+    streaming response has committed to a status code. ``anchors`` is the expanded
+    scope retrieval will be given (``None`` = the whole source).
+    """
+
+    conversation: Conversation
+    target: StructureSection | None
+    history: list[HistoryTurn]
+    turn_index: int
+    anchors: tuple[str, ...] | None
+
+
+@dataclass(frozen=True)
 class _TurnPlan:
     """Everything the guards resolved for one turn, before any generation runs.
 
-    Produced by the turn path's shared preflight so the buffered and streaming
-    paths run byte-identical guards, retrieval, and history (I-CM-5). ``target`` is
-    the resolved teach target on a teach turn and ``None`` on an answer turn;
-    ``turn_index`` is the count of prior turns, the index this turn claims.
+    A :class:`_TurnPrep` plus the evidence retrieval found for it, so the buffered
+    and streaming paths run byte-identical guards, retrieval, and history (I-CM-5).
+    ``target`` is the resolved teach target on a teach turn and ``None`` on an
+    answer turn; ``turn_index`` is the count of prior turns, the index this turn
+    claims.
     """
 
     conversation: Conversation
@@ -504,12 +524,8 @@ class PostConversationTurn:
         message: str,
         mode: str,
     ) -> ConversationTurn:
-        plan = self._preflight(
-            user=user,
-            conversation_id=conversation_id,
-            message=message,
-            mode=mode,
-        )
+        prep = self._preflight(user=user, conversation_id=conversation_id, mode=mode)
+        plan = self._retrieve_evidence(user=user, prep=prep, message=message)
 
         if not plan.evidence:
             # Nothing in scope to answer from → not-found; the port is never invoked,
@@ -542,25 +558,42 @@ class PostConversationTurn:
     ) -> Iterator[TurnStreamEvent]:
         """Run one turn incrementally, persisting only on stream completion.
 
-        The shared guards + scoped retrieval run **eagerly** (before this returns), so
-        the turn's HTTP error outcomes (404/409) surface before any SSE bytes. The
-        generation stream then drives the sentinel hold-back and the same grounding
-        guard, and the turn is persisted and yielded as the terminal
+        The shared guards run **eagerly** (before this returns), so the turn's HTTP
+        error outcomes (404/409/422) surface before any SSE bytes. Retrieval does
+        not: it is the first slow thing a turn does, so it runs inside the stream,
+        behind an immediately-yielded ``searching`` phase — the wait for evidence is
+        the part of the turn a reader would otherwise spend staring at nothing.
+        Failing there can no longer be an HTTP status (the response has begun), so
+        it becomes the same generation-failure the reader is shown for any other
+        mid-stream break.
+
+        The generation stream then drives the sentinel hold-back and the same
+        grounding guard, and the turn is persisted and yielded as the terminal
         :class:`~app.application.streaming.StreamTurn` only after grounding completes
         — so a consumer disconnect mid-stream persists nothing, and the persisted turn
         is identical to the buffered path's (I-CM-5).
         """
-        plan = self._preflight(
-            user=user,
-            conversation_id=conversation_id,
-            message=message,
-            mode=mode,
-        )
-        return self._turn_stream(plan=plan, message=message, mode=mode)
+        prep = self._preflight(user=user, conversation_id=conversation_id, mode=mode)
+        return self._turn_stream(user=user, prep=prep, message=message, mode=mode)
 
     def _turn_stream(
-        self, *, plan: _TurnPlan, message: str, mode: str
+        self, *, user: User, prep: _TurnPrep, message: str, mode: str
     ) -> Iterator[TurnStreamEvent]:
+        yield StreamPhase(phase=PHASE_SEARCHING)
+        try:
+            plan = self._retrieve_evidence(user=user, prep=prep, message=message)
+        except Exception as exc:  # retrieval can no longer answer with a status code
+            # The reader is told only that generation failed, so this line is the
+            # sole record of *why*: without it an index outage and a programming
+            # error both leave nothing behind but a generic frame.
+            logger.exception(
+                "conversation turn retrieval failed conversation_id=%s source_id=%s mode=%s",
+                prep.conversation.id,
+                prep.conversation.source_id,
+                mode,
+            )
+            raise AnswerGenerationFailed("Answer generation failed.") from exc
+
         if not plan.evidence:
             turn = self._not_found_turn(plan, message, mode, 0, self._generation.model)
             yield StreamTurn(self._persist(plan, turn, mode))
@@ -583,14 +616,15 @@ class PostConversationTurn:
         *,
         user: User,
         conversation_id: UUID,
-        message: str,
         mode: str,
-    ) -> _TurnPlan:
-        """Run the shared turn guards, scope expansion, history, and retrieval.
+    ) -> _TurnPrep:
+        """Run the shared turn guards, scope expansion, and history.
 
-        Both the buffered and the streaming path run this identically before any
-        generation, so the same error outcomes surface (for the stream, before any
-        SSE bytes) and both see the same evidence and history.
+        Both the buffered and the streaming path run this identically, and both run
+        it eagerly, so the same error outcomes surface — for the stream, before any
+        SSE bytes, which is what keeps a rejected turn an HTTP status rather than a
+        200 that carries bad news. Retrieval is deliberately *not* here: see
+        :meth:`_retrieve_evidence`.
         """
         if mode not in (MODE_ANSWER, MODE_TEACH):
             # A named error rather than a bare ValueError: this is a public service
@@ -631,20 +665,35 @@ class PostConversationTurn:
         # loads — the turn path never uses them — and its count is the next index.
         turn_index, history = self._turns.recent_history(conversation_id, self._history_turns)
 
-        evidence = self._retrieve(
-            user=user,
-            source_id=conversation.source_id,
-            query=message,
-            top_k=self._evidence_top_k,
-            anchors=anchors,
-            include_notes=conversation.include_notes,
-        )
-        return _TurnPlan(
+        return _TurnPrep(
             conversation=conversation,
             target=target,
             history=history,
-            evidence=evidence,
             turn_index=turn_index,
+            anchors=anchors,
+        )
+
+    def _retrieve_evidence(self, *, user: User, prep: _TurnPrep, message: str) -> _TurnPlan:
+        """Search the conversation's scope for this turn's evidence.
+
+        Split out of the guards so the streaming path can run it *after* the first
+        frame is on the wire while the buffered path still runs it straight through:
+        the two paths must see the same evidence, only at different moments.
+        """
+        evidence = self._retrieve(
+            user=user,
+            source_id=prep.conversation.source_id,
+            query=message,
+            top_k=self._evidence_top_k,
+            anchors=prep.anchors,
+            include_notes=prep.conversation.include_notes,
+        )
+        return _TurnPlan(
+            conversation=prep.conversation,
+            target=prep.target,
+            history=prep.history,
+            evidence=evidence,
+            turn_index=prep.turn_index,
         )
 
     def _resolve_target(

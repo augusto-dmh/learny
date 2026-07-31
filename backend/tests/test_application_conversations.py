@@ -43,12 +43,19 @@ from app.application.errors import (
     SourceNotReady,
 )
 from app.application.identity import AuthorizeOwnership
-from app.application.streaming import StreamDelta, StreamTurn, TurnStreamEvent
+from app.application.streaming import (
+    StreamDelta,
+    StreamPhase,
+    StreamReasoningDelta,
+    StreamTurn,
+    TurnStreamEvent,
+)
 from app.domain.entities import (
     MODE_ANSWER,
     MODE_TEACH,
     SENTINEL,
     AnswerCompleted,
+    AnswerReasoningDelta,
     AnswerStreamEvent,
     AnswerTextDelta,
     Conversation,
@@ -409,6 +416,10 @@ class FakeGeneration:
     Records the message, the mode, the evidence, the bounded history, and the target
     section path each call was handed, so a test can assert not just *that* the port
     ran but *how* the turn reached it.
+
+    A ``deltas`` entry that is not a string is streamed as-is, so a case can place
+    reasoning events at exact points among the text — including partway through a
+    reply the sentinel guard is still holding back.
     """
 
     def __init__(
@@ -416,7 +427,7 @@ class FakeGeneration:
         *,
         answer: GeneratedAnswer | None = None,
         error: Exception | None = None,
-        deltas: Sequence[str] | None = None,
+        deltas: Sequence[str | AnswerStreamEvent] | None = None,
         model: str = _MODEL,
     ) -> None:
         self._answer = answer
@@ -462,7 +473,7 @@ class FakeGeneration:
         )
         try:
             for text in texts:
-                yield AnswerTextDelta(text=text)
+                yield AnswerTextDelta(text=text) if isinstance(text, str) else text
             yield AnswerCompleted(answer=self._answer)
         finally:
             self.stream_closed = True
@@ -1994,7 +2005,8 @@ def test_stream_yields_the_deltas_then_the_persisted_turn() -> None:
         ).stream(user=user, conversation_id=conversation.id, message="q", mode=MODE_ANSWER)
     )
 
-    assert [e.text for e in events[:-1]] == ["one ", "two"]
+    assert events[0] == StreamPhase(phase="searching")
+    assert [e.text for e in events[1:-1]] == ["one ", "two"]
     assert isinstance(events[-1], StreamTurn)
     assert events[-1].turn.answer_text == "one two"
     assert turns.list_for_conversation(conversation.id) == [events[-1].turn]
@@ -2062,7 +2074,8 @@ def test_stream_cancelled_before_completion_persists_nothing() -> None:
         retrieve=FakeScopedRetrieveEvidence(evidence),
         generation=generation,
     ).stream(user=user, conversation_id=conversation.id, message="q", mode=MODE_ANSWER)
-    next(stream)
+    assert next(stream) == StreamPhase(phase="searching")
+    assert next(stream) == StreamDelta(text="one ")  # generation is now under way
     stream.close()
 
     assert turns.add_calls == 0
@@ -2086,10 +2099,178 @@ def test_stream_without_evidence_persists_the_scoped_not_found_turn() -> None:
         ).stream(user=user, conversation_id=conversation.id, message="q", mode=MODE_ANSWER)
     )
 
-    assert len(events) == 1
+    # The phase, then straight to the verdict: nothing was found to answer from, so
+    # there is no reasoning and no text between them.
+    assert events[0] == StreamPhase(phase="searching")
+    assert len(events) == 2
     assert events[-1].turn.answer_status == "not_found_in_scope"
     assert generation.stream_calls == []
     assert turns.list_for_conversation(conversation.id) == [events[-1].turn]
+
+
+# --- Turn path: streamed phases and reasoning (ANSW-01, ANSW-02, ANSW-03) -------
+#
+# Derived from the phases ACs: a turn announces that it is searching *before* it
+# searches, so the slowest silent stretch of a turn is accounted for; reasoning the
+# provider streams reaches the reader as it arrives, including while the sentinel
+# guard is still holding answer text back; a turn that finds nothing goes from the
+# phase straight to its verdict; and a retrieval that fails now that the response
+# has already begun is reported as the same generation failure as any other
+# mid-stream break, since a status code is no longer available to say it.
+
+
+def test_the_searching_phase_is_yielded_before_retrieval_runs() -> None:
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
+    retrieve = FakeScopedRetrieveEvidence(evidence)
+    stream = _post(
+        conversations=conversations,
+        turns=FakeConversationTurnRepository(),
+        sources=sources,
+        corpus=corpus,
+        retrieve=retrieve,
+        generation=FakeGeneration(answer=_answered(*evidence, text="reply")),
+    ).stream(user=user, conversation_id=conversation.id, message="q", mode=MODE_ANSWER)
+
+    first = next(stream)
+
+    assert first == StreamPhase(phase="searching")
+    # The frame is out while the search has not started — the point of moving it.
+    assert retrieve.calls == []
+    next(stream)
+    assert len(retrieve.calls) == 1
+    stream.close()
+
+
+def test_reasoning_streams_through_while_answer_text_is_still_held_back() -> None:
+    # The sentinel guard buffers text that might still be the not-found signal.
+    # Reasoning is not answer text, so it must not queue behind that buffer — and
+    # the buffered text must still be released exactly as it was: one flush, whole.
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
+    tail = " is the phrase this chapter uses."
+    generation = FakeGeneration(
+        answer=_answered(*evidence, text=SENTINEL + tail),
+        deltas=[
+            SENTINEL[:9],
+            AnswerReasoningDelta(text="Checking the second passage"),
+            SENTINEL[9:] + tail,
+        ],
+    )
+
+    events = list(
+        _post(
+            conversations=conversations,
+            turns=FakeConversationTurnRepository(),
+            sources=sources,
+            corpus=corpus,
+            retrieve=FakeScopedRetrieveEvidence(evidence),
+            generation=generation,
+        ).stream(user=user, conversation_id=conversation.id, message="q", mode=MODE_ANSWER)
+    )
+
+    assert events[0] == StreamPhase(phase="searching")
+    # The reasoning left while the text it arrived between was still held.
+    assert events[1] == StreamReasoningDelta(text="Checking the second passage")
+    assert _deltas(events) == [SENTINEL + tail]
+    assert events[-1].turn.answer_status == "answered"
+
+
+def test_a_sentinel_only_turn_leaks_no_text_and_nothing_after_the_verdict() -> None:
+    # Reasoning may stream during a turn that then finds nothing; it must not leave a
+    # trailing frame after the verdict, and none of the sentinel may reach the reader.
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
+    generation = FakeGeneration(
+        answer=GeneratedAnswer(text="", cited_chunk_ids=(), model=_MODEL, found=False),
+        deltas=[
+            AnswerReasoningDelta(text="No passage covers this."),
+            SENTINEL[:9],
+            SENTINEL[9:],
+        ],
+    )
+
+    events = list(
+        _post(
+            conversations=conversations,
+            turns=FakeConversationTurnRepository(),
+            sources=sources,
+            corpus=corpus,
+            retrieve=FakeScopedRetrieveEvidence(evidence),
+            generation=generation,
+        ).stream(user=user, conversation_id=conversation.id, message="q", mode=MODE_ANSWER)
+    )
+
+    assert events[0] == StreamPhase(phase="searching")
+    assert events[1] == StreamReasoningDelta(text="No passage covers this.")
+    assert _deltas(events) == []
+    # The verdict is last: nothing — reasoning included — follows it.
+    assert isinstance(events[-1], StreamTurn)
+    assert len(events) == 3
+    assert events[-1].turn.answer_status == "not_found_in_scope"
+    assert events[-1].turn.answer_text == ""
+
+
+def test_retrieval_failing_inside_the_stream_becomes_the_generation_failure() -> None:
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    turns = FakeConversationTurnRepository()
+    generation = FakeGeneration()
+    stream = _post(
+        conversations=conversations,
+        turns=turns,
+        sources=sources,
+        corpus=corpus,
+        retrieve=FakeScopedRetrieveEvidence([], error=RuntimeError("index unavailable")),
+        generation=generation,
+    ).stream(user=user, conversation_id=conversation.id, message="q", mode=MODE_ANSWER)
+
+    assert next(stream) == StreamPhase(phase="searching")
+    with pytest.raises(AnswerGenerationFailed):
+        next(stream)
+
+    # The failure replaces the answer, it does not half-write a turn.
+    assert generation.stream_calls == []
+    assert turns.add_calls == 0
+    assert conversations.touch_calls == []
+
+
+def test_retrieval_failing_inside_the_stream_is_logged_with_its_traceback(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # The reader is shown one generic sentence whatever broke, so the log is the
+    # only place an index outage is distinguishable from a bug in our own code.
+    # It carries the ids to find the turn and the traceback to explain it — and
+    # still not a word of what the reader asked.
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+
+    with caplog.at_level(logging.ERROR, logger=_LOGGER):
+        stream = _post(
+            conversations=conversations,
+            turns=FakeConversationTurnRepository(),
+            sources=sources,
+            corpus=corpus,
+            retrieve=FakeScopedRetrieveEvidence([], error=RuntimeError("index unavailable")),
+        ).stream(
+            user=user,
+            conversation_id=conversation.id,
+            message=_PRIVATE_MESSAGE,
+            mode=MODE_ANSWER,
+        )
+        next(stream)
+        with pytest.raises(AnswerGenerationFailed):
+            next(stream)
+
+    failures = [r for r in caplog.records if r.name == _LOGGER and r.levelno >= logging.ERROR]
+    assert len(failures) == 1
+    record = failures[0]
+    line = record.getMessage()
+    assert f"conversation_id={conversation.id}" in line
+    assert f"source_id={source.id}" in line
+    assert f"mode={MODE_ANSWER}" in line
+    assert _PRIVATE_MESSAGE not in line
+    # The cause survives: a TypeError in our own retrieval code keeps its stack.
+    assert record.exc_info is not None
+    assert isinstance(record.exc_info[1], RuntimeError)
 
 
 # --- Turn path: the streaming sentinel hold-back (design §6) --------------------
@@ -2181,6 +2362,59 @@ def test_stream_flushes_a_short_answer_that_merely_looked_like_the_sentinel() ->
     assert _deltas(events) == [short]
     assert events[-1].turn.answer_status == "answered"
     assert events[-1].turn.answer_text == short
+
+
+def test_stream_passes_citation_marks_through_as_ordinary_answer_text() -> None:
+    # The adapter emits a citation mark as its own text delta, so the hold-back sees
+    # it as answer text like any other. The reader gets the marked answer intact and
+    # the persisted text matches what streamed.
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
+    text = "The tides follow the moon.[^1]"
+    generation = FakeGeneration(
+        answer=_answered(*evidence, text=text),
+        deltas=["The tides follow the moon.", "[^1]"],
+    )
+
+    events = list(
+        _post(
+            conversations=conversations,
+            turns=FakeConversationTurnRepository(),
+            sources=sources,
+            corpus=corpus,
+            retrieve=FakeScopedRetrieveEvidence(evidence),
+            generation=generation,
+        ).stream(user=user, conversation_id=conversation.id, message="q", mode=MODE_ANSWER)
+    )
+
+    assert "".join(_deltas(events)) == text
+    assert events[-1].turn.answer_text == text
+
+
+def test_a_mark_after_a_sentinel_prefix_releases_the_held_answer() -> None:
+    # An answer short enough to be a prefix of the sentinel, marked as cited: the mark
+    # is the delta that proves the reply is not the decline, so the held run is
+    # flushed rather than swallowed with it.
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
+    text = SENTINEL[:3] + "[^1]"
+    generation = FakeGeneration(
+        answer=_answered(*evidence, text=text), deltas=[SENTINEL[:3], "[^1]"]
+    )
+
+    events = list(
+        _post(
+            conversations=conversations,
+            turns=FakeConversationTurnRepository(),
+            sources=sources,
+            corpus=corpus,
+            retrieve=FakeScopedRetrieveEvidence(evidence),
+            generation=generation,
+        ).stream(user=user, conversation_id=conversation.id, message="q", mode=MODE_ANSWER)
+    )
+
+    assert _deltas(events) == [text]
+    assert events[-1].turn.answer_status == "answered"
 
 
 def test_stream_that_ends_without_a_completed_event_is_a_generation_failure() -> None:

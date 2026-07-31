@@ -7,7 +7,8 @@
  * library sidebar uses), fetched once on mount and cached, marking the current
  * chapter and — as the reader scrolls — the current section from the live scroll
  * state. Clicking an entry inside the loaded chapter scrolls to it in the flow
- * (no chapter reload); clicking an entry in another chapter loads that chapter.
+ * (no chapter reload); clicking an entry in another chapter loads that chapter,
+ * with that entry marked pending until the load lands.
  * Either way the URL `?anchor=` is kept in step so a deep link is always shareable.
  * At ≥lg the panel is a persistent side column; below lg it collapses behind the
  * top-bar toggle so it never squeezes the prose column.
@@ -18,13 +19,17 @@
  */
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { readUrl } from "@/app/lib/read-url";
 import { fetchSourceStructure } from "@/app/lib/sources";
 import type { SourceStructure } from "@/app/lib/sources";
 import { flattenSections } from "@/app/lib/tree";
+import {
+  LinkPendingIndicator,
+  PendingIndicator,
+  useNavigateWithTransition,
+} from "@/app/components/nav-pending";
 import { cn } from "@/lib/utils";
 
 export function TocPanel({
@@ -49,9 +54,12 @@ export function TocPanel({
   onSameChapterNavigate: (anchor: string) => void;
   fetchStructureImpl?: typeof fetchSourceStructure;
 }) {
-  const router = useRouter();
+  const { navigate, isPending } = useNavigateWithTransition();
   const [structure, setStructure] = useState<SourceStructure | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // The entry whose chapter load is in flight, so the pending spinner sits on
+  // the clicked entry rather than on the whole list.
+  const [pendingAnchor, setPendingAnchor] = useState<string | null>(null);
 
   // The structure is fetched once per source and cached; scrolling and collapsing
   // never re-fetch it (the panel stays mounted).
@@ -79,7 +87,8 @@ export function TocPanel({
       onSameChapterNavigate(anchor);
     } else {
       // Another chapter: load it (a new content round-trip), updating the URL.
-      router.push(readUrl(sourceId, anchor));
+      setPendingAnchor(anchor);
+      navigate(readUrl(sourceId, anchor));
     }
   }
 
@@ -114,13 +123,16 @@ export function TocPanel({
                   data-current-chapter={isCurrentChapter ? "true" : undefined}
                   style={{ paddingLeft: `${0.5 + section.depth * 0.75}rem` }}
                   className={cn(
-                    "w-full truncate rounded-md py-1 pr-2 text-left transition-colors hover:bg-accent/50",
+                    "flex w-full items-center gap-1 rounded-md py-1 pr-2 text-left transition-colors hover:bg-accent/50",
                     isCurrentSection
                       ? "font-medium text-foreground"
                       : "text-muted-foreground",
                   )}
                 >
-                  {section.title}
+                  <span className="truncate">{section.title}</span>
+                  {isPending && pendingAnchor === section.anchor ? (
+                    <PendingIndicator />
+                  ) : null}
                 </button>
               </li>
             );
@@ -156,6 +168,7 @@ export function ChapterNav({
           className="text-primary underline-offset-4 hover:underline"
         >
           ← Previous chapter
+          <LinkPendingIndicator className="ml-1 align-middle" />
         </Link>
       ) : (
         <span />
@@ -166,6 +179,7 @@ export function ChapterNav({
           className="text-primary underline-offset-4 hover:underline"
         >
           Next chapter →
+          <LinkPendingIndicator className="ml-1 align-middle" />
         </Link>
       ) : (
         <span />

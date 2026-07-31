@@ -16,7 +16,9 @@ from __future__ import annotations
 import ast
 import inspect
 import json
+import logging
 import os
+import re
 from uuid import uuid4
 
 import pytest
@@ -26,6 +28,7 @@ from app.domain.entities import (
     MODE_ANSWER,
     MODE_TEACH,
     AnswerCompleted,
+    AnswerReasoningDelta,
     AnswerTextDelta,
     Evidence,
     HistoryTurn,
@@ -41,6 +44,11 @@ from app.infrastructure.answering.prompts import (
 
 _MODEL = "claude-sonnet-4-6"
 _MAX_TOKENS = 1024
+# Deliberately not the settings default, so an adapter that hard-coded the default
+# effort instead of spending the configured one fails these assertions.
+_EFFORT = "high"
+_SUMMARIZED_THINKING = {"type": "adaptive", "display": "summarized"}
+_LOGGER = "app.infrastructure.answering.anthropic"
 
 
 # --- Fake Anthropic client (records the create call, returns a canned message) ---
@@ -59,6 +67,14 @@ class _FakeTextBlock:
         self.type = "text"
         self.text = text
         self.citations = citations
+
+
+class _FakeThinkingBlock:
+    """A summarized-thinking block: the model's reasoning, never the answer."""
+
+    def __init__(self, thinking: str) -> None:
+        self.type = "thinking"
+        self.thinking = thinking
 
 
 class _FakeUsage:
@@ -93,7 +109,11 @@ class _FakeClient:
 def _adapter(message: _FakeMessage) -> tuple[AnthropicGenerationAdapter, _FakeClient]:
     client = _FakeClient(message)
     adapter = AnthropicGenerationAdapter(
-        api_key="unused-fake", model=_MODEL, max_tokens=_MAX_TOKENS, client=client
+        api_key="unused-fake",
+        model=_MODEL,
+        max_tokens=_MAX_TOKENS,
+        effort=_EFFORT,
+        client=client,
     )
     return adapter, client
 
@@ -154,6 +174,105 @@ def test_document_title_falls_back_to_anchor_when_section_path_empty() -> None:
 
     doc = client.messages.calls[0]["messages"][0]["content"][0]
     assert doc["title"] == item.anchor
+
+
+# --- Deliberate thinking config (ANSW-04, ANSW-06) -----------------------------
+#
+# Derived from the generation-config ACs: every request the adapter builds — either
+# path, either mode — asks for adaptive thinking with its content *summarized*
+# rather than omitted (the omission is what makes a thinking model look hung), at
+# the effort the composition root configured, inside the shared token budget. The
+# effort also reaches the log line, so the latency and spend on that same line can
+# be read against the setting that bought them.
+
+
+@pytest.mark.parametrize("mode", [MODE_ANSWER, MODE_TEACH])
+def test_buffered_request_asks_for_summarized_thinking_at_the_configured_effort(
+    mode: str,
+) -> None:
+    adapter, client = _adapter(_FakeMessage([_FakeTextBlock("ok")]))
+
+    adapter.generate(
+        mode=mode,
+        message="q",
+        evidence=[_evidence("alpha")],
+        target_section_path=("Ch", "A") if mode == MODE_TEACH else None,
+    )
+
+    call = client.messages.calls[0]
+    assert call["thinking"] == _SUMMARIZED_THINKING
+    assert call["output_config"] == {"effort": _EFFORT}
+    # The budget covers thinking and answer together, so it is part of this contract.
+    assert call["max_tokens"] == _MAX_TOKENS
+    # The buffered call shows nothing until it returns and holds a threadpool slot
+    # throughout, so it is bounded well under the SDK's ten-minute default.
+    assert 0 < call["timeout"] <= 180
+
+
+@pytest.mark.parametrize("mode", [MODE_ANSWER, MODE_TEACH])
+def test_stream_request_asks_for_summarized_thinking_at_the_configured_effort(
+    mode: str,
+) -> None:
+    stream = _FakeStream(deltas=["ok"], final_message=_FakeMessage([_FakeTextBlock("ok")]))
+    adapter, client = _streaming_answer_adapter(stream)
+
+    list(
+        adapter.generate_stream(
+            mode=mode,
+            message="q",
+            evidence=[_evidence("alpha")],
+            target_section_path=("Ch", "A") if mode == MODE_TEACH else None,
+        )
+    )
+
+    call = client.messages.stream_calls[0]
+    assert call["thinking"] == _SUMMARIZED_THINKING
+    assert call["output_config"] == {"effort": _EFFORT}
+    assert call["max_tokens"] == _MAX_TOKENS
+    # No bound on this one: its frames are the proof of progress the buffered call
+    # cannot give, and a long teach turn streaming steadily is not a hung one.
+    assert "timeout" not in call
+
+
+def test_buffered_answer_ignores_thinking_blocks_in_the_reply() -> None:
+    # Summarized thinking arrives as its own block type; it is the model's scratchpad,
+    # never part of the answer text or its citations.
+    evidence = [_evidence("alpha")]
+    message = _FakeMessage(
+        [
+            _FakeThinkingBlock("Weighing the two passages against the question."),
+            _FakeTextBlock("The tides follow the moon.", [_FakeCitation(0)]),
+        ]
+    )
+    adapter, _ = _adapter(message)
+
+    result = adapter.generate(mode=MODE_ANSWER, message="q", evidence=evidence)
+
+    assert result.text == "The tides follow the moon.[^1]"
+    assert result.cited_chunk_ids == (evidence[0].chunk_id,)
+
+
+def test_buffered_call_logs_the_effort_it_spent(caplog) -> None:
+    adapter, _ = _adapter(_FakeMessage([_FakeTextBlock("ok")]))
+
+    with caplog.at_level(logging.INFO, logger=_LOGGER):
+        adapter.generate(mode=MODE_ANSWER, message="q", evidence=[_evidence("alpha")])
+
+    lines = [r.getMessage() for r in caplog.records if r.name == _LOGGER]
+    assert len(lines) == 1
+    assert f"effort={_EFFORT}" in lines[0]
+
+
+def test_streamed_call_logs_the_effort_it_spent(caplog) -> None:
+    stream = _FakeStream(deltas=["ok"], final_message=_FakeMessage([_FakeTextBlock("ok")]))
+    adapter, _ = _streaming_answer_adapter(stream)
+
+    with caplog.at_level(logging.INFO, logger=_LOGGER):
+        list(adapter.generate_stream(mode=MODE_ANSWER, message="q", evidence=[_evidence("alpha")]))
+
+    lines = [r.getMessage() for r in caplog.records if r.name == _LOGGER]
+    assert len(lines) == 1
+    assert f"effort={_EFFORT}" in lines[0]
 
 
 # --- Answer-mode conversation history (CONV-14, CONV-26 AC2) -------------------
@@ -232,6 +351,33 @@ def test_only_the_latest_answer_history_block_carries_the_cache_breakpoint() -> 
     assert messages[3]["content"][0]["cache_control"] == _CACHE_1H
 
 
+def test_history_replays_a_prior_answer_without_the_marks_we_wrote_into_it() -> None:
+    # The stored answer carries our `[^n]` marks; the model never wrote them and its
+    # numbering restarts every turn, so replaying them would teach it a token it can
+    # only get wrong — and an imitation landing inside this turn's range would be
+    # rendered to the reader as a link to a passage the model never cited. The prose
+    # around the marks is replayed exactly.
+    history = [
+        HistoryTurn(
+            message="Who wrote it?",
+            response_text="Kahneman did.[^1] He worked with Tversky.[^2][^10]",
+        )
+    ]
+    adapter, client = _adapter(_FakeMessage([_FakeTextBlock("ok")]))
+
+    adapter.generate(
+        mode=MODE_ANSWER, message="And why?", evidence=[_evidence("alpha")], history=history
+    )
+
+    block = client.messages.calls[0]["messages"][1]["content"][0]
+    assert block["text"] == "Kahneman did. He worked with Tversky."
+    # Rewriting the text does not cost the block its breakpoint — the cached prefix
+    # is still the settled history.
+    assert block["cache_control"] == _CACHE_1H
+    # The learner's own message is theirs — it is replayed untouched either way.
+    assert client.messages.calls[0]["messages"][0]["content"] == "Who wrote it?"
+
+
 def test_answer_stream_sends_the_same_request_as_the_buffered_path() -> None:
     # Both paths assemble the request through one helper, so history reaches the
     # streamed answer identically — no second, drifting assembly.
@@ -289,6 +435,183 @@ def test_citations_dedup_keeping_first_occurrence_order() -> None:
     assert result.cited_chunk_ids == (evidence[1].chunk_id, evidence[0].chunk_id)
 
 
+# --- Inline citation marks (ANSW-07) -------------------------------------------
+#
+# Derived from the citations-in-flow ACs: the answer text itself carries a ``[^n]``
+# token wherever the model attached a citation, so a mark can be rendered at the
+# point it belongs instead of a chip detached from the prose. The number is the
+# cited chunk's position in ``cited_chunk_ids`` — the two come out of one walk, so
+# these tests pin the mapping rather than the literal numbers. The API attaches
+# citations to whole text blocks and gives no character span into the reply, so a
+# block's marks sit directly after its text.
+
+
+def _marker_numbers(text: str) -> list[int]:
+    """The ``[^n]`` numbers in the order they appear in the answer text."""
+    return [int(number) for number in re.findall(r"\[\^(\d+)\]", text)]
+
+
+def test_each_cited_block_carries_its_mark_after_the_cited_text() -> None:
+    evidence = [_evidence("alpha"), _evidence("beta")]
+    message = _FakeMessage(
+        [
+            _FakeTextBlock("The tides follow the moon.", [_FakeCitation(0)]),
+            _FakeTextBlock(" Volcanoes vent magma.", [_FakeCitation(1)]),
+        ]
+    )
+    adapter, _ = _adapter(message)
+
+    result = adapter.generate(mode=MODE_ANSWER, message="q", evidence=evidence)
+
+    assert result.text == "The tides follow the moon.[^1] Volcanoes vent magma.[^2]"
+
+
+def test_mark_n_names_the_nth_citation() -> None:
+    # The load-bearing contract for the reader: activating mark n opens
+    # citations[n - 1]. Asserted through the mapping, not through fixed numbers.
+    evidence = [_evidence("alpha"), _evidence("beta"), _evidence("gamma")]
+    message = _FakeMessage(
+        [
+            _FakeTextBlock("Second first.", [_FakeCitation(2)]),
+            _FakeTextBlock(" Then the first.", [_FakeCitation(0)]),
+        ]
+    )
+    adapter, _ = _adapter(message)
+
+    result = adapter.generate(mode=MODE_ANSWER, message="q", evidence=evidence)
+
+    numbers = _marker_numbers(result.text)
+    assert numbers == [1, 2]
+    assert [result.cited_chunk_ids[n - 1] for n in numbers] == [
+        evidence[2].chunk_id,
+        evidence[0].chunk_id,
+    ]
+
+
+def test_a_chunk_cited_again_later_reuses_its_first_mark() -> None:
+    # One passage, one number, wherever it is referenced — the citation list still
+    # holds it once (first-occurrence dedupe), so the mark points at the same entry.
+    evidence = [_evidence("alpha"), _evidence("beta")]
+    message = _FakeMessage(
+        [
+            _FakeTextBlock("First.", [_FakeCitation(1), _FakeCitation(0)]),
+            _FakeTextBlock(" Second.", [_FakeCitation(1)]),
+        ]
+    )
+    adapter, _ = _adapter(message)
+
+    result = adapter.generate(mode=MODE_ANSWER, message="q", evidence=evidence)
+
+    assert result.text == "First.[^1][^2] Second.[^1]"
+    assert result.cited_chunk_ids == (evidence[1].chunk_id, evidence[0].chunk_id)
+
+
+def test_a_block_citing_one_chunk_twice_carries_one_mark() -> None:
+    # A repeated mark on the same sentence would only lead the reader to a passage
+    # the first mark already reaches.
+    evidence = [_evidence("alpha")]
+    message = _FakeMessage([_FakeTextBlock("Twice cited.", [_FakeCitation(0), _FakeCitation(0)])])
+    adapter, _ = _adapter(message)
+
+    result = adapter.generate(mode=MODE_ANSWER, message="q", evidence=evidence)
+
+    assert result.text == "Twice cited.[^1]"
+    assert result.cited_chunk_ids == (evidence[0].chunk_id,)
+
+
+def test_uncited_prose_carries_no_marks() -> None:
+    evidence = [_evidence("alpha")]
+    message = _FakeMessage(
+        [
+            _FakeTextBlock("A framing sentence."),
+            _FakeTextBlock(" The cited claim.", [_FakeCitation(0)]),
+            _FakeTextBlock(" A closing thought."),
+        ]
+    )
+    adapter, _ = _adapter(message)
+
+    result = adapter.generate(mode=MODE_ANSWER, message="q", evidence=evidence)
+
+    assert result.text == "A framing sentence. The cited claim.[^1] A closing thought."
+
+
+def test_answer_without_citations_is_marker_free() -> None:
+    adapter, _ = _adapter(_FakeMessage([_FakeTextBlock("Plain prose, no citations.")]))
+
+    result = adapter.generate(mode=MODE_ANSWER, message="q", evidence=[_evidence("alpha")])
+
+    assert result.text == "Plain prose, no citations."
+    assert result.cited_chunk_ids == ()
+
+
+def test_malformed_document_index_leaves_no_mark_behind() -> None:
+    # The skipped citation must not leave a mark either: a mark with no citation to
+    # open is a control that does nothing.
+    evidence = [_evidence("alpha")]
+    message = _FakeMessage([_FakeTextBlock("An answer", [_FakeCitation(5), _FakeCitation(0)])])
+    adapter, _ = _adapter(message)
+
+    result = adapter.generate(mode=MODE_ANSWER, message="q", evidence=evidence)
+
+    assert result.text == "An answer[^1]"
+    assert result.cited_chunk_ids == (evidence[0].chunk_id,)
+
+
+def test_a_marker_the_model_itself_wrote_passes_through_the_walk_untouched() -> None:
+    # Documenting the accepted residual risk of AD-222: the walk writes marks, it does
+    # not police them. A `[^n]` that arrives inside the model's own text — quoted book
+    # prose with a footnote, or an imitation — survives into the answer alongside the
+    # marks the citations earned. Stripping every marker from model text would corrupt
+    # a legitimately quoted footnote, and the reader's renderer already leaves an
+    # out-of-range token as plain prose. What keeps this rare is that the model is
+    # never shown a marker: history is replayed stripped.
+    evidence = [_evidence("alpha")]
+    message = _FakeMessage(
+        [_FakeTextBlock('The footnote reads "see[^7] the appendix".', [_FakeCitation(0)])]
+    )
+    adapter, _ = _adapter(message)
+
+    result = adapter.generate(mode=MODE_ANSWER, message="q", evidence=evidence)
+
+    assert result.text == 'The footnote reads "see[^7] the appendix".[^1]'
+    # The model's token bought no citation — only the reported one is grounded.
+    assert result.cited_chunk_ids == (evidence[0].chunk_id,)
+
+
+def test_sentinel_reply_stays_not_found_even_when_the_model_cites_it() -> None:
+    # Marks are written into the answer text, so the not-found comparison runs on the
+    # unmarked text: a decline the model happened to attach a citation to is still a
+    # decline, never a one-word answer with a footnote.
+    evidence = [_evidence("alpha")]
+    adapter, _ = _adapter(_FakeMessage([_FakeTextBlock(SENTINEL, [_FakeCitation(0)])]))
+
+    result = adapter.generate(mode=MODE_ANSWER, message="q", evidence=evidence)
+
+    assert result.found is False
+    assert result.text == ""
+    assert result.cited_chunk_ids == ()
+
+
+def test_teaching_answers_are_marked_by_the_same_walk() -> None:
+    # One parser serves both modes, so the teaching turn is marked identically.
+    evidence = [_evidence("alpha"), _evidence("beta")]
+    message = _FakeMessage(
+        [_FakeTextBlock("Here is the teaching.", [_FakeCitation(1), _FakeCitation(0)])]
+    )
+    adapter, _ = _teaching_adapter(message)
+
+    result = adapter.generate(
+        mode=MODE_TEACH,
+        message="teach me",
+        target_section_path=("Ch", "A"),
+        history=[],
+        evidence=evidence,
+    )
+
+    assert result.text == "Here is the teaching.[^1][^2]"
+    assert result.cited_chunk_ids == (evidence[1].chunk_id, evidence[0].chunk_id)
+
+
 # --- Sentinel / not-found (GEN-06 + edge cases) --------------------------------
 
 
@@ -324,7 +647,7 @@ def test_embedded_sentinel_stays_prose() -> None:
     result = adapter.generate(mode=MODE_ANSWER, message="q", evidence=evidence)
 
     assert result.found is True
-    assert result.text == prose
+    assert result.text == f"{prose}[^1]"
     assert result.cited_chunk_ids == (evidence[0].chunk_id,)
 
 
@@ -342,7 +665,7 @@ def test_max_tokens_returns_partial_answer_without_raising() -> None:
     result = adapter.generate(mode=MODE_ANSWER, message="q", evidence=evidence)
 
     assert result.found is True
-    assert result.text == "Partial answer"
+    assert result.text == "Partial answer[^1]"
     assert result.cited_chunk_ids == (evidence[0].chunk_id,)
 
 
@@ -406,7 +729,11 @@ def _teaching_adapter(
 ) -> tuple[AnthropicGenerationAdapter, _FakeClient]:
     client = _FakeClient(message)
     adapter = AnthropicGenerationAdapter(
-        api_key="unused-fake", model=_MODEL, max_tokens=_MAX_TOKENS, client=client
+        api_key="unused-fake",
+        model=_MODEL,
+        max_tokens=_MAX_TOKENS,
+        effort=_EFFORT,
+        client=client,
     )
     return adapter, client
 
@@ -625,7 +952,7 @@ def test_teaching_citations_map_by_document_index() -> None:
     )
 
     assert result.found is True
-    assert result.text == "Here is the teaching."
+    assert result.text == "Here is the teaching.[^1]"
     assert result.cited_chunk_ids == (evidence[1].chunk_id,)
 
 
@@ -645,17 +972,68 @@ class _FakeTextStreamEvent:
         self.text = text
 
 
-class _FakeStream:
-    """Fake ``MessageStream``: iterates text events, exposes the final message, closes."""
+class _FakeThinkingStreamEvent:
+    """The SDK's synthetic ``thinking`` event: a reasoning delta plus running snapshot."""
 
-    def __init__(self, deltas: list[str], final_message: _FakeMessage) -> None:
+    def __init__(self, thinking: str) -> None:
+        self.type = "thinking"
+        self.thinking = thinking
+        self.snapshot = thinking
+
+
+class _FakeContentBlockStopEvent:
+    """The SDK's ``content_block_stop``: the finished block, citations attached."""
+
+    def __init__(self, content_block: object) -> None:
+        self.type = "content_block_stop"
+        self.content_block = content_block
+
+
+class _FakeOtherStreamEvent:
+    """Any event the adapter has no mapping for (bookkeeping, or a future type)."""
+
+    def __init__(self, event_type: str) -> None:
+        self.type = event_type
+
+
+def _stream_events_for(message: _FakeMessage) -> list[object]:
+    """Replay a final message as the event sequence the SDK's stream would fire.
+
+    Each block arrives as its deltas (text or thinking) followed by the
+    ``content_block_stop`` carrying the finished block with its citations. Text is
+    deliberately split across two deltas, so a mark inserted anywhere but the block's
+    end lands in the middle of the streamed prose and the parity check catches it.
+    Driving the streaming path from the *same* object the buffered path parses is
+    what makes that check a statement about one provider response seen two ways,
+    instead of two hand-written fixtures that were written to agree.
+    """
+    events: list[object] = []
+    for block in message.content:
+        if block.type == "text":
+            split = len(block.text) // 2
+            events.append(_FakeTextStreamEvent(block.text[:split]))
+            events.append(_FakeTextStreamEvent(block.text[split:]))
+        else:
+            events.append(_FakeThinkingStreamEvent(block.thinking))
+        events.append(_FakeContentBlockStopEvent(block))
+    return events
+
+
+class _FakeStream:
+    """Fake ``MessageStream``: iterates events, exposes the final message, closes.
+
+    A plain string in ``deltas`` is a text event; any other item is yielded as-is, so
+    a case can interleave thinking (or unmapped) events between text deltas.
+    """
+
+    def __init__(self, deltas: list[object], final_message: _FakeMessage) -> None:
         self._deltas = deltas
         self._final = final_message
         self.closed = False
 
-    def __iter__(self):  # noqa: ANN204 — yields fake text events
-        for text in self._deltas:
-            yield _FakeTextStreamEvent(text)
+    def __iter__(self):  # noqa: ANN204 — yields fake stream events
+        for delta in self._deltas:
+            yield _FakeTextStreamEvent(delta) if isinstance(delta, str) else delta
 
     def get_final_message(self) -> _FakeMessage:
         return self._final
@@ -702,7 +1080,11 @@ def _streaming_answer_adapter(
 ) -> tuple[AnthropicGenerationAdapter, _FakeStreamingClient]:
     client = _FakeStreamingClient(stream)
     adapter = AnthropicGenerationAdapter(
-        api_key="unused-fake", model=_MODEL, max_tokens=_MAX_TOKENS, client=client
+        api_key="unused-fake",
+        model=_MODEL,
+        max_tokens=_MAX_TOKENS,
+        effort=_EFFORT,
+        client=client,
     )
     return adapter, client
 
@@ -730,6 +1112,79 @@ def test_answer_stream_maps_text_events_to_deltas_then_one_completed() -> None:
     assert content[-1] == {"type": "text", "text": "q"}
 
 
+# --- Streamed reasoning (ANSW-02) ----------------------------------------------
+#
+# Derived from the phases ACs: thinking the provider streams reaches the caller as
+# reasoning events, in arrival order relative to the answer text, so a panel can
+# show the model reasoning instead of a blank wait. A provider that does not think
+# yields none of them, and an event the adapter has no mapping for is not quietly
+# filed as either kind.
+
+
+def test_stream_maps_thinking_events_to_reasoning_deltas_in_arrival_order() -> None:
+    evidence = [_evidence("alpha")]
+    stream = _FakeStream(
+        deltas=[
+            _FakeThinkingStreamEvent("Weighing "),
+            _FakeThinkingStreamEvent("the passages."),
+            "The tides ",
+            _FakeThinkingStreamEvent("(checking the second passage)"),
+            "follow the moon.",
+        ],
+        final_message=_FakeMessage([_FakeTextBlock("The tides follow the moon.")]),
+    )
+    adapter, _ = _streaming_answer_adapter(stream)
+
+    events = list(adapter.generate_stream(mode=MODE_ANSWER, message="q", evidence=evidence))
+
+    assert events[:-1] == [
+        AnswerReasoningDelta(text="Weighing "),
+        AnswerReasoningDelta(text="the passages."),
+        AnswerTextDelta(text="The tides "),
+        AnswerReasoningDelta(text="(checking the second passage)"),
+        AnswerTextDelta(text="follow the moon."),
+    ]
+    assert isinstance(events[-1], AnswerCompleted)
+
+
+def test_stream_without_thinking_emits_no_reasoning_events() -> None:
+    # Adaptive thinking may decide an easy question needs none; the turn then has
+    # no reasoning at all rather than an empty one.
+    stream = _FakeStream(
+        deltas=["Hello ", "world"], final_message=_FakeMessage([_FakeTextBlock("Hello world")])
+    )
+    adapter, _ = _streaming_answer_adapter(stream)
+
+    events = list(
+        adapter.generate_stream(mode=MODE_ANSWER, message="q", evidence=[_evidence("alpha")])
+    )
+
+    assert [e for e in events if isinstance(e, AnswerReasoningDelta)] == []
+
+
+def test_stream_ignores_events_it_has_no_mapping_for() -> None:
+    # The SDK's stream carries bookkeeping events (and will carry types that do not
+    # exist yet); each mapped kind is matched by name so none of them can arrive as
+    # answer text or as reasoning.
+    stream = _FakeStream(
+        deltas=[
+            _FakeOtherStreamEvent("message_start"),
+            "Hello",
+            _FakeOtherStreamEvent("signature"),
+            _FakeOtherStreamEvent("message_delta"),
+        ],
+        final_message=_FakeMessage([_FakeTextBlock("Hello")]),
+    )
+    adapter, _ = _streaming_answer_adapter(stream)
+
+    events = list(
+        adapter.generate_stream(mode=MODE_ANSWER, message="q", evidence=[_evidence("alpha")])
+    )
+
+    assert events[:-1] == [AnswerTextDelta(text="Hello")]
+    assert isinstance(events[-1], AnswerCompleted)
+
+
 def test_answer_stream_completed_parse_equals_buffered_parse() -> None:
     # The completed event parses the final message with the SAME parser as the
     # buffered path → identical GeneratedAnswer (document_index mapping included).
@@ -749,6 +1204,168 @@ def test_answer_stream_completed_parse_equals_buffered_parse() -> None:
     assert isinstance(completed, AnswerCompleted)
     assert completed.answer == buffered
     assert completed.answer.cited_chunk_ids == (evidence[1].chunk_id,)
+
+
+# --- Streamed citation marks and stream/buffered parity (ANSW-07) --------------
+#
+# A mark is answer text, so it has to reach the reader the same way the prose does —
+# and it has to land in the same place in the streamed text as in the text that gets
+# persisted, or a reader who reloads sees their marks move. The API attaches
+# citations mid-block while the buffered parser can only write a block's marks after
+# its text, so the stream emits them when the block finishes; these tests pin that
+# the two paths produce byte-identical text for the same provider response.
+
+
+def test_stream_marks_each_block_when_the_block_finishes() -> None:
+    evidence = [_evidence("alpha"), _evidence("beta")]
+    first = _FakeTextBlock("The tides follow the moon.", [_FakeCitation(0)])
+    # The second block cites a new chunk and then the one already marked [^1].
+    second = _FakeTextBlock(" Volcanoes vent magma.", [_FakeCitation(1), _FakeCitation(0)])
+    final = _FakeMessage([first, second])
+    # The first block's prose arrives in two deltas: the mark belongs after the last
+    # of them, not after whichever delta the citation happened to attach near.
+    adapter, _ = _streaming_answer_adapter(
+        _FakeStream(
+            deltas=[
+                _FakeTextStreamEvent("The tides "),
+                _FakeTextStreamEvent("follow the moon."),
+                _FakeContentBlockStopEvent(first),
+                _FakeTextStreamEvent(" Volcanoes vent magma."),
+                _FakeContentBlockStopEvent(second),
+            ],
+            final_message=final,
+        )
+    )
+
+    events = list(adapter.generate_stream(mode=MODE_ANSWER, message="q", evidence=evidence))
+
+    assert [e.text for e in events if isinstance(e, AnswerTextDelta)] == [
+        "The tides ",
+        "follow the moon.",
+        "[^1]",
+        " Volcanoes vent magma.",
+        "[^2][^1]",
+    ]
+
+
+def test_stream_emits_no_marker_delta_for_a_block_with_no_citations() -> None:
+    # An empty marker run must not become an empty delta: a frame carrying nothing
+    # is a frame the client has to learn to ignore.
+    final = _FakeMessage([_FakeThinkingBlock("Weighing it."), _FakeTextBlock("Plain prose.")])
+    adapter, _ = _streaming_answer_adapter(
+        _FakeStream(deltas=_stream_events_for(final), final_message=final)
+    )
+
+    events = list(
+        adapter.generate_stream(mode=MODE_ANSWER, message="q", evidence=[_evidence("alpha")])
+    )
+
+    texts = [e.text for e in events if isinstance(e, AnswerTextDelta)]
+    assert "".join(texts) == "Plain prose."
+    assert all(texts), "an empty marker run must not be sent as a delta"
+    assert [e.text for e in events if isinstance(e, AnswerReasoningDelta)] == ["Weighing it."]
+
+
+def test_stream_of_a_declined_turn_carries_no_marks() -> None:
+    # The not-found reply cites nothing, so nothing marks it — the hold-back never
+    # sees a marker it would have to reason about.
+    final = _FakeMessage([_FakeTextBlock(SENTINEL)])
+    adapter, _ = _streaming_answer_adapter(
+        _FakeStream(deltas=_stream_events_for(final), final_message=final)
+    )
+
+    events = list(
+        adapter.generate_stream(mode=MODE_ANSWER, message="q", evidence=[_evidence("alpha")])
+    )
+
+    assert "".join(e.text for e in events if isinstance(e, AnswerTextDelta)) == SENTINEL
+    assert isinstance(events[-1], AnswerCompleted)
+    assert events[-1].answer.found is False
+
+
+def _cited_answer_message() -> _FakeMessage:
+    return _FakeMessage([_FakeTextBlock("One claim.", [_FakeCitation(1)])])
+
+
+def _repeated_citation_message() -> _FakeMessage:
+    return _FakeMessage(
+        [
+            _FakeTextBlock("First.", [_FakeCitation(2), _FakeCitation(0)]),
+            _FakeTextBlock(" Second.", [_FakeCitation(2)]),
+            _FakeTextBlock(" Third.", [_FakeCitation(1)]),
+        ]
+    )
+
+
+def _thinking_then_answer_message() -> _FakeMessage:
+    return _FakeMessage(
+        [
+            _FakeThinkingBlock("Weighing the passages."),
+            _FakeTextBlock("A framing sentence."),
+            _FakeTextBlock(" The cited claim.", [_FakeCitation(0)]),
+        ]
+    )
+
+
+def _malformed_citation_message() -> _FakeMessage:
+    return _FakeMessage([_FakeTextBlock("An answer", [_FakeCitation(9), _FakeCitation(0)])])
+
+
+def _uncited_message() -> _FakeMessage:
+    return _FakeMessage([_FakeTextBlock("Plain prose, no citations.")])
+
+
+@pytest.mark.parametrize(
+    "build_message",
+    [
+        _cited_answer_message,
+        _repeated_citation_message,
+        _thinking_then_answer_message,
+        _malformed_citation_message,
+        _uncited_message,
+    ],
+)
+def test_streamed_text_equals_the_answer_text_that_gets_persisted(build_message) -> None:
+    # The parity invariant: concatenating what the reader watched arrive gives exactly
+    # the text stored on the turn — marks, positions and numbering included. Both
+    # paths are driven from the same message object, so a fixture cannot paper over a
+    # divergence.
+    evidence = [_evidence("alpha"), _evidence("beta"), _evidence("gamma")]
+    final = build_message()
+    stream_adapter, _ = _streaming_answer_adapter(
+        _FakeStream(deltas=_stream_events_for(final), final_message=final)
+    )
+    buffered_adapter, _ = _adapter(build_message())
+
+    events = list(stream_adapter.generate_stream(mode=MODE_ANSWER, message="q", evidence=evidence))
+    buffered = buffered_adapter.generate(mode=MODE_ANSWER, message="q", evidence=evidence)
+
+    streamed = "".join(e.text for e in events if isinstance(e, AnswerTextDelta))
+    assert streamed == buffered.text
+    assert isinstance(events[-1], AnswerCompleted)
+    assert events[-1].answer.text == streamed
+
+
+def test_teaching_stream_marks_cited_blocks_too() -> None:
+    # One stream runner serves both modes, so the teaching turn is marked identically.
+    evidence = [_evidence("alpha"), _evidence("beta")]
+    final = _FakeMessage([_FakeTextBlock("Here is the teaching.", [_FakeCitation(1)])])
+    adapter, _ = _streaming_answer_adapter(
+        _FakeStream(deltas=_stream_events_for(final), final_message=final)
+    )
+
+    events = list(
+        adapter.generate_stream(
+            mode=MODE_TEACH,
+            message="teach me",
+            target_section_path=("Ch", "A"),
+            evidence=evidence,
+        )
+    )
+
+    texts = [e.text for e in events if isinstance(e, AnswerTextDelta)]
+    assert "".join(texts) == "Here is the teaching.[^1]"
+    assert texts[-1] == "[^1]"
 
 
 def test_answer_stream_close_closes_the_sdk_stream() -> None:
@@ -776,7 +1393,11 @@ def test_teaching_stream_maps_deltas_and_carries_cached_system() -> None:
     )
     client = _FakeStreamingClient(stream)
     adapter = AnthropicGenerationAdapter(
-        api_key="unused-fake", model=_MODEL, max_tokens=_MAX_TOKENS, client=client
+        api_key="unused-fake",
+        model=_MODEL,
+        max_tokens=_MAX_TOKENS,
+        effort=_EFFORT,
+        client=client,
     )
 
     events = list(

@@ -87,6 +87,26 @@ describe("saveAnswerAsNote anchored capture (RA-20)", () => {
     });
   });
 
+  it("strips the answer's inline citation markers from the saved body", async () => {
+    const captureImpl = vi.fn().mockResolvedValue({});
+
+    await saveAnswerAsNote({
+      sourceId: "s1",
+      question: "Who wrote the first algorithm?",
+      answerText: "Ada Lovelace wrote it.[^1] She worked with Babbage.[^2]",
+      citations: [citation()],
+      csrfToken: "csrf",
+      captureImpl,
+    });
+
+    // The markers point at a citation list the note does not carry, so the note
+    // keeps the prose and nothing else.
+    const [, body] = captureImpl.mock.calls[0];
+    expect(body.body_markdown).toBe(
+      "Ada Lovelace wrote it. She worked with Babbage.",
+    );
+  });
+
   it("truncates the note title to 80 characters", async () => {
     const captureImpl = vi.fn().mockResolvedValue({});
     const longQuestion = "Q".repeat(200);

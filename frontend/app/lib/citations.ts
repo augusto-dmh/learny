@@ -30,3 +30,55 @@ export type Citation = {
   note_id?: string;
   note_title?: string;
 };
+
+/**
+ * The inline citation marker the backend writes into answer text: `[^n]`, where
+ * *n* is the 1-based position of the citation in the turn's citation list (both
+ * are the same first-occurrence walk, so marker *n* is `citations[n - 1]` by
+ * construction — AD-222).
+ *
+ * The marker is plain text, which is what makes a mark survive persistence: a
+ * restored turn carries the same tokens the stream did and renders the same
+ * marks from them.
+ */
+const MARKER = /\[\^(\d+)\]/g;
+
+/** The link a rendered mark carries, from which its citation number is read back. */
+const MARK_HREF_PREFIX = "#citation-";
+
+/**
+ * Rewrite each marker backed by one of `count` citations into a Markdown link the
+ * answer renderer turns into an interactive mark.
+ *
+ * A marker with no citation behind it — grounding the model claimed but the turn
+ * did not carry — is left exactly as written, so it renders as the plain text it
+ * is rather than a control that leads nowhere.
+ */
+export function linkCitationMarkers(text: string, count: number): string {
+  return text.replace(MARKER, (token, digits: string) => {
+    const index = Number(digits);
+    return index >= 1 && index <= count
+      ? `[${index}](${MARK_HREF_PREFIX}${index})`
+      : token;
+  });
+}
+
+/** The 1-based citation a rendered mark's link points at, or `null` for any other link. */
+export function citationIndexFromHref(href: string | undefined): number | null {
+  if (!href || !href.startsWith(MARK_HREF_PREFIX)) {
+    return null;
+  }
+  const index = Number(href.slice(MARK_HREF_PREFIX.length));
+  return Number.isInteger(index) && index >= 1 ? index : null;
+}
+
+/**
+ * The answer text with its markers removed — what an answer reads like outside
+ * the panel that renders marks.
+ *
+ * Saving an answer as a note takes this path: a note is prose the reader keeps,
+ * and `[^1]` in it would point at a citation list the note does not carry.
+ */
+export function stripCitationMarkers(text: string): string {
+  return text.replace(MARKER, "");
+}

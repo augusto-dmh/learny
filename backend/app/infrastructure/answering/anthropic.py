@@ -6,7 +6,10 @@ Learny-owned ``GeneratedAnswer`` (ADR-0007/0009). Each retrieved chunk becomes o
 plain-text citations-enabled ``document`` block, in evidence order; the response's
 ``document_index`` citations map back through the ordered chunk-id list assembled
 at request time — never through ``document_title`` (research §1). Citations are
-enabled on every document (all-or-none API rule).
+enabled on every document (all-or-none API rule). Cited passages are also marked
+inline in the answer text as ``[^n]`` tokens, numbered by the very walk that builds
+the citation list, so a reader's mark and the passage behind it cannot drift apart
+(AD-222).
 
 The SDK is imported lazily inside :meth:`_get_client` only, so the module stays
 import-light and an injected fake client needs no key or network (mirrors the
@@ -22,13 +25,16 @@ from typing import Any, Protocol
 from uuid import UUID
 
 from app.domain.entities import (
+    CITATION_MARKER_RE,
     MODE_TEACH,
     AnswerCompleted,
+    AnswerReasoningDelta,
     AnswerStreamEvent,
     AnswerTextDelta,
     Evidence,
     GeneratedAnswer,
     HistoryTurn,
+    citation_marker,
 )
 from app.infrastructure.answering.prompts import (
     ANSWER_SYSTEM_PROMPT,
@@ -44,6 +50,21 @@ logger = logging.getLogger(__name__)
 # grows with the conversation.
 _CACHE_CONTROL = {"type": "ephemeral", "ttl": "1h"}
 
+# Adaptive is the model's own decision about how much to think; ``summarized``
+# display is what makes that thinking readable in the response at all — the
+# provider default omits the content and returns empty blocks, which is the dead
+# air a reader sees while the model reasons. Sent on both request paths so the
+# buffered and streamed calls stay one request shape.
+_THINKING = {"type": "adaptive", "display": "summarized"}
+
+# Wall-clock bound for the buffered call, which returns nothing until the whole reply
+# is written and holds a threadpool slot for every second of it. Generous for thinking
+# at medium effort plus the configured token budget, and far under the SDK's ten-minute
+# default: past this the reader has a blank screen and no reason to believe anything is
+# coming. The streaming path is deliberately unbounded here — its frames prove progress
+# as they arrive, and a long teach turn is not a hung one.
+_GENERATE_TIMEOUT_S = 120.0
+
 
 class _MessagesClient(Protocol):
     """The narrow slice of the Anthropic client this adapter uses (test seam).
@@ -51,7 +72,11 @@ class _MessagesClient(Protocol):
     Both the real ``anthropic.Anthropic`` client and the test fake expose
     ``client.messages.create(...)`` returning a message whose ``.content`` is a
     list of blocks (``text`` blocks carry ``.text`` and an optional ``.citations``
-    list of objects with ``.document_index``).
+    list of objects with ``.document_index``; ``thinking`` blocks carry the
+    summarized reasoning and are not part of the answer). The streaming half,
+    ``client.messages.stream(...)``, yields ``text`` and ``thinking`` events plus a
+    ``content_block_stop`` carrying the finished ``content_block``. Both calls accept
+    the ``thinking`` and ``output_config`` request params.
     """
 
     messages: Any
@@ -91,44 +116,95 @@ def _build_documents(
     return documents, chunk_ids
 
 
+class _CitationMarks:
+    """One first-occurrence walk producing both the marker numbers and the citations.
+
+    The Citations API attaches citations to whole ``text`` blocks and reports no
+    character span into the reply, so a block boundary is the only position the
+    response gives us: the marker run for a block is written directly after that
+    block's text. Numbering is the order in which cited chunks are first seen, which
+    is exactly the order ``cited_chunk_ids`` is built in — because it is the same
+    walk. Marker *n* therefore names ``cited_chunk_ids[n - 1]`` by construction
+    rather than by two pieces of code agreeing (AD-222). An out-of-range
+    ``document_index`` is skipped whole — no chunk, no citation, no marker; grounding
+    is the second line of defence (AD-027).
+    """
+
+    def __init__(self, chunk_ids: Sequence[UUID]) -> None:
+        self._chunk_ids = chunk_ids
+        self._numbers: dict[UUID, int] = {}
+        self.cited: list[UUID] = []
+
+    def run_for(self, citations: Any) -> str:
+        """Return the marker run that follows one text block's text (may be empty).
+
+        Markers keep the block's citation order. A chunk cited again later in the
+        reply reuses its first number, so one passage carries one mark everywhere it
+        is referenced; a chunk cited twice *within a single block* contributes a
+        single mark, since a repeated mark on the same sentence would only point the
+        reader at a passage that mark already reaches.
+        """
+        marks: list[str] = []
+        for citation in citations or ():
+            index = citation.document_index
+            if not 0 <= index < len(self._chunk_ids):
+                continue
+            chunk_id = self._chunk_ids[index]
+            number = self._numbers.get(chunk_id)
+            if number is None:
+                self.cited.append(chunk_id)
+                number = len(self.cited)
+                self._numbers[chunk_id] = number
+            mark = citation_marker(number)
+            if mark not in marks:
+                marks.append(mark)
+        return "".join(marks)
+
+
 def _parse_message(message: Any, chunk_ids: Sequence[UUID], *, model: str) -> GeneratedAnswer:
     """Parse a Claude message into a ``GeneratedAnswer`` (shared by both modes).
 
-    Concatenates every ``text`` block into the answer text and walks their
-    ``citations`` arrays, resolving each ``document_index`` back to a ``chunk_id``
-    in first-occurrence order and deduped. An out-of-range index (malformed) is
-    skipped — grounding is the second line of defence (AD-027). A whole-reply
-    sentinel (after stripping) is the not-found signal → ``found=False`` with empty
-    text and citations; an embedded occurrence stays as prose. A ``max_tokens``
-    stop reason returns the partial text like any other reply (never raises).
+    Concatenates every ``text`` block into the answer text, writing each block's
+    ``[^n]`` marker run after it, and resolves the same walk's ``document_index``
+    citations into ``cited_chunk_ids`` (see :class:`_CitationMarks`). A whole-reply
+    sentinel is the not-found signal → ``found=False`` with empty text and citations;
+    an embedded occurrence stays as prose. The sentinel comparison deliberately runs
+    on the *unmarked* text, so no marker can turn a decline into an answer. A
+    ``max_tokens`` stop reason returns the partial text like any other reply (never
+    raises).
     """
+    marks = _CitationMarks(chunk_ids)
     text_parts: list[str] = []
-    cited: list[UUID] = []
-    seen: set[UUID] = set()
+    unmarked_parts: list[str] = []
     for block in message.content:
         if getattr(block, "type", None) != "text":
             continue
+        unmarked_parts.append(block.text)
         text_parts.append(block.text)
-        for citation in getattr(block, "citations", None) or ():
-            index = citation.document_index
-            if 0 <= index < len(chunk_ids):
-                chunk_id = chunk_ids[index]
-                if chunk_id not in seen:
-                    seen.add(chunk_id)
-                    cited.append(chunk_id)
-    text = "".join(text_parts)
-    if text.strip() == SENTINEL:
+        text_parts.append(marks.run_for(getattr(block, "citations", None)))
+    if "".join(unmarked_parts).strip() == SENTINEL:
         return GeneratedAnswer(text="", cited_chunk_ids=(), model=model, found=False)
-    return GeneratedAnswer(text=text, cited_chunk_ids=tuple(cited), model=model, found=True)
+    return GeneratedAnswer(
+        text="".join(text_parts),
+        cited_chunk_ids=tuple(marks.cited),
+        model=model,
+        found=True,
+    )
 
 
-def _log_call(message: Any, *, model: str, found: bool) -> None:
-    """Emit one content-free log line per call — usage counts and outcome only."""
+def _log_call(message: Any, *, model: str, effort: str, found: bool) -> None:
+    """Emit one content-free log line per call — usage counts and outcome only.
+
+    ``effort`` rides along because the token counts on the same line are largely a
+    consequence of it: reading latency or spend without knowing which effort bought
+    it is how a knob gets tuned blind.
+    """
     usage = getattr(message, "usage", None)
     logger.info(
-        "anthropic generation model=%s input_tokens=%s output_tokens=%s "
+        "anthropic generation model=%s effort=%s input_tokens=%s output_tokens=%s "
         "cache_read_input_tokens=%s stop_reason=%s found=%s",
         model,
+        effort,
         getattr(usage, "input_tokens", None),
         getattr(usage, "output_tokens", None),
         getattr(usage, "cache_read_input_tokens", None),
@@ -149,12 +225,24 @@ def _build_history_messages(
     breakpoint, so the cached prefix (system + settled history) grows turn over turn
     (research §5). Empty history → no messages and therefore no history breakpoint —
     only the system prompt is cached.
+
+    A stored answer carries the ``[^n]`` marks this adapter wrote into it, and those
+    are stripped here. The marks are ours, not the model's: they are the *result* of
+    the citations the API reported, and the numbering restarts every turn. Replaying
+    them would teach the model a token it never authored and cannot number correctly
+    — and a marker it imitated inside this turn's numbering range would be rendered
+    by the reader as a link to a passage the model never cited. Stripping at this one
+    choke point keeps the model's view marker-free without touching the persisted
+    answer or the stream, which must stay byte-identical (AD-222).
     """
     messages: list[dict[str, Any]] = []
     assistant_blocks: list[dict[str, Any]] = []
     for turn in history:
         messages.append({"role": "user", "content": turn.message})
-        block: dict[str, Any] = {"type": "text", "text": turn.response_text}
+        block: dict[str, Any] = {
+            "type": "text",
+            "text": CITATION_MARKER_RE.sub("", turn.response_text),
+        }
         messages.append({"role": "assistant", "content": [block]})
         assistant_blocks.append(block)
     if assistant_blocks:
@@ -165,7 +253,8 @@ def _build_history_messages(
 class AnthropicAdapterBase:
     """Shared construction and lazy client seam for the Anthropic adapters.
 
-    Constructed with the API key, model id, and ``max_tokens``; the real
+    Constructed with the API key, model id, ``max_tokens``, and the thinking
+    ``effort`` the composition root read from settings; the real
     ``anthropic.Anthropic`` client is built lazily on first use (so the SDK import
     stays inside this module and an injected fake needs no key/network, mirroring
     the OpenAI embedding adapter). Subclasses add the port-specific ``generate``.
@@ -177,11 +266,13 @@ class AnthropicAdapterBase:
         api_key: str,
         model: str,
         max_tokens: int,
+        effort: str = "medium",
         client: _MessagesClient | None = None,
     ) -> None:
         self._api_key = api_key
         self._model = model
         self._max_tokens = max_tokens
+        self._effort = effort
         self._client = client
 
     @property
@@ -207,26 +298,54 @@ class AnthropicAdapterBase:
         """Stream generation events, closing the SDK stream on early cancellation.
 
         Opens ``messages.stream(...)`` (the SDK context manager), mapping each
-        text-delta event to an :class:`~app.domain.entities.AnswerTextDelta`; once
-        the stream is exhausted, ``get_final_message()`` is parsed with the **same**
-        parser as the buffered path into the authoritative
+        text-delta event to an :class:`~app.domain.entities.AnswerTextDelta`, each
+        thinking delta to an :class:`~app.domain.entities.AnswerReasoningDelta`, and
+        each finished text block to the ``[^n]`` marker run its citations earned —
+        one more :class:`~app.domain.entities.AnswerTextDelta`, because a marker is
+        just answer text. Only those event types are mapped, each by name: the SDK's
+        stream carries bookkeeping events too, and a catch-all would file tomorrow's
+        new event type into whichever bucket happened to be last.
+
+        The SDK does surface citations as they attach (a synthetic ``citation`` event
+        per ``citations_delta``), but they attach *mid-block* while the buffered
+        parser — which has no character spans to work with — can only write a block's
+        marks after its text. Emitting at the block's ``content_block_stop`` instead
+        walks the finished block exactly as :func:`_parse_message` walks the final
+        message, in the same block order with the same numbering state, so the
+        streamed text and the persisted text are equal by construction rather than by
+        two insertion rules staying in sync (AD-222). The lag is one block boundary.
+
+        Once the stream is exhausted, ``get_final_message()`` is parsed with the
+        **same** parser as the buffered path into the authoritative
         :class:`~app.domain.entities.AnswerCompleted`. The ``with`` block guarantees
         the SDK stream is closed when the consumer closes this generator early
         (``GeneratorExit`` unwinds through it), so a client disconnect never leaks a
         provider stream. Shared by both modes — only ``system``/``messages`` differ.
         """
+        marks = _CitationMarks(chunk_ids)
         with self._get_client().messages.stream(
             model=self._model,
             max_tokens=self._max_tokens,
+            thinking=_THINKING,
+            output_config={"effort": self._effort},
             system=system,
             messages=messages,
         ) as stream:
             for event in stream:
-                if getattr(event, "type", None) == "text":
+                event_type = getattr(event, "type", None)
+                if event_type == "text":
                     yield AnswerTextDelta(text=event.text)
+                elif event_type == "thinking":
+                    yield AnswerReasoningDelta(text=event.thinking)
+                elif event_type == "content_block_stop":
+                    block = getattr(event, "content_block", None)
+                    if getattr(block, "type", None) == "text":
+                        run = marks.run_for(getattr(block, "citations", None))
+                        if run:
+                            yield AnswerTextDelta(text=run)
             final = stream.get_final_message()
         answer = _parse_message(final, chunk_ids, model=self._model)
-        _log_call(final, model=self._model, found=answer.found)
+        _log_call(final, model=self._model, effort=self._effort, found=answer.found)
         yield AnswerCompleted(answer=answer)
 
 
@@ -252,8 +371,9 @@ class AnthropicGenerationAdapter(AnthropicAdapterBase):
     this turn — the retrieved evidence documents, the target section, and the new
     message — sits strictly *after* the prefix (research §5). The buffered path
     calls ``messages.create`` (``max_tokens`` is far below the SDK's non-streaming
-    guard) with no sampling or ``thinking`` params; the client is built lazily by the
-    shared base so an injected fake needs no key/network.
+    guard) under :data:`_GENERATE_TIMEOUT_S` and carries the same thinking/effort
+    config as the streamed one, with no sampling params; the client is built lazily
+    by the shared base so an injected fake needs no key/network.
     """
 
     def _build_request(
@@ -316,11 +436,14 @@ class AnthropicGenerationAdapter(AnthropicAdapterBase):
         response = self._get_client().messages.create(
             model=self._model,
             max_tokens=self._max_tokens,
+            thinking=_THINKING,
+            output_config={"effort": self._effort},
             system=system,
             messages=messages,
+            timeout=_GENERATE_TIMEOUT_S,
         )
         answer = _parse_message(response, chunk_ids, model=self._model)
-        _log_call(response, model=self._model, found=answer.found)
+        _log_call(response, model=self._model, effort=self._effort, found=answer.found)
         return answer
 
     def generate_stream(

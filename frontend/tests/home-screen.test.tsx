@@ -13,10 +13,19 @@
  * shows both empty states at once (spec edge case).
  */
 
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { HomeScreen } from "../app/components/home-screen";
+
+// jsdom performs no App Router navigation, so `useLinkStatus` is never pending
+// on its own; this drives that one export to cover the pending branch (ANSW-10).
+// The primitive's own contract is covered in tests/nav-pending.test.tsx.
+const linkStatus = vi.hoisted(() => ({ pending: false }));
+vi.mock("next/link", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("next/link")>();
+  return { ...actual, useLinkStatus: () => ({ pending: linkStatus.pending }) };
+});
 
 beforeAll(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
@@ -65,6 +74,7 @@ function dueQueue(total: number) {
 
 afterEach(() => {
   cleanup();
+  linkStatus.pending = false;
   vi.restoreAllMocks();
 });
 
@@ -212,6 +222,59 @@ describe("HomeScreen stats isolation (spec edge case)", () => {
     expect((await screen.findByTestId("due-count")).textContent).toContain("5");
     // …while the stats block shows its own quiet error below the fold.
     expect((await screen.findByRole("alert")).textContent).toContain("Stats boom.");
+  });
+});
+
+describe("HomeScreen pending feedback (ANSW-10)", () => {
+  it("shows a pending indicator on the action that is navigating, without renaming it", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        [CONTINUE]: () => jsonResponse(200, hero),
+        [DUE]: () => jsonResponse(200, dueQueue(5)),
+      }),
+    );
+    linkStatus.pending = true;
+
+    render(<HomeScreen />);
+
+    // Resume and Review both carry their own indicator — and are still found by
+    // their name, because the indicator stays out of the a11y tree.
+    const resume = await screen.findByRole("link", { name: "Resume" });
+    expect(within(resume).getByTestId("nav-pending")).toBeTruthy();
+    const review = screen.getByRole("link", { name: "Review" });
+    expect(within(review).getByTestId("nav-pending")).toBeTruthy();
+  });
+
+  it("shows the pick-a-book action's indicator on the empty hero", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        [CONTINUE]: () => jsonResponse(200, null),
+        [DUE]: () => jsonResponse(200, dueQueue(0)),
+      }),
+    );
+    linkStatus.pending = true;
+
+    render(<HomeScreen />);
+
+    const pick = await screen.findByRole("link", { name: "Pick a book" });
+    expect(within(pick).getByTestId("nav-pending")).toBeTruthy();
+  });
+
+  it("shows no indicator anywhere while nothing is navigating", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        [CONTINUE]: () => jsonResponse(200, hero),
+        [DUE]: () => jsonResponse(200, dueQueue(5)),
+      }),
+    );
+
+    render(<HomeScreen />);
+
+    await screen.findByRole("link", { name: "Resume" });
+    expect(screen.queryAllByTestId("nav-pending")).toHaveLength(0);
   });
 });
 

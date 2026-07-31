@@ -1,31 +1,18 @@
 // @vitest-environment jsdom
 
 /**
- * D2 gate (component) — a citation renders as a chip that opens a popover with
- * its section-path breadcrumb and snippet, and an "Open in book" link into the
- * reader at that citation's `encodeURIComponent`-encoded anchor (a `/`- and
- * `#`-bearing anchor round-trips correctly). FE-16.
+ * D2 gate (component) — a citation renders as a chip that opens its passage in
+ * flow beneath the answer, carrying its section-path breadcrumb and snippet, and
+ * an "Open in book" link into the reader at that citation's
+ * `encodeURIComponent`-encoded anchor (a `/`- and `#`-bearing anchor round-trips
+ * correctly). FE-16, ANSW-08.
  */
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CitationList } from "../app/components/citations";
 import { type Citation } from "../app/lib/citations";
-
-// Radix Popover reaches for ResizeObserver and the pointer-capture APIs that
-// jsdom does not implement; stub them so the popover can open under test.
-beforeAll(() => {
-  globalThis.ResizeObserver = class {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-  } as unknown as typeof ResizeObserver;
-  Element.prototype.hasPointerCapture = () => false;
-  Element.prototype.setPointerCapture = () => {};
-  Element.prototype.releasePointerCapture = () => {};
-  Element.prototype.scrollIntoView = () => {};
-});
 
 afterEach(() => {
   cleanup();
@@ -43,17 +30,25 @@ const citation: Citation = {
 };
 
 describe("CitationList (D2)", () => {
-  it("opens a popover with the breadcrumb, snippet, and an encoded reader link", () => {
-    render(<CitationList sourceId="s1" citations={[citation]} />);
+  it("opens the passage with the breadcrumb, snippet, and an encoded reader link", () => {
+    const { container } = render(
+      <CitationList sourceId="s1" citations={[citation]} />,
+    );
 
-    // The popover content is not shown until the chip is clicked.
+    // The passage is not shown until the chip is clicked.
     expect(screen.queryByText("Chapter 1 › Core Idea")).toBeNull();
 
     fireEvent.click(
       screen.getByRole("button", { name: "Citation: Chapter 1 › Core Idea" }),
     );
 
-    // Breadcrumb (section_path joined by " › ") and snippet render in the popover.
+    // It opens in flow, inside the list's own tree — the full-height overlay
+    // that used to cover the reading column is gone.
+    expect(container.contains(screen.getByTestId("citation-passage"))).toBe(
+      true,
+    );
+
+    // Breadcrumb (section_path joined by " › ") and snippet render in the passage.
     expect(screen.getByText("Chapter 1 › Core Idea")).toBeTruthy();
     expect(screen.getByText("the first algorithm ever written")).toBeTruthy();
 
@@ -65,7 +60,7 @@ describe("CitationList (D2)", () => {
     );
 
     // The snippet quotation renders under the reading-typography class — the
-    // popover speaks in the book's voice (class presence, not pixels).
+    // passage speaks in the book's voice (class presence, not pixels).
     const snippet = screen.getByText("the first algorithm ever written");
     expect(snippet.closest("blockquote")!.className).toContain("prose-reading");
   });
@@ -75,6 +70,88 @@ describe("CitationList (D2)", () => {
       <CitationList sourceId="s1" citations={[]} />,
     );
     expect(container.firstChild).toBeNull();
+  });
+
+  it("closes the open passage again, leaving the chip row behind", () => {
+    render(<CitationList sourceId="s1" citations={[citation]} />);
+    const chip = screen.getByRole("button", {
+      name: "Citation: Chapter 1 › Core Idea",
+    });
+
+    fireEvent.click(chip);
+    expect(chip.getAttribute("aria-expanded")).toBe("true");
+
+    fireEvent.click(screen.getByRole("button", { name: "Close passage" }));
+
+    // The evidence inventory stays; only the passage folds away.
+    expect(screen.queryByTestId("citation-passage")).toBeNull();
+    expect(screen.getByLabelText("citations")).toBeTruthy();
+    expect(chip.getAttribute("aria-expanded")).toBe("false");
+  });
+});
+
+describe("CitationList passage dismissal and wiring (ANSW-08)", () => {
+  it("closes on Escape and puts focus back on the chip that opened it", () => {
+    render(<CitationList sourceId="s1" citations={[citation]} />);
+    const chip = screen.getByRole("button", {
+      name: "Citation: Chapter 1 › Core Idea",
+    });
+
+    chip.focus();
+    fireEvent.click(chip);
+    expect(screen.getByTestId("citation-passage")).toBeTruthy();
+
+    fireEvent.keyDown(document.body, { key: "Escape" });
+
+    // Dismissed, and the reader is left where they were — not on the page body,
+    // tabbing back to the chip row they just came from.
+    expect(screen.queryByTestId("citation-passage")).toBeNull();
+    expect(document.activeElement).toBe(chip);
+  });
+
+  it("returns focus to the chip when the close button dismisses the passage", () => {
+    render(<CitationList sourceId="s1" citations={[citation]} />);
+    const chip = screen.getByRole("button", {
+      name: "Citation: Chapter 1 › Core Idea",
+    });
+
+    chip.focus();
+    fireEvent.click(chip);
+    fireEvent.click(screen.getByRole("button", { name: "Close passage" }));
+
+    // The button that took the focus is being removed, so it hands it back.
+    expect(document.activeElement).toBe(chip);
+  });
+
+  it("stays open when a click lands elsewhere on the page", () => {
+    // Deliberate: this is a region in the page, not a layer over it. Closing on
+    // any stray click would fight selecting the passage text it exists to show.
+    render(<CitationList sourceId="s1" citations={[citation]} />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Citation: Chapter 1 › Core Idea" }),
+    );
+
+    fireEvent.mouseDown(document.body);
+    fireEvent.click(document.body);
+
+    expect(screen.getByTestId("citation-passage")).toBeTruthy();
+  });
+
+  it("points the open chip at the passage region, and at nothing while closed", () => {
+    render(<CitationList sourceId="s1" citations={[citation]} />);
+    const chip = screen.getByRole("button", {
+      name: "Citation: Chapter 1 › Core Idea",
+    });
+
+    expect(chip.getAttribute("aria-expanded")).toBe("false");
+    expect(chip.getAttribute("aria-controls")).toBeNull();
+
+    fireEvent.click(chip);
+
+    const passage = screen.getByTestId("citation-passage");
+    expect(chip.getAttribute("aria-expanded")).toBe("true");
+    expect(chip.getAttribute("aria-controls")).toBe(passage.id);
+    expect(passage.id).toBeTruthy();
   });
 });
 
@@ -86,7 +163,7 @@ describe("CitationList as passage (RA-12)", () => {
     );
 
     // The passage renders as a verbatim blockquote under the reading-typography
-    // class — the popover speaks in the book's voice, with its section-path locator.
+    // class — the passage speaks in the book's voice, with its section-path locator.
     expect(screen.getByText("Chapter 1 › Core Idea")).toBeTruthy();
     const snippet = screen.getByText("the first algorithm ever written");
     expect(snippet.closest("blockquote")!.className).toContain("prose-reading");
@@ -155,7 +232,7 @@ describe("CitationList note citations (NL-03)", () => {
     // The note chip carries its own label (not the book "Citation:" one).
     fireEvent.click(screen.getByRole("button", { name: "Your note: My Insight" }));
 
-    // "Your note — <title>" label and the cited passage render in the popover.
+    // "Your note — <title>" label and the cited passage render in the region.
     expect(screen.getByText("Your note — My Insight")).toBeTruthy();
     expect(
       screen.getByText("a distinctive fact from my own note"),

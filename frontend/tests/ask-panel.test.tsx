@@ -90,12 +90,13 @@ function sseStream() {
       "x-vercel-ai-ui-message-stream": "v1",
     },
   });
-  // Enqueue one frame, then yield a macrotask inside `act` so the SDK consumes
-  // the chunk and flushes its React state update before the next assertion.
+  // Enqueue one frame, then wait out the stream throttle inside `act` so the
+  // SDK's trailing flush lands and renders before the next assertion — a bare
+  // macrotask races the 50ms throttle window on slow runners.
   const frame = (bytes: Uint8Array) =>
     act(async () => {
       controller.enqueue(bytes);
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 60));
     });
   return {
     response,
@@ -150,8 +151,10 @@ function callsTo(
   return fetchMock.mock.calls.filter(([called]) => called === url);
 }
 
-function ask(value: string) {
-  fireEvent.change(screen.getByPlaceholderText(/ask a question/i), {
+async function ask(value: string) {
+  // The input renders only once the thread is ready; with stream updates
+  // throttled, restore-path state can land a beat after the fetch resolves.
+  fireEvent.change(await screen.findByPlaceholderText(/ask a question/i), {
     target: { value },
   });
   fireEvent.click(screen.getByRole("button", { name: "Submit" }));
@@ -171,7 +174,7 @@ describe("AskPanel on the conversation surface", () => {
 
     render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
 
-    ask("Who wrote the first algorithm?");
+    await ask("Who wrote the first algorithm?");
 
     // The conversation is created for this book with whole-book scope.
     await waitFor(() => expect(callsTo(fetchMock, CREATE_URL)).toHaveLength(1));
@@ -243,14 +246,14 @@ describe("AskPanel on the conversation surface", () => {
 
     render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
 
-    ask("first question");
+    await ask("first question");
     await waitFor(() => expect(streams).toHaveLength(1));
     await streamAnswer(streams[0], []);
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "Submit" })).toBeTruthy(),
     );
 
-    ask("a follow-up");
+    await ask("a follow-up");
     await waitFor(() => expect(callsTo(fetchMock, STREAM_URL)).toHaveLength(2));
 
     // Exactly one conversation exists; the follow-up rides the same one.
@@ -266,7 +269,7 @@ describe("AskPanel on the conversation surface", () => {
     vi.stubGlobal("fetch", routedFetch(baseHandlers(() => stream.response)));
 
     render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
-    ask("nonsense token");
+    await ask("nonsense token");
     await waitFor(() =>
       expect(document.body.textContent).toContain("nonsense token"),
     );
@@ -300,7 +303,7 @@ describe("AskPanel on the conversation surface", () => {
     );
 
     render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
-    ask("first try");
+    await ask("first try");
 
     await stream.push({ type: "start", messageId: "m1" });
     await stream.push({ type: "text-start", id: "t1" });
@@ -335,7 +338,7 @@ describe("AskPanel on the conversation surface", () => {
     );
 
     render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
-    ask("a question");
+    await ask("a question");
 
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toMatch(/too many requests/i);
@@ -351,7 +354,7 @@ describe("AskPanel on the conversation surface", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
-    ask("streaming question");
+    await ask("streaming question");
 
     await stream.push({ type: "start", messageId: "m1" });
     await stream.push({ type: "text-start", id: "t1" });
@@ -398,7 +401,7 @@ describe("AskPanel notes scope (NL-04)", () => {
 
     // Turning it off is carried into the conversation the question creates.
     fireEvent.click(toggle);
-    ask("a question");
+    await ask("a question");
 
     await waitFor(() => expect(callsTo(fetchMock, CREATE_URL)).toHaveLength(1));
     expect(bodyOf(callsTo(fetchMock, CREATE_URL)[0])).toMatchObject({
@@ -411,7 +414,7 @@ describe("AskPanel notes scope (NL-04)", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
-    ask("a question");
+    await ask("a question");
 
     // The server has no default to fall back on, so the flag is never omitted.
     await waitFor(() => expect(callsTo(fetchMock, CREATE_URL)).toHaveLength(1));
@@ -435,7 +438,7 @@ describe("AskPanel notes scope (NL-04)", () => {
     // Before there is a conversation the choice is the reader's to make.
     expect(toggle().disabled).toBe(false);
     fireEvent.click(toggle());
-    ask("a question");
+    await ask("a question");
     await waitFor(() => expect(callsTo(fetchMock, CREATE_URL)).toHaveLength(1));
 
     // Once one exists the control reports what it was created with and stops
@@ -481,7 +484,7 @@ describe("AskPanel thread restore", () => {
     const stream = sseStream();
     vi.stubGlobal("fetch", routedFetch(baseHandlers(() => stream.response)));
     render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
-    ask("Who wrote the first algorithm?");
+    await ask("Who wrote the first algorithm?");
     await streamAnswer(stream, [citation]);
     await waitFor(() =>
       expect(document.body.textContent).toContain("Ada Lovelace did."),
@@ -544,7 +547,7 @@ describe("AskPanel thread restore", () => {
     render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
     await waitFor(() => expect(callsTo(fetchMock, READ_URL)).toHaveLength(1));
 
-    ask("a follow-up after the reload");
+    await ask("a follow-up after the reload");
     await waitFor(() => expect(callsTo(fetchMock, STREAM_URL)).toHaveLength(1));
 
     // The restored conversation is continued; nothing new is created.
@@ -591,7 +594,7 @@ describe("AskPanel when the conversation cannot be created", () => {
     const fetchMock = failingCreate(409, "Source is not ready.");
 
     render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
-    ask("a question about a book still being ingested");
+    await ask("a question about a book still being ingested");
 
     // The failure is on screen, in the reader's terms.
     const alert = await screen.findByRole("alert");
@@ -617,7 +620,7 @@ describe("AskPanel when the conversation cannot be created", () => {
     failingCreate(429, "Too many requests.");
 
     render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
-    ask("a question");
+    await ask("a question");
 
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toMatch(/too many requests/i);
@@ -628,7 +631,7 @@ describe("AskPanel when the conversation cannot be created", () => {
     failingCreate(404, "Source not found.");
 
     render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
-    ask("a question about a book that is gone");
+    await ask("a question about a book that is gone");
 
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toMatch(/could not be found/i);
@@ -642,7 +645,7 @@ describe("AskPanel when the conversation cannot be created", () => {
     render(
       <AskPanel sourceId="s1" csrf="csrf-xyz" onRequireAuth={onRequireAuth} />,
     );
-    ask("a question");
+    await ask("a question");
 
     // Same contract as a 401 mid-stream: a redirect, not an inline banner.
     await waitFor(() => expect(onRequireAuth).toHaveBeenCalledTimes(1));
@@ -665,7 +668,7 @@ describe("AskPanel auth (RA-07)", () => {
     render(
       <AskPanel sourceId="s1" csrf="csrf-xyz" onRequireAuth={onRequireAuth} />,
     );
-    ask("a question");
+    await ask("a question");
 
     await waitFor(() => expect(onRequireAuth).toHaveBeenCalledTimes(1));
     // A 401 is a UX redirect, not an inline error banner.
@@ -709,7 +712,7 @@ describe("AskPanel streaming caret (RA-09)", () => {
     vi.stubGlobal("fetch", routedFetch(baseHandlers(() => stream.response)));
 
     render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
-    ask("a question");
+    await ask("a question");
 
     await stream.push({ type: "start", messageId: "m1" });
     await stream.push({ type: "text-start", id: "t1" });
@@ -728,6 +731,315 @@ describe("AskPanel streaming caret (RA-09)", () => {
     await waitFor(() =>
       expect(screen.queryByTestId("streaming-caret")).toBeNull(),
     );
+  });
+});
+
+describe("AskPanel inline citation marks (ANSW-07/08)", () => {
+  it("hydrates the answer's markers into marks when the citations land, and opens the passage in the dock", async () => {
+    const stream = sseStream();
+    const onShowInBook = vi.fn();
+    vi.stubGlobal("fetch", routedFetch(baseHandlers(() => stream.response)));
+
+    render(
+      <AskPanel sourceId="s1" csrf="csrf-xyz" onShowInBook={onShowInBook} />,
+    );
+    await ask("Who wrote the first algorithm?");
+
+    await stream.push({ type: "start", messageId: "m1" });
+    await stream.push({ type: "text-start", id: "t1" });
+    await stream.push({
+      type: "text-delta",
+      id: "t1",
+      delta: "Ada Lovelace did.[^1]",
+    });
+    await stream.push({ type: "text-end", id: "t1" });
+
+    // The citations arrive after the text, so until they do the marker has
+    // nothing behind it and reads as the plain text it is.
+    await waitFor(() =>
+      expect(document.body.textContent).toContain("Ada Lovelace did."),
+    );
+    expect(screen.queryByRole("button", { name: "Citation 1" })).toBeNull();
+
+    await stream.push({ type: "data-citations", data: [citation] });
+    await stream.push({
+      type: "data-answer-status",
+      data: { status: "answered" },
+    });
+    await stream.push({ type: "finish" });
+    await stream.done();
+
+    // They land, and the marker becomes a mark in place.
+    const mark = await screen.findByRole("button", { name: "Citation 1" });
+    expect(document.body.textContent).not.toContain("[^1]");
+
+    await act(async () => {
+      fireEvent.click(mark);
+    });
+
+    // The passage opens beneath the answer and jumps the reading column without
+    // closing the dock (RA-13/14).
+    expect(screen.getByTestId("citation-passage").textContent).toContain(
+      "Chapter 1 › Core Idea",
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /show in book/i }));
+    });
+    expect(onShowInBook).toHaveBeenCalledWith(citation.anchor);
+    expect(screen.getByPlaceholderText(/ask a question/i)).toBeTruthy();
+  });
+
+  it("renders a restored turn's marks exactly as the streamed ones", async () => {
+    // The markers are part of the stored answer text, which is what makes a
+    // reloaded thread's evidence work the same as a live one's.
+    const restored = {
+      ...conversation,
+      turns: [
+        {
+          turn_index: 0,
+          message: "Who wrote the first algorithm?",
+          mode: "answer",
+          answer_status: "answered",
+          text: "The server's copy of the answer.[^1]",
+          citations: [citation],
+          evidence_count: 6,
+          model: "local-extractive",
+          created_at: "now",
+        },
+      ],
+    };
+    const onShowInBook = vi.fn();
+    writeActiveConversation("s1", "ask", "conv1");
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/conversations/conv1": () => jsonResponse(200, restored),
+      }),
+    );
+
+    render(
+      <AskPanel sourceId="s1" csrf="csrf-xyz" onShowInBook={onShowInBook} />,
+    );
+
+    expect(
+      await screen.findByText(/The server's copy of the answer\./),
+    ).toBeTruthy();
+    expect(document.body.textContent).not.toContain("[^1]");
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Citation 1" }));
+    });
+    expect(
+      screen.getByText("the first algorithm ever written"),
+    ).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /show in book/i }));
+    });
+    expect(onShowInBook).toHaveBeenCalledWith(citation.anchor);
+  });
+});
+
+describe("AskPanel answer phases (ANSW-01/02/03)", () => {
+  /** The phase line, wherever in the thread it is currently rendered. */
+  function phaseLine(): HTMLElement | null {
+    return screen.queryByText(/searching the book/i);
+  }
+
+  function reasoningRegion(): HTMLElement | null {
+    return screen.queryByRole("region", { name: "reasoning" });
+  }
+
+  it("shows the search phase from submit until the model starts, then the thinking, then the answer", async () => {
+    const stream = sseStream();
+    vi.stubGlobal("fetch", routedFetch(baseHandlers(() => stream.response)));
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+    await ask("Who wrote the first algorithm?");
+
+    // The wait starts at submit — before a single frame has come back, which is
+    // exactly the stretch that used to be blank.
+    await waitFor(() => expect(phaseLine()).toBeTruthy());
+    expect(phaseLine()!.textContent).toContain("Searching the book");
+
+    // The backend's own searching frame reads the same, so the phase does not
+    // flicker between the request going out and the search being announced.
+    await stream.push({ type: "start", messageId: "m1" });
+    await stream.push({ type: "data-phase", data: { phase: "searching" } });
+    expect(phaseLine()!.textContent).toContain("Searching the book");
+    expect(reasoningRegion()).toBeNull();
+
+    // The model starts thinking: the search line gives way to the live reasoning,
+    // open and streaming its text.
+    await stream.push({ type: "reasoning-start", id: "r1" });
+    await stream.push({
+      type: "reasoning-delta",
+      id: "r1",
+      delta: "The chapter on engines ",
+    });
+    await stream.push({
+      type: "reasoning-delta",
+      id: "r1",
+      delta: "names her.",
+    });
+
+    await waitFor(() => expect(reasoningRegion()).toBeTruthy());
+    expect(phaseLine()).toBeNull();
+    expect(
+      screen.getByText("The chapter on engines names her."),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: /thinking/i })).toBeTruthy();
+
+    // The answer arrives: the thinking folds away on its own, leaving the answer.
+    await stream.push({ type: "reasoning-end", id: "r1" });
+    await stream.push({ type: "text-start", id: "t1" });
+    await stream.push({ type: "text-delta", id: "t1", delta: "Ada Lovelace did." });
+
+    await waitFor(() =>
+      expect(document.body.textContent).toContain("Ada Lovelace did."),
+    );
+    expect(screen.queryByText("The chapter on engines names her.")).toBeNull();
+    expect(reasoningRegion()).toBeTruthy();
+
+    await stream.push({ type: "text-end", id: "t1" });
+    await stream.push({ type: "data-citations", data: [citation] });
+    await stream.push({
+      type: "data-answer-status",
+      data: { status: "answered" },
+    });
+    await stream.push({ type: "finish" });
+    await stream.done();
+
+    // The completed turn keeps its thinking available — collapsed, and reopenable
+    // for as long as the turn is on screen.
+    const toggle = await screen.findByRole("button", {
+      name: /thought process/i,
+    });
+    await act(async () => {
+      fireEvent.click(toggle);
+    });
+    expect(screen.getByText("The chapter on engines names her.")).toBeTruthy();
+    expect(phaseLine()).toBeNull();
+  });
+
+  it("skips the reasoning region entirely for a turn that carried no thinking", async () => {
+    const stream = sseStream();
+    vi.stubGlobal("fetch", routedFetch(baseHandlers(() => stream.response)));
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+    await ask("a question");
+
+    // The local adapter — and any turn adaptive thinking skipped — streams text
+    // with no reasoning at all. There is no shell for the reader to open.
+    await streamAnswer(stream, [citation]);
+
+    await waitFor(() =>
+      expect(document.body.textContent).toContain("Ada Lovelace did."),
+    );
+    expect(reasoningRegion()).toBeNull();
+    expect(phaseLine()).toBeNull();
+  });
+
+  it("collapses a not-found turn's thinking into the not-found notice", async () => {
+    const stream = sseStream();
+    vi.stubGlobal("fetch", routedFetch(baseHandlers(() => stream.response)));
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+    await ask("nonsense token");
+
+    await stream.push({ type: "start", messageId: "m1" });
+    await stream.push({ type: "data-phase", data: { phase: "searching" } });
+    await stream.push({ type: "reasoning-start", id: "r1" });
+    await stream.push({
+      type: "reasoning-delta",
+      id: "r1",
+      delta: "Nothing in the book covers this.",
+    });
+    await stream.push({ type: "reasoning-end", id: "r1" });
+    await stream.push({ type: "text-start", id: "t1" });
+    await stream.push({ type: "text-end", id: "t1" });
+    await stream.push({ type: "data-citations", data: [] });
+    await stream.push({
+      type: "data-answer-status",
+      data: { status: "not_found_in_source" },
+    });
+    await stream.push({ type: "finish" });
+    await stream.done();
+
+    // The verdict stands alone: no reasoning left beside a retraction of it.
+    const notFound = await screen.findByTestId("not-found");
+    expect(notFound.textContent).toContain("not found in this book");
+    expect(reasoningRegion()).toBeNull();
+    expect(phaseLine()).toBeNull();
+    expect(
+      screen.queryByText("Nothing in the book covers this."),
+    ).toBeNull();
+  });
+
+  it("replaces the phase line with the error state when the stream fails mid-search", async () => {
+    const stream = sseStream();
+    vi.stubGlobal(
+      "fetch",
+      routedFetch(
+        baseHandlers(() => stream.response, {
+          "DELETE /api/conversations/conv1": () =>
+            new Response(null, { status: 204 }),
+        }),
+      ),
+    );
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+    await ask("a question");
+
+    await stream.push({ type: "start", messageId: "m1" });
+    await stream.push({ type: "data-phase", data: { phase: "searching" } });
+    await waitFor(() => expect(phaseLine()).toBeTruthy());
+
+    // Retrieval now runs inside the stream, so its failure arrives as an error
+    // part rather than a pre-stream status — and it must end the waiting.
+    await stream.push({
+      type: "error",
+      errorText: "Answer generation failed. Please try again.",
+    });
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(/generation failed/i);
+    await waitFor(() => expect(phaseLine()).toBeNull());
+  });
+
+  it("shows no reasoning region on a restored thread", async () => {
+    // Thinking is transient, so a thread read back from the server has none —
+    // and must not render an empty region where it used to be.
+    const restored = {
+      ...conversation,
+      turns: [
+        {
+          turn_index: 0,
+          message: "Who wrote the first algorithm?",
+          mode: "answer",
+          answer_status: "answered",
+          text: "The server's copy of the answer.",
+          citations: [citation],
+          evidence_count: 6,
+          model: "local-extractive",
+          created_at: "now",
+        },
+      ],
+    };
+    writeActiveConversation("s1", "ask", "conv1");
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/conversations/conv1": () => jsonResponse(200, restored),
+      }),
+    );
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+
+    expect(
+      await screen.findByText("The server's copy of the answer."),
+    ).toBeTruthy();
+    expect(reasoningRegion()).toBeNull();
+    expect(phaseLine()).toBeNull();
   });
 });
 
@@ -770,7 +1082,7 @@ describe("AskPanel save to note (RA-20/22)", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
-    ask("Who wrote the first algorithm?");
+    await ask("Who wrote the first algorithm?");
     await streamAnswer(stream, [citation]);
 
     // A cited, completed answer offers the save action.
@@ -805,7 +1117,7 @@ describe("AskPanel save to note (RA-20/22)", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
-    ask("Who wrote the first algorithm?");
+    await ask("Who wrote the first algorithm?");
     await streamAnswer(stream, [citation]);
 
     const saveButton = await screen.findByRole("button", {
@@ -841,7 +1153,7 @@ describe("AskPanel save to note (RA-20/22)", () => {
     );
 
     render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
-    ask("a question");
+    await ask("a question");
     await streamAnswer(stream, [citation]);
 
     const saveButton = await screen.findByRole("button", {
@@ -861,7 +1173,7 @@ describe("AskPanel save to note (RA-20/22)", () => {
     vi.stubGlobal("fetch", routedFetch(baseHandlers(() => stream.response)));
 
     render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
-    ask("nonsense token");
+    await ask("nonsense token");
     await stream.push({ type: "start", messageId: "m1" });
     await stream.push({ type: "text-start", id: "t1" });
     await stream.push({ type: "text-end", id: "t1" });
@@ -884,7 +1196,7 @@ describe("AskPanel save to note (RA-20/22)", () => {
     vi.stubGlobal("fetch", routedFetch(baseHandlers(() => stream.response)));
 
     render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
-    ask("a question");
+    await ask("a question");
     await streamAnswer(stream, []);
 
     await waitFor(() =>
@@ -954,7 +1266,7 @@ describe("AskPanel selection verbs (RA-17/18)", () => {
     expect(callsTo(fetchMock, STREAM_URL)).toHaveLength(0);
 
     // The typed question rides along with the attached quote in the fixed shape.
-    ask("What does this mean?");
+    await ask("What does this mean?");
     await waitFor(() => expect(callsTo(fetchMock, STREAM_URL)).toHaveLength(1));
     expect(bodyOf(callsTo(fetchMock, STREAM_URL)[0])).toEqual({
       message:
@@ -989,7 +1301,7 @@ describe("AskPanel selection verbs (RA-17/18)", () => {
     );
 
     // The typed question submits unwrapped — the discarded passage never rides along.
-    ask("What does this mean?");
+    await ask("What does this mean?");
     await waitFor(() => expect(callsTo(fetchMock, STREAM_URL)).toHaveLength(1));
     expect(bodyOf(callsTo(fetchMock, STREAM_URL)[0])).toEqual({
       message: "What does this mean?",
@@ -1022,7 +1334,7 @@ describe("AskPanel selection verbs (RA-17/18)", () => {
     await screen.findByTestId("ask-context-chip");
 
     // The first typed question rides along with the attached quote.
-    ask("What does this mean?");
+    await ask("What does this mean?");
     await waitFor(() => expect(streams).toHaveLength(1));
     expect(bodyOf(callsTo(fetchMock, STREAM_URL)[0])).toEqual({
       message:
@@ -1036,7 +1348,7 @@ describe("AskPanel selection verbs (RA-17/18)", () => {
     );
 
     // A second question submits bare — the quote was consumed once, not made sticky.
-    ask("And now?");
+    await ask("And now?");
     await waitFor(() => expect(callsTo(fetchMock, STREAM_URL)).toHaveLength(2));
     expect(bodyOf(callsTo(fetchMock, STREAM_URL)[1])).toEqual({
       message: "And now?",

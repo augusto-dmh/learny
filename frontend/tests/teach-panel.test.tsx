@@ -81,10 +81,12 @@ function sseStream() {
       "x-vercel-ai-ui-message-stream": "v1",
     },
   });
+  // Wait out the stream throttle inside `act` so the SDK's trailing flush
+  // lands and renders before the next assertion (see ask-panel's helper).
   const frame = (bytes: Uint8Array) =>
     act(async () => {
       controller.enqueue(bytes);
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 60));
     });
   return {
     response,
@@ -212,8 +214,10 @@ function callsTo(
   return fetchMock.mock.calls.filter(([called]) => called === url);
 }
 
-function sendMessage(value: string) {
-  fireEvent.change(screen.getByPlaceholderText(/send a message/i), {
+async function sendMessage(value: string) {
+  // The input renders only once the thread is ready; with stream updates
+  // throttled, restore-path state can land a beat after the fetch resolves.
+  fireEvent.change(await screen.findByPlaceholderText(/send a message/i), {
     target: { value },
   });
   fireEvent.click(screen.getByRole("button", { name: "Submit" }));
@@ -259,7 +263,7 @@ describe("TeachPanel on the conversation surface (RA-10)", () => {
     // Nothing is created until there is something to teach.
     expect(callsTo(fetchMock, CREATE_URL)).toHaveLength(0);
 
-    sendMessage("Explain this chapter.");
+    await sendMessage("Explain this chapter.");
 
     // The conversation is scoped to the chosen target and named for it.
     await waitFor(() => expect(callsTo(fetchMock, CREATE_URL)).toHaveLength(1));
@@ -325,14 +329,14 @@ describe("TeachPanel on the conversation surface (RA-10)", () => {
     render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
     await startSession();
 
-    sendMessage("first message");
+    await sendMessage("first message");
     await waitFor(() => expect(streams).toHaveLength(1));
     await streamTurn(streams[0], []);
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "Submit" })).toBeTruthy(),
     );
 
-    sendMessage("second message");
+    await sendMessage("second message");
     await waitFor(() => expect(callsTo(fetchMock, TURN_STREAM)).toHaveLength(2));
 
     expect(callsTo(fetchMock, CREATE_URL)).toHaveLength(1);
@@ -344,7 +348,7 @@ describe("TeachPanel on the conversation surface (RA-10)", () => {
 
     render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
     await startSession();
-    sendMessage("unrelated nonsense");
+    await sendMessage("unrelated nonsense");
 
     await stream.push({ type: "start", messageId: "m1" });
     await stream.push({ type: "text-start", id: "t1" });
@@ -374,7 +378,7 @@ describe("TeachPanel on the conversation surface (RA-10)", () => {
 
     render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
     await startSession();
-    sendMessage("a message");
+    await sendMessage("a message");
 
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toMatch(/too many requests/i);
@@ -393,7 +397,7 @@ describe("TeachPanel on the conversation surface (RA-10)", () => {
 
     render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
     await startSession();
-    sendMessage("teach me this section");
+    await sendMessage("teach me this section");
 
     // The failure is readable, and the panel is usable again rather than left
     // spinning on a message that never went anywhere.
@@ -423,7 +427,7 @@ describe("TeachPanel on the conversation surface (RA-10)", () => {
 
     render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
     await startSession();
-    sendMessage("first try");
+    await sendMessage("first try");
 
     await stream.push({ type: "start", messageId: "m1" });
     await stream.push({ type: "text-start", id: "t1" });
@@ -449,7 +453,7 @@ describe("TeachPanel scope misses", () => {
 
     render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
     await startSession();
-    sendMessage("something from another chapter");
+    await sendMessage("something from another chapter");
 
     await stream.push({ type: "start", messageId: "m1" });
     await stream.push({ type: "text-start", id: "t1" });
@@ -486,6 +490,105 @@ describe("TeachPanel scope misses", () => {
     expect(screen.getByTestId("not-found").textContent).toMatch(
       /elsewhere in the book/i,
     );
+  });
+});
+
+describe("TeachPanel answer phases (ANSW-01/02)", () => {
+  it("shows the same search, thinking, and answer phases Ask does", async () => {
+    // The dock is mode-agnostic: a taught turn waits, thinks, and answers on the
+    // same unified stream, so it must read identically to an asked one.
+    const stream = sseStream();
+    vi.stubGlobal("fetch", routedFetch(baseHandlers(() => stream.response)));
+
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
+    await startSession();
+    await sendMessage("Explain this chapter.");
+
+    await waitFor(() =>
+      expect(screen.queryByText(/searching the book/i)).toBeTruthy(),
+    );
+
+    await stream.push({ type: "start", messageId: "m1" });
+    await stream.push({ type: "data-phase", data: { phase: "searching" } });
+    await stream.push({ type: "reasoning-start", id: "r1" });
+    await stream.push({
+      type: "reasoning-delta",
+      id: "r1",
+      delta: "Start from the engine metaphor.",
+    });
+
+    await waitFor(() =>
+      expect(screen.queryByRole("region", { name: "reasoning" })).toBeTruthy(),
+    );
+    expect(screen.queryByText(/searching the book/i)).toBeNull();
+    expect(screen.getByText("Start from the engine metaphor.")).toBeTruthy();
+
+    await stream.push({ type: "reasoning-end", id: "r1" });
+    await stream.push({ type: "text-start", id: "t1" });
+    await stream.push({ type: "text-delta", id: "t1", delta: "A lesson." });
+
+    // The thinking folds away the moment the lesson starts.
+    await waitFor(() =>
+      expect(document.body.textContent).toContain("A lesson."),
+    );
+    expect(screen.queryByText("Start from the engine metaphor.")).toBeNull();
+    expect(screen.getByRole("button", { name: /thought process/i })).toBeTruthy();
+  });
+
+  it("collapses a not-found turn's thinking into the not-found notice", async () => {
+    // Same rule as Ask: a turn that reasoned its way to "the section does not
+    // cover this" must not leave that reasoning on screen beside the retraction
+    // of it. The gate is written per panel, so it is guarded per panel.
+    const stream = sseStream();
+    vi.stubGlobal("fetch", routedFetch(baseHandlers(() => stream.response)));
+
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
+    await startSession();
+    await sendMessage("Explain the thing this chapter never mentions.");
+
+    await stream.push({ type: "start", messageId: "m1" });
+    await stream.push({ type: "data-phase", data: { phase: "searching" } });
+    await stream.push({ type: "reasoning-start", id: "r1" });
+    await stream.push({
+      type: "reasoning-delta",
+      id: "r1",
+      delta: "This section is about something else.",
+    });
+    await stream.push({ type: "reasoning-end", id: "r1" });
+    await stream.push({ type: "text-start", id: "t1" });
+    await stream.push({ type: "text-end", id: "t1" });
+    await stream.push({ type: "data-citations", data: [] });
+    await stream.push({
+      type: "data-answer-status",
+      data: { status: "not_found_in_source" },
+    });
+    await stream.push({ type: "finish" });
+    await stream.done();
+
+    const notFound = await screen.findByTestId("not-found");
+    expect(notFound.textContent).toContain("not found in this book");
+    expect(screen.queryByRole("region", { name: "reasoning" })).toBeNull();
+    expect(screen.queryByText(/searching the book/i)).toBeNull();
+    expect(
+      screen.queryByText("This section is about something else."),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /thought process/i }),
+    ).toBeNull();
+  });
+
+  it("shows no phase line or reasoning region for a turn that carried neither", async () => {
+    const stream = sseStream();
+    vi.stubGlobal("fetch", routedFetch(baseHandlers(() => stream.response)));
+
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
+    await startSession();
+    await sendMessage("Explain this chapter.");
+    await streamTurn(stream, [citation]);
+
+    await waitFor(() => expect(document.body.textContent).toContain("A lesson."));
+    expect(screen.queryByRole("region", { name: "reasoning" })).toBeNull();
+    expect(screen.queryByText(/searching the book/i)).toBeNull();
   });
 });
 
@@ -554,7 +657,7 @@ describe("TeachPanel auth (RA-10)", () => {
       <TeachPanel sourceId="s1" csrf="csrf-xyz" onRequireAuth={onRequireAuth} />,
     );
     await startSession();
-    sendMessage("a message");
+    await sendMessage("a message");
 
     await waitFor(() => expect(onRequireAuth).toHaveBeenCalledTimes(1));
   });
@@ -597,7 +700,7 @@ describe("TeachPanel save to note (RA-20/22)", () => {
 
     render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
     await startSession();
-    sendMessage("Explain this chapter.");
+    await sendMessage("Explain this chapter.");
     await streamTurn(stream, [citation]);
 
     const saveButton = await screen.findByRole("button", {
@@ -649,7 +752,7 @@ describe("TeachPanel taught passage (RA-11)", () => {
     expect(onShowInBook).toHaveBeenCalledTimes(1);
 
     // Streaming a full turn does not re-trigger the jump.
-    sendMessage("Explain this chapter.");
+    await sendMessage("Explain this chapter.");
     await streamTurn(stream, [citation]);
 
     await waitFor(() =>
@@ -693,7 +796,7 @@ describe("TeachPanel include-my-notes choice (NL-04)", () => {
 
     // Turning it on is carried into the conversation the next message creates.
     fireEvent.click(toggle);
-    sendMessage("Explain this chapter.");
+    await sendMessage("Explain this chapter.");
 
     await waitFor(() => expect(callsTo(fetchMock, CREATE_URL)).toHaveLength(1));
     expect(bodyOf(callsTo(fetchMock, CREATE_URL)[0])).toMatchObject({

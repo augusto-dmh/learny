@@ -14,6 +14,7 @@ Security invariants encoded here:
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from decimal import Decimal
@@ -431,12 +432,46 @@ class GeneratedAnswer:
 SENTINEL = "NOT_FOUND_IN_SOURCE"
 
 
+# The inline mark a generation adapter writes into the answer text where a citation
+# attaches (AD-222) — ``[^1]``, ``[^2]``, … numbered by the order cited passages are
+# first seen. Defined here for the same reason ``SENTINEL`` is: it is a contract, not
+# a provider detail. It is written by an adapter, stored in ``answer_text``, read back
+# out of history, and re-read by the reader's own renderer, so the one place its shape
+# is decided must sit where every one of those layers may look. The two halves are
+# split so the matcher below is derived from the same literals the writer uses.
+_MARKER_OPEN = "[^"
+_MARKER_CLOSE = "]"
+
+# Any marker :func:`citation_marker` can produce, for the paths that read markers back
+# rather than write them.
+CITATION_MARKER_RE = re.compile(re.escape(_MARKER_OPEN) + r"\d+" + re.escape(_MARKER_CLOSE))
+
+
+def citation_marker(number: int) -> str:
+    """Return the inline mark for citation ``number`` (1-based)."""
+    return f"{_MARKER_OPEN}{number}{_MARKER_CLOSE}"
+
+
 @dataclass(frozen=True)
 class AnswerTextDelta:
     """One incremental chunk of generated answer text (streaming path, §5).
 
     Carries the raw model text as it arrives; the streaming service assembles and,
     where needed, holds these back (sentinel guard) before presenting them.
+    """
+
+    text: str
+
+
+@dataclass(frozen=True)
+class AnswerReasoningDelta:
+    """One incremental chunk of the model's summarized reasoning (streaming path).
+
+    Reasoning is what the model works through before it answers, not part of the
+    answer: it is shown while a turn is in flight and never persisted, never
+    grounded, and never subject to the sentinel hold-back — a provider that thinks
+    out loud must not be able to delay or corrupt the not-found decision. A
+    provider that does not think emits none of these.
     """
 
     text: str
@@ -454,10 +489,11 @@ class AnswerCompleted:
     answer: GeneratedAnswer
 
 
-# A generation stream yields zero or more :class:`AnswerTextDelta` then exactly one
+# A generation stream yields zero or more :class:`AnswerTextDelta` — optionally
+# preceded by or interleaved with :class:`AnswerReasoningDelta` — then exactly one
 # :class:`AnswerCompleted` (always last, authoritative). Shared by both generation
 # ports' ``generate_stream`` so one capability has two consumption modes.
-AnswerStreamEvent = AnswerTextDelta | AnswerCompleted
+AnswerStreamEvent = AnswerTextDelta | AnswerReasoningDelta | AnswerCompleted
 
 
 # --- Conversations aggregate (ADR-0029; originally the Cycle 7 teaching sessions) ---

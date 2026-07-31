@@ -7,11 +7,18 @@ arrive. The protocol vocabulary lives *only* here (design §7): the domain and
 application layers never learn the wire format, and the JSON endpoints are
 untouched.
 
-Frame order (per response): ``start`` → ``text-start`` → ``text-delta``×N →
-``text-end`` → ``data-citations`` (the grounded citations, same ``EvidenceView``
-projection as the JSON endpoint) → ``data-answer-status`` (``answered`` |
-``not_found_in_scope`` | ``not_found_in_source``) → ``finish`` → the terminal
-``[DONE]``. Message/part ids are per-response ``uuid4``. A mid-stream
+Frame order (per response): ``start`` → ``data-phase`` (the work the turn is
+starting, e.g. searching the book) → ``reasoning-start`` → ``reasoning-delta``×N →
+``reasoning-end`` (only when the model reasons) → ``text-start`` →
+``text-delta``×N → ``text-end`` → ``data-citations`` (the grounded citations, same
+``EvidenceView`` projection as the JSON endpoint) → ``data-answer-status``
+(``answered`` | ``not_found_in_scope`` | ``not_found_in_source``) → ``finish`` →
+the terminal ``[DONE]``. The text part opens at its first delta rather than up
+front, so the reasoning that precedes it closes first; a response with no answer
+text still carries the empty text pair. Adaptive thinking may resume after the
+model has begun answering, so each reasoning block gets its **own** id: reopening
+a closed part id would ask the client to append to something it has already
+finished. The message and text ids are per-response ``uuid4``. A mid-stream
 ``AnswerGenerationFailed`` (the provider failing after headers were already sent)
 is rendered as a protocol ``error`` part carrying the same generic message as the
 buffered 502, then the stream terminates.
@@ -29,6 +36,8 @@ from fastapi.sse import EventSourceResponse, ServerSentEvent, format_sse_event
 from app.application.errors import AnswerGenerationFailed
 from app.application.streaming import (
     StreamDelta,
+    StreamPhase,
+    StreamReasoningDelta,
     StreamTurn,
     TurnStreamEvent,
 )
@@ -58,18 +67,37 @@ def to_ui_message_stream(
     """Render application stream events as UI Message Stream v1 SSE frames."""
     message_id = uuid4().hex
     text_id = uuid4().hex
+    # The id of the reasoning block currently open, or ``None`` between blocks — a
+    # model that thinks again after answering opens a new part, never the old one.
+    reasoning_id: str | None = None
     yield ServerSentEvent(data={"type": "start", "messageId": message_id})
-    yield ServerSentEvent(data={"type": "text-start", "id": text_id})
 
     citations: list[Evidence] = []
     status = ""
+    text_started = False
     try:
         for event in events:
-            if isinstance(event, StreamDelta):
+            if isinstance(event, StreamPhase):
+                yield ServerSentEvent(data={"type": "data-phase", "data": {"phase": event.phase}})
+            elif isinstance(event, StreamReasoningDelta):
+                if reasoning_id is None:
+                    reasoning_id = uuid4().hex
+                    yield ServerSentEvent(data={"type": "reasoning-start", "id": reasoning_id})
+                yield ServerSentEvent(
+                    data={"type": "reasoning-delta", "id": reasoning_id, "delta": event.text}
+                )
+            elif isinstance(event, StreamDelta):
+                if reasoning_id is not None:
+                    # The answer has started, so the reasoning that led to it is done.
+                    yield ServerSentEvent(data={"type": "reasoning-end", "id": reasoning_id})
+                    reasoning_id = None
+                if not text_started:
+                    text_started = True
+                    yield ServerSentEvent(data={"type": "text-start", "id": text_id})
                 yield ServerSentEvent(
                     data={"type": "text-delta", "id": text_id, "delta": event.text}
                 )
-            else:  # the terminal StreamTurn — carries citations + status
+            elif isinstance(event, StreamTurn):  # terminal — carries citations + status
                 citations, status = _terminal(event)
     except AnswerGenerationFailed:
         # Provider failed after headers were sent: surface the generic error as a
@@ -78,6 +106,11 @@ def to_ui_message_stream(
         yield ServerSentEvent(raw_data="[DONE]")
         return
 
+    if reasoning_id is not None:
+        # A turn that reasoned and then had nothing to say — the not-found verdict.
+        yield ServerSentEvent(data={"type": "reasoning-end", "id": reasoning_id})
+    if not text_started:
+        yield ServerSentEvent(data={"type": "text-start", "id": text_id})
     yield ServerSentEvent(data={"type": "text-end", "id": text_id})
     yield ServerSentEvent(
         data={

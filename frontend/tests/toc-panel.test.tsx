@@ -5,15 +5,19 @@
  * marks the current section from live scroll state, scrolls in-flow for a
  * same-chapter click (no reload) while pushing to another chapter for a
  * cross-chapter click, and collapses behind the top-bar toggle below lg. Chapter
- * nav links to the adjacent chapters and is absent at a book edge.
+ * nav links to the adjacent chapters and is absent at a book edge. A
+ * cross-chapter click also marks the clicked entry pending until its chapter
+ * loads (ANSW-10).
  */
 
+import { Suspense, use, useEffect, useState } from "react";
 import {
   act,
   cleanup,
   fireEvent,
   render,
   screen,
+  within,
 } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -33,6 +37,14 @@ vi.mock("next-themes", () => ({
   useTheme: () => ({ theme: "system", resolvedTheme: "light", setTheme: vi.fn() }),
 }));
 
+// jsdom performs no App Router navigation, so `useLinkStatus` is never pending on
+// its own; this drives that one export to cover the pending branch (ANSW-10).
+const linkStatus = vi.hoisted(() => ({ pending: false }));
+vi.mock("next/link", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("next/link")>();
+  return { ...actual, useLinkStatus: () => ({ pending: linkStatus.pending }) };
+});
+
 beforeAll(() => {
   Element.prototype.scrollIntoView = vi.fn();
 });
@@ -42,6 +54,7 @@ afterEach(() => {
   localStorage.clear();
   nav.push.mockClear();
   nav.replace.mockClear();
+  linkStatus.pending = false;
 });
 
 const A = "part1/ch1.xhtml#s1";
@@ -134,6 +147,74 @@ describe("TocPanel navigation (RD-23)", () => {
   });
 });
 
+describe("TocPanel pending feedback (ANSW-10)", () => {
+  /** Suspends forever: stands in for the chapter the push is loading. */
+  const NEVER_LOADS = new Promise<void>(() => {});
+
+  function ChapterLoad() {
+    use(NEVER_LOADS);
+    return null;
+  }
+
+  /**
+   * The mocked router stands in for the App Router: a cross-chapter push starts
+   * a chapter load, and it is that suspended load — scheduled inside the panel's
+   * transition — which holds the transition (and so the entry) pending.
+   */
+  function TocWithChapterLoad({ loads }: { loads: boolean }) {
+    const [loading, setLoading] = useState(false);
+    useEffect(() => {
+      nav.push.mockImplementation(() => {
+        if (loads) setLoading(true);
+      });
+    }, [loads]);
+    return (
+      <>
+        <TocPanel
+          sourceId="s1"
+          currentAnchor={A}
+          chapterAnchor={A}
+          chapterSectionAnchors={[A, B]}
+          open={false}
+          onSameChapterNavigate={vi.fn()}
+          fetchStructureImpl={vi.fn().mockResolvedValue(structure)}
+        />
+        <Suspense fallback={null}>{loading ? <ChapterLoad /> : null}</Suspense>
+      </>
+    );
+  }
+
+  afterEach(() => {
+    nav.push.mockReset();
+  });
+
+  it("marks the clicked entry — and only it — pending while its chapter loads", async () => {
+    render(<TocWithChapterLoad loads />);
+
+    const entry = await screen.findByRole("button", { name: "S3" });
+    await act(async () => {
+      fireEvent.click(entry);
+    });
+
+    // The entry is still found by its own name: the indicator is decorative.
+    const clicked = screen.getByRole("button", { name: "S3" });
+    expect(within(clicked).getByTestId("nav-pending")).toBeTruthy();
+    expect(screen.queryAllByTestId("nav-pending")).toHaveLength(1);
+  });
+
+  it("leaves no entry pending when the navigation resolves at once", async () => {
+    render(<TocWithChapterLoad loads={false} />);
+
+    const entry = await screen.findByRole("button", { name: "S3" });
+    await act(async () => {
+      fireEvent.click(entry);
+    });
+
+    expect(nav.push).toHaveBeenCalledTimes(1);
+    expect(screen.queryAllByTestId("nav-pending")).toHaveLength(0);
+  });
+});
+
 describe("TocPanel collapse (RD-25)", () => {
   it("reflects the open state so the panel can hide below lg and show when toggled", () => {
     const shared = {
@@ -192,6 +273,26 @@ describe("ChapterNav prev/next (RD-06)", () => {
       <ChapterNav sourceId="s1" prevAnchor={null} nextAnchor={null} />,
     );
     expect(container.firstChild).toBeNull();
+  });
+
+  it("marks each chapter control pending while its navigation is in flight (ANSW-10)", () => {
+    // Loading the next chapter is the slowest move in the reader, and it happens
+    // from the bottom of the page where nothing else on screen changes — so the
+    // feedback has to be on the control that was activated.
+    linkStatus.pending = true;
+
+    render(<ChapterNav sourceId="s1" prevAnchor={A} nextAnchor={C} />);
+
+    for (const name of [/previous chapter/i, /next chapter/i]) {
+      const link = screen.getByRole("link", { name });
+      expect(within(link).getByTestId("nav-pending")).toBeTruthy();
+    }
+  });
+
+  it("shows no pending indicator on the chapter controls while nothing is navigating", () => {
+    render(<ChapterNav sourceId="s1" prevAnchor={A} nextAnchor={C} />);
+
+    expect(screen.queryAllByTestId("nav-pending")).toHaveLength(0);
   });
 });
 

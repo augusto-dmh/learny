@@ -15,6 +15,13 @@
  * in `ChapterReader`; the panel receives the session-bound CSRF token as a prop
  * rather than fetching `/api/auth/me` itself.
  *
+ * A turn in flight always says what it is doing: the phase line while the book is
+ * being searched, the model's thinking in a collapsible region while it thinks,
+ * then the streaming answer. A turn that reasons and then finds nothing shows the
+ * not-found notice alone, so no thinking is left standing next to a retraction.
+ * The answer itself carries its evidence inline — `CitedAnswer` renders the
+ * citation marks and opens the cited passage beneath the message.
+ *
  * Panel-only additions: an empty-state list of suggested prompts (click ⇒ submit,
  * RA-08); a streaming caret at the tail of the in-flight answer (RA-09); and the
  * selection-verb contract (RA-17/18) — an `explain` pending request auto-submits a
@@ -49,11 +56,7 @@ import {
   Conversation,
   ConversationContent,
 } from "@/components/ai-elements/conversation";
-import {
-  Message,
-  MessageContent,
-  MessageResponse,
-} from "@/components/ai-elements/message";
+import { Message, MessageContent } from "@/components/ai-elements/message";
 import {
   PromptInput,
   PromptInputBody,
@@ -64,7 +67,8 @@ import {
 } from "@/components/ai-elements/prompt-input";
 import { Button } from "@/components/ui/button";
 
-import { CitationList } from "./citations";
+import { AnswerPhaseIndicator, ReasoningRegion } from "./answer-phase";
+import { CitedAnswer } from "./cited-answer";
 import { IncludeNotesToggle } from "./include-notes-toggle";
 import { isNotFound, NotFoundNotice } from "./not-found-notice";
 import { SaveToNoteAction } from "./save-to-note-action";
@@ -359,31 +363,44 @@ function AskChat({
                 </Message>
               );
             }
-            const { text, citations, status: answerStatus } =
+            const { text, citations, status: answerStatus, reasoning } =
               assistantView(message);
             const notFound = isNotFound(answerStatus);
             const previous = messages[index - 1];
             const question =
               previous?.role === "user" ? messageText(previous) : "";
+            // The turn is still working while it is the live one and has neither
+            // thought nor spoken yet — that is the gap the phase line fills.
+            const pending = isLast && isStreaming;
             return (
               <Message from="assistant" key={message.id}>
                 <MessageContent>
-                  {text ? <MessageResponse>{text}</MessageResponse> : null}
-                  {isLast && isStreaming ? (
-                    <span
-                      data-testid="streaming-caret"
-                      aria-hidden
-                      className="ml-0.5 inline-block h-4 w-px animate-pulse bg-foreground align-text-bottom"
+                  {reasoning && !notFound ? (
+                    <ReasoningRegion
+                      text={reasoning}
+                      thinking={pending && !text}
                     />
                   ) : null}
+                  {pending && !text && !reasoning ? (
+                    <AnswerPhaseIndicator />
+                  ) : null}
+                  <CitedAnswer
+                    sourceId={sourceId}
+                    text={text}
+                    citations={notFound ? null : citations}
+                    onShowInBook={onShowInBook}
+                    trailing={
+                      pending && text ? (
+                        <span
+                          data-testid="streaming-caret"
+                          aria-hidden
+                          className="ml-0.5 inline-block h-4 w-px animate-pulse bg-foreground align-text-bottom"
+                        />
+                      ) : null
+                    }
+                  />
                   {notFound && answerStatus ? (
                     <NotFoundNotice status={answerStatus} />
-                  ) : citations ? (
-                    <CitationList
-                      sourceId={sourceId}
-                      citations={citations}
-                      onShowInBook={onShowInBook}
-                    />
                   ) : null}
                   {!notFound && citations && citations.length > 0 ? (
                     <SaveToNoteAction
@@ -398,6 +415,11 @@ function AskChat({
               </Message>
             );
           })}
+          {/* The question is sent but the answer's message does not exist yet:
+              the same search is already under way, so it reads the same. */}
+          {isStreaming && messages[messages.length - 1]?.role === "user" ? (
+            <AnswerPhaseIndicator />
+          ) : null}
         </ConversationContent>
       </Conversation>
 
