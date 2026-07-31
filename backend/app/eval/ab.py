@@ -173,6 +173,61 @@ def aggregate(lines: Sequence[dict[str, Any]]) -> ModelAggregate:
     )
 
 
+# --- Multi-run spread (RFC-005 Cycle C, AD-231) ---------------------------------
+
+
+@dataclass(frozen=True)
+class MetricSpread:
+    """One metric's per-run values for one arm and tier (multi-run study, AD-231).
+
+    ``values`` holds the metric's value from each run that produced one; a run
+    whose metric is ``None`` (nothing to average) contributes nothing. An empty
+    spread keeps every statistic ``None`` — the module's degenerate-input rule:
+    no evidence never reads as a score.
+    """
+
+    values: tuple[float, ...]
+
+    @property
+    def mean(self) -> float | None:
+        """Arithmetic mean of the per-run values, ``None`` when empty."""
+        return _mean(self.values)
+
+    @property
+    def min(self) -> float | None:
+        """Smallest per-run value, ``None`` when empty."""
+        return min(self.values) if self.values else None
+
+    @property
+    def max(self) -> float | None:
+        """Largest per-run value, ``None`` when empty."""
+        return max(self.values) if self.values else None
+
+    @property
+    def range(self) -> float | None:
+        """``max - min`` — the observed cross-run noise band, ``None`` when empty."""
+        if not self.values:
+            return None
+        return max(self.values) - min(self.values)
+
+
+def metric_spread(
+    runs: Sequence[ModelAggregate], *, tier: str, metric: str
+) -> MetricSpread:
+    """Collect one metric across a study's per-run aggregates for one tier.
+
+    ``tier`` is ``"golden"`` or ``"silver"``; ``metric`` a :class:`TierAggregate`
+    metric field name (e.g. ``"mean_faithfulness"``). Runs whose metric is
+    ``None`` are excluded from the spread rather than coerced to a number.
+    """
+    values = []
+    for run in runs:
+        value = getattr(run.silver if tier == SILVER else run.golden, metric)
+        if value is not None:
+            values.append(float(value))
+    return MetricSpread(values=tuple(values))
+
+
 # --- Judge A/B agreement + verdicts --------------------------------------------
 
 

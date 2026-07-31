@@ -8,14 +8,18 @@ DEEP-10..15 and the recorded not-found / threshold decisions.
 
 from __future__ import annotations
 
+import pytest
+
 from app.eval.ab import (
     Agreement,
+    MetricSpread,
     ModelAggregate,
     TierAggregate,
     aggregate,
     generation_verdict,
     judge_agreement,
     judge_verdict,
+    metric_spread,
 )
 
 
@@ -392,3 +396,82 @@ def test_generation_stays_when_silver_has_no_comparable_metrics():
     sonnet = _arm(faithfulness=None, relevancy=None, discipline=None)
     opus = _arm(faithfulness=None, relevancy=None, discipline=None)
     assert generation_verdict(sonnet, opus) == "stay"
+
+
+# --- metric_spread (DENOISE-01: per-run spread, None-runs excluded) -------------
+
+
+def test_metric_spread_collects_the_silver_metric_across_runs():
+    runs = [
+        _arm(faithfulness=0.90, relevancy=3.0, discipline=None),
+        _arm(faithfulness=0.95, relevancy=3.5, discipline=None),
+        _arm(faithfulness=0.85, relevancy=4.0, discipline=None),
+    ]
+    spread = metric_spread(runs, tier="silver", metric="mean_faithfulness")
+    assert spread.values == (0.90, 0.95, 0.85)
+    assert spread.mean == pytest.approx(0.90)
+    assert spread.min == 0.85
+    assert spread.max == 0.95
+    assert spread.range == pytest.approx(0.10)
+
+
+def test_metric_spread_excludes_none_runs_instead_of_coercing():
+    runs = [
+        _arm(faithfulness=0.90, relevancy=3.0, discipline=None),
+        _arm(faithfulness=None, relevancy=3.5, discipline=None),
+    ]
+    spread = metric_spread(runs, tier="silver", metric="mean_faithfulness")
+    assert spread.values == (0.90,)
+
+
+def test_metric_spread_of_no_runs_is_visibly_empty_never_zero():
+    spread = metric_spread([], tier="silver", metric="mean_relevancy")
+    assert spread.values == ()
+    assert spread.mean is None
+    assert spread.min is None
+    assert spread.max is None
+    assert spread.range is None
+
+
+def test_metric_spread_of_all_none_runs_is_visibly_empty_never_zero():
+    runs = [_arm(faithfulness=None, relevancy=None, discipline=None)]
+    spread = metric_spread(runs, tier="silver", metric="not_found_discipline")
+    assert spread.values == ()
+    assert spread.mean is None
+
+
+def test_metric_spread_reads_the_golden_tier_when_asked():
+    golden = TierAggregate(
+        tier="golden",
+        scored=2,
+        answered=2,
+        not_found_expected=1,
+        not_found_correct=1,
+        mean_faithfulness=0.8,
+        mean_relevancy=3.0,
+        citation_valid_rate=1.0,
+        not_found_discipline=1.0,
+    )
+    silver = TierAggregate(
+        tier="silver",
+        scored=0,
+        answered=0,
+        not_found_expected=0,
+        not_found_correct=0,
+        mean_faithfulness=None,
+        mean_relevancy=None,
+        citation_valid_rate=None,
+        not_found_discipline=None,
+    )
+    run = ModelAggregate(line_count=2, error_count=0, other_count=0, golden=golden, silver=silver)
+    spread = metric_spread([run], tier="golden", metric="not_found_discipline")
+    assert spread.values == (1.0,)
+
+
+def test_metric_spread_of_a_constant_metric_has_zero_range():
+    runs = [
+        _arm(faithfulness=1.0, relevancy=3.0, discipline=None),
+        _arm(faithfulness=1.0, relevancy=3.5, discipline=None),
+    ]
+    spread = metric_spread(runs, tier="silver", metric="mean_faithfulness")
+    assert spread.range == 0.0
