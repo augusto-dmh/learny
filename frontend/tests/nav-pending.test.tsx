@@ -30,7 +30,7 @@ import {
   PENDING_DELAY_MS,
   PendingIndicator,
   useNavigateWithTransition,
-} from "../components/ui/nav-pending";
+} from "../app/components/nav-pending";
 
 const linkStatus = vi.hoisted(() => ({ pending: false }));
 vi.mock("next/link", async (importOriginal) => {

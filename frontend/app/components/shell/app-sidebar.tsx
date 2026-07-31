@@ -11,7 +11,7 @@
 
 import Link from "next/link";
 
-import { LinkPendingIndicator } from "@/components/ui/nav-pending";
+import { LinkPendingIndicator } from "@/app/components/nav-pending";
 import {
   Sidebar,
   SidebarContent,

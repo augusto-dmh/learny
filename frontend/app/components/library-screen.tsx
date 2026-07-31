@@ -45,7 +45,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { LinkPendingIndicator } from "@/components/ui/nav-pending";
+import { LinkPendingIndicator } from "@/app/components/nav-pending";
 import { Spinner } from "@/components/ui/spinner";
 import {
   Tooltip,

@@ -29,7 +29,7 @@ import {
   LinkPendingIndicator,
   PendingIndicator,
   useNavigateWithTransition,
-} from "@/components/ui/nav-pending";
+} from "@/app/components/nav-pending";
 import { cn } from "@/lib/utils";
 
 export function TocPanel({

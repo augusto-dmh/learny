@@ -27,7 +27,7 @@ import { getDueReviews } from "@/app/lib/quiz";
 import { readUrl } from "@/app/lib/read-url";
 import { StudyStats } from "./study-heatmap";
 import { Button } from "@/components/ui/button";
-import { LinkPendingIndicator } from "@/components/ui/nav-pending";
+import { LinkPendingIndicator } from "@/app/components/nav-pending";
 import {
   Card,
   CardContent,
