@@ -1,9 +1,11 @@
 /**
  * Unit gate — the streaming transport reshapes each request to Learny's contract
  * (latest user message only → `{message, mode}`, CSRF header, the stream URL of
- * the conversation it resolves); persisted turns map to seeded `useChat` messages
- * carrying the same citation + answer-status parts a live stream assembles; and
- * every pre-stream failure maps to a readable message.
+ * the conversation it resolves); an assistant message's parts read back as the
+ * view a panel renders (text, citations, status, reasoning, phase); persisted
+ * turns map to seeded `useChat` messages carrying the same citation +
+ * answer-status parts a live stream assembles; and every pre-stream failure maps
+ * to a readable message.
  */
 
 import type { PrepareSendMessagesRequest } from "ai";
@@ -12,6 +14,7 @@ import { describe, expect, it } from "vitest";
 import { type Citation } from "../app/lib/citations";
 import { type ConversationTurnView } from "../app/lib/conversations";
 import {
+  assistantView,
   createConversationTransport,
   errorMessageFor,
   turnsToUIMessages,
@@ -141,6 +144,63 @@ describe("createConversationTransport request shaping", () => {
   });
 });
 
+describe("assistantView", () => {
+  function assistant(parts: LearnyUIMessage["parts"]): LearnyUIMessage {
+    return { id: "a1", role: "assistant", parts };
+  }
+
+  it("collects text, citations, status, reasoning, and the announced phase", () => {
+    const view = assistantView(
+      assistant([
+        { type: "data-phase", data: { phase: "searching" } },
+        { type: "reasoning", text: "The chapter on " },
+        { type: "reasoning", text: "engines mentions it." },
+        { type: "text", text: "Ada Lovelace " },
+        { type: "text", text: "wrote it.[^1]" },
+        { type: "data-citations", data: [citation] },
+        { type: "data-answer-status", data: { status: "answered" } },
+      ]),
+    );
+
+    // Reasoning concatenates across deltas exactly as the answer text does, and
+    // stays separate from it — the thinking is never mixed into the answer.
+    expect(view.reasoning).toBe("The chapter on engines mentions it.");
+    expect(view.text).toBe("Ada Lovelace wrote it.[^1]");
+    expect(view.phase).toBe("searching");
+    expect(view.citations).toEqual([citation]);
+    expect(view.status).toBe("answered");
+  });
+
+  it("reports the phase alone while a turn is still searching", () => {
+    // The frame the backend emits before retrieval runs: a phase and nothing else.
+    const view = assistantView(
+      assistant([{ type: "data-phase", data: { phase: "searching" } }]),
+    );
+
+    expect(view.phase).toBe("searching");
+    expect(view.text).toBe("");
+    expect(view.reasoning).toBe("");
+    expect(view.citations).toBeNull();
+    expect(view.status).toBeNull();
+  });
+
+  it("reports no reasoning and no phase for a turn that carried neither", () => {
+    // The local adapter, an adaptive turn that chose not to think, and every
+    // restored turn look like this — the caller renders no reasoning region.
+    const view = assistantView(
+      assistant([
+        { type: "text", text: "It is about early computing." },
+        { type: "data-citations", data: [] },
+        { type: "data-answer-status", data: { status: "answered" } },
+      ]),
+    );
+
+    expect(view.reasoning).toBe("");
+    expect(view.phase).toBeNull();
+    expect(view.text).toBe("It is about early computing.");
+  });
+});
+
 describe("turnsToUIMessages", () => {
   const answered: ConversationTurnView = {
     turn_index: 0,
@@ -203,6 +263,29 @@ describe("turnsToUIMessages", () => {
       type: "data-answer-status",
       data: { status: "not_found_in_source" },
     });
+  });
+
+  it("replays a stored turn with its inline markers and no reasoning or phase", () => {
+    // Reasoning is transient and a stored turn has no phase left to announce, so
+    // a restored message must read as text + citations + status and nothing else
+    // — the markers in the stored text are what make its marks render again.
+    const marked: ConversationTurnView = {
+      ...answered,
+      text: "It is about early computing.[^1]",
+    };
+
+    const [, assistant] = turnsToUIMessages([marked]);
+    const view = assistantView(assistant);
+
+    expect(assistant.parts.map((part) => part.type)).toEqual([
+      "text",
+      "data-citations",
+      "data-answer-status",
+    ]);
+    expect(view.text).toBe("It is about early computing.[^1]");
+    expect(view.reasoning).toBe("");
+    expect(view.phase).toBeNull();
+    expect(view.citations).toEqual([citation]);
   });
 });
 
