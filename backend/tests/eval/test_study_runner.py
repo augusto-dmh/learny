@@ -473,3 +473,44 @@ def test_per_run_aggregates_splits_lines_by_arm_and_run():
     assert len(runs) == 2
     assert runs[0].silver.mean_faithfulness == 1.0
     assert runs[1].silver.mean_faithfulness == 0.5
+
+
+# --- entrypoint guards (DENOISE-09: opt-in only, never nightly-collected) -------
+
+
+def test_study_entrypoint_is_not_enrolled_in_the_nightly_selection():
+    # The nightly runs `-m "live and eval"`. The study test must carry `live`
+    # (it exercises a real provider) but never `eval` — enrolling a two-arm
+    # paid study in the nightly would multiply its cost silently.
+    from tests.eval.test_generation_study import (
+        test_generation_study_runs_both_arms_over_seeded_runs as study_test,
+    )
+
+    marker_names = {mark.name for mark in study_test.pytestmark}
+    assert "live" in marker_names
+    assert "eval" not in marker_names
+
+
+def test_study_skips_without_the_opt_in_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A bare run (no --generation-study) must skip, not spend — even with a key.
+    from tests.eval.test_generation_study import study_skip_reason
+
+    monkeypatch.setenv("LEARNY_ANTHROPIC_API_KEY", "sk-ant-set")
+    config = SimpleNamespace(getoption=lambda name: False)
+    assert "--generation-study" in study_skip_reason(config)
+
+
+def test_study_skips_without_a_provider_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    from tests.eval.test_generation_study import study_skip_reason
+
+    monkeypatch.delenv("LEARNY_ANTHROPIC_API_KEY", raising=False)
+    config = SimpleNamespace(getoption=lambda name: True)
+    assert "LEARNY_ANTHROPIC_API_KEY" in study_skip_reason(config)
+
+
+def test_study_runs_with_flag_and_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    from tests.eval.test_generation_study import study_skip_reason
+
+    monkeypatch.setenv("LEARNY_ANTHROPIC_API_KEY", "sk-ant-set")
+    config = SimpleNamespace(getoption=lambda name: True)
+    assert study_skip_reason(config) is None
