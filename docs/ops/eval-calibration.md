@@ -16,31 +16,41 @@ Secrets (repository → Actions): `LEARNY_ANTHROPIC_API_KEY` (required — absen
 means the whole nightly green-skips with a notice), `LEARNY_OPENAI_API_KEY`
 (optional — absent means the retrieval arm self-skips).
 
-## Recorded baselines (2026-07-18)
+## Recorded baselines (2026-07-31)
 
-Generation: `claude-sonnet-5`. Judge: `claude-haiku-4-5`. Embeddings:
-`text-embedding-3-large@1536`.
+Generation: `claude-sonnet-5`. Judge: `claude-opus-4-8` (switched from
+`claude-haiku-4-5` this date — evidence and decision in
+`docs/research/2026-07-31/opus-judge-recalibration.md`). Embeddings:
+`text-embedding-3-large@1536`. Aggregate semantics: **answered-only means**
+(ADR-028) — declines carry `null` scores, are never judge-called, and are
+excluded from both means; the citation invariant covers every line.
 
 | Metric | Observed | Gate threshold | Derivation |
 |---|---|---|---|
-| Judge faithfulness (mean) | 1.0 — stable across 5 keyed seed runs | ≥ 0.90 | mean − 0.10 |
-| Judge relevancy (mean) | superseded 2026-07-21 (see below) | ≥ 2.8 | mean − 0.5 |
+| Judge faithfulness (answered mean) | 1.0/1.0/1.0 across 3 keyed opus seed runs | ≥ 0.90 | mean − 0.10 |
+| Judge relevancy (answered mean) | 3.56/3.44/3.67, grand mean 3.556 | ≥ 3.1 | mean − 0.5, one decimal |
 | Citation validity | all valid, every run | all must be valid | invariant, no margin |
 | Retrieval recall@1 (keyed, 42 labeled pairs) | 1.0 | ≥ 0.9 | test constants, confirmed at ceiling |
 | Retrieval recall@5 | 1.0 | ≥ 1.0 | " |
 | Retrieval MRR | 1.0 | ≥ 0.93 | " |
 
-Replay snapshots: 12 per-case files under `backend/tests/eval/snapshots/`,
-recorded the same day against the same models; PR CI replays them offline.
+The live judge tier is the **12 committed replay snapshots** (9 answered + 3
+expected-not-found) under `backend/tests/eval/snapshots/` — the gate runs on
+the exact distribution its thresholds were derived from, via
+`tests/test_eval_judge.py::test_live_judge_scores_replay_snapshots`.
+
+Superseded baselines: 2026-07-18 (haiku judge, 1-case synthetic tier,
+faithfulness ≥ 0.90 / relevancy ≥ 2.8 after the 2026-07-21 rubric anchoring) —
+history preserved in the sections below.
 
 **Known limitations, recorded honestly:**
 
-- The live judge tier currently scores **one synthetic smoke case**
-  (`live-tides`), so its aggregates are narrow. Observed relevancy (3) sits
-  below the literature's aspirational 4.0 — the gate is a *regression
-  detector against measured behavior*, not a quality bar. If the judge tier
-  ever widens to real pipeline cases, the thresholds MUST be re-derived (the
-  aggregates will move).
+- The committed snapshots were recorded **before the 2026-07-31 answer-format
+  change** (v6 answer experience: inline `[^n]` citation markers, 4096-token
+  budget, thinking enabled). They remain the correct same-inputs baseline for
+  the judge comparison, but they understate what live answers now look like —
+  **the next snapshot re-record must trigger a full threshold re-derivation**,
+  and until then live-generation scores may drift from the replay baseline.
 - The answerability tier (quiz eval) showed one judge-variance flake in the
   seed runs (1 of 18 item judgments flipped). Answerability is **not gated**;
   treat isolated flips in the JSONL history as judge noise unless they trend.
@@ -111,12 +121,18 @@ model/dimensions change:
    Note: the recorder must be invoked on its test file directly — the
    `-m "live and eval"` nightly selection does not include it.
 
-2. **Seed fresh judge baselines** — run the live tier at least 3 times and
-   aggregate the JSONL it appends under `evals/results/`:
+2. **Seed fresh judge baselines** — run the live judge tier at least 3 times
+   and aggregate the JSONL it appends under `evals/results/` (answered-only
+   means, per ADR-028). Target the judge test file directly — the bare
+   `-m "live and eval"` selection also triggers the paid silver runner and the
+   keyed retrieval arm, multiplying the spend:
 
    ```bash
-   for i in 1 2 3; do uv run pytest -m "live and eval" -q; done
+   for i in 1 2 3; do uv run pytest tests/test_eval_judge.py -m "live and eval" -q; done
    ```
+
+   To seed for a candidate judge model without flipping the config default
+   first, set `LEARNY_JUDGE_MODEL=<candidate>` for these runs only.
 
 3. **Observe retrieval metrics** (both arms print their snapshot):
 

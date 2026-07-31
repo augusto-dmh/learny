@@ -259,8 +259,8 @@ def test_exact_and_within_1_rates():
 
 
 def test_gate_flip_counts_disagreement_on_passing_the_gate():
-    # RELEVANCY_MIN 2.8 → relevancy 3 passes, 2 fails; FAITHFULNESS_MIN 0.90.
-    a = [_jline("c1", faithfulness=1.0, relevancy=3)]  # passes
+    # RELEVANCY_MIN 3.1 → relevancy 4 passes, 2 fails; FAITHFULNESS_MIN 0.90.
+    a = [_jline("c1", faithfulness=1.0, relevancy=4)]  # passes
     b = [_jline("c1", faithfulness=1.0, relevancy=2)]  # fails → flip
     result = judge_agreement(a, b)
     assert result.gate_flips == 1
@@ -268,7 +268,7 @@ def test_gate_flip_counts_disagreement_on_passing_the_gate():
 
 def test_no_gate_flip_when_both_judges_pass():
     a = [_jline("c1", faithfulness=1.0, relevancy=5)]
-    b = [_jline("c1", faithfulness=0.95, relevancy=3)]  # both clear the gate
+    b = [_jline("c1", faithfulness=0.95, relevancy=4)]  # both clear the gate
     result = judge_agreement(a, b)
     assert result.gate_flips == 0
 

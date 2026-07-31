@@ -360,13 +360,14 @@ def test_gate_passes_on_baseline_aggregates(tmp_path: Path) -> None:
 
 def test_gate_constants_pin_the_calibrated_baselines() -> None:
     # The calibration (docs/ops/eval-calibration.md): observed mean minus the
-    # safety margin. Faithfulness from the 2026-07-18 seed runs (1.0 − 0.10);
-    # relevancy re-derived 2026-07-21 after the rubric was anchored (answered-case
-    # mean ~3.3 − 0.5). A drive-by edit to either constant silently re-arms or
-    # disarms the nightly gate, so the derived values are pinned here exactly like
-    # the model default is pinned in test_config.py.
+    # safety margin. Both re-derived 2026-07-31 for the opus judge switch over
+    # the 12-snapshot tier with answered-only means (ADR-028): faithfulness
+    # 1.0 − 0.10, relevancy grand mean 3.556 − 0.5 rounded to one decimal. A
+    # drive-by edit to either constant silently re-arms or disarms the nightly
+    # gate, so the derived values are pinned here exactly like the model default
+    # is pinned in test_config.py.
     assert FAITHFULNESS_MIN == 0.90
-    assert RELEVANCY_MIN == 2.8
+    assert RELEVANCY_MIN == 3.1
 
 
 def test_relevancy_rubric_carries_one_worked_exemplar_per_score() -> None:
@@ -423,7 +424,6 @@ def test_live_judge_scores_replay_snapshots() -> None:
     # run produces the results JSONL the workflow uploads as an artifact
     # (GEN-22). Live-only, so an offline run never touches the repo tree.
     from app.core.config import get_settings
-
     from tests.eval.harness import load_snapshots, snapshot_eval_inputs
 
     settings = get_settings()

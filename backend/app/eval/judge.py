@@ -46,19 +46,18 @@ _JUDGE_MAX_TOKENS = 1024
 # (faithfulness −0.10, relevancy −0.5) — the gate detects regression from a
 # measured baseline, it does not encode aspirational quality.
 #
-# FAITHFULNESS_MIN (2026-07-18): five keyed seed runs of the live judge tier
-# (generation claude-sonnet-5, judge claude-haiku-4-5) scored faithfulness 1.0
-# stably; 1.0 − 0.10.
-#
-# RELEVANCY_MIN (2026-07-21): after the relevancy rubric gained one worked
-# exemplar per score, the anchored judge (haiku) was re-run over the 12 committed
-# replay snapshots ×3. The nine answered cases held a stable mean of ~3.3
-# (3.44/3.22/3.22); the three not-found declines score 1 by construction — an
-# empty answer is off-topic — and are excluded from the relevancy baseline exactly
-# as faithfulness treats them as vacuously faithful. 3.3 − 0.5. Re-derive whenever
-# the generation or judge model changes, or when the judge tier widens.
+# Both constants (2026-07-31): re-derived for the opus judge switch (ADR-028 /
+# RFC-005 Cycle B). Three keyed seed runs of the live judge tier — the 12
+# committed replay snapshots, generation claude-sonnet-5, judge claude-opus-4-8,
+# answered-only means per ADR-028 (declines carry null scores and stay out) —
+# scored the nine answered cases faithfulness 1.0/1.0/1.0 (1.0 − 0.10) and
+# relevancy 3.56/3.44/3.67, grand mean 3.556 (3.556 − 0.5, rounded to one
+# decimal). Evidence: evals/results/2026-07-31-059cb763.jsonl; derivation and
+# flip decision: docs/research/2026-07-31/opus-judge-recalibration.md.
+# Re-derive whenever the generation or judge model changes, or when the judge
+# tier widens.
 FAITHFULNESS_MIN = 0.90
-RELEVANCY_MIN = 2.8
+RELEVANCY_MIN = 3.1
 
 _FAITHFULNESS_SCHEMA: dict[str, Any] = {
     "type": "object",
