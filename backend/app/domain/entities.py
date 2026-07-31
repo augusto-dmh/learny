@@ -14,6 +14,7 @@ Security invariants encoded here:
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from decimal import Decimal
@@ -429,6 +430,26 @@ class GeneratedAnswer:
 # text deltas while they remain a prefix of this string so the sentinel is never
 # streamed to a client, independent of which provider produced it.
 SENTINEL = "NOT_FOUND_IN_SOURCE"
+
+
+# The inline mark a generation adapter writes into the answer text where a citation
+# attaches (AD-222) — ``[^1]``, ``[^2]``, … numbered by the order cited passages are
+# first seen. Defined here for the same reason ``SENTINEL`` is: it is a contract, not
+# a provider detail. It is written by an adapter, stored in ``answer_text``, read back
+# out of history, and re-read by the reader's own renderer, so the one place its shape
+# is decided must sit where every one of those layers may look. The two halves are
+# split so the matcher below is derived from the same literals the writer uses.
+_MARKER_OPEN = "[^"
+_MARKER_CLOSE = "]"
+
+# Any marker :func:`citation_marker` can produce, for the paths that read markers back
+# rather than write them.
+CITATION_MARKER_RE = re.compile(re.escape(_MARKER_OPEN) + r"\d+" + re.escape(_MARKER_CLOSE))
+
+
+def citation_marker(number: int) -> str:
+    """Return the inline mark for citation ``number`` (1-based)."""
+    return f"{_MARKER_OPEN}{number}{_MARKER_CLOSE}"
 
 
 @dataclass(frozen=True)

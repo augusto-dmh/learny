@@ -33,6 +33,7 @@ from app.domain.entities import (
     Evidence,
     GeneratedAnswer,
     HistoryTurn,
+    citation_marker,
 )
 from app.infrastructure.answering.prompts import (
     ANSWER_SYSTEM_PROMPT,
@@ -145,7 +146,7 @@ class _CitationMarks:
                 self.cited.append(chunk_id)
                 number = len(self.cited)
                 self._numbers[chunk_id] = number
-            mark = f"[^{number}]"
+            mark = citation_marker(number)
             if mark not in marks:
                 marks.append(mark)
         return "".join(marks)
