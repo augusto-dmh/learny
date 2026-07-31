@@ -132,13 +132,22 @@ def load_snapshots(snapshots_dir: Path = SNAPSHOTS_DIR) -> tuple[Snapshot, ...]:
     )
 
 
+def _snapshot_citation_valid(snapshot: Snapshot) -> bool:
+    """The canonical citation rule (mirrors ``silver._citation_valid``): a found
+    answer must cite something and only retrieved chunks; a decline cites nothing."""
+    cited = set(snapshot.answer.cited_chunk_ids)
+    if not snapshot.answer.found:
+        return not cited
+    return bool(cited) and cited <= {e.chunk_id for e in snapshot.evidence}
+
+
 def snapshot_eval_inputs(snapshots: Sequence[Snapshot]) -> list[EvalInput]:
     """Map committed snapshots to judge inputs — the nightly judged tier (ADR-028).
 
     ``evidence_text`` joins the recorded snippets in retrieval order;
-    ``citation_valid`` re-checks the containment invariant (cited ids ⊆ retrieved
-    ids) from the snapshot itself; ``found`` carries the recorded outcome class so
-    declines are never judge-scored.
+    ``citation_valid`` re-checks the canonical citation rule from the snapshot
+    itself; ``found`` carries the recorded outcome class so declines are never
+    judge-scored.
     """
     return [
         EvalInput(
@@ -147,8 +156,7 @@ def snapshot_eval_inputs(snapshots: Sequence[Snapshot]) -> list[EvalInput]:
             evidence_text="\n\n".join(e.snippet for e in snapshot.evidence),
             answer_text=snapshot.answer.text,
             generation_model=snapshot.model,
-            citation_valid=set(snapshot.answer.cited_chunk_ids)
-            <= {e.chunk_id for e in snapshot.evidence},
+            citation_valid=_snapshot_citation_valid(snapshot),
             found=snapshot.answer.found,
         )
         for snapshot in snapshots

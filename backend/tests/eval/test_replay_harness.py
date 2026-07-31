@@ -216,6 +216,21 @@ def test_snapshot_eval_inputs_flag_citation_outside_evidence_invalid() -> None:
     assert built.citation_valid is False
 
 
+def test_snapshot_eval_inputs_flag_answered_citing_nothing_invalid() -> None:
+    # The canonical rule (silver._citation_valid): a found answer must cite
+    # SOMETHING, not merely avoid citing outside the evidence.
+    (built,) = snapshot_eval_inputs([_mapping_snapshot(cited=())])
+
+    assert built.citation_valid is False
+
+
+def test_snapshot_eval_inputs_flag_declined_citing_something_invalid() -> None:
+    # A decline must cite nothing (same canonical rule).
+    (built,) = snapshot_eval_inputs([_mapping_snapshot(found=False, cited=("c1",))])
+
+    assert built.citation_valid is False
+
+
 def test_snapshot_eval_inputs_carry_the_declined_outcome() -> None:
     (built,) = snapshot_eval_inputs([_mapping_snapshot(found=False, cited=())])
 
