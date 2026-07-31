@@ -81,10 +81,12 @@ function sseStream() {
       "x-vercel-ai-ui-message-stream": "v1",
     },
   });
+  // Wait out the stream throttle inside `act` so the SDK's trailing flush
+  // lands and renders before the next assertion (see ask-panel's helper).
   const frame = (bytes: Uint8Array) =>
     act(async () => {
       controller.enqueue(bytes);
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 60));
     });
   return {
     response,

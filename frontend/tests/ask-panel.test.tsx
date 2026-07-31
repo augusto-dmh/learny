@@ -90,12 +90,13 @@ function sseStream() {
       "x-vercel-ai-ui-message-stream": "v1",
     },
   });
-  // Enqueue one frame, then yield a macrotask inside `act` so the SDK consumes
-  // the chunk and flushes its React state update before the next assertion.
+  // Enqueue one frame, then wait out the stream throttle inside `act` so the
+  // SDK's trailing flush lands and renders before the next assertion — a bare
+  // macrotask races the 50ms throttle window on slow runners.
   const frame = (bytes: Uint8Array) =>
     act(async () => {
       controller.enqueue(bytes);
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 60));
     });
   return {
     response,
