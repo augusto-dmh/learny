@@ -46,19 +46,18 @@ _JUDGE_MAX_TOKENS = 1024
 # (faithfulness −0.10, relevancy −0.5) — the gate detects regression from a
 # measured baseline, it does not encode aspirational quality.
 #
-# FAITHFULNESS_MIN (2026-07-18): five keyed seed runs of the live judge tier
-# (generation claude-sonnet-5, judge claude-haiku-4-5) scored faithfulness 1.0
-# stably; 1.0 − 0.10.
-#
-# RELEVANCY_MIN (2026-07-21): after the relevancy rubric gained one worked
-# exemplar per score, the anchored judge (haiku) was re-run over the 12 committed
-# replay snapshots ×3. The nine answered cases held a stable mean of ~3.3
-# (3.44/3.22/3.22); the three not-found declines score 1 by construction — an
-# empty answer is off-topic — and are excluded from the relevancy baseline exactly
-# as faithfulness treats them as vacuously faithful. 3.3 − 0.5. Re-derive whenever
-# the generation or judge model changes, or when the judge tier widens.
+# Both constants (2026-07-31): re-derived for the opus judge switch (ADR-028 /
+# RFC-005 Cycle B). Three keyed seed runs of the live judge tier — the 12
+# committed replay snapshots, generation claude-sonnet-5, judge claude-opus-4-8,
+# answered-only means per ADR-028 (declines carry null scores and stay out) —
+# scored the nine answered cases faithfulness 1.0/1.0/1.0 (1.0 − 0.10) and
+# relevancy 3.56/3.44/3.67, grand mean 3.556 (3.556 − 0.5, rounded to one
+# decimal). Evidence: evals/results/2026-07-31-059cb763.jsonl; derivation and
+# flip decision: docs/research/2026-07-31/opus-judge-recalibration.md.
+# Re-derive whenever the generation or judge model changes, or when the judge
+# tier widens.
 FAITHFULNESS_MIN = 0.90
-RELEVANCY_MIN = 2.8
+RELEVANCY_MIN = 3.1
 
 _FAITHFULNESS_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -156,7 +155,9 @@ class EvalInput:
     ``evidence_text`` is the plain-text passages the answer was grounded in (no
     citations-enabled documents — structured outputs would 400 otherwise);
     ``citation_valid`` is the deterministic invariant result carried through to the
-    JSONL line and the gate.
+    JSONL line and the gate. ``found=False`` marks a declined ("not found in
+    source") case: it is not judge-scored and stays out of the aggregate means
+    (ADR-028).
     """
 
     case_id: str
@@ -165,6 +166,7 @@ class EvalInput:
     answer_text: str
     generation_model: str
     citation_valid: bool
+    found: bool = True
 
 
 class _MessagesClient(Protocol):
@@ -200,7 +202,11 @@ class Judge:
         if self._client is None:
             import anthropic  # local import — the sole SDK reference (ADR-0007/0009)
 
-            self._client = anthropic.Anthropic(api_key=self._api_key)
+            # Explicit per-call time bound: the SDK defaults (600s × 3 attempts)
+            # would let the 18-call nightly tier run for hours against a degraded
+            # endpoint and starve the workflow of its artifact-upload step. Judge
+            # outputs are ≤1024 tokens, so two minutes is generous.
+            self._client = anthropic.Anthropic(api_key=self._api_key, timeout=120.0, max_retries=2)
         return self._client
 
     def _judge(self, *, system: str, user: str, schema: dict[str, Any]) -> dict[str, Any]:
@@ -313,9 +319,12 @@ def run_eval(
     Caps the case count first (cost bound, research §8), scores faithfulness and
     relevancy per case, and writes ``evals/results/<date>-<git-sha>.jsonl`` with one
     line per case: ``{case_id, ts, git_sha, generation_model, judge_model,
-    prompt_hash, faithfulness, relevancy, citation_valid}``. When ``gate`` is true
-    (defaults to ``LEARNY_EVAL_GATE=1``) the aggregate thresholds are asserted;
-    otherwise the run is report-only (calibration-first). Returns the written lines.
+    prompt_hash, faithfulness, relevancy, citation_valid, found}``. Declined cases
+    (``found=False``) make no judge calls and carry ``null`` scores — a decline is
+    a different outcome class, not a low-quality answer (ADR-028). When ``gate`` is
+    true (defaults to ``LEARNY_EVAL_GATE=1``) the aggregate thresholds are
+    asserted; otherwise the run is report-only (calibration-first). Returns the
+    written lines.
     """
     if gate is None:
         gate = os.getenv("LEARNY_EVAL_GATE") == "1"
@@ -325,10 +334,16 @@ def run_eval(
     capped = list(inputs[:max_cases])
     lines: list[dict[str, Any]] = []
     for item in capped:
-        faithfulness = judge.faithfulness(
-            question=item.question, evidence=item.evidence_text, answer=item.answer_text
-        )
-        relevancy = judge.relevancy(question=item.question, answer=item.answer_text)
+        if item.found:
+            faithfulness = judge.faithfulness(
+                question=item.question, evidence=item.evidence_text, answer=item.answer_text
+            ).supported_ratio
+            relevancy = judge.relevancy(question=item.question, answer=item.answer_text)
+        else:
+            # A decline is scored by no judge: its quality scores are null and it
+            # stays out of the aggregate means (ADR-028).
+            faithfulness = None
+            relevancy = None
         lines.append(
             {
                 "case_id": item.case_id,
@@ -337,9 +352,10 @@ def run_eval(
                 "generation_model": item.generation_model,
                 "judge_model": judge.model,
                 "prompt_hash": phash,
-                "faithfulness": faithfulness.supported_ratio,
+                "faithfulness": faithfulness,
                 "relevancy": relevancy,
                 "citation_valid": item.citation_valid,
+                "found": item.found,
             }
         )
 
@@ -402,12 +418,21 @@ def _write_jsonl(lines: Sequence[dict[str, Any]], *, results_dir: Path, git_sha:
 
 
 def _assert_aggregates(lines: Sequence[dict[str, Any]]) -> None:
-    """Enforce the aggregate thresholds (mean faithfulness/relevancy + citations)."""
+    """Enforce the aggregate thresholds (mean faithfulness/relevancy + citations).
+
+    The means run over answered lines only — a decline is its own outcome class,
+    carried by not-found discipline, never by the quality means (ADR-028). The
+    citation invariant runs over every line, declines included. A run with no
+    answered line has no mean: the threshold asserts are skipped.
+    """
     if not lines:
         return
-    mean_faithfulness = sum(line["faithfulness"] for line in lines) / len(lines)
-    mean_relevancy = sum(line["relevancy"] for line in lines) / len(lines)
     assert all(line["citation_valid"] for line in lines), "a case failed citation validity"
+    answered = [line for line in lines if line.get("found", True)]
+    if not answered:
+        return
+    mean_faithfulness = sum(line["faithfulness"] for line in answered) / len(answered)
+    mean_relevancy = sum(line["relevancy"] for line in answered) / len(answered)
     assert mean_faithfulness >= FAITHFULNESS_MIN, (
         f"mean faithfulness {mean_faithfulness:.3f} < {FAITHFULNESS_MIN}"
     )

@@ -4,8 +4,9 @@ Derived from GEN-21 and the D3 Done-when: faithfulness aggregates claim labels t
 a supported ratio; relevancy parses the integer score; ``run_eval`` writes one
 JSONL line per case with the full schema (case id, timestamps, model ids, prompt
 hash, scores, citation flag), caps at ``max_cases``, and is report-only unless the
-gate is on; the SDK is imported lazily. A ``live and eval`` smoke runs the real
-judge over one inline case and is skipped without a key (the nightly's judge tier).
+gate is on; the SDK is imported lazily. A ``live and eval`` test runs the real
+judge over the committed replay snapshots — the nightly judged tier (RECAL-05) —
+and is skipped without a key.
 """
 
 from __future__ import annotations
@@ -169,6 +170,7 @@ def test_run_eval_writes_jsonl_line_per_case_with_full_schema(tmp_path: Path) ->
         "faithfulness",
         "relevancy",
         "citation_valid",
+        "found",
     }
     assert first["case_id"] == "case-0"
     assert first["generation_model"] == "claude-sonnet-4-6"
@@ -179,6 +181,107 @@ def test_run_eval_writes_jsonl_line_per_case_with_full_schema(tmp_path: Path) ->
     assert first["citation_valid"] is True
     assert written[1]["faithfulness"] == pytest.approx(0.5)
     assert written[1]["relevancy"] == 3
+
+
+# --- Decline semantics (ADR-028 / RECAL-02, RECAL-03) --------------------------
+
+
+def _declined_input(case_id: str = "case-declined", *, citation_valid: bool = True) -> EvalInput:
+    return EvalInput(
+        case_id=case_id,
+        question="q-declined",
+        evidence_text="passages",
+        answer_text="",
+        generation_model="claude-sonnet-4-6",
+        citation_valid=citation_valid,
+        found=False,
+    )
+
+
+def test_run_eval_skips_judge_calls_for_declined_cases(tmp_path: Path) -> None:
+    # One answered + one declined case: only the answered case is judged
+    # (2 calls); the declined line carries null scores and found=false (ADR-028).
+    judge, client = _judge([_faithfulness_payload(True), {"score": 5}])
+
+    lines = run_eval(
+        [*_inputs(1), _declined_input()],
+        judge=judge,
+        max_cases=10,
+        results_dir=tmp_path,
+        gate=False,
+    )
+
+    assert len(lines) == 2
+    assert len(client.messages.calls) == 2
+    declined = lines[1]
+    assert declined["found"] is False
+    assert declined["faithfulness"] is None
+    assert declined["relevancy"] is None
+
+
+def test_run_eval_marks_answered_lines_found_true_by_default(tmp_path: Path) -> None:
+    # EvalInput without an explicit found flag behaves exactly as before ADR-028:
+    # judged normally, line carries found=true.
+    judge, client = _judge([_faithfulness_payload(True), {"score": 5}])
+
+    lines = run_eval(_inputs(1), judge=judge, max_cases=10, results_dir=tmp_path, gate=False)
+
+    assert lines[0]["found"] is True
+    assert len(client.messages.calls) == 2
+
+
+def test_gate_means_exclude_declined_lines(tmp_path: Path) -> None:
+    # A passing answered case plus declined cases: the gate means are computed
+    # over the answered line alone, so the run passes (ADR-028 answered-only).
+    judge, _ = _judge([_faithfulness_payload(True), {"score": 5}])
+
+    lines = run_eval(
+        [*_inputs(1), _declined_input("case-d1"), _declined_input("case-d2")],
+        judge=judge,
+        max_cases=10,
+        results_dir=tmp_path,
+        gate=True,
+    )
+
+    assert [line["found"] for line in lines] == [True, False, False]
+
+
+def test_gate_treats_legacy_lines_without_found_key_as_answered() -> None:
+    # Archived JSONL lines predate the `found` field (ADR-028): the gate must
+    # treat them as answered, so a failing legacy line still trips the
+    # thresholds instead of being silently skipped.
+    from app.eval.judge import _assert_aggregates
+
+    legacy = {"faithfulness": 0.0, "relevancy": 1, "citation_valid": True}
+    with pytest.raises(AssertionError, match="faithfulness"):
+        _assert_aggregates([legacy])
+
+
+def test_gate_all_declined_skips_threshold_asserts(tmp_path: Path) -> None:
+    # No answered line exists, so no mean exists: the threshold asserts are
+    # skipped and the gated run passes (ADR-028 all-declined edge).
+    judge, client = _judge([])
+
+    lines = run_eval(
+        [_declined_input()], judge=judge, max_cases=10, results_dir=tmp_path, gate=True
+    )
+
+    assert len(lines) == 1
+    assert client.messages.calls == []
+
+
+def test_gate_all_declined_still_asserts_citation_validity(tmp_path: Path) -> None:
+    # The citation invariant runs over ALL lines, declines included (ADR-028).
+    judge, _ = _judge([])
+
+    with pytest.raises(AssertionError, match="citation"):
+        run_eval(
+            [_declined_input(citation_valid=False)],
+            judge=judge,
+            max_cases=10,
+            results_dir=tmp_path,
+            gate=True,
+        )
 
 
 # --- max_cases cap (GEN-21 / research §8 cost cap) -----------------------------
@@ -268,13 +371,14 @@ def test_gate_passes_on_baseline_aggregates(tmp_path: Path) -> None:
 
 def test_gate_constants_pin_the_calibrated_baselines() -> None:
     # The calibration (docs/ops/eval-calibration.md): observed mean minus the
-    # safety margin. Faithfulness from the 2026-07-18 seed runs (1.0 − 0.10);
-    # relevancy re-derived 2026-07-21 after the rubric was anchored (answered-case
-    # mean ~3.3 − 0.5). A drive-by edit to either constant silently re-arms or
-    # disarms the nightly gate, so the derived values are pinned here exactly like
-    # the model default is pinned in test_config.py.
+    # safety margin. Both re-derived 2026-07-31 for the opus judge switch over
+    # the 12-snapshot tier with answered-only means (ADR-028): faithfulness
+    # 1.0 − 0.10, relevancy grand mean 3.556 − 0.5 rounded to one decimal. A
+    # drive-by edit to either constant silently re-arms or disarms the nightly
+    # gate, so the derived values are pinned here exactly like the model default
+    # is pinned in test_config.py.
     assert FAITHFULNESS_MIN == 0.90
-    assert RELEVANCY_MIN == 2.8
+    assert RELEVANCY_MIN == 3.1
 
 
 def test_relevancy_rubric_carries_one_worked_exemplar_per_score() -> None:
@@ -299,6 +403,54 @@ def test_gate_defaults_to_env_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         run_eval(_inputs(1), judge=judge, max_cases=10, results_dir=tmp_path)
 
 
+def test_snapshot_tier_composes_with_run_eval_offline(tmp_path: Path) -> None:
+    # The nightly tier end-to-end, minus the network: the committed snapshots map
+    # through snapshot_eval_inputs into run_eval with a fake judge, declines make
+    # no calls and carry nulls, and passing scores clear the pinned gate.
+    from tests.eval.harness import load_snapshots, snapshot_eval_inputs
+
+    inputs = snapshot_eval_inputs(load_snapshots())
+    if not inputs:
+        pytest.skip("no committed generation snapshots to compose")
+    answered_count = sum(1 for i in inputs if i.found)
+    payloads = [p for i in inputs if i.found for p in (_faithfulness_payload(True), {"score": 4})]
+    judge, client = _judge(payloads)
+
+    lines = run_eval(inputs, judge=judge, max_cases=50, results_dir=tmp_path, gate=True)
+
+    assert len(lines) == len(inputs)
+    assert len(client.messages.calls) == answered_count * 2
+    assert all(
+        line["faithfulness"] is None and line["relevancy"] is None
+        for line in lines
+        if not line["found"]
+    )
+
+
+def test_real_client_is_built_with_a_bounded_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Without an explicit bound the SDK defaults (600s × 3 attempts) let the
+    # 18-call nightly tier burn hours on a degraded endpoint before the workflow
+    # reaches its artifact-upload step.
+    import sys
+    import types
+
+    captured: dict[str, object] = {}
+
+    fake_sdk = types.ModuleType("anthropic")
+
+    def _fake_anthropic(**kwargs: object) -> object:
+        captured.update(kwargs)
+        return object()
+
+    fake_sdk.Anthropic = _fake_anthropic  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "anthropic", fake_sdk)
+
+    Judge(api_key="unused-fake", model=_JUDGE_MODEL)._get_client()
+
+    assert captured["timeout"] == 120.0
+    assert captured["max_retries"] == 2
+
+
 # --- Lazy SDK import (GEN-03) --------------------------------------------------
 
 
@@ -314,43 +466,50 @@ def test_judge_module_imports_no_sdk_at_module_level() -> None:
     assert "anthropic" not in top_level
 
 
-# --- Live judge smoke (nightly judge tier) — skipped without a key -------------
+# --- Live judge tier (nightly) — the committed replay snapshots ----------------
 
 
 @pytest.mark.live
 @pytest.mark.eval
 @pytest.mark.skipif(
     not os.getenv("LEARNY_ANTHROPIC_API_KEY"),
-    reason="LEARNY_ANTHROPIC_API_KEY unset — live judge smoke skipped (CI stays offline)",
+    reason="LEARNY_ANTHROPIC_API_KEY unset — live judge tier skipped (CI stays offline)",
 )
-def test_live_judge_scores_one_case() -> None:
-    # Writes to the real evals/results/ dir (the default) so the nightly run
-    # produces the results JSONL the workflow uploads as an artifact (GEN-22).
-    # Live-only, so an offline run never touches the repo tree.
+def test_live_judge_scores_replay_snapshots() -> None:
+    # The nightly judged tier IS the committed replay snapshots (RECAL-05): the
+    # gate runs on the same distribution its thresholds were derived from, and
+    # the calibration runbook's "run the live tier ≥3 times" is literally this
+    # test. Writes to the real evals/results/ dir (the default) so the nightly
+    # run produces the results JSONL the workflow uploads as an artifact
+    # (GEN-22). Live-only, so an offline run never touches the repo tree.
     from app.core.config import get_settings
+    from tests.eval.harness import load_snapshots, snapshot_eval_inputs
 
     settings = get_settings()
     judge = Judge(api_key=os.environ["LEARNY_ANTHROPIC_API_KEY"], model=settings.judge_model)
-    evidence = (
-        "Ocean tides rise and fall because the moon's gravity pulls seawater across the planet."
-    )
-    grounded = EvalInput(
-        case_id="live-tides",
-        question="Why do ocean tides rise and fall?",
-        evidence_text=evidence,
-        answer_text="Ocean tides rise and fall because the moon's gravity pulls seawater.",
-        generation_model=settings.generation_model,
-        citation_valid=True,
-    )
+    inputs = snapshot_eval_inputs(load_snapshots())
+    assert inputs, "no committed snapshots — the nightly judge tier would be empty"
 
-    lines = run_eval([grounded], judge=judge, max_cases=settings.eval_max_cases)
+    lines = run_eval(inputs, judge=judge, max_cases=settings.eval_max_cases)
 
-    assert len(lines) == 1
-    assert 0.0 <= lines[0]["faithfulness"] <= 1.0
-    assert lines[0]["relevancy"] in range(1, 6)
+    assert len(lines) == len(inputs)
+    declined = [line for line in lines if not line["found"]]
+    answered = [line for line in lines if line["found"]]
+    assert declined and answered  # the committed tier carries both outcome classes
+    assert all(line["faithfulness"] is None and line["relevancy"] is None for line in declined)
+    assert all(
+        0.0 <= line["faithfulness"] <= 1.0 and line["relevancy"] in range(1, 6) for line in answered
+    )
 
 
 # --- Nightly enrollment guard --------------------------------------------------
+
+
+def test_live_judge_tier_carries_the_nightly_markers() -> None:
+    # Same guard as the retrieval arm below: the `live` + `eval` markers are the
+    # sole wiring that enrolls the judge tier in the nightly selection.
+    marker_names = {mark.name for mark in test_live_judge_scores_replay_snapshots.pytestmark}
+    assert {"live", "eval"} <= marker_names
 
 
 def test_keyed_retrieval_arm_carries_the_nightly_markers() -> None:

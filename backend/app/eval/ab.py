@@ -27,13 +27,13 @@ aggregate):
 - ``found: bool``              — did the model answer (vs decline)? **absent → True**.
 - ``expected_not_found: bool`` — is the case unanswerable by design? **absent → False**.
 
-Not-found handling (recorded decisions, tasks.md Phase B status line): a decline
-scores relevancy 1 *by construction* (an empty answer is off-topic), so the
-**relevancy mean excludes declined lines** (``found`` False); faithfulness treats a
-decline as vacuously faithful (ratio 1.0) and keeps it in the mean, matching the
-existing gate. **Not-found discipline** is its own metric — the
-decline-when-unanswerable rate over the ``expected_not_found`` cases — and is
-``None`` for a tier with no such cases. Silver cases are all authored answerable, so
+Not-found handling (ADR-028): a decline is its own outcome class, never a
+quality signal — **both the faithfulness and relevancy means exclude declined
+lines** (``found`` False), matching the nightly gate, and ``run_eval`` decline
+lines carry ``null`` scores (they are never judge-called). Judge agreement pairs
+answered lines only. **Not-found discipline** is the metric that carries
+declines — the decline-when-unanswerable rate over the ``expected_not_found``
+cases — and is ``None`` for a tier with no such cases. Silver cases are all authored answerable, so
 silver discipline is ``None`` and does not drive the generation verdict; faithfulness
 and relevancy do.
 
@@ -77,11 +77,13 @@ class TierAggregate:
     """One tier's metrics for one generation model (``None`` mean/rate = no lines).
 
     ``scored`` counts metric-bearing lines (status ok); ``answered`` the subset the
-    model actually answered (``found``). ``mean_relevancy`` averages only the
-    answered lines (declines score 1 by construction); ``mean_faithfulness`` and
-    ``citation_valid_rate`` cover all scored lines. ``not_found_discipline`` is
-    ``not_found_correct / not_found_expected`` — the decline-when-unanswerable rate —
-    or ``None`` when the tier has no ``expected_not_found`` case.
+    model actually answered (``found``). ``mean_faithfulness`` and
+    ``mean_relevancy`` average only the answered lines — a decline is its own
+    outcome class, carried by ``not_found_discipline``, never by the quality means
+    (ADR-028). ``citation_valid_rate`` covers all scored lines.
+    ``not_found_discipline`` is ``not_found_correct / not_found_expected`` — the
+    decline-when-unanswerable rate — or ``None`` when the tier has no
+    ``expected_not_found`` case.
     """
 
     tier: str
@@ -137,7 +139,7 @@ def _tier_aggregate(tier: str, lines: list[dict[str, Any]]) -> TierAggregate:
         answered=len(answered),
         not_found_expected=len(not_found_expected),
         not_found_correct=len(not_found_correct),
-        mean_faithfulness=_mean(float(line["faithfulness"]) for line in lines),
+        mean_faithfulness=_mean(float(line["faithfulness"]) for line in answered),
         mean_relevancy=_mean(float(line["relevancy"]) for line in answered),
         citation_valid_rate=_mean(1.0 if line["citation_valid"] else 0.0 for line in lines),
         not_found_discipline=discipline,
@@ -207,12 +209,14 @@ def judge_agreement(a: Sequence[dict[str, Any]], b: Sequence[dict[str, Any]]) ->
     """Compare judge ``a`` vs judge ``b`` over the cases both scored.
 
     Lines are paired by (case_id, generation_model); unpaired lines on either side
-    are excluded and do not count toward ``n``. Agreement is measured on the
+    are excluded and do not count toward ``n``. Declined lines (``found`` False)
+    are excluded before pairing — a decline carries no quality scores to agree on
+    (``run_eval`` writes them as ``null``, ADR-028). Agreement is measured on the
     relevancy score; a gate flip is a paired case one judge passes and the other
     fails. When a key repeats within a judge's list the last occurrence wins.
     """
-    a_by = {_pair_key(line): line for line in a}
-    b_by = {_pair_key(line): line for line in b}
+    a_by = {_pair_key(line): line for line in a if line.get("found", True)}
+    b_by = {_pair_key(line): line for line in b if line.get("found", True)}
     keys = a_by.keys() & b_by.keys()
     n = len(keys)
     if n == 0:

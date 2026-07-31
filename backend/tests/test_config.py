@@ -75,7 +75,7 @@ def test_generation_settings_defaults(monkeypatch) -> None:
     assert settings.generation_model == "claude-sonnet-5"
     assert settings.generation_effort == "medium"
     assert settings.generation_max_tokens == 4096
-    assert settings.judge_model == "claude-haiku-4-5"
+    assert settings.judge_model == "claude-opus-4-8"
     assert settings.eval_max_cases == 50
 
 

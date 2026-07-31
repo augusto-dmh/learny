@@ -1,6 +1,6 @@
 # RFC-005: Evidence-Gated Hardening with a Product Beachhead
 
-- **Status**: Draft, **PAUSED after Cycle A** (2026-07-24) — superseded in sequence by [RFC-006](0006-reading-first-ux-overhaul.md) (reading-first UX overhaul), by driver decision. Cycle A shipped (PR #47); Cycles B–F stay queued unmodified and resume when RFC-006 completes or pauses. Cycle E (worker liveness) remains pullable forward if worker pain bites mid-RFC-006. ADR-0028 stays reserved for the decline-faithfulness convention. Formal acceptance remains pending the RFC-004 dogfood retrospective (~2026-08-04)
+- **Status**: Draft, **RESUMED at Cycle B** (2026-07-31, RFC-006 complete) — Cycle A shipped (PR #47); Cycle B shipped (PR #59): ADR-0028 settled the decline-faithfulness convention, the Opus baselines were re-derived over the widened replay tier, and the judge default flipped to `claude-opus-4-8` with thresholds re-pinned. Cycles C–F stay queued (C depends on B's settled judge); Cycle E (worker liveness) remains pullable forward. Formal acceptance remains pending the RFC-004 dogfood retrospective (~2026-08-04)
 - **Date**: 2026-07-24
 - **Driver**: Augusto
 - **Approvers**: Augusto
