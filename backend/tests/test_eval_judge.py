@@ -403,6 +403,30 @@ def test_gate_defaults_to_env_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         run_eval(_inputs(1), judge=judge, max_cases=10, results_dir=tmp_path)
 
 
+def test_real_client_is_built_with_a_bounded_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Without an explicit bound the SDK defaults (600s × 3 attempts) let the
+    # 18-call nightly tier burn hours on a degraded endpoint before the workflow
+    # reaches its artifact-upload step.
+    import sys
+    import types
+
+    captured: dict[str, object] = {}
+
+    fake_sdk = types.ModuleType("anthropic")
+
+    def _fake_anthropic(**kwargs: object) -> object:
+        captured.update(kwargs)
+        return object()
+
+    fake_sdk.Anthropic = _fake_anthropic  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "anthropic", fake_sdk)
+
+    Judge(api_key="unused-fake", model=_JUDGE_MODEL)._get_client()
+
+    assert captured["timeout"] == 120.0
+    assert captured["max_retries"] == 2
+
+
 # --- Lazy SDK import (GEN-03) --------------------------------------------------
 
 

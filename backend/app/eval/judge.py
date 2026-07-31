@@ -202,7 +202,11 @@ class Judge:
         if self._client is None:
             import anthropic  # local import — the sole SDK reference (ADR-0007/0009)
 
-            self._client = anthropic.Anthropic(api_key=self._api_key)
+            # Explicit per-call time bound: the SDK defaults (600s × 3 attempts)
+            # would let the 18-call nightly tier run for hours against a degraded
+            # endpoint and starve the workflow of its artifact-upload step. Judge
+            # outputs are ≤1024 tokens, so two minutes is generous.
+            self._client = anthropic.Anthropic(api_key=self._api_key, timeout=120.0, max_retries=2)
         return self._client
 
     def _judge(self, *, system: str, user: str, schema: dict[str, Any]) -> dict[str, Any]:
