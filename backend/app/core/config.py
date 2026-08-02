@@ -10,6 +10,7 @@ import logging
 import os
 from contextvars import ContextVar
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic import model_validator
@@ -279,6 +280,20 @@ class Settings(BaseSettings):
     instrument_capacity: int = 500
     slow_query_ms: int = 200
     slow_query_statement_chars: int = 2000
+
+    # The eval-results dashboard (RFC-005 Cycle D). ``dev_eval_dashboard_enabled``
+    # gates a second, independent dev-only surface: the nightly eval JSONL has
+    # accumulated since v2 with nothing rendering it. It carries its own switch
+    # rather than riding the instrument's so either surface can be turned on
+    # alone, and — like the instrument — a production process refuses it whatever
+    # the environment hands in (AD-243). ``eval_results_dir`` unset means the
+    # judge's own ``RESULTS_DIR``, which on a default checkout holds only the
+    # committed golden files; point it at a checkout of the ``eval-results``
+    # branch to render the full nightly history without putting git in the
+    # request path (AD-239). The reader walks it recursively, so either layout
+    # reads the same.
+    dev_eval_dashboard_enabled: bool = False
+    eval_results_dir: Path | None = None
 
     # The page unit (RFC-006 Cycle B). An EPUB reflows, so a book has no intrinsic
     # page; ``words_per_page`` defines one. Pages are derived from the word counts
