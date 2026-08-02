@@ -1,6 +1,6 @@
-"""A gate — backup stack topology + script safety (unit, OPS-01..09).
+"""A gate — backup stack topology + script safety (unit, OPS-01..09, PITR-03..06/10).
 
-Two layers, both pure text/YAML (no Docker required, deterministic):
+Three layers, all pure text/YAML (no Docker required, deterministic):
 
 * Compose topology — the prod overlay's ``backup`` sidecar (GHCR image, restart,
   the three required secret files, the ``backup_data`` volume, db+minio health
@@ -10,12 +10,19 @@ Two layers, both pure text/YAML (no Docker required, deterministic):
   ``--yes`` restore guard fails here, not in production. The end-to-end behaviour
   is proven by the CI roundtrip (OPS-10); these asserts pin the exact flags CI
   cannot easily distinguish from a weakened variant.
+* Recovery chain — the physical base backup and the WAL retention predicate. The
+  predicate is the highest-value assertion in the module: deleting a segment a
+  retained base still needs severs the replay chain invisibly, and the severance
+  only surfaces when someone actually attempts a restore. Its behaviour was
+  additionally exercised against a live archive during development; what is pinned
+  here is the shape a text diff can silently weaken.
 
 Mirrors the merge semantics + helper shapes of ``test_deploy_topology.py``.
 """
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -284,8 +291,8 @@ def test_base_backup_shares_the_nightly_dump_lock() -> None:
     # and the same /backups volume. Sharing backup.sh's lock file is what makes the
     # second arrival exit instead of running concurrently; a private lock here would
     # silently allow the overlap. Pin the SAME variable and default backup.sh uses.
-    assert 'LEARNY_BACKUP_LOCK:=/tmp/learny-backup.lock' in _BASE_BACKUP_SH
-    assert 'LEARNY_BACKUP_LOCK:=/tmp/learny-backup.lock' in _BACKUP_SH
+    assert "LEARNY_BACKUP_LOCK:=/tmp/learny-backup.lock" in _BASE_BACKUP_SH
+    assert "LEARNY_BACKUP_LOCK:=/tmp/learny-backup.lock" in _BACKUP_SH
     guard = [line for line in _executed_lines(_BASE_BACKUP_SH) if "flock" in line]
     assert guard and guard[0].lstrip().startswith("if !")
     assert "-n" in guard[0], "the guard must be non-blocking; blocking would queue a duplicate"
@@ -296,7 +303,7 @@ def test_base_backup_writes_to_a_temp_name_and_renames_only_on_success() -> None
     # must not touch prior bases.
     assert 'tmp="$base.tmp"' in _BASE_BACKUP_SH
     assert 'mv "$tmp" "$base"' in _BASE_BACKUP_SH
-    assert 'trap \'rm -rf "$tmp"\' EXIT' in _BASE_BACKUP_SH
+    assert "trap 'rm -rf \"$tmp\"' EXIT" in _BASE_BACKUP_SH
 
 
 def test_base_backup_records_the_wal_segment_its_replay_starts_from() -> None:
@@ -426,14 +433,14 @@ def test_the_floor_comparison_is_strict_so_the_base_start_segment_survives() -> 
     # The segment a base replays FROM is required by it. `<=` would delete exactly
     # the segment the oldest base needs first — an off-by-one that destroys the chain.
     assert '[ "$segment" \\< "$floor" ]' in _WAL_SH
-    assert '\\<=' not in _WAL_SH
+    assert "\\<=" not in _WAL_SH
 
 
 def test_no_base_backup_means_no_segment_is_pruned() -> None:
     # With no base there is no floor to derive from, and the fail-safe direction is
     # to keep everything rather than fall back to age.
     assert 'if [ -z "$oldest_base" ] || [ ! -f "$oldest_base/START_WAL" ]; then' in _WAL_SH
-    bail_at = _WAL_SH.index('no retained base backup with a recorded start segment')
+    bail_at = _WAL_SH.index("no retained base backup with a recorded start segment")
     delete_at = _WAL_SH.index('rm -f "$path"')
     assert bail_at < delete_at
     # The bail must actually leave the script, not merely log.
@@ -474,7 +481,7 @@ def test_wal_shipping_never_overwrites_an_archived_segment() -> None:
 def test_offsite_pruning_removes_only_what_was_pruned_locally() -> None:
     # Never a bulk age sweep and never `mirror --remove`: either would let an emptied
     # or lost local archive wipe the offsite copy that exists for exactly that case.
-    assert 'while IFS= read -r name; do' in _WAL_SH
+    assert "while IFS= read -r name; do" in _WAL_SH
     assert 'done < "$pruned"' in _WAL_SH
     assert "--older-than" not in _WAL_SH, "offsite WAL retention must not be age-driven"
     # Removal is guarded by an existence check, so a segment archived before offsite
@@ -603,6 +610,122 @@ def test_entrypoint_writes_the_backup_env_owner_only() -> None:
     # /etc/backup.env snapshots DB/MinIO/offsite credentials, so it must be created
     # owner-only. Pin the umask on the executed line (a doc comment must not satisfy it).
     assert any("umask 077" in line for line in _executed_lines(_ENTRYPOINT_SH))
+
+
+# --- configuration is documented, credentials are not committed (PITR-10) -------
+
+_ENV_EXAMPLE = (_REPO_ROOT / "backend" / ".env.production.example").read_text()
+
+# Every name that would be a credential if it appeared with a literal value.
+_SECRET_NAMES = (
+    "POSTGRES_PASSWORD",
+    "PGPASSWORD",
+    "MINIO_ROOT_USER",
+    "MINIO_ROOT_PASSWORD",
+    "LEARNY_BACKUP_REMOTE_ACCESS_KEY",
+    "LEARNY_BACKUP_REMOTE_SECRET_KEY",
+)
+
+
+def _shell_defaults(text: str) -> set[str]:
+    """The ``LEARNY_*`` variables a script declares with ``: "${VAR:=default}"``."""
+    return set(re.findall(r':\s*"\$\{(LEARNY_[A-Z0-9_]+):=', text))
+
+
+def test_every_new_backup_variable_is_documented_for_operators() -> None:
+    """PITR-10 — derived from the scripts, not from a hand-kept list.
+
+    A variable a job reads but no template mentions is a setting the operator can
+    only discover by reading the source, which is where undocumented retention
+    knobs come from.
+    """
+    existing = _shell_defaults(_BACKUP_SH) | _shell_defaults(_RESTORE_SH)
+    added = (
+        _shell_defaults(_BASE_BACKUP_SH)
+        | _shell_defaults(_WAL_SH)
+        | _shell_defaults(_ENTRYPOINT_SH)
+    ) - existing
+    assert added, "expected the recovery jobs to introduce configuration"
+    undocumented = {name for name in added if name not in _ENV_EXAMPLE}
+    assert not undocumented, f"undocumented in .env.production.example: {sorted(undocumented)}"
+
+
+def test_the_compose_level_archive_setting_is_documented() -> None:
+    # The db's archive settings are compose interpolation rather than a secrets file,
+    # so they are documented under their own heading; an operator tuning the recovery
+    # point must be able to find the knob.
+    base_text = _BASE.read_text()
+    for name in set(re.findall(r"\$\{(LEARNY_[A-Z0-9_]+)(?::-[^}]*)?\}", base_text)):
+        if name == "LEARNY_IMAGE_TAG":
+            continue  # set by the deploy workflow, not an operator setting
+        assert name in _ENV_EXAMPLE, f"{name} is interpolated into compose but undocumented"
+
+
+def test_the_coupled_retention_rule_is_stated_where_operators_configure_it() -> None:
+    # The one rule an operator can break by hand: the two artifact families cannot be
+    # retained independently. Stating the knob without the coupling invites exactly
+    # the age-based pruning that severs the chain.
+    section = _ENV_EXAMPLE[_ENV_EXAMPLE.index("LEARNY_WAL_KEEP_DAYS") - 2000 :]
+    assert "oldest retained base backup" in section
+    assert "Never prune the archive by age by hand" in section
+
+
+# The throwaway values used by local dev and by CI's scratch services. They exist
+# only inside a developer's machine or a runner, and the dev/CI stacks must share
+# them to boot at all. Anything else appearing as a literal is a real credential.
+_THROWAWAY = {"learny", "learny-dev-secret"}
+
+
+def test_no_credential_is_committed_in_compose_workflows_or_images() -> None:
+    """PITR-10 — a production credential reaches a container only via a secrets file.
+
+    Allow-listing the two documented throwaway values rather than excluding whole
+    files keeps this able to catch a real secret pasted into any of them.
+    """
+    scanned = [
+        _BASE,
+        _PROD,
+        _OVERRIDE,
+        *sorted((_REPO_ROOT / ".github" / "workflows").glob("*.yml")),
+        *sorted((_REPO_ROOT / "deploy" / "backup").iterdir()),
+        *sorted((_REPO_ROOT / "deploy" / "postgres").iterdir()),
+    ]
+    offenders: list[str] = []
+    for path in scanned:
+        if not path.is_file():
+            continue
+        for number, line in enumerate(path.read_text().splitlines(), start=1):
+            if line.lstrip().startswith("#"):
+                continue  # prose naming a variable is not a credential
+            for name in _SECRET_NAMES:
+                # A literal value begins with an alphanumeric; every legitimate use is
+                # a reference (`${VAR}`, `${VAR:?...}`, `${VAR:-...}`) or a bare name.
+                for value in re.findall(rf"\b{name}\s*[:=]\s*['\"]?([A-Za-z0-9][^\s'\"]*)", line):
+                    if value not in _THROWAWAY:
+                        offenders.append(f"{path.relative_to(_REPO_ROOT)}:{number}: {name}={value}")
+    assert not offenders, "committed credential(s):\n" + "\n".join(offenders)
+
+
+def test_the_production_overlay_carries_no_credential_literal_at_all() -> None:
+    # Even a throwaway value would be wrong in the production overlay: every service
+    # there takes its credentials from a required secrets file.
+    for number, line in enumerate(_PROD.read_text().splitlines(), start=1):
+        if line.lstrip().startswith("#"):
+            continue
+        for name in _SECRET_NAMES:
+            assert not re.search(rf"\b{name}\s*[:=]\s*['\"]?[A-Za-z0-9]", line), (
+                f"docker-compose.prod.yml:{number} sets {name} inline"
+            )
+
+
+def test_the_database_image_carries_no_backup_credential() -> None:
+    # The db archives to a shared volume precisely so the sidecar can own every
+    # offsite decision; an object-store client or credential here would widen the
+    # secret blast radius to the database container.
+    postgres_dir = (_REPO_ROOT / "deploy" / "postgres").iterdir()
+    text = "\n".join(p.read_text() for p in sorted(postgres_dir) if p.is_file())
+    for marker in ("mc alias", "ACCESS_KEY", "SECRET_KEY", "aws", "s3"):
+        assert marker not in text, f"the database image must not carry {marker!r}"
 
 
 # --- CI restore roundtrip (OPS-10) ----------------------------------------------

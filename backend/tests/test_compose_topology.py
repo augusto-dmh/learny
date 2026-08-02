@@ -306,7 +306,9 @@ def test_the_archive_volume_is_mounted_at_the_path_the_image_declares(base: dict
     coupling is what guarantees writability with no host-side chown.
     """
     created = [
-        line for line in _PG_DOCKERFILE.splitlines() if "install -d" in line and _ARCHIVE_DIR in line
+        line
+        for line in _PG_DOCKERFILE.splitlines()
+        if "install -d" in line and _ARCHIVE_DIR in line
     ]
     assert created, f"the image must create {_ARCHIVE_DIR} owned by the database user"
     assert "-o postgres" in created[0], "the archive directory must be owned by the database user"
