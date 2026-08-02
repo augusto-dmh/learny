@@ -116,6 +116,17 @@ describe("EvalDashboard", () => {
     expect(metricValue("Faithfulness")).toBe("1.000");
     expect(metricValue("Relevancy")).toBe("4.500");
     expect(metricValue("Citations valid")).toBe("1.000");
+    expect(screen.getByText("2026-07-30 10:00:00")).toBeTruthy();
+  });
+
+  it("says so when a run's records carry no timestamp", async () => {
+    // Undated runs sort last rather than at an arbitrary position, so the row
+    // has to admit the absence instead of rendering an invalid date.
+    mockFetch(200, dashboard({ runs: [run({ latest_ts: null })] }));
+
+    render(<EvalDashboard />);
+
+    expect(await screen.findByText("undated")).toBeTruthy();
   });
 
   it("names which gate condition a failing run broke", async () => {

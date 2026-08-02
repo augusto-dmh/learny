@@ -11,12 +11,14 @@ from __future__ import annotations
 import ast
 import json
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 import pytest
 
 from app.eval import results as reader
 from app.eval.judge import FAITHFULNESS_MIN, RELEVANCY_MIN, _assert_aggregates
+from app.infrastructure.web import evals as web_evals
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 COMMITTED_RESULTS = REPO_ROOT / "evals" / "results"
@@ -267,14 +269,22 @@ def test_a_mean_below_its_threshold_names_that_metric() -> None:
     assert (verdict, failures) == (reader.FAIL, (reader.RELEVANCY_FAILURE,))
 
 
-def test_thresholds_are_imported_rather_than_retyped() -> None:
-    """A threshold literal in this module would outlive the next recalibration.
+#: Every module on the dashboard's path that decides or publishes a threshold.
+#: Value-equality assertions cannot catch a literal re-typed at today's value —
+#: it only diverges at the next recalibration, which is precisely when nobody is
+#: looking at this test — so the ban is enforced structurally, per module.
+THRESHOLD_FREE_MODULES = (reader, web_evals)
+
+
+@pytest.mark.parametrize("module", THRESHOLD_FREE_MODULES, ids=lambda m: m.__name__)
+def test_thresholds_are_imported_rather_than_retyped(module: ModuleType) -> None:
+    """A threshold literal in these modules would outlive the next recalibration.
 
     Cycle B moved relevancy 3.0 → 3.1; a dashboard drawing its reference line
     from its own copy would have kept drawing the old one. Checks the parsed
     code rather than the text, so prose naming a threshold is not a violation.
     """
-    tree = ast.parse(Path(reader.__file__).read_text(encoding="utf-8"))
+    tree = ast.parse(Path(module.__file__ or "").read_text(encoding="utf-8"))
     numbers = [
         node.value
         for node in ast.walk(tree)
