@@ -192,6 +192,40 @@ def test_pdf_ocr_langs_fall_back_to_the_default_pair_when_empty() -> None:
     assert settings.pdf_ocr_lang_list() == ("en", "pt")
 
 
+def test_ingestion_max_attempts_defaults_to_five(monkeypatch) -> None:
+    # A deployment that never sets the knob still gets a bounded number of claims —
+    # the default is what stops a job that kills its worker from being redelivered
+    # forever, so it has to be a real value and not "unset means unlimited".
+    monkeypatch.delenv("LEARNY_INGESTION_MAX_ATTEMPTS", raising=False)
+
+    assert Settings(_env_file=None).ingestion_max_attempts == 5
+
+
+def test_ingestion_max_attempts_env_override(monkeypatch) -> None:
+    monkeypatch.setenv("LEARNY_INGESTION_MAX_ATTEMPTS", "2")
+
+    assert Settings(_env_file=None).ingestion_max_attempts == 2
+
+
+@pytest.mark.parametrize("value", ["0", "-1"])
+def test_ingestion_max_attempts_below_one_is_rejected_at_startup(monkeypatch, value: str) -> None:
+    # A cap below 1 terminates every job on its first claim — ingestion silently
+    # stops working. That has to be a boot failure the operator sees, not a fleet
+    # of jobs failing with a processing error that names nothing.
+    monkeypatch.setenv("LEARNY_INGESTION_MAX_ATTEMPTS", value)
+
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
+
+
+def test_env_example_documents_the_ingestion_attempts_cap() -> None:
+    # The knob decides when a stuck job stops retrying; an operator tuning it reads
+    # it off the contract.
+    contract = _ENV_EXAMPLE.read_text()
+
+    assert "\nLEARNY_INGESTION_MAX_ATTEMPTS=" in contract
+
+
 def test_fsrs_settings_defaults() -> None:
     # FSRS-6 population defaults; fuzzing on by default (tests disable it explicitly).
     settings = Settings(_env_file=None)
