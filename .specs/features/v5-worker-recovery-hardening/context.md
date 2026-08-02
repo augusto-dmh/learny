@@ -173,6 +173,83 @@ the `learny` compose project's `db`/`redis`/`minio` were never touched.
   own lock still prevents it from overlapping *itself* when a mirror runs long. Why not:
   two lock files instead of one for the operator to know about — documented in the runbook.
 
+## D-11 — Where the replay actually runs (in-phase) → AD-260
+
+**Chosen: the sidecar *prepares* the recovery; a profile-gated `db-restore` service
+built from the SAME image as `db` performs the replay.**
+
+The obvious reading of AD-254 — "restore logic lives in the sidecar" — was taken to
+mean the sidecar would also run the recovering server. It cannot, and the brief's
+premise that `postgresql16-client` supplies a server was **wrong**. Verified:
+
+```
+$ docker run --rm alpine:3.22 sh -c 'apk add postgresql16-client; ...'
+postgres -> MISSING     pg_ctl -> MISSING     initdb -> MISSING
+pg_basebackup -> /usr/bin/pg_basebackup   psql -> /usr/bin/psql   pg_dump -> /usr/bin/pg_dump
+```
+
+Adding alpine's `postgresql16` server package would have compiled, and would have been
+a trap: the alpine server carries no `vector.so`, so a recovered Learny cluster would
+start, replay, report success, and then fail on the first read of an embedding column —
+including any `pg_dump` of it, since dumping calls the type's output function. A
+recovery path that works only for tables without embeddings is not a recovery path.
+
+So the split is: the sidecar owns everything that reads the archive (choosing the base,
+unpacking it, writing the recovery configuration), and `db-restore` — same build
+context as `db`, therefore the same binaries and the same extension set — starts on the
+staged directory and replays. AD-254 holds unchanged: the database image gains no
+object-store client and no credential, and `db-restore` reads the archive **read-only**.
+
+Two consequences worth stating rather than discovering later. The restore is a
+two-command procedure (prepare, then bring up), which is also how a real PITR is
+performed; the prepare step prints the second command. And the staging area is its own
+volume, never `db_data` — a sidecar that runs cron jobs around the clock must not be
+able to overwrite the database it exists to protect, and a rehearsal then costs only
+disk.
+
+File ownership needed no magic uid: the official postgres entrypoint, when it starts as
+root, runs `find "$PGDATA" \! -user postgres -exec chown postgres '{}' +` before
+dropping privileges, so a directory the (root) sidecar unpacked is corrected at startup.
+Verified in the entrypoint source and in the running drill.
+
+- *Rejected — run the server inside the sidecar.* Why not: needs the alpine server
+  package, and that server cannot read the extension types the cluster contains.
+- *Rejected — restore straight into `db_data`.* Why not: it would put the live
+  database inside the blast radius of a permanently-running sidecar, and a botched
+  rehearsal would destroy the thing being rehearsed against.
+
+## D-12 — What makes the CI drill able to fail (in-phase) → AD-261
+
+**Chosen: three writes and two targets, not two writes and one.**
+
+The first drill written here had exactly the shape the phase brief describes — write A,
+record T, write B, restore to T, assert A present and B absent. It passed. The control
+run intended to prove the B-absent assertion *could* fail — restoring to a target after
+B — did not merely fail to show B, it crashed the server:
+
+```
+LOG:  last completed transaction was at log time 2026-08-02 15:45:59.293157+00
+FATAL:  recovery ended before configured recovery target was reached
+```
+
+PostgreSQL confirms it reached a time target only by seeing a **committed record past
+it**. A target after the last archived commit is therefore unreachable, and recovery
+refuses to finish rather than quietly stopping at the end of the archive — good
+behaviour, and the reason a target beyond the window fails loudly instead of silently
+under-restoring. But it also means the control needs a third write after the control
+target, or the control cannot run at all.
+
+The drill therefore writes three rows and records two moments. Restoring to the first
+yields row 1 only; restoring to the second — same base, same archive — yields rows 1
+and 2 and not 3. The pair is what makes the assertion evidence: replay demonstrably
+happened (row 1 returns), and the boundary demonstrably moves with the target rather
+than with anything else.
+
+Independently confirmed by mutation: deleting the emitted `recovery_target_time` line
+degrades the implementation into a whole-archive restore, and the drill's discriminating
+assertion then fails with `id=2 count: 1`. The script was restored byte-identical
+afterwards.
+
 ## D-9 — Execution shape → AD-257
 
 **Chosen: four phases, one worker per phase, all Opus; fresh Verifier on Fable.**
