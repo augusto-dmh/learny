@@ -868,6 +868,32 @@ def test_every_new_backup_variable_is_documented_for_operators() -> None:
     assert not undocumented, f"undocumented in .env.production.example: {sorted(undocumented)}"
 
 
+def test_the_hardcoded_container_paths_are_not_offered_as_tunables() -> None:
+    """A documented setting that cannot be set is worse than an undocumented one.
+
+    Compose hardcodes both mount points, and the db's archive_command writes the
+    literal archive path. An operator who "sets" either one points the sidecar at a
+    directory that does not exist: wal-archive.sh then takes its absent-directory
+    branch and exits 0, so the quarter-hourly job keeps reporting success while
+    shipping and pruning have stopped for good. They stay named in the template —
+    the variables exist — but never as an assignment.
+    """
+    compose_text = "\n".join(path.read_text() for path in (_BASE, _OVERRIDE, _PROD))
+    for name, mount in (
+        ("LEARNY_WAL_ARCHIVE_DIR", "wal_archive:/wal_archive"),
+        ("LEARNY_PITR_DIR", "pitr_data:/pitr"),
+    ):
+        assert name in _ENV_EXAMPLE, f"{name} must stay documented"
+        assert not re.search(rf"^{name}=", _ENV_EXAMPLE, flags=re.MULTILINE), (
+            f"{name} is presented as a settable value but compose hardcodes {mount}"
+        )
+        assert mount in compose_text, (
+            f"{name} is documented as fixed; compose must still hardcode {mount}"
+        )
+    # And the reason, so the next reader does not "helpfully" restore the assignments.
+    assert "NOT settable" in _ENV_EXAMPLE
+
+
 def test_the_compose_level_archive_setting_is_documented() -> None:
     # The db's archive settings are compose interpolation rather than a secrets file,
     # so they are documented under their own heading; an operator tuning the recovery

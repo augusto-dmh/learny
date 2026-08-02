@@ -18,6 +18,7 @@ from app.core.config import _RETIRED_KNOBS, Settings
 from app.core.instrumentation import InstrumentRecorder
 
 _ENV_EXAMPLE = Path(__file__).resolve().parents[1] / ".env.example"
+_ENV_PRODUCTION_EXAMPLE = Path(__file__).resolve().parents[1] / ".env.production.example"
 
 _INSTRUMENT_VARS = (
     "LEARNY_DEV_INSTRUMENT_ENABLED",
@@ -224,6 +225,14 @@ def test_env_example_documents_the_ingestion_attempts_cap() -> None:
     contract = _ENV_EXAMPLE.read_text()
 
     assert "\nLEARNY_INGESTION_MAX_ATTEMPTS=" in contract
+
+
+def test_production_template_documents_the_ingestion_attempts_cap() -> None:
+    # The operator who most needs it — the one running the deployment where a worker
+    # actually gets OOM-killed — reads the production template, not the dev one.
+    contract = _ENV_PRODUCTION_EXAMPLE.read_text()
+
+    assert "LEARNY_INGESTION_MAX_ATTEMPTS=" in contract
 
 
 def test_fsrs_settings_defaults() -> None:
