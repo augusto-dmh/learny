@@ -124,6 +124,57 @@ def test_expected_chunk_miss_is_recorded() -> None:
     assert line["expected_chunk_hit"] is False
 
 
+# --- decline handling (ADR-028: a decline is never judge-called) ---------------
+
+
+def test_declined_answer_skips_the_judge_and_carries_null_scores() -> None:
+    # The judge stands in for a paid call: if the decline path reached it, the
+    # line would flip to status error — so an ok line proves the skip.
+    line = run_silver_case(
+        _resolved(),
+        retrieve=lambda r: [FakeEvidence("c1")],
+        generate=lambda q, ev: FakeAnswer(text="", cited_chunk_ids=(), found=False),
+        judge=RaisingJudge(),
+        now=_FIXED,
+    )
+
+    assert line["status"] == "ok"
+    assert line["found"] is False
+    assert line["faithfulness"] is None
+    assert line["relevancy"] is None
+    # No judge ran, so no judge identity is recorded on the line.
+    assert "judge_model" not in line
+    assert "prompt_hash" not in line
+    assert line["generation_model"] == "claude-sonnet-5"
+    assert line["citation_valid"] is True  # a decline citing nothing is valid
+
+
+def test_declined_answer_that_cites_is_recorded_citation_invalid() -> None:
+    line = run_silver_case(
+        _resolved(),
+        retrieve=lambda r: [FakeEvidence("c1")],
+        generate=lambda q, ev: FakeAnswer(text="", cited_chunk_ids=("c1",), found=False),
+        judge=RaisingJudge(),
+        now=_FIXED,
+    )
+
+    assert line["status"] == "ok"
+    assert line["citation_valid"] is False
+
+
+def test_answered_line_carries_found_true() -> None:
+    line = run_silver_case(
+        _resolved(),
+        retrieve=lambda r: [FakeEvidence("c1")],
+        generate=lambda q, ev: FakeAnswer(cited_chunk_ids=("c1",), found=True),
+        judge=_ok_judge,
+        now=_FIXED,
+    )
+
+    assert line["status"] == "ok"
+    assert line["found"] is True
+
+
 # --- retrieved-empty is ok, not error (DEEP-19) --------------------------------
 
 

@@ -8,14 +8,18 @@ DEEP-10..15 and the recorded not-found / threshold decisions.
 
 from __future__ import annotations
 
+import pytest
+
 from app.eval.ab import (
     Agreement,
     ModelAggregate,
     TierAggregate,
     aggregate,
+    denoised_generation_verdict,
     generation_verdict,
     judge_agreement,
     judge_verdict,
+    metric_spread,
 )
 
 
@@ -392,3 +396,157 @@ def test_generation_stays_when_silver_has_no_comparable_metrics():
     sonnet = _arm(faithfulness=None, relevancy=None, discipline=None)
     opus = _arm(faithfulness=None, relevancy=None, discipline=None)
     assert generation_verdict(sonnet, opus) == "stay"
+
+
+# --- metric_spread (DENOISE-01: per-run spread, None-runs excluded) -------------
+
+
+def test_metric_spread_collects_the_silver_metric_across_runs():
+    runs = [
+        _arm(faithfulness=0.90, relevancy=3.0, discipline=None),
+        _arm(faithfulness=0.95, relevancy=3.5, discipline=None),
+        _arm(faithfulness=0.85, relevancy=4.0, discipline=None),
+    ]
+    spread = metric_spread(runs, tier="silver", metric="mean_faithfulness")
+    assert spread.values == (0.90, 0.95, 0.85)
+    assert spread.mean == pytest.approx(0.90)
+    assert spread.min == 0.85
+    assert spread.max == 0.95
+    assert spread.range == pytest.approx(0.10)
+
+
+def test_metric_spread_excludes_none_runs_instead_of_coercing():
+    runs = [
+        _arm(faithfulness=0.90, relevancy=3.0, discipline=None),
+        _arm(faithfulness=None, relevancy=3.5, discipline=None),
+    ]
+    spread = metric_spread(runs, tier="silver", metric="mean_faithfulness")
+    assert spread.values == (0.90,)
+
+
+def test_metric_spread_of_no_runs_is_visibly_empty_never_zero():
+    spread = metric_spread([], tier="silver", metric="mean_relevancy")
+    assert spread.values == ()
+    assert spread.mean is None
+    assert spread.min is None
+    assert spread.max is None
+    assert spread.range is None
+
+
+def test_metric_spread_of_all_none_runs_is_visibly_empty_never_zero():
+    runs = [_arm(faithfulness=None, relevancy=None, discipline=None)]
+    spread = metric_spread(runs, tier="silver", metric="not_found_discipline")
+    assert spread.values == ()
+    assert spread.mean is None
+
+
+def test_metric_spread_reads_the_golden_tier_when_asked():
+    golden = TierAggregate(
+        tier="golden",
+        scored=2,
+        answered=2,
+        not_found_expected=1,
+        not_found_correct=1,
+        mean_faithfulness=0.8,
+        mean_relevancy=3.0,
+        citation_valid_rate=1.0,
+        not_found_discipline=1.0,
+    )
+    silver = TierAggregate(
+        tier="silver",
+        scored=0,
+        answered=0,
+        not_found_expected=0,
+        not_found_correct=0,
+        mean_faithfulness=None,
+        mean_relevancy=None,
+        citation_valid_rate=None,
+        not_found_discipline=None,
+    )
+    run = ModelAggregate(line_count=2, error_count=0, other_count=0, golden=golden, silver=silver)
+    spread = metric_spread([run], tier="golden", metric="not_found_discipline")
+    assert spread.values == (1.0,)
+
+
+def test_metric_spread_of_a_constant_metric_has_zero_range():
+    runs = [
+        _arm(faithfulness=1.0, relevancy=3.0, discipline=None),
+        _arm(faithfulness=1.0, relevancy=3.5, discipline=None),
+    ]
+    spread = metric_spread(runs, tier="silver", metric="mean_faithfulness")
+    assert spread.range == 0.0
+
+
+# --- denoised_generation_verdict (DENOISE-02/03, AD-231: range-overlap rule) ----
+
+
+def _runs(faith: list, rel: list, disc: list) -> list[ModelAggregate]:
+    """One silver-tier arm's per-run aggregates from parallel metric lists."""
+    return [
+        _arm(faithfulness=f, relevancy=r, discipline=d)
+        for f, r, d in zip(faith, rel, disc, strict=True)
+    ]
+
+
+def test_denoised_moves_when_two_metrics_have_disjoint_ranges_and_none_worse():
+    sonnet = _runs([0.80, 0.82, 0.81], [3.0, 3.2, 3.1], [None] * 3)
+    opus = _runs([0.90, 0.92, 0.91], [3.5, 3.7, 3.6], [None] * 3)
+    assert denoised_generation_verdict(sonnet, opus) == "move"
+
+
+def test_denoised_stays_when_ranges_overlap_on_one_of_the_two_metrics():
+    # Opus faithfulness min (0.81) falls inside sonnet's range → tie on that
+    # metric → only one better → stay.
+    sonnet = _runs([0.80, 0.82, 0.81], [3.0, 3.2, 3.1], [None] * 3)
+    opus = _runs([0.81, 0.92, 0.91], [3.5, 3.7, 3.6], [None] * 3)
+    assert denoised_generation_verdict(sonnet, opus) == "stay"
+
+
+def test_denoised_touching_ranges_count_as_overlap_not_better():
+    # min(opus) == max(sonnet) on both metrics: the rule is strictly greater.
+    sonnet = _runs([0.80, 0.82], [3.0, 3.2], [None] * 2)
+    opus = _runs([0.82, 0.92], [3.2, 3.7], [None] * 2)
+    assert denoised_generation_verdict(sonnet, opus) == "stay"
+
+
+def test_denoised_stays_when_any_metric_is_strictly_worse():
+    # Faithfulness and relevancy disjointly better, but discipline disjointly
+    # worse → the "worse on none" leg fails.
+    sonnet = _runs([0.80, 0.82], [3.0, 3.2], [0.9, 1.0])
+    opus = _runs([0.90, 0.92], [3.5, 3.7], [0.5, 0.6])
+    assert denoised_generation_verdict(sonnet, opus) == "stay"
+
+
+def test_denoised_ceiling_flat_metric_on_both_arms_is_a_tie():
+    # Both arms flat at 1.0 faithfulness: identical point ranges overlap → tie,
+    # so only relevancy can be better → fewer than two → stay.
+    sonnet = _runs([1.0, 1.0, 1.0], [3.0, 3.1, 3.2], [None] * 3)
+    opus = _runs([1.0, 1.0, 1.0], [3.5, 3.6, 3.7], [None] * 3)
+    assert denoised_generation_verdict(sonnet, opus) == "stay"
+
+
+def test_denoised_all_none_metric_is_incomparable_never_worse():
+    # Discipline None on both arms (all-answerable silver) must not count as
+    # worse; the two real metrics decide.
+    sonnet = _runs([0.80, 0.82], [3.0, 3.2], [None] * 2)
+    opus = _runs([0.90, 0.92], [3.5, 3.7], [None] * 2)
+    assert denoised_generation_verdict(sonnet, opus) == "move"
+
+
+def test_denoised_one_sided_metric_is_incomparable():
+    # A metric with values on one arm only cannot count as better or worse.
+    sonnet = _runs([0.80, 0.82], [3.0, 3.2], [0.9, 1.0])
+    opus = _runs([0.90, 0.92], [3.5, 3.7], [None] * 2)
+    assert denoised_generation_verdict(sonnet, opus) == "move"
+
+
+def test_denoised_empty_arm_stays():
+    sonnet = _runs([0.80, 0.82], [3.0, 3.2], [None] * 2)
+    assert denoised_generation_verdict(sonnet, []) == "stay"
+    assert denoised_generation_verdict([], sonnet) == "stay"
+
+
+def test_denoised_single_better_metric_is_not_enough():
+    sonnet = _runs([0.80, 0.82], [3.0, 3.2], [None] * 2)
+    opus = _runs([0.90, 0.92], [3.0, 3.2], [None] * 2)  # relevancy identical → overlap
+    assert denoised_generation_verdict(sonnet, opus) == "stay"

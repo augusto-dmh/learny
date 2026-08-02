@@ -23,9 +23,9 @@ from app.domain.entities import MODE_ANSWER
 from tests.eval.silver import (
     BrokenCase,
     ResolvedCase,
-    SilverJudgement,
     SkippedCase,
     broken_result,
+    judge_adapter,
     load_silver_cases,
     resolve_case,
     run_silver_case,
@@ -60,20 +60,7 @@ def test_silver_tier_runs_over_the_local_corpus() -> None:
         max_tokens=settings.generation_max_tokens,
     )
     judge = Judge(api_key=api_key, model=settings.judge_model)
-    judge_prompt_hash = prompt_hash()
-
-    def judge_call(question, evidence, answer) -> SilverJudgement:  # noqa: ANN001
-        evidence_text = "\n\n".join(item.snippet for item in evidence)
-        faithfulness = judge.faithfulness(
-            question=question, evidence=evidence_text, answer=answer.text
-        )
-        relevancy = judge.relevancy(question=question, answer=answer.text)
-        return SilverJudgement(
-            faithfulness=faithfulness.supported_ratio,
-            relevancy=relevancy,
-            model=judge.model,
-            prompt_hash=judge_prompt_hash,
-        )
+    judge_call = judge_adapter(judge, prompt_hash())
 
     engine = create_engine(settings.database_url, future=True)
     lines: list[dict] = []

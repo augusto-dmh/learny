@@ -305,6 +305,32 @@ Generate = Callable[[str, Sequence[_Evidence]], _Answer]
 JudgeCall = Callable[[str, Sequence[_Evidence], _Answer], SilverJudgement]
 
 
+def judge_adapter(judge: Any, prompt_hash_value: str) -> JudgeCall:
+    """Adapt the judge port onto the silver line's judgement shape.
+
+    ``judge`` needs ``faithfulness(question=, evidence=, answer=)`` returning a
+    supported-ratio carrier, ``relevancy(question=, answer=)``, and a ``model``
+    attribute — the :class:`app.eval.judge.Judge` surface, duck-typed so this
+    module keeps zero provider imports. Both live entrypoints (nightly silver
+    and the generation study) wire through here, so the evidence join and the
+    judgement shape cannot drift apart.
+    """
+
+    def call(question: str, evidence: Sequence[_Evidence], answer: _Answer) -> SilverJudgement:
+        evidence_text = "\n\n".join(item.snippet for item in evidence)
+        faithfulness = judge.faithfulness(
+            question=question, evidence=evidence_text, answer=answer.text
+        )
+        return SilverJudgement(
+            faithfulness=faithfulness.supported_ratio,
+            relevancy=judge.relevancy(question=question, answer=answer.text),
+            model=judge.model,
+            prompt_hash=prompt_hash_value,
+        )
+
+    return call
+
+
 def _now_iso(now: datetime | None) -> str:
     return (now or datetime.now(UTC)).isoformat()
 
@@ -341,19 +367,28 @@ def run_silver_case(
     Status ``ok`` on success, ``error`` when any injected step raises (a provider
     5xx or a malformed judge output surfaces as a visible error line, never a
     silent score — DEEP-17/20). Empty retrieval is *not* an error: the case is
-    still generated and judged, with ``retrieved_empty`` flagged (DEEP-19). No book
-    text is written — only ids, scores, and flags.
+    still generated, with ``retrieved_empty`` flagged (DEEP-19). A declined
+    answer (``found`` falsy) is never judge-called: its scores are ``null`` and
+    the line carries no judge identity — a decline is its own outcome class,
+    carried by not-found discipline, never by the quality means (ADR-028). No
+    book text is written — only ids, scores, and flags.
     """
     line = _base_line(resolved.case, now)
     line["source_id"] = resolved.source_id
     try:
         evidence = list(retrieve(resolved))
         answer = generate(resolved.case.question, evidence)
-        judgement = judge(resolved.case.question, evidence, answer)
-        faithfulness = float(judgement.faithfulness)
-        relevancy = int(judgement.relevancy)
-        judge_model = str(judgement.model)
-        judge_prompt_hash = str(judgement.prompt_hash)
+        if answer.found:
+            judgement = judge(resolved.case.question, evidence, answer)
+            scores: dict[str, Any] = {
+                "faithfulness": float(judgement.faithfulness),
+                "relevancy": int(judgement.relevancy),
+                "judge_model": str(judgement.model),
+                "prompt_hash": str(judgement.prompt_hash),
+            }
+        else:
+            # ADR-028: no judge call, null scores, no judge identity on the line.
+            scores = {"faithfulness": None, "relevancy": None}
         generation_model = str(answer.model)
     except Exception as exc:  # noqa: BLE001 — any step failing becomes a visible error line
         return {**line, "status": "error", "error": f"{type(exc).__name__}: {exc}"}
@@ -363,10 +398,8 @@ def run_silver_case(
         **line,
         "status": "ok",
         "generation_model": generation_model,
-        "judge_model": judge_model,
-        "prompt_hash": judge_prompt_hash,
-        "faithfulness": faithfulness,
-        "relevancy": relevancy,
+        **scores,
+        "found": bool(answer.found),
         "citation_valid": _citation_valid(answer, retrieved_ids),
         "retrieved_empty": not evidence,
         "expected_chunk_hit": bool(retrieved_ids & set(resolved.expected_chunk_ids)),

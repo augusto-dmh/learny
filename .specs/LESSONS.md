@@ -116,6 +116,24 @@ Seen once or not yet corroborated. Tracked, not trusted.
 - evidence: backend/app/eval/judge.py:427 (M6) (backend/tests)
 - last seen: 2026-07-31T17:03:23Z
 
+### L-018 — Before any paid live eval run, assert every model identity the spec pins (judge and generation) against the resolved settings, not just the prompt hash — a git-ignored .env override can silently swap the model and the resume mismatch guard compares against the same drifted value.
+- signal: `ac_gap` · recurrence: 1 feature(s) · scope: `backend/tests/eval` · harmful: 0
+- features: v5-generation-denoise
+- evidence: DENOISE-10 / evals/results/2026-07-31-e9d9fbab-generation-denoise.jsonl (backend/tests/eval)
+- last seen: 2026-07-31T19:13:22Z
+
+### L-019 — When a spec AC requires an observable side channel (progress/log lines), add a test capturing its output — passing a discard callback in every test leaves the AC with zero evidence.
+- signal: `ac_gap` · recurrence: 1 feature(s) · scope: `backend/tests/eval` · harmful: 0
+- features: v5-generation-denoise
+- evidence: DENOISE-09 AC8 / backend/tests/eval/test_study_runner.py:88 (backend/tests/eval)
+- last seen: 2026-07-31T19:13:22Z
+
+### L-020 — Paid multi-run live studies should verify the provider credit balance covers the modeled estimate before the first unit — a mid-study credit exhaustion truncates the final run and turns the planned evidence into a recorded deviation.
+- signal: `spec_deviation` · recurrence: 1 feature(s) · scope: `backend/tests/eval` · harmful: 0
+- features: v5-generation-denoise
+- evidence: spec.md Recorded deviations / AD-238 (backend/tests/eval)
+- last seen: 2026-08-02T01:50:35Z
+
 ## Quarantined (failed when applied — ignore)
 
 A confirmed lesson that recurred alongside failure. Kept for the maintainer to review.

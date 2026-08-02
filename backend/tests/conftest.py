@@ -55,6 +55,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         default=False,
         help="run the live generation adapter over the eval cases and rewrite snapshots",
     )
+    parser.addoption(
+        "--generation-study",
+        action="store_true",
+        default=False,
+        help="run the budget-capped generation A/B study (both arms, seeded runs)",
+    )
 
 
 @pytest.fixture(autouse=True)

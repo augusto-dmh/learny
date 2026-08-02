@@ -86,24 +86,22 @@ Cycle F interleaves after RFC-004 Cycle C.
 | `v4-home-ia` | E | Two-card Home, streak/heatmap, nav collapse | Done (PR #44) |
 | `v4-polish-gate` | F | Restyle completion + 14-day dogfood gate | Polish shipped (PR #45); dogfood window open 2026-07-21, retrospective closes the RFC |
 
-## v5 (RFC-005 — Draft, PAUSED after Cycle A)
+## v5 (RFC-005 — Draft, RESUMED after RFC-006)
 
 v5 is proposed in [RFC-005](../../docs/rfc/0005-evidence-gated-hardening-roadmap.md)
 (**Draft, work-in-window authorized 2026-07-24**): evidence-gated hardening plus one
-product beachhead, written into the open RFC-004 dogfood window. Cycle A shipped; then
-the 2026-07-24 dogfood session produced thirteen UX findings and the driver **paused
-RFC-005 after Cycle A**, giving the window to RFC-006 (below). Cycles B–F stay queued
-and unmodified — nothing in RFC-006 touches the eval stack, the workers, or retrieval
-ranking — and resume when RFC-006 completes or pauses in turn. **None of them is the
-next cycle to run.** The one exception: Cycle E (worker liveness) may be pulled forward
-between any two RFC-006 cycles if worker pain bites. Formal acceptance remains pending
-the RFC-004 dogfood retrospective (~2026-08-04). Targets v0.5.0.
+product beachhead, written into the open RFC-004 dogfood window. The RFC paused after
+Cycle A for the 2026-07-24 dogfood findings (RFC-006, below) and **resumed once
+RFC-006 completed**: Cycle B shipped the Opus judge flip, and Cycle C the de-noised
+generation verdict. Cycles D–F remain queued in RFC order (E stays pullable forward
+if worker pain bites). Formal acceptance remains pending the RFC-004 dogfood
+retrospective (~2026-08-04). Targets v0.5.0.
 
 | tlc Cycle | RFC-005 Cycle | Scope | Status |
 |---|---|---|---|
 | `v5-offline-suite-honesty` | A | conftest provider pin (offline-suite leak) + teach-panel resume deflake | Done (PR #47) |
 | `v5-opus-judge-recalibration` | B | Decline-faithfulness contract (ADR-0028) + Opus judge re-derivation → flip-or-stay | Done (PR #59) — FLIP: judge default now `claude-opus-4-8`, thresholds re-pinned (0.90 / 3.1), nightly tier = the 12 replay snapshots |
-| `v5-generation-denoise` | C | Multi-run Sonnet-vs-Opus A/B, per-metric variance | Paused (queued behind RFC-006) |
+| `v5-generation-denoise` | C | Multi-run Sonnet-vs-Opus A/B, per-metric variance | Built (PR pending) — de-noised STAY on `claude-sonnet-5` under the opus judge (2 complete runs + partial run 3, 137/144 units — operator credit halt, deviation recorded; complete-runs cross-check agrees); committed study runner closes the uncommitted-driver gap |
 | `v5-eval-dashboard` | D | Read-only render of the nightly eval JSONL (compact, cuttable) | Paused (queued behind RFC-006) |
 | `v5-worker-recovery-hardening` | E | Celery worker liveness/heartbeat + WAL/PITR restore drill | Paused (pullable forward if worker pain bites) |
 | `v5-spoiler-safe-retrieval` | F | Position-scoped retrieval (build now, deploy after the retrospective) | Paused (deploy also dogfood-gated) |
