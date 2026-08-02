@@ -37,6 +37,9 @@ services:
       # the surface exists only here. Local runs a single API worker, which is
       # what makes its view of the traffic complete.
       LEARNY_DEV_INSTRUMENT_ENABLED: "true"
+      # Mounts the eval-results dashboard behind /dev/evals on the same terms:
+      # local only, never set by the prod overlay, refused by a production process.
+      LEARNY_DEV_EVAL_DASHBOARD_ENABLED: "true"
     # Optional local AI-provider keys (git-ignored; see backend/.env.example).
     # `required: false` keeps a keyless clone booting deterministic adapters.
     env_file:
