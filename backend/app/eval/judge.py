@@ -417,23 +417,81 @@ def _write_jsonl(lines: Sequence[dict[str, Any]], *, results_dir: Path, git_sha:
     return path
 
 
-def _assert_aggregates(lines: Sequence[dict[str, Any]]) -> None:
-    """Enforce the aggregate thresholds (mean faithfulness/relevancy + citations).
+#: The three conditions a run can fail, named so a reader — or a dashboard —
+#: can say *which* one broke rather than only that the run is red.
+CITATION_FAILURE = "citation"
+FAITHFULNESS_FAILURE = "faithfulness"
+RELEVANCY_FAILURE = "relevancy"
+
+
+@dataclass(frozen=True)
+class GateFailure:
+    """One failed gate condition, with the number that failed it.
+
+    ``observed``/``threshold`` are ``None`` for the citation invariant, which is
+    a per-line boolean rather than an aggregate.
+    """
+
+    metric: str
+    observed: float | None = None
+    threshold: float | None = None
+
+    def describe(self) -> str:
+        if self.observed is None:
+            return "a case failed citation validity"
+        return f"mean {self.metric} {self.observed:.3f} < {self.threshold}"
+
+
+def gated_lines(lines: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The lines the gate actually evaluates: the scored ones.
+
+    A study run records ``status`` per unit and writes ``error``/``skipped``/
+    ``broken`` lines carrying neither scores nor ``citation_valid`` (see
+    ``tests/eval/study.py``); those are outcomes *about* the run, not results
+    from it, and ``ab.aggregate`` already excludes them from every metric. The
+    judge's own writer never sets ``status`` at all, so for gate-produced data
+    this filter selects everything and changes nothing.
+    """
+    return [line for line in lines if line.get("status", "ok") == "ok"]
+
+
+def gate_failures(lines: Sequence[dict[str, Any]]) -> tuple[GateFailure, ...]:
+    """Which gate conditions a set of result lines fails, in the gate's order.
+
+    The single owner of the rule. The nightly assert below and the dashboard's
+    rendered verdict both call this, so the page cannot drift from the check it
+    claims to display — previously they were two implementations kept equal by a
+    sampled test, which the next condition added to one of them would have
+    silently broken.
 
     The means run over answered lines only — a decline is its own outcome class,
     carried by not-found discipline, never by the quality means (ADR-028). The
-    citation invariant runs over every line, declines included. A run with no
-    answered line has no mean: the threshold asserts are skipped.
+    citation invariant runs over every scored line, declines included. A run with
+    no answered line has no mean, so the threshold checks are skipped rather than
+    failed. A missing score or a missing ``citation_valid`` is treated as absent
+    rather than dereferenced: a renderer may not crash on a file the gate would
+    merely have died on.
     """
-    if not lines:
-        return
-    assert all(line["citation_valid"] for line in lines), "a case failed citation validity"
-    answered = [line for line in lines if line.get("found", True)]
-    if not answered:
-        return
-    mean_faithfulness = sum(line["faithfulness"] for line in answered) / len(answered)
-    mean_relevancy = sum(line["relevancy"] for line in answered) / len(answered)
-    assert mean_faithfulness >= FAITHFULNESS_MIN, (
-        f"mean faithfulness {mean_faithfulness:.3f} < {FAITHFULNESS_MIN}"
-    )
-    assert mean_relevancy >= RELEVANCY_MIN, f"mean relevancy {mean_relevancy:.3f} < {RELEVANCY_MIN}"
+    scored = gated_lines(lines)
+    if not scored:
+        return ()
+    failures: list[GateFailure] = []
+    if not all(line.get("citation_valid", False) for line in scored):
+        failures.append(GateFailure(CITATION_FAILURE))
+    answered = [line for line in scored if line.get("found", True)]
+    for metric, minimum in (
+        (FAITHFULNESS_FAILURE, FAITHFULNESS_MIN),
+        (RELEVANCY_FAILURE, RELEVANCY_MIN),
+    ):
+        values = [float(line[metric]) for line in answered if line.get(metric) is not None]
+        if values:
+            observed = sum(values) / len(values)
+            if observed < minimum:
+                failures.append(GateFailure(metric, observed, minimum))
+    return tuple(failures)
+
+
+def _assert_aggregates(lines: Sequence[dict[str, Any]]) -> None:
+    """Enforce the aggregate thresholds (mean faithfulness/relevancy + citations)."""
+    failures = gate_failures(lines)
+    assert not failures, "; ".join(failure.describe() for failure in failures)

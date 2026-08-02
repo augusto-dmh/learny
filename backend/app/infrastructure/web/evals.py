@@ -15,15 +15,25 @@ recalibration cannot leave a stale line on the chart.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from app.eval.ab import TierAggregate
 from app.eval.judge import FAITHFULNESS_MIN, RELEVANCY_MIN, RESULTS_DIR
-from app.eval.results import CaseRecord, RunSummary, load_runs
+from app.eval.results import CaseRecord, RunMetrics, RunSummary, load_runs
 from app.infrastructure.web.dependencies import AppSettings, get_authenticated_user
 
 router = APIRouter(tags=["evals"])
+
+#: How many runs one response carries, newest first, unless asked otherwise.
+#: The nightly appends a run every night with no retention, and each run brings
+#: its own cases, so an unbounded list grows without limit on a page that shows
+#: the recent history. The discovered total travels alongside, so a bounded view
+#: is visibly bounded rather than silently truncated.
+DEFAULT_RUN_LIMIT = 25
+MAX_RUN_LIMIT = 200
 
 #: Carried in the payload so a reader cannot mistake a default checkout for the
 #: whole eval history: locally the directory holds the committed golden files
@@ -43,6 +53,26 @@ class ThresholdsView(BaseModel):
 
     faithfulness_min: float
     relevancy_min: float
+
+
+class RunMetricsView(BaseModel):
+    """A run's headline numbers, over the same lines that produced its verdict."""
+
+    scored: int
+    answered: int
+    mean_faithfulness: float | None
+    mean_relevancy: float | None
+    citation_valid_rate: float | None
+
+    @classmethod
+    def from_metrics(cls, metrics: RunMetrics) -> RunMetricsView:
+        return cls(
+            scored=metrics.scored,
+            answered=metrics.answered,
+            mean_faithfulness=metrics.mean_faithfulness,
+            mean_relevancy=metrics.mean_relevancy,
+            citation_valid_rate=metrics.citation_valid_rate,
+        )
 
 
 class TierMetricsView(BaseModel):
@@ -85,6 +115,7 @@ class EvalCaseView(BaseModel):
     status: str | None
     expected_not_found: bool
     run_index: int | None
+    generation_model: str | None
 
     @classmethod
     def from_record(cls, record: CaseRecord) -> EvalCaseView:
@@ -98,6 +129,7 @@ class EvalCaseView(BaseModel):
             status=record.status,
             expected_not_found=record.expected_not_found,
             run_index=record.run_index,
+            generation_model=record.generation_model,
         )
 
 
@@ -115,6 +147,7 @@ class EvalRunView(BaseModel):
     unparsable: int
     verdict: str
     failures: list[str]
+    metrics: RunMetricsView | None
     error_count: int
     other_count: int
     golden: TierMetricsView | None
@@ -138,6 +171,7 @@ class EvalRunView(BaseModel):
             unparsable=summary.unparsable,
             verdict=summary.verdict,
             failures=list(summary.failures),
+            metrics=RunMetricsView.from_metrics(summary.metrics) if summary.metrics else None,
             error_count=generation.error_count if generation else 0,
             other_count=generation.other_count if generation else 0,
             golden=TierMetricsView.from_aggregate(generation.golden) if generation else None,
@@ -159,21 +193,29 @@ class EvalDashboardView(BaseModel):
     #: showing a wall of red that only means "the threshold moved".
     judge_model_in_force: str
     thresholds: ThresholdsView
+    #: Runs discovered in the directory, which may exceed the number returned.
+    total_runs: int
     runs: list[EvalRunView]
 
 
 @router.get("/api/dev/evals", dependencies=[Depends(get_authenticated_user)])
-def read_eval_runs(settings: AppSettings) -> EvalDashboardView:
-    """Return every discovered eval run, newest first.
+def read_eval_runs(
+    settings: AppSettings,
+    limit: Annotated[int, Query(ge=1, le=MAX_RUN_LIMIT)] = DEFAULT_RUN_LIMIT,
+) -> EvalDashboardView:
+    """Return the most recent eval runs, newest first.
 
     An empty list is the honest answer for a checkout where nothing has run, so
-    a missing directory reads as no runs rather than as an error.
+    a missing directory reads as no runs rather than as an error. ``total_runs``
+    reports everything discovered, so a truncated view says so.
     """
     results_dir = settings.eval_results_dir or RESULTS_DIR
+    runs = load_runs(results_dir)
     return EvalDashboardView(
         scope=SCOPE_NOTICE,
         results_dir=str(results_dir),
         judge_model_in_force=settings.judge_model,
         thresholds=ThresholdsView(faithfulness_min=FAITHFULNESS_MIN, relevancy_min=RELEVANCY_MIN),
-        runs=[EvalRunView.from_summary(summary) for summary in load_runs(results_dir)],
+        total_runs=len(runs),
+        runs=[EvalRunView.from_summary(summary) for summary in runs[:limit]],
     )

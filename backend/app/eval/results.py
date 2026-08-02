@@ -30,12 +30,38 @@ than a preference:
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from app.eval.ab import ModelAggregate, aggregate
-from app.eval.judge import FAITHFULNESS_MIN, RELEVANCY_MIN
+from app.eval.judge import (
+    CITATION_FAILURE,
+    FAITHFULNESS_FAILURE,
+    RELEVANCY_FAILURE,
+    gate_failures,
+    gated_lines,
+)
+
+__all__ = [
+    "ANSWERABILITY_KEY",
+    "CITATION_FAILURE",
+    "FAIL",
+    "FAITHFULNESS_FAILURE",
+    "GENERATION_KEY",
+    "NOT_EVALUATED",
+    "PASS",
+    "RELEVANCY_FAILURE",
+    "CaseRecord",
+    "RunSummary",
+    "discover_result_files",
+    "gate_outcome",
+    "load_runs",
+    "parse_lines",
+    "partition_families",
+    "summarize_run",
+]
 
 #: Identity key the generation judge writes (``judge.py`` builds these lines).
 GENERATION_KEY = "case_id"
@@ -49,11 +75,8 @@ PASS = "pass"
 FAIL = "fail"
 NOT_EVALUATED = "not-evaluated"
 
-#: Failure reasons, carried alongside a ``fail`` so the page can say which
-#: condition broke instead of only that the run is red.
-CITATION_FAILURE = "citation"
-FAITHFULNESS_FAILURE = "faithfulness"
-RELEVANCY_FAILURE = "relevancy"
+#: Failure reasons are re-exported from the gate rather than restated here — the
+#: names travel with the predicate that produces them.
 
 
 @dataclass(frozen=True)
@@ -74,6 +97,30 @@ class CaseRecord:
     status: str | None
     expected_not_found: bool
     run_index: int | None
+    #: The arm that produced this line. A study file repeats one case across
+    #: models and runs, so the case id alone does not identify a row.
+    generation_model: str | None
+
+
+@dataclass(frozen=True)
+class RunMetrics:
+    """A run's headline numbers, over exactly the lines the verdict was derived from.
+
+    Deliberately not the per-tier aggregate. ``ab.aggregate`` splits golden from
+    silver and reports each separately, which is right for a study comparing two
+    arms but wrong as a headline: a run carrying both tiers would show one tier's
+    numbers beside a verdict computed from both, and a run carrying error lines
+    would show a citation rate that excludes them beside a verdict that did not.
+    Numbers displayed next to a verdict must come from the same lines as the
+    verdict, or the page contradicts itself. The per-tier breakdown stays
+    available alongside.
+    """
+
+    scored: int
+    answered: int
+    mean_faithfulness: float | None
+    mean_relevancy: float | None
+    citation_valid_rate: float | None
 
 
 @dataclass(frozen=True)
@@ -89,6 +136,10 @@ class RunSummary:
     prompt_hash: str | None
     line_count: int
     unparsable: int
+    #: The headline numbers — same lines as the verdict. ``None`` when the run
+    #: has no generation records at all.
+    metrics: RunMetrics | None
+    #: The per-tier study breakdown, for the golden/silver split.
     generation: ModelAggregate | None
     answerability_count: int
     answerability_mean_score: float | None
@@ -174,51 +225,23 @@ def partition_families(
 
 
 def gate_outcome(generation_lines: list[dict[str, Any]]) -> tuple[str, tuple[str, ...]]:
-    """Re-derive the nightly gate's verdict for one run's generation lines.
+    """The nightly gate's verdict for one run's generation lines.
 
-    Mirrors :func:`app.eval.judge._assert_aggregates` condition for condition,
-    because the JSONL records no verdict and a dashboard that disagrees with the
-    gate it claims to show is worse than none. The order matters and is the
-    gate's own:
+    The rule itself lives in :func:`app.eval.judge.gate_failures`, which the
+    nightly assert also calls, so this is a rendering of the gate rather than a
+    second implementation of it. What is added here is the distinction the assert
+    cannot express: the gate returns silently when it evaluated nothing, which is
+    indistinguishable from acceptance, and a dashboard must not paint a run green
+    on that basis.
 
-    1. No generation line at all — nothing was gated (``not-evaluated``).
-    2. ``citation_valid`` must hold on **every** line, declines included.
-    3. With no answered line there is no mean to take, and the gate returns
-       before its threshold asserts — so this is a pass on the citation
-       invariant alone, not a failure, and the means stay absent.
-    4. Otherwise both means, over answered lines only (ADR-0028).
-
-    Thresholds come from :mod:`app.eval.judge`; a literal here would silently
-    outlive the next recalibration (relevancy moved 3.0 → 3.1 in Cycle B).
-
-    Two deliberate divergences, both unreachable on judge-written data, because a
-    renderer may not crash on a file the gate would merely have died on:
-    a generation line missing ``citation_valid`` counts as violating the
-    invariant (the gate subscripts the key and would raise), and an *answered*
-    line carrying a null score is left out of that mean rather than poisoning it
-    (the gate would raise on the ``None``). Neither shape is producible by the
-    writer — a decline is exactly the null-score line, and declines are not
-    answered — so the equivalence with the gate holds for everything the judge
-    actually emits.
+    A run whose scored lines are all declines still passes on the citation
+    invariant alone — the means are skipped, exactly as the gate skips them.
     """
-    if not generation_lines:
+    scored = gated_lines(generation_lines)
+    if not scored:
         return NOT_EVALUATED, ()
-    failures: list[str] = []
-    if not all(line.get("citation_valid", False) for line in generation_lines):
-        failures.append(CITATION_FAILURE)
-    answered = [line for line in generation_lines if line.get("found", True)]
-    if answered:
-        faithfulness = [
-            float(line["faithfulness"]) for line in answered if line.get("faithfulness") is not None
-        ]
-        relevancy = [
-            float(line["relevancy"]) for line in answered if line.get("relevancy") is not None
-        ]
-        if faithfulness and sum(faithfulness) / len(faithfulness) < FAITHFULNESS_MIN:
-            failures.append(FAITHFULNESS_FAILURE)
-        if relevancy and sum(relevancy) / len(relevancy) < RELEVANCY_MIN:
-            failures.append(RELEVANCY_FAILURE)
-    return (FAIL if failures else PASS), tuple(failures)
+    failures = gate_failures(scored)
+    return (FAIL if failures else PASS), tuple(failure.metric for failure in failures)
 
 
 def _first_present(lines: list[dict[str, Any]], key: str) -> Any | None:
@@ -233,6 +256,40 @@ def _first_present(lines: list[dict[str, Any]], key: str) -> Any | None:
         if value is not None:
             return value
     return None
+
+
+def run_metrics(generation_lines: list[dict[str, Any]]) -> RunMetrics | None:
+    """Headline numbers over the lines the gate would have evaluated.
+
+    Means over answered lines only (ADR-0028); citation rate over every scored
+    line, declines included — which is the gate's own citation scope, and the
+    spec's. ``None`` for a run with nothing scored.
+    """
+    scored = gated_lines(generation_lines)
+    if not scored:
+        return None
+    answered = [line for line in scored if line.get("found", True)]
+    return RunMetrics(
+        scored=len(scored),
+        answered=len(answered),
+        mean_faithfulness=_mean(
+            float(line["faithfulness"]) for line in answered if line.get("faithfulness") is not None
+        ),
+        mean_relevancy=_mean(
+            float(line["relevancy"]) for line in answered if line.get("relevancy") is not None
+        ),
+        citation_valid_rate=_mean(
+            1.0 if line.get("citation_valid", False) else 0.0 for line in scored
+        ),
+    )
+
+
+def _mean(values: Iterable[float]) -> float | None:
+    """Arithmetic mean, or ``None`` for an empty sequence (never a misleading 0.0)."""
+    materialized = list(values)
+    if not materialized:
+        return None
+    return sum(materialized) / len(materialized)
 
 
 def _mean_score(lines: list[dict[str, Any]]) -> float | None:
@@ -256,6 +313,7 @@ def _case_record(line: dict[str, Any]) -> CaseRecord:
         status=line.get("status"),
         expected_not_found=bool(line.get("expected_not_found", False)),
         run_index=line.get("run_index") if isinstance(line.get("run_index"), int) else None,
+        generation_model=line.get("generation_model"),
     )
 
 
@@ -279,6 +337,7 @@ def summarize_run(run_id: str, path: Path, root: Path) -> RunSummary:
         prompt_hash=_first_present(records, "prompt_hash"),
         line_count=len(records),
         unparsable=unparsable,
+        metrics=run_metrics(generation),
         # Aggregation sees generation lines only — never the mixed list (AD-242).
         generation=aggregate(generation) if generation else None,
         answerability_count=len(answerability),

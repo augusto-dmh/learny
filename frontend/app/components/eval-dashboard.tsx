@@ -44,6 +44,15 @@ type EvalCase = {
   status: string | null;
   expected_not_found: boolean;
   run_index: number | null;
+  generation_model: string | null;
+};
+
+type RunMetrics = {
+  scored: number;
+  answered: number;
+  mean_faithfulness: number | null;
+  mean_relevancy: number | null;
+  citation_valid_rate: number | null;
 };
 
 type EvalRun = {
@@ -58,6 +67,7 @@ type EvalRun = {
   unparsable: number;
   verdict: string;
   failures: string[];
+  metrics: RunMetrics | null;
   error_count: number;
   other_count: number;
   golden: TierMetrics | null;
@@ -72,6 +82,7 @@ type Dashboard = {
   results_dir: string;
   judge_model_in_force: string;
   thresholds: { faithfulness_min: number; relevancy_min: number };
+  total_runs: number;
   runs: EvalRun[];
 };
 
@@ -91,10 +102,17 @@ function formatTimestamp(ts: string | null): string {
   return Number.isNaN(parsed.getTime()) ? ts : parsed.toISOString().replace("T", " ").slice(0, 19);
 }
 
-/** The tier a run's headline numbers come from: silver when it has any, else golden. */
-function headlineTier(run: EvalRun): TierMetrics | null {
-  if (run.silver && run.silver.scored > 0) return run.silver;
-  return run.golden;
+/**
+ * The numbers shown beside a run's verdict.
+ *
+ * These come from the run-level aggregate, which the server computes over the
+ * same lines the verdict was derived from — not from a per-tier aggregate. A run
+ * carrying both tiers, or carrying error lines, would otherwise show one slice's
+ * numbers next to a verdict computed from a different slice, and a page that
+ * contradicts itself is worse than one that shows less.
+ */
+function headline(run: EvalRun): RunMetrics | null {
+  return run.metrics;
 }
 
 function VerdictBadge({ verdict, failures }: { verdict: string; failures: string[] }) {
@@ -188,12 +206,19 @@ function MetricTrend({
   );
 }
 
-function CaseTable({ cases }: { cases: EvalCase[] }) {
+function CaseTable({ cases, arm }: { cases: EvalCase[]; arm: string | null }) {
+  // A study file repeats each case per arm and per run — the de-noise run holds
+  // two generation models × three runs × twelve cases — so neither the case id
+  // nor case+run_index identifies a row. Position does, and the list is a static
+  // projection of file order that never reorders client-side.
+  const repeated = cases.some((item) => item.run_index !== null);
   return (
     <table className="w-full text-left text-xs">
       <thead className="text-muted-foreground">
         <tr>
           <th className="py-1 pr-3 font-medium">Case</th>
+          {repeated ? <th className="py-1 pr-3 font-medium">Run</th> : null}
+          {repeated ? <th className="py-1 pr-3 font-medium">Model</th> : null}
           <th className="py-1 pr-3 font-medium">Outcome</th>
           <th className="py-1 pr-3 font-medium">Faithfulness</th>
           <th className="py-1 pr-3 font-medium">Relevancy</th>
@@ -201,9 +226,11 @@ function CaseTable({ cases }: { cases: EvalCase[] }) {
         </tr>
       </thead>
       <tbody>
-        {cases.map((item) => (
-          <tr key={`${item.case_id}-${item.run_index ?? 0}`} className="border-t border-border">
+        {cases.map((item, index) => (
+          <tr key={index} className="border-t border-border">
             <td className="py-1 pr-3 font-mono">{item.case_id}</td>
+            {repeated ? <td className="py-1 pr-3">{item.run_index ?? "—"}</td> : null}
+            {repeated ? <td className="py-1 pr-3">{item.generation_model ?? arm ?? "—"}</td> : null}
             <td className="py-1 pr-3">
               {/* A decline is its own outcome, never a zero-scoring answer (ADR-0028). */}
               {item.found ? "answered" : "declined"}
@@ -223,7 +250,7 @@ function CaseTable({ cases }: { cases: EvalCase[] }) {
 
 function RunRow({ run, judgeInForce }: { run: EvalRun; judgeInForce: string }) {
   const [expanded, setExpanded] = useState(false);
-  const tier = headlineTier(run);
+  const tier = headline(run);
   // A run judged by another model was gated against thresholds derived for that
   // model. Its verdict here is recomputed with today's, so the comparison is not
   // like-for-like and the row has to say so next to the badge.
@@ -292,7 +319,7 @@ function RunRow({ run, judgeInForce }: { run: EvalRun; judgeInForce: string }) {
           </button>
           {expanded ? (
             <div className="mt-2">
-              <CaseTable cases={run.cases} />
+              <CaseTable cases={run.cases} arm={run.generation_model} />
             </div>
           ) : null}
         </>
@@ -374,13 +401,13 @@ export function EvalDashboard() {
       <div className="flex flex-wrap gap-x-6 gap-y-2">
         <MetricTrend
           label="Mean faithfulness"
-          points={series((run) => headlineTier(run)?.mean_faithfulness ?? null)}
+          points={series((run) => headline(run)?.mean_faithfulness ?? null)}
           threshold={data.thresholds.faithfulness_min}
           domain={[0, 1]}
         />
         <MetricTrend
           label="Mean relevancy"
-          points={series((run) => headlineTier(run)?.mean_relevancy ?? null)}
+          points={series((run) => headline(run)?.mean_relevancy ?? null)}
           threshold={data.thresholds.relevancy_min}
           domain={[1, 5]}
         />
@@ -391,6 +418,10 @@ export function EvalDashboard() {
         ))}
       </ul>
       <p className="text-xs text-muted-foreground">
+        {/* A bounded view has to admit it is bounded, or "the last 25" reads as "all". */}
+        {data.total_runs > data.runs.length
+          ? `Showing the ${data.runs.length} most recent of ${data.total_runs} runs. `
+          : null}
         Read from {data.results_dir}. {data.scope}
       </p>
     </div>
