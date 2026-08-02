@@ -239,6 +239,22 @@ def test_payload_carries_the_gate_thresholds(
     }
 
 
+def test_payload_names_the_judge_in_force(build_client: ClientBuilder, results_dir: Path) -> None:
+    """A run judged by another model was gated against other thresholds.
+
+    Without this the page cannot tell a real regression from a run that merely
+    predates a recalibration — which is most of the published history.
+    """
+    client = build_client(
+        enabled=True,
+        LEARNY_EVAL_RESULTS_DIR=str(results_dir),
+        LEARNY_JUDGE_MODEL="claude-opus-4-8",
+    )
+    _register(client, "evals-judge@example.com")
+
+    assert client.get(EVALS_PATH).json()["judge_model_in_force"] == "claude-opus-4-8"
+
+
 def test_payload_names_the_directory_it_read(
     build_client: ClientBuilder, results_dir: Path
 ) -> None:

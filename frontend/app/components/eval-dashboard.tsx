@@ -70,6 +70,7 @@ type EvalRun = {
 type Dashboard = {
   scope: string;
   results_dir: string;
+  judge_model_in_force: string;
   thresholds: { faithfulness_min: number; relevancy_min: number };
   runs: EvalRun[];
 };
@@ -220,15 +221,24 @@ function CaseTable({ cases }: { cases: EvalCase[] }) {
   );
 }
 
-function RunRow({ run }: { run: EvalRun }) {
+function RunRow({ run, judgeInForce }: { run: EvalRun; judgeInForce: string }) {
   const [expanded, setExpanded] = useState(false);
   const tier = headlineTier(run);
+  // A run judged by another model was gated against thresholds derived for that
+  // model. Its verdict here is recomputed with today's, so the comparison is not
+  // like-for-like and the row has to say so next to the badge.
+  const staleJudge = run.judge_model !== null && run.judge_model !== judgeInForce;
   return (
     <li className="border-t border-border py-3">
       <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
         <span className="font-mono text-sm">{run.run_id}</span>
         <VerdictBadge verdict={run.verdict} failures={run.failures} />
         <span className="text-xs text-muted-foreground">{formatTimestamp(run.latest_ts)}</span>
+        {staleJudge ? (
+          <span className="text-xs text-amber-700 dark:text-amber-400">
+            judged by {run.judge_model} — verdict recomputed with the current thresholds
+          </span>
+        ) : null}
       </div>
       <dl className="mt-2 flex flex-wrap gap-x-6 gap-y-1 text-xs">
         <div>
@@ -377,7 +387,7 @@ export function EvalDashboard() {
       </div>
       <ul className="border-b border-border">
         {data.runs.map((run) => (
-          <RunRow key={run.run_id} run={run} />
+          <RunRow key={run.run_id} run={run} judgeInForce={data.judge_model_in_force} />
         ))}
       </ul>
       <p className="text-xs text-muted-foreground">

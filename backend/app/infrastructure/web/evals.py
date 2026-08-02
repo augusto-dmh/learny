@@ -32,7 +32,9 @@ SCOPE_NOTICE = (
     "Runs are read from the configured results directory on this process's disk. A default "
     "checkout holds only the committed result files; the accumulating nightly history lives on "
     "the eval-results branch, which LEARNY_EVAL_RESULTS_DIR can point at. Pass/fail is derived "
-    "from the same thresholds the nightly gate asserts — it is not recorded in the data."
+    "from the same thresholds the nightly gate asserts — it is not recorded in the data — so a "
+    "run predating a recalibration is judged here by today's thresholds, not the ones it "
+    "actually ran against. Runs judged by a different model are marked."
 )
 
 
@@ -151,6 +153,11 @@ class EvalDashboardView(BaseModel):
 
     scope: str
     results_dir: str
+    #: The judge this process is configured with. A run judged by anything else
+    #: was gated against thresholds derived for a different judge, so its
+    #: recomputed verdict is not comparable — the page marks those rather than
+    #: showing a wall of red that only means "the threshold moved".
+    judge_model_in_force: str
     thresholds: ThresholdsView
     runs: list[EvalRunView]
 
@@ -166,6 +173,7 @@ def read_eval_runs(settings: AppSettings) -> EvalDashboardView:
     return EvalDashboardView(
         scope=SCOPE_NOTICE,
         results_dir=str(results_dir),
+        judge_model_in_force=settings.judge_model,
         thresholds=ThresholdsView(faithfulness_min=FAITHFULNESS_MIN, relevancy_min=RELEVANCY_MIN),
         runs=[EvalRunView.from_summary(summary) for summary in load_runs(results_dir)],
     )

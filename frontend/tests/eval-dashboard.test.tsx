@@ -86,6 +86,7 @@ function dashboard(overrides: Record<string, unknown> = {}) {
   return {
     scope: "Runs are read from the configured results directory.",
     results_dir: "/repo/evals/results",
+    judge_model_in_force: "claude-opus-4-8",
     thresholds: { faithfulness_min: 0.9, relevancy_min: 3.1 },
     runs: [run()],
     ...overrides,
@@ -265,6 +266,33 @@ describe("EvalDashboard", () => {
     render(<EvalDashboard />);
 
     expect(await screen.findByText("3 items, mean 4.67")).toBeTruthy();
+  });
+
+  it("marks a run judged by a model other than the one in force", async () => {
+    // Nine of the eleven real historical runs are haiku-judged and recompute as
+    // failures purely because Cycle B moved the relevancy threshold. Unmarked,
+    // the page's loudest signal would be a wall of red that means nothing.
+    mockFetch(
+      200,
+      dashboard({
+        runs: [run({ judge_model: "claude-haiku-4-5", verdict: "fail", failures: ["relevancy"] })],
+      }),
+    );
+
+    render(<EvalDashboard />);
+
+    expect(
+      await screen.findByText(/judged by claude-haiku-4-5 — verdict recomputed/),
+    ).toBeTruthy();
+  });
+
+  it("does not mark a run judged by the model in force", async () => {
+    mockFetch(200, dashboard());
+
+    render(<EvalDashboard />);
+
+    await screen.findByText("2026-07-30-aaa1111");
+    expect(screen.queryByText(/verdict recomputed/)).toBeNull();
   });
 
   it("explains a disabled surface instead of reporting an error", async () => {

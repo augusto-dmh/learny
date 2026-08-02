@@ -75,3 +75,21 @@ independently switchable.
 | C. No visualization — tables only | Cheapest | The RFC's stated value is drawing the recalibrated thresholds as reference lines; a table of numbers does not make drift visible |
 
 **Chosen: A.**
+
+## AD-245 — Verdicts recomputed across a recalibration boundary
+
+Found by pointing the finished reader at the real `eval-results` branch: **9 of the 11 historical runs
+render `fail`**, all at relevancy exactly 3.00. They are not regressions. Those runs were judged by
+`claude-haiku-4-5` and gated at the old `RELEVANCY_MIN = 3.0`; Cycle B flipped the judge to
+`claude-opus-4-8` and re-pinned the threshold to 3.1. Every verdict is re-derived with *today's*
+constants (AD-241), so a run that passed its own gate at the time now reads as failing.
+
+| Option | Why recommend | Why not |
+| --- | --- | --- |
+| **A. Keep the derived verdict, and mark any run whose judge differs from the one in force, with the caveat stated on the page** *(chosen)* | Preserves AD-241's single decision rule and the drift-proofing that motivated it, while making the one thing that invalidates a cross-boundary comparison visible exactly where the comparison happens; costs one payload field | The badge still says `fail` on a run that passed its own gate — mitigated by the marker sitting beside it |
+| B. Record each run's thresholds at write time and judge it against those | Historically exact | Does not apply retroactively to the eight already-published snapshots, which are the data being rendered; and it re-opens the writer, which this read-only cycle deliberately does not touch |
+| C. Render no verdict for runs predating the recalibration | Never misleading | Blanks the majority of the history, and the RFC asked for gate pass/fail |
+
+**Chosen: A.** The endpoint carries `judge_model_in_force` (from `settings.judge_model`) so the page can
+name the mismatch rather than the client keeping its own idea of the current judge. Left unmarked, the
+dashboard's most prominent signal would be a wall of red that means "the threshold moved".
