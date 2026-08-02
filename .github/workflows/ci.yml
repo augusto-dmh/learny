@@ -121,6 +121,12 @@ jobs:
 
   compose-smoke:
     runs-on: ubuntu-latest
+    # Local development runs with WAL archiving off (docker-compose.override.yml
+    # explains why: no base backup is ever taken there, so the segments can neither
+    # be replayed nor pruned). The point-in-time drill below needs a real archive, so
+    # this job opts in exactly as an operator rehearsing a restore would.
+    env:
+      LEARNY_WAL_ARCHIVE_MODE: "on"
     steps:
       - uses: actions/checkout@v4
       # One build-and-boot step: `--wait` blocks until EVERY named service's

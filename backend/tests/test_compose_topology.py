@@ -290,6 +290,41 @@ def test_db_bounds_archive_timeout_so_an_idle_database_still_closes_segments(
     )
 
 
+def test_wal_archiving_is_enabled_only_where_something_retires_the_segments() -> None:
+    """The producer and its only consumer must not be gated differently.
+
+    `db` archives continuously, but the job that retires a segment lives in the
+    `backup` sidecar. In production that sidecar is unprofiled and runs, so the pair
+    is complete. Locally it is behind the `backup` profile — and, more fundamentally,
+    a local stack never takes the base backup the retention predicate derives its
+    floor from, so nothing there could prune even if it ran. Archiving on that side
+    is monotonic growth in exchange for segments that can never be replayed.
+    """
+    prod_services = _services(_BASE, _PROD)
+    assert _pg_settings(prod_services["db"]["command"])["archive_mode"] == "on"
+    assert not prod_services["backup"].get("profiles"), (
+        "production archives WAL, so its pruning sidecar must not be profile-gated"
+    )
+
+    dev = _services(_BASE, _OVERRIDE)
+    assert _load(_OVERRIDE)["services"]["backup"]["profiles"] == ["backup"]
+    assert _pg_settings(dev["db"]["command"])["archive_mode"] == "${LEARNY_WAL_ARCHIVE_MODE:-off}", (
+        "a plain `docker compose up` must not archive: the default is off, opt-in on"
+    )
+
+
+def test_the_dev_override_changes_only_the_archive_mode_flag() -> None:
+    # Restating the command duplicates it, so the duplication is pinned rather than
+    # trusted: every other setting — the hba_file, the no-overwrite archive_command,
+    # the bounded timeout — must be the base file's, character for character.
+    base_command = _tokens(_services(_BASE)["db"]["command"])
+    override_command = _tokens(_load(_OVERRIDE)["services"]["db"]["command"])
+    assert override_command == [
+        "archive_mode=${LEARNY_WAL_ARCHIVE_MODE:-off}" if token.startswith("archive_mode=") else token
+        for token in base_command
+    ]
+
+
 def test_db_command_starts_the_postgres_server(base: dict) -> None:
     # The settings above only take effect if they are arguments to `postgres` itself.
     assert _tokens(base["db"]["command"])[0] == "postgres"

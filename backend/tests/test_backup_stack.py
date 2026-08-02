@@ -1055,6 +1055,14 @@ _ROW_AFTER_TARGET_ABSENT = "WHERE id = 2;')\" != 0"
 _ROW_AFTER_TARGET_PRESENT = "WHERE id = 2;')\" != 1"
 
 
+def test_ci_opts_into_wal_archiving_for_the_drill() -> None:
+    # The dev override leaves archiving off, because a local stack has no base backup
+    # to replay onto and no pruner to retire segments. The drill needs a real archive,
+    # so the job opts in the same way an operator rehearsing a restore would.
+    workflow = yaml.safe_load(_CI.read_text())
+    assert workflow["jobs"]["compose-smoke"]["env"]["LEARNY_WAL_ARCHIVE_MODE"] == "on"
+
+
 def test_ci_takes_the_base_before_the_rows_it_must_replay() -> None:
     # A base taken after the writes already contains them, so the replay would prove
     # nothing about WAL at all.

@@ -137,6 +137,13 @@ The settings live in the `db` service's `command` in `docker-compose.yml`:
   `secrets/backup.env`, because compose interpolates it — and unlike `archive_mode`
   it can be changed with a plain service recreate.
 
+Archiving is on in production and off for local development. `docker-compose.override.yml`
+— loaded only by a plain `docker compose up` — sets `archive_mode` from
+`LEARNY_WAL_ARCHIVE_MODE`, defaulting to `off`, because a local stack never takes the
+base backup that archived segments replay onto and never runs the sidecar that retires
+them: the segments would accumulate forever and be unreplayable anyway. Set
+`LEARNY_WAL_ARCHIVE_MODE=on` to rehearse a restore locally, which is what CI's drill does.
+
 The archive directory is **not** inside `db_data`: it exists to recover the very data
 directory it would otherwise be lost with. It is created inside the repo-owned
 `learny-postgres` image, owned by the database user, so Docker propagates that
