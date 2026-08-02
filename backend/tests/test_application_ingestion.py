@@ -377,6 +377,36 @@ def test_a_redelivery_after_the_cap_terminated_the_job_is_an_idempotent_no_op() 
     assert jobs.get_by_id(job.id).status == IngestionStatus.FAILED
 
 
+def test_a_first_claim_is_not_worth_a_warning(caplog) -> None:
+    # Every ingestion begins with one claim; warning about it would bury the case
+    # that matters in a record emitted for every source ever uploaded.
+    _, _, _, run, job, _ = _claim_context(cap=5)
+
+    with caplog.at_level(logging.WARNING, logger="app.application.ingestion"):
+        run.begin_run(job.id)
+
+    assert [r for r in caplog.records if r.name == "app.application.ingestion"] == []
+
+
+def test_a_repeat_claim_warns_once_naming_the_job_source_and_attempt(caplog) -> None:
+    # A phase that silently restarts is the signal the operator has none of today:
+    # the job row still says ``running``, so nothing distinguishes a long ingestion
+    # from one whose worker has died three times. One record per repeat claim, and
+    # the attempt number is what makes it readable as a pattern rather than an event.
+    _, _, _, run, job, source = _claim_context(cap=5)
+    run.begin_run(job.id)
+
+    with caplog.at_level(logging.WARNING, logger="app.application.ingestion"):
+        run.begin_run(job.id)
+        run.begin_run(job.id)
+
+    records = [r for r in caplog.records if r.name == "app.application.ingestion"]
+    assert [r.levelno for r in records] == [logging.WARNING, logging.WARNING]
+    assert [r.attempt for r in records] == [2, 3]
+    assert {r.job_id for r in records} == {str(job.id)}
+    assert {r.source_id for r in records} == {str(source.id)}
+
+
 def test_the_cap_terminating_a_job_is_not_silent(caplog) -> None:
     # ``None`` also means "missing or already terminal", which the worker logs as an
     # ordinary no-op. A claim that just failed a job terminally is a different event

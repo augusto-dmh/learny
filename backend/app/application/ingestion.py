@@ -213,6 +213,20 @@ class RunIngestion:
         started = self._jobs.update(job.started(now))
         self._sources.set_status(job.source_id, SOURCE_STATUS_PROCESSING, now)
         self._append_event(job.id, IngestionEventType.STARTED, None, now)
+        if started.attempts > 1:
+            # A job on its second or later attempt is one that already failed once —
+            # from the outside, a phase that quietly restarts and, if its worker keeps
+            # dying, leaves no trace at all beyond a row that keeps saying ``running``.
+            # The event trail records the attempt durably; this puts it in the stream
+            # the monitoring stack already collects, at the level that gets noticed.
+            logger.warning(
+                "ingestion.begin_run: job re-claimed for a further attempt",
+                extra={
+                    "job_id": str(job.id),
+                    "source_id": str(job.source_id),
+                    "attempt": started.attempts,
+                },
+            )
         return started
 
     def _exhaust(self, job: IngestionJob, now) -> None:  # noqa: ANN001 — injected clock's datetime

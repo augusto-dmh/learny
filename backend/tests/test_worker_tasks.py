@@ -741,10 +741,10 @@ class _TraceRecordingHandler(logging.Handler):
 
 
 @contextmanager
-def _capture_worker_logs():
-    """Attach a recording handler to the worker task logger, forced enabled."""
+def _capture_worker_logs(name: str = "app.worker.tasks"):
+    """Attach a recording handler to a logger the worker emits through, forced enabled."""
     handler = _TraceRecordingHandler()
-    logger = logging.getLogger("app.worker.tasks")
+    logger = logging.getLogger(name)
     previous_level, previous_disabled = logger.level, logger.disabled
     logger.setLevel(logging.INFO)
     logger.disabled = False
@@ -774,6 +774,40 @@ def test_run_ingestion_success_logs_trace_fields_and_duration(seed, db_engine: E
     assert rec.source_id == str(ctx.source.id)
     assert isinstance(rec.duration_ms, float)
     assert rec.duration_ms >= 0.0
+
+
+def test_a_restarted_ingestion_says_so_in_the_worker_log_stream(
+    seed, attempts_cap, db_engine: Engine
+) -> None:
+    # A job whose worker died is claimed again with the row still ``running``. From
+    # the log stream alone that used to be indistinguishable from a first run, which
+    # is the whole reason a repeatedly-killed worker goes unnoticed. One WARNING,
+    # naming the job, the source and which attempt this is.
+    attempts_cap(5)
+    ctx = seed(IngestionStatus.RUNNING, attempts=1)
+
+    with _capture_worker_logs("app.application.ingestion") as handler:
+        with patch("app.worker.tasks._build_step", lambda conn: NoOpIngestionStep()):
+            _run(FakeSelf(), str(ctx.source.id), str(ctx.job.id))
+
+    rec = _record_for(handler, "ingestion.begin_run: job re-claimed for a further attempt")
+    assert rec.levelno == logging.WARNING
+    assert rec.job_id == str(ctx.job.id)
+    assert rec.source_id == str(ctx.source.id)
+    assert rec.attempt == 2
+
+
+def test_a_first_run_does_not_look_like_a_restart_in_the_log_stream(
+    seed, attempts_cap, db_engine: Engine
+) -> None:
+    attempts_cap(5)
+    ctx = seed(IngestionStatus.QUEUED)
+
+    with _capture_worker_logs("app.application.ingestion") as handler:
+        with patch("app.worker.tasks._build_step", lambda conn: NoOpIngestionStep()):
+            _run(FakeSelf(), str(ctx.source.id), str(ctx.job.id))
+
+    assert [r.getMessage() for r in handler.records if r.levelno >= logging.WARNING] == []
 
 
 def test_run_ingestion_failure_logs_trace_fields_and_duration(seed, db_engine: Engine) -> None:
