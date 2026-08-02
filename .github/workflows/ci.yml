@@ -209,6 +209,30 @@ jobs:
       # whole claim, and the control step below exists to prove it can fail.
       - name: Take the physical base a replay starts from
         run: docker compose --profile backup run --rm backup base-backup.sh
+      - name: The recorded replay floor never sits past the base's own start
+        run: |
+          # WAL retention is derived from START_WAL, and the job reads it from the
+          # server BEFORE the copy rather than out of the finished tarball. That is
+          # only safe in one direction: a floor EARLIER than the base's real start
+          # retains more WAL than needed, while a floor past it prunes segments the
+          # base needs to replay and leaves it unrecoverable. This compares the
+          # recorded floor against the base's own backup_label every run.
+          docker compose --profile backup run --rm --no-deps backup sh -c '
+            set -eu
+            base="$(ls -1d /backups/base/learny-base-* | sort | tail -n1)"
+            recorded="$(cat "$base/START_WAL")"
+            label="$(tar -xzOf "$base/base.tar.gz" backup_label |
+              sed -n "s/^START WAL LOCATION: .*(file \([0-9A-F]\{24\}\))$/\1/p")"
+            echo "recorded floor=$recorded  base label=$label"
+            if [ -z "$label" ]; then
+              echo "could not read the base label; the comparison proves nothing"; exit 1
+            fi
+            # Fixed-width hex, so a string compare is a WAL-order compare.
+            if [ "$recorded" \> "$label" ]; then
+              echo "the recorded floor is LATER than the base start:"
+              echo "WAL this base needs to replay would be eligible for pruning"
+              exit 1
+            fi'
       - name: Write a boundary into the WAL and record it
         run: |
           q() {

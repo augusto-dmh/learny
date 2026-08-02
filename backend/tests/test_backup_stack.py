@@ -311,8 +311,7 @@ def test_base_backup_records_the_wal_segment_its_replay_starts_from() -> None:
     # This file is the sole input to WAL retention. Without it, pruning would have
     # nothing to derive from and would fall back to age — the exact silent
     # chain-breaking the retention rule exists to prevent.
-    assert "backup_label" in _BASE_BACKUP_SH
-    assert "START WAL LOCATION" in _BASE_BACKUP_SH
+    assert "pg_walfile_name(pg_current_wal_lsn())" in _BASE_BACKUP_SH
     assert 'printf \'%s\\n\' "$start_wal" > "$tmp/START_WAL"' in _BASE_BACKUP_SH
     # The record is written INSIDE the temp directory, so the rename publishes the
     # base and its replay floor atomically — a base can never appear without one.
@@ -321,11 +320,36 @@ def test_base_backup_records_the_wal_segment_its_replay_starts_from() -> None:
     assert label_at < rename_at
 
 
+def test_the_replay_floor_is_read_before_the_copy_so_it_can_only_be_early() -> None:
+    """The direction of the error, which is what makes the shortcut safe.
+
+    Deriving the floor from the server's current segment instead of the finished
+    tarball is only sound one way round: WAL moves forward, so a segment read BEFORE
+    the copy can only be at or before the base's real start, and an early floor
+    retains more WAL than needed. Read after, it could land past the start and make
+    the segments the base needs eligible for pruning — an unrecoverable base. CI
+    additionally compares the recorded floor against the base's own label.
+    """
+    executed = _logical_lines(_BASE_BACKUP_SH)
+    query_at = next(i for i, line in enumerate(executed) if "pg_walfile_name" in line)
+    backup_at = next(i for i, line in enumerate(executed) if line.startswith("pg_basebackup "))
+    assert query_at < backup_at, "the floor must be read before the backup starts"
+
+
 def test_base_backup_fails_when_the_replay_floor_cannot_be_read() -> None:
     # A base whose START WAL is unknown cannot pin any segment, so publishing one
-    # would quietly leave every retained segment prunable. Fail the run instead.
-    assert 'if [ -z "$start_wal" ]; then' in _BASE_BACKUP_SH
-    guard_at = _BASE_BACKUP_SH.index('if [ -z "$start_wal" ]')
+    # would quietly leave every retained segment prunable. Fail the run instead —
+    # and report what the server said rather than discarding it, since the container
+    # log is this job's only monitoring channel.
+    assert 'if ! start_wal="$(psql' in _BASE_BACKUP_SH
+    query = next(line for line in _logical_lines(_BASE_BACKUP_SH) if "pg_walfile_name" in line)
+    assert "2>/dev/null" not in query, (
+        "a discarded diagnostic leaves a failed weekly job with nothing to act on"
+    )
+    assert "2>&1" in query, "the server's own error must reach the log"
+    assert 'if [ "${#start_wal}" -ne 24 ]; then' in _BASE_BACKUP_SH
+    assert "*[!0-9A-F]*)" in _BASE_BACKUP_SH, "the floor must be validated, not just non-empty"
+    guard_at = _BASE_BACKUP_SH.index('if [ "${#start_wal}" -ne 24 ]')
     rename_at = _BASE_BACKUP_SH.index('mv "$tmp" "$base"')
     assert guard_at < rename_at, "the floor must be verified before the base is published"
 
@@ -1092,6 +1116,21 @@ def test_ci_takes_the_base_before_the_rows_it_must_replay() -> None:
     # nothing about WAL at all.
     scripts = _compose_smoke_scripts()
     assert scripts.index("base-backup.sh") < scripts.index("'before-target'")
+
+
+def test_ci_checks_the_recorded_floor_against_the_bases_own_label() -> None:
+    # The one property that makes reading the floor from the server (rather than from
+    # the finished tarball) safe: it may be earlier than the base's real start, never
+    # later. Compared on every run, right after the base is taken.
+    scripts = _compose_smoke_scripts()
+    check_at = scripts.index('recorded="$(cat "$base/START_WAL")"')
+    assert scripts.index("base-backup.sh") < check_at
+    assert 'if [ "$recorded" \\> "$label" ]; then' in scripts, (
+        "the comparison must fail when the recorded floor sits past the base start"
+    )
+    assert "would be eligible for pruning" in scripts
+    # A label the check could not read must fail the step, not pass it vacuously.
+    assert "the comparison proves nothing" in scripts
 
 
 def test_ci_records_the_target_between_the_two_writes() -> None:
