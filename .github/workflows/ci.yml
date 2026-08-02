@@ -200,6 +200,100 @@ jobs:
             mc alias set m http://minio:9000 learny learny-dev-secret &&
             mc ls --recursive m/learny-offsite-ci/db/ | grep -qF .dump &&
             mc ls --recursive m/learny-offsite-ci/objects/ | grep -qF offsite-probe.txt'
+      # The WAL retention predicate, executed rather than string-matched. Deleting a
+      # segment a retained base still needs severs the replay chain invisibly, and the
+      # break surfaces only when someone attempts a restore — so every branch runs
+      # here against a crafted archive: the age floor, the strictly-below-floor
+      # comparison, the fail-safe that prunes nothing when no base is retained, the
+      # timeline-history exemption, and the empty-glob case that would otherwise abort
+      # the run under `set -e` before the fail-safe was ever reached. Offsite is
+      # configured, so the WAL shipping path runs against a scratch bucket too.
+      - name: Prove the WAL retention predicate
+        run: |
+          docker compose --profile backup run --rm -T --no-deps \
+            -e LEARNY_BACKUP_REMOTE_ENDPOINT=http://minio:9000 \
+            -e LEARNY_BACKUP_REMOTE_ACCESS_KEY=learny \
+            -e LEARNY_BACKUP_REMOTE_SECRET_KEY=learny-dev-secret \
+            -e LEARNY_BACKUP_REMOTE_BUCKET=learny-walgate-ci \
+            backup sh -s <<'GATE'
+          set -eu
+          # Scratch state under /tmp: crafted archive, crafted base. Nothing here
+          # touches the archive or the bases the point-in-time drill below depends on.
+          gate=/tmp/wal-retention-gate
+          rm -rf "$gate"
+          mkdir -p "$gate/archive" "$gate/base"
+          export LEARNY_WAL_ARCHIVE_DIR="$gate/archive"
+          export LEARNY_BASEBACKUP_DIR="$gate/base"
+          export LEARNY_WAL_LOCK="$gate/lock"
+          export LEARNY_WAL_KEEP_DAYS=1
+
+          seg() { echo segment > "$LEARNY_WAL_ARCHIVE_DIR/$1"; touch -t "$2" "$LEARNY_WAL_ARCHIVE_DIR/$1"; }
+          aged=200001010000
+          fresh="$(date -u +%Y%m%d%H%M)"
+
+          # Aged and below the floor: the only two that may ever be deleted. A .backup
+          # label shares its segment's first 24 characters, which is what puts it here.
+          seg 00000002000000000000000A "$aged"
+          seg 00000002000000000000000A.00000028.backup "$aged"
+          # Aged and exactly the floor: the segment the oldest base replays FROM, so a
+          # non-strict comparison would delete precisely the one it needs first.
+          seg 000000020000000000000010 "$aged"
+          # Aged and above the floor.
+          seg 000000020000000000000020 "$aged"
+          # Below the floor but not aged: age can only ever withhold, never license.
+          seg 000000020000000000000009 "$fresh"
+          # A timeline history file, aged and sorting below the floor: exempt anyway,
+          # because it is what lets a restore resolve which timeline to follow.
+          seg 00000002.history "$aged"
+
+          count() { ls -1 "$LEARNY_WAL_ARCHIVE_DIR" | wc -l | tr -d ' '; }
+
+          echo "=== no retained base: nothing may be pruned, and the run must not abort ==="
+          out="$(wal-archive.sh 2>&1)"
+          echo "$out"
+          echo "$out" | grep -qF "no retained base backup"
+          if [ "$(count)" -ne 6 ]; then
+            echo "the no-base fail-safe pruned something; there is no floor to prune against"
+            exit 1
+          fi
+
+          echo "=== with a retained base: only aged AND strictly-below-floor segments go ==="
+          base="$LEARNY_BASEBACKUP_DIR/learny-base-2026-01-01-000000"
+          mkdir -p "$base"
+          echo 000000020000000000000010 > "$base/START_WAL"
+          out="$(wal-archive.sh 2>&1)"
+          echo "$out"
+          echo "$out" | grep -qF "pruned 2 segment(s)"
+          for gone in 00000002000000000000000A 00000002000000000000000A.00000028.backup; do
+            if [ -e "$LEARNY_WAL_ARCHIVE_DIR/$gone" ]; then
+              echo "$gone is aged and below the floor; it should have been pruned"
+              exit 1
+            fi
+          done
+          for kept in 000000020000000000000010 000000020000000000000020 000000020000000000000009 00000002.history; do
+            if [ ! -e "$LEARNY_WAL_ARCHIVE_DIR/$kept" ]; then
+              echo "$kept was pruned; the replay chain from the oldest retained base is severed"
+              exit 1
+            fi
+          done
+
+          echo "=== offsite: shipped before pruning, and only the pruned names removed ==="
+          mc alias set gate "$LEARNY_BACKUP_REMOTE_ENDPOINT" \
+            "$LEARNY_BACKUP_REMOTE_ACCESS_KEY" "$LEARNY_BACKUP_REMOTE_SECRET_KEY"
+          listing="$(mc ls --recursive "gate/$LEARNY_BACKUP_REMOTE_BUCKET/wal/")"
+          echo "$listing"
+          for kept in 000000020000000000000010 000000020000000000000020 000000020000000000000009 00000002.history; do
+            if ! echo "$listing" | grep -qF "$kept"; then
+              echo "$kept never reached the offsite bucket, or went with the pruned ones"
+              exit 1
+            fi
+          done
+          if echo "$listing" | grep -qF 00000002000000000000000A; then
+            echo "a segment pruned locally is still offsite"
+            exit 1
+          fi
+          echo "WAL retention gate passed"
+          GATE
       # Point-in-time recovery, proven rather than asserted (PITR-09). A drill that
       # seeds data, restores, and finds it again passes just as happily against a
       # plain whole-archive restore — it proves nothing about recovering to a MOMENT.

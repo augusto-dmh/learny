@@ -85,7 +85,8 @@ log "oldest retained base ${oldest_base##*/} replays from $floor; nothing below 
 # --- prune (PITR-05): older than the window AND below the floor -----------------
 candidates="$(mktemp)"
 pruned="$(mktemp)"
-trap 'rm -f "$candidates" "$pruned"' EXIT
+offsite_present="$(mktemp)"
+trap 'rm -f "$candidates" "$pruned" "$offsite_present"' EXIT
 
 # The age condition, applied first. It can only ever WITHHOLD a segment from
 # pruning; it is never on its own grounds to delete one.
@@ -116,13 +117,31 @@ log "pruned $pruned_count segment(s) below $floor"
 # Offsite pruning mirrors exactly what was just removed locally — never a bulk
 # age sweep and never `mirror --remove`, either of which would let an emptied or
 # lost local archive wipe the offsite copy that exists for precisely that case.
+#
+# One listing plus one batched removal, not two processes per segment. The floor
+# only advances when the oldest base is pruned — weekly — so a single run can make
+# roughly a week of segments eligible at once (~670 at the default archive_timeout).
+# Serialized, that was ~1340 process starts, TLS handshakes and re-authentications
+# inside a job scheduled every 15 minutes, with `flock -n` then dropping the runs
+# that overlapped and stretching the very offsite recovery point this job maintains.
 if [ "$offsite" -eq 1 ] && [ -s "$pruned" ]; then
+  # The listing keeps the removal to objects that actually exist: a segment archived
+  # before offsite was configured never reached the bucket, and `mc rm` on a missing
+  # object would abort the run. `|| true` covers the prefix not existing at all.
+  mc ls "learny_offsite/$LEARNY_BACKUP_REMOTE_BUCKET/wal/" 2>/dev/null \
+    | awk '{print $NF}' > "$offsite_present" || true
+  targets=""
   while IFS= read -r name; do
-    object="learny_offsite/$LEARNY_BACKUP_REMOTE_BUCKET/wal/$name"
-    if mc stat "$object" >/dev/null 2>&1; then
-      mc rm --force "$object"
+    if grep -qxF "$name" "$offsite_present"; then
+      targets="$targets learny_offsite/$LEARNY_BACKUP_REMOTE_BUCKET/wal/$name"
     fi
   done < "$pruned"
+  if [ -n "$targets" ]; then
+    # Deliberately unquoted: the words ARE the object paths, and a WAL segment name
+    # is fixed-width hex with no whitespace in it.
+    # shellcheck disable=SC2086
+    mc rm --force $targets
+  fi
 fi
 
 log "WAL shipping complete"

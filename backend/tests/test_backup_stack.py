@@ -13,9 +13,10 @@ Three layers, all pure text/YAML (no Docker required, deterministic):
 * Recovery chain — the physical base backup and the WAL retention predicate. The
   predicate is the highest-value assertion in the module: deleting a segment a
   retained base still needs severs the replay chain invisibly, and the severance
-  only surfaces when someone actually attempts a restore. Its behaviour was
-  additionally exercised against a live archive during development; what is pinned
-  here is the shape a text diff can silently weaken.
+  only surfaces when someone actually attempts a restore. Its branches are executed
+  every CI run against a crafted archive (the retention gate in ci.yml, whose
+  fixtures are pinned at the end of this module); what is pinned inline is the shape
+  a text diff can weaken without changing what the gate observes.
 
 Mirrors the merge semantics + helper shapes of ``test_deploy_topology.py``.
 """
@@ -506,12 +507,36 @@ def test_wal_shipping_never_overwrites_an_archived_segment() -> None:
 def test_offsite_pruning_removes_only_what_was_pruned_locally() -> None:
     # Never a bulk age sweep and never `mirror --remove`: either would let an emptied
     # or lost local archive wipe the offsite copy that exists for exactly that case.
+    # The removal set is built by walking the names pruned locally, and every one of
+    # them must have been confirmed present in the bucket listing first.
     assert "while IFS= read -r name; do" in _WAL_SH
     assert 'done < "$pruned"' in _WAL_SH
     assert "--older-than" not in _WAL_SH, "offsite WAL retention must not be age-driven"
-    # Removal is guarded by an existence check, so a segment archived before offsite
-    # was configured does not abort the run.
-    assert 'if mc stat "$object" >/dev/null 2>&1; then' in _WAL_SH
+    assert "--recursive" not in _WAL_SH, "offsite WAL removal must never be a prefix sweep"
+    assert 'grep -qxF "$name" "$offsite_present"' in _WAL_SH, (
+        "each removal target must be a segment this run pruned AND one the bucket has"
+    )
+    removal = next(line for line in _executed_lines(_WAL_SH) if "mc rm" in line)
+    assert removal.strip() == "mc rm --force $targets"
+
+
+def test_offsite_pruning_is_batched_rather_than_one_process_per_segment() -> None:
+    """One run can make roughly a week of segments eligible at once.
+
+    The floor only advances when the oldest base is pruned, so ~670 segments at the
+    default archive_timeout become prunable together. Two `mc` invocations each —
+    a fresh process, TLS handshake and re-authentication — is ~1340 serialized calls
+    inside a job scheduled every 15 minutes, after which `flock -n` starts dropping
+    the runs that overlap and the offsite recovery point stretches.
+    """
+    executed = _executed_lines(_WAL_SH)
+    invocations = [line for line in executed if re.search(r"\bmc (ls|rm|stat)\b", line)]
+    assert len(invocations) == 2, f"offsite pruning must be one listing + one removal: {invocations}"
+    # And neither may sit inside the per-segment loop.
+    loop_at = _WAL_SH.rindex("while IFS= read -r name; do")
+    loop_end = _WAL_SH.index('done < "$pruned"', loop_at)
+    body = _WAL_SH[loop_at:loop_end]
+    assert "mc " not in body, "no mc invocation may run once per segment"
 
 
 def test_wal_archive_gates_offsite_on_all_four_remote_vars() -> None:
@@ -1088,6 +1113,54 @@ def test_ci_asserts_offsite_dump_and_mirror_landed() -> None:
     scripts = _compose_smoke_scripts()
     assert "mc ls --recursive m/learny-offsite-ci/db/" in scripts
     assert "mc ls --recursive m/learny-offsite-ci/objects/" in scripts
+
+
+# --- CI WAL retention gate (PITR-05) --------------------------------------------
+#
+# The predicate's branches are executed in CI against a crafted archive, so the
+# text pins above are a second line of defence rather than the only one. These
+# asserts pin the gate's discriminating fixtures: each is a segment whose fate
+# distinguishes the shipped rule from a plausible weakening of it, and a gate that
+# lost one would keep passing while the rule it stands for had gone.
+
+
+def test_ci_exercises_the_retention_predicate_against_a_crafted_archive() -> None:
+    scripts = _compose_smoke_scripts()
+    assert "wal-archive.sh" in scripts, "the retention predicate must be executed, not only read"
+    # The fail-safe: no retained base means no floor, so nothing may go — and the
+    # empty glob must not abort the run before that branch is reached.
+    assert "no retained base backup" in scripts
+    assert "the no-base fail-safe pruned something" in scripts
+    # Age narrows the candidates; the floor decides. Both are asserted by fixtures.
+    assert "the replay chain from the oldest retained base is severed" in scripts
+    assert "is aged and below the floor; it should have been pruned" in scripts
+
+
+def test_the_retention_gate_keeps_every_discriminating_fixture() -> None:
+    scripts = _compose_smoke_scripts()
+    floor = "000000020000000000000010"
+    for fixture, why in (
+        ("00000002000000000000000A", "aged and below the floor — the one prunable segment"),
+        ("00000002000000000000000A.00000028.backup", "a label shares its segment's prefix"),
+        (floor, "the floor itself must survive a STRICTLY-below comparison"),
+        ("000000020000000000000020", "above the floor"),
+        ("000000020000000000000009", "below the floor but fresh — age withholds it"),
+        ("00000002.history", "a timeline history file is exempt from pruning"),
+    ):
+        assert fixture in scripts, f"the gate must cover {fixture}: {why}"
+    # The floor the base publishes is what the whole comparison hangs on.
+    assert f"echo {floor} > \"$base/START_WAL\"" in scripts
+    # Exactly two of the six, named in the log line the gate matches on.
+    assert 'grep -qF "pruned 2 segment(s)"' in scripts
+
+
+def test_the_retention_gate_runs_with_offsite_configured() -> None:
+    # PITR-04's WAL half, executed: segments must reach the bucket before anything is
+    # pruned, and offsite removal must mirror exactly the local deletions.
+    scripts = _compose_smoke_scripts()
+    assert "LEARNY_BACKUP_REMOTE_BUCKET=learny-walgate-ci" in scripts
+    assert "never reached the offsite bucket, or went with the pruned ones" in scripts
+    assert "a segment pruned locally is still offsite" in scripts
 
 
 # --- CI point-in-time drill (PITR-09) -------------------------------------------
