@@ -32,6 +32,7 @@ _RESTORE_SH = (_BACKUP_DIR / "restore.sh").read_text()
 _ENTRYPOINT_SH = (_BACKUP_DIR / "entrypoint.sh").read_text()
 _DOCKERFILE = (_BACKUP_DIR / "Dockerfile").read_text()
 _BASE_BACKUP_SH = (_BACKUP_DIR / "base-backup.sh").read_text()
+_WAL_SH = (_BACKUP_DIR / "wal-archive.sh").read_text()
 
 _CI = _REPO_ROOT / ".github" / "workflows" / "ci.yml"
 
@@ -47,6 +48,21 @@ def _executed_lines(text: str) -> list[str]:
     return [
         line for line in text.splitlines() if line.strip() and not line.lstrip().startswith("#")
     ]
+
+
+def _logical_lines(text: str) -> list[str]:
+    """Executed lines, with backslash continuations rejoined into one line each.
+
+    A safety-critical flag pushed onto a continuation line is still part of the same
+    command, so assertions about a command must see it whole.
+    """
+    joined: list[str] = []
+    for line in _executed_lines(text):
+        if joined and joined[-1].rstrip().endswith("\\"):
+            joined[-1] = joined[-1].rstrip()[:-1].rstrip() + " " + line.strip()
+        else:
+            joined.append(line)
+    return joined
 
 
 def _load(path: Path) -> dict:
@@ -362,6 +378,157 @@ def test_image_ships_the_base_backup_job_executable() -> None:
     chmod = _DOCKERFILE[_DOCKERFILE.index("RUN chmod +x") :]
     assert "/usr/local/bin/base-backup.sh" in chmod
     assert "/usr/local/bin/base-backup-now" in chmod
+
+
+# --- wal-archive.sh: shipping + base-derived retention (PITR-04/05) -------------
+#
+# The retention predicate is the highest-value assertion in this module: deleting a
+# segment a retained base still needs breaks the replay chain invisibly, and the
+# break only surfaces when someone actually attempts a restore.
+
+
+def test_wal_archive_runs_in_strict_mode_with_pipefail() -> None:
+    assert "set -euo pipefail" in _WAL_SH
+
+
+def test_wal_pruning_derives_its_floor_from_the_oldest_retained_base() -> None:
+    # PITR-05. The floor is read from the base's recorded start segment, not from a
+    # clock, a constant, or the archive's own contents.
+    assert "START_WAL" in _WAL_SH
+    assert 'floor="$(cat "$oldest_base/START_WAL")"' in _WAL_SH
+    assert 'oldest_base="$(ls -1d "$LEARNY_BASEBACKUP_DIR"/learny-base-*' in _WAL_SH
+
+
+def test_age_alone_never_deletes_a_segment() -> None:
+    """PITR-05's discriminating assertion.
+
+    An age sweep would pass a naive "old segments are pruned" check while silently
+    destroying recoverability. So the deletion must sit inside the floor comparison,
+    and the age filter must only ever narrow the candidate set feeding it.
+    """
+    executed = _logical_lines(_WAL_SH)
+    deletions = [i for i, line in enumerate(executed) if line.strip().startswith('rm -f "$path"')]
+    assert len(deletions) == 1, "there must be exactly one segment deletion site"
+    # The nearest enclosing condition above the deletion is the floor comparison.
+    guards = [line for line in executed[: deletions[0]] if line.strip().startswith("if [ ")]
+    assert guards[-1].strip() == 'if [ "$segment" \\< "$floor" ]; then', (
+        f"the segment deletion must be guarded by the floor comparison, got {guards[-1]!r}"
+    )
+    # `find -mtime` produces candidates only; it must never delete.
+    find_line = next(line for line in executed if line.startswith("find "))
+    assert "-delete" not in find_line and "-exec rm" not in find_line, (
+        "the age filter must only list candidates, never delete them"
+    )
+    assert '-print > "$candidates"' in find_line
+
+
+def test_the_floor_comparison_is_strict_so_the_base_start_segment_survives() -> None:
+    # The segment a base replays FROM is required by it. `<=` would delete exactly
+    # the segment the oldest base needs first — an off-by-one that destroys the chain.
+    assert '[ "$segment" \\< "$floor" ]' in _WAL_SH
+    assert '\\<=' not in _WAL_SH
+
+
+def test_no_base_backup_means_no_segment_is_pruned() -> None:
+    # With no base there is no floor to derive from, and the fail-safe direction is
+    # to keep everything rather than fall back to age.
+    assert 'if [ -z "$oldest_base" ] || [ ! -f "$oldest_base/START_WAL" ]; then' in _WAL_SH
+    bail_at = _WAL_SH.index('no retained base backup with a recorded start segment')
+    delete_at = _WAL_SH.index('rm -f "$path"')
+    assert bail_at < delete_at
+    # The bail must actually leave the script, not merely log.
+    tail = _WAL_SH[bail_at : bail_at + 400]
+    assert "exit 0" in tail, "the no-base branch must exit before reaching the prune"
+    # The branch is only reachable if looking for a base cannot itself abort the run.
+    # Under `set -e` with `pipefail`, the glob matching nothing makes `ls` exit
+    # non-zero and kills the script before the branch — observed, not theorised — so
+    # the lookup must tolerate the empty case.
+    lookup = next(line for line in _logical_lines(_WAL_SH) if line.startswith("oldest_base="))
+    assert "|| true" in lookup, (
+        "the oldest-base lookup must tolerate finding nothing, or the no-base "
+        "fail-safe becomes an aborted run"
+    )
+
+
+def test_timeline_history_files_are_never_pruned() -> None:
+    # A few bytes each, and what lets a restore resolve which timeline to follow.
+    assert "*.history) continue ;;" in _WAL_SH
+
+
+def test_segments_are_shipped_before_they_can_be_pruned() -> None:
+    # PITR-04 + PITR-05 together: a segment deleted locally before it reached the
+    # offsite bucket exists nowhere.
+    ship_at = _WAL_SH.index("mc mirror")
+    prune_at = _WAL_SH.index('rm -f "$path"')
+    assert ship_at < prune_at
+
+
+def test_wal_shipping_never_overwrites_an_archived_segment() -> None:
+    # An archived segment is immutable; a local file differing from the object of the
+    # same name means something is wrong, and overwriting would destroy the good copy.
+    mirror = next(line for line in _executed_lines(_WAL_SH) if "mc mirror" in line)
+    assert "--overwrite" not in mirror
+    assert "--remove" not in mirror
+
+
+def test_offsite_pruning_removes_only_what_was_pruned_locally() -> None:
+    # Never a bulk age sweep and never `mirror --remove`: either would let an emptied
+    # or lost local archive wipe the offsite copy that exists for exactly that case.
+    assert 'while IFS= read -r name; do' in _WAL_SH
+    assert 'done < "$pruned"' in _WAL_SH
+    assert "--older-than" not in _WAL_SH, "offsite WAL retention must not be age-driven"
+    # Removal is guarded by an existence check, so a segment archived before offsite
+    # was configured does not abort the run.
+    assert 'if mc stat "$object" >/dev/null 2>&1; then' in _WAL_SH
+
+
+def test_wal_archive_gates_offsite_on_all_four_remote_vars() -> None:
+    lines = _executed_lines(_WAL_SH)
+    start = next(i for i, ln in enumerate(lines) if ln.lstrip().startswith("if [ -n"))
+    end = next(i for i in range(start, len(lines)) if lines[i].rstrip().endswith("; then"))
+    conditional = " ".join(ln.rstrip().rstrip("\\").strip() for ln in lines[start : end + 1])
+    for var in (
+        "LEARNY_BACKUP_REMOTE_ENDPOINT",
+        "LEARNY_BACKUP_REMOTE_ACCESS_KEY",
+        "LEARNY_BACKUP_REMOTE_SECRET_KEY",
+        "LEARNY_BACKUP_REMOTE_BUCKET",
+    ):
+        assert f'[ -n "${{{var}:-}}" ]' in conditional, f"offsite gate must check {var}"
+    assert conditional.count("&&") == 3, "the four remote-var checks must be joined by &&"
+    assert "||" not in conditional, "offsite gating must not OR the remote-var checks"
+    assert "offsite not configured" in _WAL_SH
+
+
+def test_wal_shipping_takes_its_own_lock_not_the_dump_lock() -> None:
+    # It runs every few minutes and competes with nothing; sharing the dump's lock
+    # would let one nightly dump silently stretch the offsite recovery point.
+    assert "LEARNY_WAL_LOCK:=/tmp/learny-wal.lock" in _WAL_SH
+    assert "LEARNY_BACKUP_LOCK" not in _WAL_SH
+    guard = [line for line in _executed_lines(_WAL_SH) if "flock" in line]
+    assert guard and "-n" in guard[0]
+
+
+def test_entrypoint_schedules_wal_shipping_frequently() -> None:
+    # This interval is the offsite recovery point for WAL, so it must be far shorter
+    # than the nightly dump's — a daily schedule would make archiving pointless.
+    assert "LEARNY_WAL_SHIP_CRON:=*/15 * * * *" in _ENTRYPOINT_SH
+    executed = "\n".join(_executed_lines(_ENTRYPOINT_SH))
+    assert "/usr/local/bin/wal-archive.sh" in executed
+
+
+def test_entrypoint_schedules_all_three_jobs() -> None:
+    # The crontab is written in one redirect; a job left out of the block is a
+    # schedule that silently never runs.
+    executed = "\n".join(_executed_lines(_ENTRYPOINT_SH))
+    for job in ("backup.sh", "base-backup.sh", "wal-archive.sh"):
+        assert f"/usr/local/bin/{job}" in executed, f"{job} must be scheduled"
+    assert executed.count("> /etc/crontabs/root") == 1
+
+
+def test_image_ships_the_wal_archive_job_executable() -> None:
+    assert "wal-archive.sh" in _DOCKERFILE
+    chmod = _DOCKERFILE[_DOCKERFILE.index("RUN chmod +x") :]
+    assert "/usr/local/bin/wal-archive.sh" in chmod
 
 
 # --- restore.sh safety-critical flags (OPS-09) ----------------------------------

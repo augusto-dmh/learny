@@ -13,6 +13,9 @@ case "${1:-crond}" in
     # Weekly, and deliberately 90 minutes clear of the nightly dump: the two jobs
     # share a lock, so an overlapping base backup would be skipped for that week.
     : "${LEARNY_BASEBACKUP_CRON:=0 2 * * 0}"
+    # Frequent, because this interval IS the offsite recovery point for WAL:
+    # segments only leave the host when this job runs.
+    : "${LEARNY_WAL_SHIP_CRON:=*/15 * * * *}"
     # Cron jobs run with a bare environment; persist the container's backup-related
     # env (single-quote-escaped, so any secret value survives) so the scheduled
     # backup.sh sees the same config as an on-demand run. The snapshot holds DB,
@@ -35,9 +38,12 @@ case "${1:-crond}" in
         "$LEARNY_BACKUP_CRON"
       printf '%s /usr/local/bin/base-backup.sh > /proc/1/fd/1 2>/proc/1/fd/2\n' \
         "$LEARNY_BASEBACKUP_CRON"
+      printf '%s /usr/local/bin/wal-archive.sh > /proc/1/fd/1 2>/proc/1/fd/2\n' \
+        "$LEARNY_WAL_SHIP_CRON"
     } > /etc/crontabs/root
     echo "[entrypoint] scheduled backup at '$LEARNY_BACKUP_CRON'"
     echo "[entrypoint] scheduled base backup at '$LEARNY_BASEBACKUP_CRON'"
+    echo "[entrypoint] scheduled WAL shipping at '$LEARNY_WAL_SHIP_CRON'"
     exec crond -f -l 8
     ;;
   *)
