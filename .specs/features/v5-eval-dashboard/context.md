@@ -2,7 +2,7 @@
 
 Decisions taken under the ship-cycle auto-decision rule (no user prompt). Each records the option set
 considered with why-recommend and why-not, the choice, and the rationale, so it is auditable without the
-conversation. Mirrored as AD-239..AD-244 in `.specs/project/STATE.md`.
+conversation. Mirrored as AD-239..AD-248 in `.specs/project/STATE.md`.
 
 RFC-005 open question #4 ("eval dashboard in or out") was already resolved in the RFC itself — *keep it as a
 compact cycle, the most naturally cuttable rider*. This cycle therefore builds the compact version and does not
@@ -93,3 +93,39 @@ constants (AD-241), so a run that passed its own gate at the time now reads as f
 **Chosen: A.** The endpoint carries `judge_model_in_force` (from `settings.judge_model`) so the page can
 name the mismatch rather than the client keeping its own idea of the current judge. Left unmarked, the
 dashboard's most prominent signal would be a wall of red that means "the threshold moved".
+
+---
+
+# Decisions added during review triage (PR #61)
+
+Full option analysis and the evidence behind each is in `review-triage.md`; recorded here so the cycle's
+decision set is complete in one place.
+
+## AD-246 — One owner for the gate rule (supersedes AD-241's "mirror it" mechanism)
+
+AD-241's *goal* stands: the rendered verdict must be the gate's verdict. Its *mechanism* — reimplementing
+the conditions and pinning them with a sampled equivalence test — was the wrong one, and review said so.
+The predicate now lives once, in `judge.gate_failures`, called by both the nightly assert and the
+dashboard. The equivalence test survives as a second line of defence rather than the only one.
+
+The same change fixes a real defect: `gate_failures` evaluates only `status == "ok"` lines. The study
+runner writes `status: "error"` lines carrying no `citation_valid`, into the same directory the dashboard
+reads, so one provider 5xx mid-study would have rendered that run `fail: citation` — for lines the gate
+never saw, beside a citation rate of 1.000 computed by `ab.aggregate`, which already excluded them. The
+docstring claim that such a shape was "not producible by the writer" was true of `judge.run_eval` and
+false of the study runner. No behaviour changes for judge-written data, which never sets `status`.
+
+## AD-247 — Headline numbers share the verdict's line set
+
+Rejected: keeping the per-tier aggregate as the headline. It is the right shape for a two-arm study and
+the wrong one beside a verdict — a mixed-tier or error-carrying run would show one slice's metrics next to
+a verdict computed from another, with nothing on the page explaining the gap. The tier breakdown remains
+in the payload for the golden/silver split.
+
+## AD-248 — The run list is bounded
+
+Rejected for now: the reviewer's preferred split into a second per-run cases endpoint. The bound
+(`limit`, default 25, max 200, discovered total reported) removes the unbounded-growth property — the
+actual risk in a nightly-appending, no-retention read path — without turning one endpoint and one
+component into an async drill-down, in a cycle the RFC scopes as compact and cuttable. The split is
+recorded as a follow-up rather than dropped.
