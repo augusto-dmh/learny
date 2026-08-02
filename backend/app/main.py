@@ -33,7 +33,11 @@ from app.infrastructure.web.vault import router as vault_router
 #: ``LEARNY_ENVIRONMENT`` value that marks a process as production.
 PRODUCTION_ENVIRONMENT = "production"
 
-_logger = logging.getLogger("app.instrument")
+# One logger per dev surface. They are independently switchable everywhere else,
+# and the logger name is the axis an operator filters a refusal by, so a shared
+# one would file the dashboard's refusal under the instrument.
+_instrument_logger = logging.getLogger("app.instrument")
+_eval_dashboard_logger = logging.getLogger("app.eval_dashboard")
 
 
 def instrument_surface_exposed(settings: Settings) -> bool:
@@ -55,7 +59,7 @@ def instrument_surface_exposed(settings: Settings) -> bool:
     if not settings.dev_instrument_enabled:
         return False
     if settings.environment.strip().lower() == PRODUCTION_ENVIRONMENT:
-        _logger.warning(
+        _instrument_logger.warning(
             "instrument.surface.refused",
             extra={"environment": settings.environment},
         )
@@ -78,7 +82,7 @@ def eval_dashboard_surface_exposed(settings: Settings) -> bool:
     if not settings.dev_eval_dashboard_enabled:
         return False
     if settings.environment.strip().lower() == PRODUCTION_ENVIRONMENT:
-        _logger.warning(
+        _eval_dashboard_logger.warning(
             "eval_dashboard.surface.refused",
             extra={"environment": settings.environment},
         )

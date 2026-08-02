@@ -20,16 +20,30 @@ it.
 
 The surface is dev-only: it is mounted only when `LEARNY_DEV_EVAL_DASHBOARD_ENABLED`
 is set on a process that is not running as production, and it requires a session
-once mounted. `docker compose up` enables it locally via the override file.
+once mounted.
 
-By default it reads this directory, which on a normal checkout holds only the
-committed result files. To render the real nightly history, check out the
-`eval-results` branch alongside the repo and point the reader at it:
+Which directory it reads is `LEARNY_EVAL_RESULTS_DIR`. Unset, it falls back to a
+path derived from the *source* layout, which resolves to this directory only for a
+process running from a checkout (`uv run uvicorn …` from `backend/`). A container
+is not a checkout — the image is built from `backend/` alone, so the fallback
+points at a `/evals/results` that was never copied in. `docker compose up`
+therefore mounts this directory and sets the variable explicitly; that pairing
+lives in `docker-compose.override.yml` and is what makes the local dashboard show
+anything. A missing directory is deliberately not an error, so a process without
+that pairing renders an empty list rather than failing.
+
+To render the real nightly history, check out the `eval-results` branch and point
+the reader at it with an **absolute** path — a relative one resolves against the
+process's working directory, not the repo root:
 
 ```bash
 git worktree add ../learny-eval-results eval-results
-export LEARNY_EVAL_RESULTS_DIR=../learny-eval-results
+export LEARNY_EVAL_RESULTS_DIR="$(cd ../learny-eval-results && pwd)"
 ```
+
+That applies to a backend run on the host. For the container, mount the checkout
+into the `api` service and set `LEARNY_EVAL_RESULTS_DIR` to the path inside it —
+a host path means nothing to the container.
 
 The directory is walked recursively, so the branch's `results/<date>-<run-id>/`
 layout and this flat directory both read the same. Because each nightly run
