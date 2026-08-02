@@ -62,6 +62,117 @@ rule (no product-direction change, no new external dependency, no undefendable p
 
 - *Chosen.* Why: pruning WAL by age alone silently breaks the replay chain of a base backup that is still inside its retention window — the failure is invisible until a restore is attempted, which is the exact class of defect this cycle exists to eliminate. Why not: retention is coupled across two artifact families, so the operator cannot reason about WAL retention in isolation — stated explicitly in the runbook.
 
+## T5 — replication connectivity finding
+
+**The stock `pgvector/pgvector:pg16` image REFUSES a remote replication connection.**
+Verified empirically, not assumed. The assumption in `spec.md` ("verify in-phase") is
+now closed: the negative branch is the real one, and Phase B had to resolve it.
+
+**Evidence 1 — the generated `pg_hba.conf`.** Ran the stock image with the project's
+`POSTGRES_USER/DB` and dumped its rules:
+
+```
+$ docker exec t5probe-db cat /var/lib/postgresql/data/pg_hba.conf   # comments stripped
+local   all             all                                     trust
+host    all             all             127.0.0.1/32            trust
+host    all             all             ::1/128                 trust
+local   replication     all                                     trust
+host    replication     all             127.0.0.1/32            trust
+host    replication     all             ::1/128                 trust
+host all all all scram-sha-256
+```
+
+Every `replication` rule is local-socket or loopback. The only remote rule uses the
+`all` database keyword, and PostgreSQL's `all` deliberately **does not match physical
+replication connections** — so a `pg_basebackup` from another container matches no
+rule whatsoever.
+
+**Evidence 2 — the connection itself.** From a second container on a shared network:
+
+```
+$ docker run --rm --network t5probe-net -e PGPASSWORD=learny pgvector/pgvector:pg16 \
+    pg_basebackup -h t5probe-db -U learny -D /tmp/bb -Ft -X fetch
+pg_basebackup: error: connection to server at "t5probe-db" (172.23.0.2), port 5432 failed:
+FATAL:  no pg_hba.conf entry for replication connection from host "172.23.0.3", user "learny",
+no encryption
+```
+
+**Resolution taken.** `deploy/postgres/pg_hba.conf`, shipped in the repo-owned image
+(AD-255) and selected with `-c hba_file=` from the compose `command`. It reproduces the
+stock file verbatim and adds exactly one rule —
+`host replication all all scram-sha-256` — i.e. remote replication under the *same*
+authentication the remote rule already used. No credential is baked into the image; the
+password still arrives via `POSTGRES_PASSWORD` from the env_file. Authentication is not
+weakened anywhere: `trust` remains confined to the in-container local socket and
+loopback, exactly as the stock image already had it.
+
+`hba_file` was chosen over a `/docker-entrypoint-initdb.d` script that appends to
+`$PGDATA/pg_hba.conf` because that hook only ever runs on a **first** initialisation:
+every already-deployed data directory — including the live VPS one — would silently
+remain unable to serve a base backup. `hba_file` points outside `PGDATA` and takes
+effect on restart, so it covers both cases.
+
+**Evidence 3 — the resolution works, on a fresh AND a pre-existing data directory.**
+
+```
+# fresh volume, repo-owned image:
+$ pg_basebackup -h t5probe-db2 -U learny -D /tmp/bb -Ft -z -Xfetch -P   →  rc=0
+$ pg_basebackup -h t5probe-db2 -U learny -D /tmp/bb3 -Ft -z -X stream   →  rc=0
+# data dir initialised by the STOCK image, then started by the repo-owned image:
+$ pg_basebackup -h t5probe-upg -U learny -D /tmp/bb2 -Ft -z -Xfetch     →  rc=0
+```
+
+`-X stream` opens a *second* replication connection and also succeeds, so the shipped
+job can use it (it bundles the WAL the base needs into `pg_wal.tar.gz`).
+
+**Evidence 4 — AD-255's ownership mechanism, proven rather than trusted.** With
+`/wal_archive` created in the image and a *fresh, empty* named volume mounted over it:
+
+```
+$ docker exec t5probe-db2 stat -c '%n owner=%U:%G mode=%a' /wal_archive
+/wal_archive owner=postgres:postgres mode=700
+```
+
+Docker propagated the image path's ownership into the empty volume, so the
+unprivileged `postgres` user can archive with no host-side chown. Archiving then ran
+for real — `pg_stat_archiver` reported `archived_count=6, failed_count=0` with the
+segments present in the volume — and the no-overwrite guard was confirmed to fail
+closed (`test ! -f … && cp …` returns 1 on an existing segment, leaving it byte-identical,
+which makes PostgreSQL retain and retry rather than silently corrupt the chain).
+
+**Evidence 5 — no new package in the backup image.** Alpine's already-installed
+`postgresql16-client` ships `pg_basebackup` (16.14), and busybox `tar` can extract
+`backup_label` out of `base.tar.gz` to read `START WAL LOCATION` — so the retention
+predicate needs no new dependency:
+
+```
+$ docker run --rm alpine:3.22 sh -c 'apk add postgresql16-client && which pg_basebackup'
+/usr/bin/pg_basebackup
+$ busybox tar -xzOf base.tar.gz backup_label
+START WAL LOCATION: 0/C000028 (file 00000001000000000000000C)
+```
+
+All probe containers, volumes, networks, and the probe image were removed afterwards;
+the `learny` compose project's `db`/`redis`/`minio` were never touched.
+
+## D-10 — Lock sharing for the base backup (in-phase)
+
+**Chosen: `base-backup.sh` shares `LEARNY_BACKUP_LOCK` with the nightly dump;
+`wal-archive.sh` takes its own separate lock.**
+
+- *Base backup shares the dump's lock.* Why: `spec.md`'s edge case is explicit — "WHEN a
+  base backup runs while a scheduled dump holds the backup lock THEN the second job SHALL
+  exit without corrupting either artifact" — and both jobs are heavy full-database reads
+  competing for the same disk and the same `/backups` volume. Why not: a base backup that
+  collides with a dump is skipped, leaving that week without a new base. Mitigated by
+  non-overlapping defaults (`0 2 * * 0` vs `30 3 * * *`, 90 minutes apart) and by the
+  skip being logged rather than silent.
+- *WAL shipping takes its own lock.* Why: it runs every 15 minutes, so sharing the dump's
+  lock would let one nightly dump silently blow the offsite RPO, and its work (copying
+  and pruning finished segments) conflicts with neither `pg_dump` nor `pg_basebackup`. Its
+  own lock still prevents it from overlapping *itself* when a mirror runs long. Why not:
+  two lock files instead of one for the operator to know about — documented in the runbook.
+
 ## D-9 — Execution shape → AD-257
 
 **Chosen: four phases, one worker per phase, all Opus; fresh Verifier on Fable.**
