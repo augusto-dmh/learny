@@ -267,6 +267,27 @@ jobs:
           if [ "$rc" -eq 0 ]; then echo "an unreachable target must exit non-zero"; exit 1; fi
           echo "$out" | grep -qF "earliest recoverable time"
           docker compose --profile backup run --rm --no-deps backup sh -c 'test ! -e /pitr/data'
+      - name: A target the validation cannot pin down is refused, staging nothing
+        run: |
+          # Both refusals executed rather than matched in the script's source. A
+          # rewrite that quietly accepted a bare timestamp keeps every pinned string
+          # and yields a restore that succeeds loudly on the WRONG moment, read in the
+          # server's timezone; one that accepted trailing content writes it verbatim
+          # into the single-quoted recovery_target_time in postgresql.auto.conf, where
+          # a crafted value can append its own directives — restore_command among
+          # them, which the server runs through a shell.
+          refuse() {
+            out="$(docker compose --profile backup run --rm --no-deps backup \
+              restore-pitr.sh --target "$1" --yes 2>&1)" && rc=0 || rc=$?
+            echo "$out"
+            if [ "$rc" -ne 2 ]; then
+              echo "expected exit 2 for [$1], got $rc"; exit 1
+            fi
+            echo "$out" | grep -qF "$2"
+          }
+          refuse '2026-08-02 12:00:00' 'target carries no UTC offset'
+          refuse "2026-08-02 12:00:00.1' notatimestamp+00:00" 'unusable fractional-seconds'
+          docker compose --profile backup run --rm --no-deps backup sh -c 'test ! -e /pitr/data'
       - name: Restore to the recorded moment
         run: |
           docker compose --profile backup run --rm backup \

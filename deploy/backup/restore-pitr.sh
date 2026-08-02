@@ -114,11 +114,34 @@ case "$target" in
     ;;
 esac
 
+# The accepted set has to be CLOSED, not merely prefixed. `$target` is written
+# verbatim into a single-quoted `recovery_target_time = '...'` below, so anything a
+# pattern lets through unexamined reaches postgresql.auto.conf: a value carrying a
+# quote and a newline would close that setting and append directives of its own —
+# including restore_command, which the server runs through a shell. A trailing `*`
+# is what makes a glob open-ended, and it matches quotes and newlines too, so no
+# pattern here may end in one. The fraction is split off and length-checked instead.
+whole="$naive"
+frac=""
 case "$naive" in
+  *.*)
+    whole="${naive%.*}"
+    frac="${naive##*.}"
+    ;;
+esac
+case "$whole" in
   [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9][\ T][0-9][0-9]:[0-9][0-9]:[0-9][0-9]) ;;
-  [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9][\ T][0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9]*) ;;
   *)
     echo "target is not a timestamp: $target" >&2
+    usage
+    exit 2
+    ;;
+esac
+# PostgreSQL keeps microseconds, so one to six digits and nothing else.
+case "$frac" in
+  ""|[0-9]|[0-9][0-9]|[0-9][0-9][0-9]|[0-9][0-9][0-9][0-9]|[0-9][0-9][0-9][0-9][0-9]|[0-9][0-9][0-9][0-9][0-9][0-9]) ;;
+  *)
+    echo "target has an unusable fractional-seconds part: $target" >&2
     usage
     exit 2
     ;;

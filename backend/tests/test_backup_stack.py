@@ -635,6 +635,30 @@ def test_pitr_restore_demands_an_unambiguous_utc_target() -> None:
     assert "exit 2" in _PITR_EXEC[reject : reject + 400]
 
 
+def test_the_accepted_target_shapes_are_a_closed_set() -> None:
+    """The validated value is written verbatim into a single-quoted setting.
+
+    A pattern ending in `*` is open: the glob matches quotes and newlines, so
+    everything after the first fractional digit used to reach
+    `recovery_target_time = '...'` unexamined, where a crafted value closes the quote
+    and appends directives of its own — `restore_command` among them, which the
+    server runs through a shell. So the fraction is split off and length-checked
+    against fixed-width alternatives instead, and no accepted pattern may end in `*`.
+    """
+    accepted = [
+        line
+        for line in _executed_lines(_PITR_SH)
+        if line.strip().endswith(") ;;") and "[0-9][0-9]" in line
+    ]
+    assert accepted, "the target validation must enumerate the shapes it accepts"
+    for line in accepted:
+        pattern = line.strip()[: -len(") ;;")]
+        assert not pattern.endswith("*"), f"open-ended accepted pattern: {pattern!r}"
+    # The split that makes the whole-seconds pattern fixed width.
+    assert 'whole="${naive%.*}"' in _PITR_EXEC
+    assert 'frac="${naive##*.}"' in _PITR_EXEC
+
+
 def test_pitr_restore_uses_the_postgresql_12_recovery_mechanism() -> None:
     # PostgreSQL 12+ enters archive recovery because recovery.signal EXISTS, and takes
     # its target from ordinary settings. The pre-12 recovery.conf is not read at all:
@@ -1095,6 +1119,17 @@ def test_ci_waits_for_the_segment_to_reach_the_archive_before_restoring() -> Non
     restore_at = scripts.index('restore-pitr.sh --target "$PITR_TARGET" --yes')
     assert switch_at < wait_at < restore_at
     assert "never reached the archive" in scripts, "the wait must fail loudly on timeout"
+
+
+def test_ci_executes_both_target_refusals_rather_than_pinning_their_text() -> None:
+    # A `case` rewrite that accepted a bare timestamp — or trailing content after the
+    # fractional seconds — keeps every string this module pins while changing what the
+    # script does. These run it.
+    scripts = _compose_smoke_scripts()
+    refusal_at = scripts.index("refuse '2026-08-02 12:00:00' 'target carries no UTC offset'")
+    assert refusal_at < scripts.index('restore-pitr.sh --target "$PITR_TARGET" --yes')
+    assert "unusable fractional-seconds" in scripts
+    assert "expected exit 2 for" in scripts, "the refusal must be pinned to exit 2, not merely non-zero"
 
 
 def test_ci_proves_the_dry_run_stages_nothing() -> None:
