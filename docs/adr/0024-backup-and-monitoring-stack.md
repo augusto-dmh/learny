@@ -96,6 +96,11 @@ drop → `restore.sh --latest --yes` → assert the row returned, plus the local
 notice. Redis remains explicitly un-backed-up (transport only); PITR/WAL archiving
 remains a recorded future upgrade if the RPO ever tightens.
 
+> **Superseded in part by ADR-0030.** The RPO tightened, and point-in-time recovery
+> now ships as a physical base backup plus continuous WAL archiving, alongside — not
+> instead of — the nightly logical dump described above. Everything else in this
+> section still holds.
+
 ### Monitoring
 
 A `monitoring` service runs `netdata/netdata:v2.10.4` (tag verified against the
@@ -151,4 +156,4 @@ never part of the default `up` and CI never resolves the `pdf` extra.
   S3-compatible bucket and fill `secrets/backup.env`; the netdata UI needs a
   tunnel rather than a URL.
 - Follow-ups: none required by this cycle; the pdf-worker size and PITR remain
-  recorded upgrade paths.
+  recorded upgrade paths. PITR was subsequently taken up and shipped — see ADR-0030.

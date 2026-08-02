@@ -17,6 +17,9 @@ _ROLLBACK = _OPS / "rollback.md"
 _DEPLOY = _OPS / "deploy.md"
 _MONITORING = _OPS / "monitoring.md"
 _INSTRUMENTATION = _OPS / "instrumentation.md"
+_ADR = Path(__file__).resolve().parents[2] / "docs" / "adr"
+_BACKUP_ADR = _ADR / "0024-backup-and-monitoring-stack.md"
+_RECOVERY_ADR = _ADR / "0030-point-in-time-recovery-and-worker-loss.md"
 
 
 def _collapsed(text: str) -> str:
@@ -47,6 +50,16 @@ def monitoring() -> str:
 @pytest.fixture
 def instrumentation() -> str:
     return _INSTRUMENTATION.read_text()
+
+
+@pytest.fixture
+def backup_adr() -> str:
+    return _BACKUP_ADR.read_text()
+
+
+@pytest.fixture
+def recovery_adr() -> str:
+    return _RECOVERY_ADR.read_text()
 
 
 def test_runbooks_exist() -> None:
@@ -200,6 +213,27 @@ def test_backups_drops_the_point_in_time_recovery_deferral(backups: str) -> None
     # The runbook used to close by declaring PITR out of scope. It now ships.
     assert "out of scope" not in backups
     assert "## Point-in-time recovery" in backups
+
+
+# --- the decision record behind the runbook (PITR-12) ---------------------------
+# The runbook says how; the ADR says why each shape was forced. The pair only works
+# if the ADR that deferred point-in-time recovery points at the one that ships it —
+# a reader who lands on the older decision must not be left believing the deferral.
+
+
+def test_the_recovery_decision_record_exists() -> None:
+    assert _RECOVERY_ADR.is_file()
+
+
+def test_the_recovery_record_states_what_it_supersedes(recovery_adr: str) -> None:
+    assert "ADR-0024" in recovery_adr
+    collapsed = _collapsed(recovery_adr)
+    assert "PITR/WAL archiving remains a recorded future upgrade" in collapsed
+    assert "superseded" in collapsed.lower()
+
+
+def test_the_deferring_record_points_at_the_one_that_ships_it(backup_adr: str) -> None:
+    assert "Superseded in part by ADR-0030" in backup_adr
 
 
 # --- deploy runbook secrets list (OPS-11) ---------------------------------------
