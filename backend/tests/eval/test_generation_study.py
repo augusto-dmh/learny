@@ -2,8 +2,8 @@
 
 Runs both arms × the seeded runs over the golden replay cases (frozen snapshot
 evidence, DB-free) and the local silver tier (resolved once per study), judged
-by the settings judge, through :func:`tests.eval.study.run_study` — checkpointed,
-resumable, and budget-capped against ``settings.eval_budget_usd``.
+by the pinned :data:`STUDY_JUDGE_MODEL`, through :func:`tests.eval.study.run_study`
+— checkpointed, resumable, and budget-capped against ``settings.eval_budget_usd``.
 
 Deliberately **not** enrolled in the nightly ``-m "live and eval"`` selection
 (the ``eval`` marker is absent — guarded offline in ``test_study_runner``): a
