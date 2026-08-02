@@ -3,7 +3,7 @@
   "promote_threshold": 2,
   "window_days": 45,
   "quarantine_threshold": 2,
-  "next_id": 21,
+  "next_id": 23,
   "lessons": [
     {
       "id": "L-001",
@@ -364,6 +364,42 @@
       ],
       "created": "2026-08-02T01:50:35Z",
       "last_seen": "2026-08-02T01:50:35Z"
+    },
+    {
+      "id": "L-021",
+      "key": "spec_precision_gap::when a feature reads committed data files derive fixtures from the newest real file not just the oldest the de noise study file repeats each case across two model arms and three runs so a case run index react key collided on all 36 rows while every fixture used run index null and passed",
+      "text": "When a feature reads committed data files, derive fixtures from the newest real file, not just the oldest: the de-noise study file repeats each case across two model arms and three runs, so a case+run_index React key collided on all 36 rows while every fixture used run_index null and passed.",
+      "signal": "spec_precision_gap",
+      "scope": "eval,fixtures",
+      "status": "candidate",
+      "features": [
+        "v5-eval-dashboard"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "backend/tests/test_eval_results.py:180 (eval,fixtures)"
+      ],
+      "created": "2026-08-02T04:03:24Z",
+      "last_seen": "2026-08-02T04:03:24Z"
+    },
+    {
+      "id": "L-022",
+      "key": "spec_precision_gap::before documenting a shape as unproducible grep every writer into that directory not just the obvious one the study runner writes status error lines with no citation valid into the same results dir the judge writes which a missing key means violation rule turned into a false citation failure",
+      "text": "Before documenting a shape as unproducible, grep every writer into that directory, not just the obvious one: the study runner writes status-error lines with no citation_valid into the same results dir the judge writes, which a missing-key-means-violation rule turned into a false citation failure.",
+      "signal": "spec_precision_gap",
+      "scope": "eval,judge",
+      "status": "candidate",
+      "features": [
+        "v5-eval-dashboard"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "backend/app/eval/results.py:207 (eval,judge)"
+      ],
+      "created": "2026-08-02T04:03:24Z",
+      "last_seen": "2026-08-02T04:03:24Z"
     }
   ]
 }

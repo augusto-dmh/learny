@@ -134,6 +134,18 @@ Seen once or not yet corroborated. Tracked, not trusted.
 - evidence: spec.md Recorded deviations / AD-238 (backend/tests/eval)
 - last seen: 2026-08-02T01:50:35Z
 
+### L-021 — When a feature reads committed data files, derive fixtures from the newest real file, not just the oldest: the de-noise study file repeats each case across two model arms and three runs, so a case+run_index React key collided on all 36 rows while every fixture used run_index null and passed.
+- signal: `spec_precision_gap` · recurrence: 1 feature(s) · scope: `eval,fixtures` · harmful: 0
+- features: v5-eval-dashboard
+- evidence: backend/tests/test_eval_results.py:180 (eval,fixtures)
+- last seen: 2026-08-02T04:03:24Z
+
+### L-022 — Before documenting a shape as unproducible, grep every writer into that directory, not just the obvious one: the study runner writes status-error lines with no citation_valid into the same results dir the judge writes, which a missing-key-means-violation rule turned into a false citation failure.
+- signal: `spec_precision_gap` · recurrence: 1 feature(s) · scope: `eval,judge` · harmful: 0
+- features: v5-eval-dashboard
+- evidence: backend/app/eval/results.py:207 (eval,judge)
+- last seen: 2026-08-02T04:03:24Z
+
 ## Quarantined (failed when applied — ignore)
 
 A confirmed lesson that recurred alongside failure. Kept for the maintainer to review.
