@@ -24,7 +24,7 @@ from sqlalchemy import Connection, text
 
 from app.application.cards import RefreshNoteCards
 from app.application.corpus import BuildCorpus
-from app.application.ingestion import RunIngestion
+from app.application.ingestion import INGESTION_FAILURE_ERROR, RunIngestion
 from app.application.notes import ReconcileNoteAnchors
 from app.application.quiz import ReconcileQuizItems, RunDeckGeneration
 from app.application.retrieval import EmbedCorpus
@@ -73,8 +73,10 @@ _RETRY_MAX_COUNTDOWN = 600
 # Durable failure text is a fixed, non-secret summary (ING-08 "redacted, non-secret").
 # A step exception — in Phase 5 potentially carrying object keys, storage URLs, or
 # filesystem paths — is written only to the server log (``exc_info``), never to the
-# owner-readable ``last_error`` / event ``message``.
-_STEP_FAILURE_ERROR = "Ingestion processing failed."
+# owner-readable ``last_error`` / event ``message``. The text is owned by the
+# application layer, which writes the same summary when a job exhausts its attempts:
+# one durable failure summary, whichever writer terminates the job.
+_STEP_FAILURE_ERROR = INGESTION_FAILURE_ERROR
 
 
 def _retry_countdown(retries: int) -> int:
@@ -155,6 +157,7 @@ def _build_run_ingestion(conn: Connection) -> RunIngestion:
         step=_build_step(conn),
         clock=_clock,
         ids=uuid4,
+        max_attempts=get_settings().ingestion_max_attempts,
     )
 
 
@@ -204,6 +207,7 @@ def _build_embed_ingestion(conn: Connection) -> RunIngestion:
         step=_build_embed_step(conn),
         clock=_clock,
         ids=uuid4,
+        max_attempts=get_settings().ingestion_max_attempts,
     )
 
 

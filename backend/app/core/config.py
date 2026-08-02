@@ -13,7 +13,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic_settings.sources import PydanticBaseSettingsSource
 
@@ -133,6 +133,16 @@ class Settings(BaseSettings):
         """
         langs = tuple(part.strip() for part in self.pdf_ocr_langs.split(",") if part.strip())
         return langs or ("en", "pt")
+
+    # Worker recovery (RFC-005 Cycle E) — how many times an ingestion job may be
+    # claimed before the claim seam terminates it instead of starting another run.
+    # The counter is the job's durable ``attempts`` column, not Celery's retry
+    # header: a message requeued after its worker died keeps its original delivery
+    # headers, so a broker-side counter never advances across those redeliveries
+    # and a job that reliably kills its worker would be redelivered forever. Below
+    # 1 is rejected here rather than at claim time — it would terminate every job
+    # on its first claim, i.e. disable ingestion entirely.
+    ingestion_max_attempts: int = Field(default=5, ge=1)
 
     # Corpus chunking (A-5) — max characters per retrieval chunk before packing
     # starts a new one; oversized single blocks split at sentence boundaries.

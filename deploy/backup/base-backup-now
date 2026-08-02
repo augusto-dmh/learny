@@ -1,0 +1,3 @@
+#!/bin/sh
+# On-demand physical base backup: run the scheduled job once, immediately.
+exec /usr/local/bin/base-backup.sh "$@"

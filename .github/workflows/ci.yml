@@ -194,8 +194,120 @@ jobs:
             mc alias set m http://minio:9000 learny learny-dev-secret &&
             mc ls --recursive m/learny-offsite-ci/db/ | grep -qF .dump &&
             mc ls --recursive m/learny-offsite-ci/objects/ | grep -qF offsite-probe.txt'
+      # Point-in-time recovery, proven rather than asserted (PITR-09). A drill that
+      # seeds data, restores, and finds it again passes just as happily against a
+      # plain whole-archive restore — it proves nothing about recovering to a MOMENT.
+      # So this one establishes a before and an after around a recorded target and
+      # checks both directions: the row written before it must return, and the row
+      # written after it must NOT. The second half is the assertion that carries the
+      # whole claim, and the control step below exists to prove it can fail.
+      - name: Take the physical base a replay starts from
+        run: docker compose --profile backup run --rm backup base-backup.sh
+      - name: Write a boundary into the WAL and record it
+        run: |
+          q() {
+            docker compose exec -T db psql -U learny -d learny -v ON_ERROR_STOP=1 "$@" | tr -d '\r'
+          }
+          q -c "CREATE TABLE pitr_marker (id int PRIMARY KEY, note text);" \
+            -c "INSERT INTO pitr_marker VALUES (1, 'before-target');"
+          # Whole seconds apart so the boundary is unambiguous at psql's precision.
+          q -c "SELECT pg_sleep(2);"
+          # UTC with an explicit offset: recovery_target_time is read in the server's
+          # timezone when the value carries none, which would make this boundary mean
+          # a different moment than the one just written.
+          target="$(q -tAc \
+            "SELECT to_char(clock_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD HH24:MI:SS.US')||'+00:00';")"
+          q -c "SELECT pg_sleep(2);"
+          q -c "INSERT INTO pitr_marker VALUES (2, 'after-target');"
+          q -c "SELECT pg_sleep(2);"
+          control="$(q -tAc \
+            "SELECT to_char(clock_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD HH24:MI:SS.US')||'+00:00';")"
+          q -c "SELECT pg_sleep(2);"
+          # Recovery confirms it reached a target by seeing a committed record PAST it,
+          # so the control target below needs a write after it or replay would run out
+          # of WAL and refuse to finish.
+          q -c "INSERT INTO pitr_marker VALUES (3, 'after-control');"
+          # WAL reaches the archive only when a segment COMPLETES. Force the switch and
+          # then wait for the segment to actually land, rather than assuming it did —
+          # a restore that replays nothing would otherwise look like a stale archive.
+          segment="$(q -tAc "SELECT pg_walfile_name(pg_current_wal_lsn());")"
+          q -tAc "SELECT pg_switch_wal();"
+          landed=0
+          for _ in $(seq 30); do
+            if docker compose exec -T db test -f "/wal_archive/$segment"; then landed=1; break; fi
+            q -c "SELECT pg_sleep(1);" > /dev/null
+          done
+          if [ "$landed" -ne 1 ]; then
+            echo "segment $segment never reached the archive; there is nothing to replay"
+            docker compose exec -T db psql -U learny -d learny -c "SELECT * FROM pg_stat_archiver;"
+            exit 1
+          fi
+          echo "PITR_TARGET=$target" >> "$GITHUB_ENV"
+          echo "PITR_CONTROL=$control" >> "$GITHUB_ENV"
+      - name: A point-in-time restore refuses to act without --yes
+        run: |
+          out="$(docker compose --profile backup run --rm backup \
+            restore-pitr.sh --target "$PITR_TARGET" 2>&1)" && rc=0 || rc=$?
+          echo "$out"
+          if [ "$rc" -eq 0 ]; then echo "the dry run must exit non-zero"; exit 1; fi
+          echo "$out" | grep -qF "nothing was changed"
+          # Inert, not merely stopped short of the last step: no data directory exists.
+          docker compose --profile backup run --rm --no-deps backup sh -c 'test ! -e /pitr/data'
+      - name: A target below the window names the earliest recoverable time
+        run: |
+          out="$(docker compose --profile backup run --rm --no-deps backup \
+            restore-pitr.sh --target '2000-01-01 00:00:00+00:00' --yes 2>&1)" && rc=0 || rc=$?
+          echo "$out"
+          if [ "$rc" -eq 0 ]; then echo "an unreachable target must exit non-zero"; exit 1; fi
+          echo "$out" | grep -qF "earliest recoverable time"
+          docker compose --profile backup run --rm --no-deps backup sh -c 'test ! -e /pitr/data'
+      - name: Restore to the recorded moment
+        run: |
+          docker compose --profile backup run --rm backup \
+            restore-pitr.sh --target "$PITR_TARGET" --yes
+          # --wait holds on db-restore's healthcheck, which requires a server OUT of
+          # recovery: one still replaying, or paused at its target, answers reads and
+          # refuses writes, and that is a failed restore, not a passed one.
+          docker compose --profile restore up -d --build --wait --wait-timeout 300 db-restore
+      - name: Assert the recovery landed on the moment, not on the whole archive
+        run: |
+          q() {
+            docker compose exec -T db-restore psql -U learny -d learny -tAc "$1" | tr -d '\r'
+          }
+          if [ "$(q 'SELECT count(*) FROM pitr_marker WHERE id = 1;')" != 1 ]; then
+            echo "the row written BEFORE the target is missing — no WAL was replayed"; exit 1
+          fi
+          if [ "$(q 'SELECT count(*) FROM pitr_marker WHERE id = 2;')" != 0 ]; then
+            echo "the row written AFTER the target came back — this is a whole-archive restore"
+            exit 1
+          fi
+          if [ "$(q 'SELECT pg_is_in_recovery();')" != f ]; then
+            echo "the restored server is still in recovery"; exit 1
+          fi
+          docker compose exec -T db-restore psql -U learny -d learny -v ON_ERROR_STOP=1 \
+            -c "CREATE TABLE pitr_writable (x int);" -c "DROP TABLE pitr_writable;"
+      - name: Prove the boundary moves with the target, not by accident
+        run: |
+          # Same base, same archive, a LATER target. If the assertion above could not
+          # fail — because replay silently stopped early, or never ran — this run would
+          # produce the same rows. It must instead bring row 2 back and leave row 3 out.
+          docker compose --profile restore rm -sf db-restore
+          docker compose --profile backup run --rm backup \
+            restore-pitr.sh --target "$PITR_CONTROL" --yes
+          docker compose --profile restore up -d --wait --wait-timeout 300 db-restore
+          q() {
+            docker compose exec -T db-restore psql -U learny -d learny -tAc "$1" | tr -d '\r'
+          }
+          if [ "$(q 'SELECT count(*) FROM pitr_marker WHERE id = 2;')" != 1 ]; then
+            echo "a later target did not bring back the row written after the first one"
+            echo "the point-in-time assertion above cannot fail and proves nothing"
+            exit 1
+          fi
+          if [ "$(q 'SELECT count(*) FROM pitr_marker WHERE id = 3;')" != 0 ]; then
+            echo "the row written after the control target came back"; exit 1
+          fi
       - name: Teardown (with logs on failure)
         if: always()
         run: |
-          docker compose logs --tail 50
-          docker compose down -v
+          docker compose --profile backup --profile restore logs --tail 50
+          docker compose --profile backup --profile restore down -v

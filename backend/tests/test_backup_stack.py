@@ -1,6 +1,6 @@
-"""A gate — backup stack topology + script safety (unit, OPS-01..09).
+"""A gate — backup stack topology + script safety (unit, OPS-01..09, PITR-03..08/10).
 
-Two layers, both pure text/YAML (no Docker required, deterministic):
+Three layers, all pure text/YAML (no Docker required, deterministic):
 
 * Compose topology — the prod overlay's ``backup`` sidecar (GHCR image, restart,
   the three required secret files, the ``backup_data`` volume, db+minio health
@@ -10,12 +10,19 @@ Two layers, both pure text/YAML (no Docker required, deterministic):
   ``--yes`` restore guard fails here, not in production. The end-to-end behaviour
   is proven by the CI roundtrip (OPS-10); these asserts pin the exact flags CI
   cannot easily distinguish from a weakened variant.
+* Recovery chain — the physical base backup and the WAL retention predicate. The
+  predicate is the highest-value assertion in the module: deleting a segment a
+  retained base still needs severs the replay chain invisibly, and the severance
+  only surfaces when someone actually attempts a restore. Its behaviour was
+  additionally exercised against a live archive during development; what is pinned
+  here is the shape a text diff can silently weaken.
 
 Mirrors the merge semantics + helper shapes of ``test_deploy_topology.py``.
 """
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -31,6 +38,9 @@ _BACKUP_SH = (_BACKUP_DIR / "backup.sh").read_text()
 _RESTORE_SH = (_BACKUP_DIR / "restore.sh").read_text()
 _ENTRYPOINT_SH = (_BACKUP_DIR / "entrypoint.sh").read_text()
 _DOCKERFILE = (_BACKUP_DIR / "Dockerfile").read_text()
+_BASE_BACKUP_SH = (_BACKUP_DIR / "base-backup.sh").read_text()
+_WAL_SH = (_BACKUP_DIR / "wal-archive.sh").read_text()
+_PITR_SH = (_BACKUP_DIR / "restore-pitr.sh").read_text()
 
 _CI = _REPO_ROOT / ".github" / "workflows" / "ci.yml"
 
@@ -46,6 +56,21 @@ def _executed_lines(text: str) -> list[str]:
     return [
         line for line in text.splitlines() if line.strip() and not line.lstrip().startswith("#")
     ]
+
+
+def _logical_lines(text: str) -> list[str]:
+    """Executed lines, with backslash continuations rejoined into one line each.
+
+    A safety-critical flag pushed onto a continuation line is still part of the same
+    command, so assertions about a command must see it whole.
+    """
+    joined: list[str] = []
+    for line in _executed_lines(text):
+        if joined and joined[-1].rstrip().endswith("\\"):
+            joined[-1] = joined[-1].rstrip()[:-1].rstrip() + " " + line.strip()
+        else:
+            joined.append(line)
+    return joined
 
 
 def _load(path: Path) -> dict:
@@ -245,6 +270,491 @@ def test_backup_pings_heartbeat_last_and_only_on_success() -> None:
     assert "curl -fsS" in _BACKUP_SH
 
 
+# --- base-backup.sh: the physical base every replay starts from (PITR-03/04/06) --
+#
+# WAL segments are not a recovery chain on their own — replay needs a physical base
+# with a known WAL position, which a logical dump does not have. These pin the
+# properties that make the base usable and its failure modes safe.
+
+
+def test_base_backup_runs_in_strict_mode_with_pipefail() -> None:
+    assert "set -euo pipefail" in _BASE_BACKUP_SH
+
+
+def test_base_backup_takes_a_physical_backup_not_a_logical_dump() -> None:
+    executed = "\n".join(_executed_lines(_BASE_BACKUP_SH))
+    assert "pg_basebackup" in executed
+    assert "pg_dump" not in executed, "the base must be physical; the dump is a separate job"
+
+
+def test_base_backup_shares_the_nightly_dump_lock() -> None:
+    # A base backup and a dump are both heavy full-database reads over the same disk
+    # and the same /backups volume. Sharing backup.sh's lock file is what makes the
+    # second arrival exit instead of running concurrently; a private lock here would
+    # silently allow the overlap. Pin the SAME variable and default backup.sh uses.
+    assert "LEARNY_BACKUP_LOCK:=/tmp/learny-backup.lock" in _BASE_BACKUP_SH
+    assert "LEARNY_BACKUP_LOCK:=/tmp/learny-backup.lock" in _BACKUP_SH
+    guard = [line for line in _executed_lines(_BASE_BACKUP_SH) if "flock" in line]
+    assert guard and guard[0].lstrip().startswith("if !")
+    assert "-n" in guard[0], "the guard must be non-blocking; blocking would queue a duplicate"
+
+
+def test_base_backup_writes_to_a_temp_name_and_renames_only_on_success() -> None:
+    # PITR-03: a failed run must leave no partial artifact under the final name and
+    # must not touch prior bases.
+    assert 'tmp="$base.tmp"' in _BASE_BACKUP_SH
+    assert 'mv "$tmp" "$base"' in _BASE_BACKUP_SH
+    assert "trap 'rm -rf \"$tmp\"' EXIT" in _BASE_BACKUP_SH
+
+
+def test_base_backup_records_the_wal_segment_its_replay_starts_from() -> None:
+    # This file is the sole input to WAL retention. Without it, pruning would have
+    # nothing to derive from and would fall back to age — the exact silent
+    # chain-breaking the retention rule exists to prevent.
+    assert "backup_label" in _BASE_BACKUP_SH
+    assert "START WAL LOCATION" in _BASE_BACKUP_SH
+    assert 'printf \'%s\\n\' "$start_wal" > "$tmp/START_WAL"' in _BASE_BACKUP_SH
+    # The record is written INSIDE the temp directory, so the rename publishes the
+    # base and its replay floor atomically — a base can never appear without one.
+    label_at = _BASE_BACKUP_SH.index('> "$tmp/START_WAL"')
+    rename_at = _BASE_BACKUP_SH.index('mv "$tmp" "$base"')
+    assert label_at < rename_at
+
+
+def test_base_backup_fails_when_the_replay_floor_cannot_be_read() -> None:
+    # A base whose START WAL is unknown cannot pin any segment, so publishing one
+    # would quietly leave every retained segment prunable. Fail the run instead.
+    assert 'if [ -z "$start_wal" ]; then' in _BASE_BACKUP_SH
+    guard_at = _BASE_BACKUP_SH.index('if [ -z "$start_wal" ]')
+    rename_at = _BASE_BACKUP_SH.index('mv "$tmp" "$base"')
+    assert guard_at < rename_at, "the floor must be verified before the base is published"
+
+
+def test_base_backup_gates_offsite_on_all_four_remote_vars() -> None:
+    # PITR-04: identical gate to the dump's — all four set means ship, anything else
+    # completes locally with the existing explicit notice and exits 0.
+    lines = _executed_lines(_BASE_BACKUP_SH)
+    start = next(i for i, ln in enumerate(lines) if ln.lstrip().startswith("if [ -n"))
+    end = next(i for i in range(start, len(lines)) if lines[i].rstrip().endswith("; then"))
+    conditional = " ".join(ln.rstrip().rstrip("\\").strip() for ln in lines[start : end + 1])
+    for var in (
+        "LEARNY_BACKUP_REMOTE_ENDPOINT",
+        "LEARNY_BACKUP_REMOTE_ACCESS_KEY",
+        "LEARNY_BACKUP_REMOTE_SECRET_KEY",
+        "LEARNY_BACKUP_REMOTE_BUCKET",
+    ):
+        assert f'[ -n "${{{var}:-}}" ]' in conditional, f"offsite gate must check {var}"
+    assert conditional.count("&&") == 3, "the four remote-var checks must be joined by &&"
+    assert "||" not in conditional, "offsite gating must not OR the remote-var checks"
+    # The same notice the dump logs, which CI asserts on.
+    assert "offsite not configured" in _BASE_BACKUP_SH
+
+
+def test_base_backup_prunes_only_after_success_and_exempts_the_newest() -> None:
+    # PITR-06. `set -e` means a failed backup never reaches the prune, so a failure
+    # can never shrink the retention window; the newest base is exempt regardless.
+    assert '-mtime "+$LEARNY_BACKUP_KEEP_DAYS"' in _BASE_BACKUP_SH
+    assert 'newest="$(ls -1dt' in _BASE_BACKUP_SH
+    assert '! -path "$newest"' in _BASE_BACKUP_SH
+    backup_at = _BASE_BACKUP_SH.rindex("pg_basebackup -h")
+    prune_at = _BASE_BACKUP_SH.index("-mtime")
+    assert backup_at < prune_at, "pruning must follow the backup, never precede it"
+
+
+def test_base_backup_prune_targets_directories_not_the_whole_backup_tree() -> None:
+    # The artifact is a directory, so the prune uses -type d. Bounding it with
+    # -mindepth/-maxdepth 1 keeps it from matching the backup root itself or
+    # descending into a base's contents.
+    prune = next(ln for ln in _executed_lines(_BASE_BACKUP_SH) if ln.startswith("find "))
+    assert "-mindepth 1 -maxdepth 1" in prune
+    assert "-type d" in prune
+    assert "-name 'learny-base-*'" in prune
+
+
+def test_entrypoint_schedules_the_base_backup_weekly_clear_of_the_dump() -> None:
+    # Sharing the dump's lock means an overlapping base backup is skipped, so the
+    # defaults must not overlap: 02:00 Sunday against the dump's 03:30 nightly.
+    assert "LEARNY_BASEBACKUP_CRON:=0 2 * * 0" in _ENTRYPOINT_SH
+    executed = "\n".join(_executed_lines(_ENTRYPOINT_SH))
+    assert "/usr/local/bin/base-backup.sh" in executed
+    assert "> /etc/crontabs/root" in executed
+
+
+def test_image_ships_the_base_backup_job_executable() -> None:
+    assert "base-backup.sh" in _DOCKERFILE
+    assert "base-backup-now" in _DOCKERFILE
+    chmod = _DOCKERFILE[_DOCKERFILE.index("RUN chmod +x") :]
+    assert "/usr/local/bin/base-backup.sh" in chmod
+    assert "/usr/local/bin/base-backup-now" in chmod
+
+
+# --- wal-archive.sh: shipping + base-derived retention (PITR-04/05) -------------
+#
+# The retention predicate is the highest-value assertion in this module: deleting a
+# segment a retained base still needs breaks the replay chain invisibly, and the
+# break only surfaces when someone actually attempts a restore.
+
+
+def test_wal_archive_runs_in_strict_mode_with_pipefail() -> None:
+    assert "set -euo pipefail" in _WAL_SH
+
+
+def test_wal_pruning_derives_its_floor_from_the_oldest_retained_base() -> None:
+    # PITR-05. The floor is read from the base's recorded start segment, not from a
+    # clock, a constant, or the archive's own contents.
+    assert "START_WAL" in _WAL_SH
+    assert 'floor="$(cat "$oldest_base/START_WAL")"' in _WAL_SH
+    assert 'oldest_base="$(ls -1d "$LEARNY_BASEBACKUP_DIR"/learny-base-*' in _WAL_SH
+
+
+def test_age_alone_never_deletes_a_segment() -> None:
+    """PITR-05's discriminating assertion.
+
+    An age sweep would pass a naive "old segments are pruned" check while silently
+    destroying recoverability. So the deletion must sit inside the floor comparison,
+    and the age filter must only ever narrow the candidate set feeding it.
+    """
+    executed = _logical_lines(_WAL_SH)
+    deletions = [i for i, line in enumerate(executed) if line.strip().startswith('rm -f "$path"')]
+    assert len(deletions) == 1, "there must be exactly one segment deletion site"
+    # The nearest enclosing condition above the deletion is the floor comparison.
+    guards = [line for line in executed[: deletions[0]] if line.strip().startswith("if [ ")]
+    assert guards[-1].strip() == 'if [ "$segment" \\< "$floor" ]; then', (
+        f"the segment deletion must be guarded by the floor comparison, got {guards[-1]!r}"
+    )
+    # `find -mtime` produces candidates only; it must never delete.
+    find_line = next(line for line in executed if line.startswith("find "))
+    assert "-delete" not in find_line and "-exec rm" not in find_line, (
+        "the age filter must only list candidates, never delete them"
+    )
+    assert '-print > "$candidates"' in find_line
+
+
+def test_the_floor_comparison_is_strict_so_the_base_start_segment_survives() -> None:
+    # The segment a base replays FROM is required by it. `<=` would delete exactly
+    # the segment the oldest base needs first — an off-by-one that destroys the chain.
+    assert '[ "$segment" \\< "$floor" ]' in _WAL_SH
+    assert "\\<=" not in _WAL_SH
+
+
+def test_no_base_backup_means_no_segment_is_pruned() -> None:
+    # With no base there is no floor to derive from, and the fail-safe direction is
+    # to keep everything rather than fall back to age.
+    assert 'if [ -z "$oldest_base" ] || [ ! -f "$oldest_base/START_WAL" ]; then' in _WAL_SH
+    bail_at = _WAL_SH.index("no retained base backup with a recorded start segment")
+    delete_at = _WAL_SH.index('rm -f "$path"')
+    assert bail_at < delete_at
+    # The bail must actually leave the script, not merely log.
+    tail = _WAL_SH[bail_at : bail_at + 400]
+    assert "exit 0" in tail, "the no-base branch must exit before reaching the prune"
+    # The branch is only reachable if looking for a base cannot itself abort the run.
+    # Under `set -e` with `pipefail`, the glob matching nothing makes `ls` exit
+    # non-zero and kills the script before the branch — observed, not theorised — so
+    # the lookup must tolerate the empty case.
+    lookup = next(line for line in _logical_lines(_WAL_SH) if line.startswith("oldest_base="))
+    assert "|| true" in lookup, (
+        "the oldest-base lookup must tolerate finding nothing, or the no-base "
+        "fail-safe becomes an aborted run"
+    )
+
+
+def test_timeline_history_files_are_never_pruned() -> None:
+    # A few bytes each, and what lets a restore resolve which timeline to follow.
+    assert "*.history) continue ;;" in _WAL_SH
+
+
+def test_segments_are_shipped_before_they_can_be_pruned() -> None:
+    # PITR-04 + PITR-05 together: a segment deleted locally before it reached the
+    # offsite bucket exists nowhere.
+    ship_at = _WAL_SH.index("mc mirror")
+    prune_at = _WAL_SH.index('rm -f "$path"')
+    assert ship_at < prune_at
+
+
+def test_wal_shipping_never_overwrites_an_archived_segment() -> None:
+    # An archived segment is immutable; a local file differing from the object of the
+    # same name means something is wrong, and overwriting would destroy the good copy.
+    mirror = next(line for line in _executed_lines(_WAL_SH) if "mc mirror" in line)
+    assert "--overwrite" not in mirror
+    assert "--remove" not in mirror
+
+
+def test_offsite_pruning_removes_only_what_was_pruned_locally() -> None:
+    # Never a bulk age sweep and never `mirror --remove`: either would let an emptied
+    # or lost local archive wipe the offsite copy that exists for exactly that case.
+    assert "while IFS= read -r name; do" in _WAL_SH
+    assert 'done < "$pruned"' in _WAL_SH
+    assert "--older-than" not in _WAL_SH, "offsite WAL retention must not be age-driven"
+    # Removal is guarded by an existence check, so a segment archived before offsite
+    # was configured does not abort the run.
+    assert 'if mc stat "$object" >/dev/null 2>&1; then' in _WAL_SH
+
+
+def test_wal_archive_gates_offsite_on_all_four_remote_vars() -> None:
+    lines = _executed_lines(_WAL_SH)
+    start = next(i for i, ln in enumerate(lines) if ln.lstrip().startswith("if [ -n"))
+    end = next(i for i in range(start, len(lines)) if lines[i].rstrip().endswith("; then"))
+    conditional = " ".join(ln.rstrip().rstrip("\\").strip() for ln in lines[start : end + 1])
+    for var in (
+        "LEARNY_BACKUP_REMOTE_ENDPOINT",
+        "LEARNY_BACKUP_REMOTE_ACCESS_KEY",
+        "LEARNY_BACKUP_REMOTE_SECRET_KEY",
+        "LEARNY_BACKUP_REMOTE_BUCKET",
+    ):
+        assert f'[ -n "${{{var}:-}}" ]' in conditional, f"offsite gate must check {var}"
+    assert conditional.count("&&") == 3, "the four remote-var checks must be joined by &&"
+    assert "||" not in conditional, "offsite gating must not OR the remote-var checks"
+    assert "offsite not configured" in _WAL_SH
+
+
+def test_wal_shipping_takes_its_own_lock_not_the_dump_lock() -> None:
+    # It runs every few minutes and competes with nothing; sharing the dump's lock
+    # would let one nightly dump silently stretch the offsite recovery point.
+    assert "LEARNY_WAL_LOCK:=/tmp/learny-wal.lock" in _WAL_SH
+    assert "LEARNY_BACKUP_LOCK" not in _WAL_SH
+    guard = [line for line in _executed_lines(_WAL_SH) if "flock" in line]
+    assert guard and "-n" in guard[0]
+
+
+def test_entrypoint_schedules_wal_shipping_frequently() -> None:
+    # This interval is the offsite recovery point for WAL, so it must be far shorter
+    # than the nightly dump's — a daily schedule would make archiving pointless.
+    assert "LEARNY_WAL_SHIP_CRON:=*/15 * * * *" in _ENTRYPOINT_SH
+    executed = "\n".join(_executed_lines(_ENTRYPOINT_SH))
+    assert "/usr/local/bin/wal-archive.sh" in executed
+
+
+def test_entrypoint_schedules_all_three_jobs() -> None:
+    # The crontab is written in one redirect; a job left out of the block is a
+    # schedule that silently never runs.
+    executed = "\n".join(_executed_lines(_ENTRYPOINT_SH))
+    for job in ("backup.sh", "base-backup.sh", "wal-archive.sh"):
+        assert f"/usr/local/bin/{job}" in executed, f"{job} must be scheduled"
+    assert executed.count("> /etc/crontabs/root") == 1
+
+
+def test_image_ships_the_wal_archive_job_executable() -> None:
+    assert "wal-archive.sh" in _DOCKERFILE
+    chmod = _DOCKERFILE[_DOCKERFILE.index("RUN chmod +x") :]
+    assert "/usr/local/bin/wal-archive.sh" in chmod
+
+
+# --- restore-pitr.sh: recovery to a chosen moment (PITR-07) ---------------------
+#
+# The end-to-end proof is the CI drill (PITR-09), whose B-absent assertion is what
+# separates a real point-in-time recovery from a whole-archive restore. Pinned here
+# is the shape a text diff can silently weaken: the confirmation gate, the
+# PostgreSQL 12+ recovery mechanism, and the timezone discipline that makes a
+# recovery boundary mean the same moment everywhere.
+
+_PITR_EXEC = "\n".join(_executed_lines(_PITR_SH))
+
+
+def test_pitr_restore_runs_in_strict_mode_with_pipefail() -> None:
+    assert "set -euo pipefail" in _PITR_SH
+
+
+def test_pitr_restore_writes_nothing_without_an_explicit_yes() -> None:
+    """PITR-07 — the dry run must be inert, not merely stop short of the last step."""
+    assert 'if [ "$confirm" -ne 1 ]; then' in _PITR_EXEC
+    gate = _PITR_EXEC.index('"$confirm" -ne 1')
+    for mutation in (
+        'rm -rf "$data_dir"',
+        'mkdir -p "$data_dir"',
+        'tar -xzf "$chosen/base.tar.gz"',
+        '>> "$data_dir/postgresql.auto.conf"',
+        'touch "$data_dir/recovery.signal"',
+    ):
+        assert gate < _PITR_EXEC.index(mutation), f"{mutation} runs before the --yes gate"
+
+
+def test_pitr_dry_run_prints_the_plan_and_exits_non_zero() -> None:
+    gate = _PITR_EXEC.index('"$confirm" -ne 1')
+    branch = _PITR_EXEC[gate : _PITR_EXEC.index('rm -rf "$data_dir"')]
+    assert "PLAN:" in branch
+    assert "re-run with --yes" in branch
+    assert "exit 1" in branch
+
+
+def test_pitr_restore_selects_a_base_that_precedes_the_target() -> None:
+    # Replay only moves forward, so a base taken AFTER the target has no path to it.
+    # The candidate is skipped when its start stamp sorts after the target's; the
+    # stamps are fixed width, so the string compare IS a time compare.
+    assert '[ "$(base_stamp "$candidate")" \\> "$target_stamp" ]' in _PITR_EXEC
+    assert 'chosen="$candidate"' in _PITR_EXEC
+
+
+def test_a_target_below_the_window_names_the_earliest_recoverable_time() -> None:
+    """PITR-08 — a dead end an operator cannot resolve is barely better than a hang.
+
+    The floor is the start of the OLDEST RETAINED base backup, which is the same
+    base WAL retention is derived from: nothing below it survives to be replayed, so
+    no earlier moment is reachable however much archive happens to still be on disk.
+    """
+    assert "outside the recoverable window" in _PITR_EXEC
+    refusal = _PITR_EXEC.index("outside the recoverable window")
+    tail = _PITR_EXEC[refusal : refusal + 500]
+    assert "earliest recoverable time" in tail
+    assert 'pretty_utc "$(base_stamp "$oldest")"' in tail, "the floor must be a real timestamp"
+    assert "exit 1" in tail
+
+
+def test_the_window_floor_is_the_oldest_retained_base() -> None:
+    # The sorted glob yields bases oldest-first, so the first COMPLETE one is the
+    # floor. Taking it from the last, or from an incomplete directory, would report a
+    # window the archive cannot actually deliver.
+    assert '[ -n "$oldest" ] || oldest="$candidate"' in _PITR_EXEC
+    skip_at = _PITR_EXEC.index('[ -f "$candidate/base.tar.gz" ] || continue')
+    floor_at = _PITR_EXEC.index('[ -n "$oldest" ] || oldest="$candidate"')
+    assert skip_at < floor_at, "an incomplete directory must not become the window floor"
+
+
+def test_a_target_below_the_window_modifies_no_data_directory() -> None:
+    refusal = _PITR_EXEC.index("outside the recoverable window")
+    assert refusal < _PITR_EXEC.index('rm -rf "$data_dir"')
+    assert "nothing was changed" in _PITR_EXEC[refusal : refusal + 500]
+
+
+def test_pitr_restore_refuses_when_there_is_no_base_backup_at_all() -> None:
+    # Archived WAL is not a recovery chain on its own — there is nothing to replay
+    # onto, and the honest answer is to say so rather than stage a broken cluster.
+    assert "no base backup in" in _PITR_EXEC
+    refusal = _PITR_EXEC.index("no base backup in")
+    assert refusal < _PITR_EXEC.index('rm -rf "$data_dir"')
+    assert "exit 1" in _PITR_EXEC[refusal : refusal + 400]
+
+
+def test_pitr_restore_demands_an_unambiguous_utc_target() -> None:
+    # `recovery_target_time` is interpreted in the SERVER's timezone when the value
+    # carries no offset, so a bare timestamp means different moments in different
+    # deployments — and a recovery boundary that moves is not a boundary.
+    assert "*Z) naive=" in _PITR_EXEC
+    assert "*+00:00) naive=" in _PITR_EXEC
+    assert "target carries no UTC offset" in _PITR_SH
+    reject = _PITR_EXEC.index("target carries no UTC offset")
+    assert "exit 2" in _PITR_EXEC[reject : reject + 400]
+
+
+def test_pitr_restore_uses_the_postgresql_12_recovery_mechanism() -> None:
+    # PostgreSQL 12+ enters archive recovery because recovery.signal EXISTS, and takes
+    # its target from ordinary settings. The pre-12 recovery.conf is not read at all:
+    # a script writing one would still start a server, still replay the whole archive,
+    # and still look like a successful restore.
+    assert 'touch "$data_dir/recovery.signal"' in _PITR_EXEC
+    assert "recovery.conf" not in _PITR_EXEC
+    assert "postgresql.auto.conf" in _PITR_EXEC
+    for setting in ("restore_command", "recovery_target_time", "recovery_target_action"):
+        assert setting in _PITR_EXEC
+
+
+def test_pitr_restore_replays_from_the_archive_the_sidecar_shares() -> None:
+    line = next(ln for ln in _executed_lines(_PITR_SH) if "restore_command" in ln)
+    assert "$LEARNY_WAL_ARCHIVE_DIR/%f" in line
+    # %p is the destination the server asks for; it is quoted in the emitted config.
+    assert "%p" in line
+
+
+def test_pitr_restore_promotes_so_the_recovered_server_accepts_writes() -> None:
+    # The default action is `pause`: a server that answers reads and refuses writes,
+    # which is a failed restore wearing the appearance of a successful one.
+    line = next(ln for ln in _executed_lines(_PITR_SH) if "recovery_target_action" in ln)
+    assert "promote" in line
+    assert "pause" not in line
+
+
+def test_pitr_restore_unpacks_the_wal_bundled_with_the_base() -> None:
+    # -X stream put the WAL written DURING the base backup in its own archive member;
+    # without it the cluster is not internally consistent, let alone able to reach a
+    # later target.
+    assert 'tar -xzf "$chosen/pg_wal.tar.gz" -C "$data_dir/pg_wal"' in _PITR_EXEC
+
+
+def test_pitr_restore_stages_outside_the_live_data_volume() -> None:
+    # A sidecar that runs cron jobs around the clock must not be able to overwrite the
+    # database it exists to protect.
+    assert 'data_dir="$LEARNY_PITR_DIR/data"' in _PITR_EXEC
+    assert "db_data" not in _PITR_SH
+    assert "/var/lib/postgresql/data" not in _PITR_SH
+
+
+def test_pitr_restore_ignores_an_incomplete_base_directory() -> None:
+    assert '[ -f "$candidate/base.tar.gz" ] || continue' in _PITR_EXEC
+
+
+def test_image_ships_the_pitr_restore_script_executable() -> None:
+    assert "restore-pitr.sh" in _DOCKERFILE
+    chmod = "\n".join(_logical_lines(_DOCKERFILE))
+    assert "/usr/local/bin/restore-pitr.sh" in chmod
+
+
+# --- db-restore: the service that performs the replay (PITR-07) -----------------
+
+
+@pytest.fixture
+def base() -> dict:
+    return _load(_BASE)["services"]
+
+
+def test_db_restore_is_gated_behind_the_restore_profile(base: dict) -> None:
+    assert base["db-restore"]["profiles"] == ["restore"]
+
+
+def test_db_restore_builds_the_same_image_as_the_database(base: dict) -> None:
+    # Replaying a pgvector cluster with a server that lacks pgvector starts happily
+    # and fails on the first read of a vector column.
+    assert base["db-restore"]["build"] == base["db"]["build"]
+
+
+def test_prod_db_restore_pins_the_same_image_as_the_database(prod: dict) -> None:
+    assert prod["db-restore"]["image"] == f"ghcr.io/augusto-dmh/learny-postgres:{_IMAGE_TAG}"
+    assert prod["db-restore"]["image"] == prod["db"]["image"]
+
+
+def test_db_restore_serves_the_staged_cluster_not_the_live_one(base: dict) -> None:
+    svc = base["db-restore"]
+    assert svc["environment"]["PGDATA"] == "/pitr/data"
+    assert "pitr_data:/pitr" in svc["volumes"]
+    assert not any(str(vol).startswith("db_data") for vol in svc["volumes"])
+
+
+def test_db_restore_mounts_the_archive_read_only(base: dict) -> None:
+    # restore_command only ever reads; a promoted restore must not write its new
+    # timeline into the archive the live database owns.
+    assert "wal_archive:/wal_archive:ro" in base["db-restore"]["volumes"]
+
+
+def test_db_restore_does_not_archive_its_own_wal(base: dict) -> None:
+    assert "archive_mode=off" in base["db-restore"]["command"]
+
+
+def test_db_restore_health_requires_a_server_out_of_recovery(base: dict) -> None:
+    # pg_isready answers yes throughout recovery and at a paused target, so on its own
+    # it cannot tell a completed restore from a stalled one. `--wait` against this
+    # check is the sensor that a restore ended in a normally running database.
+    probe = " ".join(base["db-restore"]["healthcheck"]["test"])
+    assert "pg_isready" in probe
+    assert "pg_is_in_recovery" in probe
+
+
+def test_nothing_pulls_db_restore_into_a_plain_compose_up(base: dict) -> None:
+    for name, svc in base.items():
+        assert "db-restore" not in (svc.get("depends_on") or {}), f"{name} depends on db-restore"
+
+
+def test_prod_db_restore_does_not_come_back_with_the_host(prod: dict) -> None:
+    # A recovery target is a tool an operator starts deliberately, not a service.
+    assert prod["db-restore"]["restart"] == "no"
+
+
+def test_the_backup_sidecar_can_stage_a_restore(override: dict, prod: dict) -> None:
+    assert "pitr_data:/pitr" in override["backup"]["volumes"]
+    assert "pitr_data:/pitr" in prod["backup"]["volumes"]
+
+
+def test_base_declares_the_pitr_staging_volume() -> None:
+    assert "pitr_data" in (_load(_BASE).get("volumes") or {})
+
+
 # --- restore.sh safety-critical flags (OPS-09) ----------------------------------
 
 
@@ -319,6 +829,123 @@ def test_entrypoint_writes_the_backup_env_owner_only() -> None:
     assert any("umask 077" in line for line in _executed_lines(_ENTRYPOINT_SH))
 
 
+# --- configuration is documented, credentials are not committed (PITR-10) -------
+
+_ENV_EXAMPLE = (_REPO_ROOT / "backend" / ".env.production.example").read_text()
+
+# Every name that would be a credential if it appeared with a literal value.
+_SECRET_NAMES = (
+    "POSTGRES_PASSWORD",
+    "PGPASSWORD",
+    "MINIO_ROOT_USER",
+    "MINIO_ROOT_PASSWORD",
+    "LEARNY_BACKUP_REMOTE_ACCESS_KEY",
+    "LEARNY_BACKUP_REMOTE_SECRET_KEY",
+)
+
+
+def _shell_defaults(text: str) -> set[str]:
+    """The ``LEARNY_*`` variables a script declares with ``: "${VAR:=default}"``."""
+    return set(re.findall(r':\s*"\$\{(LEARNY_[A-Z0-9_]+):=', text))
+
+
+def test_every_new_backup_variable_is_documented_for_operators() -> None:
+    """PITR-10 — derived from the scripts, not from a hand-kept list.
+
+    A variable a job reads but no template mentions is a setting the operator can
+    only discover by reading the source, which is where undocumented retention
+    knobs come from.
+    """
+    existing = _shell_defaults(_BACKUP_SH) | _shell_defaults(_RESTORE_SH)
+    added = (
+        _shell_defaults(_BASE_BACKUP_SH)
+        | _shell_defaults(_WAL_SH)
+        | _shell_defaults(_PITR_SH)
+        | _shell_defaults(_ENTRYPOINT_SH)
+    ) - existing
+    assert added, "expected the recovery jobs to introduce configuration"
+    undocumented = {name for name in added if name not in _ENV_EXAMPLE}
+    assert not undocumented, f"undocumented in .env.production.example: {sorted(undocumented)}"
+
+
+def test_the_compose_level_archive_setting_is_documented() -> None:
+    # The db's archive settings are compose interpolation rather than a secrets file,
+    # so they are documented under their own heading; an operator tuning the recovery
+    # point must be able to find the knob.
+    base_text = _BASE.read_text()
+    for name in set(re.findall(r"\$\{(LEARNY_[A-Z0-9_]+)(?::-[^}]*)?\}", base_text)):
+        if name == "LEARNY_IMAGE_TAG":
+            continue  # set by the deploy workflow, not an operator setting
+        assert name in _ENV_EXAMPLE, f"{name} is interpolated into compose but undocumented"
+
+
+def test_the_coupled_retention_rule_is_stated_where_operators_configure_it() -> None:
+    # The one rule an operator can break by hand: the two artifact families cannot be
+    # retained independently. Stating the knob without the coupling invites exactly
+    # the age-based pruning that severs the chain.
+    section = _ENV_EXAMPLE[_ENV_EXAMPLE.index("LEARNY_WAL_KEEP_DAYS") - 2000 :]
+    assert "oldest retained base backup" in section
+    assert "Never prune the archive by age by hand" in section
+
+
+# The throwaway values used by local dev and by CI's scratch services. They exist
+# only inside a developer's machine or a runner, and the dev/CI stacks must share
+# them to boot at all. Anything else appearing as a literal is a real credential.
+_THROWAWAY = {"learny", "learny-dev-secret"}
+
+
+def test_no_credential_is_committed_in_compose_workflows_or_images() -> None:
+    """PITR-10 — a production credential reaches a container only via a secrets file.
+
+    Allow-listing the two documented throwaway values rather than excluding whole
+    files keeps this able to catch a real secret pasted into any of them.
+    """
+    scanned = [
+        _BASE,
+        _PROD,
+        _OVERRIDE,
+        *sorted((_REPO_ROOT / ".github" / "workflows").glob("*.yml")),
+        *sorted((_REPO_ROOT / "deploy" / "backup").iterdir()),
+        *sorted((_REPO_ROOT / "deploy" / "postgres").iterdir()),
+    ]
+    offenders: list[str] = []
+    for path in scanned:
+        if not path.is_file():
+            continue
+        for number, line in enumerate(path.read_text().splitlines(), start=1):
+            if line.lstrip().startswith("#"):
+                continue  # prose naming a variable is not a credential
+            for name in _SECRET_NAMES:
+                # A literal value begins with an alphanumeric; every legitimate use is
+                # a reference (`${VAR}`, `${VAR:?...}`, `${VAR:-...}`) or a bare name.
+                for value in re.findall(rf"\b{name}\s*[:=]\s*['\"]?([A-Za-z0-9][^\s'\"]*)", line):
+                    if value not in _THROWAWAY:
+                        offenders.append(f"{path.relative_to(_REPO_ROOT)}:{number}: {name}={value}")
+    assert not offenders, "committed credential(s):\n" + "\n".join(offenders)
+
+
+def test_the_production_overlay_carries_no_credential_literal_at_all() -> None:
+    # Even a throwaway value would be wrong in the production overlay: every service
+    # there takes its credentials from a required secrets file.
+    for number, line in enumerate(_PROD.read_text().splitlines(), start=1):
+        if line.lstrip().startswith("#"):
+            continue
+        for name in _SECRET_NAMES:
+            assert not re.search(rf"\b{name}\s*[:=]\s*['\"]?[A-Za-z0-9]", line), (
+                f"docker-compose.prod.yml:{number} sets {name} inline"
+            )
+
+
+def test_the_database_image_carries_no_backup_credential() -> None:
+    # The db archives to a shared volume precisely so the sidecar can own every
+    # offsite decision; an object-store client or credential here would widen the
+    # secret blast radius to the database container.
+    postgres_dir = (_REPO_ROOT / "deploy" / "postgres").iterdir()
+    text = "\n".join(p.read_text() for p in sorted(postgres_dir) if p.is_file())
+    for marker in ("mc alias", "ACCESS_KEY", "SECRET_KEY", "aws", "s3"):
+        assert marker not in text, f"the database image must not carry {marker!r}"
+
+
 # --- CI restore roundtrip (OPS-10) ----------------------------------------------
 #
 # The end-to-end proof lives in ci.yml's compose-smoke job; these asserts pin the
@@ -387,3 +1014,112 @@ def test_ci_asserts_offsite_dump_and_mirror_landed() -> None:
     scripts = _compose_smoke_scripts()
     assert "mc ls --recursive m/learny-offsite-ci/db/" in scripts
     assert "mc ls --recursive m/learny-offsite-ci/objects/" in scripts
+
+
+# --- CI point-in-time drill (PITR-09) -------------------------------------------
+#
+# The drill itself is the proof; these asserts pin the ORDER and the two-directional
+# shape it depends on, because every way of hollowing it out is a reordering or a
+# deletion that still leaves a green-looking job: taking the base after the writes,
+# recording the target outside the two writes, restoring before the archive has the
+# segment, or keeping only the half that a plain whole-archive restore also passes.
+
+# The discriminating assertion, and its control, distinguished by what each expects.
+_ROW_AFTER_TARGET_ABSENT = "WHERE id = 2;')\" != 0"
+_ROW_AFTER_TARGET_PRESENT = "WHERE id = 2;')\" != 1"
+
+
+def test_ci_takes_the_base_before_the_rows_it_must_replay() -> None:
+    # A base taken after the writes already contains them, so the replay would prove
+    # nothing about WAL at all.
+    scripts = _compose_smoke_scripts()
+    assert scripts.index("base-backup.sh") < scripts.index("'before-target'")
+
+
+def test_ci_records_the_target_between_the_two_writes() -> None:
+    # The target has to sit strictly between them or there is no boundary to test.
+    scripts = _compose_smoke_scripts()
+    assert scripts.index("'before-target'") < scripts.index("clock_timestamp() AT TIME ZONE 'UTC'")
+    assert scripts.index("clock_timestamp() AT TIME ZONE 'UTC'") < scripts.index("'after-target'")
+
+
+def test_ci_records_the_target_in_utc_with_its_offset() -> None:
+    # A target without an offset is read in the server's timezone, which would move
+    # the boundary away from the moment the drill actually recorded.
+    scripts = _compose_smoke_scripts()
+    assert "AT TIME ZONE 'UTC'" in scripts
+    assert "||'+00:00'" in scripts
+
+
+def test_ci_waits_for_the_segment_to_reach_the_archive_before_restoring() -> None:
+    # WAL is archived only when a segment COMPLETES. Restoring before the switch has
+    # landed would replay nothing, and "nothing replayed" also satisfies a one-sided
+    # row-is-absent check.
+    scripts = _compose_smoke_scripts()
+    switch_at = scripts.index("SELECT pg_switch_wal();")
+    wait_at = scripts.index('test -f "/wal_archive/$segment"')
+    restore_at = scripts.index('restore-pitr.sh --target "$PITR_TARGET" --yes')
+    assert switch_at < wait_at < restore_at
+    assert "never reached the archive" in scripts, "the wait must fail loudly on timeout"
+
+
+def test_ci_proves_the_dry_run_stages_nothing() -> None:
+    # Inert, not merely stopped short: the staging directory must not exist at all.
+    scripts = _compose_smoke_scripts()
+    dry_at = scripts.index('restore-pitr.sh --target "$PITR_TARGET" 2>&1')
+    inert_at = scripts.index("test ! -e /pitr/data")
+    assert dry_at < inert_at < scripts.index('restore-pitr.sh --target "$PITR_TARGET" --yes')
+
+
+def test_ci_proves_an_unreachable_target_names_the_window_floor() -> None:
+    scripts = _compose_smoke_scripts()
+    assert "earliest recoverable time" in scripts
+    assert "an unreachable target must exit non-zero" in scripts
+
+
+def test_ci_asserts_the_row_written_before_the_target_returns() -> None:
+    # Without this half, a restore that replayed nothing at all would pass.
+    scripts = _compose_smoke_scripts()
+    restore_at = scripts.index('restore-pitr.sh --target "$PITR_TARGET" --yes')
+    assert restore_at < scripts.index("WHERE id = 1;')\" != 1")
+
+
+def test_ci_asserts_the_row_written_after_the_target_is_absent() -> None:
+    """PITR-09 — the assertion the whole deliverable's credibility rests on.
+
+    A whole-archive restore passes every other check in this drill and fails only
+    this one. Dropping it would leave a drill that proves a restore ran, not that it
+    landed on a moment.
+    """
+    scripts = _compose_smoke_scripts()
+    restore_at = scripts.index('restore-pitr.sh --target "$PITR_TARGET" --yes')
+    assert restore_at < scripts.index(_ROW_AFTER_TARGET_ABSENT)
+    assert "whole-archive restore" in scripts
+
+
+def test_ci_proves_the_absent_assertion_can_fail() -> None:
+    # The control replays the SAME base and the SAME archive to a LATER target. If the
+    # assertion above were inert — replay silently stopping early, or never running —
+    # this run would produce the same rows and the drill would be self-deceiving.
+    scripts = _compose_smoke_scripts()
+    absent_at = scripts.index(_ROW_AFTER_TARGET_ABSENT)
+    control_at = scripts.index('restore-pitr.sh --target "$PITR_CONTROL" --yes')
+    present_at = scripts.index(_ROW_AFTER_TARGET_PRESENT)
+    assert absent_at < control_at < present_at
+    assert "cannot fail and proves nothing" in scripts
+
+
+def test_ci_asserts_the_restore_ends_writable_and_out_of_recovery() -> None:
+    # `--wait` holds on db-restore's not-in-recovery healthcheck; the write proves the
+    # promoted server accepts more than reads.
+    scripts = _compose_smoke_scripts()
+    assert "--wait --wait-timeout 300 db-restore" in scripts
+    assert "SELECT pg_is_in_recovery();" in scripts
+    assert "CREATE TABLE pitr_writable" in scripts
+
+
+def test_ci_tears_down_the_profile_gated_services_too() -> None:
+    # db-restore is started with `up -d`, so a teardown blind to its profile would
+    # leave it and its volume behind on the runner.
+    scripts = _compose_smoke_scripts()
+    assert "--profile backup --profile restore down -v" in scripts

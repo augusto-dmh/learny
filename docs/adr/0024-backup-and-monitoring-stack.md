@@ -96,6 +96,11 @@ drop → `restore.sh --latest --yes` → assert the row returned, plus the local
 notice. Redis remains explicitly un-backed-up (transport only); PITR/WAL archiving
 remains a recorded future upgrade if the RPO ever tightens.
 
+> **Superseded in part by ADR-0030.** The RPO tightened, and point-in-time recovery
+> now ships as a physical base backup plus continuous WAL archiving, alongside — not
+> instead of — the nightly logical dump described above. Everything else in this
+> section still holds.
+
 ### Monitoring
 
 A `monitoring` service runs `netdata/netdata:v2.10.4` (tag verified against the
@@ -140,6 +145,42 @@ admits local versions, when the pdf extra can drop torchvision, or with an
 explicit mutually-consistent `+cpu` pair; meanwhile the image stays large but is
 never part of the default `up` and CI never resolves the `pdf` extra.
 
+> **Re-probed 2026-08-02: no longer blocked at resolution, and the recorded cause
+> above was the wrong one.** Resolution-only probe in a scratch project (uv 0.11.8,
+> Python 3.13) against the current `pdf` extra (`docling>=2.112,<3`,
+> `easyocr>=1.7,<2`); the repository's `uv.lock` and pins were not touched.
+>
+> Today's resolution is unchanged from the one recorded above: docling 2.117.0,
+> easyocr 1.7.2, **torch 2.13.0** and **torchvision 0.28.0** from PyPI, pulling 15
+> `nvidia-*` packages — 2.52 GB of linux x86_64 wheels for the torch stack alone
+> (torch 527 MB, `nvidia-cublas` 423 MB, `nvidia-cudnn-cu13` 366 MB, …), 132
+> packages total.
+>
+> But torchvision's pin is not what excluded the CPU build. Its published
+> `cp313-cp313-manylinux_2_28_x86_64` wheel declares `Requires-Dist: torch
+> (==2.13.0)`, and a `==` specifier carrying no local label admits candidates that
+> have one — `2.13.0+cpu` satisfies it. The `torch>=2.13.0,<2.13.0+` above was uv's
+> rendering of that pin, not an exclusion.
+>
+> What actually made the documented recipe inert: `[tool.uv.sources]` applies only
+> to a project's **direct** dependencies, and torch arrives transitively through the
+> extra. The A/B, same `[[tool.uv.index]]`/`[tool.uv.sources]` block in both arms —
+> torch left transitive: torch 2.13.0 from `pypi.org/simple`, 15 `nvidia-*`
+> packages, 132 total. torch declared directly:
+> **torch 2.13.0+cpu from `download.pytorch.org/whl/cpu`, zero `nvidia-*`
+> packages, 115 total**, with
+> torchvision 0.28.0 still resolving from PyPI and no conflict. The CPU wheel is
+> 192 MB against the 2.52 GB it replaces.
+>
+> **Still no lockfile or pin change**: this was scoped as re-probe and record only,
+> and a multi-gigabyte image swap is not a rider on an unrelated cycle. Two things a
+> follow-up must settle before the size win is real. torchvision keeps resolving
+> from PyPI, where its wheels are built against the CUDA torch, so the pair has to
+> be shown to import and run OCR — a successful resolution is not a working runtime.
+> And declaring torch directly inside the `pdf` extra pins a resolution decision into
+> an extra whose torch requirement is otherwise docling's to make, which is a
+> dependency-ownership choice, not a build detail.
+
 ## Consequences
 
 - Positive: unattended nightly backups with a CI-proven restore path; disaster
@@ -151,4 +192,6 @@ never part of the default `up` and CI never resolves the `pdf` extra.
   S3-compatible bucket and fill `secrets/backup.env`; the netdata UI needs a
   tunnel rather than a URL.
 - Follow-ups: none required by this cycle; the pdf-worker size and PITR remain
-  recorded upgrade paths.
+  recorded upgrade paths. PITR was subsequently taken up and shipped — see ADR-0030.
+  The pdf-worker path was re-probed on 2026-08-02 (above): the resolution blockage is
+  gone, the cause recorded here was wrong, and adopting it is its own decision.

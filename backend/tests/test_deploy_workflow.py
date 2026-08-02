@@ -113,16 +113,35 @@ def test_build_job_uses_only_the_github_token_secret() -> None:
 # --- DEP-01: three-image build matrix with correct context + target -------------
 
 
-def test_build_matrix_covers_the_four_images() -> None:
+def test_build_matrix_covers_every_published_image() -> None:
     include = _job("build")["strategy"]["matrix"]["include"]
-    # learny-backup builds a single-stage Dockerfile, so it carries no `target`.
+    # learny-backup and learny-postgres build single-stage Dockerfiles, so they
+    # carry no `target`.
     by_name = {entry["name"]: (entry["context"], entry.get("target")) for entry in include}
     assert by_name == {
         "learny-backend": ("./backend", "runtime"),
         "learny-pdf-worker": ("./backend", "pdf-worker"),
         "learny-web": ("./frontend", "prod"),
         "learny-backup": ("./deploy/backup", None),
+        "learny-postgres": ("./deploy/postgres", None),
     }
+
+
+def test_every_ghcr_image_the_prod_overlay_runs_is_published() -> None:
+    """No prod service may reference a GHCR image the matrix never builds.
+
+    The db moved off a public upstream tag onto a repo-owned image; if it is added
+    to the overlay but not to the build matrix, `pull` on the VPS fails against an
+    image that was never pushed — a deploy that breaks only in production.
+    """
+    prod = yaml.safe_load((_REPO_ROOT / "docker-compose.prod.yml").read_text())["services"]
+    referenced = {
+        svc["image"].split("/")[-1].split(":")[0]
+        for svc in prod.values()
+        if str(svc.get("image", "")).startswith("ghcr.io/augusto-dmh/")
+    }
+    built = {entry["name"] for entry in _job("build")["strategy"]["matrix"]["include"]}
+    assert referenced <= built, f"prod runs unpublished GHCR images: {referenced - built}"
 
 
 # --- DEP-01: each image is tagged both :latest and the commit sha ---------------
