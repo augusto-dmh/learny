@@ -236,6 +236,29 @@ def test_the_deferring_record_points_at_the_one_that_ships_it(backup_adr: str) -
     assert "Superseded in part by ADR-0030" in backup_adr
 
 
+# --- the pdf-worker size re-probe (PROBE-01) ------------------------------------
+
+
+def test_the_pdf_worker_reprobe_is_recorded_with_its_outcome(backup_adr: str) -> None:
+    collapsed = _collapsed(backup_adr)
+    # The finding, and the version evidence behind it — the record is only useful if
+    # the next reader can tell what was resolved rather than what was assumed.
+    assert "Re-probed 2026-08-02" in collapsed
+    assert "torch 2.13.0+cpu from `download.pytorch.org/whl/cpu`" in collapsed
+    assert "Still no lockfile or pin change" in collapsed
+
+
+def test_the_reprobe_left_the_dependency_pins_alone() -> None:
+    """The probe was scoped record-only, and this is what makes that checkable.
+
+    Adopting the CPU index later is a deliberate two-file change: the recipe lands in
+    ``pyproject.toml`` and the note above stops saying no change was made.
+    """
+    pyproject = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text()
+    assert "tool.uv.sources" not in pyproject
+    assert "download.pytorch.org" not in pyproject
+
+
 # --- deploy runbook secrets list (OPS-11) ---------------------------------------
 
 
