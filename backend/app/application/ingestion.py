@@ -229,20 +229,33 @@ class RunIngestion:
             )
         return started
 
+    def _terminate(self, job: IngestionJob, error: str, now) -> IngestionJob:  # noqa: ANN001 — injected clock's datetime
+        """The terminal-failure transition, shared by both paths that reach it.
+
+        Terminal ``failed`` with a durable ``last_error``, the source synced, a
+        ``failed`` event appended. Both callers must write exactly this, so the
+        equivalence is structural rather than two copies kept in step by hand.
+        """
+        failed = self._jobs.update(job.failed(now, error))
+        self._sources.set_status(job.source_id, SOURCE_STATUS_FAILED, now)
+        self._append_event(job.id, IngestionEventType.FAILED, error, now)
+        return failed
+
     def _exhaust(self, job: IngestionJob, now) -> None:  # noqa: ANN001 — injected clock's datetime
         """Fail a job that has used up its attempts, as ``fail`` would have.
 
-        Same three transitions as the task's terminal-failure path — terminal
-        ``failed`` with the fixed non-secret summary, the source synced, a ``failed``
-        event appended — so a job that dies with its worker (where no ``except`` in
-        the task ever runs) still ends in the state the owner can read, instead of
-        sitting in ``running`` behind a worker that no longer exists. ``>=`` rather
-        than ``==`` so a job already past a cap the operator has since lowered
-        terminates too, rather than running unbounded.
+        The same terminal transition as the task's ordinary failure path, with the
+        fixed non-secret summary — so a job that dies with its worker (where no
+        ``except`` in the task ever runs) still ends in the state the owner can read,
+        instead of sitting in ``running`` behind a worker that no longer exists.
+        ``>=`` rather than ``==`` so a job already past a cap the operator has since
+        lowered terminates too, rather than running unbounded.
+
+        It shares :meth:`_terminate` rather than calling :meth:`fail`, which re-reads
+        the job by id: this path already holds it, and the terminal claim is no place
+        to add a redundant query.
         """
-        self._jobs.update(job.failed(now, INGESTION_FAILURE_ERROR))
-        self._sources.set_status(job.source_id, SOURCE_STATUS_FAILED, now)
-        self._append_event(job.id, IngestionEventType.FAILED, INGESTION_FAILURE_ERROR, now)
+        self._terminate(job, INGESTION_FAILURE_ERROR, now)
         logger.warning(
             "ingestion.begin_run: attempts exhausted, job failed",
             extra={
@@ -288,11 +301,7 @@ class RunIngestion:
         job = self._jobs.get_by_id(job_id)
         if job is None:
             return None
-        now = self._clock.now()
-        failed = self._jobs.update(job.failed(now, error))
-        self._sources.set_status(job.source_id, SOURCE_STATUS_FAILED, now)
-        self._append_event(job.id, IngestionEventType.FAILED, error, now)
-        return failed
+        return self._terminate(job, error, self._clock.now())
 
     def _append_event(self, job_id: UUID, event_type: str, message: str | None, now) -> None:  # noqa: ANN001 — ``now`` is the injected clock's datetime
         self._events.append(
