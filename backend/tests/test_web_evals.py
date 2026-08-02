@@ -27,7 +27,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import Connection
 
-from app.eval.judge import FAITHFULNESS_MIN, RELEVANCY_MIN
+from app.eval.judge import FAITHFULNESS_MIN, RELEVANCY_MIN, RESULTS_DIR
 from tests.conftest import TEST_ORIGIN, requires_db
 
 pytestmark = requires_db
@@ -37,8 +37,10 @@ ClientBuilder = Callable[..., TestClient]
 EVALS_PATH = "/api/dev/evals"
 INSTRUMENT_PATH = "/api/dev/instrument"
 
-#: Logger the composition root records a refused dashboard flag on.
-EVAL_LOGGER = "app.instrument"
+#: Logger the composition root records a refused dashboard flag on — its own,
+#: not the instrument's, so an operator can filter a refusal by the surface it
+#: belongs to.
+EVAL_LOGGER = "app.eval_dashboard"
 
 
 @pytest.fixture
@@ -305,6 +307,58 @@ def test_answerability_records_are_reported_separately(
 
     assert runs["2026-07-30-aaa1111"]["answerability_count"] == 1
     assert runs["2026-07-30-aaa1111"]["answerability_mean_score"] == 5.0
+
+
+def test_an_unset_results_dir_falls_back_to_the_judges_own_directory(
+    build_client: ClientBuilder, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The documented default. Every other 200-returning test sets the variable."""
+    monkeypatch.delenv("LEARNY_EVAL_RESULTS_DIR", raising=False)
+    client = build_client(enabled=True)
+    _register(client, "evals-default-dir@example.com")
+
+    assert client.get(EVALS_PATH).json()["results_dir"] == str(RESULTS_DIR)
+
+
+def test_the_run_list_is_bounded_and_says_when_it_truncates(
+    build_client: ClientBuilder, results_dir: Path
+) -> None:
+    """The nightly appends forever with no retention, so the read path needs a cap."""
+    client = build_client(enabled=True, LEARNY_EVAL_RESULTS_DIR=str(results_dir))
+    _register(client, "evals-limit@example.com")
+
+    body = client.get(f"{EVALS_PATH}?limit=1").json()
+
+    assert len(body["runs"]) == 1
+    assert body["total_runs"] == 2
+    # Newest first, so a truncated view keeps the runs that matter.
+    assert body["runs"][0]["run_id"] == "2026-07-30-aaa1111"
+
+
+def test_an_out_of_range_limit_is_refused(build_client: ClientBuilder, results_dir: Path) -> None:
+    client = build_client(enabled=True, LEARNY_EVAL_RESULTS_DIR=str(results_dir))
+    _register(client, "evals-limit-range@example.com")
+
+    assert client.get(f"{EVALS_PATH}?limit=0").status_code == 422
+    assert client.get(f"{EVALS_PATH}?limit=100000").status_code == 422
+
+
+def test_headline_metrics_are_reported_beside_the_verdict(
+    build_client: ClientBuilder, results_dir: Path
+) -> None:
+    """The page renders these next to the badge, so they share the verdict's lines."""
+    client = build_client(enabled=True, LEARNY_EVAL_RESULTS_DIR=str(results_dir))
+    _register(client, "evals-metrics@example.com")
+
+    runs = {run["run_id"]: run for run in client.get(EVALS_PATH).json()["runs"]}
+
+    assert runs["2026-07-30-aaa1111"]["metrics"] == {
+        "scored": 1,
+        "answered": 1,
+        "mean_faithfulness": 1.0,
+        "mean_relevancy": 5.0,
+        "citation_valid_rate": 1.0,
+    }
 
 
 def test_a_directory_with_no_runs_reads_as_empty_not_as_an_error(

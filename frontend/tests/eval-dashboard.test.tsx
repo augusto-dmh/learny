@@ -10,7 +10,7 @@
  * settles to an explanation instead of an error.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { EvalDashboard } from "../app/components/eval-dashboard";
@@ -59,6 +59,13 @@ function run(overrides: Record<string, unknown> = {}) {
     unparsable: 0,
     verdict: "pass",
     failures: [],
+    metrics: {
+      scored: 2,
+      answered: 2,
+      mean_faithfulness: 1.0,
+      mean_relevancy: 4.5,
+      citation_valid_rate: 1.0,
+    },
     error_count: 0,
     other_count: 0,
     golden: tier(),
@@ -76,6 +83,7 @@ function run(overrides: Record<string, unknown> = {}) {
         status: null,
         expected_not_found: false,
         run_index: null,
+        generation_model: null,
       },
     ],
     ...overrides,
@@ -87,6 +95,7 @@ function dashboard(overrides: Record<string, unknown> = {}) {
     scope: "Runs are read from the configured results directory.",
     results_dir: "/repo/evals/results",
     judge_model_in_force: "claude-opus-4-8",
+    total_runs: 1,
     thresholds: { faithfulness_min: 0.9, relevancy_min: 3.1 },
     runs: [run()],
     ...overrides,
@@ -137,7 +146,7 @@ describe("EvalDashboard", () => {
           run({
             verdict: "fail",
             failures: ["faithfulness", "relevancy"],
-            golden: tier({ mean_faithfulness: 0.2, mean_relevancy: 1 }),
+            metrics: { scored: 2, answered: 2, mean_faithfulness: 0.2, mean_relevancy: 1, citation_valid_rate: 1.0 },
           }),
         ],
       }),
@@ -151,7 +160,7 @@ describe("EvalDashboard", () => {
   it("distinguishes a run that gated nothing from a passing run", async () => {
     mockFetch(
       200,
-      dashboard({ runs: [run({ verdict: "not-evaluated", golden: null, silver: null, cases: [] })] }),
+      dashboard({ runs: [run({ verdict: "not-evaluated", metrics: null, golden: null, silver: null, cases: [] })] }),
     );
 
     render(<EvalDashboard />);
@@ -191,6 +200,7 @@ describe("EvalDashboard", () => {
                 status: null,
                 expected_not_found: true,
                 run_index: null,
+                generation_model: null,
               },
             ],
           }),
@@ -227,6 +237,7 @@ describe("EvalDashboard", () => {
                 status: null,
                 expected_not_found: false,
                 run_index: null,
+                generation_model: null,
               },
             ],
           }),
@@ -246,9 +257,10 @@ describe("EvalDashboard", () => {
       200,
       dashboard({
         thresholds: { faithfulness_min: 0.77, relevancy_min: 2.5 },
+        total_runs: 2,
         runs: [
-          run({ run_id: "newer", golden: tier({ mean_faithfulness: 0.95 }) }),
-          run({ run_id: "older", golden: tier({ mean_faithfulness: 0.85 }) }),
+          run({ run_id: "newer", metrics: { scored: 2, answered: 2, mean_faithfulness: 0.95, mean_relevancy: 4.5, citation_valid_rate: 1.0 } }),
+          run({ run_id: "older", metrics: { scored: 2, answered: 2, mean_faithfulness: 0.85, mean_relevancy: 4.5, citation_valid_rate: 1.0 } }),
         ],
       }),
     );
@@ -304,6 +316,82 @@ describe("EvalDashboard", () => {
 
     await screen.findByText("2026-07-30-aaa1111");
     expect(screen.queryByText(/verdict recomputed/)).toBeNull();
+  });
+
+  it("renders every row of a study run that repeats one case across arms and runs", async () => {
+    // The de-noise file holds two generation arms × three runs × twelve cases,
+    // so neither case_id nor case_id+run_index identifies a row. All six rows
+    // for one case must render, and the arm and run must be visible or they are
+    // six identical-looking lines.
+    const repeated = [0, 1, 2].flatMap((run_index) =>
+      ["claude-sonnet-5", "claude-opus-4-8"].map((generation_model) => ({
+        case_id: "printing-movable-type",
+        found: true,
+        faithfulness: 1.0,
+        relevancy: 5,
+        citation_valid: true,
+        tier: "golden",
+        status: "ok",
+        expected_not_found: false,
+        run_index,
+        generation_model,
+      })),
+    );
+    mockFetch(200, dashboard({ runs: [run({ cases: repeated })] }));
+
+    render(<EvalDashboard />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Show 6 cases" }));
+
+    // Scoped to the table: the run header also names the arm, and counting that
+    // would make the assertion pass for the wrong reason.
+    const table = within(screen.getByRole("table"));
+    expect(table.getAllByText("printing-movable-type").length).toBe(6);
+    expect(table.getAllByText("claude-sonnet-5").length).toBe(3);
+    expect(table.getAllByText("claude-opus-4-8").length).toBe(3);
+  });
+
+  it("says when the list is showing only the most recent runs", async () => {
+    mockFetch(200, dashboard({ total_runs: 40 }));
+
+    render(<EvalDashboard />);
+
+    expect(await screen.findByText(/Showing the 1 most recent of 40 runs/)).toBeTruthy();
+  });
+
+  it("does not claim truncation when every run is shown", async () => {
+    mockFetch(200, dashboard());
+
+    render(<EvalDashboard />);
+
+    await screen.findByText("2026-07-30-aaa1111");
+    expect(screen.queryByText(/most recent of/)).toBeNull();
+  });
+
+  it("recovers when the retry succeeds", async () => {
+    // Asserting the button exists proves nothing about whether it works.
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(500, { detail: "boom" }))
+      .mockResolvedValueOnce(jsonResponse(200, dashboard()));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<EvalDashboard />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Try again" }));
+
+    expect(await screen.findByText("2026-07-30-aaa1111")).toBeTruthy();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("settles rather than throwing when the request itself fails", async () => {
+    // A proxy hiccup or a truncated body rejects the promise; every other case
+    // here resolves to a well-formed Response, so this branch had no sensor.
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network")));
+
+    render(<EvalDashboard />);
+
+    expect(await screen.findByText(/could not be read/)).toBeTruthy();
   });
 
   it("explains a disabled surface instead of reporting an error", async () => {

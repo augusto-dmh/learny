@@ -218,13 +218,45 @@ def test_silver_tier_lines_aggregate_into_the_silver_tier(tmp_path: Path) -> Non
     assert (run.generation.silver.scored, run.generation.golden.scored) == (1, 0)
 
 
-def test_the_committed_result_files_all_parse(tmp_path: Path) -> None:
+#: The parsed shape of each committed result file: (line_count, cases, answerability).
+#: Pinned per file rather than in aggregate, because "they all parse" stays green
+#: through a change that silently reclassifies half the real lines. Verdicts are
+#: deliberately not pinned — those move with a recalibration, the shape does not.
+#: Keyed as a subset so committing a sixth result file does not break this test.
+COMMITTED_RUN_SHAPES = {
+    "2026-07-18-5b85c39": (14, 2, 12),
+    "2026-07-18-5ffffb2": (21, 3, 18),
+    "2026-07-22T001350-124986f-eval-deepening-ab": (72, 72, 0),
+    "2026-07-31-059cb763": (36, 36, 0),
+    "2026-07-31-c2bf2375-generation-denoise": (72, 72, 0),
+}
+
+
+def test_the_committed_result_files_parse_to_their_known_shapes() -> None:
     """The four real record shapes are the regression surface for this reader."""
-    runs = reader.load_runs(COMMITTED_RESULTS)
-    assert len(runs) == 5
-    assert all(run.unparsable == 0 for run in runs)
-    assert any(run.generation is not None for run in runs)
-    assert any(run.answerability_count > 0 for run in runs)
+    runs = {run.run_id: run for run in reader.load_runs(COMMITTED_RESULTS)}
+    assert set(COMMITTED_RUN_SHAPES) <= set(runs)
+    shapes = {
+        run_id: (runs[run_id].line_count, len(runs[run_id].cases), runs[run_id].answerability_count)
+        for run_id in COMMITTED_RUN_SHAPES
+    }
+    assert shapes == COMMITTED_RUN_SHAPES
+    assert all(run.unparsable == 0 for run in runs.values())
+
+
+def test_the_denoise_study_file_keeps_its_repeat_run_identity() -> None:
+    """The newest real file repeats each case across two arms and three runs.
+
+    Neither the case id nor case id + run index identifies one of its rows, so
+    both fields have to survive to the payload for the drill-down to distinguish
+    them at all.
+    """
+    runs = {run.run_id: run for run in reader.load_runs(COMMITTED_RESULTS)}
+    cases = runs["2026-07-31-c2bf2375-generation-denoise"].cases
+    assert {case.run_index for case in cases} == {0, 1, 2}
+    assert {case.generation_model for case in cases} == {"claude-sonnet-5", "claude-opus-4-8"}
+    identity = {(case.case_id, case.run_index, case.generation_model) for case in cases}
+    assert len(identity) == len(cases)
 
 
 # --- verdict (T3) ---------------------------------------------------------------
@@ -294,6 +326,87 @@ def test_thresholds_are_imported_rather_than_retyped(module: ModuleType) -> None
     assert RELEVANCY_MIN not in numbers
 
 
+# --- the branches that exist only for input no fixture produces by accident -----
+
+
+def test_a_study_error_line_does_not_read_as_a_citation_failure() -> None:
+    """A failed study unit is an outcome about the run, not a result from it.
+
+    ``tests/eval/study.py`` writes ``{"status": "error", "case_id": …}`` with no
+    ``citation_valid`` and no scores into the same directory the dashboard reads.
+    Counting a missing key as a violation would paint that run ``fail: citation``
+    — the most alarming badge the page has — for lines the gate never evaluated,
+    while the same payload reported a clean citation rate beside it.
+    """
+    lines = [
+        generation_line("scored"),
+        {"case_id": "died", "status": "error", "error": "APIError", "ts": "2026-07-31T10:00:02Z"},
+    ]
+    assert reader.gate_outcome(lines) == (reader.PASS, ())
+
+
+def test_a_run_of_nothing_but_failed_units_is_not_evaluated() -> None:
+    """Nothing was scored, so there is nothing to pass or fail."""
+    lines = [{"case_id": f"died-{i}", "status": "error"} for i in range(3)]
+    assert reader.gate_outcome(lines) == (reader.NOT_EVALUATED, ())
+
+
+def test_skipped_and_broken_units_are_excluded_like_errors() -> None:
+    """``silver.py`` writes these two statuses; neither is a scored result."""
+    lines = [
+        generation_line("scored"),
+        {"case_id": "absent-book", "status": "skipped", "reason": "source missing"},
+        {"case_id": "bad-case", "status": "broken"},
+    ]
+    assert reader.gate_outcome(lines) == (reader.PASS, ())
+
+
+def test_a_scored_line_missing_citation_valid_counts_as_a_violation() -> None:
+    """The gate would subscript the key; a renderer may not crash, so it fails closed."""
+    line = generation_line("a")
+    del line["citation_valid"]
+    assert reader.gate_outcome([line]) == (reader.FAIL, (reader.CITATION_FAILURE,))
+
+
+def test_an_answered_line_with_a_null_score_is_left_out_of_that_mean() -> None:
+    """The gate would raise on the ``None``; the reader averages what it has."""
+    lines = [
+        generation_line("scored", faithfulness=1.0, relevancy=5),
+        generation_line("half", faithfulness=None, relevancy=5),
+    ]
+    verdict, failures = reader.gate_outcome(lines)
+    assert (verdict, failures) == (reader.PASS, ())
+    metrics = reader.run_metrics(lines)
+    assert metrics is not None
+    assert metrics.mean_faithfulness == pytest.approx(1.0)
+
+
+def test_a_record_with_neither_identity_key_is_no_ones_case(tmp_path: Path) -> None:
+    """It still counts as a line read, and appears in neither family."""
+    write_run(tmp_path, "run.jsonl", [generation_line("a"), {"note": "not a record"}])
+    (run,) = reader.load_runs(tmp_path)
+    assert (run.line_count, len(run.cases), run.answerability_count) == (2, 1, 0)
+
+
+def test_headline_metrics_come_from_the_same_lines_as_the_verdict(tmp_path: Path) -> None:
+    """Otherwise a run can show metrics above threshold beside a failing badge."""
+    write_run(
+        tmp_path,
+        "run.jsonl",
+        [
+            generation_line("golden-ok", tier="golden", status="ok", relevancy=5),
+            generation_line("silver-bad", tier="silver", status="ok", relevancy=1),
+            {"case_id": "died", "status": "error"},
+        ],
+    )
+    (run,) = reader.load_runs(tmp_path)
+    assert run.metrics is not None
+    # Both tiers, error line excluded — exactly the set gate_outcome judged.
+    assert run.metrics.scored == 2
+    assert run.metrics.mean_relevancy == pytest.approx(3.0)
+    assert run.verdict == reader.FAIL
+
+
 # --- the sensor that keeps the dashboard honest ---------------------------------
 
 
@@ -337,6 +450,23 @@ EQUIVALENCE_CASES: list[tuple[str, list[dict[str, Any]]]] = [
     (
         "exactly at both thresholds",
         [generation_line("a", faithfulness=FAITHFULNESS_MIN, relevancy=4)],
+    ),
+    # Relevancy scores are integers, so no single line sits on 3.1 — but ten do:
+    # nine 3s and one 4 average exactly the threshold Cycle B moved. The gate
+    # compares with >=, so this must pass, while one more 3 must not.
+    (
+        "relevancy mean exactly at the threshold",
+        [generation_line(f"a{i}", relevancy=3) for i in range(9)]
+        + [generation_line("a9", relevancy=4)],
+    ),
+    (
+        "relevancy mean just under the threshold",
+        [generation_line(f"a{i}", relevancy=3) for i in range(10)]
+        + [generation_line("a10", relevancy=4)],
+    ),
+    (
+        "a study error line alongside scored ones",
+        [generation_line("a"), {"case_id": "died", "status": "error"}],
     ),
     ("empty", []),
 ]
