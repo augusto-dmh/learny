@@ -44,7 +44,7 @@ tests/eval/test_generation_study.py   live entrypoint (opt-in flag, wires real a
 
 ## 4. Live entrypoint (`backend/tests/eval/test_generation_study.py`, new)
 
-- **No `live`/`eval` markers** — the nightly `-m "live and eval"` must never collect it (AD-226 lesson; DENOISE-09). Opt-in via a `--generation-study` conftest flag (mirrors `--record-generation`), plus module skip when `LEARNY_ANTHROPIC_API_KEY` is absent. Silver additionally needs the local DB; when `silver_run_skip_reason()` fires, the study runs golden-only and says so (spec edge case: silver-driving metrics absent → verdict `stay` by incomparability).
+- **Carries `live` but never `eval`** (as shipped; corrected post-review) — it exercises a real provider, and the nightly `-m "live and eval"` needs both markers so it cannot collect it (AD-226 lesson; DENOISE-09). Opt-in via a `--generation-study` conftest flag (mirrors `--record-generation`), with a fixture skip (`study_skip_reason`) when the flag or `LEARNY_ANTHROPIC_API_KEY` is absent. Silver additionally needs the local DB; when `silver_run_skip_reason()` fires, the study runs golden-only and says so (spec edge case: silver-driving metrics absent → verdict `stay` by incomparability).
 - Wires: two `AnthropicGenerationAdapter`s (one per arm, `settings.generation_max_tokens`), one `Judge(model=settings.judge_model)`, memoized retrieval, the pinned `CostModel`; calls `study.run_study(...)`.
 - Offline guard tests (in `test_study_runner.py`): the module is skipped without the flag, and it carries no `live`/`eval` marks (mirror the marker-enrollment guards in `test_eval_judge.py`).
 
