@@ -85,7 +85,8 @@ jobs:
           LEARNY_EVAL_MAX_CASES: "20"
           LEARNY_TEST_DATABASE_URL: postgresql+psycopg://learny:learny@localhost:5432/learny_test
       # The judge appends to evals/results/*.jsonl at the repo root; upload it so
-      # git history / the artifact is the eval dashboard (research §5 — no UI).
+      # the run's results survive as an artifact. These files, and the branch copy
+      # below, are what the dev-only dashboard at /dev/evals renders (evals/README.md).
       - name: Upload eval results
         if: steps.secret.outputs.present == 'true'
         uses: actions/upload-artifact@v4

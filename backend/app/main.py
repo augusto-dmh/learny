@@ -18,6 +18,7 @@ from app.infrastructure.web.auth import router as auth_router
 from app.infrastructure.web.cards import router as cards_router
 from app.infrastructure.web.conversations import router as conversations_router
 from app.infrastructure.web.error_handlers import register_error_handlers
+from app.infrastructure.web.evals import router as evals_router
 from app.infrastructure.web.health import router as health_router
 from app.infrastructure.web.ingestion import router as ingestion_router
 from app.infrastructure.web.instrument import router as instrument_router
@@ -32,7 +33,11 @@ from app.infrastructure.web.vault import router as vault_router
 #: ``LEARNY_ENVIRONMENT`` value that marks a process as production.
 PRODUCTION_ENVIRONMENT = "production"
 
-_logger = logging.getLogger("app.instrument")
+# One logger per dev surface. They are independently switchable everywhere else,
+# and the logger name is the axis an operator filters a refusal by, so a shared
+# one would file the dashboard's refusal under the instrument.
+_instrument_logger = logging.getLogger("app.instrument")
+_eval_dashboard_logger = logging.getLogger("app.eval_dashboard")
 
 
 def instrument_surface_exposed(settings: Settings) -> bool:
@@ -54,8 +59,31 @@ def instrument_surface_exposed(settings: Settings) -> bool:
     if not settings.dev_instrument_enabled:
         return False
     if settings.environment.strip().lower() == PRODUCTION_ENVIRONMENT:
-        _logger.warning(
+        _instrument_logger.warning(
             "instrument.surface.refused",
+            extra={"environment": settings.environment},
+        )
+        return False
+    return True
+
+
+def eval_dashboard_surface_exposed(settings: Settings) -> bool:
+    """Whether this process may expose the eval dashboard: flag set AND not production.
+
+    The same two-part rule as the instrument, and for the same reason: a flag
+    alone leaves production safe only by the absence of a variable, while the
+    service loads an operator-authored env file and ``Settings`` also reads
+    ``.env``. Refusal is a property of the application, so a process configured
+    as production never serves eval case text, model identifiers, or prompt
+    hashes, whatever its environment hands it. The switch is separate from the
+    instrument's so either dev surface can be enabled without dragging in the
+    other. A flag that is set and refused is logged rather than silently ignored.
+    """
+    if not settings.dev_eval_dashboard_enabled:
+        return False
+    if settings.environment.strip().lower() == PRODUCTION_ENVIRONMENT:
+        _eval_dashboard_logger.warning(
+            "eval_dashboard.surface.refused",
             extra={"environment": settings.environment},
         )
         return False
@@ -103,6 +131,11 @@ def create_app() -> FastAPI:
     # Authentication gates it independently once it is mounted.
     if exposed:
         app.include_router(instrument_router)
+    # The eval dashboard rides its own switch, so enabling the instrument does not
+    # drag in a second surface. Same refusal shape: flag off, or a production
+    # process, and the path matches no route and is absent from the schema.
+    if eval_dashboard_surface_exposed(settings):
+        app.include_router(evals_router)
     return app
 
 

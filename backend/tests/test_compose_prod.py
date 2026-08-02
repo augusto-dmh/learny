@@ -118,6 +118,20 @@ def test_local_override_enables_the_dev_instrument_surface() -> None:
     assert local["api"]["environment"]["LEARNY_DEV_INSTRUMENT_ENABLED"] == "true"
 
 
+def test_prod_never_enables_the_eval_dashboard_surface(prod: dict) -> None:
+    # The dashboard serves eval case identifiers, model names, and prompt hashes.
+    # The application refuses the flag on a production process, but the production
+    # invocation must not be the thing that sets it either — for any service.
+    for svc in _ALL_SERVICES:
+        env = prod[svc].get("environment", {})
+        assert "LEARNY_DEV_EVAL_DASHBOARD_ENABLED" not in env, svc
+
+
+def test_local_override_enables_the_eval_dashboard_surface() -> None:
+    local = _services(_BASE, _OVERRIDE)
+    assert local["api"]["environment"]["LEARNY_DEV_EVAL_DASHBOARD_ENABLED"] == "true"
+
+
 def test_local_override_restores_infra_ports() -> None:
     local = _services(_BASE, _OVERRIDE)
     for svc in _INFRA:
