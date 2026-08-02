@@ -153,7 +153,13 @@ existing data directories too, not only freshly initialised ones.
 ### Turning it on for an existing deployment
 
 Both the image and the `command` change, so the database container is recreated
-once. `archive_mode` takes effect on exactly that restart:
+once. `archive_mode` takes effect on exactly that restart.
+
+`db` no longer runs a public upstream tag: it runs the repo-owned `learny-postgres`
+image from GHCR, which is **private by default**. Confirm it (and `learny-backup`)
+read "Public" under your GitHub profile → Packages first — see "One-time: Flip GHCR
+packages to public" in `docs/ops/deploy.md`. Without that, the `pull` below fails on
+the database image and takes `db` — and everything depending on it — down with it.
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.prod.yml pull db backup

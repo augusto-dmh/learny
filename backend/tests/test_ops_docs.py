@@ -156,6 +156,17 @@ def test_backups_documents_that_the_archive_lives_outside_the_data_volume(
     assert "wal_archive" in backups
 
 
+def test_backups_adoption_warns_about_the_private_database_package(backups: str) -> None:
+    # The adoption steps tell the operator to `pull db`, and `db` now runs a
+    # repo-owned GHCR image that is private until the one-time visibility flip. Sending
+    # them into that pull unwarned fails the deploy on the database itself.
+    collapsed = _collapsed(backups)
+    assert "learny-postgres" in collapsed
+    assert "private by default" in collapsed
+    assert "docs/ops/deploy.md" in collapsed
+    assert "One-time: Flip GHCR packages to public" in collapsed
+
+
 def test_backups_documents_what_a_base_backup_is_and_why(backups: str) -> None:
     assert "pg_basebackup -Ft -z -X stream --checkpoint=fast" in backups
     assert "LEARNY_BASEBACKUP_CRON" in backups

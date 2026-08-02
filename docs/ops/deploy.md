@@ -216,18 +216,24 @@ into GitHub's `VPS_SSH_KEY` secret.
 
 ## One-time: Flip GHCR packages to public
 
-After the first successful deploy workflow run, the three container images land in your GitHub
+After the first successful deploy workflow run, the container images land in your GitHub
 Container Registry (GHCR) as **private by default**. The VPS needs to pull them as a public user
-(no credentials), so flip their visibility once:
+(no credentials), so flip their visibility once. Every image the deploy workflow builds must be
+flipped, not only the application ones: `learny-postgres` is the database itself, so an
+unauthorized pull of it fails the deploy and takes down everything that depends on `db`.
 
 1. Go to your GitHub profile → **Packages**.
-2. For each of these packages (in order), click → Package settings → Change visibility → **Public**:
+2. For each of these packages, click → Package settings → Change visibility → **Public**:
    - `learny-backend`
    - `learny-pdf-worker`
    - `learny-web`
+   - `learny-backup`
+   - `learny-postgres`
 3. Confirm each one reads "Public" in its card.
 
-After this, the VPS can `docker compose pull` without credentials.
+After this, the VPS can `docker compose pull` without credentials. This list is asserted against
+the deploy workflow's build matrix by `test_deploy_workflow.py`, so a newly published image cannot
+drift out of it silently.
 
 ## First deploy: Trigger the workflow
 
@@ -248,7 +254,7 @@ gh run view <run-id> --log
 ```
 
 Expected output:
-- Three images build and push to GHCR (learny-backend, learny-pdf-worker, learny-web), tagged `:latest` and `:<commit-sha>`.
+- Five images build and push to GHCR (learny-backend, learny-pdf-worker, learny-web, learny-backup, learny-postgres), tagged `:latest` and `:<commit-sha>`.
 - Deploy job runs (or skips green if VPS secrets are not yet set).
 - If secrets are set, the deploy job scp's compose files to `/opt/learny`, runs `docker compose pull`, then `up -d --no-build --wait`.
 

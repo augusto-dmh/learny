@@ -144,6 +144,65 @@ def test_every_ghcr_image_the_prod_overlay_runs_is_published() -> None:
     assert referenced <= built, f"prod runs unpublished GHCR images: {referenced - built}"
 
 
+# --- the runbook's one-time GHCR visibility list tracks the matrix ---------------
+
+
+_NUMBER_WORDS = {
+    1: "One",
+    2: "Two",
+    3: "Three",
+    4: "Four",
+    5: "Five",
+    6: "Six",
+    7: "Seven",
+    8: "Eight",
+}
+
+_DEPLOY_RUNBOOK = _REPO_ROOT / "docs" / "ops" / "deploy.md"
+
+
+def _section(text: str, heading: str) -> str:
+    """The body of a `## ` section, up to the next heading of the same level."""
+    start = text.index(heading)
+    rest = text[start + len(heading) :]
+    end = rest.find("\n## ")
+    return rest if end == -1 else rest[:end]
+
+
+def _built_images() -> set[str]:
+    return {entry["name"] for entry in _job("build")["strategy"]["matrix"]["include"]}
+
+
+def test_the_runbook_lists_every_published_image_for_the_visibility_flip() -> None:
+    """GHCR packages are private by default, so an image missing from this list is
+    a package the VPS cannot pull anonymously. `learny-postgres` is the database
+    itself: an unauthorized pull there fails the deploy and takes down every service
+    that depends on `db`. Derived from the matrix rather than hand-kept, because the
+    list falling behind a newly published image is exactly how this broke.
+    """
+    runbook = _DEPLOY_RUNBOOK.read_text()
+    section = _section(runbook, "## One-time: Flip GHCR packages to public")
+    listed = set(re.findall(r"^\s*-\s*`(learny-[a-z-]+)`", section, flags=re.MULTILINE))
+    assert listed == _built_images(), (
+        f"the visibility list must name every published image; missing "
+        f"{sorted(_built_images() - listed)}, extra {sorted(listed - _built_images())}"
+    )
+
+
+def test_the_runbook_states_the_right_number_of_published_images() -> None:
+    # The prose count is a second place the list can drift; it named three while five
+    # were built.
+    expected = _NUMBER_WORDS[len(_built_images())]
+    assert f"{expected} images build and push to GHCR" in _DEPLOY_RUNBOOK.read_text()
+
+
+def test_the_runbook_expected_output_names_every_published_image() -> None:
+    runbook = _DEPLOY_RUNBOOK.read_text()
+    line = next(ln for ln in runbook.splitlines() if "images build and push to GHCR" in ln)
+    for name in _built_images():
+        assert name in line, f"{name} is published but absent from the expected-output line"
+
+
 # --- DEP-01: each image is tagged both :latest and the commit sha ---------------
 
 
