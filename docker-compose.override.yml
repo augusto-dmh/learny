@@ -92,6 +92,7 @@ services:
       MINIO_ROOT_PASSWORD: learny-dev-secret
     volumes:
       - backup_data:/backups
+      - wal_archive:/wal_archive
 
 volumes:
   backup_data:

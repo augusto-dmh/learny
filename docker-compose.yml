@@ -12,14 +12,41 @@
 # -f docker-compose.prod.yml up -d` is the production-like run.
 
 services:
+  # Built from ./deploy/postgres — a thin pgvector/pgvector:pg16 derivative that
+  # exists only to create the WAL-archive directory owned by the database user
+  # (so a fresh named volume is writable without a host-side chown) and to ship a
+  # pg_hba.conf that admits remote physical replication for pg_basebackup. See the
+  # Dockerfile there for why each is needed.
   db:
-    image: pgvector/pgvector:pg16
+    build:
+      context: ./deploy/postgres
+      dockerfile: Dockerfile
     environment:
       POSTGRES_USER: learny
       POSTGRES_DB: learny
       # POSTGRES_PASSWORD comes from the override (local) or env_file (prod).
+    # Continuous WAL archiving (the base of point-in-time recovery). archive_mode is
+    # postmaster-level, so changing it needs a database restart — see docs/ops/backups.md.
+    # The archive_command refuses to overwrite an existing segment: `test ! -f` fails,
+    # the command exits non-zero, and PostgreSQL RETAINS the segment and retries rather
+    # than silently overwriting it and corrupting the replay chain.
+    command:
+      - postgres
+      - -c
+      - hba_file=/etc/postgresql/pg_hba.conf
+      - -c
+      - archive_mode=on
+      - -c
+      - archive_command=test ! -f /wal_archive/%f && cp %p /wal_archive/%f
+      - -c
+      - archive_timeout=${LEARNY_WAL_ARCHIVE_TIMEOUT:-900}
     volumes:
       - db_data:/var/lib/postgresql/data
+      # Deliberately NOT inside db_data: the archive exists to recover the very data
+      # directory it would otherwise be lost with. The backup sidecar mounts the same
+      # volume and owns all offsite shipping and pruning, so no S3 client and no
+      # backup credential ever enters the database container.
+      - wal_archive:/wal_archive
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U learny -d learny"]
       interval: 5s
@@ -157,3 +184,4 @@ services:
 volumes:
   db_data:
   minio_data:
+  wal_archive:

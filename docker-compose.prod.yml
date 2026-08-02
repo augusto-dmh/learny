@@ -15,8 +15,10 @@
 services:
   db:
     restart: unless-stopped
-    # pgvector/pgvector:pg16 (from base) is an explicit tag; operators may re-pin
-    # to a digest for full reproducibility.
+    # Repo-owned image (./deploy/postgres, published by the deploy workflow), pinned
+    # to the deployed commit like every other Learny image. Its base tag,
+    # pgvector/pgvector:pg16, is pinned in that Dockerfile.
+    image: ghcr.io/augusto-dmh/learny-postgres:${LEARNY_IMAGE_TAG:-latest}
     env_file:
       - path: ./secrets/db.env
         required: true
@@ -86,6 +88,9 @@ services:
         required: true
     volumes:
       - backup_data:/backups
+      # The db archives completed WAL segments here; this sidecar is what ships them
+      # offsite and prunes them against the oldest retained base backup.
+      - wal_archive:/wal_archive
     depends_on:
       db:
         condition: service_healthy

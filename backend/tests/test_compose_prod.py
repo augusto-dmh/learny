@@ -138,6 +138,32 @@ def test_local_override_restores_infra_ports() -> None:
         assert local[svc].get("ports"), f"{svc} must publish host ports for local dev"
 
 
+def test_prod_db_runs_the_repo_owned_postgres_image(prod: dict) -> None:
+    # The WAL-archive directory and the replication pg_hba.conf are properties of the
+    # repo's image; prod pulling the stock upstream tag would run a database that
+    # cannot archive and cannot serve a base backup, while every structural assertion
+    # about the base file still passed.
+    image = prod["db"]["image"]
+    assert image.startswith("ghcr.io/augusto-dmh/learny-postgres:")
+    # Pinned to the deployed commit like every other Learny image.
+    assert image.endswith(":${LEARNY_IMAGE_TAG:-latest}")
+
+
+def test_prod_db_keeps_the_archiving_command_from_the_base_file(prod: dict) -> None:
+    # The overlay must override only prod-specific keys; if it ever replaced the base
+    # file's `command`, archiving would be silently off in production alone.
+    command = " ".join(str(token) for token in prod["db"]["command"])
+    assert "archive_mode=on" in command
+    assert "/wal_archive/%f" in command
+
+
+def test_prod_db_still_takes_its_password_from_the_env_file(prod: dict) -> None:
+    # The new image must not have become a place credentials live: the password
+    # arrives via secrets/db.env exactly as before.
+    assert "POSTGRES_PASSWORD" not in prod["db"].get("environment", {})
+    assert [entry["path"] for entry in prod["db"]["env_file"]] == ["./secrets/db.env"]
+
+
 def test_api_and_worker_receive_object_storage_configuration() -> None:
     # Both services talk to object storage (api stores uploads, the worker
     # fetches them during ingestion); without these base-file vars a service
