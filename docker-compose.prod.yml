@@ -91,11 +91,21 @@ services:
       # The db archives completed WAL segments here; this sidecar is what ships them
       # offsite and prunes them against the oldest retained base backup.
       - wal_archive:/wal_archive
+      # Where restore-pitr.sh stages a recovered cluster for db-restore to serve.
+      - pitr_data:/pitr
     depends_on:
       db:
         condition: service_healthy
       minio:
         condition: service_healthy
+
+  # Point-in-time recovery target (RFC-005 Cycle E). Same repo-owned image as `db`,
+  # so a replayed cluster meets the binaries and extensions it was written with.
+  # No restart policy on purpose: this is a tool an operator starts deliberately
+  # during a recovery, not a service that should come back with the host.
+  db-restore:
+    restart: "no"
+    image: ghcr.io/augusto-dmh/learny-postgres:${LEARNY_IMAGE_TAG:-latest}
 
   # Self-hosted host + per-container metrics (RFC-003 Cycle A, OPS-13/14). Netdata
   # is pinned to a registry-verified tag and published ONLY on loopback — the UI is

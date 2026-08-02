@@ -1,4 +1,4 @@
-"""A gate — backup stack topology + script safety (unit, OPS-01..09, PITR-03..06/10).
+"""A gate — backup stack topology + script safety (unit, OPS-01..09, PITR-03..08/10).
 
 Three layers, all pure text/YAML (no Docker required, deterministic):
 
@@ -40,6 +40,7 @@ _ENTRYPOINT_SH = (_BACKUP_DIR / "entrypoint.sh").read_text()
 _DOCKERFILE = (_BACKUP_DIR / "Dockerfile").read_text()
 _BASE_BACKUP_SH = (_BACKUP_DIR / "base-backup.sh").read_text()
 _WAL_SH = (_BACKUP_DIR / "wal-archive.sh").read_text()
+_PITR_SH = (_BACKUP_DIR / "restore-pitr.sh").read_text()
 
 _CI = _REPO_ROOT / ".github" / "workflows" / "ci.yml"
 
@@ -538,6 +539,189 @@ def test_image_ships_the_wal_archive_job_executable() -> None:
     assert "/usr/local/bin/wal-archive.sh" in chmod
 
 
+# --- restore-pitr.sh: recovery to a chosen moment (PITR-07) ---------------------
+#
+# The end-to-end proof is the CI drill (PITR-09), whose B-absent assertion is what
+# separates a real point-in-time recovery from a whole-archive restore. Pinned here
+# is the shape a text diff can silently weaken: the confirmation gate, the
+# PostgreSQL 12+ recovery mechanism, and the timezone discipline that makes a
+# recovery boundary mean the same moment everywhere.
+
+_PITR_EXEC = "\n".join(_executed_lines(_PITR_SH))
+
+
+def test_pitr_restore_runs_in_strict_mode_with_pipefail() -> None:
+    assert "set -euo pipefail" in _PITR_SH
+
+
+def test_pitr_restore_writes_nothing_without_an_explicit_yes() -> None:
+    """PITR-07 — the dry run must be inert, not merely stop short of the last step."""
+    assert 'if [ "$confirm" -ne 1 ]; then' in _PITR_EXEC
+    gate = _PITR_EXEC.index('"$confirm" -ne 1')
+    for mutation in (
+        'rm -rf "$data_dir"',
+        'mkdir -p "$data_dir"',
+        'tar -xzf "$chosen/base.tar.gz"',
+        '>> "$data_dir/postgresql.auto.conf"',
+        'touch "$data_dir/recovery.signal"',
+    ):
+        assert gate < _PITR_EXEC.index(mutation), f"{mutation} runs before the --yes gate"
+
+
+def test_pitr_dry_run_prints_the_plan_and_exits_non_zero() -> None:
+    gate = _PITR_EXEC.index('"$confirm" -ne 1')
+    branch = _PITR_EXEC[gate : _PITR_EXEC.index('rm -rf "$data_dir"')]
+    assert "PLAN:" in branch
+    assert "re-run with --yes" in branch
+    assert "exit 1" in branch
+
+
+def test_pitr_restore_selects_a_base_that_precedes_the_target() -> None:
+    # Replay only moves forward, so a base taken AFTER the target has no path to it.
+    # The candidate is skipped when its start stamp sorts after the target's; the
+    # stamps are fixed width, so the string compare IS a time compare.
+    assert '[ "$(base_stamp "$candidate")" \\> "$target_stamp" ]' in _PITR_EXEC
+    assert 'chosen="$candidate"' in _PITR_EXEC
+
+
+def test_pitr_restore_fails_closed_when_no_base_precedes_the_target() -> None:
+    assert "no retained base backup starts before" in _PITR_SH
+    refusal = _PITR_EXEC.index("no retained base backup starts before")
+    assert refusal < _PITR_EXEC.index('rm -rf "$data_dir"')
+    assert "exit 1" in _PITR_EXEC[refusal : refusal + 300]
+
+
+def test_pitr_restore_demands_an_unambiguous_utc_target() -> None:
+    # `recovery_target_time` is interpreted in the SERVER's timezone when the value
+    # carries no offset, so a bare timestamp means different moments in different
+    # deployments — and a recovery boundary that moves is not a boundary.
+    assert "*Z) naive=" in _PITR_EXEC
+    assert "*+00:00) naive=" in _PITR_EXEC
+    assert "target carries no UTC offset" in _PITR_SH
+    reject = _PITR_EXEC.index("target carries no UTC offset")
+    assert "exit 2" in _PITR_EXEC[reject : reject + 400]
+
+
+def test_pitr_restore_uses_the_postgresql_12_recovery_mechanism() -> None:
+    # PostgreSQL 12+ enters archive recovery because recovery.signal EXISTS, and takes
+    # its target from ordinary settings. The pre-12 recovery.conf is not read at all:
+    # a script writing one would still start a server, still replay the whole archive,
+    # and still look like a successful restore.
+    assert 'touch "$data_dir/recovery.signal"' in _PITR_EXEC
+    assert "recovery.conf" not in _PITR_EXEC
+    assert "postgresql.auto.conf" in _PITR_EXEC
+    for setting in ("restore_command", "recovery_target_time", "recovery_target_action"):
+        assert setting in _PITR_EXEC
+
+
+def test_pitr_restore_replays_from_the_archive_the_sidecar_shares() -> None:
+    line = next(ln for ln in _executed_lines(_PITR_SH) if "restore_command" in ln)
+    assert "$LEARNY_WAL_ARCHIVE_DIR/%f" in line
+    # %p is the destination the server asks for; it is quoted in the emitted config.
+    assert "%p" in line
+
+
+def test_pitr_restore_promotes_so_the_recovered_server_accepts_writes() -> None:
+    # The default action is `pause`: a server that answers reads and refuses writes,
+    # which is a failed restore wearing the appearance of a successful one.
+    line = next(ln for ln in _executed_lines(_PITR_SH) if "recovery_target_action" in ln)
+    assert "promote" in line
+    assert "pause" not in line
+
+
+def test_pitr_restore_unpacks_the_wal_bundled_with_the_base() -> None:
+    # -X stream put the WAL written DURING the base backup in its own archive member;
+    # without it the cluster is not internally consistent, let alone able to reach a
+    # later target.
+    assert 'tar -xzf "$chosen/pg_wal.tar.gz" -C "$data_dir/pg_wal"' in _PITR_EXEC
+
+
+def test_pitr_restore_stages_outside_the_live_data_volume() -> None:
+    # A sidecar that runs cron jobs around the clock must not be able to overwrite the
+    # database it exists to protect.
+    assert 'data_dir="$LEARNY_PITR_DIR/data"' in _PITR_EXEC
+    assert "db_data" not in _PITR_SH
+    assert "/var/lib/postgresql/data" not in _PITR_SH
+
+
+def test_pitr_restore_ignores_an_incomplete_base_directory() -> None:
+    assert '[ -f "$candidate/base.tar.gz" ] || continue' in _PITR_EXEC
+
+
+def test_image_ships_the_pitr_restore_script_executable() -> None:
+    assert "restore-pitr.sh" in _DOCKERFILE
+    chmod = "\n".join(_logical_lines(_DOCKERFILE))
+    assert "/usr/local/bin/restore-pitr.sh" in chmod
+
+
+# --- db-restore: the service that performs the replay (PITR-07) -----------------
+
+
+@pytest.fixture
+def base() -> dict:
+    return _load(_BASE)["services"]
+
+
+def test_db_restore_is_gated_behind_the_restore_profile(base: dict) -> None:
+    assert base["db-restore"]["profiles"] == ["restore"]
+
+
+def test_db_restore_builds_the_same_image_as_the_database(base: dict) -> None:
+    # Replaying a pgvector cluster with a server that lacks pgvector starts happily
+    # and fails on the first read of a vector column.
+    assert base["db-restore"]["build"] == base["db"]["build"]
+
+
+def test_prod_db_restore_pins_the_same_image_as_the_database(prod: dict) -> None:
+    assert prod["db-restore"]["image"] == f"ghcr.io/augusto-dmh/learny-postgres:{_IMAGE_TAG}"
+    assert prod["db-restore"]["image"] == prod["db"]["image"]
+
+
+def test_db_restore_serves_the_staged_cluster_not_the_live_one(base: dict) -> None:
+    svc = base["db-restore"]
+    assert svc["environment"]["PGDATA"] == "/pitr/data"
+    assert "pitr_data:/pitr" in svc["volumes"]
+    assert not any(str(vol).startswith("db_data") for vol in svc["volumes"])
+
+
+def test_db_restore_mounts_the_archive_read_only(base: dict) -> None:
+    # restore_command only ever reads; a promoted restore must not write its new
+    # timeline into the archive the live database owns.
+    assert "wal_archive:/wal_archive:ro" in base["db-restore"]["volumes"]
+
+
+def test_db_restore_does_not_archive_its_own_wal(base: dict) -> None:
+    assert "archive_mode=off" in base["db-restore"]["command"]
+
+
+def test_db_restore_health_requires_a_server_out_of_recovery(base: dict) -> None:
+    # pg_isready answers yes throughout recovery and at a paused target, so on its own
+    # it cannot tell a completed restore from a stalled one. `--wait` against this
+    # check is the sensor that a restore ended in a normally running database.
+    probe = " ".join(base["db-restore"]["healthcheck"]["test"])
+    assert "pg_isready" in probe
+    assert "pg_is_in_recovery" in probe
+
+
+def test_nothing_pulls_db_restore_into_a_plain_compose_up(base: dict) -> None:
+    for name, svc in base.items():
+        assert "db-restore" not in (svc.get("depends_on") or {}), f"{name} depends on db-restore"
+
+
+def test_prod_db_restore_does_not_come_back_with_the_host(prod: dict) -> None:
+    # A recovery target is a tool an operator starts deliberately, not a service.
+    assert prod["db-restore"]["restart"] == "no"
+
+
+def test_the_backup_sidecar_can_stage_a_restore(override: dict, prod: dict) -> None:
+    assert "pitr_data:/pitr" in override["backup"]["volumes"]
+    assert "pitr_data:/pitr" in prod["backup"]["volumes"]
+
+
+def test_base_declares_the_pitr_staging_volume() -> None:
+    assert "pitr_data" in (_load(_BASE).get("volumes") or {})
+
+
 # --- restore.sh safety-critical flags (OPS-09) ----------------------------------
 
 
@@ -643,6 +827,7 @@ def test_every_new_backup_variable_is_documented_for_operators() -> None:
     added = (
         _shell_defaults(_BASE_BACKUP_SH)
         | _shell_defaults(_WAL_SH)
+        | _shell_defaults(_PITR_SH)
         | _shell_defaults(_ENTRYPOINT_SH)
     ) - existing
     assert added, "expected the recovery jobs to introduce configuration"

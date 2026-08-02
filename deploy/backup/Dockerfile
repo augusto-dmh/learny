@@ -23,11 +23,11 @@ RUN apk add --no-cache postgresql16-client curl flock ca-certificates \
     && chmod +x /usr/local/bin/mc
 
 COPY backup.sh restore.sh backup-now base-backup.sh base-backup-now \
-     wal-archive.sh entrypoint.sh /usr/local/bin/
+     wal-archive.sh restore-pitr.sh entrypoint.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/backup.sh /usr/local/bin/restore.sh \
              /usr/local/bin/backup-now /usr/local/bin/base-backup.sh \
              /usr/local/bin/base-backup-now /usr/local/bin/wal-archive.sh \
-             /usr/local/bin/entrypoint.sh
+             /usr/local/bin/restore-pitr.sh /usr/local/bin/entrypoint.sh
 
 # mc stores its aliases under this directory; keep it stable and writable.
 ENV HOME=/root MC_CONFIG_DIR=/root/.mc

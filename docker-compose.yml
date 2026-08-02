@@ -53,6 +53,47 @@ services:
       timeout: 5s
       retries: 10
 
+  # Point-in-time recovery target. Profile-gated, so it is never part of a plain
+  # `docker compose up`; it exists to serve the data directory `restore-pitr.sh`
+  # stages in the backup sidecar. It runs the SAME image as `db` on purpose — the
+  # cluster being replayed was written by these binaries and these extensions, and
+  # a server without pgvector would start happily and then fail on the first read
+  # of a vector column.
+  db-restore:
+    profiles: ["restore"]
+    build:
+      context: ./deploy/postgres
+      dockerfile: Dockerfile
+    environment:
+      POSTGRES_USER: learny
+      POSTGRES_DB: learny
+      # The staged cluster, not the live data volume.
+      PGDATA: /pitr/data
+    # archive_mode=off: this server promotes onto a new timeline when it reaches the
+    # target, and a promoted restore must not write its timeline back into the
+    # archive the live database owns. The archive is mounted read-only for the same
+    # reason — restore_command only ever reads it.
+    command:
+      - postgres
+      - -c
+      - hba_file=/etc/postgresql/pg_hba.conf
+      - -c
+      - archive_mode=off
+    volumes:
+      - pitr_data:/pitr
+      - wal_archive:/wal_archive:ro
+    # Deliberately stricter than `pg_isready`, which answers yes throughout
+    # recovery: a server still replaying — or paused at its target — accepts reads
+    # and refuses writes, which is a FAILED restore that looks like a healthy one.
+    # `--wait` on this healthcheck is what turns that into a visible failure.
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -q -U learny -d learny && psql -U learny -d learny -tAc 'SELECT NOT pg_is_in_recovery()' | grep -qx t
+      interval: 5s
+      timeout: 10s
+      retries: 60
+
   redis:
     image: redis:7-alpine
     healthcheck:
@@ -185,3 +226,7 @@ volumes:
   db_data:
   minio_data:
   wal_archive:
+  # Staging area for a point-in-time restore: written by the backup sidecar, served
+  # by db-restore. Separate from db_data so a restore can never overwrite the live
+  # database, and so a rehearsal costs nothing but disk.
+  pitr_data:

@@ -93,6 +93,8 @@ services:
     volumes:
       - backup_data:/backups
       - wal_archive:/wal_archive
+      # Where restore-pitr.sh stages a recovered cluster for db-restore to serve.
+      - pitr_data:/pitr
 
 volumes:
   backup_data:
