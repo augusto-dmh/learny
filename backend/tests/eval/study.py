@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -89,7 +89,6 @@ class StudyReport:
     skipped: int = 0
     budget_stopped: bool = False
     modeled_spent_usd: float = 0.0
-    paths: list[Path] = field(default_factory=list)
 
 
 def plan_units(
@@ -135,7 +134,16 @@ def load_recorded(
         if not path.exists():
             continue
         for raw in path.read_text(encoding="utf-8").splitlines():
-            line = json.loads(raw)
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                line = json.loads(raw)
+            except json.JSONDecodeError:
+                # A truncated tail is what a hard kill mid-append leaves behind:
+                # that unit's result is lost, so leaving it unrecorded makes the
+                # resume re-attempt it — the checkpoint promise, not an abort.
+                continue
             recorded_hash = line.get("prompt_hash")
             if recorded_hash is not None and recorded_hash != prompt_hash_value:
                 raise StudyMismatchError(
@@ -196,7 +204,6 @@ def run_study(
         if status in _BILLED_STATUSES
     )
     report = StudyReport(modeled_spent_usd=spent)
-    report.paths = [golden_path, silver_path]
 
     for unit in units:
         if recorded.get(unit.key) in _COMPLETE_STATUSES:
@@ -237,9 +244,31 @@ def run_study(
         }
         _append_line(golden_path if unit.tier == GOLDEN else silver_path, line)
         report.scored += 1
-        report.modeled_spent_usd += unit_cost
+        # Bill on the same predicate as the resume computation above: a
+        # skipped/broken unit made no provider call and consumes no ceiling.
+        if line["status"] in _BILLED_STATUSES:
+            report.modeled_spent_usd += unit_cost
         progress(f"{unit.tier}/{unit.case_id}/{unit.arm}/run{unit.run_index}: {line['status']}")
     return report
+
+
+def memoize_retrieval(retrieve: Callable[[Any], list]) -> Callable[[Any], list]:
+    """Wrap a silver ``retrieve`` so each case's evidence resolves exactly once.
+
+    The study holds evidence fixed per case across arms and runs — identical
+    inputs are what make the comparison an A/B of generation rather than of
+    retrieval. The wrapper caches by ``resolved.case.case_id``, so all six
+    units of a case (2 arms × 3 runs) see the same evidence list.
+    """
+    cache: dict[str, list] = {}
+
+    def cached(resolved: Any) -> list:
+        case_id = resolved.case.case_id
+        if case_id not in cache:
+            cache[case_id] = list(retrieve(resolved))
+        return cache[case_id]
+
+    return cached
 
 
 def domain_evidence(snapshot: Snapshot) -> list[Evidence]:

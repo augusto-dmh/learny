@@ -586,3 +586,101 @@ def test_resume_skips_a_recorded_broken_unit(tmp_path: Path):
     _run(units, scorer, tmp_path, recorded=recorded)
 
     assert [u.case_id for u in scorer.calls] == ["g2"]
+
+
+# --- review fixes: billing symmetry, checkpoint robustness, lifted wiring -------
+
+
+def test_recorded_error_lines_bill_exactly_once(tmp_path: Path):
+    # A recorded error unit consumed provider calls, so it holds its ceiling
+    # share; its re-attempt bills again (a second real attempt). Under a $0.05
+    # ceiling with $0.02 units, the recorded error ($0.02) plus its re-attempt
+    # ($0.02) leave no room for g2 — were error lines unbilled, both would run.
+    units = plan_units(["g1", "g2"], [], arms=("claude-sonnet-5",), runs=1)
+    recorded = {("golden", "g1", "claude-sonnet-5", 0): "error"}
+    scorer = RecordingScorer()
+    report = _run(
+        units, scorer, tmp_path, recorded=recorded, budget=0.05, cost=_cost(gen=0.01, judge=0.01)
+    )
+
+    assert [u.case_id for u in scorer.calls] == ["g1"]
+    assert report.budget_stopped is True
+
+
+def test_freshly_scored_skipped_units_bill_nothing(tmp_path: Path):
+    # A skipped resolution makes no provider call, so scoring it must not
+    # consume ceiling — the same rule the resume computation applies.
+    units = plan_units(["g1", "g2"], [], arms=("claude-sonnet-5",), runs=1)
+
+    def scorer(unit: StudyUnit) -> dict:
+        if unit.case_id == "g1":
+            return {"status": "skipped", "reason": "book absent"}
+        return _ok_fields()
+
+    report = _run(units, scorer, tmp_path, cost=_cost(gen=0.01, judge=0.01))
+
+    assert report.scored == 2
+    assert report.modeled_spent_usd == pytest.approx(0.02)  # g2 only
+
+
+def test_load_recorded_skips_corrupt_and_blank_lines(tmp_path: Path):
+    # A truncated tail is what a hard kill mid-append leaves; the unit's result
+    # is lost, so resume must re-attempt it — not abort on a parse error.
+    golden_path, silver_path = _paths(tmp_path)
+    good = json.dumps(
+        {
+            "case_id": "g1",
+            "tier": "golden",
+            "generation_model": "claude-sonnet-5",
+            "run_index": 0,
+            "status": "ok",
+            "prompt_hash": _PHASH,
+            "judge_model": _JUDGE,
+        }
+    )
+    golden_path.write_text(good + "\n\n" + '{"case_id": "g2", "tier": "gol')
+    recorded = load_recorded(golden_path, silver_path, prompt_hash_value=_PHASH, judge_model=_JUDGE)
+    assert recorded == {("golden", "g1", "claude-sonnet-5", 0): "ok"}
+
+
+def test_memoize_retrieval_resolves_each_case_once():
+    calls: list[str] = []
+
+    def retrieve(resolved) -> list:  # noqa: ANN001
+        calls.append(resolved.case.case_id)
+        return [f"evidence-{resolved.case.case_id}"]
+
+    from tests.eval.study import memoize_retrieval
+
+    cached = memoize_retrieval(retrieve)
+    a = SimpleNamespace(case=SimpleNamespace(case_id="s1"))
+    b = SimpleNamespace(case=SimpleNamespace(case_id="s2"))
+    # All six units of a case (2 arms x 3 runs) must see identical evidence.
+    results = [cached(a) for _ in range(6)] + [cached(b) for _ in range(6)]
+    assert calls == ["s1", "s2"]
+    assert all(r == ["evidence-s1"] for r in results[:6])
+    assert all(r == ["evidence-s2"] for r in results[6:])
+
+
+def test_study_cost_map_covers_every_arm():
+    # A cost-map key mismatch would raise KeyError on the first paid unit and
+    # make recorded artifacts unresumable — pin it offline like the judge.
+    from tests.eval.study import ARMS
+    from tests.eval.test_generation_study import _GENERATION_USD_PER_UNIT
+
+    assert set(_GENERATION_USD_PER_UNIT) == set(ARMS)
+
+
+def test_judge_adapter_builds_the_silver_judgement_shape():
+    from tests.eval.silver import judge_adapter
+
+    judge = FakeJudge()
+    call = judge_adapter(judge, _PHASH)
+    judgement = call(
+        "What?", [SimpleNamespace(snippet="a passage")], SimpleNamespace(text="An answer.")
+    )
+    assert judgement.faithfulness == 1.0
+    assert judgement.relevancy == 4
+    assert judgement.model == _JUDGE
+    assert judgement.prompt_hash == _PHASH
+    assert judge.calls == ["faithfulness", "relevancy"]

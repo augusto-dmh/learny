@@ -75,9 +75,9 @@ def test_generation_study_runs_both_arms_over_seeded_runs(_study_enabled: None) 
         SILVER_RESULTS_DIR,
         BrokenCase,
         ResolvedCase,
-        SilverJudgement,
         SkippedCase,
         broken_result,
+        judge_adapter,
         load_silver_cases,
         resolve_case,
         run_silver_case,
@@ -89,6 +89,7 @@ def test_generation_study_runs_both_arms_over_seeded_runs(_study_enabled: None) 
         StudyUnit,
         domain_evidence,
         load_recorded,
+        memoize_retrieval,
         plan_units,
         run_study,
         score_golden_unit,
@@ -107,17 +108,7 @@ def test_generation_study_runs_both_arms_over_seeded_runs(_study_enabled: None) 
         for arm in ARMS
     }
 
-    def judge_call(question, evidence, answer) -> SilverJudgement:  # noqa: ANN001
-        evidence_text = "\n\n".join(item.snippet for item in evidence)
-        faithfulness = judge.faithfulness(
-            question=question, evidence=evidence_text, answer=answer.text
-        )
-        return SilverJudgement(
-            faithfulness=faithfulness.supported_ratio,
-            relevancy=judge.relevancy(question=question, answer=answer.text),
-            model=judge.model,
-            prompt_hash=judge_prompt_hash,
-        )
+    judge_call = judge_adapter(judge, judge_prompt_hash)
 
     # Golden: the committed replay cases with their frozen snapshot evidence.
     snapshots = {snapshot.case_id: snapshot for snapshot in load_snapshots()}
@@ -126,10 +117,11 @@ def test_generation_study_runs_both_arms_over_seeded_runs(_study_enabled: None) 
         case_id: domain_evidence(snapshot) for case_id, snapshot in snapshots.items()
     }
 
-    # Silver: resolved once per study; retrieval memoized per case (AD-233).
+    # Silver: resolved once per study; retrieval memoized per case so evidence
+    # stays fixed across arms and runs.
     silver_skip = silver_run_skip_reason()
     resolutions: dict[str, ResolvedCase | SkippedCase | BrokenCase] = {}
-    evidence_cache: dict[str, list] = {}
+    memoized_retrieve = None
     engine = None
     conn = None
     if silver_skip is None:
@@ -142,18 +134,14 @@ def test_generation_study_runs_both_arms_over_seeded_runs(_study_enabled: None) 
         for case in load_silver_cases():
             resolutions[case.case_id] = resolve_case(conn, case)
 
-        def memoized_retrieve(resolved: ResolvedCase) -> list:
-            case_id = resolved.case.case_id
-            if case_id not in evidence_cache:
-                evidence_cache[case_id] = list(
-                    retrieve_evidence(
-                        conn,
-                        UUID(resolved.source_id),
-                        resolved.case.question,
-                        top_k=settings.conversation_evidence_top_k,
-                    )
-                )
-            return evidence_cache[case_id]
+        memoized_retrieve = memoize_retrieval(
+            lambda resolved: retrieve_evidence(
+                conn,
+                UUID(resolved.source_id),
+                resolved.case.question,
+                top_k=settings.conversation_evidence_top_k,
+            )
+        )
     else:
         print(f"silver tier unavailable ({silver_skip}) — running golden-only")
 

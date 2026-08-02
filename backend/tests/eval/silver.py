@@ -305,6 +305,32 @@ Generate = Callable[[str, Sequence[_Evidence]], _Answer]
 JudgeCall = Callable[[str, Sequence[_Evidence], _Answer], SilverJudgement]
 
 
+def judge_adapter(judge: Any, prompt_hash_value: str) -> JudgeCall:
+    """Adapt the judge port onto the silver line's judgement shape.
+
+    ``judge`` needs ``faithfulness(question=, evidence=, answer=)`` returning a
+    supported-ratio carrier, ``relevancy(question=, answer=)``, and a ``model``
+    attribute — the :class:`app.eval.judge.Judge` surface, duck-typed so this
+    module keeps zero provider imports. Both live entrypoints (nightly silver
+    and the generation study) wire through here, so the evidence join and the
+    judgement shape cannot drift apart.
+    """
+
+    def call(question: str, evidence: Sequence[_Evidence], answer: _Answer) -> SilverJudgement:
+        evidence_text = "\n\n".join(item.snippet for item in evidence)
+        faithfulness = judge.faithfulness(
+            question=question, evidence=evidence_text, answer=answer.text
+        )
+        return SilverJudgement(
+            faithfulness=faithfulness.supported_ratio,
+            relevancy=judge.relevancy(question=question, answer=answer.text),
+            model=judge.model,
+            prompt_hash=prompt_hash_value,
+        )
+
+    return call
+
+
 def _now_iso(now: datetime | None) -> str:
     return (now or datetime.now(UTC)).isoformat()
 
