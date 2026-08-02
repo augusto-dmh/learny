@@ -3,7 +3,7 @@
   "promote_threshold": 2,
   "window_days": 45,
   "quarantine_threshold": 2,
-  "next_id": 20,
+  "next_id": 21,
   "lessons": [
     {
       "id": "L-001",
@@ -346,6 +346,24 @@
       ],
       "created": "2026-07-31T19:13:22Z",
       "last_seen": "2026-07-31T19:13:22Z"
+    },
+    {
+      "id": "L-020",
+      "key": "spec_deviation::paid multi run live studies should verify the provider credit balance covers the modeled estimate before the first unit a mid study credit exhaustion truncates the final run and turns the planned evidence into a recorded deviation",
+      "text": "Paid multi-run live studies should verify the provider credit balance covers the modeled estimate before the first unit — a mid-study credit exhaustion truncates the final run and turns the planned evidence into a recorded deviation.",
+      "signal": "spec_deviation",
+      "scope": "backend/tests/eval",
+      "status": "candidate",
+      "features": [
+        "v5-generation-denoise"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "spec.md Recorded deviations / AD-238 (backend/tests/eval)"
+      ],
+      "created": "2026-08-02T01:50:35Z",
+      "last_seen": "2026-08-02T01:50:35Z"
     }
   ]
 }

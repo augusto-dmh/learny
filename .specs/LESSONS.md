@@ -128,6 +128,12 @@ Seen once or not yet corroborated. Tracked, not trusted.
 - evidence: DENOISE-09 AC8 / backend/tests/eval/test_study_runner.py:88 (backend/tests/eval)
 - last seen: 2026-07-31T19:13:22Z
 
+### L-020 — Paid multi-run live studies should verify the provider credit balance covers the modeled estimate before the first unit — a mid-study credit exhaustion truncates the final run and turns the planned evidence into a recorded deviation.
+- signal: `spec_deviation` · recurrence: 1 feature(s) · scope: `backend/tests/eval` · harmful: 0
+- features: v5-generation-denoise
+- evidence: spec.md Recorded deviations / AD-238 (backend/tests/eval)
+- last seen: 2026-08-02T01:50:35Z
+
 ## Quarantined (failed when applied — ignore)
 
 A confirmed lesson that recurred alongside failure. Kept for the maintainer to review.
