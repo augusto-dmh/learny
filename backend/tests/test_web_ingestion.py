@@ -315,7 +315,7 @@ def _drive_to_succeeded(conn: Connection, user, source_id: str) -> None:
     }
     start = StartIngestion(**common, authorize=AuthorizeOwnership(), clock=clock, ids=uuid4)
     job, _, _ = start(user=user, source_id=UUID(source_id))
-    run = RunIngestion(**common, step=NoOpIngestionStep(), clock=clock, ids=uuid4)
+    run = RunIngestion(**common, step=NoOpIngestionStep(), clock=clock, ids=uuid4, max_attempts=5)
     clock.advance(timedelta(seconds=1))
     run.begin_run(job.id)
     clock.advance(timedelta(seconds=1))

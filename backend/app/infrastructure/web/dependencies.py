@@ -318,7 +318,10 @@ def build_compensate(conn: Connection) -> RunIngestion:
     """Wire the enqueue-failure compensation driver on a start-path UoW connection.
 
     Only ``RunIngestion.fail`` is used (it never invokes the step), so the no-op
-    step keeps the Phase-5 boundary intact — no parsing happens on this path.
+    step keeps the Phase-5 boundary intact — no parsing happens on this path. The
+    attempts cap comes from settings like every other composition root: this driver
+    never claims a job, but a wiring that quietly disagreed with the worker's cap is
+    the kind of drift a second literal invites.
     """
     return RunIngestion(
         sources=SqlAlchemySourceRepository(conn),
@@ -327,6 +330,7 @@ def build_compensate(conn: Connection) -> RunIngestion:
         step=NoOpIngestionStep(),
         clock=_clock,
         ids=uuid4,
+        max_attempts=get_settings().ingestion_max_attempts,
     )
 
 

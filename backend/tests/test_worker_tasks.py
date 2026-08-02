@@ -23,6 +23,7 @@ from sqlalchemy import Engine, func, select
 from sqlalchemy import delete as sa_delete
 
 import app.worker.tasks as tasks_module
+from app.core.config import get_settings
 from app.core.tracing import TraceContextFilter, current_trace
 from app.domain.entities import (
     CorpusStructure,
@@ -103,7 +104,7 @@ def seed(db_engine: Engine, monkeypatch: pytest.MonkeyPatch):  # noqa: ANN201
     created_users: list[UUID] = []
 
     def _seed(
-        job_status: str = IngestionStatus.QUEUED, *, with_job: bool = True
+        job_status: str = IngestionStatus.QUEUED, *, with_job: bool = True, attempts: int = 0
     ) -> SimpleNamespace:
         now = datetime.now(UTC)
         user = User(id=uuid4(), email=f"{uuid4()}@example.com", created_at=now)
@@ -124,7 +125,7 @@ def seed(db_engine: Engine, monkeypatch: pytest.MonkeyPatch):  # noqa: ANN201
             id=uuid4(),
             source_id=source.id,
             status=job_status,
-            attempts=0,
+            attempts=attempts,
             last_error=None,
             created_at=now,
             updated_at=now,
@@ -382,6 +383,72 @@ def test_run_ingestion_terminal_job_is_noop(seed, db_engine: Engine) -> None:
     assert job.attempts == 0  # begin_run did not start a new attempt
     # No started/succeeded appended — only the seeded queued event remains.
     assert _read_event_types(db_engine, ctx.job.id) == [IngestionEventType.QUEUED]
+
+
+class _RecordingStep:
+    """``IngestionStep`` double that records whether the task ever reached it."""
+
+    def __init__(self) -> None:
+        self.runs = 0
+
+    def run(self, *, source: Source, job: IngestionJob) -> None:  # noqa: ARG002
+        self.runs += 1
+
+
+@pytest.fixture
+def attempts_cap(monkeypatch: pytest.MonkeyPatch):  # noqa: ANN201
+    """Set ``LEARNY_INGESTION_MAX_ATTEMPTS`` for the task's composition root."""
+
+    def _cap(value: int) -> None:
+        monkeypatch.setenv("LEARNY_INGESTION_MAX_ATTEMPTS", str(value))
+        get_settings.cache_clear()
+
+    yield _cap
+    get_settings.cache_clear()
+
+
+def test_run_ingestion_stops_a_job_that_has_used_up_its_attempts(
+    seed, attempts_cap, db_engine: Engine
+) -> None:
+    # A worker killed mid-task (OOM, SIGKILL) runs no ``except`` block: the row is
+    # left ``running`` with its attempts spent, and the broker redelivers. The claim
+    # must end it here — a job that reliably kills its worker would otherwise be
+    # redelivered forever.
+    attempts_cap(2)
+    ctx = seed(IngestionStatus.RUNNING, attempts=2)
+    step = _RecordingStep()
+
+    with patch("app.worker.tasks._build_step", lambda conn: step):
+        _run(FakeSelf(), str(ctx.source.id), str(ctx.job.id))
+
+    assert step.runs == 0  # the job was never started again
+    job = _read_job(db_engine, ctx.job.id)
+    assert job.status == IngestionStatus.FAILED
+    assert job.attempts == 2
+    assert job.last_error == _REDACTED
+    assert _read_source_status(db_engine, ctx.source.id) == "failed"
+    assert _read_event_types(db_engine, ctx.job.id) == [
+        IngestionEventType.QUEUED,
+        IngestionEventType.FAILED,
+    ]
+
+
+def test_run_ingestion_still_runs_a_job_with_one_attempt_left(
+    seed, attempts_cap, db_engine: Engine
+) -> None:
+    # The other side of the boundary: the cap terminates a job at it, not before it.
+    attempts_cap(3)
+    ctx = seed(IngestionStatus.RUNNING, attempts=2)
+    step = _RecordingStep()
+
+    with patch("app.worker.tasks._build_step", lambda conn: step):
+        _run(FakeSelf(), str(ctx.source.id), str(ctx.job.id))
+
+    assert step.runs == 1
+    job = _read_job(db_engine, ctx.job.id)
+    assert job.status == IngestionStatus.SUCCEEDED
+    assert job.attempts == 3
+    assert _read_source_status(db_engine, ctx.source.id) == "ready"
 
 
 def test_celery_enqueuer_routes_epub_to_default_queue_with_ids_only() -> None:
