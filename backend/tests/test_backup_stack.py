@@ -1014,3 +1014,112 @@ def test_ci_asserts_offsite_dump_and_mirror_landed() -> None:
     scripts = _compose_smoke_scripts()
     assert "mc ls --recursive m/learny-offsite-ci/db/" in scripts
     assert "mc ls --recursive m/learny-offsite-ci/objects/" in scripts
+
+
+# --- CI point-in-time drill (PITR-09) -------------------------------------------
+#
+# The drill itself is the proof; these asserts pin the ORDER and the two-directional
+# shape it depends on, because every way of hollowing it out is a reordering or a
+# deletion that still leaves a green-looking job: taking the base after the writes,
+# recording the target outside the two writes, restoring before the archive has the
+# segment, or keeping only the half that a plain whole-archive restore also passes.
+
+# The discriminating assertion, and its control, distinguished by what each expects.
+_ROW_AFTER_TARGET_ABSENT = "WHERE id = 2;')\" != 0"
+_ROW_AFTER_TARGET_PRESENT = "WHERE id = 2;')\" != 1"
+
+
+def test_ci_takes_the_base_before_the_rows_it_must_replay() -> None:
+    # A base taken after the writes already contains them, so the replay would prove
+    # nothing about WAL at all.
+    scripts = _compose_smoke_scripts()
+    assert scripts.index("base-backup.sh") < scripts.index("'before-target'")
+
+
+def test_ci_records_the_target_between_the_two_writes() -> None:
+    # The target has to sit strictly between them or there is no boundary to test.
+    scripts = _compose_smoke_scripts()
+    assert scripts.index("'before-target'") < scripts.index("clock_timestamp() AT TIME ZONE 'UTC'")
+    assert scripts.index("clock_timestamp() AT TIME ZONE 'UTC'") < scripts.index("'after-target'")
+
+
+def test_ci_records_the_target_in_utc_with_its_offset() -> None:
+    # A target without an offset is read in the server's timezone, which would move
+    # the boundary away from the moment the drill actually recorded.
+    scripts = _compose_smoke_scripts()
+    assert "AT TIME ZONE 'UTC'" in scripts
+    assert "||'+00:00'" in scripts
+
+
+def test_ci_waits_for_the_segment_to_reach_the_archive_before_restoring() -> None:
+    # WAL is archived only when a segment COMPLETES. Restoring before the switch has
+    # landed would replay nothing, and "nothing replayed" also satisfies a one-sided
+    # row-is-absent check.
+    scripts = _compose_smoke_scripts()
+    switch_at = scripts.index("SELECT pg_switch_wal();")
+    wait_at = scripts.index('test -f "/wal_archive/$segment"')
+    restore_at = scripts.index('restore-pitr.sh --target "$PITR_TARGET" --yes')
+    assert switch_at < wait_at < restore_at
+    assert "never reached the archive" in scripts, "the wait must fail loudly on timeout"
+
+
+def test_ci_proves_the_dry_run_stages_nothing() -> None:
+    # Inert, not merely stopped short: the staging directory must not exist at all.
+    scripts = _compose_smoke_scripts()
+    dry_at = scripts.index('restore-pitr.sh --target "$PITR_TARGET" 2>&1')
+    inert_at = scripts.index("test ! -e /pitr/data")
+    assert dry_at < inert_at < scripts.index('restore-pitr.sh --target "$PITR_TARGET" --yes')
+
+
+def test_ci_proves_an_unreachable_target_names_the_window_floor() -> None:
+    scripts = _compose_smoke_scripts()
+    assert "earliest recoverable time" in scripts
+    assert "an unreachable target must exit non-zero" in scripts
+
+
+def test_ci_asserts_the_row_written_before_the_target_returns() -> None:
+    # Without this half, a restore that replayed nothing at all would pass.
+    scripts = _compose_smoke_scripts()
+    restore_at = scripts.index('restore-pitr.sh --target "$PITR_TARGET" --yes')
+    assert restore_at < scripts.index("WHERE id = 1;')\" != 1")
+
+
+def test_ci_asserts_the_row_written_after_the_target_is_absent() -> None:
+    """PITR-09 — the assertion the whole deliverable's credibility rests on.
+
+    A whole-archive restore passes every other check in this drill and fails only
+    this one. Dropping it would leave a drill that proves a restore ran, not that it
+    landed on a moment.
+    """
+    scripts = _compose_smoke_scripts()
+    restore_at = scripts.index('restore-pitr.sh --target "$PITR_TARGET" --yes')
+    assert restore_at < scripts.index(_ROW_AFTER_TARGET_ABSENT)
+    assert "whole-archive restore" in scripts
+
+
+def test_ci_proves_the_absent_assertion_can_fail() -> None:
+    # The control replays the SAME base and the SAME archive to a LATER target. If the
+    # assertion above were inert — replay silently stopping early, or never running —
+    # this run would produce the same rows and the drill would be self-deceiving.
+    scripts = _compose_smoke_scripts()
+    absent_at = scripts.index(_ROW_AFTER_TARGET_ABSENT)
+    control_at = scripts.index('restore-pitr.sh --target "$PITR_CONTROL" --yes')
+    present_at = scripts.index(_ROW_AFTER_TARGET_PRESENT)
+    assert absent_at < control_at < present_at
+    assert "cannot fail and proves nothing" in scripts
+
+
+def test_ci_asserts_the_restore_ends_writable_and_out_of_recovery() -> None:
+    # `--wait` holds on db-restore's not-in-recovery healthcheck; the write proves the
+    # promoted server accepts more than reads.
+    scripts = _compose_smoke_scripts()
+    assert "--wait --wait-timeout 300 db-restore" in scripts
+    assert "SELECT pg_is_in_recovery();" in scripts
+    assert "CREATE TABLE pitr_writable" in scripts
+
+
+def test_ci_tears_down_the_profile_gated_services_too() -> None:
+    # db-restore is started with `up -d`, so a teardown blind to its profile would
+    # leave it and its volume behind on the runner.
+    scripts = _compose_smoke_scripts()
+    assert "--profile backup --profile restore down -v" in scripts
