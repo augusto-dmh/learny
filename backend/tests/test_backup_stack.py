@@ -31,6 +31,7 @@ _BACKUP_SH = (_BACKUP_DIR / "backup.sh").read_text()
 _RESTORE_SH = (_BACKUP_DIR / "restore.sh").read_text()
 _ENTRYPOINT_SH = (_BACKUP_DIR / "entrypoint.sh").read_text()
 _DOCKERFILE = (_BACKUP_DIR / "Dockerfile").read_text()
+_BASE_BACKUP_SH = (_BACKUP_DIR / "base-backup.sh").read_text()
 
 _CI = _REPO_ROOT / ".github" / "workflows" / "ci.yml"
 
@@ -243,6 +244,124 @@ def test_backup_pings_heartbeat_last_and_only_on_success() -> None:
     heartbeat_at = _BACKUP_SH.index("LEARNY_BACKUP_HEARTBEAT_URL")
     assert dump_at < prune_at < heartbeat_at
     assert "curl -fsS" in _BACKUP_SH
+
+
+# --- base-backup.sh: the physical base every replay starts from (PITR-03/04/06) --
+#
+# WAL segments are not a recovery chain on their own — replay needs a physical base
+# with a known WAL position, which a logical dump does not have. These pin the
+# properties that make the base usable and its failure modes safe.
+
+
+def test_base_backup_runs_in_strict_mode_with_pipefail() -> None:
+    assert "set -euo pipefail" in _BASE_BACKUP_SH
+
+
+def test_base_backup_takes_a_physical_backup_not_a_logical_dump() -> None:
+    executed = "\n".join(_executed_lines(_BASE_BACKUP_SH))
+    assert "pg_basebackup" in executed
+    assert "pg_dump" not in executed, "the base must be physical; the dump is a separate job"
+
+
+def test_base_backup_shares_the_nightly_dump_lock() -> None:
+    # A base backup and a dump are both heavy full-database reads over the same disk
+    # and the same /backups volume. Sharing backup.sh's lock file is what makes the
+    # second arrival exit instead of running concurrently; a private lock here would
+    # silently allow the overlap. Pin the SAME variable and default backup.sh uses.
+    assert 'LEARNY_BACKUP_LOCK:=/tmp/learny-backup.lock' in _BASE_BACKUP_SH
+    assert 'LEARNY_BACKUP_LOCK:=/tmp/learny-backup.lock' in _BACKUP_SH
+    guard = [line for line in _executed_lines(_BASE_BACKUP_SH) if "flock" in line]
+    assert guard and guard[0].lstrip().startswith("if !")
+    assert "-n" in guard[0], "the guard must be non-blocking; blocking would queue a duplicate"
+
+
+def test_base_backup_writes_to_a_temp_name_and_renames_only_on_success() -> None:
+    # PITR-03: a failed run must leave no partial artifact under the final name and
+    # must not touch prior bases.
+    assert 'tmp="$base.tmp"' in _BASE_BACKUP_SH
+    assert 'mv "$tmp" "$base"' in _BASE_BACKUP_SH
+    assert 'trap \'rm -rf "$tmp"\' EXIT' in _BASE_BACKUP_SH
+
+
+def test_base_backup_records_the_wal_segment_its_replay_starts_from() -> None:
+    # This file is the sole input to WAL retention. Without it, pruning would have
+    # nothing to derive from and would fall back to age — the exact silent
+    # chain-breaking the retention rule exists to prevent.
+    assert "backup_label" in _BASE_BACKUP_SH
+    assert "START WAL LOCATION" in _BASE_BACKUP_SH
+    assert 'printf \'%s\\n\' "$start_wal" > "$tmp/START_WAL"' in _BASE_BACKUP_SH
+    # The record is written INSIDE the temp directory, so the rename publishes the
+    # base and its replay floor atomically — a base can never appear without one.
+    label_at = _BASE_BACKUP_SH.index('> "$tmp/START_WAL"')
+    rename_at = _BASE_BACKUP_SH.index('mv "$tmp" "$base"')
+    assert label_at < rename_at
+
+
+def test_base_backup_fails_when_the_replay_floor_cannot_be_read() -> None:
+    # A base whose START WAL is unknown cannot pin any segment, so publishing one
+    # would quietly leave every retained segment prunable. Fail the run instead.
+    assert 'if [ -z "$start_wal" ]; then' in _BASE_BACKUP_SH
+    guard_at = _BASE_BACKUP_SH.index('if [ -z "$start_wal" ]')
+    rename_at = _BASE_BACKUP_SH.index('mv "$tmp" "$base"')
+    assert guard_at < rename_at, "the floor must be verified before the base is published"
+
+
+def test_base_backup_gates_offsite_on_all_four_remote_vars() -> None:
+    # PITR-04: identical gate to the dump's — all four set means ship, anything else
+    # completes locally with the existing explicit notice and exits 0.
+    lines = _executed_lines(_BASE_BACKUP_SH)
+    start = next(i for i, ln in enumerate(lines) if ln.lstrip().startswith("if [ -n"))
+    end = next(i for i in range(start, len(lines)) if lines[i].rstrip().endswith("; then"))
+    conditional = " ".join(ln.rstrip().rstrip("\\").strip() for ln in lines[start : end + 1])
+    for var in (
+        "LEARNY_BACKUP_REMOTE_ENDPOINT",
+        "LEARNY_BACKUP_REMOTE_ACCESS_KEY",
+        "LEARNY_BACKUP_REMOTE_SECRET_KEY",
+        "LEARNY_BACKUP_REMOTE_BUCKET",
+    ):
+        assert f'[ -n "${{{var}:-}}" ]' in conditional, f"offsite gate must check {var}"
+    assert conditional.count("&&") == 3, "the four remote-var checks must be joined by &&"
+    assert "||" not in conditional, "offsite gating must not OR the remote-var checks"
+    # The same notice the dump logs, which CI asserts on.
+    assert "offsite not configured" in _BASE_BACKUP_SH
+
+
+def test_base_backup_prunes_only_after_success_and_exempts_the_newest() -> None:
+    # PITR-06. `set -e` means a failed backup never reaches the prune, so a failure
+    # can never shrink the retention window; the newest base is exempt regardless.
+    assert '-mtime "+$LEARNY_BACKUP_KEEP_DAYS"' in _BASE_BACKUP_SH
+    assert 'newest="$(ls -1dt' in _BASE_BACKUP_SH
+    assert '! -path "$newest"' in _BASE_BACKUP_SH
+    backup_at = _BASE_BACKUP_SH.rindex("pg_basebackup -h")
+    prune_at = _BASE_BACKUP_SH.index("-mtime")
+    assert backup_at < prune_at, "pruning must follow the backup, never precede it"
+
+
+def test_base_backup_prune_targets_directories_not_the_whole_backup_tree() -> None:
+    # The artifact is a directory, so the prune uses -type d. Bounding it with
+    # -mindepth/-maxdepth 1 keeps it from matching the backup root itself or
+    # descending into a base's contents.
+    prune = next(ln for ln in _executed_lines(_BASE_BACKUP_SH) if ln.startswith("find "))
+    assert "-mindepth 1 -maxdepth 1" in prune
+    assert "-type d" in prune
+    assert "-name 'learny-base-*'" in prune
+
+
+def test_entrypoint_schedules_the_base_backup_weekly_clear_of_the_dump() -> None:
+    # Sharing the dump's lock means an overlapping base backup is skipped, so the
+    # defaults must not overlap: 02:00 Sunday against the dump's 03:30 nightly.
+    assert "LEARNY_BASEBACKUP_CRON:=0 2 * * 0" in _ENTRYPOINT_SH
+    executed = "\n".join(_executed_lines(_ENTRYPOINT_SH))
+    assert "/usr/local/bin/base-backup.sh" in executed
+    assert "> /etc/crontabs/root" in executed
+
+
+def test_image_ships_the_base_backup_job_executable() -> None:
+    assert "base-backup.sh" in _DOCKERFILE
+    assert "base-backup-now" in _DOCKERFILE
+    chmod = _DOCKERFILE[_DOCKERFILE.index("RUN chmod +x") :]
+    assert "/usr/local/bin/base-backup.sh" in chmod
+    assert "/usr/local/bin/base-backup-now" in chmod
 
 
 # --- restore.sh safety-critical flags (OPS-09) ----------------------------------
