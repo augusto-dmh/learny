@@ -19,6 +19,11 @@ _MONITORING = _OPS / "monitoring.md"
 _INSTRUMENTATION = _OPS / "instrumentation.md"
 
 
+def _collapsed(text: str) -> str:
+    """One-line view of a document, so a hard-wrapped sentence still matches."""
+    return " ".join(text.split())
+
+
 @pytest.fixture
 def backups() -> str:
     return _BACKUPS.read_text()
@@ -112,6 +117,89 @@ def test_backups_documents_the_shipped_restore_script(backups: str) -> None:
 def test_backups_drops_the_deferral_text(backups: str) -> None:
     # The old "deliberately not fixed here" TODO must be gone (OPS-12).
     assert "deliberately not fixed here" not in backups
+
+
+# --- point-in-time recovery (PITR-11) -------------------------------------------
+# The runbook is the only place an operator learns that recovery to a moment exists,
+# what the two artifact families are, and how their retentions interact. Every string
+# pinned below is a code fact asserted elsewhere in this suite or in the shipped
+# scripts, so a doc that drifts from the implementation fails here rather than during
+# an incident.
+
+
+def test_backups_documents_wal_archiving(backups: str) -> None:
+    assert "archive_mode=on" in backups
+    assert "archive_command=test ! -f /wal_archive/%f && cp %p /wal_archive/%f" in backups
+    assert "LEARNY_WAL_ARCHIVE_TIMEOUT" in backups
+    # archive_mode is postmaster-level: an operator who misses this enables nothing.
+    assert "postmaster-level" in backups
+
+
+def test_backups_documents_that_the_archive_lives_outside_the_data_volume(
+    backups: str,
+) -> None:
+    # An archive inside db_data is lost with the directory it exists to recover.
+    assert "not** inside `db_data`" in backups
+    assert "wal_archive" in backups
+
+
+def test_backups_documents_what_a_base_backup_is_and_why(backups: str) -> None:
+    assert "pg_basebackup -Ft -z -X stream --checkpoint=fast" in backups
+    assert "LEARNY_BASEBACKUP_CRON" in backups
+    assert "0 2 * * 0" in backups
+    # The reason the nightly dump cannot play this role at all.
+    assert "carries no WAL position" in _collapsed(backups)
+    # The file the retention predicate reads.
+    assert "START_WAL" in backups
+
+
+def test_backups_documents_the_coupled_retention_rule(backups: str) -> None:
+    assert "LEARNY_WAL_KEEP_DAYS" in backups
+    assert "oldest *retained* base" in backups
+    # The invariant, stated as such: age is a withholding condition, never a licence.
+    assert "Age alone is never sufficient grounds to delete a segment" in backups
+    # And its operational consequence.
+    assert "Never delete files from `/wal_archive` by hand" in backups
+
+
+def test_backups_documents_the_wal_offsite_recovery_point(backups: str) -> None:
+    # WAL reaches the bucket on the sidecar's schedule, not continuously.
+    assert "LEARNY_WAL_SHIP_CRON" in backups
+    assert "*/15 * * * *" in backups
+
+
+def test_backups_documents_the_lock_topology(backups: str) -> None:
+    # Two locks, and why: sharing the dump's lock for WAL shipping would let one
+    # nightly dump stretch the offsite recovery point.
+    assert "LEARNY_BACKUP_LOCK" in backups
+    assert "LEARNY_WAL_LOCK" in backups
+
+
+def test_backups_documents_the_two_command_restore(backups: str) -> None:
+    assert "two-command" in backups
+    assert "restore-pitr.sh --target" in backups
+    assert "--profile restore up -d --wait db-restore" in backups
+    # The UTC-offset requirement the script enforces with exit 2.
+    assert "+00:00" in backups
+    # Dry run and the out-of-window failure, both non-destructive.
+    assert "without `--yes`" in backups
+    assert "earliest recoverable time" in backups
+
+
+def test_backups_documents_the_state_a_restore_leaves_behind(backups: str) -> None:
+    # Its own volume, never the live one — the property that makes a rehearsal safe.
+    assert "pitr_data" in backups
+    assert "never `db_data`" in _collapsed(backups)
+    # Promoted and writable, not paused: "it accepts writes" must be a real signal.
+    assert "recovery_target_action = 'promote'" in backups
+    assert "archive_mode=off" in backups
+    assert "read-only" in backups
+
+
+def test_backups_drops_the_point_in_time_recovery_deferral(backups: str) -> None:
+    # The runbook used to close by declaring PITR out of scope. It now ships.
+    assert "out of scope" not in backups
+    assert "## Point-in-time recovery" in backups
 
 
 # --- deploy runbook secrets list (OPS-11) ---------------------------------------
