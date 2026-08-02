@@ -584,11 +584,44 @@ def test_pitr_restore_selects_a_base_that_precedes_the_target() -> None:
     assert 'chosen="$candidate"' in _PITR_EXEC
 
 
-def test_pitr_restore_fails_closed_when_no_base_precedes_the_target() -> None:
-    assert "no retained base backup starts before" in _PITR_SH
-    refusal = _PITR_EXEC.index("no retained base backup starts before")
+def test_a_target_below_the_window_names_the_earliest_recoverable_time() -> None:
+    """PITR-08 — a dead end an operator cannot resolve is barely better than a hang.
+
+    The floor is the start of the OLDEST RETAINED base backup, which is the same
+    base WAL retention is derived from: nothing below it survives to be replayed, so
+    no earlier moment is reachable however much archive happens to still be on disk.
+    """
+    assert "outside the recoverable window" in _PITR_EXEC
+    refusal = _PITR_EXEC.index("outside the recoverable window")
+    tail = _PITR_EXEC[refusal : refusal + 500]
+    assert "earliest recoverable time" in tail
+    assert 'pretty_utc "$(base_stamp "$oldest")"' in tail, "the floor must be a real timestamp"
+    assert "exit 1" in tail
+
+
+def test_the_window_floor_is_the_oldest_retained_base() -> None:
+    # The sorted glob yields bases oldest-first, so the first COMPLETE one is the
+    # floor. Taking it from the last, or from an incomplete directory, would report a
+    # window the archive cannot actually deliver.
+    assert '[ -n "$oldest" ] || oldest="$candidate"' in _PITR_EXEC
+    skip_at = _PITR_EXEC.index('[ -f "$candidate/base.tar.gz" ] || continue')
+    floor_at = _PITR_EXEC.index('[ -n "$oldest" ] || oldest="$candidate"')
+    assert skip_at < floor_at, "an incomplete directory must not become the window floor"
+
+
+def test_a_target_below_the_window_modifies_no_data_directory() -> None:
+    refusal = _PITR_EXEC.index("outside the recoverable window")
     assert refusal < _PITR_EXEC.index('rm -rf "$data_dir"')
-    assert "exit 1" in _PITR_EXEC[refusal : refusal + 300]
+    assert "nothing was changed" in _PITR_EXEC[refusal : refusal + 500]
+
+
+def test_pitr_restore_refuses_when_there_is_no_base_backup_at_all() -> None:
+    # Archived WAL is not a recovery chain on its own — there is nothing to replay
+    # onto, and the honest answer is to say so rather than stage a broken cluster.
+    assert "no base backup in" in _PITR_EXEC
+    refusal = _PITR_EXEC.index("no base backup in")
+    assert refusal < _PITR_EXEC.index('rm -rf "$data_dir"')
+    assert "exit 1" in _PITR_EXEC[refusal : refusal + 400]
 
 
 def test_pitr_restore_demands_an_unambiguous_utc_target() -> None:

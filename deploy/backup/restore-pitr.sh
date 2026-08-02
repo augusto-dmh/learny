@@ -137,18 +137,34 @@ fi
 # Glob expansion is sorted, and the stamps are fixed width, so this walks the bases
 # oldest-first; the last one that does not start after the target is the newest one
 # that can reach it.
+oldest=""
 chosen=""
 for candidate in "$LEARNY_BASEBACKUP_DIR"/learny-base-*; do
   # An incomplete directory (a crashed run's leftovers) is not a base backup.
   [ -f "$candidate/base.tar.gz" ] || continue
+  # The FIRST complete base the sorted glob yields is the oldest retained one, and
+  # its start is the floor of the whole recoverable window: WAL retention is derived
+  # from exactly this base, so nothing below it survives to be replayed.
+  [ -n "$oldest" ] || oldest="$candidate"
   if [ "$(base_stamp "$candidate")" \> "$target_stamp" ]; then
     continue
   fi
   chosen="$candidate"
 done
 
+if [ -z "$oldest" ]; then
+  log "no base backup in $LEARNY_BASEBACKUP_DIR"
+  log "archived WAL is not a recovery chain on its own; there is nothing to replay onto"
+  log "nothing was changed"
+  exit 1
+fi
+
+# --- a target below the window fails loudly, and says how far back it goes -------
+# "Out of range" without a range is an error an operator can only resolve by reading
+# the source; naming the floor turns a dead end into the next thing to try.
 if [ -z "$chosen" ]; then
-  log "no retained base backup starts before $target"
+  log "target $target is outside the recoverable window"
+  log "earliest recoverable time: $(pretty_utc "$(base_stamp "$oldest")") (oldest retained base ${oldest##*/})"
   log "nothing was changed"
   exit 1
 fi
