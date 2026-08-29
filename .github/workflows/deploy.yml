@@ -2,7 +2,7 @@
 #
 # Gated on CI: this workflow only runs after the `CI` workflow completes
 # successfully on `main` (or a manual dispatch on main). It builds and pushes the
-# three production images to GHCR, then — when the VPS secrets are configured —
+# production images to GHCR, then — when the VPS secrets are configured —
 # ships the compose triad to the VPS over SSH. No `push`/`pull_request` triggers:
 # CI is the gate, and coupling is by the `workflows: ["CI"]` name below.
 name: Deploy
@@ -51,6 +51,10 @@ jobs:
           # Single-stage image (deploy/backup/Dockerfile) — no build target.
           - name: learny-backup
             context: ./deploy/backup
+          # Thin pgvector derivative carrying the WAL-archive directory and the
+          # replication pg_hba.conf. Single-stage — no build target.
+          - name: learny-postgres
+            context: ./deploy/postgres
     steps:
       # Build the exact commit CI validated (head_sha on workflow_run), or the
       # dispatched ref's sha. Same expression drives the image tags below.

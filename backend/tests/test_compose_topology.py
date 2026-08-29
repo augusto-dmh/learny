@@ -1,11 +1,21 @@
-"""E gate — PDF worker isolation topology (unit, ING-18/19).
+"""E gate — service isolation + WAL-archiving topology (unit, ING-18/19, PITR-01/02).
 
-Loads the compose files as YAML (and the Dockerfile / CI workflow as text) and
-asserts the isolation seam that keeps a heavy, pathological PDF off the main
-worker: worker-pdf drains only the ingest-pdf queue with concurrency 1, a memory
-cap, and one task per child; the default worker drains only the default queue and
-never ingest-pdf; the prod overlay hardens worker-pdf like worker; the pdf-worker
-image lives behind its own build target; and CI never installs the pdf extra.
+Loads the compose files as YAML (and the Dockerfiles / CI workflow as text) and
+asserts two topology seams.
+
+* **PDF worker isolation** — what keeps a heavy, pathological PDF off the main
+  worker: worker-pdf drains only the ingest-pdf queue with concurrency 1, a memory
+  cap, and one task per child; the default worker drains only the default queue and
+  never ingest-pdf; the prod overlay hardens worker-pdf like worker; the pdf-worker
+  image lives behind its own build target; and CI never installs the pdf extra.
+* **WAL archiving substrate** — the `db` service continuously captures completed
+  WAL segments onto a volume that outlives its data directory, and does so on a
+  clean deploy with no host-side step. The assertions here pin the *mechanisms*
+  that make that true (an image-declared, database-owned archive directory whose
+  path is exactly the compose mount point; a replication-capable pg_hba.conf), not
+  merely the wiring — a fresh named volume is root-owned when its mount path is
+  absent from the image, which would fail at runtime far from its cause.
+
 Pure text/YAML — no Docker required, deterministic.
 """
 
@@ -23,6 +33,10 @@ _OVERRIDE = _REPO_ROOT / "docker-compose.override.yml"
 _PROD = _REPO_ROOT / "docker-compose.prod.yml"
 _DOCKERFILE = _REPO_ROOT / "backend" / "Dockerfile"
 _CI = _REPO_ROOT / ".github" / "workflows" / "ci.yml"
+
+_PG_DIR = _REPO_ROOT / "deploy" / "postgres"
+_PG_DOCKERFILE = (_PG_DIR / "Dockerfile").read_text()
+_PG_HBA = (_PG_DIR / "pg_hba.conf").read_text()
 
 _INGEST_PDF_QUEUE = "ingest-pdf"
 _DEFAULT_QUEUE = "celery"
@@ -195,3 +209,215 @@ def test_ci_does_not_install_all_extras() -> None:
     text = _CI.read_text()
     assert "--all-extras" not in text
     assert "--extra dev" in text
+
+
+# --- WAL archiving substrate (PITR-01, PITR-02) ---------------------------------
+#
+# The archive directory the whole recovery chain writes into. Named once here and
+# cross-checked against the image, the compose mount, and the archive_command, so a
+# change to any one of them without the others fails loudly.
+_ARCHIVE_DIR = "/wal_archive"
+_HBA_PATH = "/etc/postgresql/pg_hba.conf"
+
+
+def _pg_settings(command: object) -> dict[str, str]:
+    """The ``-c key=value`` postgres settings in a compose ``command``."""
+    tokens = _tokens(command)
+    settings: dict[str, str] = {}
+    for index, token in enumerate(tokens):
+        if token == "-c" and index + 1 < len(tokens):
+            key, _, value = tokens[index + 1].partition("=")
+            settings[key] = value
+    return settings
+
+
+def _hba_records() -> list[list[str]]:
+    """The shipped pg_hba.conf as records, comments and blank lines dropped."""
+    return [
+        line.split()
+        for line in _PG_HBA.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+
+
+@pytest.fixture
+def db_settings(base: dict) -> dict[str, str]:
+    return _pg_settings(base["db"]["command"])
+
+
+def test_db_builds_from_the_repo_owned_postgres_image(base: dict) -> None:
+    # Every guarantee below (a database-owned archive directory, a replication-capable
+    # pg_hba.conf) is a property of the repo's own image. Falling back to the stock
+    # image silently removes all of them, so pin that db is built here.
+    assert base["db"]["build"]["context"] == "./deploy/postgres"
+    assert "image" not in base["db"], "the base db service must build, not pull a stock image"
+    assert _PG_DOCKERFILE.startswith("#")  # header comment retained
+    assert "FROM pgvector/pgvector:pg16" in _PG_DOCKERFILE
+
+
+def test_db_archives_completed_wal_segments(db_settings: dict[str, str]) -> None:
+    # PITR-01: archiving is on and writes into the archive directory.
+    assert db_settings["archive_mode"] == "on"
+    assert _ARCHIVE_DIR in db_settings["archive_command"]
+
+
+def test_archive_command_refuses_to_overwrite_an_existing_segment(
+    db_settings: dict[str, str],
+) -> None:
+    # PITR-01's discriminating half. A bare `cp %p ...` also "archives", but silently
+    # overwriting a segment corrupts the replay chain with no error anywhere. The
+    # existence test must GUARD the copy (&&, so a present file fails the command and
+    # PostgreSQL retains and retries) — never `||`, which would overwrite on failure.
+    command = db_settings["archive_command"]
+    assert f"test ! -f {_ARCHIVE_DIR}/%f" in command, (
+        "archive_command must refuse to overwrite an existing segment"
+    )
+    guard, sep, copy = command.partition("&&")
+    assert sep, "the existence test must be AND-joined to the copy, not sequenced"
+    assert "||" not in command, "an OR would archive precisely when the guard refused"
+    assert "test ! -f" in guard and "cp" in copy
+
+
+def test_db_bounds_archive_timeout_so_an_idle_database_still_closes_segments(
+    db_settings: dict[str, str],
+) -> None:
+    # PITR-01: without a bounded timeout an idle database holds a partially filled
+    # segment indefinitely, so the archive silently lags the database by that segment.
+    timeout = db_settings["archive_timeout"]
+    default = timeout.partition(":-")[2].rstrip("}") if ":-" in timeout else timeout
+    assert default.isdigit() and 0 < int(default) <= 3600, (
+        f"archive_timeout must be bounded and non-zero, got {timeout!r}"
+    )
+
+
+def test_wal_archiving_is_enabled_only_where_something_retires_the_segments() -> None:
+    """The producer and its only consumer must not be gated differently.
+
+    `db` archives continuously, but the job that retires a segment lives in the
+    `backup` sidecar. In production that sidecar is unprofiled and runs, so the pair
+    is complete. Locally it is behind the `backup` profile — and, more fundamentally,
+    a local stack never takes the base backup the retention predicate derives its
+    floor from, so nothing there could prune even if it ran. Archiving on that side
+    is monotonic growth in exchange for segments that can never be replayed.
+    """
+    prod_services = _services(_BASE, _PROD)
+    assert _pg_settings(prod_services["db"]["command"])["archive_mode"] == "on"
+    assert not prod_services["backup"].get("profiles"), (
+        "production archives WAL, so its pruning sidecar must not be profile-gated"
+    )
+
+    dev = _services(_BASE, _OVERRIDE)
+    assert _load(_OVERRIDE)["services"]["backup"]["profiles"] == ["backup"]
+    dev_archive_mode = _pg_settings(dev["db"]["command"])["archive_mode"]
+    assert dev_archive_mode == "${LEARNY_WAL_ARCHIVE_MODE:-off}", (
+        "a plain `docker compose up` must not archive: the default is off, opt-in on"
+    )
+
+
+def test_the_dev_override_changes_only_the_archive_mode_flag() -> None:
+    # Restating the command duplicates it, so the duplication is pinned rather than
+    # trusted: every other setting — the hba_file, the no-overwrite archive_command,
+    # the bounded timeout — must be the base file's, character for character.
+    base_command = _tokens(_services(_BASE)["db"]["command"])
+    override_command = _tokens(_load(_OVERRIDE)["services"]["db"]["command"])
+    assert override_command == [
+        "archive_mode=${LEARNY_WAL_ARCHIVE_MODE:-off}"
+        if token.startswith("archive_mode=")
+        else token
+        for token in base_command
+    ]
+
+
+def test_db_command_starts_the_postgres_server(base: dict) -> None:
+    # The settings above only take effect if they are arguments to `postgres` itself.
+    assert _tokens(base["db"]["command"])[0] == "postgres"
+
+
+def test_the_archive_volume_is_mounted_at_the_path_the_image_declares(base: dict) -> None:
+    """PITR-02 — the mechanism, not the wiring.
+
+    Docker copies an image path's ownership into a *fresh, empty* named volume only
+    when that exact path exists in the image; otherwise the volume is created
+    root-owned and `archive_command`, which runs as the unprivileged database user,
+    fails at runtime on a clean deploy. So the image must create the directory owned
+    by the database user, and the compose mount point must be that same path — the
+    coupling is what guarantees writability with no host-side chown.
+    """
+    created = [
+        line
+        for line in _PG_DOCKERFILE.splitlines()
+        if "install -d" in line and _ARCHIVE_DIR in line
+    ]
+    assert created, f"the image must create {_ARCHIVE_DIR} owned by the database user"
+    assert "-o postgres" in created[0], "the archive directory must be owned by the database user"
+    mounts = base["db"]["volumes"]
+    assert any(mount.endswith(f":{_ARCHIVE_DIR}") for mount in mounts), (
+        f"db must mount the archive volume at {_ARCHIVE_DIR}, the path the image creates"
+    )
+
+
+def test_the_archive_never_lives_inside_the_data_volume(base: dict) -> None:
+    # An archive stored under the data directory is lost with the very data directory
+    # it exists to recover.
+    data_mount = next(m for m in base["db"]["volumes"] if m.endswith("/var/lib/postgresql/data"))
+    assert not _ARCHIVE_DIR.startswith(data_mount.split(":", 1)[1])
+    archive_volume = next(
+        m.split(":", 1)[0] for m in base["db"]["volumes"] if m.endswith(f":{_ARCHIVE_DIR}")
+    )
+    assert archive_volume != data_mount.split(":", 1)[0]
+    assert archive_volume in (_load(_BASE).get("volumes") or {}), (
+        "the archive volume must be declared as a named volume, not a bind mount"
+    )
+
+
+def test_the_backup_sidecar_shares_the_archive_volume() -> None:
+    # The db holds no S3 client and no offsite credential by decision; the sidecar is
+    # what ships and prunes, so it must see the same volume in prod and in dev/CI.
+    archive_volume = next(
+        m.split(":", 1)[0]
+        for m in _services(_BASE)["db"]["volumes"]
+        if m.endswith(f":{_ARCHIVE_DIR}")
+    )
+    for path in (_PROD, _OVERRIDE):
+        backup = _load(path)["services"]["backup"]
+        assert f"{archive_volume}:{_ARCHIVE_DIR}" in backup["volumes"], (
+            f"the backup sidecar in {path.name} must mount the archive volume"
+        )
+
+
+# --- replication connectivity for pg_basebackup (T5 finding) --------------------
+
+
+def test_db_uses_the_shipped_hba_file(base: dict, db_settings: dict[str, str]) -> None:
+    # The stock entrypoint's generated pg_hba.conf has no remote replication rule, and
+    # PostgreSQL's `all` database keyword does not match replication connections, so
+    # pg_basebackup from the sidecar is refused outright. The shipped file is selected
+    # via hba_file (a path outside PGDATA), which — unlike an initdb hook — also
+    # applies to data directories that already exist.
+    assert db_settings["hba_file"] == _HBA_PATH
+    assert f"COPY pg_hba.conf {_HBA_PATH}" in _PG_DOCKERFILE
+
+
+def test_the_shipped_hba_admits_remote_physical_replication() -> None:
+    remote_replication = [
+        record
+        for record in _hba_records()
+        if record[0] == "host" and record[1] == "replication" and record[3] == "all"
+    ]
+    assert remote_replication, (
+        "pg_basebackup runs from another container; without a remote `replication` "
+        "rule PostgreSQL refuses the connection regardless of the `all all` rule"
+    )
+
+
+def test_no_remote_rule_weakens_authentication_to_trust() -> None:
+    # Admitting replication must not be paid for with authentication. `trust` may
+    # appear only for the in-container local socket and loopback (what the stock image
+    # already does); every rule reachable over the compose network stays password-based.
+    loopback = {"127.0.0.1/32", "::1/128"}
+    for record in _hba_records():
+        connection_type, address, method = record[0], record[3], record[-1]
+        if connection_type == "local" or address in loopback:
+            continue
+        assert method != "trust", f"remote rule must not use trust: {' '.join(record)}"
+        assert method == "scram-sha-256", f"unexpected remote auth method: {' '.join(record)}"

@@ -13,6 +13,7 @@ run inside the Celery task, one per transaction (the task opens a UoW per call).
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from uuid import UUID
 
@@ -40,12 +41,21 @@ from app.domain.ports import (
     SourceRepository,
 )
 
+logger = logging.getLogger(__name__)
+
 # ``source.status`` projection values (spec §Assumptions). Distinct from the job
 # lifecycle in :class:`IngestionStatus`: a source moves uploaded → processing →
 # ready / failed as its latest job advances.
 SOURCE_STATUS_PROCESSING = "processing"
 SOURCE_STATUS_READY = "ready"
 SOURCE_STATUS_FAILED = "failed"
+
+# The durable failure text written to the owner-readable ``last_error`` and event
+# ``message``: a fixed, non-secret summary (ING-08 "redacted, non-secret"). It lives
+# here rather than in the worker because both writers use it — the task, when a step
+# raises (the exception itself goes only to the server log), and the claim seam,
+# when a job has exhausted its attempts.
+INGESTION_FAILURE_ERROR = "Ingestion processing failed."
 
 
 def authorized_source(
@@ -152,6 +162,12 @@ class RunIngestion:
     The Celery task calls these across separate units of work; each is idempotent
     on a missing row (defensive no-op, ING-08 AC3). Retry *counting* lives in the
     task; these methods only persist state and append events.
+
+    The one counter that does *not* live in the task is the attempts cap enforced by
+    :meth:`begin_run`. A message the broker requeues because its worker died keeps
+    its original delivery headers, so the task's own retry count never advances
+    across those redeliveries; the job's durable ``attempts`` column is the only
+    counter that survives one, which is why the guard sits here.
     """
 
     def __init__(
@@ -163,6 +179,7 @@ class RunIngestion:
         step: IngestionStep,
         clock: Clock,
         ids: Callable[[], UUID],
+        max_attempts: int,
     ) -> None:
         self._sources = sources
         self._jobs = jobs
@@ -170,6 +187,7 @@ class RunIngestion:
         self._step = step
         self._clock = clock
         self._ids = ids
+        self._max_attempts = max_attempts
 
     def begin_run(self, job_id: UUID) -> IngestionJob | None:
         """Transition ``queued``/``running`` → ``running`` (attempts+1); else no-op.
@@ -177,15 +195,76 @@ class RunIngestion:
         Returns ``None`` when the job is missing (ING-08 AC3) or already terminal
         (idempotent redelivery under ``acks_late``); otherwise persists the
         ``running`` transition, syncs ``source.status`` and appends ``started``.
+
+        A job whose attempts have reached the cap is *not* started again: it is
+        failed terminally here, and ``None`` then means "this job will not run",
+        exactly as it does for a job that was already terminal. The caller needs no
+        new branch for it — but the two are not the same event, so the terminal
+        transition announces itself in the log rather than being inferred from a
+        no-op line.
         """
         job = self._jobs.get_by_id(job_id)
         if job is None or job.status not in ACTIVE_STATUSES:
             return None
         now = self._clock.now()
+        if job.attempts >= self._max_attempts:
+            self._exhaust(job, now)
+            return None
         started = self._jobs.update(job.started(now))
         self._sources.set_status(job.source_id, SOURCE_STATUS_PROCESSING, now)
         self._append_event(job.id, IngestionEventType.STARTED, None, now)
+        if started.attempts > 1:
+            # A job on its second or later attempt is one that already failed once —
+            # from the outside, a phase that quietly restarts and, if its worker keeps
+            # dying, leaves no trace at all beyond a row that keeps saying ``running``.
+            # The event trail records the attempt durably; this puts it in the stream
+            # the monitoring stack already collects, at the level that gets noticed.
+            logger.warning(
+                "ingestion.begin_run: job re-claimed for a further attempt",
+                extra={
+                    "job_id": str(job.id),
+                    "source_id": str(job.source_id),
+                    "attempt": started.attempts,
+                },
+            )
         return started
+
+    def _terminate(self, job: IngestionJob, error: str, now) -> IngestionJob:  # noqa: ANN001 — injected clock's datetime
+        """The terminal-failure transition, shared by both paths that reach it.
+
+        Terminal ``failed`` with a durable ``last_error``, the source synced, a
+        ``failed`` event appended. Both callers must write exactly this, so the
+        equivalence is structural rather than two copies kept in step by hand.
+        """
+        failed = self._jobs.update(job.failed(now, error))
+        self._sources.set_status(job.source_id, SOURCE_STATUS_FAILED, now)
+        self._append_event(job.id, IngestionEventType.FAILED, error, now)
+        return failed
+
+    def _exhaust(self, job: IngestionJob, now) -> None:  # noqa: ANN001 — injected clock's datetime
+        """Fail a job that has used up its attempts, as ``fail`` would have.
+
+        The same terminal transition as the task's ordinary failure path, with the
+        fixed non-secret summary — so a job that dies with its worker (where no
+        ``except`` in the task ever runs) still ends in the state the owner can read,
+        instead of sitting in ``running`` behind a worker that no longer exists.
+        ``>=`` rather than ``==`` so a job already past a cap the operator has since
+        lowered terminates too, rather than running unbounded.
+
+        It shares :meth:`_terminate` rather than calling :meth:`fail`, which re-reads
+        the job by id: this path already holds it, and the terminal claim is no place
+        to add a redundant query.
+        """
+        self._terminate(job, INGESTION_FAILURE_ERROR, now)
+        logger.warning(
+            "ingestion.begin_run: attempts exhausted, job failed",
+            extra={
+                "job_id": str(job.id),
+                "source_id": str(job.source_id),
+                "attempts": job.attempts,
+                "max_attempts": self._max_attempts,
+            },
+        )
 
     def run_step(self, job: IngestionJob) -> None:
         """Invoke the Phase-5 seam for ``job`` (propagates for retry classification).
@@ -222,11 +301,7 @@ class RunIngestion:
         job = self._jobs.get_by_id(job_id)
         if job is None:
             return None
-        now = self._clock.now()
-        failed = self._jobs.update(job.failed(now, error))
-        self._sources.set_status(job.source_id, SOURCE_STATUS_FAILED, now)
-        self._append_event(job.id, IngestionEventType.FAILED, error, now)
-        return failed
+        return self._terminate(job, error, self._clock.now())
 
     def _append_event(self, job_id: UUID, event_type: str, message: str | None, now) -> None:  # noqa: ANN001 — ``now`` is the injected clock's datetime
         self._events.append(

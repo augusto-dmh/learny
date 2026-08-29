@@ -26,8 +26,22 @@ celery_app = Celery(
 # Conservative long-task defaults (celery-workers skill: reliability). ``acks_late``
 # + ``prefetch=1`` need idempotent tasks; ``visibility_timeout`` stays above
 # ``task_time_limit`` so Redis does not redeliver a job mid-run.
+#
+# ``task_reject_on_worker_lost`` covers the death ``acks_late`` alone does not: when
+# the worker process is killed outright (OOM, SIGKILL, a container stopped mid-task)
+# no ``except`` in the task body ever runs, and without rejection the message is
+# dropped — leaving the ingestion job row saying ``running`` with nothing behind it,
+# forever. Rejecting requeues it instead. That is only safe because the number of
+# attempts is capped durably on the job row: a requeued message keeps its original
+# delivery headers, so this task's own retry count does not advance across these
+# redeliveries and a job that reliably kills its worker would loop indefinitely.
+#
+# Deliberately absent: ``broker_heartbeat``. It is an AMQP setting and does nothing
+# on the Redis transport; worker liveness comes from the ``celery inspect ping``
+# container healthchecks instead.
 celery_app.conf.update(
     task_acks_late=True,
+    task_reject_on_worker_lost=True,
     worker_prefetch_multiplier=1,
     broker_connection_retry_on_startup=True,
     task_time_limit=1800,

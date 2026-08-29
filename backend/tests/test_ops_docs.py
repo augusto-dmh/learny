@@ -17,6 +17,14 @@ _ROLLBACK = _OPS / "rollback.md"
 _DEPLOY = _OPS / "deploy.md"
 _MONITORING = _OPS / "monitoring.md"
 _INSTRUMENTATION = _OPS / "instrumentation.md"
+_ADR = Path(__file__).resolve().parents[2] / "docs" / "adr"
+_BACKUP_ADR = _ADR / "0024-backup-and-monitoring-stack.md"
+_RECOVERY_ADR = _ADR / "0030-point-in-time-recovery-and-worker-loss.md"
+
+
+def _collapsed(text: str) -> str:
+    """One-line view of a document, so a hard-wrapped sentence still matches."""
+    return " ".join(text.split())
 
 
 @pytest.fixture
@@ -42,6 +50,16 @@ def monitoring() -> str:
 @pytest.fixture
 def instrumentation() -> str:
     return _INSTRUMENTATION.read_text()
+
+
+@pytest.fixture
+def backup_adr() -> str:
+    return _BACKUP_ADR.read_text()
+
+
+@pytest.fixture
+def recovery_adr() -> str:
+    return _RECOVERY_ADR.read_text()
 
 
 def test_runbooks_exist() -> None:
@@ -112,6 +130,144 @@ def test_backups_documents_the_shipped_restore_script(backups: str) -> None:
 def test_backups_drops_the_deferral_text(backups: str) -> None:
     # The old "deliberately not fixed here" TODO must be gone (OPS-12).
     assert "deliberately not fixed here" not in backups
+
+
+# --- point-in-time recovery (PITR-11) -------------------------------------------
+# The runbook is the only place an operator learns that recovery to a moment exists,
+# what the two artifact families are, and how their retentions interact. Every string
+# pinned below is a code fact asserted elsewhere in this suite or in the shipped
+# scripts, so a doc that drifts from the implementation fails here rather than during
+# an incident.
+
+
+def test_backups_documents_wal_archiving(backups: str) -> None:
+    assert "archive_mode=on" in backups
+    assert "archive_command=test ! -f /wal_archive/%f && cp %p /wal_archive/%f" in backups
+    assert "LEARNY_WAL_ARCHIVE_TIMEOUT" in backups
+    # archive_mode is postmaster-level: an operator who misses this enables nothing.
+    assert "postmaster-level" in backups
+
+
+def test_backups_documents_that_the_archive_lives_outside_the_data_volume(
+    backups: str,
+) -> None:
+    # An archive inside db_data is lost with the directory it exists to recover.
+    assert "not** inside `db_data`" in backups
+    assert "wal_archive" in backups
+
+
+def test_backups_adoption_warns_about_the_private_database_package(backups: str) -> None:
+    # The adoption steps tell the operator to `pull db`, and `db` now runs a
+    # repo-owned GHCR image that is private until the one-time visibility flip. Sending
+    # them into that pull unwarned fails the deploy on the database itself.
+    collapsed = _collapsed(backups)
+    assert "learny-postgres" in collapsed
+    assert "private by default" in collapsed
+    assert "docs/ops/deploy.md" in collapsed
+    assert "One-time: Flip GHCR packages to public" in collapsed
+
+
+def test_backups_documents_what_a_base_backup_is_and_why(backups: str) -> None:
+    assert "pg_basebackup -Ft -z -X stream --checkpoint=fast" in backups
+    assert "LEARNY_BASEBACKUP_CRON" in backups
+    assert "0 2 * * 0" in backups
+    # The reason the nightly dump cannot play this role at all.
+    assert "carries no WAL position" in _collapsed(backups)
+    # The file the retention predicate reads.
+    assert "START_WAL" in backups
+
+
+def test_backups_documents_the_coupled_retention_rule(backups: str) -> None:
+    assert "LEARNY_WAL_KEEP_DAYS" in backups
+    assert "oldest *retained* base" in backups
+    # The invariant, stated as such: age is a withholding condition, never a licence.
+    assert "Age alone is never sufficient grounds to delete a segment" in backups
+    # And its operational consequence.
+    assert "Never delete files from `/wal_archive` by hand" in backups
+
+
+def test_backups_documents_the_wal_offsite_recovery_point(backups: str) -> None:
+    # WAL reaches the bucket on the sidecar's schedule, not continuously.
+    assert "LEARNY_WAL_SHIP_CRON" in backups
+    assert "*/15 * * * *" in backups
+
+
+def test_backups_documents_the_lock_topology(backups: str) -> None:
+    # Two locks, and why: sharing the dump's lock for WAL shipping would let one
+    # nightly dump stretch the offsite recovery point.
+    assert "LEARNY_BACKUP_LOCK" in backups
+    assert "LEARNY_WAL_LOCK" in backups
+
+
+def test_backups_documents_the_two_command_restore(backups: str) -> None:
+    assert "two-command" in backups
+    assert "restore-pitr.sh --target" in backups
+    assert "--profile restore up -d --wait db-restore" in backups
+    # The UTC-offset requirement the script enforces with exit 2.
+    assert "+00:00" in backups
+    # Dry run and the out-of-window failure, both non-destructive.
+    assert "without `--yes`" in backups
+    assert "earliest recoverable time" in backups
+
+
+def test_backups_documents_the_state_a_restore_leaves_behind(backups: str) -> None:
+    # Its own volume, never the live one — the property that makes a rehearsal safe.
+    assert "pitr_data" in backups
+    assert "never `db_data`" in _collapsed(backups)
+    # Promoted and writable, not paused: "it accepts writes" must be a real signal.
+    assert "recovery_target_action = 'promote'" in backups
+    assert "archive_mode=off" in backups
+    assert "read-only" in backups
+
+
+def test_backups_drops_the_point_in_time_recovery_deferral(backups: str) -> None:
+    # The runbook used to close by declaring PITR out of scope. It now ships.
+    assert "out of scope" not in backups
+    assert "## Point-in-time recovery" in backups
+
+
+# --- the decision record behind the runbook (PITR-12) ---------------------------
+# The runbook says how; the ADR says why each shape was forced. The pair only works
+# if the ADR that deferred point-in-time recovery points at the one that ships it —
+# a reader who lands on the older decision must not be left believing the deferral.
+
+
+def test_the_recovery_decision_record_exists() -> None:
+    assert _RECOVERY_ADR.is_file()
+
+
+def test_the_recovery_record_states_what_it_supersedes(recovery_adr: str) -> None:
+    assert "ADR-0024" in recovery_adr
+    collapsed = _collapsed(recovery_adr)
+    assert "PITR/WAL archiving remains a recorded future upgrade" in collapsed
+    assert "superseded" in collapsed.lower()
+
+
+def test_the_deferring_record_points_at_the_one_that_ships_it(backup_adr: str) -> None:
+    assert "Superseded in part by ADR-0030" in backup_adr
+
+
+# --- the pdf-worker size re-probe (PROBE-01) ------------------------------------
+
+
+def test_the_pdf_worker_reprobe_is_recorded_with_its_outcome(backup_adr: str) -> None:
+    collapsed = _collapsed(backup_adr)
+    # The finding, and the version evidence behind it — the record is only useful if
+    # the next reader can tell what was resolved rather than what was assumed.
+    assert "Re-probed 2026-08-02" in collapsed
+    assert "torch 2.13.0+cpu from `download.pytorch.org/whl/cpu`" in collapsed
+    assert "Still no lockfile or pin change" in collapsed
+
+
+def test_the_reprobe_left_the_dependency_pins_alone() -> None:
+    """The probe was scoped record-only, and this is what makes that checkable.
+
+    Adopting the CPU index later is a deliberate two-file change: the recipe lands in
+    ``pyproject.toml`` and the note above stops saying no change was made.
+    """
+    pyproject = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text()
+    assert "tool.uv.sources" not in pyproject
+    assert "download.pytorch.org" not in pyproject
 
 
 # --- deploy runbook secrets list (OPS-11) ---------------------------------------

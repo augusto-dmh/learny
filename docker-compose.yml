@@ -12,19 +12,87 @@
 # -f docker-compose.prod.yml up -d` is the production-like run.
 
 services:
+  # Built from ./deploy/postgres — a thin pgvector/pgvector:pg16 derivative that
+  # exists only to create the WAL-archive directory owned by the database user
+  # (so a fresh named volume is writable without a host-side chown) and to ship a
+  # pg_hba.conf that admits remote physical replication for pg_basebackup. See the
+  # Dockerfile there for why each is needed.
   db:
-    image: pgvector/pgvector:pg16
+    build:
+      context: ./deploy/postgres
+      dockerfile: Dockerfile
     environment:
       POSTGRES_USER: learny
       POSTGRES_DB: learny
       # POSTGRES_PASSWORD comes from the override (local) or env_file (prod).
+    # Continuous WAL archiving (the base of point-in-time recovery). archive_mode is
+    # postmaster-level, so changing it needs a database restart — see docs/ops/backups.md.
+    # The archive_command refuses to overwrite an existing segment: `test ! -f` fails,
+    # the command exits non-zero, and PostgreSQL RETAINS the segment and retries rather
+    # than silently overwriting it and corrupting the replay chain.
+    command:
+      - postgres
+      - -c
+      - hba_file=/etc/postgresql/pg_hba.conf
+      - -c
+      - archive_mode=on
+      - -c
+      - archive_command=test ! -f /wal_archive/%f && cp %p /wal_archive/%f
+      - -c
+      - archive_timeout=${LEARNY_WAL_ARCHIVE_TIMEOUT:-900}
     volumes:
       - db_data:/var/lib/postgresql/data
+      # Deliberately NOT inside db_data: the archive exists to recover the very data
+      # directory it would otherwise be lost with. The backup sidecar mounts the same
+      # volume and owns all offsite shipping and pruning, so no S3 client and no
+      # backup credential ever enters the database container.
+      - wal_archive:/wal_archive
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U learny -d learny"]
       interval: 5s
       timeout: 5s
       retries: 10
+
+  # Point-in-time recovery target. Profile-gated, so it is never part of a plain
+  # `docker compose up`; it exists to serve the data directory `restore-pitr.sh`
+  # stages in the backup sidecar. It runs the SAME image as `db` on purpose — the
+  # cluster being replayed was written by these binaries and these extensions, and
+  # a server without pgvector would start happily and then fail on the first read
+  # of a vector column.
+  db-restore:
+    profiles: ["restore"]
+    build:
+      context: ./deploy/postgres
+      dockerfile: Dockerfile
+    environment:
+      POSTGRES_USER: learny
+      POSTGRES_DB: learny
+      # The staged cluster, not the live data volume.
+      PGDATA: /pitr/data
+    # archive_mode=off: this server promotes onto a new timeline when it reaches the
+    # target, and a promoted restore must not write its timeline back into the
+    # archive the live database owns. The archive is mounted read-only for the same
+    # reason — restore_command only ever reads it.
+    command:
+      - postgres
+      - -c
+      - hba_file=/etc/postgresql/pg_hba.conf
+      - -c
+      - archive_mode=off
+    volumes:
+      - pitr_data:/pitr
+      - wal_archive:/wal_archive:ro
+    # Deliberately stricter than `pg_isready`, which answers yes throughout
+    # recovery: a server still replaying — or paused at its target — accepts reads
+    # and refuses writes, which is a FAILED restore that looks like a healthy one.
+    # `--wait` on this healthcheck is what turns that into a visible failure.
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -q -U learny -d learny && psql -U learny -d learny -tAc 'SELECT NOT pg_is_in_recovery()' | grep -qx t
+      interval: 5s
+      timeout: 10s
+      retries: 60
 
   redis:
     image: redis:7-alpine
@@ -157,3 +225,8 @@ services:
 volumes:
   db_data:
   minio_data:
+  wal_archive:
+  # Staging area for a point-in-time restore: written by the backup sidecar, served
+  # by db-restore. Separate from db_data so a restore can never overwrite the live
+  # database, and so a rehearsal costs nothing but disk.
+  pitr_data:

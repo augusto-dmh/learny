@@ -12,6 +12,30 @@ services:
       - "5432:5432"
     environment:
       POSTGRES_PASSWORD: learny
+    # WAL archiving is OFF for local development, and this is the only difference
+    # from the base command (a test pins that, so the rest cannot drift).
+    #
+    # Archived WAL is only ever useful with a physical base backup to replay onto,
+    # and a local stack never takes one: the sidecar that would is behind the
+    # `backup` profile. So a plain `docker compose up` produces segments that can
+    # never be replayed AND can never be pruned — the retention predicate correctly
+    # refuses to delete anything when there is no retained base — which grows the
+    # archive volume monotonically for no recoverability at all. Production loads
+    # the prod overlay instead of this file and keeps the base file's
+    # `archive_mode=on`, where the sidecar runs unprofiled and does prune.
+    #
+    # CI's point-in-time drill sets LEARNY_WAL_ARCHIVE_MODE=on to opt back in; so
+    # can a developer rehearsing a restore.
+    command:
+      - postgres
+      - -c
+      - hba_file=/etc/postgresql/pg_hba.conf
+      - -c
+      - archive_mode=${LEARNY_WAL_ARCHIVE_MODE:-off}
+      - -c
+      - archive_command=test ! -f /wal_archive/%f && cp %p /wal_archive/%f
+      - -c
+      - archive_timeout=${LEARNY_WAL_ARCHIVE_TIMEOUT:-900}
 
   redis:
     ports:
@@ -92,6 +116,9 @@ services:
       MINIO_ROOT_PASSWORD: learny-dev-secret
     volumes:
       - backup_data:/backups
+      - wal_archive:/wal_archive
+      # Where restore-pitr.sh stages a recovered cluster for db-restore to serve.
+      - pitr_data:/pitr
 
 volumes:
   backup_data:

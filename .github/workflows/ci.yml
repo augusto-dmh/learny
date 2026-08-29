@@ -121,6 +121,12 @@ jobs:
 
   compose-smoke:
     runs-on: ubuntu-latest
+    # Local development runs with WAL archiving off (docker-compose.override.yml
+    # explains why: no base backup is ever taken there, so the segments can neither
+    # be replayed nor pruned). The point-in-time drill below needs a real archive, so
+    # this job opts in exactly as an operator rehearsing a restore would.
+    env:
+      LEARNY_WAL_ARCHIVE_MODE: "on"
     steps:
       - uses: actions/checkout@v4
       # One build-and-boot step: `--wait` blocks until EVERY named service's
@@ -194,8 +200,259 @@ jobs:
             mc alias set m http://minio:9000 learny learny-dev-secret &&
             mc ls --recursive m/learny-offsite-ci/db/ | grep -qF .dump &&
             mc ls --recursive m/learny-offsite-ci/objects/ | grep -qF offsite-probe.txt'
+      # The WAL retention predicate, executed rather than string-matched. Deleting a
+      # segment a retained base still needs severs the replay chain invisibly, and the
+      # break surfaces only when someone attempts a restore — so every branch runs
+      # here against a crafted archive: the age floor, the strictly-below-floor
+      # comparison, the fail-safe that prunes nothing when no base is retained, the
+      # timeline-history exemption, and the empty-glob case that would otherwise abort
+      # the run under `set -e` before the fail-safe was ever reached. Offsite is
+      # configured, so the WAL shipping path runs against a scratch bucket too.
+      - name: Prove the WAL retention predicate
+        run: |
+          docker compose --profile backup run --rm -T --no-deps \
+            -e LEARNY_BACKUP_REMOTE_ENDPOINT=http://minio:9000 \
+            -e LEARNY_BACKUP_REMOTE_ACCESS_KEY=learny \
+            -e LEARNY_BACKUP_REMOTE_SECRET_KEY=learny-dev-secret \
+            -e LEARNY_BACKUP_REMOTE_BUCKET=learny-walgate-ci \
+            backup sh -s <<'GATE'
+          set -eu
+          # Scratch state under /tmp: crafted archive, crafted base. Nothing here
+          # touches the archive or the bases the point-in-time drill below depends on.
+          gate=/tmp/wal-retention-gate
+          rm -rf "$gate"
+          mkdir -p "$gate/archive" "$gate/base"
+          export LEARNY_WAL_ARCHIVE_DIR="$gate/archive"
+          export LEARNY_BASEBACKUP_DIR="$gate/base"
+          export LEARNY_WAL_LOCK="$gate/lock"
+          export LEARNY_WAL_KEEP_DAYS=1
+
+          seg() { echo segment > "$LEARNY_WAL_ARCHIVE_DIR/$1"; touch -t "$2" "$LEARNY_WAL_ARCHIVE_DIR/$1"; }
+          aged=200001010000
+          fresh="$(date -u +%Y%m%d%H%M)"
+
+          # Aged and below the floor: the only two that may ever be deleted. A .backup
+          # label shares its segment's first 24 characters, which is what puts it here.
+          seg 00000002000000000000000A "$aged"
+          seg 00000002000000000000000A.00000028.backup "$aged"
+          # Aged and exactly the floor: the segment the oldest base replays FROM, so a
+          # non-strict comparison would delete precisely the one it needs first.
+          seg 000000020000000000000010 "$aged"
+          # Aged and above the floor.
+          seg 000000020000000000000020 "$aged"
+          # Below the floor but not aged: age can only ever withhold, never license.
+          seg 000000020000000000000009 "$fresh"
+          # A timeline history file, aged and sorting below the floor: exempt anyway,
+          # because it is what lets a restore resolve which timeline to follow.
+          seg 00000002.history "$aged"
+
+          count() { ls -1 "$LEARNY_WAL_ARCHIVE_DIR" | wc -l | tr -d ' '; }
+
+          echo "=== no retained base: nothing may be pruned, and the run must not abort ==="
+          out="$(wal-archive.sh 2>&1)"
+          echo "$out"
+          echo "$out" | grep -qF "no retained base backup"
+          if [ "$(count)" -ne 6 ]; then
+            echo "the no-base fail-safe pruned something; there is no floor to prune against"
+            exit 1
+          fi
+
+          echo "=== with a retained base: only aged AND strictly-below-floor segments go ==="
+          base="$LEARNY_BASEBACKUP_DIR/learny-base-2026-01-01-000000"
+          mkdir -p "$base"
+          echo 000000020000000000000010 > "$base/START_WAL"
+          out="$(wal-archive.sh 2>&1)"
+          echo "$out"
+          echo "$out" | grep -qF "pruned 2 segment(s)"
+          for gone in 00000002000000000000000A 00000002000000000000000A.00000028.backup; do
+            if [ -e "$LEARNY_WAL_ARCHIVE_DIR/$gone" ]; then
+              echo "$gone is aged and below the floor; it should have been pruned"
+              exit 1
+            fi
+          done
+          for kept in 000000020000000000000010 000000020000000000000020 000000020000000000000009 00000002.history; do
+            if [ ! -e "$LEARNY_WAL_ARCHIVE_DIR/$kept" ]; then
+              echo "$kept was pruned; the replay chain from the oldest retained base is severed"
+              exit 1
+            fi
+          done
+
+          echo "=== offsite: shipped before pruning, and only the pruned names removed ==="
+          mc alias set gate "$LEARNY_BACKUP_REMOTE_ENDPOINT" \
+            "$LEARNY_BACKUP_REMOTE_ACCESS_KEY" "$LEARNY_BACKUP_REMOTE_SECRET_KEY"
+          listing="$(mc ls --recursive "gate/$LEARNY_BACKUP_REMOTE_BUCKET/wal/")"
+          echo "$listing"
+          for kept in 000000020000000000000010 000000020000000000000020 000000020000000000000009 00000002.history; do
+            if ! echo "$listing" | grep -qF "$kept"; then
+              echo "$kept never reached the offsite bucket, or went with the pruned ones"
+              exit 1
+            fi
+          done
+          if echo "$listing" | grep -qF 00000002000000000000000A; then
+            echo "a segment pruned locally is still offsite"
+            exit 1
+          fi
+          echo "WAL retention gate passed"
+          GATE
+      # Point-in-time recovery, proven rather than asserted (PITR-09). A drill that
+      # seeds data, restores, and finds it again passes just as happily against a
+      # plain whole-archive restore — it proves nothing about recovering to a MOMENT.
+      # So this one establishes a before and an after around a recorded target and
+      # checks both directions: the row written before it must return, and the row
+      # written after it must NOT. The second half is the assertion that carries the
+      # whole claim, and the control step below exists to prove it can fail.
+      - name: Take the physical base a replay starts from
+        run: docker compose --profile backup run --rm backup base-backup.sh
+      - name: The recorded replay floor never sits past the base's own start
+        run: |
+          # WAL retention is derived from START_WAL, and the job reads it from the
+          # server BEFORE the copy rather than out of the finished tarball. That is
+          # only safe in one direction: a floor EARLIER than the base's real start
+          # retains more WAL than needed, while a floor past it prunes segments the
+          # base needs to replay and leaves it unrecoverable. This compares the
+          # recorded floor against the base's own backup_label every run.
+          docker compose --profile backup run --rm --no-deps backup sh -c '
+            set -eu
+            base="$(ls -1d /backups/base/learny-base-* | sort | tail -n1)"
+            recorded="$(cat "$base/START_WAL")"
+            label="$(tar -xzOf "$base/base.tar.gz" backup_label |
+              sed -n "s/^START WAL LOCATION: .*(file \([0-9A-F]\{24\}\))$/\1/p")"
+            echo "recorded floor=$recorded  base label=$label"
+            if [ -z "$label" ]; then
+              echo "could not read the base label; the comparison proves nothing"; exit 1
+            fi
+            # Fixed-width hex, so a string compare is a WAL-order compare.
+            if [ "$recorded" \> "$label" ]; then
+              echo "the recorded floor is LATER than the base start:"
+              echo "WAL this base needs to replay would be eligible for pruning"
+              exit 1
+            fi'
+      - name: Write a boundary into the WAL and record it
+        run: |
+          q() {
+            docker compose exec -T db psql -U learny -d learny -v ON_ERROR_STOP=1 "$@" | tr -d '\r'
+          }
+          q -c "CREATE TABLE pitr_marker (id int PRIMARY KEY, note text);" \
+            -c "INSERT INTO pitr_marker VALUES (1, 'before-target');"
+          # Whole seconds apart so the boundary is unambiguous at psql's precision.
+          q -c "SELECT pg_sleep(2);"
+          # UTC with an explicit offset: recovery_target_time is read in the server's
+          # timezone when the value carries none, which would make this boundary mean
+          # a different moment than the one just written.
+          target="$(q -tAc \
+            "SELECT to_char(clock_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD HH24:MI:SS.US')||'+00:00';")"
+          q -c "SELECT pg_sleep(2);"
+          q -c "INSERT INTO pitr_marker VALUES (2, 'after-target');"
+          q -c "SELECT pg_sleep(2);"
+          control="$(q -tAc \
+            "SELECT to_char(clock_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD HH24:MI:SS.US')||'+00:00';")"
+          q -c "SELECT pg_sleep(2);"
+          # Recovery confirms it reached a target by seeing a committed record PAST it,
+          # so the control target below needs a write after it or replay would run out
+          # of WAL and refuse to finish.
+          q -c "INSERT INTO pitr_marker VALUES (3, 'after-control');"
+          # WAL reaches the archive only when a segment COMPLETES. Force the switch and
+          # then wait for the segment to actually land, rather than assuming it did —
+          # a restore that replays nothing would otherwise look like a stale archive.
+          segment="$(q -tAc "SELECT pg_walfile_name(pg_current_wal_lsn());")"
+          q -tAc "SELECT pg_switch_wal();"
+          landed=0
+          for _ in $(seq 30); do
+            if docker compose exec -T db test -f "/wal_archive/$segment"; then landed=1; break; fi
+            q -c "SELECT pg_sleep(1);" > /dev/null
+          done
+          if [ "$landed" -ne 1 ]; then
+            echo "segment $segment never reached the archive; there is nothing to replay"
+            docker compose exec -T db psql -U learny -d learny -c "SELECT * FROM pg_stat_archiver;"
+            exit 1
+          fi
+          echo "PITR_TARGET=$target" >> "$GITHUB_ENV"
+          echo "PITR_CONTROL=$control" >> "$GITHUB_ENV"
+      - name: A point-in-time restore refuses to act without --yes
+        run: |
+          out="$(docker compose --profile backup run --rm backup \
+            restore-pitr.sh --target "$PITR_TARGET" 2>&1)" && rc=0 || rc=$?
+          echo "$out"
+          if [ "$rc" -eq 0 ]; then echo "the dry run must exit non-zero"; exit 1; fi
+          echo "$out" | grep -qF "nothing was changed"
+          # Inert, not merely stopped short of the last step: no data directory exists.
+          docker compose --profile backup run --rm --no-deps backup sh -c 'test ! -e /pitr/data'
+      - name: A target below the window names the earliest recoverable time
+        run: |
+          out="$(docker compose --profile backup run --rm --no-deps backup \
+            restore-pitr.sh --target '2000-01-01 00:00:00+00:00' --yes 2>&1)" && rc=0 || rc=$?
+          echo "$out"
+          if [ "$rc" -eq 0 ]; then echo "an unreachable target must exit non-zero"; exit 1; fi
+          echo "$out" | grep -qF "earliest recoverable time"
+          docker compose --profile backup run --rm --no-deps backup sh -c 'test ! -e /pitr/data'
+      - name: A target the validation cannot pin down is refused, staging nothing
+        run: |
+          # Both refusals executed rather than matched in the script's source. A
+          # rewrite that quietly accepted a bare timestamp keeps every pinned string
+          # and yields a restore that succeeds loudly on the WRONG moment, read in the
+          # server's timezone; one that accepted trailing content writes it verbatim
+          # into the single-quoted recovery_target_time in postgresql.auto.conf, where
+          # a crafted value can append its own directives — restore_command among
+          # them, which the server runs through a shell.
+          refuse() {
+            out="$(docker compose --profile backup run --rm --no-deps backup \
+              restore-pitr.sh --target "$1" --yes 2>&1)" && rc=0 || rc=$?
+            echo "$out"
+            if [ "$rc" -ne 2 ]; then
+              echo "expected exit 2 for [$1], got $rc"; exit 1
+            fi
+            echo "$out" | grep -qF "$2"
+          }
+          refuse '2026-08-02 12:00:00' 'target carries no UTC offset'
+          refuse "2026-08-02 12:00:00.1' notatimestamp+00:00" 'unusable fractional-seconds'
+          docker compose --profile backup run --rm --no-deps backup sh -c 'test ! -e /pitr/data'
+      - name: Restore to the recorded moment
+        run: |
+          docker compose --profile backup run --rm backup \
+            restore-pitr.sh --target "$PITR_TARGET" --yes
+          # --wait holds on db-restore's healthcheck, which requires a server OUT of
+          # recovery: one still replaying, or paused at its target, answers reads and
+          # refuses writes, and that is a failed restore, not a passed one.
+          docker compose --profile restore up -d --build --wait --wait-timeout 300 db-restore
+      - name: Assert the recovery landed on the moment, not on the whole archive
+        run: |
+          q() {
+            docker compose exec -T db-restore psql -U learny -d learny -tAc "$1" | tr -d '\r'
+          }
+          if [ "$(q 'SELECT count(*) FROM pitr_marker WHERE id = 1;')" != 1 ]; then
+            echo "the row written BEFORE the target is missing — no WAL was replayed"; exit 1
+          fi
+          if [ "$(q 'SELECT count(*) FROM pitr_marker WHERE id = 2;')" != 0 ]; then
+            echo "the row written AFTER the target came back — this is a whole-archive restore"
+            exit 1
+          fi
+          if [ "$(q 'SELECT pg_is_in_recovery();')" != f ]; then
+            echo "the restored server is still in recovery"; exit 1
+          fi
+          docker compose exec -T db-restore psql -U learny -d learny -v ON_ERROR_STOP=1 \
+            -c "CREATE TABLE pitr_writable (x int);" -c "DROP TABLE pitr_writable;"
+      - name: Prove the boundary moves with the target, not by accident
+        run: |
+          # Same base, same archive, a LATER target. If the assertion above could not
+          # fail — because replay silently stopped early, or never ran — this run would
+          # produce the same rows. It must instead bring row 2 back and leave row 3 out.
+          docker compose --profile restore rm -sf db-restore
+          docker compose --profile backup run --rm backup \
+            restore-pitr.sh --target "$PITR_CONTROL" --yes
+          docker compose --profile restore up -d --wait --wait-timeout 300 db-restore
+          q() {
+            docker compose exec -T db-restore psql -U learny -d learny -tAc "$1" | tr -d '\r'
+          }
+          if [ "$(q 'SELECT count(*) FROM pitr_marker WHERE id = 2;')" != 1 ]; then
+            echo "a later target did not bring back the row written after the first one"
+            echo "the point-in-time assertion above cannot fail and proves nothing"
+            exit 1
+          fi
+          if [ "$(q 'SELECT count(*) FROM pitr_marker WHERE id = 3;')" != 0 ]; then
+            echo "the row written after the control target came back"; exit 1
+          fi
       - name: Teardown (with logs on failure)
         if: always()
         run: |
-          docker compose logs --tail 50
-          docker compose down -v
+          docker compose --profile backup --profile restore logs --tail 50
+          docker compose --profile backup --profile restore down -v
