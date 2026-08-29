@@ -531,7 +531,9 @@ def test_offsite_pruning_is_batched_rather_than_one_process_per_segment() -> Non
     """
     executed = _executed_lines(_WAL_SH)
     invocations = [line for line in executed if re.search(r"\bmc (ls|rm|stat)\b", line)]
-    assert len(invocations) == 2, f"offsite pruning must be one listing + one removal: {invocations}"
+    assert len(invocations) == 2, (
+        f"offsite pruning must be one listing + one removal: {invocations}"
+    )
     # And neither may sit inside the per-segment loop.
     loop_at = _WAL_SH.rindex("while IFS= read -r name; do")
     loop_end = _WAL_SH.index('done < "$pruned"', loop_at)
@@ -1149,7 +1151,7 @@ def test_the_retention_gate_keeps_every_discriminating_fixture() -> None:
     ):
         assert fixture in scripts, f"the gate must cover {fixture}: {why}"
     # The floor the base publishes is what the whole comparison hangs on.
-    assert f"echo {floor} > \"$base/START_WAL\"" in scripts
+    assert f'echo {floor} > "$base/START_WAL"' in scripts
     # Exactly two of the six, named in the log line the gate matches on.
     assert 'grep -qF "pruned 2 segment(s)"' in scripts
 
@@ -1241,7 +1243,9 @@ def test_ci_executes_both_target_refusals_rather_than_pinning_their_text() -> No
     refusal_at = scripts.index("refuse '2026-08-02 12:00:00' 'target carries no UTC offset'")
     assert refusal_at < scripts.index('restore-pitr.sh --target "$PITR_TARGET" --yes')
     assert "unusable fractional-seconds" in scripts
-    assert "expected exit 2 for" in scripts, "the refusal must be pinned to exit 2, not merely non-zero"
+    assert "expected exit 2 for" in scripts, (
+        "the refusal must be pinned to exit 2, not merely non-zero"
+    )
 
 
 def test_ci_proves_the_dry_run_stages_nothing() -> None:

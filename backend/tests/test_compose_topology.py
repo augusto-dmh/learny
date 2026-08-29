@@ -308,7 +308,8 @@ def test_wal_archiving_is_enabled_only_where_something_retires_the_segments() ->
 
     dev = _services(_BASE, _OVERRIDE)
     assert _load(_OVERRIDE)["services"]["backup"]["profiles"] == ["backup"]
-    assert _pg_settings(dev["db"]["command"])["archive_mode"] == "${LEARNY_WAL_ARCHIVE_MODE:-off}", (
+    dev_archive_mode = _pg_settings(dev["db"]["command"])["archive_mode"]
+    assert dev_archive_mode == "${LEARNY_WAL_ARCHIVE_MODE:-off}", (
         "a plain `docker compose up` must not archive: the default is off, opt-in on"
     )
 
@@ -320,7 +321,9 @@ def test_the_dev_override_changes_only_the_archive_mode_flag() -> None:
     base_command = _tokens(_services(_BASE)["db"]["command"])
     override_command = _tokens(_load(_OVERRIDE)["services"]["db"]["command"])
     assert override_command == [
-        "archive_mode=${LEARNY_WAL_ARCHIVE_MODE:-off}" if token.startswith("archive_mode=") else token
+        "archive_mode=${LEARNY_WAL_ARCHIVE_MODE:-off}"
+        if token.startswith("archive_mode=")
+        else token
         for token in base_command
     ]
 
