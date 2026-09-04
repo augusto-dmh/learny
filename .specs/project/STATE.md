@@ -310,6 +310,17 @@ Accepted architecture (locked — sourced from ADRs/TDD, not re-decided here):
 | AD-300 | Deterministic generation adapter stays extractive. Pedagogy is pinned on Anthropic request shape and on `TeachingPolicy`, not on local prose. | `teach-becomes-tutor` spec assumption |
 | AD-301 | Execute: four phases (playbook/retrieve, ladder, tutor card, Chat dock), one Opus worker each, fresh Verifier. Grounding carve-out, opening retrieve, close 409, and tutor-origin reconcile are quiet-failure invariants — no Haiku unit. | `teach-becomes-tutor` Specify |
 | AD-302 | Other Models usage limits killed the first playbook worker (Opus). It was re-dispatched once on the session model; remaining Execute workers and the passing Verifier also ran on the session model. A nested Verifier spawned by the last Execute worker was discarded. Author ≠ verifier still held: the passing Verifier was a fresh orchestrator-dispatched subagent. | `teach-becomes-tutor` Execute |
+| AD-303 | RFC-0007 Bet 4 / Cycle D is **one** ship-cycle PR (`review-worth-returning`): honesty + formulation + undo/session + flag/edit. Preview/highlight-first and the email digest are later rows, not a split of this list. *Rejected:* four PRs that ship formulation without undo. | `review-worth-returning` context.md |
+| AD-304 | Opt-in email due digest is **deferred** to Cycle F with `EmailPort`. The RFC-004 thaw stays authorized on the record; this PR ships no preference schema and no sender. | `review-worth-returning` context.md |
+| AD-305 | Learner flag is `quiz_items.flagged_at TIMESTAMPTZ NULL`, orthogonal to `active\|stale\|orphaned`. Due = active AND `flagged_at IS NULL` AND `due <= now`. *Rejected:* a `suspended` status (reconcile owns status, AD-078). | `review-worth-returning` context.md |
+| AD-306 | Undo is a compensating event: `review_log` keeps the row, sets `undone_at`, and restores a previous `SchedulingSnapshot` stored on that row. Caller's globally latest not-undone row. Pre-cycle NULL snapshots → 409. *Rejected:* delete the row; inverse rating. | `review-worth-returning` context.md |
+| AD-307 | Undo decrements `study_days.reviews_count` on the credited local day, floored at 0, via an UPDATE of an existing row only (never insert). Compensates AD-153. | `review-worth-returning` context.md |
+| AD-308 | Cloze stopwords are the union of closed English and Portuguese function-word lists, plus any 1–2 letter answer. | `review-worth-returning` context.md |
+| AD-309 | The local deterministic quiz adapter must emit only formulation-legal candidates so the offline suite still produces reviewable items. | `review-worth-returning` context.md |
+| AD-310 | Today's session is `GetDueQueue`'s existing `limit`, default `LEARNY_REVIEW_SESSION_SIZE=20` (cap 100). `total_due` stays the uncapped overdue count. *Rejected:* a `review_sessions` table. | `review-worth-returning` context.md |
+| AD-311 | In-session requeue: if the new `due` is within `LEARNY_REVIEW_REQUEUE_MINUTES` (default 15) the client inserts the card into the remaining session queue. Covers FSRS 1m/10m steps. | `review-worth-returning` context.md |
+| AD-312 | Interval labels are a non-persisted FSRS preview with fuzzing off, bucketed to `~1m` / `~10m` / `~1h` / `~1d` / `~4d` / `~2w` / `~1mo` / `~4mo` / `~1y`. | `review-worth-returning` context.md |
+| AD-313 | Execute: four phases (formulation, schema/undo/flag, preview/session wire, UI), one Opus worker each, fresh Verifier. QC wiring, undo snapshot, due predicate, and content/schedule split are quiet-failure invariants — no Haiku unit. | `review-worth-returning` Specify |
 
 ## Blockers
 
@@ -329,6 +340,8 @@ Accepted architecture (locked — sourced from ADRs/TDD, not re-decided here):
   neighbours.
 
 ## Handoff
+
+- **Cycle `review-worth-returning` (RFC-0007 Cycle D / Bet 4 — empty-deck honesty, formulation gates, undo/session, flag/edit) — PLANNING on `feat/review-worth-returning`.** Spec 45 ACs (REV-01..45), design approved, 14 tasks / 4 Opus phases. Decisions AD-303..AD-313. Digest deferred to Cycle F (AD-304). NEXT: Execute T1–T14 then Verifier. Do not start Bets 5–7.
 
 - **Cycle `teach-becomes-tutor` (RFC-0007 Cycle C / Bet 3 — frozen playbook, tutor-opens, Chat dock, one FSRS card) — MERGED to `main` (PR #65, merge commit `ea398b19`).** Implementation T1–T15 (four phases: playbook/retrieve, ladder, tutor card, Chat dock) plus three review-fix commits (stream-echoed tutor ladder, tutor-card 401/403, streamed close + failed Accept). Slice: byte-stable teach playbook + user-turn envelope; teach grounding carve-out (Socratic turns may omit citations); opening sentinel with `query=target_title`; application `TeachingPolicy`; Chat tab aliases `ask`/`teach`; opt-in `origin=tutor` card from the check restatement. Decisions AD-288..AD-302. Verifier: **PASS 42/42 ACs, 3/3 mutants killed**. Review: 4 findings, all real, all fixed; Cursor co-author trailers stripped before merge. NEXT: RFC-0007 Bets 4–7 remain Not started (first: Review worth returning to); RFC-005 Cycle F is still paused. Do not auto-start the next cycle.
 
