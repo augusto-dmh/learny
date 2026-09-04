@@ -92,11 +92,14 @@ def test_faithfulness_ratio_counts_supported_claims() -> None:
         Claim("claim 2", True),
     )
     assert result.supported_ratio == pytest.approx(2 / 3)
-    # The judge call carried structured-outputs json_schema, no citations documents.
+    # The judge call carried structured-outputs json_schema, no citations documents:
+    # Anthropic rejects a request that asks for both, so the second half is asserted
+    # rather than assumed.
     call = client.messages.calls[0]
     assert call["model"] == _JUDGE_MODEL
     assert call["output_config"]["format"]["type"] == "json_schema"
     assert call["output_config"]["format"]["schema"]["additionalProperties"] is False
+    assert all(isinstance(message["content"], str) for message in call["messages"])
 
 
 def test_faithfulness_ratio_is_one_when_no_claims() -> None:

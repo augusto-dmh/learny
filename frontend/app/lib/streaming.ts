@@ -23,9 +23,10 @@ import { type Citation } from "./citations";
 
 /**
  * The answer outcome a surface reports, mirroring the backend status. The
- * unified surface carries all three values on the wire, `not_found_in_scope`
+ * unified surface carries all four values on the wire, `not_found_in_scope`
  * included — a scoped conversation coming up empty is a different fact from the
- * whole book coming up empty, and the reader is told which.
+ * whole book coming up empty, and the reader is told which. `failed` is a
+ * generation miss: the question stays, the answer does not.
  */
 export type AnswerStatus = ConversationAnswerStatus;
 

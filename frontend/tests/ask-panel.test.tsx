@@ -39,6 +39,29 @@ import {
   writeActiveConversation,
 } from "../app/lib/active-conversation";
 
+// The delete-on-failure sensor: the conversations client is real except for
+// `deleteConversation`, which is replaced by a spy so a reintroduced DELETE is
+// caught at the call, not just at the wire. Retry must not create a second
+// conversation, so `startConversation` is wrapped the same way.
+const { deleteConversationSpy, startConversationSpy } = vi.hoisted(() => ({
+  deleteConversationSpy: vi.fn(),
+  startConversationSpy: vi.fn(),
+}));
+vi.mock("../app/lib/conversations", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../app/lib/conversations")>();
+  return {
+    ...actual,
+    deleteConversation: deleteConversationSpy,
+    startConversation: (
+      ...args: Parameters<typeof actual.startConversation>
+    ) => {
+      startConversationSpy(...args);
+      return actual.startConversation(...args);
+    },
+  };
+});
+
 // AI Elements' Conversation (stick-to-bottom) and the citation Popover reach for
 // ResizeObserver and pointer-capture APIs jsdom lacks; stub them.
 beforeAll(() => {
@@ -163,6 +186,8 @@ async function ask(value: string) {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  deleteConversationSpy.mockClear();
+  startConversationSpy.mockClear();
   localStorage.clear();
 });
 
@@ -321,8 +346,17 @@ describe("AskPanel on the conversation surface", () => {
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("Answer generation failed");
     expect(document.body.textContent).toContain("Partial answer");
+    expect(document.body.textContent).toContain("first try");
     expect(
       (screen.getByPlaceholderText(/ask a question/i) as HTMLTextAreaElement)
+        .disabled,
+    ).toBe(false);
+    expect(deleteConversationSpy).not.toHaveBeenCalled();
+    expect(readActiveConversation("s1", "ask")).toBe("conv1");
+    const failed = screen.getByTestId("failed-turn");
+    expect(failed.textContent).toContain("Answer generation failed");
+    expect(
+      (screen.getByRole("button", { name: "Retry" }) as HTMLButtonElement)
         .disabled,
     ).toBe(false);
   });
@@ -344,6 +378,15 @@ describe("AskPanel on the conversation surface", () => {
     expect(alert.textContent).toMatch(/too many requests/i);
     expect(
       (screen.getByPlaceholderText(/ask a question/i) as HTMLTextAreaElement)
+        .disabled,
+    ).toBe(false);
+    expect(deleteConversationSpy).not.toHaveBeenCalled();
+    expect(readActiveConversation("s1", "ask")).toBe("conv1");
+    expect(screen.getByTestId("failed-turn").textContent).toMatch(
+      /too many requests/i,
+    );
+    expect(
+      (screen.getByRole("button", { name: "Retry" }) as HTMLButtonElement)
         .disabled,
     ).toBe(false);
   });
@@ -385,6 +428,172 @@ describe("AskPanel on the conversation surface", () => {
     await Promise.resolve();
     expect(callsTo(fetchMock, CREATE_URL)).toHaveLength(0);
     expect(callsTo(fetchMock, STREAM_URL)).toHaveLength(0);
+  });
+});
+
+/** Every DELETE the panel issued against the thread's conversation. */
+function deleteCalls(fetchMock: ReturnType<typeof routedFetch>): unknown[][] {
+  return fetchMock.mock.calls.filter(
+    ([url, init]) =>
+      url === "/api/conversations/conv1" &&
+      (init as RequestInit | undefined)?.method === "DELETE",
+  );
+}
+
+describe("AskPanel keeps the thread when a turn fails", () => {
+  it("never deletes the conversation its first message created when the stream errors", async () => {
+    const stream = sseStream();
+    const fetchMock = routedFetch(
+      baseHandlers(() => stream.response, {
+        "DELETE /api/conversations/conv1": () =>
+          new Response(null, { status: 204 }),
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+    await ask("a question that fails");
+
+    await stream.push({ type: "start", messageId: "m1" });
+    await stream.push({
+      type: "error",
+      errorText: "Answer generation failed. Please try again.",
+    });
+    await screen.findByRole("alert");
+
+    // The conversation the question was created for outlives the failure, and
+    // the surface still points at it, so the thread is there to come back to.
+    expect(deleteConversationSpy).not.toHaveBeenCalled();
+    expect(deleteCalls(fetchMock)).toHaveLength(0);
+    expect(readActiveConversation("s1", "ask")).toBe("conv1");
+    expect(document.body.textContent).toContain("a question that fails");
+  });
+
+  it("never deletes the conversation when the first turn fails before the stream starts", async () => {
+    const fetchMock = routedFetch(
+      baseHandlers(() => jsonResponse(502, { detail: "Generation failed." }), {
+        "DELETE /api/conversations/conv1": () =>
+          new Response(null, { status: 204 }),
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+    await ask("a question that never reaches the model");
+
+    await screen.findByRole("alert");
+
+    expect(deleteConversationSpy).not.toHaveBeenCalled();
+    expect(deleteCalls(fetchMock)).toHaveLength(0);
+    expect(readActiveConversation("s1", "ask")).toBe("conv1");
+    expect(document.body.textContent).toContain(
+      "a question that never reaches the model",
+    );
+  });
+
+  it("never deletes the conversation when the reader stops the first turn", async () => {
+    const stream = sseStream();
+    const fetchMock = routedFetch(
+      baseHandlers(() => stream.response, {
+        "DELETE /api/conversations/conv1": () =>
+          new Response(null, { status: 204 }),
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+    await ask("a question I will interrupt");
+
+    await stream.push({ type: "start", messageId: "m1" });
+    await stream.push({ type: "text-start", id: "t1" });
+    await stream.push({ type: "text-delta", id: "t1", delta: "Partial" });
+
+    const stopButton = await screen.findByRole("button", { name: "Stop" });
+    await act(async () => {
+      fireEvent.click(stopButton);
+    });
+
+    expect(deleteConversationSpy).not.toHaveBeenCalled();
+    expect(deleteCalls(fetchMock)).toHaveLength(0);
+    expect(readActiveConversation("s1", "ask")).toBe("conv1");
+    expect(document.body.textContent).toContain("a question I will interrupt");
+  });
+});
+
+describe("AskPanel retries a failed turn on the same conversation", () => {
+  it("resubmits the same question as a new turn without creating another conversation", async () => {
+    const streams = [sseStream(), sseStream()];
+    let streamCalls = 0;
+    const fetchMock = routedFetch(
+      baseHandlers(() => streams[Math.min(streamCalls++, 1)].response),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+    await ask("the same question");
+
+    await streams[0].push({ type: "start", messageId: "m1" });
+    await streams[0].push({
+      type: "error",
+      errorText: "Answer generation failed. Please try again.",
+    });
+
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    expect(screen.getByTestId("failed-turn").textContent).toContain(
+      "Answer generation failed",
+    );
+    expect(callsTo(fetchMock, CREATE_URL)).toHaveLength(1);
+    expect(startConversationSpy).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      fireEvent.click(retry);
+    });
+
+    await waitFor(() => expect(callsTo(fetchMock, STREAM_URL)).toHaveLength(2));
+    expect(bodyOf(callsTo(fetchMock, STREAM_URL)[0])).toMatchObject({
+      message: "the same question",
+    });
+    expect(bodyOf(callsTo(fetchMock, STREAM_URL)[1])).toMatchObject({
+      message: "the same question",
+    });
+    expect(callsTo(fetchMock, CREATE_URL)).toHaveLength(1);
+    expect(startConversationSpy).toHaveBeenCalledTimes(1);
+    expect(readActiveConversation("s1", "ask")).toBe("conv1");
+  });
+
+  it("disables Retry while a turn is already streaming", async () => {
+    const streams = [sseStream(), sseStream()];
+    let streamCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      routedFetch(
+        baseHandlers(() => streams[Math.min(streamCalls++, 1)].response),
+      ),
+    );
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+    await ask("the same question");
+
+    await streams[0].push({ type: "start", messageId: "m1" });
+    await streams[0].push({
+      type: "error",
+      errorText: "Answer generation failed. Please try again.",
+    });
+
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    expect((retry as HTMLButtonElement).disabled).toBe(false);
+
+    await act(async () => {
+      fireEvent.click(retry);
+    });
+
+    await streams[1].push({ type: "start", messageId: "m2" });
+    await waitFor(() =>
+      expect(
+        (screen.getByRole("button", { name: "Retry" }) as HTMLButtonElement)
+          .disabled,
+      ).toBe(true),
+    );
   });
 });
 
@@ -532,6 +741,44 @@ describe("AskPanel thread restore", () => {
     expect(
       screen.getByRole("button", { name: "Citation: Chapter 1 › Core Idea" }),
     ).toBeTruthy();
+  });
+
+  it("restores a failed turn as the question plus the error, not an empty shell", async () => {
+    const restored = {
+      ...conversation,
+      turns: [
+        {
+          turn_index: 0,
+          message: "Who wrote the first algorithm?",
+          mode: "answer",
+          answer_status: "failed",
+          text: "",
+          citations: [],
+          evidence_count: 0,
+          model: "unknown",
+          created_at: "now",
+        },
+      ],
+    };
+    writeActiveConversation("s1", "ask", "conv1");
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        [`GET ${READ_URL}`]: () => jsonResponse(200, restored),
+      }),
+    );
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+
+    expect(
+      await screen.findByText("Who wrote the first algorithm?"),
+    ).toBeTruthy();
+    expect(screen.getByTestId("failed-turn").textContent).toContain(
+      "Answer generation failed",
+    );
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(screen.queryByLabelText("suggested prompts")).toBeNull();
+    expect(screen.queryByTestId("not-found")).toBeNull();
   });
 
   it("continues the restored conversation instead of creating a new one", async () => {
@@ -1004,6 +1251,15 @@ describe("AskPanel answer phases (ANSW-01/02/03)", () => {
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toMatch(/generation failed/i);
     await waitFor(() => expect(phaseLine()).toBeNull());
+    expect(deleteConversationSpy).not.toHaveBeenCalled();
+    expect(readActiveConversation("s1", "ask")).toBe("conv1");
+    expect(screen.getByTestId("failed-turn").textContent).toMatch(
+      /generation failed/i,
+    );
+    expect(
+      (screen.getByRole("button", { name: "Retry" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
   });
 
   it("shows no reasoning region on a restored thread", async () => {

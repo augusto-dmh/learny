@@ -6,13 +6,15 @@ answer path and the teaching turn path, not per-adapter goodwill. Given a port's
 only citations that reference retrieved evidence — in evidence-rank order and
 inherently deduped (evidence chunk ids are unique) — and collapses the three
 not-found conditions (``found=False``, blank text, nothing survives grounding)
-into a single ``None`` return. Framework-free (ADR-0007/0009): no FastAPI /
-SQLAlchemy / provider-SDK type crosses this boundary.
+into a single ``None`` return. A companion helper narrows the answer's claim-level
+spans to the citations that survived, so a quote can never outlive its chunk.
+Framework-free (ADR-0007/0009): no FastAPI / SQLAlchemy / provider-SDK type
+crosses this boundary.
 """
 
 from __future__ import annotations
 
-from app.domain.entities import Evidence, GeneratedAnswer
+from app.domain.entities import CitedSpan, Evidence, GeneratedAnswer
 
 
 def ground(
@@ -31,3 +33,15 @@ def ground(
     if not generated.found or not generated.text.strip() or not grounded:
         return None
     return generated.text, grounded
+
+
+def ground_spans(generated: GeneratedAnswer, grounded: list[Evidence]) -> tuple[CitedSpan, ...]:
+    """Keep only the spans whose chunk survived grounding, in reported order.
+
+    A span is a location inside a citation, so it can never outlive it: once a chunk
+    is dropped because the adapter cited evidence that was not retrieved, any quote
+    pointing into that chunk names a passage the reader is not being shown. Order
+    follows the adapter's report, which is the order the passages were cited in.
+    """
+    kept = {item.chunk_id for item in grounded}
+    return tuple(span for span in generated.spans if span.chunk_id in kept)

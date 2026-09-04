@@ -123,7 +123,8 @@ class AnswerGenerationFailed(Exception):
     The Q&A service wraps any exception from
     :meth:`~app.domain.ports.GenerationPort.generate` in this error; the
     web layer maps it to 502 with a generic body that leaks no provider or
-    internal detail. Nothing is persisted, so there is no state to roll back.
+    internal detail. The failed turn is persisted before this error is raised, so
+    a later request can still read the question.
     """
 
 

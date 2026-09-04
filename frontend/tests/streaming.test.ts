@@ -286,6 +286,30 @@ describe("turnsToUIMessages", () => {
     expect(view.reasoning).toBe("");
     expect(view.citations).toEqual([citation]);
   });
+
+  it("maps a failed turn to the user text plus a failed assistant with empty answer and no citations", () => {
+    const failed: ConversationTurnView = {
+      turn_index: 0,
+      message: "Who wrote the first algorithm?",
+      mode: "answer",
+      answer_status: "failed",
+      text: "",
+      citations: [],
+      evidence_count: 0,
+      model: "unknown",
+      created_at: "now",
+    };
+
+    const messages = turnsToUIMessages([failed]);
+    expect(messages.map((m) => m.role)).toEqual(["user", "assistant"]);
+    expect(messages[0].parts).toEqual([
+      { type: "text", text: "Who wrote the first algorithm?" },
+    ]);
+    const view = assistantView(messages[1]);
+    expect(view.text).toBe("");
+    expect(view.citations).toEqual([]);
+    expect(view.status).toBe("failed");
+  });
 });
 
 describe("errorMessageFor", () => {

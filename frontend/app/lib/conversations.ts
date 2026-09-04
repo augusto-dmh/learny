@@ -33,11 +33,14 @@ export type ConversationMode = "answer" | "teach";
  * A turn's outcome. `not_found_in_scope` means retrieval came up empty inside a
  * conversation's declared scope — the answer may still live elsewhere in the
  * book — while `not_found_in_source` means the whole book came up empty.
+ * `failed` is a generation or transport failure: the user's message is kept,
+ * the answer is empty, and there are no citations.
  */
 export type ConversationAnswerStatus =
   | "answered"
   | "not_found_in_scope"
-  | "not_found_in_source";
+  | "not_found_in_source"
+  | "failed";
 
 /** One conversation, mirroring the backend `ConversationView`. */
 export type ConversationView = {

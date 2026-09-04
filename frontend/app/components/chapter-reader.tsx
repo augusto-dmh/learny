@@ -88,6 +88,15 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 
+/** Ephemeral cited-sentence paint; not a real note — same painter as saved highlights. */
+const CITATION_SPAN_ID = "citation-span";
+
+/**
+ * Quote to paint after a cross-chapter Show-in-book navigation. ChapterFlow
+ * consumes this on mount so the new chapter can highlight the span once loaded.
+ */
+let pendingCitationQuote: { anchor: string; quote: string } | null = null;
+
 /** A stable empty highlight list, so sections without highlights never repaint. */
 const NO_HIGHLIGHTS: SourceHighlightView[] = [];
 
@@ -360,6 +369,41 @@ export function ChapterFlow({
     [chapter.sections, chapter.words_before_chapter],
   );
   const [flashAnchor, setFlashAnchor] = useState<string | null>(scrollTarget);
+  const [spanQuote, setSpanQuote] = useState<{
+    anchor: string;
+    quote: string;
+  } | null>(() => {
+    const pending = pendingCitationQuote;
+    if (!pending) {
+      return null;
+    }
+    const inChapter = chapter.sections.some(
+      (section) => section.anchor === pending.anchor,
+    );
+    pendingCitationQuote = null;
+    return inChapter ? pending : null;
+  });
+  const highlightsWithSpan = useMemo(() => {
+    if (!spanQuote) {
+      return highlightsByAnchor;
+    }
+    const next = new Map(highlightsByAnchor);
+    const saved = next.get(spanQuote.anchor) ?? NO_HIGHLIGHTS;
+    next.set(spanQuote.anchor, [
+      ...saved,
+      {
+        note_id: CITATION_SPAN_ID,
+        note_title: "",
+        has_body: false,
+        anchor: spanQuote.anchor,
+        quote_exact: spanQuote.quote,
+        quote_prefix: "",
+        quote_suffix: "",
+        status: "active",
+      },
+    ]);
+    return next;
+  }, [highlightsByAnchor, spanQuote]);
   // The below-lg table of contents collapses behind the top-bar toggle (RD-25).
   const [tocOpen, setTocOpen] = useState(false);
   // Top bar recedes on downward scroll, restores on upward scroll (RD-31).
@@ -630,10 +674,14 @@ export function ChapterFlow({
   // flashes its heading, keeping the panel open and the URL anchor in step (the
   // loaded-chapter guard in `ChapterReader` makes this a no-reload replace); an
   // anchor in another chapter navigates there, carrying the open panel along so
-  // the answer stays beside the book.
-  function handleShowInBook(anchor: string) {
+  // the answer stays beside the book. A quoted sentence, when provided, is
+  // painted with the same highlighter the notes use; callers that pass only an
+  // anchor keep today's section-level flash.
+  function handleShowInBook(anchor: string, quote?: string) {
     const inChapter = sectionAnchors.includes(anchor);
+    const needle = quote ? quote : undefined;
     if (!inChapter) {
+      pendingCitationQuote = needle ? { anchor, quote: needle } : null;
       router.push(readUrl(sourceId, anchor, { panel: dockTab }));
       return;
     }
@@ -641,6 +689,7 @@ export function ChapterFlow({
       .getElementById(anchor)
       ?.scrollIntoView({ behavior: "smooth", block: "start" });
     setFlashAnchor(anchor);
+    setSpanQuote(needle ? { anchor, quote: needle } : null);
     router.replace(readUrl(sourceId, anchor, { panel: dockTab }));
   }
 
@@ -782,7 +831,7 @@ export function ChapterFlow({
               wordsBefore={offsets[index]}
               wordsPerPage={chapter.words_per_page}
               flashing={flashAnchor === section.anchor}
-              highlights={highlightsByAnchor.get(section.anchor) ?? NO_HIGHLIGHTS}
+              highlights={highlightsWithSpan.get(section.anchor) ?? NO_HIGHLIGHTS}
               onMouseUp={() => handleMouseUp(section)}
             />
           ))}

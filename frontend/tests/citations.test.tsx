@@ -196,6 +196,44 @@ describe("CitationList as passage (RA-12)", () => {
     expect(onShowInBook).toHaveBeenCalledWith(citation.anchor);
   });
 
+  it("passes the cited sentence to Show in book when the citation carries a span", () => {
+    const onShowInBook = vi.fn();
+    const quoted = "the first algorithm ever written";
+    render(
+      <CitationList
+        sourceId="s1"
+        citations={[{ ...citation, quoted_text: quoted }]}
+        onShowInBook={onShowInBook}
+      />,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Citation: Chapter 1 › Core Idea" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /show in book/i }));
+
+    expect(onShowInBook).toHaveBeenCalledTimes(1);
+    expect(onShowInBook).toHaveBeenCalledWith(citation.anchor, quoted);
+  });
+
+  it("keeps section-level Show in book when the citation has no span", () => {
+    const onShowInBook = vi.fn();
+    render(
+      <CitationList
+        sourceId="s1"
+        citations={[citation]}
+        onShowInBook={onShowInBook}
+      />,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Citation: Chapter 1 › Core Idea" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /show in book/i }));
+
+    expect(onShowInBook).toHaveBeenCalledTimes(1);
+    expect(onShowInBook).toHaveBeenCalledWith(citation.anchor);
+    expect(onShowInBook.mock.calls[0]).toHaveLength(1);
+  });
+
   it("falls back to the reader-route link when no callback is given", () => {
     render(<CitationList sourceId="s1" citations={[citation]} />);
     fireEvent.click(
@@ -268,5 +306,21 @@ describe("CitationList note citations (NL-03)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Your note: My Insight" }));
     const noteLink = screen.getByRole("link", { name: /open note/i });
     expect(noteLink.getAttribute("href")).toBe("/notes/note-123");
+  });
+
+  it("never offers Show in book span highlight for a note citation", () => {
+    const onShowInBook = vi.fn();
+    render(
+      <CitationList
+        sourceId="s1"
+        citations={[{ ...noteCitation, quoted_text: "a distinctive fact from my own note" }]}
+        onShowInBook={onShowInBook}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Your note: My Insight" }));
+
+    expect(screen.getByRole("link", { name: /open note/i })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /show in book/i })).toBeNull();
+    expect(onShowInBook).not.toHaveBeenCalled();
   });
 });

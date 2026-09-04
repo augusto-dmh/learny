@@ -9,8 +9,8 @@ FastAPI or SQLAlchemy.
 
 Transaction boundary: a request-scoped SQLAlchemy ``Connection`` is opened per
 request inside a transaction. The connection is committed when the handler
-returns normally and rolled back on any exception, so each request is an atomic
-unit of work (the repositories themselves are transaction-agnostic, per B3).
+returns normally. A generation failure still commits — the failed turn *is* the
+record — and any other exception rolls back.
 """
 
 from __future__ import annotations
@@ -40,6 +40,7 @@ from app.application.conversations import (
     StartConversation,
 )
 from app.application.corpus import ReadSection, ReadSourceStructure
+from app.application.errors import AnswerGenerationFailed
 from app.application.identity import (
     AuthenticateUser,
     AuthorizeOwnership,
@@ -149,12 +150,23 @@ def get_db_connection(request: Request) -> Iterator[Connection]:
     Commits on success, rolls back if the handler raised. Stored on
     ``request.state`` is unnecessary — each dependency consumer shares the same
     yielded connection because FastAPI caches dependency results per request.
+
+    A generation failure is the one raise that still commits. The turn written on
+    that path *is* the record of the failure (AD-262): the reader's question, no
+    answer, status ``failed``. Rolling it back with the 502 would delete the very
+    thing the failure path exists to keep, and the reader would refresh into an
+    empty conversation — the data loss ASK-01 forbids. The streaming sibling never
+    reaches here (its generator renders the failure as an error frame and returns
+    normally), so this covers the buffered turn endpoint.
     """
     engine = get_engine()
     conn = engine.connect()
     trans = conn.begin()
     try:
         yield conn
+    except AnswerGenerationFailed:
+        trans.commit()
+        raise
     except Exception:
         trans.rollback()
         raise

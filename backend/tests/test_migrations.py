@@ -2317,6 +2317,129 @@ def test_migration_0017_generalizes_teaching_into_conversations(monkeypatch) -> 
 
 
 @pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
+def test_migration_0018_adds_citation_spans_without_touching_stored_citations(monkeypatch) -> None:
+    """0018 up: a citation may carry the sentence it cited, and an old one need not.
+
+    Every citation written before this revision recorded only the passage it came
+    from, so the three columns arrive nullable and unbackfilled: a row seeded at 0017
+    comes through with all three null, which is exactly the pre-span reading (the
+    snippet is the quote, the section is the highlight target — ASK-17). Inventing a
+    quote for it would be worse than having none, because the reader would be shown a
+    highlight over a sentence nobody cited.
+
+    A new row can store one, and the offsets address the ``snippet`` stored on the same
+    row rather than the live corpus — the citation snapshot has no foreign key into
+    ``corpus_chunks`` (AD-033), so a re-ingest that regenerates every chunk id cannot
+    move the text these indices point into. Down one step to 0017 drops the three
+    columns and leaves the seeded citation intact.
+    """
+    monkeypatch.setenv("LEARNY_DATABASE_URL", TEST_DB_URL)
+    cfg = _alembic_config(TEST_DB_URL)
+
+    # Land on 0017 (pre-spans) and seed the way a running deployment would have: a
+    # teaching session at 0016, carried through 0017's rename into a conversation.
+    command.upgrade(cfg, "head")
+    command.downgrade(cfg, "0016_reading_volume")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        _user_id, _source_id, _conversation_id, turn_id, _chunk_id = _seed_teaching_session(
+            engine, target_anchor="ch3.xhtml", target_title="Chapter Three"
+        )
+    finally:
+        engine.dispose()
+    command.upgrade(cfg, "0017_conversations")
+
+    command.upgrade(cfg, "0018_citation_spans")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        inspector = inspect(engine)
+        columns = {c["name"]: c for c in inspector.get_columns("conversation_turn_citations")}
+        for name in ("quoted_text", "start_char", "end_char"):
+            assert columns[name]["nullable"] is True, f"{name} must be optional"
+
+        # The pre-span citation is untouched: its snippet is still its whole text and
+        # it names no sentence, which is the behaviour it had before this revision.
+        with engine.connect() as conn:
+            legacy = conn.execute(
+                text(
+                    "SELECT snippet, quoted_text, start_char, end_char "
+                    "FROM conversation_turn_citations WHERE turn_id = :id"
+                ),
+                {"id": turn_id},
+            ).one()
+        assert legacy.snippet == "snip"
+        assert (legacy.quoted_text, legacy.start_char, legacy.end_char) == (None, None, None)
+
+        # A citation written from here on may locate its claim inside its own snippet.
+        span_citation_id = uuid.uuid4()
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO conversation_turn_citations "
+                    "(id, turn_id, rank, chunk_id, section_path, anchor, snippet, score, "
+                    " quoted_text, start_char, end_char) "
+                    "VALUES (:id, :turn, 1, :chunk, '[\"Chapter Three\"]', 'ch3.xhtml', "
+                    "        :snippet, 0.5, :quote, 5, 23)"
+                ),
+                {
+                    "id": span_citation_id,
+                    "turn": turn_id,
+                    "chunk": uuid.uuid4(),
+                    "snippet": "Then sunlight drives it, and the leaf stores the rest.",
+                    "quote": "sunlight drives it",
+                },
+            )
+        with engine.connect() as conn:
+            stored = conn.execute(
+                text(
+                    "SELECT snippet, quoted_text, start_char, end_char "
+                    "FROM conversation_turn_citations WHERE id = :id"
+                ),
+                {"id": span_citation_id},
+            ).one()
+        # The offsets address the snapshot's own snippet, so they stay true no matter
+        # what happens to the corpus the snippet was copied from.
+        assert stored.snippet[stored.start_char : stored.end_char] == stored.quoted_text
+
+        # The migrated database and the metadata the repositories read through agree.
+        from app.infrastructure.db.metadata import conversation_turn_citations
+
+        reflected = {
+            c["name"]: c["nullable"]
+            for c in inspector.get_columns(conversation_turn_citations.name)
+        }
+        assert reflected == {c.name: c.nullable for c in conversation_turn_citations.columns}
+    finally:
+        engine.dispose()
+
+    command.downgrade(cfg, "0017_conversations")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        inspector = inspect(engine)
+        remaining = {c["name"] for c in inspector.get_columns("conversation_turn_citations")}
+        assert not ({"quoted_text", "start_char", "end_char"} & remaining)
+        with engine.connect() as conn:
+            surviving = (
+                conn.execute(
+                    text(
+                        "SELECT snippet FROM conversation_turn_citations "
+                        "WHERE turn_id = :id ORDER BY rank"
+                    ),
+                    {"id": turn_id},
+                )
+                .scalars()
+                .all()
+            )
+        # Losing the columns loses only the quotes; every citation is still there.
+        assert surviving == ["snip", "Then sunlight drives it, and the leaf stores the rest."]
+    finally:
+        engine.dispose()
+
+    # Drop everything to clear the committed seed rows; the module fixture restores head.
+    command.downgrade(cfg, "base")
+
+
+@pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
 def test_in_process_migration_preserves_app_root_logging(monkeypatch) -> None:
     """An in-process migration must not reconfigure the app-owned root logger.
 

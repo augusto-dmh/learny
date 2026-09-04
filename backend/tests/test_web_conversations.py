@@ -47,6 +47,7 @@ from sqlalchemy import Connection, func, select
 from app.application.conversations import DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT
 from app.domain.entities import (
     ANSWERED,
+    FAILED,
     MODE_ANSWER,
     MODE_TEACH,
     NOT_FOUND_IN_SCOPE,
@@ -54,6 +55,7 @@ from app.domain.entities import (
     AnswerCompleted,
     AnswerReasoningDelta,
     AnswerTextDelta,
+    CitedSpan,
     Conversation,
     ConversationTurn,
     CorpusSectionRecord,
@@ -1536,11 +1538,13 @@ def test_post_turn_claiming_a_taken_index_returns_409(
     assert resp.status_code == 409, resp.text
 
 
-def test_post_turn_generation_failure_returns_502_and_persists_nothing(
+def test_post_turn_generation_failure_returns_502_and_keeps_the_question(
     auth_client: TestClient, db_conn: Connection
 ) -> None:
-    # CONV-20: a failing generation port → 502 with a generic body that leaks no
-    # internal detail, and no turn row.
+    # CONV-20 + ASK-01/ASK-02: a failing generation port → 502 with a generic body
+    # that leaks no internal detail. The turn row is *not* rolled back with it: the
+    # reader's question is readable again through GET at ``failed`` with no answer
+    # and no citations (AD-262 supersedes the earlier "persists nothing" contract).
     from app.infrastructure.web.dependencies import get_generation
 
     source_id, csrf = _seed_ready_source(auth_client, db_conn, "turn-502@example.com")
@@ -1578,7 +1582,24 @@ def test_post_turn_generation_failure_returns_502_and_persists_nothing(
     # own message — is the failure this asserts against in both directions.
     assert resp.json()["detail"] == "Answer generation failed. Please try again."
     assert "provider-secret-internal-detail" not in resp.text
-    assert auth_client.get(f"/api/conversations/{conversation.id}").json()["turns"] == []
+    turns = auth_client.get(f"/api/conversations/{conversation.id}").json()["turns"]
+    assert len(turns) == 1
+    assert turns[0]["answer_status"] == FAILED
+    assert turns[0]["message"] == "photosynthesis sunlight"
+    assert turns[0]["text"] == ""
+    assert turns[0]["citations"] == []
+    # And nothing was written to the snapshot table either — a failed turn has no
+    # passage to point at, so it must not leave a citation row behind for one.
+    citation_rows = db_conn.execute(
+        select(func.count())
+        .select_from(conversation_turn_citations)
+        .join(
+            conversation_turns,
+            conversation_turns.c.id == conversation_turn_citations.c.turn_id,
+        )
+        .where(conversation_turns.c.conversation_id == conversation.id)
+    ).scalar_one()
+    assert citation_rows == 0
 
 
 def test_post_turn_missing_csrf_returns_403(auth_client: TestClient, db_conn: Connection) -> None:
@@ -1887,11 +1908,13 @@ def test_turn_stream_gives_each_reasoning_block_its_own_part(
     assert not text_ids & set(starts)
 
 
-def test_turn_stream_mid_stream_failure_emits_the_error_frame_and_persists_nothing(
+def test_turn_stream_mid_stream_failure_emits_the_error_frame_and_keeps_the_question(
     auth_client: TestClient, db_conn: Connection
 ) -> None:
-    # CONV-21: a provider failure after the first delta is rendered as a protocol
-    # error part followed by [DONE] — no finish frame — and persists nothing.
+    # CONV-21 + ASK-01/ASK-02: a provider failure after the first delta is rendered as
+    # a protocol error part followed by [DONE] — no finish frame. The conversation is
+    # still there afterwards and still holds the question, at ``failed`` (AD-262):
+    # this is the walkthrough where the first ask vanished entirely.
     from app.infrastructure.web.dependencies import get_generation
 
     source_id, csrf = _seed_ready_source(auth_client, db_conn, "stream-mid@example.com")
@@ -1944,7 +1967,12 @@ def test_turn_stream_mid_stream_failure_emits_the_error_frame_and_persists_nothi
     assert error_part["errorText"] == "Answer generation failed. Please try again."
     assert "provider-secret-internal-detail" not in resp.text
 
-    assert auth_client.get(f"/api/conversations/{conversation.id}").json()["turns"] == []
+    body = auth_client.get(f"/api/conversations/{conversation.id}").json()
+    assert len(body["turns"]) == 1
+    assert body["turns"][0]["answer_status"] == FAILED
+    assert body["turns"][0]["message"] == "photosynthesis sunlight"
+    assert body["turns"][0]["text"] == ""
+    assert body["turns"][0]["citations"] == []
 
 
 def test_turn_stream_closes_the_reasoning_part_on_a_turn_that_declines(
@@ -2076,7 +2104,12 @@ def test_turn_stream_failing_while_reasoning_still_reaches_the_error_frame(
     assert error_part["errorText"] == "Answer generation failed. Please try again."
     assert "provider-secret-internal-detail" not in resp.text
 
-    assert auth_client.get(f"/api/conversations/{conversation.id}").json()["turns"] == []
+    # A turn that broke before writing a word still keeps what was asked (AD-262).
+    body = auth_client.get(f"/api/conversations/{conversation.id}").json()
+    assert len(body["turns"]) == 1
+    assert body["turns"][0]["answer_status"] == FAILED
+    assert body["turns"][0]["message"] == "photosynthesis sunlight energy"
+    assert body["turns"][0]["text"] == ""
 
 
 def test_turn_stream_pre_stream_guards_return_plain_http(
@@ -2371,6 +2404,155 @@ def test_turn_stream_note_citation_carries_origin_and_note_identity(
     assert note_citations[0]["note_title"] == "Stream Note"
     for citation in [c for c in citations if c.get("origin") != "note"]:
         assert set(citation) == _CITATION_KEYS
+
+
+# --- The sentence behind a citation mark (ASK-12, ASK-17) ----------------------
+
+
+class _QuotingAdapter:
+    """A generation port that names the sentence of the passage it actually used.
+
+    Cites the first two passages but quotes only inside the first, which is the
+    mixed case the wire has to survive: one citation that can say more than the
+    passage, beside one that cannot and must therefore look exactly as it did
+    before spans existed.
+    """
+
+    model = _MODEL
+
+    #: The half-open slice of the first passage's snippet the answer claims to use.
+    START, END = 5, 25
+
+    def __init__(self) -> None:
+        self.quote = ""
+
+    def _answer(self, evidence: Sequence[Evidence]) -> GeneratedAnswer:
+        cited = evidence[:2]
+        self.quote = cited[0].snippet[self.START : self.END]
+        return GeneratedAnswer(
+            text="Sunlight drives it.[^1][^2]",
+            cited_chunk_ids=tuple(e.chunk_id for e in cited),
+            model=_MODEL,
+            found=True,
+            spans=(
+                CitedSpan(
+                    chunk_id=cited[0].chunk_id,
+                    quote=self.quote,
+                    start=self.START,
+                    end=self.END,
+                ),
+            ),
+        )
+
+    def generate(
+        self,
+        *,
+        message: str,
+        mode: str,
+        evidence: Sequence[Evidence],
+        history: Sequence[HistoryTurn] = (),
+        target_section_path: tuple[str, ...] | None = None,
+    ) -> GeneratedAnswer:
+        return self._answer(evidence)
+
+    def generate_stream(
+        self,
+        *,
+        message: str,
+        mode: str,
+        evidence: Sequence[Evidence],
+        history: Sequence[HistoryTurn] = (),
+        target_section_path: tuple[str, ...] | None = None,
+    ):
+        answer = self._answer(evidence)
+        yield AnswerTextDelta(text=answer.text)
+        yield AnswerCompleted(answer=answer)
+
+
+def test_a_quoted_citation_carries_its_sentence_and_survives_a_reload(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # ASK-12: the sentence a citation was written for reaches the client with offsets
+    # into that citation's own snippet, and it is stored, not just streamed — reloading
+    # the conversation shows the same quote. ASK-17: the citation beside it, which the
+    # adapter quoted nothing from, keeps exactly the seven fields a book citation has
+    # always had, so a client that never learns about spans is unaffected.
+    from app.infrastructure.web.dependencies import get_generation
+
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "conv-span@example.com")
+    _embed_all(db_conn, UUID(source_id))
+    conversation = _seed_conversation(db_conn, UUID(source_id))
+
+    adapter = _QuotingAdapter()
+    auth_client.app.dependency_overrides[get_generation] = lambda: adapter
+    try:
+        resp = _post_turn(
+            auth_client,
+            conversation.id,
+            {"message": "photosynthesis sunlight energy", "mode": MODE_ANSWER},
+            csrf=csrf,
+        )
+    finally:
+        auth_client.app.dependency_overrides.pop(get_generation, None)
+
+    assert resp.status_code == 201, resp.text
+    citations = resp.json()["citations"]
+    assert len(citations) == 2
+    quoted, unquoted = citations
+    assert quoted["quoted_text"] == adapter.quote
+    assert (quoted["start_char"], quoted["end_char"]) == (
+        _QuotingAdapter.START,
+        _QuotingAdapter.END,
+    )
+    # The offsets locate the quote inside the snippet shipped on the same citation,
+    # so a client can paint it without asking the server where the passage came from.
+    assert quoted["snippet"][quoted["start_char"] : quoted["end_char"]] == quoted["quoted_text"]
+    assert set(unquoted) == _CITATION_KEYS
+
+    # The quote is part of the stored turn, not a property of the response that
+    # produced it: a reader who comes back tomorrow sees the same sentence.
+    turns = auth_client.get(f"/api/conversations/{conversation.id}").json()["turns"]
+    stored_quoted, stored_unquoted = turns[0]["citations"]
+    assert stored_quoted["quoted_text"] == adapter.quote
+    assert (stored_quoted["start_char"], stored_quoted["end_char"]) == (
+        _QuotingAdapter.START,
+        _QuotingAdapter.END,
+    )
+    assert set(stored_unquoted) == _CITATION_KEYS
+
+
+def test_a_streamed_quoted_citation_frame_matches_the_buffered_one(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # The two paths persist the same turn (I-CM-5), so the quote cannot be a property
+    # of only one of them: the streamed citations frame carries the span too.
+    from app.infrastructure.web.dependencies import get_generation
+
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "conv-span-stream@example.com")
+    _embed_all(db_conn, UUID(source_id))
+    conversation = _seed_conversation(db_conn, UUID(source_id))
+
+    adapter = _QuotingAdapter()
+    auth_client.app.dependency_overrides[get_generation] = lambda: adapter
+    try:
+        resp = _turn_stream(
+            auth_client,
+            conversation.id,
+            {"message": "photosynthesis sunlight energy", "mode": MODE_ANSWER},
+            csrf=csrf,
+        )
+    finally:
+        auth_client.app.dependency_overrides.pop(get_generation, None)
+
+    assert resp.status_code == 200, resp.text
+    parts = _parse_ui_stream(resp.text)
+    citations = next(p for p in parts if isinstance(p, dict) and p["type"] == "data-citations")[
+        "data"
+    ]
+    quoted, unquoted = citations
+    assert quoted["quoted_text"] == adapter.quote
+    assert quoted["snippet"][quoted["start_char"] : quoted["end_char"]] == quoted["quoted_text"]
+    assert set(unquoted) == _CITATION_KEYS
 
 
 # --- Rate limit: one policy for the whole surface (CONV-22) --------------------

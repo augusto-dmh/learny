@@ -26,6 +26,12 @@ import {
   type Citation,
 } from "@/app/lib/citations";
 import { MessageResponse } from "@/components/ai-elements/message";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 import { CitationList } from "./citations";
 
@@ -42,13 +48,17 @@ const MarkSelectionContext = createContext<{
   selected: number | null;
   passageId: string;
   toggle: (index: number) => void;
-}>({ selected: null, passageId: "", toggle: () => {} });
+  /** 1-based mark index → first-span quote for that chunk (AD-266). */
+  quotedByMark: Readonly<Record<number, string>>;
+}>({ selected: null, passageId: "", toggle: () => {}, quotedByMark: {} });
 
 /** One numbered mark in the prose; a second activation closes what it opened. */
 function CitationMark({ index }: { index: number }) {
-  const { selected, passageId, toggle } = useContext(MarkSelectionContext);
+  const { selected, passageId, toggle, quotedByMark } =
+    useContext(MarkSelectionContext);
   const open = selected === index;
-  return (
+  const quote = quotedByMark[index];
+  const mark = (
     <button
       type="button"
       aria-label={`Citation ${index}`}
@@ -59,6 +69,19 @@ function CitationMark({ index }: { index: number }) {
     >
       {index}
     </button>
+  );
+  // Tooltip (not HoverCard): ASK-15 requires the quote on focus as well as hover.
+  // No quote → no card, even an empty one (ASK-17). Click still toggles the passage.
+  if (!quote) {
+    return mark;
+  }
+  return (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>{mark}</TooltipTrigger>
+        <TooltipContent>{quote}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   );
 }
 
@@ -79,15 +102,21 @@ export function CitedAnswer({
 }) {
   const [selected, setSelected] = useState<number | null>(null);
   const passageId = useId();
-  const markSelection = useMemo(
-    () => ({
+  const markSelection = useMemo(() => {
+    const quotedByMark: Record<number, string> = {};
+    citations?.forEach((citation, offset) => {
+      if (citation.quoted_text) {
+        quotedByMark[offset + 1] = citation.quoted_text;
+      }
+    });
+    return {
       selected,
       passageId,
       toggle: (index: number) =>
         setSelected((current) => (current === index ? null : index)),
-    }),
-    [selected, passageId],
-  );
+      quotedByMark,
+    };
+  }, [selected, passageId, citations]);
 
   // Rewriting the markers into links is what puts the marks *in* the prose: the
   // renderer parses one document, so a mark mid-sentence stays mid-sentence.

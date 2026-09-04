@@ -1040,6 +1040,9 @@ class SqlAlchemyConversationTurnRepository:
                 "anchor": citation.anchor,
                 "snippet": citation.snippet,
                 "score": citation.score,
+                "quoted_text": citation.quoted_text,
+                "start_char": citation.start_char,
+                "end_char": citation.end_char,
             }
             for rank, citation in enumerate(turn.citations)
         ]
@@ -1065,6 +1068,9 @@ class SqlAlchemyConversationTurnRepository:
                 conversation_turn_citations.c.anchor,
                 conversation_turn_citations.c.snippet,
                 conversation_turn_citations.c.score,
+                conversation_turn_citations.c.quoted_text,
+                conversation_turn_citations.c.start_char,
+                conversation_turn_citations.c.end_char,
             )
             .select_from(
                 conversation_turns.outerjoin(
@@ -1091,6 +1097,9 @@ class SqlAlchemyConversationTurnRepository:
                         page_span=None,
                         snippet=row.snippet,
                         score=row.score,
+                        quoted_text=row.quoted_text,
+                        start_char=row.start_char,
+                        end_char=row.end_char,
                     )
                 )
         seen: set[UUID] = set()

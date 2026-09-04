@@ -1,14 +1,14 @@
 """Conversation domain contracts (ADR-0029).
 
 Unit coverage for the vocabulary a client reads off the wire — the per-turn modes and
-the three answer statuses — and for the two conversation shapes the unified model
-exists to allow: scoped (a teach target) and whole-book (none). Pure domain — no DB,
-no framework.
+the four answer statuses — for the two conversation shapes the unified model exists to
+allow (scoped with a teach target, and whole-book with none), and for the Learny-owned
+citation span a generation adapter reports. Pure domain — no DB, no framework.
 """
 
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, fields
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -16,13 +16,16 @@ import pytest
 
 from app.domain.entities import (
     ANSWERED,
+    FAILED,
     MODE_ANSWER,
     MODE_TEACH,
     NOT_FOUND_IN_SCOPE,
     NOT_FOUND_IN_SOURCE,
+    CitedSpan,
     Conversation,
     ConversationSummary,
     ConversationTurn,
+    GeneratedAnswer,
 )
 
 _NOW = datetime(2026, 7, 25, 12, 0, 0, tzinfo=UTC)
@@ -61,6 +64,62 @@ def test_answer_statuses_are_the_wire_strings_and_stay_distinct() -> None:
     # the first. Collapsing them into one value would hide a scoped search.
     assert NOT_FOUND_IN_SCOPE != NOT_FOUND_IN_SOURCE
     assert len({ANSWERED, NOT_FOUND_IN_SOURCE, NOT_FOUND_IN_SCOPE}) == 3
+
+
+def test_failed_is_a_fourth_status_distinct_from_the_three_verdicts() -> None:
+    # The other three say what the book could answer. This one says generation never
+    # got that far — a turn carrying it is persisted anyway (AD-262) so a reload still
+    # shows the question, which is what puts the string on the wire and pins it here.
+    # Folding it into either not-found value would tell the reader the book declined.
+    assert FAILED == "failed"
+    assert len({ANSWERED, NOT_FOUND_IN_SOURCE, NOT_FOUND_IN_SCOPE, FAILED}) == 4
+
+
+def test_cited_span_names_a_chunk_and_locates_the_quote_inside_it() -> None:
+    chunk_id = uuid4()
+    span = CitedSpan(chunk_id=chunk_id, quote="Volcanoes vent magma.", start=27, end=48)
+
+    assert (span.chunk_id, span.quote, span.start, span.end) == (
+        chunk_id,
+        "Volcanoes vent magma.",
+        27,
+        48,
+    )
+    with pytest.raises(FrozenInstanceError):
+        span.start = 0  # type: ignore[misc]
+
+
+def test_generation_types_expose_no_provider_document_index() -> None:
+    # ADR-0020: a provider's document ordering is resolved to a chunk id inside the
+    # adapter. A domain field carrying that index would put one request's argument
+    # order on the wire, where no later reader can interpret it.
+    for entity in (CitedSpan, GeneratedAnswer):
+        assert "document_index" not in {field.name for field in fields(entity)}
+
+
+def test_generated_answer_carries_no_spans_unless_the_adapter_reported_them() -> None:
+    # Reporting spans is an adapter capability, not a port requirement: the
+    # deterministic adapter reports none and constructs exactly as it always has.
+    plain = GeneratedAnswer(
+        text="because", cited_chunk_ids=(), model="local-extractive", found=True
+    )
+
+    assert plain.spans == ()
+
+
+def test_generated_answer_keeps_the_spans_an_adapter_reported() -> None:
+    chunk_id = uuid4()
+    span = CitedSpan(chunk_id=chunk_id, quote="Volcanoes vent magma.", start=27, end=48)
+
+    answer = GeneratedAnswer(
+        text="Magma escapes upward.",
+        cited_chunk_ids=(chunk_id,),
+        model="claude-sonnet-5",
+        found=True,
+        spans=(span,),
+    )
+
+    assert answer.spans == (span,)
 
 
 def test_whole_book_conversation_has_empty_scope_and_no_target() -> None:

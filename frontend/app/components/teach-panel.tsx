@@ -29,7 +29,7 @@
  * on every call regardless of client-side routing (FR-AUTH-007, ADR-017).
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   readActiveConversation,
@@ -43,6 +43,7 @@ import {
 import { fetchSourceStructure, type SourceStructure } from "@/app/lib/sources";
 import {
   assistantView,
+  errorMessageFor,
   messageText,
   turnsToUIMessages,
   type LearnyUIMessage,
@@ -65,6 +66,7 @@ import {
 
 import { AnswerPhaseIndicator, ReasoningRegion } from "./answer-phase";
 import { CitedAnswer } from "./cited-answer";
+import { FailedTurn } from "./failed-turn";
 import { IncludeNotesToggle } from "./include-notes-toggle";
 import { isNotFound, NotFoundNotice } from "./not-found-notice";
 import { SaveToNoteAction } from "./save-to-note-action";
@@ -211,11 +213,6 @@ export function TeachPanel({
     onConversationsChanged?.();
   }, [onConversationsChanged]);
 
-  const handleDiscarded = useCallback(() => {
-    writeActiveConversation(sourceId, SURFACE, null);
-    onConversationsChanged?.();
-  }, [sourceId, onConversationsChanged]);
-
   function handleStart(event: React.FormEvent) {
     event.preventDefault();
     setError(null);
@@ -253,7 +250,6 @@ export function TeachPanel({
         onRequireAuth={onRequireAuth}
         onConversationStarted={handleStarted}
         onConversationKept={handleKept}
-        onConversationDiscarded={handleDiscarded}
       />
     );
   }
@@ -304,7 +300,6 @@ function TeachChat({
   onRequireAuth,
   onConversationStarted,
   onConversationKept,
-  onConversationDiscarded,
 }: {
   sourceId: string;
   csrf: string;
@@ -318,7 +313,6 @@ function TeachChat({
   onRequireAuth?: () => void;
   onConversationStarted: (conversationId: string) => void;
   onConversationKept: () => void;
-  onConversationDiscarded: () => void;
 }) {
   // The notes choice belongs to the conversation, so it is fixed when the thread
   // creates one and is always sent explicitly rather than left to a server guess.
@@ -354,14 +348,7 @@ function TeachChat({
     [includeNotes, onConversationStarted],
   );
 
-  // A discarded first message leaves no conversation, so the choice is the
-  // reader's again.
-  const handleDiscarded = useCallback(() => {
-    setFixedNotes(null);
-    onConversationDiscarded();
-  }, [onConversationDiscarded]);
-
-  const { messages, status, isStreaming, banner, send, stop } =
+  const { messages, status, isStreaming, banner, failedTurn, send, stop } =
     useConversationThread({
       csrf,
       mode: "teach",
@@ -370,9 +357,15 @@ function TeachChat({
       initialMessages,
       onConversationStarted: handleStarted,
       onConversationKept,
-      onConversationDiscarded: handleDiscarded,
       onRequireAuth,
     });
+
+  const retryFailedTurn = useCallback(() => {
+    if (!failedTurn?.userText) {
+      return;
+    }
+    send(failedTurn.userText);
+  }, [failedTurn, send]);
 
   const handleSubmit = useCallback(
     (message: PromptInputMessage) => {
@@ -393,22 +386,37 @@ function TeachChat({
           {messages.map((message, index) => {
             if (message.role === "user") {
               return (
-                <Message from="user" key={message.id}>
-                  <MessageContent>
-                    {message.parts.map((part, i) =>
-                      part.type === "text" ? (
-                        <span data-testid="user-message" key={i}>
-                          {part.text}
-                        </span>
-                      ) : null,
-                    )}
-                  </MessageContent>
-                </Message>
+                <Fragment key={message.id}>
+                  <Message from="user">
+                    <MessageContent>
+                      {message.parts.map((part, i) =>
+                        part.type === "text" ? (
+                          <span data-testid="user-message" key={i}>
+                            {part.text}
+                          </span>
+                        ) : null,
+                      )}
+                    </MessageContent>
+                  </Message>
+                  {failedTurn?.messageId === message.id ? (
+                    <Message from="assistant">
+                      <MessageContent>
+                        <FailedTurn
+                          error={failedTurn.error}
+                          onRetry={retryFailedTurn}
+                          retryDisabled={isStreaming}
+                        />
+                      </MessageContent>
+                    </Message>
+                  ) : null}
+                </Fragment>
               );
             }
             const { text, citations, status: answerStatus, reasoning } =
               assistantView(message);
             const notFound = isNotFound(answerStatus);
+            const restoredFailed = answerStatus === "failed";
+            const liveFailed = failedTurn?.messageId === message.id;
             const previous = messages[index - 1];
             const question =
               previous?.role === "user" ? messageText(previous) : "";
@@ -418,7 +426,7 @@ function TeachChat({
             return (
               <Message from="assistant" key={message.id}>
                 <MessageContent>
-                  {reasoning && !notFound ? (
+                  {reasoning && !notFound && !restoredFailed ? (
                     <ReasoningRegion
                       text={reasoning}
                       thinking={pending && !text}
@@ -427,22 +435,39 @@ function TeachChat({
                   {pending && !text && !reasoning ? (
                     <AnswerPhaseIndicator />
                   ) : null}
-                  <CitedAnswer
-                    sourceId={sourceId}
-                    text={text}
-                    citations={notFound ? null : citations}
-                    onShowInBook={onShowInBook}
-                  />
+                  {restoredFailed && !text ? null : (
+                    <CitedAnswer
+                      sourceId={sourceId}
+                      text={text}
+                      citations={notFound || restoredFailed ? null : citations}
+                      onShowInBook={onShowInBook}
+                    />
+                  )}
                   {notFound && answerStatus ? (
                     <NotFoundNotice status={answerStatus} />
                   ) : null}
-                  {!notFound && citations && citations.length > 0 ? (
+                  {!notFound && !restoredFailed && citations && citations.length > 0 ? (
                     <SaveToNoteAction
                       sourceId={sourceId}
                       question={question}
                       answerText={text}
                       citations={citations}
                       csrf={csrf}
+                    />
+                  ) : null}
+                  {liveFailed || restoredFailed ? (
+                    <FailedTurn
+                      error={
+                        liveFailed && failedTurn
+                          ? failedTurn.error
+                          : errorMessageFor(502)
+                      }
+                      onRetry={() =>
+                        send(
+                          (liveFailed && failedTurn?.userText) || question,
+                        )
+                      }
+                      retryDisabled={isStreaming}
                     />
                   ) : null}
                 </MessageContent>
@@ -453,6 +478,18 @@ function TeachChat({
               the same search is already under way, so it reads the same. */}
           {isStreaming && messages[messages.length - 1]?.role === "user" ? (
             <AnswerPhaseIndicator />
+          ) : null}
+          {failedTurn &&
+          !messages.some((message) => message.id === failedTurn.messageId) ? (
+            <Message from="assistant">
+              <MessageContent>
+                <FailedTurn
+                  error={failedTurn.error}
+                  onRetry={retryFailedTurn}
+                  retryDisabled={isStreaming}
+                />
+              </MessageContent>
+            </Message>
           ) : null}
         </ConversationContent>
       </Conversation>

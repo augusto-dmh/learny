@@ -31,7 +31,33 @@ import {
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { TeachPanel } from "../app/components/teach-panel";
-import { writeActiveConversation } from "../app/lib/active-conversation";
+import {
+  readActiveConversation,
+  writeActiveConversation,
+} from "../app/lib/active-conversation";
+
+// The delete-on-failure sensor: the conversations client is real except for
+// `deleteConversation`, which is replaced by a spy so a reintroduced DELETE is
+// caught at the call, not just at the wire. Retry must not create a second
+// conversation, so `startConversation` is wrapped the same way.
+const { deleteConversationSpy, startConversationSpy } = vi.hoisted(() => ({
+  deleteConversationSpy: vi.fn(),
+  startConversationSpy: vi.fn(),
+}));
+vi.mock("../app/lib/conversations", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../app/lib/conversations")>();
+  return {
+    ...actual,
+    deleteConversation: deleteConversationSpy,
+    startConversation: (
+      ...args: Parameters<typeof actual.startConversation>
+    ) => {
+      startConversationSpy(...args);
+      return actual.startConversation(...args);
+    },
+  };
+});
 
 beforeAll(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
@@ -235,6 +261,8 @@ async function startSession(anchor = "c2.xhtml") {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  deleteConversationSpy.mockClear();
+  startConversationSpy.mockClear();
   localStorage.clear();
 });
 
@@ -443,6 +471,129 @@ describe("TeachPanel on the conversation surface (RA-10)", () => {
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("Answer generation failed");
     expect(document.body.textContent).toContain("Partial turn");
+    expect(document.body.textContent).toContain("first try");
+    expect(deleteConversationSpy).not.toHaveBeenCalled();
+    expect(readActiveConversation("s1", "teach")).toBe("conv2");
+    expect(screen.getByTestId("failed-turn").textContent).toContain(
+      "Answer generation failed",
+    );
+    expect(
+      (screen.getByRole("button", { name: "Retry" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
+  });
+});
+
+/** Every DELETE the panel issued against the taught conversation. */
+function deleteCalls(fetchMock: ReturnType<typeof routedFetch>): unknown[][] {
+  return fetchMock.mock.calls.filter(
+    ([url, init]) =>
+      url === READ_URL &&
+      (init as RequestInit | undefined)?.method === "DELETE",
+  );
+}
+
+describe("TeachPanel keeps the thread when a turn fails", () => {
+  it("never deletes the conversation its first message created when the stream errors", async () => {
+    const stream = sseStream();
+    const fetchMock = routedFetch(
+      baseHandlers(() => stream.response, {
+        [`DELETE ${READ_URL}`]: () => new Response(null, { status: 204 }),
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
+    await startSession();
+    await sendMessage("a question that fails");
+
+    await stream.push({ type: "start", messageId: "m1" });
+    await stream.push({
+      type: "error",
+      errorText: "Answer generation failed. Please try again.",
+    });
+    await screen.findByRole("alert");
+
+    expect(deleteConversationSpy).not.toHaveBeenCalled();
+    expect(deleteCalls(fetchMock)).toHaveLength(0);
+    expect(readActiveConversation("s1", "teach")).toBe("conv2");
+    expect(document.body.textContent).toContain("a question that fails");
+  });
+});
+
+describe("TeachPanel retries a failed turn on the same conversation", () => {
+  it("resubmits the same message as a new turn without creating another conversation", async () => {
+    const streams = [sseStream(), sseStream()];
+    let streamCalls = 0;
+    const fetchMock = routedFetch(
+      baseHandlers(() => streams[Math.min(streamCalls++, 1)].response),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
+    await startSession();
+    await sendMessage("the same question");
+
+    await streams[0].push({ type: "start", messageId: "m1" });
+    await streams[0].push({
+      type: "error",
+      errorText: "Answer generation failed. Please try again.",
+    });
+
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    expect(callsTo(fetchMock, CREATE_URL)).toHaveLength(1);
+    expect(startConversationSpy).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      fireEvent.click(retry);
+    });
+
+    await waitFor(() => expect(callsTo(fetchMock, TURN_STREAM)).toHaveLength(2));
+    expect(bodyOf(callsTo(fetchMock, TURN_STREAM)[0])).toMatchObject({
+      message: "the same question",
+    });
+    expect(bodyOf(callsTo(fetchMock, TURN_STREAM)[1])).toMatchObject({
+      message: "the same question",
+    });
+    expect(callsTo(fetchMock, CREATE_URL)).toHaveLength(1);
+    expect(startConversationSpy).toHaveBeenCalledTimes(1);
+    expect(readActiveConversation("s1", "teach")).toBe("conv2");
+  });
+
+  it("disables Retry while a turn is already streaming", async () => {
+    const streams = [sseStream(), sseStream()];
+    let streamCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      routedFetch(
+        baseHandlers(() => streams[Math.min(streamCalls++, 1)].response),
+      ),
+    );
+
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
+    await startSession();
+    await sendMessage("the same question");
+
+    await streams[0].push({ type: "start", messageId: "m1" });
+    await streams[0].push({
+      type: "error",
+      errorText: "Answer generation failed. Please try again.",
+    });
+
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    expect((retry as HTMLButtonElement).disabled).toBe(false);
+
+    await act(async () => {
+      fireEvent.click(retry);
+    });
+
+    await streams[1].push({ type: "start", messageId: "m2" });
+    await waitFor(() =>
+      expect(
+        (screen.getByRole("button", { name: "Retry" }) as HTMLButtonElement)
+          .disabled,
+      ).toBe(true),
+    );
   });
 });
 
@@ -621,6 +772,42 @@ describe("TeachPanel thread restore (RA-10)", () => {
 
     // The taught passage is named by the live structure, not by a stored label.
     expect(screen.getByRole("heading", { name: "Chapter 1" })).toBeTruthy();
+  });
+
+  it("restores a failed turn as the question plus the error, not an empty shell", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/sources/s1/structure": () => jsonResponse(200, structure),
+        [`GET ${READ_URL}`]: () =>
+          jsonResponse(200, {
+            ...conversationScopedTo("c1.xhtml", "Chapter 1"),
+            turns: [
+              {
+                turn_index: 0,
+                message: "What is this about?",
+                mode: "teach",
+                answer_status: "failed",
+                text: "",
+                citations: [],
+                evidence_count: 0,
+                model: "unknown",
+                created_at: "now",
+              },
+            ],
+          }),
+      }),
+    );
+    writeActiveConversation("s1", "teach", "conv2");
+
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
+
+    expect(await screen.findByText("What is this about?")).toBeTruthy();
+    expect(screen.getByTestId("failed-turn").textContent).toContain(
+      "Answer generation failed",
+    );
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(screen.queryByTestId("not-found")).toBeNull();
   });
 
   it("offers the target picker again when the pointed-at conversation is gone", async () => {

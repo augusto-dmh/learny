@@ -1,17 +1,20 @@
 // @vitest-environment jsdom
 
 /**
- * A message that never landed must leave nothing behind.
+ * A message that never landed must leave the thread behind, not take it away.
  *
  * Creating a conversation and sending its first message are two calls, so there
- * is a window where the first has succeeded and the second has not — a
- * conversation with no grounded turn, which the reader never asked to make and
- * would find sitting in the dock afterwards. These tests drive the panel against
- * a fake server that actually holds what it was told to create, so the list
+ * is a window where the first has succeeded and the second has not. That window
+ * used to end in a DELETE: the client threw the conversation away rather than
+ * leave an empty row in the dock. It no longer does — the reader's question is
+ * the part worth keeping, so a failed or stopped first message keeps its
+ * conversation and keeps the surface pointed at it, and the dock lists the row
+ * once the server holds a turn for it. These tests drive the panel against a
+ * fake server that actually holds what it was told to create, so the list
  * assertions are about what the server has, not about what the client drew.
  *
- * The contrast case matters as much: a failure on a *later* message must not
- * take the thread with it.
+ * The contrast case still holds: a failure on a *later* message must not take
+ * the thread with it either.
  */
 
 import {
@@ -195,9 +198,20 @@ afterEach(() => {
   localStorage.clear();
 });
 
-describe("a first message that never lands", () => {
-  it("leaves no conversation behind when the turn fails", async () => {
-    const { conversations } = fakeServer(() =>
+/** Every DELETE issued against the conversation the first message created. */
+function deleteCalls(
+  fetchMock: ReturnType<typeof fakeServer>["fetchMock"],
+): unknown[][] {
+  return fetchMock.mock.calls.filter(
+    ([url, init]) =>
+      url === CONVERSATION_URL &&
+      (init as RequestInit | undefined)?.method === "DELETE",
+  );
+}
+
+describe("a first message that does not land", () => {
+  it("keeps the conversation when the turn fails", async () => {
+    const { conversations, fetchMock } = fakeServer(() =>
       jsonResponse(429, { detail: "Too many requests." }),
     );
     renderDock();
@@ -209,18 +223,17 @@ describe("a first message that never lands", () => {
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toMatch(/too many requests/i);
 
-    // And the conversation created for that message is gone from the server, so
-    // the dock has nothing to list and nothing to come back to on a reload.
-    await waitFor(() => expect(conversations.size).toBe(0));
-    await waitFor(() =>
-      expect(screen.getByText("No conversations yet.")).toBeTruthy(),
-    );
-    expect(readActiveConversation("s1", "ask")).toBeNull();
+    // And the conversation created for that message is still on the server,
+    // still pointed at, so the reader retries into the same thread instead of
+    // finding it gone.
+    expect(conversations.has("conv1")).toBe(true);
+    expect(deleteCalls(fetchMock)).toHaveLength(0);
+    expect(readActiveConversation("s1", "ask")).toBe("conv1");
   });
 
-  it("leaves no conversation behind when the reader stops the turn", async () => {
+  it("keeps the conversation when the reader stops the turn", async () => {
     let stream: ReturnType<typeof abortableStream> | null = null;
-    const { conversations } = fakeServer((init) => {
+    const { conversations, fetchMock } = fakeServer((init) => {
       stream = abortableStream(init);
       return stream.response;
     });
@@ -238,11 +251,10 @@ describe("a first message that never lands", () => {
       fireEvent.click(stopButton);
     });
 
-    await waitFor(() => expect(conversations.size).toBe(0));
-    await waitFor(() =>
-      expect(screen.getByText("No conversations yet.")).toBeTruthy(),
-    );
-    expect(readActiveConversation("s1", "ask")).toBeNull();
+    // Stopping is not a request to throw the question away.
+    expect(conversations.has("conv1")).toBe(true);
+    expect(deleteCalls(fetchMock)).toHaveLength(0);
+    expect(readActiveConversation("s1", "ask")).toBe("conv1");
   });
 
   it("lists the thread once its first message has landed, and not before", async () => {
@@ -260,8 +272,8 @@ describe("a first message that never lands", () => {
     await stream!.push({ type: "text-start", id: "t1" });
     await stream!.push({ type: "text-delta", id: "t1", delta: "An answer." });
 
-    // Mid-stream the conversation exists but holds no turn, and it may yet be
-    // discarded — so there is nothing for the dock to offer the reader.
+    // Mid-stream the conversation exists but the server has no turn yet, so
+    // there is nothing for the dock to offer the reader.
     await waitFor(() => expect(document.body.textContent).toContain("An answer."));
     expect(
       screen.queryByRole("button", { name: "Resume Untitled conversation" }),
@@ -325,13 +337,7 @@ describe("a first message that never lands", () => {
     expect(alert.textContent).toMatch(/too many requests/i);
 
     expect(conversations.size).toBe(1);
-    expect(
-      fetchMock.mock.calls.filter(
-        ([url, init]) =>
-          url === CONVERSATION_URL &&
-          (init as RequestInit | undefined)?.method === "DELETE",
-      ),
-    ).toHaveLength(0);
+    expect(deleteCalls(fetchMock)).toHaveLength(0);
     expect(readActiveConversation("s1", "ask")).toBe("conv1");
   });
 });

@@ -130,3 +130,12 @@ redirects (RFC-004 Cycle C), the contents rail (`TocPanel`), and the per-source
 due-cards filter — so the remainder divides along two disjoint axes rather than the
 RFC's literal "dock + redirects / notes & review" seam. Rationale and the rejected
 alternatives: AD-203.
+
+## v7 (RFC-0007 — Draft)
+
+v7 is proposed in [RFC-0007](../../docs/rfc/0007-public-launch-roadmap.md) (**Draft, research 2026-09-03**): the public-launch arc. Evidence: `docs/research/2026-09-03/`. Bet 1 gates activation and any launch motion.
+
+| tlc Cycle | RFC-0007 | Scope | Status |
+|---|---|---|---|
+| `trustworthy-cited-ask` | A / Bet 1 | Keep the thread on failed Ask; pin both Anthropic request shapes; claim-level citation spans | Verifier PASS, publishing |
+| *(Bets 2–7)* | B–G | Reader; tutor; review; first session; safety rails; cheaper intelligence | Not started |

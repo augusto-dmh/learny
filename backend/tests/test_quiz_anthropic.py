@@ -451,3 +451,65 @@ def test_suggest_cards_bounds_the_foreground_call_with_a_timeout() -> None:
     timeout = adapter._get_client().messages.create_kwargs["timeout"]
     assert timeout is not None
     assert 0 < timeout <= 60
+
+
+# --- The structured-output shape, and what it must never carry (ASK-08) ----------
+#
+# The mirror of the answering adapter's citations pin. Anthropic rejects a request
+# that asks for citations and a structured-output format at once, so the two shapes
+# are pinned in two places that cannot both pass on a mixed request: the answering
+# suite asserts documents-with-citations and no output format, and these assert a
+# json_schema format and no document blocks at all. All three structured-output
+# paths are covered, because one unpinned path is where the mix comes back.
+
+
+def _document_blocks(messages: list[dict]) -> list[dict]:
+    """Every ``document`` block in a request's messages.
+
+    Section and note text reaches these requests as plain prompt text. A ``document``
+    block is the answering path's shape and has no business here at all, so the
+    assertion is on its absence rather than on its ``citations`` flag.
+    """
+    blocks: list[dict] = []
+    for message in messages:
+        content = message["content"]
+        if isinstance(content, str):
+            continue
+        blocks.extend(
+            block
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "document"
+        )
+    return blocks
+
+
+def test_batch_request_sends_a_json_schema_and_no_document_blocks() -> None:
+    batches = _FakeBatches()
+    adapter = _adapter(batches)
+
+    adapter.begin_deck([_section("A", [uuid4()])])
+
+    params = batches.created_requests[0]["params"]
+    assert params["output_config"]["format"]["type"] == "json_schema"
+    assert _document_blocks(params["messages"]) == []
+
+
+def test_suggest_cards_request_sends_a_json_schema_and_no_document_blocks() -> None:
+    chunk = uuid4()
+    adapter = _adapter(_FakeBatches(), reply=_items_json(chunk))
+
+    adapter.suggest_cards(_section("A", [chunk]), "The key term.", 3)
+
+    kwargs = adapter._get_client().messages.create_kwargs
+    assert kwargs["output_config"]["format"]["type"] == "json_schema"
+    assert _document_blocks(kwargs["messages"]) == []
+
+
+def test_note_suggestion_request_sends_a_json_schema_and_no_document_blocks() -> None:
+    adapter = _adapter(_FakeBatches(), reply=_note_items_json())
+
+    adapter.suggest_note_cards("A note body worth a card.", "Chapter One", 3)
+
+    kwargs = adapter._get_client().messages.create_kwargs
+    assert kwargs["output_config"]["format"]["type"] == "json_schema"
+    assert _document_blocks(kwargs["messages"]) == []

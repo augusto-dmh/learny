@@ -51,6 +51,7 @@ from app.application.streaming import (
     TurnStreamEvent,
 )
 from app.domain.entities import (
+    FAILED,
     MODE_ANSWER,
     MODE_TEACH,
     SENTINEL,
@@ -58,6 +59,7 @@ from app.domain.entities import (
     AnswerReasoningDelta,
     AnswerStreamEvent,
     AnswerTextDelta,
+    CitedSpan,
     Conversation,
     ConversationSummary,
     ConversationTurn,
@@ -1807,6 +1809,101 @@ def test_answered_turn_is_persisted_with_the_next_index_and_ranked_citations() -
     assert [t.turn_index for t in turns.list_for_conversation(conversation.id)] == [0, 1]
 
 
+def test_only_the_citation_a_quote_was_reported_for_carries_that_quote() -> None:
+    # ASK-12: a reported quote is a location *inside one citation*, so it lands on
+    # that citation and nowhere else. ASK-17: the passage the answer quoted nothing
+    # from is snapshotted exactly as it was retrieved — a citation carrying a
+    # neighbour's sentence would put a highlight over text nobody cited.
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    top = _evidence(source.id, "the tides follow the moon", anchor="ch1.xhtml", score=0.9)
+    second = _evidence(source.id, "volcanoes vent magma", anchor="ch1.xhtml#core", score=0.4)
+    generation = FakeGeneration(
+        answer=GeneratedAnswer(
+            text="grounded",
+            cited_chunk_ids=(top.chunk_id, second.chunk_id),
+            model=_MODEL,
+            found=True,
+            spans=(CitedSpan(chunk_id=second.chunk_id, quote="vent magma", start=10, end=20),),
+        )
+    )
+
+    turn = _post(
+        conversations=conversations,
+        turns=FakeConversationTurnRepository(),
+        sources=sources,
+        corpus=corpus,
+        retrieve=FakeScopedRetrieveEvidence([top, second]),
+        generation=generation,
+    )(user=user, conversation_id=conversation.id, message="q", mode=MODE_ANSWER)
+
+    quoted, unquoted = turn.citations[1], turn.citations[0]
+    assert (quoted.quoted_text, quoted.start_char, quoted.end_char) == ("vent magma", 10, 20)
+    # The offsets address the snippet stored beside them on the same citation.
+    assert quoted.snippet[quoted.start_char : quoted.end_char] == quoted.quoted_text
+    # Untouched, down to identity: nothing about the quote changed its neighbour.
+    assert unquoted == top
+
+
+def test_a_second_quote_into_the_same_passage_does_not_displace_the_first() -> None:
+    # A reader sees one mark per cited passage (AD-222), so one citation can show one
+    # sentence. When an answer draws twice on the same passage the first quote is what
+    # the mark stands for; the rest of the passage is still there in the snippet.
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    evidence = _evidence(source.id, "the tides follow the moon", anchor="ch1.xhtml")
+    generation = FakeGeneration(
+        answer=GeneratedAnswer(
+            text="grounded",
+            cited_chunk_ids=(evidence.chunk_id,),
+            model=_MODEL,
+            found=True,
+            spans=(
+                CitedSpan(chunk_id=evidence.chunk_id, quote="the tides", start=0, end=9),
+                CitedSpan(chunk_id=evidence.chunk_id, quote="the moon", start=17, end=25),
+            ),
+        )
+    )
+
+    turn = _post(
+        conversations=conversations,
+        turns=FakeConversationTurnRepository(),
+        sources=sources,
+        corpus=corpus,
+        retrieve=FakeScopedRetrieveEvidence([evidence]),
+        generation=generation,
+    )(user=user, conversation_id=conversation.id, message="q", mode=MODE_ANSWER)
+
+    (citation,) = turn.citations
+    assert (citation.quoted_text, citation.start_char, citation.end_char) == ("the tides", 0, 9)
+
+
+def test_a_quote_into_a_passage_grounding_dropped_reaches_no_citation() -> None:
+    # A span cannot outlive the citation it points into: the adapter naming a chunk
+    # that was never retrieved leaves nothing for a quote into it to attach to.
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    evidence = _evidence(source.id, "the tides follow the moon", anchor="ch1.xhtml")
+    ghost = uuid4()
+    generation = FakeGeneration(
+        answer=GeneratedAnswer(
+            text="grounded",
+            cited_chunk_ids=(evidence.chunk_id, ghost),
+            model=_MODEL,
+            found=True,
+            spans=(CitedSpan(chunk_id=ghost, quote="never retrieved", start=0, end=15),),
+        )
+    )
+
+    turn = _post(
+        conversations=conversations,
+        turns=FakeConversationTurnRepository(),
+        sources=sources,
+        corpus=corpus,
+        retrieve=FakeScopedRetrieveEvidence([evidence]),
+        generation=generation,
+    )(user=user, conversation_id=conversation.id, message="q", mode=MODE_ANSWER)
+
+    assert turn.citations == (evidence,)
+
+
 def test_a_persisted_turn_bumps_the_conversations_activity() -> None:
     # CONV-13: the conversation rises in the list the moment a turn lands in it.
     user, source, sources, corpus, conversations, conversation = _scoped_world()
@@ -1863,8 +1960,11 @@ def test_a_turn_index_race_surfaces_as_a_conflict_while_streaming() -> None:
         list(post.stream(user=user, conversation_id=conversation.id, message="q", mode=MODE_ANSWER))
 
 
-def test_generation_failure_persists_nothing() -> None:
-    # A port failure maps to the generic generation error (502) with no turn written.
+def test_generation_failure_keeps_the_question_as_a_failed_turn() -> None:
+    # ASK-01/ASK-02: a port failure still maps to the generic generation error (502),
+    # but the reader's question is written as a turn at ``failed`` with no answer and
+    # no citations — a refresh after the error must find the question, not an empty
+    # conversation. (Supersedes the earlier "502 persists nothing" contract, AD-262.)
     user, source, sources, corpus, conversations, conversation = _scoped_world()
     turns = FakeConversationTurnRepository()
     evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
@@ -1877,10 +1977,52 @@ def test_generation_failure_persists_nothing() -> None:
             corpus=corpus,
             retrieve=FakeScopedRetrieveEvidence(evidence),
             generation=FakeGeneration(error=RuntimeError("provider down")),
-        )(user=user, conversation_id=conversation.id, message="q", mode=MODE_ANSWER)
+        )(user=user, conversation_id=conversation.id, message=_PRIVATE_MESSAGE, mode=MODE_ANSWER)
 
-    assert turns.add_calls == 0
-    assert conversations.touch_calls == []
+    persisted = turns.list_for_conversation(conversation.id)
+    assert len(persisted) == 1
+    turn = persisted[0]
+    assert turn.answer_status == FAILED
+    assert turn.message == _PRIVATE_MESSAGE
+    assert turn.answer_text == ""
+    assert turn.citations == ()
+    assert turn.turn_index == 0
+    assert turn.mode == MODE_ANSWER
+    # The adapter never returned, so the model is the configured one, not blank.
+    assert turn.model == _MODEL
+    assert [call[0] for call in conversations.touch_calls] == [conversation.id]
+
+
+def test_a_failure_on_a_later_turn_leaves_the_earlier_turns_alone() -> None:
+    # ASK-05: the failed turn is an append at the next index. A conversation that has
+    # been answering for a while keeps every prior turn and gains one failed row.
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    turns = FakeConversationTurnRepository()
+    evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
+    answered = _post(
+        conversations=conversations,
+        turns=turns,
+        sources=sources,
+        corpus=corpus,
+        retrieve=FakeScopedRetrieveEvidence(evidence),
+        generation=FakeGeneration(answer=_answered(*evidence, text="the first reply")),
+    )(user=user, conversation_id=conversation.id, message="first", mode=MODE_ANSWER)
+
+    with pytest.raises(AnswerGenerationFailed):
+        _post(
+            conversations=conversations,
+            turns=turns,
+            sources=sources,
+            corpus=corpus,
+            retrieve=FakeScopedRetrieveEvidence(evidence),
+            generation=FakeGeneration(error=RuntimeError("provider down")),
+        )(user=user, conversation_id=conversation.id, message="second", mode=MODE_ANSWER)
+
+    persisted = turns.list_for_conversation(conversation.id)
+    assert [t.turn_index for t in persisted] == [0, 1]
+    assert persisted[0] == answered
+    assert persisted[1].answer_status == FAILED
+    assert persisted[1].message == "second"
 
 
 # --- Turn path: the completion log (CONV-13) ------------------------------------
@@ -2228,10 +2370,67 @@ def test_retrieval_failing_inside_the_stream_becomes_the_generation_failure() ->
     with pytest.raises(AnswerGenerationFailed):
         next(stream)
 
-    # The failure replaces the answer, it does not half-write a turn.
+    # The failure replaces the answer, not the question: nothing was generated, and
+    # the turn that lands is the reader's message at ``failed`` (AD-262). Evidence
+    # count is zero because the search never answered.
     assert generation.stream_calls == []
-    assert turns.add_calls == 0
-    assert conversations.touch_calls == []
+    persisted = turns.list_for_conversation(conversation.id)
+    assert len(persisted) == 1
+    assert persisted[0].answer_status == FAILED
+    assert persisted[0].message == "q"
+    assert persisted[0].answer_text == ""
+    assert persisted[0].citations == ()
+    assert persisted[0].evidence_count == 0
+
+
+def test_a_provider_breaking_mid_stream_still_keeps_the_question() -> None:
+    # ASK-01 on the streaming path — the one the reader actually uses. Deltas have
+    # already been shown when the provider breaks, so the error frame is all the
+    # client gets; the question survives as a ``failed`` turn, and a reload after the
+    # error shows what was asked instead of an empty conversation.
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
+    turns = FakeConversationTurnRepository()
+
+    class _BreaksMidStream(FakeGeneration):
+        def generate_stream(
+            self,
+            *,
+            message: str,
+            mode: str,
+            evidence: Sequence[Evidence],
+            history: Sequence[HistoryTurn] = (),
+            target_section_path: tuple[str, ...] | None = None,
+        ) -> Iterator[AnswerStreamEvent]:
+            yield AnswerTextDelta(text="partial ")
+            raise RuntimeError("provider down")
+
+    with pytest.raises(AnswerGenerationFailed):
+        list(
+            _post(
+                conversations=conversations,
+                turns=turns,
+                sources=sources,
+                corpus=corpus,
+                retrieve=FakeScopedRetrieveEvidence(evidence),
+                generation=_BreaksMidStream(),
+            ).stream(
+                user=user,
+                conversation_id=conversation.id,
+                message=_PRIVATE_MESSAGE,
+                mode=MODE_ANSWER,
+            )
+        )
+
+    persisted = turns.list_for_conversation(conversation.id)
+    assert len(persisted) == 1
+    turn = persisted[0]
+    assert turn.answer_status == FAILED
+    assert turn.message == _PRIVATE_MESSAGE
+    # The partial text the reader saw is not an answer, and is not kept as one.
+    assert turn.answer_text == ""
+    assert turn.citations == ()
+    assert turn.model == _MODEL
 
 
 def test_retrieval_failing_inside_the_stream_is_logged_with_its_traceback(
@@ -2419,8 +2618,8 @@ def test_a_mark_after_a_sentinel_prefix_releases_the_held_answer() -> None:
 
 def test_stream_that_ends_without_a_completed_event_is_a_generation_failure() -> None:
     # Port contract: a generation stream ends with exactly one completed event. One
-    # that just stops surfaces as a generation failure with nothing persisted, never
-    # as a silently empty answer built from the deltas already sent.
+    # that just stops surfaces as a generation failure — the question kept at
+    # ``failed`` — never as a silently empty answer built from the deltas already sent.
     user, source, sources, corpus, conversations, conversation = _scoped_world()
     evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
     turns = FakeConversationTurnRepository()
@@ -2450,8 +2649,10 @@ def test_stream_that_ends_without_a_completed_event_is_a_generation_failure() ->
             ).stream(user=user, conversation_id=conversation.id, message="q", mode=MODE_ANSWER)
         )
 
-    assert turns.add_calls == 0
-    assert conversations.touch_calls == []
+    persisted = turns.list_for_conversation(conversation.id)
+    assert len(persisted) == 1
+    assert persisted[0].answer_status == FAILED
+    assert persisted[0].answer_text == ""
 
 
 # --- Turn path: ownership and readiness (I-CM-6) --------------------------------

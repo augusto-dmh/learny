@@ -34,7 +34,7 @@
  */
 
 import { X } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 
 import {
   readActiveConversation,
@@ -48,6 +48,7 @@ import {
 import { type PendingPanelRequest } from "@/app/lib/panel";
 import {
   assistantView,
+  errorMessageFor,
   messageText,
   turnsToUIMessages,
   type LearnyUIMessage,
@@ -69,6 +70,7 @@ import { Button } from "@/components/ui/button";
 
 import { AnswerPhaseIndicator, ReasoningRegion } from "./answer-phase";
 import { CitedAnswer } from "./cited-answer";
+import { FailedTurn } from "./failed-turn";
 import { IncludeNotesToggle } from "./include-notes-toggle";
 import { isNotFound, NotFoundNotice } from "./not-found-notice";
 import { SaveToNoteAction } from "./save-to-note-action";
@@ -188,11 +190,6 @@ export function AskPanel({
     onConversationsChanged?.();
   }, [onConversationsChanged]);
 
-  const handleDiscarded = useCallback(() => {
-    writeActiveConversation(sourceId, SURFACE, null);
-    onConversationsChanged?.();
-  }, [sourceId, onConversationsChanged]);
-
   if (thread === null) {
     return <p className="text-muted-foreground">Loading…</p>;
   }
@@ -212,7 +209,6 @@ export function AskPanel({
       onRequireAuth={onRequireAuth}
       onConversationStarted={handleStarted}
       onConversationKept={handleKept}
-      onConversationDiscarded={handleDiscarded}
     />
   );
 }
@@ -230,7 +226,6 @@ function AskChat({
   onRequireAuth,
   onConversationStarted,
   onConversationKept,
-  onConversationDiscarded,
 }: {
   sourceId: string;
   csrf: string;
@@ -245,7 +240,6 @@ function AskChat({
   onRequireAuth?: () => void;
   onConversationStarted: (conversationId: string) => void;
   onConversationKept: () => void;
-  onConversationDiscarded: () => void;
 }) {
   // A quote the reader chose to "Ask about": it rides along, once, with the next
   // typed question (RA-18) and shows as a dismissable context chip until then.
@@ -279,14 +273,7 @@ function AskChat({
     [includeNotes, onConversationStarted],
   );
 
-  // A discarded first message leaves no conversation, so the choice is the
-  // reader's again.
-  const handleDiscarded = useCallback(() => {
-    setFixedNotes(null);
-    onConversationDiscarded();
-  }, [onConversationDiscarded]);
-
-  const { messages, status, isStreaming, banner, send, stop } =
+  const { messages, status, isStreaming, banner, failedTurn, send, stop } =
     useConversationThread({
       csrf,
       mode: "answer",
@@ -295,7 +282,6 @@ function AskChat({
       initialMessages,
       onConversationStarted: handleStarted,
       onConversationKept,
-      onConversationDiscarded: handleDiscarded,
       onRequireAuth,
     });
 
@@ -315,6 +301,13 @@ function AskChat({
     }
     onPendingConsumed?.();
   }, [pendingRequest, send, onPendingConsumed]);
+
+  const retryFailedTurn = useCallback(() => {
+    if (!failedTurn?.userText) {
+      return;
+    }
+    send(failedTurn.userText);
+  }, [failedTurn, send]);
 
   const handleSubmit = useCallback(
     (message: PromptInputMessage) => {
@@ -352,20 +345,35 @@ function AskChat({
             const isLast = index === messages.length - 1;
             if (message.role === "user") {
               return (
-                <Message from="user" key={message.id}>
-                  <MessageContent>
-                    {message.parts.map((part, i) =>
-                      part.type === "text" ? (
-                        <span key={i}>{part.text}</span>
-                      ) : null,
-                    )}
-                  </MessageContent>
-                </Message>
+                <Fragment key={message.id}>
+                  <Message from="user">
+                    <MessageContent>
+                      {message.parts.map((part, i) =>
+                        part.type === "text" ? (
+                          <span key={i}>{part.text}</span>
+                        ) : null,
+                      )}
+                    </MessageContent>
+                  </Message>
+                  {failedTurn?.messageId === message.id ? (
+                    <Message from="assistant">
+                      <MessageContent>
+                        <FailedTurn
+                          error={failedTurn.error}
+                          onRetry={retryFailedTurn}
+                          retryDisabled={isStreaming}
+                        />
+                      </MessageContent>
+                    </Message>
+                  ) : null}
+                </Fragment>
               );
             }
             const { text, citations, status: answerStatus, reasoning } =
               assistantView(message);
             const notFound = isNotFound(answerStatus);
+            const restoredFailed = answerStatus === "failed";
+            const liveFailed = failedTurn?.messageId === message.id;
             const previous = messages[index - 1];
             const question =
               previous?.role === "user" ? messageText(previous) : "";
@@ -375,7 +383,7 @@ function AskChat({
             return (
               <Message from="assistant" key={message.id}>
                 <MessageContent>
-                  {reasoning && !notFound ? (
+                  {reasoning && !notFound && !restoredFailed ? (
                     <ReasoningRegion
                       text={reasoning}
                       thinking={pending && !text}
@@ -384,31 +392,48 @@ function AskChat({
                   {pending && !text && !reasoning ? (
                     <AnswerPhaseIndicator />
                   ) : null}
-                  <CitedAnswer
-                    sourceId={sourceId}
-                    text={text}
-                    citations={notFound ? null : citations}
-                    onShowInBook={onShowInBook}
-                    trailing={
-                      pending && text ? (
-                        <span
-                          data-testid="streaming-caret"
-                          aria-hidden
-                          className="ml-0.5 inline-block h-4 w-px animate-pulse bg-foreground align-text-bottom"
-                        />
-                      ) : null
-                    }
-                  />
+                  {restoredFailed && !text ? null : (
+                    <CitedAnswer
+                      sourceId={sourceId}
+                      text={text}
+                      citations={notFound || restoredFailed ? null : citations}
+                      onShowInBook={onShowInBook}
+                      trailing={
+                        pending && text ? (
+                          <span
+                            data-testid="streaming-caret"
+                            aria-hidden
+                            className="ml-0.5 inline-block h-4 w-px animate-pulse bg-foreground align-text-bottom"
+                          />
+                        ) : null
+                      }
+                    />
+                  )}
                   {notFound && answerStatus ? (
                     <NotFoundNotice status={answerStatus} />
                   ) : null}
-                  {!notFound && citations && citations.length > 0 ? (
+                  {!notFound && !restoredFailed && citations && citations.length > 0 ? (
                     <SaveToNoteAction
                       sourceId={sourceId}
                       question={question}
                       answerText={text}
                       citations={citations}
                       csrf={csrf}
+                    />
+                  ) : null}
+                  {liveFailed || restoredFailed ? (
+                    <FailedTurn
+                      error={
+                        liveFailed && failedTurn
+                          ? failedTurn.error
+                          : errorMessageFor(502)
+                      }
+                      onRetry={() =>
+                        send(
+                          (liveFailed && failedTurn?.userText) || question,
+                        )
+                      }
+                      retryDisabled={isStreaming}
                     />
                   ) : null}
                 </MessageContent>
@@ -419,6 +444,18 @@ function AskChat({
               the same search is already under way, so it reads the same. */}
           {isStreaming && messages[messages.length - 1]?.role === "user" ? (
             <AnswerPhaseIndicator />
+          ) : null}
+          {failedTurn &&
+          !messages.some((message) => message.id === failedTurn.messageId) ? (
+            <Message from="assistant">
+              <MessageContent>
+                <FailedTurn
+                  error={failedTurn.error}
+                  onRetry={retryFailedTurn}
+                  retryDisabled={isStreaming}
+                />
+              </MessageContent>
+            </Message>
           ) : null}
         </ConversationContent>
       </Conversation>

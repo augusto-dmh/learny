@@ -239,8 +239,9 @@ class ConversationTurnView(BaseModel):
 
     ``mode`` names how the turn was answered (``answer`` or ``teach``);
     ``answer_status`` is ``answered``, ``not_found_in_scope`` (a scoped conversation
-    came up short) or ``not_found_in_source`` (a whole-book one did), with ``text``
-    and ``citations`` empty for both not-found outcomes. ``citations`` reuses the
+    came up short), ``not_found_in_source`` (a whole-book one did), or ``failed``
+    (generation broke and the question was kept anyway, AD-262), with ``text`` and
+    ``citations`` empty for all three non-answered outcomes. ``citations`` reuses the
     retrieval endpoint's ``EvidenceView`` citation-only projection.
     """
 
@@ -470,8 +471,8 @@ def post_conversation_turn(
     (``ConversationTargetUnavailable`` → 409), retrieves evidence within the
     conversation's scope, and either composes a grounded answer or the explicit
     not-found outcome. A generation failure surfaces as ``AnswerGenerationFailed`` →
-    502 with nothing persisted, and a turn-index race loses with
-    ``ConversationTurnConflict`` → 409.
+    502, with the question kept as a ``failed`` turn (AD-262), and a turn-index race
+    loses with ``ConversationTurnConflict`` → 409.
     """
     turn = service(
         user=user,
@@ -502,9 +503,10 @@ def post_conversation_turn_stream(
     auth/CSRF/Origin/rate-limit dependencies. ``PostConversationTurn.stream`` runs
     all guards **eagerly** here, so ownership (404), readiness / target-gone (409),
     validation (422) and rate-limit (429) surface as the same plain HTTP errors as
-    the JSON endpoint before any SSE byte is sent. The turn is persisted only on
-    stream completion, so a mid-stream failure (rendered as a protocol ``error``
-    part) or a client disconnect persists nothing. The handler stays synchronous and
+    the JSON endpoint before any SSE byte is sent. An answered turn is persisted only
+    on stream completion, so a client disconnect persists nothing; a mid-stream
+    failure (rendered as a protocol ``error`` part) keeps the question as a ``failed``
+    turn instead (AD-262). The handler stays synchronous and
     returns the response instance so the frame generator runs in the threadpool —
     see the contract on ``to_sse_response``.
     """
