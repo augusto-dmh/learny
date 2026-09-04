@@ -84,7 +84,12 @@ export type CardProvenance = {
  * then the constant "Your notes" and there is no book to open. `note_changed` is
  * the "your note changed" badge (NL-12): true when the origin note changed since
  * this card was last reviewed or created — always `false` for deck/highlight cards.
+ *
+ * `interval_labels` are the next-interval buckets for ratings 1–4 (REV-29). JSON
+ * object keys may arrive as strings, so lookups accept both.
  */
+export type IntervalLabels = Record<string, string>;
+
 export type DueItem = {
   id: string;
   source_id: string | null;
@@ -97,12 +102,15 @@ export type DueItem = {
   status: string;
   due: string;
   note_changed: boolean;
+  interval_labels: IntervalLabels;
 };
 
 /** The due queue response, mirroring the backend `DueQueueView`. */
 export type DueQueue = {
   items: DueItem[];
   total_due: number;
+  session_size: number;
+  requeue_minutes: number;
 };
 
 /** The updated scheduling snapshot returned after a review (backend `SchedulingView`). */
@@ -113,7 +121,20 @@ export type Scheduling = {
   difficulty: number | null;
   due: string;
   last_review: string | null;
+  interval_labels: IntervalLabels;
 };
+
+/** Read a rating's bucket label, accepting JSON string keys or numeric keys. */
+export function intervalLabel(
+  labels: IntervalLabels | Record<number, string> | undefined,
+  rating: number,
+): string {
+  if (!labels) {
+    return "";
+  }
+  const record = labels as Record<string, string>;
+  return record[String(rating)] ?? record[rating as unknown as string] ?? "";
+}
 
 /**
  * Fetch a source's quiz overview: items + per-status counts + due count + latest

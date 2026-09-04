@@ -53,6 +53,13 @@ const authedMe = jsonResponse(200, {
   csrf_token: "csrf-xyz",
 });
 
+const INTERVAL_LABELS = {
+  "1": "~1m",
+  "2": "~10m",
+  "3": "~4d",
+  "4": "~2w",
+};
+
 const clozeCard = {
   id: "i1",
   source_id: "s1",
@@ -68,6 +75,8 @@ const clozeCard = {
   provenance: null,
   status: "active",
   due: "2026-07-16T00:00:00Z",
+  note_changed: false,
+  interval_labels: INTERVAL_LABELS,
 };
 
 const recallCard = {
@@ -85,7 +94,35 @@ const recallCard = {
   provenance: null,
   status: "active",
   due: "2026-07-16T00:00:00Z",
+  note_changed: false,
+  interval_labels: INTERVAL_LABELS,
 };
+
+function dueQueue(
+  items: unknown[],
+  extra: Record<string, unknown> = {},
+) {
+  return {
+    items,
+    total_due: items.length,
+    session_size: 20,
+    requeue_minutes: 15,
+    ...extra,
+  };
+}
+
+function scheduling(due: string, extra: Record<string, unknown> = {}) {
+  return {
+    state: 2,
+    step: null,
+    stability: 4,
+    difficulty: 5,
+    due,
+    last_review: "2026-07-16T00:00:00Z",
+    interval_labels: INTERVAL_LABELS,
+    ...extra,
+  };
+}
 
 const DUE = "/api/reviews/due";
 
@@ -101,7 +138,7 @@ describe("ReviewScreen session flow (E2)", () => {
       routedFetch({
         "GET /api/auth/me": () => authedMe.clone(),
         [`GET ${DUE}?source_id=s1`]: () =>
-          jsonResponse(200, { items: [clozeCard], total_due: 1 }),
+          jsonResponse(200, dueQueue([clozeCard])),
         "POST /api/quiz-items/i1/reviews": () =>
           jsonResponse(200, {
             state: 2,
@@ -138,7 +175,7 @@ describe("ReviewScreen session flow (E2)", () => {
     const fetchMock = routedFetch({
       "GET /api/auth/me": () => authedMe.clone(),
       [`GET ${DUE}?source_id=s1`]: () =>
-        jsonResponse(200, { items: [clozeCard], total_due: 1 }),
+        jsonResponse(200, dueQueue([clozeCard])),
     });
     vi.stubGlobal("fetch", fetchMock);
 
@@ -154,7 +191,7 @@ describe("ReviewScreen session flow (E2)", () => {
     const fetchMock = routedFetch({
       "GET /api/auth/me": () => authedMe.clone(),
       [`GET ${DUE}`]: () =>
-        jsonResponse(200, { items: [clozeCard, recallCard], total_due: 2 }),
+        jsonResponse(200, dueQueue([clozeCard, recallCard])),
       "POST /api/quiz-items/i1/reviews": () =>
         jsonResponse(200, {
           state: 2,
@@ -213,7 +250,7 @@ describe("ReviewScreen session flow (E2)", () => {
     const fetchMock = routedFetch({
       "GET /api/auth/me": () => authedMe.clone(),
       [`GET ${DUE}`]: () =>
-        jsonResponse(200, { items: [clozeCard], total_due: 1 }),
+        jsonResponse(200, dueQueue([clozeCard])),
       "POST /api/quiz-items/i1/reviews": () =>
         jsonResponse(200, {
           state: 2,
@@ -255,7 +292,7 @@ describe("ReviewScreen session flow (E2)", () => {
       "fetch",
       routedFetch({
         "GET /api/auth/me": () => authedMe.clone(),
-        [`GET ${DUE}`]: () => jsonResponse(200, { items: [], total_due: 0 }),
+        [`GET ${DUE}`]: () => jsonResponse(200, dueQueue([])),
       }),
     );
 
@@ -273,7 +310,7 @@ describe("ReviewScreen session flow (E2)", () => {
         attempt += 1;
         return attempt === 1
           ? jsonResponse(500, { detail: "Boom." })
-          : jsonResponse(200, { items: [clozeCard], total_due: 1 });
+          : jsonResponse(200, dueQueue([clozeCard]));
       },
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -295,7 +332,7 @@ describe("ReviewScreen session flow (E2)", () => {
       routedFetch({
         "GET /api/auth/me": () => authedMe.clone(),
         [`GET ${DUE}`]: () =>
-          jsonResponse(200, { items: [clozeCard], total_due: 1 }),
+          jsonResponse(200, dueQueue([clozeCard])),
         "POST /api/quiz-items/i1/reviews": () =>
           jsonResponse(429, { detail: "Too many requests." }),
       }),
@@ -347,7 +384,7 @@ describe("ReviewScreen pin and provenance (CAP-25/26/27)", () => {
       routedFetch({
         "GET /api/auth/me": () => authedMe.clone(),
         [`GET ${DUE}?source_id=s1`]: () =>
-          jsonResponse(200, { items: [clozeCard], total_due: 1 }),
+          jsonResponse(200, dueQueue([clozeCard])),
       }),
     );
 
@@ -367,7 +404,7 @@ describe("ReviewScreen pin and provenance (CAP-25/26/27)", () => {
       routedFetch({
         "GET /api/auth/me": () => authedMe.clone(),
         [`GET ${DUE}?source_id=s1`]: () =>
-          jsonResponse(200, { items: [clozeCard], total_due: 1 }),
+          jsonResponse(200, dueQueue([clozeCard])),
       }),
     );
 
@@ -386,7 +423,7 @@ describe("ReviewScreen pin and provenance (CAP-25/26/27)", () => {
       routedFetch({
         "GET /api/auth/me": () => authedMe.clone(),
         [`GET ${DUE}?source_id=s1`]: () =>
-          jsonResponse(200, { items: [highlightCard], total_due: 1 }),
+          jsonResponse(200, dueQueue([highlightCard])),
       }),
     );
 
@@ -404,7 +441,7 @@ describe("ReviewScreen pin and provenance (CAP-25/26/27)", () => {
       routedFetch({
         "GET /api/auth/me": () => authedMe.clone(),
         [`GET ${DUE}?source_id=s1`]: () =>
-          jsonResponse(200, { items: [clozeCard], total_due: 1 }),
+          jsonResponse(200, dueQueue([clozeCard])),
       }),
     );
 
@@ -445,6 +482,7 @@ describe("ReviewScreen note-changed badge and reset (NL-12/NL-13)", () => {
     status: "active",
     due: "2026-07-16T00:00:00Z",
     note_changed: true,
+    interval_labels: INTERVAL_LABELS,
   };
 
   it("shows the badge linking the note, and offers no book pin for a note card", async () => {
@@ -453,7 +491,7 @@ describe("ReviewScreen note-changed badge and reset (NL-12/NL-13)", () => {
       routedFetch({
         "GET /api/auth/me": () => authedMe.clone(),
         [`GET ${DUE}`]: () =>
-          jsonResponse(200, { items: [noteCard], total_due: 1 }),
+          jsonResponse(200, dueQueue([noteCard])),
       }),
     );
 
@@ -478,10 +516,7 @@ describe("ReviewScreen note-changed badge and reset (NL-12/NL-13)", () => {
       routedFetch({
         "GET /api/auth/me": () => authedMe.clone(),
         [`GET ${DUE}`]: () =>
-          jsonResponse(200, {
-            items: [{ ...noteCard, note_changed: false }],
-            total_due: 1,
-          }),
+          jsonResponse(200, dueQueue([{ ...noteCard, note_changed: false }])),
       }),
     );
 
@@ -499,7 +534,7 @@ describe("ReviewScreen note-changed badge and reset (NL-12/NL-13)", () => {
       routedFetch({
         "GET /api/auth/me": () => authedMe.clone(),
         [`GET ${DUE}`]: () =>
-          jsonResponse(200, { items: [noteCard], total_due: 1 }),
+          jsonResponse(200, dueQueue([noteCard])),
         "POST /api/quiz-items/i9/schedule-reset": () => {
           resets += 1;
           return jsonResponse(200, freshScheduling);
@@ -526,7 +561,7 @@ describe("ReviewScreen note-changed badge and reset (NL-12/NL-13)", () => {
       routedFetch({
         "GET /api/auth/me": () => authedMe.clone(),
         [`GET ${DUE}`]: () =>
-          jsonResponse(200, { items: [noteCard], total_due: 1 }),
+          jsonResponse(200, dueQueue([noteCard])),
         "POST /api/quiz-items/i9/schedule-reset": () => {
           resets += 1;
           return jsonResponse(200, freshScheduling);
@@ -568,7 +603,7 @@ describe("ReviewScreen grading shortcuts (CAP-30/31/32)", () => {
     return routedFetch({
       "GET /api/auth/me": () => authedMe.clone(),
       [`GET ${DUE}?source_id=s1`]: () =>
-        jsonResponse(200, { items: [clozeCard], total_due: 1 }),
+        jsonResponse(200, dueQueue([clozeCard])),
       "POST /api/quiz-items/i1/reviews": () => {
         onReview?.();
         return jsonResponse(200, {
@@ -592,11 +627,10 @@ describe("ReviewScreen grading shortcuts (CAP-30/31/32)", () => {
 
     pressKey(" ");
 
-    // A generous timeout: under full-suite parallel load the default 1s window
-    // intermittently expired before the reveal re-render landed.
-    expect(
-      (await screen.findByTestId("answer", {}, { timeout: 5000 })).textContent,
-    ).toBe("algorithm");
+    await waitFor(
+      () => expect(screen.getByTestId("answer").textContent).toBe("algorithm"),
+      { timeout: 5000 },
+    );
   });
 
   it("submits the pressed grade once the answer is revealed", async () => {
@@ -664,5 +698,129 @@ describe("ReviewScreen grading shortcuts (CAP-30/31/32)", () => {
 
     await waitFor(() => expect(screen.getByTestId("answer")).toBeTruthy());
     expect(reviews).toBe(0);
+  });
+
+  it("grades Good on Space once the answer is revealed (REV-44)", async () => {
+    const fetchMock = reviewFetch();
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ReviewScreen sourceId="s1" />);
+    await screen.findByTestId("question");
+    fireEvent.click(screen.getByRole("button", { name: "Reveal answer" }));
+
+    pressKey(" ");
+
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(
+        ([url]) => url === "/api/quiz-items/i1/reviews",
+      );
+      expect(call).toBeTruthy();
+      expect(JSON.parse((call![1] as RequestInit).body as string).rating).toBe(3);
+    });
+    expect(await screen.findByTestId("reviewed-total")).toBeTruthy();
+  });
+
+  it("still reveals on Space while the answer is hidden (REV-44)", async () => {
+    let reviews = 0;
+    vi.stubGlobal("fetch", reviewFetch(() => (reviews += 1)));
+
+    render(<ReviewScreen sourceId="s1" />);
+    await screen.findByTestId("question");
+    expect(screen.queryByTestId("answer")).toBeNull();
+
+    pressKey(" ");
+
+    expect(
+      (await screen.findByTestId("answer", {}, { timeout: 5000 })).textContent,
+    ).toBe("algorithm");
+    expect(reviews).toBe(0);
+  });
+});
+
+describe("ReviewScreen interval labels and requeue (REV-29/31/32)", () => {
+  it("shows a bucketed next-interval label on each grade button", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        [`GET ${DUE}`]: () =>
+          jsonResponse(200, dueQueue([
+            {
+              ...clozeCard,
+              interval_labels: { "1": "~1m", "2": "~10m", "3": "~1d", "4": "~4d" },
+            },
+          ])),
+      }),
+    );
+
+    render(<ReviewScreen />);
+    await screen.findByTestId("question");
+    fireEvent.click(screen.getByRole("button", { name: "Reveal answer" }));
+
+    expect(screen.getByTestId("grade-interval-1").textContent).toBe("~1m");
+    expect(screen.getByTestId("grade-interval-2").textContent).toBe("~10m");
+    expect(screen.getByTestId("grade-interval-3").textContent).toBe("~1d");
+    expect(screen.getByTestId("grade-interval-4").textContent).toBe("~4d");
+  });
+
+  it("requeues a ~1m due card into the remaining session without refetching the pile", async () => {
+    const soon = new Date(Date.now() + 60 * 1000).toISOString();
+    const fetchMock = routedFetch({
+      "GET /api/auth/me": () => authedMe.clone(),
+      [`GET ${DUE}`]: () => jsonResponse(200, dueQueue([clozeCard])),
+      "POST /api/quiz-items/i1/reviews": () =>
+        jsonResponse(
+          200,
+          scheduling(soon, {
+            state: 1,
+            step: 0,
+            interval_labels: { "1": "~1m", "2": "~10m", "3": "~1d", "4": "~4d" },
+          }),
+        ),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ReviewScreen />);
+    await screen.findByTestId("question");
+    fireEvent.click(screen.getByRole("button", { name: "Reveal answer" }));
+    fireEvent.click(screen.getByRole("button", { name: "Again" }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("position").textContent).toBe("2/2"),
+    );
+    expect(screen.queryByText("Session complete")).toBeNull();
+    expect(screen.getByTestId("short-term-remaining").textContent).toMatch(
+      /1 still in short-term review/,
+    );
+    expect(screen.queryByTestId("answer")).toBeNull();
+
+    const dueGets = fetchMock.mock.calls.filter(
+      ([url, init]) =>
+        String(url).startsWith(DUE) &&
+        ((init as RequestInit | undefined)?.method ?? "GET") === "GET",
+    );
+    expect(dueGets).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Reveal answer" }));
+    expect(screen.getByTestId("grade-interval-3").textContent).toBe("~1d");
+  });
+
+  it("does not requeue a ~4d due card and does not show short-term remaining", async () => {
+    const later = new Date(Date.now() + 4 * 24 * 60 * 60 * 1000).toISOString();
+    const fetchMock = routedFetch({
+      "GET /api/auth/me": () => authedMe.clone(),
+      [`GET ${DUE}`]: () => jsonResponse(200, dueQueue([clozeCard])),
+      "POST /api/quiz-items/i1/reviews": () => jsonResponse(200, scheduling(later)),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ReviewScreen />);
+    await screen.findByTestId("question");
+    fireEvent.click(screen.getByRole("button", { name: "Reveal answer" }));
+    fireEvent.click(screen.getByRole("button", { name: "Easy" }));
+
+    expect(await screen.findByText("Session complete")).toBeTruthy();
+    expect(screen.queryByTestId("short-term-remaining")).toBeNull();
+    expect(screen.queryByTestId("question")).toBeNull();
   });
 });

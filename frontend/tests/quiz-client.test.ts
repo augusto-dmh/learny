@@ -81,6 +81,13 @@ const overview: QuizOverview = {
   latest_job: { ...job, status: "succeeded", generated_count: 2 },
 };
 
+const INTERVAL_LABELS = {
+  "1": "~1m",
+  "2": "~10m",
+  "3": "~4d",
+  "4": "~2w",
+};
+
 const dueItem: DueItem = {
   id: "i1",
   source_id: "s1",
@@ -97,9 +104,15 @@ const dueItem: DueItem = {
   status: "active",
   due: "2026-07-16T00:00:00Z",
   note_changed: false,
+  interval_labels: INTERVAL_LABELS,
 };
 
-const dueQueue: DueQueue = { items: [dueItem], total_due: 12 };
+const dueQueue: DueQueue = {
+  items: [dueItem],
+  total_due: 12,
+  session_size: 20,
+  requeue_minutes: 15,
+};
 
 const scheduling: Scheduling = {
   state: 2,
@@ -108,6 +121,7 @@ const scheduling: Scheduling = {
   difficulty: 5.1,
   due: "2026-07-20T00:00:00Z",
   last_review: "2026-07-16T00:00:00Z",
+  interval_labels: INTERVAL_LABELS,
 };
 
 function jsonResponse(status: number, body: unknown): Response {

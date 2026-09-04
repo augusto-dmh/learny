@@ -14,7 +14,11 @@
  * self-grade and auto-advances; after the last card a summary shows counts per
  * rating. Nothing due and a fetch/submit failure each settle to their own
  * readable state. The queue only ever holds active items (the server excludes
- * stale/orphaned), so no source-changed indication appears here.
+ * stale/orphaned), so no source-changed indication appears here. Grade buttons
+ * show the server's next-interval labels. A grade whose new due is within the
+ * session requeue window is inserted back into the remaining queue (not by
+ * refetching the overdue pile). Space reveals while hidden and grades Good
+ * once the answer is out.
  *
  * `onRequireAuth` is a UX-only redirect for unauthenticated users, NOT the
  * security boundary — FastAPI enforces auth and per-user ownership on every
@@ -34,9 +38,11 @@ import { useKeyShortcuts } from "@/app/components/use-key-shortcuts";
 import { readUrl } from "@/app/lib/read-url";
 import {
   getDueReviews,
+  intervalLabel,
   resetSchedule,
   submitReview,
   type DueItem,
+  type Scheduling,
 } from "@/app/lib/quiz";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -61,6 +67,32 @@ type Tally = Record<number, number>;
 
 const EMPTY_TALLY: Tally = { 1: 0, 2: 0, 3: 0, 4: 0 };
 
+const DEFAULT_REQUEUE_MINUTES = 15;
+
+/** A session card may be tagged when it was inserted as a short-term requeue. */
+type SessionCard = DueItem & { shortTerm?: boolean };
+
+function shouldRequeue(
+  dueIso: string,
+  requeueMinutes: number,
+  nowMs: number = Date.now(),
+): boolean {
+  const dueMs = Date.parse(dueIso);
+  if (Number.isNaN(dueMs)) {
+    return false;
+  }
+  return Math.abs(dueMs - nowMs) <= requeueMinutes * 60 * 1000;
+}
+
+function withSubmitLabels(card: SessionCard, scheduling: Scheduling): SessionCard {
+  return {
+    ...card,
+    due: scheduling.due,
+    interval_labels: scheduling.interval_labels ?? card.interval_labels,
+    shortTerm: true,
+  };
+}
+
 export function ReviewScreen({
   sourceId,
   onRequireAuth,
@@ -72,7 +104,8 @@ export function ReviewScreen({
 }) {
   const [csrf, setCsrf] = useState<string | null>(null);
   const [authed, setAuthed] = useState<boolean | null>(null);
-  const [queue, setQueue] = useState<DueItem[] | null>(null);
+  const [queue, setQueue] = useState<SessionCard[] | null>(null);
+  const [requeueMinutes, setRequeueMinutes] = useState(DEFAULT_REQUEUE_MINUTES);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [index, setIndex] = useState(0);
   const [revealed, setRevealed] = useState(false);
@@ -91,6 +124,7 @@ export function ReviewScreen({
     try {
       const result = await getDueReviews({ sourceId });
       setQueue(result.items);
+      setRequeueMinutes(result.requeue_minutes ?? DEFAULT_REQUEUE_MINUTES);
     } catch (err) {
       setLoadError(
         err instanceof Error ? err.message : "Could not load your due reviews.",
@@ -130,12 +164,22 @@ export function ReviewScreen({
     setSubmitting(true);
     setSubmitError(null);
     try {
-      await submitReview(
+      const scheduling = await submitReview(
         item.id,
         { rating, review_duration_ms: Date.now() - questionShownAt.current },
         csrf,
       );
+      const requeue = shouldRequeue(scheduling.due, requeueMinutes);
+      if (requeue) {
+        const updated = withSubmitLabels(item, scheduling);
+        setQueue((prev) =>
+          prev
+            ? [...prev.slice(0, index + 1), ...prev.slice(index + 1), updated]
+            : prev,
+        );
+      }
       setTally((prev) => ({ ...prev, [rating]: prev[rating] + 1 }));
+      setRevealed(false);
       setIndex((i) => i + 1);
       onGraded?.();
     } catch (err) {
@@ -176,19 +220,21 @@ export function ReviewScreen({
     }
   }
 
-  // Grading on bare keys (CAP-30/31). The binding set follows the card's own
-  // state so a key can only ever do the thing the card is currently offering:
-  // space reveals while the answer is hidden, and 1–4 grade once it is out. The
+  // Grading on bare keys (CAP-30/31, REV-44). Space reveals while the answer is
+  // hidden and grades Good once it is out; 1–4 grade once revealed. The
   // shortcuts are live only while a card is actually on screen.
   const cardOnScreen = queue !== null && index < queue.length;
   useKeyShortcuts(
     revealed
-      ? Object.fromEntries(
-          GRADES.map((grade) => [
-            String(grade.rating),
-            () => void handleGrade(grade.rating),
-          ]),
-        )
+      ? {
+          ...Object.fromEntries(
+            GRADES.map((grade) => [
+              String(grade.rating),
+              () => void handleGrade(grade.rating),
+            ]),
+          ),
+          space: () => void handleGrade(3),
+        }
       : { space: () => setRevealed(true) },
     cardOnScreen,
   );
@@ -256,12 +302,19 @@ export function ReviewScreen({
   }
 
   const item = queue[index];
+  const shortTermLeft = queue.slice(index).filter((card) => card.shortTerm).length;
   return (
     <section aria-label="review" className="space-y-4">
       <p data-testid="position" className="text-sm text-muted-foreground">
         {index + 1}/{queue.length}
       </p>
+      {shortTermLeft > 0 ? (
+        <p data-testid="short-term-remaining" className="text-sm text-muted-foreground">
+          {shortTermLeft} still in short-term review
+        </p>
+      ) : null}
       <ReviewCard
+        key={`${item.id}-${index}`}
         item={item}
         revealed={revealed}
         onReveal={() => setRevealed(true)}
@@ -443,18 +496,30 @@ function ReviewCard({
               aria-label="Grade your recall"
               className="flex flex-wrap gap-2"
             >
-              {GRADES.map((grade) => (
-                <Button
-                  key={grade.rating}
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={submitting}
-                  onClick={() => onGrade(grade.rating)}
-                >
-                  {grade.label}
-                </Button>
-              ))}
+              {GRADES.map((grade) => {
+                const interval = intervalLabel(item.interval_labels, grade.rating);
+                return (
+                  <Button
+                    key={grade.rating}
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={submitting}
+                    aria-label={grade.label}
+                    onClick={() => onGrade(grade.rating)}
+                  >
+                    {grade.label}
+                    {interval ? (
+                      <span
+                        data-testid={`grade-interval-${grade.rating}`}
+                        className="ml-1 text-muted-foreground"
+                      >
+                        {interval}
+                      </span>
+                    ) : null}
+                  </Button>
+                );
+              })}
             </div>
           </div>
         ) : (

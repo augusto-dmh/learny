@@ -344,9 +344,9 @@ T11 → T12 → T13 → T14
 
 **Done when**:
 
-- [ ] Labels render per rating; a ~1m due reappears; a ~4d due does not
-- [ ] Space after reveal submits 3; Space before reveal still reveals
-- [ ] Gate: `cd frontend && npm test -- review-screen`
+- [x] Labels render per rating; a ~1m due reappears; a ~4d due does not
+- [x] Space after reveal submits 3; Space before reveal still reveals
+- [x] Gate: `cd frontend && npm test -- review-screen`
 
 **Tests**: unit
 **Gate**: full
