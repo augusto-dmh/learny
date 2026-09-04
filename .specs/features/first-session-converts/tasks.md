@@ -392,8 +392,8 @@ T10 → T11 → T12 → T13 → T14 → T15 → T16
 
 **Done when**:
 
-- [ ] Accessible name is Download notes
-- [ ] href still hits `/api/export/vault`
+- [x] Accessible name is Download notes
+- [x] href still hits `/api/export/vault`
 
 **Tests**: unit
 **Gate**: full
