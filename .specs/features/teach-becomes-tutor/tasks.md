@@ -203,8 +203,8 @@ T11 → T12 → T13 → T14 → T15
 
 **Done when**:
 
-- [ ] Table-driven tests kill a skipped transition (at least: just-explain in check does not close; third ordinary moves to check)
-- [ ] Gate: `uv run pytest tests/test_application_teaching_policy.py tests/test_config.py`
+- [x] Table-driven tests kill a skipped transition (at least: just-explain in check does not close; third ordinary moves to check)
+- [x] Gate: `uv run pytest tests/test_application_teaching_policy.py tests/test_config.py`
 
 **Tests**: unit
 **Gate**: quick
