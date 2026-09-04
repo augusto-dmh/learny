@@ -33,7 +33,7 @@ from app.infrastructure.worker.steps import NoOpIngestionStep
 logger = logging.getLogger(__name__)
 
 _ENQUEUE_FAILURE_ERROR = "Failed to enqueue ingestion task."
-_DEFAULT_EPUB = Path(__file__).resolve().parents[2] / "data" / "samples" / "art-of-war.epub"
+_BACKEND_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _storage() -> S3StorageAdapter:
@@ -47,15 +47,23 @@ def _storage() -> S3StorageAdapter:
     )
 
 
+def _resolve_epub(override: Path | None) -> Path:
+    chosen = override if override is not None else get_settings().sample_epub_path
+    if not chosen.is_absolute():
+        chosen = _BACKEND_ROOT / chosen
+    return chosen
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Seed the shared sample book once.")
-    parser.add_argument("--epub", type=Path, default=_DEFAULT_EPUB)
+    parser.add_argument("--epub", type=Path, default=None)
     args = parser.parse_args(argv)
-    if not args.epub.is_file():
-        print(f"sample epub not found: {args.epub}", file=sys.stderr)
+    epub_path = _resolve_epub(args.epub)
+    if not epub_path.is_file():
+        print(f"sample epub not found: {epub_path}", file=sys.stderr)
         return 2
 
-    epub_bytes = args.epub.read_bytes()
+    epub_bytes = epub_path.read_bytes()
     engine = get_engine()
     clock = SystemClock()
     settings = get_settings()

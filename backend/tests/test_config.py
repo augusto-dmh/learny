@@ -396,6 +396,22 @@ def test_words_per_page_env_override(monkeypatch) -> None:
     assert settings.words_per_page == 300
 
 
+def test_sample_epub_path_default(monkeypatch) -> None:
+    monkeypatch.delenv("LEARNY_SAMPLE_EPUB_PATH", raising=False)
+
+    settings = Settings(_env_file=None)
+
+    assert settings.sample_epub_path == Path(
+        "data/samples/sun-tzu_the-art-of-war_lionel-giles.epub"
+    )
+
+
+def test_env_example_documents_the_sample_epub_path() -> None:
+    contract = _ENV_EXAMPLE.read_text()
+
+    assert "\nLEARNY_SAMPLE_EPUB_PATH=" in contract
+
+
 def test_conversation_settings_defaults() -> None:
     # One policy for every grounded conversation: the evidence budget handed to
     # scoped retrieval, the prior turns a generation port sees, and the message

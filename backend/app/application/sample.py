@@ -11,7 +11,9 @@ shared (FS-06).
 from __future__ import annotations
 
 import hashlib
+import logging
 from collections.abc import Callable
+from datetime import datetime
 from uuid import UUID
 
 from app.application.errors import EnqueueFailed, StorageUnavailable
@@ -49,6 +51,8 @@ SAMPLE_OPERATOR_EMAIL = "sample-operator@learny.invalid"
 SAMPLE_TITLE = "The Art of War"
 SAMPLE_FILENAME = "art-of-war.epub"
 SAMPLE_ENQUEUE_ERROR = "Failed to enqueue ingestion task."
+
+logger = logging.getLogger(__name__)
 
 # Operator-owned deck templates cloned per learner by EnsureStarterDeck. Distinct
 # content_keys so the per-source deck unique holds five rows.
@@ -195,16 +199,20 @@ class SeedSample:
                     created_at=now,
                 )
             )
+            logger.warning(
+                "sample seed enqueue failed",
+                extra={"source_id": str(source.id), "job_id": str(job.id)},
+            )
             raise EnqueueFailed("Could not start ingestion.") from exc
         return self._sources.get_by_id(source.id) or source
 
-    def _ensure_operator(self, now) -> User:  # noqa: ANN001 — injected clock datetime
+    def _ensure_operator(self, now: datetime) -> User:
         existing = self._users.get_by_email(SAMPLE_OPERATOR_EMAIL)
         if existing is not None:
             return existing
         return self._users.add(User(id=self._ids(), email=SAMPLE_OPERATOR_EMAIL, created_at=now))
 
-    def _insert_templates(self, source: Source, operator_id: UUID, now) -> None:  # noqa: ANN001
+    def _insert_templates(self, source: Source, operator_id: UUID, now: datetime) -> None:
         initial = self._scheduling.initial()
         for question, answer in _TEMPLATE_CARDS:
             excerpt = f"{question} {answer}"
