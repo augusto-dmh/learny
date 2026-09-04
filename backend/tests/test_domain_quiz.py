@@ -565,12 +565,23 @@ def test_scheduling_port_is_runtime_checkable_protocol() -> None:
         def review(self, snapshot, rating, reviewed_at):  # noqa: ANN001, ANN201
             return None
 
+        def preview(self, snapshot, reviewed_at):  # noqa: ANN001, ANN201
+            return None
+
     class MissingReview:
         def initial(self):  # noqa: ANN201
             return None
 
+    class MissingPreview:
+        def initial(self):  # noqa: ANN201
+            return None
+
+        def review(self, snapshot, rating, reviewed_at):  # noqa: ANN001, ANN201
+            return None
+
     assert isinstance(ConformingScheduler(), SchedulingPort)
     assert not isinstance(MissingReview(), SchedulingPort)
+    assert not isinstance(MissingPreview(), SchedulingPort)
 
 
 def test_quiz_deck_enqueuer_is_runtime_checkable_protocol() -> None:

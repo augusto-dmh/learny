@@ -833,6 +833,14 @@ class SchedulingPort(Protocol):
         """
         ...
 
+    def preview(self, snapshot: SchedulingSnapshot, reviewed_at: datetime) -> dict[int, datetime]:
+        """Return next-due times for ratings 1–4 without recording a review (REV-33).
+
+        Uses a throwaway FSRS scheduler with fuzzing off (AD-312). Callers bucket the
+        deltas for display; this method must not be used as a persist path.
+        """
+        ...
+
 
 @runtime_checkable
 class QuizDeckEnqueuer(Protocol):

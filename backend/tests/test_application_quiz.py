@@ -166,6 +166,9 @@ class FakeScheduling:
     def review(self, snapshot, rating, reviewed_at):  # noqa: ANN001, ANN201
         raise NotImplementedError
 
+    def preview(self, snapshot, reviewed_at):  # noqa: ANN001, ANN201
+        raise NotImplementedError
+
 
 class FakeEmbedding:
     """``EmbeddingPort`` double mapping exact texts to preset vectors.

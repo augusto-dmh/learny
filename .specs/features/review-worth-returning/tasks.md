@@ -277,9 +277,9 @@ T11 → T12 → T13 → T14
 
 **Done when**:
 
-- [ ] Four ratings return four dues; calling preview leaves DB log length unchanged
-- [ ] Bucket table pins the nine labels at the documented boundaries
-- [ ] Gate: `uv run pytest tests/test_scheduling_fsrs.py`
+- [x] Four ratings return four dues; calling preview leaves DB log length unchanged
+- [x] Bucket table pins the nine labels at the documented boundaries
+- [x] Gate: `uv run pytest tests/test_scheduling_fsrs.py`
 
 **Tests**: unit
 **Gate**: quick

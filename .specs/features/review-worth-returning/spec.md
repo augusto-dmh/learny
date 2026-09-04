@@ -221,10 +221,10 @@ Review is a correct 4-button FSRS grader, but generation can "succeed" with zero
 | REV-27 | P1: Review undo | 2 | Done |
 | REV-28 | P1: Review undo | 2 | Done |
 | REV-29 | P1: Intervals and requeue | 3 | In Tasks |
-| REV-30 | P1: Intervals and requeue | 3 | In Tasks |
+| REV-30 | P1: Intervals and requeue | 3 | Done |
 | REV-31 | P1: Intervals and requeue | 3 | In Tasks |
 | REV-32 | P1: Intervals and requeue | 4 | In Tasks |
-| REV-33 | P1: Intervals and requeue | 3 | In Tasks |
+| REV-33 | P1: Intervals and requeue | 3 | Done |
 | REV-34 | P1: Flag and edit | 2 | Done |
 | REV-35 | P1: Flag and edit | 2 | Done |
 | REV-36 | P1: Flag and edit | 2 | Done |

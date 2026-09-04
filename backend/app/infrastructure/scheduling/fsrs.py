@@ -14,7 +14,7 @@ same adapter for ``review``.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from fsrs import Card, Rating, Scheduler, State
 
@@ -22,6 +22,34 @@ from app.domain.entities import ReviewLogEntry, SchedulingSnapshot
 
 # The FSRS-6 maximum interval (days) — a card is never scheduled further out (design).
 _MAXIMUM_INTERVAL = 36500
+
+# Display buckets for interval preview (AD-312). Exact minutes are a lie under
+# fuzzing, so the UI grades against one of these nine tokens.
+INTERVAL_LABELS: frozenset[str] = frozenset(
+    {"~1m", "~10m", "~1h", "~1d", "~4d", "~2w", "~1mo", "~4mo", "~1y"}
+)
+
+
+def interval_bucket(delta: timedelta) -> str:
+    """Map a next-due delta onto exactly one of the nine preview labels (AD-312)."""
+    seconds = delta.total_seconds()
+    if seconds < 90:
+        return "~1m"
+    if seconds < 12 * 60:
+        return "~10m"
+    if seconds < 90 * 60:
+        return "~1h"
+    if seconds < 36 * 3600:
+        return "~1d"
+    if seconds < 6 * 86400:
+        return "~4d"
+    if seconds < 18 * 86400:
+        return "~2w"
+    if seconds < 45 * 86400:
+        return "~1mo"
+    if seconds < 150 * 86400:
+        return "~4mo"
+    return "~1y"
 
 
 def _to_snapshot(card: Card) -> SchedulingSnapshot:
@@ -52,8 +80,9 @@ class FsrsSchedulingAdapter:
     """``SchedulingPort`` backed by py-fsrs (FSRS-6).
 
     Wraps one :class:`fsrs.Scheduler`; ``initial`` returns a fresh card's state (``due``
-    now, Learning), and ``review`` applies a 1–4 rating at ``reviewed_at`` and returns the
-    advanced snapshot plus the review-log entry the service persists.
+    now, Learning), ``review`` applies a 1–4 rating at ``reviewed_at`` and returns the
+    advanced snapshot plus the review-log entry the service persists, and ``preview``
+    returns next-due times for ratings 1–4 from a throwaway fuzzing-off scheduler.
     """
 
     def __init__(
@@ -81,3 +110,26 @@ class FsrsSchedulingAdapter:
             _to_card(snapshot), Rating(rating), review_datetime=reviewed_at
         )
         return _to_snapshot(card), ReviewLogEntry(rating=rating, reviewed_at=reviewed_at)
+
+    def preview(self, snapshot: SchedulingSnapshot, reviewed_at: datetime) -> dict[int, datetime]:
+        """Return next-due times for ratings 1–4 with fuzzing off (AD-312).
+
+        Builds a throwaway :class:`fsrs.Scheduler` so production fuzzing never
+        leaks into labels. The py-fsrs review log is discarded — this is not a
+        persist path (REV-33).
+        """
+        scheduler = Scheduler(
+            parameters=self._scheduler.parameters,
+            desired_retention=self._scheduler.desired_retention,
+            learning_steps=self._scheduler.learning_steps,
+            relearning_steps=self._scheduler.relearning_steps,
+            maximum_interval=self._scheduler.maximum_interval,
+            enable_fuzzing=False,
+        )
+        dues: dict[int, datetime] = {}
+        for rating in (1, 2, 3, 4):
+            card, _log = scheduler.review_card(
+                _to_card(snapshot), Rating(rating), review_datetime=reviewed_at
+            )
+            dues[rating] = card.due
+        return dues

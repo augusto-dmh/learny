@@ -244,6 +244,9 @@ class FakeCardScheduling:
     def review(self, snapshot, rating, reviewed_at):  # noqa: ANN001, ANN201
         raise NotImplementedError
 
+    def preview(self, snapshot, reviewed_at):  # noqa: ANN001, ANN201
+        raise NotImplementedError
+
 
 class FakeCardEmbedding:
     """``EmbeddingPort`` double returning one preset vector for every text."""
