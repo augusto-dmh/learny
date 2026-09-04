@@ -404,6 +404,15 @@ class Evidence:
     origin: Literal["book", "note"] = "book"
     note_id: UUID | None = None
     note_title: str | None = None
+    # The claim-level passage a generation adapter located inside this snippet, kept
+    # on the stored citation snapshot so a reader can be shown the cited sentence
+    # (ASK-12). Present or absent as a group; ``start_char``/``end_char`` are ``str``
+    # indices into ``snippet``. Retrieval never sets them — evidence is a passage,
+    # and only an answer can say which sentence of it was used — so they default to
+    # ``None`` and every existing construction stays valid.
+    quoted_text: str | None = None
+    start_char: int | None = None
+    end_char: int | None = None
 
 
 @dataclass(frozen=True)

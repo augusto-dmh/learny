@@ -55,6 +55,7 @@ from app.domain.entities import (
     AnswerCompleted,
     AnswerReasoningDelta,
     AnswerTextDelta,
+    CitedSpan,
     Conversation,
     ConversationTurn,
     CorpusSectionRecord,
@@ -1587,6 +1588,18 @@ def test_post_turn_generation_failure_returns_502_and_keeps_the_question(
     assert turns[0]["message"] == "photosynthesis sunlight"
     assert turns[0]["text"] == ""
     assert turns[0]["citations"] == []
+    # And nothing was written to the snapshot table either — a failed turn has no
+    # passage to point at, so it must not leave a citation row behind for one.
+    citation_rows = db_conn.execute(
+        select(func.count())
+        .select_from(conversation_turn_citations)
+        .join(
+            conversation_turns,
+            conversation_turns.c.id == conversation_turn_citations.c.turn_id,
+        )
+        .where(conversation_turns.c.conversation_id == conversation.id)
+    ).scalar_one()
+    assert citation_rows == 0
 
 
 def test_post_turn_missing_csrf_returns_403(auth_client: TestClient, db_conn: Connection) -> None:
@@ -2391,6 +2404,155 @@ def test_turn_stream_note_citation_carries_origin_and_note_identity(
     assert note_citations[0]["note_title"] == "Stream Note"
     for citation in [c for c in citations if c.get("origin") != "note"]:
         assert set(citation) == _CITATION_KEYS
+
+
+# --- The sentence behind a citation mark (ASK-12, ASK-17) ----------------------
+
+
+class _QuotingAdapter:
+    """A generation port that names the sentence of the passage it actually used.
+
+    Cites the first two passages but quotes only inside the first, which is the
+    mixed case the wire has to survive: one citation that can say more than the
+    passage, beside one that cannot and must therefore look exactly as it did
+    before spans existed.
+    """
+
+    model = _MODEL
+
+    #: The half-open slice of the first passage's snippet the answer claims to use.
+    START, END = 5, 25
+
+    def __init__(self) -> None:
+        self.quote = ""
+
+    def _answer(self, evidence: Sequence[Evidence]) -> GeneratedAnswer:
+        cited = evidence[:2]
+        self.quote = cited[0].snippet[self.START : self.END]
+        return GeneratedAnswer(
+            text="Sunlight drives it.[^1][^2]",
+            cited_chunk_ids=tuple(e.chunk_id for e in cited),
+            model=_MODEL,
+            found=True,
+            spans=(
+                CitedSpan(
+                    chunk_id=cited[0].chunk_id,
+                    quote=self.quote,
+                    start=self.START,
+                    end=self.END,
+                ),
+            ),
+        )
+
+    def generate(
+        self,
+        *,
+        message: str,
+        mode: str,
+        evidence: Sequence[Evidence],
+        history: Sequence[HistoryTurn] = (),
+        target_section_path: tuple[str, ...] | None = None,
+    ) -> GeneratedAnswer:
+        return self._answer(evidence)
+
+    def generate_stream(
+        self,
+        *,
+        message: str,
+        mode: str,
+        evidence: Sequence[Evidence],
+        history: Sequence[HistoryTurn] = (),
+        target_section_path: tuple[str, ...] | None = None,
+    ):
+        answer = self._answer(evidence)
+        yield AnswerTextDelta(text=answer.text)
+        yield AnswerCompleted(answer=answer)
+
+
+def test_a_quoted_citation_carries_its_sentence_and_survives_a_reload(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # ASK-12: the sentence a citation was written for reaches the client with offsets
+    # into that citation's own snippet, and it is stored, not just streamed — reloading
+    # the conversation shows the same quote. ASK-17: the citation beside it, which the
+    # adapter quoted nothing from, keeps exactly the seven fields a book citation has
+    # always had, so a client that never learns about spans is unaffected.
+    from app.infrastructure.web.dependencies import get_generation
+
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "conv-span@example.com")
+    _embed_all(db_conn, UUID(source_id))
+    conversation = _seed_conversation(db_conn, UUID(source_id))
+
+    adapter = _QuotingAdapter()
+    auth_client.app.dependency_overrides[get_generation] = lambda: adapter
+    try:
+        resp = _post_turn(
+            auth_client,
+            conversation.id,
+            {"message": "photosynthesis sunlight energy", "mode": MODE_ANSWER},
+            csrf=csrf,
+        )
+    finally:
+        auth_client.app.dependency_overrides.pop(get_generation, None)
+
+    assert resp.status_code == 201, resp.text
+    citations = resp.json()["citations"]
+    assert len(citations) == 2
+    quoted, unquoted = citations
+    assert quoted["quoted_text"] == adapter.quote
+    assert (quoted["start_char"], quoted["end_char"]) == (
+        _QuotingAdapter.START,
+        _QuotingAdapter.END,
+    )
+    # The offsets locate the quote inside the snippet shipped on the same citation,
+    # so a client can paint it without asking the server where the passage came from.
+    assert quoted["snippet"][quoted["start_char"] : quoted["end_char"]] == quoted["quoted_text"]
+    assert set(unquoted) == _CITATION_KEYS
+
+    # The quote is part of the stored turn, not a property of the response that
+    # produced it: a reader who comes back tomorrow sees the same sentence.
+    turns = auth_client.get(f"/api/conversations/{conversation.id}").json()["turns"]
+    stored_quoted, stored_unquoted = turns[0]["citations"]
+    assert stored_quoted["quoted_text"] == adapter.quote
+    assert (stored_quoted["start_char"], stored_quoted["end_char"]) == (
+        _QuotingAdapter.START,
+        _QuotingAdapter.END,
+    )
+    assert set(stored_unquoted) == _CITATION_KEYS
+
+
+def test_a_streamed_quoted_citation_frame_matches_the_buffered_one(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # The two paths persist the same turn (I-CM-5), so the quote cannot be a property
+    # of only one of them: the streamed citations frame carries the span too.
+    from app.infrastructure.web.dependencies import get_generation
+
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "conv-span-stream@example.com")
+    _embed_all(db_conn, UUID(source_id))
+    conversation = _seed_conversation(db_conn, UUID(source_id))
+
+    adapter = _QuotingAdapter()
+    auth_client.app.dependency_overrides[get_generation] = lambda: adapter
+    try:
+        resp = _turn_stream(
+            auth_client,
+            conversation.id,
+            {"message": "photosynthesis sunlight energy", "mode": MODE_ANSWER},
+            csrf=csrf,
+        )
+    finally:
+        auth_client.app.dependency_overrides.pop(get_generation, None)
+
+    assert resp.status_code == 200, resp.text
+    parts = _parse_ui_stream(resp.text)
+    citations = next(p for p in parts if isinstance(p, dict) and p["type"] == "data-citations")[
+        "data"
+    ]
+    quoted, unquoted = citations
+    assert quoted["quoted_text"] == adapter.quote
+    assert quoted["snippet"][quoted["start_char"] : quoted["end_char"]] == quoted["quoted_text"]
+    assert set(unquoted) == _CITATION_KEYS
 
 
 # --- Rate limit: one policy for the whole surface (CONV-22) --------------------

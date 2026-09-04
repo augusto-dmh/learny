@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Iterator, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from uuid import UUID
 
 from app.application.errors import (
@@ -32,7 +32,7 @@ from app.application.errors import (
     NotAuthorized,
     SourceNotReady,
 )
-from app.application.grounding import ground
+from app.application.grounding import ground, ground_spans
 from app.application.identity import AuthorizeOwnership
 from app.application.ingestion import SOURCE_STATUS_READY, authorized_source
 from app.application.retrieval import RetrieveEvidence
@@ -51,6 +51,7 @@ from app.domain.entities import (
     NOT_FOUND_IN_SCOPE,
     NOT_FOUND_IN_SOURCE,
     AnswerStreamEvent,
+    CitedSpan,
     Conversation,
     ConversationSummary,
     ConversationTurn,
@@ -417,6 +418,35 @@ class DeleteConversation:
             raise ConversationNotFound("Conversation not found.")
 
 
+def _with_spans(citations: list[Evidence], spans: Sequence[CitedSpan]) -> tuple[Evidence, ...]:
+    """Snapshot each citation with the first claim-level quote reported for its chunk.
+
+    One quote per citation rather than per reported span: the reader sees one ``[^n]``
+    per passage (AD-222), so the hover behind that mark has one sentence to show.
+    Later spans into the same chunk are dropped instead of concatenated — the passage
+    region still carries the whole snippet, which is where a second claim is read. A
+    citation nothing was reported for keeps its empty span and behaves exactly as it
+    did before spans existed (ASK-17).
+    """
+    first: dict[UUID, CitedSpan] = {}
+    for span in spans:
+        first.setdefault(span.chunk_id, span)
+    snapshots: list[Evidence] = []
+    for citation in citations:
+        span = first.get(citation.chunk_id)
+        snapshots.append(
+            citation
+            if span is None
+            else replace(
+                citation,
+                quoted_text=span.quote,
+                start_char=span.start,
+                end_char=span.end,
+            )
+        )
+    return tuple(snapshots)
+
+
 @dataclass(frozen=True)
 class _TurnPrep:
     """What the guards resolved for one turn, before anything is searched for.
@@ -548,7 +578,14 @@ class PostConversationTurn:
                     plan, message, mode, len(plan.evidence), generated.model
                 )
             else:
-                turn = self._answered_turn(plan, message, mode, grounded, generated.model)
+                turn = self._answered_turn(
+                    plan,
+                    message,
+                    mode,
+                    grounded,
+                    generated.model,
+                    ground_spans(generated, grounded[1]),
+                )
 
         return self._persist(plan, turn, mode)
 
@@ -629,7 +666,9 @@ class PostConversationTurn:
         if grounded is None:
             turn = self._not_found_turn(plan, message, mode, len(plan.evidence), answer.model)
         else:
-            turn = self._answered_turn(plan, message, mode, grounded, answer.model)
+            turn = self._answered_turn(
+                plan, message, mode, grounded, answer.model, ground_spans(answer, grounded[1])
+            )
         yield StreamTurn(self._persist(plan, turn, mode))
 
     def _preflight(
@@ -836,6 +875,7 @@ class PostConversationTurn:
         mode: str,
         grounded: tuple[str, list[Evidence]],
         model: str,
+        spans: tuple[CitedSpan, ...],
     ) -> ConversationTurn:
         text, citations = grounded
         return ConversationTurn(
@@ -848,7 +888,7 @@ class PostConversationTurn:
             answer_text=text,
             model=model,
             evidence_count=len(plan.evidence),
-            citations=tuple(citations),
+            citations=_with_spans(citations, spans),
             created_at=self._clock.now(),
         )
 

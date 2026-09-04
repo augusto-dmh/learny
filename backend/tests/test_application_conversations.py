@@ -59,6 +59,7 @@ from app.domain.entities import (
     AnswerReasoningDelta,
     AnswerStreamEvent,
     AnswerTextDelta,
+    CitedSpan,
     Conversation,
     ConversationSummary,
     ConversationTurn,
@@ -1806,6 +1807,101 @@ def test_answered_turn_is_persisted_with_the_next_index_and_ranked_citations() -
     assert turn.citations == (top, second)
     assert (turn.evidence_count, turn.model) == (2, "claude-test")
     assert [t.turn_index for t in turns.list_for_conversation(conversation.id)] == [0, 1]
+
+
+def test_only_the_citation_a_quote_was_reported_for_carries_that_quote() -> None:
+    # ASK-12: a reported quote is a location *inside one citation*, so it lands on
+    # that citation and nowhere else. ASK-17: the passage the answer quoted nothing
+    # from is snapshotted exactly as it was retrieved — a citation carrying a
+    # neighbour's sentence would put a highlight over text nobody cited.
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    top = _evidence(source.id, "the tides follow the moon", anchor="ch1.xhtml", score=0.9)
+    second = _evidence(source.id, "volcanoes vent magma", anchor="ch1.xhtml#core", score=0.4)
+    generation = FakeGeneration(
+        answer=GeneratedAnswer(
+            text="grounded",
+            cited_chunk_ids=(top.chunk_id, second.chunk_id),
+            model=_MODEL,
+            found=True,
+            spans=(CitedSpan(chunk_id=second.chunk_id, quote="vent magma", start=10, end=20),),
+        )
+    )
+
+    turn = _post(
+        conversations=conversations,
+        turns=FakeConversationTurnRepository(),
+        sources=sources,
+        corpus=corpus,
+        retrieve=FakeScopedRetrieveEvidence([top, second]),
+        generation=generation,
+    )(user=user, conversation_id=conversation.id, message="q", mode=MODE_ANSWER)
+
+    quoted, unquoted = turn.citations[1], turn.citations[0]
+    assert (quoted.quoted_text, quoted.start_char, quoted.end_char) == ("vent magma", 10, 20)
+    # The offsets address the snippet stored beside them on the same citation.
+    assert quoted.snippet[quoted.start_char : quoted.end_char] == quoted.quoted_text
+    # Untouched, down to identity: nothing about the quote changed its neighbour.
+    assert unquoted == top
+
+
+def test_a_second_quote_into_the_same_passage_does_not_displace_the_first() -> None:
+    # A reader sees one mark per cited passage (AD-222), so one citation can show one
+    # sentence. When an answer draws twice on the same passage the first quote is what
+    # the mark stands for; the rest of the passage is still there in the snippet.
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    evidence = _evidence(source.id, "the tides follow the moon", anchor="ch1.xhtml")
+    generation = FakeGeneration(
+        answer=GeneratedAnswer(
+            text="grounded",
+            cited_chunk_ids=(evidence.chunk_id,),
+            model=_MODEL,
+            found=True,
+            spans=(
+                CitedSpan(chunk_id=evidence.chunk_id, quote="the tides", start=0, end=9),
+                CitedSpan(chunk_id=evidence.chunk_id, quote="the moon", start=17, end=25),
+            ),
+        )
+    )
+
+    turn = _post(
+        conversations=conversations,
+        turns=FakeConversationTurnRepository(),
+        sources=sources,
+        corpus=corpus,
+        retrieve=FakeScopedRetrieveEvidence([evidence]),
+        generation=generation,
+    )(user=user, conversation_id=conversation.id, message="q", mode=MODE_ANSWER)
+
+    (citation,) = turn.citations
+    assert (citation.quoted_text, citation.start_char, citation.end_char) == ("the tides", 0, 9)
+
+
+def test_a_quote_into_a_passage_grounding_dropped_reaches_no_citation() -> None:
+    # A span cannot outlive the citation it points into: the adapter naming a chunk
+    # that was never retrieved leaves nothing for a quote into it to attach to.
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    evidence = _evidence(source.id, "the tides follow the moon", anchor="ch1.xhtml")
+    ghost = uuid4()
+    generation = FakeGeneration(
+        answer=GeneratedAnswer(
+            text="grounded",
+            cited_chunk_ids=(evidence.chunk_id, ghost),
+            model=_MODEL,
+            found=True,
+            spans=(CitedSpan(chunk_id=ghost, quote="never retrieved", start=0, end=15),),
+        )
+    )
+
+    turn = _post(
+        conversations=conversations,
+        turns=FakeConversationTurnRepository(),
+        sources=sources,
+        corpus=corpus,
+        retrieve=FakeScopedRetrieveEvidence([evidence]),
+        generation=generation,
+    )(user=user, conversation_id=conversation.id, message="q", mode=MODE_ANSWER)
+
+    assert turn.citations == (evidence,)
 
 
 def test_a_persisted_turn_bumps_the_conversations_activity() -> None:

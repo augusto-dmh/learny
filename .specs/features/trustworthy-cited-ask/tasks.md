@@ -241,7 +241,7 @@ T12 -> T13
 
 ---
 
-### T8: Store optional citation spans on turn snapshots
+### T8: Store optional citation spans on turn snapshots ✅
 
 **What**: Additive nullable `quoted_text`, `start_char`, `end_char` on `conversation_turn_citations`; serialize only when set.
 **Where**: `backend/app/infrastructure/db/metadata.py`
@@ -256,9 +256,9 @@ T12 -> T13
 
 **Done when**:
 
-- [ ] Migration `0018` upgrades and downgrades
-- [ ] Wire JSON omits the three keys when null (book payload size unchanged)
-- [ ] Failed turns still write zero citation rows
+- [x] Migration `0018` upgrades and downgrades
+- [x] Wire JSON omits the three keys when null (book payload size unchanged)
+- [x] Failed turns still write zero citation rows
 
 **Tests**: integration
 **Gate**: full

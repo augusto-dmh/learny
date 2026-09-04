@@ -79,6 +79,12 @@ class EvidenceView(BaseModel):
     three fields are emitted **only** for note evidence: a book citation serializes
     to exactly the original seven keys (NL-03 book-citations-unchanged), so existing
     clients and the pinned wire contract see no change.
+
+    A stored citation that carries a claim-level span adds ``quoted_text`` and its
+    offsets by the same rule (ASK-12). Retrieval results never have one, and neither
+    do legacy rows or a deterministic adapter's citations, so those three keys are
+    absent exactly where they would be null (ASK-17) — the seven-key book projection
+    is unchanged for every citation that has nothing more to say.
     """
 
     chunk_id: UUID
@@ -91,15 +97,22 @@ class EvidenceView(BaseModel):
     origin: Literal["book", "note"] = "book"
     note_id: UUID | None = None
     note_title: str | None = None
+    quoted_text: str | None = None
+    start_char: int | None = None
+    end_char: int | None = None
 
     @model_serializer(mode="wrap")
     def _serialize(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
         # The default handler serializes every field (respecting python/json mode);
         # for book evidence the note-only fields are dropped so the projection is
-        # byte-identical to the pre-notes contract (NL-03).
+        # byte-identical to the pre-notes contract (NL-03), and a citation with no
+        # cited sentence drops the span keys for the same reason (ASK-17).
         data = handler(self)
         if self.origin == "book":
             for key in ("origin", "note_id", "note_title"):
+                data.pop(key, None)
+        if self.quoted_text is None:
+            for key in ("quoted_text", "start_char", "end_char"):
                 data.pop(key, None)
         return data
 
@@ -116,6 +129,9 @@ class EvidenceView(BaseModel):
             origin=evidence.origin,
             note_id=evidence.note_id,
             note_title=evidence.note_title,
+            quoted_text=evidence.quoted_text,
+            start_char=evidence.start_char,
+            end_char=evidence.end_char,
         )
 
 

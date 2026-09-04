@@ -411,6 +411,14 @@ conversation_turn_citations = Table(
     Column("anchor", Text, nullable=False),
     Column("snippet", Text, nullable=False),
     Column("score", Float, nullable=False),
+    # The claim-level passage inside the snippet, when the generation adapter reported
+    # one (AD-269). Nullable together: rows written before spans existed, and every row
+    # a deterministic adapter writes, carry no quote and keep the whole-snippet reading
+    # behaviour (ASK-17). Offsets are ``str`` indices into ``snippet``, stored beside it
+    # so a later corpus replace cannot move the text out from under them.
+    Column("quoted_text", Text, nullable=True),
+    Column("start_char", Integer, nullable=True),
+    Column("end_char", Integer, nullable=True),
     UniqueConstraint("turn_id", "rank"),
 )
 

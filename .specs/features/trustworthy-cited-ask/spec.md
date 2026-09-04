@@ -124,12 +124,12 @@ A second trust gap sits on the same path: the Citations API already returns `cit
 | ASK-09 | P1: Pin the 400 | T4, T5 | Done |
 | ASK-10 | P1: Pin the 400 | T6 | Done |
 | ASK-11 | P1: Pin the 400 | T1 (arc) + Execute dump | In Tasks |
-| ASK-12 | P1: Citation spans | T2, T3, T8 | In Tasks |
+| ASK-12 | P1: Citation spans | T2, T3, T8 | Done |
 | ASK-13 | P1: Citation spans | T3 | Done |
 | ASK-14 | P1: Citation spans | T3 | Done |
 | ASK-15 | P1: Citation spans | T12 | In Tasks |
 | ASK-16 | P1: Citation spans | T13 | In Tasks |
-| ASK-17 | P1: Citation spans | T8, T12, T13 | In Tasks |
+| ASK-17 | P1: Citation spans | T8, T12, T13 | Backend done (T8) |
 
 **Coverage:** 17 total, 17 mapped to tasks, 0 unmapped
 
