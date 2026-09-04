@@ -50,6 +50,7 @@ from app.infrastructure.ingestion.factory import (
     PDF_CONTENT_TYPE,
     build_parser,
 )
+from app.infrastructure.ingestion.images import PillowImageEncoder
 from app.infrastructure.ingestion.markup import Bs4MarkupConverter
 from app.infrastructure.quiz import build_quiz_adapter
 from app.infrastructure.scheduling import build_scheduling_adapter
@@ -144,6 +145,7 @@ def _build_step(conn: Connection) -> IngestionStep:
             clock=_clock,
             ids=uuid4,
             chunk_max_chars=get_settings().chunk_max_chars,
+            encoder=PillowImageEncoder(),
         )
     )
 

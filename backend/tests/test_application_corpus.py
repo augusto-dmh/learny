@@ -33,18 +33,22 @@ from app.application.identity import AuthorizeOwnership
 from app.application.quiz_qc import normalize_text
 from app.domain.entities import (
     CorpusSectionRecord,
+    EncodedRaster,
     IngestionJob,
     ParsedBlock,
     ParsedBook,
+    ParsedMedia,
     ParsedSection,
     Source,
     User,
 )
+from app.infrastructure.ingestion.markup import Bs4MarkupConverter
 from tests.fakes import (
     FailingStorage,
     FakeClock,
     FakeCorpusRepository,
     FakeEpubParser,
+    FakeImageEncoder,
     FakeIngestionEventRepository,
     FakeMarkupConverter,
     FakeSourceRepository,
@@ -119,17 +123,27 @@ def _book() -> ParsedBook:
     )
 
 
-def _build(*, storage, parser, corpus, events, chunk_max_chars: int = 2000) -> BuildCorpus:  # noqa: ANN001 — port doubles
+def _build(  # noqa: ANN001 — port doubles
+    *,
+    storage,
+    parser,
+    corpus,
+    events,
+    chunk_max_chars: int = 2000,
+    encoder=None,
+    markup=None,
+) -> BuildCorpus:
     ids = count(1)
     return BuildCorpus(
         storage=storage,
         parser=parser,
-        markup=FakeMarkupConverter(),
+        markup=markup or FakeMarkupConverter(),
         corpus=corpus,
         events=events,
         clock=FakeClock(_NOW),
         ids=lambda: UUID(int=next(ids)),
         chunk_max_chars=chunk_max_chars,
+        encoder=encoder or FakeImageEncoder(),
     )
 
 
@@ -637,3 +651,169 @@ def test_read_structure_owned_source_without_corpus_raises_corpus_not_found() ->
 
     with pytest.raises(CorpusNotFound):
         _read_structure(sources, corpus)(user=user, source_id=source.id)
+
+
+_WEBP_BYTES = b"WEBP-BYTES"
+_WEBP_HASH = "b" * 64
+_COVER_HTML = '<img alt="Cover image" src="cover.png"/>'
+_OK_HTML = '<img alt="Keep" src="ok.png"/>'
+_BAD_HTML = '<img alt="Gone" src="bad.png"/>'
+_EMPTY_ALT_HTML = '<img alt="" src="cover.png"/>'
+
+
+def _figure_book(*html_blocks: str, media: tuple[ParsedMedia, ...] = ()) -> ParsedBook:
+    blocks = tuple(
+        ParsedBlock(i, "heading" if i == 0 else "img", html)
+        for i, html in enumerate(("<h1>One</h1>", *html_blocks))
+    )
+    return ParsedBook(
+        title="Figures",
+        authors=(),
+        language="en",
+        sections=(
+            ParsedSection(
+                position=0,
+                title="One",
+                depth=0,
+                section_path=("One",),
+                anchor="one.xhtml",
+                blocks=blocks,
+            ),
+        ),
+        media=media,
+    )
+
+
+def test_build_corpus_puts_webp_and_rewrites_markdown_url() -> None:
+    source = _source()
+    png = b"png-bytes"
+    encoder = FakeImageEncoder(
+        {png: EncodedRaster(data=_WEBP_BYTES, sha256=_WEBP_HASH, content_type="image/webp")}
+    )
+    storage = FakeStorage()
+    storage.objects[source.object_key] = b"epub-bytes"
+    corpus = FakeCorpusRepository()
+    book = _figure_book(
+        _COVER_HTML,
+        media=(ParsedMedia("cover.png", "image/png", png),),
+    )
+
+    _build(
+        storage=storage,
+        parser=FakeEpubParser(book=book),
+        corpus=corpus,
+        events=FakeIngestionEventRepository(),
+        encoder=encoder,
+        markup=Bs4MarkupConverter(),
+    )(source=source, job=_job(source.id))
+
+    key = f"sources/{source.user_id}/{source.id}/media/{_WEBP_HASH}.webp"
+    assert (key, "image/webp") in storage.put_calls
+    assert storage.objects[key] == _WEBP_BYTES
+    markdown = corpus.replace_calls[0]["sections"][0].markdown
+    expected_url = f"/api/sources/{source.id}/media/{_WEBP_HASH}"
+    assert f"![Cover image]({expected_url})" in markdown
+    assert "cover.png" not in markdown
+
+
+def test_one_dropped_image_does_not_fail_ingest() -> None:
+    source = _source()
+    ok, bad = b"ok-bytes", b"bad-bytes"
+    encoder = FakeImageEncoder(
+        {
+            ok: EncodedRaster(data=_WEBP_BYTES, sha256=_WEBP_HASH, content_type="image/webp"),
+            bad: None,
+        }
+    )
+    storage = FakeStorage()
+    storage.objects[source.object_key] = b"epub-bytes"
+    corpus = FakeCorpusRepository()
+    book = _figure_book(
+        _OK_HTML,
+        _BAD_HTML,
+        media=(
+            ParsedMedia("ok.png", "image/png", ok),
+            ParsedMedia("bad.png", "image/png", bad),
+        ),
+    )
+
+    _build(
+        storage=storage,
+        parser=FakeEpubParser(book=book),
+        corpus=corpus,
+        events=FakeIngestionEventRepository(),
+        encoder=encoder,
+        markup=Bs4MarkupConverter(),
+    )(source=source, job=_job(source.id))
+
+    assert len(corpus.replace_calls) == 1
+    keys = [key for key, _ in storage.put_calls if "/media/" in key]
+    assert keys == [f"sources/{source.user_id}/{source.id}/media/{_WEBP_HASH}.webp"]
+    markdown = corpus.replace_calls[0]["sections"][0].markdown
+    assert f"![Keep](/api/sources/{source.id}/media/{_WEBP_HASH})" in markdown
+    assert "*Gone*" in markdown
+    assert "bad.png" not in markdown
+
+
+def test_html_fragment_hash_matches_pre_rewrite_markdown() -> None:
+    source = _source()
+    png = b"png-bytes"
+    encoder = FakeImageEncoder(
+        {png: EncodedRaster(data=_WEBP_BYTES, sha256=_WEBP_HASH, content_type="image/webp")}
+    )
+    storage = FakeStorage()
+    storage.objects[source.object_key] = b"epub-bytes"
+    corpus = FakeCorpusRepository()
+    book = _figure_book(
+        _COVER_HTML,
+        media=(ParsedMedia("cover.png", "image/png", png),),
+    )
+
+    _build(
+        storage=storage,
+        parser=FakeEpubParser(book=book),
+        corpus=corpus,
+        events=FakeIngestionEventRepository(),
+        encoder=encoder,
+        markup=Bs4MarkupConverter(),
+    )(source=source, job=_job(source.id))
+
+    record = corpus.replace_calls[0]["sections"][0]
+    img_block = record.section.blocks[1]
+    assert img_block.html_fragment == _COVER_HTML
+    raw_markdown = Bs4MarkupConverter().to_markdown(_COVER_HTML)
+    expected_hash = hashlib.sha256(normalize_text(raw_markdown).encode("utf-8")).hexdigest()
+    assert record.block_hashes[1] == expected_hash
+    assert raw_markdown == "![Cover image](cover.png)"
+    assert "cover.png" not in record.markdown
+
+
+def test_empty_alt_raster_is_omitted_and_not_stored() -> None:
+    source = _source()
+    png = b"png-bytes"
+    encoder = FakeImageEncoder(
+        {png: EncodedRaster(data=_WEBP_BYTES, sha256=_WEBP_HASH, content_type="image/webp")}
+    )
+    storage = FakeStorage()
+    storage.objects[source.object_key] = b"epub-bytes"
+    corpus = FakeCorpusRepository()
+    book = _figure_book(
+        _EMPTY_ALT_HTML,
+        media=(ParsedMedia("cover.png", "image/png", png),),
+    )
+
+    _build(
+        storage=storage,
+        parser=FakeEpubParser(book=book),
+        corpus=corpus,
+        events=FakeIngestionEventRepository(),
+        encoder=encoder,
+        markup=Bs4MarkupConverter(),
+    )(source=source, job=_job(source.id))
+
+    assert encoder.calls == []
+    assert all("/media/" not in key for key, _ in storage.put_calls)
+    markdown = corpus.replace_calls[0]["sections"][0].markdown
+    assert "cover.png" not in markdown
+    assert "/api/sources/" not in markdown
+    assert "![" not in markdown

@@ -49,6 +49,7 @@ from app.infrastructure.db.repositories import (
 from app.infrastructure.db.retrieval import SqlAlchemyRetrievalRepository
 from app.infrastructure.embeddings import build_embedding_adapter
 from app.infrastructure.ingestion.epub import EbooklibEpubParser
+from app.infrastructure.ingestion.images import PillowImageEncoder
 from app.infrastructure.ingestion.markup import Bs4MarkupConverter
 from tests.fakes import (
     FakeClock,
@@ -108,6 +109,7 @@ def run_ingestion(epub: bytes) -> BuiltCorpus:
         clock=FakeClock(_EPOCH),
         ids=_uuid_seq(),
         chunk_max_chars=settings.chunk_max_chars,
+        encoder=PillowImageEncoder(),
     )
     build(source=_throwaway_source(), job=_throwaway_job())
 
@@ -170,6 +172,7 @@ def build_corpus_in_db(db_conn: Connection, source: Source, epub: bytes) -> None
         clock=FakeClock(_EPOCH),
         ids=_uuid_seq(),
         chunk_max_chars=settings.chunk_max_chars,
+        encoder=PillowImageEncoder(),
     )
     build(source=source, job=_throwaway_job())
 

@@ -158,10 +158,10 @@ T11 → T12 → T13 → T14 → T15
 
 **Done when**:
 
-- [ ] Test ingest puts the webp key and markdown URL
-- [ ] Injected encoder `None` for one of two images still completes the job with one figure
-- [ ] Block hash of an img html_fragment equals the pre-rewrite parse
-- [ ] Gate: `uv run pytest tests/test_application_corpus.py tests/test_ingestion_markup.py`
+- [x] Test ingest puts the webp key and markdown URL
+- [x] Injected encoder `None` for one of two images still completes the job with one figure
+- [x] Block hash of an img html_fragment equals the pre-rewrite parse
+- [x] Gate: `uv run pytest tests/test_application_corpus.py tests/test_ingestion_markup.py`
 
 **Tests**: unit
 **Gate**: quick

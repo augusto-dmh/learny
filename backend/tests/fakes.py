@@ -26,6 +26,7 @@ from app.domain.entities import (
     CorpusSectionRecord,
     CorpusStructure,
     DerivedNoteLink,
+    EncodedRaster,
     Evidence,
     GeneratedAnswer,
     HistoryTurn,
@@ -214,6 +215,18 @@ class FakeStorage:
 
     def get_object(self, key: str) -> bytes:
         return self.objects[key]
+
+
+class FakeImageEncoder:
+    """``ImageEncoderPort`` double: returns the configured raster, else drops."""
+
+    def __init__(self, outcomes: dict[bytes, EncodedRaster | None] | None = None) -> None:
+        self.calls: list[tuple[bytes, str]] = []
+        self._outcomes = outcomes or {}
+
+    def encode(self, data: bytes, *, content_type: str) -> EncodedRaster | None:
+        self.calls.append((data, content_type))
+        return self._outcomes.get(data)
 
 
 class FailingStorage:

@@ -22,6 +22,12 @@ from app.application.errors import CorpusNotFound
 from app.application.identity import AuthorizeOwnership
 from app.application.ingestion import authorized_source
 from app.application.language import detect_language, sample_text
+from app.application.media import (
+    emphasize_dropped_images,
+    markdown_images,
+    omit_empty_alt_images,
+    rewrite_markdown_images,
+)
 from app.application.normalization import normalize_book
 from app.application.quiz_qc import normalize_text
 from app.domain.entities import (
@@ -29,6 +35,8 @@ from app.domain.entities import (
     CorpusStructure,
     IngestionEvent,
     IngestionJob,
+    ParsedBook,
+    ParsedMedia,
     SectionContent,
     Source,
     User,
@@ -37,6 +45,7 @@ from app.domain.ports import (
     Clock,
     CorpusRepository,
     DocumentParserPort,
+    ImageEncoderPort,
     IngestionEventRepository,
     MarkupConverterPort,
     SourceRepository,
@@ -90,6 +99,7 @@ class BuildCorpus:
         clock: Clock,
         ids: Callable[[], UUID],
         chunk_max_chars: int,
+        encoder: ImageEncoderPort,
     ) -> None:
         self._storage = storage
         self._parser = parser
@@ -99,6 +109,7 @@ class BuildCorpus:
         self._clock = clock
         self._ids = ids
         self._chunk_max_chars = chunk_max_chars
+        self._encoder = encoder
 
     def __call__(self, *, source: Source, job: IngestionJob) -> None:
         source_bytes = self._storage.get_object(source.object_key)
@@ -117,12 +128,27 @@ class BuildCorpus:
         normalized = normalize_book(parsed)
         book = normalized.book
 
+        section_block_texts = [
+            [self._markup.to_markdown(block.html_fragment) for block in section.blocks]
+            for section in book.sections
+        ]
+        href_to_hash, dropped, packaged_srcs = self._store_figures(
+            source, book, section_block_texts
+        )
+
         records: list[CorpusSectionRecord] = []
         total_blocks = 0
         total_chunks = 0
-        for section in book.sections:
-            block_texts = [
-                self._markup.to_markdown(block.html_fragment) for block in section.blocks
+        for section, block_texts in zip(book.sections, section_block_texts, strict=True):
+            rewritten = [
+                _rewrite_figure_markdown(
+                    text,
+                    source_id=source.id,
+                    href_to_hash=href_to_hash,
+                    dropped_hrefs=dropped,
+                    packaged_hrefs=packaged_srcs,
+                )
+                for text in block_texts
             ]
             chunks = pack_chunks(
                 block_texts,
@@ -134,12 +160,11 @@ class BuildCorpus:
             records.append(
                 CorpusSectionRecord(
                     section=section,
-                    markdown="\n\n".join(block_texts),
+                    markdown="\n\n".join(rewritten),
                     chunks=chunks,
                     # Per-block content hash for highlight anchoring (NF-02): the
-                    # sha256 of each block's normalized Markdown, aligned with
-                    # ``section.blocks``. Same normalize_text idiom the quiz QC uses,
-                    # so the hash is whitespace/case-stable across re-derivation.
+                    # sha256 of each block's *pre-rewrite* Markdown, aligned with
+                    # ``section.blocks``, so extract does not churn note anchors.
                     block_hashes=tuple(_content_hash(text) for text in block_texts),
                 )
             )
@@ -181,6 +206,80 @@ class BuildCorpus:
                 created_at=self._clock.now(),
             )
         )
+
+    def _store_figures(
+        self,
+        source: Source,
+        book: ParsedBook,
+        section_block_texts: list[list[str]],
+    ) -> tuple[dict[str, str], set[str], set[str]]:
+        """Encode packaged rasters, put WebP objects, and return rewrite maps.
+
+        Empty-alt nodes are not stored. Encode failures drop that image only —
+        they never fail the ingest job.
+        """
+        by_href, by_name = _index_media(book.media)
+        packaged_srcs: set[str] = set(by_href) | set(by_name)
+        needed: dict[str, ParsedMedia] = {}
+        for block_texts in section_block_texts:
+            for text in block_texts:
+                for alt, src in markdown_images(text):
+                    item = _resolve_media(src, by_href, by_name)
+                    if item is None:
+                        continue
+                    packaged_srcs.add(src)
+                    if alt.strip():
+                        needed[src] = item
+
+        href_to_hash: dict[str, str] = {}
+        dropped: set[str] = set()
+        for src, item in needed.items():
+            try:
+                encoded = self._encoder.encode(item.data, content_type=item.content_type)
+            except Exception:  # noqa: BLE001 — one figure must not fail ingest
+                encoded = None
+            if encoded is None:
+                dropped.add(src)
+                continue
+            key = f"sources/{source.user_id}/{source.id}/media/{encoded.sha256}.webp"
+            self._storage.put_object(key, encoded.data, content_type=encoded.content_type)
+            href_to_hash[src] = encoded.sha256
+        return href_to_hash, dropped, packaged_srcs
+
+
+def _index_media(
+    media: tuple[ParsedMedia, ...],
+) -> tuple[dict[str, ParsedMedia], dict[str, ParsedMedia]]:
+    by_href = {item.href: item for item in media}
+    by_name: dict[str, ParsedMedia] = {}
+    for item in media:
+        by_name.setdefault(_href_name(item.href), item)
+    return by_href, by_name
+
+
+def _resolve_media(
+    src: str,
+    by_href: dict[str, ParsedMedia],
+    by_name: dict[str, ParsedMedia],
+) -> ParsedMedia | None:
+    return by_href.get(src) or by_name.get(_href_name(src))
+
+
+def _href_name(href: str) -> str:
+    return href.rsplit("/", 1)[-1]
+
+
+def _rewrite_figure_markdown(
+    markdown: str,
+    *,
+    source_id: UUID,
+    href_to_hash: dict[str, str],
+    dropped_hrefs: set[str],
+    packaged_hrefs: set[str],
+) -> str:
+    rewritten = rewrite_markdown_images(markdown, source_id=source_id, href_to_hash=href_to_hash)
+    rewritten = omit_empty_alt_images(rewritten, packaged_hrefs=packaged_hrefs)
+    return emphasize_dropped_images(rewritten, dropped_hrefs=dropped_hrefs)
 
 
 class ReadSourceStructure:
