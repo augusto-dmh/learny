@@ -138,4 +138,5 @@ v7 is proposed in [RFC-0007](../../docs/rfc/0007-public-launch-roadmap.md) (**Dr
 | tlc Cycle | RFC-0007 | Scope | Status |
 |---|---|---|---|
 | `trustworthy-cited-ask` | A / Bet 1 | Keep the thread on failed Ask; pin both Anthropic request shapes; claim-level citation spans | Done (PR #63) |
-| *(Bets 2–7)* | B–G | Reader; tutor; review; first session; safety rails; cheaper intelligence | Not started |
+| `reader-people-read-in` | B / Bet 2 | Safe figures; immersive `/read` chrome; phone column | In progress |
+| *(Bets 3–7)* | C–G | Tutor; review; first session; safety rails; cheaper intelligence | Not started |
