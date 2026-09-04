@@ -93,6 +93,24 @@ def test_due_queue_defaults_to_twenty_and_passes_user_and_now() -> None:
     assert call["source_id"] is None
 
 
+def test_due_queue_uses_injected_session_size_when_limit_is_omitted() -> None:
+    repo = _CapturingItemRepo((0, []))
+    service = GetDueQueue(items=repo, clock=FakeClock(_NOW), session_size=7)
+
+    service(user=_user())
+
+    assert repo.calls[0]["limit"] == 7
+
+
+def test_due_queue_caps_injected_session_size_at_max() -> None:
+    repo = _CapturingItemRepo((0, []))
+    service = GetDueQueue(items=repo, clock=FakeClock(_NOW), session_size=1000)
+
+    service(user=_user())
+
+    assert repo.calls[0]["limit"] == MAX_DUE_LIMIT == 100
+
+
 def test_due_queue_caps_limit_at_max() -> None:
     repo = _CapturingItemRepo((0, []))
     service = GetDueQueue(items=repo, clock=FakeClock(_NOW))

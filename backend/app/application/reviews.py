@@ -51,8 +51,10 @@ def _owned_item(items: QuizItemRepository, user: User, item_id: UUID) -> QuizIte
     return item
 
 
-# Due-queue bounds (A-6 / QUIZ-13): default page size and the hard cap the service
-# enforces regardless of the requested limit (the web layer 422s over the cap first).
+# Due-queue bounds (A-6 / QUIZ-13 / AD-310): default page size and the hard cap
+# the service enforces regardless of the requested limit (the web layer 422s over
+# the cap first). ``GetDueQueue`` takes ``session_size`` from settings so today's
+# session follows ``LEARNY_REVIEW_SESSION_SIZE`` when the caller omits ``limit``.
 DEFAULT_DUE_LIMIT = 20
 MAX_DUE_LIMIT = 100
 
@@ -62,15 +64,24 @@ class GetDueQueue:
 
     Active items with ``due <= now`` (stale/orphaned excluded, QUIZ-17), ordered
     ``due ASC, id ASC`` (A-6), optionally filtered to one ``source_id``. The limit
-    defaults to :data:`DEFAULT_DUE_LIMIT` and is capped at :data:`MAX_DUE_LIMIT`;
-    the total due count is the full count before the limit. Ownership is enforced
-    by the repository's join through ``sources`` — no cross-user leakage.
-    Flagged cards are excluded even when they are active and past-due (REV-35).
+    defaults to the injected ``session_size`` (settings ``review_session_size``,
+    falling back to :data:`DEFAULT_DUE_LIMIT`) and is capped at
+    :data:`MAX_DUE_LIMIT`; the total due count is the full count before the limit.
+    Ownership is enforced by the repository's join through ``sources`` — no
+    cross-user leakage. Flagged cards are excluded even when they are active and
+    past-due (REV-35).
     """
 
-    def __init__(self, *, items: QuizItemRepository, clock: Clock) -> None:
+    def __init__(
+        self,
+        *,
+        items: QuizItemRepository,
+        clock: Clock,
+        session_size: int = DEFAULT_DUE_LIMIT,
+    ) -> None:
         self._items = items
         self._clock = clock
+        self._session_size = min(session_size, MAX_DUE_LIMIT)
 
     def __call__(
         self,
@@ -79,7 +90,7 @@ class GetDueQueue:
         limit: int | None = None,
         source_id: UUID | None = None,
     ) -> tuple[int, list[DueReviewItem]]:
-        effective = DEFAULT_DUE_LIMIT if limit is None else limit
+        effective = self._session_size if limit is None else limit
         capped = min(effective, MAX_DUE_LIMIT)
         return self._items.due_for_user(
             user.id, now=self._clock.now(), limit=capped, source_id=source_id

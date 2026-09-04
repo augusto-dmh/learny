@@ -25,7 +25,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import Connection, select
+from sqlalchemy import Connection, func, select
 
 from app.application.dates import local_day
 from app.application.quiz_qc import content_key
@@ -47,9 +47,26 @@ from app.infrastructure.db.repositories import (
     SqlAlchemyQuizJobRepository,
     SqlAlchemySourceRepository,
 )
+from app.infrastructure.scheduling.fsrs import INTERVAL_LABELS
 from tests.conftest import TEST_ORIGIN, TEST_PASSWORD, requires_db
 
 pytestmark = requires_db
+
+_SCHEDULING_FIELDS = {
+    "state",
+    "step",
+    "stability",
+    "difficulty",
+    "due",
+    "last_review",
+    "interval_labels",
+}
+
+
+def _assert_interval_labels(labels: dict) -> None:
+    assert {int(k) for k in labels} == {1, 2, 3, 4}
+    assert set(labels.values()) <= INTERVAL_LABELS
+    assert all(isinstance(value, str) for value in labels.values())
 
 
 # --- Auth / request helpers ----------------------------------------------------
@@ -519,6 +536,7 @@ def test_due_returns_items_and_total_with_full_card(
         "status",
         "due",
         "note_changed",
+        "interval_labels",
     }
     assert view["id"] == str(item.id)
     assert view["note_changed"] is False  # a deck card is never note-changed
@@ -530,6 +548,7 @@ def test_due_returns_items_and_total_with_full_card(
         "anchor": "ch1.xhtml",
         "source_excerpt": "The mitochondria is the powerhouse of the cell.",
     }
+    _assert_interval_labels(view["interval_labels"])
 
 
 def test_due_deck_card_is_queued_with_null_provenance(
@@ -580,6 +599,82 @@ def test_due_unauthenticated_returns_401(quiz_client: TestClient, db_conn: Conne
     assert resp.status_code == 401, resp.text
 
 
+def test_due_session_caps_page_and_exposes_session_knobs(
+    quiz_client: TestClient, db_conn: Connection
+) -> None:
+    source_id, _ = _seed_ready_source(quiz_client, db_conn, "due-session@example.com")
+    sid = UUID(source_id)
+    now = datetime.now(UTC)
+    for i in range(25):
+        _seed_item(
+            db_conn,
+            sid,
+            question=f"Question {i}?",
+            answer=f"Answer {i}",
+            due=now - timedelta(hours=1),
+        )
+
+    resp = quiz_client.get("/api/reviews/due")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert set(body) == {"items", "total_due", "session_size", "requeue_minutes"}
+    assert body["total_due"] == 25
+    assert len(body["items"]) == 20
+    assert body["session_size"] == 20
+    assert body["requeue_minutes"] == 15
+    for view in body["items"]:
+        _assert_interval_labels(view["interval_labels"])
+
+
+def test_due_query_limit_overrides_session_page_size(
+    quiz_client: TestClient, db_conn: Connection
+) -> None:
+    source_id, _ = _seed_ready_source(quiz_client, db_conn, "due-limit-override@example.com")
+    sid = UUID(source_id)
+    now = datetime.now(UTC)
+    for i in range(10):
+        _seed_item(
+            db_conn,
+            sid,
+            question=f"Override {i}?",
+            answer=f"A{i}",
+            due=now - timedelta(hours=1),
+        )
+
+    resp = quiz_client.get("/api/reviews/due", params={"limit": 5})
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["total_due"] == 10
+    assert len(body["items"]) == 5
+    assert body["session_size"] == 20
+    assert body["requeue_minutes"] == 15
+
+
+def test_due_preview_does_not_write_scheduling_or_review_log(
+    quiz_client: TestClient, db_conn: Connection
+) -> None:
+    source_id, _ = _seed_ready_source(quiz_client, db_conn, "due-preview-nowrite@example.com")
+    item = _seed_item(db_conn, UUID(source_id))
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    before = repo.get_scheduling(item.id)
+    logged_before = db_conn.execute(
+        select(func.count()).select_from(review_log).where(review_log.c.quiz_item_id == item.id)
+    ).scalar_one()
+
+    resp = quiz_client.get("/api/reviews/due")
+
+    assert resp.status_code == 200, resp.text
+    assert len(resp.json()["items"]) == 1
+    _assert_interval_labels(resp.json()["items"][0]["interval_labels"])
+    assert repo.get_scheduling(item.id) == before
+    logged_after = db_conn.execute(
+        select(func.count()).select_from(review_log).where(review_log.c.quiz_item_id == item.id)
+    ).scalar_one()
+    assert logged_after == logged_before == 0
+
+
 # --- Review POST (QUIZ-12) -----------------------------------------------------
 
 
@@ -591,7 +686,8 @@ def test_review_advances_scheduling_and_logs(quiz_client: TestClient, db_conn: C
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert set(body) == {"state", "step", "stability", "difficulty", "due", "last_review"}
+    assert set(body) == _SCHEDULING_FIELDS
+    _assert_interval_labels(body["interval_labels"])
     # Good schedules the next review in the future and records last_review.
     assert datetime.fromisoformat(body["due"]) > datetime.now(UTC)
     assert body["last_review"] is not None
@@ -617,14 +713,7 @@ def test_review_with_client_timezone_credits_a_study_day(
 
     assert resp.status_code == 200, resp.text
     # The additive header leaks no fields into the SchedulingView body (I-6).
-    assert set(resp.json()) == {
-        "state",
-        "step",
-        "stability",
-        "difficulty",
-        "due",
-        "last_review",
-    }
+    assert set(resp.json()) == _SCHEDULING_FIELDS
     user_id = SqlAlchemySourceRepository(db_conn).get_by_id(UUID(source_id)).user_id
     rows = db_conn.execute(
         select(study_days.c.reviews_count, study_days.c.reading_updates).where(
@@ -905,7 +994,8 @@ def test_undo_restores_scheduling_and_keeps_the_log(
     resp = _post_undo(quiz_client, csrf=csrf)
 
     assert resp.status_code == 200, resp.text
-    assert set(resp.json()) == {"state", "step", "stability", "difficulty", "due", "last_review"}
+    assert set(resp.json()) == _SCHEDULING_FIELDS
+    _assert_interval_labels(resp.json()["interval_labels"])
     assert repo.get_scheduling(item.id) == before
     row = db_conn.execute(
         select(review_log.c.rating, review_log.c.undone_at).where(

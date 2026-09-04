@@ -285,6 +285,42 @@ def test_fsrs_settings_env_override(monkeypatch) -> None:
     assert settings.fsrs_fuzzing is False
 
 
+def test_review_session_settings_defaults(monkeypatch) -> None:
+    monkeypatch.delenv("LEARNY_REVIEW_SESSION_SIZE", raising=False)
+    monkeypatch.delenv("LEARNY_REVIEW_REQUEUE_MINUTES", raising=False)
+    settings = Settings(_env_file=None)
+
+    assert settings.review_session_size == 20
+    assert settings.review_requeue_minutes == 15
+
+
+def test_review_session_settings_env_override(monkeypatch) -> None:
+    monkeypatch.setenv("LEARNY_REVIEW_SESSION_SIZE", "40")
+    monkeypatch.setenv("LEARNY_REVIEW_REQUEUE_MINUTES", "10")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.review_session_size == 40
+    assert settings.review_requeue_minutes == 10
+
+
+@pytest.mark.parametrize("value", ["0", "101", "-1"])
+def test_review_session_size_outside_one_to_hundred_is_rejected_at_startup(
+    monkeypatch, value: str
+) -> None:
+    monkeypatch.setenv("LEARNY_REVIEW_SESSION_SIZE", value)
+
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
+
+
+def test_env_example_documents_the_review_session_knobs() -> None:
+    contract = _ENV_EXAMPLE.read_text()
+
+    assert "\nLEARNY_REVIEW_SESSION_SIZE=20" in contract
+    assert "\nLEARNY_REVIEW_REQUEUE_MINUTES=15" in contract
+
+
 def test_notes_settings_default() -> None:
     # Note-body cap default (NF-04); enforced by the note use cases before any write.
     settings = Settings(_env_file=None)

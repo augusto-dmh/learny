@@ -90,6 +90,7 @@ from app.domain.ports import (
     NoteIndexEnqueuer,
     QuizDeckEnqueuer,
     QuizGenerationPort,
+    SchedulingPort,
     StoragePort,
 )
 from app.infrastructure.answering import (
@@ -621,9 +622,23 @@ def get_list_quiz_items(conn: DbConnection) -> ListQuizItems:
     )
 
 
-def get_due_queue(conn: DbConnection) -> GetDueQueue:
-    """Wire ``GetDueQueue`` on the request-scoped connection (QUIZ-13)."""
-    return GetDueQueue(items=SqlAlchemyQuizItemRepository(conn), clock=_clock)
+def get_due_queue(conn: DbConnection, settings: AppSettings) -> GetDueQueue:
+    """Wire ``GetDueQueue`` on the request-scoped connection (QUIZ-13, AD-310)."""
+    return GetDueQueue(
+        items=SqlAlchemyQuizItemRepository(conn),
+        clock=_clock,
+        session_size=settings.review_session_size,
+    )
+
+
+def get_scheduling_port(settings: AppSettings) -> SchedulingPort:
+    """Wire the FSRS adapter for interval preview (AD-312)."""
+    return build_scheduling_adapter(settings)
+
+
+def get_quiz_item_repository(conn: DbConnection) -> SqlAlchemyQuizItemRepository:
+    """Request-scoped quiz-item repository for due-queue snapshot reads."""
+    return SqlAlchemyQuizItemRepository(conn)
 
 
 def get_export_quiz_deck(conn: DbConnection) -> ExportQuizDeck:

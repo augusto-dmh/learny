@@ -299,9 +299,9 @@ T11 → T12 → T13 → T14
 
 **Done when**:
 
-- [ ] 25 due with default session returns 20 items and `total_due=25` plus `session_size` and `requeue_minutes`
-- [ ] Each item has four bucket labels; submit returns labels for the new snapshot
-- [ ] Gate: `uv run pytest tests/test_web_quiz.py tests/test_config.py tests/test_application_reviews.py`
+- [x] 25 due with default session returns 20 items and `total_due=25` plus `session_size` and `requeue_minutes`
+- [x] Each item has four bucket labels; submit returns labels for the new snapshot
+- [x] Gate: `uv run pytest tests/test_web_quiz.py tests/test_config.py tests/test_application_reviews.py`
 
 **Tests**: unit
 **Gate**: full
