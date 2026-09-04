@@ -119,7 +119,7 @@ A second trust gap sits on the same path: the Citations API already returns `cit
 | ASK-04 | P1: Never lose the thread | T9 | In Tasks |
 | ASK-05 | P1: Never lose the thread | T7 | In Tasks |
 | ASK-06 | P1: Never lose the thread | T9 | In Tasks |
-| ASK-07 | P1: Pin the 400 | T4 | In Tasks |
+| ASK-07 | P1: Pin the 400 | T4 | Done |
 | ASK-08 | P1: Pin the 400 | T5 | In Tasks |
 | ASK-09 | P1: Pin the 400 | T4, T5 | In Tasks |
 | ASK-10 | P1: Pin the 400 | T6 | In Tasks |

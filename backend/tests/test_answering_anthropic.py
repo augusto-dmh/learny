@@ -188,6 +188,64 @@ def test_document_title_falls_back_to_anchor_when_section_path_empty() -> None:
     assert doc["title"] == item.anchor
 
 
+# --- The citations request shape, and what it must never carry (ASK-07, ASK-09) --
+#
+# Derived from the request-shape ACs. Anthropic rejects a request that asks for
+# citations and a structured-output format together, and that rejection is a 400 the
+# reader sees as "answer generation failed" with no clue which half was wrong. The
+# two shapes therefore live in two tests that cannot both pass on a mixed request:
+# this one asserts the citations half is present and the schema half is absent, and
+# the quiz suite asserts the mirror. Both request paths are pinned, because a request
+# that is only correct when buffered fails exactly where the reader is watching.
+
+
+def _document_blocks(content: list[dict[str, object]]) -> list[dict[str, object]]:
+    return [block for block in content if block.get("type") == "document"]
+
+
+@pytest.mark.parametrize("mode", [MODE_ANSWER, MODE_TEACH])
+def test_buffered_request_enables_citations_and_sends_no_output_format(mode: str) -> None:
+    adapter, client = _adapter(_FakeMessage([_FakeTextBlock("ok")]))
+
+    adapter.generate(
+        mode=mode,
+        message="q",
+        evidence=[_evidence("alpha"), _evidence("beta")],
+        target_section_path=("Ch", "A") if mode == MODE_TEACH else None,
+    )
+
+    call = client.messages.calls[0]
+    documents = _document_blocks(call["messages"][-1]["content"])
+    assert len(documents) == 2
+    assert all(doc["citations"] == {"enabled": True} for doc in documents)
+    # ``output_config`` carries the thinking effort and nothing else. A structured
+    # output format alongside citations is the documented 400.
+    assert call["output_config"] == {"effort": _EFFORT}
+    assert "format" not in call["output_config"]
+
+
+@pytest.mark.parametrize("mode", [MODE_ANSWER, MODE_TEACH])
+def test_stream_request_enables_citations_and_sends_no_output_format(mode: str) -> None:
+    stream = _FakeStream(deltas=["ok"], final_message=_FakeMessage([_FakeTextBlock("ok")]))
+    adapter, client = _streaming_answer_adapter(stream)
+
+    list(
+        adapter.generate_stream(
+            mode=mode,
+            message="q",
+            evidence=[_evidence("alpha"), _evidence("beta")],
+            target_section_path=("Ch", "A") if mode == MODE_TEACH else None,
+        )
+    )
+
+    call = client.messages.stream_calls[0]
+    documents = _document_blocks(call["messages"][-1]["content"])
+    assert len(documents) == 2
+    assert all(doc["citations"] == {"enabled": True} for doc in documents)
+    assert call["output_config"] == {"effort": _EFFORT}
+    assert "format" not in call["output_config"]
+
+
 # --- Deliberate thinking config (ANSW-04, ANSW-06) -----------------------------
 #
 # Derived from the generation-config ACs: every request the adapter builds — either

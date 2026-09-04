@@ -145,7 +145,7 @@ T12 -> T13
 
 ---
 
-### T4: Pin the citations-enabled Anthropic request shape
+### T4: Pin the citations-enabled Anthropic request shape ✅
 
 **What**: Assert the answering `messages.create` / `stream` kwargs include citations-enabled documents and do not include `output_config.format`.
 **Where**: `backend/tests/test_answering_anthropic.py`
@@ -160,8 +160,8 @@ T12 -> T13
 
 **Done when**:
 
-- [ ] Buffered and stream paths are both pinned
-- [ ] A mutant that adds `output_config.format` fails this test
+- [x] Buffered and stream paths are both pinned
+- [x] A mutant that adds `output_config.format` fails this test
 
 **Tests**: unit
 **Gate**: quick
