@@ -153,7 +153,7 @@ Learny already has a study-reader skeleton (chapter flow, 65ch serif, `Aa`, rece
 | READ-19 | P1: Immersive chrome | T10 | Done |
 | READ-20 | P1: Immersive chrome | T9, T10 | Done |
 | READ-21 | P1: Immersive chrome | T9 | Done |
-| READ-22 | P1: Phone column | T11 | In Tasks |
+| READ-22 | P1: Phone column | T11 | Done |
 | READ-23 | P1: Phone column | T12 | In Tasks |
 | READ-24 | P1: Phone column | T13 | In Tasks |
 | READ-25 | P1: Phone column | T14 | In Tasks |

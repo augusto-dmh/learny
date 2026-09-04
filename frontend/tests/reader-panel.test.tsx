@@ -20,7 +20,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   ReaderPanel,
@@ -28,6 +28,7 @@ import {
   type PanelMode,
 } from "../app/components/reader-panel";
 import { readActiveConversation } from "../app/lib/active-conversation";
+import { LG_MIN_WIDTH_PX } from "../hooks/use-below-lg";
 
 // The shell test covers tabs, close, and which mode's body renders — not the
 // chat internals (unit-tested in ask-panel.test.tsx, which pull in AI-Elements).
@@ -126,6 +127,43 @@ function stubServer(rows: ReturnType<typeof summary>[]) {
   return fetchMock;
 }
 
+/**
+ * Drive the AD-280 breakpoint in JS. Tailwind `lg` is 1024px; below that the
+ * dock is a bottom sheet. jsdom has no CSS media queries, so tests that only
+ * inspect class names cannot prove READ-22.
+ */
+function stubViewportWidth(width: number) {
+  window.matchMedia = (query: string) => {
+    const maxWidth = query.match(/max-width:\s*(\d+)px/i);
+    const matches = maxWidth ? width <= Number(maxWidth[1]) : false;
+    return {
+      matches,
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    } as unknown as MediaQueryList;
+  };
+}
+
+function sheetContent(): HTMLElement | null {
+  return document.querySelector<HTMLElement>("[data-slot='sheet-content']");
+}
+
+beforeAll(() => {
+  globalThis.ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  } as unknown as typeof ResizeObserver;
+  Element.prototype.hasPointerCapture = () => false;
+  Element.prototype.setPointerCapture = () => {};
+  Element.prototype.releasePointerCapture = () => {};
+});
+
 beforeEach(() => {
   stubList();
 });
@@ -134,6 +172,7 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   localStorage.clear();
+  Reflect.deleteProperty(window, "matchMedia");
 });
 
 describe("ReaderPanel shell (RA-01/02/03)", () => {
@@ -511,5 +550,46 @@ describe("ReaderPanel tabs that hold no conversation", () => {
     // told to re-read: visiting a tab with no conversation state disturbed none.
     expect(readActiveConversation("s1", "ask")).toBe("conv1");
     expect(screen.getByTestId("ask-panel-body").dataset.revision).toBe(revision);
+  });
+});
+
+describe("ReaderPanel phone sheet (READ-22)", () => {
+  it("renders an open dock as a bottom sheet below lg, not a 26rem side column", async () => {
+    stubViewportWidth(LG_MIN_WIDTH_PX - 1);
+    render(
+      <ReaderPanel sourceId="s1" csrf="csrf-xyz" tab="ask" onTabChange={() => {}} onClose={() => {}} />,
+    );
+
+    const sheet = await waitFor(() => {
+      const node = sheetContent();
+      expect(node).not.toBeNull();
+      return node!;
+    });
+    expect(sheet.getAttribute("data-side")).toBe("bottom");
+    expect(sheet.className.split(/\s+/)).not.toContain("w-[26rem]");
+    const panel = screen.getByTestId("reader-panel");
+    expect(panel.className.split(/\s+/)).not.toContain("w-[26rem]");
+    expect(panel.className.split(/\s+/)).not.toContain("max-xl:fixed");
+    expect(screen.getByTestId("ask-panel-body")).toBeTruthy();
+  });
+
+  it("keeps the overlay side dock at lg and above, not a full-width bottom sheet", async () => {
+    stubViewportWidth(LG_MIN_WIDTH_PX);
+    render(
+      <ReaderPanel sourceId="s1" csrf="csrf-xyz" tab="ask" onTabChange={() => {}} onClose={() => {}} />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("reader-panel")).toBeTruthy();
+    });
+    expect(sheetContent()).toBeNull();
+    const panel = screen.getByTestId("reader-panel");
+    const classes = panel.className.split(/\s+/);
+    expect(classes).toContain("w-[26rem]");
+    expect(classes).toContain("max-xl:fixed");
+    expect(classes).toContain("max-xl:inset-y-0");
+    expect(classes).toContain("max-xl:right-0");
+    expect(classes).not.toContain("shrink-0");
+    expect(classes).toContain("xl:shrink-0");
   });
 });

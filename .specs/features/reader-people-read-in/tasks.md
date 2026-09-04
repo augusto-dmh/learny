@@ -296,8 +296,8 @@ T11 → T12 → T13 → T14 → T15
 
 **Done when**:
 
-- [ ] Viewport `<lg` + open dock → sheet; `lg` → not a full-width bottom sheet covering the article
-- [ ] Gate: `cd frontend && npm test -- reader-panel`
+- [x] Viewport `<lg` + open dock → sheet; `lg` → not a full-width bottom sheet covering the article
+- [x] Gate: `cd frontend && npm test -- reader-panel`
 
 **Tests**: unit
 **Gate**: full
