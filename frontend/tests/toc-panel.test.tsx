@@ -227,9 +227,11 @@ describe("TocPanel collapse (RD-25)", () => {
     };
     const { rerender } = render(<TocPanel {...shared} open={false} />);
     const panel = screen.getByTestId("toc-panel");
-    // Closed: hidden below lg (shown only at ≥lg via the lg:block utility).
+    // Closed: hidden at every breakpoint (READ-18). `lg:block` would pin it open
+    // on desktop and make `[` a no-op.
     expect(panel.getAttribute("data-state")).toBe("closed");
     expect(panel.className).toContain("hidden");
+    expect(panel.className).not.toContain("lg:block");
 
     rerender(<TocPanel {...shared} open={true} />);
     expect(screen.getByTestId("toc-panel").getAttribute("data-state")).toBe("open");

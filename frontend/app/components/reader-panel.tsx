@@ -25,7 +25,7 @@
  */
 
 import { X } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useState } from "react";
 
 import {
   readActiveConversation,
@@ -34,6 +34,15 @@ import {
 import { type ConversationSummaryView } from "@/app/lib/conversations";
 import { type PendingPanelRequest } from "@/app/lib/panel";
 import { Button } from "@/components/ui/button";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
+import { useBelowLg } from "@/hooks/use-below-lg";
+import { readControlMinStyle } from "@/app/lib/read-control-size";
 import { cn } from "@/lib/utils";
 
 import { AskPanel } from "./ask-panel";
@@ -244,13 +253,10 @@ export function ReaderPanel({
     review: bookDue.total,
   };
 
-  return (
-    <aside
-      data-testid="reader-panel"
-      data-tab={tab}
-      aria-label={TAB_TITLES[tab]}
-      className="sticky top-0 flex h-[calc(100vh-3rem)] w-[26rem] shrink-0 flex-col overflow-y-auto border-l bg-background"
-    >
+  const belowLg = useBelowLg();
+
+  const body = (
+    <>
       <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
         <div role="tablist" aria-label="Dock tabs" className="flex gap-1">
           {TABS.map(({ value, label }) => (
@@ -272,15 +278,17 @@ export function ReaderPanel({
             </button>
           ))}
         </div>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          aria-label="Close panel"
-          onClick={onClose}
-        >
-          <X />
-        </Button>
+        {belowLg ? null : (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Close panel"
+            onClick={onClose}
+          >
+            <X />
+          </Button>
+        )}
       </div>
 
       {/* Threads belong to the conversation surfaces; Notes and Review have none. */}
@@ -327,6 +335,75 @@ export function ReaderPanel({
           />
         )}
       </div>
+    </>
+  );
+
+  if (belowLg) {
+    return (
+      <Sheet
+        open
+        onOpenChange={(open) => {
+          if (!open) {
+            onClose();
+          }
+        }}
+      >
+        <SheetContent
+          side="bottom"
+          showCloseButton={false}
+          className="max-h-[85svh] gap-0 p-0 motion-reduce:animate-none motion-reduce:transition-none"
+        >
+          <SheetHeader className="sr-only">
+            <SheetTitle>{TAB_TITLES[tab]}</SheetTitle>
+            <SheetDescription>
+              Study surfaces for this book, as a bottom sheet.
+            </SheetDescription>
+          </SheetHeader>
+          <Button
+            type="button"
+            variant="ghost"
+            className="absolute top-3 right-3 z-10 size-11"
+            style={readControlMinStyle}
+            aria-label="Close"
+            onClick={onClose}
+          >
+            <X />
+          </Button>
+          <ReaderPanelFrame tab={tab} className="flex max-h-[85svh] min-h-0 flex-col overflow-y-auto bg-background">
+            {body}
+          </ReaderPanelFrame>
+        </SheetContent>
+      </Sheet>
+    );
+  }
+
+  return (
+    <ReaderPanelFrame
+      tab={tab}
+      className="sticky top-0 flex h-svh w-[26rem] flex-col overflow-y-auto border-l bg-background max-xl:fixed max-xl:inset-y-0 max-xl:right-0 max-xl:z-30 xl:shrink-0"
+    >
+      {body}
+    </ReaderPanelFrame>
+  );
+}
+
+function ReaderPanelFrame({
+  tab,
+  className,
+  children,
+}: {
+  tab: DockTab;
+  className: string;
+  children: ReactNode;
+}) {
+  return (
+    <aside
+      data-testid="reader-panel"
+      data-tab={tab}
+      aria-label={TAB_TITLES[tab]}
+      className={className}
+    >
+      {children}
     </aside>
   );
 }

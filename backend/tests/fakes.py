@@ -13,6 +13,7 @@ from datetime import UTC, date, datetime
 from itertools import count
 from uuid import UUID, uuid4
 
+from app.application.errors import StorageUnavailable
 from app.domain.entities import (
     ACTIVE_STATUSES,
     AnchorSection,
@@ -26,6 +27,7 @@ from app.domain.entities import (
     CorpusSectionRecord,
     CorpusStructure,
     DerivedNoteLink,
+    EncodedRaster,
     Evidence,
     GeneratedAnswer,
     HistoryTurn,
@@ -216,6 +218,18 @@ class FakeStorage:
         return self.objects[key]
 
 
+class FakeImageEncoder:
+    """``ImageEncoderPort`` double: returns the configured raster, else drops."""
+
+    def __init__(self, outcomes: dict[bytes, EncodedRaster | None] | None = None) -> None:
+        self.calls: list[tuple[bytes, str]] = []
+        self._outcomes = outcomes or {}
+
+    def encode(self, data: bytes, *, content_type: str) -> EncodedRaster | None:
+        self.calls.append((data, content_type))
+        return self._outcomes.get(data)
+
+
 class FailingStorage:
     """``StoragePort`` whose ``put_object`` always fails (storage-down path)."""
 
@@ -224,6 +238,16 @@ class FailingStorage:
 
     def get_object(self, key: str) -> bytes:
         raise RuntimeError("storage down")
+
+
+class UnavailableStorage:
+    """``StoragePort`` that raises the application outage error on every call."""
+
+    def put_object(self, key: str, data: bytes, *, content_type: str) -> None:
+        raise StorageUnavailable("storage down")
+
+    def get_object(self, key: str) -> bytes:
+        raise StorageUnavailable("storage down")
 
 
 class FakeIngestionJobRepository:

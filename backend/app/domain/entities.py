@@ -243,6 +243,29 @@ class ParsedSection:
 
 
 @dataclass(frozen=True)
+class EncodedRaster:
+    """Capped WebP bytes plus the sha256 of those encoded bytes."""
+
+    data: bytes
+    sha256: str
+    content_type: str = "image/webp"
+
+
+@dataclass(frozen=True)
+class ParsedMedia:
+    """Packaged image bytes copied out of the source document.
+
+    Library-free so application code never imports ebooklib or Docling types.
+    ``href`` is the package path markup ``src`` refers to; ``data`` is the item
+    payload. Ingest-only — not persisted as rows.
+    """
+
+    href: str
+    content_type: str
+    data: bytes
+
+
+@dataclass(frozen=True)
 class ParsedBook:
     """The library-free result of parsing an EPUB (ADR-0009).
 
@@ -250,12 +273,15 @@ class ParsedBook:
     only). ``title``/``language`` are ``None`` and ``authors`` empty when the OPF
     omits them (CORP-01). This is the boundary DTO between the parser adapter and
     the ``BuildCorpus`` use case — no ebooklib/bs4 types cross it (ADR-0009).
+    ``media`` holds packaged image items; default empty when the parser supplied
+    none.
     """
 
     title: str | None
     authors: tuple[str, ...]
     language: str | None
     sections: tuple[ParsedSection, ...]
+    media: tuple[ParsedMedia, ...] = ()
 
 
 @dataclass(frozen=True)

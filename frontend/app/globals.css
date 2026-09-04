@@ -184,6 +184,13 @@ html:not(.dark) [data-appearance="paper"] {
     hyphens: none;
   }
 
+  .prose-reading img,
+  .book-prose img,
+  .prose-reading figure {
+    max-width: 100%;
+    height: auto;
+  }
+
   /*
    * The book column: the approved reading column. Deliberately silent about
    * type size and line height — those stay on `--reading-size` /

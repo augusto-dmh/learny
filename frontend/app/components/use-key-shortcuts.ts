@@ -15,9 +15,10 @@
  *   the student is writing, and a letter is a letter. Typing "h" into a note body
  *   must never create a highlight.
  *
- * Callers scope the listener further with `enabled`: the reader binds its keys
- * only while the capture popover is open, so a bare press with nothing selected
- * cannot fire an action the student has no on-screen evidence of.
+ * Callers scope the listener further with `enabled`: capture verbs stay bound
+ * only while the popover is open, so a bare press with nothing selected cannot
+ * fire an action the student has no on-screen evidence of. Chrome keys (`[` / `]`)
+ * stay enabled while reading.
  *
  * Bindings are read through a ref, so a caller may pass a fresh object every
  * render — closing over current state — without the listener being torn down and

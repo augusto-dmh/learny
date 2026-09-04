@@ -9,13 +9,15 @@
  * capture control, byte-identical to the shipped highlight flow.
  */
 
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CapturePopover } from "../app/components/notes/capture-popover";
+import { LG_MIN_WIDTH_PX } from "../hooks/use-below-lg";
 
 afterEach(() => {
   cleanup();
+  Reflect.deleteProperty(window, "matchMedia");
 });
 
 /** Render the popover; every render supplies the capture-flow essentials. */
@@ -143,5 +145,86 @@ describe("CapturePopover without verbs (RA-16)", () => {
     ]);
     expect(screen.queryByRole("button", { name: "Explain" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Create card" })).toBeNull();
+  });
+});
+
+function stubViewportWidth(width: number) {
+  window.matchMedia = (query: string) => {
+    const maxWidth = query.match(/max-width:\s*(\d+)px/i);
+    const matches = maxWidth ? width <= Number(maxWidth[1]) : false;
+    return {
+      matches,
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    } as unknown as MediaQueryList;
+  };
+}
+
+const FIVE_VERBS = {
+  quote: "a passage",
+  onExplain: vi.fn(),
+  onAskAbout: vi.fn(),
+  onCreateCard: vi.fn(),
+};
+
+describe("CapturePopover compact bar below lg (READ-24)", () => {
+  it("keeps Highlight as the visible primary and hides the rest behind overflow", async () => {
+    stubViewportWidth(LG_MIN_WIDTH_PX - 1);
+    renderPopover(FIVE_VERBS);
+
+    const overflow = await waitFor(() =>
+      screen.getByRole("button", { name: "More capture actions" }),
+    );
+    const row = screen.getByTestId("capture-verb-row");
+    expect(within(row).getByRole("button", { name: "Highlight" })).toBeTruthy();
+    expect(within(row).queryByRole("button", { name: "Explain" })).toBeNull();
+    expect(within(row).queryByRole("button", { name: "Ask" })).toBeNull();
+    expect(within(row).queryByRole("button", { name: "Note" })).toBeNull();
+    expect(within(row).queryByRole("button", { name: "Create card" })).toBeNull();
+
+    fireEvent.click(overflow);
+    expect(screen.getByRole("button", { name: "Note" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Explain" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Ask" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Create card" })).toBeTruthy();
+  });
+
+  it("still offers the five-verb bar at lg and above", async () => {
+    stubViewportWidth(LG_MIN_WIDTH_PX);
+    renderPopover(FIVE_VERBS);
+
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "More capture actions" })).toBeNull();
+    });
+    const dialog = screen.getByRole("dialog", { name: "Capture highlight" });
+    expect(
+      within(dialog)
+        .getAllByRole("button")
+        .map((button) => button.textContent),
+    ).toEqual(["Highlight", "Note", "Explain", "Ask", "Create card"]);
+  });
+});
+
+describe("CapturePopover control targets (READ-25)", () => {
+  it("sizes Highlight to at least 44px", () => {
+    renderPopover(FIVE_VERBS);
+    const highlight = screen.getByRole("button", { name: "Highlight" });
+    expect(Number.parseFloat(getComputedStyle(highlight).minWidth)).toBeGreaterThanOrEqual(44);
+    expect(Number.parseFloat(getComputedStyle(highlight).minHeight)).toBeGreaterThanOrEqual(44);
+  });
+
+  it("sizes the overflow control to at least 44px below lg", async () => {
+    stubViewportWidth(LG_MIN_WIDTH_PX - 1);
+    renderPopover(FIVE_VERBS);
+    const overflow = await waitFor(() =>
+      screen.getByRole("button", { name: "More capture actions" }),
+    );
+    expect(Number.parseFloat(getComputedStyle(overflow).minWidth)).toBeGreaterThanOrEqual(44);
+    expect(Number.parseFloat(getComputedStyle(overflow).minHeight)).toBeGreaterThanOrEqual(44);
   });
 });

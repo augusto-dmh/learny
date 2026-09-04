@@ -16,3 +16,7 @@ evals/silver/
 
 # Transient ship-cycle heartbeat: per-session state, not repository content.
 .specs/.ship-status
+
+# Agent-harness copies of project-local skills (canonical tree is .claude/skills/).
+.cursor/skills/
+.windsurf/skills/

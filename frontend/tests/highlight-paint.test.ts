@@ -144,4 +144,41 @@ describe("paintHighlights (RD-28/29)", () => {
     // No characters added or removed; the visible/selectable text is identical.
     expect(el.textContent).toBe(before);
   });
+
+  it("wraps only prose text and never wraps a figure in the same section", () => {
+    const el = document.createElement("div");
+    const paragraph = document.createElement("p");
+    paragraph.appendChild(document.createTextNode("Ada designed "));
+    const figure = document.createElement("img");
+    figure.setAttribute("src", "/api/sources/s1/media/abc");
+    figure.setAttribute("alt", "diagram");
+    figure.appendChild(document.createTextNode("the engine"));
+    paragraph.appendChild(figure);
+    paragraph.appendChild(document.createTextNode(" on paper."));
+    el.appendChild(paragraph);
+
+    paintHighlights(el, [active({ quote_exact: "Ada designed " })]);
+
+    const painted = marks(el);
+    expect(painted).toHaveLength(1);
+    expect(painted[0].textContent).toBe("Ada designed ");
+    expect(figure.closest("mark")).toBeNull();
+    expect(figure.querySelector("mark")).toBeNull();
+  });
+
+  it("does not paint a quote that exists only inside an img", () => {
+    const el = document.createElement("div");
+    const paragraph = document.createElement("p");
+    paragraph.appendChild(document.createTextNode("See the plate."));
+    const figure = document.createElement("img");
+    figure.setAttribute("src", "/api/sources/s1/media/abc");
+    figure.appendChild(document.createTextNode("the engine"));
+    paragraph.appendChild(figure);
+    el.appendChild(paragraph);
+
+    paintHighlights(el, [active({ quote_exact: "the engine" })]);
+
+    expect(marks(el)).toHaveLength(0);
+    expect(figure.querySelector("mark")).toBeNull();
+  });
 });

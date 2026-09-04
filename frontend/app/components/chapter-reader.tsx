@@ -7,9 +7,8 @@
  * `ChapterFlow` is the found-state renderer: every section of the loaded chapter
  * is laid out in order inside one `.prose-reading` article, each wrapped in a
  * `<section id={anchor} data-section-anchor>` so a deep link (`?anchor=`) or a
- * TOC jump resolves to a DOM id. Each section's markdown is rendered with the
- * same memoized Streamdown the streamed answers use (`MessageResponse` — raw HTML
- * in the markdown stays inert, never injected as live DOM). A `scrollTarget`
+ * TOC jump resolves to a DOM id. Each section's markdown is rendered with
+ * `ChapterMarkdown` (raw HTML stays inert; same-origin figures may paint). A `scrollTarget`
  * (the URL anchor, or the resumed reading position) is scrolled into view once
  * per change and its section heading is transiently highlighted so the reader
  * lands on the cited passage.
@@ -17,9 +16,10 @@
  * Highlight capture (NF-12) is ported here unchanged: selecting text over a
  * section raises a popover whose actions POST the selection — resolved against
  * that section's served Markdown via the pure `deriveCaptureSelection` seam,
- * never the DOM — to the capture endpoint. The per-section `onMouseUp` closes
- * over the right section so a multi-section chapter resolves each selection
- * against its own Markdown and anchor.
+ * never the DOM — to the capture endpoint. Pointer-up, mouse-up, and
+ * `selectionchange` all share that seam so a phone selection is not mouse-only.
+ * The per-section handlers close over the right section so a multi-section
+ * chapter resolves each selection against its own Markdown and anchor.
  *
  * The margin rail (CAP-18..24) renders the same highlight set as a column beside
  * the article, scoped to the loaded chapter, and yields to the Ask/Teach panel
@@ -32,7 +32,7 @@
  * generation from costing the student their highlight.
  */
 
-import { List } from "lucide-react";
+import { List, PanelRight } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
@@ -83,10 +83,11 @@ import {
   type ChapterView,
   type SourceHighlightView,
 } from "@/app/lib/reading";
-import { MessageResponse } from "@/components/ai-elements/message";
+import { ChapterMarkdown } from "@/app/components/chapter-markdown";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
+import { readControlMinStyle } from "@/app/lib/read-control-size";
 
 /** Ephemeral cited-sentence paint; not a real note — same painter as saved highlights. */
 const CITATION_SPAN_ID = "citation-span";
@@ -107,6 +108,9 @@ const NO_HIGHLIGHTS: SourceHighlightView[] = [];
  */
 const STALE_CAPTURE_MESSAGE =
   "The book changed while you were reading. Reload the page to capture this highlight.";
+
+/** Default dock tab when `]` opens the panel with no `?panel=` already set. */
+const DEFAULT_DOCK_TAB: DockTab = "ask";
 
 /** Pixels below the popover's top edge to drop the suggestion row, clearing the verbs. */
 const SUGGESTIONS_OFFSET = 44;
@@ -404,7 +408,7 @@ export function ChapterFlow({
     ]);
     return next;
   }, [highlightsByAnchor, spanQuote]);
-  // The below-lg table of contents collapses behind the top-bar toggle (RD-25).
+  // The table of contents starts closed; the top-bar toggle and `[` open it.
   const [tocOpen, setTocOpen] = useState(false);
   // Top bar recedes on downward scroll, restores on upward scroll (RD-31).
   const chromeHidden = useRecedingChrome();
@@ -503,10 +507,12 @@ export function ChapterFlow({
     return () => clearTimeout(timer);
   }, [scrollTarget]);
 
-  // On mouse-up over a section, resolve the selection against THAT section's
-  // served Markdown; a resolvable selection raises the popover near it, anything
-  // else dismisses it. The closure carries the section's anchor for the write.
-  function handleMouseUp(section: ChapterSectionView) {
+  // On pointer/mouse release over a section, resolve the selection against THAT
+  // section's served Markdown; a resolvable selection raises the popover near
+  // it, anything else dismisses it. Mouse-up stays so existing desktop tests
+  // and browsers that still synthesize it keep working; pointer-up is the
+  // touch path. The closure carries the section's anchor for the write.
+  function handleSelectionRelease(section: ChapterSectionView) {
     const selection = window.getSelection();
     const derived = deriveCaptureSelection(
       section.markdown,
@@ -528,6 +534,34 @@ export function ChapterFlow({
       ...selectionPosition(selection, articleRef.current),
     });
   }
+
+  const handleSelectionReleaseRef = useRef(handleSelectionRelease);
+  handleSelectionReleaseRef.current = handleSelectionRelease;
+
+  // Touch browsers often commit the range on `selectionchange` rather than a
+  // mouse event. An empty or caret selection must not raise a false popover.
+  useEffect(() => {
+    function onSelectionChange() {
+      const selection = window.getSelection();
+      const text = selection?.toString() ?? "";
+      if (!text.trim()) {
+        setCapture(null);
+        return;
+      }
+      const sectionEl = sectionElementForSelection(selection);
+      const anchor = sectionEl?.getAttribute("data-section-anchor");
+      if (!anchor) {
+        return;
+      }
+      const section = chapter.sections.find((item) => item.anchor === anchor);
+      if (!section) {
+        return;
+      }
+      handleSelectionReleaseRef.current(section);
+    }
+    document.addEventListener("selectionchange", onSelectionChange);
+    return () => document.removeEventListener("selectionchange", onSelectionChange);
+  }, [chapter.sections]);
 
   async function handleCapture(action: CaptureAction) {
     if (!capture || !csrf) {
@@ -634,6 +668,14 @@ export function ChapterFlow({
     Boolean(capture),
   );
 
+  useKeyShortcuts(
+    {
+      "[": () => setTocOpen((open) => !open),
+      "]": handleDockToggle,
+    },
+    true,
+  );
+
   // Once a return chip is showing, dismiss it after the reader has scrolled a
   // way past where the jump landed — they have settled into the new spot (RD-24).
   useEffect(() => {
@@ -667,6 +709,14 @@ export function ChapterFlow({
   // along so the reader stays where they were.
   function handlePanelClose() {
     router.replace(readUrl(sourceId, urlAnchor));
+  }
+
+  function handleDockToggle() {
+    if (dockTab) {
+      handlePanelClose();
+    } else {
+      handleDockTabChange(DEFAULT_DOCK_TAB);
+    }
   }
 
   // Bring a cited (or taught) passage into view without leaving the answer
@@ -770,13 +820,24 @@ export function ChapterFlow({
             <Button
               type="button"
               variant="ghost"
-              size="icon-sm"
+              className="size-11"
+              style={readControlMinStyle}
               aria-label="Table of contents"
               aria-expanded={tocOpen}
-              className="lg:hidden"
               onClick={() => setTocOpen((prev) => !prev)}
             >
               <List />
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              className="size-11"
+              style={readControlMinStyle}
+              aria-label="Study dock"
+              aria-expanded={Boolean(dockTab)}
+              onClick={handleDockToggle}
+            >
+              <PanelRight />
             </Button>
             <span className="min-w-0 truncate text-sm font-medium">
               {chapter.chapter_title}
@@ -832,7 +893,7 @@ export function ChapterFlow({
               wordsPerPage={chapter.words_per_page}
               flashing={flashAnchor === section.anchor}
               highlights={highlightsWithSpan.get(section.anchor) ?? NO_HIGHLIGHTS}
-              onMouseUp={() => handleMouseUp(section)}
+              onSelectionRelease={() => handleSelectionRelease(section)}
             />
           ))}
           <ChapterNav
@@ -908,7 +969,7 @@ export function ChapterFlow({
  *
  * The paint runs in an effect keyed on the Markdown and the section's highlights,
  * both stable across unrelated re-renders, so the injected marks survive: the
- * memoized `MessageResponse` subtree does not re-render while its Markdown is
+ * memoized `ChapterMarkdown` subtree does not re-render while its Markdown is
  * unchanged, and the effect only repaints when the content or the highlight set
  * actually changes. `paintHighlights` is idempotent (unwrap-first), so even a
  * repaint yields the same DOM.
@@ -924,14 +985,14 @@ function FlowSection({
   wordsPerPage,
   flashing,
   highlights,
-  onMouseUp,
+  onSelectionRelease,
 }: {
   section: ChapterSectionView;
   wordsBefore: number;
   wordsPerPage: number;
   flashing: boolean;
   highlights: SourceHighlightView[];
-  onMouseUp: () => void;
+  onSelectionRelease: () => void;
 }) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const breadcrumb = section.section_path.join(" › ");
@@ -953,7 +1014,8 @@ function FlowSection({
     <section
       id={section.anchor}
       data-section-anchor={section.anchor}
-      onMouseUp={onMouseUp}
+      onMouseUp={onSelectionRelease}
+      onPointerUp={onSelectionRelease}
       // The same height the sticky chrome is laid out at, so a section jumped to
       // stops clear of it rather than under it.
       style={{ scrollMarginTop: READER_CHROME_HEIGHT }}
@@ -971,13 +1033,22 @@ function FlowSection({
       <div ref={bodyRef} className="book-prose">
         {runs.map((run, index) => (
           <Fragment key={index}>
-            <MessageResponse>{run.markdown}</MessageResponse>
+            <ChapterMarkdown>{run.markdown}</ChapterMarkdown>
             {run.pageAfter === null ? null : <PageRule page={run.pageAfter} />}
           </Fragment>
         ))}
       </div>
     </section>
   );
+}
+
+function sectionElementForSelection(selection: Selection | null): Element | null {
+  const node = selection?.anchorNode;
+  if (!node) {
+    return null;
+  }
+  const el = node instanceof Element ? node : node.parentElement;
+  return el?.closest("[data-section-anchor]") ?? null;
 }
 
 /**

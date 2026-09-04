@@ -20,7 +20,7 @@ from app.application.errors import (
     StorageUnavailable,
 )
 from app.application.identity import AuthorizeOwnership
-from app.application.sources import CreateSource, GetSource, ListSources
+from app.application.sources import CreateSource, GetSource, ListSources, ReadSourceMedia
 from app.application.validation import validate_source_upload
 from app.domain.entities import Source, User
 from tests.fakes import (
@@ -28,6 +28,7 @@ from tests.fakes import (
     FakeClock,
     FakeSourceRepository,
     FakeStorage,
+    UnavailableStorage,
 )
 
 EPUB_TYPE = "application/epub+zip"
@@ -418,3 +419,42 @@ def test_list_sources_delegates_to_owner_scoped_repo() -> None:
     result = list_sources(user=owner)
 
     assert {s.id for s in result} == {mine_a.id, mine_b.id}
+
+
+# ---- ReadSourceMedia ------------------------------------------------------
+
+
+def _read_media(sources: FakeSourceRepository, storage) -> ReadSourceMedia:  # noqa: ANN001
+    return ReadSourceMedia(
+        get_source=GetSource(sources=sources, authorize=AuthorizeOwnership()),
+        storage=storage,
+    )
+
+
+def test_read_source_media_returns_stored_bytes() -> None:
+    sources, storage = FakeSourceRepository(), FakeStorage()
+    owner = _user()
+    source = _stored_source(sources, owner)
+    digest = "a" * 64
+    payload = b"webp-bytes"
+    storage.objects[f"sources/{owner.id}/{source.id}/media/{digest}.webp"] = payload
+
+    assert _read_media(sources, storage)(user=owner, source_id=source.id, sha256=digest) == payload
+
+
+def test_read_source_media_missing_blob_is_not_found() -> None:
+    sources, storage = FakeSourceRepository(), FakeStorage()
+    owner = _user()
+    source = _stored_source(sources, owner)
+
+    with pytest.raises(SourceNotFound):
+        _read_media(sources, storage)(user=owner, source_id=source.id, sha256="a" * 64)
+
+
+def test_read_source_media_outage_propagates() -> None:
+    sources = FakeSourceRepository()
+    owner = _user()
+    source = _stored_source(sources, owner)
+
+    with pytest.raises(StorageUnavailable):
+        _read_media(sources, UnavailableStorage())(user=owner, source_id=source.id, sha256="a" * 64)

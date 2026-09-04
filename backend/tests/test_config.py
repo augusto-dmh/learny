@@ -159,6 +159,37 @@ def test_quiz_settings_env_override(monkeypatch) -> None:
     assert settings.quiz_batch_poll_interval_s == 15
 
 
+def test_media_encode_settings_defaults() -> None:
+    settings = Settings(_env_file=None)
+
+    assert settings.media_max_edge_px == 1600
+    assert settings.media_max_bytes == 1572864
+
+
+def test_media_encode_settings_env_override(monkeypatch) -> None:
+    monkeypatch.setenv("LEARNY_MEDIA_MAX_EDGE_PX", "800")
+    monkeypatch.setenv("LEARNY_MEDIA_MAX_BYTES", "65536")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.media_max_edge_px == 800
+    assert settings.media_max_bytes == 65536
+
+
+def test_env_example_documents_the_media_encode_caps() -> None:
+    contract = _ENV_EXAMPLE.read_text()
+
+    assert "\nLEARNY_MEDIA_MAX_EDGE_PX=1600" in contract
+    assert "\nLEARNY_MEDIA_MAX_BYTES=1572864" in contract
+
+
+def test_production_template_documents_the_media_encode_caps() -> None:
+    contract = _ENV_PRODUCTION_EXAMPLE.read_text()
+
+    assert "LEARNY_MEDIA_MAX_EDGE_PX=" in contract
+    assert "LEARNY_MEDIA_MAX_BYTES=" in contract
+
+
 def test_pdf_ocr_settings_defaults() -> None:
     # OCR on by default with the author-corpus language pair (spec: enabled=true,
     # langs "en,pt"); the parsed list mirrors the raw value.

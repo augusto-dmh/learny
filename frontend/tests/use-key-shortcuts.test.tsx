@@ -49,6 +49,18 @@ describe("useKeyShortcuts dispatch", () => {
     expect(highlight).toHaveBeenCalledTimes(1);
   });
 
+  it("runs bindings for the reader chrome bracket keys", () => {
+    const toc = vi.fn();
+    const dock = vi.fn();
+    renderHook(() => useKeyShortcuts({ "[": toc, "]": dock }, true));
+
+    press("[");
+    press("]");
+
+    expect(toc).toHaveBeenCalledTimes(1);
+    expect(dock).toHaveBeenCalledTimes(1);
+  });
+
   it("treats an uppercase key as the same binding", () => {
     const card = vi.fn();
     renderHook(() => useKeyShortcuts({ c: card }, true));

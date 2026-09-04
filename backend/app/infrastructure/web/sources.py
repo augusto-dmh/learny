@@ -9,6 +9,8 @@ Contract (also consumed by the Next.js proxy in Phase 4):
 - ``POST /api/sources``        → 201, multipart ``file`` + ``title``; auth + CSRF.
 - ``GET  /api/sources``        → 200, owner-scoped list, newest-first (auth).
 - ``GET  /api/sources/{id}``   → 200 owner; 404 cross-user/missing (auth).
+- ``GET  /api/sources/{id}/media/{sha256}`` → 200 ``image/webp`` owner;
+  404 missing/non-owner; 503 storage down (auth).
 """
 
 from __future__ import annotations
@@ -19,13 +21,13 @@ from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, Header, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, Header, Query, Response, UploadFile, status
 from pydantic import BaseModel
 
 from app.application.corpus import ReadSection, ReadSourceStructure
 from app.application.errors import StorageUnavailable
 from app.application.reading import ReadChapter, SaveReadingPosition
-from app.application.sources import CreateSource, GetSource, ListSources
+from app.application.sources import CreateSource, GetSource, ListSources, ReadSourceMedia
 from app.domain.entities import (
     ChapterContent,
     CorpusStructure,
@@ -44,6 +46,7 @@ from app.infrastructure.web.dependencies import (
     get_list_sources,
     get_read_chapter,
     get_read_section,
+    get_read_source_media,
     get_read_source_structure,
     get_save_reading_position,
 )
@@ -140,6 +143,23 @@ def get_source(
 ) -> SourceSummary:
     """Return one owned source (200); 404 if missing or owned by another user."""
     return SourceSummary.from_entity(service(user=user, source_id=source_id))
+
+
+@router.get("/{source_id}/media/{sha256}")
+def get_source_media(
+    source_id: UUID,
+    sha256: str,
+    user: Annotated[User, Depends(get_authenticated_user)],
+    service: Annotated[ReadSourceMedia, Depends(get_read_source_media)],
+) -> Response:
+    """Return owned figure bytes as WebP (200); 404 if missing, non-owner, or bad hash.
+
+    Cookie auth only — no CSRF (safe GET) and no upload rate limit. Non-owners,
+    a missing blob, and a hash that is not 64 lowercase hex all 404, never 403.
+    A storage outage surfaces as 503, same as upload.
+    """
+    data = service(user=user, source_id=source_id, sha256=sha256)
+    return Response(content=data, media_type="image/webp")
 
 
 class StructureSectionView(BaseModel):

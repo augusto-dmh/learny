@@ -348,6 +348,32 @@ describe("ChapterFlow render (RD-03)", () => {
     }
     expect((globalThis as { __xss?: number }).__xss).toBeUndefined();
   });
+
+  it("paints rewritten figure markdown as a same-origin img", async () => {
+    const mediaSrc =
+      "/api/sources/s1/media/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const withFigure: ChapterView = {
+      ...chapter,
+      sections: [
+        {
+          ...chapter.sections[0],
+          markdown: `## Beginnings\n\nAda Lovelace wrote the first algorithm.\n\n![Engine diagram](${mediaSrc})`,
+        },
+        chapter.sections[1],
+      ],
+    };
+
+    const { container } = render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={withFigure} scrollTarget={null} />,
+    );
+    await screen.findByText(/ada lovelace wrote the first algorithm/i);
+
+    const img = container.querySelector("img");
+    expect(img).not.toBeNull();
+    expect(img!.getAttribute("src")?.startsWith("/api/sources/")).toBe(true);
+    expect(img!.getAttribute("src")).toBe(mediaSrc);
+    expect(container.textContent).not.toContain("[Image blocked");
+  });
 });
 
 describe("ChapterFlow deep-link scroll (RD-04)", () => {
@@ -408,6 +434,97 @@ describe("ChapterFlow capture (NF-12)", () => {
     for (const verb of ["Highlight", "Note", "Explain", "Ask", "Create card"]) {
       expect(screen.getByRole("button", { name: verb })).toBeTruthy();
     }
+  });
+
+  it("raises capture on pointerup without a mouseup (READ-23)", () => {
+    const view = render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+    );
+    selectText("Ada Lovelace wrote the first algorithm");
+    fireEvent.pointerUp(
+      view.container.querySelector(`[data-section-anchor="${S1}"]`)!,
+    );
+
+    expect(
+      screen.getByRole("dialog", { name: "Capture highlight" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Highlight" })).toBeTruthy();
+  });
+
+  it("raises capture on selectionchange for a resolvable range (READ-23)", () => {
+    const view = render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+    );
+    const section = view.container.querySelector(`[data-section-anchor="${S1}"]`)!;
+    window.getSelection = () =>
+      ({
+        toString: () => "Ada Lovelace wrote the first algorithm",
+        isCollapsed: false,
+        rangeCount: 1,
+        anchorNode: section,
+        getRangeAt: () => ({ getBoundingClientRect: () => undefined }),
+      }) as unknown as Selection;
+
+    act(() => {
+      document.dispatchEvent(new Event("selectionchange"));
+    });
+
+    expect(
+      screen.getByRole("dialog", { name: "Capture highlight" }),
+    ).toBeTruthy();
+  });
+
+  it("does not raise capture on an empty or caret selectionchange (READ-23)", () => {
+    const view = render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+    );
+    const section = view.container.querySelector(`[data-section-anchor="${S1}"]`)!;
+    window.getSelection = () =>
+      ({
+        toString: () => "",
+        isCollapsed: true,
+        rangeCount: 1,
+        anchorNode: section,
+        getRangeAt: () => ({ getBoundingClientRect: () => undefined }),
+      }) as unknown as Selection;
+
+    act(() => {
+      document.dispatchEvent(new Event("selectionchange"));
+    });
+
+    expect(
+      screen.queryByRole("dialog", { name: "Capture highlight" }),
+    ).toBeNull();
+  });
+
+  it("still captures from served markdown when the selection includes a figure", () => {
+    const mediaSrc =
+      "/api/sources/s1/media/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const withFigure: ChapterView = {
+      ...chapter,
+      sections: [
+        {
+          ...chapter.sections[0],
+          markdown: `Ada Lovelace wrote the first algorithm.\n\n![Engine diagram](${mediaSrc})`,
+        },
+        chapter.sections[1],
+      ],
+    };
+    const view = render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={withFigure} scrollTarget={null} />,
+    );
+    selectText("Ada Lovelace wrote the first algorithm");
+    fireEvent.pointerUp(
+      view.container.querySelector(`[data-section-anchor="${S1}"]`)!,
+    );
+
+    expect(
+      screen.getByRole("dialog", { name: "Capture highlight" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Highlight" })).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: /image|figure|snapshot/i }),
+    ).toBeNull();
   });
 
   it("shows a note captured from the page in the open Notes tab, no reload", async () => {
@@ -1939,5 +2056,138 @@ describe("ChapterFlow capture shortcuts (CAP-28/29/32)", () => {
     });
 
     expect(captures(fetchMock)).toBe(0);
+  });
+});
+
+describe("ChapterFlow reader chrome (TOC, dock, measure)", () => {
+  function pressKey(
+    key: string,
+    target: EventTarget = window,
+    init: KeyboardEventInit = {},
+  ) {
+    target.dispatchEvent(
+      new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init }),
+    );
+  }
+
+  it("starts with the TOC closed and the dock closed when the URL has no panel", async () => {
+    nav.params = new URLSearchParams();
+    render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+    );
+
+    await screen.findByText("Ada Lovelace wrote the first algorithm.");
+    const toc = screen.getByTestId("toc-panel");
+    expect(toc.getAttribute("data-state")).toBe("closed");
+    expect(toc.className).toContain("hidden");
+    expect(toc.className).not.toContain("lg:block");
+    expect(screen.queryByTestId("reader-panel")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Table of contents" }).getAttribute("aria-expanded"),
+    ).toBe("false");
+    expect(
+      screen.getByRole("button", { name: "Study dock" }).getAttribute("aria-expanded"),
+    ).toBe("false");
+  });
+
+  it("toggles the table of contents on a bare [", async () => {
+    render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+    );
+    await screen.findByText("Ada Lovelace wrote the first algorithm.");
+    const toggle = screen.getByRole("button", { name: "Table of contents" });
+
+    act(() => pressKey("["));
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByTestId("toc-panel").getAttribute("data-state")).toBe("open");
+    expect(screen.getByTestId("toc-panel").className).toContain("block");
+
+    act(() => pressKey("["));
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.getByTestId("toc-panel").getAttribute("data-state")).toBe("closed");
+  });
+
+  it("does not toggle the TOC from an input or while a modifier is held", async () => {
+    render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+    );
+    await screen.findByText("Ada Lovelace wrote the first algorithm.");
+    const input = document.body.appendChild(document.createElement("input"));
+
+    act(() => {
+      pressKey("[", input);
+      pressKey("[", window, { ctrlKey: true });
+    });
+
+    expect(screen.getByTestId("toc-panel").getAttribute("data-state")).toBe("closed");
+    input.remove();
+  });
+
+  it("opens the dock through ?panel= on a bare ]", async () => {
+    render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+    );
+    await screen.findByText("Ada Lovelace wrote the first algorithm.");
+
+    act(() => pressKey("]"));
+
+    expect(nav.replace).toHaveBeenCalledWith("/sources/s1/read?panel=ask");
+  });
+
+  it("closes the dock by dropping ?panel= on a second ]", async () => {
+    nav.params = new URLSearchParams("panel=ask");
+    render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+    );
+    await screen.findByTestId("reader-panel");
+
+    act(() => pressKey("]"));
+
+    expect(nav.replace).toHaveBeenCalledWith("/sources/s1/read");
+  });
+
+  it("does not toggle the dock from an input", async () => {
+    render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+    );
+    await screen.findByText("Ada Lovelace wrote the first algorithm.");
+    const input = document.body.appendChild(document.createElement("input"));
+
+    act(() => pressKey("]", input));
+
+    expect(nav.replace).not.toHaveBeenCalled();
+    input.remove();
+  });
+
+  it("keeps progress, Aa, and TOC and dock icon buttons on the receding bar", async () => {
+    render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+    );
+    await screen.findByText("Ada Lovelace wrote the first algorithm.");
+
+    const bar = screen.getByTestId("reader-top-bar");
+    expect(bar.className).toContain("transition-transform");
+    expect(screen.getByTestId("reading-progress")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Reading settings" })).toBeTruthy();
+    const tocButton = screen.getByRole("button", { name: "Table of contents" });
+    const dockButton = screen.getByRole("button", { name: "Study dock" });
+    expect(tocButton.className).not.toContain("lg:hidden");
+    expect(bar.contains(tocButton)).toBe(true);
+    expect(bar.contains(dockButton)).toBe(true);
+  });
+});
+
+describe("ChapterFlow reading control targets (READ-25)", () => {
+  it("sizes the TOC and dock toggles to at least 44px", async () => {
+    render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+    );
+    await screen.findByText("Ada Lovelace wrote the first algorithm.");
+
+    for (const name of ["Table of contents", "Study dock"]) {
+      const control = screen.getByRole("button", { name });
+      expect(Number.parseFloat(getComputedStyle(control).minWidth)).toBeGreaterThanOrEqual(44);
+      expect(Number.parseFloat(getComputedStyle(control).minHeight)).toBeGreaterThanOrEqual(44);
+    }
   });
 });

@@ -10,8 +10,8 @@
  * (no chapter reload); clicking an entry in another chapter loads that chapter,
  * with that entry marked pending until the load lands.
  * Either way the URL `?anchor=` is kept in step so a deep link is always shareable.
- * At ≥lg the panel is a persistent side column; below lg it collapses behind the
- * top-bar toggle so it never squeezes the prose column.
+ * The panel starts closed at every breakpoint and opens from the top-bar toggle
+ * (or `[`) so it never squeezes the prose column until the reader asks for it.
  *
  * `ChapterNav` renders the previous/next-chapter controls from the chapter's
  * adjacent anchors, and renders nothing at a book edge (a single-chapter book has
@@ -48,7 +48,7 @@ export function TocPanel({
   chapterAnchor: string;
   /** Anchors in the loaded chapter, to route same-chapter clicks to in-flow scroll. */
   chapterSectionAnchors: readonly string[];
-  /** Whether the collapsed (below-lg) panel is open; always shown at ≥lg. */
+  /** Whether the TOC is visible. Closed by default at every breakpoint. */
   open: boolean;
   /** In-flow scroll for a same-chapter target (the parent also updates the URL). */
   onSameChapterNavigate: (anchor: string) => void;
@@ -100,7 +100,7 @@ export function TocPanel({
       data-state={open ? "open" : "closed"}
       aria-label="Table of contents"
       className={cn(
-        "w-64 shrink-0 overflow-y-auto border-r pr-2 text-sm lg:block",
+        "w-64 shrink-0 overflow-y-auto border-r pr-2 text-sm",
         open ? "block" : "hidden",
       )}
     >

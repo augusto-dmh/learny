@@ -17,7 +17,11 @@
  * the reader shows no popover.
  */
 
+import { useState, type ReactNode } from "react";
+
 import { Button } from "@/components/ui/button";
+import { useBelowLg } from "@/hooks/use-below-lg";
+import { readControlMinStyle } from "@/app/lib/read-control-size";
 
 const WHITESPACE = /\s+/g;
 const CONTEXT_CHARS = 32;
@@ -101,6 +105,19 @@ export function CapturePopover({
   // The full verb set only when the reader wires the panel- and card-bound verbs;
   // otherwise the popover is the original two-action capture control (RA-15/16).
   const verbs = Boolean(onExplain && onAskAbout && onCreateCard);
+  const belowLg = useBelowLg();
+  const compact = verbs && belowLg;
+  const extras = (
+    <CaptureExtraVerbs
+      verbs={verbs}
+      pending={pending}
+      quote={quote}
+      onCapture={onCapture}
+      onExplain={onExplain}
+      onAskAbout={onAskAbout}
+      onCreateCard={onCreateCard}
+    />
+  );
   return (
     <div
       role="dialog"
@@ -111,61 +128,127 @@ export function CapturePopover({
       // capture reads the same range that raised it.
       onMouseDown={(event) => event.preventDefault()}
     >
-      <div className="flex flex-wrap gap-1">
+      <div data-testid="capture-verb-row" className="flex flex-wrap gap-1">
         <Button
           type="button"
           size="sm"
           variant="ghost"
+          className="min-h-11 min-w-11"
+          style={readControlMinStyle}
           disabled={pending}
           onClick={() => onCapture("highlight")}
         >
           Highlight
         </Button>
-        <Button
-          type="button"
-          size="sm"
-          variant="ghost"
-          disabled={pending}
-          onClick={() => onCapture("highlight-note")}
-        >
-          {verbs ? "Note" : "Highlight + note"}
-        </Button>
-        {verbs ? (
-          <>
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              disabled={pending}
-              onClick={() => onExplain?.(quote ?? "")}
-            >
-              Explain
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              disabled={pending}
-              onClick={() => onAskAbout?.(quote ?? "")}
-            >
-              Ask
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              disabled={pending}
-              onClick={() => onCreateCard?.()}
-            >
-              Create card
-            </Button>
-          </>
-        ) : null}
+        {compact ? (
+          <CaptureOverflow pending={pending}>{extras}</CaptureOverflow>
+        ) : (
+          extras
+        )}
       </div>
       {error ? (
         <p role="alert" className="px-2 pb-1 text-xs text-destructive">
           {error}
         </p>
+      ) : null}
+    </div>
+  );
+}
+
+function CaptureExtraVerbs({
+  verbs,
+  pending,
+  quote,
+  onCapture,
+  onExplain,
+  onAskAbout,
+  onCreateCard,
+}: {
+  verbs: boolean;
+  pending: boolean;
+  quote?: string;
+  onCapture: (action: CaptureAction) => void;
+  onExplain?: (quote: string) => void;
+  onAskAbout?: (quote: string) => void;
+  onCreateCard?: () => void;
+}) {
+  return (
+    <>
+      <Button
+        type="button"
+        size="sm"
+        variant="ghost"
+        disabled={pending}
+        onClick={() => onCapture("highlight-note")}
+      >
+        {verbs ? "Note" : "Highlight + note"}
+      </Button>
+      {verbs ? (
+        <>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            disabled={pending}
+            onClick={() => onExplain?.(quote ?? "")}
+          >
+            Explain
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            disabled={pending}
+            onClick={() => onAskAbout?.(quote ?? "")}
+          >
+            Ask
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            disabled={pending}
+            onClick={() => onCreateCard?.()}
+          >
+            Create card
+          </Button>
+        </>
+      ) : null}
+    </>
+  );
+}
+
+function CaptureOverflow({
+  pending,
+  children,
+}: {
+  pending: boolean;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="relative">
+      <Button
+        type="button"
+        size="sm"
+        variant="ghost"
+        className="min-h-11 min-w-11"
+        style={readControlMinStyle}
+        aria-label="More capture actions"
+        aria-expanded={open}
+        aria-haspopup="menu"
+        disabled={pending}
+        onClick={() => setOpen((current) => !current)}
+      >
+        …
+      </Button>
+      {open ? (
+        <div
+          role="menu"
+          className="absolute top-full left-0 z-20 mt-1 flex min-w-36 flex-col rounded-md border bg-popover p-1 shadow-md"
+        >
+          {children}
+        </div>
       ) : null}
     </div>
   );
