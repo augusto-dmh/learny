@@ -179,9 +179,9 @@ T11 → T12 → T13 → T14 → T15
 
 **Done when**:
 
-- [ ] Owner GET returns stored bytes and `Content-Type: image/webp`
-- [ ] Other user, missing key, and non-hex hash are 404
-- [ ] Gate: `uv run pytest tests/test_web_sources.py`
+- [x] Owner GET returns stored bytes and `Content-Type: image/webp`
+- [x] Other user, missing key, and non-hex hash are 404
+- [x] Gate: `uv run pytest tests/test_web_sources.py`
 
 **Tests**: integration
 **Gate**: full

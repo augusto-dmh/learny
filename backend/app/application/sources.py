@@ -9,6 +9,7 @@ the errors raised here to HTTP responses.
 from __future__ import annotations
 
 import hashlib
+import re
 from collections.abc import Callable
 from uuid import UUID
 
@@ -21,6 +22,8 @@ from app.application.identity import AuthorizeOwnership
 from app.application.validation import extension_of, validate_source_upload
 from app.domain.entities import Source, User
 from app.domain.ports import Clock, SourceRepository, StoragePort
+
+_FIGURE_DIGEST = re.compile(r"^[0-9a-f]{64}$")
 
 
 class CreateSource:
@@ -127,3 +130,26 @@ class GetSource:
             # Non-owners get 404, not 403, so a source's existence isn't disclosed.
             raise SourceNotFound("Source not found.") from exc
         return source
+
+
+class ReadSourceMedia:
+    """Return stored figure bytes for an owned source, or raise ``SourceNotFound``.
+
+    Ownership uses :class:`GetSource` so a missing source and a non-owner collapse
+    to the same 404. A hash that is not 64 lowercase hex, or a ``get_object``
+    miss, also collapse to 404 — never 403, and never 500 for a missing blob.
+    """
+
+    def __init__(self, *, get_source: GetSource, storage: StoragePort) -> None:
+        self._get_source = get_source
+        self._storage = storage
+
+    def __call__(self, *, user: User, source_id: UUID, sha256: str) -> bytes:
+        source = self._get_source(user=user, source_id=source_id)
+        if _FIGURE_DIGEST.fullmatch(sha256) is None:
+            raise SourceNotFound("Source not found.")
+        key = f"sources/{source.user_id}/{source.id}/media/{sha256}.webp"
+        try:
+            return self._storage.get_object(key)
+        except Exception as exc:  # noqa: BLE001 — missing blob after a rewritten URL is 404
+            raise SourceNotFound("Source not found.") from exc

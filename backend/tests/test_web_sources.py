@@ -590,3 +590,100 @@ def test_get_malformed_uuid_returns_422(sources_client: TestClient) -> None:
 def test_get_unauthenticated_returns_401(sources_client: TestClient) -> None:
     sources_client.cookies.clear()
     assert sources_client.get(f"/api/sources/{uuid4()}").status_code == 401
+
+
+# --- Figure media (READ-05 / READ-06) ------------------------------------------
+
+FIGURE_BYTES = b"learny-stored-figure-bytes"
+FIGURE_SHA256 = "0123456789abcdef" * 4  # 64 lowercase hex
+
+
+def _store_figure(user_id: str, source_id: str, *, digest: str = FIGURE_SHA256) -> None:
+    _storage.put_object(
+        f"sources/{user_id}/{source_id}/media/{digest}.webp",
+        FIGURE_BYTES,
+        content_type="image/webp",
+    )
+
+
+def test_get_own_media_returns_webp_bytes(sources_client: TestClient) -> None:
+    user_id = _register(sources_client, "media-owner@example.com")
+    created = _upload(sources_client, csrf=_csrf(sources_client), title="Illustrated")
+    source_id = created.json()["id"]
+    _store_figure(user_id, source_id)
+
+    # Cookie session only — no CSRF header on this GET (safe method).
+    resp = sources_client.get(f"/api/sources/{source_id}/media/{FIGURE_SHA256}")
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["content-type"] == "image/webp"
+    assert resp.content == FIGURE_BYTES
+
+
+def test_get_cross_user_media_returns_404(sources_client: TestClient) -> None:
+    user_id = _register(sources_client, "media-a@example.com")
+    created = _upload(sources_client, csrf=_csrf(sources_client))
+    source_id = created.json()["id"]
+    _store_figure(user_id, source_id)
+
+    _login(sources_client, "media-a@example.com")
+    _register(sources_client, "media-b@example.com")
+    resp = sources_client.get(f"/api/sources/{source_id}/media/{FIGURE_SHA256}")
+    assert resp.status_code == 404, resp.text
+
+
+def test_get_missing_media_hash_returns_404(sources_client: TestClient) -> None:
+    _register(sources_client, "media-missing-hash@example.com")
+    created = _upload(sources_client, csrf=_csrf(sources_client))
+    source_id = created.json()["id"]
+    missing = "fedcba9876543210" * 4
+
+    resp = sources_client.get(f"/api/sources/{source_id}/media/{missing}")
+    assert resp.status_code == 404, resp.text
+
+
+def test_get_missing_media_blob_returns_404(sources_client: TestClient) -> None:
+    # Valid 64-hex in the URL after a rewrite, but nothing stored at the key.
+    _register(sources_client, "media-missing-blob@example.com")
+    created = _upload(sources_client, csrf=_csrf(sources_client))
+    source_id = created.json()["id"]
+
+    resp = sources_client.get(f"/api/sources/{source_id}/media/{FIGURE_SHA256}")
+    assert resp.status_code == 404, resp.text
+
+
+@pytest.mark.parametrize(
+    "digest",
+    [
+        FIGURE_SHA256.upper(),
+        FIGURE_SHA256[:16],
+        FIGURE_SHA256[:63] + "!",
+    ],
+)
+def test_get_malformed_media_hash_returns_404(sources_client: TestClient, digest: str) -> None:
+    user_id = _register(sources_client, f"media-bad-{digest[:8]}@example.com")
+    created = _upload(sources_client, csrf=_csrf(sources_client))
+    source_id = created.json()["id"]
+    _store_figure(user_id, source_id)
+
+    resp = sources_client.get(f"/api/sources/{source_id}/media/{digest}")
+    assert resp.status_code == 404, resp.text
+
+
+def test_get_media_unauthenticated_returns_401(sources_client: TestClient) -> None:
+    sources_client.cookies.clear()
+    assert sources_client.get(f"/api/sources/{uuid4()}/media/{FIGURE_SHA256}").status_code == 401
+
+
+def test_get_media_is_not_upload_rate_limited(
+    throttled_sources_client: TestClient,
+) -> None:
+    client = throttled_sources_client
+    user_id = _register(client, "media-flood@example.com")
+    created = _upload(client, csrf=_csrf(client))
+    source_id = created.json()["id"]
+    _store_figure(user_id, source_id)
+
+    for _ in range(4):
+        resp = client.get(f"/api/sources/{source_id}/media/{FIGURE_SHA256}")
+        assert resp.status_code == 200, resp.text
+        assert resp.content == FIGURE_BYTES

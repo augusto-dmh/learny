@@ -70,7 +70,7 @@ from app.application.reading import (
 )
 from app.application.retrieval import RetrieveEvidence
 from app.application.reviews import GetDueQueue, ResetSchedule, SubmitReview
-from app.application.sources import CreateSource, GetSource, ListSources
+from app.application.sources import CreateSource, GetSource, ListSources, ReadSourceMedia
 from app.application.study import ContinueReading, GetStudySummary
 from app.application.vault import ExportVault
 from app.core.config import Settings, get_settings
@@ -279,6 +279,10 @@ def get_get_source(conn: DbConnection) -> GetSource:
         sources=SqlAlchemySourceRepository(conn),
         authorize=AuthorizeOwnership(),
     )
+
+
+def get_read_source_media(conn: DbConnection, storage: Storage) -> ReadSourceMedia:
+    return ReadSourceMedia(get_source=get_get_source(conn), storage=storage)
 
 
 # --- Ingestion (worker-foundation) ---------------------------------------------
