@@ -225,12 +225,12 @@ Review is a correct 4-button FSRS grader, but generation can "succeed" with zero
 | REV-31 | P1: Intervals and requeue | 3 | In Tasks |
 | REV-32 | P1: Intervals and requeue | 4 | In Tasks |
 | REV-33 | P1: Intervals and requeue | 3 | In Tasks |
-| REV-34 | P1: Flag and edit | 2 | In Tasks |
-| REV-35 | P1: Flag and edit | 2 | In Tasks |
-| REV-36 | P1: Flag and edit | 2 | In Tasks |
+| REV-34 | P1: Flag and edit | 2 | Done |
+| REV-35 | P1: Flag and edit | 2 | Done |
+| REV-36 | P1: Flag and edit | 2 | Done |
 | REV-37 | P1: Flag and edit | 4 | In Tasks |
-| REV-38 | P1: Flag and edit | 2 | In Tasks |
-| REV-39 | P1: Flag and edit | 2 | In Tasks |
+| REV-38 | P1: Flag and edit | 2 | Done |
+| REV-39 | P1: Flag and edit | 2 | Done |
 | REV-40 | P1: Bounded session | 3 | In Tasks |
 | REV-41 | P1: Bounded session | 4 | In Tasks |
 | REV-42 | P1: Bounded session | 4 | In Tasks |
