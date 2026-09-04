@@ -345,6 +345,117 @@ def test_streamed_call_logs_the_effort_it_spent(caplog) -> None:
     assert f"effort={_EFFORT}" in lines[0]
 
 
+# --- A rejected request says which shape was rejected (ASK-10) -----------------
+#
+# Derived from ASK-10 and its edge case. A provider 4xx is what the reader sees as
+# "answer generation failed"; the operator needs the request shape, the status, and
+# the request id to tell the documented citations-plus-schema 400 from anything else
+# and to quote the call to the provider. The same line must stay clean: the SDK's
+# error message quotes the rejected request back, so document bodies, the system
+# prompt, and the learner's question would ride along if the exception were logged
+# (NFR-SEC-004). A 4xx with no request id still logs status and shape.
+
+_SECRET_SNIPPET = "the tides follow the moon in a way no log should repeat"
+_SECRET_QUESTION = "why do the tides follow the moon"
+
+
+class _FakeAPIStatusError(Exception):
+    """Shaped like the SDK's ``APIStatusError``: HTTP status, request id, body text."""
+
+    def __init__(self, status_code: int, *, request_id: str | None, body: str) -> None:
+        super().__init__(body)
+        self.status_code = status_code
+        self.request_id = request_id
+
+
+def _rejection(request_id: str | None) -> _FakeAPIStatusError:
+    """A 400 whose message quotes the request back, exactly as the SDK's does."""
+    return _FakeAPIStatusError(
+        400,
+        request_id=request_id,
+        body=(
+            "Error code: 400 - {'error': {'message': \"documents.0.source.data: "
+            f"'{_SECRET_SNIPPET}' ... messages.0: '{_SECRET_QUESTION}' ... "
+            f"system: '{ANSWER_SYSTEM_PROMPT[:40]}'\"}}"
+        ),
+    )
+
+
+class _RejectingMessagesResource:
+    def __init__(self, error: Exception) -> None:
+        self._error = error
+
+    def create(self, **kwargs: object) -> object:
+        raise self._error
+
+    def stream(self, **kwargs: object) -> object:
+        raise self._error
+
+
+class _RejectingClient:
+    def __init__(self, error: Exception) -> None:
+        self.messages = _RejectingMessagesResource(error)
+
+
+def _rejecting_adapter(error: Exception) -> AnthropicGenerationAdapter:
+    return AnthropicGenerationAdapter(
+        api_key="unused-fake",
+        model=_MODEL,
+        max_tokens=_MAX_TOKENS,
+        effort=_EFFORT,
+        client=_RejectingClient(error),
+    )
+
+
+def _rejected_call_lines(caplog, error: Exception, *, stream: bool) -> list[str]:
+    """Drive one rejected call and return this adapter's log lines."""
+    adapter = _rejecting_adapter(error)
+    with caplog.at_level(logging.WARNING, logger=_LOGGER), pytest.raises(_FakeAPIStatusError):
+        if stream:
+            list(
+                adapter.generate_stream(
+                    mode=MODE_ANSWER,
+                    message=_SECRET_QUESTION,
+                    evidence=[_evidence(_SECRET_SNIPPET)],
+                )
+            )
+        else:
+            adapter.generate(
+                mode=MODE_ANSWER,
+                message=_SECRET_QUESTION,
+                evidence=[_evidence(_SECRET_SNIPPET)],
+            )
+    return [r.getMessage() for r in caplog.records if r.name == _LOGGER]
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["buffered", "stream"])
+def test_a_rejected_request_logs_its_shape_status_and_request_id(caplog, stream: bool) -> None:
+    lines = _rejected_call_lines(caplog, _rejection("req_011CQ7x"), stream=stream)
+
+    assert len(lines) == 1
+    assert "request_shape=citations" in lines[0]
+    assert "status=400" in lines[0]
+    assert "request_id=req_011CQ7x" in lines[0]
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["buffered", "stream"])
+def test_a_rejected_request_never_logs_the_body_it_was_rejected_for(caplog, stream: bool) -> None:
+    lines = _rejected_call_lines(caplog, _rejection("req_011CQ7x"), stream=stream)
+
+    assert len(lines) == 1
+    assert _SECRET_SNIPPET not in lines[0]
+    assert _SECRET_QUESTION not in lines[0]
+    assert ANSWER_SYSTEM_PROMPT[:40] not in lines[0]
+
+
+def test_a_rejection_without_a_request_id_still_logs_status_and_shape(caplog) -> None:
+    lines = _rejected_call_lines(caplog, _rejection(None), stream=False)
+
+    assert len(lines) == 1
+    assert "request_shape=citations" in lines[0]
+    assert "status=400" in lines[0]
+
+
 # --- Answer-mode conversation history (CONV-14, CONV-26 AC2) -------------------
 #
 # An answer turn inside a conversation carries the bounded prior turns, so a

@@ -68,6 +68,11 @@ _THINKING = {"type": "adaptive", "display": "summarized"}
 # as they arrive, and a long teach turn is not a hung one.
 _GENERATE_TIMEOUT_S = 120.0
 
+# The shape every request this adapter builds has: citations-enabled documents and
+# no structured-output format. Named on the 4xx line so a rejection can be read
+# against the shape that earned it without reproducing the request (ASK-10).
+_REQUEST_SHAPE = "citations"
+
 
 class _MessagesClient(Protocol):
     """The narrow slice of the Anthropic client this adapter uses (test seam).
@@ -264,6 +269,33 @@ def _log_call(message: Any, *, model: str, effort: str, found: bool) -> None:
     )
 
 
+def _log_client_error(exc: BaseException) -> None:
+    """Emit one redacted line naming the request shape a provider 4xx rejected.
+
+    A rejected request is the one moment the usage-only line above says nothing
+    useful: the reader gets "answer generation failed" and the operator gets no way
+    to tell *which* of the two mutually exclusive Anthropic request shapes was sent
+    (citations-enabled documents here, JSON schema in the quiz adapter) or which
+    request to quote to the provider. Shape, status, and ``request_id`` are exactly
+    that, and they are all this line carries: the exception's own message quotes the
+    offending request back, so logging it would put document bodies, the system
+    prompt, and the learner's question in the log (NFR-SEC-004). A 4xx with no
+    ``request_id`` still logs — status and shape alone already narrow the cause.
+    The status is read off the exception rather than an SDK type so this module keeps
+    its single lazy ``anthropic`` import; anything without a 4xx status passes through
+    unlogged as the transport failure it is.
+    """
+    status = getattr(exc, "status_code", None)
+    if not isinstance(status, int) or not 400 <= status < 500:
+        return
+    logger.warning(
+        "anthropic generation rejected request_shape=%s status=%s request_id=%s",
+        _REQUEST_SHAPE,
+        status,
+        getattr(exc, "request_id", None),
+    )
+
+
 def _build_history_messages(
     history: Sequence[HistoryTurn],
 ) -> list[dict[str, Any]]:
@@ -374,27 +406,31 @@ class AnthropicAdapterBase:
         provider stream. Shared by both modes — only ``system``/``messages`` differ.
         """
         marks = _CitationMarks(documents)
-        with self._get_client().messages.stream(
-            model=self._model,
-            max_tokens=self._max_tokens,
-            thinking=_THINKING,
-            output_config={"effort": self._effort},
-            system=system,
-            messages=messages,
-        ) as stream:
-            for event in stream:
-                event_type = getattr(event, "type", None)
-                if event_type == "text":
-                    yield AnswerTextDelta(text=event.text)
-                elif event_type == "thinking":
-                    yield AnswerReasoningDelta(text=event.thinking)
-                elif event_type == "content_block_stop":
-                    block = getattr(event, "content_block", None)
-                    if getattr(block, "type", None) == "text":
-                        run = marks.run_for(getattr(block, "citations", None))
-                        if run:
-                            yield AnswerTextDelta(text=run)
-            final = stream.get_final_message()
+        try:
+            with self._get_client().messages.stream(
+                model=self._model,
+                max_tokens=self._max_tokens,
+                thinking=_THINKING,
+                output_config={"effort": self._effort},
+                system=system,
+                messages=messages,
+            ) as stream:
+                for event in stream:
+                    event_type = getattr(event, "type", None)
+                    if event_type == "text":
+                        yield AnswerTextDelta(text=event.text)
+                    elif event_type == "thinking":
+                        yield AnswerReasoningDelta(text=event.thinking)
+                    elif event_type == "content_block_stop":
+                        block = getattr(event, "content_block", None)
+                        if getattr(block, "type", None) == "text":
+                            run = marks.run_for(getattr(block, "citations", None))
+                            if run:
+                                yield AnswerTextDelta(text=run)
+                final = stream.get_final_message()
+        except Exception as exc:
+            _log_client_error(exc)
+            raise
         answer = _parse_message(final, documents, model=self._model)
         _log_call(final, model=self._model, effort=self._effort, found=answer.found)
         yield AnswerCompleted(answer=answer)
@@ -484,15 +520,19 @@ class AnthropicGenerationAdapter(AnthropicAdapterBase):
             evidence=evidence,
             target_section_path=target_section_path,
         )
-        response = self._get_client().messages.create(
-            model=self._model,
-            max_tokens=self._max_tokens,
-            thinking=_THINKING,
-            output_config={"effort": self._effort},
-            system=system,
-            messages=messages,
-            timeout=_GENERATE_TIMEOUT_S,
-        )
+        try:
+            response = self._get_client().messages.create(
+                model=self._model,
+                max_tokens=self._max_tokens,
+                thinking=_THINKING,
+                output_config={"effort": self._effort},
+                system=system,
+                messages=messages,
+                timeout=_GENERATE_TIMEOUT_S,
+            )
+        except Exception as exc:
+            _log_client_error(exc)
+            raise
         answer = _parse_message(response, sent, model=self._model)
         _log_call(response, model=self._model, effort=self._effort, found=answer.found)
         return answer

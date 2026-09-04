@@ -193,7 +193,7 @@ T12 -> T13
 
 ### Phase 2
 
-### T6: Log Anthropic 4xx with shape, status, and request_id
+### T6: Log Anthropic 4xx with shape, status, and request_id ✅
 
 **What**: On answering-adapter HTTP 4xx, emit one redacted log line with request shape `citations`, status, and `request_id`; never document bodies or prompts.
 **Where**: `backend/app/infrastructure/answering/anthropic.py`
@@ -208,9 +208,9 @@ T12 -> T13
 
 **Done when**:
 
-- [ ] Test captures the log line for a fake 4xx with `request_id`
-- [ ] Test asserts snippet/prompt text is absent even when the exception body contains it
-- [ ] Missing `request_id` still logs status + shape
+- [x] Test captures the log line for a fake 4xx with `request_id`
+- [x] Test asserts snippet/prompt text is absent even when the exception body contains it
+- [x] Missing `request_id` still logs status + shape
 
 **Tests**: unit
 **Gate**: quick
