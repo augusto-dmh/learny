@@ -1493,6 +1493,139 @@ def test_a_turn_whose_answer_text_is_blank_is_not_found_despite_its_citations(te
     assert turns.list_for_conversation(conversation.id) == [turn]
 
 
+def test_teach_citation_free_non_sentinel_persists_as_answered() -> None:
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
+    turns = FakeConversationTurnRepository()
+    generation = FakeGeneration(
+        answer=GeneratedAnswer(
+            text="What is this section trying to convince you of?",
+            cited_chunk_ids=(),
+            model=_MODEL,
+            found=True,
+        )
+    )
+
+    turn = _post(
+        conversations=conversations,
+        turns=turns,
+        sources=sources,
+        corpus=corpus,
+        retrieve=FakeScopedRetrieveEvidence(evidence),
+        generation=generation,
+    )(user=user, conversation_id=conversation.id, message="teach me", mode=MODE_TEACH)
+
+    assert turn.answer_status == "answered"
+    assert turn.answer_text == "What is this section trying to convince you of?"
+    assert turn.citations == ()
+    assert turns.list_for_conversation(conversation.id) == [turn]
+
+
+def test_teach_stream_citation_free_non_sentinel_persists_as_answered() -> None:
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
+    turns = FakeConversationTurnRepository()
+    generation = FakeGeneration(
+        answer=GeneratedAnswer(
+            text="What else follows from that claim?",
+            cited_chunk_ids=(),
+            model=_MODEL,
+            found=True,
+        )
+    )
+
+    events = list(
+        _post(
+            conversations=conversations,
+            turns=turns,
+            sources=sources,
+            corpus=corpus,
+            retrieve=FakeScopedRetrieveEvidence(evidence),
+            generation=generation,
+        ).stream(
+            user=user,
+            conversation_id=conversation.id,
+            message="teach me",
+            mode=MODE_TEACH,
+        )
+    )
+
+    turn = events[-1].turn
+    assert turn.answer_status == "answered"
+    assert turn.answer_text == "What else follows from that claim?"
+    assert turn.citations == ()
+    assert turns.list_for_conversation(conversation.id) == [turn]
+
+
+def test_teach_sentinel_reply_persists_as_not_found() -> None:
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
+    turns = FakeConversationTurnRepository()
+    generation = FakeGeneration(
+        answer=GeneratedAnswer(text="", cited_chunk_ids=(), model=_MODEL, found=False)
+    )
+
+    turn = _post(
+        conversations=conversations,
+        turns=turns,
+        sources=sources,
+        corpus=corpus,
+        retrieve=FakeScopedRetrieveEvidence(evidence),
+        generation=generation,
+    )(user=user, conversation_id=conversation.id, message="off book", mode=MODE_TEACH)
+
+    assert turn.answer_status == "not_found_in_scope"
+    assert (turn.answer_text, turn.citations) == ("", ())
+    assert turns.list_for_conversation(conversation.id) == [turn]
+
+
+def test_answer_zero_citations_still_collapses_to_not_found() -> None:
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
+    turns = FakeConversationTurnRepository()
+    generation = FakeGeneration(
+        answer=GeneratedAnswer(
+            text="An uncited claim about the book.",
+            cited_chunk_ids=(),
+            model=_MODEL,
+            found=True,
+        )
+    )
+
+    turn = _post(
+        conversations=conversations,
+        turns=turns,
+        sources=sources,
+        corpus=corpus,
+        retrieve=FakeScopedRetrieveEvidence(evidence),
+        generation=generation,
+    )(user=user, conversation_id=conversation.id, message="q", mode=MODE_ANSWER)
+
+    assert turn.answer_status == "not_found_in_scope"
+    assert (turn.answer_text, turn.citations) == ("", ())
+    assert turns.list_for_conversation(conversation.id) == [turn]
+
+
+def test_teach_blank_text_is_still_not_found() -> None:
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
+    generation = FakeGeneration(
+        answer=GeneratedAnswer(text="   \n", cited_chunk_ids=(), model=_MODEL, found=True)
+    )
+
+    turn = _post(
+        conversations=conversations,
+        turns=FakeConversationTurnRepository(),
+        sources=sources,
+        corpus=corpus,
+        retrieve=FakeScopedRetrieveEvidence(evidence),
+        generation=generation,
+    )(user=user, conversation_id=conversation.id, message="teach me", mode=MODE_TEACH)
+
+    assert turn.answer_status == "not_found_in_scope"
+    assert (turn.answer_text, turn.citations) == ("", ())
+
+
 # --- Turn path: mode dispatch (CONV-10 AC2, CONV-14) ----------------------------
 
 

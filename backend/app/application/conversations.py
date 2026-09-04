@@ -571,21 +571,9 @@ class PostConversationTurn:
                 self._persist_failed(plan, message, mode)
                 raise AnswerGenerationFailed("Answer generation failed.") from exc
 
-            grounded = ground(generated, plan.evidence)
-            if grounded is None:
-                # found=false / blank text / nothing survives grounding.
-                turn = self._not_found_turn(
-                    plan, message, mode, len(plan.evidence), generated.model
-                )
-            else:
-                turn = self._answered_turn(
-                    plan,
-                    message,
-                    mode,
-                    grounded,
-                    generated.model,
-                    ground_spans(generated, grounded[1]),
-                )
+            turn = self._turn_from_generated(
+                plan=plan, message=message, mode=mode, generated=generated
+            )
 
         return self._persist(plan, turn, mode)
 
@@ -662,13 +650,7 @@ class PostConversationTurn:
         # longer deletes it; keeping the stopped question is not an acceptance
         # criterion and is left to the retry cycle.
 
-        grounded = ground(answer, plan.evidence)
-        if grounded is None:
-            turn = self._not_found_turn(plan, message, mode, len(plan.evidence), answer.model)
-        else:
-            turn = self._answered_turn(
-                plan, message, mode, grounded, answer.model, ground_spans(answer, grounded[1])
-            )
+        turn = self._turn_from_generated(plan=plan, message=message, mode=mode, generated=answer)
         yield StreamTurn(self._persist(plan, turn, mode))
 
     def _preflight(
@@ -866,6 +848,39 @@ class PostConversationTurn:
             evidence=plan.evidence,
             history=plan.history,
             target_section_path=self._target_path(mode, plan),
+        )
+
+    def _turn_from_generated(
+        self,
+        *,
+        plan: _TurnPlan,
+        message: str,
+        mode: str,
+        generated: GeneratedAnswer,
+    ) -> ConversationTurn:
+        """Ground the port result, with a teach carve-out for citation-free replies.
+
+        Answer mode still collapses empty citations to not-found (AD-027). Teach
+        mode keeps a non-sentinel reply with no surviving citations as answered
+        so a Socratic question can persist (AD-295). ``found=False`` and blank
+        text stay not-found in both modes.
+        """
+        grounded = ground(generated, plan.evidence)
+        if grounded is not None:
+            return self._answered_turn(
+                plan,
+                message,
+                mode,
+                grounded,
+                generated.model,
+                ground_spans(generated, grounded[1]),
+            )
+        if mode == MODE_TEACH and generated.found and generated.text.strip():
+            return self._answered_turn(
+                plan, message, mode, (generated.text, []), generated.model, ()
+            )
+        return self._not_found_turn(
+            plan, message, mode, len(plan.evidence), generated.model
         )
 
     def _answered_turn(

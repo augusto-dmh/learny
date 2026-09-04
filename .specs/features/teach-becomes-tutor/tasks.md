@@ -137,10 +137,10 @@ T11 → T12 → T13 → T14 → T15
 
 **Done when**:
 
-- [ ] Application test: teach `found=True`, text, zero cited ids → persisted `answered`
-- [ ] Application test: teach whole-reply sentinel → not-found
-- [ ] Application test: answer zero citations → not-found
-- [ ] Gate: `uv run pytest tests/test_application_conversations.py tests/test_application_grounding.py`
+- [x] Application test: teach `found=True`, text, zero cited ids → persisted `answered`
+- [x] Application test: teach whole-reply sentinel → not-found
+- [x] Application test: answer zero citations → not-found
+- [x] Gate: `uv run pytest tests/test_application_conversations.py tests/test_application_grounding.py`
 
 **Tests**: unit
 **Gate**: quick
