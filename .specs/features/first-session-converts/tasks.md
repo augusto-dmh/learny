@@ -367,9 +367,9 @@ T10 → T11 → T12 → T13 → T14 → T15 → T16
 
 **Done when**:
 
-- [ ] The `/sources` h1 reads Library
-- [ ] The sidebar nav label that pointed at `/sources` reads Library
-- [ ] Tests that looked for “Your bookshelf” or “Bookshelf” as that label are updated
+- [x] The `/sources` h1 reads Library
+- [x] The sidebar nav label that pointed at `/sources` reads Library
+- [x] Tests that looked for “Your bookshelf” or “Bookshelf” as that label are updated
 
 **Tests**: unit
 **Gate**: full

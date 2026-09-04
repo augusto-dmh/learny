@@ -200,7 +200,7 @@ A stranger who creates an account lands on an empty library, waits on ingest wit
 | FS-21 | P1: Library | T11 | Implemented |
 | FS-22 | P1: Library | T11 | Implemented |
 | FS-23 | P1: Library | T11 | Implemented |
-| FS-24 | P1: Library | T12 | In Tasks |
+| FS-24 | P1: Library | T12 | Implemented |
 | FS-25 | P1: Library | T11 | Implemented |
 | FS-26 | P1: Library | T13 | In Tasks |
 | FS-27 | P1: Landing / Home | T16 | In Tasks |

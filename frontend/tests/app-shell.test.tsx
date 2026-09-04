@@ -178,7 +178,7 @@ describe("app shell composition", () => {
 
     // Header (email) and sidebar (nav) both frame the page content.
     expect(await screen.findByText("a@b.c")).toBeTruthy();
-    expect(screen.getByRole("link", { name: "Bookshelf" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Library" })).toBeTruthy();
     expect(screen.getByTestId("page-content")).toBeTruthy();
   });
 
@@ -191,7 +191,7 @@ describe("app shell composition", () => {
 
     expect(screen.getByTestId("auth-child")).toBeTruthy();
     // No navigation sidebar around auth pages.
-    expect(screen.queryByRole("link", { name: "Bookshelf" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Library" })).toBeNull();
   });
 
   it("renders the (read) layout without sidebar or auth header", () => {
@@ -202,7 +202,7 @@ describe("app shell composition", () => {
     );
 
     expect(screen.getByTestId("read-child")).toBeTruthy();
-    expect(screen.queryByRole("link", { name: "Bookshelf" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Library" })).toBeNull();
     expect(screen.queryByRole("link", { name: "Account" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Log out" })).toBeNull();
   });

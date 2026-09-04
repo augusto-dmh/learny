@@ -3,9 +3,9 @@
 /**
  * App navigation sidebar (RFC-004 Cycle E — HOME-16).
  *
- * A small, stable primary nav: Home, Bookshelf, Review, Notes. The brand link
+ * A small, stable primary nav: Home, Library, Review, Notes. The brand link
  * returns to Home. The per-source book list that used to live here is gone —
- * individual books are reached through the Bookshelf (`/sources`), and the
+ * individual books are reached through the Library (`/sources`), and the
  * account surface lives in the header, not here.
  */
 
@@ -25,7 +25,7 @@ import {
 
 const NAV_ITEMS = [
   { label: "Home", href: "/home" },
-  { label: "Bookshelf", href: "/sources" },
+  { label: "Library", href: "/sources" },
   { label: "Review", href: "/review" },
   { label: "Notes", href: "/notes" },
 ] as const;

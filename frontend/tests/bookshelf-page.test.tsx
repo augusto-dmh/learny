@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 
 /**
- * C gate (component) — the `/sources` page presents itself as the Bookshelf
- * (HOME-18): the page title reads as a bookshelf and the user's books render as
+ * C gate (component) — the `/sources` page presents itself as the Library
+ * (HOME-18): the page title reads Library and the user's books render as
  * a shelf of tiles. The route stays `/sources` (display-level rename only). The
  * list/upload/ingestion behaviors of the embedded screen are covered by
  * tests/sources-screen.test.tsx; here the focus is the bookshelf framing.
@@ -57,8 +57,8 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("Bookshelf page (HOME-18)", () => {
-  it("titles the page as the bookshelf", async () => {
+describe("Library page (HOME-18)", () => {
+  it("titles the page as the library", async () => {
     vi.stubGlobal(
       "fetch",
       routedFetch({
@@ -70,7 +70,7 @@ describe("Bookshelf page (HOME-18)", () => {
     render(<SourcesPage />);
 
     const heading = await screen.findByRole("heading", { level: 1 });
-    expect(heading.textContent).toBe("Your bookshelf");
+    expect(heading.textContent).toBe("Library");
   });
 
   it("presents the user's books as a shelf of tiles", async () => {
