@@ -134,7 +134,7 @@ Learny already has a study-reader skeleton (chapter flow, 65ch serif, `Aa`, rece
 |---|---|---|---|
 | READ-01 | P1: Safe figures | T3, T4 | Done |
 | READ-02 | P1: Safe figures | T4 | Done |
-| READ-03 | P1: Safe figures | T1, T6 | In Progress |
+| READ-03 | P1: Safe figures | T1, T6 | Done |
 | READ-04 | P1: Safe figures | T1, T4 | Done |
 | READ-05 | P1: Safe figures | T5 | Done |
 | READ-06 | P1: Safe figures | T5 | Done |

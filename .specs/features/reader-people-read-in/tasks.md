@@ -199,8 +199,8 @@ T11 → T12 → T13 → T14 → T15
 
 **Done when**:
 
-- [ ] Names and defaults match settings
-- [ ] Gate: `uv run pytest tests/test_config.py` (already covering defaults)
+- [x] Names and defaults match settings
+- [x] Gate: `uv run pytest tests/test_config.py` (already covering defaults)
 
 **Tests**: unit
 **Gate**: quick
