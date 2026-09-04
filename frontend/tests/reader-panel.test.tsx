@@ -7,9 +7,9 @@
  * turns those into URL changes). Open state and the active tab are driven entirely
  * by props derived from `?panel=`, so the shell itself is a pure function of `tab`.
  *
- * The strip carries four tabs, but only Ask and Teach hold a conversation, so the
- * conversation list is theirs alone and the per-surface thread state must survive a
- * trip through the other two.
+ * The strip is Chat | Notes | Review. Chat holds the conversation list; Ask and
+ * Teach are composer modes armed by `?panel=` aliases, not extra tabs. Per-surface
+ * thread state must survive a trip through Notes and Review.
  */
 
 import {
@@ -24,6 +24,8 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 
 import {
   ReaderPanel,
+  composerModeFromParam,
+  dockTabFromParam,
   type DockTab,
   type PanelMode,
 } from "../app/components/reader-panel";
@@ -175,74 +177,200 @@ afterEach(() => {
   Reflect.deleteProperty(window, "matchMedia");
 });
 
-describe("ReaderPanel shell (RA-01/02/03)", () => {
-  it("offers the book's four working surfaces plus a close control", () => {
+describe("dockTabFromParam (TUTOR-27/28)", () => {
+  it("maps ask, teach, and chat onto Chat, and leaves Notes and Review as themselves", () => {
+    expect(dockTabFromParam("ask")).toBe("chat");
+    expect(dockTabFromParam("teach")).toBe("chat");
+    expect(dockTabFromParam("chat")).toBe("chat");
+    expect(dockTabFromParam("notes")).toBe("notes");
+    expect(dockTabFromParam("review")).toBe("review");
+    expect(dockTabFromParam("nowhere")).toBeNull();
+    expect(dockTabFromParam(null)).toBeNull();
+  });
+});
+
+describe("composerModeFromParam (TUTOR-28)", () => {
+  it("arms Answer from ask, Tutor from teach, and last-used or Answer from chat", () => {
+    expect(composerModeFromParam("ask", "teach")).toBe("ask");
+    expect(composerModeFromParam("teach", "ask")).toBe("teach");
+    expect(composerModeFromParam("chat", "teach")).toBe("teach");
+    expect(composerModeFromParam("chat", null)).toBe("ask");
+  });
+});
+
+describe("ReaderPanel shell (RA-01/02/03, TUTOR-27/28)", () => {
+  it("offers Chat, Notes, and Review — not Ask or Teach tabs (TUTOR-27)", () => {
     render(
-      <ReaderPanel sourceId="s1" csrf="csrf-xyz" tab="ask" onTabChange={() => {}} onClose={() => {}} />,
+      <ReaderPanel
+        sourceId="s1"
+        csrf="csrf-xyz"
+        tab="chat"
+        panelParam="ask"
+        onTabChange={() => {}}
+        onClose={() => {}}
+      />,
     );
 
     expect(
       screen.getAllByRole("tab").map((tab) => tab.textContent?.trim()),
-    ).toEqual(["Ask", "Teach", "Notes", "Review"]);
+    ).toEqual(["Chat", "Notes", "Review"]);
+    expect(screen.queryByRole("tab", { name: "Ask" })).toBeNull();
+    expect(screen.queryByRole("tab", { name: "Teach" })).toBeNull();
     expect(screen.getByRole("button", { name: "Close panel" })).toBeTruthy();
   });
 
-  it("renders the ask body and selects the ask tab in ask mode (RA-01)", () => {
+  it("opens Chat with Answer armed when ?panel=ask (TUTOR-28)", () => {
     render(
-      <ReaderPanel sourceId="s1" csrf="csrf-xyz" tab="ask" onTabChange={() => {}} onClose={() => {}} />,
+      <ReaderPanel
+        sourceId="s1"
+        csrf="csrf-xyz"
+        tab="chat"
+        panelParam="ask"
+        onTabChange={() => {}}
+        onClose={() => {}}
+      />,
     );
 
     expect(screen.getByTestId("ask-panel-body")).toBeTruthy();
     expect(screen.queryByTestId("teach-panel-body")).toBeNull();
     expect(
-      screen.getByRole("tab", { name: "Ask" }).getAttribute("aria-selected"),
+      screen.getByRole("tab", { name: "Chat" }).getAttribute("aria-selected"),
     ).toBe("true");
-    expect(
-      screen.getByRole("tab", { name: "Teach" }).getAttribute("aria-selected"),
-    ).toBe("false");
   });
 
-  it("renders the teach body and selects the teach tab in teach mode (RA-02)", () => {
+  it("opens Chat with Tutor armed when ?panel=teach (TUTOR-28)", () => {
     render(
-      <ReaderPanel sourceId="s1" csrf="csrf-xyz" tab="teach" onTabChange={() => {}} onClose={() => {}} />,
+      <ReaderPanel
+        sourceId="s1"
+        csrf="csrf-xyz"
+        tab="chat"
+        panelParam="teach"
+        onTabChange={() => {}}
+        onClose={() => {}}
+      />,
     );
 
     expect(screen.getByTestId("teach-panel-body")).toBeTruthy();
     expect(screen.queryByTestId("ask-panel-body")).toBeNull();
     expect(
-      screen.getByRole("tab", { name: "Teach" }).getAttribute("aria-selected"),
+      screen.getByRole("tab", { name: "Chat" }).getAttribute("aria-selected"),
     ).toBe("true");
   });
 
-  it("reports the chosen mode when a tab is clicked (RA-03)", () => {
-    const onModeChange = vi.fn();
+  it("opens Chat with Answer when ?panel=chat and nothing was used last (TUTOR-28)", () => {
     render(
-      <ReaderPanel sourceId="s1" csrf="csrf-xyz" tab="ask" onTabChange={onModeChange} onClose={() => {}} />,
+      <ReaderPanel
+        sourceId="s1"
+        csrf="csrf-xyz"
+        tab="chat"
+        panelParam="chat"
+        onTabChange={() => {}}
+        onClose={() => {}}
+      />,
     );
 
-    fireEvent.click(screen.getByRole("tab", { name: "Teach" }));
-    expect(onModeChange).toHaveBeenCalledWith("teach");
+    expect(screen.getByTestId("ask-panel-body")).toBeTruthy();
+    expect(screen.queryByTestId("teach-panel-body")).toBeNull();
+  });
+
+  it("opens Chat with last-used Tutor when ?panel=chat follows a teach visit (TUTOR-28)", () => {
+    const { rerender } = render(
+      <ReaderPanel
+        sourceId="s1"
+        csrf="csrf-xyz"
+        tab="chat"
+        panelParam="teach"
+        onTabChange={() => {}}
+        onClose={() => {}}
+      />,
+    );
+    expect(screen.getByTestId("teach-panel-body")).toBeTruthy();
+
+    rerender(
+      <ReaderPanel
+        sourceId="s1"
+        csrf="csrf-xyz"
+        tab="chat"
+        panelParam="chat"
+        onTabChange={() => {}}
+        onClose={() => {}}
+      />,
+    );
+
+    expect(screen.getByTestId("teach-panel-body")).toBeTruthy();
+    expect(screen.queryByTestId("ask-panel-body")).toBeNull();
+  });
+
+  it("lets ?panel=ask arm Answer even when last-used was Tutor (TUTOR-28)", () => {
+    const { rerender } = render(
+      <ReaderPanel
+        sourceId="s1"
+        csrf="csrf-xyz"
+        tab="chat"
+        panelParam="teach"
+        onTabChange={() => {}}
+        onClose={() => {}}
+      />,
+    );
+
+    rerender(
+      <ReaderPanel
+        sourceId="s1"
+        csrf="csrf-xyz"
+        tab="chat"
+        panelParam="ask"
+        onTabChange={() => {}}
+        onClose={() => {}}
+      />,
+    );
+
+    expect(screen.getByTestId("ask-panel-body")).toBeTruthy();
+    expect(screen.queryByTestId("teach-panel-body")).toBeNull();
+  });
+
+  it("reports the chosen strip tab when a tab is clicked (RA-03)", () => {
+    const onModeChange = vi.fn();
+    render(
+      <ReaderPanel
+        sourceId="s1"
+        csrf="csrf-xyz"
+        tab="chat"
+        panelParam="ask"
+        onTabChange={onModeChange}
+        onClose={() => {}}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("tab", { name: "Notes" }));
+    expect(onModeChange).toHaveBeenCalledWith("notes");
   });
 
   it("reports a close request when the close control is clicked (RA-03)", () => {
     const onClose = vi.fn();
     render(
-      <ReaderPanel sourceId="s1" csrf="csrf-xyz" tab="ask" onTabChange={() => {}} onClose={onClose} />,
+      <ReaderPanel
+        sourceId="s1"
+        csrf="csrf-xyz"
+        tab="chat"
+        panelParam="ask"
+        onTabChange={() => {}}
+        onClose={onClose}
+      />,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Close panel" }));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it("forwards the show-in-book callback to the active mode body (RA-13/14)", () => {
+  it("forwards the show-in-book callback to the armed composer body (RA-13/14)", () => {
     const onShowInBook = vi.fn();
 
-    // Ask mode: the ask body's jump reaches the shell's callback with its anchor.
     const { rerender } = render(
       <ReaderPanel
         sourceId="s1"
         csrf="csrf-xyz"
-        tab="ask"
+        tab="chat"
+        panelParam="ask"
         onTabChange={() => {}}
         onClose={() => {}}
         onShowInBook={onShowInBook}
@@ -251,12 +379,12 @@ describe("ReaderPanel shell (RA-01/02/03)", () => {
     fireEvent.click(screen.getByRole("button", { name: "ask-show-in-book" }));
     expect(onShowInBook).toHaveBeenCalledWith("ask#anchor");
 
-    // Teach mode: the teach body's jump reaches the same callback — both wired.
     rerender(
       <ReaderPanel
         sourceId="s1"
         csrf="csrf-xyz"
-        tab="teach"
+        tab="chat"
+        panelParam="teach"
         onTabChange={() => {}}
         onClose={() => {}}
         onShowInBook={onShowInBook}
@@ -269,14 +397,15 @@ describe("ReaderPanel shell (RA-01/02/03)", () => {
 
 describe("ReaderPanel conversation list", () => {
   function renderPanel(
-    mode: PanelMode = "ask",
-    onModeChange: (tab: DockTab) => void = () => {},
+    panelParam: string | null = "ask",
+    onModeChange: (tab: DockTab | PanelMode) => void = () => {},
   ) {
     return render(
       <ReaderPanel
         sourceId="s1"
         csrf="csrf-xyz"
-        tab={mode}
+        tab="chat"
+        panelParam={panelParam}
         onTabChange={onModeChange}
         onClose={() => {}}
       />,
@@ -380,7 +509,7 @@ describe("ReaderPanel conversation list", () => {
     ).toBeNull();
   });
 
-  it("resumes an asked conversation in the Ask panel without switching tabs", async () => {
+  it("resumes an asked conversation in Answer without switching the Chat tab (TUTOR-31)", async () => {
     const onModeChange = vi.fn();
     const fetchMock = stubServer([summary("conv1", "Ada Lovelace", 1)]);
     renderPanel("ask", onModeChange);
@@ -391,17 +520,14 @@ describe("ReaderPanel conversation list", () => {
       fireEvent.click(row);
     });
 
-    // The Ask panel is pointed at that conversation and told to re-read.
     expect(readActiveConversation("s1", "ask")).toBe("conv1");
     expect(screen.getByTestId("ask-panel-body").dataset.revision).not.toBe(before);
+    expect(screen.getByTestId("ask-panel-body")).toBeTruthy();
     expect(onModeChange).not.toHaveBeenCalled();
-    // The row already said where the thread resumes, so the click cost nothing:
-    // only the list load was ever fetched. Reading the conversation here would
-    // pull every turn and citation the panel is about to load for itself.
     expect(conversationCalls(fetchMock)).toHaveLength(1);
   });
 
-  it("resumes a taught conversation in the Teach panel", async () => {
+  it("resumes a taught conversation in Tutor even when the alias was ask (TUTOR-31)", async () => {
     const onModeChange = vi.fn();
     stubServer([summary("conv2", "Chapter 2", 3, ["c2.xhtml"], "teach")]);
     renderPanel("ask", onModeChange);
@@ -411,11 +537,27 @@ describe("ReaderPanel conversation list", () => {
       fireEvent.click(row);
     });
 
-    // Its turns were taught, so the dock moves to the panel that can continue it
-    // rather than leaving the reader on the wrong tab.
     expect(onModeChange).toHaveBeenCalledWith("teach");
+    expect(screen.getByTestId("teach-panel-body")).toBeTruthy();
+    expect(screen.queryByTestId("ask-panel-body")).toBeNull();
     expect(readActiveConversation("s1", "teach")).toBe("conv2");
     expect(readActiveConversation("s1", "ask")).toBeNull();
+  });
+
+  it("resumes an answered conversation in Answer even when the alias was teach (TUTOR-31)", async () => {
+    const onModeChange = vi.fn();
+    stubServer([summary("conv1", "Ada Lovelace", 1, [], "answer")]);
+    renderPanel("teach", onModeChange);
+
+    const row = await screen.findByRole("button", { name: "Resume Ada Lovelace" });
+    await act(async () => {
+      fireEvent.click(row);
+    });
+
+    expect(onModeChange).toHaveBeenCalledWith("ask");
+    expect(screen.getByTestId("ask-panel-body")).toBeTruthy();
+    expect(screen.queryByTestId("teach-panel-body")).toBeNull();
+    expect(readActiveConversation("s1", "ask")).toBe("conv1");
   });
 
   it("resumes a section-scoped asked conversation in the Ask panel", async () => {
@@ -479,7 +621,8 @@ describe("ReaderPanel tabs that hold no conversation", () => {
       <ReaderPanel
         sourceId="s1"
         csrf="csrf-xyz"
-        tab="ask"
+        tab="chat"
+        panelParam="ask"
         onTabChange={() => {}}
         onClose={() => {}}
       />,
@@ -519,7 +662,8 @@ describe("ReaderPanel tabs that hold no conversation", () => {
       <ReaderPanel
         sourceId="s1"
         csrf="csrf-xyz"
-        tab="ask"
+        tab="chat"
+        panelParam="ask"
         onTabChange={() => {}}
         onClose={() => {}}
       />,
@@ -532,13 +676,14 @@ describe("ReaderPanel tabs that hold no conversation", () => {
     const revision = screen.getByTestId("ask-panel-body").dataset.revision;
     expect(readActiveConversation("s1", "ask")).toBe("conv1");
 
-    for (const tab of ["notes", "review", "ask"] as const) {
+    for (const tab of ["notes", "review", "chat"] as const) {
       await act(async () => {
         rerender(
           <ReaderPanel
             sourceId="s1"
             csrf="csrf-xyz"
             tab={tab}
+            panelParam={tab === "chat" ? "ask" : undefined}
             onTabChange={() => {}}
             onClose={() => {}}
           />,
@@ -546,7 +691,7 @@ describe("ReaderPanel tabs that hold no conversation", () => {
       });
     }
 
-    // Back on Ask, the same thread is still the open one and the panel was never
+    // Back on Chat, the same thread is still the open one and the panel was never
     // told to re-read: visiting a tab with no conversation state disturbed none.
     expect(readActiveConversation("s1", "ask")).toBe("conv1");
     expect(screen.getByTestId("ask-panel-body").dataset.revision).toBe(revision);
@@ -557,7 +702,14 @@ describe("ReaderPanel phone sheet (READ-22)", () => {
   it("renders an open dock as a bottom sheet below lg, not a 26rem side column", async () => {
     stubViewportWidth(LG_MIN_WIDTH_PX - 1);
     render(
-      <ReaderPanel sourceId="s1" csrf="csrf-xyz" tab="ask" onTabChange={() => {}} onClose={() => {}} />,
+      <ReaderPanel
+        sourceId="s1"
+        csrf="csrf-xyz"
+        tab="chat"
+        panelParam="ask"
+        onTabChange={() => {}}
+        onClose={() => {}}
+      />,
     );
 
     const sheet = await waitFor(() => {
@@ -576,7 +728,14 @@ describe("ReaderPanel phone sheet (READ-22)", () => {
   it("keeps the overlay side dock at lg and above, not a full-width bottom sheet", async () => {
     stubViewportWidth(LG_MIN_WIDTH_PX);
     render(
-      <ReaderPanel sourceId="s1" csrf="csrf-xyz" tab="ask" onTabChange={() => {}} onClose={() => {}} />,
+      <ReaderPanel
+        sourceId="s1"
+        csrf="csrf-xyz"
+        tab="chat"
+        panelParam="ask"
+        onTabChange={() => {}}
+        onClose={() => {}}
+      />,
     );
 
     await waitFor(() => {
@@ -598,7 +757,14 @@ describe("ReaderPanel sheet close target (READ-25)", () => {
   it("sizes the sheet close control to at least 44px", async () => {
     stubViewportWidth(LG_MIN_WIDTH_PX - 1);
     render(
-      <ReaderPanel sourceId="s1" csrf="csrf-xyz" tab="ask" onTabChange={() => {}} onClose={() => {}} />,
+      <ReaderPanel
+        sourceId="s1"
+        csrf="csrf-xyz"
+        tab="chat"
+        panelParam="ask"
+        onTabChange={() => {}}
+        onClose={() => {}}
+      />,
     );
 
     const close = await waitFor(() => screen.getByRole("button", { name: "Close" }));

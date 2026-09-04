@@ -333,9 +333,9 @@ T11 → T12 → T13 → T14 → T15
 
 **Done when**:
 
-- [ ] Strip has no Ask/Teach tabs; `?panel=ask` still opens the conversation surface in Answer
-- [ ] Explain pending-request test still auto-submits
-- [ ] Gate: `cd frontend && npm test -- reader-panel chapter-reader`
+- [x] Strip has no Ask/Teach tabs; `?panel=ask` still opens the conversation surface in Answer
+- [x] Explain pending-request test still auto-submits
+- [x] Gate: `cd frontend && npm test -- reader-panel chapter-reader`
 
 **Tests**: unit
 **Gate**: full

@@ -21,6 +21,12 @@ describe("readUrl", () => {
     );
   });
 
+  it("writes the Chat strip tab as panel=chat", () => {
+    expect(readUrl("s1", null, { panel: "chat" })).toBe(
+      "/sources/s1/read?panel=chat",
+    );
+  });
+
   it("adds only the anchor param when there is no panel", () => {
     expect(readUrl("s1", "c1")).toBe("/sources/s1/read?anchor=c1");
   });
@@ -31,8 +37,16 @@ describe("readUrl", () => {
     );
   });
 
-  it("carries every dock tab, not only the two conversation ones", () => {
-    for (const panel of ["ask", "teach", "notes", "review"] as const) {
+  it("carries every dock strip tab", () => {
+    for (const panel of ["chat", "notes", "review"] as const) {
+      expect(readUrl("s1", null, { panel })).toBe(
+        `/sources/s1/read?panel=${panel}`,
+      );
+    }
+  });
+
+  it("still writes ask and teach aliases for capture and tombstones", () => {
+    for (const panel of ["ask", "teach"] as const) {
       expect(readUrl("s1", null, { panel })).toBe(
         `/sources/s1/read?panel=${panel}`,
       );

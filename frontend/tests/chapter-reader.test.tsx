@@ -237,6 +237,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  localStorage.clear();
 });
 
 describe("ChapterFlow render (RD-03)", () => {
@@ -933,7 +934,7 @@ describe("ChapterReader highlight load (RD-28)", () => {
 });
 
 describe("ChapterFlow dock tabs (RA-01/02/03/06)", () => {
-  it("opens the ask panel when ?panel=ask (RA-01)", async () => {
+  it("opens Chat with Answer armed when ?panel=ask (TUTOR-28)", async () => {
     nav.params = new URLSearchParams("panel=ask");
     render(
       <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
@@ -941,11 +942,16 @@ describe("ChapterFlow dock tabs (RA-01/02/03/06)", () => {
 
     await screen.findByText("Ada Lovelace wrote the first algorithm.");
     const panel = screen.getByTestId("reader-panel");
-    expect(panel.getAttribute("data-tab")).toBe("ask");
+    expect(panel.getAttribute("data-tab")).toBe("chat");
     expect(screen.getByTestId("ask-panel-body")).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Chat" }).getAttribute("aria-selected")).toBe(
+      "true",
+    );
+    expect(screen.queryByRole("tab", { name: "Ask" })).toBeNull();
+    expect(screen.queryByRole("tab", { name: "Teach" })).toBeNull();
   });
 
-  it("opens the teach panel when ?panel=teach (RA-02)", async () => {
+  it("opens Chat with Tutor armed when ?panel=teach (TUTOR-28)", async () => {
     nav.params = new URLSearchParams("panel=teach");
     render(
       <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
@@ -953,8 +959,20 @@ describe("ChapterFlow dock tabs (RA-01/02/03/06)", () => {
 
     await screen.findByText("Ada Lovelace wrote the first algorithm.");
     const panel = screen.getByTestId("reader-panel");
-    expect(panel.getAttribute("data-tab")).toBe("teach");
+    expect(panel.getAttribute("data-tab")).toBe("chat");
     expect(screen.getByTestId("teach-panel-body")).toBeTruthy();
+    expect(screen.queryByTestId("ask-panel-body")).toBeNull();
+  });
+
+  it("opens Chat with Answer when ?panel=chat and nothing was used last (TUTOR-28)", async () => {
+    nav.params = new URLSearchParams("panel=chat");
+    render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+    );
+
+    await screen.findByText("Ada Lovelace wrote the first algorithm.");
+    expect(screen.getByTestId("reader-panel").getAttribute("data-tab")).toBe("chat");
+    expect(screen.getByTestId("ask-panel-body")).toBeTruthy();
   });
 
   it("renders no panel when the panel param is absent", async () => {
@@ -1066,17 +1084,17 @@ describe("ChapterFlow dock tabs (RA-01/02/03/06)", () => {
     );
   });
 
-  it("switches modes via router.replace, preserving the anchor (RA-03)", async () => {
+  it("switches strip tabs via router.replace, preserving the anchor (RA-03)", async () => {
     nav.params = new URLSearchParams(`anchor=${ENCODED_S2}&panel=ask`);
     render(
       <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={S2} />,
     );
 
     await screen.findByText("Ada Lovelace wrote the first algorithm.");
-    fireEvent.click(screen.getByRole("tab", { name: "Teach" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Notes" }));
 
     expect(nav.replace).toHaveBeenCalledWith(
-      `/sources/s1/read?anchor=${ENCODED_S2}&panel=teach`,
+      `/sources/s1/read?anchor=${ENCODED_S2}&panel=notes`,
     );
   });
 
@@ -2131,7 +2149,7 @@ describe("ChapterFlow reader chrome (TOC, dock, measure)", () => {
 
     act(() => pressKey("]"));
 
-    expect(nav.replace).toHaveBeenCalledWith("/sources/s1/read?panel=ask");
+    expect(nav.replace).toHaveBeenCalledWith("/sources/s1/read?panel=chat");
   });
 
   it("closes the dock by dropping ?panel= on a second ]", async () => {

@@ -56,6 +56,7 @@ import {
   dockTabFromParam,
   ReaderPanel,
   type DockTab,
+  type PanelQuery,
 } from "@/app/components/reader-panel";
 import { ReadingControls } from "@/app/components/reading-controls";
 import { ChapterNav, TocPanel } from "@/app/components/toc-panel";
@@ -110,7 +111,7 @@ const STALE_CAPTURE_MESSAGE =
   "The book changed while you were reading. Reload the page to capture this highlight.";
 
 /** Default dock tab when `]` opens the panel with no `?panel=` already set. */
-const DEFAULT_DOCK_TAB: DockTab = "ask";
+const DEFAULT_DOCK_TAB: DockTab = "chat";
 
 /** Pixels below the popover's top edge to drop the suggestion row, clearing the verbs. */
 const SUGGESTIONS_OFFSET = 44;
@@ -338,7 +339,8 @@ export function ChapterFlow({
   // effect lives in `ChapterReader` and is not keyed on `panel`).
   const searchParams = useSearchParams();
   const urlAnchor = searchParams.get("anchor");
-  const dockTab = dockTabFromParam(searchParams.get("panel"));
+  const panelQuery = searchParams.get("panel");
+  const dockTab = dockTabFromParam(panelQuery);
   const articleRef = useRef<HTMLElement>(null);
   // Device-local reading surface: type size, spacing, and Default/Paper (RD-18).
   const reading = useReadingSettings();
@@ -701,7 +703,7 @@ export function ChapterFlow({
   // Opening the dock or switching between its tabs is pure URL state: replace
   // the query in place (preserving the anchor) so it is deep-linkable and the
   // back button works, without a chapter refetch or a scroll reset.
-  function handleDockTabChange(tab: DockTab) {
+  function handleDockTabChange(tab: PanelQuery) {
     router.replace(readUrl(sourceId, urlAnchor, { panel: tab }));
   }
 
@@ -730,9 +732,11 @@ export function ChapterFlow({
   function handleShowInBook(anchor: string, quote?: string) {
     const inChapter = sectionAnchors.includes(anchor);
     const needle = quote ? quote : undefined;
+    const panel: PanelQuery | undefined =
+      dockTab && panelQuery ? (panelQuery as PanelQuery) : undefined;
     if (!inChapter) {
       pendingCitationQuote = needle ? { anchor, quote: needle } : null;
-      router.push(readUrl(sourceId, anchor, { panel: dockTab }));
+      router.push(readUrl(sourceId, anchor, { panel }));
       return;
     }
     document
@@ -740,7 +744,7 @@ export function ChapterFlow({
       ?.scrollIntoView({ behavior: "smooth", block: "start" });
     setFlashAnchor(anchor);
     setSpanQuote(needle ? { anchor, quote: needle } : null);
-    router.replace(readUrl(sourceId, anchor, { panel: dockTab }));
+    router.replace(readUrl(sourceId, anchor, { panel }));
   }
 
   // A selection verb routes the passage into the Ask panel: stash the request,
@@ -750,7 +754,7 @@ export function ChapterFlow({
   function openAskWithPassage(request: PendingPanelRequest) {
     setPendingRequest(request);
     setCapture(null);
-    if (dockTab !== "ask") {
+    if (panelQuery !== "ask") {
       router.replace(readUrl(sourceId, urlAnchor, { panel: "ask" }));
     }
   }
@@ -946,6 +950,7 @@ export function ChapterFlow({
             sourceId={sourceId}
             csrf={csrf}
             tab={dockTab}
+            panelParam={panelQuery}
             onTabChange={handleDockTabChange}
             onClose={handlePanelClose}
             pendingRequest={pendingRequest}

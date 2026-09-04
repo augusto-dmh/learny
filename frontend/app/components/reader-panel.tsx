@@ -5,23 +5,22 @@
  * the book's four working surfaces beside the chapter so studying never leaves the
  * page.
  *
- * The shell owns the tab strip (Ask | Teach | Notes | Review), the close control,
- * and this book's conversation list. Open state and the active tab are pure URL
+ * The shell owns the tab strip (Chat | Notes | Review), the close control, and
+ * this book's conversation list. Open state and the active tab are pure URL
  * state driven by `?panel=`, so the parent renders the panel only when a tab is
  * active — closing it simply drops the query param and restores full reading
  * width, and reading stays non-modal underneath.
  *
- * Only two of those tabs hold a conversation. `PanelMode` stays the conversation
- * subset — it keys the per-surface `activeIds`/`revisions` maps, where a key that
- * can never hold a conversation would be a lie — while `DockTab` is what the strip
- * and `?panel=` speak. The conversation list therefore renders on conversation
- * tabs only.
+ * Chat is the only strip tab that holds a conversation. `PanelMode` (`ask` |
+ * `teach`) is the composer arming — Answer vs Tutor — and still keys the
+ * per-surface `activeIds`/`revisions` maps. `DockTab` is what the strip speaks.
+ * `?panel=ask` / `?panel=teach` / `?panel=chat` all open Chat; the aliases arm
+ * Answer vs Tutor. The conversation list therefore renders on Chat only.
  *
- * The conversation list is deliberately mode-agnostic and shown in both
- * conversation tabs: one book has one set of threads. Which panel resumes a given
- * thread follows from the mode its turns were answered in, so the shell switches
- * tabs when it has to rather than asking the reader to guess which tab their
- * thread is behind.
+ * The conversation list is deliberately mode-agnostic: one book has one set of
+ * threads. Which composer continues a given thread follows from the mode its
+ * turns were answered in, so resume arms Answer or Tutor rather than asking the
+ * reader to guess which mode their thread is behind.
  */
 
 import { X } from "lucide-react";
@@ -51,37 +50,104 @@ import { DockNotesPanel, useBookNotes } from "./dock-notes-panel";
 import { DockReviewPanel, useDueCount } from "./dock-review-panel";
 import { TeachPanel } from "./teach-panel";
 
-/** A dock surface that holds a conversation, and so has per-surface thread state. */
+/** A composer mode that holds a conversation, and so has per-surface thread state. */
 export type PanelMode = "ask" | "teach";
 
-/** Every tab in the dock's strip, and every value `?panel=` accepts. */
-export type DockTab = PanelMode | "notes" | "review";
+/** Every tab in the dock's strip. */
+export type DockTab = "chat" | "notes" | "review";
+
+/** Every value `?panel=` may write: strip tabs plus Ask/Teach aliases. */
+export type PanelQuery = DockTab | PanelMode;
 
 const TABS: { value: DockTab; label: string }[] = [
-  { value: "ask", label: "Ask" },
-  { value: "teach", label: "Teach" },
+  { value: "chat", label: "Chat" },
   { value: "notes", label: "Notes" },
   { value: "review", label: "Review" },
 ];
 
 const TAB_TITLES: Record<DockTab, string> = {
-  ask: "Ask panel",
-  teach: "Teach panel",
+  chat: "Chat panel",
   notes: "Notes panel",
   review: "Review panel",
 };
 
-/**
- * Whether a tab is one of the conversation surfaces — the guard that keeps the
- * conversation state maps keyed by something that can actually hold a thread.
- */
-export function isConversationTab(tab: DockTab): tab is PanelMode {
-  return tab === "ask" || tab === "teach";
+const LAST_CHAT_MODE_KEY = "learny.chat-mode.v1";
+
+/** The last Answer/Tutor arming for this book, or null when none has been used. */
+export function readLastChatMode(sourceId: string): PanelMode | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  try {
+    const raw = localStorage.getItem(LAST_CHAT_MODE_KEY);
+    if (!raw) {
+      return null;
+    }
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const value = parsed[sourceId];
+    return value === "ask" || value === "teach" ? value : null;
+  } catch {
+    return null;
+  }
 }
 
-/** The `?panel=` value, or null when it names no tab the dock has. */
+/** Remember which composer Chat last armed for this book. */
+export function writeLastChatMode(sourceId: string, mode: PanelMode): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    const raw = localStorage.getItem(LAST_CHAT_MODE_KEY);
+    const parsed =
+      raw === null ? {} : (JSON.parse(raw) as Record<string, unknown>);
+    const next: Record<string, unknown> =
+      parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+        ? parsed
+        : {};
+    next[sourceId] = mode;
+    localStorage.setItem(LAST_CHAT_MODE_KEY, JSON.stringify(next));
+  } catch {
+    // Private mode: last-used is simply not remembered across reloads.
+  }
+}
+
+/**
+ * Whether a tab is the conversation surface — the guard that keeps the list off
+ * Notes and Review.
+ */
+export function isConversationTab(tab: DockTab): tab is "chat" {
+  return tab === "chat";
+}
+
+/**
+ * The strip tab for a `?panel=` value, or null when it names nothing the dock
+ * has. Ask, Teach, and Chat all open the Chat tab (TUTOR-27/28).
+ */
 export function dockTabFromParam(value: string | null): DockTab | null {
-  return TABS.some((tab) => tab.value === value) ? (value as DockTab) : null;
+  if (value === "ask" || value === "teach" || value === "chat") {
+    return "chat";
+  }
+  if (value === "notes" || value === "review") {
+    return value;
+  }
+  return null;
+}
+
+/**
+ * Which composer Chat arms from a `?panel=` value. Aliases win over last-used;
+ * `chat` (or an omitted param) uses last-used, defaulting to Answer (TUTOR-28).
+ */
+export function composerModeFromParam(
+  value: string | null | undefined,
+  lastUsed: PanelMode | null,
+): PanelMode {
+  if (value === "teach") {
+    return "teach";
+  }
+  if (value === "ask") {
+    return "ask";
+  }
+  return lastUsed ?? "ask";
 }
 
 /**
@@ -132,6 +198,7 @@ export function ReaderPanel({
   sourceId,
   csrf,
   tab,
+  panelParam = null,
   onTabChange,
   onClose,
   pendingRequest,
@@ -143,7 +210,9 @@ export function ReaderPanel({
   sourceId: string;
   csrf: string;
   tab: DockTab;
-  onTabChange: (tab: DockTab) => void;
+  /** Raw `?panel=` value so Chat can arm Answer vs Tutor from aliases. */
+  panelParam?: string | null;
+  onTabChange: (tab: PanelQuery) => void;
   onClose: () => void;
   pendingRequest?: PendingPanelRequest | null;
   onPendingConsumed?: () => void;
@@ -164,6 +233,30 @@ export function ReaderPanel({
     ask: null,
     teach: null,
   });
+
+  const [lastUsed, setLastUsed] = useState<PanelMode | null>(() =>
+    readLastChatMode(sourceId),
+  );
+  const [armedOverride, setArmedOverride] = useState<PanelMode | null>(null);
+
+  useEffect(() => {
+    setLastUsed(readLastChatMode(sourceId));
+    setArmedOverride(null);
+  }, [sourceId]);
+
+  useEffect(() => {
+    setArmedOverride(null);
+  }, [panelParam]);
+
+  useEffect(() => {
+    if (panelParam === "ask" || panelParam === "teach") {
+      writeLastChatMode(sourceId, panelParam);
+      setLastUsed(panelParam);
+    }
+  }, [panelParam, sourceId]);
+
+  const armedMode: PanelMode =
+    armedOverride ?? composerModeFromParam(panelParam, lastUsed);
 
   const syncActiveIds = useCallback(() => {
     setActiveIds({
@@ -199,18 +292,21 @@ export function ReaderPanel({
       if (!conversationTab) {
         return;
       }
-      const target = panelFor(summary, conversationTab);
+      const target = panelFor(summary, armedMode);
       writeActiveConversation(sourceId, target, summary.id);
+      writeLastChatMode(sourceId, target);
+      setLastUsed(target);
+      setArmedOverride(target);
       setActiveIds((current) => ({ ...current, [target]: summary.id }));
       setRevisions((current) => ({
         ...current,
         [target]: current[target] + 1,
       }));
-      if (target !== conversationTab) {
+      if (target !== armedMode) {
         onTabChange(target);
       }
     },
-    [sourceId, conversationTab, onTabChange],
+    [sourceId, conversationTab, armedMode, onTabChange],
   );
 
   // Deleting the conversation a panel is showing cannot leave that panel
@@ -237,14 +333,14 @@ export function ReaderPanel({
     if (!conversationTab) {
       return;
     }
-    const surface = conversationTab;
+    const surface = armedMode;
     writeActiveConversation(sourceId, surface, null);
     setActiveIds((current) => ({ ...current, [surface]: null }));
     setRevisions((current) => ({
       ...current,
       [surface]: current[surface] + 1,
     }));
-  }, [sourceId, conversationTab]);
+  }, [sourceId, conversationTab, armedMode]);
 
   // What each tab is holding, so the reader can see it without opening the tab.
   // Inventory, never achievement: nothing counts up, and nothing is behind.
@@ -297,7 +393,7 @@ export function ReaderPanel({
           sourceId={sourceId}
           csrf={csrf}
           refreshToken={listToken}
-          activeConversationId={activeIds[conversationTab]}
+          activeConversationId={activeIds[armedMode]}
           onResume={handleResume}
           onNew={handleNew}
           onDeleted={handleDeleted}
@@ -305,7 +401,7 @@ export function ReaderPanel({
       ) : null}
 
       <div className="min-h-0 flex-1 p-3">
-        {tab === "ask" ? (
+        {tab === "chat" && armedMode === "ask" ? (
           <AskPanel
             sourceId={sourceId}
             csrf={csrf}
@@ -316,7 +412,7 @@ export function ReaderPanel({
             onRequireAuth={onRequireAuth}
             onConversationsChanged={handleConversationsChanged}
           />
-        ) : tab === "teach" ? (
+        ) : tab === "chat" ? (
           <TeachPanel
             sourceId={sourceId}
             csrf={csrf}

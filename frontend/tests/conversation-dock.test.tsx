@@ -102,7 +102,7 @@ function renderDock(handlers: Record<string, Handler>) {
     <ReaderPanel
       sourceId="s1"
       csrf="csrf-xyz"
-      tab="ask"
+      tab="chat"
       onTabChange={() => {}}
       onClose={() => {}}
     />,

@@ -199,12 +199,12 @@ Teach is a cited, section-scoped chat with a four-sentence "patient tutor" promp
 | TUTOR-24 | P1: Ladder and close | T8 | Done |
 | TUTOR-25 | P1: Ladder and close | T7 | Done |
 | TUTOR-26 | P1: Ladder and close | T7 | Done |
-| TUTOR-27 | P1: One Chat dock | Tasks | In Tasks |
-| TUTOR-28 | P1: One Chat dock | Tasks | In Tasks |
+| TUTOR-27 | P1: One Chat dock | T12 | Done |
+| TUTOR-28 | P1: One Chat dock | T12 | Done |
 | TUTOR-29 | P1: One Chat dock | Tasks | In Tasks |
 | TUTOR-30 | P1: One Chat dock | Tasks | In Tasks |
-| TUTOR-31 | P1: One Chat dock | Tasks | In Tasks |
-| TUTOR-32 | P1: One Chat dock | Tasks | In Tasks |
+| TUTOR-31 | P1: One Chat dock | T12 | Done |
+| TUTOR-32 | P1: One Chat dock | T12 | Done |
 | TUTOR-33 | P1: One Chat dock | Tasks | In Tasks |
 | TUTOR-34 | P1: One FSRS card | Tasks | In Tasks |
 | TUTOR-35 | P1: One FSRS card | T10 | Done |
@@ -228,4 +228,4 @@ Teach is a cited, section-scoped chat with a four-sentence "patient tutor" promp
 - [ ] Opening retrieval is pinned to `target_title`, not the sentinel string.
 - [ ] A citation-free Socratic teach reply persists as answered; the same shape in Answer stays not-found.
 - [ ] After a check restatement the composer is gone and exactly one card can be accepted into the due queue.
-- [ ] `?panel=ask` and `?panel=teach` still open the dock; the strip reads Chat | Notes | Review.
+- [x] `?panel=ask` and `?panel=teach` still open the dock; the strip reads Chat | Notes | Review.

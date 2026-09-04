@@ -178,7 +178,7 @@ function renderDock() {
     <ReaderPanel
       sourceId="s1"
       csrf="csrf-xyz"
-      tab="ask"
+      tab="chat"
       onTabChange={() => {}}
       onClose={() => {}}
     />,
