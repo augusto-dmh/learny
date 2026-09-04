@@ -34,6 +34,7 @@ from app.application.conversations import (
 )
 from app.application.errors import (
     AnswerGenerationFailed,
+    ConversationClosed,
     ConversationNotFound,
     ConversationTargetUnavailable,
     ConversationTurnConflict,
@@ -56,6 +57,7 @@ from app.domain.entities import (
     MODE_ANSWER,
     MODE_TEACH,
     SENTINEL,
+    TUTOR_JUST_EXPLAIN_MESSAGE,
     TUTOR_OPENING_MESSAGE,
     AnswerCompleted,
     AnswerReasoningDelta,
@@ -79,6 +81,7 @@ _NOW = datetime(2026, 7, 25, 12, 0, 0, tzinfo=UTC)
 _MODEL = "local-extractive"
 _TOP_K = 8
 _HISTORY_TURNS = 6
+_CHECK_AFTER = 3
 # A page wider than any fixture below, so a test that is about ownership or order
 # reads the whole of what it seeded rather than accidentally testing paging.
 _PAGE = 50
@@ -403,6 +406,8 @@ def _recorded(
     evidence: Sequence[Evidence],
     history: Sequence[HistoryTurn],
     target_section_path: tuple[str, ...] | None,
+    tutor_phase: str | None = None,
+    hint_level: str | None = None,
 ) -> dict[str, object]:
     """Every argument the converged generation port was handed, in one record."""
     return {
@@ -411,6 +416,8 @@ def _recorded(
         "evidence": list(evidence),
         "history": list(history),
         "target_section_path": target_section_path,
+        "tutor_phase": tutor_phase,
+        "hint_level": hint_level,
     }
 
 
@@ -453,7 +460,11 @@ class FakeGeneration:
         tutor_phase: str | None = None,
         hint_level: str | None = None,
     ) -> GeneratedAnswer:
-        self.calls.append(_recorded(message, mode, evidence, history, target_section_path))
+        self.calls.append(
+            _recorded(
+                message, mode, evidence, history, target_section_path, tutor_phase, hint_level
+            )
+        )
         if self._error is not None:
             raise self._error
         assert self._answer is not None, "no preset answer configured"
@@ -470,7 +481,11 @@ class FakeGeneration:
         tutor_phase: str | None = None,
         hint_level: str | None = None,
     ) -> Iterator[AnswerStreamEvent]:
-        self.stream_calls.append(_recorded(message, mode, evidence, history, target_section_path))
+        self.stream_calls.append(
+            _recorded(
+                message, mode, evidence, history, target_section_path, tutor_phase, hint_level
+            )
+        )
         if self._error is not None:
             raise self._error
         assert self._answer is not None, "no preset answer configured"
@@ -1072,6 +1087,7 @@ def _post(
         ids=ids,
         evidence_top_k=_TOP_K,
         history_turns=_HISTORY_TURNS,
+        tutor_check_after_turns=_CHECK_AFTER,
     )
 
 
@@ -1515,7 +1531,7 @@ def test_teach_citation_free_non_sentinel_persists_as_answered() -> None:
         corpus=corpus,
         retrieve=FakeScopedRetrieveEvidence(evidence),
         generation=generation,
-    )(user=user, conversation_id=conversation.id, message="teach me", mode=MODE_TEACH)
+    )(user=user, conversation_id=conversation.id, message=TUTOR_OPENING_MESSAGE, mode=MODE_TEACH)
 
     assert turn.answer_status == "answered"
     assert turn.answer_text == "What is this section trying to convince you of?"
@@ -1547,7 +1563,7 @@ def test_teach_stream_citation_free_non_sentinel_persists_as_answered() -> None:
         ).stream(
             user=user,
             conversation_id=conversation.id,
-            message="teach me",
+            message=TUTOR_OPENING_MESSAGE,
             mode=MODE_TEACH,
         )
     )
@@ -1574,7 +1590,7 @@ def test_teach_sentinel_reply_persists_as_not_found() -> None:
         corpus=corpus,
         retrieve=FakeScopedRetrieveEvidence(evidence),
         generation=generation,
-    )(user=user, conversation_id=conversation.id, message="off book", mode=MODE_TEACH)
+    )(user=user, conversation_id=conversation.id, message=TUTOR_OPENING_MESSAGE, mode=MODE_TEACH)
 
     assert turn.answer_status == "not_found_in_scope"
     assert (turn.answer_text, turn.citations) == ("", ())
@@ -1622,7 +1638,7 @@ def test_teach_blank_text_is_still_not_found() -> None:
         corpus=corpus,
         retrieve=FakeScopedRetrieveEvidence(evidence),
         generation=generation,
-    )(user=user, conversation_id=conversation.id, message="teach me", mode=MODE_TEACH)
+    )(user=user, conversation_id=conversation.id, message=TUTOR_OPENING_MESSAGE, mode=MODE_TEACH)
 
     assert turn.answer_status == "not_found_in_scope"
     assert (turn.answer_text, turn.citations) == ("", ())
@@ -1675,6 +1691,8 @@ def test_answer_mode_sends_the_bounded_history_to_the_answer_port() -> None:
                 HistoryTurn(message="message 1", response_text="answer 1"),
             ],
             "target_section_path": None,
+            "tutor_phase": None,
+            "hint_level": None,
         }
     ]
 
@@ -1741,6 +1759,8 @@ def test_scoped_answer_turn_generates_as_an_answer_despite_its_target_snapshot()
             "evidence": evidence,
             "history": [],
             "target_section_path": None,
+            "tutor_phase": None,
+            "hint_level": None,
         }
     ]
     assert turn.mode == MODE_ANSWER
@@ -1783,15 +1803,17 @@ def test_teach_mode_sends_the_mode_target_section_path_and_history_to_the_port()
         corpus=corpus,
         retrieve=FakeScopedRetrieveEvidence(evidence),
         generation=generation,
-    )(user=user, conversation_id=conversation.id, message="teach me", mode="teach")
+    )(user=user, conversation_id=conversation.id, message=TUTOR_OPENING_MESSAGE, mode="teach")
 
     assert generation.calls == [
         {
-            "message": "teach me",
+            "message": TUTOR_OPENING_MESSAGE,
             "mode": MODE_TEACH,
             "evidence": evidence,
             "history": [],
             "target_section_path": ("Chapter 1",),
+            "tutor_phase": "open",
+            "hint_level": "pump",
         }
     ]
     assert turn.mode == "teach"
@@ -1803,14 +1825,16 @@ def test_opening_teach_retrieves_by_section_title() -> None:
     )
     evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
     retrieve = FakeScopedRetrieveEvidence(evidence)
+    turns = FakeConversationTurnRepository()
+    generation = FakeGeneration(answer=_answered(*evidence))
 
     _post(
         conversations=conversations,
-        turns=FakeConversationTurnRepository(),
+        turns=turns,
         sources=sources,
         corpus=corpus,
         retrieve=retrieve,
-        generation=FakeGeneration(answer=_answered(*evidence)),
+        generation=generation,
     )(
         user=user,
         conversation_id=conversation.id,
@@ -1821,12 +1845,19 @@ def test_opening_teach_retrieves_by_section_title() -> None:
     assert retrieve.calls[0]["query"] == "Chapter 1"
     assert retrieve.calls[0]["query"] != TUTOR_OPENING_MESSAGE
     assert retrieve.calls[0]["anchors"] == ["ch1.xhtml", "ch1.xhtml#core", "ch1-old.xhtml"]
+    stored = conversations.get_by_id(conversation.id)
+    assert stored is not None
+    assert (stored.tutor_phase, stored.hint_level) == ("open", "pump")
+    assert generation.calls[0]["tutor_phase"] == "open"
+    assert generation.calls[0]["hint_level"] == "pump"
+    assert turns.list_for_conversation(conversation.id)[0].message == TUTOR_OPENING_MESSAGE
 
 
 def test_opening_teach_stream_retrieves_by_section_title() -> None:
     user, source, sources, corpus, conversations, conversation = _scoped_world()
     evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
     retrieve = FakeScopedRetrieveEvidence(evidence)
+    generation = FakeGeneration(answer=_answered(*evidence))
 
     list(
         _post(
@@ -1835,7 +1866,7 @@ def test_opening_teach_stream_retrieves_by_section_title() -> None:
             sources=sources,
             corpus=corpus,
             retrieve=retrieve,
-            generation=FakeGeneration(answer=_answered(*evidence)),
+            generation=generation,
         ).stream(
             user=user,
             conversation_id=conversation.id,
@@ -1846,6 +1877,11 @@ def test_opening_teach_stream_retrieves_by_section_title() -> None:
 
     assert retrieve.calls[0]["query"] == conversation.target_title
     assert retrieve.calls[0]["query"] != TUTOR_OPENING_MESSAGE
+    assert generation.stream_calls[0]["tutor_phase"] == "open"
+    assert generation.stream_calls[0]["hint_level"] == "pump"
+    stored = conversations.get_by_id(conversation.id)
+    assert stored is not None
+    assert (stored.tutor_phase, stored.hint_level) == ("open", "pump")
 
 
 def test_opening_teach_falls_back_to_target_anchor_when_title_is_empty() -> None:
@@ -1887,18 +1923,375 @@ def test_non_opening_teach_still_retrieves_with_the_learner_message() -> None:
     user, source, sources, corpus, conversations, conversation = _scoped_world()
     evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
     retrieve = FakeScopedRetrieveEvidence(evidence)
-
-    _post(
+    turns = FakeConversationTurnRepository()
+    post = _post(
         conversations=conversations,
-        turns=FakeConversationTurnRepository(),
+        turns=turns,
         sources=sources,
         corpus=corpus,
         retrieve=retrieve,
         generation=FakeGeneration(answer=_answered(*evidence)),
-    )(user=user, conversation_id=conversation.id, message="what is anchoring?", mode=MODE_TEACH)
+    )
+    post(
+        user=user,
+        conversation_id=conversation.id,
+        message=TUTOR_OPENING_MESSAGE,
+        mode=MODE_TEACH,
+    )
 
-    assert retrieve.calls[0]["query"] == "what is anchoring?"
-    assert retrieve.calls[0]["anchors"] == ["ch1.xhtml", "ch1.xhtml#core"]
+    post(
+        user=user,
+        conversation_id=conversation.id,
+        message="what is anchoring?",
+        mode=MODE_TEACH,
+    )
+
+    assert retrieve.calls[1]["query"] == "what is anchoring?"
+    assert retrieve.calls[1]["anchors"] == ["ch1.xhtml", "ch1.xhtml#core"]
+    stored = conversations.get_by_id(conversation.id)
+    assert stored is not None
+    assert stored.tutor_phase == "elicit"
+
+
+def test_first_teach_on_an_empty_conversation_must_be_the_opening_sentinel() -> None:
+    # TUTOR-11: a brand-new teach thread cannot skip the session-start message.
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    retrieve = FakeScopedRetrieveEvidence([_evidence(source.id, "snippet", anchor="ch1.xhtml")])
+    turns = FakeConversationTurnRepository()
+
+    with pytest.raises(InvalidConversationMode):
+        _post(
+            conversations=conversations,
+            turns=turns,
+            sources=sources,
+            corpus=corpus,
+            retrieve=retrieve,
+        )(user=user, conversation_id=conversation.id, message="teach me", mode=MODE_TEACH)
+
+    assert retrieve.calls == []
+    assert turns.add_calls == 0
+    stored = conversations.get_by_id(conversation.id)
+    assert stored is not None
+    assert stored.tutor_phase is None
+
+
+def test_failed_opening_teach_can_be_retried_with_the_opening_sentinel() -> None:
+    # TUTOR-12: a failed opening still records the question; another opening is accepted.
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
+    turns = FakeConversationTurnRepository()
+    retrieve = FakeScopedRetrieveEvidence(evidence)
+
+    with pytest.raises(AnswerGenerationFailed):
+        _post(
+            conversations=conversations,
+            turns=turns,
+            sources=sources,
+            corpus=corpus,
+            retrieve=retrieve,
+            generation=FakeGeneration(error=RuntimeError("provider down")),
+        )(
+            user=user,
+            conversation_id=conversation.id,
+            message=TUTOR_OPENING_MESSAGE,
+            mode=MODE_TEACH,
+        )
+
+    failed = turns.list_for_conversation(conversation.id)
+    assert len(failed) == 1
+    assert failed[0].answer_status == FAILED
+    assert failed[0].message == TUTOR_OPENING_MESSAGE
+    stored = conversations.get_by_id(conversation.id)
+    assert stored is not None
+    assert (stored.tutor_phase, stored.hint_level) == ("open", "pump")
+
+    generation = FakeGeneration(answer=_answered(*evidence))
+    retry = _post(
+        conversations=conversations,
+        turns=turns,
+        sources=sources,
+        corpus=corpus,
+        retrieve=retrieve,
+        generation=generation,
+    )(
+        user=user,
+        conversation_id=conversation.id,
+        message=TUTOR_OPENING_MESSAGE,
+        mode=MODE_TEACH,
+    )
+
+    assert retry.turn_index == 1
+    assert retry.message == TUTOR_OPENING_MESSAGE
+    assert retry.answer_status == "answered"
+    assert generation.calls[0]["tutor_phase"] == "open"
+    assert generation.calls[0]["hint_level"] == "pump"
+
+
+def test_closed_tutor_conversation_refuses_any_new_turn_and_persists_nothing() -> None:
+    # TUTOR-23 / AD-299: close is a lock; the check text and turn list stay as they were.
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    conversations.add(
+        replace(
+            conversation,
+            tutor_phase="close",
+            hint_level="assert",
+            tutor_check_text="the section argues for anchors",
+        )
+    )
+    retrieve = FakeScopedRetrieveEvidence([_evidence(source.id, "snippet", anchor="ch1.xhtml")])
+    turns = FakeConversationTurnRepository()
+
+    with pytest.raises(ConversationClosed):
+        _post(
+            conversations=conversations,
+            turns=turns,
+            sources=sources,
+            corpus=corpus,
+            retrieve=retrieve,
+        )(user=user, conversation_id=conversation.id, message="one more", mode=MODE_TEACH)
+
+    assert retrieve.calls == []
+    assert turns.add_calls == 0
+    stored = conversations.get_by_id(conversation.id)
+    assert stored is not None
+    assert stored.tutor_phase == "close"
+    assert stored.tutor_check_text == "the section argues for anchors"
+
+
+def test_closed_tutor_conversation_refuses_a_streamed_turn_and_persists_nothing() -> None:
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    conversations.add(
+        replace(conversation, tutor_phase="close", hint_level="assert", tutor_check_text="done")
+    )
+    retrieve = FakeScopedRetrieveEvidence([_evidence(source.id, "snippet", anchor="ch1.xhtml")])
+    turns = FakeConversationTurnRepository()
+
+    with pytest.raises(ConversationClosed):
+        _post(
+            conversations=conversations,
+            turns=turns,
+            sources=sources,
+            corpus=corpus,
+            retrieve=retrieve,
+        ).stream(
+            user=user,
+            conversation_id=conversation.id,
+            message="one more",
+            mode=MODE_TEACH,
+        )
+
+    assert retrieve.calls == []
+    assert turns.add_calls == 0
+
+
+def test_answer_mode_cannot_continue_a_tutor_conversation() -> None:
+    # TUTOR-25: once the ladder has started, Ask is a different product surface.
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    conversations.add(replace(conversation, tutor_phase="open", hint_level="pump"))
+    retrieve = FakeScopedRetrieveEvidence([_evidence(source.id, "snippet", anchor="ch1.xhtml")])
+    turns = FakeConversationTurnRepository()
+
+    with pytest.raises(InvalidConversationMode):
+        _post(
+            conversations=conversations,
+            turns=turns,
+            sources=sources,
+            corpus=corpus,
+            retrieve=retrieve,
+        )(user=user, conversation_id=conversation.id, message="what is it?", mode=MODE_ANSWER)
+
+    assert retrieve.calls == []
+    assert turns.add_calls == 0
+
+
+def test_pre_cycle_teach_with_existing_turns_accepts_a_normal_message() -> None:
+    # TUTOR-26: a null-phase teach thread that already has turns is not a new tutor open.
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
+    turns = FakeConversationTurnRepository()
+    turns.add(
+        ConversationTurn(
+            id=uuid4(),
+            conversation_id=conversation.id,
+            turn_index=0,
+            message="old teach",
+            mode=MODE_TEACH,
+            answer_status="answered",
+            answer_text="because",
+            model=_MODEL,
+            evidence_count=1,
+            citations=(),
+            created_at=_NOW,
+        )
+    )
+    generation = FakeGeneration(answer=_answered(*evidence))
+
+    turn = _post(
+        conversations=conversations,
+        turns=turns,
+        sources=sources,
+        corpus=corpus,
+        retrieve=FakeScopedRetrieveEvidence(evidence),
+        generation=generation,
+    )(
+        user=user,
+        conversation_id=conversation.id,
+        message="what is anchoring?",
+        mode=MODE_TEACH,
+    )
+
+    assert turn.message == "what is anchoring?"
+    assert turn.turn_index == 1
+    assert generation.calls[0]["tutor_phase"] is None
+    assert generation.calls[0]["hint_level"] is None
+    stored = conversations.get_by_id(conversation.id)
+    assert stored is not None
+    assert stored.tutor_phase is None
+
+
+def test_ordinary_message_after_opening_generates_in_elicit() -> None:
+    # TUTOR-17: the first ordinary learner message moves the following generate to elicit.
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
+    turns = FakeConversationTurnRepository()
+    retrieve = FakeScopedRetrieveEvidence(evidence)
+    post = _post(
+        conversations=conversations,
+        turns=turns,
+        sources=sources,
+        corpus=corpus,
+        retrieve=retrieve,
+        generation=FakeGeneration(answer=_answered(*evidence)),
+    )
+    post(
+        user=user,
+        conversation_id=conversation.id,
+        message=TUTOR_OPENING_MESSAGE,
+        mode=MODE_TEACH,
+    )
+    generation = FakeGeneration(answer=_answered(*evidence))
+    post_again = _post(
+        conversations=conversations,
+        turns=turns,
+        sources=sources,
+        corpus=corpus,
+        retrieve=retrieve,
+        generation=generation,
+    )
+
+    post_again(
+        user=user,
+        conversation_id=conversation.id,
+        message="what is anchoring?",
+        mode=MODE_TEACH,
+    )
+
+    assert generation.calls[0]["tutor_phase"] == "elicit"
+    assert generation.calls[0]["hint_level"] == "pump"
+    stored = conversations.get_by_id(conversation.id)
+    assert stored is not None
+    assert stored.tutor_phase == "elicit"
+
+
+def test_just_explain_generates_with_assert_then_persists_check() -> None:
+    # TUTOR-19: the frozen just-explain chip is an assert generate, then check after persist.
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
+    turns = FakeConversationTurnRepository()
+    retrieve = FakeScopedRetrieveEvidence(evidence)
+    _post(
+        conversations=conversations,
+        turns=turns,
+        sources=sources,
+        corpus=corpus,
+        retrieve=retrieve,
+        generation=FakeGeneration(answer=_answered(*evidence)),
+    )(
+        user=user,
+        conversation_id=conversation.id,
+        message=TUTOR_OPENING_MESSAGE,
+        mode=MODE_TEACH,
+    )
+    generation = FakeGeneration(answer=_answered(*evidence))
+
+    _post(
+        conversations=conversations,
+        turns=turns,
+        sources=sources,
+        corpus=corpus,
+        retrieve=retrieve,
+        generation=generation,
+    )(
+        user=user,
+        conversation_id=conversation.id,
+        message=TUTOR_JUST_EXPLAIN_MESSAGE,
+        mode=MODE_TEACH,
+    )
+
+    assert generation.calls[0]["hint_level"] == "assert"
+    stored = conversations.get_by_id(conversation.id)
+    assert stored is not None
+    assert stored.tutor_phase == "check"
+
+
+def test_ordinary_message_in_check_closes_and_stores_the_restatement() -> None:
+    # TUTOR-22 then TUTOR-23: the unaided check closes the session; a later turn is refused.
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    conversations.add(replace(conversation, tutor_phase="check", hint_level="assert"))
+    evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
+    retrieve = FakeScopedRetrieveEvidence(evidence)
+    generation = FakeGeneration(answer=_answered(*evidence))
+    turns = FakeConversationTurnRepository()
+    turns.add(
+        ConversationTurn(
+            id=uuid4(),
+            conversation_id=conversation.id,
+            turn_index=0,
+            message=TUTOR_OPENING_MESSAGE,
+            mode=MODE_TEACH,
+            answer_status="answered",
+            answer_text="What is this section trying to convince you of?",
+            model=_MODEL,
+            evidence_count=1,
+            citations=(),
+            created_at=_NOW,
+        )
+    )
+    post = _post(
+        conversations=conversations,
+        turns=turns,
+        sources=sources,
+        corpus=corpus,
+        retrieve=retrieve,
+        generation=generation,
+    )
+
+    turn = post(
+        user=user,
+        conversation_id=conversation.id,
+        message="it argues that anchors must stay stable",
+        mode=MODE_TEACH,
+    )
+
+    assert generation.calls == []
+    assert retrieve.calls == []
+    assert turn.message == "it argues that anchors must stay stable"
+    stored = conversations.get_by_id(conversation.id)
+    assert stored is not None
+    assert stored.tutor_phase == "close"
+    assert stored.tutor_check_text == "it argues that anchors must stay stable"
+    assert len(turns.list_for_conversation(conversation.id)) == 2
+
+    with pytest.raises(ConversationClosed):
+        post(
+            user=user,
+            conversation_id=conversation.id,
+            message="and another thought",
+            mode=MODE_TEACH,
+        )
+
+    assert len(turns.list_for_conversation(conversation.id)) == 2
+    assert retrieve.calls == []
 
 
 def test_an_unknown_mode_is_rejected_from_the_published_error_vocabulary() -> None:

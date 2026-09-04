@@ -536,6 +536,7 @@ def get_post_conversation_turn(
         ids=uuid4,
         evidence_top_k=settings.conversation_evidence_top_k,
         history_turns=settings.conversation_history_turns,
+        tutor_check_after_turns=settings.tutor_check_after_turns,
     )
 
 

@@ -224,8 +224,8 @@ T11 → T12 → T13 → T14 → T15
 
 **Done when**:
 
-- [ ] Tests for 422 / retry / 409 close / 422 mixed mode / null-phase teach still accepts a normal first message when turns already exist
-- [ ] Gate: `uv run pytest tests/test_application_conversations.py`
+- [x] Tests for 422 / retry / 409 close / 422 mixed mode / null-phase teach still accepts a normal first message when turns already exist
+- [x] Gate: `uv run pytest tests/test_application_conversations.py`
 
 **Tests**: unit
 **Gate**: quick

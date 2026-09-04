@@ -183,22 +183,22 @@ Teach is a cited, section-scoped chat with a four-sentence "patient tutor" promp
 | TUTOR-08 | P1: Tutor opens | Tasks | In Tasks |
 | TUTOR-09 | P1: Tutor opens | T4 | Done |
 | TUTOR-10 | P1: Tutor opens | T4 | Done |
-| TUTOR-11 | P1: Tutor opens | Tasks | In Tasks |
-| TUTOR-12 | P1: Tutor opens | Tasks | In Tasks |
+| TUTOR-11 | P1: Tutor opens | T7 | Done |
+| TUTOR-12 | P1: Tutor opens | T7 | Done |
 | TUTOR-13 | P1: Tutor opens | Tasks | In Tasks |
 | TUTOR-14 | P1: Tutor opens | Tasks | In Tasks |
 | TUTOR-15 | P1: Tutor opens | Tasks | In Tasks |
-| TUTOR-16 | P1: Ladder and close | Tasks | In Tasks |
-| TUTOR-17 | P1: Ladder and close | Tasks | In Tasks |
-| TUTOR-18 | P1: Ladder and close | Tasks | In Tasks |
-| TUTOR-19 | P1: Ladder and close | Tasks | In Tasks |
-| TUTOR-20 | P1: Ladder and close | Tasks | In Tasks |
-| TUTOR-21 | P1: Ladder and close | Tasks | In Tasks |
-| TUTOR-22 | P1: Ladder and close | Tasks | In Tasks |
-| TUTOR-23 | P1: Ladder and close | Tasks | In Tasks |
+| TUTOR-16 | P1: Ladder and close | T7 | Done |
+| TUTOR-17 | P1: Ladder and close | T7 | Done |
+| TUTOR-18 | P1: Ladder and close | T6 | Done |
+| TUTOR-19 | P1: Ladder and close | T7 | Done |
+| TUTOR-20 | P1: Ladder and close | T6 | Done |
+| TUTOR-21 | P1: Ladder and close | T6 | Done |
+| TUTOR-22 | P1: Ladder and close | T7 | Done |
+| TUTOR-23 | P1: Ladder and close | T7 | Done |
 | TUTOR-24 | P1: Ladder and close | Tasks | In Tasks |
-| TUTOR-25 | P1: Ladder and close | Tasks | In Tasks |
-| TUTOR-26 | P1: Ladder and close | Tasks | In Tasks |
+| TUTOR-25 | P1: Ladder and close | T7 | Done |
+| TUTOR-26 | P1: Ladder and close | T7 | Done |
 | TUTOR-27 | P1: One Chat dock | Tasks | In Tasks |
 | TUTOR-28 | P1: One Chat dock | Tasks | In Tasks |
 | TUTOR-29 | P1: One Chat dock | Tasks | In Tasks |

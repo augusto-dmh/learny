@@ -164,7 +164,17 @@ class InvalidConversationMode(Exception):
     The turn service is a public application service with callers beyond the
     router, so it names its own failure rather than trusting each caller to have
     validated first; the web layer maps it to 422, the same answer a client gets
-    from the router's own mode validator.
+    from the router's own mode validator. Tutor threads also raise this when a
+    turn is posted with ``mode=answer`` (TUTOR-25) or when the first teach turn
+    is not the opening sentinel (TUTOR-11).
+    """
+
+
+class ConversationClosed(Exception):
+    """A turn was posted on a conversation whose tutor check already passed.
+
+    WHILE ``tutor_phase`` is ``close``, any new turn is refused and nothing is
+    persisted (TUTOR-23, AD-299). The web layer maps this to 409.
     """
 
 
