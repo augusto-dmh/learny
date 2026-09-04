@@ -6,9 +6,9 @@ Learny already has a study-reader skeleton (chapter flow, 65ch serif, `Aa`, rece
 
 ## Goals
 
-- [ ] Raster figures from an ingested book render as same-origin `<img>` in the chapter, never `[Image blocked]`, without iframing EPUB HTML or giving it script rights.
-- [ ] `/read` is a long-form surface: product sidebar and auth header are gone; `[` / `]` toggle TOC and dock; the 65ch measure survives the dock.
-- [ ] A phone viewport can read and highlight: bottom-sheet dock, touch capture, 44px targets, no horizontal scroll at 200% zoom.
+- [x] Raster figures from an ingested book render as same-origin `<img>` in the chapter, never `[Image blocked]`, without iframing EPUB HTML or giving it script rights.
+- [x] `/read` is a long-form surface: product sidebar and auth header are gone; `[` / `]` toggle TOC and dock; the 65ch measure survives the dock.
+- [x] A phone viewport can read and highlight: bottom-sheet dock, touch capture, 44px targets, no horizontal scroll at 200% zoom.
 
 ## Out of Scope
 
@@ -132,32 +132,32 @@ Learny already has a study-reader skeleton (chapter flow, 65ch serif, `Aa`, rece
 
 | Requirement ID | Story | Phase | Status |
 |---|---|---|---|
-| READ-01 | P1: Safe figures | T3, T4 | Done |
-| READ-02 | P1: Safe figures | T4 | Done |
-| READ-03 | P1: Safe figures | T1, T6 | Done |
-| READ-04 | P1: Safe figures | T1, T4 | Done |
-| READ-05 | P1: Safe figures | T5 | Done |
-| READ-06 | P1: Safe figures | T5 | Done |
-| READ-07 | P1: Safe figures | T7 | Done |
-| READ-08 | P1: Safe figures | T7 | Done |
-| READ-09 | P1: Safe figures | T8 | Done |
-| READ-10 | P1: Safe figures | T3, T4 | Done |
-| READ-11 | P1: Safe figures | T2, T7 | Done |
-| READ-12 | P1: Safe figures | T4 | Done |
-| READ-13 | P1: Safe figures | T1, T4 | Done |
-| READ-14 | P1: Safe figures | T7 | Done |
-| READ-15 | P1: Safe figures | T3, T4 | Done |
-| READ-16 | P1: Immersive chrome | T9 | Done |
-| READ-17 | P1: Immersive chrome | T10 | Done |
-| READ-18 | P1: Immersive chrome | T10 | Done |
-| READ-19 | P1: Immersive chrome | T10 | Done |
-| READ-20 | P1: Immersive chrome | T9, T10 | Done |
-| READ-21 | P1: Immersive chrome | T9 | Done |
-| READ-22 | P1: Phone column | T11 | Done |
-| READ-23 | P1: Phone column | T12 | Done |
-| READ-24 | P1: Phone column | T13 | Done |
-| READ-25 | P1: Phone column | T14 | Done |
-| READ-26 | P1: Phone column | T15 | Done |
+| READ-01 | P1: Safe figures | T3, T4 | Verified |
+| READ-02 | P1: Safe figures | T4 | Verified |
+| READ-03 | P1: Safe figures | T1, T6 | Verified |
+| READ-04 | P1: Safe figures | T1, T4 | Verified |
+| READ-05 | P1: Safe figures | T5 | Verified |
+| READ-06 | P1: Safe figures | T5 | Verified |
+| READ-07 | P1: Safe figures | T7 | Verified |
+| READ-08 | P1: Safe figures | T7 | Verified |
+| READ-09 | P1: Safe figures | T8 | Verified |
+| READ-10 | P1: Safe figures | T3, T4 | Verified |
+| READ-11 | P1: Safe figures | T2, T7 | Verified |
+| READ-12 | P1: Safe figures | T4 | Verified |
+| READ-13 | P1: Safe figures | T1, T4 | Verified |
+| READ-14 | P1: Safe figures | T7 | Verified |
+| READ-15 | P1: Safe figures | T3, T4 | Verified |
+| READ-16 | P1: Immersive chrome | T9 | Verified |
+| READ-17 | P1: Immersive chrome | T10 | Verified |
+| READ-18 | P1: Immersive chrome | T10 | Verified |
+| READ-19 | P1: Immersive chrome | T10 | Verified |
+| READ-20 | P1: Immersive chrome | T9, T10 | Verified |
+| READ-21 | P1: Immersive chrome | T9 | Verified |
+| READ-22 | P1: Phone column | T11 | Verified |
+| READ-23 | P1: Phone column | T12 | Verified |
+| READ-24 | P1: Phone column | T13 | Verified |
+| READ-25 | P1: Phone column | T14 | Verified |
+| READ-26 | P1: Phone column | T15 | Verified |
 
 **ID format:** `READ-NN`
 
@@ -167,7 +167,7 @@ Learny already has a study-reader skeleton (chapter flow, 65ch serif, `Aa`, rece
 
 ## Success Criteria
 
-- [ ] A packaged PNG in a test EPUB becomes a same-origin `<img>` in the chapter after ingest, with owner GET 200 and stranger GET 404.
-- [ ] `/read` has no app sidebar or auth header; `[` and `]` toggle TOC and dock; 65ch holds with the dock open below `xl`.
-- [ ] Below `lg`, the dock is a bottom sheet and a touch/pointer selection opens Highlight-first capture.
-- [ ] Zero iframe of book HTML; SVG never served; data: images not allowlisted on the chapter renderer.
+- [x] A packaged PNG in a test EPUB becomes a same-origin `<img>` in the chapter after ingest, with owner GET 200 and stranger GET 404.
+- [x] `/read` has no app sidebar or auth header; `[` and `]` toggle TOC and dock; 65ch holds with the dock open below `xl`.
+- [x] Below `lg`, the dock is a bottom sheet and a touch/pointer selection opens Highlight-first capture.
+- [x] Zero iframe of book HTML; SVG never served; data: images not allowlisted on the chapter renderer.
