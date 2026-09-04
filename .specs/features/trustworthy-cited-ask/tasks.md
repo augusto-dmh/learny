@@ -168,7 +168,7 @@ T12 -> T13
 
 ---
 
-### T5: Pin the structured-output Anthropic request shape
+### T5: Pin the structured-output Anthropic request shape ✅
 
 **What**: Assert quiz (and judge if in-scope of the same pin) requests send JSON schema and do not send citations-enabled documents.
 **Where**: `backend/tests/test_quiz_anthropic.py`
@@ -183,8 +183,8 @@ T12 -> T13
 
 **Done when**:
 
-- [ ] The forbidden citations-document key is asserted absent
-- [ ] Mixing the two shapes cannot pass both T4 and T5
+- [x] The forbidden citations-document key is asserted absent
+- [x] Mixing the two shapes cannot pass both T4 and T5
 
 **Tests**: unit
 **Gate**: quick
