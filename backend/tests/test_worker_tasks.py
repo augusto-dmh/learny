@@ -57,6 +57,7 @@ from tests.fixtures_epub import (
     EXPECTED_VALID_TITLE,
     no_toc_book,
     not_an_epub,
+    tiny_png,
     valid_book,
 )
 
@@ -217,6 +218,28 @@ def _count_embedded_with_model(engine: Engine, source_id: UUID, model: str) -> i
     )
     with engine.connect() as conn:
         return conn.execute(stmt).scalar_one()
+
+
+def _read_section_markdown(engine: Engine, source_id: UUID, title: str) -> str:
+    stmt = (
+        select(corpus_sections.c.markdown)
+        .join(corpus_documents, corpus_sections.c.document_id == corpus_documents.c.id)
+        .where(corpus_documents.c.source_id == source_id)
+        .where(corpus_sections.c.title == title)
+    )
+    with engine.connect() as conn:
+        return conn.execute(stmt).scalar_one()
+
+
+def _read_chunk_texts(engine: Engine, source_id: UUID) -> list[str]:
+    stmt = (
+        select(corpus_chunks.c.text)
+        .join(corpus_sections, corpus_chunks.c.section_id == corpus_sections.c.id)
+        .join(corpus_documents, corpus_sections.c.document_id == corpus_documents.c.id)
+        .where(corpus_documents.c.source_id == source_id)
+    )
+    with engine.connect() as conn:
+        return list(conn.execute(stmt).scalars())
 
 
 def _serve_bytes(monkeypatch, object_key: str, data: bytes) -> None:  # noqa: ANN001
@@ -527,6 +550,28 @@ def test_run_ingestion_builds_corpus_from_valid_epub(
         "embeddings_built",
         IngestionEventType.SUCCEEDED,
     ]
+
+
+def test_run_ingestion_stores_decoded_cover_figure(
+    seed, db_engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = seed(IngestionStatus.QUEUED)
+    storage = FakeStorage()
+    storage.objects[ctx.source.object_key] = valid_book(cover_png=tiny_png())
+    monkeypatch.setattr("app.worker.tasks._build_storage", lambda: storage)
+
+    _run(FakeSelf(), str(ctx.source.id), str(ctx.job.id))
+
+    job = _read_job(db_engine, ctx.job.id)
+    assert job.status == IngestionStatus.SUCCEEDED
+    media_keys = [key for key in storage.objects if "/media/" in key and key.endswith(".webp")]
+    assert len(media_keys) == 1
+    markdown = _read_section_markdown(db_engine, ctx.source.id, "Cover")
+    assert f"/api/sources/{ctx.source.id}/media/" in markdown
+    assert "cover.png" not in markdown
+    assert "![Cover image](" in markdown
+    chunk_blob = "\n".join(_read_chunk_texts(db_engine, ctx.source.id))
+    assert "![Cover image](cover.png)" in chunk_blob
 
 
 def test_run_ingestion_invalid_epub_fails_with_no_corpus(

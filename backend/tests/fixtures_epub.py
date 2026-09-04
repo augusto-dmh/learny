@@ -14,6 +14,7 @@ HTML (CORP-01..03). They are the golden targets the parser asserts against.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from io import BytesIO
 
 from tests.epub_builder import CONTAINER as _CONTAINER
 from tests.epub_builder import build_doc as _doc
@@ -123,7 +124,19 @@ _VALID_NOTES = _doc(
 )
 
 
-def valid_book() -> bytes:
+def tiny_png() -> bytes:
+    """A real 8×8 PNG the image encoder can decode (valid_book's cover is magic-only)."""
+    from PIL import Image
+
+    buffer = BytesIO()
+    Image.new("RGB", (8, 8), (10, 20, 30)).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+_MAGIC_PNG = b"\x89PNG\r\n\x1a\n"
+
+
+def valid_book(*, cover_png: bytes = _MAGIC_PNG) -> bytes:
     """A well-formed EPUB covering every parser branch (see module docstring)."""
     return _zip(
         {
@@ -135,7 +148,7 @@ def valid_book() -> bytes:
             "chap1.xhtml": _VALID_CHAP1,
             "chap2.xhtml": _VALID_CHAP2,
             "notes.xhtml": _VALID_NOTES,
-            "cover.png": b"\x89PNG\r\n\x1a\n",
+            "cover.png": cover_png,
         }
     )
 
