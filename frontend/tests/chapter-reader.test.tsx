@@ -348,6 +348,32 @@ describe("ChapterFlow render (RD-03)", () => {
     }
     expect((globalThis as { __xss?: number }).__xss).toBeUndefined();
   });
+
+  it("paints rewritten figure markdown as a same-origin img", async () => {
+    const mediaSrc =
+      "/api/sources/s1/media/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const withFigure: ChapterView = {
+      ...chapter,
+      sections: [
+        {
+          ...chapter.sections[0],
+          markdown: `## Beginnings\n\nAda Lovelace wrote the first algorithm.\n\n![Engine diagram](${mediaSrc})`,
+        },
+        chapter.sections[1],
+      ],
+    };
+
+    const { container } = render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={withFigure} scrollTarget={null} />,
+    );
+    await screen.findByText(/ada lovelace wrote the first algorithm/i);
+
+    const img = container.querySelector("img");
+    expect(img).not.toBeNull();
+    expect(img!.getAttribute("src")?.startsWith("/api/sources/")).toBe(true);
+    expect(img!.getAttribute("src")).toBe(mediaSrc);
+    expect(container.textContent).not.toContain("[Image blocked");
+  });
 });
 
 describe("ChapterFlow deep-link scroll (RD-04)", () => {

@@ -138,14 +138,14 @@ Learny already has a study-reader skeleton (chapter flow, 65ch serif, `Aa`, rece
 | READ-04 | P1: Safe figures | T1, T4 | Done |
 | READ-05 | P1: Safe figures | T5 | Done |
 | READ-06 | P1: Safe figures | T5 | Done |
-| READ-07 | P1: Safe figures | T7 | In Tasks |
-| READ-08 | P1: Safe figures | T7 | In Tasks |
+| READ-07 | P1: Safe figures | T7 | Done |
+| READ-08 | P1: Safe figures | T7 | Done |
 | READ-09 | P1: Safe figures | T8 | In Tasks |
 | READ-10 | P1: Safe figures | T3, T4 | Done |
-| READ-11 | P1: Safe figures | T2, T7 | In Progress |
+| READ-11 | P1: Safe figures | T2, T7 | Done |
 | READ-12 | P1: Safe figures | T4 | Done |
 | READ-13 | P1: Safe figures | T1, T4 | Done |
-| READ-14 | P1: Safe figures | T7 | In Tasks |
+| READ-14 | P1: Safe figures | T7 | Done |
 | READ-15 | P1: Safe figures | T3, T4 | Done |
 | READ-16 | P1: Immersive chrome | T9 | In Tasks |
 | READ-17 | P1: Immersive chrome | T10 | In Tasks |

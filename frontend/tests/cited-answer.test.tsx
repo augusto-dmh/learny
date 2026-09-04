@@ -9,6 +9,9 @@
  * reading column.
  */
 
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -325,5 +328,35 @@ describe("CitedAnswer citation quote hover (ASK-15, ASK-17)", () => {
     fireEvent.click(mark);
     expect(screen.getByTestId("citation-passage")).toBeTruthy();
     expect(screen.getByText(first.snippet)).toBeTruthy();
+  });
+});
+
+describe("CitedAnswer Streamdown harden (READ-14)", () => {
+  it("does not apply the chapter image allowlist to a generated answer", async () => {
+    const { container } = render(
+      <CitedAnswer
+        sourceId="s1"
+        text={"See this.\n\n![diagram](https://evil.example/x.png)"}
+        citations={[first]}
+      />,
+    );
+
+    const img = await waitFor(() => {
+      const found = container.querySelector('img[src="https://evil.example/x.png"]');
+      expect(found).not.toBeNull();
+      return found!;
+    });
+
+    expect(img.getAttribute("src")).toBe("https://evil.example/x.png");
+  });
+
+  it("keeps MessageResponse free of the chapter media prefix allowlist", () => {
+    const source = readFileSync(
+      resolve(process.cwd(), "components/ai-elements/message.tsx"),
+      "utf8",
+    );
+    expect(source).not.toContain("allowedImagePrefixes");
+    expect(source).not.toContain("/api/sources/");
+    expect(source).not.toContain("allowDataImages");
   });
 });

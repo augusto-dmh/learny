@@ -7,9 +7,8 @@
  * `ChapterFlow` is the found-state renderer: every section of the loaded chapter
  * is laid out in order inside one `.prose-reading` article, each wrapped in a
  * `<section id={anchor} data-section-anchor>` so a deep link (`?anchor=`) or a
- * TOC jump resolves to a DOM id. Each section's markdown is rendered with the
- * same memoized Streamdown the streamed answers use (`MessageResponse` — raw HTML
- * in the markdown stays inert, never injected as live DOM). A `scrollTarget`
+ * TOC jump resolves to a DOM id. Each section's markdown is rendered with
+ * `ChapterMarkdown` (raw HTML stays inert; same-origin figures may paint). A `scrollTarget`
  * (the URL anchor, or the resumed reading position) is scrolled into view once
  * per change and its section heading is transiently highlighted so the reader
  * lands on the cited passage.
@@ -83,7 +82,7 @@ import {
   type ChapterView,
   type SourceHighlightView,
 } from "@/app/lib/reading";
-import { MessageResponse } from "@/components/ai-elements/message";
+import { ChapterMarkdown } from "@/app/components/chapter-markdown";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
@@ -908,7 +907,7 @@ export function ChapterFlow({
  *
  * The paint runs in an effect keyed on the Markdown and the section's highlights,
  * both stable across unrelated re-renders, so the injected marks survive: the
- * memoized `MessageResponse` subtree does not re-render while its Markdown is
+ * memoized `ChapterMarkdown` subtree does not re-render while its Markdown is
  * unchanged, and the effect only repaints when the content or the highlight set
  * actually changes. `paintHighlights` is idempotent (unwrap-first), so even a
  * repaint yields the same DOM.
@@ -971,7 +970,7 @@ function FlowSection({
       <div ref={bodyRef} className="book-prose">
         {runs.map((run, index) => (
           <Fragment key={index}>
-            <MessageResponse>{run.markdown}</MessageResponse>
+            <ChapterMarkdown>{run.markdown}</ChapterMarkdown>
             {run.pageAfter === null ? null : <PageRule page={run.pageAfter} />}
           </Fragment>
         ))}

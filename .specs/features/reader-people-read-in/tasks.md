@@ -218,10 +218,10 @@ T11 → T12 → T13 → T14 → T15
 
 **Done when**:
 
-- [ ] Rewritten markdown renders `<img src="/api/sources/...">`
-- [ ] `https://evil.example/x.png` and `data:image/png;base64,...` do not become fetched imgs
-- [ ] Existing cited-answer harden test still passes without allowlist leak
-- [ ] Gate: `cd frontend && npm test -- chapter-reader chapter-markdown cited-answer`
+- [x] Rewritten markdown renders `<img src="/api/sources/...">`
+- [x] `https://evil.example/x.png` and `data:image/png;base64,...` do not become fetched imgs
+- [x] Existing cited-answer harden test still passes without allowlist leak
+- [x] Gate: `cd frontend && npm test -- chapter-reader chapter-markdown cited-answer`
 
 **Tests**: unit
 **Gate**: full
