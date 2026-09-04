@@ -56,11 +56,10 @@ from app.application.errors import (
 from app.application.identity import AuthorizeOwnership
 from app.application.ingestion import authorized_source
 from app.application.quiz_qc import (
-    cloze_is_valid,
     content_key,
+    discard_reason,
     normalize_text,
     note_card_passes_qc,
-    quote_in_text,
 )
 from app.domain.entities import (
     TUTOR_CARD_QUESTION,
@@ -116,25 +115,13 @@ def _section_text(section: QuizSection) -> str:
 
 
 def _passes_qc(candidate: QuizCandidate, section_text: str) -> bool:
-    """Return whether a generated candidate survives groundedness QC (CAP-03/04).
+    """Return whether a generated candidate may be suggested (CAP-03/04, REV-09).
 
-    The deck pipeline's checks narrowed to one section: a known item type, non-empty
-    text, an ``anchor_quote`` contained verbatim in the section (QUIZ-06), and for a
-    cloze a mask that is valid against that quote (QUIZ-07). Applied to *generated*
-    text only — text the student edited before accepting is author-owned and is not
-    re-gated (AD-138).
+    Delegates to ``discard_reason`` so highlight suggestions share the formulation
+    bar with deck generation. Applied to *generated* text only — author-edited
+    accept/update paths never call this (AD-138).
     """
-    if candidate.item_type not in _VALID_ITEM_TYPES:
-        return False
-    if not (candidate.question.strip() and candidate.answer.strip()):
-        return False
-    if not candidate.anchor_quote.strip():
-        return False
-    if not quote_in_text(candidate.anchor_quote, section_text):
-        return False
-    if candidate.item_type == QuizItemType.CLOZE:
-        return cloze_is_valid(candidate.question, candidate.answer, candidate.anchor_quote)
-    return True
+    return discard_reason(candidate, chunk_text=section_text) is None
 
 
 def _validated_text(value: str, field: str, max_chars: int) -> str:

@@ -649,6 +649,47 @@ def test_patch_rewrites_text_and_leaves_identity_and_scheduling_untouched(
     assert repo.get_scheduling(item_id) == due_before
 
 
+def test_patch_of_a_200_character_answer_leaves_scheduling_untouched(
+    cards_client: TestClient, db_conn: Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from sqlalchemy import func, select
+
+    from app.core.config import get_settings
+    from app.infrastructure.db.metadata import review_log
+
+    monkeypatch.setenv("LEARNY_QUIZ_MAX_CARD_CHARS", "2000")
+    get_settings.cache_clear()
+    source_id, anchor_id, csrf = _seed_highlighted_source(
+        cards_client, db_conn, "patch-long@example.com"
+    )
+    created = _post_card(
+        cards_client, source_id, _accept_body(note_anchor_id=str(anchor_id)), csrf=csrf
+    )
+    assert created.status_code == 201, created.text
+    item_id = UUID(created.json()["id"])
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    due_before = repo.get_scheduling(item_id)
+    log_before = db_conn.execute(
+        select(func.count()).select_from(review_log).where(review_log.c.quiz_item_id == item_id)
+    ).scalar_one()
+    long_answer = "x" * 200
+
+    resp = _patch_card(
+        cards_client,
+        item_id,
+        {"question": "Which animal jumps?", "answer": long_answer},
+        csrf=csrf,
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["answer"] == long_answer
+    assert repo.get_scheduling(item_id) == due_before
+    log_after = db_conn.execute(
+        select(func.count()).select_from(review_log).where(review_log.c.quiz_item_id == item_id)
+    ).scalar_one()
+    assert log_after == log_before
+
+
 def test_patch_of_a_deck_origin_card_returns_409(
     cards_client: TestClient, db_conn: Connection
 ) -> None:

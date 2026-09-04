@@ -207,9 +207,9 @@ T11 → T12 → T13 → T14
 
 **Done when**:
 
-- [ ] A generated generic stem does not appear in suggestions
-- [ ] PATCH of a 200-character answer still 200s and does not change scheduling
-- [ ] Gate: `uv run pytest tests/test_application_cards.py tests/test_web_cards.py`
+- [x] A generated generic stem does not appear in suggestions
+- [x] PATCH of a 200-character answer still 200s and does not change scheduling
+- [x] Gate: `uv run pytest tests/test_application_cards.py tests/test_web_cards.py`
 
 **Tests**: unit
 **Gate**: quick

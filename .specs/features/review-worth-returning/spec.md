@@ -200,7 +200,7 @@ Review is a correct 4-button FSRS grader, but generation can "succeed" with zero
 | REV-06 | P1: Empty-deck honesty | 4 | In Tasks |
 | REV-07 | P1: Empty-deck honesty | 2 | Done |
 | REV-08 | P1: Empty-deck honesty | 1 | Done |
-| REV-09 | P1: Formulation gates | 1 | In Tasks |
+| REV-09 | P1: Formulation gates | 1 | Done |
 | REV-10 | P1: Formulation gates | 1 | Done |
 | REV-11 | P1: Formulation gates | 1 | Done |
 | REV-12 | P1: Formulation gates | 1 | Done |

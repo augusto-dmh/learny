@@ -178,23 +178,10 @@ def discard_reason(
 
 
 def note_card_passes_qc(candidate: QuizCandidate, note_body: str) -> bool:
-    """Return whether a note candidate is grounded in ``note_body`` (NL-08).
+    """Return whether a generated note candidate may be suggested (NL-08, REV-09).
 
-    The note→quiz mirror of the highlight ``_passes_qc``: the note *is* the source, so
-    the candidate's ``anchor_quote`` is verified for verbatim (whitespace/case-normalized)
-    containment against the whole note body rather than a chunk. A known item type,
-    non-empty question/answer/quote, that containment, and — for a cloze — a valid mask
-    against the quote (QUIZ-07). Applied to *generated* text only; text the reader edits
-    before accepting is author-owned and not re-gated (AD-138).
+    Delegates to ``discard_reason`` with the note body as the grounding source.
+    Applied to *generated* text only; author-edited accept/update paths never call
+    this (AD-138).
     """
-    if candidate.item_type not in _VALID_ITEM_TYPES:
-        return False
-    if not (candidate.question.strip() and candidate.answer.strip()):
-        return False
-    if not candidate.anchor_quote.strip():
-        return False
-    if not quote_in_text(candidate.anchor_quote, note_body):
-        return False
-    if candidate.item_type == QuizItemType.CLOZE:
-        return cloze_is_valid(candidate.question, candidate.answer, candidate.anchor_quote)
-    return True
+    return discard_reason(candidate, note_body=note_body) is None
