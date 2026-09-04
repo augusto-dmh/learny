@@ -9,14 +9,23 @@
  * reading column.
  */
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { CitedAnswer } from "../app/components/cited-answer";
 import { type Citation } from "../app/lib/citations";
 
 afterEach(() => {
   cleanup();
+});
+
+// Radix Tooltip measures the trigger with ResizeObserver, which jsdom lacks.
+beforeAll(() => {
+  globalThis.ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  } as unknown as typeof ResizeObserver;
 });
 
 const first: Citation = {
@@ -269,5 +278,52 @@ describe("CitedAnswer passage region (ANSW-08)", () => {
     expect(link.getAttribute("target")).toBe("_blank");
     expect(link.getAttribute("rel")).toContain("noreferrer");
     expect(link.getAttribute("rel")).toContain("noopener");
+  });
+});
+
+describe("CitedAnswer citation quote hover (ASK-15, ASK-17)", () => {
+  const quoted = "the first algorithm ever written";
+  const withSpan: Citation = { ...first, quoted_text: quoted };
+
+  it("shows quoted_text when the mark is hovered or focused", async () => {
+    render(
+      <CitedAnswer
+        sourceId="s1"
+        text="Ada Lovelace wrote it.[^1]"
+        citations={[withSpan]}
+      />,
+    );
+    const mark = screen.getByRole("button", { name: "Citation 1" });
+
+    expect(screen.queryByRole("tooltip")).toBeNull();
+
+    fireEvent.focus(mark);
+    expect((await screen.findByRole("tooltip")).textContent).toBe(quoted);
+
+    fireEvent.blur(mark);
+    await waitFor(() => expect(screen.queryByRole("tooltip")).toBeNull());
+
+    fireEvent.pointerMove(mark, { pointerType: "mouse" });
+    expect((await screen.findByRole("tooltip")).textContent).toBe(quoted);
+  });
+
+  it("does not show an empty hover card when the citation has no span, and click still opens the passage", () => {
+    render(
+      <CitedAnswer
+        sourceId="s1"
+        text="Ada Lovelace wrote it.[^1]"
+        citations={[first]}
+        onShowInBook={vi.fn()}
+      />,
+    );
+    const mark = screen.getByRole("button", { name: "Citation 1" });
+
+    fireEvent.focus(mark);
+    fireEvent.pointerMove(mark, { pointerType: "mouse" });
+    expect(screen.queryByRole("tooltip")).toBeNull();
+
+    fireEvent.click(mark);
+    expect(screen.getByTestId("citation-passage")).toBeTruthy();
+    expect(screen.getByText(first.snippet)).toBeTruthy();
   });
 });

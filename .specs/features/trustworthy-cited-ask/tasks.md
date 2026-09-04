@@ -340,7 +340,7 @@ T12 -> T13
 
 ### Phase 4
 
-### T12: Hover `[^n]` shows the cited sentence
+### T12: Hover `[^n]` shows the cited sentence ✅
 
 **What**: Focusing or hovering a citation mark shows `quoted_text` when the citation carries a span.
 **Where**: `frontend/app/components/cited-answer.tsx`
@@ -355,8 +355,8 @@ T12 -> T13
 
 **Done when**:
 
-- [ ] Test asserts the hover/focus accessible name or content equals `quoted_text`
-- [ ] Missing span: no empty hover card (today's mark still clicks open the passage)
+- [x] Test asserts the hover/focus accessible name or content equals `quoted_text`
+- [x] Missing span: no empty hover card (today's mark still clicks open the passage)
 
 **Tests**: unit
 **Gate**: full

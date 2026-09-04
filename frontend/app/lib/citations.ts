@@ -29,6 +29,14 @@ export type Citation = {
   origin?: "book" | "note";
   note_id?: string;
   note_title?: string;
+  /**
+   * Claim-level span when the adapter mapped one. The three keys travel together
+   * and are omitted on legacy rows and the deterministic adapter (ASK-17).
+   * `document_index` is adapter-only and never appears here.
+   */
+  quoted_text?: string;
+  start_char?: number;
+  end_char?: number;
 };
 
 /**
