@@ -334,9 +334,9 @@ T11 → T12 → T13 → T14 → T15
 
 **Done when**:
 
-- [ ] Narrow viewport: Highlight visible; Explain/Ask/Note/Create card not all in the first row
-- [ ] `lg+` keeps the five-verb bar (no silent removal)
-- [ ] Gate: `cd frontend && npm test -- capture-popover`
+- [x] Narrow viewport: Highlight visible; Explain/Ask/Note/Create card not all in the first row
+- [x] `lg+` keeps the five-verb bar (no silent removal)
+- [x] Gate: `cd frontend && npm test -- capture-popover`
 
 **Tests**: unit
 **Gate**: full
