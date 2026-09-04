@@ -192,51 +192,51 @@ Review is a correct 4-button FSRS grader, but generation can "succeed" with zero
 
 | Requirement ID | Story | Phase | Status |
 |---|---|---|---|
-| REV-01 | P1: Empty-deck honesty | 2 | Done |
-| REV-02 | P1: Empty-deck honesty | 1 | Done |
-| REV-03 | P1: Empty-deck honesty | 4 | Done |
-| REV-04 | P1: Empty-deck honesty | 4 | Done |
-| REV-05 | P1: Empty-deck honesty | 4 | Done |
-| REV-06 | P1: Empty-deck honesty | 4 | Done |
-| REV-07 | P1: Empty-deck honesty | 2 | Done |
-| REV-08 | P1: Empty-deck honesty | 1 | Done |
-| REV-09 | P1: Formulation gates | 1 | Done |
-| REV-10 | P1: Formulation gates | 1 | Done |
-| REV-11 | P1: Formulation gates | 1 | Done |
-| REV-12 | P1: Formulation gates | 1 | Done |
-| REV-13 | P1: Formulation gates | 1 | Done |
-| REV-14 | P1: Formulation gates | 1 | Done |
-| REV-15 | P1: Formulation gates | 1 | Done |
-| REV-16 | P1: Formulation gates | 1 | Done |
-| REV-17 | P1: Formulation gates | 1 | Done |
-| REV-18 | P1: Formulation gates | 1 | Done |
-| REV-19 | P1: Formulation gates | 2 | Done |
-| REV-20 | P1: Formulation gates | 1 | Done |
-| REV-21 | P1: Formulation gates | 1 | Done |
-| REV-22 | P1: Review undo | 2 | Done |
-| REV-23 | P1: Review undo | 2 | Done |
-| REV-24 | P1: Review undo | 2 | Done |
-| REV-25 | P1: Review undo | 2 | Done |
-| REV-26 | P1: Review undo | 2 | Done |
-| REV-27 | P1: Review undo | 2 | Done |
-| REV-28 | P1: Review undo | 2 | Done |
-| REV-29 | P1: Intervals and requeue | 3 | Done |
-| REV-30 | P1: Intervals and requeue | 3 | Done |
-| REV-31 | P1: Intervals and requeue | 3 | Done |
-| REV-32 | P1: Intervals and requeue | 4 | Done |
-| REV-33 | P1: Intervals and requeue | 3 | Done |
-| REV-34 | P1: Flag and edit | 2 | Done |
-| REV-35 | P1: Flag and edit | 2 | Done |
-| REV-36 | P1: Flag and edit | 2 | Done |
-| REV-37 | P1: Flag and edit | 4 | Done |
-| REV-38 | P1: Flag and edit | 2 | Done |
-| REV-39 | P1: Flag and edit | 2 | Done |
-| REV-40 | P1: Bounded session | 3 | Done |
-| REV-41 | P1: Bounded session | 4 | Done |
-| REV-42 | P1: Bounded session | 4 | Done |
-| REV-43 | P1: Bounded session | 4 | Done |
-| REV-44 | P1: Bounded session | 4 | Done |
-| REV-45 | P1: Bounded session | 4 | Done |
+| REV-01 | P1: Empty-deck honesty | 2 | Verified |
+| REV-02 | P1: Empty-deck honesty | 1 | Verified |
+| REV-03 | P1: Empty-deck honesty | 4 | Verified |
+| REV-04 | P1: Empty-deck honesty | 4 | Verified |
+| REV-05 | P1: Empty-deck honesty | 4 | Verified |
+| REV-06 | P1: Empty-deck honesty | 4 | Verified |
+| REV-07 | P1: Empty-deck honesty | 2 | Verified |
+| REV-08 | P1: Empty-deck honesty | 1 | Verified |
+| REV-09 | P1: Formulation gates | 1 | Verified |
+| REV-10 | P1: Formulation gates | 1 | Verified |
+| REV-11 | P1: Formulation gates | 1 | Verified |
+| REV-12 | P1: Formulation gates | 1 | Verified |
+| REV-13 | P1: Formulation gates | 1 | Verified |
+| REV-14 | P1: Formulation gates | 1 | Verified |
+| REV-15 | P1: Formulation gates | 1 | Verified |
+| REV-16 | P1: Formulation gates | 1 | Verified |
+| REV-17 | P1: Formulation gates | 1 | Verified |
+| REV-18 | P1: Formulation gates | 1 | Verified |
+| REV-19 | P1: Formulation gates | 2 | Verified |
+| REV-20 | P1: Formulation gates | 1 | Verified |
+| REV-21 | P1: Formulation gates | 1 | Verified |
+| REV-22 | P1: Review undo | 2 | Verified |
+| REV-23 | P1: Review undo | 2 | Verified |
+| REV-24 | P1: Review undo | 2 | Verified |
+| REV-25 | P1: Review undo | 2 | Verified |
+| REV-26 | P1: Review undo | 2 | Verified |
+| REV-27 | P1: Review undo | 2 | Verified |
+| REV-28 | P1: Review undo | 2 | Verified |
+| REV-29 | P1: Intervals and requeue | 3 | Verified |
+| REV-30 | P1: Intervals and requeue | 3 | Verified |
+| REV-31 | P1: Intervals and requeue | 3 | Verified |
+| REV-32 | P1: Intervals and requeue | 4 | Verified |
+| REV-33 | P1: Intervals and requeue | 3 | Verified |
+| REV-34 | P1: Flag and edit | 2 | Verified |
+| REV-35 | P1: Flag and edit | 2 | Verified |
+| REV-36 | P1: Flag and edit | 2 | Verified |
+| REV-37 | P1: Flag and edit | 4 | Verified |
+| REV-38 | P1: Flag and edit | 2 | Verified |
+| REV-39 | P1: Flag and edit | 2 | Verified |
+| REV-40 | P1: Bounded session | 3 | Verified |
+| REV-41 | P1: Bounded session | 4 | Verified |
+| REV-42 | P1: Bounded session | 4 | Verified |
+| REV-43 | P1: Bounded session | 4 | Verified |
+| REV-44 | P1: Bounded session | 4 | Verified |
+| REV-45 | P1: Bounded session | 4 | Verified |
 
 **Coverage:** 45 total, 45 mapped to tasks, 0 unmapped
 
