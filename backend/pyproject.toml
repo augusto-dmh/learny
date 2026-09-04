@@ -24,6 +24,7 @@ dependencies = [
     "anthropic>=0.116,<1",
     "fsrs>=6,<7",
     "genanki>=0.13,<0.14",
+    "pillow>=12,<13",
 ]
 
 [project.optional-dependencies]

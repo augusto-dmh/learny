@@ -243,6 +243,15 @@ class ParsedSection:
 
 
 @dataclass(frozen=True)
+class EncodedRaster:
+    """Capped WebP bytes plus the sha256 of those encoded bytes."""
+
+    data: bytes
+    sha256: str
+    content_type: str = "image/webp"
+
+
+@dataclass(frozen=True)
 class ParsedBook:
     """The library-free result of parsing an EPUB (ADR-0009).
 

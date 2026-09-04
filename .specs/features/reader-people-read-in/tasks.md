@@ -97,10 +97,10 @@ T11 → T12 → T13 → T14 → T15
 
 **Done when**:
 
-- [ ] SVG / undecodable / pixel-bomb → `None`
-- [ ] PNG/JPEG → WebP under both caps; identical input → identical sha256
-- [ ] PIL is not imported from `app/domain` or `app/application`
-- [ ] Gate: `uv run pytest tests/test_ingestion_images.py tests/test_config.py`
+- [x] SVG / undecodable / pixel-bomb → `None`
+- [x] PNG/JPEG → WebP under both caps; identical input → identical sha256
+- [x] PIL is not imported from `app/domain` or `app/application`
+- [x] Gate: `uv run pytest tests/test_ingestion_images.py tests/test_config.py`
 
 **Tests**: unit
 **Gate**: quick

@@ -117,6 +117,11 @@ class Settings(BaseSettings):
     # so a crafted archive could otherwise inflate far past it in worker memory.
     epub_max_uncompressed_bytes: int = 524288000  # 500 MiB
 
+    # Figure encode caps — long edge in pixels and encoded WebP payload. Rasters
+    # that cannot meet both after downscale are dropped rather than failing ingest.
+    media_max_edge_px: int = 1600
+    media_max_bytes: int = 1572864
+
     # Scanned-PDF OCR (ADR-0025) — the Docling adapter retries a textless PDF
     # once with OCR before failing. ``pdf_ocr_enabled`` is the operational
     # kill-switch (False reproduces the OCR-less behavior exactly, for workers

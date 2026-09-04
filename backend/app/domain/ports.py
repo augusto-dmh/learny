@@ -35,6 +35,7 @@ from app.domain.entities import (
     CorpusStructure,
     DerivedNoteLink,
     DueReviewItem,
+    EncodedRaster,
     Evidence,
     GeneratedAnswer,
     HistoryTurn,
@@ -307,6 +308,19 @@ class StoragePort(Protocol):
 
     def get_object(self, key: str) -> bytes:
         """Return the bytes stored under ``key``. Raises if absent."""
+        ...
+
+
+@runtime_checkable
+class ImageEncoderPort(Protocol):
+    """Raster bytes → capped WebP, or ``None`` to drop the asset.
+
+    SVG, undecodable, and pixel-bomb inputs return ``None`` so one bad figure
+    cannot fail ingest. Pillow stays in the adapter; this port does not import it.
+    """
+
+    def encode(self, data: bytes, *, content_type: str) -> EncodedRaster | None:
+        """Return capped WebP bytes and sha256, or ``None`` when the asset is dropped."""
         ...
 
 
