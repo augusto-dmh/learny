@@ -30,6 +30,7 @@ export type QuizJob = {
   generated_count: number;
   discarded_count: number;
   failed_sections: number;
+  discard_reasons: Record<string, number>;
   error: string | null;
   created_at: string;
   updated_at: string;

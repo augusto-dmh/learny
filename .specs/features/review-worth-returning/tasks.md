@@ -323,8 +323,8 @@ T11 → T12 → T13 → T14
 
 **Done when**:
 
-- [ ] Tests cover the three count triples plus a quiet discarded footnote
-- [ ] Gate: `cd frontend && npm test -- library-screen`
+- [x] Tests cover the three count triples plus a quiet discarded footnote
+- [x] Gate: `cd frontend && npm test -- library-screen`
 
 **Tests**: unit
 **Gate**: full

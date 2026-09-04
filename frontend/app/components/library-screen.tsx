@@ -27,6 +27,7 @@ import {
   generateDeck,
   getQuizOverview,
   quizExportUrl,
+  type QuizJob,
   type QuizOverview,
 } from "@/app/lib/quiz";
 import {
@@ -63,9 +64,12 @@ import { useQuizDeckPolling } from "./use-quiz-deck-polling";
  * simply shows no quiz controls. Generating a deck starts a job and polls the
  * overview every 3s until the job goes terminal (stopping on unmount). A failed
  * job surfaces its error with the generate button as a retry; a finished deck
- * shows item + due counts, a "source changed" badge when items went stale or
+ * shows item + due counts, a quiet discarded footnote when generation dropped
+ * candidates, a saved/failed-section note when some sections failed, a
+ * "source changed" badge when items went stale or
  * orphaned after a re-ingest, a per-source Review link when anything is due, and
- * an Anki export link.
+ * an Anki export link. A succeeded empty job explains why (no long-enough
+ * section, or nothing survived QC) instead of looking like "no deck yet".
  */
 function QuizDeckControls({
   sourceId,
@@ -164,45 +168,137 @@ function QuizDeckControls({
         </p>
       ) : null}
 
+      {job?.status === "succeeded" ? (
+        <QuizDeckHonesty sourceId={sourceId} job={job} />
+      ) : null}
+
       {items.length > 0 ? (
-        <div className="flex flex-wrap items-center gap-3 text-sm">
-          <span
-            data-testid={`quiz-counts-${sourceId}`}
-            className="text-muted-foreground"
-          >
-            {items.length} {items.length === 1 ? "item" : "items"} · {due} due
-          </span>
-          {changed > 0 ? (
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Badge variant="outline">source changed</Badge>
-                </TooltipTrigger>
-                <TooltipContent>
-                  Some items no longer match the book after re-ingestion and are
-                  paused until you review them.
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-          ) : null}
-          {due > 0 ? (
-            <Link
-              href={`/review?source_id=${sourceId}`}
+        <div className="space-y-1">
+          <div className="flex flex-wrap items-center gap-3 text-sm">
+            <span
+              data-testid={`quiz-counts-${sourceId}`}
+              className="text-muted-foreground"
+            >
+              {items.length} {items.length === 1 ? "item" : "items"} · {due} due
+            </span>
+            {changed > 0 ? (
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Badge variant="outline">source changed</Badge>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    Some items no longer match the book after re-ingestion and are
+                    paused until you review them.
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            ) : null}
+            {due > 0 ? (
+              <Link
+                href={`/review?source_id=${sourceId}`}
+                className="text-primary underline-offset-4 hover:underline"
+              >
+                Review
+                <LinkPendingIndicator className="ml-1 align-middle" />
+              </Link>
+            ) : null}
+            <a
+              href={quizExportUrl(sourceId)}
               className="text-primary underline-offset-4 hover:underline"
             >
-              Review
-              <LinkPendingIndicator className="ml-1 align-middle" />
-            </Link>
+              Export to Anki
+            </a>
+          </div>
+          {job?.status === "succeeded" && job.generated_count >= 1 ? (
+            <QuizDeckYieldNotes sourceId={sourceId} job={job} />
           ) : null}
-          <a
-            href={quizExportUrl(sourceId)}
-            className="text-primary underline-offset-4 hover:underline"
-          >
-            Export to Anki
-          </a>
         </div>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * Honest empty-deck copy from a succeeded job's counts (REV-03/04/07). Thin and
+ * failed-partial yield notes live next to the item counts, not here.
+ */
+function QuizDeckHonesty({
+  sourceId,
+  job,
+}: {
+  sourceId: string;
+  job: QuizJob;
+}) {
+  const generated = job.generated_count;
+  const discarded = job.discarded_count;
+  const failed = job.failed_sections;
+
+  if (generated === 0 && discarded === 0 && failed === 0) {
+    return (
+      <p
+        data-testid={`quiz-honesty-${sourceId}`}
+        className="text-sm text-muted-foreground"
+      >
+        This book has no section long enough to quiz (a leaf chapter needs about
+        200+ characters).{" "}
+        <Link
+          href={`/sources/${sourceId}/read`}
+          className="text-primary underline-offset-4 hover:underline"
+        >
+          Highlight a passage
+        </Link>{" "}
+        instead.
+      </p>
+    );
+  }
+
+  if (generated === 0 && discarded > 0) {
+    return (
+      <p
+        data-testid={`quiz-honesty-${sourceId}`}
+        className="text-sm text-muted-foreground"
+      >
+        Drafts were written but none survived quality checks ({discarded}{" "}
+        discarded).
+      </p>
+    );
+  }
+
+  return null;
+}
+
+/** Quiet discarded footnote and failed-section note on a non-empty succeeded deck. */
+function QuizDeckYieldNotes({
+  sourceId,
+  job,
+}: {
+  sourceId: string;
+  job: QuizJob;
+}) {
+  const discarded = job.discarded_count;
+  const failed = job.failed_sections;
+  const saved = job.generated_count;
+
+  return (
+    <>
+      {discarded > 0 ? (
+        <p
+          data-testid={`quiz-discard-footnote-${sourceId}`}
+          className="text-xs text-muted-foreground"
+        >
+          {discarded} discarded during generation.
+        </p>
+      ) : null}
+      {failed > 0 ? (
+        <p
+          data-testid={`quiz-partial-${sourceId}`}
+          className="text-sm text-muted-foreground"
+        >
+          Saved {saved}. {failed} {failed === 1 ? "section" : "sections"} failed.
+        </p>
+      ) : null}
+    </>
   );
 }
 

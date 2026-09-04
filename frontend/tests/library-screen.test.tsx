@@ -90,6 +90,7 @@ function job(status: string, extra: Record<string, unknown> = {}) {
     generated_count: 0,
     discarded_count: 0,
     failed_sections: 0,
+    discard_reasons: {},
     error: null,
     created_at: "now",
     updated_at: "now",
@@ -318,6 +319,143 @@ describe("LibraryScreen quiz-deck controls (E3)", () => {
     expect(
       screen.queryByRole("button", { name: "Generate quiz deck" }),
     ).toBeNull();
+  });
+
+  it("explains a succeeded empty deck when no section was long enough to quiz (REV-03, REV-07)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        "GET /api/sources": () => jsonResponse(200, [readySource]),
+        [`GET ${QUIZ}`]: () =>
+          jsonResponse(200, {
+            items: [],
+            counts_by_status: {},
+            due_count: 0,
+            latest_job: job("succeeded", {
+              generated_count: 0,
+              discarded_count: 0,
+              failed_sections: 0,
+            }),
+          }),
+      }),
+    );
+
+    render(<LibraryScreen />);
+
+    const honesty = await screen.findByTestId("quiz-honesty-s1");
+    expect(honesty.textContent).toMatch(/no section long enough/i);
+    expect(honesty.textContent).toMatch(/200\+/);
+    expect(honesty.textContent).toMatch(/leaf/i);
+    expect(
+      screen.getByRole("link", { name: /highlight a passage/i }),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("quiz-error-s1")).toBeNull();
+    expect(screen.queryByTestId("quiz-counts-s1")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Generate quiz deck" }),
+    ).toBeTruthy();
+  });
+
+  it("explains when drafts were written but none survived quality checks (REV-04)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        "GET /api/sources": () => jsonResponse(200, [readySource]),
+        [`GET ${QUIZ}`]: () =>
+          jsonResponse(200, {
+            items: [],
+            counts_by_status: {},
+            due_count: 0,
+            latest_job: job("succeeded", {
+              generated_count: 0,
+              discarded_count: 7,
+              failed_sections: 0,
+              discard_reasons: { generic_stem: 7 },
+            }),
+          }),
+      }),
+    );
+
+    render(<LibraryScreen />);
+
+    const honesty = await screen.findByTestId("quiz-honesty-s1");
+    expect(honesty.textContent).toMatch(/drafts were written/i);
+    expect(honesty.textContent).toMatch(/none survived/i);
+    expect(honesty.textContent).toContain("7");
+    expect(screen.queryByTestId("quiz-error-s1")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Generate quiz deck" }),
+    ).toBeTruthy();
+  });
+
+  it("shows item and due counts with a quiet discarded footnote (REV-05)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        "GET /api/sources": () => jsonResponse(200, [readySource]),
+        [`GET ${QUIZ}`]: () =>
+          jsonResponse(200, {
+            items: [item("i1", "active"), item("i2", "active")],
+            counts_by_status: { active: 2 },
+            due_count: 1,
+            latest_job: job("succeeded", {
+              generated_count: 2,
+              discarded_count: 4,
+              failed_sections: 0,
+              discard_reasons: { yes_no: 4 },
+            }),
+          }),
+      }),
+    );
+
+    render(<LibraryScreen />);
+
+    const counts = await screen.findByTestId("quiz-counts-s1");
+    expect(counts.textContent).toContain("2 items");
+    expect(counts.textContent).toContain("1 due");
+    const footnote = screen.getByTestId("quiz-discard-footnote-s1");
+    expect(footnote.textContent).toContain("4");
+    expect(footnote.className).toMatch(/muted/);
+    expect(screen.queryByTestId("quiz-honesty-s1")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Generate quiz deck" }),
+    ).toBeTruthy();
+  });
+
+  it("mentions the saved count and failed-section count when some sections fail (REV-06)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        "GET /api/sources": () => jsonResponse(200, [readySource]),
+        [`GET ${QUIZ}`]: () =>
+          jsonResponse(200, {
+            items: [item("i1", "active")],
+            counts_by_status: { active: 1 },
+            due_count: 1,
+            latest_job: job("succeeded", {
+              generated_count: 1,
+              discarded_count: 0,
+              failed_sections: 3,
+            }),
+          }),
+      }),
+    );
+
+    render(<LibraryScreen />);
+
+    const partial = await screen.findByTestId("quiz-partial-s1");
+    expect(partial.textContent).toMatch(/1/);
+    expect(partial.textContent).toMatch(/saved/i);
+    expect(partial.textContent).toMatch(/3/);
+    expect(partial.textContent).toMatch(/section/i);
+    expect(screen.getByTestId("quiz-counts-s1").textContent).toContain("1 item");
+    expect(
+      screen.getByRole("button", { name: "Generate quiz deck" }),
+    ).toBeTruthy();
   });
 
   it("generates a deck and shows the in-progress state while the job is queued", async () => {

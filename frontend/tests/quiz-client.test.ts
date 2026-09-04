@@ -53,6 +53,7 @@ const job: QuizJob = {
   generated_count: 0,
   discarded_count: 0,
   failed_sections: 0,
+  discard_reasons: {},
   error: null,
   created_at: "now",
   updated_at: "now",
