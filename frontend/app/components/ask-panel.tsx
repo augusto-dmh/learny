@@ -188,11 +188,6 @@ export function AskPanel({
     onConversationsChanged?.();
   }, [onConversationsChanged]);
 
-  const handleDiscarded = useCallback(() => {
-    writeActiveConversation(sourceId, SURFACE, null);
-    onConversationsChanged?.();
-  }, [sourceId, onConversationsChanged]);
-
   if (thread === null) {
     return <p className="text-muted-foreground">Loading…</p>;
   }
@@ -212,7 +207,6 @@ export function AskPanel({
       onRequireAuth={onRequireAuth}
       onConversationStarted={handleStarted}
       onConversationKept={handleKept}
-      onConversationDiscarded={handleDiscarded}
     />
   );
 }
@@ -230,7 +224,6 @@ function AskChat({
   onRequireAuth,
   onConversationStarted,
   onConversationKept,
-  onConversationDiscarded,
 }: {
   sourceId: string;
   csrf: string;
@@ -245,7 +238,6 @@ function AskChat({
   onRequireAuth?: () => void;
   onConversationStarted: (conversationId: string) => void;
   onConversationKept: () => void;
-  onConversationDiscarded: () => void;
 }) {
   // A quote the reader chose to "Ask about": it rides along, once, with the next
   // typed question (RA-18) and shows as a dismissable context chip until then.
@@ -279,13 +271,6 @@ function AskChat({
     [includeNotes, onConversationStarted],
   );
 
-  // A discarded first message leaves no conversation, so the choice is the
-  // reader's again.
-  const handleDiscarded = useCallback(() => {
-    setFixedNotes(null);
-    onConversationDiscarded();
-  }, [onConversationDiscarded]);
-
   const { messages, status, isStreaming, banner, send, stop } =
     useConversationThread({
       csrf,
@@ -295,7 +280,6 @@ function AskChat({
       initialMessages,
       onConversationStarted: handleStarted,
       onConversationKept,
-      onConversationDiscarded: handleDiscarded,
       onRequireAuth,
     });
 

@@ -211,11 +211,6 @@ export function TeachPanel({
     onConversationsChanged?.();
   }, [onConversationsChanged]);
 
-  const handleDiscarded = useCallback(() => {
-    writeActiveConversation(sourceId, SURFACE, null);
-    onConversationsChanged?.();
-  }, [sourceId, onConversationsChanged]);
-
   function handleStart(event: React.FormEvent) {
     event.preventDefault();
     setError(null);
@@ -253,7 +248,6 @@ export function TeachPanel({
         onRequireAuth={onRequireAuth}
         onConversationStarted={handleStarted}
         onConversationKept={handleKept}
-        onConversationDiscarded={handleDiscarded}
       />
     );
   }
@@ -304,7 +298,6 @@ function TeachChat({
   onRequireAuth,
   onConversationStarted,
   onConversationKept,
-  onConversationDiscarded,
 }: {
   sourceId: string;
   csrf: string;
@@ -318,7 +311,6 @@ function TeachChat({
   onRequireAuth?: () => void;
   onConversationStarted: (conversationId: string) => void;
   onConversationKept: () => void;
-  onConversationDiscarded: () => void;
 }) {
   // The notes choice belongs to the conversation, so it is fixed when the thread
   // creates one and is always sent explicitly rather than left to a server guess.
@@ -354,13 +346,6 @@ function TeachChat({
     [includeNotes, onConversationStarted],
   );
 
-  // A discarded first message leaves no conversation, so the choice is the
-  // reader's again.
-  const handleDiscarded = useCallback(() => {
-    setFixedNotes(null);
-    onConversationDiscarded();
-  }, [onConversationDiscarded]);
-
   const { messages, status, isStreaming, banner, send, stop } =
     useConversationThread({
       csrf,
@@ -370,7 +355,6 @@ function TeachChat({
       initialMessages,
       onConversationStarted: handleStarted,
       onConversationKept,
-      onConversationDiscarded: handleDiscarded,
       onRequireAuth,
     });
 

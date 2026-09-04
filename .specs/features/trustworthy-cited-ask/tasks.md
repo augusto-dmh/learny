@@ -267,7 +267,7 @@ T12 -> T13
 
 ### Phase 3
 
-### T9: Stop deleting the conversation on first-turn stream failure
+### T9: Stop deleting the conversation on first-turn stream failure ✅
 
 **What**: Remove provisional `deleteConversation` on abort, disconnect, and error. Keep the conversation id. Add a test that fails if delete is called on stream error.
 **Where**: `frontend/app/components/use-conversation-thread.ts`
@@ -282,9 +282,9 @@ T12 -> T13
 
 **Done when**:
 
-- [ ] `deleteConversation` is not invoked from this hook on error/abort/disconnect
-- [ ] ASK-06 sensor exists and would fail if the DELETE is restored
-- [ ] Teach panel shares the hook, so both surfaces keep the thread
+- [x] `deleteConversation` is not invoked from this hook on error/abort/disconnect
+- [x] ASK-06 sensor exists and would fail if the DELETE is restored
+- [x] Teach panel shares the hook, so both surfaces keep the thread
 
 **Tests**: unit
 **Gate**: full

@@ -113,12 +113,12 @@ A second trust gap sits on the same path: the Citations API already returns `cit
 
 | Requirement ID | Story | Phase | Status |
 |---|---|---|---|
-| ASK-01 | P1: Never lose the thread | T7, T9 | Backend done (T7) |
+| ASK-01 | P1: Never lose the thread | T7, T9 | Done |
 | ASK-02 | P1: Never lose the thread | T2, T7, T11 | Backend done (T7) |
 | ASK-03 | P1: Never lose the thread | T10 | In Tasks |
-| ASK-04 | P1: Never lose the thread | T9 | In Tasks |
+| ASK-04 | P1: Never lose the thread | T9 | Done |
 | ASK-05 | P1: Never lose the thread | T7 | Done |
-| ASK-06 | P1: Never lose the thread | T9 | In Tasks |
+| ASK-06 | P1: Never lose the thread | T9 | Done |
 | ASK-07 | P1: Pin the 400 | T4 | Done |
 | ASK-08 | P1: Pin the 400 | T5 | Done |
 | ASK-09 | P1: Pin the 400 | T4, T5 | Done |

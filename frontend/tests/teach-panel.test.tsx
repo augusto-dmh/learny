@@ -31,7 +31,22 @@ import {
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { TeachPanel } from "../app/components/teach-panel";
-import { writeActiveConversation } from "../app/lib/active-conversation";
+import {
+  readActiveConversation,
+  writeActiveConversation,
+} from "../app/lib/active-conversation";
+
+// The delete-on-failure sensor: the conversations client is real except for
+// `deleteConversation`, which is replaced by a spy so a reintroduced DELETE is
+// caught at the call, not just at the wire.
+const { deleteConversationSpy } = vi.hoisted(() => ({
+  deleteConversationSpy: vi.fn(),
+}));
+vi.mock("../app/lib/conversations", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../app/lib/conversations")>();
+  return { ...actual, deleteConversation: deleteConversationSpy };
+});
 
 beforeAll(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
@@ -235,6 +250,7 @@ async function startSession(anchor = "c2.xhtml") {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  deleteConversationSpy.mockClear();
   localStorage.clear();
 });
 
@@ -443,6 +459,46 @@ describe("TeachPanel on the conversation surface (RA-10)", () => {
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("Answer generation failed");
     expect(document.body.textContent).toContain("Partial turn");
+    expect(document.body.textContent).toContain("first try");
+    expect(deleteConversationSpy).not.toHaveBeenCalled();
+    expect(readActiveConversation("s1", "teach")).toBe("conv2");
+  });
+});
+
+/** Every DELETE the panel issued against the taught conversation. */
+function deleteCalls(fetchMock: ReturnType<typeof routedFetch>): unknown[][] {
+  return fetchMock.mock.calls.filter(
+    ([url, init]) =>
+      url === READ_URL &&
+      (init as RequestInit | undefined)?.method === "DELETE",
+  );
+}
+
+describe("TeachPanel keeps the thread when a turn fails", () => {
+  it("never deletes the conversation its first message created when the stream errors", async () => {
+    const stream = sseStream();
+    const fetchMock = routedFetch(
+      baseHandlers(() => stream.response, {
+        [`DELETE ${READ_URL}`]: () => new Response(null, { status: 204 }),
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
+    await startSession();
+    await sendMessage("a question that fails");
+
+    await stream.push({ type: "start", messageId: "m1" });
+    await stream.push({
+      type: "error",
+      errorText: "Answer generation failed. Please try again.",
+    });
+    await screen.findByRole("alert");
+
+    expect(deleteConversationSpy).not.toHaveBeenCalled();
+    expect(deleteCalls(fetchMock)).toHaveLength(0);
+    expect(readActiveConversation("s1", "teach")).toBe("conv2");
+    expect(document.body.textContent).toContain("a question that fails");
   });
 });
 

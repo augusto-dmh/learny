@@ -39,6 +39,18 @@ import {
   writeActiveConversation,
 } from "../app/lib/active-conversation";
 
+// The delete-on-failure sensor (ASK-06): the conversations client is real except
+// for `deleteConversation`, which is replaced by a spy so a reintroduced DELETE
+// is caught at the call, not just at the wire.
+const { deleteConversationSpy } = vi.hoisted(() => ({
+  deleteConversationSpy: vi.fn(),
+}));
+vi.mock("../app/lib/conversations", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../app/lib/conversations")>();
+  return { ...actual, deleteConversation: deleteConversationSpy };
+});
+
 // AI Elements' Conversation (stick-to-bottom) and the citation Popover reach for
 // ResizeObserver and pointer-capture APIs jsdom lacks; stub them.
 beforeAll(() => {
@@ -163,6 +175,7 @@ async function ask(value: string) {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  deleteConversationSpy.mockClear();
   localStorage.clear();
 });
 
@@ -321,10 +334,13 @@ describe("AskPanel on the conversation surface", () => {
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("Answer generation failed");
     expect(document.body.textContent).toContain("Partial answer");
+    expect(document.body.textContent).toContain("first try");
     expect(
       (screen.getByPlaceholderText(/ask a question/i) as HTMLTextAreaElement)
         .disabled,
     ).toBe(false);
+    expect(deleteConversationSpy).not.toHaveBeenCalled();
+    expect(readActiveConversation("s1", "ask")).toBe("conv1");
   });
 
   it("shows a readable throttle message when the turn stream returns 429", async () => {
@@ -346,6 +362,8 @@ describe("AskPanel on the conversation surface", () => {
       (screen.getByPlaceholderText(/ask a question/i) as HTMLTextAreaElement)
         .disabled,
     ).toBe(false);
+    expect(deleteConversationSpy).not.toHaveBeenCalled();
+    expect(readActiveConversation("s1", "ask")).toBe("conv1");
   });
 
   it("swaps submit for a stop control while streaming and issues only one turn", async () => {
@@ -385,6 +403,95 @@ describe("AskPanel on the conversation surface", () => {
     await Promise.resolve();
     expect(callsTo(fetchMock, CREATE_URL)).toHaveLength(0);
     expect(callsTo(fetchMock, STREAM_URL)).toHaveLength(0);
+  });
+});
+
+/** Every DELETE the panel issued against the thread's conversation. */
+function deleteCalls(fetchMock: ReturnType<typeof routedFetch>): unknown[][] {
+  return fetchMock.mock.calls.filter(
+    ([url, init]) =>
+      url === "/api/conversations/conv1" &&
+      (init as RequestInit | undefined)?.method === "DELETE",
+  );
+}
+
+describe("AskPanel keeps the thread when a turn fails", () => {
+  it("never deletes the conversation its first message created when the stream errors", async () => {
+    const stream = sseStream();
+    const fetchMock = routedFetch(
+      baseHandlers(() => stream.response, {
+        "DELETE /api/conversations/conv1": () =>
+          new Response(null, { status: 204 }),
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+    await ask("a question that fails");
+
+    await stream.push({ type: "start", messageId: "m1" });
+    await stream.push({
+      type: "error",
+      errorText: "Answer generation failed. Please try again.",
+    });
+    await screen.findByRole("alert");
+
+    // The conversation the question was created for outlives the failure, and
+    // the surface still points at it, so the thread is there to come back to.
+    expect(deleteConversationSpy).not.toHaveBeenCalled();
+    expect(deleteCalls(fetchMock)).toHaveLength(0);
+    expect(readActiveConversation("s1", "ask")).toBe("conv1");
+    expect(document.body.textContent).toContain("a question that fails");
+  });
+
+  it("never deletes the conversation when the first turn fails before the stream starts", async () => {
+    const fetchMock = routedFetch(
+      baseHandlers(() => jsonResponse(502, { detail: "Generation failed." }), {
+        "DELETE /api/conversations/conv1": () =>
+          new Response(null, { status: 204 }),
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+    await ask("a question that never reaches the model");
+
+    await screen.findByRole("alert");
+
+    expect(deleteConversationSpy).not.toHaveBeenCalled();
+    expect(deleteCalls(fetchMock)).toHaveLength(0);
+    expect(readActiveConversation("s1", "ask")).toBe("conv1");
+    expect(document.body.textContent).toContain(
+      "a question that never reaches the model",
+    );
+  });
+
+  it("never deletes the conversation when the reader stops the first turn", async () => {
+    const stream = sseStream();
+    const fetchMock = routedFetch(
+      baseHandlers(() => stream.response, {
+        "DELETE /api/conversations/conv1": () =>
+          new Response(null, { status: 204 }),
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+    await ask("a question I will interrupt");
+
+    await stream.push({ type: "start", messageId: "m1" });
+    await stream.push({ type: "text-start", id: "t1" });
+    await stream.push({ type: "text-delta", id: "t1", delta: "Partial" });
+
+    const stopButton = await screen.findByRole("button", { name: "Stop" });
+    await act(async () => {
+      fireEvent.click(stopButton);
+    });
+
+    expect(deleteConversationSpy).not.toHaveBeenCalled();
+    expect(deleteCalls(fetchMock)).toHaveLength(0);
+    expect(readActiveConversation("s1", "ask")).toBe("conv1");
+    expect(document.body.textContent).toContain("a question I will interrupt");
   });
 });
 
@@ -1004,6 +1111,8 @@ describe("AskPanel answer phases (ANSW-01/02/03)", () => {
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toMatch(/generation failed/i);
     await waitFor(() => expect(phaseLine()).toBeNull());
+    expect(deleteConversationSpy).not.toHaveBeenCalled();
+    expect(readActiveConversation("s1", "ask")).toBe("conv1");
   });
 
   it("shows no reasoning region on a restored thread", async () => {
