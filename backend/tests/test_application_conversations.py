@@ -2294,6 +2294,65 @@ def test_ordinary_message_in_check_closes_and_stores_the_restatement() -> None:
     assert retrieve.calls == []
 
 
+def test_ordinary_message_in_check_closes_on_the_stream_without_searching() -> None:
+    # The UI posts the unaided check on the stream path; it must skip retrieval
+    # and generation the same way the buffered sibling does, and echo close.
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    conversations.add(replace(conversation, tutor_phase="check", hint_level="assert"))
+    evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
+    retrieve = FakeScopedRetrieveEvidence(evidence)
+    generation = FakeGeneration(answer=_answered(*evidence))
+    turns = FakeConversationTurnRepository()
+    turns.add(
+        ConversationTurn(
+            id=uuid4(),
+            conversation_id=conversation.id,
+            turn_index=0,
+            message=TUTOR_OPENING_MESSAGE,
+            mode=MODE_TEACH,
+            answer_status="answered",
+            answer_text="What is this section trying to convince you of?",
+            model=_MODEL,
+            evidence_count=1,
+            citations=(),
+            created_at=_NOW,
+        )
+    )
+    post = _post(
+        conversations=conversations,
+        turns=turns,
+        sources=sources,
+        corpus=corpus,
+        retrieve=retrieve,
+        generation=generation,
+    )
+    restatement = "it argues that anchors must stay stable"
+
+    events = list(
+        post.stream(
+            user=user,
+            conversation_id=conversation.id,
+            message=restatement,
+            mode=MODE_TEACH,
+        )
+    )
+
+    assert generation.calls == []
+    assert generation.stream_calls == []
+    assert retrieve.calls == []
+    assert [type(event) for event in events] == [StreamTurn]
+    terminal = events[0]
+    assert isinstance(terminal, StreamTurn)
+    assert terminal.turn.message == restatement
+    assert terminal.tutor_phase == "close"
+    assert terminal.tutor_check_text == restatement
+    stored = conversations.get_by_id(conversation.id)
+    assert stored is not None
+    assert stored.tutor_phase == "close"
+    assert stored.tutor_check_text == restatement
+    assert len(turns.list_for_conversation(conversation.id)) == 2
+
+
 def test_an_unknown_mode_is_rejected_from_the_published_error_vocabulary() -> None:
     # CONV-20: the turn service is public — the router is not its only caller — so a
     # mode it does not know is a named 422-mapped error rather than a bare ValueError

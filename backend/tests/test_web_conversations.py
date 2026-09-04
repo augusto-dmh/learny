@@ -1862,6 +1862,27 @@ def test_turn_stream_emits_the_full_frame_sequence_and_persists_the_turn(
     assert turns[0]["mode"] == MODE_ANSWER
 
 
+def test_teach_opening_stream_carries_tutor_state_on_the_terminal_frame(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "stream-tutor-state@example.com")
+    _embed_all(db_conn, UUID(source_id))
+    conversation = _seed_conversation(db_conn, UUID(source_id))
+
+    resp = _turn_stream(
+        auth_client,
+        conversation.id,
+        {"message": TUTOR_OPENING_MESSAGE, "mode": MODE_TEACH},
+        csrf=csrf,
+    )
+
+    assert resp.status_code == 200, resp.text
+    parts = _parse_ui_stream(resp.text)
+    assert "data-tutor-state" in _part_types(parts)
+    tutor = next(p for p in parts if isinstance(p, dict) and p["type"] == "data-tutor-state")
+    assert tutor["data"] == {"phase": "open", "hint_level": "pump", "check_text": None}
+
+
 def test_turn_stream_carries_not_found_in_scope_in_the_status_frame(
     auth_client: TestClient, db_conn: Connection
 ) -> None:
@@ -2847,6 +2868,31 @@ def test_accept_tutor_card_stranger_and_missing_return_identical_404(
     assert stranger.status_code == 404, stranger.text
     assert missing.status_code == 404, missing.text
     assert stranger.json() == missing.json()
+    assert SqlAlchemyQuizItemRepository(db_conn).list_for_source(UUID(source_id)) == []
+
+
+def test_accept_tutor_card_unauthenticated_returns_401_and_writes_nothing(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    source_id, _ = _seed_ready_source(auth_client, db_conn, "tutor-card-401@example.com")
+    conversation = _seed_closed_tutor(db_conn, UUID(source_id))
+    auth_client.cookies.clear()
+
+    resp = _accept_tutor_card(auth_client, conversation.id, csrf="x")
+
+    assert resp.status_code == 401, resp.text
+    assert SqlAlchemyQuizItemRepository(db_conn).list_for_source(UUID(source_id)) == []
+
+
+def test_accept_tutor_card_missing_csrf_returns_403_and_writes_nothing(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    source_id, _ = _seed_ready_source(auth_client, db_conn, "tutor-card-403@example.com")
+    conversation = _seed_closed_tutor(db_conn, UUID(source_id))
+
+    resp = _accept_tutor_card(auth_client, conversation.id, csrf=None)
+
+    assert resp.status_code == 403, resp.text
     assert SqlAlchemyQuizItemRepository(db_conn).list_for_source(UUID(source_id)) == []
 
 
