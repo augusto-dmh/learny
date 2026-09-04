@@ -179,8 +179,8 @@ A stranger who creates an account lands on an empty library, waits on ingest wit
 |---|---|---|---|
 | FS-01 | P1: Shared sample | T1, T2 | Implemented |
 | FS-02 | P1: Shared sample | T3 | Implemented |
-| FS-03 | P1: Shared sample | T4 | In Tasks |
-| FS-04 | P1: Shared sample | T4 | In Tasks |
+| FS-03 | P1: Shared sample | T4 | Implemented |
+| FS-04 | P1: Shared sample | T4 | Implemented |
 | FS-05 | P1: Shared sample | T5 | In Tasks |
 | FS-06 | P1: Shared sample | T10 | In Tasks |
 | FS-07 | P1: Shared sample | T5 | In Tasks |
@@ -205,7 +205,7 @@ A stranger who creates an account lands on an empty library, waits on ingest wit
 | FS-26 | P1: Library | T13 | In Tasks |
 | FS-27 | P1: Landing / Home | T16 | In Tasks |
 | FS-28 | P1: Landing / Home | T8 | In Tasks |
-| FS-29 | P1: Landing / Home | T4 | In Tasks |
+| FS-29 | P1: Landing / Home | T4 | Implemented |
 | FS-30 | P1: Landing / Home | T14 | In Tasks |
 | FS-31 | P1: Landing / Home | T14 | In Tasks |
 | FS-32 | P1: Landing / Home | T10 | In Tasks |

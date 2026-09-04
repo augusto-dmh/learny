@@ -164,9 +164,9 @@ T10 → T11 → T12 → T13 → T14 → T15 → T16
 
 **Done when**:
 
-- [ ] Non-owner GetSource on sample succeeds when ready
-- [ ] Non-owner StartIngestion-style authorized_source on sample raises SourceNotFound
-- [ ] First readable sample stamps `sample_opened` once
+- [x] Non-owner GetSource on sample succeeds when ready
+- [x] Non-owner StartIngestion-style authorized_source on sample raises SourceNotFound
+- [x] First readable sample stamps `sample_opened` once
 
 **Tests**: unit
 **Gate**: quick

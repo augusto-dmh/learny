@@ -98,6 +98,7 @@ from app.infrastructure.answering import (
 from app.infrastructure.clock import SystemClock
 from app.infrastructure.db.engine import get_engine
 from app.infrastructure.db.repositories import (
+    SqlAlchemyActivationEventRepository,
     SqlAlchemyConversationRepository,
     SqlAlchemyConversationTurnRepository,
     SqlAlchemyCorpusRepository,
@@ -285,6 +286,8 @@ def get_get_source(conn: DbConnection) -> GetSource:
     return GetSource(
         sources=SqlAlchemySourceRepository(conn),
         authorize=AuthorizeOwnership(),
+        activations=SqlAlchemyActivationEventRepository(conn),
+        clock=_clock,
     )
 
 

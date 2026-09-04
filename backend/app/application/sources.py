@@ -14,14 +14,19 @@ from collections.abc import Callable
 from uuid import UUID
 
 from app.application.errors import (
-    NotAuthorized,
     SourceNotFound,
     StorageUnavailable,
 )
 from app.application.identity import AuthorizeOwnership
+from app.application.ingestion import readable_source
 from app.application.validation import extension_of, validate_source_upload
 from app.domain.entities import Source, User
-from app.domain.ports import Clock, SourceRepository, StoragePort
+from app.domain.ports import (
+    ActivationEventRepository,
+    Clock,
+    SourceRepository,
+    StoragePort,
+)
 
 _FIGURE_DIGEST = re.compile(r"^[0-9a-f]{64}$")
 
@@ -114,22 +119,30 @@ class ListSources:
 
 
 class GetSource:
-    """Return one owned source, or raise ``SourceNotFound`` (404, no disclosure)."""
+    """Return one readable source, or raise ``SourceNotFound`` (404, no disclosure)."""
 
-    def __init__(self, *, sources: SourceRepository, authorize: AuthorizeOwnership) -> None:
+    def __init__(
+        self,
+        *,
+        sources: SourceRepository,
+        authorize: AuthorizeOwnership,
+        activations: ActivationEventRepository,
+        clock: Clock,
+    ) -> None:
         self._sources = sources
         self._authorize = authorize
+        self._activations = activations
+        self._clock = clock
 
     def __call__(self, *, user: User, source_id: UUID) -> Source:
-        source = self._sources.get_by_id(source_id)
-        if source is None:
-            raise SourceNotFound("Source not found.")
-        try:
-            self._authorize(user=user, owner_id=source.user_id)
-        except NotAuthorized as exc:
-            # Non-owners get 404, not 403, so a source's existence isn't disclosed.
-            raise SourceNotFound("Source not found.") from exc
-        return source
+        return readable_source(
+            user=user,
+            source_id=source_id,
+            sources=self._sources,
+            authorize=self._authorize,
+            activations=self._activations,
+            clock=self._clock,
+        )
 
 
 class ReadSourceMedia:

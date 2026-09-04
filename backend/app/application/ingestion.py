@@ -34,6 +34,7 @@ from app.domain.entities import (
     User,
 )
 from app.domain.ports import (
+    ActivationEventRepository,
     Clock,
     IngestionEventRepository,
     IngestionJobRepository,
@@ -57,6 +58,8 @@ SOURCE_STATUS_FAILED = "failed"
 # when a job has exhausted its attempts.
 INGESTION_FAILURE_ERROR = "Ingestion processing failed."
 
+ACTIVATION_SAMPLE_OPENED = "sample_opened"
+
 
 def authorized_source(
     *,
@@ -68,11 +71,44 @@ def authorized_source(
     """Return the caller's source or raise ``SourceNotFound`` (404, no disclosure).
 
     Mirrors ``GetSource``: a missing source and a non-owner collapse to the same
-    error so a source's existence is never disclosed (ING-04).
+    error so a source's existence is never disclosed (ING-04). Owner-only — do
+    not use this for sample reads.
     """
     source = sources.get_by_id(source_id)
     if source is None:
         raise SourceNotFound("Source not found.")
+    try:
+        authorize(user=user, owner_id=source.user_id)
+    except NotAuthorized as exc:
+        raise SourceNotFound("Source not found.") from exc
+    return source
+
+
+def readable_source(
+    *,
+    user: User,
+    source_id: UUID,
+    sources: SourceRepository,
+    authorize: AuthorizeOwnership,
+    activations: ActivationEventRepository,
+    clock: Clock,
+) -> Source:
+    """Return a source the caller may read, or raise ``SourceNotFound``.
+
+    Readable means the caller owns it or it is the shared sample. Missing and
+    non-readable collapse to the same error. The first successful sample read
+    records ``sample_opened`` once.
+    """
+    source = sources.get_by_id(source_id)
+    if source is None:
+        raise SourceNotFound("Source not found.")
+    if source.is_sample:
+        activations.insert_if_absent(
+            user_id=user.id,
+            name=ACTIVATION_SAMPLE_OPENED,
+            occurred_at=clock.now(),
+        )
+        return source
     try:
         authorize(user=user, owner_id=source.user_id)
     except NotAuthorized as exc:
