@@ -440,8 +440,8 @@ T10 → T11 → T12 → T13 → T14 → T15 → T16
 
 **Done when**:
 
-- [ ] Sample source renders the canned string as the highlighted prompt
-- [ ] Non-sample Ask does not show that string as the highlight
+- [x] Sample source renders the canned string as the highlighted prompt
+- [x] Non-sample Ask does not show that string as the highlight
 
 **Tests**: unit
 **Gate**: full
