@@ -36,7 +36,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
 import { fetchAuthState } from "@/app/lib/auth";
-import { useKeyShortcuts } from "@/app/components/use-key-shortcuts";
+import { isTypingTarget, useKeyShortcuts } from "@/app/components/use-key-shortcuts";
 import { readUrl } from "@/app/lib/read-url";
 import {
   flagQuizItem,
@@ -101,19 +101,6 @@ function withSubmitLabels(card: SessionCard, scheduling: Scheduling): SessionCar
     interval_labels: scheduling.interval_labels ?? card.interval_labels,
     shortTerm: true,
   };
-}
-
-function isTypingTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) {
-    return false;
-  }
-  const tag = target.tagName.toLowerCase();
-  if (tag === "input" || tag === "textarea") {
-    return true;
-  }
-  return (
-    target.closest('[contenteditable]:not([contenteditable="false"])') !== null
-  );
 }
 
 export function ReviewScreen({
