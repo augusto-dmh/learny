@@ -266,6 +266,10 @@ class SqlAlchemySourceRepository:
         row = self._conn.execute(select(sources).where(sources.c.id == source_id)).one_or_none()
         return _to_source(row) if row is not None else None
 
+    def get_sample(self) -> Source | None:
+        row = self._conn.execute(select(sources).where(sources.c.is_sample.is_(True))).one_or_none()
+        return _to_source(row) if row is not None else None
+
     def set_status(self, source_id: UUID, status: str, updated_at: datetime) -> None:
         """Update the ``source.status`` projection alongside a job transition."""
         self._conn.execute(

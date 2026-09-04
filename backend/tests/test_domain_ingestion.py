@@ -212,6 +212,9 @@ def test_source_repository_requires_set_status() -> None:
         def get_by_id(self, source_id):  # noqa: ANN001, ANN201
             return None
 
+        def get_sample(self):  # noqa: ANN001, ANN201
+            return None
+
     class WithSetStatus(WithoutSetStatus):
         def set_status(self, source_id, status, updated_at):  # noqa: ANN001, ANN201
             return None

@@ -315,9 +315,9 @@ T10 → T11 → T12 → T13 → T14 → T15 → T16
 
 **Done when**:
 
-- [ ] First successful review inserts `first_review`; second does not
-- [ ] Seed when sample exists returns that source without a second insert
-- [ ] Enqueue failure leaves no ready `is_sample` source
+- [x] First successful review inserts `first_review`; second does not
+- [x] Seed when sample exists returns that source without a second insert
+- [x] Enqueue failure leaves no ready `is_sample` source
 
 **Tests**: unit
 **Gate**: full

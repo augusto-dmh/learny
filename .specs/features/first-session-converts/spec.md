@@ -182,7 +182,7 @@ A stranger who creates an account lands on an empty library, waits on ingest wit
 | FS-03 | P1: Shared sample | T4 | Implemented |
 | FS-04 | P1: Shared sample | T4 | Implemented |
 | FS-05 | P1: Shared sample | T5 | Implemented |
-| FS-06 | P1: Shared sample | T10 | In Tasks |
+| FS-06 | P1: Shared sample | T10 | Implemented |
 | FS-07 | P1: Shared sample | T5 | Implemented |
 | FS-08 | P1: Canned Ask | T15 | In Tasks |
 | FS-09 | P1: Canned Ask | T9 | Implemented |
@@ -208,7 +208,7 @@ A stranger who creates an account lands on an empty library, waits on ingest wit
 | FS-29 | P1: Landing / Home | T4 | Implemented |
 | FS-30 | P1: Landing / Home | T14 | In Tasks |
 | FS-31 | P1: Landing / Home | T14 | In Tasks |
-| FS-32 | P1: Landing / Home | T10 | In Tasks |
+| FS-32 | P1: Landing / Home | T10 | Implemented |
 
 **Coverage:** 32 total, 32 mapped to tasks, 0 unmapped.
 

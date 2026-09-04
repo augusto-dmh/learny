@@ -199,6 +199,10 @@ class SourceRepository(Protocol):
         """Return the source with ``source_id``, or ``None`` if absent."""
         ...
 
+    def get_sample(self) -> Source | None:
+        """Return the unique ``is_sample`` source, or ``None`` if none is seeded."""
+        ...
+
     def set_status(self, source_id: UUID, status: str, updated_at: datetime) -> None:
         """Update the ``source.status`` projection alongside a job transition.
 

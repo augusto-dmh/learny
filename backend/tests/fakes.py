@@ -197,6 +197,12 @@ class FakeSourceRepository:
     def get_by_id(self, source_id: UUID) -> Source | None:
         return self._by_id.get(source_id)
 
+    def get_sample(self) -> Source | None:
+        for source in self._by_id.values():
+            if source.is_sample:
+                return source
+        return None
+
     def set_status(self, source_id: UUID, status: str, updated_at: datetime) -> None:
         source = self._by_id.get(source_id)
         if source is not None:

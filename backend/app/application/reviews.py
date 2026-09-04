@@ -18,6 +18,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from uuid import UUID
 
+from app.application.activation import ACTIVATION_FIRST_REVIEW, RecordActivation
 from app.application.dates import local_day
 from app.application.errors import (
     QuizItemNotFound,
@@ -158,11 +159,13 @@ class SubmitReview:
         scheduling: SchedulingPort,
         clock: Clock,
         study_days: StudyDayRepository,
+        record_activation: RecordActivation | None = None,
     ) -> None:
         self._items = items
         self._scheduling = scheduling
         self._clock = clock
         self._study_days = study_days
+        self._record_activation = record_activation
 
     def __call__(
         self,
@@ -186,6 +189,8 @@ class SubmitReview:
             replace(log, review_duration_ms=review_duration_ms, previous=snapshot),
         )
         self._study_days.record(user.id, local_day(now, client_tz), reviews=1)
+        if self._record_activation is not None:
+            self._record_activation(user_id=user.id, name=ACTIVATION_FIRST_REVIEW)
         return _reviewed(self._scheduling, advanced, now)
 
 

@@ -694,6 +694,10 @@ def get_submit_review(conn: DbConnection) -> SubmitReview:
         scheduling=build_scheduling_adapter(get_settings()),
         clock=_clock,
         study_days=SqlAlchemyStudyDayRepository(conn),
+        record_activation=RecordActivation(
+            activations=SqlAlchemyActivationEventRepository(conn),
+            clock=_clock,
+        ),
     )
 
 

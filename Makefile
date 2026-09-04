@@ -1,6 +1,6 @@
 # Canonical verification vocabulary — same names locally, in agent sessions, and in docs.
 
-.PHONY: infra test test-backend test-frontend lint lint-backend lint-frontend fitness check
+.PHONY: infra test test-backend test-frontend lint lint-backend lint-frontend fitness check seed-sample
 
 infra: ## Start the local services DB/golden tests depend on
 	docker compose up -d db minio redis
@@ -26,3 +26,6 @@ fitness: ## Architecture boundaries (provider-SDK isolation, layering)
 lint: lint-backend lint-frontend fitness
 
 check: lint test
+
+seed-sample: ## Idempotent shared sample book (operator + store + enqueue)
+	cd backend && uv run python -m app.cli.seed_sample
