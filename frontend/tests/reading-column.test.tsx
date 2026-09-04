@@ -18,7 +18,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ChapterFlow } from "../app/components/chapter-reader";
@@ -221,5 +221,87 @@ describe("the open dock overlays below xl without shrinking the measure", () => 
     expect(classes).toContain("xl:shrink-0");
     expect(declaration(rule(".prose-reading"), "max-width")).toBe("65ch");
     sheet.remove();
+  });
+});
+
+describe("the book column does not scroll sideways (READ-26)", () => {
+  const FIGURE_SRC =
+    "/api/sources/s1/media/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+  function committedBlock(selectorStart: string): string {
+    const start = css.indexOf(`${selectorStart}`);
+    expect(start, `rule starting "${selectorStart}" exists`).toBeGreaterThanOrEqual(0);
+    return css.slice(start, css.indexOf("}", start) + 1);
+  }
+
+  /**
+   * jsdom does not implement zoom or real layout. The sensor still fails if
+   * figures have no max-width: a 1600px image then reports scrollWidth 1600.
+   */
+  function installNarrowLayout(article: HTMLElement, cssWidth: number) {
+    article.style.width = `${cssWidth}px`;
+    article.style.zoom = "2";
+    Object.defineProperty(article, "clientWidth", {
+      configurable: true,
+      get: () => cssWidth,
+    });
+    Object.defineProperty(article, "scrollWidth", {
+      configurable: true,
+      get: () => {
+        const overflowing = Array.from(
+          article.querySelectorAll("img, figure"),
+        ).some((node) => {
+          const max = getComputedStyle(node).maxWidth;
+          return max !== "100%" && max !== `${cssWidth}px`;
+        });
+        return overflowing ? cssWidth + 1600 : cssWidth;
+      },
+    });
+  }
+
+  it("pins figures to the column width", () => {
+    const images = committedBlock(".prose-reading img");
+    expect(images).toContain("max-width: 100%");
+    expect(images).toContain("height: auto");
+  });
+
+  it("keeps article.scrollWidth <= clientWidth at 320px and 200% zoom with a figure", async () => {
+    const style = document.createElement("style");
+    style.textContent = [
+      committedBlock(".prose-reading {"),
+      committedBlock(".book-column {"),
+      committedBlock(".prose-reading img"),
+    ].join("\n");
+    document.head.appendChild(style);
+
+    const withFigure: ChapterView = {
+      ...chapter,
+      sections: [
+        {
+          ...chapter.sections[0],
+          markdown: `First paragraph here.\n\n![Engine diagram](${FIGURE_SRC})`,
+        },
+        chapter.sections[1],
+      ],
+    };
+
+    const { container } = render(
+      <ChapterFlow sourceId="s1" csrf="c" chapter={withFigure} scrollTarget={null} />,
+    );
+    const article = container.querySelector<HTMLElement>("article.prose-reading")!;
+    const img = await waitFor(() => {
+      const node = article.querySelector("img");
+      expect(node).not.toBeNull();
+      return node as HTMLImageElement;
+    });
+    img.setAttribute("width", "1600");
+    img.style.width = "1600px";
+
+    installNarrowLayout(article, 320);
+
+    expect(getComputedStyle(img).maxWidth).toBe("100%");
+    expect(article.clientWidth).toBe(320);
+    expect(article.scrollWidth).toBeLessThanOrEqual(article.clientWidth);
+    style.remove();
   });
 });

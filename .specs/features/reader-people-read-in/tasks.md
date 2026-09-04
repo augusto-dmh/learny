@@ -373,8 +373,8 @@ T11 → T12 → T13 → T14 → T15
 
 **Done when**:
 
-- [ ] Assertion holds with a figure in the markdown
-- [ ] Gate: `cd frontend && npm test -- reading-column chapter-reader` then phase-boundary `make lint` + backend/frontend cycle suites
+- [x] Assertion holds with a figure in the markdown
+- [x] Gate: `cd frontend && npm test -- reading-column chapter-reader` then phase-boundary `make lint` + backend/frontend cycle suites
 
 **Tests**: unit
 **Gate**: build

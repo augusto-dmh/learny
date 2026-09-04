@@ -156,8 +156,8 @@ Learny already has a study-reader skeleton (chapter flow, 65ch serif, `Aa`, rece
 | READ-22 | P1: Phone column | T11 | Done |
 | READ-23 | P1: Phone column | T12 | Done |
 | READ-24 | P1: Phone column | T13 | Done |
-| READ-25 | P1: Phone column | T14 | In Tasks |
-| READ-26 | P1: Phone column | T15 | In Tasks |
+| READ-25 | P1: Phone column | T14 | Done |
+| READ-26 | P1: Phone column | T15 | Done |
 
 **ID format:** `READ-NN`
 
