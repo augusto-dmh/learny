@@ -416,8 +416,8 @@ T10 → T11 → T12 → T13 → T14 → T15 → T16
 
 **Done when**:
 
-- [ ] Zero due + no resume + sample in list → Ask control to the sample
-- [ ] total_due > 0 still shows the due-session card
+- [x] Zero due + no resume + sample in list → Ask control to the sample
+- [x] total_due > 0 still shows the due-session card
 
 **Tests**: unit
 **Gate**: full

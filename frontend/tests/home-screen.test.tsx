@@ -51,6 +51,9 @@ function routedFetch(handlers: Record<string, Handler>) {
     if (!handler && key === STUDY) {
       return jsonResponse(200, { days: [], studied_last_14: 0 });
     }
+    if (!handler && key === SOURCES) {
+      return jsonResponse(200, []);
+    }
     if (!handler) throw new Error(`unexpected fetch: ${key}`);
     return handler(init ?? {});
   });
@@ -59,6 +62,7 @@ function routedFetch(handlers: Record<string, Handler>) {
 const CONTINUE = "GET /api/reading/continue";
 const DUE = "GET /api/reviews/due?limit=1";
 const STUDY = "GET /api/study/days?window=84";
+const SOURCES = "GET /api/sources";
 
 const hero = {
   source_id: "s1",
@@ -76,6 +80,19 @@ function dueQueue(total: number, sessionSize = 20) {
     requeue_minutes: 15,
   };
 }
+
+const sampleSource = {
+  id: "s-sample",
+  title: "The Art of War",
+  filename: "art-of-war.epub",
+  byte_size: 3,
+  content_type: "application/epub+zip",
+  status: "ready",
+  created_at: "now",
+  is_sample: true,
+  suggested_question:
+    "What does Sun Tzu mean by \u201call warfare is based on deception\u201d?",
+};
 
 afterEach(() => {
   cleanup();
@@ -320,5 +337,47 @@ describe("HomeScreen new-user state (spec edge case)", () => {
       ),
     ).toBe("/sources");
     await waitFor(() => expect(screen.getByTestId("due-done")).toBeTruthy());
+  });
+});
+
+describe("HomeScreen Ask-first", () => {
+  it("offers Ask on the sample when nothing is due and there is no resume", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        [CONTINUE]: () => jsonResponse(200, null),
+        [DUE]: () => jsonResponse(200, dueQueue(0)),
+        [SOURCES]: () => jsonResponse(200, [sampleSource]),
+      }),
+    );
+
+    render(<HomeScreen />);
+
+    const ask = await screen.findByRole("link", { name: "Ask" });
+    expect(ask.getAttribute("href")).toBe(
+      "/sources/s-sample/read?panel=ask",
+    );
+    expect(
+      screen.getByRole("link", { name: "Pick a book" }).getAttribute("href"),
+    ).toBe("/sources");
+  });
+
+  it("still shows the due-session card when total_due is greater than zero", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        [CONTINUE]: () => jsonResponse(200, null),
+        [DUE]: () => jsonResponse(200, dueQueue(5)),
+        [SOURCES]: () => jsonResponse(200, [sampleSource]),
+      }),
+    );
+
+    render(<HomeScreen />);
+
+    expect((await screen.findByTestId("due-count")).textContent).toContain("5");
+    expect(
+      screen.getByRole("link", { name: "Review" }).getAttribute("href"),
+    ).toBe("/review");
+    expect(screen.queryByRole("link", { name: "Ask" })).toBeNull();
   });
 });
