@@ -42,6 +42,13 @@ from app.infrastructure.answering.anthropic import AnthropicAdapterBase
 # threadpool slot only makes the next request worse.
 _SUGGEST_TIMEOUT_S = 30.0
 
+# Formulation bar both deck and quote prompts must carry (REV-20).
+_FORMULATION_RUBRIC = (
+    "Each card must cover one fact per card with a short answer. For cloze, blank the "
+    "key term not a function word. No lists, no yes/no. Every item must be answerable "
+    "without opening the book."
+)
+
 
 def _custom_id(index: int, anchor: str) -> str:
     """Return a batch-legal, section-unique custom id derived from the anchor.
@@ -102,7 +109,8 @@ def _section_prompt(section: QuizSection) -> str:
         "source_chunk_id to the id of the chunk it is drawn from and anchor_quote to a "
         "sentence copied verbatim from that chunk. Use item_type 'free_recall' for a "
         "question/answer pair, or 'cloze' for a fill-in-the-blank where the question is a "
-        "sentence from the chunk with the key term replaced by ____ and answer is that term."
+        "sentence from the chunk with the key term replaced by ____ and answer is that term. "
+        f"{_FORMULATION_RUBRIC}"
     )
 
 
@@ -122,7 +130,7 @@ def _quote_prompt(section: QuizSection, quote: str, limit: int) -> str:
         "sentence copied verbatim from that chunk. Use item_type 'free_recall' for a "
         "question/answer pair, or 'cloze' for a fill-in-the-blank where the question is "
         "a sentence from the chunk with the key term replaced by ____ and answer is "
-        "that term."
+        f"that term. {_FORMULATION_RUBRIC}"
     )
 
 

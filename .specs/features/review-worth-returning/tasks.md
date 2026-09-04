@@ -117,9 +117,9 @@ T11 → T12 → T13 → T14
 
 **Done when**:
 
-- [ ] Prompt tests assert the rubric tokens on both helpers
-- [ ] Citations/item schema tests still pass
-- [ ] Gate: `uv run pytest tests/test_quiz_anthropic.py`
+- [x] Prompt tests assert the rubric tokens on both helpers
+- [x] Citations/item schema tests still pass
+- [x] Gate: `uv run pytest tests/test_quiz_anthropic.py`
 
 **Tests**: unit
 **Gate**: quick
