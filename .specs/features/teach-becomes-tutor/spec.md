@@ -181,8 +181,8 @@ Teach is a cited, section-scoped chat with a four-sentence "patient tutor" promp
 | TUTOR-06 | P1: Frozen playbook | T3 | Done |
 | TUTOR-07 | P1: Frozen playbook | T3 | Done |
 | TUTOR-08 | P1: Tutor opens | Tasks | In Tasks |
-| TUTOR-09 | P1: Tutor opens | Tasks | In Tasks |
-| TUTOR-10 | P1: Tutor opens | Tasks | In Tasks |
+| TUTOR-09 | P1: Tutor opens | T4 | Done |
+| TUTOR-10 | P1: Tutor opens | T4 | Done |
 | TUTOR-11 | P1: Tutor opens | Tasks | In Tasks |
 | TUTOR-12 | P1: Tutor opens | Tasks | In Tasks |
 | TUTOR-13 | P1: Tutor opens | Tasks | In Tasks |

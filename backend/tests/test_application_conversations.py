@@ -55,6 +55,7 @@ from app.domain.entities import (
     MODE_ANSWER,
     MODE_TEACH,
     SENTINEL,
+    TUTOR_OPENING_MESSAGE,
     AnswerCompleted,
     AnswerReasoningDelta,
     AnswerStreamEvent,
@@ -1793,6 +1794,110 @@ def test_teach_mode_sends_the_mode_target_section_path_and_history_to_the_port()
         }
     ]
     assert turn.mode == "teach"
+
+
+def test_opening_teach_retrieves_by_section_title() -> None:
+    user, source, sources, corpus, conversations, conversation = _scoped_world(
+        alias_expansions={"ch1.xhtml": ("ch1-old.xhtml",)}
+    )
+    evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
+    retrieve = FakeScopedRetrieveEvidence(evidence)
+
+    _post(
+        conversations=conversations,
+        turns=FakeConversationTurnRepository(),
+        sources=sources,
+        corpus=corpus,
+        retrieve=retrieve,
+        generation=FakeGeneration(answer=_answered(*evidence)),
+    )(
+        user=user,
+        conversation_id=conversation.id,
+        message=TUTOR_OPENING_MESSAGE,
+        mode=MODE_TEACH,
+    )
+
+    assert retrieve.calls[0]["query"] == "Chapter 1"
+    assert retrieve.calls[0]["query"] != TUTOR_OPENING_MESSAGE
+    assert retrieve.calls[0]["anchors"] == ["ch1.xhtml", "ch1.xhtml#core", "ch1-old.xhtml"]
+
+
+def test_opening_teach_stream_retrieves_by_section_title() -> None:
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
+    retrieve = FakeScopedRetrieveEvidence(evidence)
+
+    list(
+        _post(
+            conversations=conversations,
+            turns=FakeConversationTurnRepository(),
+            sources=sources,
+            corpus=corpus,
+            retrieve=retrieve,
+            generation=FakeGeneration(answer=_answered(*evidence)),
+        ).stream(
+            user=user,
+            conversation_id=conversation.id,
+            message=TUTOR_OPENING_MESSAGE,
+            mode=MODE_TEACH,
+        )
+    )
+
+    assert retrieve.calls[0]["query"] == conversation.target_title
+    assert retrieve.calls[0]["query"] != TUTOR_OPENING_MESSAGE
+
+
+def test_opening_teach_falls_back_to_target_anchor_when_title_is_empty() -> None:
+    user, source, sources = _owned_world()
+    parent = _section("ch1.xhtml", ("Chapter 1",), title="Chapter 1")
+    corpus = FakeCorpus(_structure(parent))
+    conversations = FakeConversationRepository(sources)
+    conversation = conversations.add(
+        _conversation(
+            source.id,
+            title="Untitled",
+            scope_anchors=("ch1.xhtml",),
+            target_anchor="ch1.xhtml",
+            target_section_path=("Chapter 1",),
+            target_title="",
+        )
+    )
+    evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
+    retrieve = FakeScopedRetrieveEvidence(evidence)
+
+    _post(
+        conversations=conversations,
+        turns=FakeConversationTurnRepository(),
+        sources=sources,
+        corpus=corpus,
+        retrieve=retrieve,
+        generation=FakeGeneration(answer=_answered(*evidence)),
+    )(
+        user=user,
+        conversation_id=conversation.id,
+        message=TUTOR_OPENING_MESSAGE,
+        mode=MODE_TEACH,
+    )
+
+    assert retrieve.calls[0]["query"] == "ch1.xhtml"
+
+
+def test_non_opening_teach_still_retrieves_with_the_learner_message() -> None:
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
+    retrieve = FakeScopedRetrieveEvidence(evidence)
+
+    _post(
+        conversations=conversations,
+        turns=FakeConversationTurnRepository(),
+        sources=sources,
+        corpus=corpus,
+        retrieve=retrieve,
+        generation=FakeGeneration(answer=_answered(*evidence)),
+    )(user=user, conversation_id=conversation.id, message="what is anchoring?", mode=MODE_TEACH)
+
+    assert retrieve.calls[0]["query"] == "what is anchoring?"
+    assert retrieve.calls[0]["anchors"] == ["ch1.xhtml", "ch1.xhtml#core"]
 
 
 def test_an_unknown_mode_is_rejected_from_the_published_error_vocabulary() -> None:

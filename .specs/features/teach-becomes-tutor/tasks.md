@@ -160,9 +160,9 @@ T11 → T12 → T13 → T14 → T15
 
 **Done when**:
 
-- [ ] Opening retrieve assertion uses `query=target_title`
-- [ ] A follow-up teach turn still retrieves with the learner text
-- [ ] Gate: `uv run pytest tests/test_application_conversations.py`
+- [x] Opening retrieve assertion uses `query=target_title`
+- [x] A follow-up teach turn still retrieves with the learner text
+- [x] Gate: `uv run pytest tests/test_application_conversations.py`
 
 **Tests**: unit
 **Gate**: quick

@@ -50,6 +50,7 @@ from app.domain.entities import (
     MODE_TEACH,
     NOT_FOUND_IN_SCOPE,
     NOT_FOUND_IN_SOURCE,
+    TUTOR_OPENING_MESSAGE,
     AnswerStreamEvent,
     CitedSpan,
     Conversation,
@@ -558,7 +559,7 @@ class PostConversationTurn:
         mode: str,
     ) -> ConversationTurn:
         prep = self._preflight(user=user, conversation_id=conversation_id, mode=mode)
-        plan = self._retrieve_evidence(user=user, prep=prep, message=message)
+        plan = self._retrieve_evidence(user=user, prep=prep, message=message, mode=mode)
 
         if not plan.evidence:
             # Nothing in scope to answer from → not-found; the port is never invoked,
@@ -613,7 +614,7 @@ class PostConversationTurn:
     ) -> Iterator[TurnStreamEvent]:
         yield StreamPhase(phase=PHASE_SEARCHING)
         try:
-            plan = self._retrieve_evidence(user=user, prep=prep, message=message)
+            plan = self._retrieve_evidence(user=user, prep=prep, message=message, mode=mode)
         except Exception as exc:  # retrieval can no longer answer with a status code
             # The reader is told only that generation failed, so this line is the
             # sole record of *why*: without it an index outage and a programming
@@ -715,7 +716,9 @@ class PostConversationTurn:
             anchors=anchors,
         )
 
-    def _retrieve_evidence(self, *, user: User, prep: _TurnPrep, message: str) -> _TurnPlan:
+    def _retrieve_evidence(
+        self, *, user: User, prep: _TurnPrep, message: str, mode: str
+    ) -> _TurnPlan:
         """Search the conversation's scope for this turn's evidence.
 
         Split out of the guards so the streaming path can run it *after* the first
@@ -725,7 +728,7 @@ class PostConversationTurn:
         evidence = self._retrieve(
             user=user,
             source_id=prep.conversation.source_id,
-            query=message,
+            query=self._retrieval_query(mode=mode, message=message, conversation=prep.conversation),
             top_k=self._evidence_top_k,
             anchors=prep.anchors,
             include_notes=prep.conversation.include_notes,
@@ -737,6 +740,14 @@ class PostConversationTurn:
             evidence=evidence,
             turn_index=prep.turn_index,
         )
+
+    @staticmethod
+    def _retrieval_query(*, mode: str, message: str, conversation: Conversation) -> str:
+        if mode != MODE_TEACH or message != TUTOR_OPENING_MESSAGE:
+            return message
+        if conversation.target_title:
+            return conversation.target_title
+        return conversation.target_anchor or message
 
     def _resolve_target(
         self, conversation: Conversation, by_anchor: dict[str, StructureSection]
@@ -879,9 +890,7 @@ class PostConversationTurn:
             return self._answered_turn(
                 plan, message, mode, (generated.text, []), generated.model, ()
             )
-        return self._not_found_turn(
-            plan, message, mode, len(plan.evidence), generated.model
-        )
+        return self._not_found_turn(plan, message, mode, len(plan.evidence), generated.model)
 
     def _answered_turn(
         self,
