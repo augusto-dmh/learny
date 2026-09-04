@@ -74,7 +74,7 @@ T12 -> T13
 
 ### Phase 1
 
-### T1: Draft RFC-0007 public-launch roadmap
+### T1: Draft RFC-0007 public-launch roadmap ✅
 
 **What**: Distill `docs/research/2026-09-03/synthesis.md` into a Draft RFC with seven bets as cycles; name this slug as Cycle A / Bet 1.
 **Where**: `docs/rfc/0007-public-launch-roadmap.md`
@@ -89,8 +89,8 @@ T12 -> T13
 
 **Done when**:
 
-- [ ] RFC exists as Draft, sequenced 1 → {2,3,4,5,7} → 6
-- [ ] Bet 1 matches this spec's boundary (no Haiku routing, no autorater)
+- [x] RFC exists as Draft, sequenced 1 → {2,3,4,5,7} → 6
+- [x] Bet 1 matches this spec's boundary (no Haiku routing, no autorater)
 
 **Tests**: none (docs layer)
 **Gate**: build
