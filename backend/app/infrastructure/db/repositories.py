@@ -1686,6 +1686,11 @@ class SqlAlchemyQuizItemRepository:
                 *_QUIZ_ITEM_READ_COLUMNS,
                 func.coalesce(sources.c.title, "Your notes").label("source_title"),
                 quiz_item_scheduling.c.due.label("due"),
+                quiz_item_scheduling.c.state,
+                quiz_item_scheduling.c.step,
+                quiz_item_scheduling.c.stability,
+                quiz_item_scheduling.c.difficulty,
+                quiz_item_scheduling.c.last_review,
                 func.coalesce(notes.c.id, notes_via_id.c.id).label("provenance_note_id"),
                 func.coalesce(notes.c.title, notes_via_id.c.title).label("provenance_note_title"),
                 note_changed,
@@ -1710,6 +1715,7 @@ class SqlAlchemyQuizItemRepository:
                     else None
                 ),
                 note_changed=bool(row.note_changed),
+                snapshot=_to_scheduling(row),
             )
             for row in rows
         ]

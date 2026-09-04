@@ -90,7 +90,6 @@ from app.domain.ports import (
     NoteIndexEnqueuer,
     QuizDeckEnqueuer,
     QuizGenerationPort,
-    SchedulingPort,
     StoragePort,
 )
 from app.infrastructure.answering import (
@@ -627,18 +626,9 @@ def get_due_queue(conn: DbConnection, settings: AppSettings) -> GetDueQueue:
     return GetDueQueue(
         items=SqlAlchemyQuizItemRepository(conn),
         clock=_clock,
+        scheduling=build_scheduling_adapter(settings),
         session_size=settings.review_session_size,
     )
-
-
-def get_scheduling_port(settings: AppSettings) -> SchedulingPort:
-    """Wire the FSRS adapter for interval preview (AD-312)."""
-    return build_scheduling_adapter(settings)
-
-
-def get_quiz_item_repository(conn: DbConnection) -> SqlAlchemyQuizItemRepository:
-    """Request-scoped quiz-item repository for due-queue snapshot reads."""
-    return SqlAlchemyQuizItemRepository(conn)
 
 
 def get_export_quiz_deck(conn: DbConnection) -> ExportQuizDeck:
@@ -679,6 +669,7 @@ def get_undo_last_review(conn: DbConnection) -> UndoLastReview:
     """
     return UndoLastReview(
         items=SqlAlchemyQuizItemRepository(conn),
+        scheduling=build_scheduling_adapter(get_settings()),
         clock=_clock,
         study_days=SqlAlchemyStudyDayRepository(conn),
     )
@@ -698,6 +689,7 @@ def get_reset_schedule(conn: DbConnection) -> ResetSchedule:
     return ResetSchedule(
         items=SqlAlchemyQuizItemRepository(conn),
         scheduling=build_scheduling_adapter(get_settings()),
+        clock=_clock,
     )
 
 

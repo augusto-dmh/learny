@@ -14,7 +14,8 @@ indistinguishable (``QuizItemNotFound`` → 404, no disclosure).
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
+from datetime import datetime
 from uuid import UUID
 
 from app.application.dates import local_day
@@ -23,6 +24,7 @@ from app.application.errors import (
     QuizItemNotReviewable,
     QuizReviewNotUndoable,
 )
+from app.application.intervals import interval_labels_for
 from app.domain.entities import (
     DueReviewItem,
     QuizItem,
@@ -59,6 +61,23 @@ DEFAULT_DUE_LIMIT = 20
 MAX_DUE_LIMIT = 100
 
 
+@dataclass(frozen=True)
+class ReviewedSchedule:
+    """A persisted snapshot plus the throwaway next-interval buckets for the UI."""
+
+    snapshot: SchedulingSnapshot
+    interval_labels: dict[int, str]
+
+
+def _reviewed(
+    scheduling: SchedulingPort, snapshot: SchedulingSnapshot, now: datetime
+) -> ReviewedSchedule:
+    return ReviewedSchedule(
+        snapshot=snapshot,
+        interval_labels=interval_labels_for(scheduling, snapshot, now),
+    )
+
+
 class GetDueQueue:
     """Return the caller's due review queue across their sources (QUIZ-13).
 
@@ -69,7 +88,9 @@ class GetDueQueue:
     :data:`MAX_DUE_LIMIT`; the total due count is the full count before the limit.
     Ownership is enforced by the repository's join through ``sources`` — no
     cross-user leakage. Flagged cards are excluded even when they are active and
-    past-due (REV-35).
+    past-due (REV-35). Interval labels come from a fuzzing-off preview of the
+    snapshot already joined on that query — the HTTP adapter does not re-read
+    ``quiz_item_scheduling``.
     """
 
     def __init__(
@@ -77,10 +98,12 @@ class GetDueQueue:
         *,
         items: QuizItemRepository,
         clock: Clock,
+        scheduling: SchedulingPort,
         session_size: int = DEFAULT_DUE_LIMIT,
     ) -> None:
         self._items = items
         self._clock = clock
+        self._scheduling = scheduling
         self._session_size = min(session_size, MAX_DUE_LIMIT)
 
     def __call__(
@@ -92,9 +115,20 @@ class GetDueQueue:
     ) -> tuple[int, list[DueReviewItem]]:
         effective = self._session_size if limit is None else limit
         capped = min(effective, MAX_DUE_LIMIT)
-        return self._items.due_for_user(
-            user.id, now=self._clock.now(), limit=capped, source_id=source_id
-        )
+        now = self._clock.now()
+        total, dues = self._items.due_for_user(user.id, now=now, limit=capped, source_id=source_id)
+        labeled = [
+            replace(
+                due,
+                interval_labels=(
+                    interval_labels_for(self._scheduling, due.snapshot, now)
+                    if due.snapshot is not None
+                    else {}
+                ),
+            )
+            for due in dues
+        ]
+        return total, labeled
 
 
 class SubmitReview:
@@ -138,7 +172,7 @@ class SubmitReview:
         rating: int,
         review_duration_ms: int | None = None,
         client_tz: str | None = None,
-    ) -> SchedulingSnapshot:
+    ) -> ReviewedSchedule:
         item = _owned_item(self._items, user, item_id)
         if item.status != QuizItemStatus.ACTIVE:
             raise QuizItemNotReviewable("Quiz item is not reviewable.")
@@ -152,7 +186,7 @@ class SubmitReview:
             replace(log, review_duration_ms=review_duration_ms, previous=snapshot),
         )
         self._study_days.record(user.id, local_day(now, client_tz), reviews=1)
-        return advanced
+        return _reviewed(self._scheduling, advanced, now)
 
 
 class UndoLastReview:
@@ -172,14 +206,16 @@ class UndoLastReview:
         self,
         *,
         items: QuizItemRepository,
+        scheduling: SchedulingPort,
         clock: Clock,
         study_days: StudyDayRepository,
     ) -> None:
         self._items = items
+        self._scheduling = scheduling
         self._clock = clock
         self._study_days = study_days
 
-    def __call__(self, *, user: User, client_tz: str | None = None) -> SchedulingSnapshot:
+    def __call__(self, *, user: User, client_tz: str | None = None) -> ReviewedSchedule:
         row = self._items.latest_undoable_review(user.id)
         if row is None or row.previous is None:
             raise QuizReviewNotUndoable("Nothing to undo.")
@@ -187,9 +223,10 @@ class UndoLastReview:
         if item is None or item.user_id != user.id:
             raise QuizItemNotFound("Quiz item not found.")
         self._items.update_scheduling(item.id, row.previous)
-        self._items.mark_log_undone(row.log_id, self._clock.now())
+        now = self._clock.now()
+        self._items.mark_log_undone(row.log_id, now)
         self._study_days.decrement_reviews(user.id, local_day(row.reviewed_at, client_tz))
-        return row.previous
+        return _reviewed(self._scheduling, row.previous, now)
 
 
 class ResetSchedule:
@@ -209,11 +246,13 @@ class ResetSchedule:
         *,
         items: QuizItemRepository,
         scheduling: SchedulingPort,
+        clock: Clock,
     ) -> None:
         self._items = items
         self._scheduling = scheduling
+        self._clock = clock
 
-    def __call__(self, *, user: User, item_id: UUID) -> SchedulingSnapshot:
+    def __call__(self, *, user: User, item_id: UUID) -> ReviewedSchedule:
         item = _owned_item(self._items, user, item_id)
         if item.status != QuizItemStatus.ACTIVE:
             raise QuizItemNotReviewable("Quiz item is not reviewable.")
@@ -221,7 +260,7 @@ class ResetSchedule:
         fresh = self._scheduling.initial()
         self._items.update_scheduling(item.id, fresh)
         self._items.clear_note_changed(item.id)
-        return fresh
+        return _reviewed(self._scheduling, fresh, self._clock.now())
 
 
 class FlagCard:

@@ -47,6 +47,7 @@ from app.application.reviews import (
     FlagCard,
     GetDueQueue,
     ResetSchedule,
+    ReviewedSchedule,
     SubmitReview,
     UndoLastReview,
 )
@@ -59,10 +60,8 @@ from app.domain.entities import (
     SchedulingSnapshot,
     User,
 )
-from app.domain.ports import QuizDeckEnqueuer, SchedulingPort
-from app.infrastructure.db.repositories import SqlAlchemyQuizItemRepository
+from app.domain.ports import QuizDeckEnqueuer
 from app.infrastructure.export.anki import build_apkg
-from app.infrastructure.scheduling.fsrs import interval_bucket
 from app.infrastructure.web.csrf import enforce_csrf, enforce_origin
 from app.infrastructure.web.dependencies import (
     AppSettings,
@@ -74,10 +73,8 @@ from app.infrastructure.web.dependencies import (
     get_flag_card,
     get_list_quiz_items,
     get_quiz_deck_enqueuer,
-    get_quiz_item_repository,
     get_quiz_uow,
     get_reset_schedule,
-    get_scheduling_port,
     get_submit_review,
     get_undo_last_review,
 )
@@ -102,16 +99,6 @@ def _export_filename(source_title: str) -> str:
     base = re.sub(r"[^A-Za-z0-9 _-]+", "", source_title).strip()
     base = re.sub(r"\s+", "_", base) or "deck"
     return f"{base}.apkg"
-
-
-def _interval_labels(
-    scheduling: SchedulingPort, snapshot: SchedulingSnapshot, now: datetime
-) -> dict[int, str]:
-    """Bucket preview dues for ratings 1–4 (AD-312). Preview is not a persist path."""
-    return {
-        rating: interval_bucket(due - now)
-        for rating, due in scheduling.preview(snapshot, now).items()
-    }
 
 
 # --- Request bodies ------------------------------------------------------------
@@ -275,7 +262,7 @@ class DueItemView(BaseModel):
     interval_labels: dict[int, str]
 
     @classmethod
-    def from_due(cls, due: DueReviewItem, *, interval_labels: dict[int, str]) -> DueItemView:
+    def from_due(cls, due: DueReviewItem) -> DueItemView:
         item = due.item
         return cls(
             id=item.id,
@@ -297,7 +284,7 @@ class DueItemView(BaseModel):
             status=item.status,
             due=due.due,
             note_changed=due.note_changed,
-            interval_labels=interval_labels,
+            interval_labels=due.interval_labels,
         )
 
 
@@ -334,6 +321,10 @@ class SchedulingView(BaseModel):
             last_review=snapshot.last_review,
             interval_labels=interval_labels,
         )
+
+    @classmethod
+    def from_reviewed(cls, result: ReviewedSchedule) -> SchedulingView:
+        return cls.from_snapshot(result.snapshot, interval_labels=result.interval_labels)
 
 
 class FlagView(BaseModel):
@@ -416,8 +407,6 @@ def get_due_reviews(
     user: Annotated[User, Depends(get_authenticated_user)],
     service: Annotated[GetDueQueue, Depends(get_due_queue)],
     settings: AppSettings,
-    scheduling: Annotated[SchedulingPort, Depends(get_scheduling_port)],
-    items: Annotated[SqlAlchemyQuizItemRepository, Depends(get_quiz_item_repository)],
     limit: Annotated[int | None, Query(ge=1, le=100)] = None,
     source_id: Annotated[UUID | None, Query()] = None,
 ) -> DueQueueView:
@@ -426,18 +415,12 @@ def get_due_reviews(
     Active items with ``due <= now`` (stale/orphaned excluded), ordered ``due ASC,
     id ASC``; optional ``source_id`` filter. ``limit`` defaults to
     ``LEARNY_REVIEW_SESSION_SIZE`` and is capped at 100 by Pydantic — over-100 →
-    422. ``session_size`` and ``requeue_minutes`` are the configured knobs (AD-310,
-    AD-311); interval labels are a non-persisted preview (REV-29, AD-312).
+    422. ``session_size`` and ``requeue_minutes`` are the configured knobs;
+    interval labels are a non-persisted preview attached by ``GetDueQueue``.
     """
     total, dues = service(user=user, limit=limit, source_id=source_id)
-    now = datetime.now(UTC)
-    views: list[DueItemView] = []
-    for due in dues:
-        snapshot = items.get_scheduling(due.item.id)
-        labels = {} if snapshot is None else _interval_labels(scheduling, snapshot, now)
-        views.append(DueItemView.from_due(due, interval_labels=labels))
     return DueQueueView(
-        items=views,
+        items=[DueItemView.from_due(due) for due in dues],
         total_due=total,
         session_size=settings.review_session_size,
         requeue_minutes=settings.review_requeue_minutes,
@@ -456,7 +439,6 @@ def submit_review(
     item_id: UUID,
     user: Annotated[User, Depends(get_authenticated_user)],
     service: Annotated[SubmitReview, Depends(get_submit_review)],
-    scheduling: Annotated[SchedulingPort, Depends(get_scheduling_port)],
     body: ReviewRequest,
     client_tz: Annotated[str | None, Header(alias="X-Client-Timezone")] = None,
 ) -> SchedulingView:
@@ -470,17 +452,14 @@ def submit_review(
     The optional ``X-Client-Timezone`` header sets the study-day boundary (silent UTC
     fallback); it does not affect the response body.
     """
-    snapshot = service(
+    result = service(
         user=user,
         item_id=item_id,
         rating=body.rating,
         review_duration_ms=body.review_duration_ms,
         client_tz=client_tz,
     )
-    now = datetime.now(UTC)
-    return SchedulingView.from_snapshot(
-        snapshot, interval_labels=_interval_labels(scheduling, snapshot, now)
-    )
+    return SchedulingView.from_reviewed(result)
 
 
 @router.post(
@@ -494,7 +473,6 @@ def submit_review(
 def undo_last_review(
     user: Annotated[User, Depends(get_authenticated_user)],
     service: Annotated[UndoLastReview, Depends(get_undo_last_review)],
-    scheduling: Annotated[SchedulingPort, Depends(get_scheduling_port)],
     client_tz: Annotated[str | None, Header(alias="X-Client-Timezone")] = None,
 ) -> SchedulingView:
     """Restore the caller's last grade and return the previous scheduling (200).
@@ -506,11 +484,8 @@ def undo_last_review(
     the study-day to decrement (silent UTC fallback); it does not affect the
     response body.
     """
-    snapshot = service(user=user, client_tz=client_tz)
-    now = datetime.now(UTC)
-    return SchedulingView.from_snapshot(
-        snapshot, interval_labels=_interval_labels(scheduling, snapshot, now)
-    )
+    result = service(user=user, client_tz=client_tz)
+    return SchedulingView.from_reviewed(result)
 
 
 @router.post(
@@ -548,7 +523,6 @@ def reset_schedule(
     item_id: UUID,
     user: Annotated[User, Depends(get_authenticated_user)],
     service: Annotated[ResetSchedule, Depends(get_reset_schedule)],
-    scheduling: Annotated[SchedulingPort, Depends(get_scheduling_port)],
 ) -> SchedulingView:
     """Reset one owned active card to its fresh state and retire the badge (200; 404/409).
 
@@ -559,11 +533,8 @@ def reset_schedule(
     append-only review log is left untouched. This is the only non-review path that changes
     scheduling (NL-12).
     """
-    snapshot = service(user=user, item_id=item_id)
-    now = datetime.now(UTC)
-    return SchedulingView.from_snapshot(
-        snapshot, interval_labels=_interval_labels(scheduling, snapshot, now)
-    )
+    result = service(user=user, item_id=item_id)
+    return SchedulingView.from_reviewed(result)
 
 
 @router.get("/api/sources/{source_id}/quiz/export")

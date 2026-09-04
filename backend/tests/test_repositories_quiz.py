@@ -431,6 +431,10 @@ def test_due_for_user_returns_active_past_due_ordered_with_title(db_conn: Connec
     assert [d.item.id for d in items] == [earlier.id, later.id]
     assert items[0].source_title == "Due Book"
     assert items[0].due == now - timedelta(hours=5)
+    assert items[0].snapshot is not None
+    assert items[0].snapshot.due == items[0].due
+    assert items[0].snapshot == repo.get_scheduling(items[0].item.id)
+    assert items[0].snapshot == repo.get_scheduling(earlier.id)
 
 
 def test_due_for_user_excludes_future_due(db_conn: Connection) -> None:

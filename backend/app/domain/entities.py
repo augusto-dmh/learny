@@ -990,6 +990,12 @@ class DueReviewItem:
     due: datetime
     provenance: CardProvenance | None = None
     note_changed: bool = False
+    # Joined ``quiz_item_scheduling`` row — ``GetDueQueue`` previews labels from this
+    # instead of a second ``get_scheduling`` per card. ``None`` on unit doubles that
+    # only pin ``due_for_user`` arguments.
+    snapshot: SchedulingSnapshot | None = None
+    # Rating → bucket from a non-persisted preview. Empty until ``GetDueQueue`` fills it.
+    interval_labels: dict[int, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

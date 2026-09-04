@@ -14,42 +14,19 @@ same adapter for ``review``.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from fsrs import Card, Rating, Scheduler, State
 
+from app.application.intervals import INTERVAL_LABELS, interval_bucket
 from app.domain.entities import ReviewLogEntry, SchedulingSnapshot
+
+# Re-export the application-owned buckets so existing adapter tests keep importing
+# from this module. The product rule itself lives in ``app.application.intervals``.
+__all__ = ["INTERVAL_LABELS", "FsrsSchedulingAdapter", "interval_bucket"]
 
 # The FSRS-6 maximum interval (days) — a card is never scheduled further out (design).
 _MAXIMUM_INTERVAL = 36500
-
-# Display buckets for interval preview (AD-312). Exact minutes are a lie under
-# fuzzing, so the UI grades against one of these nine tokens.
-INTERVAL_LABELS: frozenset[str] = frozenset(
-    {"~1m", "~10m", "~1h", "~1d", "~4d", "~2w", "~1mo", "~4mo", "~1y"}
-)
-
-
-def interval_bucket(delta: timedelta) -> str:
-    """Map a next-due delta onto exactly one of the nine preview labels (AD-312)."""
-    seconds = delta.total_seconds()
-    if seconds < 90:
-        return "~1m"
-    if seconds < 12 * 60:
-        return "~10m"
-    if seconds < 90 * 60:
-        return "~1h"
-    if seconds < 36 * 3600:
-        return "~1d"
-    if seconds < 6 * 86400:
-        return "~4d"
-    if seconds < 18 * 86400:
-        return "~2w"
-    if seconds < 45 * 86400:
-        return "~1mo"
-    if seconds < 150 * 86400:
-        return "~4mo"
-    return "~1y"
 
 
 def _to_snapshot(card: Card) -> SchedulingSnapshot:

@@ -78,10 +78,29 @@ def _user() -> User:
     return User(id=uuid4(), email="due@example.com", created_at=_NOW)
 
 
+class _UnusedScheduling:
+    """A ``SchedulingPort`` double that fails if preview runs without a snapshot."""
+
+    def preview(self, snapshot, reviewed_at):  # noqa: ANN001, ANN201
+        raise AssertionError("preview should not run without a joined snapshot")
+
+
+class _PreviewScheduling:
+    """Returns fixed dues so GetDueQueue's bucket mapping is asserted, not FSRS."""
+
+    def preview(self, snapshot, reviewed_at):  # noqa: ANN001, ANN201
+        return {
+            1: reviewed_at + timedelta(seconds=30),
+            2: reviewed_at + timedelta(minutes=10),
+            3: reviewed_at + timedelta(days=1),
+            4: reviewed_at + timedelta(days=4),
+        }
+
+
 def test_due_queue_defaults_to_twenty_and_passes_user_and_now() -> None:
     repo = _CapturingItemRepo((0, []))
     user = _user()
-    service = GetDueQueue(items=repo, clock=FakeClock(_NOW))
+    service = GetDueQueue(items=repo, clock=FakeClock(_NOW), scheduling=_UnusedScheduling())
 
     total, items = service(user=user)
 
@@ -95,7 +114,9 @@ def test_due_queue_defaults_to_twenty_and_passes_user_and_now() -> None:
 
 def test_due_queue_uses_injected_session_size_when_limit_is_omitted() -> None:
     repo = _CapturingItemRepo((0, []))
-    service = GetDueQueue(items=repo, clock=FakeClock(_NOW), session_size=7)
+    service = GetDueQueue(
+        items=repo, clock=FakeClock(_NOW), scheduling=_UnusedScheduling(), session_size=7
+    )
 
     service(user=_user())
 
@@ -104,7 +125,9 @@ def test_due_queue_uses_injected_session_size_when_limit_is_omitted() -> None:
 
 def test_due_queue_caps_injected_session_size_at_max() -> None:
     repo = _CapturingItemRepo((0, []))
-    service = GetDueQueue(items=repo, clock=FakeClock(_NOW), session_size=1000)
+    service = GetDueQueue(
+        items=repo, clock=FakeClock(_NOW), scheduling=_UnusedScheduling(), session_size=1000
+    )
 
     service(user=_user())
 
@@ -113,7 +136,7 @@ def test_due_queue_caps_injected_session_size_at_max() -> None:
 
 def test_due_queue_caps_limit_at_max() -> None:
     repo = _CapturingItemRepo((0, []))
-    service = GetDueQueue(items=repo, clock=FakeClock(_NOW))
+    service = GetDueQueue(items=repo, clock=FakeClock(_NOW), scheduling=_UnusedScheduling())
 
     service(user=_user(), limit=1000)
 
@@ -125,7 +148,7 @@ def test_due_queue_passes_source_filter_and_returns_repo_result() -> None:
         item=_item(uuid4()), source_title="Book", due=_NOW - timedelta(hours=1)
     )
     repo = _CapturingItemRepo((1, [due_item]))
-    service = GetDueQueue(items=repo, clock=FakeClock(_NOW))
+    service = GetDueQueue(items=repo, clock=FakeClock(_NOW), scheduling=_UnusedScheduling())
     source_id = uuid4()
 
     total, items = service(user=_user(), limit=5, source_id=source_id)
@@ -135,6 +158,31 @@ def test_due_queue_passes_source_filter_and_returns_repo_result() -> None:
     call = repo.calls[0]
     assert call["limit"] == 5
     assert call["source_id"] == source_id
+
+
+def test_due_queue_attaches_interval_labels_from_the_joined_snapshot() -> None:
+    snapshot = SchedulingSnapshot(
+        state=1,
+        step=0,
+        stability=None,
+        difficulty=None,
+        due=_NOW - timedelta(hours=1),
+        last_review=None,
+    )
+    due_item = DueReviewItem(
+        item=_item(uuid4()),
+        source_title="Book",
+        due=snapshot.due,
+        snapshot=snapshot,
+    )
+    repo = _CapturingItemRepo((1, [due_item]))
+    service = GetDueQueue(items=repo, clock=FakeClock(_NOW), scheduling=_PreviewScheduling())
+
+    _total, items = service(user=_user())
+
+    assert items[0].interval_labels == {1: "~1m", 2: "~10m", 3: "~1d", 4: "~4d"}
+    assert items[0].snapshot == snapshot
+    assert not hasattr(repo, "get_scheduling")
 
 
 # --- SubmitReview (integration) -------------------------------------------------
@@ -237,8 +285,9 @@ def test_submit_review_advances_scheduling_and_appends_log(db_conn: Connection) 
     )
 
     # Good schedules the next review after now — the due date advanced.
-    assert advanced.due > _NOW
-    assert repo.get_scheduling(item.id) == advanced
+    assert advanced.snapshot.due > _NOW
+    assert repo.get_scheduling(item.id) == advanced.snapshot
+    assert set(advanced.interval_labels) == {1, 2, 3, 4}
     rows = db_conn.execute(
         select(review_log.c.rating, review_log.c.review_duration_ms).where(
             review_log.c.quiz_item_id == item.id
@@ -270,7 +319,7 @@ def test_submit_review_allows_early_review_of_future_due_item(db_conn: Connectio
 
     advanced = _service(db_conn, now=_NOW)(user=user, item_id=item.id, rating=3)
 
-    assert advanced.due > _NOW
+    assert advanced.snapshot.due > _NOW
 
 
 @requires_db
@@ -478,6 +527,7 @@ def _reset_service(db_conn: Connection) -> ResetSchedule:
     return ResetSchedule(
         items=SqlAlchemyQuizItemRepository(db_conn),
         scheduling=FsrsSchedulingAdapter(fuzzing=False),
+        clock=FakeClock(_NOW),
     )
 
 
@@ -489,8 +539,8 @@ def test_submit_review_advances_a_source_less_note_card(db_conn: Connection) -> 
 
     advanced = _service(db_conn, now=_NOW)(user=user, item_id=item.id, rating=3)
 
-    assert advanced.due > _NOW
-    assert SqlAlchemyQuizItemRepository(db_conn).get_scheduling(item.id) == advanced
+    assert advanced.snapshot.due > _NOW
+    assert SqlAlchemyQuizItemRepository(db_conn).get_scheduling(item.id) == advanced.snapshot
 
 
 @requires_db
@@ -539,14 +589,14 @@ def test_reset_returns_fresh_state_clears_badge_and_preserves_log(
     # Fresh state: the learning shape a new card receives (no hand-rolled literal), and
     # the stored snapshot is exactly what was returned.
     reference = FsrsSchedulingAdapter(fuzzing=False).initial()
-    assert fresh.state == reference.state
-    assert fresh.stability == reference.stability
-    assert fresh.difficulty == reference.difficulty
-    assert fresh.last_review is None
+    assert fresh.snapshot.state == reference.state
+    assert fresh.snapshot.stability == reference.stability
+    assert fresh.snapshot.difficulty == reference.difficulty
+    assert fresh.snapshot.last_review is None
     # Due is minted "now" (Learning), bounded by the call window — the advanced
     # schedule is gone. Bounding against the real clock keeps this date-proof.
-    assert before <= fresh.due <= after
-    assert repo.get_scheduling(item.id) == fresh
+    assert before <= fresh.snapshot.due <= after
+    assert repo.get_scheduling(item.id) == fresh.snapshot
     # Badge cleared, review log untouched.
     assert repo.get_by_id(item.id).note_changed_at is None
     log_after = db_conn.execute(
@@ -592,6 +642,7 @@ def test_reset_missing_item_is_404(db_conn: Connection) -> None:
 def _undo_service(db_conn: Connection, *, now: datetime) -> UndoLastReview:
     return UndoLastReview(
         items=SqlAlchemyQuizItemRepository(db_conn),
+        scheduling=FsrsSchedulingAdapter(fuzzing=False),
         clock=FakeClock(now),
         study_days=SqlAlchemyStudyDayRepository(db_conn),
     )
@@ -646,11 +697,12 @@ def test_undo_restores_scheduling_and_keeps_the_log_row(db_conn: Connection) -> 
     clock.advance(timedelta(seconds=5))
     restored = UndoLastReview(
         items=repo,
+        scheduling=FsrsSchedulingAdapter(fuzzing=False),
         clock=clock,
         study_days=SqlAlchemyStudyDayRepository(db_conn),
     )(user=user)
 
-    assert restored == before
+    assert restored.snapshot == before
     assert repo.get_scheduling(item.id) == before
     rows = db_conn.execute(
         select(review_log.c.rating, review_log.c.undone_at).where(
@@ -776,6 +828,7 @@ def test_undo_targets_the_callers_latest_review_across_items(db_conn: Connection
 
     UndoLastReview(
         items=repo,
+        scheduling=FsrsSchedulingAdapter(fuzzing=False),
         clock=clock,
         study_days=SqlAlchemyStudyDayRepository(db_conn),
     )(user=user)
@@ -841,6 +894,7 @@ def test_undo_vanished_item_is_not_found() -> None:
     with pytest.raises(QuizItemNotFound):
         UndoLastReview(
             items=_VanishedItemRepo(),
+            scheduling=FsrsSchedulingAdapter(fuzzing=False),
             clock=FakeClock(_NOW),
             study_days=FakeStudyDayRepository(),
         )(user=_user())
