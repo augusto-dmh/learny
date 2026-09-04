@@ -95,9 +95,9 @@ T11 → T12 → T13 → T14
 
 **Done when**:
 
-- [ ] One unit per reason code fails that code and no other
-- [ ] A legal one-word cloze and a short free-recall return `None`
-- [ ] Gate: `uv run pytest tests/test_application_quiz_qc.py`
+- [x] One unit per reason code fails that code and no other
+- [x] A legal one-word cloze and a short free-recall return `None`
+- [x] Gate: `uv run pytest tests/test_application_quiz_qc.py`
 
 **Tests**: unit
 **Gate**: quick
