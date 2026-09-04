@@ -407,6 +407,25 @@ class Evidence:
 
 
 @dataclass(frozen=True)
+class CitedSpan:
+    """One claim-level passage a generation adapter reported, located in its chunk.
+
+    ``quote`` is the sentence the provider actually cited; ``start`` and ``end`` are
+    Python ``str`` indices into the *exact* text the adapter sent as that chunk's
+    document body, so a reader can be shown the sentence rather than the whole
+    chunk. Learny-owned by construction: a provider's own document ordering is
+    resolved to ``chunk_id`` inside the adapter and never reaches this type
+    (ADR-0020). A span is only as good as the chunk it names — grounding drops it
+    with the chunk.
+    """
+
+    chunk_id: UUID
+    quote: str
+    start: int
+    end: int
+
+
+@dataclass(frozen=True)
 class GeneratedAnswer:
     """The raw output of the answer-generation port (QA-05, ADR-0007 §4).
 
@@ -415,12 +434,18 @@ class GeneratedAnswer:
     are the chunk ids the adapter drew on; the application service grounds them
     against the retrieved evidence. ``found`` is ``False`` when the evidence
     cannot support an answer (``text`` empty, ``cited_chunk_ids`` empty).
+
+    ``spans`` carries the claim-level quotes when the provider reported them. It
+    defaults to empty because reporting them is an adapter capability, not a port
+    requirement: an adapter that returns none (the deterministic one) is answering
+    exactly as completely as before.
     """
 
     text: str
     cited_chunk_ids: tuple[UUID, ...]
     model: str
     found: bool
+    spans: tuple[CitedSpan, ...] = ()
 
 
 # The exact reply a generation adapter instructs the model to return, alone, when
@@ -515,9 +540,15 @@ MODE_TEACH = "teach"
 # reader's own selection could not support the answer — which a client can offer to
 # widen — while ``not_found_in_source`` is the whole-book verdict. Collapsing them
 # would let a scoped conversation look like it had searched the whole book.
+# ``failed`` is the fourth value and the odd one out: the other three are verdicts
+# about the book, while this one says no verdict was reached because generation or
+# transport failed. It is a status rather than only an HTTP code because the turn is
+# persisted (AD-262) — a reader who reloads after a provider error must still find
+# the question they asked.
 ANSWERED = "answered"
 NOT_FOUND_IN_SOURCE = "not_found_in_source"
 NOT_FOUND_IN_SCOPE = "not_found_in_scope"
+FAILED = "failed"
 
 
 @dataclass(frozen=True)

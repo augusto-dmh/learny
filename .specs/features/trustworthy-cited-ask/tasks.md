@@ -97,7 +97,7 @@ T12 -> T13
 
 ---
 
-### T2: Domain `CitedSpan`, `FAILED`, and `GeneratedAnswer.spans`
+### T2: Domain `CitedSpan`, `FAILED`, and `GeneratedAnswer.spans` ✅
 
 **What**: Add Learny-owned `CitedSpan`, `FAILED = "failed"`, and optional `spans` on `GeneratedAnswer`; pin the four answer statuses.
 **Where**: `backend/app/domain/entities.py`
@@ -112,9 +112,9 @@ T12 -> T13
 
 **Done when**:
 
-- [ ] `document_index` does not appear on the domain types
-- [ ] Domain test asserts `failed` is distinct from the three existing statuses
-- [ ] Deterministic default `spans=()` keeps existing constructors valid
+- [x] `document_index` does not appear on the domain types
+- [x] Domain test asserts `failed` is distinct from the three existing statuses
+- [x] Deterministic default `spans=()` keeps existing constructors valid
 
 **Tests**: unit
 **Gate**: quick
