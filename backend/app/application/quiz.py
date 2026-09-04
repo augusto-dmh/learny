@@ -345,8 +345,7 @@ class RunDeckGeneration:
         )
         if reason is not None:
             return None, reason
-        if located is None:
-            return None, "ungrounded"
+        assert located is not None
         return located, None
 
     def _is_duplicate(self, embedding: list[float], targets: list[list[float]]) -> bool:
