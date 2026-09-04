@@ -212,7 +212,7 @@ Teach is a cited, section-scoped chat with a four-sentence "patient tutor" promp
 | TUTOR-37 | P1: One FSRS card | T10 | Done |
 | TUTOR-38 | P1: One FSRS card | T10 | Done |
 | TUTOR-39 | P1: One FSRS card | T9 | Done |
-| TUTOR-40 | P1: One FSRS card | Tasks | In Tasks |
+| TUTOR-40 | P1: One FSRS card | T11 | Done |
 | TUTOR-41 | P1: One FSRS card | Tasks | In Tasks |
 | TUTOR-42 | P1: One FSRS card | T10 | Done |
 

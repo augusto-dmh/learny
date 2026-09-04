@@ -311,9 +311,9 @@ T11 → T12 → T13 → T14 → T15
 
 **Done when**:
 
-- [ ] Anchor still present → active even if excerpt is only the title
-- [ ] Anchor gone → orphaned; scheduling row bytes unchanged
-- [ ] Gate: `uv run pytest tests/test_application_quiz.py`
+- [x] Anchor still present → active even if excerpt is only the title
+- [x] Anchor gone → orphaned; scheduling row bytes unchanged
+- [x] Gate: `uv run pytest tests/test_application_quiz.py`
 
 **Tests**: unit
 **Gate**: quick

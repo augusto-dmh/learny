@@ -11,6 +11,7 @@ persisted state, not on mock call counts alone.
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
 from itertools import count
@@ -23,6 +24,7 @@ from app.application.identity import AuthorizeOwnership
 from app.application.quiz import (
     ListQuizItems,
     PlanDeckGeneration,
+    ReconcileQuizItems,
     RunDeckGeneration,
 )
 from app.application.quiz_qc import CLOZE_BLANK, content_key
@@ -31,10 +33,12 @@ from app.domain.entities import (
     QuizDeckResult,
     QuizGenerationJob,
     QuizItem,
+    QuizItemOrigin,
     QuizItemStatus,
     QuizItemType,
     QuizJobStatus,
     QuizSection,
+    ReconcileSection,
     SchedulingSnapshot,
     Source,
     User,
@@ -689,3 +693,186 @@ def test_list_quiz_items_hides_non_owner() -> None:
         ListQuizItems(sources=sources, items=items, jobs=jobs, authorize=AuthorizeOwnership())(
             user=stranger, source_id=source.id
         )
+
+
+# --- ReconcileQuizItems (TUTOR-40) ----------------------------------------------
+
+_TITLE_EXCERPT = "Cells"
+_BODY_WITHOUT_TITLE = "The mitochondria is the powerhouse of the cell and makes energy."
+
+
+class FakeReconcileItemRepository:
+    """In-memory items slice: reconcile writes status/anchor/path only."""
+
+    def __init__(self, items: list[QuizItem]) -> None:
+        self._items = {item.id: item for item in items}
+        self.scheduling = {item.id: _INITIAL for item in items}
+        self.review_log = {item.id: (3,) for item in items}
+
+    def items_for_reconcile(self, source_id: UUID) -> list[QuizItem]:
+        return [item for item in self._items.values() if item.source_id == source_id]
+
+    def update_reconciliation(
+        self,
+        item_id: UUID,
+        *,
+        anchor: str,
+        section_path: Sequence[str],
+        status: str,
+    ) -> None:
+        item = self._items[item_id]
+        self._items[item_id] = replace(
+            item, anchor=anchor, section_path=tuple(section_path), status=status
+        )
+
+
+class FakeReconcileCorpus:
+    """``CorpusRepository.section_texts`` double."""
+
+    def __init__(self, sections: list[ReconcileSection]) -> None:
+        self._sections = sections
+
+    def section_texts(self, source_id: UUID) -> list[ReconcileSection]:  # noqa: ARG002
+        return list(self._sections)
+
+
+def _quiz_item(
+    source_id: UUID,
+    *,
+    origin: str,
+    anchor: str,
+    section_path: tuple[str, ...],
+    excerpt: str,
+    question: str = "Q?",
+) -> QuizItem:
+    return QuizItem(
+        id=uuid4(),
+        source_id=source_id,
+        origin=origin,
+        item_type=QuizItemType.FREE_RECALL,
+        question=question,
+        answer="A",
+        section_path=section_path,
+        anchor=anchor,
+        source_excerpt=excerpt,
+        chunk_hash="h" * 64,
+        content_key=content_key(QuizItemType.FREE_RECALL, question, "A"),
+        status=QuizItemStatus.ACTIVE,
+        generation_meta={},
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+
+
+def test_reconcile_keeps_a_tutor_card_active_when_the_anchor_survives_title_only() -> None:
+    source_id = uuid4()
+    item = _quiz_item(
+        source_id,
+        origin=QuizItemOrigin.TUTOR,
+        anchor="ch1",
+        section_path=("One",),
+        excerpt=_TITLE_EXCERPT,
+    )
+    items = FakeReconcileItemRepository([item])
+    before_sched = items.scheduling[item.id]
+    before_log = items.review_log[item.id]
+    ReconcileQuizItems(
+        items=items,
+        corpus=FakeReconcileCorpus(
+            [ReconcileSection(anchor="ch1", section_path=("One",), text=_BODY_WITHOUT_TITLE)]
+        ),
+    )(source_id=source_id)
+
+    stored = items._items[item.id]
+    assert stored.status == QuizItemStatus.ACTIVE
+    assert stored.anchor == "ch1"
+    assert stored.section_path == ("One",)
+    assert items.scheduling[item.id] == before_sched
+    assert items.review_log[item.id] == before_log
+
+
+def test_reconcile_relocates_a_tutor_card_onto_an_alias_survivor_without_excerpt() -> None:
+    source_id = uuid4()
+    item = _quiz_item(
+        source_id,
+        origin=QuizItemOrigin.TUTOR,
+        anchor="gone",
+        section_path=("Gone",),
+        excerpt=_TITLE_EXCERPT,
+    )
+    items = FakeReconcileItemRepository([item])
+    ReconcileQuizItems(
+        items=items,
+        corpus=FakeReconcileCorpus(
+            [
+                ReconcileSection(
+                    anchor="survivor",
+                    section_path=("Survivor",),
+                    text=_BODY_WITHOUT_TITLE,
+                    anchor_aliases=("gone",),
+                )
+            ]
+        ),
+    )(source_id=source_id)
+
+    stored = items._items[item.id]
+    assert (stored.status, stored.anchor, stored.section_path) == (
+        QuizItemStatus.ACTIVE,
+        "survivor",
+        ("Survivor",),
+    )
+
+
+def test_reconcile_orphans_a_tutor_card_when_anchor_and_alias_are_gone() -> None:
+    source_id = uuid4()
+    item = _quiz_item(
+        source_id,
+        origin=QuizItemOrigin.TUTOR,
+        anchor="gone",
+        section_path=("Gone",),
+        excerpt="epsilon zeta",
+        question="Q orphan?",
+    )
+    items = FakeReconcileItemRepository([item])
+    before_sched = items.scheduling[item.id]
+    before_log = items.review_log[item.id]
+    ReconcileQuizItems(
+        items=items,
+        corpus=FakeReconcileCorpus(
+            [
+                ReconcileSection(
+                    anchor="ch9",
+                    section_path=("Nine",),
+                    text="A later part states epsilon zeta plainly here.",
+                )
+            ]
+        ),
+    )(source_id=source_id)
+
+    stored = items._items[item.id]
+    assert stored.status == QuizItemStatus.ORPHANED
+    assert stored.anchor == "gone"
+    assert items.scheduling[item.id] == before_sched
+    assert items.review_log[item.id] == before_log
+
+
+def test_reconcile_still_stales_a_deck_card_whose_excerpt_left_the_section() -> None:
+    source_id = uuid4()
+    item = _quiz_item(
+        source_id,
+        origin=QuizItemOrigin.DECK,
+        anchor="ch1",
+        section_path=("One",),
+        excerpt=_TITLE_EXCERPT,
+        question="Q deck?",
+    )
+    items = FakeReconcileItemRepository([item])
+    ReconcileQuizItems(
+        items=items,
+        corpus=FakeReconcileCorpus(
+            [ReconcileSection(anchor="ch1", section_path=("One",), text=_BODY_WITHOUT_TITLE)]
+        ),
+    )(source_id=source_id)
+
+    assert items._items[item.id].status == QuizItemStatus.STALE
+    assert items._items[item.id].anchor == "ch1"
