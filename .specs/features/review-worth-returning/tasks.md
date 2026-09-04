@@ -185,9 +185,9 @@ T11 → T12 → T13 → T14
 
 **Done when**:
 
-- [ ] A generic-stem candidate increments `generic_stem` and not `quiz_items`
-- [ ] Eligible-empty still succeeds with all-zero counts and `{}` reasons
-- [ ] Gate: `uv run pytest tests/test_application_quiz.py tests/test_web_quiz.py tests/test_domain_quiz.py`
+- [x] A generic-stem candidate increments `generic_stem` and not `quiz_items`
+- [x] Eligible-empty still succeeds with all-zero counts and `{}` reasons
+- [x] Gate: `uv run pytest tests/test_application_quiz.py tests/test_web_quiz.py tests/test_domain_quiz.py`
 
 **Tests**: unit
 **Gate**: quick

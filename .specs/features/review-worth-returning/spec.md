@@ -192,14 +192,14 @@ Review is a correct 4-button FSRS grader, but generation can "succeed" with zero
 
 | Requirement ID | Story | Phase | Status |
 |---|---|---|---|
-| REV-01 | P1: Empty-deck honesty | 2 | In Tasks |
-| REV-02 | P1: Empty-deck honesty | 1 | In Tasks |
+| REV-01 | P1: Empty-deck honesty | 2 | Done |
+| REV-02 | P1: Empty-deck honesty | 1 | Done |
 | REV-03 | P1: Empty-deck honesty | 4 | In Tasks |
 | REV-04 | P1: Empty-deck honesty | 4 | In Tasks |
 | REV-05 | P1: Empty-deck honesty | 4 | In Tasks |
 | REV-06 | P1: Empty-deck honesty | 4 | In Tasks |
-| REV-07 | P1: Empty-deck honesty | 2 | In Tasks |
-| REV-08 | P1: Empty-deck honesty | 1 | In Tasks |
+| REV-07 | P1: Empty-deck honesty | 2 | Done |
+| REV-08 | P1: Empty-deck honesty | 1 | Done |
 | REV-09 | P1: Formulation gates | 1 | In Tasks |
 | REV-10 | P1: Formulation gates | 1 | Done |
 | REV-11 | P1: Formulation gates | 1 | Done |

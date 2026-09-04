@@ -390,11 +390,37 @@ def test_overview_returns_items_counts_due_and_latest_job(
     # Only the active past-due item counts toward due_count (future + stale excluded).
     assert body["due_count"] == 1
     assert body["latest_job"]["status"] == QuizJobStatus.SUCCEEDED
+    assert body["latest_job"]["discard_reasons"] == {}
     item_view = next(i for i in body["items"] if i["id"] == str(due_item.id))
     assert set(item_view) == {"id", "item_type", "question", "status", "due"}
     assert item_view["item_type"] == QuizItemType.FREE_RECALL
     assert item_view["question"] == "Due one"
     assert item_view["status"] == QuizItemStatus.ACTIVE
+
+
+def test_overview_exposes_job_discard_reasons(
+    quiz_client: TestClient, db_conn: Connection
+) -> None:
+    source_id, _ = _seed_ready_source(quiz_client, db_conn, "overview-reasons@example.com")
+    sid = UUID(source_id)
+    jobs = SqlAlchemyQuizJobRepository(db_conn)
+    job = _seed_job(db_conn, sid, status=QuizJobStatus.RUNNING)
+    jobs.update(
+        job.succeeded(
+            datetime.now(UTC),
+            generated_count=0,
+            discarded_count=3,
+            failed_sections=0,
+            discard_reasons={"generic_stem": 2, "duplicate": 1},
+        )
+    )
+
+    resp = quiz_client.get(f"/api/sources/{source_id}/quiz")
+
+    assert resp.status_code == 200, resp.text
+    reasons = resp.json()["latest_job"]["discard_reasons"]
+    assert reasons == {"generic_stem": 2, "duplicate": 1}
+    assert sum(reasons.values()) == 3
 
 
 def test_overview_no_job_returns_null_latest_job(

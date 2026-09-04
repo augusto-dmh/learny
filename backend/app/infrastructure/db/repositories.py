@@ -1723,6 +1723,7 @@ class SqlAlchemyQuizJobRepository:
                 generated_count=job.generated_count,
                 discarded_count=job.discarded_count,
                 failed_sections=job.failed_sections,
+                discard_reasons=job.discard_reasons,
                 last_error=job.last_error,
                 created_at=job.created_at,
                 updated_at=job.updated_at,
@@ -1757,7 +1758,7 @@ class SqlAlchemyQuizJobRepository:
         return _to_quiz_job(row) if row is not None else None
 
     def update(self, job: QuizGenerationJob) -> QuizGenerationJob:
-        """Persist ``status``/``attempts``/counts/``last_error``/``updated_at``."""
+        """Persist status, attempts, counts, discard reasons, last_error, and updated_at."""
         self._conn.execute(
             update(quiz_generation_jobs)
             .where(quiz_generation_jobs.c.id == job.id)
@@ -1767,6 +1768,7 @@ class SqlAlchemyQuizJobRepository:
                 generated_count=job.generated_count,
                 discarded_count=job.discarded_count,
                 failed_sections=job.failed_sections,
+                discard_reasons=job.discard_reasons,
                 last_error=job.last_error,
                 updated_at=job.updated_at,
             )
@@ -2458,6 +2460,7 @@ def _to_quiz_job(row) -> QuizGenerationJob:  # noqa: ANN001
         last_error=row.last_error,
         created_at=row.created_at,
         updated_at=row.updated_at,
+        discard_reasons=dict(row.discard_reasons),
     )
 
 

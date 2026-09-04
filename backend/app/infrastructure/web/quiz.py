@@ -116,6 +116,7 @@ class QuizJobView(BaseModel):
     generated_count: int
     discarded_count: int
     failed_sections: int
+    discard_reasons: dict[str, int]
     error: str | None
     created_at: datetime
     updated_at: datetime
@@ -129,6 +130,7 @@ class QuizJobView(BaseModel):
             generated_count=job.generated_count,
             discarded_count=job.discarded_count,
             failed_sections=job.failed_sections,
+            discard_reasons=job.discard_reasons,
             error=job.last_error,
             created_at=job.created_at,
             updated_at=job.updated_at,
