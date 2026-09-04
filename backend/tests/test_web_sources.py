@@ -37,7 +37,7 @@ from tests.conftest import (
     TEST_PASSWORD,
     requires_db,
 )
-from tests.fakes import FailingStorage
+from tests.fakes import FailingStorage, UnavailableStorage
 
 pytestmark = requires_db
 
@@ -649,6 +649,18 @@ def test_get_missing_media_blob_returns_404(sources_client: TestClient) -> None:
 
     resp = sources_client.get(f"/api/sources/{source_id}/media/{FIGURE_SHA256}")
     assert resp.status_code == 404, resp.text
+
+
+def test_get_media_storage_unavailable_returns_503(sources_client: TestClient) -> None:
+    _register(sources_client, "media-down@example.com")
+    created = _upload(sources_client, csrf=_csrf(sources_client))
+    source_id = created.json()["id"]
+    sources_client.app.dependency_overrides[get_storage] = lambda: UnavailableStorage()
+    try:
+        resp = sources_client.get(f"/api/sources/{source_id}/media/{FIGURE_SHA256}")
+    finally:
+        sources_client.app.dependency_overrides.pop(get_storage, None)
+    assert resp.status_code == 503, resp.text
 
 
 @pytest.mark.parametrize(

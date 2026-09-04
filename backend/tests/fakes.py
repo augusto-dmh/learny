@@ -13,6 +13,7 @@ from datetime import UTC, date, datetime
 from itertools import count
 from uuid import UUID, uuid4
 
+from app.application.errors import StorageUnavailable
 from app.domain.entities import (
     ACTIVE_STATUSES,
     AnchorSection,
@@ -237,6 +238,16 @@ class FailingStorage:
 
     def get_object(self, key: str) -> bytes:
         raise RuntimeError("storage down")
+
+
+class UnavailableStorage:
+    """``StoragePort`` that raises the application outage error on every call."""
+
+    def put_object(self, key: str, data: bytes, *, content_type: str) -> None:
+        raise StorageUnavailable("storage down")
+
+    def get_object(self, key: str) -> bytes:
+        raise StorageUnavailable("storage down")
 
 
 class FakeIngestionJobRepository:

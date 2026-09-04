@@ -9,7 +9,8 @@ Contract (also consumed by the Next.js proxy in Phase 4):
 - ``POST /api/sources``        → 201, multipart ``file`` + ``title``; auth + CSRF.
 - ``GET  /api/sources``        → 200, owner-scoped list, newest-first (auth).
 - ``GET  /api/sources/{id}``   → 200 owner; 404 cross-user/missing (auth).
-- ``GET  /api/sources/{id}/media/{sha256}`` → 200 ``image/webp`` owner; 404 else (auth).
+- ``GET  /api/sources/{id}/media/{sha256}`` → 200 ``image/webp`` owner;
+  404 missing/non-owner; 503 storage down (auth).
 """
 
 from __future__ import annotations
@@ -155,6 +156,7 @@ def get_source_media(
 
     Cookie auth only — no CSRF (safe GET) and no upload rate limit. Non-owners,
     a missing blob, and a hash that is not 64 lowercase hex all 404, never 403.
+    A storage outage surfaces as 503, same as upload.
     """
     data = service(user=user, source_id=source_id, sha256=sha256)
     return Response(content=data, media_type="image/webp")

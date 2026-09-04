@@ -138,6 +138,7 @@ class ReadSourceMedia:
     Ownership uses :class:`GetSource` so a missing source and a non-owner collapse
     to the same 404. A hash that is not 64 lowercase hex, or a ``get_object``
     miss, also collapse to 404 — never 403, and never 500 for a missing blob.
+    A storage outage propagates as ``StorageUnavailable`` (503), same as upload.
     """
 
     def __init__(self, *, get_source: GetSource, storage: StoragePort) -> None:
@@ -151,5 +152,7 @@ class ReadSourceMedia:
         key = f"sources/{source.user_id}/{source.id}/media/{sha256}.webp"
         try:
             return self._storage.get_object(key)
+        except StorageUnavailable:
+            raise
         except Exception as exc:  # noqa: BLE001 — missing blob after a rewritten URL is 404
             raise SourceNotFound("Source not found.") from exc
