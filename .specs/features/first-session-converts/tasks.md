@@ -265,8 +265,8 @@ T10 → T11 → T12 → T13 → T14 → T15 → T16
 
 **Done when**:
 
-- [ ] Register inserts one `account_created` row
-- [ ] A second explicit RecordActivation of the same name does not add a row
+- [x] Register inserts one `account_created` row
+- [x] A second explicit RecordActivation of the same name does not add a row
 
 **Tests**: unit
 **Gate**: quick

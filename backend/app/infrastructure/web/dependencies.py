@@ -24,6 +24,7 @@ from uuid import UUID, uuid4
 from fastapi import Depends, Request
 from sqlalchemy import Connection
 
+from app.application.activation import RecordActivation
 from app.application.cards import (
     AcceptCard,
     AcceptNoteCard,
@@ -197,6 +198,10 @@ def get_register_user(conn: DbConnection) -> RegisterUser:
         hasher=_hasher,
         tokens=_tokens,
         clock=_clock,
+        record_activation=RecordActivation(
+            activations=SqlAlchemyActivationEventRepository(conn),
+            clock=_clock,
+        ),
     )
 
 

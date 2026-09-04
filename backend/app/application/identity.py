@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from uuid import UUID, uuid4
 
+from app.application.activation import ACTIVATION_ACCOUNT_CREATED, RecordActivation
 from app.application.errors import (
     EmailAlreadyExists,
     InvalidCredentials,
@@ -85,6 +86,7 @@ class RegisterUser:
         hasher: PasswordHasher,
         tokens: TokenGenerator,
         clock: Clock,
+        record_activation: RecordActivation,
         session_ttl: timedelta = DEFAULT_SESSION_TTL,
     ) -> None:
         self._users = users
@@ -93,6 +95,7 @@ class RegisterUser:
         self._hasher = hasher
         self._tokens = tokens
         self._clock = clock
+        self._record_activation = record_activation
         self._session_ttl = session_ttl
 
     def __call__(self, *, email: str, password: str) -> AuthResult:
@@ -123,6 +126,7 @@ class RegisterUser:
             clock=self._clock,
             session_ttl=self._session_ttl,
         )
+        self._record_activation(user_id=user.id, name=ACTIVATION_ACCOUNT_CREATED)
         return AuthResult(user=user, issued=issued)
 
 

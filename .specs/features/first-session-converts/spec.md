@@ -204,7 +204,7 @@ A stranger who creates an account lands on an empty library, waits on ingest wit
 | FS-25 | P1: Library | T11 | In Tasks |
 | FS-26 | P1: Library | T13 | In Tasks |
 | FS-27 | P1: Landing / Home | T16 | In Tasks |
-| FS-28 | P1: Landing / Home | T8 | In Tasks |
+| FS-28 | P1: Landing / Home | T8 | Implemented |
 | FS-29 | P1: Landing / Home | T4 | Implemented |
 | FS-30 | P1: Landing / Home | T14 | In Tasks |
 | FS-31 | P1: Landing / Home | T14 | In Tasks |
