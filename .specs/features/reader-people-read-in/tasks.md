@@ -354,8 +354,8 @@ T11 → T12 → T13 → T14 → T15
 
 **Done when**:
 
-- [ ] Tests assert min width/height 44px on those controls
-- [ ] Gate: `cd frontend && npm test -- chapter-reader capture-popover reader-panel`
+- [x] Tests assert min width/height 44px on those controls
+- [x] Gate: `cd frontend && npm test -- chapter-reader capture-popover reader-panel`
 
 **Tests**: unit
 **Gate**: full

@@ -2176,3 +2176,18 @@ describe("ChapterFlow reader chrome (TOC, dock, measure)", () => {
     expect(bar.contains(dockButton)).toBe(true);
   });
 });
+
+describe("ChapterFlow reading control targets (READ-25)", () => {
+  it("sizes the TOC and dock toggles to at least 44px", async () => {
+    render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+    );
+    await screen.findByText("Ada Lovelace wrote the first algorithm.");
+
+    for (const name of ["Table of contents", "Study dock"]) {
+      const control = screen.getByRole("button", { name });
+      expect(Number.parseFloat(getComputedStyle(control).minWidth)).toBeGreaterThanOrEqual(44);
+      expect(Number.parseFloat(getComputedStyle(control).minHeight)).toBeGreaterThanOrEqual(44);
+    }
+  });
+});

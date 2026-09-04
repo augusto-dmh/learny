@@ -87,6 +87,7 @@ import { ChapterMarkdown } from "@/app/components/chapter-markdown";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
+import { readControlMinStyle } from "@/app/lib/read-control-size";
 
 /** Ephemeral cited-sentence paint; not a real note — same painter as saved highlights. */
 const CITATION_SPAN_ID = "citation-span";
@@ -819,7 +820,8 @@ export function ChapterFlow({
             <Button
               type="button"
               variant="ghost"
-              size="icon-sm"
+              className="size-11"
+              style={readControlMinStyle}
               aria-label="Table of contents"
               aria-expanded={tocOpen}
               onClick={() => setTocOpen((prev) => !prev)}
@@ -829,7 +831,8 @@ export function ChapterFlow({
             <Button
               type="button"
               variant="ghost"
-              size="icon-sm"
+              className="size-11"
+              style={readControlMinStyle}
               aria-label="Study dock"
               aria-expanded={Boolean(dockTab)}
               onClick={handleDockToggle}

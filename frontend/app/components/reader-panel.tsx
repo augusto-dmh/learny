@@ -42,6 +42,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { useBelowLg } from "@/hooks/use-below-lg";
+import { readControlMinStyle } from "@/app/lib/read-control-size";
 import { cn } from "@/lib/utils";
 
 import { AskPanel } from "./ask-panel";
@@ -349,6 +350,7 @@ export function ReaderPanel({
       >
         <SheetContent
           side="bottom"
+          showCloseButton={false}
           className="max-h-[85svh] gap-0 p-0 motion-reduce:animate-none motion-reduce:transition-none"
         >
           <SheetHeader className="sr-only">
@@ -357,6 +359,16 @@ export function ReaderPanel({
               Study surfaces for this book, as a bottom sheet.
             </SheetDescription>
           </SheetHeader>
+          <Button
+            type="button"
+            variant="ghost"
+            className="absolute top-3 right-3 z-10 size-11"
+            style={readControlMinStyle}
+            aria-label="Close"
+            onClick={onClose}
+          >
+            <X />
+          </Button>
           <ReaderPanelFrame tab={tab} className="flex max-h-[85svh] min-h-0 flex-col overflow-y-auto bg-background">
             {body}
           </ReaderPanelFrame>

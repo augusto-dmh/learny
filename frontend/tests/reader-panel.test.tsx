@@ -593,3 +593,16 @@ describe("ReaderPanel phone sheet (READ-22)", () => {
     expect(classes).toContain("xl:shrink-0");
   });
 });
+
+describe("ReaderPanel sheet close target (READ-25)", () => {
+  it("sizes the sheet close control to at least 44px", async () => {
+    stubViewportWidth(LG_MIN_WIDTH_PX - 1);
+    render(
+      <ReaderPanel sourceId="s1" csrf="csrf-xyz" tab="ask" onTabChange={() => {}} onClose={() => {}} />,
+    );
+
+    const close = await waitFor(() => screen.getByRole("button", { name: "Close" }));
+    expect(Number.parseFloat(getComputedStyle(close).minWidth)).toBeGreaterThanOrEqual(44);
+    expect(Number.parseFloat(getComputedStyle(close).minHeight)).toBeGreaterThanOrEqual(44);
+  });
+});

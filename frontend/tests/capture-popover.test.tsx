@@ -209,3 +209,22 @@ describe("CapturePopover compact bar below lg (READ-24)", () => {
     ).toEqual(["Highlight", "Note", "Explain", "Ask", "Create card"]);
   });
 });
+
+describe("CapturePopover control targets (READ-25)", () => {
+  it("sizes Highlight to at least 44px", () => {
+    renderPopover(FIVE_VERBS);
+    const highlight = screen.getByRole("button", { name: "Highlight" });
+    expect(Number.parseFloat(getComputedStyle(highlight).minWidth)).toBeGreaterThanOrEqual(44);
+    expect(Number.parseFloat(getComputedStyle(highlight).minHeight)).toBeGreaterThanOrEqual(44);
+  });
+
+  it("sizes the overflow control to at least 44px below lg", async () => {
+    stubViewportWidth(LG_MIN_WIDTH_PX - 1);
+    renderPopover(FIVE_VERBS);
+    const overflow = await waitFor(() =>
+      screen.getByRole("button", { name: "More capture actions" }),
+    );
+    expect(Number.parseFloat(getComputedStyle(overflow).minWidth)).toBeGreaterThanOrEqual(44);
+    expect(Number.parseFloat(getComputedStyle(overflow).minHeight)).toBeGreaterThanOrEqual(44);
+  });
+});

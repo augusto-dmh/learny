@@ -21,6 +21,7 @@ import { useState, type ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
 import { useBelowLg } from "@/hooks/use-below-lg";
+import { readControlMinStyle } from "@/app/lib/read-control-size";
 
 const WHITESPACE = /\s+/g;
 const CONTEXT_CHARS = 32;
@@ -132,6 +133,8 @@ export function CapturePopover({
           type="button"
           size="sm"
           variant="ghost"
+          className="min-h-11 min-w-11"
+          style={readControlMinStyle}
           disabled={pending}
           onClick={() => onCapture("highlight")}
         >
@@ -229,6 +232,8 @@ function CaptureOverflow({
         type="button"
         size="sm"
         variant="ghost"
+        className="min-h-11 min-w-11"
+        style={readControlMinStyle}
         aria-label="More capture actions"
         aria-expanded={open}
         aria-haspopup="menu"
