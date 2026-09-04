@@ -139,9 +139,9 @@ T11 → T12 → T13 → T14
 
 **Done when**:
 
-- [ ] Every local candidate from the golden fixture sections has `discard_reason is None`
-- [ ] Existing groundedness eval still sees ≥1 persisted item on the standard fixture book (adjust assertions to yield, not to the old generic stem)
-- [ ] Gate: `uv run pytest tests/test_quiz_local.py tests/eval/test_quiz_groundedness.py tests/test_worker_quiz.py`
+- [x] Every local candidate from the golden fixture sections has `discard_reason is None`
+- [x] Existing groundedness eval still sees ≥1 persisted item on the standard fixture book (adjust assertions to yield, not to the old generic stem)
+- [x] Gate: `uv run pytest tests/test_quiz_local.py tests/eval/test_quiz_groundedness.py tests/test_worker_quiz.py`
 
 **Tests**: unit
 **Gate**: quick

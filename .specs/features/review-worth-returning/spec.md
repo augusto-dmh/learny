@@ -212,7 +212,7 @@ Review is a correct 4-button FSRS grader, but generation can "succeed" with zero
 | REV-18 | P1: Formulation gates | 1 | Done |
 | REV-19 | P1: Formulation gates | 2 | In Tasks |
 | REV-20 | P1: Formulation gates | 1 | Done |
-| REV-21 | P1: Formulation gates | 1 | In Tasks |
+| REV-21 | P1: Formulation gates | 1 | Done |
 | REV-22 | P1: Review undo | 2 | In Tasks |
 | REV-23 | P1: Review undo | 2 | In Tasks |
 | REV-24 | P1: Review undo | 2 | In Tasks |
