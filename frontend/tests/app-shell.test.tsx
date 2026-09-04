@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import AppLayout from "../app/(app)/layout";
 import AuthLayout from "../app/(auth)/layout";
+import ReadLayout from "../app/(read)/layout";
 import { AuthHeader } from "../app/components/shell/auth-header";
 import { ThemeProvider } from "../app/components/theme-provider";
 import { SidebarProvider } from "../components/ui/sidebar";
@@ -191,5 +192,18 @@ describe("app shell composition", () => {
     expect(screen.getByTestId("auth-child")).toBeTruthy();
     // No navigation sidebar around auth pages.
     expect(screen.queryByRole("link", { name: "Bookshelf" })).toBeNull();
+  });
+
+  it("renders the (read) layout without sidebar or auth header", () => {
+    render(
+      <ReadLayout>
+        <div data-testid="read-child">Read body</div>
+      </ReadLayout>,
+    );
+
+    expect(screen.getByTestId("read-child")).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "Bookshelf" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Account" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Log out" })).toBeNull();
   });
 });

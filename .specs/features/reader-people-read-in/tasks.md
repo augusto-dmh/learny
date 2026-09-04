@@ -258,8 +258,8 @@ T11 → T12 → T13 → T14 → T15
 
 **Done when**:
 
-- [ ] `/read` render has no sidebar/header; a library route still has both
-- [ ] Gate: `cd frontend && npm test -- app-shell` plus the read-page test
+- [x] `/read` render has no sidebar/header; a library route still has both
+- [x] Gate: `cd frontend && npm test -- app-shell` plus the read-page test
 
 **Tests**: unit
 **Gate**: full
