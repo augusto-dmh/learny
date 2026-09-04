@@ -140,5 +140,5 @@ v7 is proposed in [RFC-0007](../../docs/rfc/0007-public-launch-roadmap.md) (**Dr
 | `trustworthy-cited-ask` | A / Bet 1 | Keep the thread on failed Ask; pin both Anthropic request shapes; claim-level citation spans | Done (PR #63) |
 | `reader-people-read-in` | B / Bet 2 | Safe figures; immersive `/read` chrome; phone column | Done (PR #64) |
 | `teach-becomes-tutor` | C / Bet 3 | Frozen teach playbook; tutor-opens; Chat dock merge; one FSRS card on passed check | Done (PR #65) |
-| `review-worth-returning` | D / Bet 4 | Empty-deck honesty, formulation gates, undo/session, flag/edit | In progress |
+| `review-worth-returning` | D / Bet 4 | Empty-deck honesty, formulation gates, undo/session, flag/edit | Done (PR #66) |
 | *(Bets 5–7)* | E–G | First session; safety rails; cheaper intelligence | Not started |
