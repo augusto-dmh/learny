@@ -16,9 +16,10 @@
  * Highlight capture (NF-12) is ported here unchanged: selecting text over a
  * section raises a popover whose actions POST the selection — resolved against
  * that section's served Markdown via the pure `deriveCaptureSelection` seam,
- * never the DOM — to the capture endpoint. The per-section `onMouseUp` closes
- * over the right section so a multi-section chapter resolves each selection
- * against its own Markdown and anchor.
+ * never the DOM — to the capture endpoint. Pointer-up, mouse-up, and
+ * `selectionchange` all share that seam so a phone selection is not mouse-only.
+ * The per-section handlers close over the right section so a multi-section
+ * chapter resolves each selection against its own Markdown and anchor.
  *
  * The margin rail (CAP-18..24) renders the same highlight set as a column beside
  * the article, scoped to the loaded chapter, and yields to the Ask/Teach panel
@@ -505,10 +506,12 @@ export function ChapterFlow({
     return () => clearTimeout(timer);
   }, [scrollTarget]);
 
-  // On mouse-up over a section, resolve the selection against THAT section's
-  // served Markdown; a resolvable selection raises the popover near it, anything
-  // else dismisses it. The closure carries the section's anchor for the write.
-  function handleMouseUp(section: ChapterSectionView) {
+  // On pointer/mouse release over a section, resolve the selection against THAT
+  // section's served Markdown; a resolvable selection raises the popover near
+  // it, anything else dismisses it. Mouse-up stays so existing desktop tests
+  // and browsers that still synthesize it keep working; pointer-up is the
+  // touch path. The closure carries the section's anchor for the write.
+  function handleSelectionRelease(section: ChapterSectionView) {
     const selection = window.getSelection();
     const derived = deriveCaptureSelection(
       section.markdown,
@@ -530,6 +533,34 @@ export function ChapterFlow({
       ...selectionPosition(selection, articleRef.current),
     });
   }
+
+  const handleSelectionReleaseRef = useRef(handleSelectionRelease);
+  handleSelectionReleaseRef.current = handleSelectionRelease;
+
+  // Touch browsers often commit the range on `selectionchange` rather than a
+  // mouse event. An empty or caret selection must not raise a false popover.
+  useEffect(() => {
+    function onSelectionChange() {
+      const selection = window.getSelection();
+      const text = selection?.toString() ?? "";
+      if (!text.trim()) {
+        setCapture(null);
+        return;
+      }
+      const sectionEl = sectionElementForSelection(selection);
+      const anchor = sectionEl?.getAttribute("data-section-anchor");
+      if (!anchor) {
+        return;
+      }
+      const section = chapter.sections.find((item) => item.anchor === anchor);
+      if (!section) {
+        return;
+      }
+      handleSelectionReleaseRef.current(section);
+    }
+    document.addEventListener("selectionchange", onSelectionChange);
+    return () => document.removeEventListener("selectionchange", onSelectionChange);
+  }, [chapter.sections]);
 
   async function handleCapture(action: CaptureAction) {
     if (!capture || !csrf) {
@@ -859,7 +890,7 @@ export function ChapterFlow({
               wordsPerPage={chapter.words_per_page}
               flashing={flashAnchor === section.anchor}
               highlights={highlightsWithSpan.get(section.anchor) ?? NO_HIGHLIGHTS}
-              onMouseUp={() => handleMouseUp(section)}
+              onSelectionRelease={() => handleSelectionRelease(section)}
             />
           ))}
           <ChapterNav
@@ -951,14 +982,14 @@ function FlowSection({
   wordsPerPage,
   flashing,
   highlights,
-  onMouseUp,
+  onSelectionRelease,
 }: {
   section: ChapterSectionView;
   wordsBefore: number;
   wordsPerPage: number;
   flashing: boolean;
   highlights: SourceHighlightView[];
-  onMouseUp: () => void;
+  onSelectionRelease: () => void;
 }) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const breadcrumb = section.section_path.join(" › ");
@@ -980,7 +1011,8 @@ function FlowSection({
     <section
       id={section.anchor}
       data-section-anchor={section.anchor}
-      onMouseUp={onMouseUp}
+      onMouseUp={onSelectionRelease}
+      onPointerUp={onSelectionRelease}
       // The same height the sticky chrome is laid out at, so a section jumped to
       // stops clear of it rather than under it.
       style={{ scrollMarginTop: READER_CHROME_HEIGHT }}
@@ -1005,6 +1037,15 @@ function FlowSection({
       </div>
     </section>
   );
+}
+
+function sectionElementForSelection(selection: Selection | null): Element | null {
+  const node = selection?.anchorNode;
+  if (!node) {
+    return null;
+  }
+  const el = node instanceof Element ? node : node.parentElement;
+  return el?.closest("[data-section-anchor]") ?? null;
 }
 
 /**

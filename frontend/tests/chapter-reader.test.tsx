@@ -436,6 +436,97 @@ describe("ChapterFlow capture (NF-12)", () => {
     }
   });
 
+  it("raises capture on pointerup without a mouseup (READ-23)", () => {
+    const view = render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+    );
+    selectText("Ada Lovelace wrote the first algorithm");
+    fireEvent.pointerUp(
+      view.container.querySelector(`[data-section-anchor="${S1}"]`)!,
+    );
+
+    expect(
+      screen.getByRole("dialog", { name: "Capture highlight" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Highlight" })).toBeTruthy();
+  });
+
+  it("raises capture on selectionchange for a resolvable range (READ-23)", () => {
+    const view = render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+    );
+    const section = view.container.querySelector(`[data-section-anchor="${S1}"]`)!;
+    window.getSelection = () =>
+      ({
+        toString: () => "Ada Lovelace wrote the first algorithm",
+        isCollapsed: false,
+        rangeCount: 1,
+        anchorNode: section,
+        getRangeAt: () => ({ getBoundingClientRect: () => undefined }),
+      }) as unknown as Selection;
+
+    act(() => {
+      document.dispatchEvent(new Event("selectionchange"));
+    });
+
+    expect(
+      screen.getByRole("dialog", { name: "Capture highlight" }),
+    ).toBeTruthy();
+  });
+
+  it("does not raise capture on an empty or caret selectionchange (READ-23)", () => {
+    const view = render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+    );
+    const section = view.container.querySelector(`[data-section-anchor="${S1}"]`)!;
+    window.getSelection = () =>
+      ({
+        toString: () => "",
+        isCollapsed: true,
+        rangeCount: 1,
+        anchorNode: section,
+        getRangeAt: () => ({ getBoundingClientRect: () => undefined }),
+      }) as unknown as Selection;
+
+    act(() => {
+      document.dispatchEvent(new Event("selectionchange"));
+    });
+
+    expect(
+      screen.queryByRole("dialog", { name: "Capture highlight" }),
+    ).toBeNull();
+  });
+
+  it("still captures from served markdown when the selection includes a figure", () => {
+    const mediaSrc =
+      "/api/sources/s1/media/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const withFigure: ChapterView = {
+      ...chapter,
+      sections: [
+        {
+          ...chapter.sections[0],
+          markdown: `Ada Lovelace wrote the first algorithm.\n\n![Engine diagram](${mediaSrc})`,
+        },
+        chapter.sections[1],
+      ],
+    };
+    const view = render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={withFigure} scrollTarget={null} />,
+    );
+    selectText("Ada Lovelace wrote the first algorithm");
+    fireEvent.pointerUp(
+      view.container.querySelector(`[data-section-anchor="${S1}"]`)!,
+    );
+
+    expect(
+      screen.getByRole("dialog", { name: "Capture highlight" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Highlight" })).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: /image|figure|snapshot/i }),
+    ).toBeNull();
+  });
+
   it("shows a note captured from the page in the open Notes tab, no reload", async () => {
     nav.params = new URLSearchParams("panel=notes");
     // The book has no notes until the capture writes one.

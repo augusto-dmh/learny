@@ -315,8 +315,8 @@ T11 → T12 → T13 → T14 → T15
 
 **Done when**:
 
-- [ ] A test that only fires `pointerup` (no mouse) opens the popover
-- [ ] Gate: `cd frontend && npm test -- chapter-reader capture-popover`
+- [x] A test that only fires `pointerup` (no mouse) opens the popover
+- [x] Gate: `cd frontend && npm test -- chapter-reader capture-popover`
 
 **Tests**: unit
 **Gate**: full
