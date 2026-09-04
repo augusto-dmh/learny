@@ -48,6 +48,7 @@ import {
 import { type PendingPanelRequest } from "@/app/lib/panel";
 import {
   assistantView,
+  errorMessageFor,
   messageText,
   turnsToUIMessages,
   type LearnyUIMessage,
@@ -371,6 +372,8 @@ function AskChat({
             const { text, citations, status: answerStatus, reasoning } =
               assistantView(message);
             const notFound = isNotFound(answerStatus);
+            const restoredFailed = answerStatus === "failed";
+            const liveFailed = failedTurn?.messageId === message.id;
             const previous = messages[index - 1];
             const question =
               previous?.role === "user" ? messageText(previous) : "";
@@ -380,7 +383,7 @@ function AskChat({
             return (
               <Message from="assistant" key={message.id}>
                 <MessageContent>
-                  {reasoning && !notFound ? (
+                  {reasoning && !notFound && !restoredFailed ? (
                     <ReasoningRegion
                       text={reasoning}
                       thinking={pending && !text}
@@ -389,25 +392,27 @@ function AskChat({
                   {pending && !text && !reasoning ? (
                     <AnswerPhaseIndicator />
                   ) : null}
-                  <CitedAnswer
-                    sourceId={sourceId}
-                    text={text}
-                    citations={notFound ? null : citations}
-                    onShowInBook={onShowInBook}
-                    trailing={
-                      pending && text ? (
-                        <span
-                          data-testid="streaming-caret"
-                          aria-hidden
-                          className="ml-0.5 inline-block h-4 w-px animate-pulse bg-foreground align-text-bottom"
-                        />
-                      ) : null
-                    }
-                  />
+                  {restoredFailed && !text ? null : (
+                    <CitedAnswer
+                      sourceId={sourceId}
+                      text={text}
+                      citations={notFound || restoredFailed ? null : citations}
+                      onShowInBook={onShowInBook}
+                      trailing={
+                        pending && text ? (
+                          <span
+                            data-testid="streaming-caret"
+                            aria-hidden
+                            className="ml-0.5 inline-block h-4 w-px animate-pulse bg-foreground align-text-bottom"
+                          />
+                        ) : null
+                      }
+                    />
+                  )}
                   {notFound && answerStatus ? (
                     <NotFoundNotice status={answerStatus} />
                   ) : null}
-                  {!notFound && citations && citations.length > 0 ? (
+                  {!notFound && !restoredFailed && citations && citations.length > 0 ? (
                     <SaveToNoteAction
                       sourceId={sourceId}
                       question={question}
@@ -416,10 +421,18 @@ function AskChat({
                       csrf={csrf}
                     />
                   ) : null}
-                  {failedTurn?.messageId === message.id ? (
+                  {liveFailed || restoredFailed ? (
                     <FailedTurn
-                      error={failedTurn.error}
-                      onRetry={retryFailedTurn}
+                      error={
+                        liveFailed && failedTurn
+                          ? failedTurn.error
+                          : errorMessageFor(502)
+                      }
+                      onRetry={() =>
+                        send(
+                          (liveFailed && failedTurn?.userText) || question,
+                        )
+                      }
                       retryDisabled={isStreaming}
                     />
                   ) : null}

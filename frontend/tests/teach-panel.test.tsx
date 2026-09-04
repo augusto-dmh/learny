@@ -774,6 +774,42 @@ describe("TeachPanel thread restore (RA-10)", () => {
     expect(screen.getByRole("heading", { name: "Chapter 1" })).toBeTruthy();
   });
 
+  it("restores a failed turn as the question plus the error, not an empty shell", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/sources/s1/structure": () => jsonResponse(200, structure),
+        [`GET ${READ_URL}`]: () =>
+          jsonResponse(200, {
+            ...conversationScopedTo("c1.xhtml", "Chapter 1"),
+            turns: [
+              {
+                turn_index: 0,
+                message: "What is this about?",
+                mode: "teach",
+                answer_status: "failed",
+                text: "",
+                citations: [],
+                evidence_count: 0,
+                model: "unknown",
+                created_at: "now",
+              },
+            ],
+          }),
+      }),
+    );
+    writeActiveConversation("s1", "teach", "conv2");
+
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
+
+    expect(await screen.findByText("What is this about?")).toBeTruthy();
+    expect(screen.getByTestId("failed-turn").textContent).toContain(
+      "Answer generation failed",
+    );
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(screen.queryByTestId("not-found")).toBeNull();
+  });
+
   it("offers the target picker again when the pointed-at conversation is gone", async () => {
     vi.stubGlobal(
       "fetch",

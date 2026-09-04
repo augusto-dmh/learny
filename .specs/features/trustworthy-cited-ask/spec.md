@@ -8,7 +8,7 @@ A second trust gap sits on the same path: the Citations API already returns `cit
 
 ## Goals
 
-- [ ] A failed generation never deletes the conversation or the user's message; the thread shows the error and a retry control.
+- [x] A failed generation never deletes the conversation or the user's message; the thread shows the error and a retry control.
 - [ ] Both Anthropic request shapes (citations-enabled documents vs structured-output JSON) are pinned by tests so mixing them fails CI.
 - [ ] Claim-level citation spans survive the adapter: hover on `[^n]` shows the quoted sentence; "Show in book" highlights that span; offsets match the Citations document body byte-for-byte.
 
@@ -114,7 +114,7 @@ A second trust gap sits on the same path: the Citations API already returns `cit
 | Requirement ID | Story | Phase | Status |
 |---|---|---|---|
 | ASK-01 | P1: Never lose the thread | T7, T9 | Done |
-| ASK-02 | P1: Never lose the thread | T2, T7, T11 | Backend done (T7) |
+| ASK-02 | P1: Never lose the thread | T2, T7, T11 | Done |
 | ASK-03 | P1: Never lose the thread | T10 | Done |
 | ASK-04 | P1: Never lose the thread | T9 | Done |
 | ASK-05 | P1: Never lose the thread | T7 | Done |
@@ -137,7 +137,7 @@ A second trust gap sits on the same path: the Citations API already returns `cit
 
 ## Success Criteria
 
-- [ ] First-turn generation failure leaves a GET-able conversation whose latest turn is the user's question with `failed`.
-- [ ] A test fails if `discardProvisional` / `deleteConversation` runs on stream error.
+- [x] First-turn generation failure leaves a GET-able conversation whose latest turn is the user's question with `failed`.
+- [x] A test fails if `discardProvisional` / `deleteConversation` runs on stream error.
 - [ ] A test fails if Citations document offsets and `CitedSpan` offsets disagree.
 - [ ] `make check` green; one manual real-provider Ask on the compose stack documented in the PR body.

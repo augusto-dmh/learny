@@ -315,7 +315,7 @@ T12 -> T13
 
 ---
 
-### T11: Restore failed turns into the thread
+### T11: Restore failed turns into the thread ✅
 
 **What**: GET/history mapping includes `answer_status=failed` turns as a user message plus a failed assistant state, so reload matches persist.
 **Where**: `frontend/app/components/use-conversation-thread.ts`
@@ -330,8 +330,8 @@ T12 -> T13
 
 **Done when**:
 
-- [ ] A fixture conversation with one failed turn renders the user text and the error, not an empty shell
-- [ ] `answered` / `not_found_*` mapping is unchanged
+- [x] A fixture conversation with one failed turn renders the user text and the error, not an empty shell
+- [x] `answered` / `not_found_*` mapping is unchanged
 
 **Tests**: unit
 **Gate**: full

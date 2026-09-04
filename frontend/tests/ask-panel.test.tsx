@@ -743,6 +743,44 @@ describe("AskPanel thread restore", () => {
     ).toBeTruthy();
   });
 
+  it("restores a failed turn as the question plus the error, not an empty shell", async () => {
+    const restored = {
+      ...conversation,
+      turns: [
+        {
+          turn_index: 0,
+          message: "Who wrote the first algorithm?",
+          mode: "answer",
+          answer_status: "failed",
+          text: "",
+          citations: [],
+          evidence_count: 0,
+          model: "unknown",
+          created_at: "now",
+        },
+      ],
+    };
+    writeActiveConversation("s1", "ask", "conv1");
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        [`GET ${READ_URL}`]: () => jsonResponse(200, restored),
+      }),
+    );
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+
+    expect(
+      await screen.findByText("Who wrote the first algorithm?"),
+    ).toBeTruthy();
+    expect(screen.getByTestId("failed-turn").textContent).toContain(
+      "Answer generation failed",
+    );
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(screen.queryByLabelText("suggested prompts")).toBeNull();
+    expect(screen.queryByTestId("not-found")).toBeNull();
+  });
+
   it("continues the restored conversation instead of creating a new one", async () => {
     const restored = { ...conversation, turns: [] };
     const stream = sseStream();
