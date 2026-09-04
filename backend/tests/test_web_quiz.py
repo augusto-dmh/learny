@@ -25,7 +25,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import Connection, func, select
+from sqlalchemy import Connection, func, select, update
 
 from app.application.dates import local_day
 from app.application.quiz_qc import content_key
@@ -40,7 +40,7 @@ from app.domain.entities import (
     SchedulingSnapshot,
     Source,
 )
-from app.infrastructure.db.metadata import review_log, study_days
+from app.infrastructure.db.metadata import review_log, sources, study_days
 from app.infrastructure.db.repositories import (
     SqlAlchemyNoteRepository,
     SqlAlchemyQuizItemRepository,
@@ -93,6 +93,17 @@ def _post_deck(
     if origin is not None:
         headers["Origin"] = origin
     return client.post(f"/api/sources/{source_id}/quiz/deck", headers=headers)
+
+
+def _post_starter(
+    client: TestClient, source_id: object, *, csrf: str | None, origin: str | None = None
+):
+    headers: dict[str, str] = {}
+    if csrf is not None:
+        headers["X-CSRF-Token"] = csrf
+    if origin is not None:
+        headers["Origin"] = origin
+    return client.post(f"/api/sources/{source_id}/quiz/starter", headers=headers)
 
 
 def _post_review(
@@ -226,6 +237,43 @@ def _seed_item(
     return item
 
 
+def _seed_sample_with_templates(
+    client: TestClient,
+    db_conn: Connection,
+    *,
+    operator_email: str,
+    learner_email: str,
+) -> tuple[str, str]:
+    """Seed the shared sample with five deck templates; return (sample_id, learner csrf)."""
+    db_conn.execute(update(sources).where(sources.c.is_sample.is_(True)).values(is_sample=False))
+    operator_id = _register(client, operator_email)
+    now = datetime.now(UTC)
+    sample = Source(
+        id=uuid4(),
+        user_id=UUID(operator_id),
+        title="The Art of War",
+        filename="art-of-war.epub",
+        content_type="application/epub+zip",
+        byte_size=1024,
+        checksum="d" * 64,
+        object_key=f"sources/{operator_id}/{uuid4()}.epub",
+        status="ready",
+        created_at=now,
+        updated_at=now,
+        is_sample=True,
+    )
+    SqlAlchemySourceRepository(db_conn).add(sample)
+    for n in range(5):
+        _seed_item(
+            db_conn,
+            sample.id,
+            question=f"Question {n}?",
+            answer=f"Answer {n}",
+        )
+    _register(client, learner_email)
+    return str(sample.id), _csrf(client)
+
+
 def _seed_job(
     db_conn: Connection, source_id: UUID, *, status: str = QuizJobStatus.QUEUED
 ) -> QuizGenerationJob:
@@ -327,6 +375,80 @@ def test_deck_post_untrusted_origin_returns_403(
 ) -> None:
     source_id, csrf = _seed_ready_source(quiz_client, db_conn, "deck-origin@example.com")
     resp = _post_deck(quiz_client, source_id, csrf=csrf, origin="http://evil.example.com")
+    assert resp.status_code == 403, resp.text
+
+
+def test_starter_post_on_sample_returns_five_items(
+    quiz_client: TestClient, db_conn: Connection
+) -> None:
+    tag = uuid4().hex[:8]
+    sample_id, csrf = _seed_sample_with_templates(
+        quiz_client,
+        db_conn,
+        operator_email=f"starter-op-{tag}@example.com",
+        learner_email=f"starter-learner-{tag}@example.com",
+    )
+
+    resp = _post_starter(quiz_client, sample_id, csrf=csrf)
+
+    assert resp.status_code == 200, resp.text
+    items = resp.json()["items"]
+    assert len(items) == 5
+    assert {item["status"] for item in items} == {QuizItemStatus.ACTIVE}
+    assert {item["question"] for item in items} == {f"Question {n}?" for n in range(5)}
+    assert len({item["id"] for item in items}) == 5
+
+
+def test_starter_post_on_owned_non_sample_returns_404(
+    quiz_client: TestClient, db_conn: Connection
+) -> None:
+    source_id, csrf = _seed_ready_source(
+        quiz_client, db_conn, f"starter-owned-{uuid4().hex[:8]}@example.com"
+    )
+    resp = _post_starter(quiz_client, source_id, csrf=csrf)
+    assert resp.status_code == 404, resp.text
+
+
+def test_starter_post_unauthenticated_returns_401(
+    quiz_client: TestClient, db_conn: Connection
+) -> None:
+    tag = uuid4().hex[:8]
+    sample_id, _csrf_token = _seed_sample_with_templates(
+        quiz_client,
+        db_conn,
+        operator_email=f"starter-unauth-op-{tag}@example.com",
+        learner_email=f"starter-unauth-learner-{tag}@example.com",
+    )
+    quiz_client.cookies.clear()
+    resp = _post_starter(quiz_client, sample_id, csrf="x")
+    assert resp.status_code == 401, resp.text
+
+
+def test_starter_post_missing_csrf_returns_403(
+    quiz_client: TestClient, db_conn: Connection
+) -> None:
+    tag = uuid4().hex[:8]
+    sample_id, _csrf_token = _seed_sample_with_templates(
+        quiz_client,
+        db_conn,
+        operator_email=f"starter-nocsrf-op-{tag}@example.com",
+        learner_email=f"starter-nocsrf-learner-{tag}@example.com",
+    )
+    resp = _post_starter(quiz_client, sample_id, csrf=None)
+    assert resp.status_code == 403, resp.text
+
+
+def test_starter_post_untrusted_origin_returns_403(
+    quiz_client: TestClient, db_conn: Connection
+) -> None:
+    tag = uuid4().hex[:8]
+    sample_id, csrf = _seed_sample_with_templates(
+        quiz_client,
+        db_conn,
+        operator_email=f"starter-origin-op-{tag}@example.com",
+        learner_email=f"starter-origin-learner-{tag}@example.com",
+    )
+    resp = _post_starter(quiz_client, sample_id, csrf=csrf, origin="http://evil.example.com")
     assert resp.status_code == 403, resp.text
 
 

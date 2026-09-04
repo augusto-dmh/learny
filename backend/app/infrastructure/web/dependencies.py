@@ -59,6 +59,7 @@ from app.application.notes import (
     UpdateNote,
 )
 from app.application.quiz import (
+    EnsureStarterDeck,
     ExportQuizDeck,
     ListQuizItems,
     PlanDeckGeneration,
@@ -633,6 +634,18 @@ def get_list_quiz_items(conn: DbConnection) -> ListQuizItems:
         items=SqlAlchemyQuizItemRepository(conn),
         jobs=SqlAlchemyQuizJobRepository(conn),
         authorize=AuthorizeOwnership(),
+    )
+
+
+def get_ensure_starter_deck(conn: DbConnection, settings: AppSettings) -> EnsureStarterDeck:
+    """Wire ``EnsureStarterDeck`` on the request-scoped connection."""
+    return EnsureStarterDeck(
+        sources=SqlAlchemySourceRepository(conn),
+        items=SqlAlchemyQuizItemRepository(conn),
+        authorize=AuthorizeOwnership(),
+        scheduling=build_scheduling_adapter(settings),
+        clock=_clock,
+        ids=uuid4,
     )
 
 

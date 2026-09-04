@@ -240,9 +240,9 @@ T10 → T11 → T12 → T13 → T14 → T15 → T16
 
 **Done when**:
 
-- [ ] Sample POST 200 with five items
-- [ ] Owned non-sample POST 404
-- [ ] Unauthenticated 401
+- [x] Sample POST 200 with five items
+- [x] Owned non-sample POST 404
+- [x] Unauthenticated 401
 
 **Tests**: integration
 **Gate**: full
