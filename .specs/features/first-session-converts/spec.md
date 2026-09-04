@@ -203,7 +203,7 @@ A stranger who creates an account lands on an empty library, waits on ingest wit
 | FS-24 | P1: Library | T12 | Implemented |
 | FS-25 | P1: Library | T11 | Implemented |
 | FS-26 | P1: Library | T13 | Implemented |
-| FS-27 | P1: Landing / Home | T16 | In Tasks |
+| FS-27 | P1: Landing / Home | T16 | Implemented |
 | FS-28 | P1: Landing / Home | T8 | Implemented |
 | FS-29 | P1: Landing / Home | T4 | Implemented |
 | FS-30 | P1: Landing / Home | T14 | Implemented |
@@ -220,4 +220,4 @@ A stranger who creates an account lands on an empty library, waits on ingest wit
 - [ ] A cited sample Ask writes exactly one `first_cited_answer`; a failed Ask writes none.
 - [ ] Starter POST is idempotent; grades are per-user.
 - [ ] Library Open / overflow / PDF / wait copy / Library-Tutor-Download notes pass in vitest.
-- [ ] Signed-out `/` shows proof with no provider call; Home Ask-first when due is 0.
+- [x] Signed-out `/` shows proof with no provider call; Home Ask-first when due is 0.

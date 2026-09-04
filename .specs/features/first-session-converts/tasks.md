@@ -464,8 +464,8 @@ T10 → T11 → T12 → T13 → T14 → T15 → T16
 
 **Done when**:
 
-- [ ] Proof strings are in the document
-- [ ] Render does not call a generation or conversation URL
+- [x] Proof strings are in the document
+- [x] Render does not call a generation or conversation URL
 
 **Tests**: unit
 **Gate**: full
