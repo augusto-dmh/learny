@@ -91,9 +91,9 @@ T10 → T11 → T12 → T13 → T14 → T15 → T16
 
 **Done when**:
 
-- [ ] Upgrade then downgrade leaves the prior schema
-- [ ] A second `is_sample=true` insert fails
-- [ ] A second activation row for the same `(user_id, name)` fails
+- [x] Upgrade then downgrade leaves the prior schema
+- [x] A second `is_sample=true` insert fails
+- [x] A second activation row for the same `(user_id, name)` fails
 
 **Tests**: integration
 **Gate**: full
