@@ -21,6 +21,7 @@ Contract (also consumed by the Next.js proxy):
 - ``GET  /api/reviews/due`` → 200 due queue + total; auth.
 - ``POST /api/quiz-items/{id}/reviews`` → 200 updated scheduling; auth + CSRF/Origin
   + limit.
+- ``POST /api/reviews/undo`` → 200 restored scheduling; auth + CSRF/Origin + limit.
 - ``POST /api/quiz-items/{id}/schedule-reset`` → 200 fresh scheduling + badge cleared;
   auth + CSRF/Origin + limit (NL-12).
 """
@@ -41,7 +42,7 @@ from sqlalchemy import Connection
 
 from app.application.errors import EnqueueFailed
 from app.application.quiz import ExportQuizDeck, ListQuizItems, QuizOverview
-from app.application.reviews import GetDueQueue, ResetSchedule, SubmitReview
+from app.application.reviews import GetDueQueue, ResetSchedule, SubmitReview, UndoLastReview
 from app.domain.entities import (
     CardProvenance,
     DueReviewItem,
@@ -65,6 +66,7 @@ from app.infrastructure.web.dependencies import (
     get_quiz_uow,
     get_reset_schedule,
     get_submit_review,
+    get_undo_last_review,
 )
 from app.infrastructure.web.rate_limit import rate_limit_quiz
 
@@ -413,6 +415,31 @@ def submit_review(
         client_tz=client_tz,
     )
     return SchedulingView.from_snapshot(snapshot)
+
+
+@router.post(
+    "/api/reviews/undo",
+    dependencies=[
+        Depends(rate_limit_quiz),
+        Depends(enforce_origin),
+        Depends(enforce_csrf),
+    ],
+)
+def undo_last_review(
+    user: Annotated[User, Depends(get_authenticated_user)],
+    service: Annotated[UndoLastReview, Depends(get_undo_last_review)],
+    client_tz: Annotated[str | None, Header(alias="X-Client-Timezone")] = None,
+) -> SchedulingView:
+    """Restore the caller's last grade and return the previous scheduling (200).
+
+    ``UndoLastReview`` looks up the caller's latest not-yet-undone log row
+    (missing snapshot or nothing to undo → ``QuizReviewNotUndoable`` → 409).
+    Another user's history is invisible. A vanished item collapses to
+    ``QuizItemNotFound`` → 404. The optional ``X-Client-Timezone`` header names
+    the study-day to decrement (silent UTC fallback); it does not affect the
+    response body.
+    """
+    return SchedulingView.from_snapshot(service(user=user, client_tz=client_tz))
 
 
 @router.post(

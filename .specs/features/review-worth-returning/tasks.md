@@ -229,10 +229,10 @@ T11 → T12 → T13 → T14
 
 **Done when**:
 
-- [ ] Grade then undo restores due/stability/step; log row remains with `undone_at`
-- [ ] Second undo is 409; legacy NULL snapshot is 409
-- [ ] `reviews_count` drops by one and never goes negative
-- [ ] Gate: `uv run pytest tests/test_application_reviews.py tests/test_web_quiz.py tests/test_repositories_quiz.py`
+- [x] Grade then undo restores due/stability/step; log row remains with `undone_at`
+- [x] Second undo is 409; legacy NULL snapshot is 409
+- [x] `reviews_count` drops by one and never goes negative
+- [x] Gate: `uv run pytest tests/test_application_reviews.py tests/test_web_quiz.py tests/test_repositories_quiz.py`
 
 **Tests**: unit
 **Gate**: full

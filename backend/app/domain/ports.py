@@ -62,6 +62,7 @@ from app.domain.entities import (
     Source,
     SourceHighlight,
     StudyDay,
+    UndoableReview,
     User,
 )
 
@@ -1033,6 +1034,18 @@ class QuizItemRepository(Protocol):
         """Append an immutable review-log entry for the item (QUIZ-12)."""
         ...
 
+    def latest_undoable_review(self, user_id: UUID) -> UndoableReview | None:
+        """Return the caller's most recent not-yet-undone log row, or ``None``.
+
+        Joined through ``quiz_items.user_id`` so another user's history is invisible
+        (AD-149). ``previous`` is ``None`` when the row stored no snapshot.
+        """
+        ...
+
+    def mark_log_undone(self, log_id: UUID, undone_at: datetime) -> None:
+        """Stamp ``undone_at`` on an existing log row. Never deletes the row (AD-306)."""
+        ...
+
     def list_for_source(self, source_id: UUID) -> list[QuizItem]:
         """Return all of ``source_id``'s items (any status), for the overview (QUIZ-14)."""
         ...
@@ -1318,6 +1331,13 @@ class StudyDayRepository(Protocol):
         Every delta defaults to zero so each caller names only the kinds of activity it
         witnessed: a submitted review credits ``reviews``, a saved reading position
         credits ``reading_updates`` and the ``words_advanced`` it newly covered.
+        """
+        ...
+
+    def decrement_reviews(self, user_id: UUID, day: date) -> None:
+        """Subtract one from ``reviews_count`` on an existing ``(user_id, day)`` row.
+
+        Floors at 0. If no row exists this is a no-op — never inserts (AD-307).
         """
         ...
 

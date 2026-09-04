@@ -79,6 +79,7 @@ from app.domain.entities import (
     SourceHighlight,
     StructureSection,
     StudyDay,
+    UndoableReview,
     User,
 )
 from app.infrastructure.db.metadata import (
@@ -1535,6 +1536,7 @@ class SqlAlchemyQuizItemRepository:
 
     def append_log(self, quiz_item_id: UUID, entry: ReviewLogEntry) -> None:
         """Append an immutable review-log entry for the item (QUIZ-12)."""
+        previous = entry.previous
         self._conn.execute(
             insert(review_log).values(
                 id=uuid4(),
@@ -1542,7 +1544,48 @@ class SqlAlchemyQuizItemRepository:
                 rating=entry.rating,
                 reviewed_at=entry.reviewed_at,
                 review_duration_ms=entry.review_duration_ms,
+                prev_state=None if previous is None else previous.state,
+                prev_step=None if previous is None else previous.step,
+                prev_stability=None if previous is None else previous.stability,
+                prev_difficulty=None if previous is None else previous.difficulty,
+                prev_due=None if previous is None else previous.due,
+                prev_last_review=None if previous is None else previous.last_review,
             )
+        )
+
+    def latest_undoable_review(self, user_id: UUID) -> UndoableReview | None:
+        """Return the caller's most recent not-yet-undone log row, or ``None``."""
+        row = self._conn.execute(
+            select(
+                review_log.c.id,
+                review_log.c.quiz_item_id,
+                review_log.c.reviewed_at,
+                review_log.c.prev_state,
+                review_log.c.prev_step,
+                review_log.c.prev_stability,
+                review_log.c.prev_difficulty,
+                review_log.c.prev_due,
+                review_log.c.prev_last_review,
+            )
+            .select_from(review_log.join(quiz_items, quiz_items.c.id == review_log.c.quiz_item_id))
+            .where(quiz_items.c.user_id == user_id)
+            .where(review_log.c.undone_at.is_(None))
+            .order_by(review_log.c.reviewed_at.desc(), review_log.c.id.desc())
+            .limit(1)
+        ).one_or_none()
+        if row is None:
+            return None
+        return UndoableReview(
+            log_id=row.id,
+            quiz_item_id=row.quiz_item_id,
+            reviewed_at=row.reviewed_at,
+            previous=_previous_from_log(row),
+        )
+
+    def mark_log_undone(self, log_id: UUID, undone_at: datetime) -> None:
+        """Stamp ``undone_at`` on an existing log row. Never deletes the row."""
+        self._conn.execute(
+            update(review_log).where(review_log.c.id == log_id).values(undone_at=undone_at)
         )
 
     def list_for_source(self, source_id: UUID) -> list[QuizItem]:
@@ -2270,6 +2313,20 @@ class SqlAlchemyStudyDayRepository:
         )
         self._conn.execute(stmt)
 
+    def decrement_reviews(self, user_id: UUID, day: date) -> None:
+        """Subtract one from an existing day's ``reviews_count``, floored at 0.
+
+        UPDATE-only: a missing ``(user_id, day)`` row is a no-op, never an insert
+        (AD-307). ``record``'s INSERT-on-miss would mint a −1 day from a negative
+        delta, so undo must not reuse it.
+        """
+        self._conn.execute(
+            update(study_days)
+            .where(study_days.c.user_id == user_id)
+            .where(study_days.c.day == day)
+            .values(reviews_count=func.greatest(study_days.c.reviews_count - 1, 0))
+        )
+
     def window(self, user_id: UUID, *, start: date, end: date) -> list[StudyDay]:
         rows = self._conn.execute(
             select(
@@ -2445,6 +2502,19 @@ def _to_scheduling(row) -> SchedulingSnapshot:  # noqa: ANN001
         difficulty=row.difficulty,
         due=row.due,
         last_review=row.last_review,
+    )
+
+
+def _previous_from_log(row) -> SchedulingSnapshot | None:  # noqa: ANN001
+    if row.prev_due is None:
+        return None
+    return SchedulingSnapshot(
+        state=row.prev_state,
+        step=row.prev_step,
+        stability=row.prev_stability,
+        difficulty=row.prev_difficulty,
+        due=row.prev_due,
+        last_review=row.prev_last_review,
     )
 
 

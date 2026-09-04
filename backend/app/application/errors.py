@@ -225,6 +225,15 @@ class QuizItemNotReviewable(Exception):
     """
 
 
+class QuizReviewNotUndoable(Exception):
+    """Undo was requested with nothing restorable (REV-23).
+
+    Covers no not-yet-undone log row for the caller, a row that is already undone,
+    and a pre-cycle row whose previous snapshot is NULL. The web layer maps this
+    to 409; it is not a missing-item 404.
+    """
+
+
 class InvalidCardText(Exception):
     """A card was accepted or edited with unusable question/answer text (CAP-05/06).
 

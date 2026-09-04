@@ -994,6 +994,18 @@ class FakeStudyDayRepository:
             words_advanced=base_words + words_advanced,
         )
 
+    def decrement_reviews(self, user_id: UUID, day: date) -> None:
+        existing = self._rows.get((user_id, day))
+        if existing is None:
+            return
+        self._rows[(user_id, day)] = StudyDay(
+            user_id=user_id,
+            day=day,
+            reviews_count=max(existing.reviews_count - 1, 0),
+            reading_updates=existing.reading_updates,
+            words_advanced=existing.words_advanced,
+        )
+
     def window(self, user_id: UUID, *, start: date, end: date) -> list[StudyDay]:
         return sorted(
             (

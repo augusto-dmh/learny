@@ -947,6 +947,21 @@ class ReviewLogEntry:
 
 
 @dataclass(frozen=True)
+class UndoableReview:
+    """The caller's latest not-yet-undone review-log row (REV-24).
+
+    ``previous`` is ``None`` for pre-cycle rows that stored no snapshot; those
+    cannot be undone (REV-23). ``reviewed_at`` is the instant the grade credited
+    a study day, so undo decrements that same local day (REV-25).
+    """
+
+    log_id: UUID
+    quiz_item_id: UUID
+    reviewed_at: datetime
+    previous: SchedulingSnapshot | None
+
+
+@dataclass(frozen=True)
 class CardProvenance:
     """The origin note of a highlight- or note-derived card, for display at review.
 

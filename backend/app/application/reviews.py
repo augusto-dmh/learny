@@ -4,10 +4,11 @@ Framework-free orchestration of the review path (ADR-007/009): nothing here
 imports FastAPI, SQLAlchemy, or a provider SDK. ``GetDueQueue`` serves the
 user-scoped due queue (QUIZ-13); ``SubmitReview`` grades one item, advancing its
 FSRS scheduling and appending an immutable review-log row in one transaction
-(QUIZ-12); ``ResetSchedule`` returns one card to its fresh state (NL-12). Ownership
-is the card's own ``user_id`` (AD-149) — reachable even for a source-less ``note``
-card — so a missing or non-owned item is indistinguishable (``QuizItemNotFound`` →
-404, no disclosure).
+(QUIZ-12); ``UndoLastReview`` restores the pre-grade snapshot on the caller's
+latest log row without deleting it (REV-22); ``ResetSchedule`` returns one card
+to its fresh state (NL-12). Ownership is the card's own ``user_id`` (AD-149) —
+reachable even for a source-less ``note`` card — so a missing or non-owned item
+is indistinguishable (``QuizItemNotFound`` → 404, no disclosure).
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from app.application.dates import local_day
 from app.application.errors import (
     QuizItemNotFound,
     QuizItemNotReviewable,
+    QuizReviewNotUndoable,
 )
 from app.domain.entities import (
     DueReviewItem,
@@ -132,9 +134,49 @@ class SubmitReview:
         snapshot = self._items.get_scheduling(item.id)
         advanced, log = self._scheduling.review(snapshot, rating, now)
         self._items.update_scheduling(item.id, advanced)
-        self._items.append_log(item.id, replace(log, review_duration_ms=review_duration_ms))
+        self._items.append_log(
+            item.id,
+            replace(log, review_duration_ms=review_duration_ms, previous=snapshot),
+        )
         self._study_days.record(user.id, local_day(now, client_tz), reviews=1)
         return advanced
+
+
+class UndoLastReview:
+    """Restore the caller's last grade without deleting its log row (REV-22).
+
+    Finds the most recent not-yet-undone ``review_log`` row among the caller's
+    items (REV-24). Another user's history is invisible because the lookup is
+    ``user_id``-scoped. Missing snapshot or no such row → ``QuizReviewNotUndoable``
+    (409). If the joined item has since vanished → ``QuizItemNotFound`` (404,
+    AD-149). On success it writes the stored previous snapshot back onto
+    scheduling, stamps ``undone_at``, and decrements that review's credited study
+    day with an UPDATE-only floor at 0 (REV-25, AD-307). Content columns stay
+    untouched (REV-26).
+    """
+
+    def __init__(
+        self,
+        *,
+        items: QuizItemRepository,
+        clock: Clock,
+        study_days: StudyDayRepository,
+    ) -> None:
+        self._items = items
+        self._clock = clock
+        self._study_days = study_days
+
+    def __call__(self, *, user: User, client_tz: str | None = None) -> SchedulingSnapshot:
+        row = self._items.latest_undoable_review(user.id)
+        if row is None or row.previous is None:
+            raise QuizReviewNotUndoable("Nothing to undo.")
+        item = self._items.get_by_id(row.quiz_item_id)
+        if item is None or item.user_id != user.id:
+            raise QuizItemNotFound("Quiz item not found.")
+        self._items.update_scheduling(item.id, row.previous)
+        self._items.mark_log_undone(row.log_id, self._clock.now())
+        self._study_days.decrement_reviews(user.id, local_day(row.reviewed_at, client_tz))
+        return row.previous
 
 
 class ResetSchedule:

@@ -70,7 +70,7 @@ from app.application.reading import (
     SaveReadingPosition,
 )
 from app.application.retrieval import RetrieveEvidence
-from app.application.reviews import GetDueQueue, ResetSchedule, SubmitReview
+from app.application.reviews import GetDueQueue, ResetSchedule, SubmitReview, UndoLastReview
 from app.application.sources import CreateSource, GetSource, ListSources, ReadSourceMedia
 from app.application.study import ContinueReading, GetStudySummary
 from app.application.vault import ExportVault
@@ -644,6 +644,20 @@ def get_submit_review(conn: DbConnection) -> SubmitReview:
     return SubmitReview(
         items=SqlAlchemyQuizItemRepository(conn),
         scheduling=build_scheduling_adapter(get_settings()),
+        clock=_clock,
+        study_days=SqlAlchemyStudyDayRepository(conn),
+    )
+
+
+def get_undo_last_review(conn: DbConnection) -> UndoLastReview:
+    """Wire ``UndoLastReview`` on the request-scoped connection (REV-22).
+
+    Undo is one atomic transaction (restore snapshot + stamp the log + decrement
+    the study day), so the ordinary auto-committing request connection is the
+    unit of work.
+    """
+    return UndoLastReview(
+        items=SqlAlchemyQuizItemRepository(conn),
         clock=_clock,
         study_days=SqlAlchemyStudyDayRepository(conn),
     )
