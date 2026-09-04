@@ -40,6 +40,7 @@ import { LG_MIN_WIDTH_PX } from "../hooks/use-below-lg";
 type StubProps = {
   revision?: number;
   onShowInBook?: (anchor: string) => void;
+  onAskAboutThis?: () => void;
 };
 vi.mock("../app/components/ask-panel", () => ({
   AskPanel: ({ revision, onShowInBook }: StubProps) => (
@@ -51,10 +52,13 @@ vi.mock("../app/components/ask-panel", () => ({
   ),
 }));
 vi.mock("../app/components/teach-panel", () => ({
-  TeachPanel: ({ revision, onShowInBook }: StubProps) => (
+  TeachPanel: ({ revision, onShowInBook, onAskAboutThis }: StubProps) => (
     <div data-testid="teach-panel-body" data-revision={revision}>
       <button type="button" onClick={() => onShowInBook?.("teach#anchor")}>
         teach-show-in-book
+      </button>
+      <button type="button" onClick={() => onAskAboutThis?.()}>
+        Ask about this
       </button>
     </div>
   ),
@@ -255,6 +259,35 @@ describe("ReaderPanel shell (RA-01/02/03, TUTOR-27/28)", () => {
     expect(
       screen.getByRole("tab", { name: "Chat" }).getAttribute("aria-selected"),
     ).toBe("true");
+  });
+
+  it("Ask about this arms a new Answer conversation without posting onto Tutor (TUTOR-33)", () => {
+    const fetchMock = stubList();
+    const onTabChange = vi.fn();
+    render(
+      <ReaderPanel
+        sourceId="s1"
+        csrf="csrf-xyz"
+        tab="chat"
+        panelParam="teach"
+        onTabChange={onTabChange}
+        onClose={() => {}}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Ask about this" }));
+
+    expect(onTabChange).toHaveBeenCalledWith("ask");
+    expect(screen.getByTestId("ask-panel-body")).toBeTruthy();
+    expect(screen.queryByTestId("teach-panel-body")).toBeNull();
+    expect(readActiveConversation("s1", "ask")).toBeNull();
+    expect(
+      fetchMock.mock.calls.some(
+        ([url, init]) =>
+          String(url).includes("/turns/stream") &&
+          (init as RequestInit | undefined)?.method === "POST",
+      ),
+    ).toBe(false);
   });
 
   it("opens Chat with Answer when ?panel=chat and nothing was used last (TUTOR-28)", () => {

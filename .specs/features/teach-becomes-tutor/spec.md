@@ -205,7 +205,7 @@ Teach is a cited, section-scoped chat with a four-sentence "patient tutor" promp
 | TUTOR-30 | P1: One Chat dock | T13 | Done |
 | TUTOR-31 | P1: One Chat dock | T12 | Done |
 | TUTOR-32 | P1: One Chat dock | T12 | Done |
-| TUTOR-33 | P1: One Chat dock | Tasks | In Tasks |
+| TUTOR-33 | P1: One Chat dock | T14 | Done |
 | TUTOR-34 | P1: One FSRS card | Tasks | In Tasks |
 | TUTOR-35 | P1: One FSRS card | T10 | Done |
 | TUTOR-36 | P1: One FSRS card | T10 | Done |

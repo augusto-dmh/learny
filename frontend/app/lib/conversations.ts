@@ -49,6 +49,10 @@ export type ConversationView = {
   title: string;
   scope_anchors: string[];
   include_notes: boolean;
+  target_anchor?: string | null;
+  target_title?: string | null;
+  tutor_phase?: string | null;
+  hint_level?: string | null;
   created_at: string;
   updated_at: string;
 };

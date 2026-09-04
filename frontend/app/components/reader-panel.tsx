@@ -345,6 +345,16 @@ export function ReaderPanel({
     }));
   }, [sourceId, conversationTab, armedMode]);
 
+  const handleAskAboutThis = useCallback(() => {
+    writeActiveConversation(sourceId, "ask", null);
+    writeLastChatMode(sourceId, "ask");
+    setLastUsed("ask");
+    setArmedOverride("ask");
+    setActiveIds((current) => ({ ...current, ask: null }));
+    setRevisions((current) => ({ ...current, ask: current.ask + 1 }));
+    onTabChange("ask");
+  }, [sourceId, onTabChange]);
+
   // What each tab is holding, so the reader can see it without opening the tab.
   // Inventory, never achievement: nothing counts up, and nothing is behind.
   const counts: Partial<Record<DockTab, number | null>> = {
@@ -424,6 +434,7 @@ export function ReaderPanel({
             onShowInBook={onShowInBook}
             onRequireAuth={onRequireAuth}
             onConversationsChanged={handleConversationsChanged}
+            onAskAboutThis={handleAskAboutThis}
           />
         ) : tab === "notes" ? (
           <DockNotesPanel {...bookNotes} onShowInBook={onShowInBook} />

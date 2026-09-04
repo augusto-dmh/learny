@@ -172,6 +172,10 @@ function conversationScopedTo(anchor: string, title: string) {
     title,
     scope_anchors: [anchor],
     include_notes: false,
+    target_anchor: anchor,
+    target_title: title,
+    tutor_phase: "pump",
+    hint_level: "pump",
     created_at: "now",
     updated_at: "now",
   };
@@ -224,6 +228,11 @@ function baseHandlers(
     "GET /api/sources/s1/structure": () => jsonResponse(200, structure),
     [`POST ${CREATE_URL}`]: () =>
       jsonResponse(201, conversationScopedTo("c2.xhtml", "Chapter 2")),
+    [`GET ${READ_URL}`]: () =>
+      jsonResponse(200, {
+        ...conversationScopedTo("c2.xhtml", "Chapter 2"),
+        turns: [],
+      }),
     [`POST ${TURN_STREAM}`]: () => stream(),
     ...extra,
   };
@@ -1082,5 +1091,72 @@ describe("Tutor Start speaks first (TUTOR-08/13/14/29/30)", () => {
     expect(screen.queryByText("(session start)")).toBeNull();
     expect(screen.queryByTestId("user-message")).toBeNull();
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+  });
+});
+
+describe("Tutor chips and closed-session handoff (TUTOR-18/19/33)", () => {
+  it("posts Just explain this. as the exact teach message", async () => {
+    const { fetchMock, streams } = tutorNetwork();
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
+    await startSession(fetchMock, streams);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Just explain this." }),
+    );
+    await waitFor(() => expect(callsTo(fetchMock, TURN_STREAM)).toHaveLength(2));
+    expect(bodyOf(callsTo(fetchMock, TURN_STREAM)[1])).toEqual({
+      message: "Just explain this.",
+      mode: "teach",
+    });
+    await streamTurn(streams[1], []);
+  });
+
+  it("posts I don't know. as the exact teach message", async () => {
+    const { fetchMock, streams } = tutorNetwork();
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
+    await startSession(fetchMock, streams);
+
+    fireEvent.click(screen.getByRole("button", { name: "I don't know." }));
+    await waitFor(() => expect(callsTo(fetchMock, TURN_STREAM)).toHaveLength(2));
+    expect(bodyOf(callsTo(fetchMock, TURN_STREAM)[1])).toEqual({
+      message: "I don't know.",
+      mode: "teach",
+    });
+    await streamTurn(streams[1], []);
+  });
+
+  it("hides the composer when the session is closed and Ask about this does not post a turn", async () => {
+    const fetchMock = routedFetch({
+      "GET /api/sources/s1/structure": () => jsonResponse(200, structure),
+      [`GET ${READ_URL}`]: () =>
+        jsonResponse(200, {
+          ...restoredDetail,
+          tutor_phase: "close",
+          target_title: "Chapter 1",
+        }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    writeActiveConversation("s1", "teach", "conv2");
+
+    const onAskAboutThis = vi.fn();
+    render(
+      <TeachPanel
+        sourceId="s1"
+        csrf="csrf-xyz"
+        onAskAboutThis={onAskAboutThis}
+      />,
+    );
+    await screen.findByText("It is about early computing.");
+
+    expect(screen.queryByPlaceholderText(/send a message/i)).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Just explain this." }),
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Submit" })).toBeNull();
+
+    const turnCount = callsTo(fetchMock, TURN_STREAM).length;
+    fireEvent.click(screen.getByRole("button", { name: "Ask about this" }));
+    expect(onAskAboutThis).toHaveBeenCalledTimes(1);
+    expect(callsTo(fetchMock, TURN_STREAM)).toHaveLength(turnCount);
   });
 });

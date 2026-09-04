@@ -39,7 +39,12 @@ import {
   getConversation,
   startConversation,
 } from "@/app/lib/conversations";
-import { isTutorOpeningMessage, TUTOR_OPENING_MESSAGE } from "@/app/lib/tutor";
+import {
+  isTutorOpeningMessage,
+  TUTOR_DONT_KNOW_MESSAGE,
+  TUTOR_JUST_EXPLAIN_MESSAGE,
+  TUTOR_OPENING_MESSAGE,
+} from "@/app/lib/tutor";
 import { fetchSourceStructure, type SourceStructure } from "@/app/lib/sources";
 import {
   assistantView,
@@ -71,7 +76,7 @@ import { FailedTurn } from "./failed-turn";
 import { IncludeNotesToggle } from "./include-notes-toggle";
 import { isNotFound, NotFoundNotice } from "./not-found-notice";
 import { SaveToNoteAction } from "./save-to-note-action";
-import { useConversationThread } from "./use-conversation-thread";
+import { useConversationThread, type ConversationThread } from "./use-conversation-thread";
 import { useIncludeNotes } from "./use-include-notes";
 
 /** The surface name the active-conversation pointer is stored under. */
@@ -87,6 +92,7 @@ type TeachThread = {
   /** Shown when the target anchor no longer resolves against the live structure. */
   fallbackLabel: string;
   initialMessages: LearnyUIMessage[];
+  tutorPhase: string | null;
 };
 
 export function TeachPanel({
@@ -97,6 +103,7 @@ export function TeachPanel({
   onShowInBook,
   onRequireAuth,
   onConversationsChanged,
+  onAskAboutThis,
 }: {
   sourceId: string;
   csrf: string;
@@ -107,6 +114,8 @@ export function TeachPanel({
   onShowInBook?: (anchor: string) => void;
   onRequireAuth?: () => void;
   onConversationsChanged?: () => void;
+  /** Switch Chat to a new Answer conversation on this book (TUTOR-33). */
+  onAskAboutThis?: () => void;
 }) {
   const [structure, setStructure] = useState<SourceStructure | null>(null);
   const [selectedAnchor, setSelectedAnchor] = useState("");
@@ -184,6 +193,7 @@ export function TeachPanel({
           targetAnchor: detail.scope_anchors[0] ?? "",
           fallbackLabel: detail.title,
           initialMessages: turnsToUIMessages(detail.turns),
+          tutorPhase: detail.tutor_phase ?? null,
         });
       })
       .catch((err: unknown) => {
@@ -270,6 +280,7 @@ export function TeachPanel({
         targetAnchor: selectedAnchor,
         fallbackLabel: option?.label ?? selectedAnchor,
         initialMessages: [],
+        tutorPhase: conversation.tutor_phase ?? null,
       });
     } catch (err: unknown) {
       if (err instanceof StreamRequestError && err.status === 401) {
@@ -301,10 +312,12 @@ export function TeachPanel({
         targetAnchor={thread.targetAnchor}
         target={targetLabel}
         initialMessages={thread.initialMessages}
+        tutorPhase={thread.tutorPhase}
         onShowInBook={onShowInBook}
         onRequireAuth={onRequireAuth}
         onConversationStarted={handleStarted}
         onConversationKept={handleKept}
+        onAskAboutThis={onAskAboutThis}
       />
     );
   }
@@ -358,10 +371,12 @@ function TeachChat({
   targetAnchor,
   target,
   initialMessages,
+  tutorPhase: initialTutorPhase,
   onShowInBook,
   onRequireAuth,
   onConversationStarted,
   onConversationKept,
+  onAskAboutThis,
 }: {
   sourceId: string;
   csrf: string;
@@ -371,10 +386,12 @@ function TeachChat({
   targetAnchor: string;
   target: string;
   initialMessages: LearnyUIMessage[];
+  tutorPhase: string | null;
   onShowInBook?: (anchor: string) => void;
   onRequireAuth?: () => void;
   onConversationStarted: (conversationId: string) => void;
   onConversationKept: () => void;
+  onAskAboutThis?: () => void;
 }) {
   // The notes choice belongs to the conversation, so it is fixed when the thread
   // creates one and is always sent explicitly rather than left to a server guess.
@@ -452,6 +469,32 @@ function TeachChat({
     initialMessages.length === 0 &&
     failedTurn === null &&
     (isStreaming || !openingPersisted);
+
+  const [tutorPhase, setTutorPhase] = useState(initialTutorPhase);
+  useEffect(() => {
+    setTutorPhase(initialTutorPhase);
+  }, [initialTutorPhase]);
+
+  useEffect(() => {
+    if (!conversationId || isStreaming) {
+      return;
+    }
+    let cancelled = false;
+    void getConversation(conversationId)
+      .then((detail) => {
+        if (!cancelled) {
+          setTutorPhase(detail.tutor_phase ?? null);
+        }
+      })
+      .catch(() => {
+        // Phase is advisory for the composer; a failed read leaves the last known value.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [conversationId, isStreaming, messages.length]);
+
+  const sessionClosed = tutorPhase === "close";
 
   const retryFailedTurn = useCallback(() => {
     if (!failedTurn?.userText) {
@@ -596,27 +639,118 @@ function TeachChat({
         </p>
       ) : null}
 
-      {openingInFlight ? null : (
-        <>
-          <IncludeNotesToggle
-            checked={fixedNotes ?? notes.includeNotes}
-            onChange={notes.setIncludeNotes}
-            locked={fixedNotes !== null}
-          />
-
-          <PromptInput onSubmit={handleSubmit}>
-            <PromptInputBody>
-              <PromptInputTextarea
-                placeholder="Send a message…"
-                disabled={isStreaming}
-              />
-            </PromptInputBody>
-            <PromptInputFooter>
-              <PromptInputSubmit status={status} onStop={stop} />
-            </PromptInputFooter>
-          </PromptInput>
-        </>
+      {sessionClosed ? (
+        <ClosedSessionHandoff onAskAboutThis={onAskAboutThis} />
+      ) : openingInFlight ? null : (
+        <TutorComposer
+          notesChecked={fixedNotes ?? notes.includeNotes}
+          onNotesChange={notes.setIncludeNotes}
+          notesLocked={fixedNotes !== null}
+          onSubmit={handleSubmit}
+          onJustExplain={() => send(TUTOR_JUST_EXPLAIN_MESSAGE)}
+          onDontKnow={() => send(TUTOR_DONT_KNOW_MESSAGE)}
+          chipsDisabled={isStreaming}
+          status={status}
+          onStop={stop}
+          streaming={isStreaming}
+        />
       )}
     </section>
   );
 }
+
+function TutorChips({
+  onJustExplain,
+  onDontKnow,
+  disabled,
+}: {
+  onJustExplain: () => void;
+  onDontKnow: () => void;
+  disabled: boolean;
+}) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={disabled}
+        onClick={onJustExplain}
+      >
+        {TUTOR_JUST_EXPLAIN_MESSAGE}
+      </Button>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={disabled}
+        onClick={onDontKnow}
+      >
+        {TUTOR_DONT_KNOW_MESSAGE}
+      </Button>
+    </div>
+  );
+}
+
+function TutorComposer({
+  notesChecked,
+  onNotesChange,
+  notesLocked,
+  onSubmit,
+  onJustExplain,
+  onDontKnow,
+  chipsDisabled,
+  status,
+  onStop,
+  streaming,
+}: {
+  notesChecked: boolean;
+  onNotesChange: (value: boolean) => void;
+  notesLocked: boolean;
+  onSubmit: (message: PromptInputMessage) => void;
+  onJustExplain: () => void;
+  onDontKnow: () => void;
+  chipsDisabled: boolean;
+  status: ConversationThread["status"];
+  onStop: () => void;
+  streaming: boolean;
+}) {
+  return (
+    <>
+      <IncludeNotesToggle
+        checked={notesChecked}
+        onChange={onNotesChange}
+        locked={notesLocked}
+      />
+      <TutorChips
+        onJustExplain={onJustExplain}
+        onDontKnow={onDontKnow}
+        disabled={chipsDisabled}
+      />
+      <PromptInput onSubmit={onSubmit}>
+        <PromptInputBody>
+          <PromptInputTextarea
+            placeholder="Send a message…"
+            disabled={streaming}
+          />
+        </PromptInputBody>
+        <PromptInputFooter>
+          <PromptInputSubmit status={status} onStop={onStop} />
+        </PromptInputFooter>
+      </PromptInput>
+    </>
+  );
+}
+
+function ClosedSessionHandoff({
+  onAskAboutThis,
+}: {
+  onAskAboutThis?: () => void;
+}) {
+  return (
+    <Button type="button" onClick={() => onAskAboutThis?.()}>
+      Ask about this
+    </Button>
+  );
+}
+

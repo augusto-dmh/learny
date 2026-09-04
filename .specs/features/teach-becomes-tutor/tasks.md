@@ -377,9 +377,9 @@ T11 → T12 → T13 → T14 → T15
 
 **Done when**:
 
-- [ ] Chip click posts the exact frozen message
-- [ ] Close state has no composer and the Answer control does not POST onto the closed thread
-- [ ] Gate: `cd frontend && npm test -- teach-panel reader-panel`
+- [x] Chip click posts the exact frozen message
+- [x] Close state has no composer and the Answer control does not POST onto the closed thread
+- [x] Gate: `cd frontend && npm test -- teach-panel reader-panel`
 
 **Tests**: unit
 **Gate**: full
