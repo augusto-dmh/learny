@@ -35,7 +35,7 @@ from app.application.errors import (
 )
 from app.application.grounding import ground, ground_spans
 from app.application.identity import AuthorizeOwnership
-from app.application.ingestion import SOURCE_STATUS_READY, authorized_source
+from app.application.ingestion import SOURCE_STATUS_READY, readable_source
 from app.application.retrieval import RetrieveEvidence
 from app.application.streaming import (
     PHASE_SEARCHING,
@@ -66,6 +66,7 @@ from app.domain.entities import (
     User,
 )
 from app.domain.ports import (
+    ActivationEventRepository,
     Clock,
     ConversationRepository,
     ConversationTurnRepository,
@@ -192,6 +193,7 @@ class StartConversation:
         authorize: AuthorizeOwnership,
         clock: Clock,
         ids: Callable[[], UUID],
+        activations: ActivationEventRepository | None = None,
     ) -> None:
         self._sources = sources
         self._corpus = corpus
@@ -199,6 +201,7 @@ class StartConversation:
         self._authorize = authorize
         self._clock = clock
         self._ids = ids
+        self._activations = activations
 
     def __call__(
         self,
@@ -209,11 +212,13 @@ class StartConversation:
         include_notes: bool,
         title: str | None = None,
     ) -> Conversation:
-        source = authorized_source(
+        source = readable_source(
             user=user,
             source_id=source_id,
             sources=self._sources,
             authorize=self._authorize,
+            activations=self._activations,
+            clock=self._clock,
         )
         if source.status != SOURCE_STATUS_READY:
             # Guard before touching the corpus so a not-ready source starts nothing.

@@ -374,6 +374,8 @@ def get_read_source_structure(conn: DbConnection) -> ReadSourceStructure:
         sources=SqlAlchemySourceRepository(conn),
         corpus=SqlAlchemyCorpusRepository(conn),
         authorize=AuthorizeOwnership(),
+        activations=SqlAlchemyActivationEventRepository(conn),
+        clock=_clock,
     )
 
 
@@ -382,6 +384,8 @@ def get_read_section(conn: DbConnection) -> ReadSection:
         sources=SqlAlchemySourceRepository(conn),
         corpus=SqlAlchemyCorpusRepository(conn),
         authorize=AuthorizeOwnership(),
+        activations=SqlAlchemyActivationEventRepository(conn),
+        clock=_clock,
     )
 
 
@@ -392,6 +396,8 @@ def get_read_chapter(conn: DbConnection) -> ReadChapter:
         corpus=SqlAlchemyCorpusRepository(conn),
         positions=SqlAlchemyReadingPositionRepository(conn),
         authorize=AuthorizeOwnership(),
+        activations=SqlAlchemyActivationEventRepository(conn),
+        clock=_clock,
     )
 
 
@@ -404,6 +410,7 @@ def get_save_reading_position(conn: DbConnection) -> SaveReadingPosition:
         authorize=AuthorizeOwnership(),
         clock=_clock,
         study_days=SqlAlchemyStudyDayRepository(conn),
+        activations=SqlAlchemyActivationEventRepository(conn),
     )
 
 
@@ -413,6 +420,8 @@ def get_list_source_highlights(conn: DbConnection) -> ListSourceHighlights:
         sources=SqlAlchemySourceRepository(conn),
         notes=SqlAlchemyNoteRepository(conn),
         authorize=AuthorizeOwnership(),
+        activations=SqlAlchemyActivationEventRepository(conn),
+        clock=_clock,
     )
 
 
@@ -449,6 +458,8 @@ def get_retrieve_evidence(conn: DbConnection) -> RetrieveEvidence:
         rrf_k=settings.retrieval_rrf_k,
         ef_search=settings.hnsw_ef_search,
         default_top_k=settings.retrieval_top_k,
+        activations=SqlAlchemyActivationEventRepository(conn),
+        clock=_clock,
     )
 
 
@@ -484,6 +495,7 @@ def get_start_conversation(conn: DbConnection) -> StartConversation:
         authorize=AuthorizeOwnership(),
         clock=_clock,
         ids=uuid4,
+        activations=SqlAlchemyActivationEventRepository(conn),
     )
 
 

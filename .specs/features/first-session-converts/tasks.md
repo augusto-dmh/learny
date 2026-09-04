@@ -189,9 +189,9 @@ T10 → T11 → T12 → T13 → T14 → T15 → T16
 
 **Done when**:
 
-- [ ] GET list JSON has `is_sample` and the canned question on the sample row
-- [ ] Unauthenticated GET sample is 401
-- [ ] Conversations/read paths that still used `authorized_source` for sample reads are switched to `readable_source` in this task if T4's helper is not yet wired there — keep mutate routes on `authorized_source`
+- [x] GET list JSON has `is_sample` and the canned question on the sample row
+- [x] Unauthenticated GET sample is 401
+- [x] Conversations/read paths that still used `authorized_source` for sample reads are switched to `readable_source` in this task if T4's helper is not yet wired there — keep mutate routes on `authorized_source`
 
 **Tests**: integration
 **Gate**: full

@@ -66,20 +66,23 @@ def test_source_round_trips_is_sample_flag() -> None:
     )
 
     assert source.is_sample is True
-    assert Source(
-        id=source.id,
-        user_id=source.user_id,
-        title=source.title,
-        filename=source.filename,
-        content_type=source.content_type,
-        byte_size=source.byte_size,
-        checksum=source.checksum,
-        object_key=source.object_key,
-        status=source.status,
-        created_at=source.created_at,
-        updated_at=source.updated_at,
-        is_sample=source.is_sample,
-    ) == source
+    assert (
+        Source(
+            id=source.id,
+            user_id=source.user_id,
+            title=source.title,
+            filename=source.filename,
+            content_type=source.content_type,
+            byte_size=source.byte_size,
+            checksum=source.checksum,
+            object_key=source.object_key,
+            status=source.status,
+            created_at=source.created_at,
+            updated_at=source.updated_at,
+            is_sample=source.is_sample,
+        )
+        == source
+    )
 
 
 def test_source_is_frozen() -> None:

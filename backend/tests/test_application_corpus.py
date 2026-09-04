@@ -643,6 +643,20 @@ def test_read_structure_non_owner_collapses_to_source_not_found() -> None:
         _read_structure(sources, corpus)(user=intruder, source_id=source.id)
 
 
+def test_read_structure_returns_sample_for_non_owner() -> None:
+    operator = _user()
+    sample = replace(_owned_source(operator), is_sample=True)
+    sources = FakeSourceRepository()
+    sources.add(sample)
+    corpus = FakeCorpusRepository()
+    _seed_corpus(corpus, sample.id)
+    reader = User(id=uuid4(), email="reader@example.com", created_at=_NOW)
+
+    structure = _read_structure(sources, corpus)(user=reader, source_id=sample.id)
+
+    assert structure == corpus.get_structure(sample.id)
+
+
 def test_read_structure_owned_source_without_corpus_raises_corpus_not_found() -> None:
     user = _user()
     source = _owned_source(user)

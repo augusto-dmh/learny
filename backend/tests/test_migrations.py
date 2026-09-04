@@ -3048,10 +3048,7 @@ def test_migration_0022_adds_sample_flag_and_activation_events(monkeypatch) -> N
                 {"id": source_id},
             ).one()
             indexdef = conn.execute(
-                text(
-                    "SELECT indexdef FROM pg_indexes "
-                    "WHERE indexname = 'uq_sources_one_sample'"
-                )
+                text("SELECT indexdef FROM pg_indexes WHERE indexname = 'uq_sources_one_sample'")
             ).scalar_one()
         assert seeded.is_sample is False
         assert "UNIQUE" in indexdef
@@ -3110,8 +3107,7 @@ def test_migration_0022_adds_sample_flag_and_activation_events(monkeypatch) -> N
         with engine.begin() as conn:
             conn.execute(
                 text(
-                    "INSERT INTO activation_events (user_id, name) "
-                    "VALUES (:uid, 'sample_opened')"
+                    "INSERT INTO activation_events (user_id, name) VALUES (:uid, 'sample_opened')"
                 ),
                 {"uid": user_id},
             )
@@ -3127,8 +3123,7 @@ def test_migration_0022_adds_sample_flag_and_activation_events(monkeypatch) -> N
         with engine.begin() as conn:
             conn.execute(
                 text(
-                    "INSERT INTO activation_events (user_id, name) "
-                    "VALUES (:uid, 'account_created')"
+                    "INSERT INTO activation_events (user_id, name) VALUES (:uid, 'account_created')"
                 ),
                 {"uid": user_id},
             )

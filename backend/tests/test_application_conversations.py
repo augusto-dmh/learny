@@ -810,6 +810,23 @@ def test_start_on_an_unowned_source_reports_the_source_missing() -> None:
     assert conversations.list_for_user(owner.id, limit=_PAGE) == []
 
 
+def test_start_on_a_ready_sample_is_readable_to_a_non_owner() -> None:
+    operator = _user()
+    sample = replace(_owned_source(operator.id, title="The Art of War"), is_sample=True)
+    sources = FakeSourceRepository()
+    sources.add(sample)
+    reader = User(id=uuid4(), email="reader@example.com", created_at=_NOW)
+    corpus = FakeCorpus(_structure(_section("ch1.xhtml", ("Chapter 1",))))
+    conversations = FakeConversationRepository(sources)
+
+    started = _start(sources=sources, corpus=corpus, conversations=conversations)(
+        user=reader, source_id=sample.id, include_notes=False
+    )
+
+    assert started.source_id == sample.id
+    assert started.title == "The Art of War"
+
+
 def test_start_against_a_not_ready_source_creates_nothing() -> None:
     user, source, sources = _owned_world(status="processing")
     corpus = FakeCorpus(_structure(_section("ch1.xhtml", ("Chapter 1",))))

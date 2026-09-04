@@ -90,24 +90,25 @@ def readable_source(
     source_id: UUID,
     sources: SourceRepository,
     authorize: AuthorizeOwnership,
-    activations: ActivationEventRepository,
-    clock: Clock,
+    activations: ActivationEventRepository | None = None,
+    clock: Clock | None = None,
 ) -> Source:
     """Return a source the caller may read, or raise ``SourceNotFound``.
 
     Readable means the caller owns it or it is the shared sample. Missing and
     non-readable collapse to the same error. The first successful sample read
-    records ``sample_opened`` once.
+    records ``sample_opened`` once when an activation store is provided.
     """
     source = sources.get_by_id(source_id)
     if source is None:
         raise SourceNotFound("Source not found.")
     if source.is_sample:
-        activations.insert_if_absent(
-            user_id=user.id,
-            name=ACTIVATION_SAMPLE_OPENED,
-            occurred_at=clock.now(),
-        )
+        if activations is not None and clock is not None:
+            activations.insert_if_absent(
+                user_id=user.id,
+                name=ACTIVATION_SAMPLE_OPENED,
+                occurred_at=clock.now(),
+            )
         return source
     try:
         authorize(user=user, owner_id=source.user_id)

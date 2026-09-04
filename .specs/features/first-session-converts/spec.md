@@ -181,9 +181,9 @@ A stranger who creates an account lands on an empty library, waits on ingest wit
 | FS-02 | P1: Shared sample | T3 | Implemented |
 | FS-03 | P1: Shared sample | T4 | Implemented |
 | FS-04 | P1: Shared sample | T4 | Implemented |
-| FS-05 | P1: Shared sample | T5 | In Tasks |
+| FS-05 | P1: Shared sample | T5 | Implemented |
 | FS-06 | P1: Shared sample | T10 | In Tasks |
-| FS-07 | P1: Shared sample | T5 | In Tasks |
+| FS-07 | P1: Shared sample | T5 | Implemented |
 | FS-08 | P1: Canned Ask | T15 | In Tasks |
 | FS-09 | P1: Canned Ask | T9 | In Tasks |
 | FS-10 | P1: Canned Ask | T9 | In Tasks |

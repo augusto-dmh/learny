@@ -57,6 +57,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/sources", tags=["sources"])
 
 
+SAMPLE_SUGGESTED_QUESTION = (
+    "What does Sun Tzu mean by \u201call warfare is based on deception\u201d?"
+)
+
+
 class SourceSummary(BaseModel):
     """Public, secret-free view of a source (safe to return/log).
 
@@ -71,6 +76,8 @@ class SourceSummary(BaseModel):
     content_type: str
     status: str
     created_at: datetime
+    is_sample: bool
+    suggested_question: str | None = None
 
     @classmethod
     def from_entity(cls, source: Source) -> SourceSummary:
@@ -82,6 +89,8 @@ class SourceSummary(BaseModel):
             content_type=source.content_type,
             status=source.status,
             created_at=source.created_at,
+            is_sample=source.is_sample,
+            suggested_question=SAMPLE_SUGGESTED_QUESTION if source.is_sample else None,
         )
 
 
