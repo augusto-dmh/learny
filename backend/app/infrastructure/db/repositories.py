@@ -83,6 +83,7 @@ from app.domain.entities import (
     User,
 )
 from app.infrastructure.db.metadata import (
+    activation_events,
     conversation_turn_citations,
     conversation_turns,
     conversations,
@@ -225,8 +226,9 @@ class SqlAlchemySessionRepository:
 class SqlAlchemySourceRepository:
     """``SourceRepository`` backed by the ``sources`` table.
 
-    Owner-scoped: ``list_by_user`` filters on ``user_id`` and returns newest
-    first. The unique ``object_key`` constraint propagates as ``IntegrityError``.
+    ``list_by_user`` returns the caller's rows plus the one shared sample,
+    newest first. The unique ``object_key`` constraint propagates as
+    ``IntegrityError``.
     """
 
     def __init__(self, connection: Connection) -> None:
@@ -255,7 +257,7 @@ class SqlAlchemySourceRepository:
     def list_by_user(self, user_id: UUID) -> list[Source]:
         rows = self._conn.execute(
             select(sources)
-            .where(sources.c.user_id == user_id)
+            .where(or_(sources.c.user_id == user_id, sources.c.is_sample.is_(True)))
             .order_by(sources.c.created_at.desc())
         ).all()
         return [_to_source(row) for row in rows]
@@ -271,6 +273,26 @@ class SqlAlchemySourceRepository:
             .where(sources.c.id == source_id)
             .values(status=status, updated_at=updated_at)
         )
+
+
+class SqlAlchemyActivationEventRepository:
+    """``ActivationEventRepository`` backed by ``activation_events``.
+
+    ``insert_if_absent`` is ``INSERT ... ON CONFLICT (user_id, name) DO NOTHING``
+    so two concurrent first-session stamps still leave one row.
+    """
+
+    def __init__(self, connection: Connection) -> None:
+        self._conn = connection
+
+    def insert_if_absent(self, *, user_id: UUID, name: str, occurred_at: datetime) -> bool:
+        result = self._conn.execute(
+            pg_insert(activation_events)
+            .values(user_id=user_id, name=name, occurred_at=occurred_at)
+            .on_conflict_do_nothing(index_elements=["user_id", "name"])
+            .returning(activation_events.c.user_id)
+        )
+        return result.first() is not None
 
 
 class SqlAlchemyIngestionJobRepository:

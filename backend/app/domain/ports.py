@@ -192,7 +192,7 @@ class SourceRepository(Protocol):
         ...
 
     def list_by_user(self, user_id: UUID) -> list[Source]:
-        """Return ``user_id``'s sources, newest first (owner-scoped)."""
+        """Return the caller's sources plus the shared sample, newest first."""
         ...
 
     def get_by_id(self, source_id: UUID) -> Source | None:
@@ -205,6 +205,15 @@ class SourceRepository(Protocol):
         Keeps the sources-list badge (``uploaded``/``processing``/``ready``/
         ``failed``) correct without joining the ingestion tables (design fork).
         """
+        ...
+
+
+@runtime_checkable
+class ActivationEventRepository(Protocol):
+    """Persistence port for once-per-user first-session events."""
+
+    def insert_if_absent(self, *, user_id: UUID, name: str, occurred_at: datetime) -> bool:
+        """Insert ``(user_id, name)``; return True if a row was written."""
         ...
 
 

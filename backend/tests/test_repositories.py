@@ -35,6 +35,7 @@ from app.domain.entities import (
     User,
 )
 from app.infrastructure.db.metadata import (
+    activation_events,
     conversation_turns,
     corpus_blocks,
     corpus_chunks,
@@ -43,6 +44,7 @@ from app.infrastructure.db.metadata import (
     sources,
 )
 from app.infrastructure.db.repositories import (
+    SqlAlchemyActivationEventRepository,
     SqlAlchemyConversationRepository,
     SqlAlchemyConversationTurnRepository,
     SqlAlchemyCorpusRepository,
@@ -68,7 +70,14 @@ def _new_user(email: str) -> User:
     return User(id=uuid4(), email=email, created_at=datetime.now(UTC))
 
 
-def _new_source(user_id: UUID, *, object_key: str, created_at: datetime | None = None) -> Source:
+def _new_source(
+    user_id: UUID,
+    *,
+    object_key: str,
+    created_at: datetime | None = None,
+    is_sample: bool = False,
+    status: str = "uploaded",
+) -> Source:
     now = created_at or datetime.now(UTC)
     return Source(
         id=uuid4(),
@@ -79,9 +88,10 @@ def _new_source(user_id: UUID, *, object_key: str, created_at: datetime | None =
         byte_size=1024,
         checksum="d" * 64,
         object_key=object_key,
-        status="uploaded",
+        status=status,
         created_at=now,
         updated_at=now,
+        is_sample=is_sample,
     )
 
 
@@ -271,6 +281,76 @@ def test_source_list_is_owner_scoped(db_conn: Connection) -> None:
     assert alice_ids == {a1.id, a2.id}
     assert b1.id not in alice_ids
     assert [s.id for s in sources.list_by_user(bob.id)] == [b1.id]
+
+
+def test_source_list_includes_one_shared_sample_for_every_user(db_conn: Connection) -> None:
+    users = SqlAlchemyUserRepository(db_conn)
+    sources = SqlAlchemySourceRepository(db_conn)
+    operator = _new_user("operator@example.com")
+    alice = _new_user("alice-lib@example.com")
+    bob = _new_user("bob-lib@example.com")
+    for user in (operator, alice, bob):
+        users.add(user)
+
+    sample = _new_source(
+        operator.id,
+        object_key=f"sources/{operator.id}/{uuid4()}.epub",
+        is_sample=True,
+        status="ready",
+    )
+    alice_book = _new_source(alice.id, object_key=f"sources/{alice.id}/{uuid4()}.epub")
+    bob_book = _new_source(bob.id, object_key=f"sources/{bob.id}/{uuid4()}.epub")
+    for source in (sample, alice_book, bob_book):
+        sources.add(source)
+
+    alice_listed = sources.list_by_user(alice.id)
+    bob_listed = sources.list_by_user(bob.id)
+    alice_ids = {s.id for s in alice_listed}
+    bob_ids = {s.id for s in bob_listed}
+
+    assert sample.id in alice_ids
+    assert sample.id in bob_ids
+    assert alice_book.id in alice_ids
+    assert bob_book.id in bob_ids
+    assert bob_book.id not in alice_ids
+    assert alice_book.id not in bob_ids
+    assert alice_ids == {alice_book.id, sample.id}
+    assert bob_ids == {bob_book.id, sample.id}
+    assert [s.id for s in alice_listed if s.is_sample] == [sample.id]
+    assert [s.id for s in bob_listed if s.is_sample] == [sample.id]
+
+
+def test_activation_event_inserts_once_per_user_and_name(db_conn: Connection) -> None:
+    users = SqlAlchemyUserRepository(db_conn)
+    activations = SqlAlchemyActivationEventRepository(db_conn)
+    user = _new_user("activated@example.com")
+    users.add(user)
+    now = datetime.now(UTC)
+
+    first = activations.insert_if_absent(user_id=user.id, name="sample_opened", occurred_at=now)
+    second = activations.insert_if_absent(
+        user_id=user.id,
+        name="sample_opened",
+        occurred_at=now + timedelta(seconds=1),
+    )
+    other = activations.insert_if_absent(
+        user_id=user.id,
+        name="account_created",
+        occurred_at=now,
+    )
+
+    assert first is True
+    assert second is False
+    assert other is True
+    rows = db_conn.execute(
+        select(activation_events.c.name, activation_events.c.occurred_at).where(
+            activation_events.c.user_id == user.id
+        )
+    ).all()
+    names = {row.name for row in rows}
+    assert names == {"sample_opened", "account_created"}
+    opened = next(row for row in rows if row.name == "sample_opened")
+    assert opened.occurred_at == now
 
 
 def test_source_object_key_is_unique(db_conn: Connection) -> None:

@@ -191,8 +191,8 @@ class FakeSourceRepository:
         return source
 
     def list_by_user(self, user_id: UUID) -> list[Source]:
-        owned = [s for s in self._by_id.values() if s.user_id == user_id]
-        return sorted(owned, key=lambda s: s.created_at, reverse=True)
+        visible = [s for s in self._by_id.values() if s.user_id == user_id or s.is_sample]
+        return sorted(visible, key=lambda s: s.created_at, reverse=True)
 
     def get_by_id(self, source_id: UUID) -> Source | None:
         return self._by_id.get(source_id)
@@ -201,6 +201,20 @@ class FakeSourceRepository:
         source = self._by_id.get(source_id)
         if source is not None:
             self._by_id[source_id] = replace(source, status=status, updated_at=updated_at)
+
+
+class FakeActivationEventRepository:
+    """In-memory ``ActivationEventRepository``: unique ``(user_id, name)``."""
+
+    def __init__(self) -> None:
+        self.rows: dict[tuple[UUID, str], datetime] = {}
+
+    def insert_if_absent(self, *, user_id: UUID, name: str, occurred_at: datetime) -> bool:
+        key = (user_id, name)
+        if key in self.rows:
+            return False
+        self.rows[key] = occurred_at
+        return True
 
 
 class FakeStorage:

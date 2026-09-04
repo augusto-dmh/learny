@@ -178,7 +178,7 @@ A stranger who creates an account lands on an empty library, waits on ingest wit
 | Requirement ID | Story | Phase | Status |
 |---|---|---|---|
 | FS-01 | P1: Shared sample | T1, T2 | Implemented |
-| FS-02 | P1: Shared sample | T3 | In Tasks |
+| FS-02 | P1: Shared sample | T3 | Implemented |
 | FS-03 | P1: Shared sample | T4 | In Tasks |
 | FS-04 | P1: Shared sample | T4 | In Tasks |
 | FS-05 | P1: Shared sample | T5 | In Tasks |

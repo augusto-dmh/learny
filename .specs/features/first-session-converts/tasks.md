@@ -140,8 +140,8 @@ T10 → T11 → T12 → T13 → T14 → T15 → T16
 
 **Done when**:
 
-- [ ] Two users each see their books plus one shared sample id
-- [ ] Two inserts of the same event name leave one row
+- [x] Two users each see their books plus one shared sample id
+- [x] Two inserts of the same event name leave one row
 
 **Tests**: integration
 **Gate**: full
