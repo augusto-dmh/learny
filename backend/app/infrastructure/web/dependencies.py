@@ -70,7 +70,13 @@ from app.application.reading import (
     SaveReadingPosition,
 )
 from app.application.retrieval import RetrieveEvidence
-from app.application.reviews import GetDueQueue, ResetSchedule, SubmitReview, UndoLastReview
+from app.application.reviews import (
+    FlagCard,
+    GetDueQueue,
+    ResetSchedule,
+    SubmitReview,
+    UndoLastReview,
+)
 from app.application.sources import CreateSource, GetSource, ListSources, ReadSourceMedia
 from app.application.study import ContinueReading, GetStudySummary
 from app.application.vault import ExportVault
@@ -661,6 +667,11 @@ def get_undo_last_review(conn: DbConnection) -> UndoLastReview:
         clock=_clock,
         study_days=SqlAlchemyStudyDayRepository(conn),
     )
+
+
+def get_flag_card(conn: DbConnection) -> FlagCard:
+    """Wire ``FlagCard`` on the request-scoped connection (REV-34)."""
+    return FlagCard(items=SqlAlchemyQuizItemRepository(conn), clock=_clock)
 
 
 def get_reset_schedule(conn: DbConnection) -> ResetSchedule:

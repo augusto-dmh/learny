@@ -1534,6 +1534,12 @@ class SqlAlchemyQuizItemRepository:
             )
         )
 
+    def set_flagged_at(self, item_id: UUID, flagged_at: datetime | None) -> None:
+        """Set or clear ``flagged_at``. Never touches scheduling or ``review_log``."""
+        self._conn.execute(
+            update(quiz_items).where(quiz_items.c.id == item_id).values(flagged_at=flagged_at)
+        )
+
     def append_log(self, quiz_item_id: UUID, entry: ReviewLogEntry) -> None:
         """Append an immutable review-log entry for the item (QUIZ-12)."""
         previous = entry.previous
@@ -1657,6 +1663,7 @@ class SqlAlchemyQuizItemRepository:
         conditions = [
             quiz_items.c.user_id == user_id,
             quiz_items.c.status == QuizItemStatus.ACTIVE,
+            quiz_items.c.flagged_at.is_(None),
             quiz_item_scheduling.c.due <= now,
         ]
         if source_id is not None:
@@ -2491,6 +2498,7 @@ def _to_quiz_item(row) -> QuizItem:  # noqa: ANN001
         note_id=row.note_id,
         note_changed_at=row.note_changed_at,
         conversation_id=row.conversation_id,
+        flagged_at=row.flagged_at,
     )
 
 

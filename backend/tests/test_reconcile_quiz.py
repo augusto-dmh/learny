@@ -263,6 +263,47 @@ def test_reconcile_never_touches_scheduling_or_review_log(db_conn: Connection) -
     assert [dict(row) for row in _log_rows(db_conn, relocate.id)] == before_log
 
 
+def test_reconcile_preserves_flagged_at(db_conn: Connection) -> None:
+    source = _source(db_conn)
+    SqlAlchemyCorpusRepository(db_conn).replace(
+        source.id,
+        title="Book",
+        authors=["A"],
+        language="en",
+        schema_version=1,
+        sections=_V2_SECTIONS,
+    )
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    keep = _item(
+        source.id,
+        question="Q keep?",
+        anchor="ch1",
+        section_path=("One",),
+        excerpt="alpha beta",
+    )
+    stale = _item(
+        source.id,
+        question="Q stale?",
+        anchor="ch2",
+        section_path=("Two",),
+        excerpt="gamma delta",
+    )
+    _seed_item(repo, keep)
+    _seed_item(repo, stale)
+    flagged_at = datetime.now(UTC)
+    repo.set_flagged_at(keep.id, flagged_at)
+    repo.set_flagged_at(stale.id, flagged_at)
+
+    _reconcile(db_conn, source.id)
+
+    kept = repo.get_by_id(keep.id)
+    staled = repo.get_by_id(stale.id)
+    assert kept.status == QuizItemStatus.ACTIVE
+    assert staled.status == QuizItemStatus.STALE
+    assert kept.flagged_at == flagged_at
+    assert staled.flagged_at == flagged_at
+
+
 def test_reconcile_reactivates_stale_item_when_quote_returns(db_conn: Connection) -> None:
     source = _source(db_conn)
     SqlAlchemyCorpusRepository(db_conn).replace(

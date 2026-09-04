@@ -1030,6 +1030,10 @@ class QuizItemRepository(Protocol):
         """Replace the item's scheduling snapshot after a review (QUIZ-12)."""
         ...
 
+    def set_flagged_at(self, item_id: UUID, flagged_at: datetime | None) -> None:
+        """Set or clear ``flagged_at``. Never touches scheduling or ``review_log`` (AD-305)."""
+        ...
+
     def append_log(self, quiz_item_id: UUID, entry: ReviewLogEntry) -> None:
         """Append an immutable review-log entry for the item (QUIZ-12)."""
         ...
@@ -1068,9 +1072,10 @@ class QuizItemRepository(Protocol):
     ) -> tuple[int, list[DueReviewItem]]:
         """Return the caller's due queue: total due count and up to ``limit`` items.
 
-        Active items with ``due <= now`` across the user's sources (optionally filtered
-        to one ``source_id``), ordered ``due ASC, id ASC`` (A-6). Stale/orphaned items
-        are excluded (QUIZ-17). The count is the full due total before the limit.
+        Active unflagged items with ``due <= now`` across the user's sources (optionally
+        filtered to one ``source_id``), ordered ``due ASC, id ASC`` (A-6). Stale/orphaned
+        items and flagged cards are excluded (QUIZ-17, REV-35). The count is the full
+        due total before the limit.
         """
         ...
 

@@ -252,10 +252,10 @@ T11 → T12 → T13 → T14
 
 **Done when**:
 
-- [ ] Flagged active past-due item is absent from due; scheduling bytes unchanged
-- [ ] Unflag restores due membership; stale+flagged stays out after unflag
-- [ ] Export GUID list excludes the flagged id
-- [ ] Gate: `uv run pytest tests/test_application_reviews.py tests/test_web_quiz.py tests/test_export_anki.py tests/test_reconcile_quiz.py`
+- [x] Flagged active past-due item is absent from due; scheduling bytes unchanged
+- [x] Unflag restores due membership; stale+flagged stays out after unflag
+- [x] Export GUID list excludes the flagged id
+- [x] Gate: `uv run pytest tests/test_application_reviews.py tests/test_web_quiz.py tests/test_export_anki.py tests/test_reconcile_quiz.py`
 
 **Tests**: unit
 **Gate**: full

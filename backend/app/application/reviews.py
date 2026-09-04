@@ -5,10 +5,11 @@ imports FastAPI, SQLAlchemy, or a provider SDK. ``GetDueQueue`` serves the
 user-scoped due queue (QUIZ-13); ``SubmitReview`` grades one item, advancing its
 FSRS scheduling and appending an immutable review-log row in one transaction
 (QUIZ-12); ``UndoLastReview`` restores the pre-grade snapshot on the caller's
-latest log row without deleting it (REV-22); ``ResetSchedule`` returns one card
-to its fresh state (NL-12). Ownership is the card's own ``user_id`` (AD-149) —
-reachable even for a source-less ``note`` card — so a missing or non-owned item
-is indistinguishable (``QuizItemNotFound`` → 404, no disclosure).
+latest log row without deleting it (REV-22); ``FlagCard`` hides a card from due
+without touching FSRS (REV-34); ``ResetSchedule`` returns one card to its fresh
+state (NL-12). Ownership is the card's own ``user_id`` (AD-149) — reachable even
+for a source-less ``note`` card — so a missing or non-owned item is
+indistinguishable (``QuizItemNotFound`` → 404, no disclosure).
 """
 
 from __future__ import annotations
@@ -64,6 +65,7 @@ class GetDueQueue:
     defaults to :data:`DEFAULT_DUE_LIMIT` and is capped at :data:`MAX_DUE_LIMIT`;
     the total due count is the full count before the limit. Ownership is enforced
     by the repository's join through ``sources`` — no cross-user leakage.
+    Flagged cards are excluded even when they are active and past-due (REV-35).
     """
 
     def __init__(self, *, items: QuizItemRepository, clock: Clock) -> None:
@@ -209,3 +211,22 @@ class ResetSchedule:
         self._items.update_scheduling(item.id, fresh)
         self._items.clear_note_changed(item.id)
         return fresh
+
+
+class FlagCard:
+    """Hide or restore an owned card in the due queue without touching FSRS (REV-34).
+
+    Sets or clears ``flagged_at`` only. Scheduling and ``review_log`` stay exactly
+    as they were (AD-073, AD-305). Missing or non-owned → ``QuizItemNotFound``
+    (REV-38). Status is not changed: unflag of a stale card does not put it in due.
+    """
+
+    def __init__(self, *, items: QuizItemRepository, clock: Clock) -> None:
+        self._items = items
+        self._clock = clock
+
+    def __call__(self, *, user: User, item_id: UUID, flagged: bool) -> QuizItem:
+        item = _owned_item(self._items, user, item_id)
+        flagged_at = self._clock.now() if flagged else None
+        self._items.set_flagged_at(item.id, flagged_at)
+        return replace(item, flagged_at=flagged_at)

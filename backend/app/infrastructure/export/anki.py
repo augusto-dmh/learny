@@ -7,7 +7,8 @@ Basic-style notes (Front = question, Back = answer + citation footnote) and
 GUID derives from ``(source_id, content_key)`` — the same upsert identity the DB
 uses — so re-importing an updated deck **updates the note in place** rather than
 duplicating it. Stale/orphaned items are included (their content is still valid
-learning material) with their status noted in the footnote.
+learning material) with their status noted in the footnote. Flagged cards are
+omitted (REV-39): they are hidden from review, not exported as suspended notes.
 
 The genanki library lives only in this adapter (ADR-0009); callers pass Learny
 :class:`~app.domain.entities.QuizItem` entities and receive ``.apkg`` bytes. Model
@@ -46,6 +47,8 @@ def build_apkg(items: Sequence[QuizItem], source_title: str) -> bytes:
     """
     deck = genanki.Deck(_DECK_ID, source_title or "Learny")
     for item in items:
+        if item.flagged_at is not None:
+            continue
         deck.add_note(_note_for(item, source_title))
     with TemporaryDirectory() as tmp_dir:
         path = Path(tmp_dir) / "deck.apkg"

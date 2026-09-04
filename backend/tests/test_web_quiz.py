@@ -114,6 +114,24 @@ def _post_undo(
     return client.post("/api/reviews/undo", headers=headers)
 
 
+def _post_flag(
+    client: TestClient,
+    item_id: object,
+    *,
+    flagged: bool,
+    csrf: str | None,
+    origin: str | None = None,
+):
+    headers: dict[str, str] = {}
+    if csrf is not None:
+        headers["X-CSRF-Token"] = csrf
+    if origin is not None:
+        headers["Origin"] = origin
+    return client.post(
+        f"/api/quiz-items/{item_id}/flag", json={"flagged": flagged}, headers=headers
+    )
+
+
 # --- Seeding -------------------------------------------------------------------
 
 
@@ -973,3 +991,65 @@ def test_undo_rate_limit_returns_429(
         assert r.status_code == 409
     throttled = _post_undo(throttled_quiz_client, csrf=csrf)
     assert throttled.status_code == 429, throttled.text
+
+
+# --- Flag out of due (REV-34..36, REV-38) ---------------------------------------
+
+
+def test_flag_removes_item_from_due_and_unflag_restores(
+    quiz_client: TestClient, db_conn: Connection
+) -> None:
+    source_id, csrf = _seed_ready_source(quiz_client, db_conn, "flag-due@example.com")
+    item = _seed_item(db_conn, UUID(source_id))
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    before = repo.get_scheduling(item.id)
+
+    flagged = _post_flag(quiz_client, item.id, flagged=True, csrf=csrf)
+    assert flagged.status_code == 200, flagged.text
+    assert flagged.json()["flagged"] is True
+    assert flagged.json()["flagged_at"] is not None
+    due = quiz_client.get("/api/reviews/due")
+    assert due.status_code == 200, due.text
+    assert due.json()["total_due"] == 0
+    assert due.json()["items"] == []
+    assert repo.get_scheduling(item.id) == before
+
+    unflagged = _post_flag(quiz_client, item.id, flagged=False, csrf=csrf)
+    assert unflagged.status_code == 200, unflagged.text
+    assert unflagged.json() == {"flagged": False, "flagged_at": None}
+    restored = quiz_client.get("/api/reviews/due")
+    assert restored.json()["total_due"] == 1
+    assert [i["id"] for i in restored.json()["items"]] == [str(item.id)]
+    assert repo.get_scheduling(item.id) == before
+
+
+def test_flag_missing_and_non_owned_return_404(
+    quiz_client: TestClient, db_conn: Connection
+) -> None:
+    source_id, _ = _seed_ready_source(quiz_client, db_conn, "flag-owner-web@example.com")
+    item = _seed_item(db_conn, UUID(source_id))
+    _register(quiz_client, "flag-intruder-web@example.com")
+    csrf = _csrf(quiz_client)
+
+    non_owned = _post_flag(quiz_client, item.id, flagged=True, csrf=csrf)
+    missing = _post_flag(quiz_client, uuid4(), flagged=True, csrf=csrf)
+
+    assert non_owned.status_code == 404, non_owned.text
+    assert missing.status_code == 404, missing.text
+    assert non_owned.json() == missing.json()
+
+
+def test_flag_missing_csrf_returns_403(quiz_client: TestClient, db_conn: Connection) -> None:
+    source_id, _ = _seed_ready_source(quiz_client, db_conn, "flag-csrf@example.com")
+    item = _seed_item(db_conn, UUID(source_id))
+    resp = _post_flag(quiz_client, item.id, flagged=True, csrf=None)
+    assert resp.status_code == 403, resp.text
+
+
+def test_flag_untrusted_origin_returns_403(quiz_client: TestClient, db_conn: Connection) -> None:
+    source_id, csrf = _seed_ready_source(quiz_client, db_conn, "flag-origin@example.com")
+    item = _seed_item(db_conn, UUID(source_id))
+    resp = _post_flag(
+        quiz_client, item.id, flagged=True, csrf=csrf, origin="http://evil.example.com"
+    )
+    assert resp.status_code == 403, resp.text

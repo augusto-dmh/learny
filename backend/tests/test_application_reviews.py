@@ -23,6 +23,7 @@ from app.application.quiz_qc import content_key
 from app.application.reviews import (
     DEFAULT_DUE_LIMIT,
     MAX_DUE_LIMIT,
+    FlagCard,
     GetDueQueue,
     ResetSchedule,
     SubmitReview,
@@ -825,3 +826,92 @@ def test_undo_vanished_item_is_not_found() -> None:
             clock=FakeClock(_NOW),
             study_days=FakeStudyDayRepository(),
         )(user=_user())
+
+
+# --- FlagCard (REV-34..36, REV-38) ----------------------------------------------
+
+
+def _flag_service(db_conn: Connection, *, now: datetime) -> FlagCard:
+    return FlagCard(items=SqlAlchemyQuizItemRepository(db_conn), clock=FakeClock(now))
+
+
+@requires_db
+def test_flag_hides_past_due_item_without_touching_schedule_or_log(
+    db_conn: Connection,
+) -> None:
+    source = _persisted_source(db_conn, "flag-hide@example.com")
+    user = SqlAlchemyUserRepository(db_conn).get_by_id(source.user_id)
+    item = _seed_active_item(db_conn, source.id, due=_NOW - timedelta(hours=1))
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    repo.append_log(item.id, ReviewLogEntry(rating=3, reviewed_at=_NOW))
+    before = repo.get_scheduling(item.id)
+    logged_before = db_conn.execute(
+        select(func.count()).select_from(review_log).where(review_log.c.quiz_item_id == item.id)
+    ).scalar_one()
+
+    flagged = _flag_service(db_conn, now=_NOW)(user=user, item_id=item.id, flagged=True)
+
+    assert flagged.flagged_at == _NOW
+    assert repo.get_by_id(item.id).flagged_at == _NOW
+    assert repo.get_scheduling(item.id) == before
+    logged_after = db_conn.execute(
+        select(func.count()).select_from(review_log).where(review_log.c.quiz_item_id == item.id)
+    ).scalar_one()
+    assert logged_after == logged_before
+    total, due = repo.due_for_user(user.id, now=_NOW, limit=20)
+    assert total == 0
+    assert due == []
+
+
+@requires_db
+def test_unflag_restores_due_membership_of_an_active_past_due_item(
+    db_conn: Connection,
+) -> None:
+    source = _persisted_source(db_conn, "flag-unflag@example.com")
+    user = SqlAlchemyUserRepository(db_conn).get_by_id(source.user_id)
+    item = _seed_active_item(db_conn, source.id, due=_NOW - timedelta(hours=1))
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    flag = _flag_service(db_conn, now=_NOW)
+    flag(user=user, item_id=item.id, flagged=True)
+
+    restored = flag(user=user, item_id=item.id, flagged=False)
+
+    assert restored.flagged_at is None
+    total, due = repo.due_for_user(user.id, now=_NOW, limit=20)
+    assert total == 1
+    assert [d.item.id for d in due] == [item.id]
+
+
+@requires_db
+def test_unflag_of_stale_item_stays_out_of_due(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "flag-stale@example.com")
+    user = SqlAlchemyUserRepository(db_conn).get_by_id(source.user_id)
+    item = _seed_active_item(
+        db_conn, source.id, status=QuizItemStatus.STALE, due=_NOW - timedelta(hours=1)
+    )
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    flag = _flag_service(db_conn, now=_NOW)
+    flag(user=user, item_id=item.id, flagged=True)
+    flag(user=user, item_id=item.id, flagged=False)
+
+    total, due = repo.due_for_user(user.id, now=_NOW, limit=20)
+    assert total == 0
+    assert due == []
+    assert repo.get_by_id(item.id).status == QuizItemStatus.STALE
+    assert repo.get_by_id(item.id).flagged_at is None
+
+
+@requires_db
+def test_flag_missing_and_non_owned_raise_not_found(db_conn: Connection) -> None:
+    owner_source = _persisted_source(db_conn, "flag-owner@example.com")
+    owner = SqlAlchemyUserRepository(db_conn).get_by_id(owner_source.user_id)
+    item = _seed_active_item(db_conn, owner_source.id)
+    intruder_source = _persisted_source(db_conn, "flag-intruder@example.com")
+    intruder = SqlAlchemyUserRepository(db_conn).get_by_id(intruder_source.user_id)
+    flag = _flag_service(db_conn, now=_NOW)
+
+    with pytest.raises(QuizItemNotFound):
+        flag(user=intruder, item_id=item.id, flagged=True)
+    with pytest.raises(QuizItemNotFound):
+        flag(user=owner, item_id=uuid4(), flagged=True)
+    assert SqlAlchemyQuizItemRepository(db_conn).get_by_id(item.id).flagged_at is None

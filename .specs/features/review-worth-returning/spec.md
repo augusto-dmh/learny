@@ -213,13 +213,13 @@ Review is a correct 4-button FSRS grader, but generation can "succeed" with zero
 | REV-19 | P1: Formulation gates | 2 | Done |
 | REV-20 | P1: Formulation gates | 1 | Done |
 | REV-21 | P1: Formulation gates | 1 | Done |
-| REV-22 | P1: Review undo | 2 | In Tasks |
-| REV-23 | P1: Review undo | 2 | In Tasks |
-| REV-24 | P1: Review undo | 2 | In Tasks |
-| REV-25 | P1: Review undo | 2 | In Tasks |
-| REV-26 | P1: Review undo | 2 | In Tasks |
-| REV-27 | P1: Review undo | 2 | In Tasks |
-| REV-28 | P1: Review undo | 2 | In Tasks |
+| REV-22 | P1: Review undo | 2 | Done |
+| REV-23 | P1: Review undo | 2 | Done |
+| REV-24 | P1: Review undo | 2 | Done |
+| REV-25 | P1: Review undo | 2 | Done |
+| REV-26 | P1: Review undo | 2 | Done |
+| REV-27 | P1: Review undo | 2 | Done |
+| REV-28 | P1: Review undo | 2 | Done |
 | REV-29 | P1: Intervals and requeue | 3 | In Tasks |
 | REV-30 | P1: Intervals and requeue | 3 | In Tasks |
 | REV-31 | P1: Intervals and requeue | 3 | In Tasks |

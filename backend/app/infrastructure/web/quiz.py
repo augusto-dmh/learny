@@ -22,6 +22,7 @@ Contract (also consumed by the Next.js proxy):
 - ``POST /api/quiz-items/{id}/reviews`` → 200 updated scheduling; auth + CSRF/Origin
   + limit.
 - ``POST /api/reviews/undo`` → 200 restored scheduling; auth + CSRF/Origin + limit.
+- ``POST /api/quiz-items/{id}/flag`` → 200 flagged state; auth + CSRF/Origin + limit.
 - ``POST /api/quiz-items/{id}/schedule-reset`` → 200 fresh scheduling + badge cleared;
   auth + CSRF/Origin + limit (NL-12).
 """
@@ -42,7 +43,13 @@ from sqlalchemy import Connection
 
 from app.application.errors import EnqueueFailed
 from app.application.quiz import ExportQuizDeck, ListQuizItems, QuizOverview
-from app.application.reviews import GetDueQueue, ResetSchedule, SubmitReview, UndoLastReview
+from app.application.reviews import (
+    FlagCard,
+    GetDueQueue,
+    ResetSchedule,
+    SubmitReview,
+    UndoLastReview,
+)
 from app.domain.entities import (
     CardProvenance,
     DueReviewItem,
@@ -61,6 +68,7 @@ from app.infrastructure.web.dependencies import (
     get_authenticated_user,
     get_due_queue,
     get_export_quiz_deck,
+    get_flag_card,
     get_list_quiz_items,
     get_quiz_deck_enqueuer,
     get_quiz_uow,
@@ -104,6 +112,12 @@ class ReviewRequest(BaseModel):
 
     rating: int = Field(ge=1, le=4)
     review_duration_ms: int | None = Field(default=None, ge=0)
+
+
+class FlagRequest(BaseModel):
+    """Flag-or-unflag body (REV-34). ``flagged`` true hides the card from due."""
+
+    flagged: bool
 
 
 # --- Response views ------------------------------------------------------------
@@ -297,6 +311,13 @@ class SchedulingView(BaseModel):
         )
 
 
+class FlagView(BaseModel):
+    """Confirmation that the card is flagged out of due, or not."""
+
+    flagged: bool
+    flagged_at: datetime | None
+
+
 UowFactory = Annotated[Callable[[], AbstractContextManager[Connection]], Depends(get_quiz_uow)]
 DeckEnqueuer = Annotated[QuizDeckEnqueuer, Depends(get_quiz_deck_enqueuer)]
 
@@ -440,6 +461,29 @@ def undo_last_review(
     response body.
     """
     return SchedulingView.from_snapshot(service(user=user, client_tz=client_tz))
+
+
+@router.post(
+    "/api/quiz-items/{item_id}/flag",
+    dependencies=[
+        Depends(rate_limit_quiz),
+        Depends(enforce_origin),
+        Depends(enforce_csrf),
+    ],
+)
+def flag_card(
+    item_id: UUID,
+    user: Annotated[User, Depends(get_authenticated_user)],
+    service: Annotated[FlagCard, Depends(get_flag_card)],
+    body: FlagRequest,
+) -> FlagView:
+    """Flag or unflag an owned card out of the due queue (200; 404).
+
+    Sets or clears ``flagged_at`` only. Scheduling and the review log are
+    untouched. Missing or non-owned → ``QuizItemNotFound`` → 404.
+    """
+    item = service(user=user, item_id=item_id, flagged=body.flagged)
+    return FlagView(flagged=item.flagged_at is not None, flagged_at=item.flagged_at)
 
 
 @router.post(
