@@ -1562,6 +1562,8 @@ def test_post_turn_generation_failure_returns_502_and_keeps_the_question(
             evidence: Sequence[Evidence],
             history: Sequence[HistoryTurn] = (),
             target_section_path: tuple[str, ...] | None = None,
+            tutor_phase: str | None = None,
+            hint_level: str | None = None,
         ) -> GeneratedAnswer:
             raise RuntimeError("provider-secret-internal-detail")
 
@@ -1762,6 +1764,8 @@ def test_turn_stream_frames_reasoning_between_the_phase_and_the_answer(
             evidence: Sequence[Evidence],
             history: Sequence[HistoryTurn] = (),
             target_section_path: tuple[str, ...] | None = None,
+            tutor_phase: str | None = None,
+            hint_level: str | None = None,
         ):
             text = "Sunlight drives it."
             yield AnswerReasoningDelta(text="Weighing ")
@@ -1847,6 +1851,8 @@ def test_turn_stream_gives_each_reasoning_block_its_own_part(
             evidence: Sequence[Evidence],
             history: Sequence[HistoryTurn] = (),
             target_section_path: tuple[str, ...] | None = None,
+            tutor_phase: str | None = None,
+            hint_level: str | None = None,
         ):
             text = "Sunlight drives it. And the leaf stores it."
             yield AnswerReasoningDelta(text="Weighing the passages.")
@@ -1932,6 +1938,8 @@ def test_turn_stream_mid_stream_failure_emits_the_error_frame_and_keeps_the_ques
             evidence: Sequence[Evidence],
             history: Sequence[HistoryTurn] = (),
             target_section_path: tuple[str, ...] | None = None,
+            tutor_phase: str | None = None,
+            hint_level: str | None = None,
         ) -> GeneratedAnswer:
             raise AssertionError("stream path must not call generate")
 
@@ -1943,6 +1951,8 @@ def test_turn_stream_mid_stream_failure_emits_the_error_frame_and_keeps_the_ques
             evidence: Sequence[Evidence],
             history: Sequence[HistoryTurn] = (),
             target_section_path: tuple[str, ...] | None = None,
+            tutor_phase: str | None = None,
+            hint_level: str | None = None,
         ):
             yield AnswerTextDelta(text="partial ")
             raise RuntimeError("provider-secret-internal-detail")
@@ -2002,6 +2012,8 @@ def test_turn_stream_closes_the_reasoning_part_on_a_turn_that_declines(
             evidence: Sequence[Evidence],
             history: Sequence[HistoryTurn] = (),
             target_section_path: tuple[str, ...] | None = None,
+            tutor_phase: str | None = None,
+            hint_level: str | None = None,
         ):
             yield AnswerReasoningDelta(text="These passages are about something else.")
             yield AnswerCompleted(
@@ -2075,6 +2087,8 @@ def test_turn_stream_failing_while_reasoning_still_reaches_the_error_frame(
             evidence: Sequence[Evidence],
             history: Sequence[HistoryTurn] = (),
             target_section_path: tuple[str, ...] | None = None,
+            tutor_phase: str | None = None,
+            hint_level: str | None = None,
         ):
             yield AnswerReasoningDelta(text="Weighing the passages.")
             raise RuntimeError("provider-secret-internal-detail")
@@ -2226,6 +2240,8 @@ class _CitingCapture:
         evidence: Sequence[Evidence],
         history: Sequence[HistoryTurn] = (),
         target_section_path: tuple[str, ...] | None = None,
+        tutor_phase: str | None = None,
+        hint_level: str | None = None,
     ) -> GeneratedAnswer:
         self.evidence_seen = list(evidence)
         return GeneratedAnswer(
@@ -2243,6 +2259,8 @@ class _CitingCapture:
         evidence: Sequence[Evidence],
         history: Sequence[HistoryTurn] = (),
         target_section_path: tuple[str, ...] | None = None,
+        tutor_phase: str | None = None,
+        hint_level: str | None = None,
     ):
         self.evidence_seen = list(evidence)
         yield AnswerTextDelta(text="a composed answer")
@@ -2452,6 +2470,8 @@ class _QuotingAdapter:
         evidence: Sequence[Evidence],
         history: Sequence[HistoryTurn] = (),
         target_section_path: tuple[str, ...] | None = None,
+        tutor_phase: str | None = None,
+        hint_level: str | None = None,
     ) -> GeneratedAnswer:
         return self._answer(evidence)
 
@@ -2463,6 +2483,8 @@ class _QuotingAdapter:
         evidence: Sequence[Evidence],
         history: Sequence[HistoryTurn] = (),
         target_section_path: tuple[str, ...] | None = None,
+        tutor_phase: str | None = None,
+        hint_level: str | None = None,
     ):
         answer = self._answer(evidence)
         yield AnswerTextDelta(text=answer.text)

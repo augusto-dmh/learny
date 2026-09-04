@@ -448,6 +448,8 @@ class FakeGeneration:
         evidence: Sequence[Evidence],
         history: Sequence[HistoryTurn] = (),
         target_section_path: tuple[str, ...] | None = None,
+        tutor_phase: str | None = None,
+        hint_level: str | None = None,
     ) -> GeneratedAnswer:
         self.calls.append(_recorded(message, mode, evidence, history, target_section_path))
         if self._error is not None:
@@ -463,6 +465,8 @@ class FakeGeneration:
         evidence: Sequence[Evidence],
         history: Sequence[HistoryTurn] = (),
         target_section_path: tuple[str, ...] | None = None,
+        tutor_phase: str | None = None,
+        hint_level: str | None = None,
     ) -> Iterator[AnswerStreamEvent]:
         self.stream_calls.append(_recorded(message, mode, evidence, history, target_section_path))
         if self._error is not None:
@@ -2401,6 +2405,8 @@ def test_a_provider_breaking_mid_stream_still_keeps_the_question() -> None:
             evidence: Sequence[Evidence],
             history: Sequence[HistoryTurn] = (),
             target_section_path: tuple[str, ...] | None = None,
+            tutor_phase: str | None = None,
+            hint_level: str | None = None,
         ) -> Iterator[AnswerStreamEvent]:
             yield AnswerTextDelta(text="partial ")
             raise RuntimeError("provider down")
@@ -2633,6 +2639,8 @@ def test_stream_that_ends_without_a_completed_event_is_a_generation_failure() ->
             evidence: Sequence[Evidence],
             history: Sequence[HistoryTurn] = (),
             target_section_path: tuple[str, ...] | None = None,
+            tutor_phase: str | None = None,
+            hint_level: str | None = None,
         ) -> Iterator[AnswerStreamEvent]:
             yield AnswerTextDelta(text="partial ")
             yield AnswerTextDelta(text="answer")

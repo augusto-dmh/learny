@@ -94,6 +94,8 @@ class DeterministicGenerationAdapter:
         evidence: Sequence[Evidence],
         history: Sequence[HistoryTurn] = (),
         target_section_path: tuple[str, ...] | None = None,
+        tutor_phase: str | None = None,
+        hint_level: str | None = None,
     ) -> GeneratedAnswer:
         """Compose a response from the top evidence snippets, citing those chunks."""
         return _extractive_answer(evidence, model=self.model)
@@ -106,6 +108,8 @@ class DeterministicGenerationAdapter:
         evidence: Sequence[Evidence],
         history: Sequence[HistoryTurn] = (),
         target_section_path: tuple[str, ...] | None = None,
+        tutor_phase: str | None = None,
+        hint_level: str | None = None,
     ) -> Iterator[AnswerStreamEvent]:
         """Stream the extractive response (one full-text delta, then completed)."""
         return _extractive_stream(evidence, model=self.model)

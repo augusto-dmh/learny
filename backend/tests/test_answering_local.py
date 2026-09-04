@@ -266,6 +266,16 @@ def test_prose_ignores_message_mode_target_and_history() -> None:
     assert first == second
 
 
+def test_tutor_phase_kwargs_do_not_change_extractive_output() -> None:
+    adapter = DeterministicGenerationAdapter()
+    evidence = [_evidence("alpha"), _evidence("beta")]
+
+    plain = _generate(adapter, MODE_TEACH, evidence)
+    enveloped = _generate(adapter, MODE_TEACH, evidence, tutor_phase="open", hint_level="pump")
+
+    assert enveloped == plain
+
+
 def test_model_identity_readable_without_a_generate_call() -> None:
     # QA-04/QA-13, TEACH-11/TEACH-24: the turn service reads this stable identity on
     # the empty-evidence not-found path, where the port is never invoked.

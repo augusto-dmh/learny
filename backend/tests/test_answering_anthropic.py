@@ -1306,6 +1306,8 @@ def test_target_section_rendered_with_arrow_separator_and_message() -> None:
     assert text_block["type"] == "text"
     assert "Part I > Chapter 3 > The Method of Loci" in text_block["text"]
     assert "Please explain the loci method." in text_block["text"]
+    assert "Phase:" not in text_block["text"]
+    assert "HintLevel:" not in text_block["text"]
 
 
 def test_answer_mode_with_a_target_still_sends_the_answer_request() -> None:
@@ -1346,6 +1348,78 @@ def test_answer_mode_stream_with_a_target_still_sends_the_answer_request() -> No
     call = client.messages.stream_calls[0]
     assert call["system"] == [{"type": "text", "text": ANSWER_SYSTEM_PROMPT}]
     assert call["messages"][0]["content"][-1] == {"type": "text", "text": "What is anchoring?"}
+
+
+def test_teach_user_turn_carries_phase_and_hint_not_the_system_prompt() -> None:
+    adapter, client = _teaching_adapter(_FakeMessage([_FakeTextBlock("ok")]))
+
+    adapter.generate(
+        mode=MODE_TEACH,
+        message="What is anchoring?",
+        target_section_path=("Chapter 3",),
+        history=[],
+        evidence=[_evidence("alpha")],
+        tutor_phase="open",
+        hint_level="pump",
+    )
+
+    call = client.messages.calls[0]
+    system_text = call["system"][0]["text"]
+    user_text = call["messages"][0]["content"][-1]["text"]
+    assert call["system"] == [
+        {"type": "text", "text": TEACHING_SYSTEM_PROMPT, "cache_control": _CACHE_1H}
+    ]
+    assert "Phase:" not in system_text
+    assert "HintLevel:" not in system_text
+    assert "I am currently studying this section: Chapter 3." in user_text
+    assert "Phase: open" in user_text
+    assert "HintLevel: pump" in user_text
+    assert "What is anchoring?" in user_text
+
+
+def test_teach_stream_user_turn_carries_phase_and_hint() -> None:
+    stream = _FakeStream(deltas=["ok"], final_message=_FakeMessage([_FakeTextBlock("ok")]))
+    adapter, client = _streaming_answer_adapter(stream)
+
+    list(
+        adapter.generate_stream(
+            mode=MODE_TEACH,
+            message="What is anchoring?",
+            target_section_path=("Chapter 3",),
+            evidence=[_evidence("alpha")],
+            tutor_phase="open",
+            hint_level="pump",
+        )
+    )
+
+    call = client.messages.stream_calls[0]
+    system_text = call["system"][0]["text"]
+    user_text = call["messages"][0]["content"][-1]["text"]
+    assert system_text == TEACHING_SYSTEM_PROMPT
+    assert "Phase:" not in system_text
+    assert "HintLevel:" not in system_text
+    assert "Phase: open" in user_text
+    assert "HintLevel: pump" in user_text
+
+
+def test_answer_request_omits_phase_and_hint_even_when_kwargs_are_set() -> None:
+    adapter, client = _adapter(_FakeMessage([_FakeTextBlock("ok")]))
+
+    adapter.generate(
+        mode=MODE_ANSWER,
+        message="What is anchoring?",
+        target_section_path=("Chapter 3",),
+        evidence=[_evidence("alpha")],
+        tutor_phase="open",
+        hint_level="pump",
+    )
+
+    call = client.messages.calls[0]
+    user_text = call["messages"][0]["content"][-1]["text"]
+    assert call["system"] == [{"type": "text", "text": ANSWER_SYSTEM_PROMPT}]
+    assert user_text == "What is anchoring?"
+    assert "Phase:" not in user_text
+    assert "HintLevel:" not in user_text
 
 
 def test_teaching_whole_reply_sentinel_is_not_found() -> None:

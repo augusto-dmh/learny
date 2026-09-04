@@ -115,9 +115,9 @@ T11 → T12 → T13 → T14 → T15
 
 **Done when**:
 
-- [ ] A teach request with phase `open` and hint `pump` puts those tokens in the user turn and not in the system block
-- [ ] Answer requests still omit them
-- [ ] Gate: `uv run pytest tests/test_answering_anthropic.py tests/test_answering_local.py tests/test_application_conversations.py`
+- [x] A teach request with phase `open` and hint `pump` puts those tokens in the user turn and not in the system block
+- [x] Answer requests still omit them
+- [x] Gate: `uv run pytest tests/test_answering_anthropic.py tests/test_answering_local.py tests/test_application_conversations.py`
 
 **Tests**: unit
 **Gate**: quick

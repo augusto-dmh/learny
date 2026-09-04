@@ -584,6 +584,10 @@ class GenerationPort(Protocol):
     from a present target would route scoped asks through the teaching prompt. It is
     supplied for a teach turn and absent for an answer turn.
 
+    ``tutor_phase`` and ``hint_level`` are optional envelope fields for a teach
+    turn. Adapters that interpolate them do so in the **user** turn, never the
+    system prompt. Answer turns omit them even when the kwargs are passed.
+
     ``model`` is the adapter's stable model identity. It must be readable
     without calling ``generate`` because the not-found short-circuit reports a
     model identity while never invoking generation (QA-04 + QA-13).
@@ -599,6 +603,8 @@ class GenerationPort(Protocol):
         evidence: Sequence[Evidence],
         history: Sequence[HistoryTurn] = (),
         target_section_path: tuple[str, ...] | None = None,
+        tutor_phase: str | None = None,
+        hint_level: str | None = None,
     ) -> GeneratedAnswer:
         """Generate a response to ``message`` grounded in ``evidence``.
 
@@ -619,6 +625,8 @@ class GenerationPort(Protocol):
         evidence: Sequence[Evidence],
         history: Sequence[HistoryTurn] = (),
         target_section_path: tuple[str, ...] | None = None,
+        tutor_phase: str | None = None,
+        hint_level: str | None = None,
     ) -> Iterator[AnswerStreamEvent]:
         """Stream the same response as :meth:`generate`, incrementally (GEN-12).
 
