@@ -132,7 +132,7 @@ Learny already has a study-reader skeleton (chapter flow, 65ch serif, `Aa`, rece
 
 | Requirement ID | Story | Phase | Status |
 |---|---|---|---|
-| READ-01 | P1: Safe figures | T3, T4 | In Tasks |
+| READ-01 | P1: Safe figures | T3, T4 | In Progress |
 | READ-02 | P1: Safe figures | T4 | In Tasks |
 | READ-03 | P1: Safe figures | T1, T6 | In Progress |
 | READ-04 | P1: Safe figures | T1, T4 | In Progress |
@@ -141,12 +141,12 @@ Learny already has a study-reader skeleton (chapter flow, 65ch serif, `Aa`, rece
 | READ-07 | P1: Safe figures | T7 | In Tasks |
 | READ-08 | P1: Safe figures | T7 | In Tasks |
 | READ-09 | P1: Safe figures | T8 | In Tasks |
-| READ-10 | P1: Safe figures | T3, T4 | In Tasks |
+| READ-10 | P1: Safe figures | T3, T4 | In Progress |
 | READ-11 | P1: Safe figures | T2, T7 | In Progress |
 | READ-12 | P1: Safe figures | T4 | In Tasks |
 | READ-13 | P1: Safe figures | T1, T4 | In Progress |
 | READ-14 | P1: Safe figures | T7 | In Tasks |
-| READ-15 | P1: Safe figures | T3, T4 | In Tasks |
+| READ-15 | P1: Safe figures | T3, T4 | In Progress |
 | READ-16 | P1: Immersive chrome | T9 | In Tasks |
 | READ-17 | P1: Immersive chrome | T10 | In Tasks |
 | READ-18 | P1: Immersive chrome | T10 | In Tasks |

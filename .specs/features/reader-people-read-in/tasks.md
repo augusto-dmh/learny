@@ -138,9 +138,9 @@ T11 → T12 → T13 → T14 → T15
 
 **Done when**:
 
-- [ ] Mapped href becomes the allowlisted path; unmapped href unchanged
-- [ ] Function never receives/returns HTML fragments
-- [ ] Gate: `uv run pytest tests/test_application_media.py`
+- [x] Mapped href becomes the allowlisted path; unmapped href unchanged
+- [x] Function never receives/returns HTML fragments
+- [x] Gate: `uv run pytest tests/test_application_media.py`
 
 **Tests**: unit
 **Gate**: quick
