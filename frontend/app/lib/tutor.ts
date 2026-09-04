@@ -11,3 +11,7 @@ export const TUTOR_DONT_KNOW_MESSAGE = "I don't know.";
 export function isTutorOpeningMessage(text: string): boolean {
   return text.trim() === TUTOR_OPENING_MESSAGE;
 }
+
+export function tutorCardQuestion(title: string): string {
+  return `In your own words, what is "${title}" arguing?`;
+}

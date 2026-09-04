@@ -9,7 +9,7 @@ Teach is a cited, section-scoped chat with a four-sentence "patient tutor" promp
 - [ ] A frozen teach playbook (pump → hint → prompt → assert), one move per turn, session closes after an unaided check.
 - [x] The tutor opens the session with section-first retrieval instead of waiting to be asked.
 - [x] Ask and Teach merge into one Chat dock (Answer | Tutor), empty state naming both modes.
-- [ ] A passed check offers exactly one FSRS card (opt-in, not auto-inserted).
+- [x] A passed check offers exactly one FSRS card (opt-in, not auto-inserted).
 
 ## Out of Scope
 
@@ -206,14 +206,14 @@ Teach is a cited, section-scoped chat with a four-sentence "patient tutor" promp
 | TUTOR-31 | P1: One Chat dock | T12 | Done |
 | TUTOR-32 | P1: One Chat dock | T12 | Done |
 | TUTOR-33 | P1: One Chat dock | T14 | Done |
-| TUTOR-34 | P1: One FSRS card | Tasks | In Tasks |
+| TUTOR-34 | P1: One FSRS card | T15 | Done |
 | TUTOR-35 | P1: One FSRS card | T10 | Done |
 | TUTOR-36 | P1: One FSRS card | T10 | Done |
 | TUTOR-37 | P1: One FSRS card | T10 | Done |
 | TUTOR-38 | P1: One FSRS card | T10 | Done |
 | TUTOR-39 | P1: One FSRS card | T9 | Done |
 | TUTOR-40 | P1: One FSRS card | T11 | Done |
-| TUTOR-41 | P1: One FSRS card | Tasks | In Tasks |
+| TUTOR-41 | P1: One FSRS card | T15 | Done |
 | TUTOR-42 | P1: One FSRS card | T10 | Done |
 
 **ID format:** `TUTOR-NN`
@@ -227,5 +227,5 @@ Teach is a cited, section-scoped chat with a four-sentence "patient tutor" promp
 - [ ] Starting Tutor on a ready section yields a tutor question before the learner types.
 - [ ] Opening retrieval is pinned to `target_title`, not the sentinel string.
 - [ ] A citation-free Socratic teach reply persists as answered; the same shape in Answer stays not-found.
-- [ ] After a check restatement the composer is gone and exactly one card can be accepted into the due queue.
+- [x] After a check restatement the composer is gone and exactly one card can be accepted into the due queue.
 - [x] `?panel=ask` and `?panel=teach` still open the dock; the strip reads Chat | Notes | Review.

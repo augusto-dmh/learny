@@ -53,6 +53,7 @@ export type ConversationView = {
   target_title?: string | null;
   tutor_phase?: string | null;
   hint_level?: string | null;
+  tutor_check_text?: string | null;
   created_at: string;
   updated_at: string;
 };

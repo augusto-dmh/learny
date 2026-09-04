@@ -399,8 +399,8 @@ T11 → T12 → T13 → T14 → T15
 
 **Done when**:
 
-- [ ] Close UI shows one Q/A; Accept hits the new route; Dismiss does not
-- [ ] Gate: `cd frontend && npm test -- teach-panel` and `cd backend && uv run pytest tests/test_web_conversations.py tests/test_application_cards.py`
+- [x] Close UI shows one Q/A; Accept hits the new route; Dismiss does not
+- [x] Gate: `cd frontend && npm test -- teach-panel` and `cd backend && uv run pytest tests/test_web_conversations.py tests/test_application_cards.py`
 
 **Tests**: unit
 **Gate**: full

@@ -382,6 +382,7 @@ _CONVERSATION_FIELDS = {
     "target_title",
     "tutor_phase",
     "hint_level",
+    "tutor_check_text",
     "created_at",
     "updated_at",
 }
@@ -429,6 +430,7 @@ def test_start_scoped_conversation_returns_201_with_scope_and_notes_choice(
     assert body["target_title"] == _TITLE
     assert body["tutor_phase"] is None
     assert body["hint_level"] is None
+    assert body["tutor_check_text"] is None
     assert body["created_at"] and body["updated_at"]
 
 
@@ -1305,6 +1307,7 @@ def test_get_conversation_after_opening_shows_tutor_phase_open(
     assert body["tutor_phase"] == "open"
     assert body["hint_level"] == "pump"
     assert body["target_title"] == _TITLE
+    assert body["tutor_check_text"] is None
     assert body["turns"][0]["message"] == TUTOR_OPENING_MESSAGE
 
     listing = auth_client.get("/api/conversations")
@@ -1382,6 +1385,7 @@ def test_post_turn_on_closed_tutor_conversation_returns_409_and_persists_nothing
     body = read.json()
     assert body["tutor_phase"] == "close"
     assert body["hint_level"] == "assert"
+    assert body["tutor_check_text"] == "the section argues for anchors"
     assert [turn["message"] for turn in body["turns"]] == [TUTOR_OPENING_MESSAGE]
 
 

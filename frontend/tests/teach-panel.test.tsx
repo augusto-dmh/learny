@@ -1160,3 +1160,90 @@ describe("Tutor chips and closed-session handoff (TUTOR-18/19/33)", () => {
     expect(callsTo(fetchMock, TURN_STREAM)).toHaveLength(turnCount);
   });
 });
+
+describe("Tutor review card offer (TUTOR-34/41)", () => {
+  const TUTOR_CARD_URL = "/api/conversations/conv2/tutor-card";
+  const checkText = "It argues that location anchors must stay stable.";
+
+  function closedConversation() {
+    return {
+      ...restoredDetail,
+      tutor_phase: "close",
+      target_title: "Chapter 1",
+      tutor_check_text: checkText,
+    };
+  }
+
+  it("offers exactly one card with the frozen question and the check text", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/sources/s1/structure": () => jsonResponse(200, structure),
+        [`GET ${READ_URL}`]: () => jsonResponse(200, closedConversation()),
+      }),
+    );
+    writeActiveConversation("s1", "teach", "conv2");
+
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
+    await screen.findByText("It is about early computing.");
+
+    const offer = screen.getByRole("article", { name: "review card offer" });
+    expect(offer.textContent).toContain(
+      'In your own words, what is "Chapter 1" arguing?',
+    );
+    expect(offer.textContent).toContain(checkText);
+    expect(screen.getAllByRole("article", { name: "review card offer" })).toHaveLength(
+      1,
+    );
+  });
+
+  it("Accept posts to the tutor-card route and does not suggest cards", async () => {
+    const fetchMock = routedFetch({
+      "GET /api/sources/s1/structure": () => jsonResponse(200, structure),
+      [`GET ${READ_URL}`]: () => jsonResponse(200, closedConversation()),
+      [`POST ${TUTOR_CARD_URL}`]: () => jsonResponse(201, { id: "q1" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    writeActiveConversation("s1", "teach", "conv2");
+
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
+    await screen.findByText("It is about early computing.");
+
+    fireEvent.click(screen.getByRole("button", { name: "Accept" }));
+    await waitFor(() =>
+      expect(callsTo(fetchMock, TUTOR_CARD_URL)).toHaveLength(1),
+    );
+    const accept = callsTo(fetchMock, TUTOR_CARD_URL)[0];
+    expect((accept[1] as RequestInit).method).toBe("POST");
+    expect(
+      new Headers((accept[1] as RequestInit).headers).get("X-CSRF-Token"),
+    ).toBe("csrf-xyz");
+    expect(
+      fetchMock.mock.calls.some(([url]) =>
+        String(url).includes("/cards/suggestions"),
+      ),
+    ).toBe(false);
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("article", { name: "review card offer" }),
+      ).toBeNull(),
+    );
+  });
+
+  it("Dismiss hides the offer and writes no quiz row", async () => {
+    const fetchMock = routedFetch({
+      "GET /api/sources/s1/structure": () => jsonResponse(200, structure),
+      [`GET ${READ_URL}`]: () => jsonResponse(200, closedConversation()),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    writeActiveConversation("s1", "teach", "conv2");
+
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
+    await screen.findByText("It is about early computing.");
+
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByRole("article", { name: "review card offer" })).toBeNull();
+    expect(callsTo(fetchMock, TUTOR_CARD_URL)).toHaveLength(0);
+    expect(screen.getByRole("button", { name: "Ask about this" })).toBeTruthy();
+  });
+});

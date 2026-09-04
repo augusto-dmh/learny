@@ -228,6 +228,7 @@ class ConversationView(BaseModel):
     target_title: str | None
     tutor_phase: str | None
     hint_level: str | None
+    tutor_check_text: str | None
     created_at: datetime
     updated_at: datetime
 
@@ -243,6 +244,7 @@ class ConversationView(BaseModel):
             target_title=conversation.target_title,
             tutor_phase=conversation.tutor_phase,
             hint_level=conversation.hint_level,
+            tutor_check_text=conversation.tutor_check_text,
             created_at=conversation.created_at,
             updated_at=conversation.updated_at,
         )

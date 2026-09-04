@@ -39,11 +39,13 @@ import {
   getConversation,
   startConversation,
 } from "@/app/lib/conversations";
+import { acceptTutorCard } from "@/app/lib/tutor-card";
 import {
   isTutorOpeningMessage,
   TUTOR_DONT_KNOW_MESSAGE,
   TUTOR_JUST_EXPLAIN_MESSAGE,
   TUTOR_OPENING_MESSAGE,
+  tutorCardQuestion,
 } from "@/app/lib/tutor";
 import { fetchSourceStructure, type SourceStructure } from "@/app/lib/sources";
 import {
@@ -93,6 +95,8 @@ type TeachThread = {
   fallbackLabel: string;
   initialMessages: LearnyUIMessage[];
   tutorPhase: string | null;
+  tutorCheckText: string | null;
+  targetTitle: string | null;
 };
 
 export function TeachPanel({
@@ -194,6 +198,8 @@ export function TeachPanel({
           fallbackLabel: detail.title,
           initialMessages: turnsToUIMessages(detail.turns),
           tutorPhase: detail.tutor_phase ?? null,
+          tutorCheckText: detail.tutor_check_text ?? null,
+          targetTitle: detail.target_title ?? null,
         });
       })
       .catch((err: unknown) => {
@@ -281,6 +287,8 @@ export function TeachPanel({
         fallbackLabel: option?.label ?? selectedAnchor,
         initialMessages: [],
         tutorPhase: conversation.tutor_phase ?? null,
+        tutorCheckText: conversation.tutor_check_text ?? null,
+        targetTitle: conversation.target_title ?? null,
       });
     } catch (err: unknown) {
       if (err instanceof StreamRequestError && err.status === 401) {
@@ -313,6 +321,8 @@ export function TeachPanel({
         target={targetLabel}
         initialMessages={thread.initialMessages}
         tutorPhase={thread.tutorPhase}
+        tutorCheckText={thread.tutorCheckText}
+        targetTitle={thread.targetTitle}
         onShowInBook={onShowInBook}
         onRequireAuth={onRequireAuth}
         onConversationStarted={handleStarted}
@@ -372,6 +382,8 @@ function TeachChat({
   target,
   initialMessages,
   tutorPhase: initialTutorPhase,
+  tutorCheckText: initialCheckText,
+  targetTitle: initialTargetTitle,
   onShowInBook,
   onRequireAuth,
   onConversationStarted,
@@ -387,6 +399,8 @@ function TeachChat({
   target: string;
   initialMessages: LearnyUIMessage[];
   tutorPhase: string | null;
+  tutorCheckText: string | null;
+  targetTitle: string | null;
   onShowInBook?: (anchor: string) => void;
   onRequireAuth?: () => void;
   onConversationStarted: (conversationId: string) => void;
@@ -471,9 +485,16 @@ function TeachChat({
     (isStreaming || !openingPersisted);
 
   const [tutorPhase, setTutorPhase] = useState(initialTutorPhase);
+  const [tutorCheckText, setTutorCheckText] = useState(initialCheckText);
+  const [cardTargetTitle, setCardTargetTitle] = useState(
+    initialTargetTitle ?? target,
+  );
+  const [offerDismissed, setOfferDismissed] = useState(false);
   useEffect(() => {
     setTutorPhase(initialTutorPhase);
-  }, [initialTutorPhase]);
+    setTutorCheckText(initialCheckText);
+    setCardTargetTitle(initialTargetTitle ?? target);
+  }, [initialTutorPhase, initialCheckText, initialTargetTitle, target]);
 
   useEffect(() => {
     if (!conversationId || isStreaming) {
@@ -484,6 +505,10 @@ function TeachChat({
       .then((detail) => {
         if (!cancelled) {
           setTutorPhase(detail.tutor_phase ?? null);
+          setTutorCheckText(detail.tutor_check_text ?? null);
+          if (detail.target_title) {
+            setCardTargetTitle(detail.target_title);
+          }
         }
       })
       .catch(() => {
@@ -495,6 +520,17 @@ function TeachChat({
   }, [conversationId, isStreaming, messages.length]);
 
   const sessionClosed = tutorPhase === "close";
+  const showCardOffer =
+    sessionClosed && !offerDismissed && Boolean(tutorCheckText);
+
+  const handleAcceptCard = useCallback(() => {
+    if (!conversationId) {
+      return;
+    }
+    void acceptTutorCard(conversationId, csrf).then(() => {
+      setOfferDismissed(true);
+    });
+  }, [conversationId, csrf]);
 
   const retryFailedTurn = useCallback(() => {
     if (!failedTurn?.userText) {
@@ -640,7 +676,17 @@ function TeachChat({
       ) : null}
 
       {sessionClosed ? (
-        <ClosedSessionHandoff onAskAboutThis={onAskAboutThis} />
+        <>
+          {showCardOffer && tutorCheckText ? (
+            <TutorCardOffer
+              question={tutorCardQuestion(cardTargetTitle)}
+              answer={tutorCheckText}
+              onAccept={handleAcceptCard}
+              onDismiss={() => setOfferDismissed(true)}
+            />
+          ) : null}
+          <ClosedSessionHandoff onAskAboutThis={onAskAboutThis} />
+        </>
       ) : openingInFlight ? null : (
         <TutorComposer
           notesChecked={fixedNotes ?? notes.includeNotes}
@@ -753,4 +799,32 @@ function ClosedSessionHandoff({
     </Button>
   );
 }
+
+function TutorCardOffer({
+  question,
+  answer,
+  onAccept,
+  onDismiss,
+}: {
+  question: string;
+  answer: string;
+  onAccept: () => void;
+  onDismiss: () => void;
+}) {
+  return (
+    <article aria-label="review card offer" className="space-y-3 rounded-md border p-3">
+      <p className="text-sm font-medium">{question}</p>
+      <p className="text-sm text-muted-foreground">{answer}</p>
+      <div className="flex flex-wrap gap-2">
+        <Button type="button" onClick={onAccept}>
+          Accept
+        </Button>
+        <Button type="button" variant="outline" onClick={onDismiss}>
+          Dismiss
+        </Button>
+      </div>
+    </article>
+  );
+}
+
 
