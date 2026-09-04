@@ -21,6 +21,8 @@ Contract (also consumed by the Next.js proxy):
 - ``GET  /api/reviews/due`` → 200 due queue + total; auth.
 - ``POST /api/quiz-items/{id}/reviews`` → 200 updated scheduling; auth + CSRF/Origin
   + limit.
+- ``POST /api/reviews/undo`` → 200 restored scheduling; auth + CSRF/Origin + limit.
+- ``POST /api/quiz-items/{id}/flag`` → 200 flagged state; auth + CSRF/Origin + limit.
 - ``POST /api/quiz-items/{id}/schedule-reset`` → 200 fresh scheduling + badge cleared;
   auth + CSRF/Origin + limit (NL-12).
 """
@@ -41,7 +43,14 @@ from sqlalchemy import Connection
 
 from app.application.errors import EnqueueFailed
 from app.application.quiz import ExportQuizDeck, ListQuizItems, QuizOverview
-from app.application.reviews import GetDueQueue, ResetSchedule, SubmitReview
+from app.application.reviews import (
+    FlagCard,
+    GetDueQueue,
+    ResetSchedule,
+    ReviewedSchedule,
+    SubmitReview,
+    UndoLastReview,
+)
 from app.domain.entities import (
     CardProvenance,
     DueReviewItem,
@@ -55,16 +64,19 @@ from app.domain.ports import QuizDeckEnqueuer
 from app.infrastructure.export.anki import build_apkg
 from app.infrastructure.web.csrf import enforce_csrf, enforce_origin
 from app.infrastructure.web.dependencies import (
+    AppSettings,
     build_deck_compensate,
     build_plan_deck_generation,
     get_authenticated_user,
     get_due_queue,
     get_export_quiz_deck,
+    get_flag_card,
     get_list_quiz_items,
     get_quiz_deck_enqueuer,
     get_quiz_uow,
     get_reset_schedule,
     get_submit_review,
+    get_undo_last_review,
 )
 from app.infrastructure.web.rate_limit import rate_limit_quiz
 
@@ -104,6 +116,12 @@ class ReviewRequest(BaseModel):
     review_duration_ms: int | None = Field(default=None, ge=0)
 
 
+class FlagRequest(BaseModel):
+    """Flag-or-unflag body (REV-34). ``flagged`` true hides the card from due."""
+
+    flagged: bool
+
+
 # --- Response views ------------------------------------------------------------
 
 
@@ -116,6 +134,7 @@ class QuizJobView(BaseModel):
     generated_count: int
     discarded_count: int
     failed_sections: int
+    discard_reasons: dict[str, int]
     error: str | None
     created_at: datetime
     updated_at: datetime
@@ -129,6 +148,7 @@ class QuizJobView(BaseModel):
             generated_count=job.generated_count,
             discarded_count=job.discarded_count,
             failed_sections=job.failed_sections,
+            discard_reasons=job.discard_reasons,
             error=job.last_error,
             created_at=job.created_at,
             updated_at=job.updated_at,
@@ -237,6 +257,9 @@ class DueItemView(BaseModel):
     # The "your note changed" badge (NL-12): the origin note changed since this card was
     # last reviewed or created. Always ``false`` for deck/highlight cards.
     note_changed: bool
+    # Next-interval buckets for ratings 1–4 from a non-persisted fuzzing-off preview
+    # (REV-29, AD-312). Keys are the FSRS ratings.
+    interval_labels: dict[int, str]
 
     @classmethod
     def from_due(cls, due: DueReviewItem) -> DueItemView:
@@ -261,14 +284,17 @@ class DueItemView(BaseModel):
             status=item.status,
             due=due.due,
             note_changed=due.note_changed,
+            interval_labels=due.interval_labels,
         )
 
 
 class DueQueueView(BaseModel):
-    """The due queue response (QUIZ-13): the page of items and the full due total."""
+    """The due queue response (QUIZ-13 / AD-310): the session page and the full due total."""
 
     items: list[DueItemView]
     total_due: int
+    session_size: int
+    requeue_minutes: int
 
 
 class SchedulingView(BaseModel):
@@ -280,9 +306,12 @@ class SchedulingView(BaseModel):
     difficulty: float | None
     due: datetime
     last_review: datetime | None
+    interval_labels: dict[int, str]
 
     @classmethod
-    def from_snapshot(cls, snapshot: SchedulingSnapshot) -> SchedulingView:
+    def from_snapshot(
+        cls, snapshot: SchedulingSnapshot, *, interval_labels: dict[int, str]
+    ) -> SchedulingView:
         return cls(
             state=snapshot.state,
             step=snapshot.step,
@@ -290,7 +319,19 @@ class SchedulingView(BaseModel):
             difficulty=snapshot.difficulty,
             due=snapshot.due,
             last_review=snapshot.last_review,
+            interval_labels=interval_labels,
         )
+
+    @classmethod
+    def from_reviewed(cls, result: ReviewedSchedule) -> SchedulingView:
+        return cls.from_snapshot(result.snapshot, interval_labels=result.interval_labels)
+
+
+class FlagView(BaseModel):
+    """Confirmation that the card is flagged out of due, or not."""
+
+    flagged: bool
+    flagged_at: datetime | None
 
 
 UowFactory = Annotated[Callable[[], AbstractContextManager[Connection]], Depends(get_quiz_uow)]
@@ -365,17 +406,25 @@ def get_quiz_overview(
 def get_due_reviews(
     user: Annotated[User, Depends(get_authenticated_user)],
     service: Annotated[GetDueQueue, Depends(get_due_queue)],
-    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    settings: AppSettings,
+    limit: Annotated[int | None, Query(ge=1, le=100)] = None,
     source_id: Annotated[UUID | None, Query()] = None,
 ) -> DueQueueView:
     """Return the caller's due queue across their sources (200).
 
     Active items with ``due <= now`` (stale/orphaned excluded), ordered ``due ASC,
-    id ASC``; optional ``source_id`` filter. ``limit`` defaults to 20 and is capped
-    at 100 by Pydantic — over-100 → 422.
+    id ASC``; optional ``source_id`` filter. ``limit`` defaults to
+    ``LEARNY_REVIEW_SESSION_SIZE`` and is capped at 100 by Pydantic — over-100 →
+    422. ``session_size`` and ``requeue_minutes`` are the configured knobs;
+    interval labels are a non-persisted preview attached by ``GetDueQueue``.
     """
-    total, items = service(user=user, limit=limit, source_id=source_id)
-    return DueQueueView(items=[DueItemView.from_due(d) for d in items], total_due=total)
+    total, dues = service(user=user, limit=limit, source_id=source_id)
+    return DueQueueView(
+        items=[DueItemView.from_due(due) for due in dues],
+        total_due=total,
+        session_size=settings.review_session_size,
+        requeue_minutes=settings.review_requeue_minutes,
+    )
 
 
 @router.post(
@@ -403,14 +452,63 @@ def submit_review(
     The optional ``X-Client-Timezone`` header sets the study-day boundary (silent UTC
     fallback); it does not affect the response body.
     """
-    snapshot = service(
+    result = service(
         user=user,
         item_id=item_id,
         rating=body.rating,
         review_duration_ms=body.review_duration_ms,
         client_tz=client_tz,
     )
-    return SchedulingView.from_snapshot(snapshot)
+    return SchedulingView.from_reviewed(result)
+
+
+@router.post(
+    "/api/reviews/undo",
+    dependencies=[
+        Depends(rate_limit_quiz),
+        Depends(enforce_origin),
+        Depends(enforce_csrf),
+    ],
+)
+def undo_last_review(
+    user: Annotated[User, Depends(get_authenticated_user)],
+    service: Annotated[UndoLastReview, Depends(get_undo_last_review)],
+    client_tz: Annotated[str | None, Header(alias="X-Client-Timezone")] = None,
+) -> SchedulingView:
+    """Restore the caller's last grade and return the previous scheduling (200).
+
+    ``UndoLastReview`` looks up the caller's latest not-yet-undone log row
+    (missing snapshot or nothing to undo → ``QuizReviewNotUndoable`` → 409).
+    Another user's history is invisible. A vanished item collapses to
+    ``QuizItemNotFound`` → 404. The optional ``X-Client-Timezone`` header names
+    the study-day to decrement (silent UTC fallback); it does not affect the
+    response body.
+    """
+    result = service(user=user, client_tz=client_tz)
+    return SchedulingView.from_reviewed(result)
+
+
+@router.post(
+    "/api/quiz-items/{item_id}/flag",
+    dependencies=[
+        Depends(rate_limit_quiz),
+        Depends(enforce_origin),
+        Depends(enforce_csrf),
+    ],
+)
+def flag_card(
+    item_id: UUID,
+    user: Annotated[User, Depends(get_authenticated_user)],
+    service: Annotated[FlagCard, Depends(get_flag_card)],
+    body: FlagRequest,
+) -> FlagView:
+    """Flag or unflag an owned card out of the due queue (200; 404).
+
+    Sets or clears ``flagged_at`` only. Scheduling and the review log are
+    untouched. Missing or non-owned → ``QuizItemNotFound`` → 404.
+    """
+    item = service(user=user, item_id=item_id, flagged=body.flagged)
+    return FlagView(flagged=item.flagged_at is not None, flagged_at=item.flagged_at)
 
 
 @router.post(
@@ -435,7 +533,8 @@ def reset_schedule(
     append-only review log is left untouched. This is the only non-review path that changes
     scheduling (NL-12).
     """
-    return SchedulingView.from_snapshot(service(user=user, item_id=item_id))
+    result = service(user=user, item_id=item_id)
+    return SchedulingView.from_reviewed(result)
 
 
 @router.get("/api/sources/{source_id}/quiz/export")

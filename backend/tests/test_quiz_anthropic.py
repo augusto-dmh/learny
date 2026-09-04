@@ -15,7 +15,11 @@ from uuid import uuid4
 import pytest
 
 from app.domain.entities import QuizItemType, QuizSection
-from app.infrastructure.quiz.anthropic import AnthropicQuizAdapter
+from app.infrastructure.quiz.anthropic import (
+    AnthropicQuizAdapter,
+    _quote_prompt,
+    _section_prompt,
+)
 
 # --- Fake Anthropic batch client (the narrow slice the adapter uses) -------------
 
@@ -451,6 +455,43 @@ def test_suggest_cards_bounds_the_foreground_call_with_a_timeout() -> None:
     timeout = adapter._get_client().messages.create_kwargs["timeout"]
     assert timeout is not None
     assert 0 < timeout <= 60
+
+
+# --- Formulation instructions both helpers must carry (REV-20) -----------------
+
+_RUBRIC_TOKENS = (
+    "one fact per card",
+    "short answer",
+    "blank the key term not a function word",
+    "No lists",
+    "no yes/no",
+    "without opening the book",
+)
+
+
+def test_section_prompt_instructs_atomic_formulation() -> None:
+    chunk = uuid4()
+    prompt = _section_prompt(_section("A", [chunk]))
+    for token in _RUBRIC_TOKENS:
+        assert token in prompt
+    assert f"[chunk {chunk}]" in prompt
+    assert "source_chunk_id" in prompt
+    assert "anchor_quote" in prompt
+    assert "free_recall" in prompt
+    assert "cloze" in prompt
+
+
+def test_quote_prompt_instructs_atomic_formulation() -> None:
+    chunk = uuid4()
+    prompt = _quote_prompt(_section("A", [chunk]), "The key term.", 3)
+    for token in _RUBRIC_TOKENS:
+        assert token in prompt
+    assert f"[chunk {chunk}]" in prompt
+    assert "source_chunk_id" in prompt
+    assert "anchor_quote" in prompt
+    assert "free_recall" in prompt
+    assert "cloze" in prompt
+    assert "The key term." in prompt
 
 
 # --- The structured-output shape, and what it must never carry (ASK-08) ----------

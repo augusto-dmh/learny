@@ -1,17 +1,17 @@
 """B2 gate — the deterministic quiz generation adapter (unit, offline).
 
-Pins the offline generation contract: exactly one free-recall and one cloze per
-section derived from the first chunk's leading sentence, grounded by construction
-(``anchor_quote`` a verbatim span, cloze mask valid — QUIZ-06/07), typed only
-``free_recall``/``cloze`` (QUIZ-10), and byte-identical across runs (QUIZ-05 local
-path is reproducible).
+Pins the offline generation contract: at most one free-recall and one cloze per
+section derived from the first chunk's leading legal term, grounded by construction
+(``anchor_quote`` a verbatim span, cloze mask valid — QUIZ-06/07), formulation-legal
+(REV-21), typed only ``free_recall``/``cloze`` (QUIZ-10), and byte-identical across
+runs (QUIZ-05 local path is reproducible).
 """
 
 from __future__ import annotations
 
 from uuid import uuid4
 
-from app.application.quiz_qc import cloze_is_valid, quote_in_text
+from app.application.quiz_qc import cloze_is_valid, discard_reason, quote_in_text
 from app.domain.entities import QuizDeckHandle, QuizItemType, QuizSection
 from app.infrastructure.quiz.local import DeterministicQuizAdapter
 
@@ -27,7 +27,9 @@ def _section(text: str, *, title: str = "Cell Biology") -> tuple[QuizSection, ob
     return section, chunk_id
 
 
-_TEXT = "The mitochondria is the powerhouse of the cell. It also does more."
+_TEXT = "The mitochondria is the powerhouse of the cell. It also stores calcium."
+_LEAD = "The mitochondria is the powerhouse of the cell."
+_SECOND = "It also stores calcium."
 
 
 def _collect(adapter: DeterministicQuizAdapter, sections):
@@ -49,15 +51,19 @@ def test_generates_one_free_recall_and_one_cloze_per_section() -> None:
     assert set(by_type) == {QuizItemType.FREE_RECALL, QuizItemType.CLOZE}
 
     free = by_type[QuizItemType.FREE_RECALL]
-    assert free.answer == "The mitochondria is the powerhouse of the cell."
-    assert free.anchor_quote == "The mitochondria is the powerhouse of the cell."
+    assert free.answer == "mitochondria"
+    assert free.anchor_quote == _LEAD
     assert free.source_chunk_id == chunk_id
+    assert "what does the passage" not in free.question.lower()
+    assert "mitochondria" not in free.question.lower()
 
     cloze = by_type[QuizItemType.CLOZE]
-    # Longest word of the leading sentence is masked.
     assert cloze.answer == "mitochondria"
     assert cloze.question == "The ____ is the powerhouse of the cell."
     assert cloze.source_chunk_id == chunk_id
+
+    for candidate in result.candidates:
+        assert discard_reason(candidate, chunk_text=_TEXT) is None
 
 
 def test_candidates_are_grounded_by_construction() -> None:
@@ -104,6 +110,12 @@ def test_section_without_chunks_yields_no_candidates() -> None:
     assert result.errors == ()
 
 
+def test_section_without_a_legal_term_yields_no_candidates() -> None:
+    section, _ = _section("The a of to and or is.")
+    result = _collect(DeterministicQuizAdapter(), [section])
+    assert result.candidates == ()
+
+
 def test_collect_deck_returns_immediately_never_pending() -> None:
     section, _ = _section(_TEXT)
     adapter = DeterministicQuizAdapter()
@@ -121,7 +133,7 @@ def test_suggest_cards_never_exceeds_the_limit() -> None:
     adapter = DeterministicQuizAdapter()
 
     for limit in (1, 2, 3):
-        candidates = adapter.suggest_cards(section, "It also does more.", limit)
+        candidates = adapter.suggest_cards(section, _SECOND, limit)
         # Non-empty first: `<= limit` alone holds for an adapter that returns nothing,
         # which would satisfy the cap while silently producing no cards.
         assert candidates
@@ -131,7 +143,7 @@ def test_suggest_cards_never_exceeds_the_limit() -> None:
 def test_suggest_cards_are_scoped_to_the_quote_not_the_section() -> None:
     # The quote is the section's *second* sentence, which the deck path never picks.
     section, chunk_id = _section(_TEXT)
-    quote = "It also does more."
+    quote = _SECOND
 
     candidates = DeterministicQuizAdapter().suggest_cards(section, quote, 3)
 
@@ -175,13 +187,15 @@ def test_suggest_note_cards_pairs_free_recall_and_cloze_from_the_leading_sentenc
     assert set(by_type) == {QuizItemType.FREE_RECALL, QuizItemType.CLOZE}
 
     free = by_type[QuizItemType.FREE_RECALL]
-    assert free.answer == _NOTE_SENTENCE
+    assert free.answer == "repetition"
     assert free.anchor_quote == _NOTE_SENTENCE
 
     cloze = by_type[QuizItemType.CLOZE]
-    # Longest word of the leading sentence is masked.
     assert cloze.answer == "repetition"
     assert cloze.question == "Spaced ____ schedules reviews at expanding intervals."
+
+    for candidate in candidates:
+        assert discard_reason(candidate, note_body=_NOTE_BODY) is None
 
 
 def test_suggest_note_cards_carry_no_source_chunk_id() -> None:

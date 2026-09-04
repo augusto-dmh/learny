@@ -2,13 +2,14 @@
 
 The CI/offline default behind :class:`~app.domain.ports.QuizGenerationPort`: it makes
 the whole deck pipeline testable with no provider key. Per eligible section it derives
-exactly two candidates from the first chunk's leading sentence — one ``free_recall``
-(the sentence is the answer) and one ``cloze`` (the sentence's longest word masked with
-``____``) — so every candidate is grounded by construction (its ``anchor_quote`` is a
-verbatim span of the chunk it cites, QUIZ-06/07). Generation is synchronous: ``begin_deck``
-computes the candidates inline onto the handle's JSON-safe payload, and ``collect_deck``
-reconstructs and returns them immediately (never ``None``), so it round-trips through the
-Celery poll hand-off like the batched adapter without ever pending.
+at most two formulation-legal candidates from the first chunk's leading sentence — one
+``free_recall`` and one ``cloze`` on the longest non-stopword term — so every candidate
+is grounded by construction (its ``anchor_quote`` is a verbatim span of the chunk it
+cites, QUIZ-06/07) and passes ``discard_reason`` (REV-21). A section with no legal term
+emits nothing. Generation is synchronous: ``begin_deck`` computes the candidates inline
+onto the handle's JSON-safe payload, and ``collect_deck`` reconstructs and returns them
+immediately (never ``None``), so it round-trips through the Celery poll hand-off like
+the batched adapter without ever pending.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ import re
 from collections.abc import Sequence
 from uuid import UUID
 
-from app.application.quiz_qc import CLOZE_BLANK, quote_in_text
+from app.application.quiz_qc import CLOZE_BLANK, CLOZE_STOPWORDS, normalize_text, quote_in_text
 from app.domain.entities import (
     QuizCandidate,
     QuizDeckHandle,
@@ -41,38 +42,49 @@ def _leading_sentence(text: str) -> str:
     return match.group(1).strip() if match else stripped
 
 
-def _longest_word(sentence: str) -> str | None:
-    """Return the sentence's longest word (first on ties), or ``None`` if it has none."""
-    words = _WORD.findall(sentence)
-    if not words:
+def _legal_term(sentence: str) -> str | None:
+    """Longest non-stopword token of at least 3 letters (first on ties)."""
+    terms = [
+        word
+        for word in _WORD.findall(sentence)
+        if len(word) >= 3 and normalize_text(word) not in CLOZE_STOPWORDS
+    ]
+    if not terms:
         return None
-    return max(words, key=len)
+    return max(terms, key=len)
 
 
-def _candidates_from(sentence: str, chunk_id: UUID, title: str) -> list[QuizCandidate]:
+def _pair_questions(sentence: str, term: str) -> tuple[str, str]:
+    cloze_question = re.sub(rf"\b{re.escape(term)}\b", CLOZE_BLANK, sentence, count=1)
+    free_question = f"Which term fills the blank: {cloze_question}"
+    return free_question, cloze_question
+
+
+def _candidates_from(sentence: str, chunk_id: UUID, _title: str) -> list[QuizCandidate]:
     """Derive the free-recall + cloze pair for one sentence of ``chunk_id``.
 
     Both candidates cite ``chunk_id`` and quote ``sentence`` verbatim, so they are
-    grounded by construction (QUIZ-06/07). Returns an empty list when the sentence has
-    no maskable word — shared by the deck pass and the quote-scoped suggestion path so
-    the two never drift apart.
+    grounded by construction (QUIZ-06/07). The answer is the longest legal term so
+    both pass formulation gates (REV-21). Empty when the sentence has no such term —
+    shared by the deck pass and the quote-scoped suggestion path so the two never
+    drift apart.
     """
-    word = _longest_word(sentence)
-    if not sentence or word is None:
+    term = _legal_term(sentence)
+    if not sentence.strip() or term is None:
         return []
 
+    free_question, cloze_question = _pair_questions(sentence, term)
     free_recall = QuizCandidate(
         item_type=QuizItemType.FREE_RECALL,
-        question=f"What does the passage in “{title}” state?",
-        answer=sentence,
+        question=free_question,
+        answer=term,
         source_chunk_id=chunk_id,
         anchor_quote=sentence,
     )
-    cloze_question = re.sub(rf"\b{re.escape(word)}\b", CLOZE_BLANK, sentence, count=1)
     cloze = QuizCandidate(
         item_type=QuizItemType.CLOZE,
         question=cloze_question,
-        answer=word,
+        answer=term,
         source_chunk_id=chunk_id,
         anchor_quote=sentence,
     )
@@ -84,24 +96,24 @@ def _note_candidates_from(sentence: str) -> list[QuizCandidate]:
 
     The note→quiz mirror of :func:`_candidates_from`: the sentence is a verbatim span of
     the note body, so both candidates are grounded by construction, and they carry no
-    ``source_chunk_id`` (a note is not chunked). Empty when the sentence has no maskable
-    word, so the deterministic path and the QC pipeline stay in agreement.
+    ``source_chunk_id`` (a note is not chunked). Empty when the sentence has no legal
+    term, so the deterministic path and the QC pipeline stay in agreement.
     """
-    word = _longest_word(sentence)
-    if not sentence or word is None:
+    term = _legal_term(sentence)
+    if not sentence.strip() or term is None:
         return []
 
+    free_question, cloze_question = _pair_questions(sentence, term)
     free_recall = QuizCandidate(
         item_type=QuizItemType.FREE_RECALL,
-        question="What does this note state?",
-        answer=sentence,
+        question=free_question,
+        answer=term,
         anchor_quote=sentence,
     )
-    cloze_question = re.sub(rf"\b{re.escape(word)}\b", CLOZE_BLANK, sentence, count=1)
     cloze = QuizCandidate(
         item_type=QuizItemType.CLOZE,
         question=cloze_question,
-        answer=word,
+        answer=term,
         anchor_quote=sentence,
     )
     return [free_recall, cloze]

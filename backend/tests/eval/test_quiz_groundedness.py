@@ -184,11 +184,15 @@ def test_pipeline_discards_candidate_whose_quote_is_not_in_the_chunk(
     # A real chunk from the first eligible golden section — the id both candidates cite.
     section = items.sections_for_generation(source.id, min_chars=settings.quiz_min_section_chars)[0]
     chunk_id, chunk_text = section.chunks[0]
-    grounded_quote = chunk_text.split(".")[0].strip() + "."  # a verbatim leading sentence
+    # Short verbatim span: the first-sentence split includes the heading and
+    # exceeds the formulation bar (generic stem + answer too long), which would
+    # discard the control and make this probe vacuous.
+    grounded_quote = "the moon's gravity pulls seawater across the planet"
+    assert quote_in_text(grounded_quote, chunk_text)
 
     control = QuizCandidate(
         item_type=QuizItemType.FREE_RECALL,
-        question="What does the passage state?",
+        question="What pulls seawater across the planet?",
         answer=grounded_quote,
         source_chunk_id=chunk_id,
         anchor_quote=grounded_quote,

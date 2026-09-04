@@ -79,6 +79,7 @@ from app.domain.entities import (
     SourceHighlight,
     StructureSection,
     StudyDay,
+    UndoableReview,
     User,
 )
 from app.infrastructure.db.metadata import (
@@ -1533,8 +1534,15 @@ class SqlAlchemyQuizItemRepository:
             )
         )
 
+    def set_flagged_at(self, item_id: UUID, flagged_at: datetime | None) -> None:
+        """Set or clear ``flagged_at``. Never touches scheduling or ``review_log``."""
+        self._conn.execute(
+            update(quiz_items).where(quiz_items.c.id == item_id).values(flagged_at=flagged_at)
+        )
+
     def append_log(self, quiz_item_id: UUID, entry: ReviewLogEntry) -> None:
         """Append an immutable review-log entry for the item (QUIZ-12)."""
+        previous = entry.previous
         self._conn.execute(
             insert(review_log).values(
                 id=uuid4(),
@@ -1542,7 +1550,48 @@ class SqlAlchemyQuizItemRepository:
                 rating=entry.rating,
                 reviewed_at=entry.reviewed_at,
                 review_duration_ms=entry.review_duration_ms,
+                prev_state=None if previous is None else previous.state,
+                prev_step=None if previous is None else previous.step,
+                prev_stability=None if previous is None else previous.stability,
+                prev_difficulty=None if previous is None else previous.difficulty,
+                prev_due=None if previous is None else previous.due,
+                prev_last_review=None if previous is None else previous.last_review,
             )
+        )
+
+    def latest_undoable_review(self, user_id: UUID) -> UndoableReview | None:
+        """Return the caller's most recent not-yet-undone log row, or ``None``."""
+        row = self._conn.execute(
+            select(
+                review_log.c.id,
+                review_log.c.quiz_item_id,
+                review_log.c.reviewed_at,
+                review_log.c.prev_state,
+                review_log.c.prev_step,
+                review_log.c.prev_stability,
+                review_log.c.prev_difficulty,
+                review_log.c.prev_due,
+                review_log.c.prev_last_review,
+            )
+            .select_from(review_log.join(quiz_items, quiz_items.c.id == review_log.c.quiz_item_id))
+            .where(quiz_items.c.user_id == user_id)
+            .where(review_log.c.undone_at.is_(None))
+            .order_by(review_log.c.reviewed_at.desc(), review_log.c.id.desc())
+            .limit(1)
+        ).one_or_none()
+        if row is None:
+            return None
+        return UndoableReview(
+            log_id=row.id,
+            quiz_item_id=row.quiz_item_id,
+            reviewed_at=row.reviewed_at,
+            previous=_previous_from_log(row),
+        )
+
+    def mark_log_undone(self, log_id: UUID, undone_at: datetime) -> None:
+        """Stamp ``undone_at`` on an existing log row. Never deletes the row."""
+        self._conn.execute(
+            update(review_log).where(review_log.c.id == log_id).values(undone_at=undone_at)
         )
 
     def list_for_source(self, source_id: UUID) -> list[QuizItem]:
@@ -1614,6 +1663,7 @@ class SqlAlchemyQuizItemRepository:
         conditions = [
             quiz_items.c.user_id == user_id,
             quiz_items.c.status == QuizItemStatus.ACTIVE,
+            quiz_items.c.flagged_at.is_(None),
             quiz_item_scheduling.c.due <= now,
         ]
         if source_id is not None:
@@ -1636,6 +1686,11 @@ class SqlAlchemyQuizItemRepository:
                 *_QUIZ_ITEM_READ_COLUMNS,
                 func.coalesce(sources.c.title, "Your notes").label("source_title"),
                 quiz_item_scheduling.c.due.label("due"),
+                quiz_item_scheduling.c.state,
+                quiz_item_scheduling.c.step,
+                quiz_item_scheduling.c.stability,
+                quiz_item_scheduling.c.difficulty,
+                quiz_item_scheduling.c.last_review,
                 func.coalesce(notes.c.id, notes_via_id.c.id).label("provenance_note_id"),
                 func.coalesce(notes.c.title, notes_via_id.c.title).label("provenance_note_title"),
                 note_changed,
@@ -1660,6 +1715,7 @@ class SqlAlchemyQuizItemRepository:
                     else None
                 ),
                 note_changed=bool(row.note_changed),
+                snapshot=_to_scheduling(row),
             )
             for row in rows
         ]
@@ -1723,6 +1779,7 @@ class SqlAlchemyQuizJobRepository:
                 generated_count=job.generated_count,
                 discarded_count=job.discarded_count,
                 failed_sections=job.failed_sections,
+                discard_reasons=job.discard_reasons,
                 last_error=job.last_error,
                 created_at=job.created_at,
                 updated_at=job.updated_at,
@@ -1757,7 +1814,7 @@ class SqlAlchemyQuizJobRepository:
         return _to_quiz_job(row) if row is not None else None
 
     def update(self, job: QuizGenerationJob) -> QuizGenerationJob:
-        """Persist ``status``/``attempts``/counts/``last_error``/``updated_at``."""
+        """Persist status, attempts, counts, discard reasons, last_error, and updated_at."""
         self._conn.execute(
             update(quiz_generation_jobs)
             .where(quiz_generation_jobs.c.id == job.id)
@@ -1767,6 +1824,7 @@ class SqlAlchemyQuizJobRepository:
                 generated_count=job.generated_count,
                 discarded_count=job.discarded_count,
                 failed_sections=job.failed_sections,
+                discard_reasons=job.discard_reasons,
                 last_error=job.last_error,
                 updated_at=job.updated_at,
             )
@@ -2268,6 +2326,20 @@ class SqlAlchemyStudyDayRepository:
         )
         self._conn.execute(stmt)
 
+    def decrement_reviews(self, user_id: UUID, day: date) -> None:
+        """Subtract one from an existing day's ``reviews_count``, floored at 0.
+
+        UPDATE-only: a missing ``(user_id, day)`` row is a no-op, never an insert
+        (AD-307). ``record``'s INSERT-on-miss would mint a −1 day from a negative
+        delta, so undo must not reuse it.
+        """
+        self._conn.execute(
+            update(study_days)
+            .where(study_days.c.user_id == user_id)
+            .where(study_days.c.day == day)
+            .values(reviews_count=func.greatest(study_days.c.reviews_count - 1, 0))
+        )
+
     def window(self, user_id: UUID, *, start: date, end: date) -> list[StudyDay]:
         rows = self._conn.execute(
             select(
@@ -2432,6 +2504,7 @@ def _to_quiz_item(row) -> QuizItem:  # noqa: ANN001
         note_id=row.note_id,
         note_changed_at=row.note_changed_at,
         conversation_id=row.conversation_id,
+        flagged_at=row.flagged_at,
     )
 
 
@@ -2443,6 +2516,19 @@ def _to_scheduling(row) -> SchedulingSnapshot:  # noqa: ANN001
         difficulty=row.difficulty,
         due=row.due,
         last_review=row.last_review,
+    )
+
+
+def _previous_from_log(row) -> SchedulingSnapshot | None:  # noqa: ANN001
+    if row.prev_due is None:
+        return None
+    return SchedulingSnapshot(
+        state=row.prev_state,
+        step=row.prev_step,
+        stability=row.prev_stability,
+        difficulty=row.prev_difficulty,
+        due=row.prev_due,
+        last_review=row.prev_last_review,
     )
 
 
@@ -2458,6 +2544,7 @@ def _to_quiz_job(row) -> QuizGenerationJob:  # noqa: ANN001
         last_error=row.last_error,
         created_at=row.created_at,
         updated_at=row.updated_at,
+        discard_reasons=dict(row.discard_reasons),
     )
 
 

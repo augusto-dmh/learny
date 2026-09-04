@@ -274,6 +274,13 @@ class Settings(BaseSettings):
     fsrs_desired_retention: float = 0.9
     fsrs_fuzzing: bool = True
 
+    # Review session (RFC-0007 Cycle D). ``review_session_size`` is GetDueQueue's
+    # default page — today's job — capped at 100 (AD-310). ``review_requeue_minutes``
+    # is the client window for re-inserting a just-graded learning step; the server
+    # exposes it on the due view and does not apply it (AD-311).
+    review_session_size: int = Field(default=20, ge=1, le=100)
+    review_requeue_minutes: int = Field(default=15, ge=1)
+
     # Notes & second-brain (RFC-003 Cycle E; ADR-0026). ``notes_max_body_chars`` caps a
     # note's Markdown body length, enforced by the note use cases before any write.
     notes_max_body_chars: int = 100000

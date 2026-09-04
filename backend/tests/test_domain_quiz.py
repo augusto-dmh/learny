@@ -34,6 +34,8 @@ from app.domain.entities import (
     QuizItemStatus,
     QuizItemType,
     QuizJobStatus,
+    ReviewLogEntry,
+    SchedulingSnapshot,
     SourceHighlight,
 )
 from app.domain.ports import (
@@ -253,6 +255,11 @@ def test_job_started_transitions_to_running_and_increments_attempts() -> None:
     assert started.updated_at == now
 
 
+def test_job_defaults_discard_reasons_to_empty() -> None:
+    # Pre-cycle constructors omit the map; REV-01 empty success is ``{}``.
+    assert _job().discard_reasons == {}
+
+
 def test_job_succeeded_records_counts() -> None:
     now = datetime(2026, 7, 16, 2, tzinfo=UTC)
     done = (
@@ -262,6 +269,27 @@ def test_job_succeeded_records_counts() -> None:
     assert done.generated_count == 5
     assert done.discarded_count == 2
     assert done.failed_sections == 1
+    assert done.discard_reasons == {}
+
+
+def test_job_succeeded_stores_discard_reasons() -> None:
+    now = datetime(2026, 7, 16, 2, tzinfo=UTC)
+    reasons = {"generic_stem": 2, "duplicate": 1}
+    done = (
+        _job()
+        .started(now)
+        .succeeded(
+            now,
+            generated_count=1,
+            discarded_count=3,
+            failed_sections=0,
+            discard_reasons=reasons,
+        )
+    )
+    assert done.discard_reasons == reasons
+    assert sum(done.discard_reasons.values()) == done.discarded_count
+    reasons["other"] = 9
+    assert done.discard_reasons == {"generic_stem": 2, "duplicate": 1}
 
 
 def test_job_failed_sets_last_error() -> None:
@@ -351,6 +379,35 @@ def test_quiz_item_defaults_to_deck_origin_with_no_provenance() -> None:
     assert item.origin == QuizItemOrigin.DECK
     assert item.note_anchor_id is None
     assert item.conversation_id is None
+    assert item.flagged_at is None
+
+
+def test_review_log_entry_defaults_have_no_undo_snapshot() -> None:
+    reviewed = datetime(2026, 7, 16, tzinfo=UTC)
+    entry = ReviewLogEntry(rating=3, reviewed_at=reviewed)
+    assert entry.review_duration_ms is None
+    assert entry.undone_at is None
+    assert entry.previous is None
+
+
+def test_review_log_entry_carries_previous_scheduling_snapshot() -> None:
+    reviewed = datetime(2026, 7, 16, 12, tzinfo=UTC)
+    previous = SchedulingSnapshot(
+        state=1,
+        step=0,
+        stability=1.2,
+        difficulty=5.0,
+        due=reviewed,
+        last_review=None,
+    )
+    entry = ReviewLogEntry(
+        rating=1,
+        reviewed_at=reviewed,
+        review_duration_ms=400,
+        previous=previous,
+    )
+    assert entry.previous == previous
+    assert entry.undone_at is None
 
 
 def test_quiz_item_carries_tutor_origin_and_conversation_link() -> None:
@@ -508,12 +565,23 @@ def test_scheduling_port_is_runtime_checkable_protocol() -> None:
         def review(self, snapshot, rating, reviewed_at):  # noqa: ANN001, ANN201
             return None
 
+        def preview(self, snapshot, reviewed_at):  # noqa: ANN001, ANN201
+            return None
+
     class MissingReview:
         def initial(self):  # noqa: ANN201
             return None
 
+    class MissingPreview:
+        def initial(self):  # noqa: ANN201
+            return None
+
+        def review(self, snapshot, rating, reviewed_at):  # noqa: ANN001, ANN201
+            return None
+
     assert isinstance(ConformingScheduler(), SchedulingPort)
     assert not isinstance(MissingReview(), SchedulingPort)
+    assert not isinstance(MissingPreview(), SchedulingPort)
 
 
 def test_quiz_deck_enqueuer_is_runtime_checkable_protocol() -> None:

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -26,7 +27,7 @@ from uuid import UUID
 from app.application.errors import QuizDeckConflict, SourceNotReady
 from app.application.identity import AuthorizeOwnership
 from app.application.ingestion import SOURCE_STATUS_READY, authorized_source
-from app.application.quiz_qc import cloze_is_valid, content_key, quote_in_text
+from app.application.quiz_qc import content_key, discard_reason, quote_in_text
 from app.domain.entities import (
     QuizCandidate,
     QuizDeckHandle,
@@ -35,7 +36,6 @@ from app.domain.entities import (
     QuizItem,
     QuizItemOrigin,
     QuizItemStatus,
-    QuizItemType,
     QuizJobStatus,
     ReconcileSection,
     User,
@@ -50,9 +50,6 @@ from app.domain.ports import (
     SchedulingPort,
     SourceRepository,
 )
-
-# The two item kinds the QC pipeline accepts (QUIZ-10 — no MCQ anywhere).
-_VALID_ITEM_TYPES = frozenset({QuizItemType.FREE_RECALL, QuizItemType.CLOZE})
 
 
 def _cosine(a: Sequence[float], b: Sequence[float]) -> float:
@@ -212,14 +209,15 @@ class RunDeckGeneration:
     def finalize(self, job_id: UUID, result: QuizDeckResult) -> QuizGenerationJob | None:
         """Ground, dedup, and persist the pass's candidates; record success (QUIZ-06..09).
 
-        Per candidate, in order: schema sanity → verbatim quote in the referenced chunk
-        (QUIZ-06) → cloze mask validity (QUIZ-07) → embedding dedup vs already-accepted
-        and persisted items (QUIZ-08) → ``content_key`` upsert (QUIZ-02). A new item gets
-        its initial scheduling row (QUIZ-09); an existing item's content is updated with
-        its scheduling untouched. Any failed check discards the candidate (never
-        persisted, counted in ``discarded``). Idempotent under redelivery: a re-run
-        upserts the same items and re-creates no scheduling (a re-generated ``content_key``
-        already persisted skips the dedup guard so it is not spuriously discarded).
+        Per candidate, in order: ``discard_reason`` (REV-02/09/18) → embedding
+        cosine dedup vs already-accepted and persisted items (QUIZ-08, ``duplicate``)
+        → ``content_key`` upsert (QUIZ-02). A new item gets its initial scheduling
+        row (QUIZ-09); an existing item's content is updated with its scheduling
+        untouched. Any failed check discards the candidate (never persisted, counted
+        in ``discarded_count`` and ``discard_reasons``). Idempotent under redelivery:
+        a re-run upserts the same items and re-creates no scheduling (a re-generated
+        ``content_key`` already persisted skips the dedup guard so it is not spuriously
+        discarded).
         """
         job = self._jobs.get_by_id(job_id)
         if job is None:
@@ -235,20 +233,21 @@ class RunDeckGeneration:
         accepted_keys: set[str] = set()
         accepted_embeddings: list[list[float]] = []
         generated = 0
-        discarded = 0
+        reasons: Counter[str] = Counter()
 
         # Ground first, then embed every surviving candidate in ONE batch call: under a
         # real provider, per-candidate embed_query would be N sequential round-trips.
         grounded: list[tuple[QuizCandidate, tuple[tuple[str, ...], str, str], str]] = []
         for candidate in result.candidates:
-            located = self._ground(candidate, chunk_index)
-            if located is None:
-                discarded += 1
+            located, reason = self._ground(candidate, chunk_index)
+            if reason is not None:
+                reasons[reason] += 1
                 continue
+            assert located is not None
             key = content_key(candidate.item_type, candidate.question, candidate.answer)
             if key in accepted_keys:
                 # Exact duplicate candidate within this pass — the same item once.
-                discarded += 1
+                reasons["duplicate"] += 1
                 continue
             accepted_keys.add(key)
             grounded.append((candidate, located, key))
@@ -269,7 +268,7 @@ class RunDeckGeneration:
             if not is_regeneration and self._is_duplicate(
                 embedding, accepted_embeddings + persisted_embeddings
             ):
-                discarded += 1
+                reasons["duplicate"] += 1
                 continue
 
             item = QuizItem(
@@ -296,12 +295,14 @@ class RunDeckGeneration:
                 accepted_embeddings.append(embedding)
             generated += 1
 
+        discarded = sum(reasons.values())
         return self._jobs.update(
             job.succeeded(
                 now,
                 generated_count=generated,
                 discarded_count=discarded,
                 failed_sections=len(result.errors),
+                discard_reasons=dict(reasons),
             )
         )
 
@@ -328,32 +329,24 @@ class RunDeckGeneration:
 
     def _ground(
         self,
-        candidate,  # noqa: ANN001 — QuizCandidate; typed loosely to keep the helper local
+        candidate: QuizCandidate,
         chunk_index: dict[UUID, tuple[tuple[str, ...], str, str]],
-    ) -> tuple[tuple[str, ...], str, str] | None:
-        """Return the candidate's ``(section_path, anchor, chunk_text)`` if it passes QC.
+    ) -> tuple[tuple[tuple[str, ...], str, str] | None, str | None]:
+        """Return ``(located, None)`` when the candidate may persist, else ``(None, reason)``.
 
-        ``None`` when schema-invalid (QUIZ-10), the cited chunk is unknown, the
-        ``anchor_quote`` is not verbatim in that chunk (QUIZ-06), or a cloze's mask is
-        invalid (QUIZ-07).
+        Delegates formulation, emptiness, and grounding to ``discard_reason`` so this
+        path does not keep a parallel bool QC (REV-02). Unknown chunks pass no text,
+        which maps to ``ungrounded``.
         """
-        if candidate.item_type not in _VALID_ITEM_TYPES:
-            return None
-        if not (candidate.question.strip() and candidate.answer.strip()):
-            return None
-        if not candidate.anchor_quote.strip():
-            return None
         located = chunk_index.get(candidate.source_chunk_id)
-        if located is None:
-            return None
-        _section_path, _anchor, chunk_text = located
-        if not quote_in_text(candidate.anchor_quote, chunk_text):
-            return None
-        if candidate.item_type == QuizItemType.CLOZE and not cloze_is_valid(
-            candidate.question, candidate.answer, candidate.anchor_quote
-        ):
-            return None
-        return located
+        reason = discard_reason(
+            candidate,
+            chunk_text=None if located is None else located[2],
+        )
+        if reason is not None:
+            return None, reason
+        assert located is not None
+        return located, None
 
     def _is_duplicate(self, embedding: list[float], targets: list[list[float]]) -> bool:
         """Return whether ``embedding`` is within the dedup threshold of any target (QUIZ-08)."""

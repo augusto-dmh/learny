@@ -13,8 +13,14 @@
  * 4-button grade bar (Again/Hard/Good/Easy → FSRS rating 1..4) submits a
  * self-grade and auto-advances; after the last card a summary shows counts per
  * rating. Nothing due and a fetch/submit failure each settle to their own
- * readable state. The queue only ever holds active items (the server excludes
- * stale/orphaned), so no source-changed indication appears here.
+ * readable state. When the session page is exhausted and overdue cards remain,
+ * Done-for-today offers Keep going (the next session page) and a continue-reading
+ * link when one exists. The queue only ever holds active items (the server excludes
+ * stale/orphaned), so no source-changed indication appears here. Grade buttons
+ * show the server's next-interval labels. A grade whose new due is within the
+ * session requeue window is inserted back into the remaining queue (not by
+ * refetching the overdue pile). Space reveals while hidden and grades Good
+ * once the answer is out.
  *
  * `onRequireAuth` is a UX-only redirect for unauthenticated users, NOT the
  * security boundary — FastAPI enforces auth and per-user ownership on every
@@ -27,17 +33,26 @@
  */
 
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
 import { fetchAuthState } from "@/app/lib/auth";
-import { useKeyShortcuts } from "@/app/components/use-key-shortcuts";
+import { isTypingTarget, useKeyShortcuts } from "@/app/components/use-key-shortcuts";
 import { readUrl } from "@/app/lib/read-url";
 import {
+  flagQuizItem,
   getDueReviews,
+  intervalLabel,
   resetSchedule,
   submitReview,
+  undoReview,
+  updateQuizItem,
   type DueItem,
+  type Scheduling,
 } from "@/app/lib/quiz";
+import {
+  getContinueReading,
+  type ContinueReadingView,
+} from "@/app/lib/study";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -47,6 +62,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
+import { Textarea } from "@/components/ui/textarea";
 
 /** The 4 FSRS self-grades, in ascending rating order (Again=1 … Easy=4). */
 const GRADES: { rating: number; label: string }[] = [
@@ -61,6 +77,32 @@ type Tally = Record<number, number>;
 
 const EMPTY_TALLY: Tally = { 1: 0, 2: 0, 3: 0, 4: 0 };
 
+const DEFAULT_REQUEUE_MINUTES = 15;
+
+/** A session card may be tagged when it was inserted as a short-term requeue. */
+type SessionCard = DueItem & { shortTerm?: boolean };
+
+function shouldRequeue(
+  dueIso: string,
+  requeueMinutes: number,
+  nowMs: number = Date.now(),
+): boolean {
+  const dueMs = Date.parse(dueIso);
+  if (Number.isNaN(dueMs)) {
+    return false;
+  }
+  return Math.abs(dueMs - nowMs) <= requeueMinutes * 60 * 1000;
+}
+
+function withSubmitLabels(card: SessionCard, scheduling: Scheduling): SessionCard {
+  return {
+    ...card,
+    due: scheduling.due,
+    interval_labels: scheduling.interval_labels ?? card.interval_labels,
+    shortTerm: true,
+  };
+}
+
 export function ReviewScreen({
   sourceId,
   onRequireAuth,
@@ -72,7 +114,8 @@ export function ReviewScreen({
 }) {
   const [csrf, setCsrf] = useState<string | null>(null);
   const [authed, setAuthed] = useState<boolean | null>(null);
-  const [queue, setQueue] = useState<DueItem[] | null>(null);
+  const [queue, setQueue] = useState<SessionCard[] | null>(null);
+  const [requeueMinutes, setRequeueMinutes] = useState(DEFAULT_REQUEUE_MINUTES);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [index, setIndex] = useState(0);
   const [revealed, setRevealed] = useState(false);
@@ -81,9 +124,19 @@ export function ReviewScreen({
   const [resetting, setResetting] = useState(false);
   const [resetError, setResetError] = useState<string | null>(null);
   const [tally, setTally] = useState<Tally>(EMPTY_TALLY);
+  const [remainingDue, setRemainingDue] = useState(0);
+  const [draft, setDraft] = useState<{ question: string; answer: string } | null>(
+    null,
+  );
+  const [savingEdit, setSavingEdit] = useState(false);
   // When the current card's question was shown, so review duration is the
   // question-to-grade span (best-effort, optional field).
   const questionShownAt = useRef<number>(Date.now());
+  const lastGrade = useRef<{
+    item: SessionCard;
+    index: number;
+    requeued: boolean;
+  } | null>(null);
 
   const loadQueue = useCallback(async () => {
     setLoadError(null);
@@ -91,6 +144,12 @@ export function ReviewScreen({
     try {
       const result = await getDueReviews({ sourceId });
       setQueue(result.items);
+      setRequeueMinutes(result.requeue_minutes ?? DEFAULT_REQUEUE_MINUTES);
+      setRemainingDue(result.total_due ?? result.items.length);
+      setIndex(0);
+      setRevealed(false);
+      setDraft(null);
+      lastGrade.current = null;
     } catch (err) {
       setLoadError(
         err instanceof Error ? err.message : "Could not load your due reviews.",
@@ -119,6 +178,7 @@ export function ReviewScreen({
     setRevealed(false);
     setSubmitError(null);
     setResetError(null);
+    setDraft(null);
     questionShownAt.current = Date.now();
   }, [index]);
 
@@ -130,12 +190,25 @@ export function ReviewScreen({
     setSubmitting(true);
     setSubmitError(null);
     try {
-      await submitReview(
+      const scheduling = await submitReview(
         item.id,
         { rating, review_duration_ms: Date.now() - questionShownAt.current },
         csrf,
       );
+      const requeue = shouldRequeue(scheduling.due, requeueMinutes);
+      lastGrade.current = { item, index, requeued: requeue };
+      if (requeue) {
+        const updated = withSubmitLabels(item, scheduling);
+        setQueue((prev) =>
+          prev
+            ? [...prev.slice(0, index + 1), ...prev.slice(index + 1), updated]
+            : prev,
+        );
+      } else {
+        setRemainingDue((n) => Math.max(0, n - 1));
+      }
       setTally((prev) => ({ ...prev, [rating]: prev[rating] + 1 }));
+      setRevealed(false);
       setIndex((i) => i + 1);
       onGraded?.();
     } catch (err) {
@@ -176,22 +249,154 @@ export function ReviewScreen({
     }
   }
 
-  // Grading on bare keys (CAP-30/31). The binding set follows the card's own
-  // state so a key can only ever do the thing the card is currently offering:
-  // space reveals while the answer is hidden, and 1–4 grade once it is out. The
-  // shortcuts are live only while a card is actually on screen.
-  const cardOnScreen = queue !== null && index < queue.length;
+  async function handleUndo() {
+    if (!csrf || !queue || submitting || index >= queue.length) {
+      return;
+    }
+    setSubmitError(null);
+    try {
+      const scheduling = await undoReview(csrf);
+      const last = lastGrade.current;
+      if (last) {
+        setQueue((prev) => {
+          if (!prev) {
+            return prev;
+          }
+          const next = [...prev];
+          if (last.requeued) {
+            const extraAt = next.findLastIndex(
+              (card, i) =>
+                i > last.index && card.id === last.item.id && card.shortTerm,
+            );
+            if (extraAt >= 0) {
+              next.splice(extraAt, 1);
+            }
+          }
+          next[last.index] = {
+            ...last.item,
+            due: scheduling.due,
+            interval_labels:
+              scheduling.interval_labels ?? last.item.interval_labels,
+            shortTerm: false,
+          };
+          return next;
+        });
+        setIndex(last.index);
+        if (!last.requeued) {
+          setRemainingDue((n) => n + 1);
+        }
+        lastGrade.current = null;
+      }
+      setRevealed(false);
+    } catch (err) {
+      setSubmitError(
+        err instanceof Error ? err.message : "Could not undo your last review.",
+      );
+    }
+  }
+
+  async function handleFlag() {
+    if (!csrf || !queue || submitting || index >= queue.length) {
+      return;
+    }
+    const item = queue[index];
+    setSubmitError(null);
+    try {
+      await flagQuizItem(item.id, true, csrf);
+      setQueue((prev) => (prev ? prev.filter((_, i) => i !== index) : prev));
+      setRemainingDue((n) => Math.max(0, n - 1));
+      setRevealed(false);
+      setDraft(null);
+    } catch (err) {
+      setSubmitError(
+        err instanceof Error ? err.message : "Could not flag this card.",
+      );
+    }
+  }
+
+  async function handleSaveEdit() {
+    if (!csrf || !queue || !draft || savingEdit || index >= queue.length) {
+      return;
+    }
+    const item = queue[index];
+    setSavingEdit(true);
+    setSubmitError(null);
+    try {
+      const saved = await updateQuizItem(item.id, draft, csrf);
+      setQueue((prev) =>
+        prev
+          ? prev.map((card, i) =>
+              i === index
+                ? { ...card, question: saved.question, answer: saved.answer }
+                : card,
+            )
+          : prev,
+      );
+      setDraft(null);
+    } catch (err) {
+      setSubmitError(
+        err instanceof Error ? err.message : "Could not save this card.",
+      );
+    } finally {
+      setSavingEdit(false);
+    }
+  }
+
+  function startEdit() {
+    if (!queue || index >= queue.length) {
+      return;
+    }
+    const item = queue[index];
+    setDraft({ question: item.question, answer: item.answer });
+  }
+
+  // Grading on bare keys (CAP-30/31, REV-44/45). Space reveals while the answer
+  // is hidden and grades Good once it is out; 1–4 grade once revealed; u/f/e
+  // undo, flag, and edit. Live only while a card is on screen and not being edited.
+  const cardOnScreen = queue !== null && index < queue.length && draft === null;
   useKeyShortcuts(
     revealed
-      ? Object.fromEntries(
-          GRADES.map((grade) => [
-            String(grade.rating),
-            () => void handleGrade(grade.rating),
-          ]),
-        )
-      : { space: () => setRevealed(true) },
+      ? {
+          ...Object.fromEntries(
+            GRADES.map((grade) => [
+              String(grade.rating),
+              () => void handleGrade(grade.rating),
+            ]),
+          ),
+          space: () => void handleGrade(3),
+          u: () => void handleUndo(),
+          f: () => void handleFlag(),
+          e: startEdit,
+        }
+      : {
+          space: () => setRevealed(true),
+          u: () => void handleUndo(),
+          f: () => void handleFlag(),
+          e: startEdit,
+        },
     cardOnScreen,
   );
+
+  useEffect(() => {
+    if (!cardOnScreen) {
+      return;
+    }
+    function onKeyDown(event: KeyboardEvent) {
+      if (!(event.ctrlKey || event.metaKey) || event.altKey) {
+        return;
+      }
+      if (event.key.toLowerCase() !== "z") {
+        return;
+      }
+      if (isTypingTarget(event.target)) {
+        return;
+      }
+      event.preventDefault();
+      void handleUndo();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [cardOnScreen, csrf, queue, index, submitting]);
 
   if (authed === null) {
     return <p className="text-muted-foreground">Loading…</p>;
@@ -214,20 +419,30 @@ export function ReviewScreen({
   if (queue === null) {
     return <p className="text-muted-foreground">Loading your due reviews…</p>;
   }
-  if (queue.length === 0) {
-    return (
-      <section aria-label="review" className="space-y-3">
-        <p className="text-muted-foreground">Nothing due right now.</p>
-        <Link
-          href="/sources"
-          className="text-primary underline-offset-4 hover:underline"
-        >
-          Back to library
-        </Link>
-      </section>
-    );
-  }
-  if (index >= queue.length) {
+  if (queue.length === 0 || index >= queue.length) {
+    if (remainingDue > 0) {
+      return (
+        <SessionDoneWithRemainder
+          onKeepGoing={() => {
+            setTally(EMPTY_TALLY);
+            void loadQueue();
+          }}
+        />
+      );
+    }
+    if (queue.length === 0) {
+      return (
+        <section aria-label="review" className="space-y-3">
+          <p className="text-muted-foreground">Nothing due right now.</p>
+          <Link
+            href="/sources"
+            className="text-primary underline-offset-4 hover:underline"
+          >
+            Back to library
+          </Link>
+        </section>
+      );
+    }
     const total = GRADES.reduce((sum, g) => sum + tally[g.rating], 0);
     return (
       <section aria-label="review summary" className="space-y-4">
@@ -256,12 +471,19 @@ export function ReviewScreen({
   }
 
   const item = queue[index];
+  const shortTermLeft = queue.slice(index).filter((card) => card.shortTerm).length;
   return (
     <section aria-label="review" className="space-y-4">
       <p data-testid="position" className="text-sm text-muted-foreground">
         {index + 1}/{queue.length}
       </p>
+      {shortTermLeft > 0 ? (
+        <p data-testid="short-term-remaining" className="text-sm text-muted-foreground">
+          {shortTermLeft} still in short-term review
+        </p>
+      ) : null}
       <ReviewCard
+        key={`${item.id}-${index}`}
         item={item}
         revealed={revealed}
         onReveal={() => setRevealed(true)}
@@ -269,6 +491,23 @@ export function ReviewScreen({
         submitting={submitting}
         onReset={handleReset}
         resetting={resetting}
+        editor={
+          draft ? (
+            <ReviewCardEditor
+              question={draft.question}
+              answer={draft.answer}
+              onQuestionChange={(question) =>
+                setDraft((prev) => (prev ? { ...prev, question } : prev))
+              }
+              onAnswerChange={(answer) =>
+                setDraft((prev) => (prev ? { ...prev, answer } : prev))
+              }
+              onSave={() => void handleSaveEdit()}
+              onCancel={() => setDraft(null)}
+              saving={savingEdit}
+            />
+          ) : null
+        }
       />
       {resetError ? (
         <p role="alert" className="text-sm text-destructive">
@@ -294,6 +533,61 @@ export function ReviewScreen({
   );
 }
 
+/**
+ * Session page finished while overdue cards remain (REV-42): Done-for-today,
+ * Keep going (next session page), and a continue-reading link when one exists.
+ * Fetches continue only in this state so a caught-up summary never asks for it.
+ */
+function SessionDoneWithRemainder({ onKeepGoing }: { onKeepGoing: () => void }) {
+  const [hero, setHero] = useState<ContinueReadingView | null | "loading">(
+    "loading",
+  );
+
+  useEffect(() => {
+    let active = true;
+    getContinueReading()
+      .then((data) => {
+        if (active) {
+          setHero(data);
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setHero(null);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  return (
+    <section aria-label="review summary" className="space-y-4">
+      <h2 data-testid="done-for-today" className="text-lg font-semibold">
+        Done for today
+      </h2>
+      <p className="text-sm text-muted-foreground">
+        You&rsquo;ve finished this session. More cards are still due when you
+        want them.
+      </p>
+      <div className="flex flex-wrap items-center gap-3">
+        <Button type="button" data-testid="keep-going" onClick={onKeepGoing}>
+          Keep going
+        </Button>
+        {hero !== "loading" && hero !== null ? (
+          <Link
+            data-testid="continue-reading"
+            href={readUrl(hero.source_id, null)}
+            className="text-primary underline-offset-4 hover:underline"
+          >
+            Continue reading {hero.source_title}
+          </Link>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
 /** One due card: question, a Reveal toggle, then the answer + citation + grades. */
 function ReviewCard({
   item,
@@ -303,6 +597,7 @@ function ReviewCard({
   submitting,
   onReset,
   resetting,
+  editor,
 }: {
   item: DueItem;
   revealed: boolean;
@@ -311,6 +606,7 @@ function ReviewCard({
   submitting: boolean;
   onReset: () => void;
   resetting: boolean;
+  editor?: ReactNode;
 }) {
   // The two-step confirm for the schedule reset lives with the card so a declined
   // confirm fires nothing (NL-12). Advancing to another card drops any open confirm
@@ -328,10 +624,13 @@ function ReviewCard({
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        {/* The cloze question already carries its `____` blank — render as text. */}
-        <p data-testid="question" className="text-base">
-          {item.question}
-        </p>
+        {editor ? (
+          editor
+        ) : (
+          <p data-testid="question" className="text-base">
+            {item.question}
+          </p>
+        )}
 
         {/*
           The pin (CAP-25/26) sits with the question rather than in the revealed
@@ -428,7 +727,7 @@ function ReviewCard({
           </div>
         ) : null}
 
-        {revealed ? (
+        {editor ? null : revealed ? (
           <div className="space-y-3">
             <Separator />
             <p data-testid="answer" className="text-base font-medium">
@@ -443,18 +742,30 @@ function ReviewCard({
               aria-label="Grade your recall"
               className="flex flex-wrap gap-2"
             >
-              {GRADES.map((grade) => (
-                <Button
-                  key={grade.rating}
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={submitting}
-                  onClick={() => onGrade(grade.rating)}
-                >
-                  {grade.label}
-                </Button>
-              ))}
+              {GRADES.map((grade) => {
+                const interval = intervalLabel(item.interval_labels, grade.rating);
+                return (
+                  <Button
+                    key={grade.rating}
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={submitting}
+                    aria-label={grade.label}
+                    onClick={() => onGrade(grade.rating)}
+                  >
+                    {grade.label}
+                    {interval ? (
+                      <span
+                        data-testid={`grade-interval-${grade.rating}`}
+                        className="ml-1 text-muted-foreground"
+                      >
+                        {interval}
+                      </span>
+                    ) : null}
+                  </Button>
+                );
+              })}
             </div>
           </div>
         ) : (
@@ -464,5 +775,70 @@ function ReviewCard({
         )}
       </CardContent>
     </Card>
+  );
+}
+
+function ReviewCardEditor({
+  question,
+  answer,
+  onQuestionChange,
+  onAnswerChange,
+  onSave,
+  onCancel,
+  saving,
+}: {
+  question: string;
+  answer: string;
+  onQuestionChange: (value: string) => void;
+  onAnswerChange: (value: string) => void;
+  onSave: () => void;
+  onCancel: () => void;
+  saving: boolean;
+}) {
+  return (
+    <form
+      className="space-y-3"
+      onSubmit={(event) => {
+        event.preventDefault();
+        onSave();
+      }}
+    >
+      <div className="space-y-1.5">
+        <label htmlFor="review-edit-question" className="text-sm font-medium">
+          Question
+        </label>
+        <Textarea
+          id="review-edit-question"
+          data-testid="edit-question"
+          value={question}
+          onChange={(event) => onQuestionChange(event.target.value)}
+        />
+      </div>
+      <div className="space-y-1.5">
+        <label htmlFor="review-edit-answer" className="text-sm font-medium">
+          Answer
+        </label>
+        <Textarea
+          id="review-edit-answer"
+          data-testid="edit-answer"
+          value={answer}
+          onChange={(event) => onAnswerChange(event.target.value)}
+        />
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <Button type="submit" size="sm" disabled={saving}>
+          {saving ? "Saving…" : "Save"}
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          disabled={saving}
+          onClick={onCancel}
+        >
+          Cancel
+        </Button>
+      </div>
+    </form>
   );
 }

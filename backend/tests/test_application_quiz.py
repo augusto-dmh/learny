@@ -166,6 +166,9 @@ class FakeScheduling:
     def review(self, snapshot, rating, reviewed_at):  # noqa: ANN001, ANN201
         raise NotImplementedError
 
+    def preview(self, snapshot, reviewed_at):  # noqa: ANN001, ANN201
+        raise NotImplementedError
+
 
 class FakeEmbedding:
     """``EmbeddingPort`` double mapping exact texts to preset vectors.
@@ -424,6 +427,7 @@ def test_finalize_persists_grounded_item_with_snapshot_and_scheduling() -> None:
 
     assert done.status == QuizJobStatus.SUCCEEDED
     assert (done.generated_count, done.discarded_count) == (1, 0)
+    assert done.discard_reasons == {}
     persisted = items.list_for_source(job.source_id)
     assert len(persisted) == 1
     item = persisted[0]
@@ -447,6 +451,7 @@ def test_finalize_discards_unverbatim_quote() -> None:
     )
 
     assert (done.generated_count, done.discarded_count) == (0, 1)
+    assert done.discard_reasons == {"ungrounded": 1}
     assert items.list_for_source(job.source_id) == []
 
 
@@ -466,6 +471,7 @@ def test_finalize_discards_candidate_citing_unknown_chunk() -> None:
     )
 
     assert (done.generated_count, done.discarded_count) == (0, 1)
+    assert done.discard_reasons == {"ungrounded": 1}
 
 
 def test_finalize_discards_invalid_cloze() -> None:
@@ -485,6 +491,7 @@ def test_finalize_discards_invalid_cloze() -> None:
     )
 
     assert (done.generated_count, done.discarded_count) == (0, 1)
+    assert done.discard_reasons == {"ungrounded": 1}
 
 
 def test_finalize_keeps_valid_cloze() -> None:
@@ -519,6 +526,7 @@ def test_finalize_discards_non_free_recall_or_cloze_type() -> None:
     done = _run_service(jobs, items).finalize(job.id, QuizDeckResult(candidates=(mcq,), errors=()))
 
     assert (done.generated_count, done.discarded_count) == (0, 1)
+    assert done.discard_reasons == {"other": 1}
     assert items.list_for_source(job.source_id) == []
 
 
@@ -537,8 +545,9 @@ def test_finalize_discards_near_duplicate_within_run_at_threshold() -> None:
         job.id, QuizDeckResult(candidates=(first, second), errors=())
     )
 
-    # cosine == threshold ⇒ the second is discarded (≥, QUIZ-08).
+    # cosine == threshold ⇒ the second is discarded (≥, QUIZ-08) as ``duplicate``.
     assert (done.generated_count, done.discarded_count) == (1, 1)
+    assert done.discard_reasons == {"duplicate": 1}
 
 
 def test_finalize_keeps_below_threshold_candidate() -> None:
@@ -577,17 +586,15 @@ def test_finalize_dedups_against_persisted_items() -> None:
         updated_at=_NOW,
     )
     items.seed(prior, [1.0, 0.0])
-    candidate = _free_recall("New?", "New", "makes energy")
-    embed = FakeEmbedding({"New?\nNew": [1.0, 0.0]})
+    candidate = _free_recall("What produces ATP here?", "energy", "makes energy")
+    embed = FakeEmbedding({"What produces ATP here?\nenergy": [1.0, 0.0]})
 
     done = _run_service(jobs, items, embeddings=embed, threshold=0.9).finalize(
         job.id, QuizDeckResult(candidates=(candidate,), errors=())
     )
 
     assert (done.generated_count, done.discarded_count) == (0, 1)
-
-
-# --- finalize: upsert preserves scheduling, idempotency (QUIZ-02/09) -------------
+    assert done.discard_reasons == {"duplicate": 1}
 
 
 def test_finalize_reupsert_preserves_scheduling_and_count() -> None:
@@ -623,6 +630,58 @@ def test_finalize_zero_candidates_succeeds_with_zero_counts() -> None:
 
     assert done.status == QuizJobStatus.SUCCEEDED
     assert (done.generated_count, done.discarded_count, done.failed_sections) == (0, 0, 0)
+    assert done.discard_reasons == {}
+
+
+def test_finalize_discards_generic_stem_without_persisting_text() -> None:
+    jobs, items = FakeQuizJobRepository(), FakeQuizItemRepository([_SECTION])
+    job = jobs.add(_job(uuid4(), status=QuizJobStatus.RUNNING))
+    candidate = _free_recall(
+        "What does the passage in Cell Biology state?",
+        "mitochondria",
+        "mitochondria is the powerhouse of the cell",
+    )
+
+    done = _run_service(jobs, items).finalize(
+        job.id, QuizDeckResult(candidates=(candidate,), errors=())
+    )
+
+    assert (done.generated_count, done.discarded_count) == (0, 1)
+    assert done.discard_reasons == {"generic_stem": 1}
+    assert sum(done.discard_reasons.values()) == done.discarded_count
+    persisted = items.list_for_source(job.source_id)
+    assert persisted == []
+    assert "What does the passage in Cell Biology state?" not in {
+        item.question for item in persisted
+    }
+
+
+def test_finalize_reason_counts_sum_to_discarded_count() -> None:
+    jobs, items = FakeQuizJobRepository(), FakeQuizItemRepository([_SECTION])
+    job = jobs.add(_job(uuid4(), status=QuizJobStatus.RUNNING))
+    keep = _free_recall(
+        "What organelle produces ATP?",
+        "mitochondria",
+        "mitochondria is the powerhouse of the cell",
+    )
+    generic = _free_recall(
+        "What does the section cover?",
+        "energy",
+        "makes energy",
+    )
+    missing = _free_recall("Which organelle is named?", "mitochondria", "absent quote")
+
+    done = _run_service(jobs, items).finalize(
+        job.id, QuizDeckResult(candidates=(keep, generic, missing), errors=())
+    )
+
+    assert done.generated_count == 1
+    assert done.discarded_count == 2
+    assert done.discard_reasons == {"generic_stem": 1, "ungrounded": 1}
+    assert sum(done.discard_reasons.values()) == done.discarded_count
+    questions = {item.question for item in items.list_for_source(job.source_id)}
+    assert questions == {"What organelle produces ATP?"}
+    assert "What does the section cover?" not in questions
 
 
 def test_finalize_counts_failed_sections_but_still_succeeds() -> None:

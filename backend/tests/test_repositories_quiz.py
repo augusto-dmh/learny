@@ -12,7 +12,7 @@ future-due items (QUIZ-13/17); and the deck-job single-active guard is a query
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
@@ -39,7 +39,7 @@ from app.domain.entities import (
     Source,
     User,
 )
-from app.infrastructure.db.metadata import note_anchors, quiz_items, review_log
+from app.infrastructure.db.metadata import note_anchors, quiz_items, review_log, study_days
 from app.infrastructure.db.repositories import (
     SqlAlchemyConversationRepository,
     SqlAlchemyCorpusRepository,
@@ -47,6 +47,7 @@ from app.infrastructure.db.repositories import (
     SqlAlchemyQuizItemRepository,
     SqlAlchemyQuizJobRepository,
     SqlAlchemySourceRepository,
+    SqlAlchemyStudyDayRepository,
     SqlAlchemyUserRepository,
 )
 from tests.conftest import requires_db
@@ -299,6 +300,105 @@ def test_get_by_id_and_get_scheduling_return_none_when_absent(db_conn: Connectio
     assert repo.get_scheduling(uuid4()) is None
 
 
+def test_append_log_stores_previous_snapshot(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "quiz-log-prev@example.com")
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    item = _item(source.id)
+    repo.upsert(item, embedding=None)
+    previous = _snapshot(due=datetime.now(UTC) - timedelta(hours=1), state=2, step=1)
+    reviewed_at = datetime.now(UTC)
+
+    repo.append_log(
+        item.id,
+        ReviewLogEntry(rating=3, reviewed_at=reviewed_at, previous=previous),
+    )
+
+    row = db_conn.execute(
+        select(
+            review_log.c.prev_state,
+            review_log.c.prev_step,
+            review_log.c.prev_stability,
+            review_log.c.prev_difficulty,
+            review_log.c.prev_due,
+            review_log.c.prev_last_review,
+            review_log.c.undone_at,
+        ).where(review_log.c.quiz_item_id == item.id)
+    ).one()
+    assert row.prev_state == previous.state
+    assert row.prev_step == previous.step
+    assert row.prev_stability == previous.stability
+    assert row.prev_difficulty == previous.difficulty
+    assert row.prev_due == previous.due
+    assert row.prev_last_review == previous.last_review
+    assert row.undone_at is None
+
+
+def test_latest_undoable_review_is_the_callers_latest_not_undone(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "quiz-undoable@example.com")
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    earlier = _item(source.id, question="Earlier?", answer="A")
+    later = _item(source.id, question="Later?", answer="B")
+    repo.upsert(earlier, embedding=None)
+    repo.upsert(later, embedding=None)
+    t0 = datetime.now(UTC) - timedelta(minutes=2)
+    t1 = datetime.now(UTC)
+    repo.append_log(
+        earlier.id, ReviewLogEntry(rating=3, reviewed_at=t0, previous=_snapshot(due=t0))
+    )
+    repo.append_log(later.id, ReviewLogEntry(rating=4, reviewed_at=t1, previous=_snapshot(due=t1)))
+
+    latest = repo.latest_undoable_review(source.user_id)
+    assert latest is not None
+    assert latest.quiz_item_id == later.id
+    assert latest.previous is not None
+    assert latest.previous.due == t1
+
+    repo.mark_log_undone(latest.log_id, t1)
+    previous = repo.latest_undoable_review(source.user_id)
+    assert previous is not None
+    assert previous.quiz_item_id == earlier.id
+    remaining = db_conn.execute(
+        select(func.count()).select_from(review_log).where(review_log.c.quiz_item_id == later.id)
+    ).scalar_one()
+    assert remaining == 1
+
+
+def test_latest_undoable_review_ignores_another_user(db_conn: Connection) -> None:
+    owner = _persisted_source(db_conn, "quiz-undo-owner@example.com")
+    other = _persisted_source(db_conn, "quiz-undo-other@example.com")
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    item = _item(owner.id)
+    repo.upsert(item, embedding=None)
+    now = datetime.now(UTC)
+    repo.append_log(
+        item.id,
+        ReviewLogEntry(rating=3, reviewed_at=now, previous=_snapshot(due=now)),
+    )
+
+    assert repo.latest_undoable_review(other.user_id) is None
+    assert repo.latest_undoable_review(owner.user_id) is not None
+
+
+def test_decrement_reviews_updates_existing_row_only(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "quiz-decrement@example.com")
+    study = SqlAlchemyStudyDayRepository(db_conn)
+    day = date(2026, 7, 16)
+
+    study.decrement_reviews(source.user_id, day)
+    missing = db_conn.execute(
+        select(func.count()).select_from(study_days).where(study_days.c.user_id == source.user_id)
+    ).scalar_one()
+    assert missing == 0
+
+    study.record(source.user_id, day, reviews=1)
+    study.decrement_reviews(source.user_id, day)
+    study.decrement_reviews(source.user_id, day)
+    count = db_conn.execute(
+        select(study_days.c.reviews_count).where(study_days.c.user_id == source.user_id)
+    ).scalar_one()
+    assert count == 0
+
+
 # --- due queue (QUIZ-13/17, A-6) ------------------------------------------------
 
 
@@ -331,6 +431,10 @@ def test_due_for_user_returns_active_past_due_ordered_with_title(db_conn: Connec
     assert [d.item.id for d in items] == [earlier.id, later.id]
     assert items[0].source_title == "Due Book"
     assert items[0].due == now - timedelta(hours=5)
+    assert items[0].snapshot is not None
+    assert items[0].snapshot.due == items[0].due
+    assert items[0].snapshot == repo.get_scheduling(items[0].item.id)
+    assert items[0].snapshot == repo.get_scheduling(earlier.id)
 
 
 def test_due_for_user_excludes_future_due(db_conn: Connection) -> None:

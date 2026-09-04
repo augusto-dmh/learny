@@ -14,11 +14,15 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from app.domain.entities import ReviewLogEntry, SchedulingSnapshot
 from app.infrastructure.scheduling.fsrs import (
+    INTERVAL_LABELS,
     FsrsSchedulingAdapter,
     _to_card,
     _to_snapshot,
+    interval_bucket,
 )
 
 # The FSRS-6 ``State`` enum ints the snapshot stores (design §Domain).
@@ -165,3 +169,107 @@ def test_review_from_persisted_snapshot_is_deterministic() -> None:
     second, _ = adapter.review(persisted, _GOOD, later)
 
     assert first == second
+
+
+# --- interval preview (REV-29/30/33, AD-312) ------------------------------------
+
+
+def test_preview_returns_four_dues_for_ratings_one_through_four() -> None:
+    adapter = _adapter()
+    snapshot = adapter.initial()
+
+    dues = adapter.preview(snapshot, _T0)
+
+    assert set(dues) == {_AGAIN, _HARD, _GOOD, _EASY}
+    assert all(isinstance(due, datetime) for due in dues.values())
+    assert all(due.tzinfo is not None and due.utcoffset() == timedelta(0) for due in dues.values())
+    assert dues[_AGAIN] < dues[_HARD] < dues[_GOOD] < dues[_EASY]
+
+
+def test_preview_matches_review_due_when_fuzzing_is_off() -> None:
+    # Preview is the same scheduling step as review, minus the persistable log.
+    adapter = _adapter()
+    snapshot = adapter.initial()
+    previewed = adapter.preview(snapshot, _T0)
+
+    for rating in (_AGAIN, _HARD, _GOOD, _EASY):
+        advanced, log = adapter.review(snapshot, rating, _T0)
+        assert advanced.due == previewed[rating]
+        assert isinstance(log, ReviewLogEntry)
+
+
+def test_preview_ignores_production_fuzzing() -> None:
+    # Labels must not inherit the production scheduler's fuzzing (AD-312).
+    fuzzy = FsrsSchedulingAdapter(fuzzing=True)
+    exact = FsrsSchedulingAdapter(fuzzing=False)
+    snapshot = exact.initial()
+
+    first = fuzzy.preview(snapshot, _T0)
+    second = fuzzy.preview(snapshot, _T0)
+
+    assert first == second
+    assert first == exact.preview(snapshot, _T0)
+
+
+def test_preview_does_not_advance_the_source_snapshot() -> None:
+    adapter = _adapter()
+    snapshot = adapter.initial()
+
+    adapter.preview(snapshot, _T0)
+
+    advanced, _log = adapter.review(snapshot, _GOOD, _T0)
+    alone, _log = _adapter().review(snapshot, _GOOD, _T0)
+    assert advanced == alone
+
+
+def test_preview_is_not_a_persist_path() -> None:
+    # Preview returns dues only — never a review-log entry the service could append.
+    adapter = _adapter()
+    dues = adapter.preview(adapter.initial(), _T0)
+
+    assert not isinstance(dues, tuple)
+    assert all(not isinstance(due, ReviewLogEntry) for due in dues.values())
+
+
+@pytest.mark.parametrize(
+    ("delta", "label"),
+    [
+        (timedelta(0), "~1m"),
+        (timedelta(seconds=89), "~1m"),
+        (timedelta(seconds=90), "~10m"),
+        (timedelta(minutes=11, seconds=59), "~10m"),
+        (timedelta(minutes=12), "~1h"),
+        (timedelta(minutes=89, seconds=59), "~1h"),
+        (timedelta(minutes=90), "~1d"),
+        (timedelta(hours=35, minutes=59), "~1d"),
+        (timedelta(hours=36), "~4d"),
+        (timedelta(days=5, hours=23), "~4d"),
+        (timedelta(days=6), "~2w"),
+        (timedelta(days=17, hours=23), "~2w"),
+        (timedelta(days=18), "~1mo"),
+        (timedelta(days=44, hours=23), "~1mo"),
+        (timedelta(days=45), "~4mo"),
+        (timedelta(days=149, hours=23), "~4mo"),
+        (timedelta(days=150), "~1y"),
+        (timedelta(days=400), "~1y"),
+    ],
+)
+def test_interval_bucket_pins_the_nine_labels_at_documented_boundaries(
+    delta: timedelta, label: str
+) -> None:
+    assert interval_bucket(delta) == label
+    assert label in INTERVAL_LABELS
+
+
+def test_interval_bucket_only_emits_the_nine_tokens() -> None:
+    assert INTERVAL_LABELS == {
+        "~1m",
+        "~10m",
+        "~1h",
+        "~1d",
+        "~4d",
+        "~2w",
+        "~1mo",
+        "~4mo",
+        "~1y",
+    }

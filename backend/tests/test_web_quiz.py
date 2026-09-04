@@ -25,7 +25,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import Connection, select
+from sqlalchemy import Connection, func, select
 
 from app.application.dates import local_day
 from app.application.quiz_qc import content_key
@@ -47,9 +47,26 @@ from app.infrastructure.db.repositories import (
     SqlAlchemyQuizJobRepository,
     SqlAlchemySourceRepository,
 )
+from app.infrastructure.scheduling.fsrs import INTERVAL_LABELS
 from tests.conftest import TEST_ORIGIN, TEST_PASSWORD, requires_db
 
 pytestmark = requires_db
+
+_SCHEDULING_FIELDS = {
+    "state",
+    "step",
+    "stability",
+    "difficulty",
+    "due",
+    "last_review",
+    "interval_labels",
+}
+
+
+def _assert_interval_labels(labels: dict) -> None:
+    assert {int(k) for k in labels} == {1, 2, 3, 4}
+    assert set(labels.values()) <= INTERVAL_LABELS
+    assert all(isinstance(value, str) for value in labels.values())
 
 
 # --- Auth / request helpers ----------------------------------------------------
@@ -95,6 +112,41 @@ def _post_review(
     if client_tz is not None:
         headers["X-Client-Timezone"] = client_tz
     return client.post(f"/api/quiz-items/{item_id}/reviews", json=body, headers=headers)
+
+
+def _post_undo(
+    client: TestClient,
+    *,
+    csrf: str | None,
+    origin: str | None = None,
+    client_tz: str | None = None,
+):
+    headers: dict[str, str] = {}
+    if csrf is not None:
+        headers["X-CSRF-Token"] = csrf
+    if origin is not None:
+        headers["Origin"] = origin
+    if client_tz is not None:
+        headers["X-Client-Timezone"] = client_tz
+    return client.post("/api/reviews/undo", headers=headers)
+
+
+def _post_flag(
+    client: TestClient,
+    item_id: object,
+    *,
+    flagged: bool,
+    csrf: str | None,
+    origin: str | None = None,
+):
+    headers: dict[str, str] = {}
+    if csrf is not None:
+        headers["X-CSRF-Token"] = csrf
+    if origin is not None:
+        headers["Origin"] = origin
+    return client.post(
+        f"/api/quiz-items/{item_id}/flag", json={"flagged": flagged}, headers=headers
+    )
 
 
 # --- Seeding -------------------------------------------------------------------
@@ -390,11 +442,35 @@ def test_overview_returns_items_counts_due_and_latest_job(
     # Only the active past-due item counts toward due_count (future + stale excluded).
     assert body["due_count"] == 1
     assert body["latest_job"]["status"] == QuizJobStatus.SUCCEEDED
+    assert body["latest_job"]["discard_reasons"] == {}
     item_view = next(i for i in body["items"] if i["id"] == str(due_item.id))
     assert set(item_view) == {"id", "item_type", "question", "status", "due"}
     assert item_view["item_type"] == QuizItemType.FREE_RECALL
     assert item_view["question"] == "Due one"
     assert item_view["status"] == QuizItemStatus.ACTIVE
+
+
+def test_overview_exposes_job_discard_reasons(quiz_client: TestClient, db_conn: Connection) -> None:
+    source_id, _ = _seed_ready_source(quiz_client, db_conn, "overview-reasons@example.com")
+    sid = UUID(source_id)
+    jobs = SqlAlchemyQuizJobRepository(db_conn)
+    job = _seed_job(db_conn, sid, status=QuizJobStatus.RUNNING)
+    jobs.update(
+        job.succeeded(
+            datetime.now(UTC),
+            generated_count=0,
+            discarded_count=3,
+            failed_sections=0,
+            discard_reasons={"generic_stem": 2, "duplicate": 1},
+        )
+    )
+
+    resp = quiz_client.get(f"/api/sources/{source_id}/quiz")
+
+    assert resp.status_code == 200, resp.text
+    reasons = resp.json()["latest_job"]["discard_reasons"]
+    assert reasons == {"generic_stem": 2, "duplicate": 1}
+    assert sum(reasons.values()) == 3
 
 
 def test_overview_no_job_returns_null_latest_job(
@@ -460,6 +536,7 @@ def test_due_returns_items_and_total_with_full_card(
         "status",
         "due",
         "note_changed",
+        "interval_labels",
     }
     assert view["id"] == str(item.id)
     assert view["note_changed"] is False  # a deck card is never note-changed
@@ -471,6 +548,7 @@ def test_due_returns_items_and_total_with_full_card(
         "anchor": "ch1.xhtml",
         "source_excerpt": "The mitochondria is the powerhouse of the cell.",
     }
+    _assert_interval_labels(view["interval_labels"])
 
 
 def test_due_deck_card_is_queued_with_null_provenance(
@@ -521,6 +599,82 @@ def test_due_unauthenticated_returns_401(quiz_client: TestClient, db_conn: Conne
     assert resp.status_code == 401, resp.text
 
 
+def test_due_session_caps_page_and_exposes_session_knobs(
+    quiz_client: TestClient, db_conn: Connection
+) -> None:
+    source_id, _ = _seed_ready_source(quiz_client, db_conn, "due-session@example.com")
+    sid = UUID(source_id)
+    now = datetime.now(UTC)
+    for i in range(25):
+        _seed_item(
+            db_conn,
+            sid,
+            question=f"Question {i}?",
+            answer=f"Answer {i}",
+            due=now - timedelta(hours=1),
+        )
+
+    resp = quiz_client.get("/api/reviews/due")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert set(body) == {"items", "total_due", "session_size", "requeue_minutes"}
+    assert body["total_due"] == 25
+    assert len(body["items"]) == 20
+    assert body["session_size"] == 20
+    assert body["requeue_minutes"] == 15
+    for view in body["items"]:
+        _assert_interval_labels(view["interval_labels"])
+
+
+def test_due_query_limit_overrides_session_page_size(
+    quiz_client: TestClient, db_conn: Connection
+) -> None:
+    source_id, _ = _seed_ready_source(quiz_client, db_conn, "due-limit-override@example.com")
+    sid = UUID(source_id)
+    now = datetime.now(UTC)
+    for i in range(10):
+        _seed_item(
+            db_conn,
+            sid,
+            question=f"Override {i}?",
+            answer=f"A{i}",
+            due=now - timedelta(hours=1),
+        )
+
+    resp = quiz_client.get("/api/reviews/due", params={"limit": 5})
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["total_due"] == 10
+    assert len(body["items"]) == 5
+    assert body["session_size"] == 20
+    assert body["requeue_minutes"] == 15
+
+
+def test_due_preview_does_not_write_scheduling_or_review_log(
+    quiz_client: TestClient, db_conn: Connection
+) -> None:
+    source_id, _ = _seed_ready_source(quiz_client, db_conn, "due-preview-nowrite@example.com")
+    item = _seed_item(db_conn, UUID(source_id))
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    before = repo.get_scheduling(item.id)
+    logged_before = db_conn.execute(
+        select(func.count()).select_from(review_log).where(review_log.c.quiz_item_id == item.id)
+    ).scalar_one()
+
+    resp = quiz_client.get("/api/reviews/due")
+
+    assert resp.status_code == 200, resp.text
+    assert len(resp.json()["items"]) == 1
+    _assert_interval_labels(resp.json()["items"][0]["interval_labels"])
+    assert repo.get_scheduling(item.id) == before
+    logged_after = db_conn.execute(
+        select(func.count()).select_from(review_log).where(review_log.c.quiz_item_id == item.id)
+    ).scalar_one()
+    assert logged_after == logged_before == 0
+
+
 # --- Review POST (QUIZ-12) -----------------------------------------------------
 
 
@@ -532,7 +686,8 @@ def test_review_advances_scheduling_and_logs(quiz_client: TestClient, db_conn: C
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert set(body) == {"state", "step", "stability", "difficulty", "due", "last_review"}
+    assert set(body) == _SCHEDULING_FIELDS
+    _assert_interval_labels(body["interval_labels"])
     # Good schedules the next review in the future and records last_review.
     assert datetime.fromisoformat(body["due"]) > datetime.now(UTC)
     assert body["last_review"] is not None
@@ -558,14 +713,7 @@ def test_review_with_client_timezone_credits_a_study_day(
 
     assert resp.status_code == 200, resp.text
     # The additive header leaks no fields into the SchedulingView body (I-6).
-    assert set(resp.json()) == {
-        "state",
-        "step",
-        "stability",
-        "difficulty",
-        "due",
-        "last_review",
-    }
+    assert set(resp.json()) == _SCHEDULING_FIELDS
     user_id = SqlAlchemySourceRepository(db_conn).get_by_id(UUID(source_id)).user_id
     rows = db_conn.execute(
         select(study_days.c.reviews_count, study_days.c.reading_updates).where(
@@ -826,3 +974,192 @@ def test_reset_without_a_session_returns_401(quiz_client: TestClient, db_conn: C
     resp = _post_reset(quiz_client, item.id, csrf=csrf)
 
     assert resp.status_code == 401, resp.text
+
+
+# --- Undo last review (REV-22..28) ----------------------------------------------
+
+
+def test_undo_restores_scheduling_and_keeps_the_log(
+    quiz_client: TestClient, db_conn: Connection
+) -> None:
+    source_id, csrf = _seed_ready_source(quiz_client, db_conn, "undo-ok@example.com")
+    item = _seed_item(db_conn, UUID(source_id))
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    before = repo.get_scheduling(item.id)
+
+    graded = _post_review(quiz_client, item.id, {"rating": 4}, csrf=csrf)
+    assert graded.status_code == 200, graded.text
+    assert datetime.fromisoformat(graded.json()["due"]) != before.due
+
+    resp = _post_undo(quiz_client, csrf=csrf)
+
+    assert resp.status_code == 200, resp.text
+    assert set(resp.json()) == _SCHEDULING_FIELDS
+    _assert_interval_labels(resp.json()["interval_labels"])
+    assert repo.get_scheduling(item.id) == before
+    row = db_conn.execute(
+        select(review_log.c.rating, review_log.c.undone_at).where(
+            review_log.c.quiz_item_id == item.id
+        )
+    ).one()
+    assert row.rating == 4
+    assert row.undone_at is not None
+    user_id = SqlAlchemySourceRepository(db_conn).get_by_id(UUID(source_id)).user_id
+    counts = db_conn.execute(
+        select(study_days.c.reviews_count).where(study_days.c.user_id == user_id)
+    ).all()
+    assert [r.reviews_count for r in counts] == [0]
+
+
+def test_undo_empty_returns_409(quiz_client: TestClient, db_conn: Connection) -> None:
+    _seed_ready_source(quiz_client, db_conn, "undo-empty@example.com")
+    csrf = _csrf(quiz_client)
+    resp = _post_undo(quiz_client, csrf=csrf)
+    assert resp.status_code == 409, resp.text
+
+
+def test_undo_second_returns_409(quiz_client: TestClient, db_conn: Connection) -> None:
+    source_id, csrf = _seed_ready_source(quiz_client, db_conn, "undo-twice@example.com")
+    item = _seed_item(db_conn, UUID(source_id))
+    assert _post_review(quiz_client, item.id, {"rating": 3}, csrf=csrf).status_code == 200
+    assert _post_undo(quiz_client, csrf=csrf).status_code == 200
+    resp = _post_undo(quiz_client, csrf=csrf)
+    assert resp.status_code == 409, resp.text
+
+
+def test_undo_does_not_see_another_users_review(
+    quiz_client: TestClient, db_conn: Connection
+) -> None:
+    source_id, csrf = _seed_ready_source(quiz_client, db_conn, "undo-owner-web@example.com")
+    item = _seed_item(db_conn, UUID(source_id))
+    assert _post_review(quiz_client, item.id, {"rating": 3}, csrf=csrf).status_code == 200
+
+    _register(quiz_client, "undo-intruder-web@example.com")
+    csrf = _csrf(quiz_client)
+    resp = _post_undo(quiz_client, csrf=csrf)
+
+    assert resp.status_code == 409, resp.text
+    undone = db_conn.execute(
+        select(review_log.c.undone_at).where(review_log.c.quiz_item_id == item.id)
+    ).scalar_one()
+    assert undone is None
+
+
+def test_undo_missing_csrf_returns_403(quiz_client: TestClient, db_conn: Connection) -> None:
+    source_id, _ = _seed_ready_source(quiz_client, db_conn, "undo-csrf@example.com")
+    item = _seed_item(db_conn, UUID(source_id))
+    csrf = _csrf(quiz_client)
+    assert _post_review(quiz_client, item.id, {"rating": 3}, csrf=csrf).status_code == 200
+    resp = _post_undo(quiz_client, csrf=None)
+    assert resp.status_code == 403, resp.text
+
+
+def test_undo_untrusted_origin_returns_403(quiz_client: TestClient, db_conn: Connection) -> None:
+    source_id, csrf = _seed_ready_source(quiz_client, db_conn, "undo-origin@example.com")
+    item = _seed_item(db_conn, UUID(source_id))
+    assert _post_review(quiz_client, item.id, {"rating": 3}, csrf=csrf).status_code == 200
+    resp = _post_undo(quiz_client, csrf=csrf, origin="http://evil.example.com")
+    assert resp.status_code == 403, resp.text
+
+
+def test_undo_unauthenticated_returns_401(quiz_client: TestClient, db_conn: Connection) -> None:
+    source_id, csrf = _seed_ready_source(quiz_client, db_conn, "undo-unauth@example.com")
+    item = _seed_item(db_conn, UUID(source_id))
+    assert _post_review(quiz_client, item.id, {"rating": 3}, csrf=csrf).status_code == 200
+    quiz_client.cookies.clear()
+    resp = _post_undo(quiz_client, csrf=csrf)
+    assert resp.status_code == 401, resp.text
+
+
+def test_undo_rate_limit_returns_429(
+    throttled_quiz_client: TestClient, db_conn: Connection
+) -> None:
+    _seed_ready_source(throttled_quiz_client, db_conn, "undo-rl@example.com")
+    csrf = _csrf(throttled_quiz_client)
+    for _ in range(3):
+        r = _post_undo(throttled_quiz_client, csrf=csrf)
+        assert r.status_code == 409
+    throttled = _post_undo(throttled_quiz_client, csrf=csrf)
+    assert throttled.status_code == 429, throttled.text
+
+
+# --- Flag out of due (REV-34..36, REV-38) ---------------------------------------
+
+
+def test_flag_removes_item_from_due_and_unflag_restores(
+    quiz_client: TestClient, db_conn: Connection
+) -> None:
+    source_id, csrf = _seed_ready_source(quiz_client, db_conn, "flag-due@example.com")
+    item = _seed_item(db_conn, UUID(source_id))
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    before = repo.get_scheduling(item.id)
+
+    flagged = _post_flag(quiz_client, item.id, flagged=True, csrf=csrf)
+    assert flagged.status_code == 200, flagged.text
+    assert flagged.json()["flagged"] is True
+    assert flagged.json()["flagged_at"] is not None
+    due = quiz_client.get("/api/reviews/due")
+    assert due.status_code == 200, due.text
+    assert due.json()["total_due"] == 0
+    assert due.json()["items"] == []
+    assert repo.get_scheduling(item.id) == before
+
+    unflagged = _post_flag(quiz_client, item.id, flagged=False, csrf=csrf)
+    assert unflagged.status_code == 200, unflagged.text
+    assert unflagged.json() == {"flagged": False, "flagged_at": None}
+    restored = quiz_client.get("/api/reviews/due")
+    assert restored.json()["total_due"] == 1
+    assert [i["id"] for i in restored.json()["items"]] == [str(item.id)]
+    assert repo.get_scheduling(item.id) == before
+
+
+def test_flag_missing_and_non_owned_return_404(
+    quiz_client: TestClient, db_conn: Connection
+) -> None:
+    source_id, _ = _seed_ready_source(quiz_client, db_conn, "flag-owner-web@example.com")
+    item = _seed_item(db_conn, UUID(source_id))
+    _register(quiz_client, "flag-intruder-web@example.com")
+    csrf = _csrf(quiz_client)
+
+    non_owned = _post_flag(quiz_client, item.id, flagged=True, csrf=csrf)
+    missing = _post_flag(quiz_client, uuid4(), flagged=True, csrf=csrf)
+
+    assert non_owned.status_code == 404, non_owned.text
+    assert missing.status_code == 404, missing.text
+    assert non_owned.json() == missing.json()
+
+
+def test_flag_unauthenticated_returns_401(quiz_client: TestClient, db_conn: Connection) -> None:
+    source_id, csrf = _seed_ready_source(quiz_client, db_conn, "flag-unauth@example.com")
+    item = _seed_item(db_conn, UUID(source_id))
+    quiz_client.cookies.clear()
+    resp = _post_flag(quiz_client, item.id, flagged=True, csrf=csrf)
+    assert resp.status_code == 401, resp.text
+
+
+def test_flag_rate_limit_returns_429(
+    throttled_quiz_client: TestClient, db_conn: Connection
+) -> None:
+    source_id, csrf = _seed_ready_source(throttled_quiz_client, db_conn, "flag-rl@example.com")
+    item = _seed_item(db_conn, UUID(source_id))
+    for _ in range(3):
+        r = _post_flag(throttled_quiz_client, item.id, flagged=True, csrf=csrf)
+        assert r.status_code == 200, r.text
+    throttled = _post_flag(throttled_quiz_client, item.id, flagged=True, csrf=csrf)
+    assert throttled.status_code == 429, throttled.text
+
+
+def test_flag_missing_csrf_returns_403(quiz_client: TestClient, db_conn: Connection) -> None:
+    source_id, _ = _seed_ready_source(quiz_client, db_conn, "flag-csrf@example.com")
+    item = _seed_item(db_conn, UUID(source_id))
+    resp = _post_flag(quiz_client, item.id, flagged=True, csrf=None)
+    assert resp.status_code == 403, resp.text
+
+
+def test_flag_untrusted_origin_returns_403(quiz_client: TestClient, db_conn: Connection) -> None:
+    source_id, csrf = _seed_ready_source(quiz_client, db_conn, "flag-origin@example.com")
+    item = _seed_item(db_conn, UUID(source_id))
+    resp = _post_flag(
+        quiz_client, item.id, flagged=True, csrf=csrf, origin="http://evil.example.com"
+    )
+    assert resp.status_code == 403, resp.text

@@ -70,7 +70,13 @@ from app.application.reading import (
     SaveReadingPosition,
 )
 from app.application.retrieval import RetrieveEvidence
-from app.application.reviews import GetDueQueue, ResetSchedule, SubmitReview
+from app.application.reviews import (
+    FlagCard,
+    GetDueQueue,
+    ResetSchedule,
+    SubmitReview,
+    UndoLastReview,
+)
 from app.application.sources import CreateSource, GetSource, ListSources, ReadSourceMedia
 from app.application.study import ContinueReading, GetStudySummary
 from app.application.vault import ExportVault
@@ -615,9 +621,14 @@ def get_list_quiz_items(conn: DbConnection) -> ListQuizItems:
     )
 
 
-def get_due_queue(conn: DbConnection) -> GetDueQueue:
-    """Wire ``GetDueQueue`` on the request-scoped connection (QUIZ-13)."""
-    return GetDueQueue(items=SqlAlchemyQuizItemRepository(conn), clock=_clock)
+def get_due_queue(conn: DbConnection, settings: AppSettings) -> GetDueQueue:
+    """Wire ``GetDueQueue`` on the request-scoped connection (QUIZ-13, AD-310)."""
+    return GetDueQueue(
+        items=SqlAlchemyQuizItemRepository(conn),
+        clock=_clock,
+        scheduling=build_scheduling_adapter(settings),
+        session_size=settings.review_session_size,
+    )
 
 
 def get_export_quiz_deck(conn: DbConnection) -> ExportQuizDeck:
@@ -649,6 +660,26 @@ def get_submit_review(conn: DbConnection) -> SubmitReview:
     )
 
 
+def get_undo_last_review(conn: DbConnection) -> UndoLastReview:
+    """Wire ``UndoLastReview`` on the request-scoped connection (REV-22).
+
+    Undo is one atomic transaction (restore snapshot + stamp the log + decrement
+    the study day), so the ordinary auto-committing request connection is the
+    unit of work.
+    """
+    return UndoLastReview(
+        items=SqlAlchemyQuizItemRepository(conn),
+        scheduling=build_scheduling_adapter(get_settings()),
+        clock=_clock,
+        study_days=SqlAlchemyStudyDayRepository(conn),
+    )
+
+
+def get_flag_card(conn: DbConnection) -> FlagCard:
+    """Wire ``FlagCard`` on the request-scoped connection (REV-34)."""
+    return FlagCard(items=SqlAlchemyQuizItemRepository(conn), clock=_clock)
+
+
 def get_reset_schedule(conn: DbConnection) -> ResetSchedule:
     """Wire ``ResetSchedule`` on the request-scoped connection (NL-12).
 
@@ -658,6 +689,7 @@ def get_reset_schedule(conn: DbConnection) -> ResetSchedule:
     return ResetSchedule(
         items=SqlAlchemyQuizItemRepository(conn),
         scheduling=build_scheduling_adapter(get_settings()),
+        clock=_clock,
     )
 
 

@@ -62,6 +62,7 @@ from app.domain.entities import (
     Source,
     SourceHighlight,
     StudyDay,
+    UndoableReview,
     User,
 )
 
@@ -832,6 +833,14 @@ class SchedulingPort(Protocol):
         """
         ...
 
+    def preview(self, snapshot: SchedulingSnapshot, reviewed_at: datetime) -> dict[int, datetime]:
+        """Return next-due times for ratings 1–4 without recording a review (REV-33).
+
+        Uses a throwaway FSRS scheduler with fuzzing off (AD-312). Callers bucket the
+        deltas for display; this method must not be used as a persist path.
+        """
+        ...
+
 
 @runtime_checkable
 class QuizDeckEnqueuer(Protocol):
@@ -1029,8 +1038,24 @@ class QuizItemRepository(Protocol):
         """Replace the item's scheduling snapshot after a review (QUIZ-12)."""
         ...
 
+    def set_flagged_at(self, item_id: UUID, flagged_at: datetime | None) -> None:
+        """Set or clear ``flagged_at``. Never touches scheduling or ``review_log`` (AD-305)."""
+        ...
+
     def append_log(self, quiz_item_id: UUID, entry: ReviewLogEntry) -> None:
         """Append an immutable review-log entry for the item (QUIZ-12)."""
+        ...
+
+    def latest_undoable_review(self, user_id: UUID) -> UndoableReview | None:
+        """Return the caller's most recent not-yet-undone log row, or ``None``.
+
+        Joined through ``quiz_items.user_id`` so another user's history is invisible
+        (AD-149). ``previous`` is ``None`` when the row stored no snapshot.
+        """
+        ...
+
+    def mark_log_undone(self, log_id: UUID, undone_at: datetime) -> None:
+        """Stamp ``undone_at`` on an existing log row. Never deletes the row (AD-306)."""
         ...
 
     def list_for_source(self, source_id: UUID) -> list[QuizItem]:
@@ -1055,9 +1080,10 @@ class QuizItemRepository(Protocol):
     ) -> tuple[int, list[DueReviewItem]]:
         """Return the caller's due queue: total due count and up to ``limit`` items.
 
-        Active items with ``due <= now`` across the user's sources (optionally filtered
-        to one ``source_id``), ordered ``due ASC, id ASC`` (A-6). Stale/orphaned items
-        are excluded (QUIZ-17). The count is the full due total before the limit.
+        Active unflagged items with ``due <= now`` across the user's sources (optionally
+        filtered to one ``source_id``), ordered ``due ASC, id ASC`` (A-6). Stale/orphaned
+        items and flagged cards are excluded (QUIZ-17, REV-35). The count is the full
+        due total before the limit.
         """
         ...
 
@@ -1318,6 +1344,13 @@ class StudyDayRepository(Protocol):
         Every delta defaults to zero so each caller names only the kinds of activity it
         witnessed: a submitted review credits ``reviews``, a saved reading position
         credits ``reading_updates`` and the ``words_advanced`` it newly covered.
+        """
+        ...
+
+    def decrement_reviews(self, user_id: UUID, day: date) -> None:
+        """Subtract one from ``reviews_count`` on an existing ``(user_id, day)`` row.
+
+        Floors at 0. If no row exists this is a no-op — never inserts (AD-307).
         """
         ...
 

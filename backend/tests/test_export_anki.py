@@ -15,6 +15,7 @@ import io
 import sqlite3
 import tempfile
 import zipfile
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -150,6 +151,19 @@ def test_footnote_notes_non_active_status() -> None:
     stale = _item(status=QuizItemStatus.STALE)
     note = _note_for(stale, "A Book")
     assert "(status: stale)" in note.fields[1]
+
+
+def test_build_apkg_omits_flagged_cards() -> None:
+    kept = _item(question="Keep?", answer="Yes")
+    dropped = replace(
+        _item(question="Drop?", answer="No"),
+        flagged_at=datetime.now(UTC),
+    )
+
+    guids = _note_guids(build_apkg([kept, dropped], "A Book"))
+
+    assert guids == [genanki.guid_for(str(kept.source_id), kept.content_key)]
+    assert genanki.guid_for(str(dropped.source_id), dropped.content_key) not in guids
 
 
 # --- export route (QUIZ-22) -----------------------------------------------------

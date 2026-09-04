@@ -74,7 +74,7 @@ function normalizeKey(key: string): string {
  * jsdom does not compute — and an explicit `contenteditable="false"` is excluded,
  * since that region is not editable at all.
  */
-function isTypingTarget(target: EventTarget | null): boolean {
+export function isTypingTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) {
     return false;
   }

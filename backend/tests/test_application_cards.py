@@ -244,6 +244,9 @@ class FakeCardScheduling:
     def review(self, snapshot, rating, reviewed_at):  # noqa: ANN001, ANN201
         raise NotImplementedError
 
+    def preview(self, snapshot, reviewed_at):  # noqa: ANN001, ANN201
+        raise NotImplementedError
+
 
 class FakeCardEmbedding:
     """``EmbeddingPort`` double returning one preset vector for every text."""
@@ -496,6 +499,19 @@ def test_cloze_candidate_with_an_invalid_mask_is_discarded() -> None:
     result = world.suggest(user=_OWNER, source_id=world.source.id, note_anchor_id=world.anchor.id)
 
     assert [c.answer for c in result] == ["mitochondria"]
+
+
+def test_generated_generic_stem_is_not_suggested() -> None:
+    keep = _candidate()
+    generic = _candidate(
+        question="What does the passage in Cell Biology state?",
+        answer="mitochondria",
+    )
+    world = _World(candidates=[keep, generic])
+
+    result = world.suggest(user=_OWNER, source_id=world.source.id, note_anchor_id=world.anchor.id)
+
+    assert [c.question for c in result] == [keep.question]
 
 
 def test_candidate_of_an_unsupported_type_is_discarded() -> None:
@@ -963,6 +979,25 @@ def test_editing_a_card_never_writes_scheduling_or_the_review_log() -> None:
     assert world.items.review_log == {}
 
 
+def test_editing_a_card_does_not_reapply_formulation_gates() -> None:
+    world = _World()
+    original = _accepted(world)
+    due_before = world.items.scheduling[original.id].due
+    long_answer = "x" * 200
+
+    updated = world.update(
+        user=_OWNER,
+        item_id=original.id,
+        question="Which organelle produces the cell's energy?",
+        answer=long_answer,
+    )
+
+    assert updated.answer == long_answer
+    assert world.items.scheduling[original.id].due == due_before
+    assert world.items.update_scheduling_calls == 0
+    assert world.items.review_log == {}
+
+
 def test_editing_a_card_recomputes_its_fingerprint() -> None:
     world = _World()
     original = _accepted(world)
@@ -1266,6 +1301,19 @@ def test_note_suggestions_are_generated_from_the_body_and_qc_filtered() -> None:
     body, _context, limit = world.generation.note_calls[0]
     assert body == _NOTE_BODY
     assert limit == 3
+
+
+def test_generated_generic_stem_is_not_suggested_from_a_note() -> None:
+    keep = _note_candidate()
+    generic = _note_candidate(
+        question="What does the note state?",
+        answer="repetition",
+    )
+    world = _NoteWorld(note_candidates=[keep, generic])
+
+    result = world.suggest(user=_OWNER, note_id=world.note.id)
+
+    assert result == [keep]
 
 
 def test_note_suggestions_carry_anchor_context_when_the_note_is_anchored() -> None:

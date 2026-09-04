@@ -68,8 +68,13 @@ const hero = {
   updated_at: "2026-07-19T00:00:00Z",
 };
 
-function dueQueue(total: number) {
-  return { items: [], total_due: total };
+function dueQueue(total: number, sessionSize = 20) {
+  return {
+    items: [],
+    total_due: total,
+    session_size: sessionSize,
+    requeue_minutes: 15,
+  };
 }
 
 afterEach(() => {
@@ -139,6 +144,25 @@ describe("DueCard (HOME-05/06)", () => {
 
     const count = await screen.findByTestId("due-count");
     expect(count.textContent).toContain("5");
+    expect(
+      screen.getByRole("link", { name: "Review" }).getAttribute("href"),
+    ).toBe("/review");
+  });
+
+  it("presents today's session size as the job when the overdue pile is larger (REV-41)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        [CONTINUE]: () => jsonResponse(200, hero),
+        [DUE]: () => jsonResponse(200, dueQueue(25, 20)),
+      }),
+    );
+
+    render(<HomeScreen />);
+
+    const count = await screen.findByTestId("due-count");
+    expect(count.textContent).toContain("20");
+    expect(count.textContent).not.toContain("25");
     expect(
       screen.getByRole("link", { name: "Review" }).getAttribute("href"),
     ).toBe("/review");

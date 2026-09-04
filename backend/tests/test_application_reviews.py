@@ -15,17 +15,19 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import Connection, func, select
+from sqlalchemy import Connection, delete, func, select, update
 
 from app.application.dates import local_day
-from app.application.errors import QuizItemNotFound, QuizItemNotReviewable
+from app.application.errors import QuizItemNotFound, QuizItemNotReviewable, QuizReviewNotUndoable
 from app.application.quiz_qc import content_key
 from app.application.reviews import (
     DEFAULT_DUE_LIMIT,
     MAX_DUE_LIMIT,
+    FlagCard,
     GetDueQueue,
     ResetSchedule,
     SubmitReview,
+    UndoLastReview,
 )
 from app.domain.entities import (
     DueReviewItem,
@@ -37,6 +39,7 @@ from app.domain.entities import (
     ReviewLogEntry,
     SchedulingSnapshot,
     Source,
+    UndoableReview,
     User,
 )
 from app.infrastructure.db.metadata import review_log, study_days
@@ -49,7 +52,7 @@ from app.infrastructure.db.repositories import (
 )
 from app.infrastructure.scheduling.fsrs import FsrsSchedulingAdapter
 from tests.conftest import requires_db
-from tests.fakes import FakeClock
+from tests.fakes import FakeClock, FakeStudyDayRepository
 
 _NOW = datetime(2026, 7, 16, 12, 0, 0, tzinfo=UTC)
 
@@ -75,10 +78,29 @@ def _user() -> User:
     return User(id=uuid4(), email="due@example.com", created_at=_NOW)
 
 
+class _UnusedScheduling:
+    """A ``SchedulingPort`` double that fails if preview runs without a snapshot."""
+
+    def preview(self, snapshot, reviewed_at):  # noqa: ANN001, ANN201
+        raise AssertionError("preview should not run without a joined snapshot")
+
+
+class _PreviewScheduling:
+    """Returns fixed dues so GetDueQueue's bucket mapping is asserted, not FSRS."""
+
+    def preview(self, snapshot, reviewed_at):  # noqa: ANN001, ANN201
+        return {
+            1: reviewed_at + timedelta(seconds=30),
+            2: reviewed_at + timedelta(minutes=10),
+            3: reviewed_at + timedelta(days=1),
+            4: reviewed_at + timedelta(days=4),
+        }
+
+
 def test_due_queue_defaults_to_twenty_and_passes_user_and_now() -> None:
     repo = _CapturingItemRepo((0, []))
     user = _user()
-    service = GetDueQueue(items=repo, clock=FakeClock(_NOW))
+    service = GetDueQueue(items=repo, clock=FakeClock(_NOW), scheduling=_UnusedScheduling())
 
     total, items = service(user=user)
 
@@ -90,9 +112,31 @@ def test_due_queue_defaults_to_twenty_and_passes_user_and_now() -> None:
     assert call["source_id"] is None
 
 
+def test_due_queue_uses_injected_session_size_when_limit_is_omitted() -> None:
+    repo = _CapturingItemRepo((0, []))
+    service = GetDueQueue(
+        items=repo, clock=FakeClock(_NOW), scheduling=_UnusedScheduling(), session_size=7
+    )
+
+    service(user=_user())
+
+    assert repo.calls[0]["limit"] == 7
+
+
+def test_due_queue_caps_injected_session_size_at_max() -> None:
+    repo = _CapturingItemRepo((0, []))
+    service = GetDueQueue(
+        items=repo, clock=FakeClock(_NOW), scheduling=_UnusedScheduling(), session_size=1000
+    )
+
+    service(user=_user())
+
+    assert repo.calls[0]["limit"] == MAX_DUE_LIMIT == 100
+
+
 def test_due_queue_caps_limit_at_max() -> None:
     repo = _CapturingItemRepo((0, []))
-    service = GetDueQueue(items=repo, clock=FakeClock(_NOW))
+    service = GetDueQueue(items=repo, clock=FakeClock(_NOW), scheduling=_UnusedScheduling())
 
     service(user=_user(), limit=1000)
 
@@ -104,7 +148,7 @@ def test_due_queue_passes_source_filter_and_returns_repo_result() -> None:
         item=_item(uuid4()), source_title="Book", due=_NOW - timedelta(hours=1)
     )
     repo = _CapturingItemRepo((1, [due_item]))
-    service = GetDueQueue(items=repo, clock=FakeClock(_NOW))
+    service = GetDueQueue(items=repo, clock=FakeClock(_NOW), scheduling=_UnusedScheduling())
     source_id = uuid4()
 
     total, items = service(user=_user(), limit=5, source_id=source_id)
@@ -114,6 +158,31 @@ def test_due_queue_passes_source_filter_and_returns_repo_result() -> None:
     call = repo.calls[0]
     assert call["limit"] == 5
     assert call["source_id"] == source_id
+
+
+def test_due_queue_attaches_interval_labels_from_the_joined_snapshot() -> None:
+    snapshot = SchedulingSnapshot(
+        state=1,
+        step=0,
+        stability=None,
+        difficulty=None,
+        due=_NOW - timedelta(hours=1),
+        last_review=None,
+    )
+    due_item = DueReviewItem(
+        item=_item(uuid4()),
+        source_title="Book",
+        due=snapshot.due,
+        snapshot=snapshot,
+    )
+    repo = _CapturingItemRepo((1, [due_item]))
+    service = GetDueQueue(items=repo, clock=FakeClock(_NOW), scheduling=_PreviewScheduling())
+
+    _total, items = service(user=_user())
+
+    assert items[0].interval_labels == {1: "~1m", 2: "~10m", 3: "~1d", 4: "~4d"}
+    assert items[0].snapshot == snapshot
+    assert not hasattr(repo, "get_scheduling")
 
 
 # --- SubmitReview (integration) -------------------------------------------------
@@ -173,9 +242,11 @@ def _seed_active_item(
     *,
     status: str = QuizItemStatus.ACTIVE,
     due: datetime | None = None,
+    question: str = "What is the powerhouse of the cell?",
+    answer: str = "Mitochondria",
 ) -> QuizItem:
     repo = SqlAlchemyQuizItemRepository(db_conn)
-    item = _item(source_id, status=status)
+    item = _item(source_id, status=status, question=question, answer=answer)
     repo.upsert(item, embedding=None)
     repo.create_scheduling(
         item.id,
@@ -214,8 +285,9 @@ def test_submit_review_advances_scheduling_and_appends_log(db_conn: Connection) 
     )
 
     # Good schedules the next review after now — the due date advanced.
-    assert advanced.due > _NOW
-    assert repo.get_scheduling(item.id) == advanced
+    assert advanced.snapshot.due > _NOW
+    assert repo.get_scheduling(item.id) == advanced.snapshot
+    assert set(advanced.interval_labels) == {1, 2, 3, 4}
     rows = db_conn.execute(
         select(review_log.c.rating, review_log.c.review_duration_ms).where(
             review_log.c.quiz_item_id == item.id
@@ -247,7 +319,7 @@ def test_submit_review_allows_early_review_of_future_due_item(db_conn: Connectio
 
     advanced = _service(db_conn, now=_NOW)(user=user, item_id=item.id, rating=3)
 
-    assert advanced.due > _NOW
+    assert advanced.snapshot.due > _NOW
 
 
 @requires_db
@@ -455,6 +527,7 @@ def _reset_service(db_conn: Connection) -> ResetSchedule:
     return ResetSchedule(
         items=SqlAlchemyQuizItemRepository(db_conn),
         scheduling=FsrsSchedulingAdapter(fuzzing=False),
+        clock=FakeClock(_NOW),
     )
 
 
@@ -466,8 +539,8 @@ def test_submit_review_advances_a_source_less_note_card(db_conn: Connection) -> 
 
     advanced = _service(db_conn, now=_NOW)(user=user, item_id=item.id, rating=3)
 
-    assert advanced.due > _NOW
-    assert SqlAlchemyQuizItemRepository(db_conn).get_scheduling(item.id) == advanced
+    assert advanced.snapshot.due > _NOW
+    assert SqlAlchemyQuizItemRepository(db_conn).get_scheduling(item.id) == advanced.snapshot
 
 
 @requires_db
@@ -516,14 +589,14 @@ def test_reset_returns_fresh_state_clears_badge_and_preserves_log(
     # Fresh state: the learning shape a new card receives (no hand-rolled literal), and
     # the stored snapshot is exactly what was returned.
     reference = FsrsSchedulingAdapter(fuzzing=False).initial()
-    assert fresh.state == reference.state
-    assert fresh.stability == reference.stability
-    assert fresh.difficulty == reference.difficulty
-    assert fresh.last_review is None
+    assert fresh.snapshot.state == reference.state
+    assert fresh.snapshot.stability == reference.stability
+    assert fresh.snapshot.difficulty == reference.difficulty
+    assert fresh.snapshot.last_review is None
     # Due is minted "now" (Learning), bounded by the call window — the advanced
     # schedule is gone. Bounding against the real clock keeps this date-proof.
-    assert before <= fresh.due <= after
-    assert repo.get_scheduling(item.id) == fresh
+    assert before <= fresh.snapshot.due <= after
+    assert repo.get_scheduling(item.id) == fresh.snapshot
     # Badge cleared, review log untouched.
     assert repo.get_by_id(item.id).note_changed_at is None
     log_after = db_conn.execute(
@@ -561,3 +634,356 @@ def test_reset_missing_item_is_404(db_conn: Connection) -> None:
 
     with pytest.raises(QuizItemNotFound):
         _reset_service(db_conn)(user=user, item_id=uuid4())
+
+
+# --- UndoLastReview (REV-22..28) ------------------------------------------------
+
+
+def _undo_service(db_conn: Connection, *, now: datetime) -> UndoLastReview:
+    return UndoLastReview(
+        items=SqlAlchemyQuizItemRepository(db_conn),
+        scheduling=FsrsSchedulingAdapter(fuzzing=False),
+        clock=FakeClock(now),
+        study_days=SqlAlchemyStudyDayRepository(db_conn),
+    )
+
+
+@requires_db
+def test_submit_review_stores_the_pre_grade_snapshot_on_the_log(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "review-prev@example.com")
+    user = SqlAlchemyUserRepository(db_conn).get_by_id(source.user_id)
+    item = _seed_active_item(db_conn, source.id)
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    before = repo.get_scheduling(item.id)
+
+    _service(db_conn, now=_NOW)(user=user, item_id=item.id, rating=3)
+
+    row = db_conn.execute(
+        select(
+            review_log.c.prev_state,
+            review_log.c.prev_step,
+            review_log.c.prev_stability,
+            review_log.c.prev_difficulty,
+            review_log.c.prev_due,
+            review_log.c.prev_last_review,
+        ).where(review_log.c.quiz_item_id == item.id)
+    ).one()
+    assert row.prev_state == before.state
+    assert row.prev_step == before.step
+    assert row.prev_stability == before.stability
+    assert row.prev_difficulty == before.difficulty
+    assert row.prev_due == before.due
+    assert row.prev_last_review == before.last_review
+
+
+@requires_db
+def test_undo_restores_scheduling_and_keeps_the_log_row(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "undo-restore@example.com")
+    user = SqlAlchemyUserRepository(db_conn).get_by_id(source.user_id)
+    item = _seed_active_item(db_conn, source.id)
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    before = repo.get_scheduling(item.id)
+    question, answer, key = item.question, item.answer, item.content_key
+
+    clock = FakeClock(_NOW)
+    SubmitReview(
+        items=repo,
+        scheduling=FsrsSchedulingAdapter(fuzzing=False),
+        clock=clock,
+        study_days=SqlAlchemyStudyDayRepository(db_conn),
+    )(user=user, item_id=item.id, rating=4)
+    assert repo.get_scheduling(item.id) != before
+
+    clock.advance(timedelta(seconds=5))
+    restored = UndoLastReview(
+        items=repo,
+        scheduling=FsrsSchedulingAdapter(fuzzing=False),
+        clock=clock,
+        study_days=SqlAlchemyStudyDayRepository(db_conn),
+    )(user=user)
+
+    assert restored.snapshot == before
+    assert repo.get_scheduling(item.id) == before
+    rows = db_conn.execute(
+        select(review_log.c.rating, review_log.c.undone_at).where(
+            review_log.c.quiz_item_id == item.id
+        )
+    ).all()
+    assert len(rows) == 1
+    assert rows[0].rating == 4
+    assert rows[0].undone_at == _NOW + timedelta(seconds=5)
+    stored = repo.get_by_id(item.id)
+    assert stored.question == question
+    assert stored.answer == answer
+    assert stored.content_key == key
+
+
+@requires_db
+def test_second_undo_is_not_undoable(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "undo-twice@example.com")
+    user = SqlAlchemyUserRepository(db_conn).get_by_id(source.user_id)
+    item = _seed_active_item(db_conn, source.id)
+    _service(db_conn, now=_NOW)(user=user, item_id=item.id, rating=3)
+    undo = _undo_service(db_conn, now=_NOW)
+    undo(user=user)
+
+    with pytest.raises(QuizReviewNotUndoable):
+        undo(user=user)
+
+
+@requires_db
+def test_legacy_null_snapshot_is_not_undoable(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "undo-legacy@example.com")
+    user = SqlAlchemyUserRepository(db_conn).get_by_id(source.user_id)
+    item = _seed_active_item(db_conn, source.id)
+    SqlAlchemyQuizItemRepository(db_conn).append_log(
+        item.id, ReviewLogEntry(rating=3, reviewed_at=_NOW)
+    )
+
+    with pytest.raises(QuizReviewNotUndoable):
+        _undo_service(db_conn, now=_NOW)(user=user)
+
+
+@requires_db
+def test_undo_with_no_reviews_is_not_undoable(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "undo-empty@example.com")
+    user = SqlAlchemyUserRepository(db_conn).get_by_id(source.user_id)
+
+    with pytest.raises(QuizReviewNotUndoable):
+        _undo_service(db_conn, now=_NOW)(user=user)
+
+
+@requires_db
+def test_undo_decrements_the_credited_study_day(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "undo-study@example.com")
+    user = SqlAlchemyUserRepository(db_conn).get_by_id(source.user_id)
+    item = _seed_active_item(db_conn, source.id)
+    _service(db_conn, now=_NEAR_MIDNIGHT)(
+        user=user, item_id=item.id, rating=3, client_tz="Asia/Tokyo"
+    )
+
+    _undo_service(db_conn, now=_NEAR_MIDNIGHT)(user=user, client_tz="Asia/Tokyo")
+
+    rows = db_conn.execute(
+        select(study_days.c.day, study_days.c.reviews_count).where(study_days.c.user_id == user.id)
+    ).all()
+    assert [(r.day, r.reviews_count) for r in rows] == [
+        (local_day(_NEAR_MIDNIGHT, "Asia/Tokyo"), 0)
+    ]
+
+
+@requires_db
+def test_undo_floors_reviews_count_at_zero(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "undo-floor@example.com")
+    user = SqlAlchemyUserRepository(db_conn).get_by_id(source.user_id)
+    item = _seed_active_item(db_conn, source.id)
+    _service(db_conn, now=_NOW)(user=user, item_id=item.id, rating=3)
+    db_conn.execute(
+        update(study_days).where(study_days.c.user_id == user.id).values(reviews_count=0)
+    )
+
+    _undo_service(db_conn, now=_NOW)(user=user)
+
+    count = db_conn.execute(
+        select(study_days.c.reviews_count).where(study_days.c.user_id == user.id)
+    ).scalar_one()
+    assert count == 0
+
+
+@requires_db
+def test_undo_does_not_insert_a_study_day_row(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "undo-noinsert@example.com")
+    user = SqlAlchemyUserRepository(db_conn).get_by_id(source.user_id)
+    item = _seed_active_item(db_conn, source.id)
+    _service(db_conn, now=_NOW)(user=user, item_id=item.id, rating=3)
+    db_conn.execute(delete(study_days).where(study_days.c.user_id == user.id))
+
+    _undo_service(db_conn, now=_NOW)(user=user)
+
+    remaining = db_conn.execute(
+        select(func.count()).select_from(study_days).where(study_days.c.user_id == user.id)
+    ).scalar_one()
+    assert remaining == 0
+
+
+@requires_db
+def test_undo_targets_the_callers_latest_review_across_items(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "undo-latest@example.com")
+    user = SqlAlchemyUserRepository(db_conn).get_by_id(source.user_id)
+    first = _seed_active_item(db_conn, source.id, question="First?", answer="A")
+    second = _seed_active_item(db_conn, source.id, question="Second?", answer="B")
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    second_before = repo.get_scheduling(second.id)
+    clock = FakeClock(_NOW)
+    submit = SubmitReview(
+        items=repo,
+        scheduling=FsrsSchedulingAdapter(fuzzing=False),
+        clock=clock,
+        study_days=SqlAlchemyStudyDayRepository(db_conn),
+    )
+    submit(user=user, item_id=first.id, rating=3)
+    first_after = repo.get_scheduling(first.id)
+    clock.advance(timedelta(minutes=1))
+    submit(user=user, item_id=second.id, rating=4)
+
+    UndoLastReview(
+        items=repo,
+        scheduling=FsrsSchedulingAdapter(fuzzing=False),
+        clock=clock,
+        study_days=SqlAlchemyStudyDayRepository(db_conn),
+    )(user=user)
+
+    assert repo.get_scheduling(second.id) == second_before
+    assert repo.get_scheduling(first.id) == first_after
+    first_log = db_conn.execute(
+        select(review_log.c.undone_at).where(review_log.c.quiz_item_id == first.id)
+    ).scalar_one()
+    second_log = db_conn.execute(
+        select(review_log.c.undone_at).where(review_log.c.quiz_item_id == second.id)
+    ).scalar_one()
+    assert first_log is None
+    assert second_log is not None
+
+
+@requires_db
+def test_undo_does_not_see_another_users_review(db_conn: Connection) -> None:
+    owner_source = _persisted_source(db_conn, "undo-owner@example.com")
+    owner = SqlAlchemyUserRepository(db_conn).get_by_id(owner_source.user_id)
+    item = _seed_active_item(db_conn, owner_source.id)
+    _service(db_conn, now=_NOW)(user=owner, item_id=item.id, rating=3)
+    intruder_source = _persisted_source(db_conn, "undo-intruder@example.com")
+    intruder = SqlAlchemyUserRepository(db_conn).get_by_id(intruder_source.user_id)
+
+    with pytest.raises(QuizReviewNotUndoable):
+        _undo_service(db_conn, now=_NOW)(user=intruder)
+
+    undone = db_conn.execute(
+        select(review_log.c.undone_at).where(review_log.c.quiz_item_id == item.id)
+    ).scalar_one()
+    assert undone is None
+
+
+def test_undo_vanished_item_is_not_found() -> None:
+    row = UndoableReview(
+        log_id=uuid4(),
+        quiz_item_id=uuid4(),
+        reviewed_at=_NOW,
+        previous=SchedulingSnapshot(
+            state=1,
+            step=0,
+            stability=None,
+            difficulty=None,
+            due=_NOW,
+            last_review=None,
+        ),
+    )
+
+    class _VanishedItemRepo:
+        def latest_undoable_review(self, user_id):  # noqa: ANN001
+            return row
+
+        def get_by_id(self, item_id):  # noqa: ANN001
+            return None
+
+        def update_scheduling(self, quiz_item_id, snapshot) -> None:  # noqa: ANN001
+            raise AssertionError("must not restore a vanished item")
+
+        def mark_log_undone(self, log_id, undone_at) -> None:  # noqa: ANN001
+            raise AssertionError("must not stamp a vanished item")
+
+    with pytest.raises(QuizItemNotFound):
+        UndoLastReview(
+            items=_VanishedItemRepo(),
+            scheduling=FsrsSchedulingAdapter(fuzzing=False),
+            clock=FakeClock(_NOW),
+            study_days=FakeStudyDayRepository(),
+        )(user=_user())
+
+
+# --- FlagCard (REV-34..36, REV-38) ----------------------------------------------
+
+
+def _flag_service(db_conn: Connection, *, now: datetime) -> FlagCard:
+    return FlagCard(items=SqlAlchemyQuizItemRepository(db_conn), clock=FakeClock(now))
+
+
+@requires_db
+def test_flag_hides_past_due_item_without_touching_schedule_or_log(
+    db_conn: Connection,
+) -> None:
+    source = _persisted_source(db_conn, "flag-hide@example.com")
+    user = SqlAlchemyUserRepository(db_conn).get_by_id(source.user_id)
+    item = _seed_active_item(db_conn, source.id, due=_NOW - timedelta(hours=1))
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    repo.append_log(item.id, ReviewLogEntry(rating=3, reviewed_at=_NOW))
+    before = repo.get_scheduling(item.id)
+    logged_before = db_conn.execute(
+        select(func.count()).select_from(review_log).where(review_log.c.quiz_item_id == item.id)
+    ).scalar_one()
+
+    flagged = _flag_service(db_conn, now=_NOW)(user=user, item_id=item.id, flagged=True)
+
+    assert flagged.flagged_at == _NOW
+    assert repo.get_by_id(item.id).flagged_at == _NOW
+    assert repo.get_scheduling(item.id) == before
+    logged_after = db_conn.execute(
+        select(func.count()).select_from(review_log).where(review_log.c.quiz_item_id == item.id)
+    ).scalar_one()
+    assert logged_after == logged_before
+    total, due = repo.due_for_user(user.id, now=_NOW, limit=20)
+    assert total == 0
+    assert due == []
+
+
+@requires_db
+def test_unflag_restores_due_membership_of_an_active_past_due_item(
+    db_conn: Connection,
+) -> None:
+    source = _persisted_source(db_conn, "flag-unflag@example.com")
+    user = SqlAlchemyUserRepository(db_conn).get_by_id(source.user_id)
+    item = _seed_active_item(db_conn, source.id, due=_NOW - timedelta(hours=1))
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    flag = _flag_service(db_conn, now=_NOW)
+    flag(user=user, item_id=item.id, flagged=True)
+
+    restored = flag(user=user, item_id=item.id, flagged=False)
+
+    assert restored.flagged_at is None
+    total, due = repo.due_for_user(user.id, now=_NOW, limit=20)
+    assert total == 1
+    assert [d.item.id for d in due] == [item.id]
+
+
+@requires_db
+def test_unflag_of_stale_item_stays_out_of_due(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "flag-stale@example.com")
+    user = SqlAlchemyUserRepository(db_conn).get_by_id(source.user_id)
+    item = _seed_active_item(
+        db_conn, source.id, status=QuizItemStatus.STALE, due=_NOW - timedelta(hours=1)
+    )
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    flag = _flag_service(db_conn, now=_NOW)
+    flag(user=user, item_id=item.id, flagged=True)
+    flag(user=user, item_id=item.id, flagged=False)
+
+    total, due = repo.due_for_user(user.id, now=_NOW, limit=20)
+    assert total == 0
+    assert due == []
+    assert repo.get_by_id(item.id).status == QuizItemStatus.STALE
+    assert repo.get_by_id(item.id).flagged_at is None
+
+
+@requires_db
+def test_flag_missing_and_non_owned_raise_not_found(db_conn: Connection) -> None:
+    owner_source = _persisted_source(db_conn, "flag-owner@example.com")
+    owner = SqlAlchemyUserRepository(db_conn).get_by_id(owner_source.user_id)
+    item = _seed_active_item(db_conn, owner_source.id)
+    intruder_source = _persisted_source(db_conn, "flag-intruder@example.com")
+    intruder = SqlAlchemyUserRepository(db_conn).get_by_id(intruder_source.user_id)
+    flag = _flag_service(db_conn, now=_NOW)
+
+    with pytest.raises(QuizItemNotFound):
+        flag(user=intruder, item_id=item.id, flagged=True)
+    with pytest.raises(QuizItemNotFound):
+        flag(user=owner, item_id=uuid4(), flagged=True)
+    assert SqlAlchemyQuizItemRepository(db_conn).get_by_id(item.id).flagged_at is None
