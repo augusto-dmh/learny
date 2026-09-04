@@ -330,6 +330,7 @@ Accepted architecture (locked — sourced from ADRs/TDD, not re-decided here):
 | AD-320 | Sample and Ask stay authenticated. Guest Ask is Cycle F+ (RFC conflict 2). | `first-session-converts` context.md |
 | AD-321 | Canned question is a frozen string on the sample payload, highlighted in Ask, not generated per request. | `first-session-converts` context.md |
 | AD-322 | Execute: three phases (ACL, starter+events+seed, product UI), one Opus worker each, fresh Verifier. Sample read-vs-write, clone uniqueness, and persist-hook aha are quiet-failure invariants — no Haiku unit. | `first-session-converts` Specify |
+| AD-323 | Other Models usage limits killed the first Opus Verifier dispatch. Execute phases 1–3 and the passing Verifier ran on the session model after one re-dispatch. Author ≠ verifier still held: the passing Verifier was a fresh orchestrator-dispatched subagent. | `first-session-converts` Execute |
 
 ## Blockers
 
@@ -350,7 +351,7 @@ Accepted architecture (locked — sourced from ADRs/TDD, not re-decided here):
 
 ## Handoff
 
-- **Cycle `first-session-converts` (RFC-0007 Cycle E / Bet 5 — shared sample, canned Ask, starter deck, landing, activation) — PLANNING on `feat/first-session-converts`.** Spec/design/tasks written (FS-01..32, T1–T16, three Opus phases). Decisions AD-315..AD-322. NEXT: Execute T1. Do not start Bets 6–7. RFC-005 Cycle F is still paused.
+- **Cycle `first-session-converts` (RFC-0007 Cycle E / Bet 5 — shared sample, canned Ask, starter deck, landing, activation) — BUILT on `feat/first-session-converts`, Verifier PASS, publishing.** Implementation T1–T16 (three phases: sample ACL, starter+events+seed, product UI) plus the committed SE EPUB. Slice: one operator-owned `is_sample` Art of War; `readable_source` vs owner-only `authorized_source`; canned Ask highlight; five per-user `origin=starter` clones; library Open + overflow; Library/Tutor/Download notes; Home Ask-first when due is 0; signed-out landing proof; activation events including `first_cited_answer`. Decisions AD-315..AD-323. Verifier: **PASS 32/32 ACs, 8/9 mutants killed** (one equivalent under AD-027 grounding). PROCESS: Opus Other Models limit; phases and Verifier on the session model; author ≠ verifier held. NEXT: PR → review → triage → fixes → comment cleanup → merge. Do not start Bets 6–7. RFC-005 Cycle F is still paused.
 
 - **Cycle `review-worth-returning` (RFC-0007 Cycle D / Bet 4 — empty-deck honesty, formulation gates, undo/session, flag/edit) — MERGED to `main` (PR #66, merge commit `57dcc4c8`).** Implementation T1–T14 plus review fixes (due-queue labels from the scheduling join, flag 401/429, requeue undo tests, shared typing-target guard). Slice: empty-deck honesty from job counts; twelve discard-reason codes; compensating undo; `flagged_at` out of due; FSRS interval labels; session page of 20; client requeue; Done-for-today when overdue remains. Decisions AD-303..AD-314. Digest deferred to Cycle F (AD-304). Verifier: **PASS 45/45 ACs, 9/9 mutants killed**. Review: 8 findings, all real, all fixed. NEXT: RFC-0007 Bet 5 (`first-session-converts`) is In progress. RFC-005 Cycle F is still paused.
 
