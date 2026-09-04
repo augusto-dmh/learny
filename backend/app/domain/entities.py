@@ -283,11 +283,6 @@ class ParsedBook:
     sections: tuple[ParsedSection, ...]
     media: tuple[ParsedMedia, ...] = ()
 
-    title: str | None
-    authors: tuple[str, ...]
-    language: str | None
-    sections: tuple[ParsedSection, ...]
-
 
 @dataclass(frozen=True)
 class SectionChunk:
