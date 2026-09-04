@@ -20,6 +20,7 @@ raises ``CorpusNotFound`` (A-7 → 404).
 from __future__ import annotations
 
 import hashlib
+import logging
 from dataclasses import replace
 from datetime import UTC, datetime
 from itertools import count
@@ -714,6 +715,9 @@ def test_build_corpus_puts_webp_and_rewrites_markdown_url() -> None:
     expected_url = f"/api/sources/{source.id}/media/{_WEBP_HASH}"
     assert f"![Cover image]({expected_url})" in markdown
     assert "cover.png" not in markdown
+    chunk_text = "\n".join(chunk.text for chunk in corpus.replace_calls[0]["sections"][0].chunks)
+    assert "![Cover image](cover.png)" in chunk_text
+    assert expected_url not in chunk_text
 
 
 def test_one_dropped_image_does_not_fail_ingest() -> None:
@@ -817,3 +821,105 @@ def test_empty_alt_raster_is_omitted_and_not_stored() -> None:
     assert "cover.png" not in markdown
     assert "/api/sources/" not in markdown
     assert "![" not in markdown
+
+
+def test_build_corpus_matches_packaged_href_to_markdown_basename() -> None:
+    source = _source()
+    png = b"png-bytes"
+    encoder = FakeImageEncoder(
+        {png: EncodedRaster(data=_WEBP_BYTES, sha256=_WEBP_HASH, content_type="image/webp")}
+    )
+    storage = FakeStorage()
+    storage.objects[source.object_key] = b"epub-bytes"
+    corpus = FakeCorpusRepository()
+    book = _figure_book(
+        _COVER_HTML,
+        media=(ParsedMedia("OEBPS/images/cover.png", "image/png", png),),
+    )
+
+    _build(
+        storage=storage,
+        parser=FakeEpubParser(book=book),
+        corpus=corpus,
+        events=FakeIngestionEventRepository(),
+        encoder=encoder,
+        markup=Bs4MarkupConverter(),
+    )(source=source, job=_job(source.id))
+
+    markdown = corpus.replace_calls[0]["sections"][0].markdown
+    expected_url = f"/api/sources/{source.id}/media/{_WEBP_HASH}"
+    assert f"![Cover image]({expected_url})" in markdown
+    assert "cover.png" not in markdown
+
+
+def test_build_corpus_same_basename_keeps_first_packaged_item() -> None:
+    source = _source()
+    first, second = b"first-png", b"second-png"
+    first_hash, second_hash = "a" * 64, "c" * 64
+    encoder = FakeImageEncoder(
+        {
+            first: EncodedRaster(data=b"WEBP-A", sha256=first_hash, content_type="image/webp"),
+            second: EncodedRaster(data=b"WEBP-C", sha256=second_hash, content_type="image/webp"),
+        }
+    )
+    storage = FakeStorage()
+    storage.objects[source.object_key] = b"epub-bytes"
+    corpus = FakeCorpusRepository()
+    book = _figure_book(
+        _COVER_HTML,
+        media=(
+            ParsedMedia("OEBPS/a/cover.png", "image/png", first),
+            ParsedMedia("OEBPS/b/cover.png", "image/png", second),
+        ),
+    )
+
+    _build(
+        storage=storage,
+        parser=FakeEpubParser(book=book),
+        corpus=corpus,
+        events=FakeIngestionEventRepository(),
+        encoder=encoder,
+        markup=Bs4MarkupConverter(),
+    )(source=source, job=_job(source.id))
+
+    markdown = corpus.replace_calls[0]["sections"][0].markdown
+    expected_url = f"/api/sources/{source.id}/media/{first_hash}"
+    assert f"![Cover image]({expected_url})" in markdown
+    assert second_hash not in markdown
+    assert encoder.calls == [(first, "image/png")]
+
+
+class _BoomEncoder:
+    def encode(self, data: bytes, *, content_type: str) -> EncodedRaster | None:
+        raise RuntimeError("encoder exploded")
+
+
+def test_encode_crash_drops_figure_and_logs(caplog: pytest.LogCaptureFixture) -> None:
+    source = _source()
+    png = b"png-bytes"
+    storage = FakeStorage()
+    storage.objects[source.object_key] = b"epub-bytes"
+    corpus = FakeCorpusRepository()
+    book = _figure_book(
+        _COVER_HTML,
+        media=(ParsedMedia("cover.png", "image/png", png),),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="app.application.corpus"):
+        _build(
+            storage=storage,
+            parser=FakeEpubParser(book=book),
+            corpus=corpus,
+            events=FakeIngestionEventRepository(),
+            encoder=_BoomEncoder(),
+            markup=Bs4MarkupConverter(),
+        )(source=source, job=_job(source.id))
+
+    assert len(corpus.replace_calls) == 1
+    markdown = corpus.replace_calls[0]["sections"][0].markdown
+    assert "*Cover image*" in markdown
+    assert "cover.png" not in markdown
+    records = [r for r in caplog.records if r.getMessage() == "ingestion.encode_figure_failed"]
+    assert records
+    assert records[0].source_id == str(source.id)
+    assert records[0].src == "cover.png"
