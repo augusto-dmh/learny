@@ -217,7 +217,7 @@ T12 -> T13
 
 ---
 
-### T7: Persist a `failed` turn when generation fails
+### T7: Persist a `failed` turn when generation fails ✅
 
 **What**: On `AnswerGenerationFailed` after a user message is known, persist the turn (`failed`, empty answer, no citations) then still surface the 502 / stream error. Prior turns stay untouched.
 **Where**: `backend/app/application/conversations.py`
@@ -232,9 +232,9 @@ T12 -> T13
 
 **Done when**:
 
-- [ ] Application tests cover sync and stream failure
-- [ ] GET after failure returns the conversation and the user message
-- [ ] Existing "502 persists nothing" assertions are updated to the new contract, not deleted to go green
+- [x] Application tests cover sync and stream failure
+- [x] GET after failure returns the conversation and the user message
+- [x] Existing "502 persists nothing" assertions are updated to the new contract, not deleted to go green
 
 **Tests**: unit
 **Gate**: full

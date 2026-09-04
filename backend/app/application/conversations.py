@@ -45,6 +45,7 @@ from app.application.streaming import (
 )
 from app.domain.entities import (
     ANSWERED,
+    FAILED,
     MODE_ANSWER,
     MODE_TEACH,
     NOT_FOUND_IN_SCOPE,
@@ -478,7 +479,9 @@ class PostConversationTurn:
     path. There is no port to choose and so no branch that chooses one, and the
     model identity a turn records has a single type. The port's answer passes
     through the shared grounding guard (AD-027), any port raise becomes
-    ``AnswerGenerationFailed`` with nothing persisted, and the turn — answered or
+    ``AnswerGenerationFailed`` — after a turn recording the question and no answer is
+    written at ``failed`` (AD-262), so a provider outage costs the reader an answer
+    and never the question — and the turn — answered or
     not-found — is persisted **only after grounding** with the next ``turn_index``,
     its citations in evidence-rank order (I-CM-5). The not-found verdict follows the
     scope: a scoped conversation reports ``not_found_in_scope`` (the reader's own
@@ -535,6 +538,7 @@ class PostConversationTurn:
             try:
                 generated = self._generate(mode=mode, message=message, plan=plan)
             except Exception as exc:  # any port failure maps to 502
+                self._persist_failed(plan, message, mode)
                 raise AnswerGenerationFailed("Answer generation failed.") from exc
 
             grounded = ground(generated, plan.evidence)
@@ -571,7 +575,10 @@ class PostConversationTurn:
         grounding guard, and the turn is persisted and yielded as the terminal
         :class:`~app.application.streaming.StreamTurn` only after grounding completes
         — so a consumer disconnect mid-stream persists nothing, and the persisted turn
-        is identical to the buffered path's (I-CM-5).
+        is identical to the buffered path's (I-CM-5). A break the reader did not ask
+        for is the exception: retrieval or the provider failing writes the ``failed``
+        turn before the error reaches the wire, so reloading after an error still
+        shows the question that was asked (AD-262).
         """
         prep = self._preflight(user=user, conversation_id=conversation_id, mode=mode)
         return self._turn_stream(user=user, prep=prep, message=message, mode=mode)
@@ -592,6 +599,7 @@ class PostConversationTurn:
                 prep.conversation.source_id,
                 mode,
             )
+            self._persist_failed(self._unsearched_plan(prep), message, mode)
             raise AnswerGenerationFailed("Answer generation failed.") from exc
 
         if not plan.evidence:
@@ -601,8 +609,21 @@ class PostConversationTurn:
 
         stream = self._generate_stream(mode=mode, message=message, plan=plan)
         # Hold-back yields presentable deltas and returns the authoritative answer;
-        # nothing is persisted until it completes (so cancellation persists nothing).
-        answer = yield from hold_back_deltas(stream)
+        # no *answered* turn is persisted until it completes (so cancellation persists
+        # nothing), but a provider break writes the failed turn before it propagates.
+        try:
+            answer = yield from hold_back_deltas(stream)
+        except AnswerGenerationFailed:
+            self._persist_failed(plan, message, mode)
+            raise
+        # SPEC_DEVIATION: a reader who stops the stream still persists nothing; only a
+        # failure the reader did not ask for writes the ``failed`` turn.
+        # Reason: cancellation arrives as ``GeneratorExit`` while this generator is
+        # closing, and writing to the database there runs after the request's response
+        # is done — a different transaction lifetime than any other write on this path.
+        # ASK-04 (the conversation survives a stop) is met on the client, which no
+        # longer deletes it; keeping the stopped question is not an acceptance
+        # criterion and is left to the retry cycle.
 
         grounded = ground(answer, plan.evidence)
         if grounded is None:
@@ -854,6 +875,54 @@ class PostConversationTurn:
             evidence_count=evidence_count,
             citations=(),
             created_at=self._clock.now(),
+        )
+
+    def _failed_turn(self, plan: _TurnPlan, message: str, mode: str) -> ConversationTurn:
+        """The turn a broken generation leaves behind: the question, and no answer.
+
+        A not-found turn is a verdict about the book; this one is the absence of a
+        verdict, and it exists for one reason — the reader's question must survive
+        the failure (AD-262). Reload is the test: a thread that only ever held the
+        question in the browser loses it to a refresh, which is how a first ask
+        vanished entirely. Empty text and no citations say there is nothing to read
+        rather than something to distrust, and the model is the configured one
+        because a call that failed returned no identity to record.
+        """
+        return ConversationTurn(
+            id=self._ids(),
+            conversation_id=plan.conversation.id,
+            turn_index=plan.turn_index,
+            message=message,
+            mode=mode,
+            answer_status=FAILED,
+            answer_text="",
+            model=self._generation.model,
+            evidence_count=len(plan.evidence),
+            citations=(),
+            created_at=self._clock.now(),
+        )
+
+    def _persist_failed(self, plan: _TurnPlan, message: str, mode: str) -> None:
+        """Write the failed turn, then let the caller surface the failure as before.
+
+        Persisting first and raising second keeps both halves of the contract: the
+        HTTP status (or the stream's error frame) still reports that generation
+        failed, and the conversation still holds what the reader asked (ASK-01).
+        Prior turns are untouched — this is an append at the next index like any
+        other turn, so a conversation that has been working for an hour keeps its
+        history and gains one failed row (ASK-05).
+        """
+        self._persist(plan, self._failed_turn(plan, message, mode), mode)
+
+    @staticmethod
+    def _unsearched_plan(prep: _TurnPrep) -> _TurnPlan:
+        """The plan of a turn that broke before retrieval answered: no evidence."""
+        return _TurnPlan(
+            conversation=prep.conversation,
+            target=prep.target,
+            history=prep.history,
+            evidence=[],
+            turn_index=prep.turn_index,
         )
 
     def _persist(self, plan: _TurnPlan, turn: ConversationTurn, mode: str) -> ConversationTurn:

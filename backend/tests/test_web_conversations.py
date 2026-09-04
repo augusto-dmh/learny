@@ -47,6 +47,7 @@ from sqlalchemy import Connection, func, select
 from app.application.conversations import DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT
 from app.domain.entities import (
     ANSWERED,
+    FAILED,
     MODE_ANSWER,
     MODE_TEACH,
     NOT_FOUND_IN_SCOPE,
@@ -1536,11 +1537,13 @@ def test_post_turn_claiming_a_taken_index_returns_409(
     assert resp.status_code == 409, resp.text
 
 
-def test_post_turn_generation_failure_returns_502_and_persists_nothing(
+def test_post_turn_generation_failure_returns_502_and_keeps_the_question(
     auth_client: TestClient, db_conn: Connection
 ) -> None:
-    # CONV-20: a failing generation port → 502 with a generic body that leaks no
-    # internal detail, and no turn row.
+    # CONV-20 + ASK-01/ASK-02: a failing generation port → 502 with a generic body
+    # that leaks no internal detail. The turn row is *not* rolled back with it: the
+    # reader's question is readable again through GET at ``failed`` with no answer
+    # and no citations (AD-262 supersedes the earlier "persists nothing" contract).
     from app.infrastructure.web.dependencies import get_generation
 
     source_id, csrf = _seed_ready_source(auth_client, db_conn, "turn-502@example.com")
@@ -1578,7 +1581,12 @@ def test_post_turn_generation_failure_returns_502_and_persists_nothing(
     # own message — is the failure this asserts against in both directions.
     assert resp.json()["detail"] == "Answer generation failed. Please try again."
     assert "provider-secret-internal-detail" not in resp.text
-    assert auth_client.get(f"/api/conversations/{conversation.id}").json()["turns"] == []
+    turns = auth_client.get(f"/api/conversations/{conversation.id}").json()["turns"]
+    assert len(turns) == 1
+    assert turns[0]["answer_status"] == FAILED
+    assert turns[0]["message"] == "photosynthesis sunlight"
+    assert turns[0]["text"] == ""
+    assert turns[0]["citations"] == []
 
 
 def test_post_turn_missing_csrf_returns_403(auth_client: TestClient, db_conn: Connection) -> None:
@@ -1887,11 +1895,13 @@ def test_turn_stream_gives_each_reasoning_block_its_own_part(
     assert not text_ids & set(starts)
 
 
-def test_turn_stream_mid_stream_failure_emits_the_error_frame_and_persists_nothing(
+def test_turn_stream_mid_stream_failure_emits_the_error_frame_and_keeps_the_question(
     auth_client: TestClient, db_conn: Connection
 ) -> None:
-    # CONV-21: a provider failure after the first delta is rendered as a protocol
-    # error part followed by [DONE] — no finish frame — and persists nothing.
+    # CONV-21 + ASK-01/ASK-02: a provider failure after the first delta is rendered as
+    # a protocol error part followed by [DONE] — no finish frame. The conversation is
+    # still there afterwards and still holds the question, at ``failed`` (AD-262):
+    # this is the walkthrough where the first ask vanished entirely.
     from app.infrastructure.web.dependencies import get_generation
 
     source_id, csrf = _seed_ready_source(auth_client, db_conn, "stream-mid@example.com")
@@ -1944,7 +1954,12 @@ def test_turn_stream_mid_stream_failure_emits_the_error_frame_and_persists_nothi
     assert error_part["errorText"] == "Answer generation failed. Please try again."
     assert "provider-secret-internal-detail" not in resp.text
 
-    assert auth_client.get(f"/api/conversations/{conversation.id}").json()["turns"] == []
+    body = auth_client.get(f"/api/conversations/{conversation.id}").json()
+    assert len(body["turns"]) == 1
+    assert body["turns"][0]["answer_status"] == FAILED
+    assert body["turns"][0]["message"] == "photosynthesis sunlight"
+    assert body["turns"][0]["text"] == ""
+    assert body["turns"][0]["citations"] == []
 
 
 def test_turn_stream_closes_the_reasoning_part_on_a_turn_that_declines(
@@ -2076,7 +2091,12 @@ def test_turn_stream_failing_while_reasoning_still_reaches_the_error_frame(
     assert error_part["errorText"] == "Answer generation failed. Please try again."
     assert "provider-secret-internal-detail" not in resp.text
 
-    assert auth_client.get(f"/api/conversations/{conversation.id}").json()["turns"] == []
+    # A turn that broke before writing a word still keeps what was asked (AD-262).
+    body = auth_client.get(f"/api/conversations/{conversation.id}").json()
+    assert len(body["turns"]) == 1
+    assert body["turns"][0]["answer_status"] == FAILED
+    assert body["turns"][0]["message"] == "photosynthesis sunlight energy"
+    assert body["turns"][0]["text"] == ""
 
 
 def test_turn_stream_pre_stream_guards_return_plain_http(
