@@ -276,24 +276,46 @@ def _log_client_error(exc: BaseException) -> None:
     useful: the reader gets "answer generation failed" and the operator gets no way
     to tell *which* of the two mutually exclusive Anthropic request shapes was sent
     (citations-enabled documents here, JSON schema in the quiz adapter) or which
-    request to quote to the provider. Shape, status, and ``request_id`` are exactly
-    that, and they are all this line carries: the exception's own message quotes the
+    request to quote to the provider. Shape, status, ``request_id``, and the
+    provider ``error.type`` are exactly that: the exception's own message quotes the
     offending request back, so logging it would put document bodies, the system
     prompt, and the learner's question in the log (NFR-SEC-004). A 4xx with no
     ``request_id`` still logs — status and shape alone already narrow the cause.
     The status is read off the exception rather than an SDK type so this module keeps
     its single lazy ``anthropic`` import; anything without a 4xx status passes through
-    unlogged as the transport failure it is.
+    unlogged as the transport failure it is. ``error_type`` is the provider's own
+    ``error.type`` when the exception carries a dict body (the live 400 was
+    ``invalid_request_error`` for an empty credit balance, not a mixed request
+    shape); the error *message* stays off the line because the SDK quotes the
+    rejected request there.
     """
     status = getattr(exc, "status_code", None)
     if not isinstance(status, int) or not 400 <= status < 500:
         return
     logger.warning(
-        "anthropic generation rejected request_shape=%s status=%s request_id=%s",
+        "anthropic generation rejected request_shape=%s status=%s request_id=%s error_type=%s",
         _REQUEST_SHAPE,
         status,
         getattr(exc, "request_id", None),
+        _provider_error_type(exc),
     )
+
+
+def _provider_error_type(exc: BaseException) -> str | None:
+    """Return the provider ``error.type`` from a dict body, else ``None``.
+
+    The SDK puts a structured body on the exception; the string ``message``
+    is the half that echoes document data and the question, so it is never
+    copied onto the log line.
+    """
+    body = getattr(exc, "body", None)
+    if not isinstance(body, dict):
+        return None
+    inner = body.get("error")
+    if not isinstance(inner, dict):
+        return None
+    kind = inner.get("type")
+    return kind if isinstance(kind, str) and kind else None
 
 
 def _build_history_messages(

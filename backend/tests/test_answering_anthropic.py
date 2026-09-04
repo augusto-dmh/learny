@@ -360,12 +360,20 @@ _SECRET_QUESTION = "why do the tides follow the moon"
 
 
 class _FakeAPIStatusError(Exception):
-    """Shaped like the SDK's ``APIStatusError``: HTTP status, request id, body text."""
+    """Shaped like the SDK's ``APIStatusError``: HTTP status, request id, body."""
 
-    def __init__(self, status_code: int, *, request_id: str | None, body: str) -> None:
+    def __init__(
+        self,
+        status_code: int,
+        *,
+        request_id: str | None,
+        body: str,
+        payload: dict[str, object] | None = None,
+    ) -> None:
         super().__init__(body)
         self.status_code = status_code
         self.request_id = request_id
+        self.body = payload
 
 
 def _rejection(request_id: str | None) -> _FakeAPIStatusError:
@@ -436,6 +444,7 @@ def test_a_rejected_request_logs_its_shape_status_and_request_id(caplog, stream:
     assert "request_shape=citations" in lines[0]
     assert "status=400" in lines[0]
     assert "request_id=req_011CQ7x" in lines[0]
+    assert "error_type=None" in lines[0]
 
 
 @pytest.mark.parametrize("stream", [False, True], ids=["buffered", "stream"])
@@ -454,6 +463,31 @@ def test_a_rejection_without_a_request_id_still_logs_status_and_shape(caplog) ->
     assert len(lines) == 1
     assert "request_shape=citations" in lines[0]
     assert "status=400" in lines[0]
+
+
+def test_a_rejected_request_logs_the_provider_error_type_not_its_message(caplog) -> None:
+    """A billing 400 is still 400; the type distinguishes it from a mixed shape."""
+    error = _FakeAPIStatusError(
+        400,
+        request_id="req_011CehjX",
+        body=(
+            "Error code: 400 - {'error': {'message': \"documents.0.source.data: "
+            f"'{_SECRET_SNIPPET}'\"}}"
+        ),
+        payload={
+            "type": "error",
+            "error": {
+                "type": "invalid_request_error",
+                "message": "Your credit balance is too low to access the Anthropic API.",
+            },
+        },
+    )
+    lines = _rejected_call_lines(caplog, error, stream=False)
+
+    assert len(lines) == 1
+    assert "error_type=invalid_request_error" in lines[0]
+    assert "credit balance" not in lines[0]
+    assert _SECRET_SNIPPET not in lines[0]
 
 
 # --- Answer-mode conversation history (CONV-14, CONV-26 AC2) -------------------
