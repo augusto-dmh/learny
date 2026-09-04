@@ -214,10 +214,10 @@ T10 → T11 → T12 → T13 → T14 → T15 → T16
 
 **Done when**:
 
-- [ ] First call inserts five active items for the caller
-- [ ] Second call leaves scheduling byte-equal
-- [ ] Grading a clone does not change the template snapshot
-- [ ] Overlap cannot yield ten clones (unique or equivalent)
+- [x] First call inserts five active items for the caller
+- [x] Second call leaves scheduling byte-equal
+- [x] Grading a clone does not change the template snapshot
+- [x] Overlap cannot yield ten clones (unique or equivalent)
 
 **Tests**: unit
 **Gate**: full

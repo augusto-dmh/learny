@@ -52,6 +52,7 @@ def test_migration_metadata_compiles() -> None:
         corpus_sections,
         ingestion_jobs,
         metadata,
+        quiz_items,
         sessions,
         sources,
         users,
@@ -118,6 +119,11 @@ def test_migration_metadata_compiles() -> None:
         if uc.__class__.__name__ == "UniqueConstraint"
     }
     assert ("document_id", "position") in section_uniques
+    starter_index = {ix.name: ix for ix in quiz_items.indexes}[
+        "uq_quiz_items_starter_user_content_key"
+    ]
+    assert starter_index.unique
+    assert [c.name for c in starter_index.columns] == ["user_id", "source_id", "content_key"]
 
 
 @pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
@@ -3169,6 +3175,162 @@ def test_migration_0022_adds_sample_flag_and_activation_events(monkeypatch) -> N
         engine.dispose()
 
     command.downgrade(cfg, "base")
+
+
+def _insert_starter_card(conn, *, item_id, source_id, user_id, content_key: str) -> None:
+    conn.execute(
+        text(
+            "INSERT INTO quiz_items "
+            "(id, source_id, user_id, origin, item_type, question, "
+            " answer, section_path, anchor, source_excerpt, chunk_hash, content_key) "
+            "VALUES (:id, :sid, :uid, 'starter', 'free_recall', 'q', 'a', "
+            " '[]', 'a.xhtml', 'excerpt', 'ch', :ck)"
+        ),
+        {
+            "id": item_id,
+            "sid": source_id,
+            "uid": user_id,
+            "ck": content_key,
+        },
+    )
+
+
+@pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
+def test_migration_0023_starter_unique_is_per_learner_not_per_source(monkeypatch) -> None:
+    """0023: two learners may share a sample fingerprint; one learner may not.
+
+    The deck unique is per source. Starter clones must not reuse it, or the
+    second learner's insert would collide with the first.
+    """
+    monkeypatch.setenv("LEARNY_DATABASE_URL", TEST_DB_URL)
+    cfg = _alembic_config(TEST_DB_URL)
+
+    command.upgrade(cfg, "head")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM quiz_items WHERE origin = 'starter'"))
+    finally:
+        engine.dispose()
+
+    command.downgrade(cfg, "0022_sample_and_activation")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        with engine.connect() as conn:
+            leftover = conn.execute(
+                text(
+                    "SELECT indexname FROM pg_indexes "
+                    "WHERE indexname = 'uq_quiz_items_starter_user_content_key'"
+                )
+            ).fetchall()
+        assert leftover == []
+    finally:
+        engine.dispose()
+
+    command.upgrade(cfg, "0023_starter_quiz_origin")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        with engine.connect() as conn:
+            indexdef = conn.execute(
+                text(
+                    "SELECT indexdef FROM pg_indexes "
+                    "WHERE indexname = 'uq_quiz_items_starter_user_content_key'"
+                )
+            ).scalar_one()
+        assert "UNIQUE" in indexdef
+        assert "user_id" in indexdef
+        assert "source_id" in indexdef
+        assert "content_key" in indexdef
+        assert "origin = 'starter'" in indexdef
+
+        operator_id = uuid.uuid4()
+        learner_a = uuid.uuid4()
+        learner_b = uuid.uuid4()
+        source_id = uuid.uuid4()
+        suffix = uuid.uuid4().hex[:8]
+        with engine.begin() as conn:
+            for uid, email in (
+                (operator_id, f"starter-op-{suffix}@example.com"),
+                (learner_a, f"starter-a-{suffix}@example.com"),
+                (learner_b, f"starter-b-{suffix}@example.com"),
+            ):
+                conn.execute(
+                    text("INSERT INTO users (id, email) VALUES (:id, :email)"),
+                    {"id": uid, "email": email},
+                )
+            conn.execute(
+                text(
+                    "INSERT INTO sources "
+                    "(id, user_id, title, filename, content_type, byte_size, "
+                    " checksum, object_key) "
+                    "VALUES (:id, :uid, 'Book', 's.epub', 'application/epub+zip', "
+                    " 1, 'c', :key)"
+                ),
+                {
+                    "id": source_id,
+                    "uid": operator_id,
+                    "key": f"sources/{source_id}.epub",
+                },
+            )
+            _insert_starter_card(
+                conn,
+                item_id=uuid.uuid4(),
+                source_id=source_id,
+                user_id=learner_a,
+                content_key="ck-shared",
+            )
+            _insert_starter_card(
+                conn,
+                item_id=uuid.uuid4(),
+                source_id=source_id,
+                user_id=learner_b,
+                content_key="ck-shared",
+            )
+        with pytest.raises(IntegrityError):
+            with engine.begin() as conn:
+                _insert_starter_card(
+                    conn,
+                    item_id=uuid.uuid4(),
+                    source_id=source_id,
+                    user_id=learner_a,
+                    content_key="ck-shared",
+                )
+
+        from app.infrastructure.db.metadata import quiz_items
+
+        inspector = inspect(engine)
+        names = {ix["name"] for ix in inspector.get_indexes("quiz_items")}
+        assert "uq_quiz_items_starter_user_content_key" in names
+        declared = {ix.name for ix in quiz_items.indexes}
+        assert "uq_quiz_items_starter_user_content_key" in declared
+    finally:
+        engine.dispose()
+
+    command.downgrade(cfg, "0022_sample_and_activation")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        with engine.connect() as conn:
+            leftover = conn.execute(
+                text(
+                    "SELECT indexname FROM pg_indexes "
+                    "WHERE indexname = 'uq_quiz_items_starter_user_content_key'"
+                )
+            ).fetchall()
+            surviving = conn.execute(
+                text("SELECT count(*) FROM quiz_items WHERE source_id = :sid"),
+                {"sid": source_id},
+            ).scalar_one()
+        assert leftover == []
+        assert surviving == 2
+        with engine.begin() as conn:
+            conn.execute(
+                text("DELETE FROM quiz_items WHERE source_id = :sid"),
+                {"sid": source_id},
+            )
+    finally:
+        engine.dispose()
+
+    command.upgrade(cfg, "head")
 
 
 @pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")

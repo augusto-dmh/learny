@@ -942,6 +942,8 @@ class QuizItemRepository(Protocol):
         from one highlight is idempotent while two highlights may share a key.
         ``tutor`` items collapse on ``conversation_id`` where ``origin='tutor'`` and
         ``conversation_id IS NOT NULL`` — one live conversation, one tutor card.
+        ``starter`` items collapse on ``(user_id, source_id, content_key)`` so two
+        learners can clone the same sample template without sharing a row.
         """
         ...
 

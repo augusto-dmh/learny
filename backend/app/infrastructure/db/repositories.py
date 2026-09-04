@@ -1324,10 +1324,13 @@ class SqlAlchemyQuizItemRepository:
         ``(note_anchor_id, content_key)`` so re-accepting identical text from the same
         highlight is idempotent while two different highlights may share a key.
         Tutor items collapse on ``conversation_id`` so a second accept of the same
-        closed thread is idempotent. A highlight item with no anchor (severed
-        provenance), a tutor item with no conversation (severed provenance), and a
-        ``note`` item (no uniqueness at all — AD-148, dedup is service-level) match
-        no partial index and are plain inserts under their minted id.
+        closed thread is idempotent. Starter items collapse on
+        ``(user_id, source_id, content_key)`` so two learners can clone the same
+        sample template; a conflict is a no-op (content and scheduling stay). A
+        highlight item with no anchor (severed provenance), a tutor item with no
+        conversation (severed provenance), and a ``note`` item (no uniqueness at
+        all — AD-148, dedup is service-level) match no partial index and are
+        plain inserts under their minted id.
         """
         # Denormalized ownership (AD-149): a note card carries its owner explicitly
         # (it has no source); every other origin leaves ``user_id`` unset and it is
@@ -1388,10 +1391,16 @@ class SqlAlchemyQuizItemRepository:
                 index_where=text("origin = 'tutor' AND conversation_id IS NOT NULL"),
                 set_=content_update,
             )
+        elif item.origin == QuizItemOrigin.STARTER:
+            stmt = stmt.on_conflict_do_nothing(
+                index_elements=["user_id", "source_id", "content_key"],
+                index_where=text("origin = 'starter'"),
+            )
         # else: a note card, or a severed-provenance highlight/tutor — no partial
         # index to collapse on, so it is a plain insert under its minted id.
         stmt = stmt.returning(literal_column("(xmax = 0)").label("inserted"))
-        return bool(self._conn.execute(stmt).scalar_one())
+        inserted = self._conn.execute(stmt).scalar()
+        return bool(inserted)
 
     def get_by_anchor_and_key(self, note_anchor_id: UUID, content_key: str) -> QuizItem | None:
         """Return the highlight card already accepted for this anchor + fingerprint.

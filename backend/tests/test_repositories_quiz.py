@@ -1751,3 +1751,61 @@ def test_deleting_the_conversation_nulls_the_link_and_leaves_the_tutor_card(
     assert repo.upsert(later_item, embedding=None) is True
     assert repo.get_by_id(later_item.id).id == later_item.id
     assert {row.id for row in repo.list_for_source(source.id)} == {item.id, later_item.id}
+
+
+def test_two_learners_can_hold_the_same_starter_fingerprint_without_sharing_schedules(
+    db_conn: Connection,
+) -> None:
+    """Starter identity is per learner on a source, not the deck unique.
+
+    Two users cloning the same sample template must both insert. Grading one
+    clone must not move the other clone's due date, and a second upsert for the
+    same learner is a no-op.
+    """
+    source = _persisted_source(db_conn, f"starter-op-{uuid4()}@example.com")
+    users = SqlAlchemyUserRepository(db_conn)
+    now = datetime.now(UTC)
+    learner_a = User(id=uuid4(), email=f"starter-a-{uuid4()}@example.com", created_at=now)
+    learner_b = User(id=uuid4(), email=f"starter-b-{uuid4()}@example.com", created_at=now)
+    users.add(learner_a)
+    users.add(learner_b)
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+
+    template = _item(source.id)
+    assert repo.upsert(template, embedding=None) is True
+    clone_a = replace(template, id=uuid4(), origin=QuizItemOrigin.STARTER, user_id=learner_a.id)
+    clone_b = replace(template, id=uuid4(), origin=QuizItemOrigin.STARTER, user_id=learner_b.id)
+    assert clone_a.content_key == template.content_key == clone_b.content_key
+
+    assert repo.upsert(clone_a, embedding=None) is True
+    assert repo.upsert(clone_b, embedding=None) is True
+    stored = repo.list_for_source(source.id)
+    starters = [item for item in stored if item.origin == QuizItemOrigin.STARTER]
+    assert len(starters) == 2
+    assert {item.user_id for item in starters} == {learner_a.id, learner_b.id}
+
+    again = replace(clone_a, id=uuid4())
+    assert repo.upsert(again, embedding=None) is False
+    remaining = [
+        item for item in repo.list_for_source(source.id) if item.origin == QuizItemOrigin.STARTER
+    ]
+    assert len(remaining) == 2
+
+    due_a = datetime.now(UTC)
+    due_b = due_a + timedelta(days=1)
+    snap_a = _snapshot(due=due_a)
+    snap_b = _snapshot(due=due_b)
+    repo.create_scheduling(clone_a.id, snap_a)
+    repo.create_scheduling(clone_b.id, snap_b)
+    repo.create_scheduling(template.id, snap_a)
+    graded = _snapshot(
+        due=due_a + timedelta(days=7),
+        stability=12.0,
+        difficulty=3.0,
+        last_review=due_a,
+    )
+    repo.update_scheduling(clone_a.id, graded)
+
+    assert repo.get_scheduling(clone_a.id) == graded
+    assert repo.get_scheduling(clone_b.id) == snap_b
+    assert repo.get_scheduling(template.id) == snap_a

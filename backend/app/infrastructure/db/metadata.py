@@ -477,9 +477,10 @@ quiz_items = Table(
         index=True,
     ),
     # deck (whole-source generation) | highlight (accepted at a passage) | note
-    # (promoted from a note) | tutor (closed-session restatement). The origins are
-    # identity modes — see the partial uniques at the end of the table; note cards
-    # are identified by their minted id alone.
+    # (promoted from a note) | tutor (closed-session restatement) | starter
+    # (per-learner clone of a sample template). The origins are identity modes —
+    # see the partial uniques at the end of the table; note cards are identified
+    # by their minted id alone.
     Column("origin", Text, nullable=False, server_default="deck"),
     # Typed provenance back to the highlight this card was accepted from. SET NULL, so
     # deleting the note severs the link without destroying the derived card; the card
@@ -562,6 +563,16 @@ quiz_items = Table(
         "conversation_id",
         unique=True,
         postgresql_where=text("origin = 'tutor' AND conversation_id IS NOT NULL"),
+    ),
+    # Starter clones are per learner on a source. The deck unique is per source
+    # only, so two learners cloning the same sample template cannot share it.
+    Index(
+        "uq_quiz_items_starter_user_content_key",
+        "user_id",
+        "source_id",
+        "content_key",
+        unique=True,
+        postgresql_where=text("origin = 'starter'"),
     ),
     # A card has a source unless it was promoted from a note (AD-149): note cards are
     # source-less, every other origin keeps its source.
