@@ -749,6 +749,10 @@ class QuizItemOrigin:
     # cards their identity is the minted id, so the note's text may be regenerated
     # without disturbing scheduling; they are the only source-less origin (AD-148/149).
     NOTE = "note"
+    # ``tutor`` cards are the one opt-in free-recall restatement from a closed tutor
+    # conversation (AD-297). Identity is the live ``conversation_id``, not content
+    # hash; they stay source-backed, so the source-or-note CHECK is unchanged.
+    TUTOR = "tutor"
 
 
 class QuizJobStatus:
@@ -865,6 +869,8 @@ class QuizItem:
     rewritable fingerprint. ``note_anchor_id`` is the typed provenance back to the
     highlight a card was accepted from — ``None`` for deck items and for a card whose
     origin note has since been deleted, which the stored snapshot survives.
+    ``conversation_id`` is the tutor-card provenance (AD-298); ``None`` for every
+    other origin and after the origin conversation is deleted.
     """
 
     id: UUID
@@ -895,6 +901,9 @@ class QuizItem:
     # When the origin note last changed under this card (AD-144); drives the review
     # badge. ``None`` until a regenerate-and-match flags the card.
     note_changed_at: datetime | None = None
+    # Provenance back to the closed tutor conversation (``origin='tutor'``); ``None``
+    # once that conversation is deleted, which the stored snapshot survives (AD-298).
+    conversation_id: UUID | None = None
 
 
 @dataclass(frozen=True)

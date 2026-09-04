@@ -20,6 +20,7 @@ from sqlalchemy import Connection, func, select
 
 from app.application.quiz_qc import content_key
 from app.domain.entities import (
+    Conversation,
     CorpusSectionRecord,
     Note,
     NoteAnchor,
@@ -40,6 +41,7 @@ from app.domain.entities import (
 )
 from app.infrastructure.db.metadata import note_anchors, quiz_items, review_log
 from app.infrastructure.db.repositories import (
+    SqlAlchemyConversationRepository,
     SqlAlchemyCorpusRepository,
     SqlAlchemyNoteRepository,
     SqlAlchemyQuizItemRepository,
@@ -1531,3 +1533,117 @@ def test_two_highlight_items_with_no_anchor_both_persist(db_conn: Connection) ->
 
     stored = {item.id for item in repo.list_for_source(source.id)}
     assert stored == {first.id, second.id}
+
+
+# --- tutor origin: conversation-scoped identity (TUTOR-35, TUTOR-36, TUTOR-39) --
+
+
+def _persisted_conversation(db_conn: Connection, source: Source) -> Conversation:
+    now = datetime.now(UTC)
+    return SqlAlchemyConversationRepository(db_conn).add(
+        Conversation(
+            id=uuid4(),
+            source_id=source.id,
+            title="Chapter 1",
+            scope_anchors=("ch01.xhtml",),
+            include_notes=False,
+            target_anchor="ch01.xhtml",
+            target_section_path=("Chapter 1",),
+            target_title="Chapter 1",
+            created_at=now,
+            updated_at=now,
+        )
+    )
+
+
+def _tutor_item(
+    source_id: UUID,
+    conversation_id: UUID | None,
+    *,
+    question: str = 'In your own words, what is "Chapter 1" arguing?',
+    answer: str = "The restatement.",
+) -> QuizItem:
+    return replace(
+        _item(source_id, question=question, answer=answer),
+        origin=QuizItemOrigin.TUTOR,
+        conversation_id=conversation_id,
+    )
+
+
+def test_upsert_persists_tutor_origin_and_conversation_link(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "quiz-tutor-persist@example.com")
+    conversation = _persisted_conversation(db_conn, source)
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    item = _tutor_item(source.id, conversation.id)
+
+    assert repo.upsert(item, embedding=None) is True
+
+    stored = repo.get_by_id(item.id)
+    assert stored.origin == QuizItemOrigin.TUTOR
+    assert stored.conversation_id == conversation.id
+    assert stored.source_id == source.id
+
+
+def test_two_tutor_items_for_one_conversation_collapse_to_one_row(
+    db_conn: Connection,
+) -> None:
+    """The partial unique is the identity: one live conversation, one tutor card.
+
+    Two different fingerprints still collide — tutor identity is conversation_id,
+    not content_key (AD-297).
+    """
+    source = _persisted_source(db_conn, "quiz-tutor-unique@example.com")
+    conversation = _persisted_conversation(db_conn, source)
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    first = _tutor_item(source.id, conversation.id, answer="First restatement.")
+    second = _tutor_item(source.id, conversation.id, answer="Second restatement.")
+    assert first.id != second.id
+    assert first.content_key != second.content_key
+
+    assert repo.upsert(first, embedding=None) is True
+    assert repo.upsert(second, embedding=None) is False
+
+    stored = repo.list_for_source(source.id)
+    assert len(stored) == 1
+    assert stored[0].id == first.id
+
+
+def test_tutor_items_for_different_conversations_both_persist(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "quiz-tutor-distinct@example.com")
+    first_conversation = _persisted_conversation(db_conn, source)
+    second_conversation = _persisted_conversation(db_conn, source)
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    first = _tutor_item(source.id, first_conversation.id)
+    second = _tutor_item(source.id, second_conversation.id)
+
+    assert repo.upsert(first, embedding=None) is True
+    assert repo.upsert(second, embedding=None) is True
+
+    stored = {item.id for item in repo.list_for_source(source.id)}
+    assert stored == {first.id, second.id}
+
+
+def test_deleting_the_conversation_nulls_the_link_and_leaves_the_tutor_card(
+    db_conn: Connection,
+) -> None:
+    """ON DELETE SET NULL: the card survives; a later conversation can mint its own."""
+    source = _persisted_source(db_conn, "quiz-tutor-set-null@example.com")
+    conversation = _persisted_conversation(db_conn, source)
+    later = _persisted_conversation(db_conn, source)
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    item = _tutor_item(source.id, conversation.id)
+    assert repo.upsert(item, embedding=None) is True
+
+    deleted = SqlAlchemyConversationRepository(db_conn).delete(conversation.id)
+    assert deleted is True
+
+    stored = repo.get_by_id(item.id)
+    assert stored is not None
+    assert stored.conversation_id is None
+    assert stored.origin == QuizItemOrigin.TUTOR
+    assert stored.question == item.question
+
+    later_item = _tutor_item(source.id, later.id, answer="A different restatement.")
+    assert repo.upsert(later_item, embedding=None) is True
+    assert repo.get_by_id(later_item.id).id == later_item.id
+    assert {row.id for row in repo.list_for_source(source.id)} == {item.id, later_item.id}

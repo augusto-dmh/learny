@@ -267,9 +267,9 @@ T11 → T12 → T13 → T14 → T15
 
 **Done when**:
 
-- [ ] Unique rejects two tutor rows for one conversation_id
-- [ ] Deleting the conversation nulls `conversation_id` and leaves the row
-- [ ] Gate: `uv run pytest tests/test_migrations.py tests/test_repositories_quiz.py`
+- [x] Unique rejects two tutor rows for one conversation_id
+- [x] Deleting the conversation nulls `conversation_id` and leaves the row
+- [x] Gate: `uv run pytest tests/test_migrations.py tests/test_repositories_quiz.py`
 
 **Tests**: integration
 **Gate**: full

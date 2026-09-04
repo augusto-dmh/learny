@@ -301,24 +301,25 @@ def test_quiz_item_is_frozen() -> None:
 # --- Card origin and provenance (CAP-10, CAP-16, CAP-19) -------------------------
 
 
-def test_item_origins_are_exactly_deck_highlight_and_note() -> None:
-    """The vocabulary is closed: a fourth origin would need its own identity rule.
+def test_item_origins_are_exactly_deck_highlight_note_and_tutor() -> None:
+    """The vocabulary is closed: each origin has its own identity rule.
 
-    ``note`` joins ``deck``/``highlight`` with AD-148's minted-id identity — the only
-    source-less origin — so a promoted note can be regenerated without touching schedule.
+    ``note`` is the only source-less origin (AD-148). ``tutor`` is source-backed and
+    identified by ``conversation_id`` (AD-297), not by content hash or highlight.
     """
     origins = {
         value
         for key, value in vars(QuizItemOrigin).items()
         if not key.startswith("_") and isinstance(value, str)
     }
-    assert origins == {"deck", "highlight", "note"}
+    assert origins == {"deck", "highlight", "note", "tutor"}
 
 
 def test_item_origin_vocabulary() -> None:
     assert QuizItemOrigin.DECK == "deck"
     assert QuizItemOrigin.HIGHLIGHT == "highlight"
     assert QuizItemOrigin.NOTE == "note"
+    assert QuizItemOrigin.TUTOR == "tutor"
 
 
 def _item(**overrides) -> QuizItem:  # noqa: ANN003
@@ -349,6 +350,16 @@ def test_quiz_item_defaults_to_deck_origin_with_no_provenance() -> None:
 
     assert item.origin == QuizItemOrigin.DECK
     assert item.note_anchor_id is None
+    assert item.conversation_id is None
+
+
+def test_quiz_item_carries_tutor_origin_and_conversation_link() -> None:
+    conversation_id = uuid4()
+
+    item = _item(origin=QuizItemOrigin.TUTOR, conversation_id=conversation_id)
+
+    assert item.origin == QuizItemOrigin.TUTOR
+    assert item.conversation_id == conversation_id
 
 
 def test_quiz_item_carries_highlight_origin_and_its_anchor_provenance() -> None:

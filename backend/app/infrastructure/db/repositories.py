@@ -1293,15 +1293,17 @@ class SqlAlchemyQuizItemRepository:
         review-log rows untouched (QUIZ-02); the ``(xmax = 0)`` projection is Postgres'
         was-inserted signal (zero on a fresh insert, the updater's xid otherwise).
 
-        The conflict target follows ``origin``, matching one of the two partial unique
-        indexes from 0012 — each ``index_where`` must equal its index's predicate or
-        Postgres cannot select the index and raises. Deck items keep collapsing on
-        ``(source_id, content_key)``; highlight items collapse on
+        The conflict target follows ``origin``, matching one of the partial unique
+        indexes from 0012 and 0020 — each ``index_where`` must equal its index's
+        predicate or Postgres cannot select the index and raises. Deck items keep
+        collapsing on ``(source_id, content_key)``; highlight items collapse on
         ``(note_anchor_id, content_key)`` so re-accepting identical text from the same
-        highlight is idempotent while two different highlights may share a key. A
-        highlight item with no anchor (severed provenance) and a ``note`` item (no
-        uniqueness at all — AD-148, dedup is service-level) match no partial index and
-        are plain inserts under their minted id.
+        highlight is idempotent while two different highlights may share a key.
+        Tutor items collapse on ``conversation_id`` so a second accept of the same
+        closed thread is idempotent. A highlight item with no anchor (severed
+        provenance), a tutor item with no conversation (severed provenance), and a
+        ``note`` item (no uniqueness at all — AD-148, dedup is service-level) match
+        no partial index and are plain inserts under their minted id.
         """
         # Denormalized ownership (AD-149): a note card carries its owner explicitly
         # (it has no source); every other origin leaves ``user_id`` unset and it is
@@ -1318,6 +1320,7 @@ class SqlAlchemyQuizItemRepository:
             origin=item.origin,
             note_anchor_id=item.note_anchor_id,
             note_id=item.note_id,
+            conversation_id=item.conversation_id,
             item_type=item.item_type,
             question=item.question,
             answer=item.answer,
@@ -1355,8 +1358,14 @@ class SqlAlchemyQuizItemRepository:
                 index_where=text("origin = 'highlight' AND note_anchor_id IS NOT NULL"),
                 set_=content_update,
             )
-        # else: a note card, or a severed-provenance highlight — no partial index to
-        # collapse on, so it is a plain insert under its minted id.
+        elif item.origin == QuizItemOrigin.TUTOR and item.conversation_id is not None:
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["conversation_id"],
+                index_where=text("origin = 'tutor' AND conversation_id IS NOT NULL"),
+                set_=content_update,
+            )
+        # else: a note card, or a severed-provenance highlight/tutor — no partial
+        # index to collapse on, so it is a plain insert under its minted id.
         stmt = stmt.returning(literal_column("(xmax = 0)").label("inserted"))
         return bool(self._conn.execute(stmt).scalar_one())
 
@@ -2413,6 +2422,7 @@ def _to_quiz_item(row) -> QuizItem:  # noqa: ANN001
         user_id=row.user_id,
         note_id=row.note_id,
         note_changed_at=row.note_changed_at,
+        conversation_id=row.conversation_id,
     )
 
 

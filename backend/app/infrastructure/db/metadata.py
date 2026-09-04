@@ -468,8 +468,9 @@ quiz_items = Table(
         index=True,
     ),
     # deck (whole-source generation) | highlight (accepted at a passage) | note
-    # (promoted from a note). The origins are identity modes — see the partial uniques
-    # at the end of the table; note cards are identified by their minted id alone.
+    # (promoted from a note) | tutor (closed-session restatement). The origins are
+    # identity modes — see the partial uniques at the end of the table; note cards
+    # are identified by their minted id alone.
     Column("origin", Text, nullable=False, server_default="deck"),
     # Typed provenance back to the highlight this card was accepted from. SET NULL, so
     # deleting the note severs the link without destroying the derived card; the card
@@ -490,6 +491,14 @@ quiz_items = Table(
         ForeignKey("notes.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
+    ),
+    # Provenance back to the tutor conversation this card was accepted from (AD-298).
+    # SET NULL, so deleting the thread severs the link without destroying the card.
+    Column(
+        "conversation_id",
+        UUID(as_uuid=True),
+        ForeignKey("conversations.id", ondelete="SET NULL"),
+        nullable=True,
     ),
     Column("item_type", Text, nullable=False),  # free_recall | cloze
     Column("question", Text, nullable=False),
@@ -532,6 +541,15 @@ quiz_items = Table(
         "content_key",
         unique=True,
         postgresql_where=text("origin = 'highlight' AND note_anchor_id IS NOT NULL"),
+    ),
+    # Tutor cards are one-per-live-conversation (AD-297). The predicate must match the
+    # upsert ``index_where`` exactly or Postgres cannot select this index. After SET
+    # NULL the row no longer occupies the unique, so a later conversation can mint.
+    Index(
+        "uq_quiz_items_tutor_conversation_id",
+        "conversation_id",
+        unique=True,
+        postgresql_where=text("origin = 'tutor' AND conversation_id IS NOT NULL"),
     ),
     # A card has a source unless it was promoted from a note (AD-149): note cards are
     # source-less, every other origin keeps its source.

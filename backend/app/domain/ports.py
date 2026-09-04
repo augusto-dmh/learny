@@ -922,6 +922,8 @@ class QuizItemRepository(Protocol):
         ``deck`` items collapse on ``(source_id, content_key)``; ``highlight`` items
         collapse on ``(note_anchor_id, content_key)``, so re-accepting the same text
         from one highlight is idempotent while two highlights may share a key.
+        ``tutor`` items collapse on ``conversation_id`` where ``origin='tutor'`` and
+        ``conversation_id IS NOT NULL`` — one live conversation, one tutor card.
         """
         ...
 
