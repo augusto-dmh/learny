@@ -195,13 +195,13 @@ A stranger who creates an account lands on an empty library, waits on ingest wit
 | FS-16 | P1: Starter deck | T6 | Implemented |
 | FS-17 | P1: Starter deck | T7 | Implemented |
 | FS-18 | P1: Starter deck | T6 | Implemented |
-| FS-19 | P1: Library | T11 | In Tasks |
-| FS-20 | P1: Library | T11 | In Tasks |
-| FS-21 | P1: Library | T11 | In Tasks |
-| FS-22 | P1: Library | T11 | In Tasks |
-| FS-23 | P1: Library | T11 | In Tasks |
+| FS-19 | P1: Library | T11 | Implemented |
+| FS-20 | P1: Library | T11 | Implemented |
+| FS-21 | P1: Library | T11 | Implemented |
+| FS-22 | P1: Library | T11 | Implemented |
+| FS-23 | P1: Library | T11 | Implemented |
 | FS-24 | P1: Library | T12 | In Tasks |
-| FS-25 | P1: Library | T11 | In Tasks |
+| FS-25 | P1: Library | T11 | Implemented |
 | FS-26 | P1: Library | T13 | In Tasks |
 | FS-27 | P1: Landing / Home | T16 | In Tasks |
 | FS-28 | P1: Landing / Home | T8 | Implemented |

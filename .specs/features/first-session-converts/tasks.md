@@ -340,11 +340,11 @@ T10 → T11 → T12 → T13 → T14 → T15 → T16
 
 **Done when**:
 
-- [ ] Ready row’s primary name is Open and href is the read URL
-- [ ] Overflow has Ask, Tutor, Review; sample has no Re-ingest
-- [ ] Input accept includes `.pdf`
-- [ ] Processing own book plus sample shows wait copy
-- [ ] Sample-only list does not show “No sources yet.”
+- [x] Ready row’s primary name is Open and href is the read URL
+- [x] Overflow has Ask, Tutor, Review; sample has no Re-ingest
+- [x] Input accept includes `.pdf`
+- [x] Processing own book plus sample shows wait copy
+- [x] Sample-only list does not show “No sources yet.”
 
 **Tests**: unit
 **Gate**: full

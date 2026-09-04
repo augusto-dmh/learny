@@ -42,6 +42,8 @@ function processingSource(id = "s1") {
     content_type: "application/epub+zip",
     status: "processing",
     created_at: "now",
+    is_sample: false,
+    suggested_question: null,
   };
 }
 
