@@ -1967,3 +1967,121 @@ describe("ChapterFlow capture shortcuts (CAP-28/29/32)", () => {
     expect(captures(fetchMock)).toBe(0);
   });
 });
+
+describe("ChapterFlow reader chrome (TOC, dock, measure)", () => {
+  function pressKey(
+    key: string,
+    target: EventTarget = window,
+    init: KeyboardEventInit = {},
+  ) {
+    target.dispatchEvent(
+      new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init }),
+    );
+  }
+
+  it("starts with the TOC closed and the dock closed when the URL has no panel", async () => {
+    nav.params = new URLSearchParams();
+    render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+    );
+
+    await screen.findByText("Ada Lovelace wrote the first algorithm.");
+    const toc = screen.getByTestId("toc-panel");
+    expect(toc.getAttribute("data-state")).toBe("closed");
+    expect(toc.className).toContain("hidden");
+    expect(toc.className).not.toContain("lg:block");
+    expect(screen.queryByTestId("reader-panel")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Table of contents" }).getAttribute("aria-expanded"),
+    ).toBe("false");
+    expect(
+      screen.getByRole("button", { name: "Study dock" }).getAttribute("aria-expanded"),
+    ).toBe("false");
+  });
+
+  it("toggles the table of contents on a bare [", async () => {
+    render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+    );
+    await screen.findByText("Ada Lovelace wrote the first algorithm.");
+    const toggle = screen.getByRole("button", { name: "Table of contents" });
+
+    act(() => pressKey("["));
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByTestId("toc-panel").getAttribute("data-state")).toBe("open");
+    expect(screen.getByTestId("toc-panel").className).toContain("block");
+
+    act(() => pressKey("["));
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.getByTestId("toc-panel").getAttribute("data-state")).toBe("closed");
+  });
+
+  it("does not toggle the TOC from an input or while a modifier is held", async () => {
+    render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+    );
+    await screen.findByText("Ada Lovelace wrote the first algorithm.");
+    const input = document.body.appendChild(document.createElement("input"));
+
+    act(() => {
+      pressKey("[", input);
+      pressKey("[", window, { ctrlKey: true });
+    });
+
+    expect(screen.getByTestId("toc-panel").getAttribute("data-state")).toBe("closed");
+    input.remove();
+  });
+
+  it("opens the dock through ?panel= on a bare ]", async () => {
+    render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+    );
+    await screen.findByText("Ada Lovelace wrote the first algorithm.");
+
+    act(() => pressKey("]"));
+
+    expect(nav.replace).toHaveBeenCalledWith("/sources/s1/read?panel=ask");
+  });
+
+  it("closes the dock by dropping ?panel= on a second ]", async () => {
+    nav.params = new URLSearchParams("panel=ask");
+    render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+    );
+    await screen.findByTestId("reader-panel");
+
+    act(() => pressKey("]"));
+
+    expect(nav.replace).toHaveBeenCalledWith("/sources/s1/read");
+  });
+
+  it("does not toggle the dock from an input", async () => {
+    render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+    );
+    await screen.findByText("Ada Lovelace wrote the first algorithm.");
+    const input = document.body.appendChild(document.createElement("input"));
+
+    act(() => pressKey("]", input));
+
+    expect(nav.replace).not.toHaveBeenCalled();
+    input.remove();
+  });
+
+  it("keeps progress, Aa, and TOC and dock icon buttons on the receding bar", async () => {
+    render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+    );
+    await screen.findByText("Ada Lovelace wrote the first algorithm.");
+
+    const bar = screen.getByTestId("reader-top-bar");
+    expect(bar.className).toContain("transition-transform");
+    expect(screen.getByTestId("reading-progress")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Reading settings" })).toBeTruthy();
+    const tocButton = screen.getByRole("button", { name: "Table of contents" });
+    const dockButton = screen.getByRole("button", { name: "Study dock" });
+    expect(tocButton.className).not.toContain("lg:hidden");
+    expect(bar.contains(tocButton)).toBe(true);
+    expect(bar.contains(dockButton)).toBe(true);
+  });
+});

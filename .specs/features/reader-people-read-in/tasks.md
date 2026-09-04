@@ -277,8 +277,8 @@ T11 → T12 → T13 → T14 → T15
 
 **Done when**:
 
-- [ ] Key tests for `[` / `]` ; TOC starts closed; overlay + 65ch assertion below `xl`
-- [ ] Gate: `cd frontend && npm test -- chapter-reader reading-column use-key-shortcuts`
+- [x] Key tests for `[` / `]` ; TOC starts closed; overlay + 65ch assertion below `xl`
+- [x] Gate: `cd frontend && npm test -- chapter-reader reading-column use-key-shortcuts`
 
 **Tests**: unit
 **Gate**: full

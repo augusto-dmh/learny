@@ -31,7 +31,7 @@
  * generation from costing the student their highlight.
  */
 
-import { List } from "lucide-react";
+import { List, PanelRight } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
@@ -106,6 +106,9 @@ const NO_HIGHLIGHTS: SourceHighlightView[] = [];
  */
 const STALE_CAPTURE_MESSAGE =
   "The book changed while you were reading. Reload the page to capture this highlight.";
+
+/** Default dock tab when `]` opens the panel with no `?panel=` already set. */
+const DEFAULT_DOCK_TAB: DockTab = "ask";
 
 /** Pixels below the popover's top edge to drop the suggestion row, clearing the verbs. */
 const SUGGESTIONS_OFFSET = 44;
@@ -403,7 +406,7 @@ export function ChapterFlow({
     ]);
     return next;
   }, [highlightsByAnchor, spanQuote]);
-  // The below-lg table of contents collapses behind the top-bar toggle (RD-25).
+  // The table of contents starts closed; the top-bar toggle and `[` open it.
   const [tocOpen, setTocOpen] = useState(false);
   // Top bar recedes on downward scroll, restores on upward scroll (RD-31).
   const chromeHidden = useRecedingChrome();
@@ -633,6 +636,14 @@ export function ChapterFlow({
     Boolean(capture),
   );
 
+  useKeyShortcuts(
+    {
+      "[": () => setTocOpen((open) => !open),
+      "]": handleDockToggle,
+    },
+    true,
+  );
+
   // Once a return chip is showing, dismiss it after the reader has scrolled a
   // way past where the jump landed — they have settled into the new spot (RD-24).
   useEffect(() => {
@@ -666,6 +677,14 @@ export function ChapterFlow({
   // along so the reader stays where they were.
   function handlePanelClose() {
     router.replace(readUrl(sourceId, urlAnchor));
+  }
+
+  function handleDockToggle() {
+    if (dockTab) {
+      handlePanelClose();
+    } else {
+      handleDockTabChange(DEFAULT_DOCK_TAB);
+    }
   }
 
   // Bring a cited (or taught) passage into view without leaving the answer
@@ -772,10 +791,19 @@ export function ChapterFlow({
               size="icon-sm"
               aria-label="Table of contents"
               aria-expanded={tocOpen}
-              className="lg:hidden"
               onClick={() => setTocOpen((prev) => !prev)}
             >
               <List />
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Study dock"
+              aria-expanded={Boolean(dockTab)}
+              onClick={handleDockToggle}
+            >
+              <PanelRight />
             </Button>
             <span className="min-w-0 truncate text-sm font-medium">
               {chapter.chapter_title}

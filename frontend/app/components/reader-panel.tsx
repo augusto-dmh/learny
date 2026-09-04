@@ -249,7 +249,7 @@ export function ReaderPanel({
       data-testid="reader-panel"
       data-tab={tab}
       aria-label={TAB_TITLES[tab]}
-      className="sticky top-0 flex h-[calc(100vh-3rem)] w-[26rem] shrink-0 flex-col overflow-y-auto border-l bg-background"
+      className="sticky top-0 flex h-svh w-[26rem] flex-col overflow-y-auto border-l bg-background max-xl:fixed max-xl:inset-y-0 max-xl:right-0 max-xl:z-30 xl:shrink-0"
     >
       <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
         <div role="tablist" aria-label="Dock tabs" className="flex gap-1">

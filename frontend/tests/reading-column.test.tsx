@@ -19,16 +19,27 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ChapterFlow } from "../app/components/chapter-reader";
 import type { ChapterView } from "../app/lib/reading";
 
-const nav = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn() }));
+const nav = vi.hoisted(() => ({
+  params: new URLSearchParams(),
+  push: vi.fn(),
+  replace: vi.fn(),
+}));
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: nav.push, replace: nav.replace }),
-  useSearchParams: () => new URLSearchParams(),
+  useSearchParams: () => nav.params,
   useParams: () => ({ id: "s1" }),
+}));
+
+vi.mock("../app/components/ask-panel", () => ({
+  AskPanel: () => <div data-testid="ask-panel-body" />,
+}));
+vi.mock("../app/components/teach-panel", () => ({
+  TeachPanel: () => <div data-testid="teach-panel-body" />,
 }));
 
 vi.mock("next-themes", () => ({
@@ -47,6 +58,10 @@ beforeAll(() => {
   Element.prototype.setPointerCapture = () => {};
   Element.prototype.releasePointerCapture = () => {};
   Element.prototype.scrollIntoView = () => {};
+});
+
+beforeEach(() => {
+  nav.params = new URLSearchParams();
 });
 
 afterEach(() => {
@@ -181,5 +196,30 @@ describe("the Aa controls stay authoritative (PAGE-12)", () => {
     expect(css).not.toContain("18.5px");
     expect(rule(".book-column")).not.toContain("font-size");
     expect(rule(".book-column")).not.toContain("line-height");
+  });
+});
+
+describe("the open dock overlays below xl without shrinking the measure", () => {
+  it("keeps computed .prose-reading max-width at 65ch when the dock is open", () => {
+    nav.params = new URLSearchParams("panel=ask");
+    const sheet = document.createElement("style");
+    sheet.textContent = ".prose-reading { max-width: 65ch; }";
+    document.head.appendChild(sheet);
+
+    const { container } = render(
+      <ChapterFlow sourceId="s1" csrf="c" chapter={chapter} scrollTarget={null} />,
+    );
+
+    const prose = container.querySelector<HTMLElement>(".prose-reading")!;
+    expect(getComputedStyle(prose).maxWidth).toBe("65ch");
+    const panel = screen.getByTestId("reader-panel");
+    const classes = panel.className.split(/\s+/);
+    expect(classes).toContain("max-xl:fixed");
+    expect(classes).toContain("max-xl:inset-y-0");
+    expect(classes).toContain("max-xl:right-0");
+    expect(classes).not.toContain("shrink-0");
+    expect(classes).toContain("xl:shrink-0");
+    expect(declaration(rule(".prose-reading"), "max-width")).toBe("65ch");
+    sheet.remove();
   });
 });
