@@ -805,6 +805,62 @@ describe("ReviewScreen interval labels and requeue (REV-29/31/32)", () => {
     expect(screen.getByTestId("grade-interval-3").textContent).toBe("~1d");
   });
 
+  it("undoes a short-term requeue without refetching the pile", async () => {
+    const soon = new Date(Date.now() + 60 * 1000).toISOString();
+    const fetchMock = routedFetch({
+      "GET /api/auth/me": () => authedMe.clone(),
+      [`GET ${DUE}`]: () => jsonResponse(200, dueQueue([clozeCard])),
+      "POST /api/quiz-items/i1/reviews": () =>
+        jsonResponse(
+          200,
+          scheduling(soon, {
+            state: 1,
+            step: 0,
+            interval_labels: { "1": "~1m", "2": "~10m", "3": "~1d", "4": "~4d" },
+          }),
+        ),
+      "POST /api/reviews/undo": () =>
+        jsonResponse(
+          200,
+          scheduling("2026-07-16T00:00:00Z", {
+            interval_labels: { "1": "~1m", "2": "~10m", "3": "~1d", "4": "~4d" },
+          }),
+        ),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ReviewScreen />);
+    await screen.findByTestId("question");
+    fireEvent.click(screen.getByRole("button", { name: "Reveal answer" }));
+    fireEvent.click(screen.getByRole("button", { name: "Again" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("position").textContent).toBe("2/2"),
+    );
+
+    act(() => {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "u", bubbles: true, cancelable: true }),
+      );
+    });
+
+    await waitFor(() =>
+      expect(screen.getByTestId("position").textContent).toBe("1/1"),
+    );
+    expect(screen.getByTestId("question").textContent).toBe(
+      "Ada wrote the first ____.",
+    );
+    expect(screen.queryByTestId("short-term-remaining")).toBeNull();
+    expect(
+      fetchMock.mock.calls.some(([url]) => url === "/api/reviews/undo"),
+    ).toBe(true);
+    const dueGets = fetchMock.mock.calls.filter(
+      ([url, init]) =>
+        String(url).startsWith(DUE) &&
+        ((init as RequestInit | undefined)?.method ?? "GET") === "GET",
+    );
+    expect(dueGets).toHaveLength(1);
+  });
+
   it("does not requeue a ~4d due card and does not show short-term remaining", async () => {
     const later = new Date(Date.now() + 4 * 24 * 60 * 60 * 1000).toISOString();
     const fetchMock = routedFetch({

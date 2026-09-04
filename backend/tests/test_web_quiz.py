@@ -1129,6 +1129,26 @@ def test_flag_missing_and_non_owned_return_404(
     assert non_owned.json() == missing.json()
 
 
+def test_flag_unauthenticated_returns_401(quiz_client: TestClient, db_conn: Connection) -> None:
+    source_id, csrf = _seed_ready_source(quiz_client, db_conn, "flag-unauth@example.com")
+    item = _seed_item(db_conn, UUID(source_id))
+    quiz_client.cookies.clear()
+    resp = _post_flag(quiz_client, item.id, flagged=True, csrf=csrf)
+    assert resp.status_code == 401, resp.text
+
+
+def test_flag_rate_limit_returns_429(
+    throttled_quiz_client: TestClient, db_conn: Connection
+) -> None:
+    source_id, csrf = _seed_ready_source(throttled_quiz_client, db_conn, "flag-rl@example.com")
+    item = _seed_item(db_conn, UUID(source_id))
+    for _ in range(3):
+        r = _post_flag(throttled_quiz_client, item.id, flagged=True, csrf=csrf)
+        assert r.status_code == 200, r.text
+    throttled = _post_flag(throttled_quiz_client, item.id, flagged=True, csrf=csrf)
+    assert throttled.status_code == 429, throttled.text
+
+
 def test_flag_missing_csrf_returns_403(quiz_client: TestClient, db_conn: Connection) -> None:
     source_id, _ = _seed_ready_source(quiz_client, db_conn, "flag-csrf@example.com")
     item = _seed_item(db_conn, UUID(source_id))

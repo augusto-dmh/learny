@@ -505,6 +505,16 @@ describe("flagQuizItem (REV-34)", () => {
     expect(JSON.parse(init.body as string)).toEqual({ flagged: true });
     expect(new Headers(init.headers).get("X-CSRF-Token")).toBe("csrf-xyz");
   });
+
+  it("surfaces the backend detail on a 404 flag response", async () => {
+    const fetchMock = fetchMockFn(async () =>
+      jsonResponse(404, { detail: "Quiz item not found." }),
+    );
+
+    await expect(
+      flagQuizItem("i1", true, "csrf-xyz", fetchMock as unknown as typeof fetch),
+    ).rejects.toThrow("Quiz item not found.");
+  });
 });
 
 describe("updateQuizItem (REV-37)", () => {
@@ -534,5 +544,20 @@ describe("updateQuizItem (REV-37)", () => {
       answer: "New answer",
     });
     expect(new Headers(init.headers).get("X-CSRF-Token")).toBe("csrf-xyz");
+  });
+
+  it("surfaces the backend detail on a 409 update response", async () => {
+    const fetchMock = fetchMockFn(async () =>
+      jsonResponse(409, { detail: "This card is not active." }),
+    );
+
+    await expect(
+      updateQuizItem(
+        "i1",
+        { question: "New question?", answer: "New answer" },
+        "csrf-xyz",
+        fetchMock as unknown as typeof fetch,
+      ),
+    ).rejects.toThrow("This card is not active.");
   });
 });
