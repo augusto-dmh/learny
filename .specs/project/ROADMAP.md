@@ -137,5 +137,5 @@ v7 is proposed in [RFC-0007](../../docs/rfc/0007-public-launch-roadmap.md) (**Dr
 
 | tlc Cycle | RFC-0007 | Scope | Status |
 |---|---|---|---|
-| `trustworthy-cited-ask` | A / Bet 1 | Keep the thread on failed Ask; pin both Anthropic request shapes; claim-level citation spans | In progress |
+| `trustworthy-cited-ask` | A / Bet 1 | Keep the thread on failed Ask; pin both Anthropic request shapes; claim-level citation spans | Verifier PASS, publishing |
 | *(Bets 2–7)* | B–G | Reader; tutor; review; first session; safety rails; cheaper intelligence | Not started |

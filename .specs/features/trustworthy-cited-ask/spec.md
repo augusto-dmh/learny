@@ -9,7 +9,7 @@ A second trust gap sits on the same path: the Citations API already returns `cit
 ## Goals
 
 - [x] A failed generation never deletes the conversation or the user's message; the thread shows the error and a retry control.
-- [ ] Both Anthropic request shapes (citations-enabled documents vs structured-output JSON) are pinned by tests so mixing them fails CI.
+- [x] Both Anthropic request shapes (citations-enabled documents vs structured-output JSON) are pinned by tests so mixing them fails CI.
 - [x] Claim-level citation spans survive the adapter: hover on `[^n]` shows the quoted sentence; "Show in book" highlights that span; offsets match the Citations document body byte-for-byte.
 
 ## Out of Scope
@@ -123,7 +123,7 @@ A second trust gap sits on the same path: the Citations API already returns `cit
 | ASK-08 | P1: Pin the 400 | T5 | Done |
 | ASK-09 | P1: Pin the 400 | T4, T5 | Done |
 | ASK-10 | P1: Pin the 400 | T6 | Done |
-| ASK-11 | P1: Pin the 400 | T1 (arc) + Execute dump | In Tasks |
+| ASK-11 | P1: Pin the 400 | T1 (arc) + Execute dump | Done |
 | ASK-12 | P1: Citation spans | T2, T3, T8 | Done |
 | ASK-13 | P1: Citation spans | T3 | Done |
 | ASK-14 | P1: Citation spans | T3 | Done |
