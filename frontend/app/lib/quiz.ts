@@ -268,6 +268,88 @@ export async function resetSchedule(
   return (await res.json()) as Scheduling;
 }
 
+/** Confirmation that a card is flagged out of due, mirroring `FlagView`. */
+export type FlagState = {
+  flagged: boolean;
+  flagged_at: string | null;
+};
+
+/**
+ * Restore the caller's last grade (200). CSRF + `X-Client-Timezone` match
+ * `submitReview`. 409 when nothing is undoable is surfaced as the backend detail.
+ */
+export async function undoReview(
+  csrfToken: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<Scheduling> {
+  const headers: Record<string, string> = {
+    "X-CSRF-Token": csrfToken,
+  };
+  const tz = clientTimezone();
+  if (tz) {
+    headers["X-Client-Timezone"] = tz;
+  }
+  const res = await fetchImpl("/api/reviews/undo", {
+    method: "POST",
+    credentials: "same-origin",
+    headers,
+  });
+  if (!res.ok) {
+    throw await toQuizError(res, "Could not undo your last review.");
+  }
+  return (await res.json()) as Scheduling;
+}
+
+/**
+ * Flag or unflag an owned card out of the due queue without touching FSRS.
+ * State-changing, so it carries CSRF. Body is `{ flagged: boolean }`.
+ */
+export async function flagQuizItem(
+  itemId: string,
+  flagged: boolean,
+  csrfToken: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<FlagState> {
+  const res = await fetchImpl(`/api/quiz-items/${itemId}/flag`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: {
+      "content-type": "application/json",
+      "X-CSRF-Token": csrfToken,
+    },
+    body: JSON.stringify({ flagged }),
+  });
+  if (!res.ok) {
+    throw await toQuizError(res, "Could not flag this card.");
+  }
+  return (await res.json()) as FlagState;
+}
+
+/**
+ * Rewrite an owned card's question and answer (content-only; scheduling
+ * unchanged). Review owns this client; cards.ts does not ship a PATCH helper.
+ */
+export async function updateQuizItem(
+  itemId: string,
+  body: { question: string; answer: string },
+  csrfToken: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ question: string; answer: string }> {
+  const res = await fetchImpl(`/api/quiz-items/${itemId}`, {
+    method: "PATCH",
+    credentials: "same-origin",
+    headers: {
+      "content-type": "application/json",
+      "X-CSRF-Token": csrfToken,
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    throw await toQuizError(res, "Could not save this card.");
+  }
+  return (await res.json()) as { question: string; answer: string };
+}
+
 /**
  * Build the same-origin URL for a source's Anki `.apkg` export. This is a plain
  * navigable/downloadable link (no fetch, no token) — the browser carries the

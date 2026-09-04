@@ -366,8 +366,8 @@ T11 → T12 → T13 → T14
 
 **Done when**:
 
-- [ ] Undo restores the prior card into view; flag removes it; edit keeps the same card id
-- [ ] Gate: `cd frontend && npm test -- review-screen`
+- [x] Undo restores the prior card into view; flag removes it; edit keeps the same card id
+- [x] Gate: `cd frontend && npm test -- review-screen`
 
 **Tests**: unit
 **Gate**: full

@@ -15,12 +15,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  flagQuizItem,
   generateDeck,
   getDueReviews,
   getQuizOverview,
   quizExportUrl,
   resetSchedule,
   submitReview,
+  undoReview,
+  updateQuizItem,
   type DueItem,
   type DueQueue,
   type QuizJob,
@@ -438,5 +441,98 @@ describe("resetSchedule (NL-12)", () => {
     await expect(
       resetSchedule("i1", "csrf-xyz", fetchMock as unknown as typeof fetch),
     ).rejects.toThrow("This card is not active.");
+  });
+});
+
+describe("undoReview (REV-22)", () => {
+  it("POSTs /api/reviews/undo with CSRF and timezone, and passes scheduling through", async () => {
+    stubZone("America/Sao_Paulo");
+    const fetchMock = fetchMockFn(async () => jsonResponse(200, scheduling));
+
+    const result = await undoReview(
+      "csrf-xyz",
+      fetchMock as unknown as typeof fetch,
+    );
+
+    expect(result).toEqual(scheduling);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/reviews/undo");
+    expect(init.method).toBe("POST");
+    expect(init.credentials).toBe("same-origin");
+    const headers = new Headers(init.headers);
+    expect(headers.get("X-CSRF-Token")).toBe("csrf-xyz");
+    expect(headers.get("X-Client-Timezone")).toBe("America/Sao_Paulo");
+  });
+
+  it("omits X-Client-Timezone when the zone is unavailable", async () => {
+    breakIntl();
+    const fetchMock = fetchMockFn(async () => jsonResponse(200, scheduling));
+
+    await undoReview("csrf-xyz", fetchMock as unknown as typeof fetch);
+
+    const headers = new Headers(fetchMock.mock.calls[0][1].headers);
+    expect(headers.has("X-Client-Timezone")).toBe(false);
+  });
+
+  it("surfaces the backend detail on a 409 empty-undo response", async () => {
+    const fetchMock = fetchMockFn(async () =>
+      jsonResponse(409, { detail: "Nothing to undo." }),
+    );
+
+    await expect(
+      undoReview("csrf-xyz", fetchMock as unknown as typeof fetch),
+    ).rejects.toThrow("Nothing to undo.");
+  });
+});
+
+describe("flagQuizItem (REV-34)", () => {
+  it("POSTs {flagged} with CSRF and returns the flag state", async () => {
+    const fetchMock = fetchMockFn(async () =>
+      jsonResponse(200, { flagged: true, flagged_at: "2026-09-04T00:00:00Z" }),
+    );
+
+    const result = await flagQuizItem(
+      "i1",
+      true,
+      "csrf-xyz",
+      fetchMock as unknown as typeof fetch,
+    );
+
+    expect(result.flagged).toBe(true);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/quiz-items/i1/flag");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body as string)).toEqual({ flagged: true });
+    expect(new Headers(init.headers).get("X-CSRF-Token")).toBe("csrf-xyz");
+  });
+});
+
+describe("updateQuizItem (REV-37)", () => {
+  it("PATCHes {question, answer} with CSRF and returns the saved text", async () => {
+    const fetchMock = fetchMockFn(async () =>
+      jsonResponse(200, {
+        id: "i1",
+        question: "New question?",
+        answer: "New answer",
+      }),
+    );
+
+    const result = await updateQuizItem(
+      "i1",
+      { question: "New question?", answer: "New answer" },
+      "csrf-xyz",
+      fetchMock as unknown as typeof fetch,
+    );
+
+    expect(result.question).toBe("New question?");
+    expect(result.answer).toBe("New answer");
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/quiz-items/i1");
+    expect(init.method).toBe("PATCH");
+    expect(JSON.parse(init.body as string)).toEqual({
+      question: "New question?",
+      answer: "New answer",
+    });
+    expect(new Headers(init.headers).get("X-CSRF-Token")).toBe("csrf-xyz");
   });
 });

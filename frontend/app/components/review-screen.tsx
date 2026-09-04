@@ -31,16 +31,19 @@
  */
 
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
 import { fetchAuthState } from "@/app/lib/auth";
 import { useKeyShortcuts } from "@/app/components/use-key-shortcuts";
 import { readUrl } from "@/app/lib/read-url";
 import {
+  flagQuizItem,
   getDueReviews,
   intervalLabel,
   resetSchedule,
   submitReview,
+  undoReview,
+  updateQuizItem,
   type DueItem,
   type Scheduling,
 } from "@/app/lib/quiz";
@@ -53,6 +56,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
+import { Textarea } from "@/components/ui/textarea";
 
 /** The 4 FSRS self-grades, in ascending rating order (Again=1 … Easy=4). */
 const GRADES: { rating: number; label: string }[] = [
@@ -93,6 +97,19 @@ function withSubmitLabels(card: SessionCard, scheduling: Scheduling): SessionCar
   };
 }
 
+function isTypingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+  const tag = target.tagName.toLowerCase();
+  if (tag === "input" || tag === "textarea") {
+    return true;
+  }
+  return (
+    target.closest('[contenteditable]:not([contenteditable="false"])') !== null
+  );
+}
+
 export function ReviewScreen({
   sourceId,
   onRequireAuth,
@@ -114,9 +131,18 @@ export function ReviewScreen({
   const [resetting, setResetting] = useState(false);
   const [resetError, setResetError] = useState<string | null>(null);
   const [tally, setTally] = useState<Tally>(EMPTY_TALLY);
+  const [draft, setDraft] = useState<{ question: string; answer: string } | null>(
+    null,
+  );
+  const [savingEdit, setSavingEdit] = useState(false);
   // When the current card's question was shown, so review duration is the
   // question-to-grade span (best-effort, optional field).
   const questionShownAt = useRef<number>(Date.now());
+  const lastGrade = useRef<{
+    item: SessionCard;
+    index: number;
+    requeued: boolean;
+  } | null>(null);
 
   const loadQueue = useCallback(async () => {
     setLoadError(null);
@@ -153,6 +179,7 @@ export function ReviewScreen({
     setRevealed(false);
     setSubmitError(null);
     setResetError(null);
+    setDraft(null);
     questionShownAt.current = Date.now();
   }, [index]);
 
@@ -170,6 +197,7 @@ export function ReviewScreen({
         csrf,
       );
       const requeue = shouldRequeue(scheduling.due, requeueMinutes);
+      lastGrade.current = { item, index, requeued: requeue };
       if (requeue) {
         const updated = withSubmitLabels(item, scheduling);
         setQueue((prev) =>
@@ -220,10 +248,107 @@ export function ReviewScreen({
     }
   }
 
-  // Grading on bare keys (CAP-30/31, REV-44). Space reveals while the answer is
-  // hidden and grades Good once it is out; 1–4 grade once revealed. The
-  // shortcuts are live only while a card is actually on screen.
-  const cardOnScreen = queue !== null && index < queue.length;
+  async function handleUndo() {
+    if (!csrf || !queue || submitting || index >= queue.length) {
+      return;
+    }
+    setSubmitError(null);
+    try {
+      const scheduling = await undoReview(csrf);
+      const last = lastGrade.current;
+      if (last) {
+        setQueue((prev) => {
+          if (!prev) {
+            return prev;
+          }
+          const next = [...prev];
+          if (last.requeued) {
+            const extraAt = next.findLastIndex(
+              (card, i) =>
+                i > last.index && card.id === last.item.id && card.shortTerm,
+            );
+            if (extraAt >= 0) {
+              next.splice(extraAt, 1);
+            }
+          }
+          next[last.index] = {
+            ...last.item,
+            due: scheduling.due,
+            interval_labels:
+              scheduling.interval_labels ?? last.item.interval_labels,
+            shortTerm: false,
+          };
+          return next;
+        });
+        setIndex(last.index);
+        lastGrade.current = null;
+      }
+      setRevealed(false);
+    } catch (err) {
+      setSubmitError(
+        err instanceof Error ? err.message : "Could not undo your last review.",
+      );
+    }
+  }
+
+  async function handleFlag() {
+    if (!csrf || !queue || submitting || index >= queue.length) {
+      return;
+    }
+    const item = queue[index];
+    setSubmitError(null);
+    try {
+      await flagQuizItem(item.id, true, csrf);
+      setQueue((prev) => (prev ? prev.filter((_, i) => i !== index) : prev));
+      setRevealed(false);
+      setDraft(null);
+    } catch (err) {
+      setSubmitError(
+        err instanceof Error ? err.message : "Could not flag this card.",
+      );
+    }
+  }
+
+  async function handleSaveEdit() {
+    if (!csrf || !queue || !draft || savingEdit || index >= queue.length) {
+      return;
+    }
+    const item = queue[index];
+    setSavingEdit(true);
+    setSubmitError(null);
+    try {
+      const saved = await updateQuizItem(item.id, draft, csrf);
+      setQueue((prev) =>
+        prev
+          ? prev.map((card, i) =>
+              i === index
+                ? { ...card, question: saved.question, answer: saved.answer }
+                : card,
+            )
+          : prev,
+      );
+      setDraft(null);
+    } catch (err) {
+      setSubmitError(
+        err instanceof Error ? err.message : "Could not save this card.",
+      );
+    } finally {
+      setSavingEdit(false);
+    }
+  }
+
+  function startEdit() {
+    if (!queue || index >= queue.length) {
+      return;
+    }
+    const item = queue[index];
+    setDraft({ question: item.question, answer: item.answer });
+  }
+
+  // Grading on bare keys (CAP-30/31, REV-44/45). Space reveals while the answer
+  // is hidden and grades Good once it is out; 1–4 grade once revealed; u/f/e
+  // undo, flag, and edit. Live only while a card is on screen and not being edited.
+  const cardOnScreen = queue !== null && index < queue.length && draft === null;
   useKeyShortcuts(
     revealed
       ? {
@@ -234,10 +359,39 @@ export function ReviewScreen({
             ]),
           ),
           space: () => void handleGrade(3),
+          u: () => void handleUndo(),
+          f: () => void handleFlag(),
+          e: startEdit,
         }
-      : { space: () => setRevealed(true) },
+      : {
+          space: () => setRevealed(true),
+          u: () => void handleUndo(),
+          f: () => void handleFlag(),
+          e: startEdit,
+        },
     cardOnScreen,
   );
+
+  useEffect(() => {
+    if (!cardOnScreen) {
+      return;
+    }
+    function onKeyDown(event: KeyboardEvent) {
+      if (!(event.ctrlKey || event.metaKey) || event.altKey) {
+        return;
+      }
+      if (event.key.toLowerCase() !== "z") {
+        return;
+      }
+      if (isTypingTarget(event.target)) {
+        return;
+      }
+      event.preventDefault();
+      void handleUndo();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [cardOnScreen, csrf, queue, index, submitting]);
 
   if (authed === null) {
     return <p className="text-muted-foreground">Loading…</p>;
@@ -322,6 +476,23 @@ export function ReviewScreen({
         submitting={submitting}
         onReset={handleReset}
         resetting={resetting}
+        editor={
+          draft ? (
+            <ReviewCardEditor
+              question={draft.question}
+              answer={draft.answer}
+              onQuestionChange={(question) =>
+                setDraft((prev) => (prev ? { ...prev, question } : prev))
+              }
+              onAnswerChange={(answer) =>
+                setDraft((prev) => (prev ? { ...prev, answer } : prev))
+              }
+              onSave={() => void handleSaveEdit()}
+              onCancel={() => setDraft(null)}
+              saving={savingEdit}
+            />
+          ) : null
+        }
       />
       {resetError ? (
         <p role="alert" className="text-sm text-destructive">
@@ -356,6 +527,7 @@ function ReviewCard({
   submitting,
   onReset,
   resetting,
+  editor,
 }: {
   item: DueItem;
   revealed: boolean;
@@ -364,6 +536,7 @@ function ReviewCard({
   submitting: boolean;
   onReset: () => void;
   resetting: boolean;
+  editor?: ReactNode;
 }) {
   // The two-step confirm for the schedule reset lives with the card so a declined
   // confirm fires nothing (NL-12). Advancing to another card drops any open confirm
@@ -381,10 +554,13 @@ function ReviewCard({
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        {/* The cloze question already carries its `____` blank — render as text. */}
-        <p data-testid="question" className="text-base">
-          {item.question}
-        </p>
+        {editor ? (
+          editor
+        ) : (
+          <p data-testid="question" className="text-base">
+            {item.question}
+          </p>
+        )}
 
         {/*
           The pin (CAP-25/26) sits with the question rather than in the revealed
@@ -481,7 +657,7 @@ function ReviewCard({
           </div>
         ) : null}
 
-        {revealed ? (
+        {editor ? null : revealed ? (
           <div className="space-y-3">
             <Separator />
             <p data-testid="answer" className="text-base font-medium">
@@ -529,5 +705,70 @@ function ReviewCard({
         )}
       </CardContent>
     </Card>
+  );
+}
+
+function ReviewCardEditor({
+  question,
+  answer,
+  onQuestionChange,
+  onAnswerChange,
+  onSave,
+  onCancel,
+  saving,
+}: {
+  question: string;
+  answer: string;
+  onQuestionChange: (value: string) => void;
+  onAnswerChange: (value: string) => void;
+  onSave: () => void;
+  onCancel: () => void;
+  saving: boolean;
+}) {
+  return (
+    <form
+      className="space-y-3"
+      onSubmit={(event) => {
+        event.preventDefault();
+        onSave();
+      }}
+    >
+      <div className="space-y-1.5">
+        <label htmlFor="review-edit-question" className="text-sm font-medium">
+          Question
+        </label>
+        <Textarea
+          id="review-edit-question"
+          data-testid="edit-question"
+          value={question}
+          onChange={(event) => onQuestionChange(event.target.value)}
+        />
+      </div>
+      <div className="space-y-1.5">
+        <label htmlFor="review-edit-answer" className="text-sm font-medium">
+          Answer
+        </label>
+        <Textarea
+          id="review-edit-answer"
+          data-testid="edit-answer"
+          value={answer}
+          onChange={(event) => onAnswerChange(event.target.value)}
+        />
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <Button type="submit" size="sm" disabled={saving}>
+          {saving ? "Saving…" : "Save"}
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          disabled={saving}
+          onClick={onCancel}
+        >
+          Cancel
+        </Button>
+      </div>
+    </form>
   );
 }

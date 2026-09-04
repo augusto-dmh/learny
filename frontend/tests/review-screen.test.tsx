@@ -824,3 +824,201 @@ describe("ReviewScreen interval labels and requeue (REV-29/31/32)", () => {
     expect(screen.queryByTestId("question")).toBeNull();
   });
 });
+
+describe("ReviewScreen undo, flag, and edit (REV-22/37/45)", () => {
+  function pressKey(
+    key: string,
+    target: EventTarget = window,
+    init: KeyboardEventInit = {},
+  ) {
+    act(() => {
+      target.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key,
+          bubbles: true,
+          cancelable: true,
+          ...init,
+        }),
+      );
+    });
+  }
+
+  it("restores the prior card as current when undo succeeds", async () => {
+    const fetchMock = routedFetch({
+      "GET /api/auth/me": () => authedMe.clone(),
+      [`GET ${DUE}`]: () => jsonResponse(200, dueQueue([clozeCard, recallCard])),
+      "POST /api/quiz-items/i1/reviews": () =>
+        jsonResponse(
+          200,
+          scheduling(new Date(Date.now() + 4 * 24 * 60 * 60 * 1000).toISOString()),
+        ),
+      "POST /api/reviews/undo": () =>
+        jsonResponse(
+          200,
+          scheduling("2026-07-16T00:00:00Z", {
+            interval_labels: { "1": "~1m", "2": "~10m", "3": "~1d", "4": "~4d" },
+          }),
+        ),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ReviewScreen />);
+    await screen.findByTestId("question");
+    fireEvent.click(screen.getByRole("button", { name: "Reveal answer" }));
+    fireEvent.click(screen.getByRole("button", { name: "Good" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("question").textContent).toBe(
+        "Who built the analytical engine?",
+      ),
+    );
+
+    pressKey("u");
+
+    await waitFor(() =>
+      expect(screen.getByTestId("question").textContent).toBe(
+        "Ada wrote the first ____.",
+      ),
+    );
+    expect(screen.getByTestId("position").textContent).toBe("1/2");
+    expect(
+      fetchMock.mock.calls.some(([url]) => url === "/api/reviews/undo"),
+    ).toBe(true);
+  });
+
+  it("undoes with Ctrl/Cmd+Z as well as u", async () => {
+    const fetchMock = routedFetch({
+      "GET /api/auth/me": () => authedMe.clone(),
+      [`GET ${DUE}`]: () => jsonResponse(200, dueQueue([clozeCard, recallCard])),
+      "POST /api/quiz-items/i1/reviews": () =>
+        jsonResponse(
+          200,
+          scheduling(new Date(Date.now() + 4 * 24 * 60 * 60 * 1000).toISOString()),
+        ),
+      "POST /api/reviews/undo": () => jsonResponse(200, scheduling("2026-07-16T00:00:00Z")),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ReviewScreen />);
+    await screen.findByTestId("question");
+    fireEvent.click(screen.getByRole("button", { name: "Reveal answer" }));
+    fireEvent.click(screen.getByRole("button", { name: "Good" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("question").textContent).toContain("analytical"),
+    );
+
+    pressKey("z", window, { metaKey: true });
+
+    await waitFor(() =>
+      expect(screen.getByTestId("question").textContent).toBe(
+        "Ada wrote the first ____.",
+      ),
+    );
+  });
+
+  it("keeps a 409 empty-undo error visible on the current card", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        [`GET ${DUE}`]: () => jsonResponse(200, dueQueue([clozeCard])),
+        "POST /api/reviews/undo": () =>
+          jsonResponse(409, { detail: "Nothing to undo." }),
+      }),
+    );
+
+    render(<ReviewScreen />);
+    await screen.findByTestId("question");
+    pressKey("u");
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Nothing to undo.");
+    expect(screen.getByTestId("question").textContent).toBe(
+      "Ada wrote the first ____.",
+    );
+    expect(screen.getByTestId("position").textContent).toBe("1/1");
+  });
+
+  it("flags the current card out of the local queue without submitting a review", async () => {
+    const fetchMock = routedFetch({
+      "GET /api/auth/me": () => authedMe.clone(),
+      [`GET ${DUE}`]: () => jsonResponse(200, dueQueue([clozeCard, recallCard])),
+      "POST /api/quiz-items/i1/flag": () =>
+        jsonResponse(200, { flagged: true, flagged_at: "2026-09-04T00:00:00Z" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ReviewScreen />);
+    expect((await screen.findByTestId("question")).textContent).toBe(
+      "Ada wrote the first ____.",
+    );
+    expect(screen.getByTestId("position").textContent).toBe("1/2");
+
+    pressKey("f");
+
+    await waitFor(() =>
+      expect(screen.getByTestId("question").textContent).toBe(
+        "Who built the analytical engine?",
+      ),
+    );
+    expect(screen.getByTestId("position").textContent).toBe("1/1");
+    expect(
+      fetchMock.mock.calls.some(([url]) => url === "/api/quiz-items/i1/flag"),
+    ).toBe(true);
+    expect(
+      fetchMock.mock.calls.some(([url]) =>
+        String(url).endsWith("/reviews"),
+      ),
+    ).toBe(false);
+  });
+
+  it("edits question and answer in place without resetting the schedule", async () => {
+    const fetchMock = routedFetch({
+      "GET /api/auth/me": () => authedMe.clone(),
+      [`GET ${DUE}`]: () => jsonResponse(200, dueQueue([clozeCard])),
+      "PATCH /api/quiz-items/i1": () =>
+        jsonResponse(200, {
+          id: "i1",
+          question: "Ada wrote the first what?",
+          answer: "computer program",
+        }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ReviewScreen />);
+    await screen.findByTestId("question");
+    pressKey("e");
+
+    const questionField = await screen.findByTestId("edit-question");
+    const answerField = screen.getByTestId("edit-answer");
+    fireEvent.change(questionField, {
+      target: { value: "Ada wrote the first what?" },
+    });
+    fireEvent.change(answerField, {
+      target: { value: "computer program" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("question").textContent).toBe(
+        "Ada wrote the first what?",
+      ),
+    );
+    expect(screen.getByTestId("position").textContent).toBe("1/1");
+    expect(screen.queryByTestId("edit-question")).toBeNull();
+    const patch = fetchMock.mock.calls.find(
+      ([url, init]) =>
+        url === "/api/quiz-items/i1" &&
+        (init as RequestInit | undefined)?.method === "PATCH",
+    );
+    expect(patch).toBeTruthy();
+    expect(JSON.parse((patch![1] as RequestInit).body as string)).toEqual({
+      question: "Ada wrote the first what?",
+      answer: "computer program",
+    });
+    expect(
+      fetchMock.mock.calls.some(([url]) =>
+        String(url).includes("schedule-reset"),
+      ),
+    ).toBe(false);
+  });
+});
