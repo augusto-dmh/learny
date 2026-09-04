@@ -27,6 +27,10 @@ from app.application.grounding import ground, ground_spans
 from app.domain.entities import (
     MODE_ANSWER,
     MODE_TEACH,
+    TUTOR_CARD_QUESTION,
+    TUTOR_DONT_KNOW_MESSAGE,
+    TUTOR_JUST_EXPLAIN_MESSAGE,
+    TUTOR_OPENING_MESSAGE,
     AnswerCompleted,
     AnswerReasoningDelta,
     AnswerTextDelta,
@@ -1187,7 +1191,58 @@ def test_teaching_system_prompt_is_frozen_and_byte_stable_across_calls() -> None
     # No per-session/per-turn interpolation → byte-identical across calls/sessions.
     assert first_system == second_system
     assert first_system[0]["text"] == TEACHING_SYSTEM_PROMPT
+    assert first_system[0]["text"].encode("utf-8") == TEACHING_SYSTEM_PROMPT.encode("utf-8")
     assert first_system[0]["cache_control"] == _CACHE_1H
+    # Phase and hint belong on the user turn (TUTOR-03); the cache prefix must
+    # not grow them, timestamps, or format slots.
+    prompt = first_system[0]["text"]
+    assert "Phase:" not in prompt
+    assert "HintLevel:" not in prompt
+    assert "{" not in prompt
+    assert "}" not in prompt
+
+
+def test_teaching_system_prompt_two_reads_are_identical_bytes() -> None:
+    first = TEACHING_SYSTEM_PROMPT.encode("utf-8")
+    second = TEACHING_SYSTEM_PROMPT.encode("utf-8")
+    assert first == second
+    assert first == TEACHING_SYSTEM_PROMPT.encode("utf-8")
+
+
+def test_teaching_system_prompt_encodes_playbook_constraints() -> None:
+    prompt = TEACHING_SYSTEM_PROMPT
+    lowered = prompt.lower()
+    assert "one move per turn" in lowered
+    assert "single question" in lowered
+    assert "pump then hint then prompt then assert" in lowered
+    assert "two failed elicitations" in lowered
+    assert "assert and cite" in lowered
+    assert "asks to be told" in lowered
+    assert "tell and demand a restatement" in lowered
+    assert "socratic questions and checks may omit citations" in lowered
+    assert "claims about the book must cite" in lowered
+    assert SENTINEL in prompt
+    assert "end after a passing unaided check" in lowered
+
+
+def test_answer_system_prompt_is_byte_identical_to_pre_cycle_value() -> None:
+    # TUTOR-04: the answering prefix must not move with the teach playbook.
+    pre_cycle = (
+        "You are Learny's book-grounded answering assistant. Answer the reader's "
+        "question using only the information contained in the provided documents. "
+        "Cite the specific passages you rely on. Do not use outside knowledge and do "
+        "not speculate beyond what the documents state. If the provided documents do "
+        "not contain the information needed to answer the question, reply with "
+        "exactly NOT_FOUND_IN_SOURCE and nothing else."
+    )
+    assert ANSWER_SYSTEM_PROMPT.encode("utf-8") == pre_cycle.encode("utf-8")
+
+
+def test_tutor_playbook_prompt_frozen_messages() -> None:
+    assert TUTOR_OPENING_MESSAGE == "(session start)"
+    assert TUTOR_JUST_EXPLAIN_MESSAGE == "Just explain this."
+    assert TUTOR_DONT_KNOW_MESSAGE == "I don't know."
+    assert TUTOR_CARD_QUESTION == 'In your own words, what is "{title}" arguing?'
 
 
 def test_only_latest_history_block_carries_second_breakpoint() -> None:

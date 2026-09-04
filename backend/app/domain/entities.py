@@ -491,6 +491,14 @@ class GeneratedAnswer:
 # streamed to a client, independent of which provider produced it.
 SENTINEL = "NOT_FOUND_IN_SOURCE"
 
+# Frozen tutor-session strings (AD-289, AD-294). Exact trimmed match on chips;
+# the opening sentinel is stored as the first teach turn's message so retrieval
+# can key on the section rather than learner prose.
+TUTOR_OPENING_MESSAGE = "(session start)"
+TUTOR_JUST_EXPLAIN_MESSAGE = "Just explain this."
+TUTOR_DONT_KNOW_MESSAGE = "I don't know."
+TUTOR_CARD_QUESTION = 'In your own words, what is "{title}" arguing?'
+
 
 # The inline mark a generation adapter writes into the answer text where a citation
 # attaches (AD-222) — ``[^1]``, ``[^2]``, … numbered by the order cited passages are

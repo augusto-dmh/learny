@@ -173,10 +173,10 @@ Teach is a cited, section-scoped chat with a four-sentence "patient tutor" promp
 
 | Requirement ID | Story | Phase | Status |
 |---|---|---|---|
-| TUTOR-01 | P1: Frozen playbook | Tasks | In Tasks |
-| TUTOR-02 | P1: Frozen playbook | Tasks | In Tasks |
+| TUTOR-01 | P1: Frozen playbook | T1 | Done |
+| TUTOR-02 | P1: Frozen playbook | T1 | Done |
 | TUTOR-03 | P1: Frozen playbook | Tasks | In Tasks |
-| TUTOR-04 | P1: Frozen playbook | Tasks | In Tasks |
+| TUTOR-04 | P1: Frozen playbook | T1 | Done |
 | TUTOR-05 | P1: Frozen playbook | Tasks | In Tasks |
 | TUTOR-06 | P1: Frozen playbook | Tasks | In Tasks |
 | TUTOR-07 | P1: Frozen playbook | Tasks | In Tasks |

@@ -93,9 +93,9 @@ T11 → T12 → T13 → T14 → T15
 
 **Done when**:
 
-- [ ] Two reads of `TEACHING_SYSTEM_PROMPT` are identical bytes and the playbook constraints are present as text
-- [ ] Answer prompt test still asserts the pre-cycle string
-- [ ] Gate: `uv run pytest tests/test_answering_anthropic.py -k prompt`
+- [x] Two reads of `TEACHING_SYSTEM_PROMPT` are identical bytes and the playbook constraints are present as text
+- [x] Answer prompt test still asserts the pre-cycle string
+- [x] Gate: `uv run pytest tests/test_answering_anthropic.py -k prompt`
 
 **Tests**: unit
 **Gate**: quick
