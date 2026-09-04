@@ -196,7 +196,7 @@ Teach is a cited, section-scoped chat with a four-sentence "patient tutor" promp
 | TUTOR-21 | P1: Ladder and close | T6 | Done |
 | TUTOR-22 | P1: Ladder and close | T7 | Done |
 | TUTOR-23 | P1: Ladder and close | T7 | Done |
-| TUTOR-24 | P1: Ladder and close | Tasks | In Tasks |
+| TUTOR-24 | P1: Ladder and close | T8 | Done |
 | TUTOR-25 | P1: Ladder and close | T7 | Done |
 | TUTOR-26 | P1: Ladder and close | T7 | Done |
 | TUTOR-27 | P1: One Chat dock | Tasks | In Tasks |

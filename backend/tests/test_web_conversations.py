@@ -52,6 +52,7 @@ from app.domain.entities import (
     MODE_TEACH,
     NOT_FOUND_IN_SCOPE,
     NOT_FOUND_IN_SOURCE,
+    TUTOR_OPENING_MESSAGE,
     AnswerCompleted,
     AnswerReasoningDelta,
     AnswerTextDelta,
@@ -227,6 +228,9 @@ def _seed_conversation(
     scope: tuple[str, ...] = (_ANCHOR,),
     include_notes: bool = False,
     target_anchor: str | None = _ANCHOR,
+    tutor_phase: str | None = None,
+    hint_level: str | None = None,
+    tutor_check_text: str | None = None,
     created_at: datetime | None = None,
     updated_at: datetime | None = None,
 ) -> Conversation:
@@ -240,6 +244,9 @@ def _seed_conversation(
         target_anchor=target_anchor,
         target_section_path=_SECTION_PATH if target_anchor is not None else None,
         target_title=_TITLE if target_anchor is not None else None,
+        tutor_phase=tutor_phase,
+        hint_level=hint_level,
+        tutor_check_text=tutor_check_text,
         created_at=now,
         updated_at=updated_at or now,
     )
@@ -331,6 +338,10 @@ _CONVERSATION_FIELDS = {
     "title",
     "scope_anchors",
     "include_notes",
+    "target_anchor",
+    "target_title",
+    "tutor_phase",
+    "hint_level",
     "created_at",
     "updated_at",
 }
@@ -374,6 +385,10 @@ def test_start_scoped_conversation_returns_201_with_scope_and_notes_choice(
     assert body["scope_anchors"] == [_ANCHOR]
     assert body["include_notes"] is True
     assert body["title"] == _TITLE
+    assert body["target_anchor"] == _ANCHOR
+    assert body["target_title"] == _TITLE
+    assert body["tutor_phase"] is None
+    assert body["hint_level"] is None
     assert body["created_at"] and body["updated_at"]
 
 
@@ -391,6 +406,10 @@ def test_start_whole_book_conversation_defaults_title_to_the_book(
     assert body["scope_anchors"] == []
     assert body["include_notes"] is False
     assert body["title"] == _BOOK_TITLE
+    assert body["target_anchor"] is None
+    assert body["target_title"] is None
+    assert body["tutor_phase"] is None
+    assert body["hint_level"] is None
 
 
 def test_start_uses_the_given_title_trimmed(auth_client: TestClient, db_conn: Connection) -> None:
@@ -604,6 +623,8 @@ def test_list_returns_newest_activity_first_with_source_title_and_turn_count(
         "include_notes",
         "turn_count",
         "last_turn_mode",
+        "tutor_phase",
+        "hint_level",
         "created_at",
         "updated_at",
     }
@@ -1211,7 +1232,7 @@ def test_post_teach_turn_returns_201_in_teach_mode(
     resp = _post_turn(
         auth_client,
         conversation.id,
-        {"message": "photosynthesis sunlight energy", "mode": MODE_TEACH},
+        {"message": TUTOR_OPENING_MESSAGE, "mode": MODE_TEACH},
         csrf=csrf,
     )
 
@@ -1220,6 +1241,108 @@ def test_post_teach_turn_returns_201_in_teach_mode(
     assert body["mode"] == MODE_TEACH
     assert body["answer_status"] == ANSWERED
     assert body["citations"]
+
+
+def test_get_conversation_after_opening_shows_tutor_phase_open(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # TUTOR-16 / TUTOR-24: after the opening teach turn, reads carry the ladder start.
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "open-phase@example.com")
+    _embed_all(db_conn, UUID(source_id))
+    conversation = _seed_conversation(db_conn, UUID(source_id))
+
+    posted = _post_turn(
+        auth_client,
+        conversation.id,
+        {"message": TUTOR_OPENING_MESSAGE, "mode": MODE_TEACH},
+        csrf=csrf,
+    )
+    assert posted.status_code == 201, posted.text
+
+    read = auth_client.get(f"/api/conversations/{conversation.id}")
+    assert read.status_code == 200, read.text
+    body = read.json()
+    assert body["tutor_phase"] == "open"
+    assert body["hint_level"] == "pump"
+    assert body["target_title"] == _TITLE
+    assert body["turns"][0]["message"] == TUTOR_OPENING_MESSAGE
+
+    listing = auth_client.get("/api/conversations")
+    assert listing.status_code == 200, listing.text
+    row = next(r for r in listing.json() if r["id"] == str(conversation.id))
+    assert row["tutor_phase"] == "open"
+    assert row["hint_level"] == "pump"
+
+
+def test_opening_teach_stream_then_read_shows_tutor_phase_open(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "open-stream@example.com")
+    _embed_all(db_conn, UUID(source_id))
+    conversation = _seed_conversation(db_conn, UUID(source_id))
+
+    streamed = _turn_stream(
+        auth_client,
+        conversation.id,
+        {"message": TUTOR_OPENING_MESSAGE, "mode": MODE_TEACH},
+        csrf=csrf,
+    )
+    assert streamed.status_code == 200, streamed.text
+
+    read = auth_client.get(f"/api/conversations/{conversation.id}")
+    assert read.status_code == 200, read.text
+    body = read.json()
+    assert body["tutor_phase"] == "open"
+    assert body["hint_level"] == "pump"
+    assert body["turns"][0]["message"] == TUTOR_OPENING_MESSAGE
+
+
+def test_post_turn_on_closed_tutor_conversation_returns_409_and_persists_nothing(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # TUTOR-23: close is a lock over both buffered and streamed turns.
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "close-lock@example.com")
+    conversation = _seed_conversation(
+        db_conn,
+        UUID(source_id),
+        tutor_phase="close",
+        hint_level="assert",
+        tutor_check_text="the section argues for anchors",
+    )
+    _seed_turn(
+        db_conn,
+        conversation,
+        turn_index=0,
+        message=TUTOR_OPENING_MESSAGE,
+        mode=MODE_TEACH,
+        answer_status=ANSWERED,
+        answer_text=_PHOTO,
+    )
+
+    buffered = _post_turn(
+        auth_client,
+        conversation.id,
+        {"message": "one more thought", "mode": MODE_TEACH},
+        csrf=csrf,
+    )
+    streamed = _turn_stream(
+        auth_client,
+        conversation.id,
+        {"message": "and another", "mode": MODE_TEACH},
+        csrf=csrf,
+    )
+
+    assert buffered.status_code == 409, buffered.text
+    assert buffered.json()["detail"]
+    assert streamed.status_code == 409, streamed.text
+    assert "start" not in streamed.text
+
+    read = auth_client.get(f"/api/conversations/{conversation.id}")
+    assert read.status_code == 200, read.text
+    body = read.json()
+    assert body["tutor_phase"] == "close"
+    assert body["hint_level"] == "assert"
+    assert [turn["message"] for turn in body["turns"]] == [TUTOR_OPENING_MESSAGE]
 
 
 def test_post_turn_in_scoped_conversation_reports_not_found_in_scope(

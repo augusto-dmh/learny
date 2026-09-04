@@ -245,9 +245,9 @@ T11 → T12 → T13 → T14 → T15
 
 **Done when**:
 
-- [ ] GET conversation after opening shows `tutor_phase=open`
-- [ ] POST turn on close is 409 with no new row
-- [ ] Gate: `uv run pytest tests/test_web_conversations.py`
+- [x] GET conversation after opening shows `tutor_phase=open`
+- [x] POST turn on close is 409 with no new row
+- [x] Gate: `uv run pytest tests/test_web_conversations.py`
 
 **Tests**: integration
 **Gate**: full

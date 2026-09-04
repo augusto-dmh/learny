@@ -218,6 +218,10 @@ class ConversationView(BaseModel):
     title: str
     scope_anchors: list[str]
     include_notes: bool
+    target_anchor: str | None
+    target_title: str | None
+    tutor_phase: str | None
+    hint_level: str | None
     created_at: datetime
     updated_at: datetime
 
@@ -229,6 +233,10 @@ class ConversationView(BaseModel):
             title=conversation.title,
             scope_anchors=list(conversation.scope_anchors),
             include_notes=conversation.include_notes,
+            target_anchor=conversation.target_anchor,
+            target_title=conversation.target_title,
+            tutor_phase=conversation.tutor_phase,
+            hint_level=conversation.hint_level,
             created_at=conversation.created_at,
             updated_at=conversation.updated_at,
         )
@@ -312,6 +320,8 @@ class ConversationSummaryView(BaseModel):
     include_notes: bool
     turn_count: int
     last_turn_mode: str | None
+    tutor_phase: str | None
+    hint_level: str | None
     created_at: datetime
     updated_at: datetime
 
@@ -327,6 +337,8 @@ class ConversationSummaryView(BaseModel):
             include_notes=conversation.include_notes,
             turn_count=summary.turn_count,
             last_turn_mode=summary.last_turn_mode,
+            tutor_phase=conversation.tutor_phase,
+            hint_level=conversation.hint_level,
             created_at=conversation.created_at,
             updated_at=conversation.updated_at,
         )
