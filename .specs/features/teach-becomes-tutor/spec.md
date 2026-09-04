@@ -173,48 +173,48 @@ Teach is a cited, section-scoped chat with a four-sentence "patient tutor" promp
 
 | Requirement ID | Story | Phase | Status |
 |---|---|---|---|
-| TUTOR-01 | P1: Frozen playbook | T1 | Done |
-| TUTOR-02 | P1: Frozen playbook | T1 | Done |
-| TUTOR-03 | P1: Frozen playbook | T2 | Done |
-| TUTOR-04 | P1: Frozen playbook | T1 | Done |
-| TUTOR-05 | P1: Frozen playbook | T3 | Done |
-| TUTOR-06 | P1: Frozen playbook | T3 | Done |
-| TUTOR-07 | P1: Frozen playbook | T3 | Done |
-| TUTOR-08 | P1: Tutor opens | T13 | Done |
-| TUTOR-09 | P1: Tutor opens | T4 | Done |
-| TUTOR-10 | P1: Tutor opens | T4 | Done |
-| TUTOR-11 | P1: Tutor opens | T7 | Done |
-| TUTOR-12 | P1: Tutor opens | T7 | Done |
-| TUTOR-13 | P1: Tutor opens | T13 | Done |
-| TUTOR-14 | P1: Tutor opens | T13 | Done |
-| TUTOR-15 | P1: Tutor opens | T13 | Done |
-| TUTOR-16 | P1: Ladder and close | T7 | Done |
-| TUTOR-17 | P1: Ladder and close | T7 | Done |
-| TUTOR-18 | P1: Ladder and close | T6 | Done |
-| TUTOR-19 | P1: Ladder and close | T7 | Done |
-| TUTOR-20 | P1: Ladder and close | T6 | Done |
-| TUTOR-21 | P1: Ladder and close | T6 | Done |
-| TUTOR-22 | P1: Ladder and close | T7 | Done |
-| TUTOR-23 | P1: Ladder and close | T7 | Done |
-| TUTOR-24 | P1: Ladder and close | T8 | Done |
-| TUTOR-25 | P1: Ladder and close | T7 | Done |
-| TUTOR-26 | P1: Ladder and close | T7 | Done |
-| TUTOR-27 | P1: One Chat dock | T12 | Done |
-| TUTOR-28 | P1: One Chat dock | T12 | Done |
-| TUTOR-29 | P1: One Chat dock | T13 | Done |
-| TUTOR-30 | P1: One Chat dock | T13 | Done |
-| TUTOR-31 | P1: One Chat dock | T12 | Done |
-| TUTOR-32 | P1: One Chat dock | T12 | Done |
-| TUTOR-33 | P1: One Chat dock | T14 | Done |
-| TUTOR-34 | P1: One FSRS card | T15 | Done |
-| TUTOR-35 | P1: One FSRS card | T10 | Done |
-| TUTOR-36 | P1: One FSRS card | T10 | Done |
-| TUTOR-37 | P1: One FSRS card | T10 | Done |
-| TUTOR-38 | P1: One FSRS card | T10 | Done |
-| TUTOR-39 | P1: One FSRS card | T9 | Done |
-| TUTOR-40 | P1: One FSRS card | T11 | Done |
-| TUTOR-41 | P1: One FSRS card | T15 | Done |
-| TUTOR-42 | P1: One FSRS card | T10 | Done |
+| TUTOR-01 | P1: Frozen playbook | T1 | ✅ Verified |
+| TUTOR-02 | P1: Frozen playbook | T1 | ✅ Verified |
+| TUTOR-03 | P1: Frozen playbook | T2 | ✅ Verified |
+| TUTOR-04 | P1: Frozen playbook | T1 | ✅ Verified |
+| TUTOR-05 | P1: Frozen playbook | T3 | ✅ Verified |
+| TUTOR-06 | P1: Frozen playbook | T3 | ✅ Verified |
+| TUTOR-07 | P1: Frozen playbook | T3 | ✅ Verified |
+| TUTOR-08 | P1: Tutor opens | T13 | ✅ Verified |
+| TUTOR-09 | P1: Tutor opens | T4 | ✅ Verified |
+| TUTOR-10 | P1: Tutor opens | T4 | ✅ Verified |
+| TUTOR-11 | P1: Tutor opens | T7 | ✅ Verified |
+| TUTOR-12 | P1: Tutor opens | T7 | ✅ Verified |
+| TUTOR-13 | P1: Tutor opens | T13 | ✅ Verified |
+| TUTOR-14 | P1: Tutor opens | T13 | ✅ Verified |
+| TUTOR-15 | P1: Tutor opens | T13 | ✅ Verified |
+| TUTOR-16 | P1: Ladder and close | T7 | ✅ Verified |
+| TUTOR-17 | P1: Ladder and close | T7 | ✅ Verified |
+| TUTOR-18 | P1: Ladder and close | T6 | ✅ Verified |
+| TUTOR-19 | P1: Ladder and close | T7 | ✅ Verified |
+| TUTOR-20 | P1: Ladder and close | T6 | ✅ Verified |
+| TUTOR-21 | P1: Ladder and close | T6 | ✅ Verified |
+| TUTOR-22 | P1: Ladder and close | T7 | ✅ Verified |
+| TUTOR-23 | P1: Ladder and close | T7 | ✅ Verified |
+| TUTOR-24 | P1: Ladder and close | T8 | ✅ Verified |
+| TUTOR-25 | P1: Ladder and close | T7 | ✅ Verified |
+| TUTOR-26 | P1: Ladder and close | T7 | ✅ Verified |
+| TUTOR-27 | P1: One Chat dock | T12 | ✅ Verified |
+| TUTOR-28 | P1: One Chat dock | T12 | ✅ Verified |
+| TUTOR-29 | P1: One Chat dock | T13 | ✅ Verified |
+| TUTOR-30 | P1: One Chat dock | T13 | ✅ Verified |
+| TUTOR-31 | P1: One Chat dock | T12 | ✅ Verified |
+| TUTOR-32 | P1: One Chat dock | T12 | ✅ Verified |
+| TUTOR-33 | P1: One Chat dock | T14 | ✅ Verified |
+| TUTOR-34 | P1: One FSRS card | T15 | ✅ Verified |
+| TUTOR-35 | P1: One FSRS card | T10 | ✅ Verified |
+| TUTOR-36 | P1: One FSRS card | T10 | ✅ Verified |
+| TUTOR-37 | P1: One FSRS card | T10 | ✅ Verified |
+| TUTOR-38 | P1: One FSRS card | T10 | ✅ Verified |
+| TUTOR-39 | P1: One FSRS card | T9 | ✅ Verified |
+| TUTOR-40 | P1: One FSRS card | T11 | ✅ Verified |
+| TUTOR-41 | P1: One FSRS card | T15 | ✅ Verified |
+| TUTOR-42 | P1: One FSRS card | T10 | ✅ Verified |
 
 **ID format:** `TUTOR-NN`
 
@@ -224,8 +224,8 @@ Teach is a cited, section-scoped chat with a four-sentence "patient tutor" promp
 
 ## Success Criteria
 
-- [ ] Starting Tutor on a ready section yields a tutor question before the learner types.
-- [ ] Opening retrieval is pinned to `target_title`, not the sentinel string.
-- [ ] A citation-free Socratic teach reply persists as answered; the same shape in Answer stays not-found.
+- [x] Starting Tutor on a ready section yields a tutor question before the learner types.
+- [x] Opening retrieval is pinned to `target_title`, not the sentinel string.
+- [x] A citation-free Socratic teach reply persists as answered; the same shape in Answer stays not-found.
 - [x] After a check restatement the composer is gone and exactly one card can be accepted into the due queue.
 - [x] `?panel=ask` and `?panel=teach` still open the dock; the strip reads Chat | Notes | Review.
