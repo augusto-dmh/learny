@@ -934,6 +934,14 @@ class QuizItemRepository(Protocol):
         """
         ...
 
+    def get_by_conversation_id(self, conversation_id: UUID) -> QuizItem | None:
+        """Return the ``tutor`` card already minted for this conversation (AD-297).
+
+        ``None`` when the learner has not accepted the restatement from this thread
+        yet. Scoped to ``origin='tutor'`` so a severed (null) link is never returned.
+        """
+        ...
+
     def get_by_note_and_key(self, note_id: UUID, content_key: str) -> QuizItem | None:
         """Return the ``note`` card already promoted from this note + fingerprint (NL-15).
 

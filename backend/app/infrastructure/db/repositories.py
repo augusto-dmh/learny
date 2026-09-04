@@ -1383,6 +1383,15 @@ class SqlAlchemyQuizItemRepository:
         ).one_or_none()
         return _to_quiz_item(row) if row is not None else None
 
+    def get_by_conversation_id(self, conversation_id: UUID) -> QuizItem | None:
+        """Return the tutor card already minted for this conversation (AD-297)."""
+        row = self._conn.execute(
+            select(*_QUIZ_ITEM_READ_COLUMNS)
+            .where(quiz_items.c.conversation_id == conversation_id)
+            .where(quiz_items.c.origin == QuizItemOrigin.TUTOR)
+        ).one_or_none()
+        return _to_quiz_item(row) if row is not None else None
+
     def get_by_note_and_key(self, note_id: UUID, content_key: str) -> QuizItem | None:
         """Return the note card already promoted from this note + fingerprint (NL-15).
 

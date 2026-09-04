@@ -27,10 +27,13 @@ Contract (also consumed by the Next.js proxy):
   (CONV-20).
 - ``POST   /api/conversations/{id}/turns/stream`` → 200 UI Message Stream v1 SSE
   (CONV-21).
+- ``POST   /api/conversations/{id}/tutor-card`` → 201 created / 200 existing tutor
+  card; 409 if the thread is not closed; 404 non-owner (TUTOR-35..38, TUTOR-42).
 
-Every mutating route carries auth + Origin/CSRF enforcement and the single
-``rate_limit_conversations`` policy that governs the whole unified surface
-(CONV-22); the reads carry auth alone, as elsewhere.
+Every mutating route carries auth + Origin/CSRF enforcement. Conversation
+create/turn/rename/delete use ``rate_limit_conversations`` (CONV-22); the tutor-card
+accept uses ``rate_limit_quiz`` because it writes a quiz item. The reads carry auth
+alone, as elsewhere.
 """
 
 from __future__ import annotations
@@ -42,6 +45,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query, Response, status
 from pydantic import BaseModel, Field, field_validator
 
+from app.application.cards import AcceptTutorCard
 from app.application.conversations import (
     DEFAULT_PAGE_LIMIT,
     MAX_PAGE_LIMIT,
@@ -62,8 +66,10 @@ from app.domain.entities import (
     ConversationTurn,
     User,
 )
+from app.infrastructure.web.cards import CardView
 from app.infrastructure.web.csrf import enforce_csrf, enforce_origin
 from app.infrastructure.web.dependencies import (
+    get_accept_tutor_card,
     get_authenticated_user,
     get_delete_conversation,
     get_list_conversations,
@@ -72,7 +78,7 @@ from app.infrastructure.web.dependencies import (
     get_rename_conversation,
     get_start_conversation,
 )
-from app.infrastructure.web.rate_limit import rate_limit_conversations
+from app.infrastructure.web.rate_limit import rate_limit_conversations, rate_limit_quiz
 from app.infrastructure.web.retrieval import EvidenceView
 from app.infrastructure.web.ui_message_stream import to_sse_response
 
@@ -529,3 +535,31 @@ def post_conversation_turn_stream(
         mode=body.mode,
     )
     return to_sse_response(events)
+
+
+@router.post(
+    "/api/conversations/{conversation_id}/tutor-card",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[
+        Depends(rate_limit_quiz),
+        Depends(enforce_origin),
+        Depends(enforce_csrf),
+    ],
+)
+def accept_tutor_card(
+    conversation_id: UUID,
+    user: Annotated[User, Depends(get_authenticated_user)],
+    service: Annotated[AcceptTutorCard, Depends(get_accept_tutor_card)],
+    response: Response,
+) -> CardView:
+    """Save the closed tutor restatement as one review card (201; 200/409/404).
+
+    ``AcceptTutorCard`` authorizes the conversation (missing/non-owner → 404),
+    refuses a thread that is not ``close`` (409), and mints one ``origin=tutor``
+    free-recall item scheduled due now. A second accept returns the existing card
+    with 200 so a double submit cannot duplicate it. Nothing is generated.
+    """
+    item, created = service(user=user, conversation_id=conversation_id)
+    if not created:
+        response.status_code = status.HTTP_200_OK
+    return CardView.from_item(item)

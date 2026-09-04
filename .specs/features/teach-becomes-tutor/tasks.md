@@ -289,9 +289,9 @@ T11 → T12 → T13 → T14 → T15
 
 **Done when**:
 
-- [ ] Accept on close inserts one due card; second accept returns the same id without rescheduling
-- [ ] Accept before close is 409; stranger is 404
-- [ ] Gate: `uv run pytest tests/test_application_cards.py tests/test_web_conversations.py`
+- [x] Accept on close inserts one due card; second accept returns the same id without rescheduling
+- [x] Accept before close is 409; stranger is 404
+- [x] Gate: `uv run pytest tests/test_application_cards.py tests/test_web_conversations.py`
 
 **Tests**: integration
 **Gate**: full

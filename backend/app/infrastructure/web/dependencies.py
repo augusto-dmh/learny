@@ -27,6 +27,7 @@ from sqlalchemy import Connection
 from app.application.cards import (
     AcceptCard,
     AcceptNoteCard,
+    AcceptTutorCard,
     SuggestCards,
     SuggestNoteCards,
     UpdateCard,
@@ -825,6 +826,23 @@ def get_accept_card(conn: DbConnection) -> AcceptCard:
         clock=_clock,
         ids=uuid4,
         max_card_chars=settings.quiz_max_card_chars,
+    )
+
+
+def get_accept_tutor_card(conn: DbConnection) -> AcceptTutorCard:
+    """Wire ``AcceptTutorCard`` on the request-scoped connection (TUTOR-35..38, 42)."""
+    settings = get_settings()
+    return AcceptTutorCard(
+        conversations=SqlAlchemyConversationRepository(conn),
+        turns=SqlAlchemyConversationTurnRepository(conn),
+        sources=SqlAlchemySourceRepository(conn),
+        items=SqlAlchemyQuizItemRepository(conn),
+        generation=get_card_generation(),
+        embeddings=get_card_embeddings(),
+        scheduling=build_scheduling_adapter(settings),
+        authorize=AuthorizeOwnership(),
+        clock=_clock,
+        ids=uuid4,
     )
 
 

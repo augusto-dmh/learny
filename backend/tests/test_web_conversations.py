@@ -52,6 +52,7 @@ from app.domain.entities import (
     MODE_TEACH,
     NOT_FOUND_IN_SCOPE,
     NOT_FOUND_IN_SOURCE,
+    TUTOR_CARD_QUESTION,
     TUTOR_OPENING_MESSAGE,
     AnswerCompleted,
     AnswerReasoningDelta,
@@ -75,6 +76,7 @@ from app.infrastructure.db.repositories import (
     SqlAlchemyCorpusRepository,
     SqlAlchemyEmbeddingIndexRepository,
     SqlAlchemyNoteRepository,
+    SqlAlchemyQuizItemRepository,
     SqlAlchemySourceRepository,
 )
 from app.infrastructure.embeddings import DeterministicEmbeddingAdapter
@@ -139,6 +141,15 @@ def _delete(
     client: TestClient, conversation_id: object, *, csrf: str | None, origin: str | None = None
 ):
     return client.delete(f"/api/conversations/{conversation_id}", headers=_headers(csrf, origin))
+
+
+def _accept_tutor_card(
+    client: TestClient, conversation_id: object, *, csrf: str | None, origin: str | None = None
+):
+    return client.post(
+        f"/api/conversations/{conversation_id}/tutor-card",
+        headers=_headers(csrf, origin),
+    )
 
 
 # --- Seeding -------------------------------------------------------------------
@@ -290,6 +301,35 @@ def _seed_turn(
         created_at=datetime.now(UTC),
     )
     return SqlAlchemyConversationTurnRepository(db_conn).add(turn)
+
+
+def _seed_closed_tutor(
+    db_conn: Connection,
+    source_id: UUID,
+    *,
+    citations: tuple[Evidence, ...] | None = None,
+    check_text: str = "Cells convert sunlight into chemical energy.",
+) -> Conversation:
+    """A closed tutor thread with its opening turn — the accept-card fixture."""
+    conversation = _seed_conversation(
+        db_conn,
+        source_id,
+        tutor_phase="close",
+        hint_level="assert",
+        tutor_check_text=check_text,
+    )
+    opening_citations = (_citation(source_id),) if citations is None else citations
+    _seed_turn(
+        db_conn,
+        conversation,
+        turn_index=0,
+        message=TUTOR_OPENING_MESSAGE,
+        mode=MODE_TEACH,
+        answer_status=ANSWERED,
+        answer_text="What is this section arguing?",
+        citations=opening_citations,
+    )
+    return conversation
 
 
 def _seed_listed_conversation(
@@ -2700,6 +2740,112 @@ def test_a_streamed_quoted_citation_frame_matches_the_buffered_one(
     assert set(unquoted) == _CITATION_KEYS
 
 
+# --- POST /api/conversations/{id}/tutor-card (TUTOR-35..38, TUTOR-42) ----------
+
+_TUTOR_CHECK = "Cells convert sunlight into chemical energy."
+
+
+def test_accept_tutor_card_on_close_returns_201_due_now_free_recall(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "tutor-card-ok@example.com")
+    conversation = _seed_closed_tutor(db_conn, UUID(source_id), check_text=_TUTOR_CHECK)
+
+    resp = _accept_tutor_card(auth_client, conversation.id, csrf=csrf)
+
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["origin"] == "tutor"
+    assert body["item_type"] == "free_recall"
+    assert body["question"] == TUTOR_CARD_QUESTION.format(title=_TITLE)
+    assert body["answer"] == _TUTOR_CHECK
+    assert body["citation"]["anchor"] == _ANCHOR
+    assert body["citation"]["section_path"] == list(_SECTION_PATH)
+    assert body["citation"]["source_excerpt"] == _PHOTO
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    stored = repo.get_by_id(UUID(body["id"]))
+    assert stored is not None
+    assert stored.conversation_id == conversation.id
+    assert len(repo.list_for_source(UUID(source_id))) == 1
+    scheduling = repo.get_scheduling(UUID(body["id"]))
+    assert scheduling is not None
+    assert scheduling.due <= datetime.now(UTC) + timedelta(seconds=1)
+
+
+def test_accept_tutor_card_without_opening_citations_uses_the_target_title(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "tutor-card-title@example.com")
+    conversation = _seed_closed_tutor(db_conn, UUID(source_id), citations=())
+
+    resp = _accept_tutor_card(auth_client, conversation.id, csrf=csrf)
+
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["citation"]["source_excerpt"] == _TITLE
+
+
+def test_reaccepting_the_tutor_card_returns_200_with_the_same_id_and_scheduling(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "tutor-card-again@example.com")
+    conversation = _seed_closed_tutor(db_conn, UUID(source_id))
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+
+    first = _accept_tutor_card(auth_client, conversation.id, csrf=csrf)
+    assert first.status_code == 201, first.text
+    item_id = UUID(first.json()["id"])
+    before = repo.get_scheduling(item_id)
+
+    second = _accept_tutor_card(auth_client, conversation.id, csrf=csrf)
+
+    assert second.status_code == 200, second.text
+    assert second.json()["id"] == first.json()["id"]
+    assert len(repo.list_for_source(UUID(source_id))) == 1
+    assert repo.get_scheduling(item_id) == before
+
+
+def test_accept_tutor_card_before_close_returns_409_and_writes_nothing(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "tutor-card-early@example.com")
+    conversation = _seed_conversation(
+        db_conn, UUID(source_id), tutor_phase="open", hint_level="pump"
+    )
+    _seed_turn(
+        db_conn,
+        conversation,
+        turn_index=0,
+        message=TUTOR_OPENING_MESSAGE,
+        mode=MODE_TEACH,
+        answer_status=ANSWERED,
+        answer_text="What is this section arguing?",
+        citations=(_citation(UUID(source_id)),),
+    )
+
+    resp = _accept_tutor_card(auth_client, conversation.id, csrf=csrf)
+
+    assert resp.status_code == 409, resp.text
+    assert SqlAlchemyQuizItemRepository(db_conn).list_for_source(UUID(source_id)) == []
+
+
+def test_accept_tutor_card_stranger_and_missing_return_identical_404(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    source_id, _ = _seed_ready_source(auth_client, db_conn, "tutor-card-owner@example.com")
+    conversation = _seed_closed_tutor(db_conn, UUID(source_id))
+
+    _register(auth_client, "tutor-card-intruder@example.com")
+    csrf = _csrf(auth_client)
+
+    stranger = _accept_tutor_card(auth_client, conversation.id, csrf=csrf)
+    missing = _accept_tutor_card(auth_client, uuid4(), csrf=csrf)
+
+    assert stranger.status_code == 404, stranger.text
+    assert missing.status_code == 404, missing.text
+    assert stranger.json() == missing.json()
+    assert SqlAlchemyQuizItemRepository(db_conn).list_for_source(UUID(source_id)) == []
+
+
 # --- Rate limit: one policy for the whole surface (CONV-22) --------------------
 
 
@@ -2812,20 +2958,27 @@ def test_turn_stream_rate_limit_returns_429_before_any_frame(
 
 
 def test_every_mutating_conversation_route_carries_the_one_policy() -> None:
-    # CONV-22 / ADR-0029: one policy for the whole unified surface. Asserted over the
-    # route inventory rather than per endpoint, so a route added later cannot quietly
-    # ship without the limiter — or with a second limiter beside it.
+    # CONV-22 / ADR-0029: one conversations limiter for the unified surface, except
+    # the tutor-card accept which writes a quiz item and therefore uses
+    # ``rate_limit_quiz``. Asserted over the route inventory rather than per
+    # endpoint, so a route added later cannot quietly ship without a limiter.
     from app.infrastructure.web.conversations import router
     from app.infrastructure.web.csrf import enforce_csrf, enforce_origin
-    from app.infrastructure.web.rate_limit import rate_limit_conversations
+    from app.infrastructure.web.rate_limit import rate_limit_conversations, rate_limit_quiz
 
     routes = [route for route in router.routes if route.path.startswith("/api/conversations")]
-    assert len(routes) == len(router.routes) == 7
+    assert len(routes) == len(router.routes) == 8
 
     mutating = {"POST", "PATCH", "DELETE", "PUT"}
     for route in routes:
         declared = [dependency.dependency for dependency in route.dependencies]
-        if route.methods & mutating:
+        if route.path.endswith("/tutor-card"):
+            assert declared == [
+                rate_limit_quiz,
+                enforce_origin,
+                enforce_csrf,
+            ], f"{sorted(route.methods)} {route.path}"
+        elif route.methods & mutating:
             assert declared == [
                 rate_limit_conversations,
                 enforce_origin,

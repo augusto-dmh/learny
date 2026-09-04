@@ -171,10 +171,11 @@ class InvalidConversationMode(Exception):
 
 
 class ConversationClosed(Exception):
-    """A turn was posted on a conversation whose tutor check already passed.
+    """This write is refused because of the tutor close lock.
 
     WHILE ``tutor_phase`` is ``close``, any new turn is refused and nothing is
-    persisted (TUTOR-23, AD-299). The web layer maps this to 409.
+    persisted (TUTOR-23, AD-299). Accepting the tutor card WHILE the phase is not
+    ``close`` is refused the same way (TUTOR-37). The web layer maps both to 409.
     """
 
 
