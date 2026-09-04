@@ -282,11 +282,11 @@ describe("ReaderPanel shell (RA-01/02/03, TUTOR-27/28)", () => {
     expect(screen.queryByTestId("teach-panel-body")).toBeNull();
     expect(readActiveConversation("s1", "ask")).toBeNull();
     expect(
-      fetchMock.mock.calls.some(
-        ([url, init]) =>
-          String(url).includes("/turns/stream") &&
-          (init as RequestInit | undefined)?.method === "POST",
-      ),
+      (fetchMock.mock.calls as unknown[][]).some((call) => {
+        const url = String(call[0]);
+        const init = call[1] as RequestInit | undefined;
+        return url.includes("/turns/stream") && init?.method === "POST";
+      }),
     ).toBe(false);
   });
 
