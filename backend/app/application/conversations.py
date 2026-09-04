@@ -22,6 +22,7 @@ from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, replace
 from uuid import UUID
 
+from app.application.activation import ACTIVATION_FIRST_CITED_ANSWER, RecordActivation
 from app.application.errors import (
     AnswerGenerationFailed,
     ConversationClosed,
@@ -471,6 +472,7 @@ class _TurnPrep:
     turn_index: int
     anchors: tuple[str, ...] | None
     tutor_state: TutorState
+    user_id: UUID
 
 
 @dataclass(frozen=True)
@@ -490,6 +492,7 @@ class _TurnPlan:
     evidence: list[Evidence]
     turn_index: int
     tutor_state: TutorState
+    user_id: UUID
 
 
 def _is_closing_restatement(prep: _TurnPrep) -> bool:
@@ -552,6 +555,7 @@ class PostConversationTurn:
         evidence_top_k: int,
         history_turns: int,
         tutor_check_after_turns: int,
+        record_activation: RecordActivation | None = None,
     ) -> None:
         self._conversations = conversations
         self._turns = turns
@@ -565,6 +569,7 @@ class PostConversationTurn:
         self._evidence_top_k = evidence_top_k
         self._history_turns = history_turns
         self._tutor_check_after_turns = tutor_check_after_turns
+        self._record_activation = record_activation
 
     def __call__(
         self,
@@ -755,6 +760,7 @@ class PostConversationTurn:
             turn_index=turn_index,
             anchors=anchors,
             tutor_state=self._next_tutor_state(conversation, mode=mode, message=message),
+            user_id=user.id,
         )
 
     def _retrieve_evidence(
@@ -781,6 +787,7 @@ class PostConversationTurn:
             evidence=evidence,
             turn_index=prep.turn_index,
             tutor_state=prep.tutor_state,
+            user_id=prep.user_id,
         )
 
     @staticmethod
@@ -1034,6 +1041,7 @@ class PostConversationTurn:
             evidence=[],
             turn_index=prep.turn_index,
             tutor_state=prep.tutor_state,
+            user_id=prep.user_id,
         )
 
     def _persist(self, plan: _TurnPlan, turn: ConversationTurn, mode: str) -> ConversationTurn:
@@ -1068,6 +1076,16 @@ class PostConversationTurn:
             persisted.evidence_count,
             persisted.model,
         )
+        if (
+            self._record_activation is not None
+            and mode == MODE_ANSWER
+            and persisted.answer_status == ANSWERED
+            and len(persisted.citations) >= 1
+        ):
+            self._record_activation(
+                user_id=plan.user_id,
+                name=ACTIVATION_FIRST_CITED_ANSWER,
+            )
         return persisted
 
     def _stream_turn(self, plan: _TurnPlan, turn: ConversationTurn, mode: str) -> StreamTurn:

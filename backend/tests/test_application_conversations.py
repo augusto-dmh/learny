@@ -22,6 +22,10 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from app.application.activation import (
+    ACTIVATION_FIRST_CITED_ANSWER,
+    RecordActivation,
+)
 from app.application.conversations import (
     DEFAULT_PAGE_LIMIT,
     TITLE_MAX_CHARS,
@@ -75,7 +79,7 @@ from app.domain.entities import (
     StructureSection,
     User,
 )
-from tests.fakes import FakeClock, FakeSourceRepository
+from tests.fakes import FakeActivationEventRepository, FakeClock, FakeSourceRepository
 
 _NOW = datetime(2026, 7, 25, 12, 0, 0, tzinfo=UTC)
 _MODEL = "local-extractive"
@@ -1091,6 +1095,7 @@ def _post(
     generation=None,
     clock=None,
     ids=uuid4,
+    record_activation=None,
 ) -> PostConversationTurn:
     return PostConversationTurn(
         conversations=conversations,
@@ -1105,6 +1110,7 @@ def _post(
         evidence_top_k=_TOP_K,
         history_turns=_HISTORY_TURNS,
         tutor_check_after_turns=_CHECK_AFTER,
+        record_activation=record_activation,
     )
 
 
@@ -2519,6 +2525,169 @@ def test_answered_turn_is_persisted_with_the_next_index_and_ranked_citations() -
     assert turn.citations == (top, second)
     assert (turn.evidence_count, turn.model) == (2, "claude-test")
     assert [t.turn_index for t in turns.list_for_conversation(conversation.id)] == [0, 1]
+
+
+def _record_activation() -> tuple[RecordActivation, FakeActivationEventRepository]:
+    activations = FakeActivationEventRepository()
+    return RecordActivation(activations=activations, clock=FakeClock(_NOW)), activations
+
+
+def test_cited_ask_persist_inserts_first_cited_answer_once() -> None:
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
+    record, activations = _record_activation()
+    post = _post(
+        conversations=conversations,
+        turns=FakeConversationTurnRepository(),
+        sources=sources,
+        corpus=corpus,
+        retrieve=FakeScopedRetrieveEvidence(evidence),
+        generation=FakeGeneration(answer=_answered(*evidence)),
+        record_activation=record,
+    )
+
+    post(user=user, conversation_id=conversation.id, message="q", mode=MODE_ANSWER)
+    post(user=user, conversation_id=conversation.id, message="again", mode=MODE_ANSWER)
+
+    assert list(activations.rows) == [(user.id, ACTIVATION_FIRST_CITED_ANSWER)]
+
+
+def test_teach_answered_does_not_insert_first_cited_answer_even_with_citations() -> None:
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
+    record, activations = _record_activation()
+
+    turn = _post(
+        conversations=conversations,
+        turns=FakeConversationTurnRepository(),
+        sources=sources,
+        corpus=corpus,
+        retrieve=FakeScopedRetrieveEvidence(evidence),
+        generation=FakeGeneration(answer=_answered(*evidence)),
+        record_activation=record,
+    )(
+        user=user,
+        conversation_id=conversation.id,
+        message=TUTOR_OPENING_MESSAGE,
+        mode=MODE_TEACH,
+    )
+
+    assert turn.answer_status == "answered"
+    assert len(turn.citations) >= 1
+    assert list(activations.rows) == []
+
+
+def test_teach_answered_with_empty_citations_inserts_no_activation() -> None:
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
+    record, activations = _record_activation()
+
+    turn = _post(
+        conversations=conversations,
+        turns=FakeConversationTurnRepository(),
+        sources=sources,
+        corpus=corpus,
+        retrieve=FakeScopedRetrieveEvidence(evidence),
+        generation=FakeGeneration(
+            answer=GeneratedAnswer(
+                text="What is this section trying to convince you of?",
+                cited_chunk_ids=(),
+                model=_MODEL,
+                found=True,
+            )
+        ),
+        record_activation=record,
+    )(
+        user=user,
+        conversation_id=conversation.id,
+        message=TUTOR_OPENING_MESSAGE,
+        mode=MODE_TEACH,
+    )
+
+    assert turn.answer_status == "answered"
+    assert turn.citations == ()
+    assert list(activations.rows) == []
+
+
+def test_failed_ask_does_not_insert_first_cited_answer() -> None:
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
+    record, activations = _record_activation()
+
+    with pytest.raises(AnswerGenerationFailed):
+        _post(
+            conversations=conversations,
+            turns=FakeConversationTurnRepository(),
+            sources=sources,
+            corpus=corpus,
+            retrieve=FakeScopedRetrieveEvidence(evidence),
+            generation=FakeGeneration(error=RuntimeError("provider down")),
+            record_activation=record,
+        )(user=user, conversation_id=conversation.id, message="q", mode=MODE_ANSWER)
+
+    assert list(activations.rows) == []
+
+
+def test_not_found_ask_does_not_insert_first_cited_answer() -> None:
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
+    record, activations = _record_activation()
+
+    turn = _post(
+        conversations=conversations,
+        turns=FakeConversationTurnRepository(),
+        sources=sources,
+        corpus=corpus,
+        retrieve=FakeScopedRetrieveEvidence(evidence),
+        generation=FakeGeneration(
+            answer=GeneratedAnswer(text="", cited_chunk_ids=(), model=_MODEL, found=False)
+        ),
+        record_activation=record,
+    )(user=user, conversation_id=conversation.id, message="q", mode=MODE_ANSWER)
+
+    assert turn.answer_status != "answered"
+    assert list(activations.rows) == []
+
+
+def test_zero_citation_ask_does_not_insert_first_cited_answer() -> None:
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
+    record, activations = _record_activation()
+
+    turn = _post(
+        conversations=conversations,
+        turns=FakeConversationTurnRepository(),
+        sources=sources,
+        corpus=corpus,
+        retrieve=FakeScopedRetrieveEvidence(evidence),
+        generation=FakeGeneration(
+            answer=GeneratedAnswer(text="ungrounded", cited_chunk_ids=(), model=_MODEL, found=True)
+        ),
+        record_activation=record,
+    )(user=user, conversation_id=conversation.id, message="q", mode=MODE_ANSWER)
+
+    assert turn.citations == ()
+    assert list(activations.rows) == []
+
+
+def test_cited_ask_stream_inserts_first_cited_answer_once() -> None:
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
+    record, activations = _record_activation()
+    post = _post(
+        conversations=conversations,
+        turns=FakeConversationTurnRepository(),
+        sources=sources,
+        corpus=corpus,
+        retrieve=FakeScopedRetrieveEvidence(evidence),
+        generation=FakeGeneration(answer=_answered(*evidence)),
+        record_activation=record,
+    )
+
+    list(post.stream(user=user, conversation_id=conversation.id, message="q", mode=MODE_ANSWER))
+    list(post.stream(user=user, conversation_id=conversation.id, message="again", mode=MODE_ANSWER))
+
+    assert list(activations.rows) == [(user.id, ACTIVATION_FIRST_CITED_ANSWER)]
 
 
 def test_only_the_citation_a_quote_was_reported_for_carries_that_quote() -> None:

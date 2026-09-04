@@ -565,6 +565,10 @@ def get_post_conversation_turn(
         evidence_top_k=settings.conversation_evidence_top_k,
         history_turns=settings.conversation_history_turns,
         tutor_check_after_turns=settings.tutor_check_after_turns,
+        record_activation=RecordActivation(
+            activations=SqlAlchemyActivationEventRepository(conn),
+            clock=_clock,
+        ),
     )
 
 

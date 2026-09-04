@@ -289,10 +289,10 @@ T10 → T11 → T12 → T13 → T14 → T15 → T16
 
 **Done when**:
 
-- [ ] Cited Ask persist inserts one row
-- [ ] Second cited Ask does not insert
-- [ ] Teach-answered with empty citations inserts none
-- [ ] Failed Ask inserts none
+- [x] Cited Ask persist inserts one row
+- [x] Second cited Ask does not insert
+- [x] Teach-answered with empty citations inserts none
+- [x] Failed Ask inserts none
 
 **Tests**: unit
 **Gate**: full
