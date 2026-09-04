@@ -29,7 +29,7 @@
  * on every call regardless of client-side routing (FR-AUTH-007, ADR-017).
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   readActiveConversation,
@@ -65,6 +65,7 @@ import {
 
 import { AnswerPhaseIndicator, ReasoningRegion } from "./answer-phase";
 import { CitedAnswer } from "./cited-answer";
+import { FailedTurn } from "./failed-turn";
 import { IncludeNotesToggle } from "./include-notes-toggle";
 import { isNotFound, NotFoundNotice } from "./not-found-notice";
 import { SaveToNoteAction } from "./save-to-note-action";
@@ -346,7 +347,7 @@ function TeachChat({
     [includeNotes, onConversationStarted],
   );
 
-  const { messages, status, isStreaming, banner, send, stop } =
+  const { messages, status, isStreaming, banner, failedTurn, send, stop } =
     useConversationThread({
       csrf,
       mode: "teach",
@@ -357,6 +358,13 @@ function TeachChat({
       onConversationKept,
       onRequireAuth,
     });
+
+  const retryFailedTurn = useCallback(() => {
+    if (!failedTurn?.userText) {
+      return;
+    }
+    send(failedTurn.userText);
+  }, [failedTurn, send]);
 
   const handleSubmit = useCallback(
     (message: PromptInputMessage) => {
@@ -377,17 +385,30 @@ function TeachChat({
           {messages.map((message, index) => {
             if (message.role === "user") {
               return (
-                <Message from="user" key={message.id}>
-                  <MessageContent>
-                    {message.parts.map((part, i) =>
-                      part.type === "text" ? (
-                        <span data-testid="user-message" key={i}>
-                          {part.text}
-                        </span>
-                      ) : null,
-                    )}
-                  </MessageContent>
-                </Message>
+                <Fragment key={message.id}>
+                  <Message from="user">
+                    <MessageContent>
+                      {message.parts.map((part, i) =>
+                        part.type === "text" ? (
+                          <span data-testid="user-message" key={i}>
+                            {part.text}
+                          </span>
+                        ) : null,
+                      )}
+                    </MessageContent>
+                  </Message>
+                  {failedTurn?.messageId === message.id ? (
+                    <Message from="assistant">
+                      <MessageContent>
+                        <FailedTurn
+                          error={failedTurn.error}
+                          onRetry={retryFailedTurn}
+                          retryDisabled={isStreaming}
+                        />
+                      </MessageContent>
+                    </Message>
+                  ) : null}
+                </Fragment>
               );
             }
             const { text, citations, status: answerStatus, reasoning } =
@@ -429,6 +450,13 @@ function TeachChat({
                       csrf={csrf}
                     />
                   ) : null}
+                  {failedTurn?.messageId === message.id ? (
+                    <FailedTurn
+                      error={failedTurn.error}
+                      onRetry={retryFailedTurn}
+                      retryDisabled={isStreaming}
+                    />
+                  ) : null}
                 </MessageContent>
               </Message>
             );
@@ -437,6 +465,18 @@ function TeachChat({
               the same search is already under way, so it reads the same. */}
           {isStreaming && messages[messages.length - 1]?.role === "user" ? (
             <AnswerPhaseIndicator />
+          ) : null}
+          {failedTurn &&
+          !messages.some((message) => message.id === failedTurn.messageId) ? (
+            <Message from="assistant">
+              <MessageContent>
+                <FailedTurn
+                  error={failedTurn.error}
+                  onRetry={retryFailedTurn}
+                  retryDisabled={isStreaming}
+                />
+              </MessageContent>
+            </Message>
           ) : null}
         </ConversationContent>
       </Conversation>

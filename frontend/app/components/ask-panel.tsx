@@ -34,7 +34,7 @@
  */
 
 import { X } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 
 import {
   readActiveConversation,
@@ -69,6 +69,7 @@ import { Button } from "@/components/ui/button";
 
 import { AnswerPhaseIndicator, ReasoningRegion } from "./answer-phase";
 import { CitedAnswer } from "./cited-answer";
+import { FailedTurn } from "./failed-turn";
 import { IncludeNotesToggle } from "./include-notes-toggle";
 import { isNotFound, NotFoundNotice } from "./not-found-notice";
 import { SaveToNoteAction } from "./save-to-note-action";
@@ -271,7 +272,7 @@ function AskChat({
     [includeNotes, onConversationStarted],
   );
 
-  const { messages, status, isStreaming, banner, send, stop } =
+  const { messages, status, isStreaming, banner, failedTurn, send, stop } =
     useConversationThread({
       csrf,
       mode: "answer",
@@ -299,6 +300,13 @@ function AskChat({
     }
     onPendingConsumed?.();
   }, [pendingRequest, send, onPendingConsumed]);
+
+  const retryFailedTurn = useCallback(() => {
+    if (!failedTurn?.userText) {
+      return;
+    }
+    send(failedTurn.userText);
+  }, [failedTurn, send]);
 
   const handleSubmit = useCallback(
     (message: PromptInputMessage) => {
@@ -336,15 +344,28 @@ function AskChat({
             const isLast = index === messages.length - 1;
             if (message.role === "user") {
               return (
-                <Message from="user" key={message.id}>
-                  <MessageContent>
-                    {message.parts.map((part, i) =>
-                      part.type === "text" ? (
-                        <span key={i}>{part.text}</span>
-                      ) : null,
-                    )}
-                  </MessageContent>
-                </Message>
+                <Fragment key={message.id}>
+                  <Message from="user">
+                    <MessageContent>
+                      {message.parts.map((part, i) =>
+                        part.type === "text" ? (
+                          <span key={i}>{part.text}</span>
+                        ) : null,
+                      )}
+                    </MessageContent>
+                  </Message>
+                  {failedTurn?.messageId === message.id ? (
+                    <Message from="assistant">
+                      <MessageContent>
+                        <FailedTurn
+                          error={failedTurn.error}
+                          onRetry={retryFailedTurn}
+                          retryDisabled={isStreaming}
+                        />
+                      </MessageContent>
+                    </Message>
+                  ) : null}
+                </Fragment>
               );
             }
             const { text, citations, status: answerStatus, reasoning } =
@@ -395,6 +416,13 @@ function AskChat({
                       csrf={csrf}
                     />
                   ) : null}
+                  {failedTurn?.messageId === message.id ? (
+                    <FailedTurn
+                      error={failedTurn.error}
+                      onRetry={retryFailedTurn}
+                      retryDisabled={isStreaming}
+                    />
+                  ) : null}
                 </MessageContent>
               </Message>
             );
@@ -403,6 +431,18 @@ function AskChat({
               the same search is already under way, so it reads the same. */}
           {isStreaming && messages[messages.length - 1]?.role === "user" ? (
             <AnswerPhaseIndicator />
+          ) : null}
+          {failedTurn &&
+          !messages.some((message) => message.id === failedTurn.messageId) ? (
+            <Message from="assistant">
+              <MessageContent>
+                <FailedTurn
+                  error={failedTurn.error}
+                  onRetry={retryFailedTurn}
+                  retryDisabled={isStreaming}
+                />
+              </MessageContent>
+            </Message>
           ) : null}
         </ConversationContent>
       </Conversation>

@@ -291,7 +291,7 @@ T12 -> T13
 
 ---
 
-### T10: Error state in the thread with retry
+### T10: Error state in the thread with retry ✅
 
 **What**: After a failed send, the thread shows the readable error on that turn and a Retry control that calls `send` with the same user text.
 **Where**: `frontend/app/components/ask-panel.tsx`
@@ -306,9 +306,9 @@ T12 -> T13
 
 **Done when**:
 
-- [ ] Retry is disabled while `isStreaming`
-- [ ] Retry does not create a second conversation
-- [ ] Teach panel shows the same failure/retry (shared hook or shared piece)
+- [x] Retry is disabled while `isStreaming`
+- [x] Retry does not create a second conversation
+- [x] Teach panel shows the same failure/retry (shared hook or shared piece)
 
 **Tests**: unit
 **Gate**: full

@@ -30,9 +30,17 @@ import {
 } from "@/app/lib/conversations";
 import {
   createConversationTransport,
+  messageText,
   StreamRequestError,
   type LearnyUIMessage,
 } from "@/app/lib/streaming";
+
+/** The turn that failed last, so Retry can resubmit the same question. */
+export type FailedTurnState = {
+  error: string;
+  userText: string;
+  messageId: string | null;
+};
 
 export type ConversationThread = {
   /** The thread's messages: restored turns first, then anything streamed since. */
@@ -43,11 +51,22 @@ export type ConversationThread = {
   isStreaming: boolean;
   /** The readable failure message to show, or `null`. */
   banner: string | null;
+  /** The in-thread failure Retry is bound to, or `null` when none has failed. */
+  failedTurn: FailedTurnState | null;
   /** Send one message, creating the conversation first if the thread has none. */
   send: (text: string) => void;
   /** Stop an in-flight turn; the conversation and its question stay. */
   stop: () => void;
 };
+
+function lastUserText(messages: LearnyUIMessage[]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === "user") {
+      return messageText(messages[i]);
+    }
+  }
+  return "";
+}
 
 export function useConversationThread({
   csrf,
@@ -74,6 +93,9 @@ export function useConversationThread({
   onRequireAuth?: () => void;
 }): ConversationThread {
   const [banner, setBanner] = useState<string | null>(null);
+  const [failedTurn, setFailedTurn] = useState<FailedTurnState | null>(null);
+  const messagesRef = useRef<LearnyUIMessage[]>([]);
+  const lastSentRef = useRef("");
 
   // The id the *transport* streams into. It has to be a ref because it is read
   // and written inside one send, before React has re-rendered with the new value.
@@ -129,7 +151,13 @@ export function useConversationThread({
         onRequireAuth?.();
         return;
       }
+      const current = messagesRef.current;
       setBanner(err.message);
+      setFailedTurn({
+        error: err.message,
+        userText: lastUserText(current) || lastSentRef.current,
+        messageId: current[current.length - 1]?.id ?? null,
+      });
     },
     onFinish: () => {
       // The first message has settled — landed, stopped, or failed — and the
@@ -143,6 +171,8 @@ export function useConversationThread({
     },
   });
 
+  messagesRef.current = messages;
+
   const isStreaming = status === "submitted" || status === "streaming";
 
   const send = useCallback(
@@ -150,6 +180,7 @@ export function useConversationThread({
       if (!text || isStreaming) {
         return;
       }
+      lastSentRef.current = text;
       setBanner(null);
       void sendMessage({ text });
     },
@@ -160,5 +191,13 @@ export function useConversationThread({
     void stop();
   }, [stop]);
 
-  return { messages, status, isStreaming, banner, send, stop: stopThread };
+  return {
+    messages,
+    status,
+    isStreaming,
+    banner,
+    failedTurn,
+    send,
+    stop: stopThread,
+  };
 }

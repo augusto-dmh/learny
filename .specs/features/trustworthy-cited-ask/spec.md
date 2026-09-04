@@ -115,7 +115,7 @@ A second trust gap sits on the same path: the Citations API already returns `cit
 |---|---|---|---|
 | ASK-01 | P1: Never lose the thread | T7, T9 | Done |
 | ASK-02 | P1: Never lose the thread | T2, T7, T11 | Backend done (T7) |
-| ASK-03 | P1: Never lose the thread | T10 | In Tasks |
+| ASK-03 | P1: Never lose the thread | T10 | Done |
 | ASK-04 | P1: Never lose the thread | T9 | Done |
 | ASK-05 | P1: Never lose the thread | T7 | Done |
 | ASK-06 | P1: Never lose the thread | T9 | Done |
