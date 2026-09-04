@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterator, Sequence
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -302,23 +303,23 @@ class FakeConversationRepository:
         if conversation is not None:
             self._by_id[conversation_id] = replace_conversation(conversation, updated_at=now)
 
+    def update_tutor_state(self, conversation: Conversation) -> Conversation | None:
+        if conversation.id not in self._by_id:
+            return None
+        self._by_id[conversation.id] = conversation
+        return conversation
+
 
 def replace_conversation(
     conversation: Conversation, *, title: str | None = None, updated_at: datetime | None = None
 ) -> Conversation:
     """Return a copy of ``conversation`` with the given fields replaced (frozen entity)."""
-    return Conversation(
-        id=conversation.id,
-        source_id=conversation.source_id,
-        title=conversation.title if title is None else title,
-        scope_anchors=conversation.scope_anchors,
-        include_notes=conversation.include_notes,
-        target_anchor=conversation.target_anchor,
-        target_section_path=conversation.target_section_path,
-        target_title=conversation.target_title,
-        created_at=conversation.created_at,
-        updated_at=conversation.updated_at if updated_at is None else updated_at,
-    )
+    replacements: dict[str, object] = {}
+    if title is not None:
+        replacements["title"] = title
+    if updated_at is not None:
+        replacements["updated_at"] = updated_at
+    return replace(conversation, **replacements)
 
 
 class FakeConversationTurnRepository:

@@ -706,6 +706,15 @@ class ConversationRepository(Protocol):
         """Set ``updated_at`` to ``now`` — the activity bump a persisted turn earns."""
         ...
 
+    def update_tutor_state(self, conversation: Conversation) -> Conversation | None:
+        """Write tutor-ladder columns and ``updated_at``; ``None`` if absent.
+
+        There is no generic save: rename and touch each write one concern. The
+        ladder (AD-291) is a third — phase, hint, counters, and check text move
+        together after a learner message or after an assert tutor turn persists.
+        """
+        ...
+
 
 @runtime_checkable
 class ConversationTurnRepository(Protocol):

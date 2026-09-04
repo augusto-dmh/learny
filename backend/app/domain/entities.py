@@ -607,6 +607,10 @@ class Conversation:
     renders without re-reading the corpus (the anchor is re-resolved per turn,
     TEACH-16). All three are ``None`` together on a whole-book conversation, which
     teaches nothing in particular.
+
+    Tutor-ladder state (AD-291) lives on this row, not on turns: history already
+    truncates. ``tutor_phase`` and ``hint_level`` are all-or-nothing — both set or
+    both ``None``. Answer threads and pre-cycle teach threads keep both ``None``.
     """
 
     id: UUID
@@ -619,6 +623,11 @@ class Conversation:
     target_title: str | None
     created_at: datetime
     updated_at: datetime
+    tutor_phase: str | None = None
+    hint_level: str | None = None
+    tutor_ordinary_turns: int = 0
+    tutor_scaffold_misses: int = 0
+    tutor_check_text: str | None = None
 
     @property
     def teach_target(self) -> tuple[str, tuple[str, ...], str] | None:

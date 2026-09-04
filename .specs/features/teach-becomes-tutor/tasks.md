@@ -182,8 +182,8 @@ T11 → T12 → T13 → T14 → T15
 
 **Done when**:
 
-- [ ] Upgrade then downgrade on the test DB; pre-cycle rows read as null phase
-- [ ] Gate: `uv run pytest tests/test_migrations.py tests/test_repositories_conversations.py`
+- [x] Upgrade then downgrade on the test DB; pre-cycle rows read as null phase
+- [x] Gate: `uv run pytest tests/test_migrations.py tests/test_repositories_conversations.py`
 
 **Tests**: integration
 **Gate**: full

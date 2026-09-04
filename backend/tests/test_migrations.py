@@ -2439,6 +2439,172 @@ def test_migration_0018_adds_citation_spans_without_touching_stored_citations(mo
     command.downgrade(cfg, "base")
 
 
+def _seed_conversation_at_0018(engine, *, title: str, target_anchor: str, target_title: str):
+    """Seed a users→source→conversation chain at revision 0018 (no tutor columns).
+
+    Returns ``(user_id, source_id, conversation_id)``.
+    """
+    user_id = uuid.uuid4()
+    source_id = uuid.uuid4()
+    conversation_id = uuid.uuid4()
+    with engine.begin() as conn:
+        conn.execute(
+            text("INSERT INTO users (id, email) VALUES (:id, :email)"),
+            {"id": user_id, "email": f"{user_id}@example.test"},
+        )
+        conn.execute(
+            text(
+                "INSERT INTO sources "
+                "(id, user_id, title, filename, content_type, byte_size, checksum, object_key) "
+                "VALUES (:id, :uid, 'Bk', 'f.epub', 'application/epub+zip', 1, 'c', :key)"
+            ),
+            {"id": source_id, "uid": user_id, "key": f"sources/{source_id}.epub"},
+        )
+        conn.execute(
+            text(
+                "INSERT INTO conversations "
+                "(id, source_id, title, scope_anchors, include_notes, "
+                " target_anchor, target_section_path, target_title) "
+                "VALUES (:id, :sid, :title, CAST(:scope AS jsonb), false, "
+                "        :anchor, CAST(:path AS jsonb), :ttitle)"
+            ),
+            {
+                "id": conversation_id,
+                "sid": source_id,
+                "title": title,
+                "scope": f'["{target_anchor}"]',
+                "anchor": target_anchor,
+                "path": f'["{target_title}"]',
+                "ttitle": target_title,
+            },
+        )
+    return user_id, source_id, conversation_id
+
+
+@pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
+def test_migration_0019_adds_tutor_state_without_touching_pre_cycle_rows(monkeypatch) -> None:
+    """0019 up: ladder columns arrive; a conversation seeded at 0018 stays null-phase.
+
+    Pre-cycle teach threads and Answer threads share the NULL spelling (TUTOR-26).
+    The all-or-nothing CHECK refuses a phase without a hint (and the reverse). A
+    row that sets both is accepted. Down one step to 0018 drops the columns and
+    leaves the seeded conversation intact.
+    """
+    monkeypatch.setenv("LEARNY_DATABASE_URL", TEST_DB_URL)
+    cfg = _alembic_config(TEST_DB_URL)
+
+    command.upgrade(cfg, "head")
+    command.downgrade(cfg, "0018_citation_spans")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        _user_id, source_id, conversation_id = _seed_conversation_at_0018(
+            engine,
+            title="Chapter One",
+            target_anchor="ch1.xhtml",
+            target_title="Chapter One",
+        )
+    finally:
+        engine.dispose()
+
+    command.upgrade(cfg, "0019_tutor_state")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        inspector = inspect(engine)
+        columns = {c["name"]: c for c in inspector.get_columns("conversations")}
+        assert columns["tutor_phase"]["nullable"] is True
+        assert columns["hint_level"]["nullable"] is True
+        assert columns["tutor_ordinary_turns"]["nullable"] is False
+        assert columns["tutor_scaffold_misses"]["nullable"] is False
+        assert columns["tutor_check_text"]["nullable"] is True
+
+        with engine.connect() as conn:
+            legacy = conn.execute(
+                text(
+                    "SELECT tutor_phase, hint_level, tutor_ordinary_turns, "
+                    "       tutor_scaffold_misses, tutor_check_text "
+                    "FROM conversations WHERE id = :id"
+                ),
+                {"id": conversation_id},
+            ).one()
+        assert (legacy.tutor_phase, legacy.hint_level) == (None, None)
+        assert (legacy.tutor_ordinary_turns, legacy.tutor_scaffold_misses) == (0, 0)
+        assert legacy.tutor_check_text is None
+
+        check_names = {cc["name"] for cc in inspector.get_check_constraints("conversations")}
+        assert "ck_conversations_tutor_phase_hint_all_or_nothing" in check_names
+        with pytest.raises(IntegrityError):
+            with engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "INSERT INTO conversations "
+                        "(id, source_id, title, scope_anchors, include_notes, tutor_phase) "
+                        "VALUES (:id, :sid, 'Half a ladder', '[]'::jsonb, true, 'open')"
+                    ),
+                    {"id": uuid.uuid4(), "sid": source_id},
+                )
+        with pytest.raises(IntegrityError):
+            with engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "INSERT INTO conversations "
+                        "(id, source_id, title, scope_anchors, include_notes, hint_level) "
+                        "VALUES (:id, :sid, 'Half a hint', '[]'::jsonb, true, 'pump')"
+                    ),
+                    {"id": uuid.uuid4(), "sid": source_id},
+                )
+
+        opened_id = uuid.uuid4()
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO conversations "
+                    "(id, source_id, title, scope_anchors, include_notes, "
+                    " tutor_phase, hint_level) "
+                    "VALUES (:id, :sid, 'Opened', '[]'::jsonb, false, 'open', 'pump')"
+                ),
+                {"id": opened_id, "sid": source_id},
+            )
+        with engine.connect() as conn:
+            opened = conn.execute(
+                text("SELECT tutor_phase, hint_level FROM conversations WHERE id = :id"),
+                {"id": opened_id},
+            ).one()
+        assert (opened.tutor_phase, opened.hint_level) == ("open", "pump")
+
+        from app.infrastructure.db.metadata import conversations
+
+        reflected = {c["name"]: c["nullable"] for c in inspector.get_columns(conversations.name)}
+        assert reflected == {c.name: c.nullable for c in conversations.columns}
+    finally:
+        engine.dispose()
+
+    command.downgrade(cfg, "0018_citation_spans")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        inspector = inspect(engine)
+        remaining = {c["name"] for c in inspector.get_columns("conversations")}
+        assert not (
+            {
+                "tutor_phase",
+                "hint_level",
+                "tutor_ordinary_turns",
+                "tutor_scaffold_misses",
+                "tutor_check_text",
+            }
+            & remaining
+        )
+        with engine.connect() as conn:
+            surviving = conn.execute(
+                text("SELECT title, target_anchor FROM conversations WHERE id = :id"),
+                {"id": conversation_id},
+            ).one()
+        assert (surviving.title, surviving.target_anchor) == ("Chapter One", "ch1.xhtml")
+    finally:
+        engine.dispose()
+
+    command.downgrade(cfg, "base")
+
+
 @pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
 def test_in_process_migration_preserves_app_root_logging(monkeypatch) -> None:
     """An in-process migration must not reconfigure the app-owned root logger.

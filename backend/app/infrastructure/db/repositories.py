@@ -896,6 +896,11 @@ class SqlAlchemyConversationRepository:
                     else list(conversation.target_section_path)
                 ),
                 target_title=conversation.target_title,
+                tutor_phase=conversation.tutor_phase,
+                hint_level=conversation.hint_level,
+                tutor_ordinary_turns=conversation.tutor_ordinary_turns,
+                tutor_scaffold_misses=conversation.tutor_scaffold_misses,
+                tutor_check_text=conversation.tutor_check_text,
                 created_at=conversation.created_at,
                 updated_at=conversation.updated_at,
             )
@@ -967,6 +972,22 @@ class SqlAlchemyConversationRepository:
             .where(conversations.c.id == conversation_id)
             .values(updated_at=now)
         )
+
+    def update_tutor_state(self, conversation: Conversation) -> Conversation | None:
+        row = self._conn.execute(
+            update(conversations)
+            .where(conversations.c.id == conversation.id)
+            .values(
+                tutor_phase=conversation.tutor_phase,
+                hint_level=conversation.hint_level,
+                tutor_ordinary_turns=conversation.tutor_ordinary_turns,
+                tutor_scaffold_misses=conversation.tutor_scaffold_misses,
+                tutor_check_text=conversation.tutor_check_text,
+                updated_at=conversation.updated_at,
+            )
+            .returning(conversations)
+        ).one_or_none()
+        return _to_conversation(row) if row is not None else None
 
     def _summary_select(self):  # noqa: ANN202
         turn_count = (
@@ -2332,6 +2353,11 @@ def _to_conversation(row) -> Conversation:  # noqa: ANN001
         target_title=row.target_title,
         created_at=row.created_at,
         updated_at=row.updated_at,
+        tutor_phase=row.tutor_phase,
+        hint_level=row.hint_level,
+        tutor_ordinary_turns=row.tutor_ordinary_turns,
+        tutor_scaffold_misses=row.tutor_scaffold_misses,
+        tutor_check_text=row.tutor_check_text,
     )
 
 

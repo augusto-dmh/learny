@@ -348,6 +348,14 @@ conversations = Table(
     Column("target_title", Text, nullable=True),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    # Tutor ladder (AD-291). NULL together on Answer threads and pre-cycle teach
+    # threads (TUTOR-26). The CHECK below is the same all-or-nothing shape as the
+    # target trio: one set and the other null is a corrupt row, not a state.
+    Column("tutor_phase", Text, nullable=True),
+    Column("hint_level", Text, nullable=True),
+    Column("tutor_ordinary_turns", Integer, nullable=False, server_default="0"),
+    Column("tutor_scaffold_misses", Integer, nullable=False, server_default="0"),
+    Column("tutor_check_text", Text, nullable=True),
     # The cross-source list reads newest activity first with ``id`` as the tiebreak
     # that makes the order total. Every question asked writes a row here, so the
     # ordering is indexed to match rather than left to a sort over the user's set.
@@ -360,6 +368,10 @@ conversations = Table(
         "(target_anchor IS NULL) = (target_section_path IS NULL) "
         "AND (target_anchor IS NULL) = (target_title IS NULL)",
         name="target_all_or_nothing",
+    ),
+    CheckConstraint(
+        "(tutor_phase IS NULL) = (hint_level IS NULL)",
+        name="tutor_phase_hint_all_or_nothing",
     ),
 )
 
