@@ -118,9 +118,9 @@ T11 → T12 → T13 → T14 → T15
 
 **Done when**:
 
-- [ ] A fixture EPUB with one raster yields one `ParsedMedia` with non-empty `data`
-- [ ] Spine/document parse tests still pass
-- [ ] Gate: `uv run pytest tests/test_ingestion_epub_parser.py tests/test_domain_entities.py`
+- [x] A fixture EPUB with one raster yields one `ParsedMedia` with non-empty `data`
+- [x] Spine/document parse tests still pass
+- [x] Gate: `uv run pytest tests/test_ingestion_epub_parser.py tests/test_domain_entities.py`
 
 **Tests**: unit
 **Gate**: quick

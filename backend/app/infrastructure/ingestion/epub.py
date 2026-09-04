@@ -22,7 +22,7 @@ from bs4 import BeautifulSoup, Tag
 from ebooklib import epub
 
 from app.application.errors import InvalidDocumentError
-from app.domain.entities import ParsedBlock, ParsedBook, ParsedSection
+from app.domain.entities import ParsedBlock, ParsedBook, ParsedMedia, ParsedSection
 
 # Coarse block-type vocabulary for the top-level elements a spine body contains
 # (design §Components step 5); anything outside this set degrades to ``other``.
@@ -123,6 +123,7 @@ class EbooklibEpubParser:
             authors=authors,
             language=language,
             sections=tuple(sections),
+            media=tuple(_packaged_images(book)),
         )
 
     def _reject_oversized_archive(self, source_bytes: bytes, filename: str) -> None:
@@ -137,6 +138,28 @@ class EbooklibEpubParser:
                 f"EPUB {filename!r} declares {declared} uncompressed bytes, "
                 f"over the {self._max_uncompressed_bytes} byte cap"
             )
+
+
+def _packaged_images(book: epub.EpubBook) -> list[ParsedMedia]:
+    """Copy ITEM_IMAGE payloads onto library-free DTOs (package href + bytes)."""
+    collected: list[ParsedMedia] = []
+    seen: set[str] = set()
+    for item in book.get_items_of_type(ebooklib.ITEM_IMAGE):
+        href = item.get_name()
+        if href in seen:
+            continue
+        payload = item.get_content()
+        if not payload:
+            continue
+        seen.add(href)
+        collected.append(
+            ParsedMedia(
+                href=href,
+                content_type=item.media_type or "application/octet-stream",
+                data=bytes(payload),
+            )
+        )
+    return collected
 
 
 def _metadata_values(book: epub.EpubBook, name: str) -> list[str]:

@@ -13,7 +13,7 @@ from __future__ import annotations
 import pytest
 
 from app.application.errors import InvalidDocumentError
-from app.domain.entities import ParsedBlock, ParsedBook, ParsedSection
+from app.domain.entities import ParsedBlock, ParsedBook, ParsedMedia, ParsedSection
 from app.infrastructure.ingestion.epub import EbooklibEpubParser
 from tests import fixtures_epub as fx
 
@@ -234,6 +234,41 @@ def test_returns_only_library_free_domain_types() -> None:
         for block in section.blocks:
             assert isinstance(block, ParsedBlock)
             assert isinstance(block.html_fragment, str)
+    for item in book.media:
+        assert isinstance(item, ParsedMedia)
+        assert isinstance(item.href, str)
+        assert isinstance(item.data, bytes)
+
+
+def test_packaged_raster_appears_on_parsed_book_media() -> None:
+    book = _parse(fx.valid_book())
+
+    assert len(book.media) == 1
+    item = book.media[0]
+    assert item.href == "cover.png"
+    assert item.content_type == "image/png"
+    assert item.data == b"\x89PNG\r\n\x1a\n"
+    assert item.data  # non-empty payload
+
+
+def test_book_without_images_has_empty_media() -> None:
+    book = _parse(fx.no_toc_book())
+
+    assert book.media == ()
+
+
+def test_image_items_do_not_enter_the_document_spine() -> None:
+    # Packaged rasters are collected as media; they do not become spine sections.
+    book = _parse(fx.valid_book())
+
+    assert [s.anchor for s in book.sections] == [
+        "cover.xhtml",
+        "part1.xhtml",
+        "chap1.xhtml",
+        "chap1.xhtml#sec-2",
+        "chap2.xhtml",
+    ]
+    assert "cover.png" not in {s.anchor for s in book.sections}
 
 
 # --- inflation cap (decompression-bomb guard) --------------------------------
