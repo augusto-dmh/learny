@@ -220,6 +220,7 @@ def test_create_stores_bytes_then_persists_row() -> None:
     # And the row is persisted (exactly once).
     assert sources.get_by_id(result.id) == result
     assert sources.add_calls == 1
+    assert result.is_sample is False
 
 
 def test_create_object_key_is_opaque_owner_partitioned() -> None:

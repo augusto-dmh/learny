@@ -116,8 +116,8 @@ T10 → T11 → T12 → T13 → T14 → T15 → T16
 
 **Done when**:
 
-- [ ] A loaded source round-trips `is_sample`
-- [ ] Ordinary uploads remain `is_sample=false`
+- [x] A loaded source round-trips `is_sample`
+- [x] Ordinary uploads remain `is_sample=false`
 
 **Tests**: unit
 **Gate**: quick

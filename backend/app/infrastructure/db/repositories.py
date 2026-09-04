@@ -245,6 +245,7 @@ class SqlAlchemySourceRepository:
                 checksum=source.checksum,
                 object_key=source.object_key,
                 status=source.status,
+                is_sample=source.is_sample,
                 created_at=source.created_at,
                 updated_at=source.updated_at,
             )
@@ -2402,6 +2403,7 @@ def _to_source(row) -> Source:  # noqa: ANN001
         checksum=row.checksum,
         object_key=row.object_key,
         status=row.status,
+        is_sample=row.is_sample,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
