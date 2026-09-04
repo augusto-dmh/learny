@@ -13,6 +13,7 @@ transaction rolls back with no partial corpus (CORP-08).
 from __future__ import annotations
 
 import hashlib
+import logging
 from collections.abc import Callable
 from dataclasses import replace
 from uuid import UUID
@@ -63,6 +64,8 @@ _CORPUS_BUILT_EVENT = "corpus_built"
 # Progress-log event appended after the structure-normalization pass; its message
 # carries what the pass changed (titles/merges/depths/stripped noise, ING-07).
 _CORPUS_NORMALIZED_EVENT = "corpus_normalized"
+
+logger = logging.getLogger(__name__)
 
 
 def _content_hash(block_markdown: str) -> str:
@@ -237,6 +240,11 @@ class BuildCorpus:
             try:
                 encoded = self._encoder.encode(item.data, content_type=item.content_type)
             except Exception:  # noqa: BLE001 — one figure must not fail ingest
+                logger.warning(
+                    "ingestion.encode_figure_failed",
+                    extra={"source_id": str(source.id), "src": src},
+                    exc_info=True,
+                )
                 encoded = None
             if encoded is None:
                 dropped.add(src)
