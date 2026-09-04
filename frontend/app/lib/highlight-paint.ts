@@ -115,20 +115,24 @@ export function paintHighlights(
 
 /**
  * Every text node of the book's prose under `root`, in document order, with
- * reader scaffolding skipped whole — one traversal both readers of the text
- * (measuring and wrapping) share, so their offsets can never disagree.
+ * reader scaffolding and figures skipped whole — one traversal both readers of
+ * the text (measuring and wrapping) share, so their offsets can never disagree.
  */
 function proseTextNodes(root: HTMLElement): Text[] {
   const walker = document.createTreeWalker(
     root,
     NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
     {
-      acceptNode: (node) =>
-        node.nodeType === Node.ELEMENT_NODE
-          ? (node as Element).hasAttribute(SCAFFOLD_ATTRIBUTE)
-            ? NodeFilter.FILTER_REJECT
-            : NodeFilter.FILTER_SKIP
-          : NodeFilter.FILTER_ACCEPT,
+      acceptNode: (node) => {
+        if (node.nodeType !== Node.ELEMENT_NODE) {
+          return NodeFilter.FILTER_ACCEPT;
+        }
+        const element = node as Element;
+        if (element.hasAttribute(SCAFFOLD_ATTRIBUTE) || element.tagName === "IMG") {
+          return NodeFilter.FILTER_REJECT;
+        }
+        return NodeFilter.FILTER_SKIP;
+      },
     },
   );
   const nodes: Text[] = [];

@@ -239,8 +239,8 @@ T11 → T12 → T13 → T14 → T15
 
 **Done when**:
 
-- [ ] A section with an img and a matching quote wraps only text nodes
-- [ ] Gate: `cd frontend && npm test -- highlight-paint`
+- [x] A section with an img and a matching quote wraps only text nodes
+- [x] Gate: `cd frontend && npm test -- highlight-paint`
 
 **Tests**: unit
 **Gate**: quick
