@@ -9,8 +9,8 @@ FastAPI or SQLAlchemy.
 
 Transaction boundary: a request-scoped SQLAlchemy ``Connection`` is opened per
 request inside a transaction. The connection is committed when the handler
-returns normally and rolled back on any exception, so each request is an atomic
-unit of work (the repositories themselves are transaction-agnostic, per B3).
+returns normally. A generation failure still commits — the failed turn *is* the
+record — and any other exception rolls back.
 """
 
 from __future__ import annotations

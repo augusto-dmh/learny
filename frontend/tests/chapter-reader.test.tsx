@@ -82,6 +82,14 @@ vi.mock("../app/components/teach-panel", () => ({
       </button>
       <button
         type="button"
+        onClick={() =>
+          onShowInBook?.(jump.foreign, "The second chapter opens here.")
+        }
+      >
+        show-foreign-span
+      </button>
+      <button
+        type="button"
         onClick={() => onShowInBook?.(jump.inChapter, "the analytical engine")}
       >
         show-span
@@ -1060,6 +1068,48 @@ describe("ChapterFlow show in book (RA-13/14)", () => {
     );
     expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled();
     expect(nav.replace).not.toHaveBeenCalled();
+  });
+
+  it("paints the cited sentence after Show in book jumps to another chapter", async () => {
+    nav.params = new URLSearchParams("panel=teach");
+    const { unmount } = render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+    );
+    await screen.findByText("Ada Lovelace wrote the first algorithm.");
+
+    fireEvent.click(screen.getByRole("button", { name: "show-foreign-span" }));
+    unmount();
+
+    const foreignChapter: ChapterView = {
+      ...chapter,
+      chapter_title: "Chapter Two",
+      chapter_anchor: "part1/ch2.xhtml#s1",
+      prev_anchor: chapter.sections[0].anchor,
+      next_anchor: null,
+      sections: [
+        {
+          anchor: "part1/ch2.xhtml#s1",
+          title: "The Second Chapter",
+          section_path: ["Chapter Two", "Onward"],
+          markdown: "## Onward\n\nThe second chapter opens here.",
+          word_count: 200,
+        },
+      ],
+    };
+    const { container } = render(
+      <ChapterFlow
+        sourceId="s1"
+        csrf="csrf-xyz"
+        chapter={foreignChapter}
+        scrollTarget="part1/ch2.xhtml#s1"
+      />,
+    );
+    await screen.findByText("The second chapter opens here.");
+    await waitFor(() => {
+      const painted = container.querySelectorAll("mark.reader-highlight");
+      expect(painted).toHaveLength(1);
+      expect(painted[0].textContent).toBe("The second chapter opens here.");
+    });
   });
 });
 
