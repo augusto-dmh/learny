@@ -7,8 +7,8 @@ Teach is a cited, section-scoped chat with a four-sentence "patient tutor" promp
 ## Goals
 
 - [ ] A frozen teach playbook (pump → hint → prompt → assert), one move per turn, session closes after an unaided check.
-- [ ] The tutor opens the session with section-first retrieval instead of waiting to be asked.
-- [ ] Ask and Teach merge into one Chat dock (Answer | Tutor), empty state naming both modes.
+- [x] The tutor opens the session with section-first retrieval instead of waiting to be asked.
+- [x] Ask and Teach merge into one Chat dock (Answer | Tutor), empty state naming both modes.
 - [ ] A passed check offers exactly one FSRS card (opt-in, not auto-inserted).
 
 ## Out of Scope
@@ -180,14 +180,14 @@ Teach is a cited, section-scoped chat with a four-sentence "patient tutor" promp
 | TUTOR-05 | P1: Frozen playbook | T3 | Done |
 | TUTOR-06 | P1: Frozen playbook | T3 | Done |
 | TUTOR-07 | P1: Frozen playbook | T3 | Done |
-| TUTOR-08 | P1: Tutor opens | Tasks | In Tasks |
+| TUTOR-08 | P1: Tutor opens | T13 | Done |
 | TUTOR-09 | P1: Tutor opens | T4 | Done |
 | TUTOR-10 | P1: Tutor opens | T4 | Done |
 | TUTOR-11 | P1: Tutor opens | T7 | Done |
 | TUTOR-12 | P1: Tutor opens | T7 | Done |
-| TUTOR-13 | P1: Tutor opens | Tasks | In Tasks |
-| TUTOR-14 | P1: Tutor opens | Tasks | In Tasks |
-| TUTOR-15 | P1: Tutor opens | Tasks | In Tasks |
+| TUTOR-13 | P1: Tutor opens | T13 | Done |
+| TUTOR-14 | P1: Tutor opens | T13 | Done |
+| TUTOR-15 | P1: Tutor opens | T13 | Done |
 | TUTOR-16 | P1: Ladder and close | T7 | Done |
 | TUTOR-17 | P1: Ladder and close | T7 | Done |
 | TUTOR-18 | P1: Ladder and close | T6 | Done |
@@ -201,8 +201,8 @@ Teach is a cited, section-scoped chat with a four-sentence "patient tutor" promp
 | TUTOR-26 | P1: Ladder and close | T7 | Done |
 | TUTOR-27 | P1: One Chat dock | T12 | Done |
 | TUTOR-28 | P1: One Chat dock | T12 | Done |
-| TUTOR-29 | P1: One Chat dock | Tasks | In Tasks |
-| TUTOR-30 | P1: One Chat dock | Tasks | In Tasks |
+| TUTOR-29 | P1: One Chat dock | T13 | Done |
+| TUTOR-30 | P1: One Chat dock | T13 | Done |
 | TUTOR-31 | P1: One Chat dock | T12 | Done |
 | TUTOR-32 | P1: One Chat dock | T12 | Done |
 | TUTOR-33 | P1: One Chat dock | Tasks | In Tasks |

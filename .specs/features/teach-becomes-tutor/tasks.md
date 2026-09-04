@@ -355,9 +355,9 @@ T11 → T12 → T13 → T14 → T15
 
 **Done when**:
 
-- [ ] Start does not wait for a typed message; sentinel bubble is absent; composer appears after persist
-- [ ] Answer empty state still has no conversation until send
-- [ ] Gate: `cd frontend && npm test -- teach-panel ask-panel reader-panel`
+- [x] Start does not wait for a typed message; sentinel bubble is absent; composer appears after persist
+- [x] Answer empty state still has no conversation until send
+- [x] Gate: `cd frontend && npm test -- teach-panel ask-panel reader-panel`
 
 **Tests**: unit
 **Gate**: full

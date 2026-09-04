@@ -3,12 +3,11 @@
 /**
  * Teach panel (RA-10/11) — the Teach mode body of the reader side panel.
  *
- * Teaching is a conversation scoped to one section: the reader picks a target,
- * and the first message creates a conversation whose scope is that target's
- * anchor and whose turns are taught rather than answered. Everything after runs
- * on the same unified surface the Ask panel uses — same start, read, turn, and
- * turn-stream — so a taught thread is persisted, resumable, and manageable like
- * any other conversation.
+ * Teaching is a conversation scoped to one section: the reader picks a target
+ * and Start creates it immediately, then streams a frozen opening turn so the
+ * tutor speaks first. Everything after runs on the same unified surface the Ask
+ * panel uses — same start, read, turn, and turn-stream — so a taught thread is
+ * persisted, resumable, and manageable like any other conversation.
  *
  * Because the dock owns the per-book conversation list, the panel no longer
  * keeps a resume list of its own; it restores whichever conversation this book's
@@ -40,11 +39,13 @@ import {
   getConversation,
   startConversation,
 } from "@/app/lib/conversations";
+import { isTutorOpeningMessage, TUTOR_OPENING_MESSAGE } from "@/app/lib/tutor";
 import { fetchSourceStructure, type SourceStructure } from "@/app/lib/sources";
 import {
   assistantView,
   errorMessageFor,
   messageText,
+  StreamRequestError,
   turnsToUIMessages,
   type LearnyUIMessage,
 } from "@/app/lib/streaming";
@@ -92,6 +93,7 @@ export function TeachPanel({
   sourceId,
   csrf,
   revision = 0,
+  currentAnchor = null,
   onShowInBook,
   onRequireAuth,
   onConversationsChanged,
@@ -100,6 +102,8 @@ export function TeachPanel({
   csrf: string;
   /** Bumped by the dock to make the panel re-read which conversation is active. */
   revision?: number;
+  /** Section currently on screen; the picker defaults to it when it is a target. */
+  currentAnchor?: string | null;
   onShowInBook?: (anchor: string) => void;
   onRequireAuth?: () => void;
   onConversationsChanged?: () => void;
@@ -108,8 +112,9 @@ export function TeachPanel({
   const [selectedAnchor, setSelectedAnchor] = useState("");
   const [thread, setThread] = useState<TeachThread | null>(null);
   const [restoring, setRestoring] = useState(false);
+  const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const startCountRef = useRef(0);
+  const pickerTouchedRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -118,9 +123,21 @@ export function TeachPanel({
         if (cancelled) return;
         setStructure(struct);
         const options = flattenSections(struct.sections);
-        if (options.length > 0) {
-          setSelectedAnchor((current) => current || options[0].anchor);
+        if (options.length === 0) {
+          return;
         }
+        setSelectedAnchor((current) => {
+          if (current) {
+            return current;
+          }
+          if (
+            currentAnchor &&
+            options.some((option) => option.anchor === currentAnchor)
+          ) {
+            return currentAnchor;
+          }
+          return options[0].anchor;
+        });
       })
       .catch((err: unknown) => {
         if (cancelled) return;
@@ -131,7 +148,20 @@ export function TeachPanel({
     return () => {
       cancelled = true;
     };
-  }, [sourceId]);
+  }, [sourceId, currentAnchor]);
+
+  useEffect(() => {
+    if (pickerTouchedRef.current || !structure) {
+      return;
+    }
+    const options = flattenSections(structure.sections);
+    if (
+      currentAnchor &&
+      options.some((option) => option.anchor === currentAnchor)
+    ) {
+      setSelectedAnchor(currentAnchor);
+    }
+  }, [currentAnchor, structure]);
 
   // Restore the conversation this book's Teach surface is pointed at. The turns
   // are always the server's copy; only the pointer is remembered locally.
@@ -213,22 +243,47 @@ export function TeachPanel({
     onConversationsChanged?.();
   }, [onConversationsChanged]);
 
-  function handleStart(event: React.FormEvent) {
+  async function handleStart(event: React.FormEvent) {
     event.preventDefault();
     setError(null);
-    if (!selectedAnchor) {
+    if (!selectedAnchor || starting) {
       return;
     }
-    startCountRef.current += 1;
+    setStarting(true);
     const option = options.find((o) => o.anchor === selectedAnchor);
-    setThread({
-      key: `new-${startCountRef.current}`,
-      conversationId: null,
-      includeNotes: null,
-      targetAnchor: selectedAnchor,
-      fallbackLabel: option?.label ?? selectedAnchor,
-      initialMessages: [],
-    });
+    try {
+      const conversation = await startConversation(
+        {
+          sourceId,
+          scopeAnchors: [selectedAnchor],
+          includeNotes: false,
+          title: option?.label ?? selectedAnchor,
+        },
+        csrf,
+      );
+      writeActiveConversation(sourceId, SURFACE, conversation.id);
+      onConversationsChanged?.();
+      setThread({
+        key: conversation.id,
+        conversationId: conversation.id,
+        includeNotes: false,
+        targetAnchor: selectedAnchor,
+        fallbackLabel: option?.label ?? selectedAnchor,
+        initialMessages: [],
+      });
+    } catch (err: unknown) {
+      if (err instanceof StreamRequestError && err.status === 401) {
+        onRequireAuth?.();
+        return;
+      }
+      setError(
+        err instanceof StreamRequestError
+          ? err.message
+          : "This conversation cannot be created. Please try again.",
+      );
+    } finally {
+      setStarting(false);
+    }
   }
 
   if (restoring) {
@@ -256,6 +311,10 @@ export function TeachPanel({
 
   return (
     <section aria-label="teach" className="space-y-6">
+      <p className="text-sm text-muted-foreground">
+        Tutor walks you through a section. Answer is for questions about the
+        book.
+      </p>
       <form onSubmit={handleStart} aria-label="start session" className="space-y-3">
         <div className="space-y-1.5">
           <label htmlFor="teach-target" className="text-sm font-medium">
@@ -265,7 +324,10 @@ export function TeachPanel({
             id="teach-target"
             aria-label="Target"
             value={selectedAnchor}
-            onChange={(e) => setSelectedAnchor(e.target.value)}
+            onChange={(e) => {
+              pickerTouchedRef.current = true;
+              setSelectedAnchor(e.target.value);
+            }}
             className="w-full rounded-md border bg-background px-3 py-2 text-sm"
           >
             {options.map((option) => (
@@ -280,7 +342,7 @@ export function TeachPanel({
             {error}
           </p>
         ) : null}
-        <Button type="submit" disabled={selectedAnchor === ""}>
+        <Button type="submit" disabled={selectedAnchor === "" || starting}>
           Start session
         </Button>
       </form>
@@ -317,11 +379,9 @@ function TeachChat({
   // The notes choice belongs to the conversation, so it is fixed when the thread
   // creates one and is always sent explicitly rather than left to a server guess.
   const notes = useIncludeNotes(SURFACE);
-  const includeNotes = notes.includeNotes;
 
-  // Which is why the control stops taking input once a conversation exists: it
-  // then reports the choice that conversation was created with. Leaving it live
-  // would offer the reader a flip that changes nothing about this thread.
+  // The control reports the choice that conversation was created with. Leaving
+  // it live would offer the reader a flip that changes nothing about this thread.
   const [fixedNotes, setFixedNotes] = useState<boolean | null>(
     conversationIncludeNotes,
   );
@@ -332,20 +392,20 @@ function TeachChat({
         {
           sourceId,
           scopeAnchors: [targetAnchor],
-          includeNotes,
+          includeNotes: false,
           title: target,
         },
         csrf,
       ),
-    [sourceId, targetAnchor, includeNotes, target, csrf],
+    [sourceId, targetAnchor, target, csrf],
   );
 
   const handleStarted = useCallback(
     (startedId: string) => {
-      setFixedNotes(includeNotes);
+      setFixedNotes(false);
       onConversationStarted(startedId);
     },
-    [includeNotes, onConversationStarted],
+    [onConversationStarted],
   );
 
   const { messages, status, isStreaming, banner, failedTurn, send, stop } =
@@ -359,6 +419,39 @@ function TeachChat({
       onConversationKept,
       onRequireAuth,
     });
+
+  const openedForIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!conversationId || initialMessages.length > 0) {
+      return;
+    }
+    if (openedForIdRef.current === conversationId) {
+      return;
+    }
+    openedForIdRef.current = conversationId;
+    send(TUTOR_OPENING_MESSAGE);
+  }, [conversationId, initialMessages.length, send]);
+
+  const openingPersisted =
+    failedTurn !== null ||
+    messages.some((message) => {
+      if (message.role !== "assistant") {
+        return false;
+      }
+      const { status: answerStatus } = assistantView(message);
+      return (
+        answerStatus === "answered" ||
+        answerStatus === "not_found_in_source" ||
+        answerStatus === "not_found_in_scope" ||
+        answerStatus === "failed"
+      );
+    });
+  // Hide the composer while the opening is in flight — including the gap
+  // after create and the tail of the stream after the status frame lands.
+  const openingInFlight =
+    initialMessages.length === 0 &&
+    failedTurn === null &&
+    (isStreaming || !openingPersisted);
 
   const retryFailedTurn = useCallback(() => {
     if (!failedTurn?.userText) {
@@ -385,19 +478,22 @@ function TeachChat({
         <ConversationContent>
           {messages.map((message, index) => {
             if (message.role === "user") {
+              const opening = isTutorOpeningMessage(messageText(message));
               return (
                 <Fragment key={message.id}>
-                  <Message from="user">
-                    <MessageContent>
-                      {message.parts.map((part, i) =>
-                        part.type === "text" ? (
-                          <span data-testid="user-message" key={i}>
-                            {part.text}
-                          </span>
-                        ) : null,
-                      )}
-                    </MessageContent>
-                  </Message>
+                  {opening ? null : (
+                    <Message from="user">
+                      <MessageContent>
+                        {message.parts.map((part, i) =>
+                          part.type === "text" ? (
+                            <span data-testid="user-message" key={i}>
+                              {part.text}
+                            </span>
+                          ) : null,
+                        )}
+                      </MessageContent>
+                    </Message>
+                  )}
                   {failedTurn?.messageId === message.id ? (
                     <Message from="assistant">
                       <MessageContent>
@@ -500,23 +596,27 @@ function TeachChat({
         </p>
       ) : null}
 
-      <IncludeNotesToggle
-        checked={fixedNotes ?? notes.includeNotes}
-        onChange={notes.setIncludeNotes}
-        locked={fixedNotes !== null}
-      />
-
-      <PromptInput onSubmit={handleSubmit}>
-        <PromptInputBody>
-          <PromptInputTextarea
-            placeholder="Send a message…"
-            disabled={isStreaming}
+      {openingInFlight ? null : (
+        <>
+          <IncludeNotesToggle
+            checked={fixedNotes ?? notes.includeNotes}
+            onChange={notes.setIncludeNotes}
+            locked={fixedNotes !== null}
           />
-        </PromptInputBody>
-        <PromptInputFooter>
-          <PromptInputSubmit status={status} onStop={stop} />
-        </PromptInputFooter>
-      </PromptInput>
+
+          <PromptInput onSubmit={handleSubmit}>
+            <PromptInputBody>
+              <PromptInputTextarea
+                placeholder="Send a message…"
+                disabled={isStreaming}
+              />
+            </PromptInputBody>
+            <PromptInputFooter>
+              <PromptInputSubmit status={status} onStop={stop} />
+            </PromptInputFooter>
+          </PromptInput>
+        </>
+      )}
     </section>
   );
 }

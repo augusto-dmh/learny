@@ -206,6 +206,7 @@ export function ReaderPanel({
   onShowInBook,
   onRequireAuth,
   notesToken = 0,
+  currentAnchor = null,
 }: {
   sourceId: string;
   csrf: string;
@@ -220,6 +221,8 @@ export function ReaderPanel({
   onRequireAuth?: () => void;
   /** Bumped by the reader when a passage is captured, so the Notes tab re-reads. */
   notesToken?: number;
+  /** Section currently on screen; Tutor Start defaults the picker to it. */
+  currentAnchor?: string | null;
 }) {
   // Bumped per surface to tell a panel to re-read which conversation is active;
   // creating one mid-thread deliberately does not bump anything, or the panel
@@ -417,6 +420,7 @@ export function ReaderPanel({
             sourceId={sourceId}
             csrf={csrf}
             revision={revisions.teach}
+            currentAnchor={currentAnchor}
             onShowInBook={onShowInBook}
             onRequireAuth={onRequireAuth}
             onConversationsChanged={handleConversationsChanged}

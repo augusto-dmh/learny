@@ -958,6 +958,7 @@ export function ChapterFlow({
             onShowInBook={handleShowInBook}
             onRequireAuth={onRequireAuth}
             notesToken={notesToken}
+            currentAnchor={currentAnchor}
           />
         ) : null}
       </div>
