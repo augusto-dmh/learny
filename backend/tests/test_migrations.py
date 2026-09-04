@@ -3327,6 +3327,11 @@ def test_migration_0023_starter_unique_is_per_learner_not_per_source(monkeypatch
                 text("DELETE FROM quiz_items WHERE source_id = :sid"),
                 {"sid": source_id},
             )
+            conn.execute(text("DELETE FROM sources WHERE id = :sid"), {"sid": source_id})
+            conn.execute(
+                text("DELETE FROM users WHERE id IN (:op, :a, :b)"),
+                {"op": operator_id, "a": learner_a, "b": learner_b},
+            )
     finally:
         engine.dispose()
 
