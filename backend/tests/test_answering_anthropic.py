@@ -23,7 +23,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.application.grounding import ground
+from app.application.grounding import ground, ground_spans
 from app.domain.entities import (
     MODE_ANSWER,
     MODE_TEACH,
@@ -55,11 +55,23 @@ _LOGGER = "app.infrastructure.answering.anthropic"
 
 
 class _FakeCitation:
-    def __init__(self, document_index: int, *, document_title: str = "") -> None:
+    """A ``char_location`` citation. Offsets default to absent (reported as ``None``)."""
+
+    def __init__(
+        self,
+        document_index: int,
+        *,
+        document_title: str = "",
+        cited_text: str = "cited",
+        start_char_index: int | None = None,
+        end_char_index: int | None = None,
+    ) -> None:
         self.type = "char_location"
         self.document_index = document_index
-        self.cited_text = "cited"
+        self.cited_text = cited_text
         self.document_title = document_title
+        self.start_char_index = start_char_index
+        self.end_char_index = end_char_index
 
 
 class _FakeTextBlock:
@@ -433,6 +445,170 @@ def test_citations_dedup_keeping_first_occurrence_order() -> None:
 
     # First-occurrence order across blocks (1 then 0); the repeat of 1 is dropped.
     assert result.cited_chunk_ids == (evidence[1].chunk_id, evidence[0].chunk_id)
+
+
+# --- Claim-level citation spans (ASK-12, ASK-13, ASK-14) -----------------------
+#
+# Derived from the citation-span ACs: a citation that reports its quote and the
+# characters it occupies becomes a Learny ``CitedSpan`` whose offsets index the very
+# string the request sent as that document's ``source.data``, so the reader can be
+# shown the sentence instead of the whole chunk. Offsets that do not select that
+# quote are dropped and the chunk id survives alone, and a span never outlives the
+# citation grounding kept.
+
+
+def _located_citation(document_index: int, body: str, quote: str) -> _FakeCitation:
+    """The citation the API returns for ``quote`` as it occurs inside ``body``."""
+    start = body.index(quote)
+    return _FakeCitation(
+        document_index,
+        cited_text=quote,
+        start_char_index=start,
+        end_char_index=start + len(quote),
+    )
+
+
+def _sent_document_body(client: _FakeClient, index: int = 0) -> str:
+    """The exact ``source.data`` string the recorded request carried."""
+    return client.messages.calls[0]["messages"][0]["content"][index]["source"]["data"]
+
+
+def test_span_offsets_index_the_exact_document_body_that_was_sent() -> None:
+    # The golden. The offsets are checked back against the string pulled out of the
+    # recorded request, never against a local copy of the fixture, so an index that
+    # drifts from what the provider was given cannot pass by agreeing with the test.
+    body = "The tides follow the moon. Volcanoes vent magma. A press sets type."
+    quote = "Volcanoes vent magma."
+    evidence = [_evidence(body)]
+    message = _FakeMessage(
+        [_FakeTextBlock("Magma escapes upward.", [_located_citation(0, body, quote)])]
+    )
+    adapter, client = _adapter(message)
+
+    result = adapter.generate(mode=MODE_ANSWER, message="q", evidence=evidence)
+
+    (span,) = result.spans
+    assert span.chunk_id == evidence[0].chunk_id
+    assert span.quote == quote
+    assert _sent_document_body(client)[span.start : span.end] == quote
+
+
+def test_span_offsets_are_character_indices_not_byte_offsets() -> None:
+    # Accented prose ahead of the quote makes its byte offset larger than its
+    # character offset, so an adapter measuring encoded bytes lands mid-sentence.
+    body = "Não é só a maré que sobe. Volcanoes vent magma."
+    quote = "Volcanoes vent magma."
+    evidence = [_evidence(body)]
+    message = _FakeMessage([_FakeTextBlock("Magma.", [_located_citation(0, body, quote)])])
+    adapter, client = _adapter(message)
+
+    result = adapter.generate(mode=MODE_ANSWER, message="q", evidence=evidence)
+
+    (span,) = result.spans
+    sent = _sent_document_body(client)
+    assert sent[span.start : span.end] == quote
+    # The fixture only discriminates if the two measurements actually disagree here.
+    assert span.start != len(sent[: span.start].encode("utf-8"))
+
+
+def test_out_of_range_offsets_drop_the_span_and_keep_the_chunk() -> None:
+    # Spec edge case: offsets past the end of the body are unusable, but the citation
+    # itself is still a citation — the mark stays and opens the whole passage.
+    body = "Volcanoes vent magma."
+    citation = _FakeCitation(
+        0, cited_text="magma.", start_char_index=15, end_char_index=len(body) + 40
+    )
+    evidence = [_evidence(body)]
+    adapter, _ = _adapter(_FakeMessage([_FakeTextBlock("An answer", [citation])]))
+
+    result = adapter.generate(mode=MODE_ANSWER, message="q", evidence=evidence)
+
+    assert result.spans == ()
+    assert result.cited_chunk_ids == (evidence[0].chunk_id,)
+    assert result.text == "An answer[^1]"
+
+
+def test_offsets_that_do_not_select_the_reported_quote_drop_the_span() -> None:
+    # In range, but slicing the body with them yields different text — a normalized
+    # body or an off-by-one on the provider side. Highlighting the wrong sentence is
+    # worse than highlighting none, so the span goes and the chunk stays.
+    body = "The tides follow the moon. Volcanoes vent magma."
+    citation = _FakeCitation(
+        0, cited_text="Volcanoes vent magma.", start_char_index=0, end_char_index=21
+    )
+    evidence = [_evidence(body)]
+    adapter, _ = _adapter(_FakeMessage([_FakeTextBlock("An answer", [citation])]))
+
+    result = adapter.generate(mode=MODE_ANSWER, message="q", evidence=evidence)
+
+    assert result.spans == ()
+    assert result.cited_chunk_ids == (evidence[0].chunk_id,)
+
+
+def test_a_citation_reporting_no_offsets_yields_no_span() -> None:
+    # A citation without a location is still a citation. The passage-level behaviour
+    # that shipped before spans is what the reader gets (ASK-17).
+    evidence = [_evidence("Volcanoes vent magma.")]
+    adapter, _ = _adapter(_FakeMessage([_FakeTextBlock("An answer", [_FakeCitation(0)])]))
+
+    result = adapter.generate(mode=MODE_ANSWER, message="q", evidence=evidence)
+
+    assert result.spans == ()
+    assert result.cited_chunk_ids == (evidence[0].chunk_id,)
+
+
+def test_grounding_discards_the_spans_of_a_chunk_it_dropped() -> None:
+    # A span is a location inside a citation, so a citation grounding refuses takes
+    # its quote with it — otherwise the reader gets a highlight into a passage that
+    # is not among the ones shown.
+    retrieved_body = "The tides follow the moon. Volcanoes vent magma."
+    ungrounded_body = "A press sets movable type."
+    retrieved, ungrounded = _evidence(retrieved_body), _evidence(ungrounded_body)
+    message = _FakeMessage(
+        [
+            _FakeTextBlock(
+                "Both claims.",
+                [
+                    _located_citation(0, retrieved_body, "Volcanoes vent magma."),
+                    _located_citation(1, ungrounded_body, "A press sets movable type."),
+                ],
+            )
+        ]
+    )
+    adapter, _ = _adapter(message)
+
+    result = adapter.generate(mode=MODE_ANSWER, message="q", evidence=[retrieved, ungrounded])
+    grounded = ground(result, [retrieved])
+
+    assert [span.quote for span in result.spans] == [
+        "Volcanoes vent magma.",
+        "A press sets movable type.",
+    ]
+    assert grounded is not None
+    _, citations = grounded
+    assert [span.quote for span in ground_spans(result, citations)] == ["Volcanoes vent magma."]
+
+
+def test_streamed_completed_answer_carries_the_same_spans_as_the_buffered_parse() -> None:
+    # The streamed path is the one the reader actually watches; its completed event
+    # is parsed by the same walk, so its spans must be the buffered ones exactly.
+    body = "The tides follow the moon. Volcanoes vent magma."
+    quote = "Volcanoes vent magma."
+    evidence = [_evidence(body)]
+    final = _FakeMessage([_FakeTextBlock("Magma escapes.", [_located_citation(0, body, quote)])])
+    stream_adapter, _ = _streaming_answer_adapter(
+        _FakeStream(deltas=_stream_events_for(final), final_message=final)
+    )
+    buffered_adapter, _ = _adapter(final)
+
+    completed = list(
+        stream_adapter.generate_stream(mode=MODE_ANSWER, message="q", evidence=evidence)
+    )[-1]
+    buffered = buffered_adapter.generate(mode=MODE_ANSWER, message="q", evidence=evidence)
+
+    assert isinstance(completed, AnswerCompleted)
+    assert completed.answer.spans == buffered.spans
+    assert [span.quote for span in completed.answer.spans] == [quote]
 
 
 # --- Inline citation marks (ANSW-07) -------------------------------------------

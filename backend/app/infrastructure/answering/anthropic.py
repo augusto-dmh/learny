@@ -4,8 +4,10 @@ The ``anthropic`` SDK, the model id, and the Citations API request/response shap
 live only in this module — callers depend on ``GenerationPort`` and receive a
 Learny-owned ``GeneratedAnswer`` (ADR-0007/0009). Each retrieved chunk becomes one
 plain-text citations-enabled ``document`` block, in evidence order; the response's
-``document_index`` citations map back through the ordered chunk-id list assembled
-at request time — never through ``document_title`` (research §1). Citations are
+``document_index`` citations map back through the ordered list of sent documents
+assembled at request time — never through ``document_title`` (research §1). That
+same list carries each document's exact body, so a citation's character offsets are
+resolved against the string the provider was actually given. Citations are
 enabled on every document (all-or-none API rule). Cited passages are also marked
 inline in the answer text as ``[^n]`` tokens, numbered by the very walk that builds
 the citation list, so a reader's mark and the passage behind it cannot drift apart
@@ -21,7 +23,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Iterator, Sequence
-from typing import Any, Protocol
+from typing import Any, NamedTuple, Protocol
 from uuid import UUID
 
 from app.domain.entities import (
@@ -31,6 +33,7 @@ from app.domain.entities import (
     AnswerReasoningDelta,
     AnswerStreamEvent,
     AnswerTextDelta,
+    CitedSpan,
     Evidence,
     GeneratedAnswer,
     HistoryTurn,
@@ -82,20 +85,36 @@ class _MessagesClient(Protocol):
     messages: Any
 
 
+class _SentDocument(NamedTuple):
+    """One document as the request sent it: its chunk and its exact body text.
+
+    A response citation names a document by position, so the parser needs two things
+    at that position — which chunk it was and which string its character offsets are
+    measured against. Keeping them in one element makes ``document_index`` resolve
+    both at once; two parallel lists could fall out of step and the drift would show
+    up as a highlight over the wrong sentence.
+    """
+
+    chunk_id: UUID
+    data: str
+
+
 def _build_documents(
     evidence: Sequence[Evidence],
-) -> tuple[list[dict[str, Any]], list[UUID]]:
+) -> tuple[list[dict[str, Any]], list[_SentDocument]]:
     """Build one citations-enabled document block per chunk, plus the index map.
 
     Returns the ordered document blocks (evidence order) and the parallel list of
-    ``chunk_id``s — the second list *is* the ``document_index`` → chunk mapping the
-    response parser resolves against. ``title`` is the chunk's last section-path
-    element (or its anchor when the path is empty); ``context`` is stringified
-    ``{chunk_id, anchor}`` metadata passed to the model but never parsed back
-    (research §1). Citations are enabled on every document (all-or-none rule).
+    :class:`_SentDocument`s — the second list *is* the ``document_index`` → chunk
+    mapping the response parser resolves against, and it carries the same ``data``
+    string that went into the block, which is the origin every citation offset is
+    interpreted against. ``title`` is the chunk's last section-path element (or its
+    anchor when the path is empty); ``context`` is stringified ``{chunk_id, anchor}``
+    metadata passed to the model but never parsed back (research §1). Citations are
+    enabled on every document (all-or-none rule).
     """
     documents: list[dict[str, Any]] = []
-    chunk_ids: list[UUID] = []
+    sent: list[_SentDocument] = []
     for item in evidence:
         title = item.section_path[-1] if item.section_path else item.anchor
         context = json.dumps({"chunk_id": str(item.chunk_id), "anchor": item.anchor})
@@ -112,8 +131,8 @@ def _build_documents(
                 "citations": {"enabled": True},
             }
         )
-        chunk_ids.append(item.chunk_id)
-    return documents, chunk_ids
+        sent.append(_SentDocument(chunk_id=item.chunk_id, data=item.snippet))
+    return documents, sent
 
 
 class _CitationMarks:
@@ -128,12 +147,17 @@ class _CitationMarks:
     rather than by two pieces of code agreeing (AD-222). An out-of-range
     ``document_index`` is skipped whole — no chunk, no citation, no marker; grounding
     is the second line of defence (AD-027).
+
+    The same walk collects :class:`~app.domain.entities.CitedSpan`s from the citations
+    that report a quote and its character offsets, so the claim-level passage travels
+    with the chunk it belongs to.
     """
 
-    def __init__(self, chunk_ids: Sequence[UUID]) -> None:
-        self._chunk_ids = chunk_ids
+    def __init__(self, documents: Sequence[_SentDocument]) -> None:
+        self._documents = documents
         self._numbers: dict[UUID, int] = {}
         self.cited: list[UUID] = []
+        self.spans: list[CitedSpan] = []
 
     def run_for(self, citations: Any) -> str:
         """Return the marker run that follows one text block's text (may be empty).
@@ -147,33 +171,59 @@ class _CitationMarks:
         marks: list[str] = []
         for citation in citations or ():
             index = citation.document_index
-            if not 0 <= index < len(self._chunk_ids):
+            if not 0 <= index < len(self._documents):
                 continue
-            chunk_id = self._chunk_ids[index]
+            document = self._documents[index]
+            chunk_id = document.chunk_id
             number = self._numbers.get(chunk_id)
             if number is None:
                 self.cited.append(chunk_id)
                 number = len(self.cited)
                 self._numbers[chunk_id] = number
+            self._collect_span(document, citation)
             mark = citation_marker(number)
             if mark not in marks:
                 marks.append(mark)
         return "".join(marks)
 
+    def _collect_span(self, document: _SentDocument, citation: Any) -> None:
+        """Record the citation's quote and offsets, or nothing if they do not agree.
 
-def _parse_message(message: Any, chunk_ids: Sequence[UUID], *, model: str) -> GeneratedAnswer:
+        The offsets are kept only when slicing the document body with them yields the
+        quote the provider reported. That equality is the whole guarantee: it makes
+        ``start``/``end`` indices into *this* string by verification rather than by
+        trust, so an encoding mismatch, a normalized body, or an off-by-one drops the
+        span instead of pointing a reader's highlight at the wrong sentence. The chunk
+        id survives either way — a citation without a usable span is still a citation,
+        and the reader falls back to the whole passage (ASK-17).
+        """
+        quote = getattr(citation, "cited_text", None)
+        start = getattr(citation, "start_char_index", None)
+        end = getattr(citation, "end_char_index", None)
+        if not isinstance(quote, str) or not isinstance(start, int) or not isinstance(end, int):
+            return
+        if not 0 <= start < end <= len(document.data):
+            return
+        if document.data[start:end] != quote:
+            return
+        self.spans.append(CitedSpan(chunk_id=document.chunk_id, quote=quote, start=start, end=end))
+
+
+def _parse_message(
+    message: Any, documents: Sequence[_SentDocument], *, model: str
+) -> GeneratedAnswer:
     """Parse a Claude message into a ``GeneratedAnswer`` (shared by both modes).
 
     Concatenates every ``text`` block into the answer text, writing each block's
     ``[^n]`` marker run after it, and resolves the same walk's ``document_index``
-    citations into ``cited_chunk_ids`` (see :class:`_CitationMarks`). A whole-reply
-    sentinel is the not-found signal → ``found=False`` with empty text and citations;
-    an embedded occurrence stays as prose. The sentinel comparison deliberately runs
-    on the *unmarked* text, so no marker can turn a decline into an answer. A
-    ``max_tokens`` stop reason returns the partial text like any other reply (never
-    raises).
+    citations into ``cited_chunk_ids`` and their claim-level ``spans`` (see
+    :class:`_CitationMarks`). A whole-reply sentinel is the not-found signal →
+    ``found=False`` with empty text, citations, and spans; an embedded occurrence
+    stays as prose. The sentinel comparison deliberately runs on the *unmarked* text,
+    so no marker can turn a decline into an answer. A ``max_tokens`` stop reason
+    returns the partial text like any other reply (never raises).
     """
-    marks = _CitationMarks(chunk_ids)
+    marks = _CitationMarks(documents)
     text_parts: list[str] = []
     unmarked_parts: list[str] = []
     for block in message.content:
@@ -189,6 +239,7 @@ def _parse_message(message: Any, chunk_ids: Sequence[UUID], *, model: str) -> Ge
         cited_chunk_ids=tuple(marks.cited),
         model=model,
         found=True,
+        spans=tuple(marks.spans),
     )
 
 
@@ -293,7 +344,7 @@ class AnthropicAdapterBase:
         *,
         system: list[dict[str, Any]],
         messages: list[dict[str, Any]],
-        chunk_ids: Sequence[UUID],
+        documents: Sequence[_SentDocument],
     ) -> Iterator[AnswerStreamEvent]:
         """Stream generation events, closing the SDK stream on early cancellation.
 
@@ -322,7 +373,7 @@ class AnthropicAdapterBase:
         (``GeneratorExit`` unwinds through it), so a client disconnect never leaks a
         provider stream. Shared by both modes — only ``system``/``messages`` differ.
         """
-        marks = _CitationMarks(chunk_ids)
+        marks = _CitationMarks(documents)
         with self._get_client().messages.stream(
             model=self._model,
             max_tokens=self._max_tokens,
@@ -344,7 +395,7 @@ class AnthropicAdapterBase:
                         if run:
                             yield AnswerTextDelta(text=run)
             final = stream.get_final_message()
-        answer = _parse_message(final, chunk_ids, model=self._model)
+        answer = _parse_message(final, documents, model=self._model)
         _log_call(final, model=self._model, effort=self._effort, found=answer.found)
         yield AnswerCompleted(answer=answer)
 
@@ -384,8 +435,8 @@ class AnthropicGenerationAdapter(AnthropicAdapterBase):
         history: Sequence[HistoryTurn],
         evidence: Sequence[Evidence],
         target_section_path: tuple[str, ...] | None,
-    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[UUID]]:
-        """Assemble the system prompt, the message list, and the chunk map.
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[_SentDocument]]:
+        """Assemble the system prompt, the message list, and the sent-document map.
 
         Shared by the buffered and streaming paths so both send the byte-identical
         request, and by both modes so only the two mode-specific pieces differ. The
@@ -393,7 +444,7 @@ class AnthropicGenerationAdapter(AnthropicAdapterBase):
         the answer turn sends the message alone, whatever target the conversation
         happens to be scoped to.
         """
-        documents, chunk_ids = _build_documents(evidence)
+        documents, sent = _build_documents(evidence)
         messages = _build_history_messages(history)
         if mode == MODE_TEACH:
             section = " > ".join(target_section_path or ())
@@ -414,7 +465,7 @@ class AnthropicGenerationAdapter(AnthropicAdapterBase):
                 "content": [*documents, {"type": "text", "text": turn_text}],
             }
         )
-        return system, messages, chunk_ids
+        return system, messages, sent
 
     def generate(
         self,
@@ -426,7 +477,7 @@ class AnthropicGenerationAdapter(AnthropicAdapterBase):
         target_section_path: tuple[str, ...] | None = None,
     ) -> GeneratedAnswer:
         """Generate a cited response grounded in ``evidence`` (single-shot call)."""
-        system, messages, chunk_ids = self._build_request(
+        system, messages, sent = self._build_request(
             message=message,
             mode=mode,
             history=history,
@@ -442,7 +493,7 @@ class AnthropicGenerationAdapter(AnthropicAdapterBase):
             messages=messages,
             timeout=_GENERATE_TIMEOUT_S,
         )
-        answer = _parse_message(response, chunk_ids, model=self._model)
+        answer = _parse_message(response, sent, model=self._model)
         _log_call(response, model=self._model, effort=self._effort, found=answer.found)
         return answer
 
@@ -456,11 +507,11 @@ class AnthropicGenerationAdapter(AnthropicAdapterBase):
         target_section_path: tuple[str, ...] | None = None,
     ) -> Iterator[AnswerStreamEvent]:
         """Stream a cited response: text deltas, then the authoritative completed event."""
-        system, messages, chunk_ids = self._build_request(
+        system, messages, sent = self._build_request(
             message=message,
             mode=mode,
             history=history,
             evidence=evidence,
             target_section_path=target_section_path,
         )
-        return self._run_stream(system=system, messages=messages, chunk_ids=chunk_ids)
+        return self._run_stream(system=system, messages=messages, documents=sent)

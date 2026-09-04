@@ -121,7 +121,7 @@ T12 -> T13
 
 ---
 
-### T3: Map Citations API spans inside the answering adapter
+### T3: Map Citations API spans inside the answering adapter ✅
 
 **What**: Resolve `document_index` to `chunk_id` as today, and map in-range `cited_text` / char offsets onto `CitedSpan` against the document body; drop out-of-range spans.
 **Where**: `backend/app/infrastructure/answering/anthropic.py`
@@ -136,9 +136,9 @@ T12 -> T13
 
 **Done when**:
 
-- [ ] Golden test: offsets are indices into the exact `source.data` string sent
-- [ ] Out-of-range offsets drop the span but keep the chunk id
-- [ ] Grounding discards spans whose chunk did not survive (sensor in application test or adapter+ground helper)
+- [x] Golden test: offsets are indices into the exact `source.data` string sent
+- [x] Out-of-range offsets drop the span but keep the chunk id
+- [x] Grounding discards spans whose chunk did not survive (sensor in application test or adapter+ground helper)
 
 **Tests**: unit
 **Gate**: quick
