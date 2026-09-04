@@ -39,7 +39,7 @@ import {
   getConversation,
   startConversation,
 } from "@/app/lib/conversations";
-import { acceptTutorCard } from "@/app/lib/tutor-card";
+import { acceptTutorCard, TutorCardError } from "@/app/lib/tutor-card";
 import {
   isTutorOpeningMessage,
   TUTOR_DONT_KNOW_MESSAGE,
@@ -51,6 +51,7 @@ import { fetchSourceStructure, type SourceStructure } from "@/app/lib/sources";
 import {
   assistantView,
   errorMessageFor,
+  latestTutorState,
   messageText,
   StreamRequestError,
   turnsToUIMessages,
@@ -484,40 +485,18 @@ function TeachChat({
     failedTurn === null &&
     (isStreaming || !openingPersisted);
 
-  const [tutorPhase, setTutorPhase] = useState(initialTutorPhase);
-  const [tutorCheckText, setTutorCheckText] = useState(initialCheckText);
   const [cardTargetTitle, setCardTargetTitle] = useState(
     initialTargetTitle ?? target,
   );
   const [offerDismissed, setOfferDismissed] = useState(false);
+  const [cardError, setCardError] = useState<string | null>(null);
   useEffect(() => {
-    setTutorPhase(initialTutorPhase);
-    setTutorCheckText(initialCheckText);
     setCardTargetTitle(initialTargetTitle ?? target);
-  }, [initialTutorPhase, initialCheckText, initialTargetTitle, target]);
+  }, [initialTargetTitle, target]);
 
-  useEffect(() => {
-    if (!conversationId || isStreaming) {
-      return;
-    }
-    let cancelled = false;
-    void getConversation(conversationId)
-      .then((detail) => {
-        if (!cancelled) {
-          setTutorPhase(detail.tutor_phase ?? null);
-          setTutorCheckText(detail.tutor_check_text ?? null);
-          if (detail.target_title) {
-            setCardTargetTitle(detail.target_title);
-          }
-        }
-      })
-      .catch(() => {
-        // Phase is advisory for the composer; a failed read leaves the last known value.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [conversationId, isStreaming, messages.length]);
+  const streamedTutor = latestTutorState(messages);
+  const tutorPhase = streamedTutor?.phase ?? initialTutorPhase;
+  const tutorCheckText = streamedTutor?.checkText ?? initialCheckText;
 
   const sessionClosed = tutorPhase === "close";
   const showCardOffer =
@@ -527,9 +506,18 @@ function TeachChat({
     if (!conversationId) {
       return;
     }
-    void acceptTutorCard(conversationId, csrf).then(() => {
-      setOfferDismissed(true);
-    });
+    setCardError(null);
+    void acceptTutorCard(conversationId, csrf)
+      .then(() => {
+        setOfferDismissed(true);
+      })
+      .catch((err: unknown) => {
+        setCardError(
+          err instanceof TutorCardError
+            ? err.message
+            : "Could not save this review card.",
+        );
+      });
   }, [conversationId, csrf]);
 
   const retryFailedTurn = useCallback(() => {
@@ -681,6 +669,7 @@ function TeachChat({
             <TutorCardOffer
               question={tutorCardQuestion(cardTargetTitle)}
               answer={tutorCheckText}
+              error={cardError}
               onAccept={handleAcceptCard}
               onDismiss={() => setOfferDismissed(true)}
             />
@@ -803,11 +792,13 @@ function ClosedSessionHandoff({
 function TutorCardOffer({
   question,
   answer,
+  error,
   onAccept,
   onDismiss,
 }: {
   question: string;
   answer: string;
+  error: string | null;
   onAccept: () => void;
   onDismiss: () => void;
 }) {
@@ -815,6 +806,11 @@ function TutorCardOffer({
     <article aria-label="review card offer" className="space-y-3 rounded-md border p-3">
       <p className="text-sm font-medium">{question}</p>
       <p className="text-sm text-muted-foreground">{answer}</p>
+      {error ? (
+        <p role="alert" className="text-sm text-destructive">
+          {error}
+        </p>
+      ) : null}
       <div className="flex flex-wrap gap-2">
         <Button type="button" onClick={onAccept}>
           Accept

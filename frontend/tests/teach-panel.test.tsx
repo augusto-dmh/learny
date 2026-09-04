@@ -908,6 +908,11 @@ async function streamTurn(
   citations: unknown[],
   status: "answered" | "not_found_in_source" | "not_found_in_scope" = "answered",
   messageId = "m1",
+  tutorState?: {
+    phase: string;
+    hint_level: string | null;
+    check_text: string | null;
+  },
 ) {
   await stream.push({ type: "start", messageId });
   await stream.push({ type: "text-start", id: "t1" });
@@ -919,6 +924,9 @@ async function streamTurn(
   await stream.push({ type: "text-end", id: "t1" });
   await stream.push({ type: "data-citations", data: citations });
   await stream.push({ type: "data-answer-status", data: { status } });
+  if (tutorState) {
+    await stream.push({ type: "data-tutor-state", data: tutorState });
+  }
   await stream.push({ type: "finish" });
   await stream.done();
 }
@@ -1228,6 +1236,90 @@ describe("Tutor review card offer (TUTOR-34/41)", () => {
         screen.queryByRole("article", { name: "review card offer" }),
       ).toBeNull(),
     );
+  });
+
+  it("offers the card from the close frame without refetching the conversation", async () => {
+    const streams: ReturnType<typeof sseStream>[] = [];
+    const fetchMock = routedFetch({
+      "GET /api/sources/s1/structure": () => jsonResponse(200, structure),
+      [`GET ${READ_URL}`]: () =>
+        jsonResponse(200, {
+          ...restoredDetail,
+          tutor_phase: "check",
+          hint_level: "assert",
+          tutor_check_text: null,
+        }),
+      [`POST ${TURN_STREAM}`]: () => {
+        const stream = sseStream();
+        streams.push(stream);
+        return stream.response;
+      },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    writeActiveConversation("s1", "teach", "conv2");
+
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
+    await screen.findByText("It is about early computing.");
+    expect(callsTo(fetchMock, READ_URL)).toHaveLength(1);
+
+    await sendMessage(checkText);
+    await waitFor(() => expect(streams).toHaveLength(1));
+    await streamTurn(streams[0], [], "answered", "close", {
+      phase: "close",
+      hint_level: "assert",
+      check_text: checkText,
+    });
+
+    const offer = await screen.findByRole("article", { name: "review card offer" });
+    expect(offer.textContent).toContain(checkText);
+    expect(callsTo(fetchMock, READ_URL)).toHaveLength(1);
+  });
+
+  it("keeps the offer and shows an error when Accept is refused", async () => {
+    const fetchMock = routedFetch({
+      "GET /api/sources/s1/structure": () => jsonResponse(200, structure),
+      [`GET ${READ_URL}`]: () => jsonResponse(200, closedConversation()),
+      [`POST ${TUTOR_CARD_URL}`]: () =>
+        jsonResponse(409, { detail: "Session is not closed." }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    writeActiveConversation("s1", "teach", "conv2");
+
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
+    await screen.findByText("It is about early computing.");
+
+    fireEvent.click(screen.getByRole("button", { name: "Accept" }));
+    await waitFor(() =>
+      expect(callsTo(fetchMock, TUTOR_CARD_URL)).toHaveLength(1),
+    );
+    expect(
+      await screen.findByText("Could not save this review card."),
+    ).toBeTruthy();
+    expect(screen.getByRole("article", { name: "review card offer" })).toBeTruthy();
+    expect(
+      fetchMock.mock.calls.some(([url]) =>
+        String(url).includes("/cards/suggestions"),
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps the offer when Accept cannot find the conversation", async () => {
+    const fetchMock = routedFetch({
+      "GET /api/sources/s1/structure": () => jsonResponse(200, structure),
+      [`GET ${READ_URL}`]: () => jsonResponse(200, closedConversation()),
+      [`POST ${TUTOR_CARD_URL}`]: () => jsonResponse(404, { detail: "Not found" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    writeActiveConversation("s1", "teach", "conv2");
+
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
+    await screen.findByText("It is about early computing.");
+
+    fireEvent.click(screen.getByRole("button", { name: "Accept" }));
+    expect(
+      await screen.findByText("Could not save this review card."),
+    ).toBeTruthy();
+    expect(screen.getByRole("article", { name: "review card offer" })).toBeTruthy();
   });
 
   it("Dismiss hides the offer and writes no quiz row", async () => {

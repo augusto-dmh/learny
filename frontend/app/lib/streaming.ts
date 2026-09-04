@@ -13,7 +13,7 @@
  *
  * FastAPI stays authoritative for auth, ownership, readiness, and generation;
  * these helpers just carry the message in and surface the streamed tokens,
- * citations, answer status, and readable errors out.
+ * citations, answer status, tutor ladder, and readable errors out.
  */
 
 import { DefaultChatTransport, type UIMessage } from "ai";
@@ -40,7 +40,8 @@ export type AnswerPhase = "searching";
 /**
  * The typed data parts Learny's stream carries alongside the streamed text,
  * matching `ui_message_stream.py`: `data-citations` (the grounded citation
- * snapshots), `data-answer-status`, and `data-phase`. The model's thinking rides
+ * snapshots), `data-answer-status`, `data-tutor-state` (the live tutor ladder,
+ * only on Teach turns), and `data-phase`. The model's thinking rides
  * on the protocol's own `reasoning` parts, so it needs no entry here.
  *
  * `phase` is declared because the backend sends it, not because a component reads
@@ -53,6 +54,11 @@ export type LearnyDataParts = {
   citations: Citation[];
   "answer-status": { status: AnswerStatus };
   phase: { phase: AnswerPhase };
+  "tutor-state": {
+    phase: string;
+    hint_level: string | null;
+    check_text: string | null;
+  };
 };
 
 /** A `useChat` message specialized to Learny's citation + answer-status parts. */
@@ -102,6 +108,42 @@ export function assistantView(message: LearnyUIMessage): {
     }
   }
   return { text, citations, status, reasoning };
+}
+
+/** The tutor ladder a live Teach stream echoed on the terminal frame, or null. */
+export type TutorStreamState = {
+  phase: string;
+  hintLevel: string | null;
+  checkText: string | null;
+};
+
+export function tutorStateFrom(message: LearnyUIMessage): TutorStreamState | null {
+  for (const part of message.parts) {
+    if (part.type === "data-tutor-state") {
+      return {
+        phase: part.data.phase,
+        hintLevel: part.data.hint_level,
+        checkText: part.data.check_text,
+      };
+    }
+  }
+  return null;
+}
+
+/** Newest assistant message that carried a tutor-state part; in-flight frames skip. */
+export function latestTutorState(
+  messages: LearnyUIMessage[],
+): TutorStreamState | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role !== "assistant") {
+      continue;
+    }
+    const state = tutorStateFrom(messages[i]);
+    if (state) {
+      return state;
+    }
+  }
+  return null;
 }
 
 /** A pre-stream HTTP failure (network unreachable, or the status code). */

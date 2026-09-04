@@ -634,12 +634,10 @@ class PostConversationTurn:
         self, *, user: User, prep: _TurnPrep, message: str, mode: str
     ) -> Iterator[TurnStreamEvent]:
         if _is_closing_restatement(prep):
-            yield StreamTurn(
-                self._persist(
-                    self._unsearched_plan(prep),
-                    self._restatement_turn(prep, message, mode),
-                    mode,
-                )
+            yield self._stream_turn(
+                self._unsearched_plan(prep),
+                self._restatement_turn(prep, message, mode),
+                mode,
             )
             return
         yield StreamPhase(phase=PHASE_SEARCHING)
@@ -660,7 +658,7 @@ class PostConversationTurn:
 
         if not plan.evidence:
             turn = self._not_found_turn(plan, message, mode, 0, self._generation.model)
-            yield StreamTurn(self._persist(plan, turn, mode))
+            yield self._stream_turn(plan, turn, mode)
             return
 
         stream = self._generate_stream(mode=mode, message=message, plan=plan)
@@ -682,7 +680,7 @@ class PostConversationTurn:
         # criterion and is left to the retry cycle.
 
         turn = self._turn_from_generated(plan=plan, message=message, mode=mode, generated=answer)
-        yield StreamTurn(self._persist(plan, turn, mode))
+        yield self._stream_turn(plan, turn, mode)
 
     def _preflight(
         self,
@@ -1042,11 +1040,7 @@ class PostConversationTurn:
         persisted = self._turns.add(turn)
         now = self._clock.now()
         self._conversations.touch(plan.conversation.id, now)
-        stored = (
-            plan.tutor_state
-            if persisted.answer_status == FAILED
-            else TeachingPolicy.after_tutor_turn(plan.tutor_state)
-        )
+        stored = self._stored_tutor(plan, persisted)
         if stored.phase is not None or plan.conversation.tutor_phase is not None:
             self._conversations.update_tutor_state(
                 replace(
@@ -1070,6 +1064,23 @@ class PostConversationTurn:
             persisted.model,
         )
         return persisted
+
+    def _stream_turn(self, plan: _TurnPlan, turn: ConversationTurn, mode: str) -> StreamTurn:
+        """Persist the turn and echo the tutor ladder the buffered read would return."""
+        persisted = self._persist(plan, turn, mode)
+        stored = self._stored_tutor(plan, persisted)
+        return StreamTurn(
+            turn=persisted,
+            tutor_phase=stored.phase,
+            hint_level=stored.hint_level,
+            tutor_check_text=stored.check_text,
+        )
+
+    @staticmethod
+    def _stored_tutor(plan: _TurnPlan, persisted: ConversationTurn) -> TutorState:
+        if persisted.answer_status == FAILED:
+            return plan.tutor_state
+        return TeachingPolicy.after_tutor_turn(plan.tutor_state)
 
     def _next_tutor_state(
         self, conversation: Conversation, *, mode: str, message: str

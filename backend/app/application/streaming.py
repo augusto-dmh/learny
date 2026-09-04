@@ -57,9 +57,18 @@ class StreamReasoningDelta:
 
 @dataclass(frozen=True)
 class StreamTurn:
-    """The terminal outcome — the persisted :class:`ConversationTurn`."""
+    """The terminal outcome — the persisted :class:`ConversationTurn`.
+
+    Tutor ladder columns are the conversation's, not the turn's: the buffered JSON
+    path reads them off the conversation row, and the stream echoes the same three
+    fields here so a live Teach client does not have to refetch every citation of
+    every turn to learn one word of phase. Answer threads leave them ``None``.
+    """
 
     turn: ConversationTurn
+    tutor_phase: str | None = None
+    hint_level: str | None = None
+    tutor_check_text: str | None = None
 
 
 # A turn stream opens with a phase, then yields zero or more reasoning and answer
