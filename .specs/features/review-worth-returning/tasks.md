@@ -387,9 +387,9 @@ T11 → T12 → T13 → T14
 
 **Done when**:
 
-- [ ] Home with 25 due / session 20 shows 20 as the job
-- [ ] Review done-state with remaining due offers Keep going + book link; zero due does not
-- [ ] Gate: `cd frontend && npm test -- home-screen review-screen`
+- [x] Home with 25 due / session 20 shows 20 as the job
+- [x] Review done-state with remaining due offers Keep going + book link; zero due does not
+- [x] Gate: `cd frontend && npm test -- home-screen review-screen`
 
 **Tests**: unit
 **Gate**: full

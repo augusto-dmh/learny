@@ -232,9 +232,9 @@ Review is a correct 4-button FSRS grader, but generation can "succeed" with zero
 | REV-38 | P1: Flag and edit | 2 | Done |
 | REV-39 | P1: Flag and edit | 2 | Done |
 | REV-40 | P1: Bounded session | 3 | Done |
-| REV-41 | P1: Bounded session | 4 | In Tasks |
-| REV-42 | P1: Bounded session | 4 | In Tasks |
-| REV-43 | P1: Bounded session | 4 | In Tasks |
+| REV-41 | P1: Bounded session | 4 | Done |
+| REV-42 | P1: Bounded session | 4 | Done |
+| REV-43 | P1: Bounded session | 4 | Done |
 | REV-44 | P1: Bounded session | 4 | Done |
 | REV-45 | P1: Bounded session | 4 | Done |
 

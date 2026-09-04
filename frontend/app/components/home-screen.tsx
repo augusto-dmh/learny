@@ -71,11 +71,18 @@ export function HomeScreen() {
 
   useEffect(() => {
     let active = true;
-    // Only the count is read (AD-156: no dedicated count endpoint), so the queue
-    // is capped at one item to keep the payload small.
+    // Only the session job is read (AD-156: no dedicated count endpoint), so the
+    // queue is capped at one item. The job is min(session size, overdue pile),
+    // not the uncapped total (REV-41).
     getDueReviews({ limit: 1 })
       .then((queue) => {
-        if (active) setDue({ status: "ready", data: queue.total_due });
+        if (!active) {
+          return;
+        }
+        const totalDue = queue.total_due;
+        const sessionSize = queue.session_size ?? 20;
+        const job = totalDue > 0 ? Math.min(sessionSize, totalDue) : 0;
+        setDue({ status: "ready", data: job });
       })
       .catch((err: unknown) => {
         if (active)

@@ -13,7 +13,9 @@
  * 4-button grade bar (Again/Hard/Good/Easy → FSRS rating 1..4) submits a
  * self-grade and auto-advances; after the last card a summary shows counts per
  * rating. Nothing due and a fetch/submit failure each settle to their own
- * readable state. The queue only ever holds active items (the server excludes
+ * readable state. When the session page is exhausted and overdue cards remain,
+ * Done-for-today offers Keep going (the next session page) and a continue-reading
+ * link when one exists. The queue only ever holds active items (the server excludes
  * stale/orphaned), so no source-changed indication appears here. Grade buttons
  * show the server's next-interval labels. A grade whose new due is within the
  * session requeue window is inserted back into the remaining queue (not by
@@ -47,6 +49,10 @@ import {
   type DueItem,
   type Scheduling,
 } from "@/app/lib/quiz";
+import {
+  getContinueReading,
+  type ContinueReadingView,
+} from "@/app/lib/study";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -131,6 +137,7 @@ export function ReviewScreen({
   const [resetting, setResetting] = useState(false);
   const [resetError, setResetError] = useState<string | null>(null);
   const [tally, setTally] = useState<Tally>(EMPTY_TALLY);
+  const [remainingDue, setRemainingDue] = useState(0);
   const [draft, setDraft] = useState<{ question: string; answer: string } | null>(
     null,
   );
@@ -151,6 +158,11 @@ export function ReviewScreen({
       const result = await getDueReviews({ sourceId });
       setQueue(result.items);
       setRequeueMinutes(result.requeue_minutes ?? DEFAULT_REQUEUE_MINUTES);
+      setRemainingDue(result.total_due ?? result.items.length);
+      setIndex(0);
+      setRevealed(false);
+      setDraft(null);
+      lastGrade.current = null;
     } catch (err) {
       setLoadError(
         err instanceof Error ? err.message : "Could not load your due reviews.",
@@ -205,6 +217,8 @@ export function ReviewScreen({
             ? [...prev.slice(0, index + 1), ...prev.slice(index + 1), updated]
             : prev,
         );
+      } else {
+        setRemainingDue((n) => Math.max(0, n - 1));
       }
       setTally((prev) => ({ ...prev, [rating]: prev[rating] + 1 }));
       setRevealed(false);
@@ -281,6 +295,9 @@ export function ReviewScreen({
           return next;
         });
         setIndex(last.index);
+        if (!last.requeued) {
+          setRemainingDue((n) => n + 1);
+        }
         lastGrade.current = null;
       }
       setRevealed(false);
@@ -300,6 +317,7 @@ export function ReviewScreen({
     try {
       await flagQuizItem(item.id, true, csrf);
       setQueue((prev) => (prev ? prev.filter((_, i) => i !== index) : prev));
+      setRemainingDue((n) => Math.max(0, n - 1));
       setRevealed(false);
       setDraft(null);
     } catch (err) {
@@ -414,20 +432,30 @@ export function ReviewScreen({
   if (queue === null) {
     return <p className="text-muted-foreground">Loading your due reviews…</p>;
   }
-  if (queue.length === 0) {
-    return (
-      <section aria-label="review" className="space-y-3">
-        <p className="text-muted-foreground">Nothing due right now.</p>
-        <Link
-          href="/sources"
-          className="text-primary underline-offset-4 hover:underline"
-        >
-          Back to library
-        </Link>
-      </section>
-    );
-  }
-  if (index >= queue.length) {
+  if (queue.length === 0 || index >= queue.length) {
+    if (remainingDue > 0) {
+      return (
+        <SessionDoneWithRemainder
+          onKeepGoing={() => {
+            setTally(EMPTY_TALLY);
+            void loadQueue();
+          }}
+        />
+      );
+    }
+    if (queue.length === 0) {
+      return (
+        <section aria-label="review" className="space-y-3">
+          <p className="text-muted-foreground">Nothing due right now.</p>
+          <Link
+            href="/sources"
+            className="text-primary underline-offset-4 hover:underline"
+          >
+            Back to library
+          </Link>
+        </section>
+      );
+    }
     const total = GRADES.reduce((sum, g) => sum + tally[g.rating], 0);
     return (
       <section aria-label="review summary" className="space-y-4">
@@ -514,6 +542,61 @@ export function ReviewScreen({
           </Button>
         </div>
       ) : null}
+    </section>
+  );
+}
+
+/**
+ * Session page finished while overdue cards remain (REV-42): Done-for-today,
+ * Keep going (next session page), and a continue-reading link when one exists.
+ * Fetches continue only in this state so a caught-up summary never asks for it.
+ */
+function SessionDoneWithRemainder({ onKeepGoing }: { onKeepGoing: () => void }) {
+  const [hero, setHero] = useState<ContinueReadingView | null | "loading">(
+    "loading",
+  );
+
+  useEffect(() => {
+    let active = true;
+    getContinueReading()
+      .then((data) => {
+        if (active) {
+          setHero(data);
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setHero(null);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  return (
+    <section aria-label="review summary" className="space-y-4">
+      <h2 data-testid="done-for-today" className="text-lg font-semibold">
+        Done for today
+      </h2>
+      <p className="text-sm text-muted-foreground">
+        You&rsquo;ve finished this session. More cards are still due when you
+        want them.
+      </p>
+      <div className="flex flex-wrap items-center gap-3">
+        <Button type="button" data-testid="keep-going" onClick={onKeepGoing}>
+          Keep going
+        </Button>
+        {hero !== "loading" && hero !== null ? (
+          <Link
+            data-testid="continue-reading"
+            href={readUrl(hero.source_id, null)}
+            className="text-primary underline-offset-4 hover:underline"
+          >
+            Continue reading {hero.source_title}
+          </Link>
+        ) : null}
+      </div>
     </section>
   );
 }

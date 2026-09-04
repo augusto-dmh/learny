@@ -1022,3 +1022,126 @@ describe("ReviewScreen undo, flag, and edit (REV-22/37/45)", () => {
     ).toBe(false);
   });
 });
+
+describe("ReviewScreen Done-for-today (REV-42/43)", () => {
+  const continueHero = {
+    source_id: "s1",
+    source_title: "Ready Book",
+    chapter_title: "Chapter One",
+    percent: 42.5,
+    updated_at: "2026-07-19T00:00:00Z",
+  };
+
+  const later = () =>
+    new Date(Date.now() + 4 * 24 * 60 * 60 * 1000).toISOString();
+
+  it("offers Keep going and the continue-reading book when due remains after the session page", async () => {
+    let duePage = 0;
+    const fetchMock = routedFetch({
+      "GET /api/auth/me": () => authedMe.clone(),
+      [`GET ${DUE}`]: () => {
+        duePage += 1;
+        return duePage === 1
+          ? jsonResponse(200, dueQueue([clozeCard], { total_due: 3 }))
+          : jsonResponse(200, dueQueue([recallCard], { total_due: 2 }));
+      },
+      "POST /api/quiz-items/i1/reviews": () =>
+        jsonResponse(200, scheduling(later())),
+      "GET /api/reading/continue": () => jsonResponse(200, continueHero),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ReviewScreen />);
+    await screen.findByTestId("question");
+    fireEvent.click(screen.getByRole("button", { name: "Reveal answer" }));
+    fireEvent.click(screen.getByRole("button", { name: "Good" }));
+
+    expect(await screen.findByTestId("done-for-today")).toBeTruthy();
+    expect(screen.queryByText("Session complete")).toBeNull();
+    expect(screen.getByRole("button", { name: "Keep going" })).toBeTruthy();
+    const book = await screen.findByTestId("continue-reading");
+    expect(book.getAttribute("href")).toBe("/sources/s1/read");
+    expect(book.textContent).toContain("Ready Book");
+
+    const dueGetsBefore = fetchMock.mock.calls.filter(
+      ([url, init]) =>
+        String(url).startsWith(DUE) &&
+        ((init as RequestInit | undefined)?.method ?? "GET") === "GET",
+    );
+    expect(dueGetsBefore).toHaveLength(1);
+    expect(String(dueGetsBefore[0][0])).not.toMatch(/limit=/);
+
+    fireEvent.click(screen.getByRole("button", { name: "Keep going" }));
+
+    expect(await screen.findByTestId("question")).toBeTruthy();
+    expect(screen.getByTestId("question").textContent).toBe(
+      "Who built the analytical engine?",
+    );
+    expect(screen.queryByTestId("done-for-today")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Keep going" })).toBeNull();
+
+    const dueGets = fetchMock.mock.calls.filter(
+      ([url, init]) =>
+        String(url).startsWith(DUE) &&
+        ((init as RequestInit | undefined)?.method ?? "GET") === "GET",
+    );
+    expect(dueGets).toHaveLength(2);
+    expect(dueGets.every(([url]) => !String(url).includes("limit="))).toBe(
+      true,
+    );
+  });
+
+  it("keeps the caught-up summary and hides Keep going when nothing remains due (REV-43)", async () => {
+    const fetchMock = routedFetch({
+      "GET /api/auth/me": () => authedMe.clone(),
+      [`GET ${DUE}`]: () => jsonResponse(200, dueQueue([clozeCard])),
+      "POST /api/quiz-items/i1/reviews": () =>
+        jsonResponse(200, scheduling(later())),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ReviewScreen />);
+    await screen.findByTestId("question");
+    fireEvent.click(screen.getByRole("button", { name: "Reveal answer" }));
+    fireEvent.click(screen.getByRole("button", { name: "Easy" }));
+
+    expect(await screen.findByText("Session complete")).toBeTruthy();
+    expect(screen.queryByTestId("done-for-today")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Keep going" })).toBeNull();
+    expect(screen.queryByTestId("continue-reading")).toBeNull();
+    expect(
+      fetchMock.mock.calls.some(([url]) =>
+        String(url).includes("/api/reading/continue"),
+      ),
+    ).toBe(false);
+  });
+
+  it("omits the book link when continue-reading is null rather than inventing one", async () => {
+    const fetchMock = routedFetch({
+      "GET /api/auth/me": () => authedMe.clone(),
+      [`GET ${DUE}`]: () =>
+        jsonResponse(200, dueQueue([clozeCard], { total_due: 4 })),
+      "POST /api/quiz-items/i1/reviews": () =>
+        jsonResponse(200, scheduling(later())),
+      "GET /api/reading/continue": () => jsonResponse(200, null),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ReviewScreen />);
+    await screen.findByTestId("question");
+    fireEvent.click(screen.getByRole("button", { name: "Reveal answer" }));
+    fireEvent.click(screen.getByRole("button", { name: "Good" }));
+
+    expect(await screen.findByRole("button", { name: "Keep going" })).toBeTruthy();
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(
+          ([url]) => String(url) === "/api/reading/continue",
+        ),
+      ).toBe(true),
+    );
+    expect(screen.queryByTestId("continue-reading")).toBeNull();
+    expect(screen.queryByRole("link", { name: /continue reading/i })).toBeNull();
+  });
+});
+
