@@ -904,6 +904,10 @@ class QuizItem:
     # Provenance back to the closed tutor conversation (``origin='tutor'``); ``None``
     # once that conversation is deleted, which the stored snapshot survives (AD-298).
     conversation_id: UUID | None = None
+    # When the learner flagged this card out of due (AD-305). ``None`` means the
+    # due predicate still considers it; a timestamp hides it without touching
+    # scheduling or ``review_log``.
+    flagged_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -930,12 +934,16 @@ class ReviewLogEntry:
     ``rating`` is FSRS's Again(1)/Hard(2)/Good(3)/Easy(4); ``reviewed_at`` is when the
     review happened; ``review_duration_ms`` is the optional client-supplied timing. The
     scheduling port produces the rating/time pair; the review service attaches the
-    duration before it is appended.
+    duration before it is appended. ``previous`` is the pre-grade scheduling snapshot
+    stored so undo can restore it (REV-28); ``undone_at`` is stamped when that happens
+    (AD-306). Both default to ``None`` so pre-cycle constructors and log rows stay valid.
     """
 
     rating: int
     reviewed_at: datetime
     review_duration_ms: int | None = None
+    undone_at: datetime | None = None
+    previous: SchedulingSnapshot | None = None
 
 
 @dataclass(frozen=True)
@@ -976,7 +984,8 @@ class QuizGenerationJob:
     Immutable record whose transition helpers return new instances; ownership is
     reachable only via the parent source (no ``user_id``, AD-014). ``generated_count``/
     ``discarded_count``/``failed_sections`` are the terminal-success counts (QUIZ-09);
-    ``last_error`` is the terminal-failure reason.
+    ``discard_reasons`` is the reason-code → count map whose values sum to
+    ``discarded_count`` (REV-01); ``last_error`` is the terminal-failure reason.
     """
 
     id: UUID
@@ -989,6 +998,7 @@ class QuizGenerationJob:
     last_error: str | None
     created_at: datetime
     updated_at: datetime
+    discard_reasons: dict[str, int] = field(default_factory=dict)
 
     def started(self, now: datetime) -> QuizGenerationJob:
         """Begin an attempt: → ``running`` and increment ``attempts``."""
@@ -1006,6 +1016,7 @@ class QuizGenerationJob:
         generated_count: int,
         discarded_count: int,
         failed_sections: int,
+        discard_reasons: dict[str, int] | None = None,
     ) -> QuizGenerationJob:
         """Terminal success: → ``succeeded`` with the generation counts (QUIZ-09)."""
         return replace(
@@ -1014,6 +1025,7 @@ class QuizGenerationJob:
             generated_count=generated_count,
             discarded_count=discarded_count,
             failed_sections=failed_sections,
+            discard_reasons={} if discard_reasons is None else dict(discard_reasons),
             updated_at=now,
         )
 

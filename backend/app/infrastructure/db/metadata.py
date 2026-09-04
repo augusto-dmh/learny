@@ -522,6 +522,9 @@ quiz_items = Table(
     # derives the "your note changed" badge from this against the last review, and an
     # explicit schedule reset clears it. NULL until a regenerate-and-match flags it.
     Column("note_changed_at", DateTime(timezone=True), nullable=True),
+    # Orthogonal hide-from-due flag (AD-305). NULL means in the due predicate;
+    # a timestamp hides the card without changing ``status`` or scheduling.
+    Column("flagged_at", DateTime(timezone=True), nullable=True),
     # Two identity modes, one table — both uniques are PARTIAL, scoped by ``origin``.
     # Deck regeneration upserts on (source_id, content_key) without minting duplicates
     # (QUIZ-02); the WHERE keeps that guarantee for deck rows only.
@@ -592,6 +595,15 @@ review_log = Table(
     Column("rating", SmallInteger, nullable=False),
     Column("reviewed_at", DateTime(timezone=True), nullable=False),
     Column("review_duration_ms", Integer, nullable=True),
+    # Compensating undo (AD-306): stamp ``undone_at`` and restore the snapshot.
+    # Pre-cycle rows keep these NULL and cannot be undone.
+    Column("undone_at", DateTime(timezone=True), nullable=True),
+    Column("prev_state", SmallInteger, nullable=True),
+    Column("prev_step", SmallInteger, nullable=True),
+    Column("prev_stability", Float, nullable=True),
+    Column("prev_difficulty", Float, nullable=True),
+    Column("prev_due", DateTime(timezone=True), nullable=True),
+    Column("prev_last_review", DateTime(timezone=True), nullable=True),
     # FSRS Rating is Again(1)/Hard(2)/Good(3)/Easy(4) — no other value is valid.
     CheckConstraint("rating BETWEEN 1 AND 4", name="rating_range"),
 )
@@ -614,6 +626,9 @@ quiz_generation_jobs = Table(
     Column("generated_count", Integer, nullable=False, server_default="0"),
     Column("discarded_count", Integer, nullable=False, server_default="0"),
     Column("failed_sections", Integer, nullable=False, server_default="0"),
+    # Reason-code → count for discarded generated candidates (REV-01). Values
+    # sum to ``discarded_count``. Existing rows take ``{}`` with no backfill.
+    Column("discard_reasons", JSONB, nullable=False, server_default="{}"),
     Column("last_error", Text, nullable=True),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),

@@ -163,9 +163,9 @@ T11 → T12 → T13 → T14
 
 **Done when**:
 
-- [ ] Upgrade/downgrade round-trip on `learny_test`
-- [ ] Entities accept the new fields with defaults that keep old constructors compiling
-- [ ] Gate: `uv run pytest tests/test_migrations.py tests/test_domain_quiz.py`
+- [x] Upgrade/downgrade round-trip on `learny_test`
+- [x] Entities accept the new fields with defaults that keep old constructors compiling
+- [x] Gate: `uv run pytest tests/test_migrations.py tests/test_domain_quiz.py`
 
 **Tests**: integration
 **Gate**: full

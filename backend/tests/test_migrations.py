@@ -2776,7 +2776,10 @@ def test_migration_0020_links_tutor_cards_to_conversations(monkeypatch) -> None:
         from app.infrastructure.db.metadata import quiz_items
 
         reflected = {c["name"]: c["nullable"] for c in inspector.get_columns(quiz_items.name)}
-        assert reflected == {c.name: c.nullable for c in quiz_items.columns}
+        declared = {c.name: c.nullable for c in quiz_items.columns}
+        # Live 0020 columns must match metadata; later revisions may add more.
+        assert reflected.keys() <= declared.keys()
+        assert all(declared[name] is nullable for name, nullable in reflected.items())
     finally:
         engine.dispose()
 
@@ -2807,6 +2810,168 @@ def test_migration_0020_links_tutor_cards_to_conversations(monkeypatch) -> None:
     try:
         columns = {c["name"] for c in inspect(engine).get_columns("quiz_items")}
         assert "conversation_id" in columns
+    finally:
+        engine.dispose()
+
+    command.downgrade(cfg, "base")
+
+
+def _seed_quiz_aggregate_at_0020(engine):
+    """Seed a user→source→item/job/log chain at revision 0020 (no review-quality columns).
+
+    Returns ``(user_id, source_id, item_id, job_id, log_id)``.
+    """
+    user_id = uuid.uuid4()
+    source_id = uuid.uuid4()
+    item_id = uuid.uuid4()
+    job_id = uuid.uuid4()
+    log_id = uuid.uuid4()
+    with engine.begin() as conn:
+        conn.execute(
+            text("INSERT INTO users (id, email) VALUES (:id, :email)"),
+            {"id": user_id, "email": f"{user_id}@example.test"},
+        )
+        conn.execute(
+            text(
+                "INSERT INTO sources "
+                "(id, user_id, title, filename, content_type, byte_size, checksum, object_key) "
+                "VALUES (:id, :uid, 'Bk', 'f.epub', 'application/epub+zip', 1, 'c', :key)"
+            ),
+            {"id": source_id, "uid": user_id, "key": f"sources/{source_id}.epub"},
+        )
+        conn.execute(
+            text(
+                "INSERT INTO quiz_items "
+                "(id, source_id, user_id, origin, item_type, question, "
+                " answer, section_path, anchor, source_excerpt, chunk_hash, content_key) "
+                "VALUES (:id, :sid, :uid, 'deck', 'free_recall', 'q', 'a', "
+                " '[]', 'a.xhtml', 'excerpt', 'ch', 'ck')"
+            ),
+            {"id": item_id, "sid": source_id, "uid": user_id},
+        )
+        conn.execute(
+            text(
+                "INSERT INTO quiz_generation_jobs (id, source_id, status) "
+                "VALUES (:id, :sid, 'succeeded')"
+            ),
+            {"id": job_id, "sid": source_id},
+        )
+        conn.execute(
+            text(
+                "INSERT INTO review_log (id, quiz_item_id, rating, reviewed_at) "
+                "VALUES (:id, :iid, 3, TIMESTAMPTZ '2026-07-16 12:00:00+00')"
+            ),
+            {"id": log_id, "iid": item_id},
+        )
+    return user_id, source_id, item_id, job_id, log_id
+
+
+@pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
+def test_migration_0021_adds_review_quality_columns(monkeypatch) -> None:
+    """0021 up: discard_reasons default {}, flagged_at and undo snapshot columns NULL.
+
+    A job/item/log seeded at 0020 takes those defaults with no backfill so a
+    pre-cycle empty success stays ``{}`` (REV-01/REV-07), cards stay unflagged
+    (REV-34), and legacy log rows cannot be undone (REV-23). Metadata nullability
+    matches the live schema. Down one step to 0020 drops the new columns and
+    leaves the seeded rows intact.
+    """
+    monkeypatch.setenv("LEARNY_DATABASE_URL", TEST_DB_URL)
+    cfg = _alembic_config(TEST_DB_URL)
+
+    command.upgrade(cfg, "head")
+    command.downgrade(cfg, "0020_tutor_cards")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        _user_id, _source_id, item_id, job_id, log_id = _seed_quiz_aggregate_at_0020(engine)
+    finally:
+        engine.dispose()
+
+    command.upgrade(cfg, "0021_review_quality")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        inspector = inspect(engine)
+        job_cols = {c["name"]: c for c in inspector.get_columns("quiz_generation_jobs")}
+        item_cols = {c["name"]: c for c in inspector.get_columns("quiz_items")}
+        log_cols = {c["name"]: c for c in inspector.get_columns("review_log")}
+        assert job_cols["discard_reasons"]["nullable"] is False
+        assert item_cols["flagged_at"]["nullable"] is True
+        assert log_cols["undone_at"]["nullable"] is True
+        for name in (
+            "prev_state",
+            "prev_step",
+            "prev_stability",
+            "prev_difficulty",
+            "prev_due",
+            "prev_last_review",
+        ):
+            assert log_cols[name]["nullable"] is True
+
+        with engine.connect() as conn:
+            job_row = conn.execute(
+                text("SELECT discard_reasons FROM quiz_generation_jobs WHERE id = :id"),
+                {"id": job_id},
+            ).one()
+            item_row = conn.execute(
+                text("SELECT flagged_at FROM quiz_items WHERE id = :id"),
+                {"id": item_id},
+            ).one()
+            log_row = conn.execute(
+                text(
+                    "SELECT undone_at, prev_state, prev_step, prev_stability, "
+                    "       prev_difficulty, prev_due, prev_last_review "
+                    "FROM review_log WHERE id = :id"
+                ),
+                {"id": log_id},
+            ).one()
+        assert job_row.discard_reasons == {}
+        assert item_row.flagged_at is None
+        assert log_row.undone_at is None
+        assert log_row.prev_state is None
+        assert log_row.prev_step is None
+        assert log_row.prev_stability is None
+        assert log_row.prev_difficulty is None
+        assert log_row.prev_due is None
+        assert log_row.prev_last_review is None
+
+        from app.infrastructure.db.metadata import quiz_generation_jobs, quiz_items, review_log
+
+        for table in (quiz_generation_jobs, quiz_items, review_log):
+            reflected = {c["name"]: c["nullable"] for c in inspector.get_columns(table.name)}
+            assert reflected == {c.name: c.nullable for c in table.columns}
+    finally:
+        engine.dispose()
+
+    command.downgrade(cfg, "0020_tutor_cards")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        inspector = inspect(engine)
+        job_remaining = {c["name"] for c in inspector.get_columns("quiz_generation_jobs")}
+        item_remaining = {c["name"] for c in inspector.get_columns("quiz_items")}
+        log_remaining = {c["name"] for c in inspector.get_columns("review_log")}
+        assert "discard_reasons" not in job_remaining
+        assert "flagged_at" not in item_remaining
+        assert "undone_at" not in log_remaining
+        assert "prev_state" not in log_remaining
+        with engine.connect() as conn:
+            surviving = conn.execute(
+                text(
+                    "SELECT "
+                    "(SELECT count(*) FROM quiz_items WHERE id = :iid), "
+                    "(SELECT count(*) FROM quiz_generation_jobs WHERE id = :jid), "
+                    "(SELECT count(*) FROM review_log WHERE id = :lid)"
+                ),
+                {"iid": item_id, "jid": job_id, "lid": log_id},
+            ).one()
+        assert tuple(surviving) == (1, 1, 1)
+    finally:
+        engine.dispose()
+
+    command.upgrade(cfg, "head")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        columns = {c["name"] for c in inspect(engine).get_columns("quiz_items")}
+        assert "flagged_at" in columns
     finally:
         engine.dispose()
 
