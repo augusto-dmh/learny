@@ -71,7 +71,7 @@ vi.mock("../app/components/teach-panel", () => ({
   TeachPanel: ({
     onShowInBook,
   }: {
-    onShowInBook?: (anchor: string) => void;
+    onShowInBook?: (anchor: string, quote?: string) => void;
   }) => (
     <div data-testid="teach-panel-body">
       <button type="button" onClick={() => onShowInBook?.(jump.inChapter)}>
@@ -79,6 +79,12 @@ vi.mock("../app/components/teach-panel", () => ({
       </button>
       <button type="button" onClick={() => onShowInBook?.(jump.foreign)}>
         show-foreign
+      </button>
+      <button
+        type="button"
+        onClick={() => onShowInBook?.(jump.inChapter, "the analytical engine")}
+      >
+        show-span
       </button>
     </div>
   ),
@@ -1015,6 +1021,27 @@ describe("ChapterFlow show in book (RA-13/14)", () => {
     expect(nav.replace).toHaveBeenCalledWith(
       `/sources/s1/read?anchor=${ENCODED_S2}&panel=teach`,
     );
+    // No cited sentence: the highlight painter is not given an empty quote.
+    expect(document.querySelectorAll("mark.reader-highlight")).toHaveLength(0);
+  });
+
+  it("paints the cited sentence in the section when Show in book carries a quote", async () => {
+    nav.params = new URLSearchParams("panel=teach");
+    const { container } = render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+    );
+    await screen.findByText("Babbage designed the analytical engine.");
+
+    fireEvent.click(screen.getByRole("button", { name: "show-span" }));
+
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
+    const flashed = document.querySelector(`[data-section-heading="${S2}"]`);
+    expect(flashed?.getAttribute("data-highlight")).toBe("on");
+    await waitFor(() => {
+      const painted = container.querySelectorAll("mark.reader-highlight");
+      expect(painted).toHaveLength(1);
+      expect(painted[0].textContent).toBe("the analytical engine");
+    });
   });
 
   it("navigates to a cited anchor in another chapter, carrying the open panel", async () => {

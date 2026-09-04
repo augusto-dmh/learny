@@ -62,7 +62,7 @@ export function CitationList({
   sourceId: string;
   citations: Citation[];
   /** In-reader jump: provided → "Show in book" button; absent → reader-route link. */
-  onShowInBook?: (anchor: string) => void;
+  onShowInBook?: (anchor: string, quote?: string) => void;
   /** The 1-based citation whose passage is open, when the caller owns selection. */
   selected?: number | null;
   onSelect?: (selected: number | null) => void;
@@ -180,7 +180,7 @@ function CitationPassage({
   sourceId: string;
   citation: Citation;
   passageId: string;
-  onShowInBook?: (anchor: string) => void;
+  onShowInBook?: (anchor: string, quote?: string) => void;
   onClose: () => void;
 }) {
   const regionRef = useRef<HTMLDivElement>(null);
@@ -244,7 +244,11 @@ function CitationPassage({
       ) : onShowInBook ? (
         <button
           type="button"
-          onClick={() => onShowInBook(citation.anchor)}
+          onClick={() =>
+            citation.quoted_text
+              ? onShowInBook(citation.anchor, citation.quoted_text)
+              : onShowInBook(citation.anchor)
+          }
           className="inline-flex items-center gap-1.5 text-sm text-primary underline-offset-4 hover:underline"
         >
           <BookOpenIcon className="size-3.5" />

@@ -363,7 +363,7 @@ T12 -> T13
 
 ---
 
-### T13: "Show in book" highlights the cited span
+### T13: "Show in book" highlights the cited span ✅
 
 **What**: When a citation has `quoted_text`, the reader highlight needle is that quote (`findQuoteOffset`); otherwise keep section-level flash.
 **Where**: `frontend/app/components/citations.tsx`
@@ -378,9 +378,9 @@ T12 -> T13
 
 **Done when**:
 
-- [ ] Test that Show in book with a span calls the highlight path with that quote
-- [ ] Null span keeps the previous section-flash behavior
-- [ ] Offset-identity remains owned by T3's golden; this task does not reimplement offsets
+- [x] Test that Show in book with a span calls the highlight path with that quote
+- [x] Null span keeps the previous section-flash behavior
+- [x] Offset-identity remains owned by T3's golden; this task does not reimplement offsets
 
 **Tests**: unit
 **Gate**: build
