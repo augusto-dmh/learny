@@ -24,6 +24,7 @@ from uuid import UUID
 
 from app.application.errors import (
     AnswerGenerationFailed,
+    ConversationClosed,
     ConversationNotFound,
     ConversationTargetUnavailable,
     InvalidConversationMode,
@@ -43,6 +44,7 @@ from app.application.streaming import (
     TurnStreamEvent,
     hold_back_deltas,
 )
+from app.application.teaching_policy import TeachingPolicy, TutorState
 from app.domain.entities import (
     ANSWERED,
     FAILED,
@@ -50,6 +52,7 @@ from app.domain.entities import (
     MODE_TEACH,
     NOT_FOUND_IN_SCOPE,
     NOT_FOUND_IN_SOURCE,
+    TUTOR_OPENING_MESSAGE,
     AnswerStreamEvent,
     CitedSpan,
     Conversation,
@@ -462,6 +465,7 @@ class _TurnPrep:
     history: list[HistoryTurn]
     turn_index: int
     anchors: tuple[str, ...] | None
+    tutor_state: TutorState
 
 
 @dataclass(frozen=True)
@@ -480,6 +484,12 @@ class _TurnPlan:
     history: list[HistoryTurn]
     evidence: list[Evidence]
     turn_index: int
+    tutor_state: TutorState
+
+
+def _is_closing_restatement(prep: _TurnPrep) -> bool:
+    """True when this learner message is the unaided check that closes the session."""
+    return prep.tutor_state.phase == "close" and prep.conversation.tutor_phase == "check"
 
 
 class PostConversationTurn:
@@ -536,6 +546,7 @@ class PostConversationTurn:
         ids: Callable[[], UUID],
         evidence_top_k: int,
         history_turns: int,
+        tutor_check_after_turns: int,
     ) -> None:
         self._conversations = conversations
         self._turns = turns
@@ -548,6 +559,7 @@ class PostConversationTurn:
         self._ids = ids
         self._evidence_top_k = evidence_top_k
         self._history_turns = history_turns
+        self._tutor_check_after_turns = tutor_check_after_turns
 
     def __call__(
         self,
@@ -557,8 +569,16 @@ class PostConversationTurn:
         message: str,
         mode: str,
     ) -> ConversationTurn:
-        prep = self._preflight(user=user, conversation_id=conversation_id, mode=mode)
-        plan = self._retrieve_evidence(user=user, prep=prep, message=message)
+        prep = self._preflight(
+            user=user, conversation_id=conversation_id, mode=mode, message=message
+        )
+        if _is_closing_restatement(prep):
+            return self._persist(
+                self._unsearched_plan(prep),
+                self._restatement_turn(prep, message, mode),
+                mode,
+            )
+        plan = self._retrieve_evidence(user=user, prep=prep, message=message, mode=mode)
 
         if not plan.evidence:
             # Nothing in scope to answer from → not-found; the port is never invoked,
@@ -571,21 +591,9 @@ class PostConversationTurn:
                 self._persist_failed(plan, message, mode)
                 raise AnswerGenerationFailed("Answer generation failed.") from exc
 
-            grounded = ground(generated, plan.evidence)
-            if grounded is None:
-                # found=false / blank text / nothing survives grounding.
-                turn = self._not_found_turn(
-                    plan, message, mode, len(plan.evidence), generated.model
-                )
-            else:
-                turn = self._answered_turn(
-                    plan,
-                    message,
-                    mode,
-                    grounded,
-                    generated.model,
-                    ground_spans(generated, grounded[1]),
-                )
+            turn = self._turn_from_generated(
+                plan=plan, message=message, mode=mode, generated=generated
+            )
 
         return self._persist(plan, turn, mode)
 
@@ -617,15 +625,24 @@ class PostConversationTurn:
         turn before the error reaches the wire, so reloading after an error still
         shows the question that was asked (AD-262).
         """
-        prep = self._preflight(user=user, conversation_id=conversation_id, mode=mode)
+        prep = self._preflight(
+            user=user, conversation_id=conversation_id, mode=mode, message=message
+        )
         return self._turn_stream(user=user, prep=prep, message=message, mode=mode)
 
     def _turn_stream(
         self, *, user: User, prep: _TurnPrep, message: str, mode: str
     ) -> Iterator[TurnStreamEvent]:
+        if _is_closing_restatement(prep):
+            yield self._stream_turn(
+                self._unsearched_plan(prep),
+                self._restatement_turn(prep, message, mode),
+                mode,
+            )
+            return
         yield StreamPhase(phase=PHASE_SEARCHING)
         try:
-            plan = self._retrieve_evidence(user=user, prep=prep, message=message)
+            plan = self._retrieve_evidence(user=user, prep=prep, message=message, mode=mode)
         except Exception as exc:  # retrieval can no longer answer with a status code
             # The reader is told only that generation failed, so this line is the
             # sole record of *why*: without it an index outage and a programming
@@ -641,7 +658,7 @@ class PostConversationTurn:
 
         if not plan.evidence:
             turn = self._not_found_turn(plan, message, mode, 0, self._generation.model)
-            yield StreamTurn(self._persist(plan, turn, mode))
+            yield self._stream_turn(plan, turn, mode)
             return
 
         stream = self._generate_stream(mode=mode, message=message, plan=plan)
@@ -662,14 +679,8 @@ class PostConversationTurn:
         # longer deletes it; keeping the stopped question is not an acceptance
         # criterion and is left to the retry cycle.
 
-        grounded = ground(answer, plan.evidence)
-        if grounded is None:
-            turn = self._not_found_turn(plan, message, mode, len(plan.evidence), answer.model)
-        else:
-            turn = self._answered_turn(
-                plan, message, mode, grounded, answer.model, ground_spans(answer, grounded[1])
-            )
-        yield StreamTurn(self._persist(plan, turn, mode))
+        turn = self._turn_from_generated(plan=plan, message=message, mode=mode, generated=answer)
+        yield self._stream_turn(plan, turn, mode)
 
     def _preflight(
         self,
@@ -677,6 +688,7 @@ class PostConversationTurn:
         user: User,
         conversation_id: UUID,
         mode: str,
+        message: str,
     ) -> _TurnPrep:
         """Run the shared turn guards, scope expansion, and history.
 
@@ -699,6 +711,10 @@ class PostConversationTurn:
             sources=self._sources,
             authorize=self._authorize,
         )
+        if conversation.tutor_phase == "close":
+            raise ConversationClosed("This conversation is closed.")
+        if conversation.tutor_phase is not None and mode == MODE_ANSWER:
+            raise InvalidConversationMode("Answer mode cannot continue a tutor conversation.")
         if source.status != SOURCE_STATUS_READY:
             # A stale-ready race resolves here on the next turn.
             raise SourceNotReady("Source is not ready for conversations.")
@@ -724,6 +740,8 @@ class PostConversationTurn:
         # ``recent_history`` skips the citation payloads ``list_for_conversation``
         # loads — the turn path never uses them — and its count is the next index.
         turn_index, history = self._turns.recent_history(conversation_id, self._history_turns)
+        if mode == MODE_TEACH and turn_index == 0 and not TeachingPolicy.is_opening(message):
+            raise InvalidConversationMode("The first teach turn must be the session-start message.")
 
         return _TurnPrep(
             conversation=conversation,
@@ -731,9 +749,12 @@ class PostConversationTurn:
             history=history,
             turn_index=turn_index,
             anchors=anchors,
+            tutor_state=self._next_tutor_state(conversation, mode=mode, message=message),
         )
 
-    def _retrieve_evidence(self, *, user: User, prep: _TurnPrep, message: str) -> _TurnPlan:
+    def _retrieve_evidence(
+        self, *, user: User, prep: _TurnPrep, message: str, mode: str
+    ) -> _TurnPlan:
         """Search the conversation's scope for this turn's evidence.
 
         Split out of the guards so the streaming path can run it *after* the first
@@ -743,7 +764,7 @@ class PostConversationTurn:
         evidence = self._retrieve(
             user=user,
             source_id=prep.conversation.source_id,
-            query=message,
+            query=self._retrieval_query(mode=mode, message=message, conversation=prep.conversation),
             top_k=self._evidence_top_k,
             anchors=prep.anchors,
             include_notes=prep.conversation.include_notes,
@@ -754,7 +775,16 @@ class PostConversationTurn:
             history=prep.history,
             evidence=evidence,
             turn_index=prep.turn_index,
+            tutor_state=prep.tutor_state,
         )
+
+    @staticmethod
+    def _retrieval_query(*, mode: str, message: str, conversation: Conversation) -> str:
+        if mode != MODE_TEACH or message != TUTOR_OPENING_MESSAGE:
+            return message
+        if conversation.target_title:
+            return conversation.target_title
+        return conversation.target_anchor or message
 
     def _resolve_target(
         self, conversation: Conversation, by_anchor: dict[str, StructureSection]
@@ -855,6 +885,8 @@ class PostConversationTurn:
             evidence=plan.evidence,
             history=plan.history,
             target_section_path=self._target_path(mode, plan),
+            tutor_phase=plan.tutor_state.phase if mode == MODE_TEACH else None,
+            hint_level=plan.tutor_state.hint_level if mode == MODE_TEACH else None,
         )
 
     def _generate_stream(
@@ -866,7 +898,40 @@ class PostConversationTurn:
             evidence=plan.evidence,
             history=plan.history,
             target_section_path=self._target_path(mode, plan),
+            tutor_phase=plan.tutor_state.phase if mode == MODE_TEACH else None,
+            hint_level=plan.tutor_state.hint_level if mode == MODE_TEACH else None,
         )
+
+    def _turn_from_generated(
+        self,
+        *,
+        plan: _TurnPlan,
+        message: str,
+        mode: str,
+        generated: GeneratedAnswer,
+    ) -> ConversationTurn:
+        """Ground the port result, with a teach carve-out for citation-free replies.
+
+        Answer mode still collapses empty citations to not-found (AD-027). Teach
+        mode keeps a non-sentinel reply with no surviving citations as answered
+        so a Socratic question can persist (AD-295). ``found=False`` and blank
+        text stay not-found in both modes.
+        """
+        grounded = ground(generated, plan.evidence)
+        if grounded is not None:
+            return self._answered_turn(
+                plan,
+                message,
+                mode,
+                grounded,
+                generated.model,
+                ground_spans(generated, grounded[1]),
+            )
+        if mode == MODE_TEACH and generated.found and generated.text.strip():
+            return self._answered_turn(
+                plan, message, mode, (generated.text, []), generated.model, ()
+            )
+        return self._not_found_turn(plan, message, mode, len(plan.evidence), generated.model)
 
     def _answered_turn(
         self,
@@ -963,6 +1028,7 @@ class PostConversationTurn:
             history=prep.history,
             evidence=[],
             turn_index=prep.turn_index,
+            tutor_state=prep.tutor_state,
         )
 
     def _persist(self, plan: _TurnPlan, turn: ConversationTurn, mode: str) -> ConversationTurn:
@@ -972,7 +1038,21 @@ class PostConversationTurn:
         for the losing writer — nothing is bumped or logged for it.
         """
         persisted = self._turns.add(turn)
-        self._conversations.touch(plan.conversation.id, self._clock.now())
+        now = self._clock.now()
+        self._conversations.touch(plan.conversation.id, now)
+        stored = self._stored_tutor(plan, persisted)
+        if stored.phase is not None or plan.conversation.tutor_phase is not None:
+            self._conversations.update_tutor_state(
+                replace(
+                    plan.conversation,
+                    tutor_phase=stored.phase,
+                    hint_level=stored.hint_level,
+                    tutor_ordinary_turns=stored.ordinary_turns,
+                    tutor_scaffold_misses=stored.scaffold_misses,
+                    tutor_check_text=stored.check_text,
+                    updated_at=now,
+                )
+            )
         logger.info(
             "conversation turn completed outcome=%s conversation_id=%s source_id=%s mode=%s "
             "evidence_count=%s model=%s",
@@ -984,3 +1064,53 @@ class PostConversationTurn:
             persisted.model,
         )
         return persisted
+
+    def _stream_turn(self, plan: _TurnPlan, turn: ConversationTurn, mode: str) -> StreamTurn:
+        """Persist the turn and echo the tutor ladder the buffered read would return."""
+        persisted = self._persist(plan, turn, mode)
+        stored = self._stored_tutor(plan, persisted)
+        return StreamTurn(
+            turn=persisted,
+            tutor_phase=stored.phase,
+            hint_level=stored.hint_level,
+            tutor_check_text=stored.check_text,
+        )
+
+    @staticmethod
+    def _stored_tutor(plan: _TurnPlan, persisted: ConversationTurn) -> TutorState:
+        if persisted.answer_status == FAILED:
+            return plan.tutor_state
+        return TeachingPolicy.after_tutor_turn(plan.tutor_state)
+
+    def _next_tutor_state(
+        self, conversation: Conversation, *, mode: str, message: str
+    ) -> TutorState:
+        current = TutorState(
+            phase=conversation.tutor_phase,
+            hint_level=conversation.hint_level,
+            ordinary_turns=conversation.tutor_ordinary_turns,
+            scaffold_misses=conversation.tutor_scaffold_misses,
+            check_text=conversation.tutor_check_text,
+        )
+        if mode != MODE_TEACH:
+            return current
+        if current.phase is None and not TeachingPolicy.is_opening(message):
+            return current
+        return TeachingPolicy.advance(
+            current, message=message, check_after=self._tutor_check_after_turns
+        )
+
+    def _restatement_turn(self, prep: _TurnPrep, message: str, mode: str) -> ConversationTurn:
+        return ConversationTurn(
+            id=self._ids(),
+            conversation_id=prep.conversation.id,
+            turn_index=prep.turn_index,
+            message=message,
+            mode=mode,
+            answer_status=ANSWERED,
+            answer_text="",
+            model=self._generation.model,
+            evidence_count=0,
+            citations=(),
+            created_at=self._clock.now(),
+        )

@@ -255,6 +255,7 @@ def answer(db_conn: Connection, user: User, source: Source, question: str) -> Co
         ids=uuid4,
         evidence_top_k=settings.conversation_evidence_top_k,
         history_turns=settings.conversation_history_turns,
+        tutor_check_after_turns=settings.tutor_check_after_turns,
     )
     conversation = start(
         user=user,

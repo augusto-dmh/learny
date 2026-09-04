@@ -33,6 +33,7 @@ _CONVERSATION_VARS = (
     "LEARNY_CONVERSATION_MESSAGE_MAX_CHARS",
     "LEARNY_CONVERSATION_SCOPE_MAX_ANCHORS",
     "LEARNY_CONVERSATION_SCOPE_ANCHOR_MAX_CHARS",
+    "LEARNY_TUTOR_CHECK_AFTER_TURNS",
 )
 
 
@@ -370,6 +371,7 @@ def test_conversation_settings_defaults() -> None:
     assert settings.conversation_message_max_chars == 2000
     assert settings.conversation_scope_max_anchors == 100
     assert settings.conversation_scope_anchor_max_chars == 512
+    assert settings.tutor_check_after_turns == 3
 
 
 def test_conversation_settings_env_override(monkeypatch) -> None:
@@ -378,6 +380,7 @@ def test_conversation_settings_env_override(monkeypatch) -> None:
     monkeypatch.setenv("LEARNY_CONVERSATION_MESSAGE_MAX_CHARS", "500")
     monkeypatch.setenv("LEARNY_CONVERSATION_SCOPE_MAX_ANCHORS", "3")
     monkeypatch.setenv("LEARNY_CONVERSATION_SCOPE_ANCHOR_MAX_CHARS", "40")
+    monkeypatch.setenv("LEARNY_TUTOR_CHECK_AFTER_TURNS", "5")
 
     settings = Settings(_env_file=None)
 
@@ -386,6 +389,7 @@ def test_conversation_settings_env_override(monkeypatch) -> None:
     assert settings.conversation_message_max_chars == 500
     assert settings.conversation_scope_max_anchors == 3
     assert settings.conversation_scope_anchor_max_chars == 40
+    assert settings.tutor_check_after_turns == 5
 
 
 def test_env_example_documents_the_conversation_contract() -> None:

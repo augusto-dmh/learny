@@ -32,6 +32,8 @@ def test_generation_takes_mode_explicitly_with_an_optional_target() -> None:
         parameters = inspect.signature(method).parameters
         assert parameters["mode"].default is inspect.Parameter.empty
         assert parameters["target_section_path"].default is None
+        assert parameters["tutor_phase"].default is None
+        assert parameters["hint_level"].default is None
 
 
 def test_the_turn_service_takes_exactly_one_generator_of_a_single_type() -> None:

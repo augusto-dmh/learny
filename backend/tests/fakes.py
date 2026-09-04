@@ -637,6 +637,8 @@ class FakeAnswerGeneration:
         evidence: Sequence[Evidence],
         history: Sequence[HistoryTurn] = (),
         target_section_path: tuple[str, ...] | None = None,
+        tutor_phase: str | None = None,
+        hint_level: str | None = None,
     ) -> GeneratedAnswer:
         self.calls.append(
             {
@@ -660,6 +662,8 @@ class FakeAnswerGeneration:
         evidence: Sequence[Evidence],
         history: Sequence[HistoryTurn] = (),
         target_section_path: tuple[str, ...] | None = None,
+        tutor_phase: str | None = None,
+        hint_level: str | None = None,
     ) -> Iterator[AnswerStreamEvent]:
         self.stream_calls.append(
             {

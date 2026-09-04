@@ -52,6 +52,8 @@ from app.domain.entities import (
     MODE_TEACH,
     NOT_FOUND_IN_SCOPE,
     NOT_FOUND_IN_SOURCE,
+    TUTOR_CARD_QUESTION,
+    TUTOR_OPENING_MESSAGE,
     AnswerCompleted,
     AnswerReasoningDelta,
     AnswerTextDelta,
@@ -74,6 +76,7 @@ from app.infrastructure.db.repositories import (
     SqlAlchemyCorpusRepository,
     SqlAlchemyEmbeddingIndexRepository,
     SqlAlchemyNoteRepository,
+    SqlAlchemyQuizItemRepository,
     SqlAlchemySourceRepository,
 )
 from app.infrastructure.embeddings import DeterministicEmbeddingAdapter
@@ -138,6 +141,15 @@ def _delete(
     client: TestClient, conversation_id: object, *, csrf: str | None, origin: str | None = None
 ):
     return client.delete(f"/api/conversations/{conversation_id}", headers=_headers(csrf, origin))
+
+
+def _accept_tutor_card(
+    client: TestClient, conversation_id: object, *, csrf: str | None, origin: str | None = None
+):
+    return client.post(
+        f"/api/conversations/{conversation_id}/tutor-card",
+        headers=_headers(csrf, origin),
+    )
 
 
 # --- Seeding -------------------------------------------------------------------
@@ -227,6 +239,9 @@ def _seed_conversation(
     scope: tuple[str, ...] = (_ANCHOR,),
     include_notes: bool = False,
     target_anchor: str | None = _ANCHOR,
+    tutor_phase: str | None = None,
+    hint_level: str | None = None,
+    tutor_check_text: str | None = None,
     created_at: datetime | None = None,
     updated_at: datetime | None = None,
 ) -> Conversation:
@@ -240,6 +255,9 @@ def _seed_conversation(
         target_anchor=target_anchor,
         target_section_path=_SECTION_PATH if target_anchor is not None else None,
         target_title=_TITLE if target_anchor is not None else None,
+        tutor_phase=tutor_phase,
+        hint_level=hint_level,
+        tutor_check_text=tutor_check_text,
         created_at=now,
         updated_at=updated_at or now,
     )
@@ -283,6 +301,35 @@ def _seed_turn(
         created_at=datetime.now(UTC),
     )
     return SqlAlchemyConversationTurnRepository(db_conn).add(turn)
+
+
+def _seed_closed_tutor(
+    db_conn: Connection,
+    source_id: UUID,
+    *,
+    citations: tuple[Evidence, ...] | None = None,
+    check_text: str = "Cells convert sunlight into chemical energy.",
+) -> Conversation:
+    """A closed tutor thread with its opening turn — the accept-card fixture."""
+    conversation = _seed_conversation(
+        db_conn,
+        source_id,
+        tutor_phase="close",
+        hint_level="assert",
+        tutor_check_text=check_text,
+    )
+    opening_citations = (_citation(source_id),) if citations is None else citations
+    _seed_turn(
+        db_conn,
+        conversation,
+        turn_index=0,
+        message=TUTOR_OPENING_MESSAGE,
+        mode=MODE_TEACH,
+        answer_status=ANSWERED,
+        answer_text="What is this section arguing?",
+        citations=opening_citations,
+    )
+    return conversation
 
 
 def _seed_listed_conversation(
@@ -331,6 +378,11 @@ _CONVERSATION_FIELDS = {
     "title",
     "scope_anchors",
     "include_notes",
+    "target_anchor",
+    "target_title",
+    "tutor_phase",
+    "hint_level",
+    "tutor_check_text",
     "created_at",
     "updated_at",
 }
@@ -374,6 +426,11 @@ def test_start_scoped_conversation_returns_201_with_scope_and_notes_choice(
     assert body["scope_anchors"] == [_ANCHOR]
     assert body["include_notes"] is True
     assert body["title"] == _TITLE
+    assert body["target_anchor"] == _ANCHOR
+    assert body["target_title"] == _TITLE
+    assert body["tutor_phase"] is None
+    assert body["hint_level"] is None
+    assert body["tutor_check_text"] is None
     assert body["created_at"] and body["updated_at"]
 
 
@@ -391,6 +448,10 @@ def test_start_whole_book_conversation_defaults_title_to_the_book(
     assert body["scope_anchors"] == []
     assert body["include_notes"] is False
     assert body["title"] == _BOOK_TITLE
+    assert body["target_anchor"] is None
+    assert body["target_title"] is None
+    assert body["tutor_phase"] is None
+    assert body["hint_level"] is None
 
 
 def test_start_uses_the_given_title_trimmed(auth_client: TestClient, db_conn: Connection) -> None:
@@ -604,6 +665,8 @@ def test_list_returns_newest_activity_first_with_source_title_and_turn_count(
         "include_notes",
         "turn_count",
         "last_turn_mode",
+        "tutor_phase",
+        "hint_level",
         "created_at",
         "updated_at",
     }
@@ -1211,7 +1274,7 @@ def test_post_teach_turn_returns_201_in_teach_mode(
     resp = _post_turn(
         auth_client,
         conversation.id,
-        {"message": "photosynthesis sunlight energy", "mode": MODE_TEACH},
+        {"message": TUTOR_OPENING_MESSAGE, "mode": MODE_TEACH},
         csrf=csrf,
     )
 
@@ -1220,6 +1283,110 @@ def test_post_teach_turn_returns_201_in_teach_mode(
     assert body["mode"] == MODE_TEACH
     assert body["answer_status"] == ANSWERED
     assert body["citations"]
+
+
+def test_get_conversation_after_opening_shows_tutor_phase_open(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # TUTOR-16 / TUTOR-24: after the opening teach turn, reads carry the ladder start.
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "open-phase@example.com")
+    _embed_all(db_conn, UUID(source_id))
+    conversation = _seed_conversation(db_conn, UUID(source_id))
+
+    posted = _post_turn(
+        auth_client,
+        conversation.id,
+        {"message": TUTOR_OPENING_MESSAGE, "mode": MODE_TEACH},
+        csrf=csrf,
+    )
+    assert posted.status_code == 201, posted.text
+
+    read = auth_client.get(f"/api/conversations/{conversation.id}")
+    assert read.status_code == 200, read.text
+    body = read.json()
+    assert body["tutor_phase"] == "open"
+    assert body["hint_level"] == "pump"
+    assert body["target_title"] == _TITLE
+    assert body["tutor_check_text"] is None
+    assert body["turns"][0]["message"] == TUTOR_OPENING_MESSAGE
+
+    listing = auth_client.get("/api/conversations")
+    assert listing.status_code == 200, listing.text
+    row = next(r for r in listing.json() if r["id"] == str(conversation.id))
+    assert row["tutor_phase"] == "open"
+    assert row["hint_level"] == "pump"
+
+
+def test_opening_teach_stream_then_read_shows_tutor_phase_open(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "open-stream@example.com")
+    _embed_all(db_conn, UUID(source_id))
+    conversation = _seed_conversation(db_conn, UUID(source_id))
+
+    streamed = _turn_stream(
+        auth_client,
+        conversation.id,
+        {"message": TUTOR_OPENING_MESSAGE, "mode": MODE_TEACH},
+        csrf=csrf,
+    )
+    assert streamed.status_code == 200, streamed.text
+
+    read = auth_client.get(f"/api/conversations/{conversation.id}")
+    assert read.status_code == 200, read.text
+    body = read.json()
+    assert body["tutor_phase"] == "open"
+    assert body["hint_level"] == "pump"
+    assert body["turns"][0]["message"] == TUTOR_OPENING_MESSAGE
+
+
+def test_post_turn_on_closed_tutor_conversation_returns_409_and_persists_nothing(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # TUTOR-23: close is a lock over both buffered and streamed turns.
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "close-lock@example.com")
+    conversation = _seed_conversation(
+        db_conn,
+        UUID(source_id),
+        tutor_phase="close",
+        hint_level="assert",
+        tutor_check_text="the section argues for anchors",
+    )
+    _seed_turn(
+        db_conn,
+        conversation,
+        turn_index=0,
+        message=TUTOR_OPENING_MESSAGE,
+        mode=MODE_TEACH,
+        answer_status=ANSWERED,
+        answer_text=_PHOTO,
+    )
+
+    buffered = _post_turn(
+        auth_client,
+        conversation.id,
+        {"message": "one more thought", "mode": MODE_TEACH},
+        csrf=csrf,
+    )
+    streamed = _turn_stream(
+        auth_client,
+        conversation.id,
+        {"message": "and another", "mode": MODE_TEACH},
+        csrf=csrf,
+    )
+
+    assert buffered.status_code == 409, buffered.text
+    assert buffered.json()["detail"]
+    assert streamed.status_code == 409, streamed.text
+    assert "start" not in streamed.text
+
+    read = auth_client.get(f"/api/conversations/{conversation.id}")
+    assert read.status_code == 200, read.text
+    body = read.json()
+    assert body["tutor_phase"] == "close"
+    assert body["hint_level"] == "assert"
+    assert body["tutor_check_text"] == "the section argues for anchors"
+    assert [turn["message"] for turn in body["turns"]] == [TUTOR_OPENING_MESSAGE]
 
 
 def test_post_turn_in_scoped_conversation_reports_not_found_in_scope(
@@ -1562,6 +1729,8 @@ def test_post_turn_generation_failure_returns_502_and_keeps_the_question(
             evidence: Sequence[Evidence],
             history: Sequence[HistoryTurn] = (),
             target_section_path: tuple[str, ...] | None = None,
+            tutor_phase: str | None = None,
+            hint_level: str | None = None,
         ) -> GeneratedAnswer:
             raise RuntimeError("provider-secret-internal-detail")
 
@@ -1693,6 +1862,27 @@ def test_turn_stream_emits_the_full_frame_sequence_and_persists_the_turn(
     assert turns[0]["mode"] == MODE_ANSWER
 
 
+def test_teach_opening_stream_carries_tutor_state_on_the_terminal_frame(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "stream-tutor-state@example.com")
+    _embed_all(db_conn, UUID(source_id))
+    conversation = _seed_conversation(db_conn, UUID(source_id))
+
+    resp = _turn_stream(
+        auth_client,
+        conversation.id,
+        {"message": TUTOR_OPENING_MESSAGE, "mode": MODE_TEACH},
+        csrf=csrf,
+    )
+
+    assert resp.status_code == 200, resp.text
+    parts = _parse_ui_stream(resp.text)
+    assert "data-tutor-state" in _part_types(parts)
+    tutor = next(p for p in parts if isinstance(p, dict) and p["type"] == "data-tutor-state")
+    assert tutor["data"] == {"phase": "open", "hint_level": "pump", "check_text": None}
+
+
 def test_turn_stream_carries_not_found_in_scope_in_the_status_frame(
     auth_client: TestClient, db_conn: Connection
 ) -> None:
@@ -1762,6 +1952,8 @@ def test_turn_stream_frames_reasoning_between_the_phase_and_the_answer(
             evidence: Sequence[Evidence],
             history: Sequence[HistoryTurn] = (),
             target_section_path: tuple[str, ...] | None = None,
+            tutor_phase: str | None = None,
+            hint_level: str | None = None,
         ):
             text = "Sunlight drives it."
             yield AnswerReasoningDelta(text="Weighing ")
@@ -1847,6 +2039,8 @@ def test_turn_stream_gives_each_reasoning_block_its_own_part(
             evidence: Sequence[Evidence],
             history: Sequence[HistoryTurn] = (),
             target_section_path: tuple[str, ...] | None = None,
+            tutor_phase: str | None = None,
+            hint_level: str | None = None,
         ):
             text = "Sunlight drives it. And the leaf stores it."
             yield AnswerReasoningDelta(text="Weighing the passages.")
@@ -1932,6 +2126,8 @@ def test_turn_stream_mid_stream_failure_emits_the_error_frame_and_keeps_the_ques
             evidence: Sequence[Evidence],
             history: Sequence[HistoryTurn] = (),
             target_section_path: tuple[str, ...] | None = None,
+            tutor_phase: str | None = None,
+            hint_level: str | None = None,
         ) -> GeneratedAnswer:
             raise AssertionError("stream path must not call generate")
 
@@ -1943,6 +2139,8 @@ def test_turn_stream_mid_stream_failure_emits_the_error_frame_and_keeps_the_ques
             evidence: Sequence[Evidence],
             history: Sequence[HistoryTurn] = (),
             target_section_path: tuple[str, ...] | None = None,
+            tutor_phase: str | None = None,
+            hint_level: str | None = None,
         ):
             yield AnswerTextDelta(text="partial ")
             raise RuntimeError("provider-secret-internal-detail")
@@ -2002,6 +2200,8 @@ def test_turn_stream_closes_the_reasoning_part_on_a_turn_that_declines(
             evidence: Sequence[Evidence],
             history: Sequence[HistoryTurn] = (),
             target_section_path: tuple[str, ...] | None = None,
+            tutor_phase: str | None = None,
+            hint_level: str | None = None,
         ):
             yield AnswerReasoningDelta(text="These passages are about something else.")
             yield AnswerCompleted(
@@ -2075,6 +2275,8 @@ def test_turn_stream_failing_while_reasoning_still_reaches_the_error_frame(
             evidence: Sequence[Evidence],
             history: Sequence[HistoryTurn] = (),
             target_section_path: tuple[str, ...] | None = None,
+            tutor_phase: str | None = None,
+            hint_level: str | None = None,
         ):
             yield AnswerReasoningDelta(text="Weighing the passages.")
             raise RuntimeError("provider-secret-internal-detail")
@@ -2226,6 +2428,8 @@ class _CitingCapture:
         evidence: Sequence[Evidence],
         history: Sequence[HistoryTurn] = (),
         target_section_path: tuple[str, ...] | None = None,
+        tutor_phase: str | None = None,
+        hint_level: str | None = None,
     ) -> GeneratedAnswer:
         self.evidence_seen = list(evidence)
         return GeneratedAnswer(
@@ -2243,6 +2447,8 @@ class _CitingCapture:
         evidence: Sequence[Evidence],
         history: Sequence[HistoryTurn] = (),
         target_section_path: tuple[str, ...] | None = None,
+        tutor_phase: str | None = None,
+        hint_level: str | None = None,
     ):
         self.evidence_seen = list(evidence)
         yield AnswerTextDelta(text="a composed answer")
@@ -2452,6 +2658,8 @@ class _QuotingAdapter:
         evidence: Sequence[Evidence],
         history: Sequence[HistoryTurn] = (),
         target_section_path: tuple[str, ...] | None = None,
+        tutor_phase: str | None = None,
+        hint_level: str | None = None,
     ) -> GeneratedAnswer:
         return self._answer(evidence)
 
@@ -2463,6 +2671,8 @@ class _QuotingAdapter:
         evidence: Sequence[Evidence],
         history: Sequence[HistoryTurn] = (),
         target_section_path: tuple[str, ...] | None = None,
+        tutor_phase: str | None = None,
+        hint_level: str | None = None,
     ):
         answer = self._answer(evidence)
         yield AnswerTextDelta(text=answer.text)
@@ -2553,6 +2763,137 @@ def test_a_streamed_quoted_citation_frame_matches_the_buffered_one(
     assert quoted["quoted_text"] == adapter.quote
     assert quoted["snippet"][quoted["start_char"] : quoted["end_char"]] == quoted["quoted_text"]
     assert set(unquoted) == _CITATION_KEYS
+
+
+# --- POST /api/conversations/{id}/tutor-card (TUTOR-35..38, TUTOR-42) ----------
+
+_TUTOR_CHECK = "Cells convert sunlight into chemical energy."
+
+
+def test_accept_tutor_card_on_close_returns_201_due_now_free_recall(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "tutor-card-ok@example.com")
+    conversation = _seed_closed_tutor(db_conn, UUID(source_id), check_text=_TUTOR_CHECK)
+
+    resp = _accept_tutor_card(auth_client, conversation.id, csrf=csrf)
+
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["origin"] == "tutor"
+    assert body["item_type"] == "free_recall"
+    assert body["question"] == TUTOR_CARD_QUESTION.format(title=_TITLE)
+    assert body["answer"] == _TUTOR_CHECK
+    assert body["citation"]["anchor"] == _ANCHOR
+    assert body["citation"]["section_path"] == list(_SECTION_PATH)
+    assert body["citation"]["source_excerpt"] == _PHOTO
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    stored = repo.get_by_id(UUID(body["id"]))
+    assert stored is not None
+    assert stored.conversation_id == conversation.id
+    assert len(repo.list_for_source(UUID(source_id))) == 1
+    scheduling = repo.get_scheduling(UUID(body["id"]))
+    assert scheduling is not None
+    assert scheduling.due <= datetime.now(UTC) + timedelta(seconds=1)
+
+
+def test_accept_tutor_card_without_opening_citations_uses_the_target_title(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "tutor-card-title@example.com")
+    conversation = _seed_closed_tutor(db_conn, UUID(source_id), citations=())
+
+    resp = _accept_tutor_card(auth_client, conversation.id, csrf=csrf)
+
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["citation"]["source_excerpt"] == _TITLE
+
+
+def test_reaccepting_the_tutor_card_returns_200_with_the_same_id_and_scheduling(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "tutor-card-again@example.com")
+    conversation = _seed_closed_tutor(db_conn, UUID(source_id))
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+
+    first = _accept_tutor_card(auth_client, conversation.id, csrf=csrf)
+    assert first.status_code == 201, first.text
+    item_id = UUID(first.json()["id"])
+    before = repo.get_scheduling(item_id)
+
+    second = _accept_tutor_card(auth_client, conversation.id, csrf=csrf)
+
+    assert second.status_code == 200, second.text
+    assert second.json()["id"] == first.json()["id"]
+    assert len(repo.list_for_source(UUID(source_id))) == 1
+    assert repo.get_scheduling(item_id) == before
+
+
+def test_accept_tutor_card_before_close_returns_409_and_writes_nothing(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "tutor-card-early@example.com")
+    conversation = _seed_conversation(
+        db_conn, UUID(source_id), tutor_phase="open", hint_level="pump"
+    )
+    _seed_turn(
+        db_conn,
+        conversation,
+        turn_index=0,
+        message=TUTOR_OPENING_MESSAGE,
+        mode=MODE_TEACH,
+        answer_status=ANSWERED,
+        answer_text="What is this section arguing?",
+        citations=(_citation(UUID(source_id)),),
+    )
+
+    resp = _accept_tutor_card(auth_client, conversation.id, csrf=csrf)
+
+    assert resp.status_code == 409, resp.text
+    assert SqlAlchemyQuizItemRepository(db_conn).list_for_source(UUID(source_id)) == []
+
+
+def test_accept_tutor_card_stranger_and_missing_return_identical_404(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    source_id, _ = _seed_ready_source(auth_client, db_conn, "tutor-card-owner@example.com")
+    conversation = _seed_closed_tutor(db_conn, UUID(source_id))
+
+    _register(auth_client, "tutor-card-intruder@example.com")
+    csrf = _csrf(auth_client)
+
+    stranger = _accept_tutor_card(auth_client, conversation.id, csrf=csrf)
+    missing = _accept_tutor_card(auth_client, uuid4(), csrf=csrf)
+
+    assert stranger.status_code == 404, stranger.text
+    assert missing.status_code == 404, missing.text
+    assert stranger.json() == missing.json()
+    assert SqlAlchemyQuizItemRepository(db_conn).list_for_source(UUID(source_id)) == []
+
+
+def test_accept_tutor_card_unauthenticated_returns_401_and_writes_nothing(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    source_id, _ = _seed_ready_source(auth_client, db_conn, "tutor-card-401@example.com")
+    conversation = _seed_closed_tutor(db_conn, UUID(source_id))
+    auth_client.cookies.clear()
+
+    resp = _accept_tutor_card(auth_client, conversation.id, csrf="x")
+
+    assert resp.status_code == 401, resp.text
+    assert SqlAlchemyQuizItemRepository(db_conn).list_for_source(UUID(source_id)) == []
+
+
+def test_accept_tutor_card_missing_csrf_returns_403_and_writes_nothing(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    source_id, _ = _seed_ready_source(auth_client, db_conn, "tutor-card-403@example.com")
+    conversation = _seed_closed_tutor(db_conn, UUID(source_id))
+
+    resp = _accept_tutor_card(auth_client, conversation.id, csrf=None)
+
+    assert resp.status_code == 403, resp.text
+    assert SqlAlchemyQuizItemRepository(db_conn).list_for_source(UUID(source_id)) == []
 
 
 # --- Rate limit: one policy for the whole surface (CONV-22) --------------------
@@ -2667,20 +3008,27 @@ def test_turn_stream_rate_limit_returns_429_before_any_frame(
 
 
 def test_every_mutating_conversation_route_carries_the_one_policy() -> None:
-    # CONV-22 / ADR-0029: one policy for the whole unified surface. Asserted over the
-    # route inventory rather than per endpoint, so a route added later cannot quietly
-    # ship without the limiter — or with a second limiter beside it.
+    # CONV-22 / ADR-0029: one conversations limiter for the unified surface, except
+    # the tutor-card accept which writes a quiz item and therefore uses
+    # ``rate_limit_quiz``. Asserted over the route inventory rather than per
+    # endpoint, so a route added later cannot quietly ship without a limiter.
     from app.infrastructure.web.conversations import router
     from app.infrastructure.web.csrf import enforce_csrf, enforce_origin
-    from app.infrastructure.web.rate_limit import rate_limit_conversations
+    from app.infrastructure.web.rate_limit import rate_limit_conversations, rate_limit_quiz
 
     routes = [route for route in router.routes if route.path.startswith("/api/conversations")]
-    assert len(routes) == len(router.routes) == 7
+    assert len(routes) == len(router.routes) == 8
 
     mutating = {"POST", "PATCH", "DELETE", "PUT"}
     for route in routes:
         declared = [dependency.dependency for dependency in route.dependencies]
-        if route.methods & mutating:
+        if route.path.endswith("/tutor-card"):
+            assert declared == [
+                rate_limit_quiz,
+                enforce_origin,
+                enforce_csrf,
+            ], f"{sorted(route.methods)} {route.path}"
+        elif route.methods & mutating:
             assert declared == [
                 rate_limit_conversations,
                 enforce_origin,

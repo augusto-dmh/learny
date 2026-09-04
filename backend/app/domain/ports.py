@@ -584,6 +584,10 @@ class GenerationPort(Protocol):
     from a present target would route scoped asks through the teaching prompt. It is
     supplied for a teach turn and absent for an answer turn.
 
+    ``tutor_phase`` and ``hint_level`` are optional envelope fields for a teach
+    turn. Adapters that interpolate them do so in the **user** turn, never the
+    system prompt. Answer turns omit them even when the kwargs are passed.
+
     ``model`` is the adapter's stable model identity. It must be readable
     without calling ``generate`` because the not-found short-circuit reports a
     model identity while never invoking generation (QA-04 + QA-13).
@@ -599,6 +603,8 @@ class GenerationPort(Protocol):
         evidence: Sequence[Evidence],
         history: Sequence[HistoryTurn] = (),
         target_section_path: tuple[str, ...] | None = None,
+        tutor_phase: str | None = None,
+        hint_level: str | None = None,
     ) -> GeneratedAnswer:
         """Generate a response to ``message`` grounded in ``evidence``.
 
@@ -619,6 +625,8 @@ class GenerationPort(Protocol):
         evidence: Sequence[Evidence],
         history: Sequence[HistoryTurn] = (),
         target_section_path: tuple[str, ...] | None = None,
+        tutor_phase: str | None = None,
+        hint_level: str | None = None,
     ) -> Iterator[AnswerStreamEvent]:
         """Stream the same response as :meth:`generate`, incrementally (GEN-12).
 
@@ -696,6 +704,15 @@ class ConversationRepository(Protocol):
 
     def touch(self, conversation_id: UUID, now: datetime) -> None:
         """Set ``updated_at`` to ``now`` — the activity bump a persisted turn earns."""
+        ...
+
+    def update_tutor_state(self, conversation: Conversation) -> Conversation | None:
+        """Write tutor-ladder columns and ``updated_at``; ``None`` if absent.
+
+        There is no generic save: rename and touch each write one concern. The
+        ladder (AD-291) is a third — phase, hint, counters, and check text move
+        together after a learner message or after an assert tutor turn persists.
+        """
         ...
 
 
@@ -905,6 +922,8 @@ class QuizItemRepository(Protocol):
         ``deck`` items collapse on ``(source_id, content_key)``; ``highlight`` items
         collapse on ``(note_anchor_id, content_key)``, so re-accepting the same text
         from one highlight is idempotent while two highlights may share a key.
+        ``tutor`` items collapse on ``conversation_id`` where ``origin='tutor'`` and
+        ``conversation_id IS NOT NULL`` — one live conversation, one tutor card.
         """
         ...
 
@@ -912,6 +931,14 @@ class QuizItemRepository(Protocol):
         """Return the ``highlight`` card already stored for this anchor + fingerprint.
 
         ``None`` when the student has not accepted this text from this highlight yet.
+        """
+        ...
+
+    def get_by_conversation_id(self, conversation_id: UUID) -> QuizItem | None:
+        """Return the ``tutor`` card already minted for this conversation (AD-297).
+
+        ``None`` when the learner has not accepted the restatement from this thread
+        yet. Scoped to ``origin='tutor'`` so a severed (null) link is never returned.
         """
         ...
 

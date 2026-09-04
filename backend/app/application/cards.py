@@ -25,6 +25,12 @@ current body, greedily pairs the live cards to the QC-passing suggestions by emb
 similarity, rewrites matched cards' text in place and flags them, flags the unmatched, and
 never touches scheduling or the review log — a note edit costs no card its memory history.
 
+:class:`AcceptTutorCard` mints the one free-recall card from a closed tutor conversation
+(TUTOR-35..38, TUTOR-42): the frozen question template, ``tutor_check_text`` as the
+answer, and a citation snapshot from the conversation target. It never calls
+``suggest_cards``. A second accept on the same thread is idempotent on
+``conversation_id`` (AD-297).
+
 Ownership is reachable through the parent source for deck/highlight cards (AD-014) and
 directly through the note for note cards; every ownership failure collapses to
 ``QuizItemNotFound`` → 404 so no anchor's, note's, or card's existence is disclosed.
@@ -37,9 +43,11 @@ import math
 from collections.abc import Callable, Sequence
 from uuid import UUID
 
+from app.application.conversations import authorized_conversation
 from app.application.errors import (
     CardAlreadyExists,
     CardNotEditable,
+    ConversationClosed,
     InvalidCardText,
     NotAuthorized,
     QuizItemNotFound,
@@ -55,6 +63,9 @@ from app.application.quiz_qc import (
     quote_in_text,
 )
 from app.domain.entities import (
+    TUTOR_CARD_QUESTION,
+    TUTOR_OPENING_MESSAGE,
+    ConversationTurn,
     Note,
     NoteAnchor,
     QuizCandidate,
@@ -67,6 +78,8 @@ from app.domain.entities import (
 )
 from app.domain.ports import (
     Clock,
+    ConversationRepository,
+    ConversationTurnRepository,
     EmbeddingPort,
     NoteRepository,
     QuizGenerationPort,
@@ -300,6 +313,105 @@ class AcceptCard:
             # through would schedule against an id that was never inserted — an FK
             # violation reported as a 201 for a card that does not exist. The other
             # request is creating that card; say so instead of inventing one.
+            raise CardAlreadyExists("This card is already being saved.")
+        self._items.create_scheduling(item.id, self._scheduling.initial())
+        return item, True
+
+
+def _tutor_card_excerpt(turns: Sequence[ConversationTurn], target_title: str | None) -> str:
+    """Opening turn's first citation snippet, else the conversation's target title."""
+    opening = next((turn for turn in turns if turn.message == TUTOR_OPENING_MESSAGE), None)
+    if opening is not None and opening.citations:
+        return opening.citations[0].snippet
+    return target_title or ""
+
+
+class AcceptTutorCard:
+    """Mint the one free-recall card from a closed tutor conversation (TUTOR-35..38).
+
+    Authorizes through :func:`authorized_conversation` (missing/non-owner → 404, no
+    disclosure). WHILE ``tutor_phase`` is not ``close``, raises
+    :class:`ConversationClosed` → 409 and inserts nothing. On close, writes one
+    ``origin=tutor`` ``free_recall`` item: the frozen question template filled from
+    ``target_title``, answer ``tutor_check_text``, excerpt the opening turn's first
+    citation snippet (else ``target_title``), citation snapshot from the conversation
+    target, scheduled due-now. Never calls ``suggest_cards`` or deck generation.
+
+    A second accept returns the existing row (``created=False``) and does not rewrite
+    scheduling — identity is the live ``conversation_id`` (AD-297).
+    """
+
+    def __init__(
+        self,
+        *,
+        conversations: ConversationRepository,
+        turns: ConversationTurnRepository,
+        sources: SourceRepository,
+        items: QuizItemRepository,
+        generation: QuizGenerationPort,
+        embeddings: EmbeddingPort,
+        scheduling: SchedulingPort,
+        authorize: AuthorizeOwnership,
+        clock: Clock,
+        ids: Callable[[], UUID],
+    ) -> None:
+        self._conversations = conversations
+        self._turns = turns
+        self._sources = sources
+        self._items = items
+        self._generation = generation
+        self._embeddings = embeddings
+        self._scheduling = scheduling
+        self._authorize = authorize
+        self._clock = clock
+        self._ids = ids
+
+    def __call__(self, *, user: User, conversation_id: UUID) -> tuple[QuizItem, bool]:
+        conversation, source = authorized_conversation(
+            user=user,
+            conversation_id=conversation_id,
+            conversations=self._conversations,
+            sources=self._sources,
+            authorize=self._authorize,
+        )
+        if conversation.tutor_phase != "close":
+            raise ConversationClosed("Tutor card can only be saved after the check.")
+
+        existing = self._items.get_by_conversation_id(conversation_id)
+        if existing is not None:
+            return existing, False
+
+        excerpt = _tutor_card_excerpt(
+            self._turns.list_for_conversation(conversation_id),
+            conversation.target_title,
+        )
+        question = TUTOR_CARD_QUESTION.format(title=conversation.target_title or "")
+        answer = conversation.tutor_check_text or ""
+        now = self._clock.now()
+        item = QuizItem(
+            id=self._ids(),
+            source_id=source.id,
+            origin=QuizItemOrigin.TUTOR,
+            conversation_id=conversation.id,
+            item_type=QuizItemType.FREE_RECALL,
+            question=question,
+            answer=answer,
+            section_path=conversation.target_section_path or (),
+            anchor=conversation.target_anchor or "",
+            source_excerpt=excerpt,
+            chunk_hash=hashlib.sha256(normalize_text(excerpt).encode("utf-8")).hexdigest(),
+            content_key=content_key(QuizItemType.FREE_RECALL, question, answer),
+            status=QuizItemStatus.ACTIVE,
+            generation_meta={"model": self._generation.model},
+            created_at=now,
+            updated_at=now,
+        )
+        embedding = self._embeddings.embed_documents([f"{question}\n{answer}"])[0]
+
+        if not self._items.upsert(item, embedding=list(embedding)):
+            stored = self._items.get_by_conversation_id(conversation_id)
+            if stored is not None:
+                return stored, False
             raise CardAlreadyExists("This card is already being saved.")
         self._items.create_scheduling(item.id, self._scheduling.initial())
         return item, True

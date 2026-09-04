@@ -429,6 +429,20 @@ describe("AskPanel on the conversation surface", () => {
     expect(callsTo(fetchMock, CREATE_URL)).toHaveLength(0);
     expect(callsTo(fetchMock, STREAM_URL)).toHaveLength(0);
   });
+
+  it("does not create a conversation until the first question is sent", async () => {
+    const fetchMock = routedFetch(baseHandlers(() => sseStream().response));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+
+    expect(document.body.textContent).toMatch(/Answer/);
+    expect(document.body.textContent).toMatch(/Tutor/);
+    expect(callsTo(fetchMock, CREATE_URL)).toHaveLength(0);
+
+    await Promise.resolve();
+    expect(callsTo(fetchMock, CREATE_URL)).toHaveLength(0);
+  });
 });
 
 /** Every DELETE the panel issued against the thread's conversation. */

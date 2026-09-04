@@ -493,6 +493,8 @@ class AnthropicGenerationAdapter(AnthropicAdapterBase):
         history: Sequence[HistoryTurn],
         evidence: Sequence[Evidence],
         target_section_path: tuple[str, ...] | None,
+        tutor_phase: str | None = None,
+        hint_level: str | None = None,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[_SentDocument]]:
         """Assemble the system prompt, the message list, and the sent-document map.
 
@@ -506,7 +508,12 @@ class AnthropicGenerationAdapter(AnthropicAdapterBase):
         messages = _build_history_messages(history)
         if mode == MODE_TEACH:
             section = " > ".join(target_section_path or ())
-            turn_text = f"I am currently studying this section: {section}.\n\n{message}"
+            header = [f"I am currently studying this section: {section}."]
+            if tutor_phase is not None:
+                header.append(f"Phase: {tutor_phase}")
+            if hint_level is not None:
+                header.append(f"HintLevel: {hint_level}")
+            turn_text = "\n".join(header) + f"\n\n{message}"
             system = [
                 {
                     "type": "text",
@@ -533,6 +540,8 @@ class AnthropicGenerationAdapter(AnthropicAdapterBase):
         evidence: Sequence[Evidence],
         history: Sequence[HistoryTurn] = (),
         target_section_path: tuple[str, ...] | None = None,
+        tutor_phase: str | None = None,
+        hint_level: str | None = None,
     ) -> GeneratedAnswer:
         """Generate a cited response grounded in ``evidence`` (single-shot call)."""
         system, messages, sent = self._build_request(
@@ -541,6 +550,8 @@ class AnthropicGenerationAdapter(AnthropicAdapterBase):
             history=history,
             evidence=evidence,
             target_section_path=target_section_path,
+            tutor_phase=tutor_phase,
+            hint_level=hint_level,
         )
         try:
             response = self._get_client().messages.create(
@@ -567,6 +578,8 @@ class AnthropicGenerationAdapter(AnthropicAdapterBase):
         evidence: Sequence[Evidence],
         history: Sequence[HistoryTurn] = (),
         target_section_path: tuple[str, ...] | None = None,
+        tutor_phase: str | None = None,
+        hint_level: str | None = None,
     ) -> Iterator[AnswerStreamEvent]:
         """Stream a cited response: text deltas, then the authoritative completed event."""
         system, messages, sent = self._build_request(
@@ -575,5 +588,7 @@ class AnthropicGenerationAdapter(AnthropicAdapterBase):
             history=history,
             evidence=evidence,
             target_section_path=target_section_path,
+            tutor_phase=tutor_phase,
+            hint_level=hint_level,
         )
         return self._run_stream(system=system, messages=messages, documents=sent)

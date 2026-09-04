@@ -491,6 +491,14 @@ class GeneratedAnswer:
 # streamed to a client, independent of which provider produced it.
 SENTINEL = "NOT_FOUND_IN_SOURCE"
 
+# Frozen tutor-session strings (AD-289, AD-294). Exact trimmed match on chips;
+# the opening sentinel is stored as the first teach turn's message so retrieval
+# can key on the section rather than learner prose.
+TUTOR_OPENING_MESSAGE = "(session start)"
+TUTOR_JUST_EXPLAIN_MESSAGE = "Just explain this."
+TUTOR_DONT_KNOW_MESSAGE = "I don't know."
+TUTOR_CARD_QUESTION = 'In your own words, what is "{title}" arguing?'
+
 
 # The inline mark a generation adapter writes into the answer text where a citation
 # attaches (AD-222) — ``[^1]``, ``[^2]``, … numbered by the order cited passages are
@@ -599,6 +607,10 @@ class Conversation:
     renders without re-reading the corpus (the anchor is re-resolved per turn,
     TEACH-16). All three are ``None`` together on a whole-book conversation, which
     teaches nothing in particular.
+
+    Tutor-ladder state (AD-291) lives on this row, not on turns: history already
+    truncates. ``tutor_phase`` and ``hint_level`` are all-or-nothing — both set or
+    both ``None``. Answer threads and pre-cycle teach threads keep both ``None``.
     """
 
     id: UUID
@@ -611,6 +623,11 @@ class Conversation:
     target_title: str | None
     created_at: datetime
     updated_at: datetime
+    tutor_phase: str | None = None
+    hint_level: str | None = None
+    tutor_ordinary_turns: int = 0
+    tutor_scaffold_misses: int = 0
+    tutor_check_text: str | None = None
 
     @property
     def teach_target(self) -> tuple[str, tuple[str, ...], str] | None:
@@ -732,6 +749,10 @@ class QuizItemOrigin:
     # cards their identity is the minted id, so the note's text may be regenerated
     # without disturbing scheduling; they are the only source-less origin (AD-148/149).
     NOTE = "note"
+    # ``tutor`` cards are the one opt-in free-recall restatement from a closed tutor
+    # conversation (AD-297). Identity is the live ``conversation_id``, not content
+    # hash; they stay source-backed, so the source-or-note CHECK is unchanged.
+    TUTOR = "tutor"
 
 
 class QuizJobStatus:
@@ -848,6 +869,8 @@ class QuizItem:
     rewritable fingerprint. ``note_anchor_id`` is the typed provenance back to the
     highlight a card was accepted from — ``None`` for deck items and for a card whose
     origin note has since been deleted, which the stored snapshot survives.
+    ``conversation_id`` is the tutor-card provenance (AD-298); ``None`` for every
+    other origin and after the origin conversation is deleted.
     """
 
     id: UUID
@@ -878,6 +901,9 @@ class QuizItem:
     # When the origin note last changed under this card (AD-144); drives the review
     # badge. ``None`` until a regenerate-and-match flags the card.
     note_changed_at: datetime | None = None
+    # Provenance back to the closed tutor conversation (``origin='tutor'``); ``None``
+    # once that conversation is deleted, which the stored snapshot survives (AD-298).
+    conversation_id: UUID | None = None
 
 
 @dataclass(frozen=True)

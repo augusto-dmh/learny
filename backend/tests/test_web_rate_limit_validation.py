@@ -216,6 +216,7 @@ def test_teaching_errors_map_to_expected_status_codes() -> None:
     from fastapi.testclient import TestClient
 
     from app.application.errors import (
+        ConversationClosed,
         ConversationNotFound,
         ConversationTargetUnavailable,
         ConversationTurnConflict,
@@ -252,6 +253,10 @@ def test_teaching_errors_map_to_expected_status_codes() -> None:
     def _invalid_mode() -> None:
         raise InvalidConversationMode("Unknown conversation mode: 'shout'")
 
+    @app.get("/conversation-closed")
+    def _conversation_closed() -> None:
+        raise ConversationClosed("This conversation is closed.")
+
     client = TestClient(app, raise_server_exceptions=False)
 
     assert client.get("/session-not-found").status_code == 404
@@ -262,6 +267,9 @@ def test_teaching_errors_map_to_expected_status_codes() -> None:
     assert gone.json() == {"detail": "The teaching target no longer exists."}
 
     assert client.get("/turn-conflict").status_code == 409
+    closed = client.get("/conversation-closed")
+    assert closed.status_code == 409
+    assert closed.json() == {"detail": "This conversation is closed."}
 
     # Neither of these is reachable over HTTP today — the routers' own validators
     # reject a blank/oversize title and an unknown mode first — which is exactly why

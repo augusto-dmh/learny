@@ -12,7 +12,9 @@ starting, e.g. searching the book) → ``reasoning-start`` → ``reasoning-delta
 ``reasoning-end`` (only when the model reasons) → ``text-start`` →
 ``text-delta``×N → ``text-end`` → ``data-citations`` (the grounded citations, same
 ``EvidenceView`` projection as the JSON endpoint) → ``data-answer-status``
-(``answered`` | ``not_found_in_scope`` | ``not_found_in_source``) → ``finish`` →
+(``answered`` | ``not_found_in_scope`` | ``not_found_in_source``) →
+``data-tutor-state`` (only when the conversation carries a tutor ladder: phase,
+hint, and check text, matching the buffered conversation read) → ``finish`` →
 the terminal ``[DONE]``. The text part opens at its first delta rather than up
 front, so the reasoning that precedes it closes first; a response with no answer
 text still carries the empty text pair. Adaptive thinking may resume after the
@@ -51,14 +53,23 @@ UI_MESSAGE_STREAM_HEADER_NAME = "x-vercel-ai-ui-message-stream"
 UI_MESSAGE_STREAM_PROTOCOL = "v1"
 
 
-def _terminal(event: StreamTurn) -> tuple[list[Evidence], str]:
-    """Read the grounded citations and answer status from the terminal event.
+def _terminal(event: StreamTurn) -> tuple[list[Evidence], str, dict[str, str | None] | None]:
+    """Read the grounded citations, answer status, and tutor ladder from the terminal.
 
     A turn stream ends with a :class:`~app.application.streaming.StreamTurn` — the
     persisted ``ConversationTurn`` — carrying the citation snapshots and the status
-    the buffered response reports, projected identically for the client.
+    the buffered response reports, projected identically for the client. Tutor
+    columns ride along only when the conversation has a ladder; Answer threads
+    leave them unset so the Ask frame sequence stays citation + status.
     """
-    return list(event.turn.citations), event.turn.answer_status
+    tutor: dict[str, str | None] | None = None
+    if event.tutor_phase is not None:
+        tutor = {
+            "phase": event.tutor_phase,
+            "hint_level": event.hint_level,
+            "check_text": event.tutor_check_text,
+        }
+    return list(event.turn.citations), event.turn.answer_status, tutor
 
 
 def to_ui_message_stream(
@@ -74,6 +85,7 @@ def to_ui_message_stream(
 
     citations: list[Evidence] = []
     status = ""
+    tutor: dict[str, str | None] | None = None
     text_started = False
     try:
         for event in events:
@@ -97,8 +109,8 @@ def to_ui_message_stream(
                 yield ServerSentEvent(
                     data={"type": "text-delta", "id": text_id, "delta": event.text}
                 )
-            elif isinstance(event, StreamTurn):  # terminal — carries citations + status
-                citations, status = _terminal(event)
+            elif isinstance(event, StreamTurn):  # terminal — citations, status, tutor ladder
+                citations, status, tutor = _terminal(event)
     except AnswerGenerationFailed:
         # Provider failed after headers were sent: surface the generic error as a
         # protocol part (never the wrapped detail) and terminate the stream.
@@ -119,6 +131,8 @@ def to_ui_message_stream(
         }
     )
     yield ServerSentEvent(data={"type": "data-answer-status", "data": {"status": status}})
+    if tutor is not None:
+        yield ServerSentEvent(data={"type": "data-tutor-state", "data": tutor})
     yield ServerSentEvent(data={"type": "finish"})
     yield ServerSentEvent(raw_data="[DONE]")
 

@@ -206,6 +206,10 @@ class Settings(BaseSettings):
     conversation_message_max_chars: int = 2000
     conversation_scope_max_anchors: int = 100
     conversation_scope_anchor_max_chars: int = 512
+    # Ordinary learner messages in elicit/scaffold before the next tutor generate
+    # is forced into the unaided check (AD-293). The policy reads this; the model
+    # does not.
+    tutor_check_after_turns: int = 3
 
     # Generation (ADR-0020) — the provider SDK and model names live only in the
     # answer/teaching adapters; these knobs stay LEARNY_-prefixed and never

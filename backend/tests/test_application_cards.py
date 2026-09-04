@@ -18,6 +18,7 @@ import pytest
 from app.application.cards import (
     AcceptCard,
     AcceptNoteCard,
+    AcceptTutorCard,
     RefreshNoteCards,
     SuggestCards,
     SuggestNoteCards,
@@ -26,6 +27,8 @@ from app.application.cards import (
 from app.application.errors import (
     CardAlreadyExists,
     CardNotEditable,
+    ConversationClosed,
+    ConversationNotFound,
     InvalidCardText,
     QuizItemNotFound,
     SourceNotFound,
@@ -34,6 +37,13 @@ from app.application.errors import (
 from app.application.identity import AuthorizeOwnership
 from app.application.quiz_qc import content_key, normalize_text
 from app.domain.entities import (
+    ANSWERED,
+    MODE_TEACH,
+    TUTOR_CARD_QUESTION,
+    TUTOR_OPENING_MESSAGE,
+    Conversation,
+    ConversationTurn,
+    Evidence,
     Note,
     NoteAnchor,
     NoteAnchorStatus,
@@ -65,11 +75,11 @@ class FakeCardItemRepository:
     """In-memory ``QuizItemRepository`` slice the card services touch.
 
     ``section_for_anchor`` returns a preset section per anchor (``None`` for an anchor
-    the corpus no longer resolves, the stale-target leg). ``upsert`` models the two
-    partial unique indexes faithfully: a ``deck`` row collapses on
-    ``(source_id, content_key)`` and a ``highlight`` row on
-    ``(note_anchor_id, content_key)``, so a card minted with the wrong origin would
-    collide with an unrelated deck row exactly as it would in Postgres.
+    the corpus no longer resolves, the stale-target leg). ``upsert`` models the partial
+    unique indexes faithfully: a ``deck`` row collapses on ``(source_id, content_key)``,
+    a ``highlight`` row on ``(note_anchor_id, content_key)``, and a ``tutor`` row on
+    ``conversation_id``, so a card minted with the wrong origin would collide with an
+    unrelated row exactly as it would in Postgres.
     """
 
     def __init__(self, sections: dict[str, QuizSection] | None = None) -> None:
@@ -89,6 +99,10 @@ class FakeCardItemRepository:
     def _identity(item: QuizItem) -> tuple:
         if item.origin == QuizItemOrigin.HIGHLIGHT:
             return (QuizItemOrigin.HIGHLIGHT, item.note_anchor_id, item.content_key)
+        if item.origin == QuizItemOrigin.TUTOR:
+            if item.conversation_id is None:
+                return (QuizItemOrigin.TUTOR, item.id)
+            return (QuizItemOrigin.TUTOR, item.conversation_id)
         if item.origin == QuizItemOrigin.NOTE:
             # No partial unique index (AD-148): each note card is its own row under its
             # minted id, so a re-promote inserts unless the service dedups first.
@@ -118,6 +132,9 @@ class FakeCardItemRepository:
     def get_by_anchor_and_key(self, note_anchor_id: UUID, content_key: str) -> QuizItem | None:
         # Scoped to highlight origin: a deck row sharing the key is never returned.
         return self._by_key.get((QuizItemOrigin.HIGHLIGHT, note_anchor_id, content_key))
+
+    def get_by_conversation_id(self, conversation_id: UUID) -> QuizItem | None:
+        return self._by_key.get((QuizItemOrigin.TUTOR, conversation_id))
 
     def get_by_note_and_key(self, note_id: UUID, content_key: str) -> QuizItem | None:
         # Scoped to note origin (NL-15): the service-level dedup behind re-promotion.
@@ -1622,3 +1639,194 @@ def test_refresh_recomputes_the_excerpt_from_the_current_body() -> None:
 
     updated = world.items.get_by_id(card.id)
     assert len(updated.source_excerpt) == 10
+
+
+# --- AcceptTutorCard (TUTOR-35..38, TUTOR-42) -----------------------------------
+
+_TUTOR_CHECK = "Cells convert sunlight into chemical energy."
+_TUTOR_TITLE = "Cells"
+
+
+class FakeTutorConversationRepository:
+    """In-memory conversation store for the tutor-card accept path."""
+
+    def __init__(self) -> None:
+        self._by_id: dict[UUID, Conversation] = {}
+
+    def add(self, conversation: Conversation) -> Conversation:
+        self._by_id[conversation.id] = conversation
+        return conversation
+
+    def get_by_id(self, conversation_id: UUID) -> Conversation | None:
+        return self._by_id.get(conversation_id)
+
+
+class FakeTutorTurnRepository:
+    """In-memory turns; ``list_for_conversation`` is the excerpt read."""
+
+    def __init__(self) -> None:
+        self._turns: list[ConversationTurn] = []
+
+    def set_turns(self, turns: list[ConversationTurn]) -> None:
+        self._turns = list(turns)
+
+    def list_for_conversation(self, conversation_id: UUID) -> list[ConversationTurn]:
+        return sorted(
+            (turn for turn in self._turns if turn.conversation_id == conversation_id),
+            key=lambda turn: turn.turn_index,
+        )
+
+
+class _TutorWorld:
+    """Closed tutor conversation plus the ports ``AcceptTutorCard`` needs."""
+
+    def __init__(
+        self,
+        *,
+        owner: User = _OWNER,
+        phase: str | None = "close",
+        snippet: str | None = _QUOTE,
+        check_text: str = _TUTOR_CHECK,
+        opening: bool = True,
+    ) -> None:
+        self.owner = owner
+        self.sources = FakeSourceRepository()
+        self.source = _source(owner.id)
+        self.sources.add(self.source)
+        self.conversations = FakeTutorConversationRepository()
+        self.turns = FakeTutorTurnRepository()
+        self.items = FakeCardItemRepository()
+        self.generation = FakeSuggestGeneration()
+        self.embeddings = FakeCardEmbedding()
+        hint = None if phase is None else ("assert" if phase == "close" else "pump")
+        self.conversation = Conversation(
+            id=uuid4(),
+            source_id=self.source.id,
+            title=_TUTOR_TITLE,
+            scope_anchors=("ch1#cells",),
+            include_notes=False,
+            target_anchor="ch1#cells",
+            target_section_path=("Chapter 1", "Cells"),
+            target_title=_TUTOR_TITLE,
+            created_at=_NOW,
+            updated_at=_NOW,
+            tutor_phase=phase,
+            hint_level=hint,
+            tutor_check_text=check_text if phase == "close" else None,
+        )
+        self.conversations.add(self.conversation)
+        if opening:
+            citations: tuple[Evidence, ...] = ()
+            if snippet is not None:
+                citations = (
+                    Evidence(
+                        chunk_id=uuid4(),
+                        source_id=self.source.id,
+                        section_path=("Chapter 1", "Cells"),
+                        anchor="ch1#cells",
+                        page_span=None,
+                        snippet=snippet,
+                        score=0.9,
+                    ),
+                )
+            self.turns.set_turns(
+                [
+                    ConversationTurn(
+                        id=uuid4(),
+                        conversation_id=self.conversation.id,
+                        turn_index=0,
+                        message=TUTOR_OPENING_MESSAGE,
+                        mode=MODE_TEACH,
+                        answer_status=ANSWERED,
+                        answer_text="What is this section arguing?",
+                        model="fake",
+                        evidence_count=len(citations),
+                        citations=citations,
+                        created_at=_NOW,
+                    )
+                ]
+            )
+        self.accept = AcceptTutorCard(
+            conversations=self.conversations,
+            turns=self.turns,
+            sources=self.sources,
+            items=self.items,
+            generation=self.generation,
+            embeddings=self.embeddings,
+            scheduling=FakeCardScheduling(),
+            authorize=AuthorizeOwnership(),
+            clock=FakeClock(_NOW),
+            ids=uuid4,
+        )
+
+
+def test_accept_on_close_inserts_one_due_now_free_recall_without_suggesting() -> None:
+    world = _TutorWorld()
+
+    item, created = world.accept(user=world.owner, conversation_id=world.conversation.id)
+
+    assert created is True
+    assert item.origin == QuizItemOrigin.TUTOR
+    assert item.item_type == QuizItemType.FREE_RECALL
+    assert item.conversation_id == world.conversation.id
+    assert item.question == TUTOR_CARD_QUESTION.format(title=_TUTOR_TITLE)
+    assert item.answer == _TUTOR_CHECK
+    assert item.anchor == "ch1#cells"
+    assert item.section_path == ("Chapter 1", "Cells")
+    assert item.source_excerpt == _QUOTE
+    assert world.generation.calls == []
+    assert world.items.create_scheduling_calls == 1
+    assert world.items.scheduling[item.id].due == _NOW
+    assert world.items.scheduling[item.id].last_review is None
+    assert len(world.items.list_all()) == 1
+
+
+def test_accept_uses_target_title_when_the_opening_turn_has_no_citation() -> None:
+    world = _TutorWorld(snippet=None)
+
+    item, created = world.accept(user=world.owner, conversation_id=world.conversation.id)
+
+    assert created is True
+    assert item.source_excerpt == _TUTOR_TITLE
+
+
+def test_second_accept_returns_the_same_id_without_rescheduling_or_suggesting() -> None:
+    world = _TutorWorld()
+    first, created = world.accept(user=world.owner, conversation_id=world.conversation.id)
+    scheduling = world.items.scheduling[first.id]
+    after_create = world.items.create_scheduling_calls
+
+    second, again = world.accept(user=world.owner, conversation_id=world.conversation.id)
+
+    assert created is True
+    assert again is False
+    assert second.id == first.id
+    assert world.items.create_scheduling_calls == after_create
+    assert world.items.update_scheduling_calls == 0
+    assert world.items.scheduling[first.id] == scheduling
+    assert world.generation.calls == []
+    assert len(world.items.list_all()) == 1
+
+
+def test_accept_before_close_raises_conflict_and_inserts_nothing() -> None:
+    world = _TutorWorld(phase="open")
+
+    with pytest.raises(ConversationClosed, match="Tutor card can only be saved after the check"):
+        world.accept(user=world.owner, conversation_id=world.conversation.id)
+
+    assert world.items.list_all() == []
+    assert world.generation.calls == []
+    assert world.items.create_scheduling_calls == 0
+
+
+def test_accept_by_a_stranger_or_on_a_missing_thread_is_the_same_not_found() -> None:
+    world = _TutorWorld()
+    missing_id = uuid4()
+
+    with pytest.raises(ConversationNotFound, match="Conversation not found"):
+        world.accept(user=_STRANGER, conversation_id=world.conversation.id)
+    with pytest.raises(ConversationNotFound, match="Conversation not found"):
+        world.accept(user=world.owner, conversation_id=missing_id)
+
+    assert world.items.list_all() == []
+    assert world.generation.calls == []

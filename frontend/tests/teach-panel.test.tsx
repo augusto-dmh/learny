@@ -172,6 +172,10 @@ function conversationScopedTo(anchor: string, title: string) {
     title,
     scope_anchors: [anchor],
     include_notes: false,
+    target_anchor: anchor,
+    target_title: title,
+    tutor_phase: "pump",
+    hint_level: "pump",
     created_at: "now",
     updated_at: "now",
   };
@@ -224,6 +228,11 @@ function baseHandlers(
     "GET /api/sources/s1/structure": () => jsonResponse(200, structure),
     [`POST ${CREATE_URL}`]: () =>
       jsonResponse(201, conversationScopedTo("c2.xhtml", "Chapter 2")),
+    [`GET ${READ_URL}`]: () =>
+      jsonResponse(200, {
+        ...conversationScopedTo("c2.xhtml", "Chapter 2"),
+        turns: [],
+      }),
     [`POST ${TURN_STREAM}`]: () => stream(),
     ...extra,
   };
@@ -240,6 +249,19 @@ function callsTo(
   return fetchMock.mock.calls.filter(([called]) => called === url);
 }
 
+function tutorNetwork(extra: Record<string, Handler> = {}) {
+  const streams: ReturnType<typeof sseStream>[] = [];
+  const fetchMock = routedFetch(
+    baseHandlers(() => {
+      const stream = sseStream();
+      streams.push(stream);
+      return stream.response;
+    }, extra),
+  );
+  vi.stubGlobal("fetch", fetchMock);
+  return { fetchMock, streams };
+}
+
 async function sendMessage(value: string) {
   // The input renders only once the thread is ready; with stream updates
   // throttled, restore-path state can land a beat after the fetch resolves.
@@ -249,13 +271,53 @@ async function sendMessage(value: string) {
   fireEvent.click(screen.getByRole("button", { name: "Submit" }));
 }
 
-/** Pick a target and enter the taught thread. */
-async function startSession(anchor = "c2.xhtml") {
+/** Pick a target and click Start. Does not wait for the opening turn. */
+async function clickStart(anchor = "c2.xhtml") {
   await screen.findByLabelText("Target");
   await screen.findByRole("option", { name: "Chapter 1" }, { timeout: 5000 });
   fireEvent.change(screen.getByLabelText("Target"), { target: { value: anchor } });
   fireEvent.click(screen.getByRole("button", { name: "Start session" }));
+}
+
+/** Finish the frozen opening stream and wait until the composer appears. */
+async function persistOpening(
+  fetchMock: ReturnType<typeof routedFetch>,
+  stream: ReturnType<typeof sseStream>,
+  status: "answered" | "not_found_in_source" | "failed" = "answered",
+) {
+  await waitFor(() => expect(callsTo(fetchMock, CREATE_URL)).toHaveLength(1));
+  await waitFor(() => expect(callsTo(fetchMock, TURN_STREAM)).toHaveLength(1));
+  expect(bodyOf(callsTo(fetchMock, TURN_STREAM)[0])).toEqual({
+    message: "(session start)",
+    mode: "teach",
+  });
+  if (status === "failed") {
+    await stream.push({ type: "start", messageId: "open" });
+    await stream.push({
+      type: "error",
+      errorText: "Answer generation failed. Please try again.",
+    });
+  } else {
+    await streamTurn(stream, [], status, "open");
+  }
   await screen.findByPlaceholderText(/send a message/i, {}, { timeout: 5000 });
+  if (status !== "failed") {
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Stop" })).toBeNull(),
+    );
+    await screen.findByRole("button", { name: "Submit" });
+  }
+}
+
+/** Pick a target, Start, and persist the opening turn so the composer is ready. */
+async function startSession(
+  fetchMock: ReturnType<typeof routedFetch>,
+  streams: ReturnType<typeof sseStream>[],
+  anchor = "c2.xhtml",
+) {
+  await clickStart(anchor);
+  await waitFor(() => expect(streams.length).toBeGreaterThan(0));
+  await persistOpening(fetchMock, streams[0]);
 }
 
 afterEach(() => {
@@ -267,10 +329,8 @@ afterEach(() => {
 });
 
 describe("TeachPanel on the conversation surface (RA-10)", () => {
-  it("scopes a new conversation to the chosen target and streams a taught turn", async () => {
-    const stream = sseStream();
-    const fetchMock = routedFetch(baseHandlers(() => stream.response));
-    vi.stubGlobal("fetch", fetchMock);
+  it("scopes a new conversation to the chosen target and streams the opening teach turn", async () => {
+    const { fetchMock, streams } = tutorNetwork();
 
     render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
 
@@ -286,108 +346,111 @@ describe("TeachPanel on the conversation surface (RA-10)", () => {
       target: { value: "c2.xhtml" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Start session" }));
-    await screen.findByPlaceholderText(/send a message/i, {}, { timeout: 5000 });
 
-    // Nothing is created until there is something to teach.
-    expect(callsTo(fetchMock, CREATE_URL)).toHaveLength(0);
-
-    await sendMessage("Explain this chapter.");
-
-    // The conversation is scoped to the chosen target and named for it.
+    // Start creates the conversation immediately, then streams the frozen opening.
     await waitFor(() => expect(callsTo(fetchMock, CREATE_URL)).toHaveLength(1));
     expect(bodyOf(callsTo(fetchMock, CREATE_URL)[0])).toMatchObject({
       source_id: "s1",
       scope_anchors: ["c2.xhtml"],
       title: "Chapter 2",
+      include_notes: false,
     });
+    expect(
+      new Headers(
+        (callsTo(fetchMock, CREATE_URL)[0][1] as RequestInit).headers,
+      ).get("X-CSRF-Token"),
+    ).toBe("csrf-xyz");
 
-    // The message is posted as a taught turn on that conversation.
     await waitFor(() => expect(callsTo(fetchMock, TURN_STREAM)).toHaveLength(1));
     const turnPost = callsTo(fetchMock, TURN_STREAM)[0];
     expect(bodyOf(turnPost)).toEqual({
-      message: "Explain this chapter.",
+      message: "(session start)",
       mode: "teach",
     });
     expect(
       new Headers((turnPost[1] as RequestInit).headers).get("X-CSRF-Token"),
     ).toBe("csrf-xyz");
 
-    // Deltas render progressively before the terminal citations.
-    await stream.push({ type: "start", messageId: "m1" });
-    await stream.push({ type: "text-start", id: "t1" });
-    await stream.push({ type: "text-delta", id: "t1", delta: "The chapter " });
+    // The opening learner bubble is never shown, and the composer waits.
+    expect(screen.queryByTestId("user-message")).toBeNull();
+    expect(screen.queryByText("(session start)")).toBeNull();
+    expect(screen.queryByPlaceholderText(/send a message/i)).toBeNull();
+
+    await streams[0].push({ type: "start", messageId: "open" });
+    await streams[0].push({ type: "text-start", id: "t1" });
+    await streams[0].push({
+      type: "text-delta",
+      id: "t1",
+      delta: "The chapter ",
+    });
     await waitFor(() =>
       expect(document.body.textContent).toContain("The chapter"),
     );
-    await stream.push({
+    await streams[0].push({
       type: "text-delta",
       id: "t1",
       delta: "introduces the analytical engine.",
     });
-    await stream.push({ type: "text-end", id: "t1" });
-    await stream.push({ type: "data-citations", data: [citation] });
-    await stream.push({
+    await streams[0].push({ type: "text-end", id: "t1" });
+    await streams[0].push({ type: "data-citations", data: [citation] });
+    await streams[0].push({
       type: "data-answer-status",
       data: { status: "answered" },
     });
-    await stream.push({ type: "finish" });
-    await stream.done();
+    await streams[0].push({ type: "finish" });
+    await streams[0].done();
 
     await waitFor(() =>
       expect(document.body.textContent).toContain(
         "The chapter introduces the analytical engine.",
       ),
     );
+    expect(screen.queryByText("(session start)")).toBeNull();
     expect(
       screen.getByRole("button", { name: "Citation: Chapter 2 › Overview" }),
+    ).toBeTruthy();
+    expect(
+      await screen.findByPlaceholderText(/send a message/i, {}, { timeout: 5000 }),
     ).toBeTruthy();
   });
 
   it("continues the same conversation for a second message", async () => {
-    const streams: ReturnType<typeof sseStream>[] = [];
-    const fetchMock = routedFetch(
-      baseHandlers(() => {
-        const next = sseStream();
-        streams.push(next);
-        return next.response;
-      }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
+    const { fetchMock, streams } = tutorNetwork();
 
     render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
-    await startSession();
+    await startSession(fetchMock, streams);
 
     await sendMessage("first message");
-    await waitFor(() => expect(streams).toHaveLength(1));
-    await streamTurn(streams[0], []);
+    await waitFor(() => expect(streams).toHaveLength(2));
+    await streamTurn(streams[1], []);
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "Submit" })).toBeTruthy(),
     );
 
     await sendMessage("second message");
-    await waitFor(() => expect(callsTo(fetchMock, TURN_STREAM)).toHaveLength(2));
+    await waitFor(() => expect(callsTo(fetchMock, TURN_STREAM)).toHaveLength(3));
 
     expect(callsTo(fetchMock, CREATE_URL)).toHaveLength(1);
   });
 
   it("renders the whole-book not-found state with no citations", async () => {
-    const stream = sseStream();
-    vi.stubGlobal("fetch", routedFetch(baseHandlers(() => stream.response)));
+    const { fetchMock, streams } = tutorNetwork();
 
     render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
-    await startSession();
+    await startSession(fetchMock, streams);
     await sendMessage("unrelated nonsense");
+    await waitFor(() => expect(streams).toHaveLength(2));
 
-    await stream.push({ type: "start", messageId: "m1" });
-    await stream.push({ type: "text-start", id: "t1" });
-    await stream.push({ type: "text-end", id: "t1" });
-    await stream.push({ type: "data-citations", data: [] });
-    await stream.push({
+    await streams[1].push({ type: "start", messageId: "m1" });
+    await streams[1].push({ type: "text-start", id: "t1" });
+    await streams[1].push({ type: "text-end", id: "t1" });
+    await streams[1].push({ type: "data-citations", data: [] });
+    await streams[1].push({
       type: "data-answer-status",
       data: { status: "not_found_in_source" },
     });
-    await stream.push({ type: "finish" });
-    await stream.done();
+    await streams[1].push({ type: "finish" });
+    await streams[1].done();
 
     const notFound = await screen.findByTestId("not-found");
     expect(notFound.textContent).toContain("not found in this book");
@@ -395,24 +458,22 @@ describe("TeachPanel on the conversation surface (RA-10)", () => {
   });
 
   it("shows a readable throttle message when a turn stream returns 429", async () => {
-    vi.stubGlobal(
-      "fetch",
-      routedFetch(
-        baseHandlers(() => jsonResponse(429, { detail: "Too many requests." }), {
-          [`DELETE ${READ_URL}`]: () => new Response(null, { status: 204 }),
-        }),
-      ),
+    const fetchMock = routedFetch(
+      baseHandlers(() => jsonResponse(429, { detail: "Too many requests." }), {
+        [`DELETE ${READ_URL}`]: () => new Response(null, { status: 204 }),
+      }),
     );
+    vi.stubGlobal("fetch", fetchMock);
 
     render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
-    await startSession();
-    await sendMessage("a message");
+    await clickStart();
 
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toMatch(/too many requests/i);
+    expect(screen.getByPlaceholderText(/send a message/i)).toBeTruthy();
   });
 
-  it("keeps the reader in the session when the conversation cannot be created", async () => {
+  it("keeps the reader on the start form when the conversation cannot be created", async () => {
     // Only the structure and the create leg are routed: a stream attempt would
     // mean a turn was posted into a conversation the server never made, and
     // `routedFetch` fails loudly on it.
@@ -424,46 +485,36 @@ describe("TeachPanel on the conversation surface (RA-10)", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
-    await startSession();
-    await sendMessage("teach me this section");
+    await clickStart();
 
-    // The failure is readable, and the panel is usable again rather than left
-    // spinning on a message that never went anywhere.
+    // The failure is readable, and Start is usable again rather than leaving
+    // the reader in a thread that was never created.
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toMatch(/still processing/i);
-    expect(screen.getByRole("button", { name: "Submit" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
-    expect(
-      (screen.getByPlaceholderText(/send a message/i) as HTMLTextAreaElement)
-        .disabled,
-    ).toBe(false);
+    expect(screen.getByLabelText("Target")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Start session" })).toBeTruthy();
+    expect(screen.queryByPlaceholderText(/send a message/i)).toBeNull();
 
-    // Nothing was created, so there is nothing to point at or clean up.
     expect(callsTo(fetchMock, CREATE_URL)).toHaveLength(1);
   });
 
   it("settles a mid-stream error part to a banner with partial text retained", async () => {
-    const stream = sseStream();
-    vi.stubGlobal(
-      "fetch",
-      routedFetch(
-        baseHandlers(() => stream.response, {
-          [`DELETE ${READ_URL}`]: () => new Response(null, { status: 204 }),
-        }),
-      ),
-    );
+    const { fetchMock, streams } = tutorNetwork({
+      [`DELETE ${READ_URL}`]: () => new Response(null, { status: 204 }),
+    });
 
     render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
-    await startSession();
+    await startSession(fetchMock, streams);
     await sendMessage("first try");
+    await waitFor(() => expect(streams).toHaveLength(2));
 
-    await stream.push({ type: "start", messageId: "m1" });
-    await stream.push({ type: "text-start", id: "t1" });
-    await stream.push({ type: "text-delta", id: "t1", delta: "Partial turn" });
+    await streams[1].push({ type: "start", messageId: "m1" });
+    await streams[1].push({ type: "text-start", id: "t1" });
+    await streams[1].push({ type: "text-delta", id: "t1", delta: "Partial turn" });
     await waitFor(() =>
       expect(document.body.textContent).toContain("Partial turn"),
     );
-    await stream.push({
+    await streams[1].push({
       type: "error",
       errorText: "Answer generation failed. Please try again.",
     });
@@ -495,20 +546,17 @@ function deleteCalls(fetchMock: ReturnType<typeof routedFetch>): unknown[][] {
 
 describe("TeachPanel keeps the thread when a turn fails", () => {
   it("never deletes the conversation its first message created when the stream errors", async () => {
-    const stream = sseStream();
-    const fetchMock = routedFetch(
-      baseHandlers(() => stream.response, {
-        [`DELETE ${READ_URL}`]: () => new Response(null, { status: 204 }),
-      }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
+    const { fetchMock, streams } = tutorNetwork({
+      [`DELETE ${READ_URL}`]: () => new Response(null, { status: 204 }),
+    });
 
     render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
-    await startSession();
+    await startSession(fetchMock, streams);
     await sendMessage("a question that fails");
+    await waitFor(() => expect(streams).toHaveLength(2));
 
-    await stream.push({ type: "start", messageId: "m1" });
-    await stream.push({
+    await streams[1].push({ type: "start", messageId: "m1" });
+    await streams[1].push({
       type: "error",
       errorText: "Answer generation failed. Please try again.",
     });
@@ -523,19 +571,15 @@ describe("TeachPanel keeps the thread when a turn fails", () => {
 
 describe("TeachPanel retries a failed turn on the same conversation", () => {
   it("resubmits the same message as a new turn without creating another conversation", async () => {
-    const streams = [sseStream(), sseStream()];
-    let streamCalls = 0;
-    const fetchMock = routedFetch(
-      baseHandlers(() => streams[Math.min(streamCalls++, 1)].response),
-    );
-    vi.stubGlobal("fetch", fetchMock);
+    const { fetchMock, streams } = tutorNetwork();
 
     render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
-    await startSession();
+    await startSession(fetchMock, streams);
     await sendMessage("the same question");
+    await waitFor(() => expect(streams).toHaveLength(2));
 
-    await streams[0].push({ type: "start", messageId: "m1" });
-    await streams[0].push({
+    await streams[1].push({ type: "start", messageId: "m1" });
+    await streams[1].push({
       type: "error",
       errorText: "Answer generation failed. Please try again.",
     });
@@ -548,11 +592,15 @@ describe("TeachPanel retries a failed turn on the same conversation", () => {
       fireEvent.click(retry);
     });
 
-    await waitFor(() => expect(callsTo(fetchMock, TURN_STREAM)).toHaveLength(2));
-    expect(bodyOf(callsTo(fetchMock, TURN_STREAM)[0])).toMatchObject({
-      message: "the same question",
+    await waitFor(() => expect(callsTo(fetchMock, TURN_STREAM)).toHaveLength(3));
+    expect(bodyOf(callsTo(fetchMock, TURN_STREAM)[0])).toEqual({
+      message: "(session start)",
+      mode: "teach",
     });
     expect(bodyOf(callsTo(fetchMock, TURN_STREAM)[1])).toMatchObject({
+      message: "the same question",
+    });
+    expect(bodyOf(callsTo(fetchMock, TURN_STREAM)[2])).toMatchObject({
       message: "the same question",
     });
     expect(callsTo(fetchMock, CREATE_URL)).toHaveLength(1);
@@ -561,21 +609,15 @@ describe("TeachPanel retries a failed turn on the same conversation", () => {
   });
 
   it("disables Retry while a turn is already streaming", async () => {
-    const streams = [sseStream(), sseStream()];
-    let streamCalls = 0;
-    vi.stubGlobal(
-      "fetch",
-      routedFetch(
-        baseHandlers(() => streams[Math.min(streamCalls++, 1)].response),
-      ),
-    );
+    const { fetchMock, streams } = tutorNetwork();
 
     render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
-    await startSession();
+    await startSession(fetchMock, streams);
     await sendMessage("the same question");
+    await waitFor(() => expect(streams).toHaveLength(2));
 
-    await streams[0].push({ type: "start", messageId: "m1" });
-    await streams[0].push({
+    await streams[1].push({ type: "start", messageId: "m1" });
+    await streams[1].push({
       type: "error",
       errorText: "Answer generation failed. Please try again.",
     });
@@ -587,7 +629,8 @@ describe("TeachPanel retries a failed turn on the same conversation", () => {
       fireEvent.click(retry);
     });
 
-    await streams[1].push({ type: "start", messageId: "m2" });
+    await waitFor(() => expect(streams).toHaveLength(3));
+    await streams[2].push({ type: "start", messageId: "m2" });
     await waitFor(() =>
       expect(
         (screen.getByRole("button", { name: "Retry" }) as HTMLButtonElement)
@@ -599,23 +642,23 @@ describe("TeachPanel retries a failed turn on the same conversation", () => {
 
 describe("TeachPanel scope misses", () => {
   it("says the answer may be elsewhere in the book when the scope comes up empty", async () => {
-    const stream = sseStream();
-    vi.stubGlobal("fetch", routedFetch(baseHandlers(() => stream.response)));
+    const { fetchMock, streams } = tutorNetwork();
 
     render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
-    await startSession();
+    await startSession(fetchMock, streams);
     await sendMessage("something from another chapter");
+    await waitFor(() => expect(streams).toHaveLength(2));
 
-    await stream.push({ type: "start", messageId: "m1" });
-    await stream.push({ type: "text-start", id: "t1" });
-    await stream.push({ type: "text-end", id: "t1" });
-    await stream.push({ type: "data-citations", data: [] });
-    await stream.push({
+    await streams[1].push({ type: "start", messageId: "m1" });
+    await streams[1].push({ type: "text-start", id: "t1" });
+    await streams[1].push({ type: "text-end", id: "t1" });
+    await streams[1].push({ type: "data-citations", data: [] });
+    await streams[1].push({
       type: "data-answer-status",
       data: { status: "not_found_in_scope" },
     });
-    await stream.push({ type: "finish" });
-    await stream.done();
+    await streams[1].push({ type: "finish" });
+    await streams[1].done();
 
     // The reader is told the scope came up short, not that the book did.
     const notFound = await screen.findByTestId("not-found");
@@ -648,21 +691,21 @@ describe("TeachPanel answer phases (ANSW-01/02)", () => {
   it("shows the same search, thinking, and answer phases Ask does", async () => {
     // The dock is mode-agnostic: a taught turn waits, thinks, and answers on the
     // same unified stream, so it must read identically to an asked one.
-    const stream = sseStream();
-    vi.stubGlobal("fetch", routedFetch(baseHandlers(() => stream.response)));
+    const { fetchMock, streams } = tutorNetwork();
 
     render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
-    await startSession();
+    await startSession(fetchMock, streams);
     await sendMessage("Explain this chapter.");
+    await waitFor(() => expect(streams).toHaveLength(2));
 
     await waitFor(() =>
       expect(screen.queryByText(/searching the book/i)).toBeTruthy(),
     );
 
-    await stream.push({ type: "start", messageId: "m1" });
-    await stream.push({ type: "data-phase", data: { phase: "searching" } });
-    await stream.push({ type: "reasoning-start", id: "r1" });
-    await stream.push({
+    await streams[1].push({ type: "start", messageId: "m1" });
+    await streams[1].push({ type: "data-phase", data: { phase: "searching" } });
+    await streams[1].push({ type: "reasoning-start", id: "r1" });
+    await streams[1].push({
       type: "reasoning-delta",
       id: "r1",
       delta: "Start from the engine metaphor.",
@@ -674,9 +717,9 @@ describe("TeachPanel answer phases (ANSW-01/02)", () => {
     expect(screen.queryByText(/searching the book/i)).toBeNull();
     expect(screen.getByText("Start from the engine metaphor.")).toBeTruthy();
 
-    await stream.push({ type: "reasoning-end", id: "r1" });
-    await stream.push({ type: "text-start", id: "t1" });
-    await stream.push({ type: "text-delta", id: "t1", delta: "A lesson." });
+    await streams[1].push({ type: "reasoning-end", id: "r1" });
+    await streams[1].push({ type: "text-start", id: "t1" });
+    await streams[1].push({ type: "text-delta", id: "t1", delta: "A lesson." });
 
     // The thinking folds away the moment the lesson starts.
     await waitFor(() =>
@@ -690,31 +733,31 @@ describe("TeachPanel answer phases (ANSW-01/02)", () => {
     // Same rule as Ask: a turn that reasoned its way to "the section does not
     // cover this" must not leave that reasoning on screen beside the retraction
     // of it. The gate is written per panel, so it is guarded per panel.
-    const stream = sseStream();
-    vi.stubGlobal("fetch", routedFetch(baseHandlers(() => stream.response)));
+    const { fetchMock, streams } = tutorNetwork();
 
     render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
-    await startSession();
+    await startSession(fetchMock, streams);
     await sendMessage("Explain the thing this chapter never mentions.");
+    await waitFor(() => expect(streams).toHaveLength(2));
 
-    await stream.push({ type: "start", messageId: "m1" });
-    await stream.push({ type: "data-phase", data: { phase: "searching" } });
-    await stream.push({ type: "reasoning-start", id: "r1" });
-    await stream.push({
+    await streams[1].push({ type: "start", messageId: "m1" });
+    await streams[1].push({ type: "data-phase", data: { phase: "searching" } });
+    await streams[1].push({ type: "reasoning-start", id: "r1" });
+    await streams[1].push({
       type: "reasoning-delta",
       id: "r1",
       delta: "This section is about something else.",
     });
-    await stream.push({ type: "reasoning-end", id: "r1" });
-    await stream.push({ type: "text-start", id: "t1" });
-    await stream.push({ type: "text-end", id: "t1" });
-    await stream.push({ type: "data-citations", data: [] });
-    await stream.push({
+    await streams[1].push({ type: "reasoning-end", id: "r1" });
+    await streams[1].push({ type: "text-start", id: "t1" });
+    await streams[1].push({ type: "text-end", id: "t1" });
+    await streams[1].push({ type: "data-citations", data: [] });
+    await streams[1].push({
       type: "data-answer-status",
       data: { status: "not_found_in_source" },
     });
-    await stream.push({ type: "finish" });
-    await stream.done();
+    await streams[1].push({ type: "finish" });
+    await streams[1].done();
 
     const notFound = await screen.findByTestId("not-found");
     expect(notFound.textContent).toContain("not found in this book");
@@ -729,13 +772,13 @@ describe("TeachPanel answer phases (ANSW-01/02)", () => {
   });
 
   it("shows no phase line or reasoning region for a turn that carried neither", async () => {
-    const stream = sseStream();
-    vi.stubGlobal("fetch", routedFetch(baseHandlers(() => stream.response)));
+    const { fetchMock, streams } = tutorNetwork();
 
     render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
-    await startSession();
+    await startSession(fetchMock, streams);
     await sendMessage("Explain this chapter.");
-    await streamTurn(stream, [citation]);
+    await waitFor(() => expect(streams).toHaveLength(2));
+    await streamTurn(streams[1], [citation]);
 
     await waitFor(() => expect(document.body.textContent).toContain("A lesson."));
     expect(screen.queryByRole("region", { name: "reasoning" })).toBeNull();
@@ -843,8 +886,7 @@ describe("TeachPanel auth (RA-10)", () => {
     render(
       <TeachPanel sourceId="s1" csrf="csrf-xyz" onRequireAuth={onRequireAuth} />,
     );
-    await startSession();
-    await sendMessage("a message");
+    await clickStart();
 
     await waitFor(() => expect(onRequireAuth).toHaveBeenCalledTimes(1));
   });
@@ -860,35 +902,46 @@ const noteDetail = {
   updated_at: "now",
 };
 
-/** Stream a complete, answered turn carrying `citations` and settling the stream. */
+/** Stream a complete turn carrying `citations` and settling the stream. */
 async function streamTurn(
   stream: ReturnType<typeof sseStream>,
   citations: unknown[],
+  status: "answered" | "not_found_in_source" | "not_found_in_scope" = "answered",
+  messageId = "m1",
+  tutorState?: {
+    phase: string;
+    hint_level: string | null;
+    check_text: string | null;
+  },
 ) {
-  await stream.push({ type: "start", messageId: "m1" });
+  await stream.push({ type: "start", messageId });
   await stream.push({ type: "text-start", id: "t1" });
-  await stream.push({ type: "text-delta", id: "t1", delta: "A lesson." });
+  await stream.push({
+    type: "text-delta",
+    id: "t1",
+    delta: status === "answered" ? "A lesson." : "",
+  });
   await stream.push({ type: "text-end", id: "t1" });
   await stream.push({ type: "data-citations", data: citations });
-  await stream.push({ type: "data-answer-status", data: { status: "answered" } });
+  await stream.push({ type: "data-answer-status", data: { status } });
+  if (tutorState) {
+    await stream.push({ type: "data-tutor-state", data: tutorState });
+  }
   await stream.push({ type: "finish" });
   await stream.done();
 }
 
 describe("TeachPanel save to note (RA-20/22)", () => {
   it("saves a cited taught turn as a note and confirms success", async () => {
-    const stream = sseStream();
-    const fetchMock = routedFetch(
-      baseHandlers(() => stream.response, {
-        "POST /api/sources/s1/highlights": () => jsonResponse(201, noteDetail),
-      }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
+    const { fetchMock, streams } = tutorNetwork({
+      "POST /api/sources/s1/highlights": () => jsonResponse(201, noteDetail),
+    });
 
     render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
-    await startSession();
+    await startSession(fetchMock, streams);
     await sendMessage("Explain this chapter.");
-    await streamTurn(stream, [citation]);
+    await waitFor(() => expect(streams).toHaveLength(2));
+    await streamTurn(streams[1], [citation]);
 
     const saveButton = await screen.findByRole("button", {
       name: "Save to note",
@@ -925,14 +978,13 @@ describe("TeachPanel save to note (RA-20/22)", () => {
 
 describe("TeachPanel taught passage (RA-11)", () => {
   it("shows the target in the book once on start and never per turn", async () => {
-    const stream = sseStream();
-    vi.stubGlobal("fetch", routedFetch(baseHandlers(() => stream.response)));
+    const { fetchMock, streams } = tutorNetwork();
 
     const onShowInBook = vi.fn();
     render(
       <TeachPanel sourceId="s1" csrf="csrf-xyz" onShowInBook={onShowInBook} />,
     );
-    await startSession();
+    await startSession(fetchMock, streams);
 
     // The book is asked to show the taught anchor exactly once.
     await waitFor(() => expect(onShowInBook).toHaveBeenCalledWith("c2.xhtml"));
@@ -940,7 +992,8 @@ describe("TeachPanel taught passage (RA-11)", () => {
 
     // Streaming a full turn does not re-trigger the jump.
     await sendMessage("Explain this chapter.");
-    await streamTurn(stream, [citation]);
+    await waitFor(() => expect(streams).toHaveLength(2));
+    await streamTurn(streams[1], [citation]);
 
     await waitFor(() =>
       expect(document.body.textContent).toContain("A lesson."),
@@ -969,35 +1022,19 @@ describe("TeachPanel taught passage (RA-11)", () => {
 });
 
 describe("TeachPanel include-my-notes choice (NL-04)", () => {
-  it("defaults the choice off and sends it explicitly when the conversation is created", async () => {
-    const stream = sseStream();
-    const fetchMock = routedFetch(baseHandlers(() => stream.response));
-    vi.stubGlobal("fetch", fetchMock);
+  it("sends include_notes false on Tutor Start and locks the control", async () => {
+    const { fetchMock, streams } = tutorNetwork();
 
     render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
-    await startSession();
+    await startSession(fetchMock, streams);
 
-    // The control reflects teaching's default (off) before any choice.
-    const toggle = screen.getByRole("checkbox");
-    expect((toggle as HTMLInputElement).checked).toBe(false);
-
-    // Turning it on is carried into the conversation the next message creates.
-    fireEvent.click(toggle);
-    await sendMessage("Explain this chapter.");
-
-    await waitFor(() => expect(callsTo(fetchMock, CREATE_URL)).toHaveLength(1));
     expect(bodyOf(callsTo(fetchMock, CREATE_URL)[0])).toMatchObject({
-      include_notes: true,
+      include_notes: false,
     });
 
-    // From here the choice belongs to that conversation: the control reports it
-    // and stops taking input rather than offering a flip that does nothing.
-    await waitFor(() =>
-      expect((screen.getByRole("checkbox") as HTMLInputElement).disabled).toBe(
-        true,
-      ),
-    );
-    expect((screen.getByRole("checkbox") as HTMLInputElement).checked).toBe(true);
+    const toggle = screen.getByRole("checkbox") as HTMLInputElement;
+    expect(toggle.checked).toBe(false);
+    expect(toggle.disabled).toBe(true);
   });
 
   it("reports a restored session's choice rather than the reader's stored one", async () => {
@@ -1019,5 +1056,286 @@ describe("TeachPanel include-my-notes choice (NL-04)", () => {
     const toggle = screen.getByRole("checkbox") as HTMLInputElement;
     expect(toggle.checked).toBe(true);
     expect(toggle.disabled).toBe(true);
+  });
+});
+
+describe("Tutor Start speaks first (TUTOR-08/13/14/29/30)", () => {
+  it("names Answer and Tutor as distinct modes on the empty Tutor start form", async () => {
+    vi.stubGlobal("fetch", routedFetch(baseHandlers(() => sseStream().response)));
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
+    await screen.findByLabelText("Target");
+    expect(document.body.textContent).toMatch(/Tutor/);
+    expect(document.body.textContent).toMatch(/Answer/);
+  });
+
+  it("defaults the section picker to the chapter currently on screen", async () => {
+    vi.stubGlobal("fetch", routedFetch(baseHandlers(() => sseStream().response)));
+    render(
+      <TeachPanel sourceId="s1" csrf="csrf-xyz" currentAnchor="c2.xhtml" />,
+    );
+    const target = await screen.findByLabelText("Target");
+    expect((target as HTMLSelectElement).value).toBe("c2.xhtml");
+    expect(screen.getByRole("button", { name: "Start session" })).toBeTruthy();
+  });
+
+  it("shows the composer after a not-found opening turn persists", async () => {
+    const { fetchMock, streams } = tutorNetwork();
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
+    await clickStart();
+    await waitFor(() => expect(streams.length).toBeGreaterThan(0));
+    expect(screen.queryByPlaceholderText(/send a message/i)).toBeNull();
+    await persistOpening(fetchMock, streams[0], "not_found_in_source");
+    expect(screen.getByPlaceholderText(/send a message/i)).toBeTruthy();
+    expect(screen.queryByText("(session start)")).toBeNull();
+  });
+
+  it("shows the composer after a failed opening turn persists, without the sentinel bubble", async () => {
+    const { fetchMock, streams } = tutorNetwork();
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
+    await clickStart();
+    await waitFor(() => expect(streams.length).toBeGreaterThan(0));
+    await persistOpening(fetchMock, streams[0], "failed");
+    expect(screen.getByPlaceholderText(/send a message/i)).toBeTruthy();
+    expect(screen.queryByText("(session start)")).toBeNull();
+    expect(screen.queryByTestId("user-message")).toBeNull();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+  });
+});
+
+describe("Tutor chips and closed-session handoff (TUTOR-18/19/33)", () => {
+  it("posts Just explain this. as the exact teach message", async () => {
+    const { fetchMock, streams } = tutorNetwork();
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
+    await startSession(fetchMock, streams);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Just explain this." }),
+    );
+    await waitFor(() => expect(callsTo(fetchMock, TURN_STREAM)).toHaveLength(2));
+    expect(bodyOf(callsTo(fetchMock, TURN_STREAM)[1])).toEqual({
+      message: "Just explain this.",
+      mode: "teach",
+    });
+    await streamTurn(streams[1], []);
+  });
+
+  it("posts I don't know. as the exact teach message", async () => {
+    const { fetchMock, streams } = tutorNetwork();
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
+    await startSession(fetchMock, streams);
+
+    fireEvent.click(screen.getByRole("button", { name: "I don't know." }));
+    await waitFor(() => expect(callsTo(fetchMock, TURN_STREAM)).toHaveLength(2));
+    expect(bodyOf(callsTo(fetchMock, TURN_STREAM)[1])).toEqual({
+      message: "I don't know.",
+      mode: "teach",
+    });
+    await streamTurn(streams[1], []);
+  });
+
+  it("hides the composer when the session is closed and Ask about this does not post a turn", async () => {
+    const fetchMock = routedFetch({
+      "GET /api/sources/s1/structure": () => jsonResponse(200, structure),
+      [`GET ${READ_URL}`]: () =>
+        jsonResponse(200, {
+          ...restoredDetail,
+          tutor_phase: "close",
+          target_title: "Chapter 1",
+        }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    writeActiveConversation("s1", "teach", "conv2");
+
+    const onAskAboutThis = vi.fn();
+    render(
+      <TeachPanel
+        sourceId="s1"
+        csrf="csrf-xyz"
+        onAskAboutThis={onAskAboutThis}
+      />,
+    );
+    await screen.findByText("It is about early computing.");
+
+    expect(screen.queryByPlaceholderText(/send a message/i)).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Just explain this." }),
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Submit" })).toBeNull();
+
+    const turnCount = callsTo(fetchMock, TURN_STREAM).length;
+    fireEvent.click(screen.getByRole("button", { name: "Ask about this" }));
+    expect(onAskAboutThis).toHaveBeenCalledTimes(1);
+    expect(callsTo(fetchMock, TURN_STREAM)).toHaveLength(turnCount);
+  });
+});
+
+describe("Tutor review card offer (TUTOR-34/41)", () => {
+  const TUTOR_CARD_URL = "/api/conversations/conv2/tutor-card";
+  const checkText = "It argues that location anchors must stay stable.";
+
+  function closedConversation() {
+    return {
+      ...restoredDetail,
+      tutor_phase: "close",
+      target_title: "Chapter 1",
+      tutor_check_text: checkText,
+    };
+  }
+
+  it("offers exactly one card with the frozen question and the check text", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/sources/s1/structure": () => jsonResponse(200, structure),
+        [`GET ${READ_URL}`]: () => jsonResponse(200, closedConversation()),
+      }),
+    );
+    writeActiveConversation("s1", "teach", "conv2");
+
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
+    await screen.findByText("It is about early computing.");
+
+    const offer = screen.getByRole("article", { name: "review card offer" });
+    expect(offer.textContent).toContain(
+      'In your own words, what is "Chapter 1" arguing?',
+    );
+    expect(offer.textContent).toContain(checkText);
+    expect(screen.getAllByRole("article", { name: "review card offer" })).toHaveLength(
+      1,
+    );
+  });
+
+  it("Accept posts to the tutor-card route and does not suggest cards", async () => {
+    const fetchMock = routedFetch({
+      "GET /api/sources/s1/structure": () => jsonResponse(200, structure),
+      [`GET ${READ_URL}`]: () => jsonResponse(200, closedConversation()),
+      [`POST ${TUTOR_CARD_URL}`]: () => jsonResponse(201, { id: "q1" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    writeActiveConversation("s1", "teach", "conv2");
+
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
+    await screen.findByText("It is about early computing.");
+
+    fireEvent.click(screen.getByRole("button", { name: "Accept" }));
+    await waitFor(() =>
+      expect(callsTo(fetchMock, TUTOR_CARD_URL)).toHaveLength(1),
+    );
+    const accept = callsTo(fetchMock, TUTOR_CARD_URL)[0];
+    expect((accept[1] as RequestInit).method).toBe("POST");
+    expect(
+      new Headers((accept[1] as RequestInit).headers).get("X-CSRF-Token"),
+    ).toBe("csrf-xyz");
+    expect(
+      fetchMock.mock.calls.some(([url]) =>
+        String(url).includes("/cards/suggestions"),
+      ),
+    ).toBe(false);
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("article", { name: "review card offer" }),
+      ).toBeNull(),
+    );
+  });
+
+  it("offers the card from the close frame without refetching the conversation", async () => {
+    const streams: ReturnType<typeof sseStream>[] = [];
+    const fetchMock = routedFetch({
+      "GET /api/sources/s1/structure": () => jsonResponse(200, structure),
+      [`GET ${READ_URL}`]: () =>
+        jsonResponse(200, {
+          ...restoredDetail,
+          tutor_phase: "check",
+          hint_level: "assert",
+          tutor_check_text: null,
+        }),
+      [`POST ${TURN_STREAM}`]: () => {
+        const stream = sseStream();
+        streams.push(stream);
+        return stream.response;
+      },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    writeActiveConversation("s1", "teach", "conv2");
+
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
+    await screen.findByText("It is about early computing.");
+    expect(callsTo(fetchMock, READ_URL)).toHaveLength(1);
+
+    await sendMessage(checkText);
+    await waitFor(() => expect(streams).toHaveLength(1));
+    await streamTurn(streams[0], [], "answered", "close", {
+      phase: "close",
+      hint_level: "assert",
+      check_text: checkText,
+    });
+
+    const offer = await screen.findByRole("article", { name: "review card offer" });
+    expect(offer.textContent).toContain(checkText);
+    expect(callsTo(fetchMock, READ_URL)).toHaveLength(1);
+  });
+
+  it("keeps the offer and shows an error when Accept is refused", async () => {
+    const fetchMock = routedFetch({
+      "GET /api/sources/s1/structure": () => jsonResponse(200, structure),
+      [`GET ${READ_URL}`]: () => jsonResponse(200, closedConversation()),
+      [`POST ${TUTOR_CARD_URL}`]: () =>
+        jsonResponse(409, { detail: "Session is not closed." }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    writeActiveConversation("s1", "teach", "conv2");
+
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
+    await screen.findByText("It is about early computing.");
+
+    fireEvent.click(screen.getByRole("button", { name: "Accept" }));
+    await waitFor(() =>
+      expect(callsTo(fetchMock, TUTOR_CARD_URL)).toHaveLength(1),
+    );
+    expect(
+      await screen.findByText("Could not save this review card."),
+    ).toBeTruthy();
+    expect(screen.getByRole("article", { name: "review card offer" })).toBeTruthy();
+    expect(
+      fetchMock.mock.calls.some(([url]) =>
+        String(url).includes("/cards/suggestions"),
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps the offer when Accept cannot find the conversation", async () => {
+    const fetchMock = routedFetch({
+      "GET /api/sources/s1/structure": () => jsonResponse(200, structure),
+      [`GET ${READ_URL}`]: () => jsonResponse(200, closedConversation()),
+      [`POST ${TUTOR_CARD_URL}`]: () => jsonResponse(404, { detail: "Not found" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    writeActiveConversation("s1", "teach", "conv2");
+
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
+    await screen.findByText("It is about early computing.");
+
+    fireEvent.click(screen.getByRole("button", { name: "Accept" }));
+    expect(
+      await screen.findByText("Could not save this review card."),
+    ).toBeTruthy();
+    expect(screen.getByRole("article", { name: "review card offer" })).toBeTruthy();
+  });
+
+  it("Dismiss hides the offer and writes no quiz row", async () => {
+    const fetchMock = routedFetch({
+      "GET /api/sources/s1/structure": () => jsonResponse(200, structure),
+      [`GET ${READ_URL}`]: () => jsonResponse(200, closedConversation()),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    writeActiveConversation("s1", "teach", "conv2");
+
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
+    await screen.findByText("It is about early computing.");
+
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByRole("article", { name: "review card offer" })).toBeNull();
+    expect(callsTo(fetchMock, TUTOR_CARD_URL)).toHaveLength(0);
+    expect(screen.getByRole("button", { name: "Ask about this" })).toBeTruthy();
   });
 });

@@ -549,3 +549,152 @@ def test_reconcile_keeps_a_highlight_card_identity_scheduling_and_provenance(
     assert moved.note_anchor_id == anchor.id
     assert dict(_scheduling_row(db_conn, relocate.id)) == before_sched
     assert [dict(row) for row in _log_rows(db_conn, relocate.id)] == before_log
+
+
+def _tutor_item(
+    source_id: UUID,
+    *,
+    question: str,
+    anchor: str,
+    section_path: tuple[str, ...],
+    excerpt: str,
+) -> QuizItem:
+    """A tutor-origin card; ``conversation_id`` is None so the FK is not required."""
+    return replace(
+        _item(
+            source_id,
+            question=question,
+            anchor=anchor,
+            section_path=section_path,
+            excerpt=excerpt,
+        ),
+        origin=QuizItemOrigin.TUTOR,
+    )
+
+
+def test_reconcile_keeps_a_tutor_card_active_when_the_anchor_survives_title_only(
+    db_conn: Connection,
+) -> None:
+    # TUTOR-40: a title-only excerpt that is not in the section body must not stale
+    # a tutor card, while the same excerpt still stales a deck card on the same
+    # live anchor.
+    source = _source(db_conn)
+    SqlAlchemyCorpusRepository(db_conn).replace(
+        source.id,
+        title="Book",
+        authors=["A"],
+        language="en",
+        schema_version=1,
+        sections=_V2_SECTIONS,
+    )
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    tutor = _tutor_item(
+        source.id,
+        question="Q tutor keep?",
+        anchor="ch2",
+        section_path=("Two",),
+        excerpt="Cells",
+    )
+    deck = _item(
+        source.id,
+        question="Q deck stale?",
+        anchor="ch2",
+        section_path=("Two",),
+        excerpt="Cells",
+    )
+    _seed_item(repo, tutor)
+    _seed_item(repo, deck)
+
+    _reconcile(db_conn, source.id)
+
+    assert repo.get_by_id(tutor.id).status == QuizItemStatus.ACTIVE
+    assert repo.get_by_id(tutor.id).anchor == "ch2"
+    assert repo.get_by_id(deck.id).status == QuizItemStatus.STALE
+
+
+def test_reconcile_relocates_a_tutor_card_onto_an_alias_survivor_without_excerpt(
+    db_conn: Connection,
+) -> None:
+    source = _source(db_conn)
+    SqlAlchemyCorpusRepository(db_conn).replace(
+        source.id,
+        title="Book",
+        authors=["A"],
+        language="en",
+        schema_version=1,
+        sections=[
+            _section(
+                1,
+                ("Survivor",),
+                "survivor",
+                "Unrelated survivor content entirely.",
+                anchor_aliases=("gone",),
+            ),
+        ],
+    )
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    item = _tutor_item(
+        source.id,
+        question="Q tutor alias?",
+        anchor="gone",
+        section_path=("Gone",),
+        excerpt="Cells",
+    )
+    _seed_item(repo, item)
+
+    _reconcile(db_conn, source.id)
+
+    reconciled = repo.get_by_id(item.id)
+    assert (reconciled.status, reconciled.anchor, reconciled.section_path) == (
+        QuizItemStatus.ACTIVE,
+        "survivor",
+        ("Survivor",),
+    )
+
+
+def test_reconcile_orphans_a_tutor_card_when_the_anchor_is_gone_without_touching_scheduling(
+    db_conn: Connection,
+) -> None:
+    # TUTOR-40: a gone anchor (no alias) orphans the tutor card even when the
+    # excerpt would relocate a deck card. Scheduling and review_log stay byte-equal.
+    source = _source(db_conn)
+    SqlAlchemyCorpusRepository(db_conn).replace(
+        source.id,
+        title="Book",
+        authors=["A"],
+        language="en",
+        schema_version=1,
+        sections=_V2_SECTIONS,
+    )
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    tutor = _tutor_item(
+        source.id,
+        question="Q tutor orphan?",
+        anchor="ch4",
+        section_path=("Four",),
+        excerpt="epsilon zeta",
+    )
+    deck = _item(
+        source.id,
+        question="Q deck reloc?",
+        anchor="ch4",
+        section_path=("Four",),
+        excerpt="epsilon zeta",
+    )
+    _seed_item(repo, tutor)
+    _seed_item(repo, deck)
+    before_sched = dict(_scheduling_row(db_conn, tutor.id))
+    before_log = [dict(row) for row in _log_rows(db_conn, tutor.id)]
+
+    _reconcile(db_conn, source.id)
+
+    orphaned = repo.get_by_id(tutor.id)
+    assert (orphaned.status, orphaned.anchor) == (QuizItemStatus.ORPHANED, "ch4")
+    moved = repo.get_by_id(deck.id)
+    assert (moved.status, moved.anchor, moved.section_path) == (
+        QuizItemStatus.ACTIVE,
+        "ch9",
+        ("Later", "Nine"),
+    )
+    assert dict(_scheduling_row(db_conn, tutor.id)) == before_sched
+    assert [dict(row) for row in _log_rows(db_conn, tutor.id)] == before_log

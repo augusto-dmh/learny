@@ -328,17 +328,23 @@ function AskChat({
       <Conversation>
         <ConversationContent>
           {messages.length === 0 ? (
-            <div aria-label="suggested prompts" className="space-y-2">
-              {SUGGESTED_PROMPTS.map((prompt) => (
-                <button
-                  key={prompt}
-                  type="button"
-                  onClick={() => send(prompt)}
-                  className="block w-full rounded-md border px-3 py-2 text-left text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                >
-                  {prompt}
-                </button>
-              ))}
+            <div className="space-y-3">
+              <p className="text-sm text-muted-foreground">
+                Answer is for questions about the book. Tutor walks you through a
+                section.
+              </p>
+              <div aria-label="suggested prompts" className="space-y-2">
+                {SUGGESTED_PROMPTS.map((prompt) => (
+                  <button
+                    key={prompt}
+                    type="button"
+                    onClick={() => send(prompt)}
+                    className="block w-full rounded-md border px-3 py-2 text-left text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  >
+                    {prompt}
+                  </button>
+                ))}
+              </div>
             </div>
           ) : null}
           {messages.map((message, index) => {

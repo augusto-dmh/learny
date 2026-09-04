@@ -33,6 +33,7 @@ from app.domain.entities import (
     QuizDeckResult,
     QuizGenerationJob,
     QuizItem,
+    QuizItemOrigin,
     QuizItemStatus,
     QuizItemType,
     QuizJobStatus,
@@ -441,6 +442,11 @@ class ReconcileQuizItems:
       anchor + ``section_path``, keep ``active``);
     - otherwise → ``orphaned``.
 
+    Tutor cards (``origin='tutor'``, TUTOR-40) skip the excerpt check: they stay
+    ``active`` while the target anchor or an alias survives (relocating onto the
+    survivor) and become ``orphaned`` otherwise. A title-only excerpt must never
+    stale them.
+
     Only ``anchor``/``section_path``/``status`` are ever written, and only when the
     outcome differs from the item's current state — ``quiz_item_scheduling`` and
     ``review_log`` rows are never touched (QUIZ-16). A source with no items is a no-op
@@ -489,6 +495,8 @@ class ReconcileQuizItems:
         """Return the item's reconciled ``(anchor, section_path, status)`` (QUIZ-16)."""
         current = first_by_anchor.get(item.anchor)
         if current is not None:
+            if item.origin == QuizItemOrigin.TUTOR:
+                return item.anchor, item.section_path, QuizItemStatus.ACTIVE
             if quote_in_text(item.source_excerpt, current.text):
                 return item.anchor, item.section_path, QuizItemStatus.ACTIVE
             return item.anchor, item.section_path, QuizItemStatus.STALE
@@ -496,9 +504,16 @@ class ReconcileQuizItems:
         # The item's anchor is no longer a live section but was merged into a survivor:
         # if its excerpt is in that survivor, relocate to the survivor's canonical
         # anchor + path and stay active (ING-22), leaving scheduling/log untouched.
+        # Tutor cards relocate onto the survivor without an excerpt check (TUTOR-40).
         survivor = alias_to_section.get(item.anchor)
-        if survivor is not None and quote_in_text(item.source_excerpt, survivor.text):
-            return survivor.anchor, survivor.section_path, QuizItemStatus.ACTIVE
+        if survivor is not None:
+            if item.origin == QuizItemOrigin.TUTOR:
+                return survivor.anchor, survivor.section_path, QuizItemStatus.ACTIVE
+            if quote_in_text(item.source_excerpt, survivor.text):
+                return survivor.anchor, survivor.section_path, QuizItemStatus.ACTIVE
+
+        if item.origin == QuizItemOrigin.TUTOR:
+            return item.anchor, item.section_path, QuizItemStatus.ORPHANED
 
         for section in sections:
             if quote_in_text(item.source_excerpt, section.text):

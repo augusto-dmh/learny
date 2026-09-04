@@ -17,6 +17,8 @@ import {
   assistantView,
   createConversationTransport,
   errorMessageFor,
+  latestTutorState,
+  tutorStateFrom,
   turnsToUIMessages,
   type LearnyUIMessage,
 } from "../app/lib/streaming";
@@ -309,6 +311,54 @@ describe("turnsToUIMessages", () => {
     expect(view.text).toBe("");
     expect(view.citations).toEqual([]);
     expect(view.status).toBe("failed");
+  });
+});
+
+describe("tutorStateFrom / latestTutorState", () => {
+  it("reads the tutor ladder off a data-tutor-state part", () => {
+    const message: LearnyUIMessage = {
+      id: "a1",
+      role: "assistant",
+      parts: [
+        { type: "text", text: "" },
+        {
+          type: "data-tutor-state",
+          data: {
+            phase: "close",
+            hint_level: "assert",
+            check_text: "anchors stay stable",
+          },
+        },
+      ],
+    };
+    expect(tutorStateFrom(message)).toEqual({
+      phase: "close",
+      hintLevel: "assert",
+      checkText: "anchors stay stable",
+    });
+  });
+
+  it("skips an in-flight assistant that has no tutor-state yet", () => {
+    const prior: LearnyUIMessage = {
+      id: "a1",
+      role: "assistant",
+      parts: [
+        {
+          type: "data-tutor-state",
+          data: { phase: "check", hint_level: "assert", check_text: null },
+        },
+      ],
+    };
+    const inflight: LearnyUIMessage = {
+      id: "a2",
+      role: "assistant",
+      parts: [{ type: "text", text: "partial" }],
+    };
+    expect(latestTutorState([prior, inflight])).toEqual({
+      phase: "check",
+      hintLevel: "assert",
+      checkText: null,
+    });
   });
 });
 
