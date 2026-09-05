@@ -76,8 +76,8 @@ Four sequential phases, one Opus worker each. No Haiku. No Turnstile. Verifier a
 
 **Done when**:
 
-- [ ] Two processes sharing a key share one window
-- [ ] A dead Redis fails closed (exception, not allow)
+- [x] Two processes sharing a key share one window
+- [x] A dead Redis fails closed (exception, not allow)
 
 **Tests**: integration
 **Gate**: quick
