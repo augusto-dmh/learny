@@ -100,8 +100,8 @@ Four sequential phases, one Opus worker each. No Haiku. No Turnstile. Verifier a
 
 **Done when**:
 
-- [ ] Default app construction uses Redis when the URL is set
-- [ ] A limited route returns 503 if Redis is unreachable
+- [x] Default app construction uses Redis when the URL is set
+- [x] A limited route returns 503 if Redis is unreachable
 
 **Tests**: integration
 **Gate**: quick

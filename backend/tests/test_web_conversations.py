@@ -2925,9 +2925,8 @@ def throttled_conversations_client(  # noqa: ANN201
     get_settings.cache_clear()
 
     previous = get_rate_limiter()
-    set_rate_limiter(InMemoryFixedWindowRateLimiter(max_attempts=3, window_seconds=300))
-
     app = create_app()
+    set_rate_limiter(InMemoryFixedWindowRateLimiter(max_attempts=3, window_seconds=300))
 
     def _override() -> Iterator[Connection]:
         yield db_conn

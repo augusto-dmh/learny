@@ -22,6 +22,10 @@ from typing import Protocol
 from fastapi import HTTPException, Request, status
 
 
+class LimiterUnavailable(Exception):
+    """Raised when the active limiter cannot record a hit (fail closed)."""
+
+
 class RateLimiter(Protocol):
     """Port for a rate limiter. ``hit`` records an attempt and reports the verdict."""
 
@@ -80,6 +84,23 @@ def get_rate_limiter() -> RateLimiter:
     return _limiter
 
 
+def _hit(key: str) -> None:
+    """Record one attempt; 429 when the window is exceeded, 503 if Redis is down."""
+    try:
+        allowed, retry_after = get_rate_limiter().hit(key)
+    except LimiterUnavailable:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Service temporarily unavailable.",
+        ) from None
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many attempts. Please try again later.",
+            headers={"Retry-After": str(retry_after)},
+        )
+
+
 def _client_key(request: Request) -> str:
     """Build a limiter key from client IP + route path (per-endpoint throttle).
 
@@ -100,13 +121,7 @@ def _client_key(request: Request) -> str:
 
 def rate_limit_auth(request: Request) -> None:
     """FastAPI dependency: throttle auth attempts; 429 when the window is exceeded."""
-    allowed, retry_after = get_rate_limiter().hit(_client_key(request))
-    if not allowed:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Too many attempts. Please try again later.",
-            headers={"Retry-After": str(retry_after)},
-        )
+    _hit(_client_key(request))
 
 
 def rate_limit_upload(request: Request) -> None:
@@ -116,13 +131,7 @@ def rate_limit_upload(request: Request) -> None:
     (same ``KNOWN LIMITATION`` under the proxy topology), applied to the upload
     endpoint so a client cannot flood object storage with writes.
     """
-    allowed, retry_after = get_rate_limiter().hit(_client_key(request))
-    if not allowed:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Too many attempts. Please try again later.",
-            headers={"Retry-After": str(retry_after)},
-        )
+    _hit(_client_key(request))
 
 
 def _route_template_key(request: Request) -> str:
@@ -158,13 +167,7 @@ def rate_limit_conversations(request: Request) -> None:
     bucket for the whole surface: each route template still counts separately, so
     renaming conversations does not spend the budget for asking questions.
     """
-    allowed, retry_after = get_rate_limiter().hit(_route_template_key(request))
-    if not allowed:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Too many attempts. Please try again later.",
-            headers={"Retry-After": str(retry_after)},
-        )
+    _hit(_route_template_key(request))
 
 
 def rate_limit_quiz(request: Request) -> None:
@@ -175,13 +178,7 @@ def rate_limit_quiz(request: Request) -> None:
     state-changing quiz endpoints (deck POST + review POST) so a client cannot flood
     batch generation or the scheduling writes (QUIZ-18).
     """
-    allowed, retry_after = get_rate_limiter().hit(_client_key(request))
-    if not allowed:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Too many attempts. Please try again later.",
-            headers={"Retry-After": str(retry_after)},
-        )
+    _hit(_client_key(request))
 
 
 def rate_limit_notes(request: Request) -> None:
@@ -192,10 +189,4 @@ def rate_limit_notes(request: Request) -> None:
     state-changing notes endpoints (create/update/delete + capture) so a client
     cannot flood the note writes or the corpus resolution capture does (NF-09).
     """
-    allowed, retry_after = get_rate_limiter().hit(_client_key(request))
-    if not allowed:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Too many attempts. Please try again later.",
-            headers={"Retry-After": str(retry_after)},
-        )
+    _hit(_client_key(request))

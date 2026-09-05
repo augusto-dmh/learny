@@ -41,9 +41,8 @@ def throttled_client(db_conn: Connection, monkeypatch: pytest.MonkeyPatch) -> It
 
     previous = get_rate_limiter()
     # Allow 3 attempts per long window so the 4th trips deterministically.
-    set_rate_limiter(InMemoryFixedWindowRateLimiter(max_attempts=3, window_seconds=300))
-
     app = create_app()
+    set_rate_limiter(InMemoryFixedWindowRateLimiter(max_attempts=3, window_seconds=300))
 
     def _override() -> Iterator[Connection]:
         yield db_conn

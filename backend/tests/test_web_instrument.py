@@ -91,6 +91,7 @@ def build_client(db_conn: Connection, monkeypatch: pytest.MonkeyPatch) -> Iterat
             get_settings.cache_clear()
 
             app = create_app()
+            set_rate_limiter(InMemoryFixedWindowRateLimiter(max_attempts=1000))
 
             def _override() -> Iterator[Connection]:
                 yield db_conn

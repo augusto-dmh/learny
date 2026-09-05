@@ -12,11 +12,7 @@ from __future__ import annotations
 import redis
 from redis.exceptions import RedisError
 
-from app.infrastructure.web.rate_limit import RateLimiter
-
-
-class LimiterUnavailable(Exception):
-    """Raised when Redis cannot record a limiter hit."""
+from app.infrastructure.web.rate_limit import LimiterUnavailable, RateLimiter
 
 
 class RedisFixedWindowRateLimiter:
