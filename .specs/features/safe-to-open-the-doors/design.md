@@ -7,22 +7,19 @@
 
 ## Architecture Overview
 
-Keep FastAPI authoritative. Redis implements the existing `RateLimiter` port at the API composition root. Daily budget, quotas, invites, Turnstile, and mail are Learny application services behind ports; adapters stay in `infrastructure/`. The Next.js proxy stays transport-only: it forwards a Caddy-stamped client IP and never interprets invites, spend, or captcha.
+Keep FastAPI authoritative. Redis implements the existing `RateLimiter` port at the API composition root. Daily budget, quotas, invites, and mail are Learny application services behind ports; adapters stay in `infrastructure/`. The Next.js proxy stays transport-only: it forwards a Caddy-stamped client IP and never interprets invites or spend.
 
-Do not introduce Cycle G's thinking-token `SpendPort`. This letter's ledger is a daily budget table plus integer counters (`DailyBudget` / `ai_spend_days`).
+Do not introduce Cycle G's thinking-token `SpendPort`. This letter's ledger is a daily budget table plus integer counters.
 
-Approach comparison (same RFC slice):
+Rejected alternatives that deliver the same RFC slice:
 
 | Approach | Why not |
 |---|---|
 | LiteLLM budgets in front of generation | Would orchestrate (ADR-0009) |
-| Invite without Turnstile | Drops the RFC opening bot brake; AD-325 chooses AND |
-| Turnstile instead of invites | Hosted stays invite-only until this letter is green |
+| Turnstile instead of invites | Hosted stays invite-only; AD-325 defers Cloudflare |
 | ESP SDK (Resend/Postmark) | New provider package; SMTP behind `EmailPort` is enough |
 | Soft-delete accounts | Not honest LGPD erase |
 | 80 MiB stored quota | Blocks the existing 100 MiB PDF upload cap |
-
-**Chosen:** Redis limiter + Postgres daily budget + invite/Turnstile/disposable + SMTP EmailPort + storage-then-CASCADE delete.
 
 ```mermaid
 graph TD
@@ -32,12 +29,10 @@ graph TD
   FastAPI --> RedisLimiter
   FastAPI --> DailyBudget
   FastAPI --> InviteRepo
-  FastAPI --> TurnstilePort
   FastAPI --> EmailPort
   FastAPI --> StoragePort
   DailyBudget --> Postgres
   InviteRepo --> Postgres
-  TurnstilePort -->|siteverify httpx| Cloudflare
 ```
 
 ---
@@ -51,14 +46,13 @@ graph TD
 | `RateLimiter` protocol + deps | `backend/app/infrastructure/web/rate_limit.py` | Redis adapter implements `hit`; change key builders |
 | `set_rate_limiter` | same | Composition root + tests |
 | `redis_url` | `backend/app/core/config.py` | Shared with Celery; pooled client |
-| Register/login | `backend/app/application/identity.py`, `web/auth.py` | Invite + tos + disposable + Turnstile before `RegisterUser` |
+| Register/login | `backend/app/application/identity.py`, `web/auth.py` | Invite + tos + disposable before `RegisterUser` |
 | Cascade FKs | `backend/app/infrastructure/db/metadata.py` | User delete wipes PG; objects need explicit storage delete |
 | `sources.byte_size` | same | SUM for byte quota; no MinIO list |
 | Same-origin proxy | `frontend/app/lib/proxy.ts` | Forward trusted IP; strip client XFF |
 | Cookie/CSRF/origin | existing auth | Deletion and reset are CSRF writes |
 | Sample `is_sample` | sources | Excluded from quotas and deletion |
 | Anthropic usage log | `backend/app/infrastructure/answering/anthropic.py` | Map `usage` onto a Learny usage DTO for USD micros |
-| httpx | `backend/pyproject.toml` | Turnstile siteverify; already a dependency |
 
 ### Integration Points
 
@@ -68,7 +62,6 @@ graph TD
 | Postgres | migration `0024` budget/invites/tokens/user columns |
 | MinIO | `delete_object` via boto3 inside the storage adapter |
 | SMTP | stdlib in `infrastructure/email/smtp.py` |
-| Turnstile | `POST` siteverify; widget script on register when site key set |
 | Caddy | `header_up X-Real-IP {remote_host}` on `reverse_proxy web:3000` |
 
 ---
@@ -112,20 +105,12 @@ graph TD
 - **Interfaces**: `consume(code) -> None`; `is_disposable(email) -> bool`.
 - **Reuses**: `validate_email` generic invalid copy for disposables (DOOR-23).
 
-### TurnstilePort
-
-- **Purpose**: Verify a widget token against Cloudflare siteverify.
-- **Location**: `backend/app/domain/ports.py` + `infrastructure/captcha/turnstile.py`
-- **Interfaces**: `verify(token: str, ip: str) -> bool`. Empty `LEARNY_TURNSTILE_SECRET` → adapter returns true without HTTP. Set secret → missing token or non-success JSON fails closed. Timeouts/5xx fail closed.
-- **Dependencies**: httpx; no official Cloudflare package.
-- **Reuses**: trusted client IP from the limiter helper.
-
 ### EmailPort
 
 - **Purpose**: Send verify and reset messages.
 - **Location**: `backend/app/domain/ports.py` + `infrastructure/email/`
 - **Interfaces**: `send(*, to, subject, body) -> None`
-- **Reuses**: session token hasher for verify/reset secrets; TTL settings. ADR-0031 records the port (Execute task T24).
+- **Reuses**: session token hasher for verify/reset secrets; TTL settings.
 
 ### DeleteAccount
 
@@ -179,11 +164,9 @@ Add `delete_object(key: str) -> None`. Missing keys are success (idempotent dele
 | In-flight ingest | 409 | Wait for the current job |
 | Bad/missing invite | 403 | Invite-required copy |
 | Disposable / tos | 422 | Generic invalid email / tos required |
-| Bad/missing Turnstile when secret set | 400 | Retry the widget |
 | Reset unknown email | 204, no mail | No enumeration |
 | Storage delete fails | 502; user remains | Retry delete |
 | SMTP send fails | Log; session still created | Resend verify later |
-| Siteverify timeout when secret set | Fail closed; no user | Retry |
 
 ---
 
@@ -200,8 +183,6 @@ Add `delete_object(key: str) -> None`. Missing keys are success (idempotent dele
 | Legal copy quality | static pages | Lying policy | Committed short pages; not generated per request |
 | Integer caps vs USD cap | DailyBudget | Two meters to explain | Whichever trips first; same honest copy class |
 | Test suite register flood | `LEARNY_INVITE_REQUIRED` | CI red | Default false; production example true |
-| Turnstile in CI | siteverify | Network in tests | Empty secret skips; fake port in unit tests |
-| Cloudflare as subprocessor | `/privacy` | Incomplete disclosure | Name Cloudflare next to OpenAI/Anthropic |
 
 ---
 
@@ -211,7 +192,7 @@ Add `delete_object(key: str) -> None`. Missing keys are success (idempotent dele
 |---|---|---|
 | Limiter store | Redis String INCR + EXPIRE | Matches the existing `hit` protocol; colon keys `learny:rl:...` |
 | Budget vs Cycle G SpendPort | Separate `ai_spend_days` table this letter | Cycle G still owns thinking-token persistence |
-| Captcha | Turnstile via `TurnstilePort` + httpx when secret set | AD-325; empty secret skips |
+| Captcha | Invite only; no Turnstile | AD-325 |
 | Mail | SMTP + log adapter | No ESP SDK |
 | Byte quota | 256 MiB | Compatible with 100 MiB PDF max × 2 books |
 | Delete order | Objects then user row | Fail closed on storage |
