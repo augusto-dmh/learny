@@ -17,6 +17,7 @@ import logging
 from collections.abc import Callable
 from uuid import UUID
 
+from app.application.activation import ACTIVATION_SAMPLE_OPENED, RecordActivation
 from app.application.errors import (
     ActiveIngestionExists,
     IngestionNotFound,
@@ -57,8 +58,6 @@ SOURCE_STATUS_FAILED = "failed"
 # raises (the exception itself goes only to the server log), and the claim seam,
 # when a job has exhausted its attempts.
 INGESTION_FAILURE_ERROR = "Ingestion processing failed."
-
-ACTIVATION_SAMPLE_OPENED = "sample_opened"
 
 
 def authorized_source(
@@ -104,10 +103,9 @@ def readable_source(
         raise SourceNotFound("Source not found.")
     if source.is_sample:
         if activations is not None and clock is not None:
-            activations.insert_if_absent(
+            RecordActivation(activations=activations, clock=clock)(
                 user_id=user.id,
                 name=ACTIVATION_SAMPLE_OPENED,
-                occurred_at=clock.now(),
             )
         return source
     try:
