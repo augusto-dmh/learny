@@ -831,6 +831,27 @@ def test_start_on_a_ready_sample_is_readable_to_a_non_owner() -> None:
     assert started.title == "The Art of War"
 
 
+def test_start_on_an_unreadied_sample_raises_source_not_ready() -> None:
+    operator = _user()
+    sample = replace(
+        _owned_source(operator.id, status="processing", title="The Art of War"),
+        is_sample=True,
+    )
+    sources = FakeSourceRepository()
+    sources.add(sample)
+    reader = User(id=uuid4(), email="reader@example.com", created_at=_NOW)
+    corpus = FakeCorpus(_structure(_section("ch1.xhtml", ("Chapter 1",))))
+    conversations = FakeConversationRepository(sources)
+
+    with pytest.raises(SourceNotReady):
+        _start(sources=sources, corpus=corpus, conversations=conversations)(
+            user=reader, source_id=sample.id, include_notes=False
+        )
+
+    assert conversations._by_id == {}
+    assert corpus.get_structure_calls == 0
+
+
 def test_start_against_a_not_ready_source_creates_nothing() -> None:
     user, source, sources = _owned_world(status="processing")
     corpus = FakeCorpus(_structure(_section("ch1.xhtml", ("Chapter 1",))))
