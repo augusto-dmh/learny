@@ -457,11 +457,7 @@ class EnsureStarterDeck:
             raise SourceNotFound("Source not found.")
 
         now = self._clock.now()
-        templates = [
-            item
-            for item in self._items.list_for_source(source_id)
-            if item.origin == QuizItemOrigin.DECK
-        ]
+        templates = self._items.list_for_source(source_id, origin=QuizItemOrigin.DECK)
         for template in templates:
             clone = QuizItem(
                 id=self._ids(),
@@ -484,11 +480,9 @@ class EnsureStarterDeck:
             if self._items.upsert(clone, embedding=None):
                 self._items.create_scheduling(clone.id, self._scheduling.initial())
 
-        return [
-            item
-            for item in self._items.list_for_source(source_id)
-            if item.origin == QuizItemOrigin.STARTER and item.user_id == user.id
-        ]
+        return self._items.list_for_source(
+            source_id, origin=QuizItemOrigin.STARTER, user_id=user.id
+        )
 
 
 class ReconcileQuizItems:

@@ -51,6 +51,7 @@ from app.domain.entities import (
     QuizDeckResult,
     QuizGenerationJob,
     QuizItem,
+    QuizItemOrigin,
     QuizSection,
     ReadingPosition,
     RecentReadingPosition,
@@ -1073,8 +1074,14 @@ class QuizItemRepository(Protocol):
         """Stamp ``undone_at`` on an existing log row. Never deletes the row (AD-306)."""
         ...
 
-    def list_for_source(self, source_id: UUID) -> list[QuizItem]:
-        """Return all of ``source_id``'s items (any status), for the overview (QUIZ-14)."""
+    def list_for_source(
+        self,
+        source_id: UUID,
+        *,
+        origin: QuizItemOrigin | None = None,
+        user_id: UUID | None = None,
+    ) -> list[QuizItem]:
+        """Return ``source_id``'s items (any status), optionally filtered (QUIZ-14)."""
         ...
 
     def due_map(self, source_id: UUID) -> dict[UUID, datetime]:

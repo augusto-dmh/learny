@@ -555,6 +555,45 @@ def test_list_for_source_returns_all_statuses(db_conn: Connection) -> None:
     assert {i.id for i in items} == {active.id, stale.id}
 
 
+def test_list_for_source_filters_origin_and_owner(db_conn: Connection) -> None:
+    source = _persisted_source(db_conn, "quiz-list-filter@example.com")
+    users = SqlAlchemyUserRepository(db_conn)
+    now = datetime.now(UTC)
+    learner = User(id=uuid4(), email=f"list-filter-{uuid4()}@example.com", created_at=now)
+    other = User(id=uuid4(), email=f"list-other-{uuid4()}@example.com", created_at=now)
+    users.add(learner)
+    users.add(other)
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    template = _item(source.id, question="template Q", answer="template A")
+    clone = replace(
+        template,
+        id=uuid4(),
+        origin=QuizItemOrigin.STARTER,
+        user_id=learner.id,
+        question="clone Q",
+        answer="clone A",
+        content_key=content_key(QuizItemType.FREE_RECALL, "clone Q", "clone A"),
+    )
+    stranger = replace(
+        template,
+        id=uuid4(),
+        origin=QuizItemOrigin.STARTER,
+        user_id=other.id,
+        question="other Q",
+        answer="other A",
+        content_key=content_key(QuizItemType.FREE_RECALL, "other Q", "other A"),
+    )
+    repo.upsert(template, embedding=None)
+    repo.upsert(clone, embedding=None)
+    repo.upsert(stranger, embedding=None)
+
+    decks = repo.list_for_source(source.id, origin=QuizItemOrigin.DECK)
+    mine = repo.list_for_source(source.id, origin=QuizItemOrigin.STARTER, user_id=learner.id)
+
+    assert {item.id for item in decks} == {template.id}
+    assert {item.id for item in mine} == {clone.id}
+
+
 def test_counts_by_status(db_conn: Connection) -> None:
     source = _persisted_source(db_conn, "quiz-counts@example.com")
     repo = SqlAlchemyQuizItemRepository(db_conn)
@@ -1782,6 +1821,15 @@ def test_two_learners_can_hold_the_same_starter_fingerprint_without_sharing_sche
     stored = repo.list_for_source(source.id)
     starters = [item for item in stored if item.origin == QuizItemOrigin.STARTER]
     assert len(starters) == 2
+    assert [item.id for item in repo.list_for_source(source.id, origin=QuizItemOrigin.DECK)] == [
+        template.id
+    ]
+    assert [
+        item.id
+        for item in repo.list_for_source(
+            source.id, origin=QuizItemOrigin.STARTER, user_id=learner_a.id
+        )
+    ] == [clone_a.id]
     assert {item.user_id for item in starters} == {learner_a.id, learner_b.id}
 
     again = replace(clone_a, id=uuid4())

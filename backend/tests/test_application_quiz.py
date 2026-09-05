@@ -176,8 +176,20 @@ class FakeQuizItemRepository:
         self.update_scheduling_calls += 1
         self.scheduling[quiz_item_id] = snapshot
 
-    def list_for_source(self, source_id: UUID) -> list[QuizItem]:
-        return [item for item in self._items.values() if item.source_id == source_id]
+    def list_for_source(
+        self,
+        source_id: UUID,
+        *,
+        origin: QuizItemOrigin | None = None,
+        user_id: UUID | None = None,
+    ) -> list[QuizItem]:
+        return [
+            item
+            for item in self._items.values()
+            if item.source_id == source_id
+            and (origin is None or item.origin == origin)
+            and (user_id is None or item.user_id == user_id)
+        ]
 
     def counts_by_status(self, source_id: UUID) -> dict[str, int]:
         counts: dict[str, int] = {}

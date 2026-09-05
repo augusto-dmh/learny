@@ -1630,11 +1630,22 @@ class SqlAlchemyQuizItemRepository:
             update(review_log).where(review_log.c.id == log_id).values(undone_at=undone_at)
         )
 
-    def list_for_source(self, source_id: UUID) -> list[QuizItem]:
-        """Return all of ``source_id``'s items (any status), oldest first (QUIZ-14)."""
+    def list_for_source(
+        self,
+        source_id: UUID,
+        *,
+        origin: QuizItemOrigin | None = None,
+        user_id: UUID | None = None,
+    ) -> list[QuizItem]:
+        """Return ``source_id``'s items (any status), oldest first (QUIZ-14)."""
+        conditions = [quiz_items.c.source_id == source_id]
+        if origin is not None:
+            conditions.append(quiz_items.c.origin == origin)
+        if user_id is not None:
+            conditions.append(quiz_items.c.user_id == user_id)
         rows = self._conn.execute(
             select(*_QUIZ_ITEM_READ_COLUMNS)
-            .where(quiz_items.c.source_id == source_id)
+            .where(*conditions)
             .order_by(quiz_items.c.created_at, quiz_items.c.id)
         ).all()
         return [_to_quiz_item(row) for row in rows]
