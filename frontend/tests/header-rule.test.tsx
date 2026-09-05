@@ -2,7 +2,7 @@
 
 /**
  * POL-11 — the ink-line header rule on the four top-level screens: Home,
- * Bookshelf, Review, and Notes each carry the static signature rule (no fill —
+ * Library, Review, and Notes each carry the static signature rule (no fill —
  * fills exist only where they encode real progress). The screens' data
  * behavior is covered by their own suites; every fetch here fails so only the
  * header framing is under test.
@@ -28,7 +28,7 @@ afterEach(() => {
 
 describe.each([
   ["Home", HomePage, "Home"],
-  ["Bookshelf", SourcesPage, "Your bookshelf"],
+  ["Library", SourcesPage, "Library"],
   ["Review", ReviewPage, "Review"],
   ["Notes", NotesPage, "Notes"],
 ] as const)("%s screen header", (_name, Page, title) => {

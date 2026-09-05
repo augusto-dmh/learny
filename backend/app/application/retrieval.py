@@ -15,9 +15,10 @@ from collections.abc import Callable, Sequence
 from uuid import UUID
 
 from app.application.identity import AuthorizeOwnership
-from app.application.ingestion import authorized_source
+from app.application.ingestion import readable_source
 from app.domain.entities import Evidence, IngestionEvent, IngestionJob, Source, User
 from app.domain.ports import (
+    ActivationEventRepository,
     Clock,
     EmbeddingIndexRepository,
     EmbeddingPort,
@@ -119,6 +120,8 @@ class RetrieveEvidence:
         rrf_k: int,
         ef_search: int,
         default_top_k: int,
+        activations: ActivationEventRepository | None = None,
+        clock: Clock | None = None,
     ) -> None:
         self._sources = sources
         self._retrieval = retrieval
@@ -129,6 +132,8 @@ class RetrieveEvidence:
         self._rrf_k = rrf_k
         self._ef_search = ef_search
         self._default_top_k = default_top_k
+        self._activations = activations
+        self._clock = clock
 
     def __call__(
         self,
@@ -140,11 +145,13 @@ class RetrieveEvidence:
         anchors: Sequence[str] | None = None,
         include_notes: bool = False,
     ) -> list[Evidence]:
-        authorized_source(
+        readable_source(
             user=user,
             source_id=source_id,
             sources=self._sources,
             authorize=self._authorize,
+            activations=self._activations,
+            clock=self._clock,
         )
         query_vec = self._embeddings.embed_query(query)
         # The owner is always forwarded so the port can scope the note arms to this

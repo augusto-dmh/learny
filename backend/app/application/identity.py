@@ -15,13 +15,15 @@ from dataclasses import dataclass
 from datetime import timedelta
 from uuid import UUID, uuid4
 
+from app.application.activation import ACTIVATION_ACCOUNT_CREATED, RecordActivation
 from app.application.errors import (
     EmailAlreadyExists,
     InvalidCredentials,
     NotAuthenticated,
     NotAuthorized,
+    ValidationError,
 )
-from app.application.validation import validate_email, validate_password
+from app.application.validation import SAMPLE_OPERATOR_EMAIL, validate_email, validate_password
 from app.domain.entities import IssuedSession, PasswordCredential, Session, User
 from app.domain.ports import (
     Clock,
@@ -85,6 +87,7 @@ class RegisterUser:
         hasher: PasswordHasher,
         tokens: TokenGenerator,
         clock: Clock,
+        record_activation: RecordActivation,
         session_ttl: timedelta = DEFAULT_SESSION_TTL,
     ) -> None:
         self._users = users
@@ -93,11 +96,14 @@ class RegisterUser:
         self._hasher = hasher
         self._tokens = tokens
         self._clock = clock
+        self._record_activation = record_activation
         self._session_ttl = session_ttl
 
     def __call__(self, *, email: str, password: str) -> AuthResult:
         normalized_email = validate_email(email)
         validate_password(password)
+        if normalized_email == SAMPLE_OPERATOR_EMAIL:
+            raise ValidationError("Invalid email address.")
 
         if self._users.get_by_email(normalized_email) is not None:
             raise EmailAlreadyExists("Email is already registered.")
@@ -123,6 +129,7 @@ class RegisterUser:
             clock=self._clock,
             session_ttl=self._session_ttl,
         )
+        self._record_activation(user_id=user.id, name=ACTIVATION_ACCOUNT_CREATED)
         return AuthResult(user=user, issued=issued)
 
 

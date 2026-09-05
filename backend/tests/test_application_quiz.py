@@ -22,6 +22,7 @@ import pytest
 from app.application.errors import QuizDeckConflict, SourceNotFound, SourceNotReady
 from app.application.identity import AuthorizeOwnership
 from app.application.quiz import (
+    EnsureStarterDeck,
     ListQuizItems,
     PlanDeckGeneration,
     ReconcileQuizItems,
@@ -85,22 +86,25 @@ class FakeQuizJobRepository:
 class FakeQuizItemRepository:
     """In-memory ``QuizItemRepository`` — coherent upsert / scheduling / reads.
 
-    ``upsert`` keys on ``(source_id, content_key)`` and returns ``True`` only on a
-    genuine insert, so ``finalize`` creates scheduling exactly once per item; a
-    re-upsert returns ``False`` and never touches the recorded scheduling snapshot
-    (QUIZ-02). ``sections_for_generation`` returns a preset list.
+    Deck ``upsert`` keys on ``(source_id, content_key)`` and returns ``True`` only
+    on a genuine insert, so ``finalize`` creates scheduling exactly once per item;
+    a re-upsert returns ``False`` and never touches the recorded scheduling
+    snapshot (QUIZ-02). Starter ``upsert`` keys on
+    ``(user_id, source_id, content_key)`` and is insert-or-ignore so a second
+    clone of the same template is a no-op. ``sections_for_generation`` returns a
+    preset list.
     """
 
     def __init__(self, sections: list[QuizSection] | None = None) -> None:
         self._sections = sections or []
-        self._items: dict[tuple[UUID, str], QuizItem] = {}
+        self._items: dict[UUID, QuizItem] = {}
         self._embeddings: dict[UUID, list[float]] = {}
         self.scheduling: dict[UUID, SchedulingSnapshot] = {}
         self.create_scheduling_calls = 0
         self.update_scheduling_calls = 0
 
     def seed(self, item: QuizItem, embedding: list[float]) -> None:
-        self._items[(item.source_id, item.content_key)] = item
+        self._items[item.id] = item
         self._embeddings[item.id] = embedding
         self.scheduling[item.id] = _INITIAL
 
@@ -110,21 +114,58 @@ class FakeQuizItemRepository:
     def existing_embeddings(self, source_id: UUID) -> list[tuple[UUID, list[float]]]:
         return [
             (item.id, self._embeddings[item.id])
-            for key, item in self._items.items()
-            if key[0] == source_id and item.id in self._embeddings
+            for item in self._items.values()
+            if item.source_id == source_id and item.id in self._embeddings
         ]
 
+    def _find_deck(self, source_id: UUID, content_key: str) -> QuizItem | None:
+        for item in self._items.values():
+            if (
+                item.origin == QuizItemOrigin.DECK
+                and item.source_id == source_id
+                and item.content_key == content_key
+            ):
+                return item
+        return None
+
+    def _find_starter(
+        self, user_id: UUID | None, source_id: UUID, content_key: str
+    ) -> QuizItem | None:
+        for item in self._items.values():
+            if (
+                item.origin == QuizItemOrigin.STARTER
+                and item.user_id == user_id
+                and item.source_id == source_id
+                and item.content_key == content_key
+            ):
+                return item
+        return None
+
     def upsert(self, item: QuizItem, *, embedding) -> bool:  # noqa: ANN001
-        key = (item.source_id, item.content_key)
-        inserted = key not in self._items
-        if inserted:
-            self._items[key] = item
+        existing: QuizItem | None
+        if item.origin == QuizItemOrigin.DECK:
+            existing = self._find_deck(item.source_id, item.content_key)
+            if existing is None:
+                self._items[item.id] = item
+                target = item
+                inserted = True
+            else:
+                target = replace(item, id=existing.id, created_at=existing.created_at)
+                self._items[existing.id] = target
+                inserted = False
+        elif item.origin == QuizItemOrigin.STARTER:
+            existing = self._find_starter(item.user_id, item.source_id, item.content_key)
+            if existing is not None:
+                return False
+            self._items[item.id] = item
+            target = item
+            inserted = True
         else:
-            existing = self._items[key]
-            self._items[key] = replace(item, id=existing.id, created_at=existing.created_at)
-        target_id = self._items[key].id
+            inserted = item.id not in self._items
+            self._items[item.id] = item
+            target = item
         if embedding is not None:
-            self._embeddings[target_id] = list(embedding)
+            self._embeddings[target.id] = list(embedding)
         return inserted
 
     def create_scheduling(self, quiz_item_id: UUID, snapshot: SchedulingSnapshot) -> None:
@@ -135,8 +176,20 @@ class FakeQuizItemRepository:
         self.update_scheduling_calls += 1
         self.scheduling[quiz_item_id] = snapshot
 
-    def list_for_source(self, source_id: UUID) -> list[QuizItem]:
-        return [item for key, item in self._items.items() if key[0] == source_id]
+    def list_for_source(
+        self,
+        source_id: UUID,
+        *,
+        origin: QuizItemOrigin | None = None,
+        user_id: UUID | None = None,
+    ) -> list[QuizItem]:
+        return [
+            item
+            for item in self._items.values()
+            if item.source_id == source_id
+            and (origin is None or item.origin == origin)
+            and (user_id is None or item.user_id == user_id)
+        ]
 
     def counts_by_status(self, source_id: UUID) -> dict[str, int]:
         counts: dict[str, int] = {}
@@ -935,3 +988,151 @@ def test_reconcile_still_stales_a_deck_card_whose_excerpt_left_the_section() -> 
 
     assert items._items[item.id].status == QuizItemStatus.STALE
     assert items._items[item.id].anchor == "ch1"
+
+
+# --- EnsureStarterDeck (FS-14/15/16/18) -----------------------------------------
+
+
+_OPERATOR = User(id=uuid4(), email="op@x.com", created_at=_NOW)
+_LEARNER = User(id=uuid4(), email="learner@x.com", created_at=_NOW)
+_OTHER_LEARNER = User(id=uuid4(), email="other@x.com", created_at=_NOW)
+_GRADED = SchedulingSnapshot(
+    state=2, step=None, stability=10.0, difficulty=4.0, due=_NOW, last_review=_NOW
+)
+
+
+def _template(source_id: UUID, n: int) -> QuizItem:
+    question = f"Question {n}?"
+    answer = f"Answer {n}"
+    return QuizItem(
+        id=uuid4(),
+        source_id=source_id,
+        user_id=_OPERATOR.id,
+        origin=QuizItemOrigin.DECK,
+        item_type=QuizItemType.FREE_RECALL,
+        question=question,
+        answer=answer,
+        section_path=("Chapter 1",),
+        anchor=f"ch1#q{n}",
+        source_excerpt=f"excerpt {n}",
+        chunk_hash="c" * 64,
+        content_key=content_key(QuizItemType.FREE_RECALL, question, answer),
+        status=QuizItemStatus.ACTIVE,
+        generation_meta={},
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+
+
+def _sample_with_templates() -> tuple[
+    FakeSourceRepository, FakeQuizItemRepository, Source, list[QuizItem]
+]:
+    sources, items = FakeSourceRepository(), FakeQuizItemRepository()
+    source = replace(_source(_OPERATOR.id), is_sample=True)
+    sources.add(source)
+    templates = [_template(source.id, n) for n in range(5)]
+    for template in templates:
+        items.seed(template, [])
+        items.scheduling[template.id] = _GRADED
+    return sources, items, source, templates
+
+
+def _ensure(sources: FakeSourceRepository, items: FakeQuizItemRepository) -> EnsureStarterDeck:
+    return EnsureStarterDeck(
+        sources=sources,
+        items=items,
+        authorize=AuthorizeOwnership(),
+        scheduling=FakeScheduling(),
+        clock=FakeClock(_NOW),
+        ids=uuid4,
+    )
+
+
+def test_ensure_starter_inserts_five_active_clones_with_new_ids_and_initial_scheduling() -> None:
+    sources, items, source, templates = _sample_with_templates()
+
+    clones = _ensure(sources, items)(user=_LEARNER, source_id=source.id)
+
+    assert len(clones) == 5
+    assert {c.origin for c in clones} == {QuizItemOrigin.STARTER}
+    assert {c.user_id for c in clones} == {_LEARNER.id}
+    assert {c.status for c in clones} == {QuizItemStatus.ACTIVE}
+    assert {c.id for c in clones}.isdisjoint({t.id for t in templates})
+    assert {c.question for c in clones} == {t.question for t in templates}
+    assert {c.answer for c in clones} == {t.answer for t in templates}
+    assert {c.content_key for c in clones} == {t.content_key for t in templates}
+    assert all(items.scheduling[c.id] == _INITIAL for c in clones)
+    assert items.create_scheduling_calls == 5
+
+
+def test_ensure_starter_second_call_leaves_count_and_schedules_byte_equal() -> None:
+    sources, items, source, _templates = _sample_with_templates()
+    ensure = _ensure(sources, items)
+
+    first = ensure(user=_LEARNER, source_id=source.id)
+    before = {clone.id: items.scheduling[clone.id] for clone in first}
+
+    second = ensure(user=_LEARNER, source_id=source.id)
+
+    assert {c.id for c in second} == {c.id for c in first}
+    assert len(second) == 5
+    assert {c.id: items.scheduling[c.id] for c in second} == before
+    assert items.create_scheduling_calls == 5
+
+
+def test_ensure_starter_grading_a_clone_does_not_change_template_scheduling() -> None:
+    sources, items, source, templates = _sample_with_templates()
+    clones = _ensure(sources, items)(user=_LEARNER, source_id=source.id)
+    before_templates = {t.id: items.scheduling[t.id] for t in templates}
+
+    items.update_scheduling(clones[0].id, _GRADED)
+
+    assert items.scheduling[clones[0].id] == _GRADED
+    assert {t.id: items.scheduling[t.id] for t in templates} == before_templates
+    assert all(items.scheduling[t.id] == _GRADED for t in templates)
+
+
+def test_ensure_starter_two_users_get_ten_clones_five_each_with_separate_schedules() -> None:
+    sources, items, source, templates = _sample_with_templates()
+    ensure = _ensure(sources, items)
+
+    first = ensure(user=_LEARNER, source_id=source.id)
+    second = ensure(user=_OTHER_LEARNER, source_id=source.id)
+
+    assert len(first) == 5
+    assert len(second) == 5
+    assert {c.id for c in first}.isdisjoint({c.id for c in second})
+    starters = [i for i in items.list_for_source(source.id) if i.origin == QuizItemOrigin.STARTER]
+    assert len(starters) == 10
+    decks = [i for i in items.list_for_source(source.id) if i.origin == QuizItemOrigin.DECK]
+    assert {i.id for i in decks} == {t.id for t in templates}
+
+    items.update_scheduling(first[0].id, _GRADED)
+    assert items.scheduling[second[0].id] == _INITIAL
+    assert all(items.scheduling[t.id] == _GRADED for t in templates)
+
+
+def test_ensure_starter_overlap_cannot_yield_ten_clones_for_one_user() -> None:
+    sources, items, source, _templates = _sample_with_templates()
+    ensure = _ensure(sources, items)
+
+    ensure(user=_LEARNER, source_id=source.id)
+    ensure(user=_LEARNER, source_id=source.id)
+
+    starters = [
+        i
+        for i in items.list_for_source(source.id)
+        if i.origin == QuizItemOrigin.STARTER and i.user_id == _LEARNER.id
+    ]
+    assert len(starters) == 5
+    assert items.create_scheduling_calls == 5
+
+
+def test_ensure_starter_rejects_a_non_sample_source() -> None:
+    sources, items = FakeSourceRepository(), FakeQuizItemRepository()
+    source = _source(_LEARNER.id)
+    sources.add(source)
+
+    with pytest.raises(SourceNotFound):
+        _ensure(sources, items)(user=_LEARNER, source_id=source.id)
+    assert items.list_for_source(source.id) == []

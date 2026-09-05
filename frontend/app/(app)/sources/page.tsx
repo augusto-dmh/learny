@@ -20,7 +20,7 @@ export default function SourcesPage() {
   return (
     <main className="flex-1 p-6">
       <header className="mb-6 space-y-2">
-        <h1 className="text-2xl font-semibold">Your bookshelf</h1>
+        <h1 className="text-2xl font-semibold">Library</h1>
         <InkLine />
       </header>
       <LibraryScreen onRequireAuth={() => router.replace("/login")} />

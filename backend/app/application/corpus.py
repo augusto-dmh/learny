@@ -21,7 +21,7 @@ from uuid import UUID
 from app.application.chunking import pack_chunks
 from app.application.errors import CorpusNotFound
 from app.application.identity import AuthorizeOwnership
-from app.application.ingestion import authorized_source
+from app.application.ingestion import readable_source
 from app.application.language import detect_language, sample_text
 from app.application.media import (
     emphasize_dropped_images,
@@ -43,6 +43,7 @@ from app.domain.entities import (
     User,
 )
 from app.domain.ports import (
+    ActivationEventRepository,
     Clock,
     CorpusRepository,
     DocumentParserPort,
@@ -307,17 +308,23 @@ class ReadSourceStructure:
         sources: SourceRepository,
         corpus: CorpusRepository,
         authorize: AuthorizeOwnership,
+        activations: ActivationEventRepository | None = None,
+        clock: Clock | None = None,
     ) -> None:
         self._sources = sources
         self._corpus = corpus
         self._authorize = authorize
+        self._activations = activations
+        self._clock = clock
 
     def __call__(self, *, user: User, source_id: UUID) -> CorpusStructure:
-        authorized_source(
+        readable_source(
             user=user,
             source_id=source_id,
             sources=self._sources,
             authorize=self._authorize,
+            activations=self._activations,
+            clock=self._clock,
         )
         structure = self._corpus.get_structure(source_id)
         if structure is None:
@@ -326,14 +333,15 @@ class ReadSourceStructure:
 
 
 class ReadSection:
-    """Return one section's content for the owner, or a not-found (FE-14).
+    """Return one section's content for a readable source, or a not-found (FE-14).
 
-    Mirrors ``ReadSourceStructure``: ownership is enforced first via
-    ``authorized_source`` so a missing source and a non-owner collapse to
-    ``SourceNotFound`` (no existence disclosure). An owned source whose corpus is
-    absent and an anchor that matches no section both surface as ``get_section``
-    returning ``None`` → ``CorpusNotFound``; the web layer maps both to 404, so a
-    valid anchor is indistinguishable from an unknown one to a non-owner.
+    Mirrors ``ReadSourceStructure``: readability is enforced first via
+    ``readable_source`` so a missing source and a non-readable caller collapse to
+    ``SourceNotFound`` (no existence disclosure). The shared sample is readable
+    to any authenticated user. An owned source whose corpus is absent and an
+    anchor that matches no section both surface as ``get_section`` returning
+    ``None`` → ``CorpusNotFound``; the web layer maps both to 404, so a valid
+    anchor is indistinguishable from an unknown one to a non-owner.
     """
 
     def __init__(
@@ -342,17 +350,23 @@ class ReadSection:
         sources: SourceRepository,
         corpus: CorpusRepository,
         authorize: AuthorizeOwnership,
+        activations: ActivationEventRepository | None = None,
+        clock: Clock | None = None,
     ) -> None:
         self._sources = sources
         self._corpus = corpus
         self._authorize = authorize
+        self._activations = activations
+        self._clock = clock
 
     def __call__(self, *, user: User, source_id: UUID, anchor: str) -> SectionContent:
-        authorized_source(
+        readable_source(
             user=user,
             source_id=source_id,
             sources=self._sources,
             authorize=self._authorize,
+            activations=self._activations,
+            clock=self._clock,
         )
         section = self._corpus.get_section(source_id, anchor)
         if section is None:

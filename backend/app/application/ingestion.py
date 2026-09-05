@@ -17,6 +17,7 @@ import logging
 from collections.abc import Callable
 from uuid import UUID
 
+from app.application.activation import ACTIVATION_SAMPLE_OPENED, RecordActivation
 from app.application.errors import (
     ActiveIngestionExists,
     IngestionNotFound,
@@ -34,6 +35,7 @@ from app.domain.entities import (
     User,
 )
 from app.domain.ports import (
+    ActivationEventRepository,
     Clock,
     IngestionEventRepository,
     IngestionJobRepository,
@@ -68,11 +70,44 @@ def authorized_source(
     """Return the caller's source or raise ``SourceNotFound`` (404, no disclosure).
 
     Mirrors ``GetSource``: a missing source and a non-owner collapse to the same
-    error so a source's existence is never disclosed (ING-04).
+    error so a source's existence is never disclosed (ING-04). Owner-only — do
+    not use this for sample reads.
     """
     source = sources.get_by_id(source_id)
     if source is None:
         raise SourceNotFound("Source not found.")
+    try:
+        authorize(user=user, owner_id=source.user_id)
+    except NotAuthorized as exc:
+        raise SourceNotFound("Source not found.") from exc
+    return source
+
+
+def readable_source(
+    *,
+    user: User,
+    source_id: UUID,
+    sources: SourceRepository,
+    authorize: AuthorizeOwnership,
+    activations: ActivationEventRepository | None = None,
+    clock: Clock | None = None,
+) -> Source:
+    """Return a source the caller may read, or raise ``SourceNotFound``.
+
+    Readable means the caller owns it or it is the shared sample. Missing and
+    non-readable collapse to the same error. The first successful sample read
+    records ``sample_opened`` once when an activation store is provided.
+    """
+    source = sources.get_by_id(source_id)
+    if source is None:
+        raise SourceNotFound("Source not found.")
+    if source.is_sample:
+        if activations is not None and clock is not None:
+            RecordActivation(activations=activations, clock=clock)(
+                user_id=user.id,
+                name=ACTIVATION_SAMPLE_OPENED,
+            )
+        return source
     try:
         authorize(user=user, owner_id=source.user_id)
     except NotAuthorized as exc:

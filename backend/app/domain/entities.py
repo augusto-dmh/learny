@@ -107,6 +107,7 @@ class Source:
     status: str
     created_at: datetime
     updated_at: datetime
+    is_sample: bool = False
 
 
 class IngestionStatus:
@@ -753,6 +754,11 @@ class QuizItemOrigin:
     # conversation (AD-297). Identity is the live ``conversation_id``, not content
     # hash; they stay source-backed, so the source-or-note CHECK is unchanged.
     TUTOR = "tutor"
+    # ``starter`` cards are per-learner clones of operator deck templates on the
+    # shared sample. Identity is ``(user_id, source_id, content_key)`` so two
+    # learners can hold the same fingerprint without colliding, and so clones
+    # never occupy the operator deck unique (which is per source, not per user).
+    STARTER = "starter"
 
 
 class QuizJobStatus:

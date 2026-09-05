@@ -24,9 +24,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
-from app.application.errors import QuizDeckConflict, SourceNotReady
+from app.application.errors import QuizDeckConflict, SourceNotFound, SourceNotReady
 from app.application.identity import AuthorizeOwnership
-from app.application.ingestion import SOURCE_STATUS_READY, authorized_source
+from app.application.ingestion import SOURCE_STATUS_READY, authorized_source, readable_source
 from app.application.quiz_qc import content_key, discard_reason, quote_in_text
 from app.domain.entities import (
     QuizCandidate,
@@ -417,6 +417,72 @@ class ExportQuizDeck:
             authorize=self._authorize,
         )
         return source.title, self._items.list_for_source(source_id)
+
+
+class EnsureStarterDeck:
+    """Clone five operator templates onto the caller for the shared sample.
+
+    Templates stay ``origin='deck'`` on the sample. Each learner gets their own
+    ``origin='starter'`` rows with new ids and ``initial()`` scheduling. A second
+    call is a no-op on count and schedules: the starter unique is per
+    ``(user_id, source_id, content_key)``, so overlap cannot mint ten clones.
+    Non-sample ids collapse to ``SourceNotFound`` (same 404 as a missing book).
+    """
+
+    def __init__(
+        self,
+        *,
+        sources: SourceRepository,
+        items: QuizItemRepository,
+        authorize: AuthorizeOwnership,
+        scheduling: SchedulingPort,
+        clock: Clock,
+        ids: Callable[[], UUID],
+    ) -> None:
+        self._sources = sources
+        self._items = items
+        self._authorize = authorize
+        self._scheduling = scheduling
+        self._clock = clock
+        self._ids = ids
+
+    def __call__(self, *, user: User, source_id: UUID) -> list[QuizItem]:
+        source = readable_source(
+            user=user,
+            source_id=source_id,
+            sources=self._sources,
+            authorize=self._authorize,
+        )
+        if not source.is_sample:
+            raise SourceNotFound("Source not found.")
+
+        now = self._clock.now()
+        templates = self._items.list_for_source(source_id, origin=QuizItemOrigin.DECK)
+        for template in templates:
+            clone = QuizItem(
+                id=self._ids(),
+                source_id=source_id,
+                user_id=user.id,
+                origin=QuizItemOrigin.STARTER,
+                item_type=template.item_type,
+                question=template.question,
+                answer=template.answer,
+                section_path=template.section_path,
+                anchor=template.anchor,
+                source_excerpt=template.source_excerpt,
+                chunk_hash=template.chunk_hash,
+                content_key=template.content_key,
+                status=QuizItemStatus.ACTIVE,
+                generation_meta={},
+                created_at=now,
+                updated_at=now,
+            )
+            if self._items.upsert(clone, embedding=None):
+                self._items.create_scheduling(clone.id, self._scheduling.initial())
+
+        return self._items.list_for_source(
+            source_id, origin=QuizItemOrigin.STARTER, user_id=user.id
+        )
 
 
 class ReconcileQuizItems:

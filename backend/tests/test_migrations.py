@@ -52,6 +52,7 @@ def test_migration_metadata_compiles() -> None:
         corpus_sections,
         ingestion_jobs,
         metadata,
+        quiz_items,
         sessions,
         sources,
         users,
@@ -82,6 +83,7 @@ def test_migration_metadata_compiles() -> None:
         "note_links",
         "reading_positions",
         "study_days",
+        "activation_events",
     }
     # Unique email + unique session token_hash are the security-critical constraints.
     user_uniques = {c.name for c in users.constraints if c.__class__.__name__ == "UniqueConstraint"}
@@ -95,6 +97,10 @@ def test_migration_metadata_compiles() -> None:
         c.name for c in sources.constraints if c.__class__.__name__ == "UniqueConstraint"
     }
     assert any("object_key" in name for name in source_uniques)
+    # At most one shared sample: partial unique on is_sample WHERE true.
+    sample_index = {ix.name: ix for ix in sources.indexes}["uq_sources_one_sample"]
+    assert sample_index.unique
+    assert [c.name for c in sample_index.columns] == ["is_sample"]
     # The active-source guard is a *partial* unique index on source_id (ING-03).
     active_index = {ix.name: ix for ix in ingestion_jobs.indexes}["uq_ingestion_jobs_active_source"]
     assert active_index.unique
@@ -113,6 +119,11 @@ def test_migration_metadata_compiles() -> None:
         if uc.__class__.__name__ == "UniqueConstraint"
     }
     assert ("document_id", "position") in section_uniques
+    starter_index = {ix.name: ix for ix in quiz_items.indexes}[
+        "uq_quiz_items_starter_user_content_key"
+    ]
+    assert starter_index.unique
+    assert [c.name for c in starter_index.columns] == ["user_id", "source_id", "content_key"]
 
 
 @pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
@@ -2976,6 +2987,355 @@ def test_migration_0021_adds_review_quality_columns(monkeypatch) -> None:
         engine.dispose()
 
     command.downgrade(cfg, "base")
+
+
+@pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
+def test_migration_0022_adds_sample_flag_and_activation_events(monkeypatch) -> None:
+    """0022 up: ``is_sample`` defaults false, only one true sample, unique event pair.
+
+    A source seeded at 0021 takes ``is_sample=false`` with no backfill. Two ordinary
+    (false) rows coexist; a second true sample is rejected. ``activation_events``
+    is keyed ``(user_id, name)`` with CASCADE from users. Down one step to 0021
+    drops the column, index, and table and leaves the seeded source intact.
+    """
+    monkeypatch.setenv("LEARNY_DATABASE_URL", TEST_DB_URL)
+    cfg = _alembic_config(TEST_DB_URL)
+
+    command.upgrade(cfg, "head")
+    command.downgrade(cfg, "0021_review_quality")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        user_id = uuid.uuid4()
+        source_id = uuid.uuid4()
+        with engine.begin() as conn:
+            conn.execute(
+                text("INSERT INTO users (id, email) VALUES (:id, :email)"),
+                {"id": user_id, "email": f"{user_id}@example.test"},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO sources "
+                    "(id, user_id, title, filename, content_type, byte_size, "
+                    " checksum, object_key) "
+                    "VALUES (:id, :uid, 'Bk', 'f.epub', 'application/epub+zip', 1, "
+                    " 'c', :key)"
+                ),
+                {"id": source_id, "uid": user_id, "key": f"sources/{source_id}.epub"},
+            )
+    finally:
+        engine.dispose()
+
+    command.upgrade(cfg, "0022_sample_and_activation")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        inspector = inspect(engine)
+        source_cols = {c["name"]: c for c in inspector.get_columns("sources")}
+        assert source_cols["is_sample"]["nullable"] is False
+        assert "activation_events" in set(inspector.get_table_names())
+
+        event_cols = {c["name"]: c for c in inspector.get_columns("activation_events")}
+        assert set(event_cols) == {"user_id", "name", "occurred_at"}
+        assert event_cols["user_id"]["nullable"] is False
+        assert event_cols["name"]["nullable"] is False
+        assert event_cols["occurred_at"]["nullable"] is False
+        pk = inspector.get_pk_constraint("activation_events")["constrained_columns"]
+        assert pk == ["user_id", "name"]
+        user_fk = next(
+            fk
+            for fk in inspector.get_foreign_keys("activation_events")
+            if fk["constrained_columns"] == ["user_id"]
+        )
+        assert user_fk["referred_table"] == "users"
+        assert user_fk["options"].get("ondelete") == "CASCADE"
+
+        with engine.connect() as conn:
+            seeded = conn.execute(
+                text("SELECT is_sample FROM sources WHERE id = :id"),
+                {"id": source_id},
+            ).one()
+            indexdef = conn.execute(
+                text("SELECT indexdef FROM pg_indexes WHERE indexname = 'uq_sources_one_sample'")
+            ).scalar_one()
+        assert seeded.is_sample is False
+        assert "UNIQUE" in indexdef
+        assert "is_sample" in indexdef
+        assert "WHERE" in indexdef
+
+        other_source = uuid.uuid4()
+        sample_id = uuid.uuid4()
+        second_sample = uuid.uuid4()
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO sources "
+                    "(id, user_id, title, filename, content_type, byte_size, "
+                    " checksum, object_key) "
+                    "VALUES (:id, :uid, 'Own', 'g.epub', 'application/epub+zip', 1, "
+                    " 'c', :key)"
+                ),
+                {
+                    "id": other_source,
+                    "uid": user_id,
+                    "key": f"sources/{other_source}.epub",
+                },
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO sources "
+                    "(id, user_id, title, filename, content_type, byte_size, "
+                    " checksum, object_key, is_sample) "
+                    "VALUES (:id, :uid, 'Sample', 's.epub', 'application/epub+zip', "
+                    " 1, 'c', :key, true)"
+                ),
+                {
+                    "id": sample_id,
+                    "uid": user_id,
+                    "key": f"sources/{sample_id}.epub",
+                },
+            )
+        with pytest.raises(IntegrityError):
+            with engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "INSERT INTO sources "
+                        "(id, user_id, title, filename, content_type, byte_size, "
+                        " checksum, object_key, is_sample) "
+                        "VALUES (:id, :uid, 'Dup', 'd.epub', 'application/epub+zip', "
+                        " 1, 'c', :key, true)"
+                    ),
+                    {
+                        "id": second_sample,
+                        "uid": user_id,
+                        "key": f"sources/{second_sample}.epub",
+                    },
+                )
+
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO activation_events (user_id, name) VALUES (:uid, 'sample_opened')"
+                ),
+                {"uid": user_id},
+            )
+        with pytest.raises(IntegrityError):
+            with engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "INSERT INTO activation_events (user_id, name) "
+                        "VALUES (:uid, 'sample_opened')"
+                    ),
+                    {"uid": user_id},
+                )
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO activation_events (user_id, name) VALUES (:uid, 'account_created')"
+                ),
+                {"uid": user_id},
+            )
+
+        from app.infrastructure.db.metadata import activation_events, sources
+
+        reflected_sources = {c["name"]: c["nullable"] for c in inspector.get_columns("sources")}
+        assert reflected_sources == {c.name: c.nullable for c in sources.columns}
+        reflected_events = {
+            c["name"]: c["nullable"] for c in inspector.get_columns("activation_events")
+        }
+        assert reflected_events == {c.name: c.nullable for c in activation_events.columns}
+    finally:
+        engine.dispose()
+
+    command.downgrade(cfg, "0021_review_quality")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        inspector = inspect(engine)
+        remaining = {c["name"] for c in inspector.get_columns("sources")}
+        assert "is_sample" not in remaining
+        assert "activation_events" not in set(inspector.get_table_names())
+        with engine.connect() as conn:
+            surviving = conn.execute(
+                text(
+                    "SELECT "
+                    "(SELECT count(*) FROM sources WHERE id = :sid), "
+                    "(SELECT count(*) FROM users WHERE id = :uid)"
+                ),
+                {"sid": source_id, "uid": user_id},
+            ).one()
+        assert tuple(surviving) == (1, 1)
+    finally:
+        engine.dispose()
+
+    command.upgrade(cfg, "head")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        columns = {c["name"] for c in inspect(engine).get_columns("sources")}
+        assert "is_sample" in columns
+        assert "activation_events" in set(inspect(engine).get_table_names())
+    finally:
+        engine.dispose()
+
+    command.downgrade(cfg, "base")
+
+
+def _insert_starter_card(conn, *, item_id, source_id, user_id, content_key: str) -> None:
+    conn.execute(
+        text(
+            "INSERT INTO quiz_items "
+            "(id, source_id, user_id, origin, item_type, question, "
+            " answer, section_path, anchor, source_excerpt, chunk_hash, content_key) "
+            "VALUES (:id, :sid, :uid, 'starter', 'free_recall', 'q', 'a', "
+            " '[]', 'a.xhtml', 'excerpt', 'ch', :ck)"
+        ),
+        {
+            "id": item_id,
+            "sid": source_id,
+            "uid": user_id,
+            "ck": content_key,
+        },
+    )
+
+
+@pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
+def test_migration_0023_starter_unique_is_per_learner_not_per_source(monkeypatch) -> None:
+    """0023: two learners may share a sample fingerprint; one learner may not.
+
+    The deck unique is per source. Starter clones must not reuse it, or the
+    second learner's insert would collide with the first.
+    """
+    monkeypatch.setenv("LEARNY_DATABASE_URL", TEST_DB_URL)
+    cfg = _alembic_config(TEST_DB_URL)
+
+    command.upgrade(cfg, "head")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM quiz_items WHERE origin = 'starter'"))
+    finally:
+        engine.dispose()
+
+    command.downgrade(cfg, "0022_sample_and_activation")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        with engine.connect() as conn:
+            leftover = conn.execute(
+                text(
+                    "SELECT indexname FROM pg_indexes "
+                    "WHERE indexname = 'uq_quiz_items_starter_user_content_key'"
+                )
+            ).fetchall()
+        assert leftover == []
+    finally:
+        engine.dispose()
+
+    command.upgrade(cfg, "0023_starter_quiz_origin")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        with engine.connect() as conn:
+            indexdef = conn.execute(
+                text(
+                    "SELECT indexdef FROM pg_indexes "
+                    "WHERE indexname = 'uq_quiz_items_starter_user_content_key'"
+                )
+            ).scalar_one()
+        assert "UNIQUE" in indexdef
+        assert "user_id" in indexdef
+        assert "source_id" in indexdef
+        assert "content_key" in indexdef
+        assert "origin = 'starter'" in indexdef
+
+        operator_id = uuid.uuid4()
+        learner_a = uuid.uuid4()
+        learner_b = uuid.uuid4()
+        source_id = uuid.uuid4()
+        suffix = uuid.uuid4().hex[:8]
+        with engine.begin() as conn:
+            for uid, email in (
+                (operator_id, f"starter-op-{suffix}@example.com"),
+                (learner_a, f"starter-a-{suffix}@example.com"),
+                (learner_b, f"starter-b-{suffix}@example.com"),
+            ):
+                conn.execute(
+                    text("INSERT INTO users (id, email) VALUES (:id, :email)"),
+                    {"id": uid, "email": email},
+                )
+            conn.execute(
+                text(
+                    "INSERT INTO sources "
+                    "(id, user_id, title, filename, content_type, byte_size, "
+                    " checksum, object_key) "
+                    "VALUES (:id, :uid, 'Book', 's.epub', 'application/epub+zip', "
+                    " 1, 'c', :key)"
+                ),
+                {
+                    "id": source_id,
+                    "uid": operator_id,
+                    "key": f"sources/{source_id}.epub",
+                },
+            )
+            _insert_starter_card(
+                conn,
+                item_id=uuid.uuid4(),
+                source_id=source_id,
+                user_id=learner_a,
+                content_key="ck-shared",
+            )
+            _insert_starter_card(
+                conn,
+                item_id=uuid.uuid4(),
+                source_id=source_id,
+                user_id=learner_b,
+                content_key="ck-shared",
+            )
+        with pytest.raises(IntegrityError):
+            with engine.begin() as conn:
+                _insert_starter_card(
+                    conn,
+                    item_id=uuid.uuid4(),
+                    source_id=source_id,
+                    user_id=learner_a,
+                    content_key="ck-shared",
+                )
+
+        from app.infrastructure.db.metadata import quiz_items
+
+        inspector = inspect(engine)
+        names = {ix["name"] for ix in inspector.get_indexes("quiz_items")}
+        assert "uq_quiz_items_starter_user_content_key" in names
+        declared = {ix.name for ix in quiz_items.indexes}
+        assert "uq_quiz_items_starter_user_content_key" in declared
+    finally:
+        engine.dispose()
+
+    command.downgrade(cfg, "0022_sample_and_activation")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        with engine.connect() as conn:
+            leftover = conn.execute(
+                text(
+                    "SELECT indexname FROM pg_indexes "
+                    "WHERE indexname = 'uq_quiz_items_starter_user_content_key'"
+                )
+            ).fetchall()
+            surviving = conn.execute(
+                text("SELECT count(*) FROM quiz_items WHERE source_id = :sid"),
+                {"sid": source_id},
+            ).scalar_one()
+        assert leftover == []
+        assert surviving == 2
+        with engine.begin() as conn:
+            conn.execute(
+                text("DELETE FROM quiz_items WHERE source_id = :sid"),
+                {"sid": source_id},
+            )
+            conn.execute(text("DELETE FROM sources WHERE id = :sid"), {"sid": source_id})
+            conn.execute(
+                text("DELETE FROM users WHERE id IN (:op, :a, :b)"),
+                {"op": operator_id, "a": learner_a, "b": learner_b},
+            )
+    finally:
+        engine.dispose()
+
+    command.upgrade(cfg, "head")
 
 
 @pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")

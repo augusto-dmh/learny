@@ -2,9 +2,9 @@
 
 /**
  * C gate (component) — the app navigation sidebar (HOME-16). The nav collapses
- * to exactly four primary destinations — Home, Bookshelf, Review, Notes — with
+ * to exactly four primary destinations — Home, Library, Review, Notes — with
  * the per-source book list removed; the brand link returns to Home. The book
- * list itself now lives on the Bookshelf and is covered by
+ * list itself now lives on the Library and is covered by
  * tests/sources-screen.test.tsx and tests/library-screen.test.tsx.
  */
 
@@ -57,7 +57,7 @@ describe("AppSidebar (HOME-16)", () => {
 
     const nav = [
       { name: "Home", href: "/home" },
-      { name: "Bookshelf", href: "/sources" },
+      { name: "Library", href: "/sources" },
       { name: "Review", href: "/review" },
       { name: "Notes", href: "/notes" },
     ];
@@ -77,7 +77,7 @@ describe("AppSidebar (HOME-16)", () => {
     const labels = within(menu!)
       .getAllByRole("link")
       .map((link) => link.textContent);
-    expect(labels).toEqual(["Home", "Bookshelf", "Review", "Notes"]);
+    expect(labels).toEqual(["Home", "Library", "Review", "Notes"]);
   });
 
   it("points the brand link at Home", () => {
@@ -93,7 +93,7 @@ describe("AppSidebar (HOME-16)", () => {
 
     renderSidebar();
 
-    for (const name of ["Home", "Bookshelf", "Review", "Notes"]) {
+    for (const name of ["Home", "Library", "Review", "Notes"]) {
       const link = screen.getByRole("link", { name });
       expect(within(link).getByTestId("nav-pending")).toBeTruthy();
     }
@@ -108,6 +108,8 @@ describe("AppSidebar (HOME-16)", () => {
   it("does not render a per-source Library group", () => {
     renderSidebar();
 
-    expect(screen.queryByText("Library")).toBeNull();
+    const library = screen.getByRole("link", { name: "Library" });
+    expect(library.getAttribute("href")).toBe("/sources");
+    expect(screen.queryByRole("heading", { name: "Library" })).toBeNull();
   });
 });

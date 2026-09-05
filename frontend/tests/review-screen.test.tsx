@@ -41,6 +41,12 @@ function routedFetch(handlers: Record<string, Handler>) {
   return vi.fn(async (url: string, init?: RequestInit) => {
     const key = `${init?.method ?? "GET"} ${url}`;
     const handler = handlers[key];
+    if (!handler && key === "GET /api/sources") {
+      return jsonResponse(200, []);
+    }
+    if (!handler && /^POST \/api\/sources\/[^/]+\/quiz\/starter$/.test(key)) {
+      return jsonResponse(200, { items: [] });
+    }
     if (!handler) throw new Error(`unexpected fetch: ${key}`);
     return handler(init ?? {});
   });
@@ -185,6 +191,44 @@ describe("ReviewScreen session flow (E2)", () => {
     expect(
       fetchMock.mock.calls.some(([url]) => url === `${DUE}?source_id=s1`),
     ).toBe(true);
+  });
+
+  it("clones starter cards for the sample before loading due", async () => {
+    const fetchMock = routedFetch({
+      "GET /api/auth/me": () => authedMe.clone(),
+      "GET /api/sources": () =>
+        jsonResponse(200, [
+          {
+            id: "s-sample",
+            title: "The Art of War",
+            filename: "art-of-war.epub",
+            byte_size: 3,
+            content_type: "application/epub+zip",
+            status: "ready",
+            created_at: "now",
+            is_sample: true,
+            suggested_question: "What does Sun Tzu mean by deception?",
+          },
+        ]),
+      "POST /api/sources/s-sample/quiz/starter": () =>
+        jsonResponse(200, { items: [] }),
+      [`GET ${DUE}`]: () => jsonResponse(200, dueQueue([clozeCard])),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ReviewScreen />);
+
+    await screen.findByTestId("question");
+    const urls = fetchMock.mock.calls.map(([url, init]) => `${init?.method ?? "GET"} ${url}`);
+    expect(urls).toContain("POST /api/sources/s-sample/quiz/starter");
+    const starterIdx = urls.indexOf("POST /api/sources/s-sample/quiz/starter");
+    const dueIdx = urls.indexOf(`GET ${DUE}`);
+    expect(starterIdx).toBeGreaterThan(-1);
+    expect(dueIdx).toBeGreaterThan(starterIdx);
+    const starterCall = fetchMock.mock.calls[starterIdx];
+    expect(new Headers(starterCall[1]?.headers).get("X-CSRF-Token")).toBe(
+      "csrf-xyz",
+    );
   });
 
   it("grades each card, advances, and shows counts per rating in the summary", async () => {

@@ -22,9 +22,11 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import { InkLine } from "@/app/components/ink-line";
+import { fetchAuthState } from "@/app/lib/auth";
 import { getContinueReading, type ContinueReadingView } from "@/app/lib/study";
-import { getDueReviews } from "@/app/lib/quiz";
+import { ensureStarterDeck, getDueReviews } from "@/app/lib/quiz";
 import { readUrl } from "@/app/lib/read-url";
+import { listSources } from "@/app/lib/sources";
 import { StudyStats } from "./study-heatmap";
 import { Button } from "@/components/ui/button";
 import { LinkPendingIndicator } from "@/app/components/nav-pending";
@@ -42,11 +44,14 @@ type Loadable<T> =
   | { status: "error"; message: string }
   | { status: "ready"; data: T };
 
+type DueView = { job: number; totalDue: number };
+
 export function HomeScreen() {
   const [hero, setHero] = useState<Loadable<ContinueReadingView | null>>({
     status: "loading",
   });
-  const [due, setDue] = useState<Loadable<number>>({ status: "loading" });
+  const [due, setDue] = useState<Loadable<DueView>>({ status: "loading" });
+  const [sampleId, setSampleId] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -71,20 +76,19 @@ export function HomeScreen() {
 
   useEffect(() => {
     let active = true;
-    // Only the session job is read (AD-156: no dedicated count endpoint), so the
-    // queue is capped at one item. The job is min(session size, overdue pile),
-    // not the uncapped total (REV-41).
-    getDueReviews({ limit: 1 })
-      .then((queue) => {
+    (async () => {
+      // Snapshot due *before* cloning. Starter cards are due immediately, so a
+      // clone-first order would hide Ask-first on the first Home visit.
+      try {
+        const queue = await getDueReviews({ limit: 1 });
         if (!active) {
           return;
         }
         const totalDue = queue.total_due;
         const sessionSize = queue.session_size ?? 20;
         const job = totalDue > 0 ? Math.min(sessionSize, totalDue) : 0;
-        setDue({ status: "ready", data: job });
-      })
-      .catch((err: unknown) => {
+        setDue({ status: "ready", data: { job, totalDue } });
+      } catch (err: unknown) {
         if (active)
           setDue({
             status: "error",
@@ -93,11 +97,46 @@ export function HomeScreen() {
                 ? err.message
                 : "Could not load your due reviews.",
           });
-      });
+      }
+      if (!active) {
+        return;
+      }
+      try {
+        const [auth, sources] = await Promise.all([
+          fetchAuthState(),
+          listSources(),
+        ]);
+        if (!active) {
+          return;
+        }
+        const sample = sources.find((source) => source.is_sample);
+        setSampleId(sample?.id ?? null);
+        if (auth.authenticated && sample) {
+          try {
+            await ensureStarterDeck(sample.id, auth.user.csrf_token);
+          } catch {
+            // Ask-first still uses the sample id; clone can retry from Review.
+          }
+        }
+      } catch {
+        if (active) {
+          setSampleId(null);
+        }
+      }
+    })();
     return () => {
       active = false;
     };
   }, []);
+
+  const askSampleHref =
+    hero.status === "ready" &&
+    hero.data === null &&
+    due.status === "ready" &&
+    due.data.totalDue === 0 &&
+    sampleId
+      ? readUrl(sampleId, null, { panel: "ask" })
+      : null;
 
   return (
     <div className="space-y-6">
@@ -105,7 +144,7 @@ export function HomeScreen() {
         aria-label="home"
         className="grid gap-4 md:grid-cols-2"
       >
-        <ContinueHero state={hero} />
+        <ContinueHero state={hero} askSampleHref={askSampleHref} />
         <DueCard state={due} />
       </section>
       <StudyStats />
@@ -114,7 +153,13 @@ export function HomeScreen() {
 }
 
 /** The continue-reading hero: resume the current book, or pick one to start. */
-function ContinueHero({ state }: { state: Loadable<ContinueReadingView | null> }) {
+function ContinueHero({
+  state,
+  askSampleHref,
+}: {
+  state: Loadable<ContinueReadingView | null>;
+  askSampleHref: string | null;
+}) {
   return (
     <Card aria-label="continue reading">
       <CardHeader>
@@ -128,11 +173,18 @@ function ContinueHero({ state }: { state: Loadable<ContinueReadingView | null> }
             {state.message}
           </p>
         ) : state.data === null ? (
-          // New-user / empty hero: nothing to resume, so point at the bookshelf.
           <div className="space-y-3">
             <p className="text-sm text-muted-foreground">
               You have no book in progress yet.
             </p>
+            {askSampleHref ? (
+              <Button asChild>
+                <Link href={askSampleHref}>
+                  Ask
+                  <LinkPendingIndicator />
+                </Link>
+              </Button>
+            ) : null}
             <Button asChild>
               <Link href="/sources">
                 Pick a book
@@ -168,7 +220,7 @@ function ContinueHero({ state }: { state: Loadable<ContinueReadingView | null> }
 }
 
 /** The due-reviews card: start a session, or a calm done-for-today state. */
-function DueCard({ state }: { state: Loadable<number> }) {
+function DueCard({ state }: { state: Loadable<DueView> }) {
   return (
     <Card aria-label="due reviews">
       <CardHeader>
@@ -181,10 +233,11 @@ function DueCard({ state }: { state: Loadable<number> }) {
           <p role="alert" className="text-sm text-destructive">
             {state.message}
           </p>
-        ) : state.data > 0 ? (
+        ) : state.data.totalDue > 0 ? (
           <div className="space-y-3">
             <p data-testid="due-count" className="text-sm">
-              You have {state.data} {state.data === 1 ? "card" : "cards"} due.
+              You have {state.data.job}{" "}
+              {state.data.job === 1 ? "card" : "cards"} due.
             </p>
             <Button asChild>
               <Link href="/review">

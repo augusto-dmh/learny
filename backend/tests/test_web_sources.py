@@ -13,14 +13,16 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
-from uuid import uuid4
+from datetime import UTC, datetime
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import Connection, select
+from sqlalchemy import Connection, func, select
 
 from app.application.sources import CreateSource
-from app.infrastructure.db.metadata import sources
+from app.domain.entities import Source
+from app.infrastructure.db.metadata import ingestion_jobs, sources
 from app.infrastructure.db.repositories import SqlAlchemySourceRepository
 from app.infrastructure.web.dependencies import (
     AppSettings,
@@ -561,6 +563,8 @@ def test_get_own_source_returns_200(sources_client: TestClient) -> None:
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["id"] == source_id and body["title"] == "Readable"
+    assert body["is_sample"] is False
+    assert body["suggested_question"] is None
     assert "object_key" not in body and "checksum" not in body
 
 
@@ -590,6 +594,107 @@ def test_get_malformed_uuid_returns_422(sources_client: TestClient) -> None:
 def test_get_unauthenticated_returns_401(sources_client: TestClient) -> None:
     sources_client.cookies.clear()
     assert sources_client.get(f"/api/sources/{uuid4()}").status_code == 401
+
+
+# Spec: `What does Sun Tzu mean by “all warfare is based on deception”?`
+_SAMPLE_QUESTION = "What does Sun Tzu mean by \u201call warfare is based on deception\u201d?"
+
+
+def _insert_sample(conn: Connection, operator_id: str) -> Source:
+    now = datetime(2026, 9, 4, 12, 0, 0, tzinfo=UTC)
+    source = Source(
+        id=uuid4(),
+        user_id=UUID(operator_id),
+        title="The Art of War",
+        filename="art-of-war.epub",
+        content_type=EPUB_TYPE,
+        byte_size=len(EPUB_BYTES),
+        checksum="d" * 64,
+        object_key=f"sources/{operator_id}/{uuid4()}.epub",
+        status="ready",
+        created_at=now,
+        updated_at=now,
+        is_sample=True,
+    )
+    return SqlAlchemySourceRepository(conn).add(source)
+
+
+def test_list_and_get_sample_include_canned_question(
+    sources_client: TestClient, db_conn: Connection
+) -> None:
+    operator_id = _register(sources_client, "sample-operator@example.com")
+    sample = _insert_sample(db_conn, operator_id)
+
+    _register(sources_client, "sample-reader@example.com")
+    listed = sources_client.get("/api/sources")
+    assert listed.status_code == 200, listed.text
+    sample_row = next(row for row in listed.json() if row["id"] == str(sample.id))
+    assert sample_row["is_sample"] is True
+    assert sample_row["suggested_question"] == _SAMPLE_QUESTION
+
+    got = sources_client.get(f"/api/sources/{sample.id}")
+    assert got.status_code == 200, got.text
+    body = got.json()
+    assert body["id"] == str(sample.id)
+    assert body["is_sample"] is True
+    assert body["suggested_question"] == _SAMPLE_QUESTION
+
+
+def test_get_sample_unauthenticated_returns_401(
+    sources_client: TestClient, db_conn: Connection
+) -> None:
+    operator_id = _register(sources_client, "sample-unauth-op@example.com")
+    sample = _insert_sample(db_conn, operator_id)
+    sources_client.cookies.clear()
+    assert sources_client.get(f"/api/sources/{sample.id}").status_code == 401
+
+
+def test_non_owner_reingest_of_sample_returns_404(
+    ingestion_client: TestClient, db_conn: Connection
+) -> None:
+    operator_id = _register(ingestion_client, "sample-ingest-op@example.com")
+    sample = _insert_sample(db_conn, operator_id)
+    _register(ingestion_client, "sample-ingest-reader@example.com")
+    csrf = _csrf(ingestion_client)
+
+    sample_resp = ingestion_client.post(
+        f"/api/sources/{sample.id}/ingestion", headers={"X-CSRF-Token": csrf}
+    )
+    missing_resp = ingestion_client.post(
+        f"/api/sources/{uuid4()}/ingestion", headers={"X-CSRF-Token": csrf}
+    )
+
+    assert sample_resp.status_code == 404, sample_resp.text
+    assert missing_resp.status_code == 404, missing_resp.text
+    assert sample_resp.json() == missing_resp.json()
+    job_count = db_conn.execute(
+        select(func.count())
+        .select_from(ingestion_jobs)
+        .where(ingestion_jobs.c.source_id == sample.id)
+    ).scalar_one()
+    assert job_count == 0
+    assert ingestion_client.app.state.ingestion_enqueuer.calls == []
+
+
+def test_non_owner_deck_generation_on_sample_returns_404(
+    quiz_client: TestClient, db_conn: Connection
+) -> None:
+    operator_id = _register(quiz_client, "sample-deck-op@example.com")
+    sample = _insert_sample(db_conn, operator_id)
+    _register(quiz_client, "sample-deck-reader@example.com")
+    csrf = _csrf(quiz_client)
+
+    sample_resp = quiz_client.post(
+        f"/api/sources/{sample.id}/quiz/deck", headers={"X-CSRF-Token": csrf}
+    )
+    missing_resp = quiz_client.post(
+        f"/api/sources/{uuid4()}/quiz/deck", headers={"X-CSRF-Token": csrf}
+    )
+
+    assert sample_resp.status_code == 404, sample_resp.text
+    assert missing_resp.status_code == 404, missing_resp.text
+    assert sample_resp.json() == missing_resp.json()
+    assert quiz_client.app.state.quiz_enqueuer.calls == []
 
 
 # --- Figure media (READ-05 / READ-06) ------------------------------------------

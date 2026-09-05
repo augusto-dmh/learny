@@ -83,6 +83,7 @@ from app.domain.entities import (
     User,
 )
 from app.infrastructure.db.metadata import (
+    activation_events,
     conversation_turn_citations,
     conversation_turns,
     conversations,
@@ -225,8 +226,9 @@ class SqlAlchemySessionRepository:
 class SqlAlchemySourceRepository:
     """``SourceRepository`` backed by the ``sources`` table.
 
-    Owner-scoped: ``list_by_user`` filters on ``user_id`` and returns newest
-    first. The unique ``object_key`` constraint propagates as ``IntegrityError``.
+    ``list_by_user`` returns the caller's rows plus the one shared sample,
+    newest first. The unique ``object_key`` constraint propagates as
+    ``IntegrityError``.
     """
 
     def __init__(self, connection: Connection) -> None:
@@ -245,6 +247,7 @@ class SqlAlchemySourceRepository:
                 checksum=source.checksum,
                 object_key=source.object_key,
                 status=source.status,
+                is_sample=source.is_sample,
                 created_at=source.created_at,
                 updated_at=source.updated_at,
             )
@@ -254,13 +257,17 @@ class SqlAlchemySourceRepository:
     def list_by_user(self, user_id: UUID) -> list[Source]:
         rows = self._conn.execute(
             select(sources)
-            .where(sources.c.user_id == user_id)
+            .where(or_(sources.c.user_id == user_id, sources.c.is_sample.is_(True)))
             .order_by(sources.c.created_at.desc())
         ).all()
         return [_to_source(row) for row in rows]
 
     def get_by_id(self, source_id: UUID) -> Source | None:
         row = self._conn.execute(select(sources).where(sources.c.id == source_id)).one_or_none()
+        return _to_source(row) if row is not None else None
+
+    def get_sample(self) -> Source | None:
+        row = self._conn.execute(select(sources).where(sources.c.is_sample.is_(True))).one_or_none()
         return _to_source(row) if row is not None else None
 
     def set_status(self, source_id: UUID, status: str, updated_at: datetime) -> None:
@@ -270,6 +277,26 @@ class SqlAlchemySourceRepository:
             .where(sources.c.id == source_id)
             .values(status=status, updated_at=updated_at)
         )
+
+
+class SqlAlchemyActivationEventRepository:
+    """``ActivationEventRepository`` backed by ``activation_events``.
+
+    ``insert_if_absent`` is ``INSERT ... ON CONFLICT (user_id, name) DO NOTHING``
+    so two concurrent first-session stamps still leave one row.
+    """
+
+    def __init__(self, connection: Connection) -> None:
+        self._conn = connection
+
+    def insert_if_absent(self, *, user_id: UUID, name: str, occurred_at: datetime) -> bool:
+        result = self._conn.execute(
+            pg_insert(activation_events)
+            .values(user_id=user_id, name=name, occurred_at=occurred_at)
+            .on_conflict_do_nothing(index_elements=["user_id", "name"])
+            .returning(activation_events.c.user_id)
+        )
+        return result.first() is not None
 
 
 class SqlAlchemyIngestionJobRepository:
@@ -1301,10 +1328,13 @@ class SqlAlchemyQuizItemRepository:
         ``(note_anchor_id, content_key)`` so re-accepting identical text from the same
         highlight is idempotent while two different highlights may share a key.
         Tutor items collapse on ``conversation_id`` so a second accept of the same
-        closed thread is idempotent. A highlight item with no anchor (severed
-        provenance), a tutor item with no conversation (severed provenance), and a
-        ``note`` item (no uniqueness at all — AD-148, dedup is service-level) match
-        no partial index and are plain inserts under their minted id.
+        closed thread is idempotent. Starter items collapse on
+        ``(user_id, source_id, content_key)`` so two learners can clone the same
+        sample template; a conflict is a no-op (content and scheduling stay). A
+        highlight item with no anchor (severed provenance), a tutor item with no
+        conversation (severed provenance), and a ``note`` item (no uniqueness at
+        all — AD-148, dedup is service-level) match no partial index and are
+        plain inserts under their minted id.
         """
         # Denormalized ownership (AD-149): a note card carries its owner explicitly
         # (it has no source); every other origin leaves ``user_id`` unset and it is
@@ -1365,10 +1395,16 @@ class SqlAlchemyQuizItemRepository:
                 index_where=text("origin = 'tutor' AND conversation_id IS NOT NULL"),
                 set_=content_update,
             )
+        elif item.origin == QuizItemOrigin.STARTER:
+            stmt = stmt.on_conflict_do_nothing(
+                index_elements=["user_id", "source_id", "content_key"],
+                index_where=text("origin = 'starter'"),
+            )
         # else: a note card, or a severed-provenance highlight/tutor — no partial
         # index to collapse on, so it is a plain insert under its minted id.
         stmt = stmt.returning(literal_column("(xmax = 0)").label("inserted"))
-        return bool(self._conn.execute(stmt).scalar_one())
+        inserted = self._conn.execute(stmt).scalar()
+        return bool(inserted)
 
     def get_by_anchor_and_key(self, note_anchor_id: UUID, content_key: str) -> QuizItem | None:
         """Return the highlight card already accepted for this anchor + fingerprint.
@@ -1594,11 +1630,22 @@ class SqlAlchemyQuizItemRepository:
             update(review_log).where(review_log.c.id == log_id).values(undone_at=undone_at)
         )
 
-    def list_for_source(self, source_id: UUID) -> list[QuizItem]:
-        """Return all of ``source_id``'s items (any status), oldest first (QUIZ-14)."""
+    def list_for_source(
+        self,
+        source_id: UUID,
+        *,
+        origin: QuizItemOrigin | None = None,
+        user_id: UUID | None = None,
+    ) -> list[QuizItem]:
+        """Return ``source_id``'s items (any status), oldest first (QUIZ-14)."""
+        conditions = [quiz_items.c.source_id == source_id]
+        if origin is not None:
+            conditions.append(quiz_items.c.origin == origin)
+        if user_id is not None:
+            conditions.append(quiz_items.c.user_id == user_id)
         rows = self._conn.execute(
             select(*_QUIZ_ITEM_READ_COLUMNS)
-            .where(quiz_items.c.source_id == source_id)
+            .where(*conditions)
             .order_by(quiz_items.c.created_at, quiz_items.c.id)
         ).all()
         return [_to_quiz_item(row) for row in rows]
@@ -2402,6 +2449,7 @@ def _to_source(row) -> Source:  # noqa: ANN001
         checksum=row.checksum,
         object_key=row.object_key,
         status=row.status,
+        is_sample=row.is_sample,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )

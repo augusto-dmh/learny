@@ -10,6 +10,7 @@ persisted ``(chunk_id, vector)`` pairs (via the fake index repo), not call count
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 from itertools import count
 from uuid import UUID, uuid4
@@ -276,6 +277,20 @@ def test_retrieve_evidence_non_owner_raises_source_not_found() -> None:
     with pytest.raises(SourceNotFound):
         service(user=other, source_id=source.id, query="anything")
     assert retrieval.calls == []
+
+
+def test_retrieve_evidence_returns_sample_for_non_owner() -> None:
+    operator = _user()
+    reader = _user()
+    sources = FakeSourceRepository()
+    sample = replace(_owned_source(operator.id), is_sample=True)
+    sources.add(sample)
+    expected = [_evidence(sample.id)]
+    retrieval = FakeRetrievalPort(results=expected)
+    service = _retrieve(sources=sources, retrieval=retrieval, embeddings=_StubEmbeddings())
+
+    assert service(user=reader, source_id=sample.id, query="deception") == expected
+    assert retrieval.calls[0]["source_id"] == sample.id
 
 
 def test_retrieve_evidence_forwards_vector_and_settings_and_returns_results() -> None:

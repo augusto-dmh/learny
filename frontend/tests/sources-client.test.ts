@@ -26,6 +26,8 @@ const summary: SourceSummary = {
   content_type: "application/epub+zip",
   status: "uploaded",
   created_at: "now",
+  is_sample: false,
+  suggested_question: null,
 };
 
 function jsonResponse(status: number, body: unknown): Response {

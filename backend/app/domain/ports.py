@@ -51,6 +51,7 @@ from app.domain.entities import (
     QuizDeckResult,
     QuizGenerationJob,
     QuizItem,
+    QuizItemOrigin,
     QuizSection,
     ReadingPosition,
     RecentReadingPosition,
@@ -192,11 +193,15 @@ class SourceRepository(Protocol):
         ...
 
     def list_by_user(self, user_id: UUID) -> list[Source]:
-        """Return ``user_id``'s sources, newest first (owner-scoped)."""
+        """Return the caller's sources plus the shared sample, newest first."""
         ...
 
     def get_by_id(self, source_id: UUID) -> Source | None:
         """Return the source with ``source_id``, or ``None`` if absent."""
+        ...
+
+    def get_sample(self) -> Source | None:
+        """Return the unique ``is_sample`` source, or ``None`` if none is seeded."""
         ...
 
     def set_status(self, source_id: UUID, status: str, updated_at: datetime) -> None:
@@ -205,6 +210,15 @@ class SourceRepository(Protocol):
         Keeps the sources-list badge (``uploaded``/``processing``/``ready``/
         ``failed``) correct without joining the ingestion tables (design fork).
         """
+        ...
+
+
+@runtime_checkable
+class ActivationEventRepository(Protocol):
+    """Persistence port for once-per-user first-session events."""
+
+    def insert_if_absent(self, *, user_id: UUID, name: str, occurred_at: datetime) -> bool:
+        """Insert ``(user_id, name)``; return True if a row was written."""
         ...
 
 
@@ -933,6 +947,8 @@ class QuizItemRepository(Protocol):
         from one highlight is idempotent while two highlights may share a key.
         ``tutor`` items collapse on ``conversation_id`` where ``origin='tutor'`` and
         ``conversation_id IS NOT NULL`` — one live conversation, one tutor card.
+        ``starter`` items collapse on ``(user_id, source_id, content_key)`` so two
+        learners can clone the same sample template without sharing a row.
         """
         ...
 
@@ -1058,8 +1074,14 @@ class QuizItemRepository(Protocol):
         """Stamp ``undone_at`` on an existing log row. Never deletes the row (AD-306)."""
         ...
 
-    def list_for_source(self, source_id: UUID) -> list[QuizItem]:
-        """Return all of ``source_id``'s items (any status), for the overview (QUIZ-14)."""
+    def list_for_source(
+        self,
+        source_id: UUID,
+        *,
+        origin: QuizItemOrigin | None = None,
+        user_id: UUID | None = None,
+    ) -> list[QuizItem]:
+        """Return ``source_id``'s items (any status), optionally filtered (QUIZ-14)."""
         ...
 
     def due_map(self, source_id: UUID) -> dict[UUID, datetime]:

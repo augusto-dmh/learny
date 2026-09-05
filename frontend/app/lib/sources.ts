@@ -21,6 +21,8 @@ export type SourceSummary = {
   content_type: string;
   status: string;
   created_at: string;
+  is_sample: boolean;
+  suggested_question: string | null;
 };
 
 /** One progress-log entry, as returned in an `IngestionSummary`. */

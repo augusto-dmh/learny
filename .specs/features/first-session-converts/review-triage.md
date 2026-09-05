@@ -1,0 +1,24 @@
+# PR #67 Review Triage — first-session-converts
+
+7 PR-level comments (6 lanes + summary), 0 inline. Every finding checked against the code; this file is the surviving record (comments are deleted in Stage 6).
+
+Verified before triage: `SAMPLE_OPERATOR_EMAIL` is a public constant and `_ensure_operator` returns any user at that address; `frontend/` has no `quiz/starter` caller; `EnsureStarterDeck` calls unfiltered `list_for_source` twice; `readable_source` writes via `activations.insert_if_absent` with a local name copy; `get_sample` has no `db_conn` test; `ReadSection` has no sample non-owner test while `ReadSourceStructure`/`ReadChapter` do; starter HTTP 404 compares status only; `landing.test.tsx` already asserts document order; `test_start_on_an_unreadied_sample_raises_source_not_ready` already exists; `validation.md` on the branch is PASS 32/32.
+
+| # | Source (comment id) | Location | Finding | Verdict | Action | Rationale |
+|---|---|---|---|---|---|---|
+| 1 | 5547869837 (security) | `sample.py:210` | Reserved operator email can be registered before seed; seed adopts that account | **Real** | **Fix** | Confirmed: `RegisterUser` does not reserve `sample-operator@learny.invalid`. `_ensure_operator` returns any existing user. Pre-seed signup owns the one `is_sample` row and therefore owner-only re-ingest / deck-gen. |
+| 2 | 5547877723 / 5547887943 / 5547876647 / 5547930109 | `frontend/app/lib/quiz.ts` | Starter POST is never called from Home or Review | **Real** | **Fix** | Spec “When to clone”: Review and Home call `POST /api/sources/{id}/quiz/starter` before showing due. Zero frontend matches. New accounts never get the five cards. Home must fetch due *before* clone so Ask-first still sees `total_due = 0` (`initial()` FSRS is due now). |
+| 3 | 5547873457 (performance) | `quiz.py` EnsureStarterDeck | Unbounded `list_for_source` on the shared sample | **Real** | **Fix** | Confirmed: both loads are `WHERE source_id = :id` with Python filters. Clones share that source_id, so cost grows with every learner. Query templates by `origin=deck` and clones by `origin=starter AND user_id`. |
+| 4 | 5547873457 (performance) | `ingestion.py` `readable_source` | INSERT on every sample read after the event exists | **Real** | **Won't-fix** | Spec FS-29 stamps `sample_opened` on first successful `readable_source`. `ON CONFLICT DO NOTHING` is the idempotent write. Moving the stamp off the shared guard would miss Ask/read entry points. Distinct from #5 (who writes). |
+| 5 | 5547887803 / 5547887943 | `ingestion.py:107` | `readable_source` bypasses `RecordActivation` and redefines the name | **Real** | **Fix** | Confirmed: local `ACTIVATION_SAMPLE_OPENED`; direct `insert_if_absent`. `account_created` / `first_cited_answer` / `first_review` go through `RecordActivation` (closed set + INFO). Stamp through that writer; delete the local constant. |
+| 6 | 5547876647 (tests) | `repositories.py:269` | `get_sample` has no DB test | **Real** | **Fix** | Confirmed: only `FakeSourceRepository` in unit seed tests. A wrong `WHERE` would not fail until CLI. Add `db_conn` none / one / ignores ordinary books. |
+| 7 | 5547876647 (tests) | `corpus.py:362` | `ReadSection` sample ACL untested | **Real** | **Fix** | Confirmed: structure and chapter have non-owner sample cases; section does not. A regression to `authorized_source` 404s Open/Ask while other reads pass. |
+| 8 | 5547876647 (tests) | `test_web_quiz.py:409` | Starter 404 asserts status only | **Real** | **Fix** | Nearby sample mutate tests compare JSON to a missing-id body. Mirror that for owned non-sample vs missing UUID. |
+| 9 | 5547877723 (requirements) | `landing.test.tsx` | FS-27 DOM order not asserted | **False** | — | `landing.test.tsx:61-67` already uses `compareDocumentPosition` so the quote precedes Create account and Log in. |
+| 10 | 5547877723 (requirements) | conversations tests | Unreadied-sample 409 not discriminated | **False** | — | `test_start_on_an_unreadied_sample_raises_source_not_ready` (`test_application_conversations.py:834`) starts a `processing` `is_sample` row as a non-owner and expects `SourceNotReady` with no conversation created. |
+| 11 | 5547877723 (requirements) | `spec.md` / `validation.md` | Spec checkboxes unchecked; validation records FAIL | **False** | — | Branch `validation.md` is PASS, 32/32 ACs, 8/9 mutants (one equivalent). Success-criteria checkboxes in `spec.md` are not the completion gate (`validate_state.py` reads `validation.md`). |
+| 12 | 5547877723 / 5547930109 | PR body | Browser walkthrough deferred | **Real** | **Won't-fix** | Ship-cycle defers browser UAT off the merge path in auto mode. Landing and first-session flows are covered by vitest. |
+
+**Tallies:** 12 findings — 9 real, 3 false, 7 fix, 2 won't-fix.
+
+**PR-level:** security/requirements/tests/architecture/regression/performance lanes plus the summary — no extra product defects beyond the table.

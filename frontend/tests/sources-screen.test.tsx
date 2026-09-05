@@ -3,7 +3,8 @@
 /**
  * C gate (component) — the library screen lists sources as cards through the
  * same-origin proxy, uploads an EPUB (add-on-success), surfaces upload/validation
- * errors without adding a row, links ready books to Ask/Teach/Read, offers a
+ * errors without adding a row, links a ready book through one Open to `/read`
+ * with Ask/Tutor/Review in overflow, offers a
  * (re)start-ingestion control for uploaded/failed sources, shows a failed
  * source's latest ingestion event message, and does a UX-only redirect when
  * unauthenticated (FE-20/FE-21; SRC-11 behaviors preserved). The section-tree
@@ -57,9 +58,19 @@ const created = {
   content_type: "application/epub+zip",
   status: "uploaded",
   created_at: "now",
+  is_sample: false,
+  suggested_question: null,
 };
 
-function sourceRow(id: string, title: string, status: string) {
+const SAMPLE_QUESTION =
+  "What does Sun Tzu mean by \u201call warfare is based on deception\u201d?";
+
+function sourceRow(
+  id: string,
+  title: string,
+  status: string,
+  extra: Record<string, unknown> = {},
+) {
   return {
     id,
     title,
@@ -68,7 +79,18 @@ function sourceRow(id: string, title: string, status: string) {
     content_type: "application/epub+zip",
     status,
     created_at: "now",
+    is_sample: false,
+    suggested_question: null,
+    ...extra,
   };
+}
+
+function sampleRow(extra: Record<string, unknown> = {}) {
+  return sourceRow("s-sample", "The Art of War", "ready", {
+    is_sample: true,
+    suggested_question: SAMPLE_QUESTION,
+    ...extra,
+  });
 }
 
 /** One source in each of the four projection states. */
@@ -124,6 +146,10 @@ function mixedHandlers(extra: Record<string, Handler> = {}) {
     "GET /api/sources/s-proc/ingestion": () => jsonResponse(200, runningIngestion),
     ...extra,
   };
+}
+
+function openOverflow(scope: HTMLElement) {
+  fireEvent.click(within(scope).getByRole("button", { name: "More actions" }));
 }
 
 function selectFileAndTitle(title: string) {
@@ -254,29 +280,20 @@ describe("LibraryScreen (upload + list)", () => {
     expect(screen.getByTestId("status-s-fail").textContent).toBe("failed");
   });
 
-  it("links only ready cards to their Ask, Teach, and Read views", async () => {
+  it("links a ready card through one Open to the read URL", async () => {
     vi.stubGlobal("fetch", routedFetch(mixedHandlers()));
 
     render(<LibraryScreen />);
     await screen.findByText("Ready Book");
 
-    // Exactly one of each action link — all on the sole ready card.
-    for (const name of ["Ask", "Teach", "Read"]) {
-      const links = screen.getAllByRole("link", { name });
-      expect(links).toHaveLength(1);
-    }
     const readyLi = screen.getByTestId("status-s-ready").closest("li");
-    expect(
-      within(readyLi!).getByRole("link", { name: "Ask" }).getAttribute("href"),
-    ).toBe("/sources/s-ready/ask");
-    expect(
-      within(readyLi!).getByRole("link", { name: "Teach" }).getAttribute("href"),
-    ).toBe("/sources/s-ready/teach");
-    expect(
-      within(readyLi!).getByRole("link", { name: "Read" }).getAttribute("href"),
-    ).toBe("/sources/s-ready/read");
+    const open = within(readyLi!).getByRole("link", { name: "Open" });
+    expect(open.getAttribute("href")).toBe("/sources/s-ready/read");
+    expect(within(readyLi!).queryByRole("link", { name: "Ask" })).toBeNull();
+    expect(within(readyLi!).queryByRole("link", { name: "Teach" })).toBeNull();
+    expect(within(readyLi!).queryByRole("link", { name: "Read" })).toBeNull();
+    expect(within(readyLi!).queryByRole("link", { name: "Tutor" })).toBeNull();
 
-    // Non-ready cards offer no action links.
     for (const id of ["s-up", "s-proc", "s-fail"]) {
       const li = screen.getByTestId(`status-${id}`).closest("li");
       expect(within(li!).queryByRole("link")).toBeNull();
@@ -306,8 +323,13 @@ describe("LibraryScreen (ingestion start)", () => {
     const procLi = screen.getByTestId("status-s-proc").closest("li");
     expect(within(procLi!).queryByRole("button")).toBeNull();
     const readyLi = screen.getByTestId("status-s-ready").closest("li");
-    const readyButtons = within(readyLi!).getAllByRole("button");
-    expect(readyButtons.map((b) => b.textContent)).toEqual(["Re-ingest"]);
+    expect(
+      within(readyLi!).queryByRole("button", { name: "Start ingestion" }),
+    ).toBeNull();
+    expect(within(readyLi!).getByRole("link", { name: "Open" })).toBeTruthy();
+    expect(
+      within(readyLi!).queryByRole("button", { name: "Re-ingest" }),
+    ).toBeNull();
   });
 
   it("starts ingestion through the proxy and reflects processing on success", async () => {
@@ -451,7 +473,9 @@ describe("LibraryScreen (re-ingest ready source)", () => {
     render(<LibraryScreen />);
     await screen.findByText("Ready Book");
 
-    fireEvent.click(screen.getByRole("button", { name: "Re-ingest" }));
+    const readyLi = screen.getByTestId("status-s-ready").closest("li")!;
+    openOverflow(readyLi);
+    fireEvent.click(within(readyLi).getByRole("button", { name: "Re-ingest" }));
 
     // The confirmation replaces the trigger: warning text plus confirm/cancel.
     expect(screen.queryByRole("button", { name: "Re-ingest" })).toBeNull();
@@ -478,7 +502,9 @@ describe("LibraryScreen (re-ingest ready source)", () => {
     render(<LibraryScreen />);
     await screen.findByText("Ready Book");
 
-    fireEvent.click(screen.getByRole("button", { name: "Re-ingest" }));
+    const readyLi = screen.getByTestId("status-s-ready").closest("li")!;
+    openOverflow(readyLi);
+    fireEvent.click(within(readyLi).getByRole("button", { name: "Re-ingest" }));
     fireEvent.click(screen.getByRole("button", { name: "Confirm re-ingest" }));
 
     await waitFor(() =>
@@ -500,13 +526,115 @@ describe("LibraryScreen (re-ingest ready source)", () => {
     render(<LibraryScreen />);
     await screen.findByText("Ready Book");
 
-    fireEvent.click(screen.getByRole("button", { name: "Re-ingest" }));
+    const readyLi = screen.getByTestId("status-s-ready").closest("li")!;
+    openOverflow(readyLi);
+    fireEvent.click(within(readyLi).getByRole("button", { name: "Re-ingest" }));
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
-    // Back to the collapsed trigger; the card is untouched and nothing posted.
-    expect(screen.getByRole("button", { name: "Re-ingest" })).toBeTruthy();
+    // Overflow still offers re-ingest; the card is untouched and nothing posted.
+    openOverflow(readyLi);
+    expect(within(readyLi).getByRole("button", { name: "Re-ingest" })).toBeTruthy();
     expect(screen.getByTestId("status-s-ready").textContent).toBe("ready");
     const posts = fetchMock.mock.calls.filter(([, init]) => init?.method === "POST");
     expect(posts).toHaveLength(0);
   });
 });
+
+describe("LibraryScreen (overflow, sample, picker)", () => {
+  it("offers Ask, Tutor, and Review in overflow and Re-ingest on an owned ready row", async () => {
+    vi.stubGlobal("fetch", routedFetch(mixedHandlers()));
+
+    render(<LibraryScreen />);
+    await screen.findByText("Ready Book");
+
+    const readyLi = screen.getByTestId("status-s-ready").closest("li")!;
+    openOverflow(readyLi);
+
+    expect(
+      within(readyLi).getByRole("link", { name: "Ask" }).getAttribute("href"),
+    ).toBe("/sources/s-ready/read?panel=ask");
+    expect(
+      within(readyLi).getByRole("link", { name: "Tutor" }).getAttribute("href"),
+    ).toBe("/sources/s-ready/read?panel=teach");
+    expect(
+      within(readyLi)
+        .getByRole("link", { name: "Review" })
+        .getAttribute("href"),
+    ).toBe("/review?source_id=s-ready");
+    expect(within(readyLi).queryByRole("link", { name: "Teach" })).toBeNull();
+    expect(within(readyLi).getByRole("button", { name: "Re-ingest" })).toBeTruthy();
+  });
+
+  it("hides Re-ingest on the sample row overflow", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        "GET /api/sources": () => jsonResponse(200, [sampleRow()]),
+      }),
+    );
+
+    render(<LibraryScreen />);
+    await screen.findByText("The Art of War");
+
+    const sampleLi = screen.getByTestId("status-s-sample").closest("li")!;
+    expect(within(sampleLi).getByRole("link", { name: "Open" })).toBeTruthy();
+    openOverflow(sampleLi);
+    expect(within(sampleLi).getByRole("link", { name: "Ask" })).toBeTruthy();
+    expect(within(sampleLi).getByRole("link", { name: "Tutor" })).toBeTruthy();
+    expect(within(sampleLi).getByRole("link", { name: "Review" })).toBeTruthy();
+    expect(within(sampleLi).queryByRole("button", { name: "Re-ingest" })).toBeNull();
+  });
+
+  it("accepts EPUB and PDF in the file picker", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        "GET /api/sources": () => jsonResponse(200, []),
+      }),
+    );
+
+    render(<LibraryScreen />);
+    await screen.findByText("No sources yet.");
+
+    const fileInput = screen.getByLabelText("EPUB file");
+    const accept = fileInput.getAttribute("accept") ?? "";
+    expect(accept).toContain(".epub");
+    expect(accept).toContain(".pdf");
+  });
+
+  it("points waiters at the sample while a non-sample book is processing", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch(
+        mixedHandlers({
+          "GET /api/sources": () =>
+            jsonResponse(200, [...mixed, sampleRow()]),
+        }),
+      ),
+    );
+
+    render(<LibraryScreen />);
+    await screen.findByText("The Art of War");
+
+    expect(
+      screen.getByText("The sample book is ready to use while you wait."),
+    ).toBeTruthy();
+  });
+
+  it("does not show No sources yet when the sample is the only book", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        "GET /api/sources": () => jsonResponse(200, [sampleRow()]),
+      }),
+    );
+
+    render(<LibraryScreen />);
+    expect(await screen.findByText("The Art of War")).toBeTruthy();
+    expect(screen.queryByText("No sources yet.")).toBeNull();
+  });
+});
+

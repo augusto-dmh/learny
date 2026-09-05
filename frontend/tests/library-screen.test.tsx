@@ -80,6 +80,8 @@ const readySource = {
   content_type: "application/epub+zip",
   status: "ready",
   created_at: "now",
+  is_sample: false,
+  suggested_question: null,
 };
 
 function job(status: string, extra: Record<string, unknown> = {}) {
@@ -159,10 +161,18 @@ describe("LibraryScreen pending feedback (ANSW-10)", () => {
 
     render(<LibraryScreen />);
 
-    for (const name of ["Ask", "Teach", "Read", "Review"]) {
-      const link = await screen.findByRole("link", { name });
-      expect(within(link).getByTestId("nav-pending")).toBeTruthy();
+    const open = await screen.findByRole("link", { name: "Open" });
+    expect(within(open).getByTestId("nav-pending")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "More actions" }));
+    for (const name of ["Ask", "Tutor", "Review"]) {
+      const links = screen.getAllByRole("link", { name });
+      for (const link of links) {
+        expect(within(link).getByTestId("nav-pending")).toBeTruthy();
+      }
     }
+    expect(screen.queryByRole("link", { name: "Teach" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Read" })).toBeNull();
   });
 
   it("shows no pending indicator while nothing is navigating", async () => {
@@ -177,7 +187,7 @@ describe("LibraryScreen pending feedback (ANSW-10)", () => {
 
     render(<LibraryScreen />);
 
-    await screen.findByRole("link", { name: "Read" });
+    await screen.findByRole("link", { name: "Open" });
     expect(screen.queryAllByTestId("nav-pending")).toHaveLength(0);
   });
 });
@@ -313,7 +323,7 @@ describe("LibraryScreen quiz-deck controls (E3)", () => {
     render(<LibraryScreen />);
 
     // The reading actions still render for the ready source...
-    expect(await screen.findByRole("link", { name: "Ask" })).toBeTruthy();
+    expect(await screen.findByRole("link", { name: "Open" })).toBeTruthy();
     // ...but the quiz controls stay hidden on a failed overview load.
     expect(screen.queryByTestId("quiz-s1")).toBeNull();
     expect(

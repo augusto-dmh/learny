@@ -17,6 +17,8 @@ validation → 422.
 
 Contract (also consumed by the Next.js proxy):
 - ``POST /api/sources/{id}/quiz/deck`` → 202 deck job; auth + CSRF/Origin + limit.
+- ``POST /api/sources/{id}/quiz/starter`` → 200 five starter clones on the sample;
+  auth + CSRF/Origin + limit; non-sample → 404.
 - ``GET  /api/sources/{id}/quiz`` → 200 items + counts + due count + latest job.
 - ``GET  /api/reviews/due`` → 200 due queue + total; auth.
 - ``POST /api/quiz-items/{id}/reviews`` → 200 updated scheduling; auth + CSRF/Origin
@@ -42,7 +44,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import Connection
 
 from app.application.errors import EnqueueFailed
-from app.application.quiz import ExportQuizDeck, ListQuizItems, QuizOverview
+from app.application.quiz import EnsureStarterDeck, ExportQuizDeck, ListQuizItems, QuizOverview
 from app.application.reviews import (
     FlagCard,
     GetDueQueue,
@@ -69,6 +71,7 @@ from app.infrastructure.web.dependencies import (
     build_plan_deck_generation,
     get_authenticated_user,
     get_due_queue,
+    get_ensure_starter_deck,
     get_export_quiz_deck,
     get_flag_card,
     get_list_quiz_items,
@@ -207,6 +210,16 @@ class QuizOverviewView(BaseModel):
                 else None
             ),
         )
+
+
+class StarterDeckView(BaseModel):
+    """The caller's five starter clones on the sample (FS-14)."""
+
+    items: list[QuizItemSummaryView]
+
+    @classmethod
+    def from_items(cls, items: list[QuizItem]) -> StarterDeckView:
+        return cls(items=[QuizItemSummaryView.from_item(item, due=None) for item in items])
 
 
 class CitationView(BaseModel):
@@ -385,6 +398,28 @@ def generate_quiz_deck(
         extra={"source_id": str(source_id), "job_id": str(job.id)},
     )
     return QuizJobView.from_job(job)
+
+
+@router.post(
+    "/api/sources/{source_id}/quiz/starter",
+    dependencies=[
+        Depends(rate_limit_quiz),
+        Depends(enforce_origin),
+        Depends(enforce_csrf),
+    ],
+)
+def ensure_starter_deck(
+    source_id: UUID,
+    user: Annotated[User, Depends(get_authenticated_user)],
+    service: Annotated[EnsureStarterDeck, Depends(get_ensure_starter_deck)],
+) -> StarterDeckView:
+    """Clone five sample templates onto the caller (200); non-sample → 404.
+
+    Idempotent: a second POST returns the same five items. CSRF/Origin and the
+    quiz rate limit match the other quiz POSTs. Unauthenticated → 401.
+    """
+    items = service(user=user, source_id=source_id)
+    return StarterDeckView.from_items(items)
 
 
 @router.get("/api/sources/{source_id}/quiz")

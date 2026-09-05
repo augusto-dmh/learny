@@ -46,6 +46,7 @@ import {
   startConversation,
 } from "@/app/lib/conversations";
 import { type PendingPanelRequest } from "@/app/lib/panel";
+import { getSource } from "@/app/lib/sources";
 import {
   assistantView,
   errorMessageFor,
@@ -128,6 +129,27 @@ export function AskPanel({
 }) {
   const [thread, setThread] = useState<AskThread | null>(null);
   const [restoreError, setRestoreError] = useState<string | null>(null);
+  const [suggestedQuestion, setSuggestedQuestion] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void getSource(sourceId)
+      .then((source) => {
+        if (!cancelled) {
+          setSuggestedQuestion(
+            source.is_sample && source.suggested_question
+              ? source.suggested_question
+              : null,
+          );
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setSuggestedQuestion(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sourceId]);
 
   // Restore the conversation this book's Ask surface was continuing. The pointer
   // is device-local; the turns are always the server's copy.
@@ -209,6 +231,7 @@ export function AskPanel({
       onRequireAuth={onRequireAuth}
       onConversationStarted={handleStarted}
       onConversationKept={handleKept}
+      suggestedQuestion={suggestedQuestion}
     />
   );
 }
@@ -226,6 +249,7 @@ function AskChat({
   onRequireAuth,
   onConversationStarted,
   onConversationKept,
+  suggestedQuestion,
 }: {
   sourceId: string;
   csrf: string;
@@ -240,6 +264,7 @@ function AskChat({
   onRequireAuth?: () => void;
   onConversationStarted: (conversationId: string) => void;
   onConversationKept: () => void;
+  suggestedQuestion: string | null;
 }) {
   // A quote the reader chose to "Ask about": it rides along, once, with the next
   // typed question (RA-18) and shows as a dismissable context chip until then.
@@ -334,16 +359,32 @@ function AskChat({
                 section.
               </p>
               <div aria-label="suggested prompts" className="space-y-2">
-                {SUGGESTED_PROMPTS.map((prompt) => (
-                  <button
-                    key={prompt}
-                    type="button"
-                    onClick={() => send(prompt)}
-                    className="block w-full rounded-md border px-3 py-2 text-left text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                  >
-                    {prompt}
-                  </button>
-                ))}
+                {(suggestedQuestion
+                  ? [
+                      suggestedQuestion,
+                      ...SUGGESTED_PROMPTS.filter(
+                        (prompt) => prompt !== suggestedQuestion,
+                      ),
+                    ]
+                  : SUGGESTED_PROMPTS
+                ).map((prompt) => {
+                  const highlighted = prompt === suggestedQuestion;
+                  return (
+                    <button
+                      key={prompt}
+                      type="button"
+                      data-highlighted={highlighted ? "true" : undefined}
+                      onClick={() => send(prompt)}
+                      className={
+                        highlighted
+                          ? "block w-full rounded-md border border-primary/40 bg-accent px-3 py-2 text-left text-sm font-medium text-foreground transition-colors hover:bg-accent"
+                          : "block w-full rounded-md border px-3 py-2 text-left text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                      }
+                    >
+                      {prompt}
+                    </button>
+                  );
+                })}
               </div>
             </div>
           ) : null}

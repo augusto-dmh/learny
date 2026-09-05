@@ -57,7 +57,7 @@ describe("read page route group (READ-16/21)", () => {
     );
 
     expect(screen.getByTestId("chapter-reader")).toBeTruthy();
-    expect(screen.queryByRole("link", { name: "Bookshelf" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Library" })).toBeNull();
     expect(screen.queryByRole("link", { name: "Account" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Log out" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Toggle theme" })).toBeNull();

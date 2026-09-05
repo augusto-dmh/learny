@@ -117,7 +117,7 @@ export function NotesScreen({
             the deterministic Obsidian vault zip straight from FastAPI (NL-16). */}
         <Button asChild variant="outline">
           <a href="/api/export/vault" download="learny-vault.zip">
-            Export vault
+            Download notes
           </a>
         </Button>
       </div>

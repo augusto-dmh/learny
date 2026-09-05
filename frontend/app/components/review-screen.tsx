@@ -39,6 +39,7 @@ import { fetchAuthState } from "@/app/lib/auth";
 import { isTypingTarget, useKeyShortcuts } from "@/app/components/use-key-shortcuts";
 import { readUrl } from "@/app/lib/read-url";
 import {
+  ensureStarterDeck,
   flagQuizItem,
   getDueReviews,
   intervalLabel,
@@ -49,6 +50,7 @@ import {
   type DueItem,
   type Scheduling,
 } from "@/app/lib/quiz";
+import { listSources } from "@/app/lib/sources";
 import {
   getContinueReading,
   type ContinueReadingView,
@@ -166,6 +168,15 @@ export function ReviewScreen({
     }
     setCsrf(next.user.csrf_token);
     setAuthed(true);
+    try {
+      const sources = await listSources();
+      const sample = sources.find((source) => source.is_sample);
+      if (sample) {
+        await ensureStarterDeck(sample.id, next.user.csrf_token);
+      }
+    } catch {
+      // Due still loads; a missing sample or failed clone must not blank Review.
+    }
     await loadQueue();
   }, [loadQueue, onRequireAuth]);
 

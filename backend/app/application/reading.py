@@ -23,7 +23,7 @@ from uuid import UUID
 from app.application.dates import local_day
 from app.application.errors import CorpusNotFound
 from app.application.identity import AuthorizeOwnership
-from app.application.ingestion import authorized_source
+from app.application.ingestion import readable_source
 from app.domain.entities import (
     ChapterContent,
     ChapterIndexRow,
@@ -32,6 +32,7 @@ from app.domain.entities import (
     User,
 )
 from app.domain.ports import (
+    ActivationEventRepository,
     Clock,
     CorpusRepository,
     NoteRepository,
@@ -222,20 +223,26 @@ class ReadChapter:
         corpus: CorpusRepository,
         positions: ReadingPositionRepository,
         authorize: AuthorizeOwnership,
+        activations: ActivationEventRepository | None = None,
+        clock: Clock | None = None,
     ) -> None:
         self._sources = sources
         self._corpus = corpus
         self._positions = positions
         self._authorize = authorize
+        self._activations = activations
+        self._clock = clock
 
     def __call__(
         self, *, user: User, source_id: UUID, anchor: str | None
     ) -> tuple[ChapterContent, ReadingPosition | None]:
-        authorized_source(
+        readable_source(
             user=user,
             source_id=source_id,
             sources=self._sources,
             authorize=self._authorize,
+            activations=self._activations,
+            clock=self._clock,
         )
         index = self._corpus.get_chapter_index(source_id)
         if not index:
@@ -321,6 +328,7 @@ class SaveReadingPosition:
         authorize: AuthorizeOwnership,
         clock: Clock,
         study_days: StudyDayRepository,
+        activations: ActivationEventRepository | None = None,
     ) -> None:
         self._sources = sources
         self._corpus = corpus
@@ -328,15 +336,18 @@ class SaveReadingPosition:
         self._authorize = authorize
         self._clock = clock
         self._study_days = study_days
+        self._activations = activations
 
     def __call__(
         self, *, user: User, source_id: UUID, anchor: str, client_tz: str | None = None
     ) -> ReadingPosition:
-        authorized_source(
+        readable_source(
             user=user,
             source_id=source_id,
             sources=self._sources,
             authorize=self._authorize,
+            activations=self._activations,
+            clock=self._clock,
         )
         index = self._corpus.get_chapter_index(source_id)
         target_idx = locate(index, anchor) if index else None
@@ -386,16 +397,22 @@ class ListSourceHighlights:
         sources: SourceRepository,
         notes: NoteRepository,
         authorize: AuthorizeOwnership,
+        activations: ActivationEventRepository | None = None,
+        clock: Clock | None = None,
     ) -> None:
         self._sources = sources
         self._notes = notes
         self._authorize = authorize
+        self._activations = activations
+        self._clock = clock
 
     def __call__(self, *, user: User, source_id: UUID) -> tuple[SourceHighlight, ...]:
-        authorized_source(
+        readable_source(
             user=user,
             source_id=source_id,
             sources=self._sources,
             authorize=self._authorize,
+            activations=self._activations,
+            clock=self._clock,
         )
         return self._notes.highlights_for_source(user.id, source_id)

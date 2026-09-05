@@ -168,7 +168,7 @@ describe("NotesScreen (NF-13/14)", () => {
     ).toEqual([]);
   });
 
-  it("offers an Export vault download pointing at the export endpoint (NL-16)", async () => {
+  it("offers a Download notes control pointing at the export endpoint (NL-16)", async () => {
     vi.stubGlobal(
       "fetch",
       routedFetch({
@@ -180,7 +180,7 @@ describe("NotesScreen (NF-13/14)", () => {
 
     render(<NotesScreen />);
 
-    const link = await screen.findByRole("link", { name: "Export vault" });
+    const link = await screen.findByRole("link", { name: "Download notes" });
     expect(link.getAttribute("href")).toBe("/api/export/vault");
     expect(link.hasAttribute("download")).toBe(true);
   });

@@ -11,12 +11,14 @@ indistinguishable (404 semantics, no disclosure).
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import Connection, delete, func, select, update
 
+from app.application.activation import ACTIVATION_FIRST_REVIEW, RecordActivation
 from app.application.dates import local_day
 from app.application.errors import QuizItemNotFound, QuizItemNotReviewable, QuizReviewNotUndoable
 from app.application.quiz_qc import content_key
@@ -52,7 +54,7 @@ from app.infrastructure.db.repositories import (
 )
 from app.infrastructure.scheduling.fsrs import FsrsSchedulingAdapter
 from tests.conftest import requires_db
-from tests.fakes import FakeClock, FakeStudyDayRepository
+from tests.fakes import FakeActivationEventRepository, FakeClock, FakeStudyDayRepository
 
 _NOW = datetime(2026, 7, 16, 12, 0, 0, tzinfo=UTC)
 
@@ -183,6 +185,108 @@ def test_due_queue_attaches_interval_labels_from_the_joined_snapshot() -> None:
     assert items[0].interval_labels == {1: "~1m", 2: "~10m", 3: "~1d", 4: "~4d"}
     assert items[0].snapshot == snapshot
     assert not hasattr(repo, "get_scheduling")
+
+
+# --- SubmitReview first_review (unit) -------------------------------------------
+
+
+class _ReviewItemRepo:
+    def __init__(self, item: QuizItem, snapshot: SchedulingSnapshot) -> None:
+        self._item = item
+        self.scheduling = {item.id: snapshot}
+        self.logs: list[tuple[UUID, ReviewLogEntry]] = []
+
+    def get_by_id(self, item_id: UUID) -> QuizItem | None:
+        return self._item if item_id == self._item.id else None
+
+    def get_scheduling(self, quiz_item_id: UUID) -> SchedulingSnapshot:
+        return self.scheduling[quiz_item_id]
+
+    def update_scheduling(self, quiz_item_id: UUID, snapshot: SchedulingSnapshot) -> None:
+        self.scheduling[quiz_item_id] = snapshot
+
+    def append_log(self, quiz_item_id: UUID, entry: ReviewLogEntry) -> None:
+        self.logs.append((quiz_item_id, entry))
+
+
+class _ReviewScheduling:
+    def review(self, snapshot, rating, reviewed_at):  # noqa: ANN001, ANN201
+        advanced = replace(snapshot, last_review=reviewed_at, due=reviewed_at + timedelta(days=1))
+        return advanced, ReviewLogEntry(rating=rating, reviewed_at=reviewed_at)
+
+    def preview(self, snapshot, reviewed_at):  # noqa: ANN001, ANN201
+        return {
+            1: reviewed_at + timedelta(seconds=30),
+            2: reviewed_at + timedelta(minutes=10),
+            3: reviewed_at + timedelta(days=1),
+            4: reviewed_at + timedelta(days=4),
+        }
+
+
+def _review_user_and_item(*, status: str = QuizItemStatus.ACTIVE) -> tuple[User, QuizItem]:
+    user = User(id=uuid4(), email="first-review@example.com", created_at=_NOW)
+    item = QuizItem(
+        id=uuid4(),
+        source_id=uuid4(),
+        user_id=user.id,
+        item_type=QuizItemType.FREE_RECALL,
+        question="What is the powerhouse of the cell?",
+        answer="Mitochondria",
+        section_path=("Chapter 1",),
+        anchor="ch1.xhtml",
+        source_excerpt="The mitochondria is the powerhouse of the cell.",
+        chunk_hash="c" * 64,
+        content_key=content_key(
+            QuizItemType.FREE_RECALL, "What is the powerhouse of the cell?", "Mitochondria"
+        ),
+        status=status,
+        generation_meta={},
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+    return user, item
+
+
+def _submit_review(
+    items: _ReviewItemRepo, *, activations: FakeActivationEventRepository
+) -> SubmitReview:
+    clock = FakeClock(_NOW)
+    return SubmitReview(
+        items=items,
+        scheduling=_ReviewScheduling(),
+        clock=clock,
+        study_days=FakeStudyDayRepository(),
+        record_activation=RecordActivation(activations=activations, clock=clock),
+    )
+
+
+def test_first_successful_review_inserts_first_review_once() -> None:
+    user, item = _review_user_and_item()
+    snapshot = SchedulingSnapshot(
+        state=1, step=0, stability=None, difficulty=None, due=_NOW, last_review=None
+    )
+    items = _ReviewItemRepo(item, snapshot)
+    activations = FakeActivationEventRepository()
+    service = _submit_review(items, activations=activations)
+
+    service(user=user, item_id=item.id, rating=3)
+    service(user=user, item_id=item.id, rating=3)
+
+    assert list(activations.rows) == [(user.id, ACTIVATION_FIRST_REVIEW)]
+
+
+def test_rejected_review_does_not_insert_first_review() -> None:
+    user, item = _review_user_and_item(status=QuizItemStatus.STALE)
+    snapshot = SchedulingSnapshot(
+        state=1, step=0, stability=None, difficulty=None, due=_NOW, last_review=None
+    )
+    activations = FakeActivationEventRepository()
+    service = _submit_review(_ReviewItemRepo(item, snapshot), activations=activations)
+
+    with pytest.raises(QuizItemNotReviewable):
+        service(user=user, item_id=item.id, rating=3)
+
+    assert activations.rows == {}
 
 
 # --- SubmitReview (integration) -------------------------------------------------

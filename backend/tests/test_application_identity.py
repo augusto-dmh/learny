@@ -12,6 +12,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.application.activation import RecordActivation
 from app.application.errors import (
     EmailAlreadyExists,
     InvalidCredentials,
@@ -27,8 +28,10 @@ from app.application.identity import (
     Logout,
     RegisterUser,
 )
+from app.application.validation import SAMPLE_OPERATOR_EMAIL
 from app.domain.entities import User
 from tests.fakes import (
+    FakeActivationEventRepository,
     FakeClock,
     FakeCredentialRepository,
     FakePasswordHasher,
@@ -52,8 +55,15 @@ def ports():
     }
 
 
-def _register(ports, email="user@example.com", password=VALID_PASSWORD):
-    return RegisterUser(**ports)(email=email, password=password)
+def _record(ports) -> RecordActivation:  # noqa: ANN001
+    return RecordActivation(
+        activations=FakeActivationEventRepository(),
+        clock=ports["clock"],
+    )
+
+
+def _register(ports, email="user@example.com", password=VALID_PASSWORD):  # noqa: ANN001
+    return RegisterUser(**ports, record_activation=_record(ports))(email=email, password=password)
 
 
 # ---- RegisterUser ---------------------------------------------------------
@@ -84,6 +94,11 @@ def test_register_rejects_duplicate_email(ports) -> None:
 def test_register_rejects_bad_email(ports) -> None:
     with pytest.raises(ValidationError):
         _register(ports, email="not-an-email")
+
+
+def test_register_rejects_sample_operator_email(ports) -> None:
+    with pytest.raises(ValidationError):
+        _register(ports, email=SAMPLE_OPERATOR_EMAIL)
 
 
 def test_register_rejects_weak_password(ports) -> None:
@@ -193,9 +208,9 @@ def test_current_user_expired_token_is_unauthenticated_and_revoked(ports) -> Non
     clock = FakeClock()
     ports["clock"] = clock
     # Short-lived session so we can expire it deterministically.
-    result = RegisterUser(**ports, session_ttl=timedelta(minutes=5))(
-        email="user@example.com", password=VALID_PASSWORD
-    )
+    result = RegisterUser(
+        **ports, record_activation=_record(ports), session_ttl=timedelta(minutes=5)
+    )(email="user@example.com", password=VALID_PASSWORD)
     clock.advance(timedelta(minutes=10))
     with pytest.raises(NotAuthenticated):
         CurrentUser(users=ports["users"], sessions=ports["sessions"], clock=clock)(

@@ -24,6 +24,7 @@ from uuid import UUID, uuid4
 from fastapi import Depends, Request
 from sqlalchemy import Connection
 
+from app.application.activation import RecordActivation
 from app.application.cards import (
     AcceptCard,
     AcceptNoteCard,
@@ -59,6 +60,7 @@ from app.application.notes import (
     UpdateNote,
 )
 from app.application.quiz import (
+    EnsureStarterDeck,
     ExportQuizDeck,
     ListQuizItems,
     PlanDeckGeneration,
@@ -98,6 +100,7 @@ from app.infrastructure.answering import (
 from app.infrastructure.clock import SystemClock
 from app.infrastructure.db.engine import get_engine
 from app.infrastructure.db.repositories import (
+    SqlAlchemyActivationEventRepository,
     SqlAlchemyConversationRepository,
     SqlAlchemyConversationTurnRepository,
     SqlAlchemyCorpusRepository,
@@ -195,6 +198,10 @@ def get_register_user(conn: DbConnection) -> RegisterUser:
         hasher=_hasher,
         tokens=_tokens,
         clock=_clock,
+        record_activation=RecordActivation(
+            activations=SqlAlchemyActivationEventRepository(conn),
+            clock=_clock,
+        ),
     )
 
 
@@ -285,6 +292,8 @@ def get_get_source(conn: DbConnection) -> GetSource:
     return GetSource(
         sources=SqlAlchemySourceRepository(conn),
         authorize=AuthorizeOwnership(),
+        activations=SqlAlchemyActivationEventRepository(conn),
+        clock=_clock,
     )
 
 
@@ -371,6 +380,8 @@ def get_read_source_structure(conn: DbConnection) -> ReadSourceStructure:
         sources=SqlAlchemySourceRepository(conn),
         corpus=SqlAlchemyCorpusRepository(conn),
         authorize=AuthorizeOwnership(),
+        activations=SqlAlchemyActivationEventRepository(conn),
+        clock=_clock,
     )
 
 
@@ -379,6 +390,8 @@ def get_read_section(conn: DbConnection) -> ReadSection:
         sources=SqlAlchemySourceRepository(conn),
         corpus=SqlAlchemyCorpusRepository(conn),
         authorize=AuthorizeOwnership(),
+        activations=SqlAlchemyActivationEventRepository(conn),
+        clock=_clock,
     )
 
 
@@ -389,6 +402,8 @@ def get_read_chapter(conn: DbConnection) -> ReadChapter:
         corpus=SqlAlchemyCorpusRepository(conn),
         positions=SqlAlchemyReadingPositionRepository(conn),
         authorize=AuthorizeOwnership(),
+        activations=SqlAlchemyActivationEventRepository(conn),
+        clock=_clock,
     )
 
 
@@ -401,6 +416,7 @@ def get_save_reading_position(conn: DbConnection) -> SaveReadingPosition:
         authorize=AuthorizeOwnership(),
         clock=_clock,
         study_days=SqlAlchemyStudyDayRepository(conn),
+        activations=SqlAlchemyActivationEventRepository(conn),
     )
 
 
@@ -410,6 +426,8 @@ def get_list_source_highlights(conn: DbConnection) -> ListSourceHighlights:
         sources=SqlAlchemySourceRepository(conn),
         notes=SqlAlchemyNoteRepository(conn),
         authorize=AuthorizeOwnership(),
+        activations=SqlAlchemyActivationEventRepository(conn),
+        clock=_clock,
     )
 
 
@@ -446,6 +464,8 @@ def get_retrieve_evidence(conn: DbConnection) -> RetrieveEvidence:
         rrf_k=settings.retrieval_rrf_k,
         ef_search=settings.hnsw_ef_search,
         default_top_k=settings.retrieval_top_k,
+        activations=SqlAlchemyActivationEventRepository(conn),
+        clock=_clock,
     )
 
 
@@ -481,6 +501,7 @@ def get_start_conversation(conn: DbConnection) -> StartConversation:
         authorize=AuthorizeOwnership(),
         clock=_clock,
         ids=uuid4,
+        activations=SqlAlchemyActivationEventRepository(conn),
     )
 
 
@@ -544,6 +565,10 @@ def get_post_conversation_turn(
         evidence_top_k=settings.conversation_evidence_top_k,
         history_turns=settings.conversation_history_turns,
         tutor_check_after_turns=settings.tutor_check_after_turns,
+        record_activation=RecordActivation(
+            activations=SqlAlchemyActivationEventRepository(conn),
+            clock=_clock,
+        ),
     )
 
 
@@ -621,6 +646,18 @@ def get_list_quiz_items(conn: DbConnection) -> ListQuizItems:
     )
 
 
+def get_ensure_starter_deck(conn: DbConnection, settings: AppSettings) -> EnsureStarterDeck:
+    """Wire ``EnsureStarterDeck`` on the request-scoped connection."""
+    return EnsureStarterDeck(
+        sources=SqlAlchemySourceRepository(conn),
+        items=SqlAlchemyQuizItemRepository(conn),
+        authorize=AuthorizeOwnership(),
+        scheduling=build_scheduling_adapter(settings),
+        clock=_clock,
+        ids=uuid4,
+    )
+
+
 def get_due_queue(conn: DbConnection, settings: AppSettings) -> GetDueQueue:
     """Wire ``GetDueQueue`` on the request-scoped connection (QUIZ-13, AD-310)."""
     return GetDueQueue(
@@ -657,6 +694,10 @@ def get_submit_review(conn: DbConnection) -> SubmitReview:
         scheduling=build_scheduling_adapter(get_settings()),
         clock=_clock,
         study_days=SqlAlchemyStudyDayRepository(conn),
+        record_activation=RecordActivation(
+            activations=SqlAlchemyActivationEventRepository(conn),
+            clock=_clock,
+        ),
     )
 
 

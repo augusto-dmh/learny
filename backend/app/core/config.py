@@ -330,6 +330,10 @@ class Settings(BaseSettings):
     # window resolves to the same value.
     words_per_page: int = 275
 
+    # Shared sample seed (RFC-0007 first session). Path is relative to the backend
+    # working directory unless absolute. The operator account has no password.
+    sample_epub_path: Path = Path("data/samples/sun-tzu_the-art-of-war_lionel-giles.epub")
+
     @classmethod
     def settings_customise_sources(
         cls,

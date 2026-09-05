@@ -92,6 +92,22 @@ function routedFetch(handlers: Record<string, Handler>) {
   return vi.fn(async (url: string, init?: RequestInit) => {
     const key = `${init?.method ?? "GET"} ${url}`;
     const handler = handlers[key];
+    if (
+      !handler &&
+      /^GET \/api\/sources\/[^/?]+$/.test(key)
+    ) {
+      return jsonResponse(200, {
+        id: "s1",
+        title: "Ready Book",
+        filename: "s1.epub",
+        byte_size: 3,
+        content_type: "application/epub+zip",
+        status: "ready",
+        created_at: "now",
+        is_sample: false,
+        suggested_question: null,
+      });
+    }
     if (!handler) throw new Error(`unexpected fetch: ${key}`);
     return handler(init ?? {});
   });
@@ -873,7 +889,7 @@ describe("AskPanel when the conversation cannot be created", () => {
 
     // Nothing was created, so nothing is pointed at and nothing needs cleaning up.
     expect(callsTo(fetchMock, CREATE_URL)).toHaveLength(1);
-    expect(fetchMock.mock.calls).toHaveLength(1);
+    expect(callsTo(fetchMock, STREAM_URL)).toHaveLength(0);
     expect(readActiveConversation("s1", "ask")).toBeNull();
   });
 
@@ -964,6 +980,55 @@ describe("AskPanel suggested prompts (RA-08)", () => {
     await waitFor(() =>
       expect(screen.queryByLabelText("suggested prompts")).toBeNull(),
     );
+  });
+});
+
+const SAMPLE_QUESTION =
+  "What does Sun Tzu mean by \u201call warfare is based on deception\u201d?";
+
+describe("AskPanel canned sample question", () => {
+  it("highlights the source suggested question on the sample", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch(
+        baseHandlers(() => sseStream().response, {
+          "GET /api/sources/s1": () =>
+            jsonResponse(200, {
+              id: "s1",
+              title: "The Art of War",
+              filename: "art-of-war.epub",
+              byte_size: 1,
+              content_type: "application/epub+zip",
+              status: "ready",
+              created_at: "2026-07-16T12:00:00Z",
+              is_sample: true,
+              suggested_question: SAMPLE_QUESTION,
+            }),
+        }),
+      ),
+    );
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+
+    const highlighted = await screen.findByRole("button", {
+      name: SAMPLE_QUESTION,
+    });
+    expect(highlighted.getAttribute("data-highlighted")).toBe("true");
+  });
+
+  it("does not highlight the canned string on a non-sample book", async () => {
+    const fetchMock = routedFetch(baseHandlers(() => sseStream().response));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+
+    await waitFor(() =>
+      expect(callsTo(fetchMock, "/api/sources/s1")).toHaveLength(1),
+    );
+    expect(
+      screen.queryByRole("button", { name: SAMPLE_QUESTION }),
+    ).toBeNull();
+    expect(document.querySelector("[data-highlighted='true']")).toBeNull();
   });
 });
 

@@ -5,9 +5,9 @@
  *
  * Resolves auth state via `/api/auth/me` (through the proxy), lists the user's
  * sources as cards with a status badge, uploads an EPUB (unchanged multipart
- * contract), links ready books to Ask/Teach/Read (with a confirm-gated
- * re-ingest control that rebuilds the corpus, e.g. after an embedding-provider
- * switch, ADR-0019), and — for a failed source — surfaces the latest ingestion
+ * contract), links a ready book through one Open to `/read` (Ask, Tutor, and
+ * Review live in overflow; re-ingest stays confirm-gated and is hidden on the
+ * sample), and — for a failed source — surfaces the latest ingestion
  * event message alongside a restart control. All
  * same-origin; the CSRF token read on mount is reused for the state-changing
  * upload and (re)start calls (AD-007).
@@ -23,6 +23,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { fetchAuthState, type AuthState } from "@/app/lib/auth";
 import { getIngestion } from "@/app/lib/ingestion";
+import { readUrl } from "@/app/lib/read-url";
 import {
   generateDeck,
   getQuizOverview,
@@ -302,6 +303,77 @@ function QuizDeckYieldNotes({
   );
 }
 
+/** Overflow verbs for a ready row: Ask, Tutor, Review, and Re-ingest when owned. */
+function ReadyRowOverflow({
+  source,
+  confirming,
+  onRequestReingest,
+}: {
+  source: SourceSummary;
+  confirming: boolean;
+  onRequestReingest: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className="relative">
+      <Button
+        type="button"
+        size="sm"
+        variant="ghost"
+        aria-label="More actions"
+        aria-expanded={open}
+        aria-haspopup="menu"
+        onClick={() => setOpen((current) => !current)}
+      >
+        …
+      </Button>
+      {open ? (
+        <div
+          role="menu"
+          className="absolute top-full left-0 z-20 mt-1 flex min-w-36 flex-col rounded-md border bg-popover p-1 shadow-md"
+        >
+          <Link
+            href={readUrl(source.id, null, { panel: "ask" })}
+            className="rounded-sm px-2 py-1.5 text-sm text-primary underline-offset-4 hover:underline"
+          >
+            Ask
+            <LinkPendingIndicator className="ml-1 align-middle" />
+          </Link>
+          <Link
+            href={readUrl(source.id, null, { panel: "teach" })}
+            className="rounded-sm px-2 py-1.5 text-sm text-primary underline-offset-4 hover:underline"
+          >
+            Tutor
+            <LinkPendingIndicator className="ml-1 align-middle" />
+          </Link>
+          <Link
+            href={`/review?source_id=${source.id}`}
+            className="rounded-sm px-2 py-1.5 text-sm text-primary underline-offset-4 hover:underline"
+          >
+            Review
+            <LinkPendingIndicator className="ml-1 align-middle" />
+          </Link>
+          {!source.is_sample && !confirming ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="justify-start"
+              onClick={() => {
+                setOpen(false);
+                onRequestReingest();
+              }}
+            >
+              Re-ingest
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function LibraryScreen({
   onRequireAuth,
 }: {
@@ -465,7 +537,7 @@ export function LibraryScreen({
                 id="upload-file"
                 type="file"
                 name="file"
-                accept=".epub,application/epub+zip"
+                accept=".epub,.pdf,application/epub+zip,application/pdf"
                 onChange={(e) => setFile(e.target.files?.[0] ?? null)}
               />
             </div>
@@ -480,6 +552,16 @@ export function LibraryScreen({
           </form>
         </CardContent>
       </Card>
+
+      {sources !== null &&
+      sources.some((item) => item.is_sample) &&
+      sources.some(
+        (item) => !item.is_sample && item.status === "processing",
+      ) ? (
+        <p className="text-sm text-muted-foreground">
+          The sample book is ready to use while you wait.
+        </p>
+      ) : null}
 
       {sources === null ? (
         <p className="text-muted-foreground">Loading your sources…</p>
@@ -502,34 +584,25 @@ export function LibraryScreen({
                 <CardContent className="space-y-3">
                   {source.status === "ready" ? (
                     <>
-                      <div className="flex gap-4 text-sm">
+                      <div className="flex items-center gap-4 text-sm">
                         <Link
-                          href={`/sources/${source.id}/ask`}
+                          href={readUrl(source.id, null)}
                           className="text-primary underline-offset-4 hover:underline"
                         >
-                          Ask
+                          Open
                           <LinkPendingIndicator className="ml-1 align-middle" />
                         </Link>
-                        <Link
-                          href={`/sources/${source.id}/teach`}
-                          className="text-primary underline-offset-4 hover:underline"
-                        >
-                          Teach
-                          <LinkPendingIndicator className="ml-1 align-middle" />
-                        </Link>
-                        <Link
-                          href={`/sources/${source.id}/read`}
-                          className="text-primary underline-offset-4 hover:underline"
-                        >
-                          Read
-                          <LinkPendingIndicator className="ml-1 align-middle" />
-                        </Link>
+                        <ReadyRowOverflow
+                          source={source}
+                          confirming={confirmingId === source.id}
+                          onRequestReingest={() => setConfirmingId(source.id)}
+                        />
                       </div>
                       <QuizDeckControls
                         sourceId={source.id}
                         csrfToken={state.user.csrf_token}
                       />
-                      {confirmingId === source.id ? (
+                      {confirmingId === source.id && !source.is_sample ? (
                         <div className="space-y-2">
                           <p className="text-sm text-muted-foreground">
                             Re-ingesting rebuilds this book&apos;s corpus with
@@ -559,16 +632,7 @@ export function LibraryScreen({
                             </Button>
                           </div>
                         </div>
-                      ) : (
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => setConfirmingId(source.id)}
-                        >
-                          Re-ingest
-                        </Button>
-                      )}
+                      ) : null}
                     </>
                   ) : null}
                   {source.status === "uploaded" ? (

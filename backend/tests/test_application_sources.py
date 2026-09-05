@@ -25,6 +25,7 @@ from app.application.validation import validate_source_upload
 from app.domain.entities import Source, User
 from tests.fakes import (
     FailingStorage,
+    FakeActivationEventRepository,
     FakeClock,
     FakeSourceRepository,
     FakeStorage,
@@ -220,6 +221,7 @@ def test_create_stores_bytes_then_persists_row() -> None:
     # And the row is persisted (exactly once).
     assert sources.get_by_id(result.id) == result
     assert sources.add_calls == 1
+    assert result.is_sample is False
 
 
 def test_create_object_key_is_opaque_owner_partitioned() -> None:
@@ -358,7 +360,13 @@ def test_create_storage_failure_raises_and_skips_persist() -> None:
 # ---- GetSource ------------------------------------------------------------
 
 
-def _stored_source(sources: FakeSourceRepository, owner: User) -> Source:
+def _stored_source(
+    sources: FakeSourceRepository,
+    owner: User,
+    *,
+    is_sample: bool = False,
+    status: str = "uploaded",
+) -> Source:
     now = datetime(2026, 7, 4, 12, 0, 0, tzinfo=UTC)
     source = Source(
         id=uuid4(),
@@ -369,18 +377,33 @@ def _stored_source(sources: FakeSourceRepository, owner: User) -> Source:
         byte_size=len(DATA),
         checksum=hashlib.sha256(DATA).hexdigest(),
         object_key=f"sources/{owner.id}/{uuid4()}.epub",
-        status="uploaded",
+        status=status,
         created_at=now,
         updated_at=now,
+        is_sample=is_sample,
     )
     return sources.add(source)
+
+
+def _get_source(
+    sources: FakeSourceRepository,
+    *,
+    activations: FakeActivationEventRepository | None = None,
+    clock: FakeClock | None = None,
+) -> GetSource:
+    return GetSource(
+        sources=sources,
+        authorize=AuthorizeOwnership(),
+        activations=activations or FakeActivationEventRepository(),
+        clock=clock or FakeClock(datetime(2026, 7, 4, 12, 0, 0, tzinfo=UTC)),
+    )
 
 
 def test_get_source_returns_entity_for_owner() -> None:
     sources = FakeSourceRepository()
     owner = _user()
     source = _stored_source(sources, owner)
-    get = GetSource(sources=sources, authorize=AuthorizeOwnership())
+    get = _get_source(sources)
 
     assert get(user=owner, source_id=source.id) == source
 
@@ -390,7 +413,7 @@ def test_get_source_hides_other_users_source_as_not_found() -> None:
     owner = _user("owner@example.com")
     source = _stored_source(sources, owner)
     other = _user("intruder@example.com")
-    get = GetSource(sources=sources, authorize=AuthorizeOwnership())
+    get = _get_source(sources)
 
     with pytest.raises(SourceNotFound):
         get(user=other, source_id=source.id)
@@ -398,10 +421,46 @@ def test_get_source_hides_other_users_source_as_not_found() -> None:
 
 def test_get_source_missing_id_is_not_found() -> None:
     sources = FakeSourceRepository()
-    get = GetSource(sources=sources, authorize=AuthorizeOwnership())
+    get = _get_source(sources)
 
     with pytest.raises(SourceNotFound):
         get(user=_user(), source_id=uuid4())
+
+
+def test_get_source_returns_ready_sample_for_non_owner() -> None:
+    sources = FakeSourceRepository()
+    operator = _user("operator@example.com")
+    sample = _stored_source(sources, operator, is_sample=True, status="ready")
+    reader = _user("reader@example.com")
+
+    assert _get_source(sources)(user=reader, source_id=sample.id) == sample
+
+
+def test_get_source_stamps_sample_opened_once() -> None:
+    sources = FakeSourceRepository()
+    activations = FakeActivationEventRepository()
+    clock = FakeClock(datetime(2026, 7, 4, 12, 0, 0, tzinfo=UTC))
+    operator = _user("operator@example.com")
+    sample = _stored_source(sources, operator, is_sample=True, status="ready")
+    reader = _user("reader@example.com")
+    get = _get_source(sources, activations=activations, clock=clock)
+
+    get(user=reader, source_id=sample.id)
+    get(user=reader, source_id=sample.id)
+
+    assert activations.rows == {(reader.id, "sample_opened"): clock.now()}
+
+
+def test_get_source_does_not_stamp_sample_opened_for_ordinary_book() -> None:
+    sources = FakeSourceRepository()
+    activations = FakeActivationEventRepository()
+    owner = _user()
+    source = _stored_source(sources, owner)
+    get = _get_source(sources, activations=activations)
+
+    get(user=owner, source_id=source.id)
+
+    assert activations.rows == {}
 
 
 # ---- ListSources ----------------------------------------------------------
@@ -421,12 +480,23 @@ def test_list_sources_delegates_to_owner_scoped_repo() -> None:
     assert {s.id for s in result} == {mine_a.id, mine_b.id}
 
 
+def test_list_sources_includes_shared_sample() -> None:
+    sources = FakeSourceRepository()
+    operator = _user("operator@example.com")
+    reader = _user("reader@example.com")
+    sample = _stored_source(sources, operator, is_sample=True, status="ready")
+    own = _stored_source(sources, reader)
+    listed = ListSources(sources=sources)(user=reader)
+
+    assert {s.id for s in listed} == {sample.id, own.id}
+
+
 # ---- ReadSourceMedia ------------------------------------------------------
 
 
 def _read_media(sources: FakeSourceRepository, storage) -> ReadSourceMedia:  # noqa: ANN001
     return ReadSourceMedia(
-        get_source=GetSource(sources=sources, authorize=AuthorizeOwnership()),
+        get_source=_get_source(sources),
         storage=storage,
     )
 

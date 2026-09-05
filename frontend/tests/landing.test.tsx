@@ -9,12 +9,13 @@
  */
 
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import LandingPage from "../app/page";
 
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
 });
 
 describe("Landing page (HOME-20)", () => {
@@ -43,5 +44,27 @@ describe("Landing page (HOME-20)", () => {
     expect(
       screen.getByRole("link", { name: "Log in" }).getAttribute("href"),
     ).toBe("/login");
+  });
+
+  it("shows a cited-answer proof above the account CTAs", () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<LandingPage />);
+
+    const proof = screen.getByText("All warfare is based on deception.");
+    const createAccount = screen.getByRole("link", { name: "Create account" });
+    const logIn = screen.getByRole("link", { name: "Log in" });
+
+    expect(screen.getByText("The Art of War")).toBeTruthy();
+    expect(screen.getByText("I. Laying Plans")).toBeTruthy();
+    expect(
+      proof.compareDocumentPosition(createAccount) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      proof.compareDocumentPosition(logIn) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

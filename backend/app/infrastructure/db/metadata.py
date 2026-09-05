@@ -139,8 +139,17 @@ sources = Table(
     # Opaque owner-partitioned key (sources/{user_id}/{uuid}.epub); no PII.
     Column("object_key", Text, nullable=False, unique=True),
     Column("status", Text, nullable=False, server_default="uploaded"),
+    Column("is_sample", Boolean, nullable=False, server_default=text("false")),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    # At most one shared sample book (reads: owner OR this flag). Partial so
+    # ordinary uploads with is_sample=false never collide.
+    Index(
+        "uq_sources_one_sample",
+        "is_sample",
+        unique=True,
+        postgresql_where=text("is_sample"),
+    ),
 )
 
 ingestion_jobs = Table(
@@ -468,9 +477,10 @@ quiz_items = Table(
         index=True,
     ),
     # deck (whole-source generation) | highlight (accepted at a passage) | note
-    # (promoted from a note) | tutor (closed-session restatement). The origins are
-    # identity modes — see the partial uniques at the end of the table; note cards
-    # are identified by their minted id alone.
+    # (promoted from a note) | tutor (closed-session restatement) | starter
+    # (per-learner clone of a sample template). The origins are identity modes —
+    # see the partial uniques at the end of the table; note cards are identified
+    # by their minted id alone.
     Column("origin", Text, nullable=False, server_default="deck"),
     # Typed provenance back to the highlight this card was accepted from. SET NULL, so
     # deleting the note severs the link without destroying the derived card; the card
@@ -553,6 +563,16 @@ quiz_items = Table(
         "conversation_id",
         unique=True,
         postgresql_where=text("origin = 'tutor' AND conversation_id IS NOT NULL"),
+    ),
+    # Starter clones are per learner on a source. The deck unique is per source
+    # only, so two learners cloning the same sample template cannot share it.
+    Index(
+        "uq_quiz_items_starter_user_content_key",
+        "user_id",
+        "source_id",
+        "content_key",
+        unique=True,
+        postgresql_where=text("origin = 'starter'"),
     ),
     # A card has a source unless it was promoted from a note (AD-149): note cards are
     # source-less, every other origin keeps its source.
@@ -813,4 +833,21 @@ study_days = Table(
     # caller's own anchor claims, on an endpoint with no rate limit — so an overflow is
     # reachable, and it would abort the position write sharing the same transaction.
     Column("words_advanced", BigInteger, nullable=False, server_default="0"),
+)
+
+# Once-per-user first-session events (account_created, sample_opened,
+# first_cited_answer, first_review). The pair is the identity so a second insert
+# of the same name is a no-op at the persistence layer. Names are a closed set
+# in application code, never taken from a client body.
+activation_events = Table(
+    "activation_events",
+    metadata,
+    Column(
+        "user_id",
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column("name", Text, nullable=False, primary_key=True),
+    Column("occurred_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
 )

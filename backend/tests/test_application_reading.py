@@ -18,6 +18,7 @@ fakes, asserting the spec ACs and edges without a DB:
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from uuid import uuid4
@@ -292,6 +293,23 @@ def test_read_chapter_missing_and_non_owner_both_raise_source_not_found() -> Non
         read(user=intruder, source_id=source.id, anchor="c1")
     with pytest.raises(SourceNotFound):
         read(user=owner, source_id=uuid4(), anchor="c1")
+
+
+def test_read_chapter_returns_sample_for_non_owner() -> None:
+    operator = _user()
+    reader = _user()
+    source = replace(_source(operator.id), is_sample=True)
+    sources = FakeSourceRepository()
+    sources.add(source)
+    corpus = FakeCorpusRepository()
+    _seed_book(corpus, source.id)
+
+    content, stored = _read_chapter(sources, corpus, FakeReadingPositionRepository())(
+        user=reader, source_id=source.id, anchor="c1"
+    )
+
+    assert content.chapter_anchor == "c1"
+    assert stored is None
 
 
 # --- SaveReadingPosition -------------------------------------------------------

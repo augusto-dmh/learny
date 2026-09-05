@@ -34,6 +34,7 @@ from app.application.ingestion import (
     ReadIngestion,
     RunIngestion,
     StartIngestion,
+    authorized_source,
 )
 from app.domain.entities import IngestionEventType, IngestionStatus, Source, User
 from tests.fakes import (
@@ -186,6 +187,42 @@ def test_start_missing_source_raises_source_not_found() -> None:
 
     with pytest.raises(SourceNotFound):
         start(user=_user(), source_id=uuid4())
+    assert jobs.add_calls == 0
+
+
+def test_authorized_source_hides_sample_from_non_owner() -> None:
+    sources = FakeSourceRepository()
+    operator = _user("operator@example.com")
+    sample = Source(
+        id=uuid4(),
+        user_id=operator.id,
+        title="The Art of War",
+        filename="art-of-war.epub",
+        content_type="application/epub+zip",
+        byte_size=1024,
+        checksum="d" * 64,
+        object_key=f"sources/{operator.id}/{uuid4()}.epub",
+        status="ready",
+        created_at=_NOW,
+        updated_at=_NOW,
+        is_sample=True,
+    )
+    sources.add(sample)
+    reader = _user("reader@example.com")
+
+    with pytest.raises(SourceNotFound):
+        authorized_source(
+            user=reader,
+            source_id=sample.id,
+            sources=sources,
+            authorize=AuthorizeOwnership(),
+        )
+
+    jobs = FakeIngestionJobRepository()
+    events = FakeIngestionEventRepository()
+    start = _start_service(sources, jobs, events, FakeClock(_NOW))
+    with pytest.raises(SourceNotFound):
+        start(user=reader, source_id=sample.id)
     assert jobs.add_calls == 0
 
 
