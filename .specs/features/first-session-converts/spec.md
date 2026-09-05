@@ -6,12 +6,12 @@ A stranger who creates an account lands on an empty library, waits on ingest wit
 
 ## Goals
 
-- [ ] Every authenticated user can open one shared, already-ready Standard Ebooks *The Art of War* without cloning embeddings.
-- [ ] The sample Ask surface highlights one canned cited question; a successful cited Ask stamps `first_cited_answer` on the server.
-- [ ] Five starter cards exist as per-user clones with their own FSRS rows; the template is not a shared schedule.
-- [ ] Library shows one Open, overflow verbs, EPUB and PDF upload copy, and ingest-wait honesty that points at the sample.
-- [ ] Product names are Library, Tutor, and Download notes.
-- [ ] Signed-out `/` shows proof above the fold. Home is Ask-first until due cards exist.
+- [x] Every authenticated user can open one shared, already-ready Standard Ebooks *The Art of War* without cloning embeddings.
+- [x] The sample Ask surface highlights one canned cited question; a successful cited Ask stamps `first_cited_answer` on the server.
+- [x] Five starter cards exist as per-user clones with their own FSRS rows; the template is not a shared schedule.
+- [x] Library shows one Open, overflow verbs, EPUB and PDF upload copy, and ingest-wait honesty that points at the sample.
+- [x] Product names are Library, Tutor, and Download notes.
+- [x] Signed-out `/` shows proof above the fold. Home is Ask-first until due cards exist.
 
 ---
 
@@ -177,38 +177,38 @@ A stranger who creates an account lands on an empty library, waits on ingest wit
 
 | Requirement ID | Story | Phase | Status |
 |---|---|---|---|
-| FS-01 | P1: Shared sample | T1, T2 | Implemented |
-| FS-02 | P1: Shared sample | T3 | Implemented |
-| FS-03 | P1: Shared sample | T4 | Implemented |
-| FS-04 | P1: Shared sample | T4 | Implemented |
-| FS-05 | P1: Shared sample | T5 | Implemented |
-| FS-06 | P1: Shared sample | T10 | Implemented |
-| FS-07 | P1: Shared sample | T5 | Implemented |
-| FS-08 | P1: Canned Ask | T15 | Implemented |
-| FS-09 | P1: Canned Ask | T9 | Implemented |
-| FS-10 | P1: Canned Ask | T9 | Implemented |
-| FS-11 | P1: Canned Ask | T9 | Implemented |
-| FS-12 | P1: Canned Ask | T1, T3, T9 | Implemented |
-| FS-13 | P1: Canned Ask | T9 | Implemented |
-| FS-14 | P1: Starter deck | T6 | Implemented |
-| FS-15 | P1: Starter deck | T6 | Implemented |
-| FS-16 | P1: Starter deck | T6 | Implemented |
-| FS-17 | P1: Starter deck | T7 | Implemented |
-| FS-18 | P1: Starter deck | T6 | Implemented |
-| FS-19 | P1: Library | T11 | Implemented |
-| FS-20 | P1: Library | T11 | Implemented |
-| FS-21 | P1: Library | T11 | Implemented |
-| FS-22 | P1: Library | T11 | Implemented |
-| FS-23 | P1: Library | T11 | Implemented |
-| FS-24 | P1: Library | T12 | Implemented |
-| FS-25 | P1: Library | T11 | Implemented |
-| FS-26 | P1: Library | T13 | Implemented |
-| FS-27 | P1: Landing / Home | T16 | Implemented |
-| FS-28 | P1: Landing / Home | T8 | Implemented |
-| FS-29 | P1: Landing / Home | T4 | Implemented |
-| FS-30 | P1: Landing / Home | T14 | Implemented |
-| FS-31 | P1: Landing / Home | T14 | Implemented |
-| FS-32 | P1: Landing / Home | T10 | Implemented |
+| FS-01 | P1: Shared sample | T1, T2 | ✅ Verified |
+| FS-02 | P1: Shared sample | T3 | ✅ Verified |
+| FS-03 | P1: Shared sample | T4 | ✅ Verified |
+| FS-04 | P1: Shared sample | T4 | ✅ Verified |
+| FS-05 | P1: Shared sample | T5 | ✅ Verified |
+| FS-06 | P1: Shared sample | T10 | ✅ Verified |
+| FS-07 | P1: Shared sample | T5 | ✅ Verified |
+| FS-08 | P1: Canned Ask | T15 | ✅ Verified |
+| FS-09 | P1: Canned Ask | T9 | ✅ Verified |
+| FS-10 | P1: Canned Ask | T9 | ✅ Verified |
+| FS-11 | P1: Canned Ask | T9 | ✅ Verified |
+| FS-12 | P1: Canned Ask | T1, T3, T9 | ✅ Verified |
+| FS-13 | P1: Canned Ask | T9 | ✅ Verified |
+| FS-14 | P1: Starter deck | T6 | ✅ Verified |
+| FS-15 | P1: Starter deck | T6 | ✅ Verified |
+| FS-16 | P1: Starter deck | T6 | ✅ Verified |
+| FS-17 | P1: Starter deck | T7 | ✅ Verified |
+| FS-18 | P1: Starter deck | T6 | ✅ Verified |
+| FS-19 | P1: Library | T11 | ✅ Verified |
+| FS-20 | P1: Library | T11 | ✅ Verified |
+| FS-21 | P1: Library | T11 | ✅ Verified |
+| FS-22 | P1: Library | T11 | ✅ Verified |
+| FS-23 | P1: Library | T11 | ✅ Verified |
+| FS-24 | P1: Library | T12 | ✅ Verified |
+| FS-25 | P1: Library | T11 | ✅ Verified |
+| FS-26 | P1: Library | T13 | ✅ Verified |
+| FS-27 | P1: Landing / Home | T16 | ✅ Verified |
+| FS-28 | P1: Landing / Home | T8 | ✅ Verified |
+| FS-29 | P1: Landing / Home | T4 | ✅ Verified |
+| FS-30 | P1: Landing / Home | T14 | ✅ Verified |
+| FS-31 | P1: Landing / Home | T14 | ✅ Verified |
+| FS-32 | P1: Landing / Home | T10 | ✅ Verified |
 
 **Coverage:** 32 total, 32 mapped to tasks, 0 unmapped.
 
