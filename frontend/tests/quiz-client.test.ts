@@ -17,6 +17,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   flagQuizItem,
   generateDeck,
+  ensureStarterDeck,
   getDueReviews,
   getQuizOverview,
   quizExportUrl,
@@ -221,6 +222,48 @@ describe("generateDeck (E1)", () => {
     await expect(
       generateDeck("s1", "csrf-xyz", fetchMock as unknown as typeof fetch),
     ).rejects.toThrow("Could not start quiz deck generation.");
+  });
+});
+
+describe("ensureStarterDeck", () => {
+  it("POSTs the starter path with the CSRF token", async () => {
+    const fetchMock = fetchMockFn(async () => jsonResponse(200, { items: [] }));
+
+    await ensureStarterDeck(
+      "s-sample",
+      "csrf-xyz",
+      fetchMock as unknown as typeof fetch,
+    );
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/sources/s-sample/quiz/starter");
+    expect(init.method).toBe("POST");
+    expect(init.credentials).toBe("same-origin");
+    expect(new Headers(init.headers).get("X-CSRF-Token")).toBe("csrf-xyz");
+  });
+
+  it("surfaces the backend detail on a 404 missing/non-sample response", async () => {
+    const fetchMock = fetchMockFn(async () =>
+      jsonResponse(404, { detail: "Source not found." }),
+    );
+
+    await expect(
+      ensureStarterDeck("s1", "csrf-xyz", fetchMock as unknown as typeof fetch),
+    ).rejects.toThrow("Source not found.");
+  });
+
+  it("treats a not-ready sample as a no-op", async () => {
+    const fetchMock = fetchMockFn(async () =>
+      jsonResponse(409, { detail: "Source is not ready." }),
+    );
+
+    await expect(
+      ensureStarterDeck(
+        "s-sample",
+        "csrf-xyz",
+        fetchMock as unknown as typeof fetch,
+      ),
+    ).resolves.toBeUndefined();
   });
 });
 

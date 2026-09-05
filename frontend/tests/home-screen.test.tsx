@@ -54,6 +54,17 @@ function routedFetch(handlers: Record<string, Handler>) {
     if (!handler && key === SOURCES) {
       return jsonResponse(200, []);
     }
+    if (!handler && key === AUTH) {
+      return jsonResponse(200, {
+        id: "u1",
+        email: "a@b.c",
+        created_at: "now",
+        csrf_token: "csrf-xyz",
+      });
+    }
+    if (!handler && /^POST \/api\/sources\/[^/]+\/quiz\/starter$/.test(key)) {
+      return jsonResponse(200, { items: [] });
+    }
     if (!handler) throw new Error(`unexpected fetch: ${key}`);
     return handler(init ?? {});
   });
@@ -63,6 +74,8 @@ const CONTINUE = "GET /api/reading/continue";
 const DUE = "GET /api/reviews/due?limit=1";
 const STUDY = "GET /api/study/days?window=84";
 const SOURCES = "GET /api/sources";
+const AUTH = "GET /api/auth/me";
+const STARTER = "POST /api/sources/s-sample/quiz/starter";
 
 const hero = {
   source_id: "s1",
@@ -342,14 +355,12 @@ describe("HomeScreen new-user state (spec edge case)", () => {
 
 describe("HomeScreen Ask-first", () => {
   it("offers Ask on the sample when nothing is due and there is no resume", async () => {
-    vi.stubGlobal(
-      "fetch",
-      routedFetch({
+    const fetchMock = routedFetch({
         [CONTINUE]: () => jsonResponse(200, null),
         [DUE]: () => jsonResponse(200, dueQueue(0)),
         [SOURCES]: () => jsonResponse(200, [sampleSource]),
-      }),
-    );
+      });
+    vi.stubGlobal("fetch", fetchMock);
 
     render(<HomeScreen />);
 
@@ -360,6 +371,23 @@ describe("HomeScreen Ask-first", () => {
     expect(
       screen.getByRole("link", { name: "Pick a book" }).getAttribute("href"),
     ).toBe("/sources");
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/sources/s-sample/quiz/starter",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const urls = fetchMock.mock.calls.map(
+      ([url, init]) => `${init?.method ?? "GET"} ${url}`,
+    );
+    expect(urls).toContain(DUE);
+    expect(urls).toContain(STARTER);
+    const starter = fetchMock.mock.calls.find(
+      ([url]) => url === "/api/sources/s-sample/quiz/starter",
+    );
+    expect(new Headers(starter?.[1]?.headers).get("X-CSRF-Token")).toBe(
+      "csrf-xyz",
+    );
   });
 
   it("still shows the due-session card when total_due is greater than zero", async () => {

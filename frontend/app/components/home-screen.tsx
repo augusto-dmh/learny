@@ -22,8 +22,9 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import { InkLine } from "@/app/components/ink-line";
+import { fetchAuthState } from "@/app/lib/auth";
 import { getContinueReading, type ContinueReadingView } from "@/app/lib/study";
-import { getDueReviews } from "@/app/lib/quiz";
+import { ensureStarterDeck, getDueReviews } from "@/app/lib/quiz";
 import { readUrl } from "@/app/lib/read-url";
 import { listSources } from "@/app/lib/sources";
 import { StudyStats } from "./study-heatmap";
@@ -75,11 +76,11 @@ export function HomeScreen() {
 
   useEffect(() => {
     let active = true;
-    // Only the session job is read (AD-156: no dedicated count endpoint), so the
-    // queue is capped at one item. The job is min(session size, overdue pile),
-    // not the uncapped total (REV-41). Ask-first still keys off total_due.
-    getDueReviews({ limit: 1 })
-      .then((queue) => {
+    (async () => {
+      // Snapshot due *before* cloning. Starter cards are due immediately, so a
+      // clone-first order would hide Ask-first on the first Home visit.
+      try {
+        const queue = await getDueReviews({ limit: 1 });
         if (!active) {
           return;
         }
@@ -87,8 +88,7 @@ export function HomeScreen() {
         const sessionSize = queue.session_size ?? 20;
         const job = totalDue > 0 ? Math.min(sessionSize, totalDue) : 0;
         setDue({ status: "ready", data: { job, totalDue } });
-      })
-      .catch((err: unknown) => {
+      } catch (err: unknown) {
         if (active)
           setDue({
             status: "error",
@@ -97,27 +97,33 @@ export function HomeScreen() {
                 ? err.message
                 : "Could not load your due reviews.",
           });
-      });
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    let active = true;
-    listSources()
-      .then((sources) => {
+      }
+      if (!active) {
+        return;
+      }
+      try {
+        const [auth, sources] = await Promise.all([
+          fetchAuthState(),
+          listSources(),
+        ]);
         if (!active) {
           return;
         }
         const sample = sources.find((source) => source.is_sample);
         setSampleId(sample?.id ?? null);
-      })
-      .catch(() => {
+        if (auth.authenticated && sample) {
+          try {
+            await ensureStarterDeck(sample.id, auth.user.csrf_token);
+          } catch {
+            // Ask-first still uses the sample id; clone can retry from Review.
+          }
+        }
+      } catch {
         if (active) {
           setSampleId(null);
         }
-      });
+      }
+    })();
     return () => {
       active = false;
     };

@@ -6,7 +6,7 @@
  * proxy* (`/api/...`, ADR-017) — never cross-origin. The HttpOnly session cookie
  * rides along automatically (`credentials: "same-origin"`), so this code never
  * reads or holds the session token. The two reads (overview, due queue) carry no
- * token; the state-changing POSTs (generate deck, submit review) echo the CSRF
+ * token; the state-changing POSTs (generate deck, starter clones, submit review) echo the CSRF
  * token (from `/api/auth/me`) in `X-CSRF-Token` (AD-007), mirroring `teaching.ts`.
  *
  * FastAPI remains authoritative for auth, ownership, readiness, grounding, and
@@ -178,6 +178,28 @@ export async function generateDeck(
     throw await toQuizError(res, "Could not start quiz deck generation.");
   }
   return (await res.json()) as QuizJob;
+}
+
+/**
+ * Clone the shared sample's five starter cards onto the caller. Idempotent.
+ * State-changing, so it carries CSRF. Non-sample ids 404 like a missing book.
+ */
+export async function ensureStarterDeck(
+  sourceId: string,
+  csrfToken: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<void> {
+  const res = await fetchImpl(`/api/sources/${sourceId}/quiz/starter`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrfToken },
+  });
+  if (res.status === 409) {
+    return;
+  }
+  if (!res.ok) {
+    throw await toQuizError(res, "Could not prepare starter cards.");
+  }
 }
 
 /**
