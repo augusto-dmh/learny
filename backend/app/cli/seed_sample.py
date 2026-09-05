@@ -14,11 +14,12 @@ from pathlib import Path
 from uuid import uuid4
 
 from app.application.ingestion import RunIngestion
-from app.application.sample import SeedSample
+from app.application.sample import SampleOperatorReserved, SeedSample
 from app.core.config import get_settings
 from app.infrastructure.clock import SystemClock
 from app.infrastructure.db.engine import get_engine
 from app.infrastructure.db.repositories import (
+    SqlAlchemyCredentialRepository,
     SqlAlchemyIngestionEventRepository,
     SqlAlchemyIngestionJobRepository,
     SqlAlchemyQuizItemRepository,
@@ -69,23 +70,28 @@ def main(argv: list[str] | None = None) -> int:
     settings = get_settings()
     storage = _storage()
 
-    with engine.begin() as conn:
-        seed = SeedSample(
-            users=SqlAlchemyUserRepository(conn),
-            sources=SqlAlchemySourceRepository(conn),
-            storage=storage,
-            jobs=SqlAlchemyIngestionJobRepository(conn),
-            events=SqlAlchemyIngestionEventRepository(conn),
-            items=SqlAlchemyQuizItemRepository(conn),
-            scheduling=build_scheduling_adapter(settings),
-            clock=clock,
-            ids=uuid4,
-            epub_bytes=epub_bytes,
-        )
-        source, job = seed.persist()
-        source_id = source.id
-        content_type = source.content_type
-        job_id = None if job is None else job.id
+    try:
+        with engine.begin() as conn:
+            seed = SeedSample(
+                users=SqlAlchemyUserRepository(conn),
+                credentials=SqlAlchemyCredentialRepository(conn),
+                sources=SqlAlchemySourceRepository(conn),
+                storage=storage,
+                jobs=SqlAlchemyIngestionJobRepository(conn),
+                events=SqlAlchemyIngestionEventRepository(conn),
+                items=SqlAlchemyQuizItemRepository(conn),
+                scheduling=build_scheduling_adapter(settings),
+                clock=clock,
+                ids=uuid4,
+                epub_bytes=epub_bytes,
+            )
+            source, job = seed.persist()
+            source_id = source.id
+            content_type = source.content_type
+            job_id = None if job is None else job.id
+    except SampleOperatorReserved:
+        print("seed failed: sample operator email is already registered", file=sys.stderr)
+        return 1
 
     if job_id is None:
         return 0

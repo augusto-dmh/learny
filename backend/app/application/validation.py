@@ -25,6 +25,11 @@ def normalize_email(email: str) -> str:
     return email.strip().lower()
 
 
+# Password-less operator for the shared sample. RegisterUser rejects it;
+# SeedSample creates the user without credentials.
+SAMPLE_OPERATOR_EMAIL = "sample-operator@learny.invalid"
+
+
 def validate_email(email: str) -> str:
     """Return the normalized email, or raise ``ValidationError``."""
     normalized = normalize_email(email)

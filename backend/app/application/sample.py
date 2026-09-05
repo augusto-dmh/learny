@@ -22,7 +22,11 @@ from app.application.ingestion import (
     SOURCE_STATUS_PROCESSING,
 )
 from app.application.quiz_qc import content_key
-from app.application.validation import EPUB_CONTENT_TYPE, EPUB_EXTENSION
+from app.application.validation import (
+    EPUB_CONTENT_TYPE,
+    EPUB_EXTENSION,
+    SAMPLE_OPERATOR_EMAIL,
+)
 from app.domain.entities import (
     IngestionEvent,
     IngestionEventType,
@@ -37,6 +41,7 @@ from app.domain.entities import (
 )
 from app.domain.ports import (
     Clock,
+    CredentialRepository,
     IngestionEnqueuer,
     IngestionEventRepository,
     IngestionJobRepository,
@@ -47,12 +52,16 @@ from app.domain.ports import (
     UserRepository,
 )
 
-SAMPLE_OPERATOR_EMAIL = "sample-operator@learny.invalid"
 SAMPLE_TITLE = "The Art of War"
 SAMPLE_FILENAME = "art-of-war.epub"
 SAMPLE_ENQUEUE_ERROR = "Failed to enqueue ingestion task."
 
 logger = logging.getLogger(__name__)
+
+
+class SampleOperatorReserved(Exception):
+    """The operator email already belongs to a password account."""
+
 
 # Operator-owned deck templates cloned per learner by EnsureStarterDeck. Distinct
 # content_keys so the per-source deck unique holds five rows.
@@ -92,6 +101,7 @@ class SeedSample:
         self,
         *,
         users: UserRepository,
+        credentials: CredentialRepository,
         sources: SourceRepository,
         storage: StoragePort,
         jobs: IngestionJobRepository,
@@ -104,6 +114,7 @@ class SeedSample:
         enqueuer: IngestionEnqueuer | None = None,
     ) -> None:
         self._users = users
+        self._credentials = credentials
         self._sources = sources
         self._storage = storage
         self._jobs = jobs
@@ -209,6 +220,8 @@ class SeedSample:
     def _ensure_operator(self, now: datetime) -> User:
         existing = self._users.get_by_email(SAMPLE_OPERATOR_EMAIL)
         if existing is not None:
+            if self._credentials.get_by_user_id(existing.id) is not None:
+                raise SampleOperatorReserved("sample operator email is already registered")
             return existing
         return self._users.add(User(id=self._ids(), email=SAMPLE_OPERATOR_EMAIL, created_at=now))
 

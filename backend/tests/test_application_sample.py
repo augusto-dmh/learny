@@ -15,16 +15,20 @@ from app.application.ingestion import SOURCE_STATUS_FAILED, SOURCE_STATUS_PROCES
 from app.application.sample import (
     SAMPLE_OPERATOR_EMAIL,
     SAMPLE_TITLE,
+    SampleOperatorReserved,
     SeedSample,
 )
 from app.domain.entities import (
+    PasswordCredential,
     QuizItem,
     QuizItemOrigin,
     SchedulingSnapshot,
+    User,
 )
 from tests.fakes import (
     FailingStorage,
     FakeClock,
+    FakeCredentialRepository,
     FakeIngestionEnqueuer,
     FakeIngestionEventRepository,
     FakeIngestionJobRepository,
@@ -49,8 +53,20 @@ class _FakeQuizItems:
     def create_scheduling(self, quiz_item_id: UUID, snapshot: SchedulingSnapshot) -> None:
         self.scheduling[quiz_item_id] = snapshot
 
-    def list_for_source(self, source_id: UUID) -> list[QuizItem]:
-        return [item for item in self.items if item.source_id == source_id]
+    def list_for_source(
+        self,
+        source_id: UUID,
+        *,
+        origin: QuizItemOrigin | None = None,
+        user_id: UUID | None = None,
+    ) -> list[QuizItem]:
+        return [
+            item
+            for item in self.items
+            if item.source_id == source_id
+            and (origin is None or item.origin == origin)
+            and (user_id is None or item.user_id == user_id)
+        ]
 
 
 class _InitialScheduling:
@@ -66,15 +82,18 @@ def _seed(
     storage: FakeStorage | FailingStorage | None = None,
     enqueuer: FakeIngestionEnqueuer | None = None,
     users: FakeUserRepository | None = None,
+    credentials: FakeCredentialRepository | None = None,
     items: _FakeQuizItems | None = None,
 ) -> tuple[SeedSample, FakeSourceRepository, FakeIngestionEnqueuer, _FakeQuizItems]:
     sources = sources if sources is not None else FakeSourceRepository()
     storage = storage if storage is not None else FakeStorage()
     enqueuer = enqueuer if enqueuer is not None else FakeIngestionEnqueuer()
     users = users if users is not None else FakeUserRepository()
+    credentials = credentials if credentials is not None else FakeCredentialRepository()
     items = items if items is not None else _FakeQuizItems()
     seed = SeedSample(
         users=users,
+        credentials=credentials,
         sources=sources,
         storage=storage,
         jobs=FakeIngestionJobRepository(),
@@ -160,3 +179,23 @@ def test_seed_creates_operator_without_inserting_a_second_user_on_repeat() -> No
 
     assert users.get_by_email(SAMPLE_OPERATOR_EMAIL) is not None
     assert len(users._by_id) == 1
+
+
+def test_seed_refuses_a_password_account_at_the_operator_email() -> None:
+    users = FakeUserRepository()
+    credentials = FakeCredentialRepository()
+    existing = users.add(User(id=uuid4(), email=SAMPLE_OPERATOR_EMAIL, created_at=_NOW))
+    credentials.add(
+        PasswordCredential(
+            user_id=existing.id,
+            password_hash="hashed",
+            algo_params={},
+            updated_at=_NOW,
+        )
+    )
+    seed, sources, _enqueuer, _items = _seed(users=users, credentials=credentials)
+
+    with pytest.raises(SampleOperatorReserved):
+        seed()
+
+    assert sources.get_sample() is None

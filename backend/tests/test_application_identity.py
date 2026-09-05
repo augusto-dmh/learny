@@ -28,6 +28,7 @@ from app.application.identity import (
     Logout,
     RegisterUser,
 )
+from app.application.validation import SAMPLE_OPERATOR_EMAIL
 from app.domain.entities import User
 from tests.fakes import (
     FakeActivationEventRepository,
@@ -93,6 +94,11 @@ def test_register_rejects_duplicate_email(ports) -> None:
 def test_register_rejects_bad_email(ports) -> None:
     with pytest.raises(ValidationError):
         _register(ports, email="not-an-email")
+
+
+def test_register_rejects_sample_operator_email(ports) -> None:
+    with pytest.raises(ValidationError):
+        _register(ports, email=SAMPLE_OPERATOR_EMAIL)
 
 
 def test_register_rejects_weak_password(ports) -> None:

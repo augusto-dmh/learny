@@ -21,8 +21,9 @@ from app.application.errors import (
     InvalidCredentials,
     NotAuthenticated,
     NotAuthorized,
+    ValidationError,
 )
-from app.application.validation import validate_email, validate_password
+from app.application.validation import SAMPLE_OPERATOR_EMAIL, validate_email, validate_password
 from app.domain.entities import IssuedSession, PasswordCredential, Session, User
 from app.domain.ports import (
     Clock,
@@ -101,6 +102,8 @@ class RegisterUser:
     def __call__(self, *, email: str, password: str) -> AuthResult:
         normalized_email = validate_email(email)
         validate_password(password)
+        if normalized_email == SAMPLE_OPERATOR_EMAIL:
+            raise ValidationError("Invalid email address.")
 
         if self._users.get_by_email(normalized_email) is not None:
             raise EmailAlreadyExists("Email is already registered.")
