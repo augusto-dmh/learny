@@ -2,14 +2,14 @@
 
 ## Problem Statement
 
-The hosted instance cannot take a stranger's account. Rate limits share one Next.js-proxy IP, there is no per-user AI spend cap, uploads are unbounded, register is open, MinIO objects survive account deletion, and there is no mail port for verify or reset. RFC-0007 Cycle F is the registration gate: shared limiter, caps, invite, legal pages, deletion, and EmailPort.
+The hosted instance cannot take a stranger's account. Rate limits share one Next.js-proxy IP, there is no per-user AI spend cap, uploads are unbounded, register is open, MinIO objects survive account deletion, and there is no mail port for verify or reset. RFC-0007 Cycle F is the registration gate: shared limiter, caps, invite, Turnstile, legal pages, deletion, and EmailPort.
 
 ## Goals
 
 - [ ] Authenticated expensive routes throttle per `user_id` across API processes; auth routes throttle per trusted-proxy client IP.
 - [ ] A learner who hits the daily AI budget or the operator kill switch sees a hard stop with honest copy; conversations are not deleted.
 - [ ] A learner cannot exceed two owned books, 256 MiB stored, or one in-flight ingest.
-- [ ] Register on a hosted instance requires a valid invite and rejects disposable domains; ToS is accepted on that form.
+- [ ] Register on a hosted instance requires a valid invite, rejects disposable domains, and checks Turnstile when the siteverify secret is configured; ToS is accepted on that form.
 - [ ] A learner can delete their account and that removes their MinIO objects and Postgres rows. Legal pages name a DMCA contact.
 - [ ] Verify and password-reset mail go through a Learny `EmailPort`.
 
@@ -19,11 +19,11 @@ The hosted instance cannot take a stranger's account. Rate limits share one Next
 
 | Feature | Reason |
 |---|---|
-| RFC Cycle G (effort=low, teach cache, OpenAI-compatible fallback) | Separate letter; needs ADR-0020 amendment |
-| Turnstile / Cloudflare siteverify | Invite XOR captcha (rq09); invite-only until open registration (AD-325) |
+| RFC Cycle G (effort=low, teach cache, OpenAI-compatible fallback) | Separate letter; needs an ADR-0020 amendment |
 | Guest Ask / uncapped public Ask | RFC conflict 2: only after this cycle is green |
 | Checkout, plans, Stripe/Paddle | RFC exclusion: caps yes, payment later |
-| New provider SDKs on the request path (Resend, LiteLLM, OpenRouter, Turnstile) | ADR-0007 / 0009 |
+| New generation or embedding provider SDKs; Resend/Postmark/SES; LiteLLM/OpenRouter | ADR-0007 / 0009 / 0019 / 0020 |
+| Cloudflare Python/JS official SDK | Siteverify is httpx behind a Learny port; the widget is a script tag |
 | EU representative, ZDR as a blocker, publisher hash-scanning, Kubernetes | RFC Cycle F out |
 | Opt-in due digest | EmailPort this letter; digest is a later small cycle |
 | Embedding-model swap | ADR-0019 stands |
@@ -36,7 +36,7 @@ The hosted instance cannot take a stranger's account. Rate limits share one Next
 | Assumption / decision | Chosen default | Rationale | Confirmed? |
 |---|---|---|---|
 | Cycle split | This PR is RFC F / Bet 6 only | ROADMAP grouped F–G; G is model work | auto (AD-324) |
-| Turnstile | Deferred; no siteverify; invite code when the flag is on | rq09 XOR; RFC action item; Cloudflare is a US subprocessor | auto (AD-325) |
+| Turnstile | Invite when the flag is on **and** Turnstile when the secret is set **and** disposable-domain blocking | RFC Cycle F body lists Turnstile as the opening step; empty secret skips so CI stays network-free | auto (AD-325) |
 | Email adapter | `EmailPort` + SMTP settings; log adapter in tests | No ESP SDK | auto (AD-326) |
 | Invite vs verify | Valid invite mints a session immediately. Verify mail is sent. Invited users may use Ask/upload before `email_verified_at` | Cycle E first session must still work | auto (AD-327) |
 | Due digest | Out of this PR | EmailPort ships; digest is a later small cycle | auto (AD-328) |
@@ -47,16 +47,31 @@ The hosted instance cannot take a stranger's account. Rate limits share one Next
 | Spend debit | After a successful provider call; check-before-call uses the ledger | Two overlapping Asks may overshoot by one call | auto |
 | What counts as spend | Generation (Ask, Teach, quiz deck) and embeddings on ingest. Reviews/FSRS are $0 | rq10 | auto |
 | Local adapters | Record 0 USD unless a test fixture supplies usage | Offline suite | auto |
-| Disposable block | Deny-list; allow `duck.com`, iCloud Hide My Email, SimpleLogin | rq09 | auto |
+| Disposable block | Deny-list; allow `duck.com`, iCloud Hide My Email, SimpleLogin | Privacy aliases are not throwaway inboxes | auto |
 | ToS checkbox | `accepted_tos: true` required | Legal pages are not optional | auto |
-| Legal copy | Committed markdown; privacy names OpenAI and Anthropic and does not claim ZDR | Brazil operator; RFC outs EU rep | auto |
+| Legal copy | Committed markdown; privacy names OpenAI, Anthropic, and Cloudflare; does not claim ZDR | Brazil operator; RFC outs EU rep | auto |
 | DMCA contact | `LEARNY_DMCA_CONTACT_EMAIL` on `/copyright` | Operator mailbox | auto |
 | Deletion | List caller keys, storage delete, then user CASCADE. Storage fault does not delete the user | AD-283 | auto (AD-331) |
 | Reset enumeration | Unknown and known email both 204 | Auth dimension | auto |
 | Mail failure | Register still creates the invited session | Best-effort this letter | auto |
-| Honest copy | Cap: today's AI limit resets 00:00 UTC. Kill: AI paused, library and review still work. Invite: this instance is invite-only | RFC | auto |
+| Honest copy | Cap: `You've reached today's AI limit. It resets at 00:00 UTC.` Kill: `Learny's AI is temporarily paused. Your library and review still work.` Invite: `This instance is invite-only.` | RFC; pin in tests | auto |
+| Turnstile failure | WHEN the secret is set, siteverify timeout/5xx fails closed (no user) | Same class as Redis fail-closed | auto |
 
 **Open questions:** none — all resolved or logged above.
+
+### Implicit-requirement dimensions
+
+| Dimension | Resolution |
+|---|---|
+| Input validation & bounds | Invite, ToS, disposable list, Turnstile token, source/byte/in-flight caps, spend integers |
+| Failure / partial-failure | Redis 503; storage delete 502 without user delete; SMTP log + session still created; siteverify fail-closed when secret set |
+| Idempotency / retry | Mail tokens consume once; missing object delete is success |
+| Auth boundaries & rate limits | This feature's limiter, invite, and deletion CSRF |
+| Concurrency / ordering | Overlapping Asks may overshoot by one paid call; next call 429s |
+| Data lifecycle / expiry | Invite `expires_at`; mail token TTL; account delete |
+| Observability | Mail failure logs without the raw token |
+| External-dependency failure | Redis, SMTP, Turnstile siteverify |
+| State-transition integrity | Invite `remaining_uses`; token `consumed_at`; `email_verified_at` |
 
 ---
 
@@ -122,7 +137,7 @@ The hosted instance cannot take a stranger's account. Rate limits share one Next
 
 ### P1: Invite-only register ⭐ MVP
 
-**User Story**: As the operator, I want new hosted accounts to require an invite and a real-looking email, so bots cannot mint unlimited sessions.
+**User Story**: As the operator, I want new hosted accounts to require an invite, a real-looking email, and a bot check when configured, so bots cannot mint unlimited sessions.
 
 **Why P1**: RFC signup gate; rq09 Cycle C.
 
@@ -134,9 +149,11 @@ The hosted instance cannot take a stranger's account. Rate limits share one Next
 4. (DOOR-23) IF the email domain is on the disposable deny-list THEN register SHALL return 422 with the same generic invalid-email copy used for malformed addresses.
 5. (DOOR-24) WHEN the email is a documented privacy alias (`duck.com`) THEN register SHALL NOT reject it as disposable.
 6. (DOOR-25) IF `accepted_tos` is not true THEN register SHALL return 422.
-7. (DOOR-26) WHERE `LEARNY_INVITE_REQUIRED` is false THEN register without an invite code SHALL still create a user, subject to ToS and disposable rules.
+7. (DOOR-26) WHERE `LEARNY_INVITE_REQUIRED` is false THEN register without an invite code SHALL still create a user, subject to ToS, disposable, and Turnstile rules.
+8. (DOOR-41) WHERE `LEARNY_TURNSTILE_SECRET` is set, IF the Turnstile token is missing or siteverify rejects it THEN register SHALL return 400 and SHALL NOT create a user.
+9. (DOOR-42) WHERE `LEARNY_TURNSTILE_SECRET` is empty THEN register SHALL skip siteverify.
 
-**Independent Test**: Mint a one-use invite with the flag on; first register 201; second 403; `mailinator.com` 422.
+**Independent Test**: Mint a one-use invite with the flag on; first register 201; second 403; `mailinator.com` 422; empty secret skips captcha; set secret rejects a bad token.
 
 ---
 
@@ -148,11 +165,11 @@ The hosted instance cannot take a stranger's account. Rate limits share one Next
 
 **Acceptance Criteria**:
 
-1. (DOOR-27) Signed-out `/terms`, `/privacy`, and `/copyright` SHALL return 200 with those document titles.
-2. (DOOR-28) `/copyright` SHALL include the configured DMCA contact email.
-3. (DOOR-29) `/privacy` SHALL name OpenAI and Anthropic as subprocessors and SHALL NOT claim zero-data-retention.
+1. (DOOR-27) WHEN an unauthenticated caller opens `/terms`, `/privacy`, or `/copyright` THEN the system SHALL respond 200 with those document titles.
+2. (DOOR-28) WHEN `/copyright` is served THEN the page SHALL include the configured DMCA contact email.
+3. (DOOR-29) WHEN `/privacy` is served THEN the page SHALL name OpenAI and Anthropic as subprocessors and SHALL NOT claim zero-data-retention.
 4. (DOOR-30) WHEN the owner `DELETE /api/auth/account` with CSRF THEN the system SHALL delete that user's MinIO objects for their sources (not the sample), then delete the user so Postgres FKs CASCADE.
-5. (DOOR-31) AFTER deletion, GET `/api/auth/me` with the old cookie SHALL be 401, and the sample source SHALL still exist.
+5. (DOOR-31) WHEN the owner has deleted their account THEN GET `/api/auth/me` with the old cookie SHALL be 401, and the sample source SHALL still exist.
 6. (DOOR-32) IF `StoragePort` delete fails THEN the system SHALL NOT delete the user row and SHALL respond 502.
 7. (DOOR-33) IF a non-owner object key would be deleted THEN the system SHALL NOT delete it.
 
@@ -173,7 +190,7 @@ The hosted instance cannot take a stranger's account. Rate limits share one Next
 3. (DOOR-36) WHEN password-reset is requested THEN the system SHALL return 204 whether or not the email exists, and SHALL send mail only when a user exists.
 4. (DOOR-37) WHEN a valid reset token is submitted with a new password THEN the system SHALL update the hash and invalidate the token.
 5. (DOOR-38) IF Redis/auth limiter is exceeded on reset or verify-resend THEN the system SHALL return 429.
-6. (DOOR-39) Invited, unverified users SHALL still be allowed to Ask and upload (verification is not a wall this letter).
+6. (DOOR-39) WHEN an invited user has no `email_verified_at` THEN the system SHALL still allow Ask and upload.
 7. (DOOR-40) IF SMTP send fails THEN register SHALL still create the invited session and SHALL log the failure without the raw token.
 
 **Independent Test**: Fake EmailPort captures the token; reset unknown email is 204 and send was not called.
@@ -185,6 +202,7 @@ The hosted instance cannot take a stranger's account. Rate limits share one Next
 - IF two overlapping Ask calls both pass the spend check THEN the system SHALL still persist both debits; a later call in the same day that would exceed the cap SHALL 429.
 - WHEN the kill switch is on, reads (library, review due, chapter) SHALL still succeed.
 - IF Redis `INCR` fails THEN the request SHALL 503, not skip the limiter.
+- IF Turnstile siteverify times out WHILE the secret is set THEN register SHALL fail closed.
 
 ---
 
@@ -193,47 +211,49 @@ The hosted instance cannot take a stranger's account. Rate limits share one Next
 | Requirement ID | Story | Phase | Status |
 |---|---|---|---|
 | DOOR-01 | P1: Shared limiter | Tasks | In Tasks |
-| DOOR-02 | P1: Shared limiter | Design | Pending |
-| DOOR-03 | P1: Shared limiter | Design | Pending |
-| DOOR-04 | P1: Shared limiter | Design | Pending |
-| DOOR-05 | P1: Shared limiter | Design | Pending |
-| DOOR-06 | P1: Shared limiter | Design | Pending |
-| DOOR-07 | P1: Spend cap | Design | Pending |
-| DOOR-08 | P1: Spend cap | Design | Pending |
-| DOOR-09 | P1: Spend cap | Design | Pending |
-| DOOR-10 | P1: Spend cap | Design | Pending |
-| DOOR-11 | P1: Spend cap | Design | Pending |
-| DOOR-12 | P1: Spend cap | Design | Pending |
-| DOOR-13 | P1: Spend cap | Design | Pending |
-| DOOR-14 | P1: Spend cap | Design | Pending |
-| DOOR-15 | P1: Library quotas | Design | Pending |
-| DOOR-16 | P1: Library quotas | Design | Pending |
-| DOOR-17 | P1: Library quotas | Design | Pending |
-| DOOR-18 | P1: Library quotas | Design | Pending |
-| DOOR-19 | P1: Library quotas | Design | Pending |
-| DOOR-20 | P1: Invite-only register | Design | Pending |
-| DOOR-21 | P1: Invite-only register | Design | Pending |
-| DOOR-22 | P1: Invite-only register | Design | Pending |
-| DOOR-23 | P1: Invite-only register | Design | Pending |
-| DOOR-24 | P1: Invite-only register | Design | Pending |
-| DOOR-25 | P1: Invite-only register | Design | Pending |
-| DOOR-26 | P1: Invite-only register | Design | Pending |
-| DOOR-27 | P1: Legal pages | Design | Pending |
-| DOOR-28 | P1: Legal pages | Design | Pending |
-| DOOR-29 | P1: Legal pages | Design | Pending |
-| DOOR-30 | P1: Legal pages | Design | Pending |
-| DOOR-31 | P1: Legal pages | Design | Pending |
-| DOOR-32 | P1: Legal pages | Design | Pending |
-| DOOR-33 | P1: Legal pages | Design | Pending |
-| DOOR-34 | P1: Email | Design | Pending |
-| DOOR-35 | P1: Email | Design | Pending |
-| DOOR-36 | P1: Email | Design | Pending |
-| DOOR-37 | P1: Email | Design | Pending |
-| DOOR-38 | P1: Email | Design | Pending |
-| DOOR-39 | P1: Email | Design | Pending |
-| DOOR-40 | P1: Email | Design | Pending |
+| DOOR-02 | P1: Shared limiter | Tasks | In Tasks |
+| DOOR-03 | P1: Shared limiter | Tasks | In Tasks |
+| DOOR-04 | P1: Shared limiter | Tasks | In Tasks |
+| DOOR-05 | P1: Shared limiter | Tasks | In Tasks |
+| DOOR-06 | P1: Shared limiter | Tasks | In Tasks |
+| DOOR-07 | P1: Spend cap | Tasks | In Tasks |
+| DOOR-08 | P1: Spend cap | Tasks | In Tasks |
+| DOOR-09 | P1: Spend cap | Tasks | In Tasks |
+| DOOR-10 | P1: Spend cap | Tasks | In Tasks |
+| DOOR-11 | P1: Spend cap | Tasks | In Tasks |
+| DOOR-12 | P1: Spend cap | Tasks | In Tasks |
+| DOOR-13 | P1: Spend cap | Tasks | In Tasks |
+| DOOR-14 | P1: Spend cap | Tasks | In Tasks |
+| DOOR-15 | P1: Library quotas | Tasks | In Tasks |
+| DOOR-16 | P1: Library quotas | Tasks | In Tasks |
+| DOOR-17 | P1: Library quotas | Tasks | In Tasks |
+| DOOR-18 | P1: Library quotas | Tasks | In Tasks |
+| DOOR-19 | P1: Library quotas | Tasks | In Tasks |
+| DOOR-20 | P1: Invite-only register | Tasks | In Tasks |
+| DOOR-21 | P1: Invite-only register | Tasks | In Tasks |
+| DOOR-22 | P1: Invite-only register | Tasks | In Tasks |
+| DOOR-23 | P1: Invite-only register | Tasks | In Tasks |
+| DOOR-24 | P1: Invite-only register | Tasks | In Tasks |
+| DOOR-25 | P1: Invite-only register | Tasks | In Tasks |
+| DOOR-26 | P1: Invite-only register | Tasks | In Tasks |
+| DOOR-27 | P1: Legal pages | Tasks | In Tasks |
+| DOOR-28 | P1: Legal pages | Tasks | In Tasks |
+| DOOR-29 | P1: Legal pages | Tasks | In Tasks |
+| DOOR-30 | P1: Legal pages | Tasks | In Tasks |
+| DOOR-31 | P1: Legal pages | Tasks | In Tasks |
+| DOOR-32 | P1: Legal pages | Tasks | In Tasks |
+| DOOR-33 | P1: Legal pages | Tasks | In Tasks |
+| DOOR-34 | P1: Email | Tasks | In Tasks |
+| DOOR-35 | P1: Email | Tasks | In Tasks |
+| DOOR-36 | P1: Email | Tasks | In Tasks |
+| DOOR-37 | P1: Email | Tasks | In Tasks |
+| DOOR-38 | P1: Email | Tasks | In Tasks |
+| DOOR-39 | P1: Email | Tasks | In Tasks |
+| DOOR-40 | P1: Email | Tasks | In Tasks |
+| DOOR-41 | P1: Invite-only register | Tasks | In Tasks |
+| DOOR-42 | P1: Invite-only register | Tasks | In Tasks |
 
-**Coverage:** 40 total, mapped to T1–T16.
+**Coverage:** 42 total, 42 mapped to T1–T32.
 
 ---
 
@@ -242,6 +262,6 @@ The hosted instance cannot take a stranger's account. Rate limits share one Next
 - [ ] A second API worker shares limiter state via Redis.
 - [ ] Ninth Ask in a UTC day is 429 and the thread remains.
 - [ ] Third owned upload is 403; sample still readable.
-- [ ] Register without invite is 403 when the flag is on; one-use invite works once.
+- [ ] Register without invite is 403 when the flag is on; one-use invite works once; bad Turnstile token is 400 when the secret is set.
 - [ ] Account deletion removes the caller's objects and leaves the sample.
 - [ ] Fake EmailPort receives verify and reset messages; unknown reset is 204.
