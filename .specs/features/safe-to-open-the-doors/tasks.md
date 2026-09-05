@@ -1,6 +1,13 @@
 # safe-to-open-the-doors Tasks
 
-**Spec**: `.specs/features/safe-to-open-the-doors/spec.md`
+## Execution Protocol (MANDATORY -- do not skip)
+
+Implement these tasks with the `tlc-spec-driven` skill: **activate it by name and follow its Execute flow and Critical Rules.** Do not search for skill files by filesystem path. The skill is the source of truth for the full flow (per-task cycle, sub-agent delegation, adequacy review, Verifier, discrimination sensor).
+
+**If the skill cannot be activated, STOP and tell the user — do not proceed without it.**
+
+---
+
 **Design**: `.specs/features/safe-to-open-the-doors/design.md`
 **Status**: Approved
 
@@ -8,30 +15,30 @@
 
 ## Test Coverage Matrix
 
-| Requirement | Test Type | Coverage Strategy |
-|---|---|---|
-| DOOR-01 Redis shared window | Integration | Two clients; second exceeds |
-| DOOR-02 Redis down | Integration | 503 on limited route |
-| DOOR-03 Auth IP | Unit | X-Real-IP from trusted peer; spoof ignored |
-| DOOR-04 Proxy strip | Unit | Outbound has no client XFF |
-| DOOR-05 User-id AI keys | Integration | Same IP different users both succeed |
-| DOOR-06 429 Retry-After | Integration | Header present |
-| DOOR-07–13 Spend/Ask/Teach | Integration | Cap then 429; no provider |
-| DOOR-14 Kill switch | Integration | 503 |
-| DOOR-15–18 Quotas | Integration | 403/409; sample excluded |
-| DOOR-19–22 Invite/tos | Integration | 403/422; session minted |
-| DOOR-23–25 Legal | Frontend | Routes render |
-| DOOR-26–28 Deletion | Integration | Objects gone, user 401, sample lives |
-| DOOR-29–34 Mail | Integration | Token hash, 204 reset, SMTP fail still 201 |
+> Guidelines: `CLAUDE.md`. Do not implement Turnstile. AD-325.
+
+| Code Layer | Required Test Type | Coverage Expectation | Location Pattern | Run Command |
+| ---------- | ------------------ | -------------------- | ---------------- | ----------- |
+| Limiter | unit + integration | shared Redis window; user_id vs IP; spoofed XFF ignored; 429 Retry-After; Redis down 503 | `backend/tests/test_web_rate_limit_validation.py` | `cd backend && uv run pytest tests/test_web_rate_limit_validation.py` |
+| Proxy / Caddy | unit | X-Real-IP forwarded; inbound XFF stripped; Caddyfile stamps header | `frontend/tests/proxy.test.ts` | `cd frontend && npm test -- proxy` |
+| Budget / kill | integration | ninth Ask 429 keeps conversation; Teach second start 429; USD cap; review not debited; kill 503 | `backend/tests/test_application_budget.py` | `cd backend && uv run pytest tests/test_application_budget.py` |
+| Quotas | integration | third source 403; sample excluded; byte 413; in-flight 409 | `backend/tests/test_web_sources.py` | `cd backend && uv run pytest tests/test_web_sources.py` |
+| Invite / disposable | integration | missing invite 403 when flagged; one-use; disposable 422; duck.com allowed; tos 422; flag off still registers | `backend/tests/test_web_auth.py` | `cd backend && uv run pytest tests/test_web_auth.py` |
+| Deletion | integration | objects gone; sample remains; storage fault 502 leaves user | `backend/tests/test_application_identity.py` | `cd backend && uv run pytest tests/test_application_identity.py` |
+| EmailPort | integration | verify send; token once; reset 204 no mail for unknown; SMTP fail still registers | `backend/tests/test_application_email.py` | `cd backend && uv run pytest tests/test_application_email.py` |
+| Legal / register UI | unit (jsdom) | invite + tos; legal titles; no Turnstile widget | `frontend/tests/legal-pages.test.tsx` | `cd frontend && npm test -- legal-pages` |
 
 ---
 
 ## Gate Check Commands
 
-**Quick**: `cd /home/augusto/projects/learny/backend && LEARNY_TEST_DATABASE_URL=postgresql+psycopg://learny:learny@localhost:5432/learny_test LEARNY_GENERATION_PROVIDER=local LEARNY_EMBEDDING_PROVIDER=local uv run pytest tests/<module> -q`
-**Frontend**: `cd /home/augusto/projects/learny/frontend && npm test -- --run <file>`
-**Full**: `cd /home/augusto/projects/learny && make lint` then backend pytest (reset `learny_test` if mixed with `test_migrations.py`) then `cd frontend && npm test -- --run`
-**Lint**: `cd /home/augusto/projects/learny && make lint`
+> Prefix `LEARNY_TEST_DATABASE_URL=postgresql+psycopg://learny:learny@localhost:5432/learny_test LEARNY_GENERATION_PROVIDER=local LEARNY_EMBEDDING_PROVIDER=local`. Reset `learny_test` if `test_migrations.py` ran in-process after a mid-migration schema.
+
+| Gate Level | When to Use | Command |
+| ---------- | ----------- | -------- |
+| Quick | After a backend unit task | `cd /home/augusto/projects/learny/backend && uv run pytest <touched module>` |
+| Full | After HTTP, Redis, migration, or frontend tasks | touched backend module and/or `cd /home/augusto/projects/learny/frontend && npm test -- <file>` |
+| Build | Phase boundary | `cd /home/augusto/projects/learny && make lint` plus the cycle's backend + frontend suites |
 
 ---
 
@@ -46,11 +53,7 @@ graph TD
     T14 --> T15 --> T16
 ```
 
----
-
-## Parallel Execution Strategy
-
-Four sequential phases (limiter, spend/quotas, invite/legal/delete, mail). One Opus worker per phase. No Haiku: auth, spend, deletion, and tokens fail quietly.
+Four sequential phases, one Opus worker each. No Haiku. No Turnstile. Verifier after T16.
 
 ---
 
@@ -64,7 +67,7 @@ Four sequential phases (limiter, spend/quotas, invite/legal/delete, mail). One O
 **Where**: `backend/app/infrastructure/web/redis_rate_limit.py`
 **Depends on**: None
 **Reuses**: `RateLimiter` protocol
-**Requirement**: DOOR-01, DOOR-02
+**Requirement**: DOOR-01, DOOR-05
 
 **Tools**:
 
@@ -88,7 +91,7 @@ Four sequential phases (limiter, spend/quotas, invite/legal/delete, mail). One O
 **Where**: `backend/app/main.py`
 **Depends on**: T1
 **Reuses**: `set_rate_limiter`
-**Requirement**: DOOR-02
+**Requirement**: DOOR-05
 
 **Tools**:
 
@@ -108,11 +111,11 @@ Four sequential phases (limiter, spend/quotas, invite/legal/delete, mail). One O
 
 #### T3: Trusted client IP
 
-**What**: Auth limiter keys on `X-Real-IP` only from a trusted peer. Next proxy sets that header from Caddy and strips inbound `X-Forwarded-For`.
+**What**: Auth limiter keys on `X-Real-IP` only from a trusted peer. Next proxy sets that header from Caddy and strips inbound `X-Forwarded-For`. Caddy stamps `X-Real-IP` from the TCP client.
 **Where**: `backend/app/infrastructure/web/rate_limit.py`
 **Depends on**: T2
 **Reuses**: `_client_key`, `buildProxyRequest`
-**Requirement**: DOOR-03, DOOR-04
+**Requirement**: DOOR-03, DOOR-06
 
 **Tools**:
 
@@ -123,6 +126,7 @@ Four sequential phases (limiter, spend/quotas, invite/legal/delete, mail). One O
 
 - [ ] A spoofed `X-Real-IP` from an untrusted peer is ignored
 - [ ] The proxy outbound request has no client `x-forwarded-for`
+- [ ] Caddyfile forwards `X-Real-IP`
 
 **Tests**: unit
 **Gate**: quick
@@ -136,7 +140,7 @@ Four sequential phases (limiter, spend/quotas, invite/legal/delete, mail). One O
 **Where**: `backend/app/infrastructure/web/rate_limit.py`
 **Depends on**: T3
 **Reuses**: `_route_template_key`
-**Requirement**: DOOR-05, DOOR-06
+**Requirement**: DOOR-02, DOOR-04
 
 **Tools**:
 
@@ -182,11 +186,11 @@ Four sequential phases (limiter, spend/quotas, invite/legal/delete, mail). One O
 
 #### T6: Spend catalog and assertions
 
-**What**: Settings hold USD/day cap and per-million prices. Application asserts remaining budget before a provider call and debits after success. Local adapters debit fixture micros when tests ask.
+**What**: Settings hold USD/day cap and per-million prices. Application asserts remaining budget before a provider call and debits after success. Local adapters debit 0 USD unless a test fixture supplies usage. FSRS review does not debit.
 **Where**: `backend/app/application/spend.py`
 **Depends on**: T5
 **Reuses**: generation/quiz call sites
-**Requirement**: DOOR-07, DOOR-08, DOOR-09
+**Requirement**: DOOR-08, DOOR-09, DOOR-13, DOOR-14
 
 **Tools**:
 
@@ -197,6 +201,7 @@ Four sequential phases (limiter, spend/quotas, invite/legal/delete, mail). One O
 
 - [ ] Crossing the USD cap returns 429 and skips the provider
 - [ ] A successful call increases `usd_micros`
+- [ ] Review submit does not increase spend
 
 **Tests**: integration
 **Gate**: quick
@@ -210,7 +215,7 @@ Four sequential phases (limiter, spend/quotas, invite/legal/delete, mail). One O
 **Where**: `backend/app/application/conversations.py`
 **Depends on**: T6
 **Reuses**: spend day row
-**Requirement**: DOOR-10, DOOR-11, DOOR-12
+**Requirement**: DOOR-10, DOOR-11
 
 **Tools**:
 
@@ -230,11 +235,11 @@ Four sequential phases (limiter, spend/quotas, invite/legal/delete, mail). One O
 
 #### T8: Kill switch
 
-**What**: `LEARNY_AI_KILL_SWITCH` true → 503 on Ask/Teach/quiz generate before any provider SDK.
+**What**: `LEARNY_AI_KILL_SWITCH` true → 503 on Ask/Teach/quiz generate and embedding ingest before any provider SDK. Review still succeeds.
 **Where**: `backend/app/core/config.py`
 **Depends on**: T7
 **Reuses**: settings cache
-**Requirement**: DOOR-13, DOOR-14
+**Requirement**: DOOR-12, DOOR-13
 
 **Tools**:
 
@@ -244,7 +249,7 @@ Four sequential phases (limiter, spend/quotas, invite/legal/delete, mail). One O
 **Done when**:
 
 - [ ] Switch on: 503, zero provider calls
-- [ ] Switch off: existing happy path
+- [ ] Review submit still 200
 
 **Tests**: integration
 **Gate**: quick
@@ -254,11 +259,11 @@ Four sequential phases (limiter, spend/quotas, invite/legal/delete, mail). One O
 
 #### T9: Source count, bytes, in-flight ingest
 
-**What**: Reject owned-source count >2, byte sum + upload >80 MiB, and a second in-flight ingest. Sample excluded from count and bytes.
+**What**: Reject owned-source count >2 (403 before put), byte sum + upload >256 MiB (413 before put), and a second in-flight ingest (409). Sample excluded from count and bytes. Allowed ingest start still hits the user-id limiter.
 **Where**: `backend/app/application/ingestion.py`
 **Depends on**: T8
 **Reuses**: `is_sample`
-**Requirement**: DOOR-15, DOOR-16, DOOR-17, DOOR-18
+**Requirement**: DOOR-15, DOOR-16, DOOR-17, DOOR-18, DOOR-19
 
 **Tools**:
 
@@ -269,6 +274,7 @@ Four sequential phases (limiter, spend/quotas, invite/legal/delete, mail). One O
 
 - [ ] Third owned book is 403
 - [ ] Sample plus two owned books still uploads
+- [ ] Oversized stored sum is 413
 - [ ] Second concurrent ingest is 409
 
 **Tests**: integration
@@ -281,11 +287,11 @@ Four sequential phases (limiter, spend/quotas, invite/legal/delete, mail). One O
 
 #### T10: Invite codes
 
-**What**: `invite_codes` table. Register requires a live code; consume decrements remaining uses. Successful invited register mints a session.
+**What**: `invite_codes` table. When `LEARNY_INVITE_REQUIRED` is true, register requires a live code and consume decrements remaining uses. Successful invited register mints a session. When the flag is false, register without a code still works.
 **Where**: `backend/app/application/invites.py`
 **Depends on**: T9
 **Reuses**: `RegisterUser`
-**Requirement**: DOOR-19, DOOR-20
+**Requirement**: DOOR-20, DOOR-21, DOOR-22, DOOR-26
 
 **Tools**:
 
@@ -294,8 +300,9 @@ Four sequential phases (limiter, spend/quotas, invite/legal/delete, mail). One O
 
 **Done when**:
 
-- [ ] Missing/bad/exhausted/expired code is 403
+- [ ] Missing/bad/exhausted/expired code is 403 when the flag is on
 - [ ] Valid code returns 201 with session cookies
+- [ ] Flag off still registers without a code
 
 **Tests**: integration
 **Gate**: full
@@ -305,11 +312,11 @@ Four sequential phases (limiter, spend/quotas, invite/legal/delete, mail). One O
 
 #### T11: Disposable emails and ToS
 
-**What**: Closed disposable-domain list; ToS checkbox required. Failures are generic 422.
+**What**: Closed disposable-domain list; ToS checkbox required. Failures are generic 422. `duck.com` is allowed.
 **Where**: `backend/app/application/identity.py`
 **Depends on**: T10
 **Reuses**: `validate_email`
-**Requirement**: DOOR-21, DOOR-22
+**Requirement**: DOOR-23, DOOR-24, DOOR-25
 
 **Tools**:
 
@@ -321,6 +328,7 @@ Four sequential phases (limiter, spend/quotas, invite/legal/delete, mail). One O
 - [ ] A listed disposable domain is 422 with the generic email copy
 - [ ] Missing ToS is 422
 - [ ] Register form posts invite + accepted_tos
+- [ ] No Turnstile widget or token field
 
 **Tests**: integration
 **Gate**: full
@@ -330,11 +338,11 @@ Four sequential phases (limiter, spend/quotas, invite/legal/delete, mail). One O
 
 #### T12: Terms, privacy, copyright
 
-**What**: Public `/terms`, `/privacy`, `/copyright` from committed copy. Copyright page names the DMCA mailbox.
+**What**: Public `/terms`, `/privacy`, `/copyright` from committed copy. Copyright names the DMCA mailbox. Privacy names OpenAI and Anthropic and does not claim ZDR.
 **Where**: `frontend/app/terms/page.tsx`
 **Depends on**: T11
 **Reuses**: signed-out layout
-**Requirement**: DOOR-23, DOOR-24, DOOR-25
+**Requirement**: DOOR-27, DOOR-28, DOOR-29
 
 **Tools**:
 
@@ -345,6 +353,7 @@ Four sequential phases (limiter, spend/quotas, invite/legal/delete, mail). One O
 
 - [ ] Each route renders a unique title and body
 - [ ] Copyright includes the configured contact address
+- [ ] Privacy names the two AI subprocessors and does not claim ZDR
 
 **Tests**: unit
 **Gate**: quick
@@ -354,11 +363,11 @@ Four sequential phases (limiter, spend/quotas, invite/legal/delete, mail). One O
 
 #### T13: Storage delete
 
-**What**: `StoragePort` gains delete-by-key (and prefix walk for media). Adapter maps faults to `StorageUnavailable`.
+**What**: `StoragePort` gains delete-by-key. Adapter maps faults to `StorageUnavailable`. Missing keys are success.
 **Where**: `backend/app/domain/ports.py`
 **Depends on**: T12
 **Reuses**: `S3StorageAdapter`
-**Requirement**: DOOR-26
+**Requirement**: DOOR-30
 
 **Tools**:
 
@@ -378,11 +387,11 @@ Four sequential phases (limiter, spend/quotas, invite/legal/delete, mail). One O
 
 #### T14: Delete account
 
-**What**: Authenticated CSRF `DELETE /api/auth/account` deletes the caller's objects then the user row. Storage failure leaves the user. Sample survives.
+**What**: Authenticated CSRF `DELETE /api/auth/account` deletes the caller's objects then the user row. Storage failure leaves the user (502). Sample survives.
 **Where**: `backend/app/application/identity.py`
 **Depends on**: T13
 **Reuses**: CASCADE FKs
-**Requirement**: DOOR-26, DOOR-27, DOOR-28
+**Requirement**: DOOR-30, DOOR-31, DOOR-32, DOOR-33
 
 **Tools**:
 
@@ -392,7 +401,7 @@ Four sequential phases (limiter, spend/quotas, invite/legal/delete, mail). One O
 **Done when**:
 
 - [ ] After delete, login 401 and objects gone
-- [ ] Injected storage failure leaves the user
+- [ ] Injected storage failure leaves the user and returns 502
 - [ ] Sample source still exists
 
 **Tests**: integration
@@ -409,7 +418,7 @@ Four sequential phases (limiter, spend/quotas, invite/legal/delete, mail). One O
 **Where**: `backend/app/domain/ports.py`
 **Depends on**: T14
 **Reuses**: stdlib smtplib inside the adapter only
-**Requirement**: DOOR-29, DOOR-34
+**Requirement**: DOOR-34, DOOR-40
 
 **Tools**:
 
@@ -429,11 +438,11 @@ Four sequential phases (limiter, spend/quotas, invite/legal/delete, mail). One O
 
 #### T16: Verify and reset
 
-**What**: Hashed verify/reset tokens. Register sends verify without blocking the session. Confirm sets `email_verified_at`. Reset unknown emails 204 with no send. SMTP failure on register still 201.
+**What**: Hashed verify/reset tokens. Register sends verify without blocking the session. Confirm sets `email_verified_at`. Reset unknown emails 204 with no send. SMTP failure on register still 201. Reset/verify-resend use the auth limiter.
 **Where**: `backend/app/application/identity.py`
 **Depends on**: T15
 **Reuses**: EmailPort, session hasher
-**Requirement**: DOOR-30, DOOR-31, DOOR-32, DOOR-33, DOOR-34
+**Requirement**: DOOR-34, DOOR-35, DOOR-36, DOOR-37, DOOR-38, DOOR-39, DOOR-40
 
 **Tools**:
 
@@ -454,6 +463,6 @@ Four sequential phases (limiter, spend/quotas, invite/legal/delete, mail). One O
 
 ## Notes
 
-- Alembic head after Cycle E is `0023_sample_and_activation` — confirm before writing `0024`.
+- Alembic head is `0023_starter_quiz_origin`. Confirm before writing `0024`.
+- Do not add Turnstile, siteverify, or a captcha widget.
 - `make test-backend` running `test_migrations.py` in-process after a mid-migration schema poisons `learny_test`; reset schema or isolate that module.
-- Do not mention invite, spend, or limiter internals in commit messages beyond the product verbs above.

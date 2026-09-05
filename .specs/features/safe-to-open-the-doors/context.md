@@ -10,7 +10,7 @@
 
 RFC-0007 Cycle F / Bet 6 as one ship-cycle PR: Redis limiter keyed by `user_id` on expensive routes and by trusted-proxy client IP on auth; per-user daily AI-spend ledger plus operator kill switch; source count/bytes quotas and one in-flight ingest; invite codes plus disposable-domain block; ToS/privacy/copyright pages with a DMCA contact; account deletion that removes MinIO objects and cascades Postgres; `EmailPort` for verify and password reset.
 
-Not in this PR: RFC Cycle G (cheaper intelligence, OpenAI-compatible fallback, ADR-0020 amendment); Turnstile; guest Ask; billing/checkout; EU representative; ZDR; publisher hash-scanning; Kubernetes; opt-in due digest.
+Not in this PR: RFC Cycle G; Turnstile; guest Ask; billing/checkout; EU representative; ZDR; publisher hash-scanning; Kubernetes; opt-in due digest.
 
 ---
 
@@ -23,18 +23,18 @@ Not in this PR: RFC Cycle G (cheaper intelligence, OpenAI-compatible fallback, A
 
 ### Turnstile
 
-- **Chosen:** Invite code required at register. No Cloudflare Turnstile widget or siteverify call.
-- **Rejected:** Turnstile as the opening bot brake (RFC bullet). Why-not: third-party US subprocessor and a widget on the only signup path while the hosted instance stays invite-only. rq09 Cycle C is invite XOR Turnstile; invite wins until registration is genuinely open (RFC action item).
+- **Chosen:** Invite code when `LEARNY_INVITE_REQUIRED` is true. No Cloudflare Turnstile widget or siteverify call.
+- **Rejected:** Turnstile as the opening bot brake (RFC bullet). Why-not: third-party US subprocessor and a widget on the only signup path while the hosted instance stays invite-only. rq09 Cycle C is invite XOR captcha; invite wins until registration is genuinely open. A later uncommitted draft that added Turnstile was reverted to this decision (AD-325).
 
 ### Email provider
 
 - **Chosen:** Learny `EmailPort` (send). Adapters: SMTP from settings for deployed mail; in-memory/log adapter for tests and local default. No Resend/Postmark/SES SDK.
-- **Rejected:** New ESP SDK (ADR-0007). EmailPort is still live the day the form opens: verify and reset tokens are hashed like sessions and actually sent through the port.
+- **Rejected:** New ESP SDK (ADR-0007).
 
 ### Verify vs invite
 
-- **Chosen:** A valid invite mints a session immediately. Verification email is sent. Invited users may use Ask/upload before `email_verified_at` is set. A later setting can require verification once registration is public.
-- **Rejected:** Verify-before-session for invited users (blocks the first session Cycle E just shipped). Open register without invite (rq09: no).
+- **Chosen:** A valid invite mints a session immediately. Verification email is sent. Invited users may use Ask/upload before `email_verified_at` is set.
+- **Rejected:** Verify-before-session for invited users (blocks the first session Cycle E just shipped).
 
 ### Due digest (AD-304)
 
@@ -43,38 +43,43 @@ Not in this PR: RFC Cycle G (cheaper intelligence, OpenAI-compatible fallback, A
 
 ### Spend meter
 
-- **Chosen:** Postgres daily USD ledger (micros) plus integer Free-tier counters from rq10: 8 Ask/day, 1 Teach session/day, 2 owned sources, 80 MiB stored bytes, 1 in-flight ingest. Hard stop with honest copy. Operator kill switch is a settings flag that 503s AI routes.
-- **Rejected:** Credits/SKU explosion (rq10 fallback). LiteLLM in front of GenerationPort (ADR-0009). USD-only with no source quota (disk still unbounded).
+- **Chosen:** Postgres daily USD ledger (micros) plus integer Free-tier counters: 8 Ask/day, 1 Teach session/day, 2 owned sources, **256 MiB** stored bytes, 1 in-flight ingest. Hard stop with honest copy. Operator kill switch is a settings flag that 503s AI routes.
+- **Rejected:** Credits/SKU explosion. LiteLLM in front of GenerationPort. **80 MiB** stored quota (blocks a legal 100 MiB PDF). AD-329 updated.
+
+### Invite flag
+
+- **Chosen:** `LEARNY_INVITE_REQUIRED` defaults false so self-host and CI keep existing register tests. Production `.env.example` sets it true.
+- **Rejected:** Always-on invite in every environment (would break hundreds of register tests).
 
 ### Limiter keys
 
-- **Chosen:** Redis fixed-window via the existing `RateLimiter` protocol. Auth/register/login: trusted-proxy `X-Real-IP` (strip inbound `X-Forwarded-For` from the browser). Authenticated expensive routes (Ask/Teach turns, quiz deck, upload, ingest start): `user_id`. Next.js proxy sets `X-Real-IP` from the hop Caddy sent, never from a client-supplied chain.
-- **Rejected:** Keep process-local IP buckets (rq09 documented hole). Read the full XFF chain.
+- **Chosen:** Redis fixed-window via the existing `RateLimiter` protocol. Auth: trusted-proxy `X-Real-IP`. Expensive authenticated routes: `user_id`. Caddy stamps `X-Real-IP`; Next strips inbound `X-Forwarded-For`. Redis down → 503.
+- **Rejected:** Process-local IP buckets. Read the full XFF chain.
 
 ### Deletion
 
-- **Chosen:** `StoragePort.delete_prefix` (or delete listed keys) then `DELETE /api/auth/account` which deletes the user row (existing CASCADE). Sample objects and the sample source are not owned by the caller and are not deleted. Idempotent: a second delete is 401.
-- **Rejected:** Soft-delete. Leaving MinIO orphans (AD-283 parked this letter).
+- **Chosen:** Delete caller-owned keys then the user row (CASCADE). Sample is not deleted. Storage failure must not delete the user (502).
+- **Rejected:** Soft-delete. Leaving MinIO orphans.
 
 ### Agent's Discretion
 
-- Exact 429/403 copy as long as it is honest (come back tomorrow / invite required / spend exhausted) and does not leak whether an email exists on reset.
-- Disposable-domain list source (frozen file vs small Python set) with alias allow-list (`duck.com`, iCloud Hide My Email, SimpleLogin).
-- SMTP library: stdlib `smtplib` in a thin adapter is enough; no new SDK.
+- Exact 429/403 copy as long as it is honest and does not leak whether an email exists on reset.
+- Disposable-domain list as a frozen committed set plus alias allow-list.
+- SMTP via stdlib `smtplib` in a thin adapter.
 - Invite CLI shape (`learny invite mint`).
 
 ### Declined / Undiscussed Gray Areas → Assumptions
 
-Ship-cycle auto-decision (Quick pace; user away, standing auto). Every spec Assumptions row is the signed-off default. Turnstile was not escalated: RFC action item plus rq09 XOR already recommend invite-only until open registration. Email adapter was not escalated: port + SMTP is the ADR-0007-compatible recommendation; an ESP SDK would need its own ADR.
+Ship-cycle auto-decision (user away, standing auto). Turnstile was not escalated: RFC lists it, rq09 XOR plus AD-325 already chose invite-only. Cloudflare siteverify is an external US dependency; it stays out.
 
 ---
 
 ## Specific References
 
-- RFC-0007 Cycle F; conflict 2 (guest Ask after F); exclusions (no billing, no new request-path SDK).
-- rq09 Cycles A–D checklist; rq10 Free caps; rq15 Cycle 1 ledger shape.
-- AD-007 CSRF/Origin; AD-017 same-origin proxy; AD-029 in-memory limiter limitation; AD-283 MinIO GC; AD-304 digest deferred onto EmailPort; ADR-0007/0009 ports.
-- `rate_limit.py` already implements `RateLimiter.hit` so Redis is a wiring change plus key policy.
+- RFC-0007 Cycle F; conflict 2 (guest Ask after F).
+- rq09 Cycles A–D; rq10 Free caps; rq15 Cycle 1 ledger shape.
+- AD-007 CSRF/Origin; AD-017 same-origin proxy; AD-029 in-memory limiter; AD-283 MinIO GC; AD-304 digest; AD-324..AD-333.
+- `rate_limit.py` already implements `RateLimiter.hit`. `deploy/Caddyfile` does not yet stamp `X-Real-IP`.
 
 ---
 
@@ -84,4 +89,4 @@ Ship-cycle auto-decision (Quick pace; user away, standing auto). Every spec Assu
 - Opt-in due digest.
 - Guest capped Ask.
 - RFC Cycle G spend optimizations and fallback adapter.
-- EU representative / ZDR.
+- Requiring `email_verified_at` before upload once registration is public.
