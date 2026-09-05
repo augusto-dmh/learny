@@ -90,4 +90,17 @@ describe("buildProxyRequest (ADR-017 same-origin proxy stub)", () => {
     }
     expect(out.headers.get("cookie")).toBe("learny_session=opaque-token");
   });
+
+  it("forwards Caddy's X-Real-IP and strips inbound X-Forwarded-For", () => {
+    const incoming = new Request("http://localhost:3000/api/auth/login", {
+      method: "POST",
+      headers: {
+        "x-real-ip": "203.0.113.10",
+        "x-forwarded-for": "198.51.100.1, 10.0.0.2",
+      },
+    });
+    const out = buildProxyRequest(incoming, ["auth", "login"], API_BASE);
+    expect(out.headers.get("x-real-ip")).toBe("203.0.113.10");
+    expect(out.headers.get("x-forwarded-for")).toBeNull();
+  });
 });

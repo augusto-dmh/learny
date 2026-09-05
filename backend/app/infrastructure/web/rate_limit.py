@@ -15,11 +15,14 @@ when wiring a Redis adapter at the composition root).
 
 from __future__ import annotations
 
+import ipaddress
 import threading
 import time
 from typing import Protocol
 
 from fastapi import HTTPException, Request, status
+
+from app.core.config import get_settings
 
 
 class LimiterUnavailable(Exception):
@@ -101,22 +104,40 @@ def _hit(key: str) -> None:
         )
 
 
-def _client_key(request: Request) -> str:
-    """Build a limiter key from client IP + route path (per-endpoint throttle).
+def _peer_is_trusted(peer: str, trusted: tuple[str, ...]) -> bool:
+    if peer in trusted:
+        return True
+    try:
+        address = ipaddress.ip_address(peer)
+    except ValueError:
+        return False
+    for entry in trusted:
+        try:
+            network = ipaddress.ip_network(entry, strict=False)
+        except ValueError:
+            continue
+        if address in network:
+            return True
+    return False
 
-    KNOWN LIMITATION (FR-AUTH-009): browser auth traffic reaches FastAPI through
-    the same-origin Next.js proxy (ADR-017), so ``request.client.host`` is the
-    proxy's IP for *every* user, not the real client. The per-IP key therefore
-    collapses to a single shared bucket per route: it cannot isolate individual
-    attackers, and one actor sending ``max_attempts`` requests can exhaust the
-    window for everyone (a cheap global lockout). This is acceptable only for
-    the single-process MVP boot. Before running behind the real proxy topology,
-    derive the client IP from a forwarded-client header the trusted proxy sets
-    (e.g. ``X-Real-IP``) -- reading only the hop the proxy appends, never the raw
-    client-supplied chain -- and configure the backend to trust that proxy.
+
+def trusted_client_ip(request: Request) -> str:
+    """Client IP for auth throttles: ``X-Real-IP`` only when the TCP peer is trusted.
+
+    A client-supplied ``X-Forwarded-For`` chain is never consulted.
     """
-    client = request.client.host if request.client else "unknown"
-    return f"{client}:{request.url.path}"
+    peer = request.client.host if request.client else "unknown"
+    if not _peer_is_trusted(peer, get_settings().trusted_proxy_host_list()):
+        return peer
+    forwarded = request.headers.get("x-real-ip", "").strip()
+    if not forwarded:
+        return peer
+    return forwarded.split(",")[0].strip()
+
+
+def _client_key(request: Request) -> str:
+    """Build a limiter key from trusted client IP + route path."""
+    return f"{trusted_client_ip(request)}:{request.url.path}"
 
 
 def rate_limit_auth(request: Request) -> None:
@@ -147,10 +168,9 @@ def _route_template_key(request: Request) -> str:
     Falls back to the concrete path when no route matched (it cannot be reached
     through a router, but a dependency should not assume its caller).
     """
-    client = request.client.host if request.client else "unknown"
     route = request.scope.get("route")
     path = getattr(route, "path", None) or request.url.path
-    return f"{client}:{path}"
+    return f"{trusted_client_ip(request)}:{path}"
 
 
 def rate_limit_conversations(request: Request) -> None:

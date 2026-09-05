@@ -225,6 +225,11 @@ def test_caddyfile_proxies_only_the_web_upstream() -> None:
     assert "reverse_proxy api" not in text
 
 
+def test_caddyfile_stamps_the_tcp_client_as_x_real_ip() -> None:
+    text = _CADDYFILE.read_text()
+    assert "header_up X-Real-IP {remote_host}" in text
+
+
 def test_caddyfile_site_address_pins_the_tls_domain() -> None:
     # The `{$LEARNY_DOMAIN}` site address is what makes Caddy request an automatic
     # Let's Encrypt certificate for the operator's domain. A regression to a plain

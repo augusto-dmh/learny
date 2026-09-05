@@ -54,6 +54,7 @@ const STRIPPED_HEADERS = new Set([
   // curl sends `Expect: 100-continue` on large multipart bodies, so forwarding
   // it turned non-browser uploads into 500s (QA finding F3).
   "expect",
+  "x-forwarded-for",
 ]);
 
 /**

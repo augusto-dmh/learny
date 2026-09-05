@@ -124,9 +124,9 @@ Four sequential phases, one Opus worker each. No Haiku. No Turnstile. Verifier a
 
 **Done when**:
 
-- [ ] A spoofed `X-Real-IP` from an untrusted peer is ignored
-- [ ] The proxy outbound request has no client `x-forwarded-for`
-- [ ] Caddyfile forwards `X-Real-IP`
+- [x] A spoofed `X-Real-IP` from an untrusted peer is ignored
+- [x] The proxy outbound request has no client `x-forwarded-for`
+- [x] Caddyfile forwards `X-Real-IP`
 
 **Tests**: unit
 **Gate**: quick
