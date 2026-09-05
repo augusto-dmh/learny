@@ -28,7 +28,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from app.application.corpus import BuildCorpus, ReadSourceStructure
+from app.application.corpus import BuildCorpus, ReadSection, ReadSourceStructure
 from app.application.errors import CorpusNotFound, InvalidDocumentError, SourceNotFound
 from app.application.identity import AuthorizeOwnership
 from app.application.quiz_qc import normalize_text
@@ -655,6 +655,42 @@ def test_read_structure_returns_sample_for_non_owner() -> None:
     structure = _read_structure(sources, corpus)(user=reader, source_id=sample.id)
 
     assert structure == corpus.get_structure(sample.id)
+
+
+def _read_section(sources: FakeSourceRepository, corpus: FakeCorpusRepository) -> ReadSection:
+    return ReadSection(
+        sources=sources,
+        corpus=corpus,
+        authorize=AuthorizeOwnership(),
+    )
+
+
+def test_read_section_returns_sample_for_non_owner() -> None:
+    operator = _user()
+    sample = replace(_owned_source(operator), is_sample=True)
+    sources = FakeSourceRepository()
+    sources.add(sample)
+    corpus = FakeCorpusRepository()
+    _seed_corpus(corpus, sample.id)
+    reader = User(id=uuid4(), email="reader@example.com", created_at=_NOW)
+
+    section = _read_section(sources, corpus)(user=reader, source_id=sample.id, anchor="one.xhtml")
+
+    assert section.anchor == "one.xhtml"
+    assert section == corpus.get_section(sample.id, "one.xhtml")
+
+
+def test_read_section_non_owner_of_ordinary_book_collapses_to_source_not_found() -> None:
+    owner = _user()
+    source = _owned_source(owner)
+    sources = FakeSourceRepository()
+    sources.add(source)
+    corpus = FakeCorpusRepository()
+    _seed_corpus(corpus, source.id)
+    intruder = User(id=uuid4(), email="intruder@example.com", created_at=_NOW)
+
+    with pytest.raises(SourceNotFound):
+        _read_section(sources, corpus)(user=intruder, source_id=source.id, anchor="one.xhtml")
 
 
 def test_read_structure_owned_source_without_corpus_raises_corpus_not_found() -> None:

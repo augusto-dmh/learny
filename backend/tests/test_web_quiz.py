@@ -406,7 +406,10 @@ def test_starter_post_on_owned_non_sample_returns_404(
         quiz_client, db_conn, f"starter-owned-{uuid4().hex[:8]}@example.com"
     )
     resp = _post_starter(quiz_client, source_id, csrf=csrf)
+    missing = _post_starter(quiz_client, uuid4(), csrf=csrf)
     assert resp.status_code == 404, resp.text
+    assert missing.status_code == 404, missing.text
+    assert resp.json() == missing.json()
 
 
 def test_starter_post_unauthenticated_returns_401(

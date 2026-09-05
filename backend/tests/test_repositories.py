@@ -320,6 +320,34 @@ def test_source_list_includes_one_shared_sample_for_every_user(db_conn: Connecti
     assert [s.id for s in bob_listed if s.is_sample] == [sample.id]
 
 
+def test_get_sample_returns_the_flagged_row_and_ignores_ordinary_books(
+    db_conn: Connection,
+) -> None:
+    users = SqlAlchemyUserRepository(db_conn)
+    sources = SqlAlchemySourceRepository(db_conn)
+    operator = _new_user("sample-get-op@example.com")
+    reader = _new_user("sample-get-reader@example.com")
+    users.add(operator)
+    users.add(reader)
+
+    assert sources.get_sample() is None
+
+    ordinary = _new_source(reader.id, object_key=f"sources/{reader.id}/{uuid4()}.epub")
+    sample = _new_source(
+        operator.id,
+        object_key=f"sources/{operator.id}/{uuid4()}.epub",
+        is_sample=True,
+        status="ready",
+    )
+    sources.add(ordinary)
+    sources.add(sample)
+
+    fetched = sources.get_sample()
+    assert fetched is not None
+    assert fetched.id == sample.id
+    assert fetched.is_sample is True
+
+
 def test_activation_event_inserts_once_per_user_and_name(db_conn: Connection) -> None:
     users = SqlAlchemyUserRepository(db_conn)
     activations = SqlAlchemyActivationEventRepository(db_conn)

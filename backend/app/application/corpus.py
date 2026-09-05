@@ -333,14 +333,15 @@ class ReadSourceStructure:
 
 
 class ReadSection:
-    """Return one section's content for the owner, or a not-found (FE-14).
+    """Return one section's content for a readable source, or a not-found (FE-14).
 
-    Mirrors ``ReadSourceStructure``: ownership is enforced first via
-    ``authorized_source`` so a missing source and a non-owner collapse to
-    ``SourceNotFound`` (no existence disclosure). An owned source whose corpus is
-    absent and an anchor that matches no section both surface as ``get_section``
-    returning ``None`` → ``CorpusNotFound``; the web layer maps both to 404, so a
-    valid anchor is indistinguishable from an unknown one to a non-owner.
+    Mirrors ``ReadSourceStructure``: readability is enforced first via
+    ``readable_source`` so a missing source and a non-readable caller collapse to
+    ``SourceNotFound`` (no existence disclosure). The shared sample is readable
+    to any authenticated user. An owned source whose corpus is absent and an
+    anchor that matches no section both surface as ``get_section`` returning
+    ``None`` → ``CorpusNotFound``; the web layer maps both to 404, so a valid
+    anchor is indistinguishable from an unknown one to a non-owner.
     """
 
     def __init__(

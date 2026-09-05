@@ -17,13 +17,17 @@ connection, mirroring how the ingestion read tests drive real services on ``db_c
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
 from sqlalchemy import Connection
 
-from app.domain.entities import CorpusSectionRecord, ParsedSection
-from app.infrastructure.db.repositories import SqlAlchemyCorpusRepository
+from app.domain.entities import CorpusSectionRecord, ParsedSection, Source
+from app.infrastructure.db.repositories import (
+    SqlAlchemyCorpusRepository,
+    SqlAlchemySourceRepository,
+)
 from tests.conftest import TEST_PASSWORD, requires_db
 
 pytestmark = requires_db
@@ -301,6 +305,39 @@ def test_section_non_owner_source_returns_404(
         f"/api/sources/{source_id}/section", params={"anchor": SECTION_ANCHOR}
     )
     assert resp.status_code == 404, resp.text  # no existence disclosure
+
+
+def test_section_returns_sample_for_non_owner(
+    sources_client: TestClient, db_conn: Connection
+) -> None:
+    operator_id = _register(sources_client, "sec-sample-op@example.com")
+    now = datetime(2026, 9, 4, 12, 0, 0, tzinfo=UTC)
+    sample = SqlAlchemySourceRepository(db_conn).add(
+        Source(
+            id=uuid4(),
+            user_id=UUID(operator_id),
+            title="The Art of War",
+            filename="art-of-war.epub",
+            content_type=EPUB_TYPE,
+            byte_size=len(EPUB_BYTES),
+            checksum="d" * 64,
+            object_key=f"sources/{operator_id}/{uuid4()}.epub",
+            status="ready",
+            created_at=now,
+            updated_at=now,
+            is_sample=True,
+        )
+    )
+    _seed_section_corpus(db_conn, str(sample.id))
+    _register(sources_client, "sec-sample-reader@example.com")
+
+    resp = sources_client.get(
+        f"/api/sources/{sample.id}/section", params={"anchor": SECTION_ANCHOR}
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["anchor"] == SECTION_ANCHOR
+    assert resp.json()["title"] == "Section Two"
 
 
 def test_section_owned_source_without_corpus_returns_404(
