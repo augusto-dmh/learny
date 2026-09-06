@@ -71,6 +71,7 @@ from app.application.quiz import (
     PlanDeckGeneration,
     RunDeckGeneration,
 )
+from app.application.quotas import Quotas
 from app.application.reading import (
     ListSourceHighlights,
     ReadChapter,
@@ -303,6 +304,16 @@ def get_storage() -> StoragePort:
 Storage = Annotated[StoragePort, Depends(get_storage)]
 
 
+def build_quotas(conn: Connection, settings: Settings) -> Quotas:
+    """Wire the library quotas on ``conn`` from the configured caps (DOOR-15..18)."""
+    return Quotas(
+        sources=SqlAlchemySourceRepository(conn),
+        jobs=SqlAlchemyIngestionJobRepository(conn),
+        max_sources=settings.library_max_owned_sources,
+        max_stored_bytes=settings.library_max_stored_bytes,
+    )
+
+
 def get_create_source(conn: DbConnection, storage: Storage, settings: AppSettings) -> CreateSource:
     return CreateSource(
         sources=SqlAlchemySourceRepository(conn),
@@ -311,6 +322,7 @@ def get_create_source(conn: DbConnection, storage: Storage, settings: AppSetting
         ids=uuid4,
         max_bytes=settings.epub_max_bytes,
         pdf_max_bytes=settings.pdf_max_bytes,
+        quotas=build_quotas(conn, settings),
     )
 
 
@@ -373,6 +385,7 @@ def build_start_ingestion(conn: Connection) -> StartIngestion:
         authorize=AuthorizeOwnership(),
         clock=_clock,
         ids=uuid4,
+        quotas=build_quotas(conn, get_settings()),
     )
 
 

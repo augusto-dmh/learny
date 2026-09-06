@@ -284,6 +284,7 @@ class FakeIngestionJobRepository:
     def __init__(self) -> None:
         self._by_id: dict[UUID, IngestionJob] = {}
         self._order: list[UUID] = []
+        self._owners: dict[UUID, UUID] = {}
         self.add_calls = 0
 
     def add(self, job: IngestionJob) -> IngestionJob:
@@ -306,6 +307,20 @@ class FakeIngestionJobRepository:
             if job.source_id == source_id:
                 return job
         return None
+
+    def count_active_for_user(self, user_id: UUID) -> int:
+        # Jobs belong to a source, and a source to an owner; this fake has no
+        # sources, so tests seed the owner mapping via source ownership on the
+        # jobs they insert (job.source_id is resolved by the caller's test).
+        return sum(
+            1
+            for job in self._by_id.values()
+            if job.status in ACTIVE_STATUSES and self._owners.get(job.source_id) == user_id
+        )
+
+    def set_owner(self, source_id: UUID, user_id: UUID) -> None:
+        """Declare which user owns a source id (the fake has no source repo)."""
+        self._owners[source_id] = user_id
 
     def update(self, job: IngestionJob) -> IngestionJob:
         self._by_id[job.id] = job

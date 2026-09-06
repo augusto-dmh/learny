@@ -488,20 +488,23 @@ def test_upload_repeated_hits_rate_limit_returns_429(
 ) -> None:
     # SRC-05 rate-limit half: the tight fixture allows 3 uploads per window, so
     # the 4th POST /api/sources trips ``rate_limit_upload`` before the handler.
+    # The library quota sits in the handler now, so the third upload inside the
+    # window is a 403 (two owned books is the cap, DOOR-15) — the limiter still
+    # counted the attempt, which is what makes the 4th a 429.
     client = throttled_sources_client
     _register(client, "flood@example.com")
     csrf = _csrf(client)
 
-    for _ in range(3):
-        resp = _upload(client, csrf=csrf)
-        assert resp.status_code == 201, resp.text
+    assert _upload(client, csrf=csrf).status_code == 201
+    assert _upload(client, csrf=csrf).status_code == 201
+    assert _upload(client, csrf=csrf).status_code == 403
 
     throttled = _upload(client, csrf=csrf)
     assert throttled.status_code == 429, throttled.text
     assert "retry-after" in {k.lower() for k in throttled.headers}
     # The throttled request short-circuits before the service, so no extra row
-    # is persisted — only the 3 that passed the limiter exist.
-    assert len(_source_rows(db_conn)) == 3
+    # is persisted — only the 2 that passed both limiter and quota exist.
+    assert len(_source_rows(db_conn)) == 2
 
 
 def test_same_file_uploaded_twice_creates_two_sources(
@@ -803,3 +806,143 @@ def test_get_media_is_not_upload_rate_limited(
         resp = client.get(f"/api/sources/{source_id}/media/{FIGURE_SHA256}")
         assert resp.status_code == 200, resp.text
         assert resp.content == FIGURE_BYTES
+
+
+# --- Library quotas (DOOR-15..17) ------------------------------------------------
+
+
+def _insert_owned_source(
+    conn: Connection, user_id: str, *, byte_size: int = 1024, is_sample: bool = False
+) -> UUID:
+    now = datetime.now(UTC)
+    return (
+        SqlAlchemySourceRepository(conn)
+        .add(
+            Source(
+                id=uuid4(),
+                user_id=UUID(user_id),
+                title="A Book",
+                filename="a-book.epub",
+                content_type=EPUB_TYPE,
+                byte_size=byte_size,
+                checksum="d" * 64,
+                object_key=f"sources/{user_id}/{uuid4()}.epub",
+                status="ready",
+                created_at=now,
+                updated_at=now,
+                is_sample=is_sample,
+            )
+        )
+        .id
+    )
+
+
+def test_third_owned_source_returns_403_before_any_put(
+    sources_client: TestClient, db_conn: Connection
+) -> None:
+    # DOOR-15: two owned books is the cap, and the refusal happens before
+    # ``put_object`` — no orphaned bytes for a source row that will never exist.
+    from tests.fakes import FakeStorage
+
+    user_id = _register(sources_client, "quota-count@example.com")
+    csrf = _csrf(sources_client)
+    _insert_owned_source(db_conn, user_id)
+    _insert_owned_source(db_conn, user_id)
+    storage = FakeStorage()
+    sources_client.app.dependency_overrides[get_storage] = lambda: storage
+    try:
+        resp = _upload(sources_client, csrf=csrf)
+    finally:
+        sources_client.app.dependency_overrides.pop(get_storage, None)
+
+    assert resp.status_code == 403, resp.text
+    assert "Delete a book" in resp.json()["detail"]
+    assert storage.put_calls == []
+    assert len(_source_rows(db_conn)) == 2
+
+
+def test_sample_does_not_count_toward_the_source_quota(
+    sources_client: TestClient, db_conn: Connection
+) -> None:
+    # DOOR-16: the shared sample is nobody's book. With the sample seeded, both
+    # owned uploads still go through (each storing exactly its own bytes); a third
+    # owned upload is the one that trips the count quota.
+    from tests.fakes import FakeStorage
+
+    user_id = _register(sources_client, "quota-sample@example.com")
+    csrf = _csrf(sources_client)
+    _insert_owned_source(db_conn, user_id, is_sample=True)
+    storage = FakeStorage()
+    sources_client.app.dependency_overrides[get_storage] = lambda: storage
+    try:
+        first = _upload(sources_client, csrf=csrf, title="First")
+        second = _upload(sources_client, csrf=csrf, title="Second")
+        third = _upload(sources_client, csrf=csrf, title="Third")
+    finally:
+        sources_client.app.dependency_overrides.pop(get_storage, None)
+
+    assert first.status_code == 201, first.text
+    assert second.status_code == 201, second.text
+    assert third.status_code == 403, third.text
+    assert len(storage.put_calls) == 2
+
+
+def test_stored_bytes_over_the_cap_returns_413_before_any_put(
+    sources_client: TestClient, db_conn: Connection
+) -> None:
+    # DOOR-17: the stored byte SUM plus the new upload is what is capped (256 MiB),
+    # and the 413 lands before ``put_object`` — seeded rows keep the test cheap.
+    from tests.fakes import FakeStorage
+
+    user_id = _register(sources_client, "quota-bytes@example.com")
+    csrf = _csrf(sources_client)
+    _insert_owned_source(db_conn, user_id, byte_size=268435456)
+    storage = FakeStorage()
+    sources_client.app.dependency_overrides[get_storage] = lambda: storage
+    try:
+        resp = _upload(sources_client, csrf=csrf)
+    finally:
+        sources_client.app.dependency_overrides.pop(get_storage, None)
+
+    assert resp.status_code == 413, resp.text
+    assert storage.put_calls == []
+    assert len(_source_rows(db_conn)) == 1
+
+
+def test_byte_sum_at_the_cap_exactly_still_uploads(
+    sources_client: TestClient, db_conn: Connection
+) -> None:
+    # The cap is "would exceed": sum + upload == cap is still a legal upload.
+    from tests.fakes import FakeStorage
+
+    user_id = _register(sources_client, "quota-bytes-exact@example.com")
+    csrf = _csrf(sources_client)
+    _insert_owned_source(db_conn, user_id, byte_size=268435456 - len(EPUB_BYTES))
+    storage = FakeStorage()
+    sources_client.app.dependency_overrides[get_storage] = lambda: storage
+    try:
+        resp = _upload(sources_client, csrf=csrf)
+    finally:
+        sources_client.app.dependency_overrides.pop(get_storage, None)
+
+    assert resp.status_code == 201, resp.text
+    assert len(storage.put_calls) == 1
+
+
+def test_sample_bytes_do_not_count_toward_the_byte_quota(
+    sources_client: TestClient, db_conn: Connection
+) -> None:
+    # DOOR-16 on the byte meter: a sample book storing 256 MiB gates nobody.
+    from tests.fakes import FakeStorage
+
+    user_id = _register(sources_client, "quota-sample-bytes@example.com")
+    csrf = _csrf(sources_client)
+    _insert_owned_source(db_conn, user_id, byte_size=268435456, is_sample=True)
+    storage = FakeStorage()
+    sources_client.app.dependency_overrides[get_storage] = lambda: storage
+    try:
+        resp = _upload(sources_client, csrf=csrf)
+    finally:
+        sources_client.app.dependency_overrides.pop(get_storage, None)
+
+    assert resp.status_code == 201, resp.text

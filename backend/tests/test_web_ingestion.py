@@ -370,3 +370,78 @@ def test_read_missing_source_returns_404(ingestion_client: TestClient) -> None:
     _register(ingestion_client, "gone@example.com")
     resp = ingestion_client.get(f"/api/sources/{uuid4()}/ingestion")
     assert resp.status_code == 404, resp.text
+
+
+# --- Library quotas (DOOR-18/19) -------------------------------------------------
+
+
+def test_second_in_flight_ingest_on_another_owned_source_returns_409(
+    ingestion_client: TestClient, db_conn: Connection
+) -> None:
+    # DOOR-18: one in-flight ingest per CALLER, not per source — a queued job on
+    # book A blocks a start on book B with the in-flight copy, and B gains no job
+    # and no enqueue.
+    _register(ingestion_client, "inflight@example.com")
+    csrf = _csrf(ingestion_client)
+    source_a = _create_source(ingestion_client, csrf, title="Book A")
+    source_b = _create_source(ingestion_client, csrf, title="Book B")
+
+    assert _start(ingestion_client, source_a, csrf=csrf).status_code == 202
+    resp = _start(ingestion_client, source_b, csrf=csrf)
+
+    assert resp.status_code == 409, resp.text
+    assert _job_count(db_conn, source_b) == 0
+    assert len(ingestion_client.app.state.ingestion_enqueuer.calls) == 1
+
+
+def test_terminal_job_on_another_source_does_not_block_a_start(
+    ingestion_client: TestClient, db_conn: Connection
+) -> None:
+    # Only queued/running jobs count: a failed ingest on book A leaves book B
+    # free to start.
+    _register(ingestion_client, "terminal@example.com")
+    csrf = _csrf(ingestion_client)
+    source_a = _create_source(ingestion_client, csrf, title="Book A")
+    source_b = _create_source(ingestion_client, csrf, title="Book B")
+
+    assert _start(ingestion_client, source_a, csrf=csrf).status_code == 202
+    db_conn.execute(
+        ingestion_jobs.update()
+        .where(ingestion_jobs.c.source_id == UUID(source_a))
+        .values(status="failed")
+    )
+    resp = _start(ingestion_client, source_b, csrf=csrf)
+
+    assert resp.status_code == 202, resp.text
+    assert _job_count(db_conn, source_b) == 1
+
+
+def test_quota_allowed_ingest_start_still_pays_the_user_limiter(
+    ingestion_client: TestClient, db_conn: Connection
+) -> None:
+    # DOOR-19: an allowed start rides the same per-user limiter as any other
+    # expensive write — the quota never bypasses it, so the next start spends the
+    # exhausted budget and is a limiter 429 (not a quota verdict).
+    from app.infrastructure.web.rate_limit import (
+        InMemoryFixedWindowRateLimiter,
+        get_rate_limiter,
+        set_rate_limiter,
+    )
+
+    _register(ingestion_client, "limited-ingest@example.com")
+    csrf = _csrf(ingestion_client)
+    source_a = _create_source(ingestion_client, csrf, title="Book A")
+    source_b = _create_source(ingestion_client, csrf, title="Book B")
+
+    previous_limiter = get_rate_limiter()
+    set_rate_limiter(InMemoryFixedWindowRateLimiter(max_attempts=1, window_seconds=300))
+    try:
+        first = _start(ingestion_client, source_a, csrf=csrf)
+        second = _start(ingestion_client, source_b, csrf=csrf)
+    finally:
+        set_rate_limiter(previous_limiter)
+
+    assert first.status_code == 202, first.text
+    assert second.status_code == 429, second.text
+    assert "Retry-After" in second.headers
+    assert _job_count(db_conn, source_b) == 0

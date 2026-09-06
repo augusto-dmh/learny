@@ -239,6 +239,14 @@ class IngestionJobRepository(Protocol):
         """Return the newest job for ``source_id`` (by ``created_at``), or ``None``."""
         ...
 
+    def count_active_for_user(self, user_id: UUID) -> int:
+        """Count the caller's queued/running jobs across every source they own.
+
+        The one-in-flight-ingest quota's read (DOOR-18): jobs on sources the caller
+        owns only — another user's queue never blocks a start.
+        """
+        ...
+
     def update(self, job: IngestionJob) -> IngestionJob:
         """Persist ``status``/``attempts``/``last_error``/``updated_at``."""
         ...

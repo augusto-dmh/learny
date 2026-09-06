@@ -49,10 +49,12 @@ from app.application.errors import (
     QuizItemNotFound,
     QuizItemNotReviewable,
     QuizReviewNotUndoable,
+    SourceCountQuotaExceeded,
     SourceNotFound,
     SourceNotReady,
     StaleCaptureTarget,
     StorageUnavailable,
+    StoredBytesQuotaExceeded,
     ValidationError,
 )
 
@@ -112,6 +114,10 @@ _STATUS_BY_ERROR = {
     # The operator kill switch: 503 with the honest pause copy; reads and reviews
     # are untouched and never route through this error.
     AiPaused: status.HTTP_503_SERVICE_UNAVAILABLE,
+    # Library quotas: count → 403 (delete a book), stored bytes → 413 (smaller
+    # file). Both are raised before ``put_object``, so neither orphans storage.
+    SourceCountQuotaExceeded: status.HTTP_403_FORBIDDEN,
+    StoredBytesQuotaExceeded: _HTTP_413,
 }
 
 # An invalid upload maps to a status keyed by its ``kind`` (design §Error Handling):

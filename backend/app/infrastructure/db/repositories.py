@@ -40,6 +40,7 @@ from app.application.errors import ConversationTurnConflict
 from app.application.text_search import resolve_text_search_config
 from app.domain.entities import (
     ACTIVE_QUIZ_JOB_STATUSES,
+    ACTIVE_STATUSES,
     AiSpendDay,
     AnchorBlockSnapshot,
     AnchorSection,
@@ -341,6 +342,21 @@ class SqlAlchemyIngestionJobRepository:
             .limit(1)
         ).one_or_none()
         return _to_ingestion_job(row) if row is not None else None
+
+    def count_active_for_user(self, user_id: UUID) -> int:
+        """Count queued/running jobs across the caller's sources (DOOR-18).
+
+        Joined through ``sources`` so the count is the caller's own queue exactly;
+        terminal jobs on any source never count.
+        """
+        stmt = (
+            select(func.count())
+            .select_from(ingestion_jobs)
+            .join(sources, sources.c.id == ingestion_jobs.c.source_id)
+            .where(sources.c.user_id == user_id)
+            .where(ingestion_jobs.c.status.in_(ACTIVE_STATUSES))
+        )
+        return int(self._conn.execute(stmt).scalar_one())
 
     def update(self, job: IngestionJob) -> IngestionJob:
         """Persist ``status``/``attempts``/``last_error``/``updated_at``."""

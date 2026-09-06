@@ -312,3 +312,19 @@ class AiPaused(Exception):
     anything. The message is the honest pause copy: the AI is off, the library and
     reviews are not. The web layer maps this to 503.
     """
+
+
+class SourceCountQuotaExceeded(Exception):
+    """The caller already owns the maximum number of non-sample sources (DOOR-15).
+
+    Raised by the upload quota before ``put_object`` runs, so a refused upload
+    never stores bytes; the web layer maps this to 403 with the delete-a-book copy.
+    """
+
+
+class StoredBytesQuotaExceeded(Exception):
+    """The caller's stored bytes plus this upload would breach the cap (DOOR-17).
+
+    Like the count quota, raised before any bytes are stored; the web layer maps
+    this to 413 with the smaller-file-or-delete copy.
+    """

@@ -263,6 +263,12 @@ class Settings(BaseSettings):
     # with the honest pause copy. Reads and review grading are untouched.
     ai_kill_switch: bool = False
 
+    # Library quotas (DOOR-15..17): owned (non-sample) sources per learner and the
+    # summed stored ``byte_size`` they may reach. 256 MiB — sized so the 100 MiB
+    # PDF cap twice over stays legal — plus the new upload must fit under it.
+    library_max_owned_sources: int = Field(default=2, ge=0)
+    library_max_stored_bytes: int = Field(default=268435456, ge=0)
+
     # Active recall — quiz deck generation (RFC-002 Cycle E). The provider SDK and
     # model name live only in the quiz adapter; these knobs stay LEARNY_-prefixed and
     # never hard-coded in application/domain code. ``quiz_model`` names the batched
