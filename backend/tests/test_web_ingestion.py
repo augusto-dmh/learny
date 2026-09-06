@@ -24,6 +24,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.application.identity import AuthorizeOwnership
 from app.application.ingestion import RunIngestion, StartIngestion
+from app.application.quotas import IN_FLIGHT_COPY
 from app.domain.entities import IngestionStatus
 from app.infrastructure.db.metadata import ingestion_jobs, sources
 from app.infrastructure.db.repositories import (
@@ -392,6 +393,9 @@ def test_second_in_flight_ingest_on_another_owned_source_returns_409(
     resp = _start(ingestion_client, source_b, csrf=csrf)
 
     assert resp.status_code == 409, resp.text
+    # The in-flight copy is the quota's constant, verbatim (DOOR-18): the second
+    # caller is told the limit and the way out, byte for byte.
+    assert resp.json() == {"detail": IN_FLIGHT_COPY}
     assert _job_count(db_conn, source_b) == 0
     assert len(ingestion_client.app.state.ingestion_enqueuer.calls) == 1
 

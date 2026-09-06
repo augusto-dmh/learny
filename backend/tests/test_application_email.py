@@ -397,7 +397,7 @@ def _override_sender(client: TestClient, emails: FakeEmailSender) -> None:
 
 @requires_db
 def test_register_is_201_and_mails_a_hashed_token_even_when_smtp_raises(
-    auth_client: TestClient, db_conn: Connection
+    auth_client: TestClient, db_conn: Connection, caplog: pytest.LogCaptureFixture
 ) -> None:
     from app.infrastructure.db.metadata import email_tokens
     from app.infrastructure.db.metadata import users as users_table
@@ -405,10 +405,11 @@ def test_register_is_201_and_mails_a_hashed_token_even_when_smtp_raises(
     emails = FakeEmailSender(error=RuntimeError("smtp relay down"))
     _override_sender(auth_client, emails)
 
-    resp = auth_client.post(
-        "/api/auth/register",
-        json={"email": "raised@example.com", "password": TEST_PASSWORD, "accepted_tos": True},
-    )
+    with caplog.at_level(logging.ERROR, logger="app.application.identity"):
+        resp = auth_client.post(
+            "/api/auth/register",
+            json={"email": "raised@example.com", "password": TEST_PASSWORD, "accepted_tos": True},
+        )
     assert resp.status_code == 201, resp.text
 
     # The unverified session is a real one (DOOR-39/AD-327): /me answers while
@@ -434,6 +435,17 @@ def test_register_is_201_and_mails_a_hashed_token_even_when_smtp_raises(
         select(email_tokens.c.purpose, email_tokens.c.secret_hash, email_tokens.c.consumed_at)
     ).all()
     assert stored == [("verify", hash_token(raw), None)]
+
+    # The transport failure is logged for the operator (DOOR-40): an ERROR record
+    # on the register path, but the raw token never reaches the log stream — the
+    # mail body alone carries that capability.
+    failure_logs = [
+        record
+        for record in caplog.records
+        if record.name == "app.application.identity" and record.levelno == logging.ERROR
+    ]
+    assert failure_logs
+    assert raw not in caplog.text
 
 
 @requires_db
