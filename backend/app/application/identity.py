@@ -19,10 +19,12 @@ from app.application.activation import ACTIVATION_ACCOUNT_CREATED, RecordActivat
 from app.application.errors import (
     EmailAlreadyExists,
     InvalidCredentials,
+    InviteRequired,
     NotAuthenticated,
     NotAuthorized,
     ValidationError,
 )
+from app.application.invites import INVITE_REQUIRED_MESSAGE, InviteRepository
 from app.application.validation import SAMPLE_OPERATOR_EMAIL, validate_email, validate_password
 from app.domain.entities import IssuedSession, PasswordCredential, Session, User
 from app.domain.ports import (
@@ -76,7 +78,13 @@ def _start_session(
 
 
 class RegisterUser:
-    """Create an email/password account and start an authenticated session."""
+    """Create an email/password account and start an authenticated session.
+
+    When an ``invites`` gate is wired (the composition root wires one exactly
+    where ``LEARNY_INVITE_REQUIRED`` is on), a live invite code is demanded and
+    consumed; without the gate an absent code is ignored, so self-host and CI
+    register exactly as before the rail existed (DOOR-26).
+    """
 
     def __init__(
         self,
@@ -88,6 +96,7 @@ class RegisterUser:
         tokens: TokenGenerator,
         clock: Clock,
         record_activation: RecordActivation,
+        invites: InviteRepository | None = None,
         session_ttl: timedelta = DEFAULT_SESSION_TTL,
     ) -> None:
         self._users = users
@@ -97,13 +106,24 @@ class RegisterUser:
         self._tokens = tokens
         self._clock = clock
         self._record_activation = record_activation
+        self._invites = invites
         self._session_ttl = session_ttl
 
-    def __call__(self, *, email: str, password: str) -> AuthResult:
+    def __call__(self, *, email: str, password: str, invite_code: str | None = None) -> AuthResult:
         normalized_email = validate_email(email)
         validate_password(password)
         if normalized_email == SAMPLE_OPERATOR_EMAIL:
             raise ValidationError("Invalid email address.")
+
+        # The invite gate runs before any user material is written and before the
+        # duplicate-email check, so a rejected register leaves no user, session,
+        # or half-burned code behind, and a bad code cannot probe which emails
+        # exist (DOOR-20). Absent code, unknown, exhausted, and expired codes all
+        # answer the same uniform 403 copy (DOOR-22).
+        if self._invites is not None:
+            if not invite_code:
+                raise InviteRequired(INVITE_REQUIRED_MESSAGE)
+            self._invites.consume(invite_code, now=self._clock.now())
 
         if self._users.get_by_email(normalized_email) is not None:
             raise EmailAlreadyExists("Email is already registered.")

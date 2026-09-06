@@ -13,7 +13,7 @@ from datetime import UTC, date, datetime
 from itertools import count
 from uuid import UUID, uuid4
 
-from app.application.errors import StorageUnavailable
+from app.application.errors import InviteRequired, StorageUnavailable
 from app.domain.entities import (
     ACTIVE_STATUSES,
     AiSpendDay,
@@ -173,6 +173,38 @@ class FakeSessionRepository:
         session = self._by_id.pop(session_id, None)
         if session is not None:
             self._hash_to_id.pop(session.token_hash, None)
+
+
+class FakeInviteRepository:
+    """In-memory ``InviteRepository``: codes with remaining uses and expiry.
+
+    Mirrors the SQL adapter's liveness predicate — a code consumes exactly one
+    use when it exists, has uses left, and is not expired (``expires_at`` absent
+    means never expires) — and raises the uniform ``InviteRequired`` otherwise,
+    recording each consumption so service tests can assert a rejected register
+    burned nothing and a successful one burned exactly one use.
+    """
+
+    def __init__(
+        self,
+        *,
+        codes: dict[str, int] | None = None,
+        expires_at: dict[str, datetime] | None = None,
+    ) -> None:
+        self._remaining: dict[str, int] = dict(codes or {})
+        self._expires_at: dict[str, datetime] = dict(expires_at or {})
+        self.consumed: list[str] = []
+
+    def consume(self, code: str, *, now: datetime) -> None:
+        expires_at = self._expires_at.get(code)
+        if self._remaining.get(code, 0) <= 0 or (expires_at is not None and expires_at <= now):
+            raise InviteRequired("This instance is invite-only.")
+        self._remaining[code] -= 1
+        self.consumed.append(code)
+
+    def remaining_uses(self, code: str) -> int:
+        """Test accessor: how many uses the code has left."""
+        return self._remaining.get(code, 0)
 
 
 class FakeSourceRepository:

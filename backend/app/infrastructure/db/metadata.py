@@ -858,6 +858,21 @@ ai_spend_days = Table(
     Column("teach_starts", Integer, nullable=False, server_default="0"),
 )
 
+# --- Registration invites (RFC-0007 Cycle F; design §Data Models) ----------------
+# Operator-minted codes gating register where ``LEARNY_INVITE_REQUIRED`` is on.
+# The code is the identity (primary key, unique); ``remaining_uses`` counts down
+# per successful register and a NULL ``expires_at`` never expires. No user FK —
+# a code exists before, and independently of, the account it admits.
+
+invite_codes = Table(
+    "invite_codes",
+    metadata,
+    Column("code", Text, primary_key=True),
+    Column("remaining_uses", Integer, nullable=False),
+    Column("expires_at", DateTime(timezone=True), nullable=True),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+)
+
 # Once-per-user first-session events (account_created, sample_opened,
 # first_cited_answer, first_review). The pair is the identity so a second insert
 # of the same name is a no-op at the persistence layer. Names are a closed set

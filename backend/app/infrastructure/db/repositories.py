@@ -36,7 +36,8 @@ from sqlalchemy import delete as sa_delete
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 
-from app.application.errors import ConversationTurnConflict
+from app.application.errors import ConversationTurnConflict, InviteRequired
+from app.application.invites import INVITE_REQUIRED_MESSAGE
 from app.application.text_search import resolve_text_search_config
 from app.domain.entities import (
     ACTIVE_QUIZ_JOB_STATUSES,
@@ -96,6 +97,7 @@ from app.infrastructure.db.metadata import (
     corpus_sections,
     ingestion_events,
     ingestion_jobs,
+    invite_codes,
     note_anchors,
     note_links,
     note_tags,
@@ -224,6 +226,33 @@ class SqlAlchemySessionRepository:
 
     def delete(self, session_id: UUID) -> None:
         self._conn.execute(sa_delete(sessions).where(sessions.c.id == session_id))
+
+
+class SqlAlchemyInviteRepository:
+    """``InviteRepository`` backed by the ``invite_codes`` table.
+
+    Consumption is one conditional ``UPDATE ... RETURNING``-shaped statement: the
+    liveness check (exists, uses left, not expired) and the decrement are a
+    single atomic write, so two concurrent registers racing for the last
+    remaining use cannot both pass — the loser updates zero rows and answers the
+    uniform ``InviteRequired`` (DOOR-20/22).
+    """
+
+    def __init__(self, connection: Connection) -> None:
+        self._conn = connection
+
+    def consume(self, code: str, *, now: datetime) -> None:
+        result = self._conn.execute(
+            update(invite_codes)
+            .where(
+                invite_codes.c.code == code,
+                invite_codes.c.remaining_uses > 0,
+                or_(invite_codes.c.expires_at.is_(None), invite_codes.c.expires_at > now),
+            )
+            .values(remaining_uses=invite_codes.c.remaining_uses - 1)
+        )
+        if result.rowcount == 0:
+            raise InviteRequired(INVITE_REQUIRED_MESSAGE)
 
 
 class SqlAlchemySourceRepository:

@@ -47,11 +47,15 @@ class Credentials(BaseModel):
 
     Email/password are validated and normalized authoritatively in the
     application layer (``validate_email``/``validate_password``, FR-AUTH-010), so
-    these are plain strings here — the boundary does not duplicate policy.
+    these are plain strings here — the boundary does not duplicate policy. The
+    invite code is likewise a plain optional string: where
+    ``LEARNY_INVITE_REQUIRED`` is on, the application service demands a live code
+    and answers the uniform 403 itself (DOOR-20); with the flag off it is ignored.
     """
 
     email: str
     password: str
+    invite_code: str | None = None
 
 
 class UserSummary(BaseModel):
@@ -85,7 +89,7 @@ def register(
     service: Annotated[RegisterUser, Depends(get_register_user)],
 ) -> UserSummary:
     """Create an account and start a session (FR-AUTH-001). 409 if email taken."""
-    result = service(email=body.email, password=body.password)
+    result = service(email=body.email, password=body.password, invite_code=body.invite_code)
     set_session_cookie(response, raw_token=result.issued.raw_token, settings=settings)
     return UserSummary.from_entity(result.user)
 

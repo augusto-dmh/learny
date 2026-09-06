@@ -85,6 +85,7 @@ def test_migration_metadata_compiles() -> None:
         "study_days",
         "ai_spend_days",
         "activation_events",
+        "invite_codes",
     }
     # Unique email + unique session token_hash are the security-critical constraints.
     user_uniques = {c.name for c in users.constraints if c.__class__.__name__ == "UniqueConstraint"}
@@ -3392,8 +3393,7 @@ def test_migration_0024_creates_ai_spend_days(monkeypatch) -> None:
         with engine.begin() as conn:
             conn.execute(
                 text(
-                    "INSERT INTO ai_spend_days (user_id, day_utc) "
-                    "VALUES (:uid, DATE '2026-09-06')"
+                    "INSERT INTO ai_spend_days (user_id, day_utc) VALUES (:uid, DATE '2026-09-06')"
                 ),
                 {"uid": user_id},
             )
@@ -3434,6 +3434,80 @@ def test_migration_0024_creates_ai_spend_days(monkeypatch) -> None:
     engine = create_engine(TEST_DB_URL)
     try:
         assert "ai_spend_days" in set(inspect(engine).get_table_names())
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
+def test_migration_0025_creates_invite_codes(monkeypatch) -> None:
+    """0025 up: creates ``invite_codes`` keyed by the unique code, with
+    ``remaining_uses`` (INTEGER NOT NULL), a nullable ``expires_at`` (NULL never
+    expires) and ``created_at``. Down one step to 0024 drops the table (users
+    survives); a further upgrade re-creates it — the invite table round-trips
+    clean.
+    """
+    monkeypatch.setenv("LEARNY_DATABASE_URL", TEST_DB_URL)
+    cfg = _alembic_config(TEST_DB_URL)
+
+    # Land on 0024 (pre-invites) so the upgrade below is the one under test.
+    command.upgrade(cfg, "head")
+    command.downgrade(cfg, "0024_safety_rails")
+    command.upgrade(cfg, "0025_invite_codes")
+
+    engine = create_engine(TEST_DB_URL)
+    try:
+        inspector = inspect(engine)
+        assert "invite_codes" in set(inspector.get_table_names())
+
+        columns = {c["name"]: c for c in inspector.get_columns("invite_codes")}
+        assert set(columns) == {"code", "remaining_uses", "expires_at", "created_at"}
+        assert columns["remaining_uses"]["nullable"] is False
+        assert columns["expires_at"]["nullable"] is True
+        assert columns["code"]["nullable"] is False
+
+        pk = inspector.get_pk_constraint("invite_codes")["constrained_columns"]
+        assert pk == ["code"]
+
+        # An expired code is representable: expires_at takes a real timestamp.
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO invite_codes (code, remaining_uses, expires_at) "
+                    "VALUES ('ROUNDTRIP', 2, now() - interval '1 hour')"
+                )
+            )
+        with engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT remaining_uses FROM invite_codes WHERE code = 'ROUNDTRIP'")
+            ).one()
+        assert row.remaining_uses == 2
+
+        # The code is unique: a second row with the same code is rejected.
+        with pytest.raises(IntegrityError), engine.begin() as conn:
+            conn.execute(
+                text("INSERT INTO invite_codes (code, remaining_uses) VALUES ('ROUNDTRIP', 1)")
+            )
+
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM invite_codes WHERE code = 'ROUNDTRIP'"))
+    finally:
+        engine.dispose()
+
+    # Down one step to 0024: the table drops; users survives.
+    command.downgrade(cfg, "0024_safety_rails")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        tables = set(inspect(engine).get_table_names())
+        assert "invite_codes" not in tables
+        assert "users" in tables
+    finally:
+        engine.dispose()
+
+    # Round-trip: a further upgrade re-creates the table at head.
+    command.upgrade(cfg, "0025_invite_codes")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        assert "invite_codes" in set(inspect(engine).get_table_names())
     finally:
         engine.dispose()
 

@@ -41,6 +41,7 @@ from app.application.errors import (
     InvalidConversationTitle,
     InvalidCredentials,
     InvalidSourceUpload,
+    InviteRequired,
     NotAuthenticated,
     NotAuthorized,
     NoteBodyTooLong,
@@ -118,6 +119,10 @@ _STATUS_BY_ERROR = {
     # file). Both are raised before ``put_object``, so neither orphans storage.
     SourceCountQuotaExceeded: status.HTTP_403_FORBIDDEN,
     StoredBytesQuotaExceeded: _HTTP_413,
+    # The invite gate (DOOR-20): one uniform 403 for an absent, unknown,
+    # exhausted, or expired code — the copy never says which of the four it was,
+    # so the refusal cannot be probed.
+    InviteRequired: status.HTTP_403_FORBIDDEN,
 }
 
 # An invalid upload maps to a status keyed by its ``kind`` (design §Error Handling):

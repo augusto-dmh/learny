@@ -114,6 +114,7 @@ from app.infrastructure.db.repositories import (
     SqlAlchemyCredentialRepository,
     SqlAlchemyIngestionEventRepository,
     SqlAlchemyIngestionJobRepository,
+    SqlAlchemyInviteRepository,
     SqlAlchemyNoteRepository,
     SqlAlchemyQuizItemRepository,
     SqlAlchemyQuizJobRepository,
@@ -222,6 +223,13 @@ def build_budget(conn: Connection) -> DailyBudget:
 
 
 def get_register_user(conn: DbConnection) -> RegisterUser:
+    """Wire ``RegisterUser`` on the request transaction.
+
+    The invite gate is wired only where ``LEARNY_INVITE_REQUIRED`` is on; the
+    default (flag off) passes no gate at all, so register behaves exactly as
+    before the rail existed (DOOR-26). Read per request, not cached, so the
+    flag is taken from the current settings rather than a stale snapshot.
+    """
     return RegisterUser(
         users=SqlAlchemyUserRepository(conn),
         credentials=SqlAlchemyCredentialRepository(conn),
@@ -233,6 +241,7 @@ def get_register_user(conn: DbConnection) -> RegisterUser:
             activations=SqlAlchemyActivationEventRepository(conn),
             clock=_clock,
         ),
+        invites=(SqlAlchemyInviteRepository(conn) if get_settings().invite_required else None),
     )
 
 

@@ -269,6 +269,12 @@ class Settings(BaseSettings):
     library_max_owned_sources: int = Field(default=2, ge=0)
     library_max_stored_bytes: int = Field(default=268435456, ge=0)
 
+    # Registration invite rail (DOOR-20..22). While true, register demands a live
+    # invite code and refuses without one with a uniform 403. The default (false)
+    # keeps self-host and CI registers code-free; the hosted deployment sets it
+    # true (see ``.env.production.example``).
+    invite_required: bool = False
+
     # Active recall — quiz deck generation (RFC-002 Cycle E). The provider SDK and
     # model name live only in the quiz adapter; these knobs stay LEARNY_-prefixed and
     # never hard-coded in application/domain code. ``quiz_model`` names the batched

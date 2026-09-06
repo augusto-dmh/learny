@@ -16,6 +16,7 @@ from app.application.activation import RecordActivation
 from app.application.errors import (
     EmailAlreadyExists,
     InvalidCredentials,
+    InviteRequired,
     NotAuthenticated,
     NotAuthorized,
     ValidationError,
@@ -34,6 +35,7 @@ from tests.fakes import (
     FakeActivationEventRepository,
     FakeClock,
     FakeCredentialRepository,
+    FakeInviteRepository,
     FakePasswordHasher,
     FakeSessionRepository,
     FakeUserRepository,
@@ -104,6 +106,88 @@ def test_register_rejects_sample_operator_email(ports) -> None:
 def test_register_rejects_weak_password(ports) -> None:
     with pytest.raises(ValidationError):
         _register(ports, password="short")
+
+
+# ---- RegisterUser invite gate (DOOR-20/21/22/26) ---------------------------
+
+
+def _register_gated(
+    ports,  # noqa: ANN001
+    invites: FakeInviteRepository,
+    email="invited@example.com",
+    password=VALID_PASSWORD,
+    invite_code="letmein",
+):
+    return RegisterUser(**ports, record_activation=_record(ports), invites=invites)(
+        email=email, password=password, invite_code=invite_code
+    )
+
+
+def test_register_with_valid_invite_consumes_exactly_one_use(ports) -> None:
+    invites = FakeInviteRepository(codes={"letmein": 2})
+    result = _register_gated(ports, invites)
+
+    # One use burned, the other still there; the invited register still mints
+    # its session immediately (DOOR-21 / AD-327).
+    assert invites.consumed == ["letmein"]
+    assert invites.remaining_uses("letmein") == 1
+    assert result.issued.raw_token == "token-1"
+    assert ports["users"].get_by_email("invited@example.com") is not None
+
+
+def test_register_without_invite_code_is_refused_when_gated(ports) -> None:
+    invites = FakeInviteRepository(codes={"letmein": 1})
+    with pytest.raises(InviteRequired):
+        _register_gated(ports, invites, invite_code=None)
+
+    # No user row and no session survive a rejected register (DOOR-20).
+    assert ports["users"].get_by_email("invited@example.com") is None
+    assert ports["sessions"].get_by_raw_token("token-1") is None
+    assert invites.consumed == []
+
+
+def test_register_with_unknown_code_is_refused_and_burns_nothing(ports) -> None:
+    invites = FakeInviteRepository(codes={"letmein": 1})
+    with pytest.raises(InviteRequired):
+        _register_gated(ports, invites, invite_code="not-a-code")
+
+    assert ports["users"].get_by_email("invited@example.com") is None
+    assert ports["sessions"].get_by_raw_token("token-1") is None
+    assert invites.consumed == []
+    assert invites.remaining_uses("letmein") == 1
+
+
+def test_register_with_exhausted_code_is_refused(ports) -> None:
+    invites = FakeInviteRepository(codes={"spent": 0})
+    with pytest.raises(InviteRequired):
+        _register_gated(ports, invites, invite_code="spent")
+
+    assert ports["users"].get_by_email("invited@example.com") is None
+    assert ports["sessions"].get_by_raw_token("token-1") is None
+
+
+def test_register_with_expired_code_is_refused(ports) -> None:
+    # The code expired one minute before the clock's "now".
+    invites = FakeInviteRepository(
+        codes={"stale": 3},
+        expires_at={"stale": ports["clock"].now() - timedelta(minutes=1)},
+    )
+    with pytest.raises(InviteRequired):
+        _register_gated(ports, invites, invite_code="stale")
+
+    assert ports["users"].get_by_email("invited@example.com") is None
+    assert ports["sessions"].get_by_raw_token("token-1") is None
+    assert invites.remaining_uses("stale") == 3
+
+
+def test_register_ignores_invite_code_when_no_gate_is_wired(ports) -> None:
+    # Flag off (the default wiring passes no gate): a code in the body changes
+    # nothing and a register without one still works (DOOR-26).
+    result = RegisterUser(**ports, record_activation=_record(ports))(
+        email="ungated@example.com", password=VALID_PASSWORD
+    )
+    assert result.user.email == "ungated@example.com"
+    assert result.issued.raw_token == "token-1"
 
 
 # ---- AuthenticateUser -----------------------------------------------------

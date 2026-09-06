@@ -328,3 +328,14 @@ class StoredBytesQuotaExceeded(Exception):
     Like the count quota, raised before any bytes are stored; the web layer maps
     this to 413 with the smaller-file-or-delete copy.
     """
+
+
+class InviteRequired(Exception):
+    """Register was called without a live invite code where one is required (DOOR-20).
+
+    One uniform failure for an absent code, an unknown code, an exhausted one
+    (remaining uses hit 0), and an expired one alike — the response must never
+    say which of the four it was. Raised by the invite gate before any user row
+    or session is written; the web layer maps this to 403 with the invite-only
+    copy.
+    """

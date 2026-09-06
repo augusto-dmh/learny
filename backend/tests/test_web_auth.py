@@ -9,9 +9,14 @@ Secure cookie for HTTP TestClient.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
+import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import Connection, func, insert, select
 
 from app.core.config import get_settings
+from app.infrastructure.db.metadata import invite_codes, sessions, users
 from tests.conftest import (
     SESSION_COOKIE_NAME,
     TEST_PASSWORD,
@@ -133,3 +138,169 @@ def test_session_cookie_attributes_match_settings(auth_client: TestClient) -> No
     assert f"path={settings.session_cookie_path}".lower() in set_cookie
     if settings.session_cookie_secure:
         assert "secure" in set_cookie
+
+
+# ---- Invite-gated register (DOOR-20/21/22) ----------------------------------
+
+INVITE_COPY = "This instance is invite-only. A valid invite code is required to register."
+
+
+def _seed_invite(db_conn: Connection, code: str, remaining: int, *, expires_at=None) -> None:
+    db_conn.execute(
+        insert(invite_codes).values(code=code, remaining_uses=remaining, expires_at=expires_at)
+    )
+
+
+@pytest.fixture
+def invite_client(auth_client: TestClient, monkeypatch: pytest.MonkeyPatch):  # noqa: ANN201
+    """``auth_client`` with ``LEARNY_INVITE_REQUIRED`` on (DOOR-20..22).
+
+    The register wiring reads the flag from settings per request, so flipping the
+    environment and clearing the settings cache after ``auth_client`` is built is
+    enough. Every auth route stays behind the auth throttle and Origin gate — the
+    invite gate itself lives in the register handler, below them.
+    """
+    monkeypatch.setenv("LEARNY_INVITE_REQUIRED", "true")
+    get_settings.cache_clear()
+    yield auth_client
+    get_settings.cache_clear()
+
+
+def test_register_without_invite_code_is_403_and_creates_nothing(
+    invite_client: TestClient, db_conn: Connection
+) -> None:
+    resp = invite_client.post(
+        "/api/auth/register",
+        json={"email": "gate@example.com", "password": TEST_PASSWORD},
+    )
+    assert resp.status_code == 403, resp.text
+    assert resp.json() == {"detail": INVITE_COPY}
+    # No session cookie was minted for the rejected register.
+    assert SESSION_COOKIE_NAME not in resp.headers.get("set-cookie", "")
+
+    # No user row (and therefore no session row) survives the rejection.
+    assert db_conn.execute(select(users).where(users.c.email == "gate@example.com")).first() is None
+    assert db_conn.execute(select(func.count()).select_from(sessions)).scalar_one() == 0
+
+
+def test_register_with_unknown_invite_code_is_403(
+    invite_client: TestClient, db_conn: Connection
+) -> None:
+    resp = invite_client.post(
+        "/api/auth/register",
+        json={
+            "email": "unknown-code@example.com",
+            "password": TEST_PASSWORD,
+            "invite_code": "not-a-code",
+        },
+    )
+    assert resp.status_code == 403, resp.text
+    assert resp.json() == {"detail": INVITE_COPY}
+    assert (
+        db_conn.execute(select(users).where(users.c.email == "unknown-code@example.com")).first()
+        is None
+    )
+
+
+def test_register_with_exhausted_invite_code_is_403(
+    invite_client: TestClient, db_conn: Connection
+) -> None:
+    _seed_invite(db_conn, "spent", 0)
+    resp = invite_client.post(
+        "/api/auth/register",
+        json={
+            "email": "spent@example.com",
+            "password": TEST_PASSWORD,
+            "invite_code": "spent",
+        },
+    )
+    assert resp.status_code == 403, resp.text
+    assert resp.json() == {"detail": INVITE_COPY}
+    assert (
+        db_conn.execute(select(users).where(users.c.email == "spent@example.com")).first() is None
+    )
+
+
+def test_register_with_expired_invite_code_is_403(
+    invite_client: TestClient, db_conn: Connection
+) -> None:
+    _seed_invite(
+        db_conn,
+        "stale",
+        3,
+        expires_at=datetime.now(UTC) - timedelta(minutes=1),
+    )
+    resp = invite_client.post(
+        "/api/auth/register",
+        json={
+            "email": "stale@example.com",
+            "password": TEST_PASSWORD,
+            "invite_code": "stale",
+        },
+    )
+    assert resp.status_code == 403, resp.text
+    assert resp.json() == {"detail": INVITE_COPY}
+    assert (
+        db_conn.execute(select(users).where(users.c.email == "stale@example.com")).first() is None
+    )
+
+
+def test_register_with_valid_invite_returns_201_with_session(
+    invite_client: TestClient, db_conn: Connection
+) -> None:
+    _seed_invite(db_conn, "WELCOME", 1)
+    resp = invite_client.post(
+        "/api/auth/register",
+        json={
+            "email": "invited@example.com",
+            "password": TEST_PASSWORD,
+            "invite_code": "WELCOME",
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["email"] == "invited@example.com"
+    # The invited register still mints its session cookie (DOOR-21 / AD-327).
+    set_cookie = resp.headers.get("set-cookie", "")
+    assert SESSION_COOKIE_NAME in set_cookie
+    assert "httponly" in set_cookie.lower()
+    assert invite_client.get("/api/auth/me").status_code == 200
+
+    # The consume decremented the remaining uses (1 → 0).
+    left = db_conn.execute(
+        select(invite_codes.c.remaining_uses).where(invite_codes.c.code == "WELCOME")
+    ).scalar_one()
+    assert left == 0
+
+
+def test_valid_invite_consumes_one_use_per_register_then_refuses(
+    invite_client: TestClient, db_conn: Connection
+) -> None:
+    _seed_invite(db_conn, "TWICE", 2)
+
+    for i in range(2):
+        resp = invite_client.post(
+            "/api/auth/register",
+            json={
+                "email": f"invitee{i}@example.com",
+                "password": TEST_PASSWORD,
+                "invite_code": "TWICE",
+            },
+        )
+        assert resp.status_code == 201, resp.text
+        invite_client.cookies.clear()
+
+    # Both uses are gone: the same code can no longer register anyone (DOOR-22).
+    third = invite_client.post(
+        "/api/auth/register",
+        json={
+            "email": "invitee-too-late@example.com",
+            "password": TEST_PASSWORD,
+            "invite_code": "TWICE",
+        },
+    )
+    assert third.status_code == 403, third.text
+    assert third.json() == {"detail": INVITE_COPY}
+    left = db_conn.execute(
+        select(invite_codes.c.remaining_uses).where(invite_codes.c.code == "TWICE")
+    ).scalar_one()
+    assert left == 0
