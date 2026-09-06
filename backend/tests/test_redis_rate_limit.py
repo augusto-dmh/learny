@@ -29,12 +29,8 @@ def test_two_clients_share_one_window() -> None:
     key = f"share-{uuid4()}"
     redis_key = f"learny:rl:{key}"
     try:
-        first = RedisFixedWindowRateLimiter.from_url(
-            _REDIS_URL, max_attempts=2, window_seconds=60
-        )
-        second = RedisFixedWindowRateLimiter.from_url(
-            _REDIS_URL, max_attempts=2, window_seconds=60
-        )
+        first = RedisFixedWindowRateLimiter.from_url(_REDIS_URL, max_attempts=2, window_seconds=60)
+        second = RedisFixedWindowRateLimiter.from_url(_REDIS_URL, max_attempts=2, window_seconds=60)
         assert first.hit(key) == (True, 0)
         assert second.hit(key) == (True, 0)
         allowed, retry_after = first.hit(key)

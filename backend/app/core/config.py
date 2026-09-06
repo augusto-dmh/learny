@@ -74,9 +74,7 @@ class Settings(BaseSettings):
     celery_result_backend: str = ""
     # Peers allowed to set ``X-Real-IP`` for auth rate-limit keys. Includes the
     # Starlette TestClient host (``testclient``) and RFC1918 Docker networks.
-    trusted_proxy_hosts: str = (
-        "127.0.0.1,::1,testclient,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
-    )
+    trusted_proxy_hosts: str = "127.0.0.1,::1,testclient,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
 
     def broker_url(self) -> str:
         """Effective Celery broker URL (falls back to ``redis_url``)."""
@@ -88,9 +86,7 @@ class Settings(BaseSettings):
 
     def trusted_proxy_host_list(self) -> tuple[str, ...]:
         """Parsed peer hosts/CIDRs that may stamp ``X-Real-IP``."""
-        return tuple(
-            part.strip() for part in self.trusted_proxy_hosts.split(",") if part.strip()
-        )
+        return tuple(part.strip() for part in self.trusted_proxy_hosts.split(",") if part.strip())
 
     # Session cookie attributes (NFR-SEC-002) — wired fully in Phase C.
     session_cookie_name: str = "learny_session"
