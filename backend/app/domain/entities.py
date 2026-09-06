@@ -1255,6 +1255,23 @@ class StudyDay:
 
 
 @dataclass(frozen=True)
+class AiSpendDay:
+    """One UTC day of the caller's AI spend (design §Data Models, ``ai_spend_days``).
+
+    ``usd_micros`` is the day's accumulated generation + embedding cost (1 USD =
+    1_000_000 micros); ``ask_count`` / ``teach_starts`` are the free-tier integer
+    counters. Written by an atomic upsert-increment keyed ``(user_id, day_utc)``, so
+    the row always equals the sum of the day's debits.
+    """
+
+    user_id: UUID
+    day_utc: date
+    usd_micros: int = 0
+    ask_count: int = 0
+    teach_starts: int = 0
+
+
+@dataclass(frozen=True)
 class StudySummary:
     """The adherence read model for the Home stats block (HOME-11).
 

@@ -83,6 +83,7 @@ def test_migration_metadata_compiles() -> None:
         "note_links",
         "reading_positions",
         "study_days",
+        "ai_spend_days",
         "activation_events",
     }
     # Unique email + unique session token_hash are the security-critical constraints.
@@ -3336,6 +3337,105 @@ def test_migration_0023_starter_unique_is_per_learner_not_per_source(monkeypatch
         engine.dispose()
 
     command.upgrade(cfg, "head")
+
+
+@pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
+def test_migration_0024_creates_ai_spend_days(monkeypatch) -> None:
+    """0024 up: creates the ``ai_spend_days`` ledger keyed ``(user_id, day_utc)`` with
+    ``usd_micros`` (BIGINT NOT NULL DEFAULT 0) and the ``ask_count``/``teach_starts``
+    integer counters, and a CASCADE FK to ``users``. An inserted row defaults all three
+    totals to 0. Down one step to 0023 drops the table (users survives); a further
+    upgrade re-creates it — the ledger round-trips clean.
+    """
+    monkeypatch.setenv("LEARNY_DATABASE_URL", TEST_DB_URL)
+    cfg = _alembic_config(TEST_DB_URL)
+
+    # Land on 0023 (pre-ledger) so the upgrade below is the one under test.
+    command.upgrade(cfg, "head")
+    command.downgrade(cfg, "0023_starter_quiz_origin")
+
+    user_id = uuid.uuid4()
+    engine = create_engine(TEST_DB_URL)
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("INSERT INTO users (id, email) VALUES (:id, :email)"),
+                {"id": user_id, "email": f"{user_id}@example.test"},
+            )
+    finally:
+        engine.dispose()
+
+    command.upgrade(cfg, "0024_safety_rails")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        inspector = inspect(engine)
+        assert "ai_spend_days" in set(inspector.get_table_names())
+
+        columns = {c["name"]: c for c in inspector.get_columns("ai_spend_days")}
+        assert set(columns) == {"user_id", "day_utc", "usd_micros", "ask_count", "teach_starts"}
+        assert columns["day_utc"]["nullable"] is False
+        for total in ("usd_micros", "ask_count", "teach_starts"):
+            assert columns[total]["nullable"] is False
+
+        pk = inspector.get_pk_constraint("ai_spend_days")["constrained_columns"]
+        assert pk == ["user_id", "day_utc"]
+
+        user_fk = next(
+            fk
+            for fk in inspector.get_foreign_keys("ai_spend_days")
+            if fk["constrained_columns"] == ["user_id"]
+        )
+        assert user_fk["referred_table"] == "users"
+        assert user_fk["options"].get("ondelete") == "CASCADE"
+
+        # An inserted row with no totals supplied defaults all three to 0.
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO ai_spend_days (user_id, day_utc) "
+                    "VALUES (:uid, DATE '2026-09-06')"
+                ),
+                {"uid": user_id},
+            )
+        with engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT usd_micros, ask_count, teach_starts FROM ai_spend_days "
+                    "WHERE user_id = :uid"
+                ),
+                {"uid": user_id},
+            ).one()
+        assert (row.usd_micros, row.ask_count, row.teach_starts) == (0, 0, 0)
+
+        # Real cascade: deleting the user removes their ledger rows.
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM users WHERE id = :uid"), {"uid": user_id})
+        with engine.connect() as conn:
+            remaining = conn.execute(
+                text("SELECT count(*) FROM ai_spend_days WHERE user_id = :uid"),
+                {"uid": user_id},
+            ).scalar_one()
+        assert remaining == 0
+    finally:
+        engine.dispose()
+
+    # Down one step to 0023: the table drops; users survives.
+    command.downgrade(cfg, "0023_starter_quiz_origin")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        tables = set(inspect(engine).get_table_names())
+        assert "ai_spend_days" not in tables
+        assert "users" in tables
+    finally:
+        engine.dispose()
+
+    # Round-trip: a further upgrade re-creates the ledger at head.
+    command.upgrade(cfg, "0024_safety_rails")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        assert "ai_spend_days" in set(inspect(engine).get_table_names())
+    finally:
+        engine.dispose()
 
 
 @pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")

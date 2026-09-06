@@ -22,6 +22,7 @@ from typing import Protocol, runtime_checkable
 from uuid import UUID
 
 from app.domain.entities import (
+    AiSpendDay,
     AnchorSection,
     AnswerStreamEvent,
     Backlink,
@@ -1379,3 +1380,29 @@ class StudyDayRepository(Protocol):
     def window(self, user_id: UUID, *, start: date, end: date) -> list[StudyDay]:
         """Return the caller's study days with ``start <= day <= end``, day-ordered."""
         ...
+
+
+@runtime_checkable
+class AiSpendDayRepository(Protocol):
+    """Persistence port for the ``ai_spend_days`` ledger (design §Data Models).
+
+    ``record`` is an atomic upsert-increment on the ``(user_id, day_utc)`` key, so N
+    same-day debits (including concurrent commits) leave exactly one row whose totals
+    equal the sum. ``get_for_day`` reads the day's row for the check-before-call
+    assertion; a missing row means nothing was spent that day. Operates on the
+    caller's ``Connection`` so a debit shares the triggering write's transaction.
+    """
+
+    def record(
+        self,
+        user_id: UUID,
+        day_utc: date,
+        *,
+        usd_micros: int = 0,
+        asks: int = 0,
+        teach_starts: int = 0,
+    ) -> None:
+        """Add the passed deltas to ``(user_id, day_utc)``, inserting the row if absent."""
+
+    def get_for_day(self, user_id: UUID, day_utc: date) -> AiSpendDay | None:
+        """Return the caller's ledger row for ``day_utc``, or ``None`` if nothing yet."""

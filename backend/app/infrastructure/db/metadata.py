@@ -835,6 +835,29 @@ study_days = Table(
     Column("words_advanced", BigInteger, nullable=False, server_default="0"),
 )
 
+# --- Daily AI spend ledger (RFC-0007 Cycle F; design §Data Models) ----------------
+# One row per (user, UTC day) durably recording what the day's AI calls cost: the
+# USD total in micros (64-bit — many calls accumulate into one cell) plus the
+# free-tier integer counters (asks, teach-session starts). Written by an atomic
+# ``INSERT ... ON CONFLICT (user_id, day_utc) DO UPDATE`` increment, so N same-day
+# calls leave exactly one row whose totals equal the sum — two increments never
+# lose one. The FK cascades: a ledger names nobody once its user is gone.
+
+ai_spend_days = Table(
+    "ai_spend_days",
+    metadata,
+    Column(
+        "user_id",
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column("day_utc", Date, nullable=False, primary_key=True),
+    Column("usd_micros", BigInteger, nullable=False, server_default="0"),
+    Column("ask_count", Integer, nullable=False, server_default="0"),
+    Column("teach_starts", Integer, nullable=False, server_default="0"),
+)
+
 # Once-per-user first-session events (account_created, sample_opened,
 # first_cited_answer, first_review). The pair is the identity so a second insert
 # of the same name is a no-op at the persistence layer. Names are a closed set

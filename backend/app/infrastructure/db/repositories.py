@@ -40,6 +40,7 @@ from app.application.errors import ConversationTurnConflict
 from app.application.text_search import resolve_text_search_config
 from app.domain.entities import (
     ACTIVE_QUIZ_JOB_STATUSES,
+    AiSpendDay,
     AnchorBlockSnapshot,
     AnchorSection,
     Backlink,
@@ -84,6 +85,7 @@ from app.domain.entities import (
 )
 from app.infrastructure.db.metadata import (
     activation_events,
+    ai_spend_days,
     conversation_turn_citations,
     conversation_turns,
     conversations,
@@ -2411,6 +2413,71 @@ class SqlAlchemyStudyDayRepository:
             )
             for row in rows
         ]
+
+
+class SqlAlchemyAiSpendDayRepository:
+    """Postgres ``ai_spend_days`` ledger (design §Data Models).
+
+    ``record`` is the atomic ``INSERT ... ON CONFLICT DO UPDATE`` increment (the
+    ``study_days`` counter precedent): the stored values are incremented in SQL, not
+    read-then-written, so two same-day debits — including concurrent commits — both
+    land and neither is lost. ``get_for_day`` reads one day's row for the
+    check-before-call budget assertion. Operates on the caller's ``Connection`` so a
+    debit shares the triggering write's transaction.
+    """
+
+    def __init__(self, connection: Connection) -> None:
+        self._conn = connection
+
+    def record(
+        self,
+        user_id: UUID,
+        day_utc: date,
+        *,
+        usd_micros: int = 0,
+        asks: int = 0,
+        teach_starts: int = 0,
+    ) -> None:
+        stmt = pg_insert(ai_spend_days).values(
+            user_id=user_id,
+            day_utc=day_utc,
+            usd_micros=usd_micros,
+            ask_count=asks,
+            teach_starts=teach_starts,
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[ai_spend_days.c.user_id, ai_spend_days.c.day_utc],
+            set_={
+                # Atomic increment against the stored value (not a read-then-write),
+                # so concurrent commits both count.
+                "usd_micros": ai_spend_days.c.usd_micros + stmt.excluded.usd_micros,
+                "ask_count": ai_spend_days.c.ask_count + stmt.excluded.ask_count,
+                "teach_starts": ai_spend_days.c.teach_starts + stmt.excluded.teach_starts,
+            },
+        )
+        self._conn.execute(stmt)
+
+    def get_for_day(self, user_id: UUID, day_utc: date) -> AiSpendDay | None:
+        row = self._conn.execute(
+            select(
+                ai_spend_days.c.user_id,
+                ai_spend_days.c.day_utc,
+                ai_spend_days.c.usd_micros,
+                ai_spend_days.c.ask_count,
+                ai_spend_days.c.teach_starts,
+            )
+            .where(ai_spend_days.c.user_id == user_id)
+            .where(ai_spend_days.c.day_utc == day_utc)
+        ).first()
+        if row is None:
+            return None
+        return AiSpendDay(
+            user_id=row.user_id,
+            day_utc=row.day_utc,
+            usd_micros=row.usd_micros,
+            ask_count=row.ask_count,
+            teach_starts=row.teach_starts,
+        )
 
 
 def _to_user(row) -> User:  # noqa: ANN001 — Row is an internal SQLAlchemy type
