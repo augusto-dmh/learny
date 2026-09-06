@@ -23,7 +23,12 @@ from dataclasses import dataclass, replace
 from uuid import UUID
 
 from app.application.activation import ACTIVATION_FIRST_CITED_ANSWER, RecordActivation
-from app.application.budget import KIND_GENERATION, DailyBudget
+from app.application.budget import (
+    KIND_ASK,
+    KIND_GENERATION,
+    KIND_TEACH_START,
+    DailyBudget,
+)
 from app.application.errors import (
     AnswerGenerationFailed,
     ConversationClosed,
@@ -90,6 +95,19 @@ TITLE_MAX_CHARS = 200
 # cannot drift apart.
 DEFAULT_PAGE_LIMIT = 20
 MAX_PAGE_LIMIT = 100
+
+
+def spend_kind(mode: str, turn_index: int) -> str:
+    """Name the budget kind one turn is paid as (DOOR-10/11).
+
+    An answer turn is an Ask. A teach turn at index 0 **is** the Teach session start
+    (the opening sentinel the preflight already requires) — a later teach turn is a
+    continuation of that session, paid as plain generation and never re-charged to
+    the one-starts-per-day cap.
+    """
+    if mode == MODE_TEACH:
+        return KIND_TEACH_START if turn_index == 0 else KIND_GENERATION
+    return KIND_ASK
 
 
 def authorized_conversation(
@@ -604,7 +622,7 @@ class PostConversationTurn:
                 self._persist_failed(plan, message, mode)
                 raise AnswerGenerationFailed("Answer generation failed.") from exc
 
-            self._debit(user.id, generated)
+            self._debit(plan.user_id, spend_kind(mode, plan.turn_index), generated)
             turn = self._turn_from_generated(
                 plan=plan, message=message, mode=mode, generated=generated
             )
@@ -694,7 +712,7 @@ class PostConversationTurn:
         # criterion and is left to the retry cycle.
 
         turn = self._turn_from_generated(plan=plan, message=message, mode=mode, generated=answer)
-        self._debit(prep.user_id, answer)
+        self._debit(prep.user_id, spend_kind(mode, plan.turn_index), answer)
         yield self._stream_turn(plan, turn, mode)
 
     def _preflight(
@@ -761,9 +779,10 @@ class PostConversationTurn:
         # The daily-budget guard runs after ownership/readiness and before anything is
         # retrieved or generated, so an exhausted day refuses with the provider never
         # called (the provider port is the only thing that costs money) and with the
-        # conversation and its history untouched.
+        # conversation and its history untouched. The kind is the turn's own: an ask,
+        # a teach session start, or a plain generation.
         if self._budget is not None:
-            self._budget.assert_generation(user.id, kind=KIND_GENERATION)
+            self._budget.assert_generation(user.id, kind=spend_kind(mode, turn_index))
 
         return _TurnPrep(
             conversation=conversation,
@@ -926,20 +945,21 @@ class PostConversationTurn:
             hint_level=plan.tutor_state.hint_level if mode == MODE_TEACH else None,
         )
 
-    def _debit(self, user_id: UUID, generated: GeneratedAnswer) -> None:
+    def _debit(self, user_id: UUID, kind: str, generated: GeneratedAnswer) -> None:
         """Debit the successful call's actual usage to the caller's UTC day.
 
         Runs after the port returned — a refused or failed call debits nothing — and
         before the turn persists, so the debit shares the turn's transaction and can
-        never outlive its record. An adapter that reports no usage (the deterministic
-        local one) debits 0, which writes nothing.
+        never outlive its record. The kind carries the free-tier counters (an ask
+        counts even when the adapter recorded no USD); a generation call without
+        reported usage writes nothing.
         """
         if self._budget is None:
             return
         self._budget.record(
             user_id,
             usd_micros=self._budget.usage_micros(generated.usage),
-            kind=KIND_GENERATION,
+            kind=kind,
         )
 
     def _turn_from_generated(

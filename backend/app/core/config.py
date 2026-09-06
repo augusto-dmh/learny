@@ -250,10 +250,14 @@ class Settings(BaseSettings):
     # provider call; ``price_*_usd_per_million_tokens`` is the operator's price
     # catalog a successful call's token usage is multiplied into when the day's
     # USD is debited. Micros (1 USD = 1_000_000) keep the accumulation integral.
+    # The free-tier integer caps sit beside the USD cap: Ask turns and Teach
+    # session starts per UTC day, whichever trips first.
     daily_ai_spend_usd: float = 0.5
     price_input_usd_per_million_tokens: float = 3.0
     price_output_usd_per_million_tokens: float = 15.0
     price_embed_usd_per_million_tokens: float = 0.13
+    daily_ask_cap: int = Field(default=8, ge=0)
+    daily_teach_start_cap: int = Field(default=1, ge=0)
 
     # Active recall — quiz deck generation (RFC-002 Cycle E). The provider SDK and
     # model name live only in the quiz adapter; these knobs stay LEARNY_-prefixed and

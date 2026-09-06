@@ -33,17 +33,24 @@ from app.application.identity import AuthorizeOwnership
 from app.application.quiz_qc import content_key
 from app.application.reviews import SubmitReview
 from app.domain.entities import (
+    ANSWERED,
     MODE_ANSWER,
+    MODE_TEACH,
+    TUTOR_OPENING_MESSAGE,
     AiSpendDay,
     AnswerCompleted,
     AnswerTextDelta,
     Conversation,
+    ConversationTurn,
+    CorpusSectionRecord,
     Evidence,
     GeneratedAnswer,
+    ParsedSection,
     QuizItem,
     QuizItemStatus,
     QuizItemType,
     SchedulingSnapshot,
+    SectionChunk,
     Source,
     TokenUsage,
     User,
@@ -88,12 +95,20 @@ def _ledger(db_conn: Connection) -> SqlAlchemyAiSpendDayRepository:
     return SqlAlchemyAiSpendDayRepository(db_conn)
 
 
-def _budget(db_conn: Connection, *, cap_micros: int = _CAP_MICROS) -> DailyBudget:
+def _budget(
+    db_conn: Connection,
+    *,
+    cap_micros: int = _CAP_MICROS,
+    ask_cap: int = 8,
+    teach_start_cap: int = 1,
+) -> DailyBudget:
     return DailyBudget(
         repo=_ledger(db_conn),
         clock=FakeClock(_NOW),
         daily_cap_micros=cap_micros,
         prices=_PRICES,
+        ask_daily_cap=ask_cap,
+        teach_start_daily_cap=teach_start_cap,
     )
 
 
@@ -345,8 +360,9 @@ def test_successful_ask_debits_the_usage_it_actually_used(db_conn: Connection) -
 
 
 def test_generation_without_reported_usage_debits_nothing(db_conn: Connection) -> None:
-    # DOOR-14: the deterministic local adapters report no usage, so the day's row is
-    # untouched — a 0-micros debit never mints a row.
+    # DOOR-14: the deterministic local adapters report no usage, so no USD is
+    # recorded — but the free-tier Ask counter still counts the call (DOOR-10),
+    # because the integer caps are call counts, not amounts.
     user, source, conversation = _seed_turn_world(db_conn, "budget-local@example.com")
     generation = _RecordingGeneration(_declining_answer(usage=None))
     retrieve = _StubRetrieve([_evidence(source.id)])
@@ -356,7 +372,9 @@ def test_generation_without_reported_usage_debits_nothing(db_conn: Connection) -
 
     service(user=user, conversation_id=conversation.id, message="Why?", mode=MODE_ANSWER)
 
-    assert _ledger(db_conn).get_for_day(user.id, _DAY) is None
+    row = _ledger(db_conn).get_for_day(user.id, _DAY)
+    assert row is not None
+    assert (row.usd_micros, row.ask_count, row.teach_starts) == (0, 1, 0)
     assert generation.calls == 1  # the call ran; it simply cost nothing recorded
 
 
@@ -536,6 +554,223 @@ def test_review_submit_leaves_the_ledger_untouched(db_conn: Connection) -> None:
     assert (row.usd_micros, row.ask_count, row.teach_starts) == (4321, 0, 0)
 
 
+# --- Ask and Teach daily integers (DOOR-10/11) -----------------------------------
+
+
+def _seed_corpus(db_conn: Connection, source_id: UUID) -> None:
+    chunk = SectionChunk(
+        index=0,
+        text="Grounded text.",
+        section_path=("Chapter 1",),
+        anchor="ch1.xhtml",
+        page_span=None,
+    )
+    record = CorpusSectionRecord(
+        section=ParsedSection(
+            position=0,
+            title="Chapter 1",
+            depth=0,
+            section_path=("Chapter 1",),
+            anchor="ch1.xhtml",
+            blocks=(),
+        ),
+        markdown="",
+        chunks=(chunk,),
+    )
+    SqlAlchemyCorpusRepository(db_conn).replace(
+        source_id,
+        title="A Book",
+        authors=("Author",),
+        language="en",
+        schema_version=1,
+        sections=(record,),
+    )
+
+
+def _seed_scoped_conversation(db_conn: Connection, source_id: UUID) -> Conversation:
+    """A chapter-scoped conversation with a live target — teachable."""
+    return SqlAlchemyConversationRepository(db_conn).add(
+        Conversation(
+            id=uuid4(),
+            source_id=source_id,
+            title="Chapter 1",
+            scope_anchors=("ch1.xhtml",),
+            include_notes=False,
+            target_anchor="ch1.xhtml",
+            target_section_path=("Chapter 1",),
+            target_title="Chapter 1",
+            tutor_phase=None,
+            hint_level=None,
+            tutor_check_text=None,
+            created_at=_NOW,
+            updated_at=_NOW,
+        )
+    )
+
+
+def _seed_prior_turn(
+    db_conn: Connection,
+    conversation_id: UUID,
+    *,
+    turn_index: int,
+    mode: str,
+    answer_status: str,
+) -> None:
+    SqlAlchemyConversationTurnRepository(db_conn).add(
+        ConversationTurn(
+            id=uuid4(),
+            conversation_id=conversation_id,
+            turn_index=turn_index,
+            message="earlier",
+            mode=mode,
+            answer_status=answer_status,
+            answer_text="earlier answer",
+            model="test-model",
+            evidence_count=0,
+            citations=(),
+            created_at=_NOW,
+        )
+    )
+
+
+def test_ninth_ask_is_refused_and_the_thread_survives(db_conn: Connection) -> None:
+    # DOOR-10: 8 Asks used, so the ninth refuses with the honest copy and zero
+    # provider work — and nothing about the conversation is taken away.
+    user, source, conversation = _seed_turn_world(db_conn, "ask-cap@example.com")
+    _ledger(db_conn).record(user.id, _DAY, asks=8)
+    generation = _RecordingGeneration(_declining_answer(usage=None))
+    retrieve = _StubRetrieve([_evidence(source.id)])
+    service = _turn_service(
+        db_conn, generation=generation, retrieve=retrieve, budget=_budget(db_conn)
+    )
+
+    with pytest.raises(DailyBudgetExhausted) as refused:
+        service(user=user, conversation_id=conversation.id, message="Nine?", mode=MODE_ANSWER)
+
+    assert EXHAUSTED_COPY in str(refused.value)
+    assert generation.calls == 0
+    turns = SqlAlchemyConversationTurnRepository(db_conn).list_for_conversation(conversation.id)
+    assert turns == []
+    row = _ledger(db_conn).get_for_day(user.id, _DAY)
+    assert row is not None and row.ask_count == 8
+
+
+def test_the_eighth_ask_still_runs_and_bumps_the_counter(db_conn: Connection) -> None:
+    # The cap counts *used* asks: seven used means the eighth runs — and its success
+    # is what writes the eighth count.
+    user, source, conversation = _seed_turn_world(db_conn, "ask-eighth@example.com")
+    _ledger(db_conn).record(user.id, _DAY, asks=7)
+    generation = _RecordingGeneration(_declining_answer(usage=None))
+    retrieve = _StubRetrieve([_evidence(source.id)])
+    service = _turn_service(
+        db_conn, generation=generation, retrieve=retrieve, budget=_budget(db_conn)
+    )
+
+    service(user=user, conversation_id=conversation.id, message="Eight?", mode=MODE_ANSWER)
+
+    row = _ledger(db_conn).get_for_day(user.id, _DAY)
+    assert row is not None and row.ask_count == 8
+
+
+def test_second_teach_start_same_day_is_refused(db_conn: Connection) -> None:
+    # DOOR-11: one Teach session start per UTC day. A teach turn at index 0 *is*
+    # the session start, so a second one refuses before any provider work.
+    user, source, _ = _seed_turn_world(db_conn, "teach-cap@example.com")
+    _seed_corpus(db_conn, source.id)
+    conversation = _seed_scoped_conversation(db_conn, source.id)
+    _ledger(db_conn).record(user.id, _DAY, teach_starts=1)
+    generation = _RecordingGeneration(_declining_answer(usage=None))
+    retrieve = _StubRetrieve([_evidence(source.id)])
+    service = _turn_service(
+        db_conn, generation=generation, retrieve=retrieve, budget=_budget(db_conn)
+    )
+
+    with pytest.raises(DailyBudgetExhausted):
+        service(
+            user=user,
+            conversation_id=conversation.id,
+            message=TUTOR_OPENING_MESSAGE,
+            mode=MODE_TEACH,
+        )
+
+    assert generation.calls == 0
+
+
+def test_first_teach_start_of_a_day_runs_and_counts(db_conn: Connection) -> None:
+    user, source, _ = _seed_turn_world(db_conn, "teach-first@example.com")
+    _seed_corpus(db_conn, source.id)
+    conversation = _seed_scoped_conversation(db_conn, source.id)
+    generation = _RecordingGeneration(_declining_answer(usage=None))
+    retrieve = _StubRetrieve([_evidence(source.id)])
+    service = _turn_service(
+        db_conn, generation=generation, retrieve=retrieve, budget=_budget(db_conn)
+    )
+
+    service(
+        user=user,
+        conversation_id=conversation.id,
+        message=TUTOR_OPENING_MESSAGE,
+        mode=MODE_TEACH,
+    )
+
+    row = _ledger(db_conn).get_for_day(user.id, _DAY)
+    assert row is not None and row.teach_starts == 1
+
+
+def test_teach_continuation_is_not_charged_as_a_session_start(db_conn: Connection) -> None:
+    # A teach turn past index 0 continues the session that already spent its one
+    # start: it rides the USD cap (kind ``generation``), never the starts counter.
+    user, source, _ = _seed_turn_world(db_conn, "teach-cont@example.com")
+    _seed_corpus(db_conn, source.id)
+    conversation = _seed_scoped_conversation(db_conn, source.id)
+    _seed_prior_turn(
+        db_conn, conversation.id, turn_index=0, mode=MODE_TEACH, answer_status=ANSWERED
+    )
+    _ledger(db_conn).record(user.id, _DAY, teach_starts=1)
+    generation = _RecordingGeneration(_declining_answer(usage=None))
+    retrieve = _StubRetrieve([_evidence(source.id)])
+    service = _turn_service(
+        db_conn, generation=generation, retrieve=retrieve, budget=_budget(db_conn)
+    )
+
+    service(user=user, conversation_id=conversation.id, message="Go on…", mode=MODE_TEACH)
+
+    row = _ledger(db_conn).get_for_day(user.id, _DAY)
+    assert row is not None
+    assert (row.teach_starts, row.ask_count) == (1, 0)
+    assert generation.calls == 1
+
+
+def test_ask_cap_does_not_gate_a_teach_start_and_vice_versa(db_conn: Connection) -> None:
+    # The meters are separate: a used-up Ask budget leaves the Teach start, and a
+    # spent Teach start leaves the asks — only the USD cap is shared.
+    user, source, conversation = _seed_turn_world(db_conn, "caps-separate@example.com")
+    _ledger(db_conn).record(user.id, _DAY, asks=8)
+    generation = _RecordingGeneration(_declining_answer(usage=None))
+    retrieve = _StubRetrieve([_evidence(source.id)])
+    service = _turn_service(
+        db_conn, generation=generation, retrieve=retrieve, budget=_budget(db_conn)
+    )
+
+    with pytest.raises(DailyBudgetExhausted):
+        service(user=user, conversation_id=conversation.id, message="Nine?", mode=MODE_ANSWER)
+
+    # Same exhausted-ask day, but a teach start is not an ask.
+    _seed_corpus(db_conn, source.id)
+    teach_conversation = _seed_scoped_conversation(db_conn, source.id)
+    service = _turn_service(
+        db_conn, generation=generation, retrieve=retrieve, budget=_budget(db_conn)
+    )
+    service(
+        user=user,
+        conversation_id=teach_conversation.id,
+        message=TUTOR_OPENING_MESSAGE,
+        mode=MODE_TEACH,
+    )
+    row = _ledger(db_conn).get_for_day(user.id, _DAY)
+    assert row is not None and row.teach_starts == 1
+
+
 # --- Route level: the honest 429 at the real wiring ------------------------------
 
 
@@ -629,6 +864,78 @@ def test_ask_turn_past_the_usd_cap_is_429_and_keeps_the_thread(
     )
     assert still_there.status_code == 200, still_there.text
     assert still_there.json()["turns"] == []
+
+
+def test_ninth_ask_at_the_route_is_429_and_keeps_the_conversation(
+    auth_client: TestClient, db_conn: Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # DOOR-10's independent test, at the real wiring: the ninth Ask of the UTC day
+    # is a 429 with the honest copy, the provider is never invoked, and the
+    # conversation row (with its history) remains.
+    user_id = _register(auth_client, "ask-cap-web@example.com")
+    csrf = _csrf(auth_client)
+    source_id = _seed_web_source(db_conn, user_id)
+    conversation = SqlAlchemyConversationRepository(db_conn).add(
+        Conversation(
+            id=uuid4(),
+            source_id=source_id,
+            title="A Book",
+            scope_anchors=(),
+            include_notes=False,
+            target_anchor=None,
+            target_section_path=None,
+            target_title=None,
+            tutor_phase=None,
+            hint_level=None,
+            tutor_check_text=None,
+            created_at=_NOW,
+            updated_at=_NOW,
+        )
+    )
+    SqlAlchemyConversationTurnRepository(db_conn).add(
+        ConversationTurn(
+            id=uuid4(),
+            conversation_id=conversation.id,
+            turn_index=0,
+            message="earlier",
+            mode=MODE_ANSWER,
+            answer_status=ANSWERED,
+            answer_text="earlier answer",
+            model="test-model",
+            evidence_count=0,
+            citations=(),
+            created_at=_NOW,
+        )
+    )
+    _ledger(db_conn).record(UUID(user_id), _DAY, asks=8)
+
+    class _NeverCalled:
+        model = "never"
+
+        def generate(self, **_kwargs):  # noqa: ANN003
+            raise AssertionError("provider must not be called past the ask cap")
+
+        def generate_stream(self, **_kwargs):  # noqa: ANN003
+            raise AssertionError("provider must not be called past the ask cap")
+
+    auth_client.app.dependency_overrides[get_generation] = lambda: _NeverCalled()
+    try:
+        resp = auth_client.post(
+            f"/api/conversations/{conversation.id}/turns",
+            json={"message": "Nine?", "mode": MODE_ANSWER},
+            headers={"X-CSRF-Token": csrf, "Origin": TEST_ORIGIN},
+        )
+    finally:
+        auth_client.app.dependency_overrides.pop(get_generation, None)
+
+    assert resp.status_code == 429, resp.text
+    assert "00:00 UTC" in resp.json()["detail"]
+    # The thread remains: its history is exactly what it was before the refusal.
+    still_there = auth_client.get(
+        f"/api/conversations/{conversation.id}", headers={"X-CSRF-Token": csrf}
+    )
+    assert still_there.status_code == 200, still_there.text
+    assert [t["turn_index"] for t in still_there.json()["turns"]] == [0]
 
 
 def test_deck_post_past_the_usd_cap_is_429_and_starts_nothing(

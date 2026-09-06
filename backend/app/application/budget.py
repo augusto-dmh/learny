@@ -74,20 +74,32 @@ class DailyBudget:
         clock: Clock,
         daily_cap_micros: int,
         prices: TokenPrices,
+        ask_daily_cap: int,
+        teach_start_daily_cap: int,
     ) -> None:
         self._repo = repo
         self._clock = clock
         self._daily_cap_micros = daily_cap_micros
         self._prices = prices
+        self._ask_daily_cap = ask_daily_cap
+        self._teach_start_daily_cap = teach_start_daily_cap
 
     def assert_generation(self, user_id: UUID, *, kind: str) -> None:
         """Refuse the call unless the caller's UTC day still has budget left.
 
-        ``kind`` names what is about to be paid for; every kind shares the USD cap
-        and (in this letter) the same honest copy.
+        The USD cap governs every kind; the free-tier integer caps govern their own
+        kinds (``ask``: so many turns a day, ``teach_start``: so many session
+        starts). Whichever cap trips first refuses with the same honest copy — a
+        learner is never told which meter was the one.
         """
         row = self._repo.get_for_day(user_id, self._clock.now().date())
-        if row is not None and row.usd_micros >= self._daily_cap_micros:
+        if row is None:
+            return
+        if row.usd_micros >= self._daily_cap_micros:
+            raise DailyBudgetExhausted(EXHAUSTED_COPY)
+        if kind == KIND_ASK and row.ask_count >= self._ask_daily_cap:
+            raise DailyBudgetExhausted(EXHAUSTED_COPY)
+        if kind == KIND_TEACH_START and row.teach_starts >= self._teach_start_daily_cap:
             raise DailyBudgetExhausted(EXHAUSTED_COPY)
 
     def usage_micros(self, usage: TokenUsage | None) -> int:
@@ -100,13 +112,21 @@ class DailyBudget:
         ) // 1_000_000
 
     def record(self, user_id: UUID, *, usd_micros: int, kind: str) -> None:
-        """Add a successful call's USD to the caller's current UTC day.
+        """Add a successful call's USD and its counter to the caller's current day.
 
-        ``kind`` names what was paid for; in this letter every kind lands in the same
-        daily USD total. A 0-micros debit writes nothing — an adapter that reports no
-        usage (the deterministic local ones) leaves the ledger untouched rather than
-        minting empty rows.
+        ``ask`` and ``teach_start`` count even when the call cost 0 recorded USD
+        (the deterministic local adapters) — the free-tier caps are call counts, not
+        amounts. A ``generation``/``embed`` call that reports no usage writes
+        nothing: an empty debit never mints a row.
         """
-        if usd_micros == 0:
+        asks = 1 if kind == KIND_ASK else 0
+        teach_starts = 1 if kind == KIND_TEACH_START else 0
+        if usd_micros == 0 and asks == 0 and teach_starts == 0:
             return
-        self._repo.record(user_id, self._clock.now().date(), usd_micros=usd_micros)
+        self._repo.record(
+            user_id,
+            self._clock.now().date(),
+            usd_micros=usd_micros,
+            asks=asks,
+            teach_starts=teach_starts,
+        )
