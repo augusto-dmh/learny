@@ -418,6 +418,24 @@ class FakeIngestionEnqueuer:
             raise self._error
 
 
+class FakeEmailSender:
+    """``EmailPort`` double: captures sent messages, or raises if configured.
+
+    Records each ``send`` call's ``to``/``subject``/``body`` so tests assert the
+    message payload by value; a configured ``error`` reproduces an SMTP
+    transport failure (register must still mint the session, DOOR-40).
+    """
+
+    def __init__(self, *, error: Exception | None = None) -> None:
+        self._error = error
+        self.sent: list[dict[str, str]] = []
+
+    def send(self, *, to: str, subject: str, body: str) -> None:
+        self.sent.append({"to": to, "subject": subject, "body": body})
+        if self._error is not None:
+            raise self._error
+
+
 class FakeQuizDeckEnqueuer:
     """``QuizDeckEnqueuer`` double: records enqueue calls, or raises if configured."""
 

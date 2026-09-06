@@ -344,6 +344,24 @@ class StoragePort(Protocol):
 
 
 @runtime_checkable
+class EmailPort(Protocol):
+    """Outbound mail port (RFC-0007 Cycle F; design §EmailPort).
+
+    The transport — stdlib SMTP in production, the log adapter where no host is
+    configured — lives only in the adapter; callers hand over a plain message
+    triple and never import a mail library or ESP SDK (AD-326). No HTML: bodies
+    are plain text this letter.
+
+    Failures raise: deciding what a failed send means (retry, log, swallow) is
+    the *caller's* policy, not the transport's.
+    """
+
+    def send(self, *, to: str, subject: str, body: str) -> None:
+        """Send one plain-text message to ``to``. Raises on transport failure."""
+        ...
+
+
+@runtime_checkable
 class ImageEncoderPort(Protocol):
     """Raster bytes → capped WebP, or ``None`` to drop the asset.
 

@@ -275,6 +275,17 @@ class Settings(BaseSettings):
     # true (see ``.env.production.example``).
     invite_required: bool = False
 
+    # Outbound mail (RFC-0007 Cycle F; AD-326). ``smtp_host`` is the adapter
+    # selector: set (with ``smtp_from``) → the stdlib SMTP adapter is the
+    # production default; empty (the default) → the log adapter, so local dev
+    # and the offline suite send nothing and open no socket. The two TTLs bound
+    # the single-use verify/reset token rows (``email_tokens.expires_at``).
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_from: str = ""
+    email_verify_ttl_minutes: int = Field(default=1440, ge=1)
+    email_reset_ttl_minutes: int = Field(default=60, ge=1)
+
     # Active recall — quiz deck generation (RFC-002 Cycle E). The provider SDK and
     # model name live only in the quiz adapter; these knobs stay LEARNY_-prefixed and
     # never hard-coded in application/domain code. ``quiz_model`` names the batched

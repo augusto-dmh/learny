@@ -93,6 +93,7 @@ from app.core.config import Settings, get_settings
 from app.core.tracing import bind_trace
 from app.domain.entities import Session, User
 from app.domain.ports import (
+    EmailPort,
     EmbeddingPort,
     GenerationPort,
     IngestionEnqueuer,
@@ -126,6 +127,7 @@ from app.infrastructure.db.repositories import (
     SqlAlchemyUserRepository,
 )
 from app.infrastructure.db.retrieval import SqlAlchemyRetrievalRepository
+from app.infrastructure.email import build_email_sender
 from app.infrastructure.embeddings import build_embedding_adapter
 from app.infrastructure.ingestion.markup import Bs4MarkupConverter
 from app.infrastructure.quiz import build_quiz_adapter
@@ -221,6 +223,20 @@ def build_budget(conn: Connection) -> DailyBudget:
         teach_start_daily_cap=settings.daily_teach_start_cap,
         ai_paused=settings.ai_kill_switch,
     )
+
+
+def get_email_sender() -> EmailPort:
+    """FastAPI dependency: the settings-selected email adapter (overridable in tests).
+
+    Built per request — deliberately not a cached or import-time singleton like
+    ``_storage`` — so the SMTP-vs-log choice reads the *current* settings (a
+    flipped ``LEARNY_SMTP_HOST`` needs no restart) and tests override it with a
+    capturing fake via ``dependency_overrides[get_email_sender]``.
+    """
+    return build_email_sender(get_settings())
+
+
+EmailSender = Annotated[EmailPort, Depends(get_email_sender)]
 
 
 def get_register_user(conn: DbConnection) -> RegisterUser:
