@@ -149,8 +149,8 @@ Four sequential phases, one Opus worker each. No Haiku. No Turnstile. Verifier a
 
 **Done when**:
 
-- [ ] Two users behind one IP both complete an Ask under the per-user cap
-- [ ] Exceeding returns 429 with Retry-After
+- [x] Two users behind one IP both complete an Ask under the per-user cap
+- [x] Exceeding returns 429 with Retry-After
 
 **Tests**: integration
 **Gate**: full
@@ -175,8 +175,8 @@ Four sequential phases, one Opus worker each. No Haiku. No Turnstile. Verifier a
 
 **Done when**:
 
-- [ ] Two increments of the same day accumulate
-- [ ] Downgrade drops the table
+- [x] Two increments of the same day accumulate
+- [x] Downgrade drops the table
 
 **Tests**: integration
 **Gate**: full
@@ -199,9 +199,9 @@ Four sequential phases, one Opus worker each. No Haiku. No Turnstile. Verifier a
 
 **Done when**:
 
-- [ ] Crossing the USD cap returns 429 and skips the provider
-- [ ] A successful call increases `usd_micros`
-- [ ] Review submit does not increase spend
+- [x] Crossing the USD cap returns 429 and skips the provider
+- [x] A successful call increases `usd_micros`
+- [x] Review submit does not increase spend
 
 **Tests**: integration
 **Gate**: quick
@@ -224,8 +224,8 @@ Four sequential phases, one Opus worker each. No Haiku. No Turnstile. Verifier a
 
 **Done when**:
 
-- [ ] The ninth Ask is 429 with remaining=0 copy
-- [ ] A second Teach start the same UTC day is 429
+- [x] The ninth Ask is 429 with remaining=0 copy
+- [x] A second Teach start the same UTC day is 429
 
 **Tests**: integration
 **Gate**: quick
@@ -248,8 +248,8 @@ Four sequential phases, one Opus worker each. No Haiku. No Turnstile. Verifier a
 
 **Done when**:
 
-- [ ] Switch on: 503, zero provider calls
-- [ ] Review submit still 200
+- [x] Switch on: 503, zero provider calls
+- [x] Review submit still 200
 
 **Tests**: integration
 **Gate**: quick
@@ -272,10 +272,10 @@ Four sequential phases, one Opus worker each. No Haiku. No Turnstile. Verifier a
 
 **Done when**:
 
-- [ ] Third owned book is 403
-- [ ] Sample plus two owned books still uploads
-- [ ] Oversized stored sum is 413
-- [ ] Second concurrent ingest is 409
+- [x] Third owned book is 403
+- [x] Sample plus two owned books still uploads
+- [x] Oversized stored sum is 413
+- [x] Second concurrent ingest is 409
 
 **Tests**: integration
 **Gate**: full
@@ -300,9 +300,9 @@ Four sequential phases, one Opus worker each. No Haiku. No Turnstile. Verifier a
 
 **Done when**:
 
-- [ ] Missing/bad/exhausted/expired code is 403 when the flag is on
-- [ ] Valid code returns 201 with session cookies
-- [ ] Flag off still registers without a code
+- [x] Missing/bad/exhausted/expired code is 403 when the flag is on
+- [x] Valid code returns 201 with session cookies
+- [x] Flag off still registers without a code
 
 **Tests**: integration
 **Gate**: full
@@ -325,10 +325,10 @@ Four sequential phases, one Opus worker each. No Haiku. No Turnstile. Verifier a
 
 **Done when**:
 
-- [ ] A listed disposable domain is 422 with the generic email copy
-- [ ] Missing ToS is 422
-- [ ] Register form posts invite + accepted_tos
-- [ ] No Turnstile widget or token field
+- [x] A listed disposable domain is 422 with the generic email copy
+- [x] Missing ToS is 422
+- [x] Register form posts invite + accepted_tos
+- [x] No Turnstile widget or token field
 
 **Tests**: integration
 **Gate**: full
@@ -351,9 +351,9 @@ Four sequential phases, one Opus worker each. No Haiku. No Turnstile. Verifier a
 
 **Done when**:
 
-- [ ] Each route renders a unique title and body
-- [ ] Copyright includes the configured contact address
-- [ ] Privacy names the two AI subprocessors and does not claim ZDR
+- [x] Each route renders a unique title and body
+- [x] Copyright includes the configured contact address
+- [x] Privacy names the two AI subprocessors and does not claim ZDR
 
 **Tests**: unit
 **Gate**: quick
@@ -376,8 +376,8 @@ Four sequential phases, one Opus worker each. No Haiku. No Turnstile. Verifier a
 
 **Done when**:
 
-- [ ] A put then delete then get raises not-found
-- [ ] A storage fault is `StorageUnavailable`, not a bare boto exception
+- [x] A put then delete then get raises not-found
+- [x] A storage fault is `StorageUnavailable`, not a bare boto exception
 
 **Tests**: integration
 **Gate**: quick
@@ -400,9 +400,9 @@ Four sequential phases, one Opus worker each. No Haiku. No Turnstile. Verifier a
 
 **Done when**:
 
-- [ ] After delete, login 401 and objects gone
-- [ ] Injected storage failure leaves the user and returns 502
-- [ ] Sample source still exists
+- [x] After delete, login 401 and objects gone
+- [x] Injected storage failure leaves the user and returns 502
+- [x] Sample source still exists
 
 **Tests**: integration
 **Gate**: full
@@ -427,8 +427,8 @@ Four sequential phases, one Opus worker each. No Haiku. No Turnstile. Verifier a
 
 **Done when**:
 
-- [ ] SMTP adapter is the production default when host is set
-- [ ] Tests capture messages in memory
+- [x] SMTP adapter is the production default when host is set
+- [x] Tests capture messages in memory
 
 **Tests**: unit
 **Gate**: quick
@@ -451,9 +451,9 @@ Four sequential phases, one Opus worker each. No Haiku. No Turnstile. Verifier a
 
 **Done when**:
 
-- [ ] Invited register 201 even if SMTP raises
-- [ ] Confirm with the raw token marks verified
-- [ ] Unknown reset email is 204 and inbox empty
+- [x] Invited register 201 even if SMTP raises
+- [x] Confirm with the raw token marks verified
+- [x] Unknown reset email is 204 and inbox empty
 
 **Tests**: integration
 **Gate**: full
