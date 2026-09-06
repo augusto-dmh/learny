@@ -258,6 +258,10 @@ class Settings(BaseSettings):
     price_embed_usd_per_million_tokens: float = 0.13
     daily_ask_cap: int = Field(default=8, ge=0)
     daily_teach_start_cap: int = Field(default=1, ge=0)
+    # The operator pause (DOOR-12): while true, every generation surface — and the
+    # embedding-producing ingest step — refuses before any provider SDK is touched,
+    # with the honest pause copy. Reads and review grading are untouched.
+    ai_kill_switch: bool = False
 
     # Active recall — quiz deck generation (RFC-002 Cycle E). The provider SDK and
     # model name live only in the quiz adapter; these knobs stay LEARNY_-prefixed and

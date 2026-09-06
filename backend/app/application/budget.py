@@ -17,7 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from uuid import UUID
 
-from app.application.errors import DailyBudgetExhausted
+from app.application.errors import AiPaused, DailyBudgetExhausted
 from app.domain.entities import TokenUsage
 from app.domain.ports import AiSpendDayRepository, Clock
 
@@ -40,6 +40,10 @@ EXHAUSTED_COPY = (
     "You've reached today's AI limit. Your library and reviews still work, "
     "and the limit resets at 00:00 UTC."
 )
+
+#: The honest operator-pause copy (DOOR-12): the AI is off on purpose, and the
+#: parts of the product that never call a provider are still fine.
+PAUSED_COPY = "AI is paused right now. Your library and reviews still work."
 
 
 def usd_to_micros(usd: float) -> int:
@@ -76,6 +80,7 @@ class DailyBudget:
         prices: TokenPrices,
         ask_daily_cap: int,
         teach_start_daily_cap: int,
+        ai_paused: bool = False,
     ) -> None:
         self._repo = repo
         self._clock = clock
@@ -83,15 +88,20 @@ class DailyBudget:
         self._prices = prices
         self._ask_daily_cap = ask_daily_cap
         self._teach_start_daily_cap = teach_start_daily_cap
+        self._ai_paused = ai_paused
 
     def assert_generation(self, user_id: UUID, *, kind: str) -> None:
-        """Refuse the call unless the caller's UTC day still has budget left.
+        """Refuse the call unless the operator's pause and the caller's day allow it.
 
-        The USD cap governs every kind; the free-tier integer caps govern their own
-        kinds (``ask``: so many turns a day, ``teach_start``: so many session
-        starts). Whichever cap trips first refuses with the same honest copy — a
-        learner is never told which meter was the one.
+        The kill switch short-circuits *before* the ledger is read: a paused
+        process refuses everything with the pause copy, whatever the caller has
+        spent. Then the USD cap governs every kind and the free-tier integer caps
+        govern their own kinds (``ask``: so many turns a day, ``teach_start``: so
+        many session starts). Whichever cap trips first refuses with the same
+        honest copy — a learner is never told which meter was the one.
         """
+        if self._ai_paused:
+            raise AiPaused(PAUSED_COPY)
         row = self._repo.get_for_day(user_id, self._clock.now().date())
         if row is None:
             return

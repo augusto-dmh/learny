@@ -24,11 +24,13 @@ from sqlalchemy import Connection, text
 
 from app.application.budget import (
     EXHAUSTED_COPY,
+    KIND_ASK,
+    PAUSED_COPY,
     DailyBudget,
     TokenPrices,
 )
 from app.application.conversations import PostConversationTurn
-from app.application.errors import DailyBudgetExhausted
+from app.application.errors import AiPaused, DailyBudgetExhausted
 from app.application.identity import AuthorizeOwnership
 from app.application.quiz_qc import content_key
 from app.application.reviews import SubmitReview
@@ -40,11 +42,13 @@ from app.domain.entities import (
     AiSpendDay,
     AnswerCompleted,
     AnswerTextDelta,
+    ChunkToEmbed,
     Conversation,
     ConversationTurn,
     CorpusSectionRecord,
     Evidence,
     GeneratedAnswer,
+    IngestionJob,
     ParsedSection,
     QuizItem,
     QuizItemStatus,
@@ -68,7 +72,13 @@ from app.infrastructure.db.repositories import (
 from app.infrastructure.scheduling import FsrsSchedulingAdapter
 from app.infrastructure.web.dependencies import get_generation
 from tests.conftest import TEST_ORIGIN, TEST_PASSWORD, requires_db
-from tests.fakes import FakeClock
+from tests.fakes import (
+    FakeAiSpendDayRepository,
+    FakeClock,
+    FakeEmbeddingIndexRepository,
+    FakeEmbeddingPort,
+    FakeIngestionEventRepository,
+)
 
 pytestmark = requires_db
 
@@ -961,3 +971,299 @@ def test_deck_post_past_the_usd_cap_is_429_and_starts_nothing(
 
     rows = db_conn.execute(select(quiz_generation_jobs)).all()
     assert rows == []
+
+
+# --- Operator kill switch (DOOR-12/13) -------------------------------------------
+
+
+def test_kill_switch_refuses_the_turn_before_the_provider(db_conn: Connection) -> None:
+    user, source, conversation = _seed_turn_world(db_conn, "pause-turn@example.com")
+    generation = _RecordingGeneration(_declining_answer(usage=None))
+    retrieve = _StubRetrieve([_evidence(source.id)])
+    paused = DailyBudget(
+        repo=_ledger(db_conn),
+        clock=FakeClock(_NOW),
+        daily_cap_micros=_CAP_MICROS,
+        prices=_PRICES,
+        ask_daily_cap=8,
+        teach_start_daily_cap=1,
+        ai_paused=True,
+    )
+    guarded = _turn_service(db_conn, generation=generation, retrieve=retrieve, budget=paused)
+
+    with pytest.raises(AiPaused) as paused_exc:
+        guarded(user=user, conversation_id=conversation.id, message="Why?", mode=MODE_ANSWER)
+
+    assert PAUSED_COPY in str(paused_exc.value)
+    assert generation.calls == 0
+    # The pause is checked before the ledger: even a fresh day refuses.
+    assert _ledger(db_conn).get_for_day(user.id, _DAY) is None
+
+
+def test_kill_switch_beats_the_budget_ledger(db_conn: Connection) -> None:
+    # The operator's pause wins whichever way the meters read — a paused process
+    # answers with the pause copy, never a spend figure.
+    paused = DailyBudget(
+        repo=FakeAiSpendDayRepository(),
+        clock=FakeClock(_NOW),
+        daily_cap_micros=0,
+        prices=_PRICES,
+        ask_daily_cap=8,
+        teach_start_daily_cap=1,
+        ai_paused=True,
+    )
+    with pytest.raises(AiPaused):
+        paused.assert_generation(uuid4(), kind=KIND_ASK)
+
+
+def test_kill_switch_stops_the_embed_step_before_the_provider(db_conn: Connection) -> None:
+    # DOOR-12's embedding-producing ingest step: with the switch on, the embed step
+    # raises before the embedding port is touched — no SDK, no batches.
+    from app.application.retrieval import EmbedCorpus
+
+    user = _add_user(db_conn, "pause-embed@example.com")
+    now = datetime.now(UTC)
+    source = Source(
+        id=uuid4(),
+        user_id=user.id,
+        title="A Book",
+        filename="a-book.epub",
+        content_type="application/epub+zip",
+        byte_size=1024,
+        checksum="d" * 64,
+        object_key=f"sources/{user.id}/{uuid4()}.epub",
+        status="processing",
+        created_at=now,
+        updated_at=now,
+    )
+    job = IngestionJob(
+        id=uuid4(),
+        source_id=source.id,
+        status="running",
+        attempts=1,
+        last_error=None,
+        created_at=now,
+        updated_at=now,
+    )
+    embeddings = FakeEmbeddingPort()
+    chunks = ChunkToEmbed(id=uuid4(), text="some text")
+    paused = DailyBudget(
+        repo=FakeAiSpendDayRepository(),
+        clock=FakeClock(_NOW),
+        daily_cap_micros=_CAP_MICROS,
+        prices=_PRICES,
+        ask_daily_cap=8,
+        teach_start_daily_cap=1,
+        ai_paused=True,
+    )
+    embed = EmbedCorpus(
+        embeddings=embeddings,
+        index=FakeEmbeddingIndexRepository({source.id: [chunks]}),
+        events=FakeIngestionEventRepository(),
+        clock=FakeClock(_NOW),
+        ids=uuid4,
+        batch_size=8,
+        budget=paused,
+    )
+
+    with pytest.raises(AiPaused):
+        embed(source=source, job=job)
+
+    assert embeddings.document_batches == []
+
+
+def test_embed_step_runs_when_the_switch_is_off(db_conn: Connection) -> None:
+    # The budget guard composes in without changing the unpaused behaviour: chunks
+    # still embed, vectors still persist.
+    from app.application.retrieval import EmbedCorpus
+
+    user = _add_user(db_conn, "unpaused-embed@example.com")
+    now = datetime.now(UTC)
+    source = Source(
+        id=uuid4(),
+        user_id=user.id,
+        title="A Book",
+        filename="a-book.epub",
+        content_type="application/epub+zip",
+        byte_size=1024,
+        checksum="d" * 64,
+        object_key=f"sources/{user.id}/{uuid4()}.epub",
+        status="processing",
+        created_at=now,
+        updated_at=now,
+    )
+    job = IngestionJob(
+        id=uuid4(),
+        source_id=source.id,
+        status="running",
+        attempts=1,
+        last_error=None,
+        created_at=now,
+        updated_at=now,
+    )
+    embeddings = FakeEmbeddingPort()
+    chunk = ChunkToEmbed(id=uuid4(), text="some text")
+    index = FakeEmbeddingIndexRepository({source.id: [chunk]})
+    embed = EmbedCorpus(
+        embeddings=embeddings,
+        index=index,
+        events=FakeIngestionEventRepository(),
+        clock=FakeClock(_NOW),
+        ids=uuid4,
+        batch_size=8,
+        budget=_budget(db_conn),
+    )
+
+    embed(source=source, job=job)
+
+    assert embeddings.document_batches == [["some text"]]
+    assert chunk.id in index.persisted
+
+
+def _pause_switch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Turn the kill switch on for this request cycle (env + fresh settings)."""
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("LEARNY_AI_KILL_SWITCH", "true")
+    get_settings.cache_clear()
+
+
+def test_kill_switch_ask_turn_is_503_with_the_pause_copy(
+    auth_client: TestClient, db_conn: Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    user_id = _register(auth_client, "pause-web@example.com")
+    csrf = _csrf(auth_client)
+    source_id = _seed_web_source(db_conn, user_id)
+    conversation = SqlAlchemyConversationRepository(db_conn).add(
+        Conversation(
+            id=uuid4(),
+            source_id=source_id,
+            title="A Book",
+            scope_anchors=(),
+            include_notes=False,
+            target_anchor=None,
+            target_section_path=None,
+            target_title=None,
+            tutor_phase=None,
+            hint_level=None,
+            tutor_check_text=None,
+            created_at=_NOW,
+            updated_at=_NOW,
+        )
+    )
+    _pause_switch(monkeypatch)
+
+    class _NeverCalled:
+        model = "never"
+
+        def generate(self, **_kwargs):  # noqa: ANN003
+            raise AssertionError("provider must not be called while paused")
+
+        def generate_stream(self, **_kwargs):  # noqa: ANN003
+            raise AssertionError("provider must not be called while paused")
+
+    auth_client.app.dependency_overrides[get_generation] = lambda: _NeverCalled()
+    try:
+        resp = auth_client.post(
+            f"/api/conversations/{conversation.id}/turns",
+            json={"message": "Why?", "mode": MODE_ANSWER},
+            headers={"X-CSRF-Token": csrf, "Origin": TEST_ORIGIN},
+        )
+    finally:
+        auth_client.app.dependency_overrides.pop(get_generation, None)
+
+    assert resp.status_code == 503, resp.text
+    assert "paused" in resp.json()["detail"]
+    assert "still work" in resp.json()["detail"]
+
+
+def test_kill_switch_deck_post_is_503_and_starts_nothing(
+    quiz_client: TestClient, db_conn: Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    user_id = _register(quiz_client, "pause-deck@example.com")
+    csrf = _csrf(quiz_client)
+    source_id = _seed_web_source(db_conn, user_id)
+    _pause_switch(monkeypatch)
+
+    resp = quiz_client.post(
+        f"/api/sources/{source_id}/quiz/deck",
+        headers={"X-CSRF-Token": csrf, "Origin": TEST_ORIGIN},
+    )
+
+    assert resp.status_code == 503, resp.text
+    assert "paused" in resp.json()["detail"]
+    assert quiz_client.app.state.quiz_enqueuer.calls == []
+    from sqlalchemy import select
+
+    from app.infrastructure.db.metadata import quiz_generation_jobs
+
+    assert db_conn.execute(select(quiz_generation_jobs)).all() == []
+
+
+def test_kill_switch_review_submit_still_grades(
+    quiz_client: TestClient, db_conn: Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # DOOR-13's independent test: reviews never touch a provider, so the pause
+    # never reaches them — a card still grades to 200 under the switch.
+    from app.domain.entities import (
+        QuizItem,
+        QuizItemStatus,
+        QuizItemType,
+        SchedulingSnapshot,
+    )
+
+    user_id = _register(quiz_client, "pause-review@example.com")
+    csrf = _csrf(quiz_client)
+    source_id = _seed_web_source(db_conn, user_id)
+    now = datetime.now(UTC)
+    question, answer = "What is the powerhouse of the cell?", "Mitochondria"
+    item = QuizItem(
+        id=uuid4(),
+        source_id=source_id,
+        item_type=QuizItemType.FREE_RECALL,
+        question=question,
+        answer=answer,
+        section_path=("Chapter 1",),
+        anchor="ch1.xhtml",
+        source_excerpt="powerhouse",
+        chunk_hash="c" * 64,
+        content_key=content_key(QuizItemType.FREE_RECALL, question, answer),
+        status=QuizItemStatus.ACTIVE,
+        generation_meta={},
+        created_at=now,
+        updated_at=now,
+    )
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    repo.upsert(item, embedding=None)
+    repo.create_scheduling(
+        item.id,
+        SchedulingSnapshot(
+            state=1,
+            step=0,
+            stability=None,
+            difficulty=None,
+            due=now - timedelta(hours=1),
+            last_review=None,
+        ),
+    )
+    _pause_switch(monkeypatch)
+
+    resp = quiz_client.post(
+        f"/api/quiz-items/{item.id}/reviews",
+        json={"rating": 3},
+        headers={"X-CSRF-Token": csrf, "Origin": TEST_ORIGIN},
+    )
+
+    assert resp.status_code == 200, resp.text
+
+
+def test_kill_switch_leaves_reads_working(
+    auth_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Spec edge: while paused, reads (the library) still succeed.
+    _register(auth_client, "pause-reads@example.com")
+    _pause_switch(monkeypatch)
+
+    resp = auth_client.get("/api/sources")
+
+    assert resp.status_code == 200, resp.text

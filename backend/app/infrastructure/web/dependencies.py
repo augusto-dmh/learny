@@ -216,6 +216,7 @@ def build_budget(conn: Connection) -> DailyBudget:
         ),
         ask_daily_cap=settings.daily_ask_cap,
         teach_start_daily_cap=settings.daily_teach_start_cap,
+        ai_paused=settings.ai_kill_switch,
     )
 
 

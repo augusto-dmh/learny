@@ -22,6 +22,7 @@ from fastapi.responses import JSONResponse
 
 from app.application.errors import (
     ActiveIngestionExists,
+    AiPaused,
     AnswerGenerationFailed,
     CardAlreadyExists,
     CardNotEditable,
@@ -108,6 +109,9 @@ _STATUS_BY_ERROR = {
     # in the message, and deliberately no ``Retry-After`` — the reset signal is the
     # 00:00 UTC boundary in the copy, not a limiter-style seconds hint.
     DailyBudgetExhausted: status.HTTP_429_TOO_MANY_REQUESTS,
+    # The operator kill switch: 503 with the honest pause copy; reads and reviews
+    # are untouched and never route through this error.
+    AiPaused: status.HTTP_503_SERVICE_UNAVAILABLE,
 }
 
 # An invalid upload maps to a status keyed by its ``kind`` (design §Error Handling):

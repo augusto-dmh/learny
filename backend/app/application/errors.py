@@ -302,3 +302,13 @@ class DailyBudgetExhausted(Exception):
     this to 429 without a ``Retry-After``: the honest signal is the reset time in
     the copy, not a per-second hint borrowed from the rate limiter.
     """
+
+
+class AiPaused(Exception):
+    """The operator's generation kill switch is on (DOOR-12).
+
+    Raised by the budget assertion before any provider SDK is touched, so a paused
+    Ask/Teach turn, deck POST, or embedding-producing ingest step cannot spend
+    anything. The message is the honest pause copy: the AI is off, the library and
+    reviews are not. The web layer maps this to 503.
+    """

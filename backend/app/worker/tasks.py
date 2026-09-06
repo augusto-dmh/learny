@@ -181,6 +181,7 @@ def _build_embed_step(conn: Connection) -> IngestionStep:
             clock=_clock,
             ids=uuid4,
             batch_size=get_settings().embedding_batch_size,
+            budget=_build_budget(conn),
         )
     )
 
@@ -497,6 +498,7 @@ def _build_budget(conn: Connection) -> DailyBudget:
         ),
         ask_daily_cap=settings.daily_ask_cap,
         teach_start_daily_cap=settings.daily_teach_start_cap,
+        ai_paused=settings.ai_kill_switch,
     )
 
 
