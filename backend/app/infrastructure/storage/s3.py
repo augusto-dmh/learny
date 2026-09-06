@@ -95,3 +95,12 @@ class S3StorageAdapter:
         except BotoCoreError as exc:
             raise StorageUnavailable(key) from exc
         return response["Body"].read()
+
+    def delete_object(self, key: str) -> None:
+        """Remove the object at ``key``; a missing key is already gone (S3's
+        DELETE is idempotent), so only genuine faults surface here."""
+        self._ensure_bucket()
+        try:
+            self._client.delete_object(Bucket=self._bucket, Key=key)
+        except (ClientError, BotoCoreError) as exc:
+            raise StorageUnavailable(key) from exc

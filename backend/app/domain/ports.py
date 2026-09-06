@@ -334,6 +334,10 @@ class StoragePort(Protocol):
         """Return the bytes stored under ``key``. Raises if absent."""
         ...
 
+    def delete_object(self, key: str) -> None:
+        """Remove the object at ``key``. A missing key is already gone: success."""
+        ...
+
 
 @runtime_checkable
 class ImageEncoderPort(Protocol):

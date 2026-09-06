@@ -257,11 +257,12 @@ class FakeActivationEventRepository:
 
 
 class FakeStorage:
-    """In-memory ``StoragePort``: records puts so tests can assert key/bytes."""
+    """In-memory ``StoragePort``: records puts/deletes so tests can assert keys."""
 
     def __init__(self) -> None:
         self.objects: dict[str, bytes] = {}
         self.put_calls: list[tuple[str, str]] = []
+        self.deleted_keys: list[str] = []
 
     def put_object(self, key: str, data: bytes, *, content_type: str) -> None:
         self.put_calls.append((key, content_type))
@@ -269,6 +270,11 @@ class FakeStorage:
 
     def get_object(self, key: str) -> bytes:
         return self.objects[key]
+
+    def delete_object(self, key: str) -> None:
+        # Idempotent like the real S3 DELETE: a missing key is not an error.
+        self.deleted_keys.append(key)
+        self.objects.pop(key, None)
 
 
 class FakeImageEncoder:
@@ -284,12 +290,15 @@ class FakeImageEncoder:
 
 
 class FailingStorage:
-    """``StoragePort`` whose ``put_object`` always fails (storage-down path)."""
+    """``StoragePort`` whose every call fails (storage-down path)."""
 
     def put_object(self, key: str, data: bytes, *, content_type: str) -> None:
         raise RuntimeError("storage down")
 
     def get_object(self, key: str) -> bytes:
+        raise RuntimeError("storage down")
+
+    def delete_object(self, key: str) -> None:
         raise RuntimeError("storage down")
 
 
@@ -300,6 +309,9 @@ class UnavailableStorage:
         raise StorageUnavailable("storage down")
 
     def get_object(self, key: str) -> bytes:
+        raise StorageUnavailable("storage down")
+
+    def delete_object(self, key: str) -> None:
         raise StorageUnavailable("storage down")
 
 
