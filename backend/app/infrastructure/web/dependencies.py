@@ -52,6 +52,7 @@ from app.application.identity import (
     AuthenticateUser,
     AuthorizeOwnership,
     CurrentUser,
+    DeleteAccount,
     Logout,
     RegisterUser,
 )
@@ -258,6 +259,16 @@ def get_authenticate_user(conn: DbConnection) -> AuthenticateUser:
 
 def get_logout(conn: DbConnection) -> Logout:
     return Logout(sessions=SqlAlchemySessionRepository(conn))
+
+
+def get_delete_account(conn: DbConnection, storage: Storage) -> DeleteAccount:
+    """Wire ``DeleteAccount`` on the request transaction + process storage."""
+    return DeleteAccount(
+        users=SqlAlchemyUserRepository(conn),
+        sources=SqlAlchemySourceRepository(conn),
+        corpus=SqlAlchemyCorpusRepository(conn),
+        storage=storage,
+    )
 
 
 def get_current_user_service(conn: DbConnection) -> CurrentUser:

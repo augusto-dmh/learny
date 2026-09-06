@@ -112,6 +112,9 @@ class FakeUserRepository:
                 return user
         return None
 
+    def delete(self, user_id: UUID) -> None:
+        self._by_id.pop(user_id, None)
+
 
 class FakeCredentialRepository:
     def __init__(self) -> None:
@@ -543,6 +546,10 @@ class FakeCorpusRepository:
     def get_section(self, source_id: UUID, anchor: str) -> SectionContent | None:
         sections = self._sections_by_source.get(source_id, ())
         return next((s for s in sections if s.anchor == anchor), None)
+
+    def list_section_markdown(self, source_id: UUID) -> list[str]:
+        records = self._records_by_source.get(source_id, ())
+        return [record.markdown for record in records]
 
     def get_chapter_index(self, source_id: UUID) -> tuple[ChapterIndexRow, ...] | None:
         if source_id not in self._records_by_source:

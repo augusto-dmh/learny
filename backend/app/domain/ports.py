@@ -135,6 +135,10 @@ class UserRepository(Protocol):
         """Return the user with ``email`` (case-insensitive), or ``None``."""
         ...
 
+    def delete(self, user_id: UUID) -> None:
+        """Remove the user row; child rows go with it (FK CASCADE)."""
+        ...
+
 
 @runtime_checkable
 class CredentialRepository(Protocol):
@@ -423,6 +427,15 @@ class CorpusRepository(Protocol):
 
     def get_section(self, source_id: UUID, anchor: str) -> SectionContent | None:
         """Return ``source_id``'s section at ``anchor``, or ``None`` if none matches."""
+        ...
+
+    def list_section_markdown(self, source_id: UUID) -> Sequence[str]:
+        """Return every section's derived Markdown for ``source_id``, in order.
+
+        The application-side source of truth for enumerating a source's media
+        objects (the digests embedded in ``/api/sources/{id}/media/{digest}``
+        references) without ever listing the bucket.
+        """
         ...
 
     def get_chapter_index(self, source_id: UUID) -> tuple[ChapterIndexRow, ...] | None:

@@ -7,13 +7,14 @@ authorize allow/deny primitive (FR-AUTH-008).
 
 from __future__ import annotations
 
-from datetime import timedelta
-from uuid import uuid4
+from datetime import UTC, datetime, timedelta
+from uuid import UUID, uuid4
 
 import pytest
 
 from app.application.activation import RecordActivation
 from app.application.errors import (
+    AccountDeleteFailed,
     EmailAlreadyExists,
     InvalidCredentials,
     InviteRequired,
@@ -26,20 +27,25 @@ from app.application.identity import (
     AuthenticateUser,
     AuthorizeOwnership,
     CurrentUser,
+    DeleteAccount,
     Logout,
     RegisterUser,
 )
 from app.application.validation import SAMPLE_OPERATOR_EMAIL
-from app.domain.entities import User
+from app.domain.entities import CorpusSectionRecord, ParsedSection, Source, User
 from tests.fakes import (
     FakeActivationEventRepository,
     FakeClock,
+    FakeCorpusRepository,
     FakeCredentialRepository,
     FakeInviteRepository,
     FakePasswordHasher,
     FakeSessionRepository,
+    FakeSourceRepository,
+    FakeStorage,
     FakeUserRepository,
     SequentialTokenGenerator,
+    UnavailableStorage,
 )
 
 VALID_PASSWORD = "correct horse battery"  # >= 12 chars
@@ -360,3 +366,189 @@ def test_authorize_denies_non_owner() -> None:
     with pytest.raises(NotAuthorized):
         authorize(user=user, owner_id=other_owner)
     assert authorize.is_owner(user=user, owner_id=other_owner) is False
+
+
+# ---- DeleteAccount (DOOR-30..33) -------------------------------------------
+
+
+def _source(user_id: UUID, *, is_sample: bool = False) -> Source:
+    now = datetime(2026, 9, 6, tzinfo=UTC)
+    return Source(
+        id=uuid4(),
+        user_id=user_id,
+        title="A Book",
+        filename="a.epub",
+        content_type="application/epub+zip",
+        byte_size=10,
+        checksum="a" * 64,
+        object_key=f"sources/{user_id}/{uuid4()}.epub",
+        status="ready",
+        created_at=now,
+        updated_at=now,
+        is_sample=is_sample,
+    )
+
+
+def _corpus_with_media(source: Source, digests: list[str]) -> FakeCorpusRepository:
+    """A corpus whose single section references the given media digests."""
+    markdown = " ".join(f"![fig](/api/sources/{source.id}/media/{digest})" for digest in digests)
+    corpus = FakeCorpusRepository()
+    corpus.replace(
+        source.id,
+        title=None,
+        authors=[],
+        language=None,
+        schema_version=1,
+        sections=(
+            CorpusSectionRecord(
+                section=ParsedSection(
+                    position=0,
+                    title="S",
+                    depth=0,
+                    section_path=("S",),
+                    anchor="s.xhtml",
+                    blocks=(),
+                ),
+                markdown=markdown,
+                chunks=(),
+            ),
+        ),
+    )
+    return corpus
+
+
+def _delete_account(ports, *, sources, corpus, storage):  # noqa: ANN001
+    return DeleteAccount(users=ports["users"], sources=sources, corpus=corpus, storage=storage)
+
+
+def test_delete_account_removes_owned_objects_then_the_user(ports) -> None:
+    result = _register(ports)
+    sources = FakeSourceRepository()
+    source = _source(result.user.id)
+    sources.add(source)
+    storage = FakeStorage()
+    storage.put_object(source.object_key, b"book-bytes", content_type="application/epub+zip")
+
+    _delete_account(ports, sources=sources, corpus=FakeCorpusRepository(), storage=storage)(
+        user=result.user
+    )
+
+    # The user row is gone. (Child-row cascades are Postgres semantics, covered
+    # against the real DB at the web layer — DOOR-31.)
+    assert ports["users"].get_by_id(result.user.id) is None
+    # The derived object key was deleted from storage.
+    assert source.object_key not in storage.objects
+
+
+def test_delete_account_deletes_media_keys_derived_from_corpus_markdown(ports) -> None:
+    result = _register(ports)
+    sources = FakeSourceRepository()
+    source = _source(result.user.id)
+    sources.add(source)
+    # The same figure digest referenced twice must yield exactly one delete.
+    repeated, other = "b" * 64, "c" * 64
+    corpus = _corpus_with_media(source, [repeated, repeated, other])
+    storage = FakeStorage()
+    media_keys = [
+        f"sources/{result.user.id}/{source.id}/media/{digest}.webp" for digest in (repeated, other)
+    ]
+    for key in [source.object_key, *media_keys]:
+        storage.put_object(key, b"bytes", content_type="image/webp")
+
+    _delete_account(ports, sources=sources, corpus=corpus, storage=storage)(user=result.user)
+
+    assert source.object_key not in storage.objects
+    for key in media_keys:
+        assert key not in storage.objects
+    # Deduplicated: each derived key was deleted exactly once.
+    assert sorted(storage.deleted_keys) == sorted([source.object_key, *media_keys])
+
+
+def test_delete_account_never_touches_sample_or_foreign_keys(ports) -> None:
+    owner = _register(ports)
+    other = _register(ports, email="other@example.com")
+    sources = FakeSourceRepository()
+    owned = _source(owner.user.id)
+    foreign = _source(other.user.id)
+    sample = _source(other.user.id, is_sample=True)  # visible to `owner`, not owned
+    for source in (owned, foreign, sample):
+        sources.add(source)
+    storage = FakeStorage()
+    for source in (owned, foreign, sample):
+        storage.put_object(source.object_key, b"bytes", content_type="application/epub+zip")
+
+    _delete_account(ports, sources=sources, corpus=FakeCorpusRepository(), storage=storage)(
+        user=owner.user
+    )
+
+    assert ports["users"].get_by_id(owner.user.id) is None
+    assert ports["users"].get_by_id(other.user.id) is not None
+    assert owned.object_key not in storage.objects
+    # DOOR-33: only keys derived from the caller's owned sources are deleted —
+    # the shared sample and the other user's file survive untouched.
+    assert sample.object_key in storage.objects
+    assert foreign.object_key in storage.objects
+
+
+def test_storage_failure_leaves_the_user_row(ports) -> None:
+    result = _register(ports)
+    sources = FakeSourceRepository()
+    source = _source(result.user.id)
+    sources.add(source)  # an owned key so a storage delete is actually attempted
+
+    with pytest.raises(AccountDeleteFailed):
+        _delete_account(
+            ports,
+            sources=sources,
+            corpus=FakeCorpusRepository(),
+            storage=UnavailableStorage(),
+        )(user=result.user)
+
+    # Fail closed: the account is fully intact after the failed erase.
+    assert ports["users"].get_by_id(result.user.id) is not None
+
+
+def test_partial_storage_failure_deletes_no_user_row(ports) -> None:
+    from app.application.errors import StorageUnavailable
+
+    class _OutageAfterFirstDelete(FakeStorage):
+        """Deletes the first object, then the outage hits."""
+
+        def __init__(self, inner: FakeStorage) -> None:
+            self._inner = inner
+            self.deletes = 0
+
+        def put_object(self, key: str, data: bytes, *, content_type: str) -> None:
+            self._inner.put_object(key, data, content_type=content_type)
+
+        def get_object(self, key: str) -> bytes:
+            return self._inner.get_object(key)
+
+        def delete_object(self, key: str) -> None:
+            self.deletes += 1
+            if self.deletes > 1:
+                raise StorageUnavailable("storage down mid-delete")
+            self._inner.delete_object(key)
+
+    result = _register(ports)
+    sources = FakeSourceRepository()
+    first, second = _source(result.user.id), _source(result.user.id)
+    sources.add(first)
+    sources.add(second)
+    storage = FakeStorage()
+    for source in (first, second):
+        storage.put_object(source.object_key, b"bytes", content_type="application/epub+zip")
+
+    with pytest.raises(AccountDeleteFailed):
+        _delete_account(
+            ports,
+            sources=sources,
+            corpus=FakeCorpusRepository(),
+            storage=_OutageAfterFirstDelete(storage),
+        )(user=result.user)
+
+    # The first object may already be gone (deletes are idempotent on retry),
+    # but the fail-closed guarantee holds: the user row survives.
+    assert first.object_key not in storage.objects
+    assert second.object_key in storage.objects
+    assert ports["users"].get_by_id(result.user.id) is not None

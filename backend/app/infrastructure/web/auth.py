@@ -14,6 +14,7 @@ Contract (also consumed by the Next.js proxy in Phase D):
 - ``POST /api/auth/login``    → 200, sets session cookie, body: user summary.
 - ``POST /api/auth/logout``   → 204, clears cookie (auth required; CSRF added in C2).
 - ``GET  /api/auth/me``       → 200 user summary + CSRF token (auth required); 401 otherwise.
+- ``DELETE /api/auth/account`` → 204, clears cookie (auth + CSRF; 502 leaves the account).
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Response, status
 from pydantic import BaseModel
 
-from app.application.identity import AuthenticateUser, Logout, RegisterUser
+from app.application.identity import AuthenticateUser, DeleteAccount, Logout, RegisterUser
 from app.domain.entities import Session, User
 from app.infrastructure.web.cookies import clear_session_cookie, set_session_cookie
 from app.infrastructure.web.csrf import enforce_csrf, enforce_origin
@@ -33,7 +34,9 @@ from app.infrastructure.web.dependencies import (
     AppSettings,
     CurrentPrincipal,
     get_authenticate_user,
+    get_authenticated_user,
     get_current_session,
+    get_delete_account,
     get_logout,
     get_register_user,
 )
@@ -131,6 +134,29 @@ def logout(
 ) -> Response:
     """End the session and clear the cookie (FR-AUTH-003). Auth + CSRF required."""
     service(session_id=session.id)
+    clear_session_cookie(response, settings=settings)
+    response.status_code = status.HTTP_204_NO_CONTENT
+    return response
+
+
+@router.delete(
+    "/account",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(enforce_csrf)],
+)
+def delete_account(
+    response: Response,
+    settings: AppSettings,
+    user: Annotated[User, Depends(get_authenticated_user)],
+    service: Annotated[DeleteAccount, Depends(get_delete_account)],
+) -> Response:
+    """Erase the caller's account (DOOR-30..32). Auth + CSRF required.
+
+    Storage objects are deleted before the user row (fail closed on storage:
+    502 and the account survives). The row delete cascades every child table,
+    including sessions, so the cookie is cleared on the way out.
+    """
+    service(user=user)
     clear_session_cookie(response, settings=settings)
     response.status_code = status.HTTP_204_NO_CONTENT
     return response

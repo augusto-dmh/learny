@@ -10,18 +10,29 @@ Secure cookie for HTTP TestClient.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import Connection, func, insert, select
 
 from app.core.config import get_settings
-from app.infrastructure.db.metadata import invite_codes, sessions, users
+from app.domain.entities import Source
+from app.infrastructure.db.metadata import (
+    invite_codes,
+    sessions,
+    sources,
+    user_credentials,
+    users,
+)
+from app.infrastructure.db.repositories import SqlAlchemySourceRepository
+from app.infrastructure.web.dependencies import get_storage
 from tests.conftest import (
     SESSION_COOKIE_NAME,
     TEST_PASSWORD,
     requires_db,
 )
+from tests.fakes import FakeStorage, UnavailableStorage
 
 pytestmark = requires_db
 
@@ -404,3 +415,133 @@ def test_valid_invite_consumes_one_use_per_register_then_refuses(
         select(invite_codes.c.remaining_uses).where(invite_codes.c.code == "TWICE")
     ).scalar_one()
     assert left == 0
+
+
+# ---- Account deletion (DOOR-30..33) -----------------------------------------
+
+
+def _user_id(db_conn: Connection, email: str) -> UUID:
+    return db_conn.execute(select(users.c.id).where(users.c.email == email)).scalar_one()
+
+
+def _insert_source(db_conn: Connection, user_id: UUID, *, is_sample: bool = False) -> Source:
+    now = datetime(2026, 9, 6, tzinfo=UTC)
+    source = Source(
+        id=uuid4(),
+        user_id=user_id,
+        title="A Book",
+        filename="a.epub",
+        content_type="application/epub+zip",
+        byte_size=10,
+        checksum="a" * 64,
+        object_key=f"sources/{user_id}/{uuid4()}.epub",
+        status="ready",
+        created_at=now,
+        updated_at=now,
+        is_sample=is_sample,
+    )
+    return SqlAlchemySourceRepository(db_conn).add(source)
+
+
+def test_delete_account_erases_objects_rows_and_leaves_the_sample(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    _register(auth_client, "deleteme@example.com")
+    _register(auth_client, "sample-operator@example.com")
+    owner_id = _user_id(db_conn, "deleteme@example.com")
+    sample_owner_id = _user_id(db_conn, "sample-operator@example.com")
+
+    owned = _insert_source(db_conn, owner_id)
+    sample = _insert_source(db_conn, sample_owner_id, is_sample=True)
+    storage = FakeStorage()
+    for source in (owned, sample):
+        storage.put_object(source.object_key, b"bytes", content_type="application/epub+zip")
+    auth_client.app.dependency_overrides[get_storage] = lambda: storage
+
+    # Log back in as the deleting user (the second register moved the cookie).
+    auth_client.cookies.clear()
+    login = auth_client.post(
+        "/api/auth/login",
+        json={"email": "deleteme@example.com", "password": TEST_PASSWORD, "accepted_tos": True},
+    )
+    assert login.status_code == 200, login.text
+    resp = auth_client.delete(
+        "/api/auth/account", headers={"X-CSRF-Token": _csrf_token(auth_client)}
+    )
+    assert resp.status_code == 204, resp.text
+
+    # DOOR-31: the old cookie is dead — the session row cascaded with the user.
+    assert auth_client.get("/api/auth/me").status_code == 401
+    auth_client.cookies.clear()
+    relogin = auth_client.post(
+        "/api/auth/login",
+        json={"email": "deleteme@example.com", "password": TEST_PASSWORD, "accepted_tos": True},
+    )
+    assert relogin.status_code == 401, relogin.text
+
+    # Zero rows remain for the deleted user across the cascaded tables.
+    assert db_conn.execute(select(users).where(users.c.id == owner_id)).first() is None
+    assert (
+        db_conn.execute(
+            select(user_credentials).where(user_credentials.c.user_id == owner_id)
+        ).first()
+        is None
+    )
+    assert db_conn.execute(select(sessions).where(sessions.c.user_id == owner_id)).first() is None
+    assert db_conn.execute(select(sources).where(sources.c.user_id == owner_id)).first() is None
+
+    # Zero storage objects remain for keys derived from the deleted user's
+    # sources — and the sample's row and object are untouched (DOOR-31/33).
+    assert owned.object_key not in storage.objects
+    assert sample.object_key in storage.objects
+    assert db_conn.execute(select(sources).where(sources.c.id == sample.id)).first() is not None
+    # The surviving account can still sign in.
+    auth_client.cookies.clear()
+    survivor = auth_client.post(
+        "/api/auth/login",
+        json={
+            "email": "sample-operator@example.com",
+            "password": TEST_PASSWORD,
+            "accepted_tos": True,
+        },
+    )
+    assert survivor.status_code == 200, survivor.text
+
+
+def test_delete_account_unauthenticated_is_401(auth_client: TestClient) -> None:
+    # Authentication resolves before the CSRF gate (logout/notes shape).
+    resp = auth_client.delete("/api/auth/account")
+    assert resp.status_code == 401, resp.text
+
+
+def test_delete_account_with_wrong_csrf_token_is_403(auth_client: TestClient) -> None:
+    _register(auth_client, "deletecsrf@example.com")
+    resp = auth_client.delete("/api/auth/account", headers={"X-CSRF-Token": "not-the-real-token"})
+    assert resp.status_code == 403, resp.text
+    # The rejected write changed nothing.
+    assert auth_client.get("/api/auth/me").status_code == 200
+
+
+def test_delete_account_storage_failure_is_502_and_user_remains(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    _register(auth_client, "deletefail@example.com")
+    owner_id = _user_id(db_conn, "deletefail@example.com")
+    source = _insert_source(db_conn, owner_id)
+    auth_client.app.dependency_overrides[get_storage] = lambda: UnavailableStorage()
+
+    resp = auth_client.delete(
+        "/api/auth/account", headers={"X-CSRF-Token": _csrf_token(auth_client)}
+    )
+
+    # DOOR-32: 502 and the account is fully intact — retryable, not half-deleted.
+    assert resp.status_code == 502, resp.text
+    assert resp.json() == {"detail": "Account deletion failed. Please try again."}
+    assert db_conn.execute(select(users).where(users.c.id == owner_id)).first() is not None
+    assert db_conn.execute(select(sources).where(sources.c.id == source.id)).first() is not None
+    auth_client.cookies.clear()
+    relogin = auth_client.post(
+        "/api/auth/login",
+        json={"email": "deletefail@example.com", "password": TEST_PASSWORD, "accepted_tos": True},
+    )
+    assert relogin.status_code == 200, relogin.text

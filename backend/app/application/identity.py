@@ -11,17 +11,20 @@ imports FastAPI, SQLAlchemy, or a provider SDK (ADR-007/009).
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import timedelta
 from uuid import UUID, uuid4
 
 from app.application.activation import ACTIVATION_ACCOUNT_CREATED, RecordActivation
 from app.application.errors import (
+    AccountDeleteFailed,
     EmailAlreadyExists,
     InvalidCredentials,
     InviteRequired,
     NotAuthenticated,
     NotAuthorized,
+    StorageUnavailable,
     ValidationError,
 )
 from app.application.invites import INVITE_REQUIRED_MESSAGE, InviteRepository
@@ -35,9 +38,12 @@ from app.application.validation import (
 from app.domain.entities import IssuedSession, PasswordCredential, Session, User
 from app.domain.ports import (
     Clock,
+    CorpusRepository,
     CredentialRepository,
     PasswordHasher,
     SessionRepository,
+    SourceRepository,
+    StoragePort,
     TokenGenerator,
     UserRepository,
 )
@@ -48,6 +54,11 @@ DEFAULT_SESSION_TTL = timedelta(days=14)
 # Collapses bursts of reads (e.g. the SPA polling ``/me``) into at most one
 # session write per interval, instead of a write on every request.
 SESSION_TOUCH_INTERVAL = timedelta(seconds=60)
+
+# Media references embedded in section markdown by the corpus builder
+# (``application/corpus.py``): ``/api/sources/{id}/media/{sha256}``. The digest
+# is the storage key's file stem (``.../media/{sha256}.webp``).
+_MEDIA_DIGEST = re.compile(r"/api/sources/[\da-f-]+/media/([\da-f]{64})")
 
 
 @dataclass(frozen=True)
@@ -245,6 +256,56 @@ class Logout:
 
     def __call__(self, *, session_id: UUID) -> None:
         self._sessions.delete(session_id)
+
+
+class DeleteAccount:
+    """Erase the caller's account: storage objects first, then the user row.
+
+    The order is the fail-closed guarantee (DOOR-30..32): every object key
+    derived from the caller's *owned* sources — the uploaded file plus the
+    figure rasters the corpus embeds — is deleted before ``users.delete`` fires,
+    so a storage fault leaves the account fully intact (no half-erased user) and
+    surfaces as :class:`AccountDeleteFailed` (502, retry-safe: object deletes
+    are idempotent, so a retry converges). The shared sample is never owned by
+    the caller and no other user's key is ever derivable from their rows, so
+    neither is ever in the delete list (DOOR-33).
+    """
+
+    def __init__(
+        self,
+        *,
+        users: UserRepository,
+        sources: SourceRepository,
+        corpus: CorpusRepository,
+        storage: StoragePort,
+    ) -> None:
+        self._users = users
+        self._sources = sources
+        self._corpus = corpus
+        self._storage = storage
+
+    def _object_keys(self, *, user: User) -> list[str]:
+        """Every storage key derived from ``user``'s owned sources, deduplicated."""
+        keys: list[str] = []
+        for source in self._sources.list_by_user(user.id):
+            if source.user_id != user.id:
+                continue  # the shared sample (and only it) is visible but not owned
+            keys.append(source.object_key)
+            for markdown in self._corpus.list_section_markdown(source.id):
+                keys.extend(
+                    f"sources/{user.id}/{source.id}/media/{digest}.webp"
+                    for digest in _MEDIA_DIGEST.findall(markdown)
+                )
+        return list(dict.fromkeys(keys))
+
+    def __call__(self, *, user: User) -> None:
+        keys = self._object_keys(user=user)
+        try:
+            for key in keys:
+                self._storage.delete_object(key)
+        except StorageUnavailable as exc:
+            raise AccountDeleteFailed("Account deletion failed. Please try again.") from exc
+        self._users.delete(user.id)
 
 
 class CurrentUser:

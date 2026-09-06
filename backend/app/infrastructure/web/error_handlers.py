@@ -21,6 +21,7 @@ from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 
 from app.application.errors import (
+    AccountDeleteFailed,
     ActiveIngestionExists,
     AiPaused,
     AnswerGenerationFailed,
@@ -89,6 +90,11 @@ _STATUS_BY_ERROR = {
     ActiveIngestionExists: status.HTTP_409_CONFLICT,
     IngestionNotFound: status.HTTP_404_NOT_FOUND,
     EnqueueFailed: status.HTTP_502_BAD_GATEWAY,
+    # Account deletion fails closed (DOOR-32): the user row survives and the
+    # client is told to retry. This is deliberately *not* the global
+    # StorageUnavailable → 503 — a failed erase is this caller's failed write,
+    # not a service-wide outage signal.
+    AccountDeleteFailed: status.HTTP_502_BAD_GATEWAY,
     CorpusNotFound: status.HTTP_404_NOT_FOUND,
     SourceNotReady: status.HTTP_409_CONFLICT,
     ConversationNotFound: status.HTTP_404_NOT_FOUND,

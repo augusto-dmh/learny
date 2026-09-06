@@ -88,6 +88,15 @@ class EnqueueFailed(Exception):
     """
 
 
+class AccountDeleteFailed(Exception):
+    """Object storage refused to delete the account's files (DOOR-32).
+
+    Deletion is fail closed: the user row is deliberately left intact and the
+    web layer maps this to 502 so the client can retry (the object deletes are
+    idempotent, so a retry converges).
+    """
+
+
 class InvalidDocumentError(Exception):
     """The source bytes are not a parseable document of the parser's format (CORP-06).
 

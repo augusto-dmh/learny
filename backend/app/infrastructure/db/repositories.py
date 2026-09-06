@@ -144,6 +144,10 @@ class SqlAlchemyUserRepository:
         row = self._conn.execute(select(users).where(users.c.email == email)).one_or_none()
         return _to_user(row) if row is not None else None
 
+    def delete(self, user_id: UUID) -> None:
+        """Remove the user row; credentials/sessions/sources/... CASCADE away."""
+        self._conn.execute(sa_delete(users).where(users.c.id == user_id))
+
 
 class SqlAlchemyCredentialRepository:
     """``CredentialRepository`` backed by the ``user_credentials`` table."""
@@ -568,6 +572,16 @@ class SqlAlchemyCorpusRepository:
             language=document.language,
             sections=sections,
         )
+
+    def list_section_markdown(self, source_id: UUID) -> list[str]:
+        """Return every section's derived Markdown for ``source_id``, in order."""
+        rows = self._conn.execute(
+            select(corpus_sections.c.markdown)
+            .join(corpus_documents, corpus_sections.c.document_id == corpus_documents.c.id)
+            .where(corpus_documents.c.source_id == source_id)
+            .order_by(corpus_sections.c.position)
+        ).fetchall()
+        return [row.markdown for row in rows]
 
     def get_section(self, source_id: UUID, anchor: str) -> SectionContent | None:
         # Owner-agnostic read: ownership is enforced one layer up via the source
