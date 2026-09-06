@@ -48,17 +48,31 @@ export async function fetchAuthState(
   return { authenticated: false };
 }
 
+/** What the register form must consent to before the backend accepts an account. */
+export type RegisterOptions = {
+  /** The backend refuses any register without an explicit ToS acceptance. */
+  acceptedTos: boolean;
+  /** Optional invite code (required only where the instance runs invite-only). */
+  inviteCode?: string;
+};
+
 /** Register a new account; backend sets the session cookie on 201. */
 export async function register(
   email: string,
   password: string,
+  { acceptedTos, inviteCode }: RegisterOptions,
   fetchImpl: typeof fetch = fetch,
 ): Promise<UserSummary> {
   const res = await fetchImpl("/api/auth/register", {
     method: "POST",
     credentials: "same-origin",
     headers: JSON_HEADERS,
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify({
+      email,
+      password,
+      invite_code: inviteCode || null,
+      accepted_tos: acceptedTos,
+    }),
   });
   if (!res.ok) {
     throw await toAuthError(res, "Registration failed.");

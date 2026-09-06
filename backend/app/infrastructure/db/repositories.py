@@ -130,6 +130,7 @@ class SqlAlchemyUserRepository:
                 id=user.id,
                 email=user.email,
                 created_at=user.created_at,
+                accepted_tos_at=user.accepted_tos_at,
             )
         )
         return user
@@ -2526,7 +2527,12 @@ class SqlAlchemyAiSpendDayRepository:
 
 
 def _to_user(row) -> User:  # noqa: ANN001 — Row is an internal SQLAlchemy type
-    return User(id=row.id, email=row.email, created_at=row.created_at)
+    return User(
+        id=row.id,
+        email=row.email,
+        created_at=row.created_at,
+        accepted_tos_at=row.accepted_tos_at,
+    )
 
 
 def _to_credential(row) -> PasswordCredential:  # noqa: ANN001

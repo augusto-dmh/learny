@@ -25,7 +25,13 @@ from app.application.errors import (
     ValidationError,
 )
 from app.application.invites import INVITE_REQUIRED_MESSAGE, InviteRepository
-from app.application.validation import SAMPLE_OPERATOR_EMAIL, validate_email, validate_password
+from app.application.validation import (
+    SAMPLE_OPERATOR_EMAIL,
+    TOS_ACCEPTANCE_MESSAGE,
+    is_disposable_email,
+    validate_email,
+    validate_password,
+)
 from app.domain.entities import IssuedSession, PasswordCredential, Session, User
 from app.domain.ports import (
     Clock,
@@ -109,8 +115,27 @@ class RegisterUser:
         self._invites = invites
         self._session_ttl = session_ttl
 
-    def __call__(self, *, email: str, password: str, invite_code: str | None = None) -> AuthResult:
+    def __call__(
+        self,
+        *,
+        email: str,
+        password: str,
+        invite_code: str | None = None,
+        accepted_tos: bool = True,
+    ) -> AuthResult:
+        # Consent first (DOOR-25): without an explicit acceptance nothing else is
+        # validated — no user material is created and no invite is consumed. The
+        # HTTP boundary defaults this to False, so an absent field is a refusal;
+        # programmatic callers default to True because consent is a client-facing
+        # concern they satisfy upstream.
+        if not accepted_tos:
+            raise ValidationError(TOS_ACCEPTANCE_MESSAGE)
+
         normalized_email = validate_email(email)
+        if is_disposable_email(normalized_email):
+            # The same generic invalid-email copy as a malformed address: the
+            # response must not reveal that disposability is the reason (DOOR-23).
+            raise ValidationError("Invalid email address.")
         validate_password(password)
         if normalized_email == SAMPLE_OPERATOR_EMAIL:
             raise ValidationError("Invalid email address.")
@@ -129,7 +154,7 @@ class RegisterUser:
             raise EmailAlreadyExists("Email is already registered.")
 
         now = self._clock.now()
-        user = User(id=uuid4(), email=normalized_email, created_at=now)
+        user = User(id=uuid4(), email=normalized_email, created_at=now, accepted_tos_at=now)
         self._users.add(user)
 
         password_hash = self._hasher.hash(password)

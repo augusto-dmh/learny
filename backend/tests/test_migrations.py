@@ -3513,6 +3513,82 @@ def test_migration_0025_creates_invite_codes(monkeypatch) -> None:
 
 
 @pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
+def test_migration_0026_stamps_user_tos_acceptance(monkeypatch) -> None:
+    """0026 up: adds a nullable ``accepted_tos_at`` timestamp to ``users`` (register
+    stamps it when the account accepts the ToS; the sample operator stays NULL).
+    Down one step to 0025 drops the column; a further upgrade re-adds it — the
+    stamp round-trips clean.
+    """
+    monkeypatch.setenv("LEARNY_DATABASE_URL", TEST_DB_URL)
+    cfg = _alembic_config(TEST_DB_URL)
+
+    command.upgrade(cfg, "head")
+    command.downgrade(cfg, "0025_invite_codes")
+
+    user_id = uuid.uuid4()
+    engine = create_engine(TEST_DB_URL)
+    try:
+        inspector = inspect(engine)
+        assert "accepted_tos_at" not in {c["name"] for c in inspector.get_columns("users")}
+    finally:
+        engine.dispose()
+
+    command.upgrade(cfg, "0026_user_tos_stamp")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        inspector = inspect(engine)
+        columns = {c["name"]: c for c in inspector.get_columns("users")}
+        assert "accepted_tos_at" in columns
+        assert columns["accepted_tos_at"]["nullable"] is True
+
+        # Existing rows (and new inserts without the stamp) stay NULL; an explicit
+        # acceptance time is stored as given.
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO users (id, email, accepted_tos_at) "
+                    "VALUES (:id, :email, DATE '2026-09-06')"
+                ),
+                {"id": user_id, "email": f"{user_id}@example.test"},
+            )
+            unstamped = uuid.uuid4()
+            conn.execute(
+                text("INSERT INTO users (id, email) VALUES (:id, :email)"),
+                {"id": unstamped, "email": f"{unstamped}@example.test"},
+            )
+        with engine.connect() as conn:
+            stamped = conn.execute(
+                text("SELECT accepted_tos_at FROM users WHERE id = :id"), {"id": user_id}
+            ).scalar_one()
+            null_stamp = conn.execute(
+                text("SELECT accepted_tos_at FROM users WHERE id = :id"), {"id": unstamped}
+            ).scalar_one()
+        assert stamped is not None
+        assert null_stamp is None
+
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM users WHERE email LIKE '%@example.test'"))
+    finally:
+        engine.dispose()
+
+    # Down one step to 0025: the column drops; the table survives.
+    command.downgrade(cfg, "0025_invite_codes")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        assert "accepted_tos_at" not in {c["name"] for c in inspect(engine).get_columns("users")}
+    finally:
+        engine.dispose()
+
+    # Round-trip: a further upgrade re-adds the column at head.
+    command.upgrade(cfg, "0026_user_tos_stamp")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        assert "accepted_tos_at" in {c["name"] for c in inspect(engine).get_columns("users")}
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
 def test_in_process_migration_preserves_app_root_logging(monkeypatch) -> None:
     """An in-process migration must not reconfigure the app-owned root logger.
 

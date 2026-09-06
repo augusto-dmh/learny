@@ -51,11 +51,14 @@ class Credentials(BaseModel):
     invite code is likewise a plain optional string: where
     ``LEARNY_INVITE_REQUIRED`` is on, the application service demands a live code
     and answers the uniform 403 itself (DOOR-20); with the flag off it is ignored.
+    ``accepted_tos`` defaults to False here — an omitted consent never registers
+    (DOOR-25) — which is the boundary that gives the default its force.
     """
 
     email: str
     password: str
     invite_code: str | None = None
+    accepted_tos: bool = False
 
 
 class UserSummary(BaseModel):
@@ -89,7 +92,12 @@ def register(
     service: Annotated[RegisterUser, Depends(get_register_user)],
 ) -> UserSummary:
     """Create an account and start a session (FR-AUTH-001). 409 if email taken."""
-    result = service(email=body.email, password=body.password, invite_code=body.invite_code)
+    result = service(
+        email=body.email,
+        password=body.password,
+        invite_code=body.invite_code,
+        accepted_tos=body.accepted_tos,
+    )
     set_session_cookie(response, raw_token=result.issued.raw_token, settings=settings)
     return UserSummary.from_entity(result.user)
 

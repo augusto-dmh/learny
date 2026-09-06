@@ -191,7 +191,9 @@ def throttled_notes_client(  # noqa: ANN201
 
 
 def _register(client: TestClient, email: str) -> str:
-    resp = client.post("/api/auth/register", json={"email": email, "password": TEST_PASSWORD})
+    resp = client.post(
+        "/api/auth/register", json={"email": email, "password": TEST_PASSWORD, "accepted_tos": True}
+    )
     assert resp.status_code == 201, resp.text
     return resp.json()["id"]
 

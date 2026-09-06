@@ -34,6 +34,9 @@ class User:
     id: UUID
     email: str
     created_at: datetime
+    # When the account accepted the Terms of Service (register stamps it); NULL
+    # for the sample operator account, which registers through no form.
+    accepted_tos_at: datetime | None = None
 
 
 @dataclass(frozen=True)

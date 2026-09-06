@@ -108,6 +108,45 @@ def test_register_rejects_weak_password(ports) -> None:
         _register(ports, password="short")
 
 
+# ---- RegisterUser disposable + ToS rails (DOOR-23/24/25) -------------------
+
+
+def test_register_rejects_listed_disposable_domain(ports) -> None:
+    with pytest.raises(ValidationError):
+        _register(ports, email="throwaway@mailinator.com")
+    assert ports["users"].get_by_email("throwaway@mailinator.com") is None
+
+
+def test_register_rejecting_disposable_matches_malformed_email_copy(ports) -> None:
+    # The generic-copy rule (DOOR-23): the disposable refusal is the *same*
+    # message a malformed address raises — no hint that disposability fired.
+    with pytest.raises(ValidationError) as disposable:
+        _register(ports, email="throwaway@mailinator.com")
+    with pytest.raises(ValidationError) as malformed:
+        _register(ports, email="not-an-email")
+    assert str(disposable.value) == str(malformed.value) == "Invalid email address."
+
+
+def test_register_allows_documented_alias_domains(ports) -> None:
+    # duck.com is a documented privacy alias, never rejected as disposable (DOOR-24).
+    result = _register(ports, email="reader@duck.com")
+    assert result.user.email == "reader@duck.com"
+
+
+def test_register_rejects_missing_tos(ports) -> None:
+    with pytest.raises(ValidationError):
+        RegisterUser(**ports, record_activation=_record(ports))(
+            email="noservice@example.com", password=VALID_PASSWORD, accepted_tos=False
+        )
+    assert ports["users"].get_by_email("noservice@example.com") is None
+    assert ports["sessions"].get_by_raw_token("token-1") is None
+
+
+def test_register_stamps_accepted_tos_at(ports) -> None:
+    result = _register(ports)
+    assert result.user.accepted_tos_at == ports["clock"].now()
+
+
 # ---- RegisterUser invite gate (DOOR-20/21/22/26) ---------------------------
 
 

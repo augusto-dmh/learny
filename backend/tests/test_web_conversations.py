@@ -100,7 +100,9 @@ _BOOK_TITLE = "A Book"
 
 
 def _register(client: TestClient, email: str) -> str:
-    resp = client.post("/api/auth/register", json={"email": email, "password": TEST_PASSWORD})
+    resp = client.post(
+        "/api/auth/register", json={"email": email, "password": TEST_PASSWORD, "accepted_tos": True}
+    )
     assert resp.status_code == 201, resp.text
     return resp.json()["id"]
 
@@ -3096,7 +3098,11 @@ def test_no_mutating_conversation_route_answers_while_the_budget_is_spent(
         with TestClient(app, headers={"Origin": TEST_ORIGIN}) as client:
             registered = client.post(
                 "/api/auth/register",
-                json={"email": "budget-spent@example.com", "password": TEST_PASSWORD},
+                json={
+                    "email": "budget-spent@example.com",
+                    "password": TEST_PASSWORD,
+                    "accepted_tos": True,
+                },
             )
             assert registered.status_code == 201, registered.text
             set_rate_limiter(InMemoryFixedWindowRateLimiter(max_attempts=0, window_seconds=300))

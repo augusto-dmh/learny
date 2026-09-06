@@ -85,6 +85,9 @@ users = Table(
     # citext extension is created by the migration; email is case-insensitively unique.
     Column("email", CITEXT, nullable=False, unique=True),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    # When the account accepted the ToS (register stamps it, DOOR-25). NULL for
+    # accounts created without the form (the sample operator).
+    Column("accepted_tos_at", DateTime(timezone=True), nullable=True),
 )
 
 user_credentials = Table(

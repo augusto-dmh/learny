@@ -110,7 +110,7 @@ def build_client(db_conn: Connection, monkeypatch: pytest.MonkeyPatch) -> Iterat
 def _register(client: TestClient, email: str) -> None:
     resp = client.post(
         "/api/auth/register",
-        json={"email": email, "password": "correct horse battery staple"},
+        json={"email": email, "password": "correct horse battery staple", "accepted_tos": True},
     )
     assert resp.status_code == 201, resp.text
 

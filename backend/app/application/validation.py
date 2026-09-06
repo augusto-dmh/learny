@@ -19,6 +19,64 @@ _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 MIN_PASSWORD_LENGTH = 12
 MAX_PASSWORD_LENGTH = 128  # bound work / avoid DoS on the hasher
 
+# The uniform ToS refusal (DOOR-25): missing consent is a 422 like every other
+# validation failure. Defined beside the disposable lists — the two register
+# rails added together — so the register copy has one home.
+TOS_ACCEPTANCE_MESSAGE = "You must accept the Terms of Service to create an account."
+
+# Documented privacy-alias domains (rq09): an address here is a real relay to
+# the user's own inbox, never a throwaway, so the allow-list wins over the
+# deny-list (DOOR-24). ``duck.com`` is the spec-named member.
+ALLOWED_ALIAS_DOMAINS = frozenset(
+    {
+        "duck.com",  # DuckDuckGo Email Protection
+        "privaterelay.appleid.com",  # iCloud Hide My Email
+        "simplelogin.com",  # SimpleLogin
+        "simplelogin.io",
+    }
+)
+
+# Closed, committed deny-list of disposable-inbox providers (DOOR-23). Frozen
+# on purpose: additions are a code change, so the register contract never
+# shifts under a data-driven edit. Matching is exact-domain — no subdomain or
+# substring matching — so ``mailinator.com`` rejects while any unlisted domain
+# (including every alias above) registers normally.
+DISPOSABLE_EMAIL_DOMAINS = frozenset(
+    {
+        "10minutemail.com",
+        "20minutemail.com",
+        "33mail.com",
+        "bugmenot.com",
+        "dispostable.com",
+        "emailondeck.com",
+        "fakeinbox.com",
+        "getnada.com",
+        "guerrillamail.com",
+        "guerrillamail.net",
+        "mailcatch.com",
+        "maildrop.cc",
+        "mailinator.com",
+        "mailnesia.com",
+        "mintemail.com",
+        "mytemp.email",
+        "sharklasers.com",
+        "temp-mail.org",
+        "tempinbox.com",
+        "tempmail.com",
+        "throwawaymail.com",
+        "trashmail.com",
+        "yopmail.com",
+    }
+)
+
+
+def is_disposable_email(email: str) -> bool:
+    """Whether the email's domain is on the committed disposable deny-list (DOOR-23)."""
+    domain = email.rsplit("@", 1)[-1].strip().lower()
+    if domain in ALLOWED_ALIAS_DOMAINS:
+        return False
+    return domain in DISPOSABLE_EMAIL_DOMAINS
+
 
 def normalize_email(email: str) -> str:
     """Trim and lowercase an email for consistent storage/lookup."""

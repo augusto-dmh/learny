@@ -59,6 +59,46 @@ describe("AuthForm (D2)", () => {
     expect(alert.textContent).toBe("Invalid email or password.");
     expect(onAuthenticated).not.toHaveBeenCalled();
   });
+
+  it("register collects the invite code and ToS consent and posts both", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse(201, { id: "u1", email: "a@b.c", created_at: "now" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const onAuthenticated = vi.fn();
+    render(<AuthForm mode="register" onAuthenticated={onAuthenticated} />);
+
+    fireEvent.change(screen.getByLabelText("Email"), { target: { value: "a@b.c" } });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "pw" } });
+    fireEvent.change(screen.getByLabelText(/Invite code/), { target: { value: "WELCOME" } });
+    fireEvent.click(screen.getByLabelText(/Terms of Service/));
+    fireEvent.click(screen.getByRole("button", { name: "Create account" }));
+
+    await waitFor(() => expect(onAuthenticated).toHaveBeenCalledTimes(1));
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init.credentials).toBe("same-origin");
+    // Exact payload: the invite and consent ride along — and the exact key set
+    // proves no captcha/Turnstile token field is ever posted.
+    expect(JSON.parse(init.body as string)).toEqual({
+      email: "a@b.c",
+      password: "pw",
+      invite_code: "WELCOME",
+      accepted_tos: true,
+    });
+  });
+
+  it("register requires the ToS checkbox client-side and links the terms", () => {
+    render(<AuthForm mode="register" />);
+
+    const checkbox = screen.getByLabelText(/Terms of Service/) as HTMLInputElement;
+    expect(checkbox.type).toBe("checkbox");
+    // Native `required` blocks submit until the learner consents.
+    expect(checkbox.required).toBe(true);
+
+    const termsLink = screen.getByRole("link", { name: "Terms of Service" });
+    expect(termsLink.getAttribute("href")).toBe("/terms");
+  });
 });
 
 describe("AccountPanel (D2)", () => {

@@ -9,6 +9,7 @@
  */
 
 import { useState } from "react";
+import Link from "next/link";
 
 import { login, register, type UserSummary } from "@/app/lib/auth";
 import { Button } from "@/components/ui/button";
@@ -25,6 +26,8 @@ export function AuthForm({
 }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [inviteCode, setInviteCode] = useState("");
+  const [acceptedTos, setAcceptedTos] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
 
@@ -35,9 +38,16 @@ export function AuthForm({
     setError(null);
     setPending(true);
     try {
-      const action = mode === "register" ? register : login;
-      const user = await action(email, password);
-      onAuthenticated?.(user);
+      if (mode === "register") {
+        const user = await register(email, password, {
+          acceptedTos,
+          inviteCode: inviteCode.trim() || undefined,
+        });
+        onAuthenticated?.(user);
+      } else {
+        const user = await login(email, password);
+        onAuthenticated?.(user);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong.");
     } finally {
@@ -79,6 +89,43 @@ export function AuthForm({
           required
         />
       </div>
+      {mode === "register" ? (
+        <>
+          <div className="space-y-1.5">
+            <label htmlFor="auth-invite" className="text-sm font-medium">
+              Invite code{" "}
+              <span className="font-normal text-muted-foreground">(if you have one)</span>
+            </label>
+            <Input
+              id="auth-invite"
+              type="text"
+              name="invite_code"
+              value={inviteCode}
+              onChange={(e) => setInviteCode(e.target.value)}
+            />
+          </div>
+          <div className="flex items-start gap-2">
+            <input
+              id="auth-tos"
+              type="checkbox"
+              name="accepted_tos"
+              checked={acceptedTos}
+              onChange={(e) => setAcceptedTos(e.target.checked)}
+              required
+              className="mt-1 size-4 accent-primary"
+            />
+            <label htmlFor="auth-tos" className="text-sm">
+              I agree to the{" "}
+              <Link
+                href="/terms"
+                className="text-primary underline-offset-4 hover:underline"
+              >
+                Terms of Service
+              </Link>
+            </label>
+          </div>
+        </>
+      ) : null}
       {error ? (
         <p role="alert" className="text-sm text-destructive">
           {error}

@@ -29,7 +29,7 @@ pytestmark = requires_db
 def _register(client: TestClient, email: str) -> None:
     resp = client.post(
         "/api/auth/register",
-        json={"email": email, "password": TEST_PASSWORD},
+        json={"email": email, "password": TEST_PASSWORD, "accepted_tos": True},
     )
     assert resp.status_code == 201, resp.text
 
@@ -44,7 +44,7 @@ def _csrf_token(client: TestClient) -> str:
 def test_register_sets_httponly_cookie_and_returns_summary(auth_client: TestClient) -> None:
     resp = auth_client.post(
         "/api/auth/register",
-        json={"email": "reg@example.com", "password": TEST_PASSWORD},
+        json={"email": "reg@example.com", "password": TEST_PASSWORD, "accepted_tos": True},
     )
     assert resp.status_code == 201, resp.text
     body = resp.json()
@@ -123,7 +123,7 @@ def test_duplicate_registration_returns_409(auth_client: TestClient) -> None:
     auth_client.cookies.clear()
     resp = auth_client.post(
         "/api/auth/register",
-        json={"email": "dupe@example.com", "password": TEST_PASSWORD},
+        json={"email": "dupe@example.com", "password": TEST_PASSWORD, "accepted_tos": True},
     )
     assert resp.status_code == 409, resp.text
 
@@ -132,7 +132,7 @@ def test_session_cookie_attributes_match_settings(auth_client: TestClient) -> No
     settings = get_settings()
     resp = auth_client.post(
         "/api/auth/register",
-        json={"email": "attrs@example.com", "password": TEST_PASSWORD},
+        json={"email": "attrs@example.com", "password": TEST_PASSWORD, "accepted_tos": True},
     )
     set_cookie = resp.headers.get("set-cookie", "").lower()
     assert f"path={settings.session_cookie_path}".lower() in set_cookie
@@ -149,6 +149,100 @@ def _seed_invite(db_conn: Connection, code: str, remaining: int, *, expires_at=N
     db_conn.execute(
         insert(invite_codes).values(code=code, remaining_uses=remaining, expires_at=expires_at)
     )
+
+
+# ---- Disposable + ToS rails (DOOR-23/24/25) ---------------------------------
+
+GENERIC_EMAIL_COPY = "Invalid email address."
+TOS_COPY = "You must accept the Terms of Service to create an account."
+
+
+def test_register_with_listed_disposable_domain_is_422_generic(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    resp = auth_client.post(
+        "/api/auth/register",
+        json={
+            "email": "throwaway@mailinator.com",
+            "password": TEST_PASSWORD,
+            "accepted_tos": True,
+        },
+    )
+    assert resp.status_code == 422, resp.text
+    # The body is the exact generic invalid-email copy — the response never
+    # names disposability as the reason (DOOR-23).
+    assert resp.json() == {"detail": GENERIC_EMAIL_COPY}
+    assert (
+        db_conn.execute(select(users).where(users.c.email == "throwaway@mailinator.com")).first()
+        is None
+    )
+
+
+def test_disposable_and_malformed_rejections_share_one_body(auth_client: TestClient) -> None:
+    disposable = auth_client.post(
+        "/api/auth/register",
+        json={
+            "email": "throwaway@yopmail.com",
+            "password": TEST_PASSWORD,
+            "accepted_tos": True,
+        },
+    )
+    malformed = auth_client.post(
+        "/api/auth/register",
+        json={"email": "not-an-email", "password": TEST_PASSWORD, "accepted_tos": True},
+    )
+    assert disposable.status_code == malformed.status_code == 422
+    assert disposable.json() == malformed.json() == {"detail": GENERIC_EMAIL_COPY}
+
+
+def test_register_allows_duck_dot_com_alias(auth_client: TestClient) -> None:
+    # duck.com is a documented privacy alias, never rejected as disposable (DOOR-24).
+    resp = auth_client.post(
+        "/api/auth/register",
+        json={"email": "reader@duck.com", "password": TEST_PASSWORD, "accepted_tos": True},
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["email"] == "reader@duck.com"
+
+
+def test_register_without_tos_is_422(auth_client: TestClient, db_conn: Connection) -> None:
+    # Consent omitted entirely — the boundary default is refusal (DOOR-25).
+    resp = auth_client.post(
+        "/api/auth/register",
+        json={"email": "noservice@example.com", "password": TEST_PASSWORD},
+    )
+    assert resp.status_code == 422, resp.text
+    assert resp.json() == {"detail": TOS_COPY}
+    assert "set-cookie" not in {k.lower() for k in resp.headers}
+    assert (
+        db_conn.execute(select(users).where(users.c.email == "noservice@example.com")).first()
+        is None
+    )
+
+
+def test_register_with_tos_false_is_422(auth_client: TestClient) -> None:
+    resp = auth_client.post(
+        "/api/auth/register",
+        json={
+            "email": "declined@example.com",
+            "password": TEST_PASSWORD,
+            "accepted_tos": False,
+        },
+    )
+    assert resp.status_code == 422, resp.text
+    assert resp.json() == {"detail": TOS_COPY}
+
+
+def test_register_with_tos_stamps_the_account(auth_client: TestClient, db_conn: Connection) -> None:
+    resp = auth_client.post(
+        "/api/auth/register",
+        json={"email": "consenting@example.com", "password": TEST_PASSWORD, "accepted_tos": True},
+    )
+    assert resp.status_code == 201, resp.text
+    stamped = db_conn.execute(
+        select(users.c.accepted_tos_at).where(users.c.email == "consenting@example.com")
+    ).scalar_one()
+    assert stamped is not None
 
 
 @pytest.fixture
@@ -171,7 +265,7 @@ def test_register_without_invite_code_is_403_and_creates_nothing(
 ) -> None:
     resp = invite_client.post(
         "/api/auth/register",
-        json={"email": "gate@example.com", "password": TEST_PASSWORD},
+        json={"email": "gate@example.com", "password": TEST_PASSWORD, "accepted_tos": True},
     )
     assert resp.status_code == 403, resp.text
     assert resp.json() == {"detail": INVITE_COPY}
@@ -192,6 +286,7 @@ def test_register_with_unknown_invite_code_is_403(
             "email": "unknown-code@example.com",
             "password": TEST_PASSWORD,
             "invite_code": "not-a-code",
+            "accepted_tos": True,
         },
     )
     assert resp.status_code == 403, resp.text
@@ -212,6 +307,7 @@ def test_register_with_exhausted_invite_code_is_403(
             "email": "spent@example.com",
             "password": TEST_PASSWORD,
             "invite_code": "spent",
+            "accepted_tos": True,
         },
     )
     assert resp.status_code == 403, resp.text
@@ -236,6 +332,7 @@ def test_register_with_expired_invite_code_is_403(
             "email": "stale@example.com",
             "password": TEST_PASSWORD,
             "invite_code": "stale",
+            "accepted_tos": True,
         },
     )
     assert resp.status_code == 403, resp.text
@@ -255,6 +352,7 @@ def test_register_with_valid_invite_returns_201_with_session(
             "email": "invited@example.com",
             "password": TEST_PASSWORD,
             "invite_code": "WELCOME",
+            "accepted_tos": True,
         },
     )
     assert resp.status_code == 201, resp.text
@@ -284,6 +382,7 @@ def test_valid_invite_consumes_one_use_per_register_then_refuses(
                 "email": f"invitee{i}@example.com",
                 "password": TEST_PASSWORD,
                 "invite_code": "TWICE",
+                "accepted_tos": True,
             },
         )
         assert resp.status_code == 201, resp.text
@@ -296,6 +395,7 @@ def test_valid_invite_consumes_one_use_per_register_then_refuses(
             "email": "invitee-too-late@example.com",
             "password": TEST_PASSWORD,
             "invite_code": "TWICE",
+            "accepted_tos": True,
         },
     )
     assert third.status_code == 403, third.text
