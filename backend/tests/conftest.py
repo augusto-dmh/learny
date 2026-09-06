@@ -364,7 +364,7 @@ def throttled_sources_client(  # noqa: ANN201
 
     previous_limiter = get_rate_limiter()
     # Allow 3 attempts per long window so the 4th trips deterministically. The
-    # limiter key is per-IP+route, so the auth register/csrf setup calls consume
+    # limiter key is per-user+route, so the auth register/csrf setup calls consume
     # separate buckets and never eat into the upload budget.
     app = create_app()
     set_rate_limiter(InMemoryFixedWindowRateLimiter(max_attempts=3, window_seconds=300))

@@ -531,7 +531,7 @@ def throttled_quiz_client(  # noqa: ANN201
 def test_deck_post_rate_limit_returns_429(
     throttled_quiz_client: TestClient, db_conn: Connection
 ) -> None:
-    # The limiter (per-IP+route) trips before the handler: the first POST creates the
+    # The limiter (per-user+route) trips before the handler: the first POST creates the
     # queued job (202), the next two hit the single-in-flight 409, and the 4th is
     # throttled to 429 regardless — the rate limit is enforced ahead of the conflict.
     source_id, csrf = _seed_ready_source(throttled_quiz_client, db_conn, "deck-rl@example.com")
