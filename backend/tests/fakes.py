@@ -16,6 +16,7 @@ from uuid import UUID, uuid4
 from app.application.errors import StorageUnavailable
 from app.domain.entities import (
     ACTIVE_STATUSES,
+    AiSpendDay,
     AnchorSection,
     AnswerCompleted,
     AnswerStreamEvent,
@@ -1035,6 +1036,43 @@ class FakeStudyDayRepository:
             ),
             key=lambda row: row.day,
         )
+
+
+class FakeAiSpendDayRepository:
+    """In-memory ``AiSpendDayRepository``: upsert-increment on the (user, day) key.
+
+    ``record`` adds the passed deltas to the stored totals (creating the row if
+    absent), mirroring the real ON CONFLICT increment, and records each call so a
+    test can assert exactly what was debited — and that a refused call debited
+    nothing.
+    """
+
+    def __init__(self) -> None:
+        self._rows: dict[tuple[UUID, date], AiSpendDay] = {}
+        self.record_calls: list[tuple[UUID, date, int, int, int]] = []
+
+    def record(
+        self,
+        user_id: UUID,
+        day_utc: date,
+        *,
+        usd_micros: int = 0,
+        asks: int = 0,
+        teach_starts: int = 0,
+    ) -> None:
+        self.record_calls.append((user_id, day_utc, usd_micros, asks, teach_starts))
+        existing = self._rows.get((user_id, day_utc))
+        base = existing or AiSpendDay(user_id=user_id, day_utc=day_utc)
+        self._rows[(user_id, day_utc)] = AiSpendDay(
+            user_id=user_id,
+            day_utc=day_utc,
+            usd_micros=base.usd_micros + usd_micros,
+            ask_count=base.ask_count + asks,
+            teach_starts=base.teach_starts + teach_starts,
+        )
+
+    def get_for_day(self, user_id: UUID, day_utc: date) -> AiSpendDay | None:
+        return self._rows.get((user_id, day_utc))
 
 
 class FakeRetrievalPort:

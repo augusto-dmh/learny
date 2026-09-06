@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
+from app.application.budget import KIND_GENERATION, DailyBudget
 from app.application.errors import QuizDeckConflict, SourceNotFound, SourceNotReady
 from app.application.identity import AuthorizeOwnership
 from app.application.ingestion import SOURCE_STATUS_READY, authorized_source, readable_source
@@ -107,12 +108,14 @@ class PlanDeckGeneration:
         authorize: AuthorizeOwnership,
         clock: Clock,
         ids: Callable[[], UUID],
+        budget: DailyBudget | None = None,
     ) -> None:
         self._sources = sources
         self._jobs = jobs
         self._authorize = authorize
         self._clock = clock
         self._ids = ids
+        self._budget = budget
 
     def __call__(self, *, user: User, source_id: UUID) -> QuizGenerationJob:
         source = authorized_source(
@@ -128,6 +131,12 @@ class PlanDeckGeneration:
         active = self._jobs.get_active_for_source(source_id)
         if active is not None:
             raise QuizDeckConflict("Deck generation is already in progress.")
+
+        # The daily-budget guard runs after authorization and before the job row is
+        # committed, so an exhausted day refuses the POST having created nothing —
+        # no queued job, no enqueue, no worker pass.
+        if self._budget is not None:
+            self._budget.assert_generation(user.id, kind=KIND_GENERATION)
 
         now = self._clock.now()
         return self._jobs.add(

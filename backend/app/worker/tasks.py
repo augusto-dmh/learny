@@ -22,6 +22,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import Connection, text
 
+from app.application.budget import KIND_GENERATION, DailyBudget, TokenPrices, usd_to_micros
 from app.application.cards import RefreshNoteCards
 from app.application.corpus import BuildCorpus
 from app.application.ingestion import INGESTION_FAILURE_ERROR, RunIngestion
@@ -30,11 +31,12 @@ from app.application.quiz import ReconcileQuizItems, RunDeckGeneration
 from app.application.retrieval import EmbedCorpus
 from app.core.config import get_settings
 from app.core.tracing import bind_trace, new_trace_scope, reset_trace
-from app.domain.entities import ParsedBook, QuizDeckHandle
+from app.domain.entities import ParsedBook, QuizDeckHandle, QuizDeckResult
 from app.domain.ports import IngestionStep, StoragePort
 from app.infrastructure.clock import SystemClock
 from app.infrastructure.db.engine import get_engine
 from app.infrastructure.db.repositories import (
+    SqlAlchemyAiSpendDayRepository,
     SqlAlchemyCorpusRepository,
     SqlAlchemyEmbeddingIndexRepository,
     SqlAlchemyIngestionEventRepository,
@@ -475,6 +477,47 @@ _DECK_FAILURE_ERROR = "Quiz deck generation failed."
 _DECK_TIMEOUT_ERROR = "Quiz deck generation timed out."
 
 
+def _build_budget(conn: Connection) -> DailyBudget:
+    """Wire the daily AI spend budget on ``conn`` (the worker's budget composition).
+
+    Mirrors the web layer's ``build_budget`` — built per call, never cached, so the
+    cap and price catalog come from the settings this task run actually sees. The
+    worker debit needs the same ledger the HTTP check reads, so a deck refused at
+    the POST and a pass debited here can never disagree about the day.
+    """
+    settings = get_settings()
+    return DailyBudget(
+        repo=SqlAlchemyAiSpendDayRepository(conn),
+        clock=_clock,
+        daily_cap_micros=usd_to_micros(settings.daily_ai_spend_usd),
+        prices=TokenPrices(
+            input_micros_per_million=usd_to_micros(settings.price_input_usd_per_million_tokens),
+            output_micros_per_million=usd_to_micros(settings.price_output_usd_per_million_tokens),
+            embed_micros_per_million=usd_to_micros(settings.price_embed_usd_per_million_tokens),
+        ),
+    )
+
+
+def _record_deck_spend(source_id: UUID, result: QuizDeckResult) -> None:
+    """Debit a completed deck pass's actual usage to its owner's current UTC day.
+
+    Runs once, where the pass's result is first obtained — after the provider call
+    succeeded, before the items persist — in its own committed transaction. An
+    adapter that reports no usage (the deterministic local one) debits 0, which
+    writes nothing.
+    """
+    with get_engine().begin() as conn:
+        source = SqlAlchemySourceRepository(conn).get_by_id(source_id)
+        if source is None:
+            return
+        budget = _build_budget(conn)
+        budget.record(
+            source.user_id,
+            usd_micros=budget.usage_micros(result.usage),
+            kind=KIND_GENERATION,
+        )
+
+
 def _build_run_deck(conn: Connection) -> RunDeckGeneration:
     """Wire the ``RunDeckGeneration`` driver on ``conn`` (the deck task's root)."""
     settings = get_settings()
@@ -568,7 +611,9 @@ def _generate_quiz_deck_body(self, jid, sid, job_id, log, start):  # noqa: ANN00
         logger.info("quiz.generate_deck: batch pending, scheduled poll", extra=log)
         return None
 
-    # 3b. Inline result (local provider or an already-finished batch): finalize now.
+    # 3b. Inline result (local provider or an already-finished batch): debit the
+    #     pass's actual usage, then finalize now.
+    _record_deck_spend(sid, result)
     _finalize_deck(jid, result, log, start)
     return None
 
@@ -619,5 +664,11 @@ def _poll_quiz_deck_body(self, jid, job_id, handle_payload, deadline_iso, log, s
         logger.info("quiz.poll_deck: still pending, rescheduled", extra=log)
         return None
 
+    # The batch ended: debit the pass's actual usage, then persist. The job row
+    # carries the owner (through its source), resolved here.
+    with get_engine().begin() as conn:
+        job = SqlAlchemyQuizJobRepository(conn).get_by_id(jid)
+        if job is not None:
+            _record_deck_spend(job.source_id, result)
     _finalize_deck(jid, result, log, start)
     return None

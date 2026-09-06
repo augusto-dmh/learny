@@ -25,6 +25,11 @@ from fastapi import Depends, Request
 from sqlalchemy import Connection
 
 from app.application.activation import RecordActivation
+from app.application.budget import (
+    DailyBudget,
+    TokenPrices,
+    usd_to_micros,
+)
 from app.application.cards import (
     AcceptCard,
     AcceptNoteCard,
@@ -101,6 +106,7 @@ from app.infrastructure.clock import SystemClock
 from app.infrastructure.db.engine import get_engine
 from app.infrastructure.db.repositories import (
     SqlAlchemyActivationEventRepository,
+    SqlAlchemyAiSpendDayRepository,
     SqlAlchemyConversationRepository,
     SqlAlchemyConversationTurnRepository,
     SqlAlchemyCorpusRepository,
@@ -188,6 +194,27 @@ def get_db_connection(request: Request) -> Iterator[Connection]:
 
 DbConnection = Annotated[Connection, Depends(get_db_connection)]
 AppSettings = Annotated[Settings, Depends(get_settings)]
+
+
+def build_budget(conn: Connection) -> DailyBudget:
+    """Wire the daily AI spend budget on ``conn`` (the caller's transaction).
+
+    Built per request / per worker call — never cached — so the cap, prices, and
+    (in a later task) the kill switch are read from the *current* settings rather
+    than a stale construction-time snapshot. The clock is the shared adapter; the
+    ledger row it resolves is the caller's UTC day.
+    """
+    settings = get_settings()
+    return DailyBudget(
+        repo=SqlAlchemyAiSpendDayRepository(conn),
+        clock=_clock,
+        daily_cap_micros=usd_to_micros(settings.daily_ai_spend_usd),
+        prices=TokenPrices(
+            input_micros_per_million=usd_to_micros(settings.price_input_usd_per_million_tokens),
+            output_micros_per_million=usd_to_micros(settings.price_output_usd_per_million_tokens),
+            embed_micros_per_million=usd_to_micros(settings.price_embed_usd_per_million_tokens),
+        ),
+    )
 
 
 def get_register_user(conn: DbConnection) -> RegisterUser:
@@ -569,6 +596,7 @@ def get_post_conversation_turn(
             activations=SqlAlchemyActivationEventRepository(conn),
             clock=_clock,
         ),
+        budget=build_budget(conn),
     )
 
 
@@ -612,6 +640,7 @@ def build_plan_deck_generation(conn: Connection) -> PlanDeckGeneration:
         authorize=AuthorizeOwnership(),
         clock=_clock,
         ids=uuid4,
+        budget=build_budget(conn),
     )
 
 

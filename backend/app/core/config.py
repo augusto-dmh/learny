@@ -245,6 +245,16 @@ class Settings(BaseSettings):
     # billed — the runbook's spend report reconciles against actual spend.
     eval_budget_usd: float = 10.0
 
+    # Daily AI spend rails (RFC-0007 Cycle F). ``daily_ai_spend_usd`` is the
+    # per-learner per-UTC-day ceiling the ledger is checked against before any
+    # provider call; ``price_*_usd_per_million_tokens`` is the operator's price
+    # catalog a successful call's token usage is multiplied into when the day's
+    # USD is debited. Micros (1 USD = 1_000_000) keep the accumulation integral.
+    daily_ai_spend_usd: float = 0.5
+    price_input_usd_per_million_tokens: float = 3.0
+    price_output_usd_per_million_tokens: float = 15.0
+    price_embed_usd_per_million_tokens: float = 0.13
+
     # Active recall — quiz deck generation (RFC-002 Cycle E). The provider SDK and
     # model name live only in the quiz adapter; these knobs stay LEARNY_-prefixed and
     # never hard-coded in application/domain code. ``quiz_model`` names the batched

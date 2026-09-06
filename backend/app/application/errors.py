@@ -290,3 +290,15 @@ class StaleCaptureTarget(Exception):
     re-ingest), so the quote no longer resolves to a block; nothing is persisted and
     the web layer maps this to 409 so the reader re-reads and re-selects.
     """
+
+
+class DailyBudgetExhausted(Exception):
+    """The caller's UTC day of AI spend is used up (design §Error Handling).
+
+    Raised by the budget assertion *before* any provider call, so a refused turn or
+    deck costs nothing and the conversation (or the absence of a job) is untouched.
+    The message is the honest come-back-tomorrow copy — today's limit, and when it
+    resets — never which cap tripped or how much anything costs. The web layer maps
+    this to 429 without a ``Retry-After``: the honest signal is the reset time in
+    the copy, not a per-second hint borrowed from the rate limiter.
+    """

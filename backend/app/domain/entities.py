@@ -462,6 +462,20 @@ class CitedSpan:
 
 
 @dataclass(frozen=True)
+class TokenUsage:
+    """The token counts one provider call consumed (design §Components, DailyBudget).
+
+    A Learny-owned DTO so a provider's usage object never crosses a port boundary:
+    adapters that can read usage map it onto this, and the budget service multiplies
+    it into the price catalog to debit the day's USD. ``None`` usage (an adapter that
+    does not report — the deterministic local ones) means a 0 USD debit.
+    """
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+
+@dataclass(frozen=True)
 class GeneratedAnswer:
     """The raw output of the answer-generation port (QA-05, ADR-0007 §4).
 
@@ -482,6 +496,9 @@ class GeneratedAnswer:
     model: str
     found: bool
     spans: tuple[CitedSpan, ...] = ()
+    # The call's token counts when the adapter can read them (an adapter capability,
+    # not a port requirement — like ``spans``). Absent → the debit is 0 USD.
+    usage: TokenUsage | None = None
 
 
 # The exact reply a generation adapter instructs the model to return, alone, when
@@ -825,6 +842,9 @@ class QuizDeckResult:
 
     candidates: tuple[QuizCandidate, ...]
     errors: tuple[str, ...]
+    # The batch's summed token counts when the adapter can read them; absent → the
+    # deck's debit is 0 USD.
+    usage: TokenUsage | None = None
 
 
 @dataclass(frozen=True)
