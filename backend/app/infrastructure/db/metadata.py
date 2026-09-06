@@ -88,6 +88,9 @@ users = Table(
     # When the account accepted the ToS (register stamps it, DOOR-25). NULL for
     # accounts created without the form (the sample operator).
     Column("accepted_tos_at", DateTime(timezone=True), nullable=True),
+    # When the account confirmed its address with the single-use verify token
+    # (DOOR-35). NULL until then; verification never gates the session (AD-327).
+    Column("email_verified_at", DateTime(timezone=True), nullable=True),
 )
 
 user_credentials = Table(
@@ -873,6 +876,34 @@ invite_codes = Table(
     Column("code", Text, primary_key=True),
     Column("remaining_uses", Integer, nullable=False),
     Column("expires_at", DateTime(timezone=True), nullable=True),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+)
+
+# --- Single-use email tokens (RFC-0007 Cycle F; design §Data Models) -------------
+# Verify and password-reset tokens. Only the SHA-256 of the raw opaque token is
+# persisted (``secret_hash``, the sessions ``token_hash`` contract, unique); the
+# raw token exists solely in the outbound mail body — never at rest (DOOR-34).
+# ``purpose`` is the closed ``verify``|``reset`` vocabulary the application
+# constants own, and the consume is one conditional UPDATE on
+# (hash, purpose, unconsumed, unexpired), so single-use holds atomically. The FK
+# cascades: a token names nobody once its user is gone.
+
+email_tokens = Table(
+    "email_tokens",
+    metadata,
+    Column("id", UUID(as_uuid=True), primary_key=True),
+    Column(
+        "user_id",
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    Column("purpose", Text, nullable=False),
+    Column("secret_hash", String(128), nullable=False, unique=True),
+    Column("expires_at", DateTime(timezone=True), nullable=False),
+    # The single-use marker: set by the consuming UPDATE, never cleared.
+    Column("consumed_at", DateTime(timezone=True), nullable=True),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
 )
 

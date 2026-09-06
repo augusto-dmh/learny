@@ -11,6 +11,7 @@ imports FastAPI, SQLAlchemy, or a provider SDK (ADR-007/009).
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from datetime import timedelta
@@ -21,6 +22,7 @@ from app.application.errors import (
     AccountDeleteFailed,
     EmailAlreadyExists,
     InvalidCredentials,
+    InvalidToken,
     InviteRequired,
     NotAuthenticated,
     NotAuthorized,
@@ -40,6 +42,8 @@ from app.domain.ports import (
     Clock,
     CorpusRepository,
     CredentialRepository,
+    EmailPort,
+    EmailTokenRepository,
     PasswordHasher,
     SessionRepository,
     SourceRepository,
@@ -59,6 +63,31 @@ SESSION_TOUCH_INTERVAL = timedelta(seconds=60)
 # (``application/corpus.py``): ``/api/sources/{id}/media/{sha256}``. The digest
 # is the storage key's file stem (``.../media/{sha256}.webp``).
 _MEDIA_DIGEST = re.compile(r"/api/sources/[\da-f-]+/media/([\da-f]{64})")
+
+logger = logging.getLogger(__name__)
+
+# The closed purpose vocabulary for ``email_tokens.purpose``. A token minted for
+# one purpose can never serve the other: the consume predicate matches the hash
+# *and* the purpose, so a verify link can never reset a password (DOOR-35).
+PURPOSE_VERIFY = "verify"
+PURPOSE_RESET = "reset"
+
+# The uniform user-facing copy for a token that is not live (DOOR-35): unknown,
+# consumed, expired, and wrong-purpose are indistinguishable to the client.
+INVALID_TOKEN_MESSAGE = "This link is invalid or has expired."
+
+VERIFY_SUBJECT = "Verify your Learny email"
+VERIFY_BODY = (
+    "Welcome to Learny!\n\n"
+    "Confirm your email address with this single-use token:\n\n{token}\n\n"
+    "If you did not create an account, you can ignore this message."
+)
+RESET_SUBJECT = "Reset your Learny password"
+RESET_BODY = (
+    "Someone asked to reset your Learny password.\n\n"
+    "Use this single-use token to choose a new one:\n\n{token}\n\n"
+    "If this was not you, you can ignore this message."
+)
 
 
 @dataclass(frozen=True)
@@ -114,6 +143,7 @@ class RegisterUser:
         clock: Clock,
         record_activation: RecordActivation,
         invites: InviteRepository | None = None,
+        send_verification: SendEmailVerification | None = None,
         session_ttl: timedelta = DEFAULT_SESSION_TTL,
     ) -> None:
         self._users = users
@@ -124,6 +154,7 @@ class RegisterUser:
         self._clock = clock
         self._record_activation = record_activation
         self._invites = invites
+        self._send_verification = send_verification
         self._session_ttl = session_ttl
 
     def __call__(
@@ -186,6 +217,13 @@ class RegisterUser:
             session_ttl=self._session_ttl,
         )
         self._record_activation(user_id=user.id, name=ACTIVATION_ACCOUNT_CREATED)
+        # The verify mail is fire-and-forget (DOOR-34/40): the token row was
+        # written with the register writes above, and the service below swallows
+        # its own transport failures, so a dead relay can never turn this 201 —
+        # the invited first session (AD-327) — into a 500. Verification never
+        # gates this session: the account is usable unverified.
+        if self._send_verification is not None:
+            self._send_verification(user_id=user.id, email=normalized_email)
         return AuthResult(user=user, issued=issued)
 
 
@@ -246,6 +284,166 @@ class AuthenticateUser:
             session_ttl=self._session_ttl,
         )
         return AuthResult(user=user, issued=issued)
+
+
+class SendEmailVerification:
+    """Mint a single-use verify token for an account and email it (DOOR-34).
+
+    The token row is written first, inside the caller's transaction, so it
+    exists whether or not the send succeeds; the send itself is best-effort by
+    design (DOOR-40): a transport failure is logged — never with the raw token,
+    which lives only in the mail body — and swallowed, because a dead relay must
+    not fail the register or resend that triggered it. The learner re-requests
+    the mail later.
+
+    ``emails`` may raise anything: ``send`` never lets it escape. The port is
+    wired wherever register/resend are, so callers need no guard of their own.
+    """
+
+    def __init__(
+        self,
+        *,
+        email_tokens: EmailTokenRepository,
+        emails: EmailPort,
+        tokens: TokenGenerator,
+        clock: Clock,
+        ttl: timedelta,
+    ) -> None:
+        self._email_tokens = email_tokens
+        self._emails = emails
+        self._tokens = tokens
+        self._clock = clock
+        self._ttl = ttl
+
+    def __call__(self, *, user_id: UUID, email: str) -> None:
+        raw_token = self._tokens.generate()
+        self._email_tokens.create(
+            user_id=user_id,
+            purpose=PURPOSE_VERIFY,
+            raw_token=raw_token,
+            expires_at=self._clock.now() + self._ttl,
+        )
+        try:
+            self._emails.send(
+                to=email, subject=VERIFY_SUBJECT, body=VERIFY_BODY.format(token=raw_token)
+            )
+        except Exception:
+            # Best-effort (DOOR-40): the failure is named for the operator
+            # without the raw token — logging the body or the token would put a
+            # live capability in the logs.
+            logger.exception("email.send.failed purpose=%s", PURPOSE_VERIFY)
+
+
+class VerifyEmail:
+    """Consume a raw verify token and stamp ``email_verified_at`` (DOOR-35)."""
+
+    def __init__(
+        self,
+        *,
+        email_tokens: EmailTokenRepository,
+        users: UserRepository,
+        clock: Clock,
+    ) -> None:
+        self._email_tokens = email_tokens
+        self._users = users
+        self._clock = clock
+
+    def __call__(self, *, raw_token: str) -> None:
+        now = self._clock.now()
+        user_id = self._email_tokens.consume(raw_token, purpose=PURPOSE_VERIFY, now=now)
+        if user_id is None:
+            raise InvalidToken(INVALID_TOKEN_MESSAGE)
+        self._users.set_email_verified(user_id, now)
+
+
+class RequestPasswordReset:
+    """Mint + email a reset token when — and only when — the email exists (DOOR-36).
+
+    Unknown and known addresses must be indistinguishable from the outside: this
+    service answers quietly (no token row, no send) for an unknown email and
+    raises nothing for a known one, so the HTTP layer can return the same 204
+    either way and the flow cannot enumerate accounts. Like the verify send, the
+    send itself is best-effort and swallowed.
+    """
+
+    def __init__(
+        self,
+        *,
+        users: UserRepository,
+        email_tokens: EmailTokenRepository,
+        emails: EmailPort,
+        tokens: TokenGenerator,
+        clock: Clock,
+        ttl: timedelta,
+    ) -> None:
+        self._users = users
+        self._email_tokens = email_tokens
+        self._emails = emails
+        self._tokens = tokens
+        self._clock = clock
+        self._ttl = ttl
+
+    def __call__(self, *, email: str) -> None:
+        normalized = validate_email(email)
+        user = self._users.get_by_email(normalized)
+        if user is None:
+            # No mail, no row, no error: the observable outcome is identical to
+            # the known-address path (DOOR-36).
+            return
+        raw_token = self._tokens.generate()
+        self._email_tokens.create(
+            user_id=user.id,
+            purpose=PURPOSE_RESET,
+            raw_token=raw_token,
+            expires_at=self._clock.now() + self._ttl,
+        )
+        try:
+            self._emails.send(
+                to=user.email, subject=RESET_SUBJECT, body=RESET_BODY.format(token=raw_token)
+            )
+        except Exception:
+            logger.exception("email.send.failed purpose=%s", PURPOSE_RESET)
+
+
+class ResetPassword:
+    """Consume a live reset token and set a new password (DOOR-37).
+
+    The password policy is checked *before* the consume, so a rejected password
+    costs no token; the consume (single-use, purpose-checked, atomic) gates the
+    credential write, so a replayed or wrong-purpose token updates nothing.
+    """
+
+    def __init__(
+        self,
+        *,
+        email_tokens: EmailTokenRepository,
+        credentials: CredentialRepository,
+        hasher: PasswordHasher,
+        clock: Clock,
+    ) -> None:
+        self._email_tokens = email_tokens
+        self._credentials = credentials
+        self._hasher = hasher
+        self._clock = clock
+
+    def __call__(self, *, raw_token: str, password: str) -> None:
+        validate_password(password)
+        now = self._clock.now()
+        user_id = self._email_tokens.consume(raw_token, purpose=PURPOSE_RESET, now=now)
+        if user_id is None:
+            raise InvalidToken(INVALID_TOKEN_MESSAGE)
+        updated = PasswordCredential(
+            user_id=user_id,
+            password_hash=self._hasher.hash(password),
+            algo_params={},
+            updated_at=now,
+        )
+        # A reset establishes a credential for an account without one (and
+        # replaces the hash for everyone else).
+        if self._credentials.get_by_user_id(user_id) is None:
+            self._credentials.add(updated)
+        else:
+            self._credentials.update(updated)
 
 
 class Logout:

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager
+from datetime import timedelta
 from functools import lru_cache
 from typing import Annotated
 from uuid import UUID, uuid4
@@ -55,6 +56,10 @@ from app.application.identity import (
     DeleteAccount,
     Logout,
     RegisterUser,
+    RequestPasswordReset,
+    ResetPassword,
+    SendEmailVerification,
+    VerifyEmail,
 )
 from app.application.ingestion import ReadIngestion, RunIngestion, StartIngestion
 from app.application.notes import (
@@ -114,6 +119,7 @@ from app.infrastructure.db.repositories import (
     SqlAlchemyConversationTurnRepository,
     SqlAlchemyCorpusRepository,
     SqlAlchemyCredentialRepository,
+    SqlAlchemyEmailTokenRepository,
     SqlAlchemyIngestionEventRepository,
     SqlAlchemyIngestionJobRepository,
     SqlAlchemyInviteRepository,
@@ -239,13 +245,34 @@ def get_email_sender() -> EmailPort:
 EmailSender = Annotated[EmailPort, Depends(get_email_sender)]
 
 
-def get_register_user(conn: DbConnection) -> RegisterUser:
+def get_send_email_verification(conn: DbConnection, emails: EmailSender) -> SendEmailVerification:
+    """Wire the best-effort verify mailer on the request transaction (DOOR-34).
+
+    The TTL comes from settings per request (like every composition-root knob),
+    and the token row write shares the caller's transaction; the send itself
+    swallows its failures inside the service (DOOR-40).
+    """
+    return SendEmailVerification(
+        email_tokens=SqlAlchemyEmailTokenRepository(conn),
+        emails=emails,
+        tokens=_tokens,
+        clock=_clock,
+        ttl=timedelta(minutes=get_settings().email_verify_ttl_minutes),
+    )
+
+
+def get_register_user(
+    conn: DbConnection,
+    send_verification: Annotated[SendEmailVerification, Depends(get_send_email_verification)],
+) -> RegisterUser:
     """Wire ``RegisterUser`` on the request transaction.
 
     The invite gate is wired only where ``LEARNY_INVITE_REQUIRED`` is on; the
     default (flag off) passes no gate at all, so register behaves exactly as
     before the rail existed (DOOR-26). Read per request, not cached, so the
-    flag is taken from the current settings rather than a stale snapshot.
+    flag is taken from the current settings rather than a stale snapshot. The
+    verify mailer is always wired: register sends one verify message per
+    successful register (DOOR-34), best-effort (DOOR-40).
     """
     return RegisterUser(
         users=SqlAlchemyUserRepository(conn),
@@ -259,6 +286,42 @@ def get_register_user(conn: DbConnection) -> RegisterUser:
             clock=_clock,
         ),
         invites=(SqlAlchemyInviteRepository(conn) if get_settings().invite_required else None),
+        send_verification=send_verification,
+    )
+
+
+def get_verify_email(conn: DbConnection) -> VerifyEmail:
+    """Wire the token confirmation on the request transaction (DOOR-35)."""
+    return VerifyEmail(
+        email_tokens=SqlAlchemyEmailTokenRepository(conn),
+        users=SqlAlchemyUserRepository(conn),
+        clock=_clock,
+    )
+
+
+def get_request_password_reset(conn: DbConnection, emails: EmailSender) -> RequestPasswordReset:
+    """Wire the reset request on the request transaction (DOOR-36).
+
+    The endpoint answers 204 whether or not the email exists; the service sends
+    nothing for an unknown address.
+    """
+    return RequestPasswordReset(
+        users=SqlAlchemyUserRepository(conn),
+        email_tokens=SqlAlchemyEmailTokenRepository(conn),
+        emails=emails,
+        tokens=_tokens,
+        clock=_clock,
+        ttl=timedelta(minutes=get_settings().email_reset_ttl_minutes),
+    )
+
+
+def get_reset_password(conn: DbConnection) -> ResetPassword:
+    """Wire the password reset on the request transaction (DOOR-37)."""
+    return ResetPassword(
+        email_tokens=SqlAlchemyEmailTokenRepository(conn),
+        credentials=SqlAlchemyCredentialRepository(conn),
+        hasher=_hasher,
+        clock=_clock,
     )
 
 

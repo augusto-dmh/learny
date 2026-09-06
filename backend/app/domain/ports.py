@@ -135,6 +135,10 @@ class UserRepository(Protocol):
         """Return the user with ``email`` (case-insensitive), or ``None``."""
         ...
 
+    def set_email_verified(self, user_id: UUID, verified_at: datetime) -> None:
+        """Stamp ``email_verified_at`` (the verify-token confirmation, DOOR-35)."""
+        ...
+
     def delete(self, user_id: UUID) -> None:
         """Remove the user row; child rows go with it (FK CASCADE)."""
         ...
@@ -186,6 +190,32 @@ class SessionRepository(Protocol):
 
     def delete(self, session_id: UUID) -> None:
         """Remove a session (instant revocation / logout)."""
+        ...
+
+
+@runtime_checkable
+class EmailTokenRepository(Protocol):
+    """Persistence port for single-use email tokens (RFC-0007 Cycle F).
+
+    Verify/reset tokens follow the session-token contract: the adapter stores
+    only the SHA-256 of the raw opaque token (``secret_hash``) and the raw token
+    exists solely in the outbound mail body — never at rest. ``consume`` is one
+    conditional write so single-use holds atomically.
+    """
+
+    def create(self, *, user_id: UUID, purpose: str, raw_token: str, expires_at: datetime) -> None:
+        """Persist a token for ``user_id``, storing only the hash of ``raw_token``."""
+        ...
+
+    def consume(self, raw_token: str, *, purpose: str, now: datetime) -> UUID | None:
+        """Consume the live ``purpose`` token for ``raw_token``; return its ``user_id``.
+
+        A token is live when it exists, is unconsumed, is unexpired at ``now``,
+        and was minted for exactly ``purpose``. Success stamps ``consumed_at``
+        and returns the owning ``user_id``; every other case — unknown, replayed,
+        expired, wrong-purpose — returns ``None`` uniformly, so the failure never
+        says which of the four it was (DOOR-35).
+        """
         ...
 
 

@@ -95,6 +95,7 @@ from app.infrastructure.db.metadata import (
     corpus_chunks,
     corpus_documents,
     corpus_sections,
+    email_tokens,
     ingestion_events,
     ingestion_jobs,
     invite_codes,
@@ -131,6 +132,7 @@ class SqlAlchemyUserRepository:
                 email=user.email,
                 created_at=user.created_at,
                 accepted_tos_at=user.accepted_tos_at,
+                email_verified_at=user.email_verified_at,
             )
         )
         return user
@@ -143,6 +145,12 @@ class SqlAlchemyUserRepository:
         # citext makes this comparison case-insensitive at the DB level.
         row = self._conn.execute(select(users).where(users.c.email == email)).one_or_none()
         return _to_user(row) if row is not None else None
+
+    def set_email_verified(self, user_id: UUID, verified_at: datetime) -> None:
+        """Stamp ``email_verified_at`` (the verify-token confirmation, DOOR-35)."""
+        self._conn.execute(
+            update(users).where(users.c.id == user_id).values(email_verified_at=verified_at)
+        )
 
     def delete(self, user_id: UUID) -> None:
         """Remove the user row; credentials/sessions/sources/... CASCADE away."""
@@ -258,6 +266,45 @@ class SqlAlchemyInviteRepository:
         )
         if result.rowcount == 0:
             raise InviteRequired(INVITE_REQUIRED_MESSAGE)
+
+
+class SqlAlchemyEmailTokenRepository:
+    """``EmailTokenRepository`` backed by the ``email_tokens`` table.
+
+    Hash-at-rest like the session repository; the consume mirrors the invite
+    repository's single-statement contract: liveness (exists, unconsumed,
+    unexpired, purpose matches) and the ``consumed_at`` stamp are one
+    conditional ``UPDATE ... RETURNING``, so two replays of the same raw token
+    cannot both win — the loser updates zero rows and gets ``None`` (DOOR-35).
+    """
+
+    def __init__(self, connection: Connection) -> None:
+        self._conn = connection
+
+    def create(self, *, user_id: UUID, purpose: str, raw_token: str, expires_at: datetime) -> None:
+        self._conn.execute(
+            insert(email_tokens).values(
+                id=uuid4(),
+                user_id=user_id,
+                purpose=purpose,
+                secret_hash=hash_token(raw_token),
+                expires_at=expires_at,
+            )
+        )
+
+    def consume(self, raw_token: str, *, purpose: str, now: datetime) -> UUID | None:
+        row = self._conn.execute(
+            update(email_tokens)
+            .where(
+                email_tokens.c.secret_hash == hash_token(raw_token),
+                email_tokens.c.purpose == purpose,
+                email_tokens.c.consumed_at.is_(None),
+                email_tokens.c.expires_at > now,
+            )
+            .values(consumed_at=now)
+            .returning(email_tokens.c.user_id)
+        ).first()
+        return row.user_id if row is not None else None
 
 
 class SqlAlchemySourceRepository:
@@ -2546,6 +2593,7 @@ def _to_user(row) -> User:  # noqa: ANN001 — Row is an internal SQLAlchemy typ
         email=row.email,
         created_at=row.created_at,
         accepted_tos_at=row.accepted_tos_at,
+        email_verified_at=row.email_verified_at,
     )
 
 

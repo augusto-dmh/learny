@@ -37,6 +37,10 @@ class User:
     # When the account accepted the Terms of Service (register stamps it); NULL
     # for the sample operator account, which registers through no form.
     accepted_tos_at: datetime | None = None
+    # When the account confirmed its address with the single-use verify token
+    # (DOOR-35). NULL until then — and verification never gates the session
+    # (AD-327): an invited, unverified account may Ask and upload.
+    email_verified_at: datetime | None = None
 
 
 @dataclass(frozen=True)

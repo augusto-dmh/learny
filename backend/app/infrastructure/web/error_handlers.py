@@ -42,6 +42,7 @@ from app.application.errors import (
     InvalidConversationTitle,
     InvalidCredentials,
     InvalidSourceUpload,
+    InvalidToken,
     InviteRequired,
     NotAuthenticated,
     NotAuthorized,
@@ -129,6 +130,9 @@ _STATUS_BY_ERROR = {
     # exhausted, or expired code — the copy never says which of the four it was,
     # so the refusal cannot be probed.
     InviteRequired: status.HTTP_403_FORBIDDEN,
+    # A verify/reset email token that is not live (DOOR-35): one uniform 403 for
+    # unknown, replayed, expired, and wrong-purpose alike.
+    InvalidToken: status.HTTP_403_FORBIDDEN,
 }
 
 # An invalid upload maps to a status keyed by its ``kind`` (design §Error Handling):

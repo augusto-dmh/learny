@@ -112,6 +112,11 @@ class FakeUserRepository:
                 return user
         return None
 
+    def set_email_verified(self, user_id: UUID, verified_at: datetime) -> None:
+        user = self._by_id.get(user_id)
+        if user is not None:
+            self._by_id[user_id] = replace(user, email_verified_at=verified_at)
+
     def delete(self, user_id: UUID) -> None:
         self._by_id.pop(user_id, None)
 
@@ -208,6 +213,59 @@ class FakeInviteRepository:
     def remaining_uses(self, code: str) -> int:
         """Test accessor: how many uses the code has left."""
         return self._remaining.get(code, 0)
+
+
+class FakeEmailTokenRepository:
+    """In-memory ``EmailTokenRepository``: hash-at-rest, atomic single-use consume.
+
+    Mirrors the SQL adapter's contract: only the SHA-256 of the raw token is
+    stored; ``consume`` succeeds exactly once per token and only when the
+    purpose matches and ``expires_at`` is in the future — unknown, replayed,
+    expired, and wrong-purpose raw tokens all answer ``None`` uniformly.
+    """
+
+    def __init__(self) -> None:
+        # rows: {user_id, purpose, secret_hash, expires_at, consumed_at}
+        self._rows: list[dict[str, object]] = []
+
+    @staticmethod
+    def _hash(raw_token: str) -> str:
+        return hashlib.sha256(raw_token.encode()).hexdigest()
+
+    def create(self, *, user_id: UUID, purpose: str, raw_token: str, expires_at: datetime) -> None:
+        self._rows.append(
+            {
+                "user_id": user_id,
+                "purpose": purpose,
+                "secret_hash": self._hash(raw_token),
+                "expires_at": expires_at,
+                "consumed_at": None,
+            }
+        )
+
+    def consume(self, raw_token: str, *, purpose: str, now: datetime) -> UUID | None:
+        for row in self._rows:
+            if (
+                row["secret_hash"] == self._hash(raw_token)
+                and row["purpose"] == purpose
+                and row["consumed_at"] is None
+                and row["expires_at"] > now  # type: ignore[operator]
+            ):
+                row["consumed_at"] = now
+                return row["user_id"]  # type: ignore[no-any-return]
+        return None
+
+    def stored_hashes(self) -> list[str]:
+        """Test accessor: every secret hash at rest (raw tokens must be absent)."""
+        return [row["secret_hash"] for row in self._rows]  # type: ignore[misc]
+
+    def hashes_for_user(self, user_id: UUID) -> list[str]:
+        """Test accessor: the hashes minted for one user, in creation order."""
+        return [
+            row["secret_hash"]  # type: ignore[misc]
+            for row in self._rows
+            if row["user_id"] == user_id
+        ]
 
 
 class FakeSourceRepository:

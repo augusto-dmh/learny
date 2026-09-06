@@ -86,6 +86,7 @@ def test_migration_metadata_compiles() -> None:
         "ai_spend_days",
         "activation_events",
         "invite_codes",
+        "email_tokens",
     }
     # Unique email + unique session token_hash are the security-critical constraints.
     user_uniques = {c.name for c in users.constraints if c.__class__.__name__ == "UniqueConstraint"}
@@ -3619,3 +3620,126 @@ def test_in_process_migration_preserves_app_root_logging(monkeypatch) -> None:
         root.handlers[:] = saved_handlers
         for handler in saved_handlers:
             handler.removeFilter(marker)
+
+
+@pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
+def test_migration_0027_creates_email_tokens_and_verified_stamp(monkeypatch) -> None:
+    """0027 up: creates ``email_tokens`` (hash-at-rest single-use verify/reset
+    tokens, FK CASCADE to users, unique ``secret_hash``) and adds a nullable
+    ``users.email_verified_at`` stamp. Down one step to 0026 drops both; a
+    further upgrade re-creates them — the pair round-trips clean.
+    """
+    monkeypatch.setenv("LEARNY_DATABASE_URL", TEST_DB_URL)
+    cfg = _alembic_config(TEST_DB_URL)
+
+    command.upgrade(cfg, "head")
+    command.downgrade(cfg, "0026_user_tos_stamp")
+
+    user_id = uuid.uuid4()
+    token_id = uuid.uuid4()
+    engine = create_engine(TEST_DB_URL)
+    try:
+        inspector = inspect(engine)
+        assert "email_tokens" not in set(inspector.get_table_names())
+        assert "email_verified_at" not in {c["name"] for c in inspector.get_columns("users")}
+    finally:
+        engine.dispose()
+
+    command.upgrade(cfg, "0027_email_verify_reset")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        inspector = inspect(engine)
+        columns = {c["name"]: c for c in inspector.get_columns("email_tokens")}
+        assert set(columns) == {
+            "id",
+            "user_id",
+            "purpose",
+            "secret_hash",
+            "expires_at",
+            "consumed_at",
+            "created_at",
+        }
+        assert columns["secret_hash"]["nullable"] is False
+        assert columns["expires_at"]["nullable"] is False
+        # The single-use marker starts NULL.
+        assert columns["consumed_at"]["nullable"] is True
+
+        fks = inspector.get_foreign_keys("email_tokens")
+        token_fk = next(fk for fk in fks if fk["constrained_columns"] == ["user_id"])
+        assert token_fk["referred_table"] == "users"
+        assert token_fk["options"].get("ondelete") == "CASCADE"
+
+        user_columns = {c["name"]: c for c in inspector.get_columns("users")}
+        assert user_columns["email_verified_at"]["nullable"] is True
+
+        # A token row and a verified stamp are both representable; the stored
+        # value is whatever was written (the hash, never a raw token, is the
+        # application's contract — the schema just stores the column).
+        with engine.begin() as conn:
+            conn.execute(
+                text("INSERT INTO users (id, email) VALUES (:id, :email)"),
+                {"id": user_id, "email": f"{user_id}@example.test"},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO email_tokens (id, user_id, purpose, secret_hash, expires_at) "
+                    "VALUES (:id, :user_id, 'verify', :secret_hash, now() + interval '1 day')"
+                ),
+                {"id": token_id, "user_id": user_id, "secret_hash": "a" * 64},
+            )
+            conn.execute(
+                text("UPDATE users SET email_verified_at = now() WHERE id = :id"),
+                {"id": user_id},
+            )
+        with engine.connect() as conn:
+            verified = conn.execute(
+                text("SELECT email_verified_at FROM users WHERE id = :id"), {"id": user_id}
+            ).scalar_one()
+            token_row = conn.execute(
+                text("SELECT purpose, secret_hash, consumed_at FROM email_tokens WHERE id = :id"),
+                {"id": token_id},
+            ).one()
+        assert verified is not None
+        assert token_row.purpose == "verify"
+        assert token_row.secret_hash == "a" * 64
+        assert token_row.consumed_at is None
+
+        # ``secret_hash`` is unique: a second token storing the same hash is
+        # rejected (the at-rest identity of a raw token).
+        with pytest.raises(IntegrityError), engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO email_tokens (id, user_id, purpose, secret_hash, expires_at) "
+                    "VALUES (:id, :user_id, 'reset', :secret_hash, now() + interval '1 day')"
+                ),
+                {"id": uuid.uuid4(), "user_id": user_id, "secret_hash": "a" * 64},
+            )
+
+        # Deleting the user cascades the token rows away.
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM users WHERE id = :id"), {"id": user_id})
+        with engine.connect() as conn:
+            remaining = conn.execute(
+                text("SELECT count(*) FROM email_tokens WHERE user_id = :id"), {"id": user_id}
+            ).scalar_one()
+        assert remaining == 0
+    finally:
+        engine.dispose()
+
+    # Down one step to 0026: the table drops and the column goes; users survives.
+    command.downgrade(cfg, "0026_user_tos_stamp")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        assert "email_tokens" not in set(inspect(engine).get_table_names())
+        assert "email_verified_at" not in {c["name"] for c in inspect(engine).get_columns("users")}
+    finally:
+        engine.dispose()
+
+    # Round-trip: a further upgrade re-creates both at head.
+    command.upgrade(cfg, "0027_email_verify_reset")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        assert "email_tokens" in set(inspect(engine).get_table_names())
+        assert "email_verified_at" in {c["name"] for c in inspect(engine).get_columns("users")}
+    finally:
+        engine.dispose()

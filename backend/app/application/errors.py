@@ -348,3 +348,12 @@ class InviteRequired(Exception):
     or session is written; the web layer maps this to 403 with the invite-only
     copy.
     """
+
+
+class InvalidToken(Exception):
+    """A submitted verify/reset email token is not live (DOOR-35).
+
+    One uniform failure for an unknown token, a replayed (consumed) one, an
+    expired one, and a token minted for the other purpose alike — the response
+    never says which. The web layer maps this to 403.
+    """
