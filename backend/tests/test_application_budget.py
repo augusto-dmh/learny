@@ -421,6 +421,48 @@ def test_successful_ask_debits_at_the_fixture_profile_catalog_including_cache(
     assert generation.calls == 1
 
 
+def test_a_stamped_answer_debits_at_the_stamped_profile_catalog(db_conn: Connection) -> None:
+    # AD-344/PRICE-01 on the turn path: the routing adapter stamps the serving
+    # profile on the answer and the debit prices that stamp's catalog. Here an
+    # economy-stamped answer debits the economy arithmetic — (900×0.2) +
+    # (400×1.0) = 580 micros — where the primary catalog would debit 1700, so
+    # the test pins *which* catalog the stamp selected.
+    user, source, conversation = _seed_turn_world(db_conn, "budget-stamp@example.com")
+    generation = _RecordingGeneration(
+        GeneratedAnswer(
+            text="",
+            cited_chunk_ids=(),
+            model="economy-model",
+            found=False,
+            usage=TokenUsage(input_tokens=900, output_tokens=400),
+            profile_id="economy",
+        )
+    )
+    retrieve = _StubRetrieve([_evidence(source.id)])
+    budget = DailyBudget(
+        repo=_ledger(db_conn),
+        clock=FakeClock(_NOW),
+        daily_cap_micros=_CAP_MICROS,
+        prices=_PRICES,
+        ask_daily_cap=8,
+        teach_start_daily_cap=1,
+        profile_catalogs={
+            "economy": TokenPrices(
+                input_micros_per_million=200_000,
+                output_micros_per_million=1_000_000,
+                embed_micros_per_million=0,
+            )
+        },
+    )
+    service = _turn_service(db_conn, generation=generation, retrieve=retrieve, budget=budget)
+
+    service(user=user, conversation_id=conversation.id, message="Why?", mode=MODE_ANSWER)
+
+    row = _ledger(db_conn).get_for_day(user.id, _DAY)
+    assert row is not None and row.usd_micros == 580
+    assert generation.calls == 1
+
+
 def test_generation_without_reported_usage_debits_nothing(db_conn: Connection) -> None:
     # DOOR-14: the deterministic local adapters report no usage, so no USD is
     # recorded — but the free-tier Ask counter still counts the call (DOOR-10),

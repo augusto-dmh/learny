@@ -958,7 +958,7 @@ class PostConversationTurn:
             return
         self._budget.record(
             user_id,
-            usd_micros=self._budget.usage_micros(generated.usage),
+            usd_micros=self._budget.usage_micros(generated.usage, generated.profile_id),
             kind=kind,
         )
 

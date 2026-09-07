@@ -513,6 +513,10 @@ class GeneratedAnswer:
     # The call's token counts when the adapter can read them (an adapter capability,
     # not a port requirement — like ``spans``). Absent → the debit is 0 USD.
     usage: TokenUsage | None = None
+    # The serving profile's id, stamped by the routing adapter (AD-344) so the
+    # debit prices the call at the serving profile's catalog (PRICE-01). Absent
+    # (a direct sub-adapter's answer) → the primary catalog, as before routing.
+    profile_id: str | None = None
 
 
 # The exact reply a generation adapter instructs the model to return, alone, when
