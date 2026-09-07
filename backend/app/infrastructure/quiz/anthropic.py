@@ -35,7 +35,7 @@ from app.domain.entities import (
     QuizSection,
     TokenUsage,
 )
-from app.infrastructure.answering.anthropic import AnthropicAdapterBase
+from app.infrastructure.answering.anthropic import AnthropicAdapterBase, raise_translated
 
 # Wall-clock bound for the one foreground generation call (card suggestions). The deck
 # path is batched and asynchronous, so it is deliberately unaffected. Chosen well under
@@ -254,7 +254,10 @@ class AnthropicQuizAdapter(AnthropicAdapterBase):
         if not requests:
             return QuizDeckHandle(provider="anthropic", batch_id=None, payload={"sections": {}})
 
-        batch = self._get_client().messages.batches.create(requests=requests)
+        try:
+            batch = self._get_client().messages.batches.create(requests=requests)
+        except Exception as exc:
+            raise_translated(exc)
         return QuizDeckHandle(
             provider="anthropic",
             batch_id=batch.id,
@@ -274,19 +277,24 @@ class AnthropicQuizAdapter(AnthropicAdapterBase):
         if limit <= 0 or not section.chunks:
             return []
         chunk_ids = [str(chunk_id) for chunk_id, _ in section.chunks]
-        message = self._get_client().messages.create(
-            model=self._model,
-            max_tokens=self._max_tokens,
-            messages=[{"role": "user", "content": _quote_prompt(section, quote, limit)}],
-            output_config={"format": {"type": "json_schema", "schema": _items_schema(chunk_ids)}},
-            # Bounded per call rather than on the shared client, which the streaming
-            # answer path also uses and where a long read is legitimate. This one is a
-            # student waiting on a popover, and it occupies a threadpool slot while it
-            # waits: on the SDK default a hung connection would hold that slot for ten
-            # minutes. Rate limiting caps how often this is entered, not how long it
-            # stays, so the bound has to live here.
-            timeout=_SUGGEST_TIMEOUT_S,
-        )
+        try:
+            message = self._get_client().messages.create(
+                model=self._model,
+                max_tokens=self._max_tokens,
+                messages=[{"role": "user", "content": _quote_prompt(section, quote, limit)}],
+                output_config={
+                    "format": {"type": "json_schema", "schema": _items_schema(chunk_ids)}
+                },
+                # Bounded per call rather than on the shared client, which the streaming
+                # answer path also uses and where a long read is legitimate. This one is a
+                # student waiting on a popover, and it occupies a threadpool slot while it
+                # waits: on the SDK default a hung connection would hold that slot for ten
+                # minutes. Rate limiting caps how often this is entered, not how long it
+                # stays, so the bound has to live here.
+                timeout=_SUGGEST_TIMEOUT_S,
+            )
+        except Exception as exc:
+            raise_translated(exc)
         try:
             candidates = _parse_items(message)
         except (KeyError, json.JSONDecodeError) as exc:
@@ -305,13 +313,16 @@ class AnthropicQuizAdapter(AnthropicAdapterBase):
         """
         if limit <= 0 or not note_body.strip():
             return []
-        message = self._get_client().messages.create(
-            model=self._model,
-            max_tokens=self._max_tokens,
-            messages=[{"role": "user", "content": _note_prompt(note_body, context, limit)}],
-            output_config={"format": {"type": "json_schema", "schema": _note_items_schema()}},
-            timeout=_SUGGEST_TIMEOUT_S,
-        )
+        try:
+            message = self._get_client().messages.create(
+                model=self._model,
+                max_tokens=self._max_tokens,
+                messages=[{"role": "user", "content": _note_prompt(note_body, context, limit)}],
+                output_config={"format": {"type": "json_schema", "schema": _note_items_schema()}},
+                timeout=_SUGGEST_TIMEOUT_S,
+            )
+        except Exception as exc:
+            raise_translated(exc)
         try:
             candidates = _parse_note_items(message)
         except (KeyError, json.JSONDecodeError) as exc:
@@ -324,7 +335,10 @@ class AnthropicQuizAdapter(AnthropicAdapterBase):
             return QuizDeckResult(candidates=(), errors=())
 
         client = self._get_client()
-        batch = client.messages.batches.retrieve(handle.batch_id)
+        try:
+            batch = client.messages.batches.retrieve(handle.batch_id)
+        except Exception as exc:
+            raise_translated(exc)
         if batch.processing_status != "ended":
             return None
 
@@ -333,22 +347,28 @@ class AnthropicQuizAdapter(AnthropicAdapterBase):
         input_tokens = 0
         output_tokens = 0
         saw_usage = False
-        for response in client.messages.batches.results(handle.batch_id):
-            result = response.result
-            if result.type != "succeeded":
-                errors.append(f"{response.custom_id}: {result.type}")
-                continue
-            try:
-                candidates.extend(_parse_items(result.message))
-            except (ValueError, KeyError, json.JSONDecodeError) as exc:
-                errors.append(f"{response.custom_id}: {exc}")
-            # Sum the batch's per-request usage onto the result so the daily spend
-            # debit prices what the pass actually consumed.
-            usage = getattr(result.message, "usage", None)
-            if usage is not None:
-                saw_usage = True
-                input_tokens += getattr(usage, "input_tokens", 0) or 0
-                output_tokens += getattr(usage, "output_tokens", 0) or 0
+        try:
+            for response in client.messages.batches.results(handle.batch_id):
+                result = response.result
+                if result.type != "succeeded":
+                    errors.append(f"{response.custom_id}: {result.type}")
+                    continue
+                try:
+                    candidates.extend(_parse_items(result.message))
+                except (ValueError, KeyError, json.JSONDecodeError) as exc:
+                    errors.append(f"{response.custom_id}: {exc}")
+                # Sum the batch's per-request usage onto the result so the daily spend
+                # debit prices what the pass actually consumed.
+                usage = getattr(result.message, "usage", None)
+                if usage is not None:
+                    saw_usage = True
+                    input_tokens += getattr(usage, "input_tokens", 0) or 0
+                    output_tokens += getattr(usage, "output_tokens", 0) or 0
+        except Exception as exc:
+            # Only a transport failure reaches this handler (per-request parse
+            # failures are consumed as section errors above), so the paginated
+            # results read translates exactly like the other batch calls.
+            raise_translated(exc)
         return QuizDeckResult(
             candidates=tuple(candidates),
             errors=tuple(errors),
