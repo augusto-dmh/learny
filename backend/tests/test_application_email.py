@@ -117,6 +117,11 @@ def test_log_adapter_logs_the_message_without_a_socket(caplog) -> None:  # noqa:
     assert len(records) == 1
     assert "reader@example.com" in records[0].getMessage()
     assert "Verify your email" in records[0].getMessage()
+    # The body embeds the raw single-use token, so it is redacted: the token
+    # string never reaches the log record (and the placeholder marks where the
+    # body would have been).
+    assert "token-1" not in records[0].getMessage()
+    assert "body=<suppressed>" in records[0].getMessage()
 
 
 # ---- Capturing double (what the flow tests assert with) -----------------------

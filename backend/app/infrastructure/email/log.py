@@ -18,4 +18,6 @@ class LogEmailSender:
     """``EmailPort`` adapter that logs the message; never touches a socket."""
 
     def send(self, *, to: str, subject: str, body: str) -> None:
-        logger.info("email.sent via log to=%s subject=%s body=%s", to, subject, body)
+        # Verify/reset bodies embed the raw single-use token: the body itself is
+        # a capability and must never reach the log stream.
+        logger.info("email.sent via log to=%s subject=%s body=<suppressed>", to, subject)
