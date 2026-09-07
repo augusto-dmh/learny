@@ -30,6 +30,7 @@ from app.application.errors import (
     ValidationError,
 )
 from app.application.invites import INVITE_REQUIRED_MESSAGE, InviteRepository
+from app.application.media import media_object_key
 from app.application.validation import (
     SAMPLE_OPERATOR_EMAIL,
     TOS_ACCEPTANCE_MESSAGE,
@@ -60,8 +61,8 @@ DEFAULT_SESSION_TTL = timedelta(days=14)
 SESSION_TOUCH_INTERVAL = timedelta(seconds=60)
 
 # Media references embedded in section markdown by the corpus builder
-# (``application/corpus.py``): ``/api/sources/{id}/media/{sha256}``. The digest
-# is the storage key's file stem (``.../media/{sha256}.webp``).
+# (``application/media.py``): ``/api/sources/{id}/media/{sha256}``. The digest
+# is the storage key's file stem — the one shape ``media_object_key`` builds.
 _MEDIA_DIGEST = re.compile(r"/api/sources/[\da-f-]+/media/([\da-f]{64})")
 
 logger = logging.getLogger(__name__)
@@ -491,7 +492,7 @@ class DeleteAccount:
             keys.append(source.object_key)
             for markdown in self._corpus.list_section_markdown(source.id):
                 keys.extend(
-                    f"sources/{user.id}/{source.id}/media/{digest}.webp"
+                    media_object_key(user_id=user.id, source_id=source.id, digest=digest)
                     for digest in _MEDIA_DIGEST.findall(markdown)
                 )
         return list(dict.fromkeys(keys))

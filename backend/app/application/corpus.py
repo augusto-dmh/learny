@@ -26,6 +26,7 @@ from app.application.language import detect_language, sample_text
 from app.application.media import (
     emphasize_dropped_images,
     markdown_images,
+    media_object_key,
     omit_empty_alt_images,
     rewrite_markdown_images,
 )
@@ -250,7 +251,9 @@ class BuildCorpus:
             if encoded is None:
                 dropped.add(src)
                 continue
-            key = f"sources/{source.user_id}/{source.id}/media/{encoded.sha256}.webp"
+            key = media_object_key(
+                user_id=source.user_id, source_id=source.id, digest=encoded.sha256
+            )
             self._storage.put_object(key, encoded.data, content_type=encoded.content_type)
             href_to_hash[src] = encoded.sha256
         return href_to_hash, dropped, packaged_srcs

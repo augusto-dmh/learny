@@ -22,6 +22,7 @@ from app.application.errors import (
     NotAuthorized,
     ValidationError,
 )
+from app.application.media import media_object_key
 from app.application.identity import (
     SESSION_TOUCH_INTERVAL,
     AuthenticateUser,
@@ -449,8 +450,11 @@ def test_delete_account_deletes_media_keys_derived_from_corpus_markdown(ports) -
     repeated, other = "b" * 64, "c" * 64
     corpus = _corpus_with_media(source, [repeated, repeated, other])
     storage = FakeStorage()
+    # Expected keys come from the ONE shared builder the deletion path itself
+    # uses — if the shapes ever drift, this test cannot pass by accident.
     media_keys = [
-        f"sources/{result.user.id}/{source.id}/media/{digest}.webp" for digest in (repeated, other)
+        media_object_key(user_id=result.user.id, source_id=source.id, digest=digest)
+        for digest in (repeated, other)
     ]
     for key in [source.object_key, *media_keys]:
         storage.put_object(key, b"bytes", content_type="image/webp")

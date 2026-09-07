@@ -19,6 +19,7 @@ from app.application.errors import (
 )
 from app.application.identity import AuthorizeOwnership
 from app.application.ingestion import readable_source
+from app.application.media import media_object_key
 from app.application.quotas import Quotas
 from app.application.validation import extension_of, validate_source_upload
 from app.domain.entities import Source, User
@@ -170,7 +171,7 @@ class ReadSourceMedia:
         source = self._get_source(user=user, source_id=source_id)
         if _FIGURE_DIGEST.fullmatch(sha256) is None:
             raise SourceNotFound("Source not found.")
-        key = f"sources/{source.user_id}/{source.id}/media/{sha256}.webp"
+        key = media_object_key(user_id=source.user_id, source_id=source.id, digest=sha256)
         try:
             return self._storage.get_object(key)
         except StorageUnavailable:

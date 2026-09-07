@@ -64,3 +64,17 @@ def emphasize_dropped_images(markdown: str, *, dropped_hrefs: Collection[str]) -
         return match.group(0)
 
     return _IMAGE.sub(replace, markdown)
+
+
+def media_object_key(*, user_id: UUID, source_id: UUID, digest: str) -> str:
+    """Return the storage key for one encoded figure; ``digest`` is its SHA-256.
+
+    The key shape exists exactly here, once. The corpus builder PUTs each encoded
+    raster at this key and embeds the matching
+    ``/api/sources/{source_id}/media/{digest}`` URL into section markdown
+    (``rewrite_markdown_images``); the media read serves the object back from the
+    same key; account erasure re-derives the keys from the stored markdown. A
+    writer and an eraser that disagreed would strand objects or destroy figures —
+    so neither hand-builds the string again.
+    """
+    return f"sources/{user_id}/{source_id}/media/{digest}.webp"

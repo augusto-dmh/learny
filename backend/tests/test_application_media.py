@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from app.application.media import rewrite_markdown_images
+from app.application.media import media_object_key, rewrite_markdown_images
 
 _SOURCE = UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
 _HASH = "a" * 64
@@ -73,3 +73,26 @@ def test_surrounding_prose_is_preserved() -> None:
     )
 
     assert rewritten == (f"See ![one](/api/sources/{_SOURCE}/media/{_HASH}) and ![two](b.png).")
+
+
+def test_media_object_key_is_the_one_shared_shape() -> None:
+    # The stored-object shape the corpus builder PUTs, the media read serves,
+    # and account erasure re-derives from markdown — pinned exactly once here.
+    key = media_object_key(
+        user_id=UUID("11111111-2222-3333-4444-555555555555"),
+        source_id=_SOURCE,
+        digest=_HASH,
+    )
+    assert key == f"sources/{UUID('11111111-2222-3333-4444-555555555555')}/{_SOURCE}/media/{_HASH}.webp"
+
+
+def test_media_object_key_matches_the_embedded_markdown_url() -> None:
+    # The markdown the corpus embeds and the key the object is stored under are
+    # two halves of one contract: the digest in the URL is the key's file stem.
+    markdown = rewrite_markdown_images(
+        "![Cover](cover.png)", source_id=_SOURCE, href_to_hash={"cover.png": _HASH}
+    )
+    digest = markdown.rsplit("/", 1)[-1].rstrip(")")
+    assert media_object_key(user_id=_SOURCE, source_id=_SOURCE, digest=digest).endswith(
+        f"/media/{digest}.webp"
+    )
