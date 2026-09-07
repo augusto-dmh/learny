@@ -310,7 +310,7 @@ def test_generate_pending_batch_schedules_poll(seed, db_engine: Engine) -> None:
     fake = FakeQuizAdapter(result=None)
 
     with (
-        patch("app.worker.tasks.build_quiz_adapter", lambda settings: fake),
+        patch("app.worker.tasks.build_quiz_adapter", lambda settings, provider=None: fake),
         patch("app.worker.tasks.poll_quiz_deck.apply_async") as apply_async,
     ):
         _generate(FakeSelf(), str(ctx.source.id), str(ctx.job.id))
@@ -334,7 +334,7 @@ def test_poll_pending_before_deadline_reschedules(seed, db_engine: Engine) -> No
     future = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
 
     with (
-        patch("app.worker.tasks.build_quiz_adapter", lambda settings: fake),
+        patch("app.worker.tasks.build_quiz_adapter", lambda settings, provider=None: fake),
         patch("app.worker.tasks.poll_quiz_deck.apply_async") as apply_async,
     ):
         _poll(FakeSelf(), str(ctx.job.id), handle, future)
@@ -350,7 +350,7 @@ def test_poll_past_deadline_fails_with_timeout(seed, db_engine: Engine) -> None:
     past = (datetime.now(UTC) - timedelta(hours=1)).isoformat()
 
     with (
-        patch("app.worker.tasks.build_quiz_adapter", lambda settings: fake),
+        patch("app.worker.tasks.build_quiz_adapter", lambda settings, provider=None: fake),
         patch("app.worker.tasks.poll_quiz_deck.apply_async") as apply_async,
     ):
         _poll(FakeSelf(), str(ctx.job.id), handle, past)
@@ -381,7 +381,7 @@ def test_poll_result_finalizes_and_persists(seed, db_engine: Engine) -> None:
     handle = QuizDeckHandle(provider="anthropic", batch_id="batch-1", payload={}).to_payload()
     future = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
 
-    with patch("app.worker.tasks.build_quiz_adapter", lambda settings: fake):
+    with patch("app.worker.tasks.build_quiz_adapter", lambda settings, provider=None: fake):
         _poll(FakeSelf(), str(ctx.job.id), handle, future)
 
     job = _read_job(db_engine, ctx.job.id)
@@ -399,7 +399,7 @@ def test_generate_provider_fault_retries_then_fails(seed, db_engine: Engine) -> 
     fake = FakeQuizAdapter(begin_error=RuntimeError("anthropic 503"))
 
     # Retries remaining: the task records a retry and re-raises, job stays running.
-    with patch("app.worker.tasks.build_quiz_adapter", lambda settings: fake):
+    with patch("app.worker.tasks.build_quiz_adapter", lambda settings, provider=None: fake):
         retrying = FakeSelf(retries=0, max_retries=3)
         with pytest.raises(FakeSelf.RetrySignal):
             _generate(retrying, str(ctx.source.id), str(ctx.job.id))
@@ -408,7 +408,7 @@ def test_generate_provider_fault_retries_then_fails(seed, db_engine: Engine) -> 
     assert _read_job(db_engine, ctx.job.id).status == QuizJobStatus.RUNNING
 
     # Retries exhausted: terminal failure with the redacted summary.
-    with patch("app.worker.tasks.build_quiz_adapter", lambda settings: fake):
+    with patch("app.worker.tasks.build_quiz_adapter", lambda settings, provider=None: fake):
         _generate(FakeSelf(retries=3, max_retries=3), str(ctx.source.id), str(ctx.job.id))
     job = _read_job(db_engine, ctx.job.id)
     assert job.status == QuizJobStatus.FAILED
@@ -424,7 +424,7 @@ def test_poll_provider_fault_retries_then_fails(seed, db_engine: Engine) -> None
     handle = QuizDeckHandle(provider="anthropic", batch_id="batch-1", payload={}).to_payload()
     future = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
 
-    with patch("app.worker.tasks.build_quiz_adapter", lambda settings: fake):
+    with patch("app.worker.tasks.build_quiz_adapter", lambda settings, provider=None: fake):
         retrying = FakeSelf(retries=0, max_retries=3)
         with pytest.raises(FakeSelf.RetrySignal):
             _poll(retrying, str(ctx.job.id), handle, future)
@@ -432,7 +432,7 @@ def test_poll_provider_fault_retries_then_fails(seed, db_engine: Engine) -> None
     assert retrying.retry_calls[0]["countdown"] > 0
     assert _read_job(db_engine, ctx.job.id).status == QuizJobStatus.RUNNING
 
-    with patch("app.worker.tasks.build_quiz_adapter", lambda settings: fake):
+    with patch("app.worker.tasks.build_quiz_adapter", lambda settings, provider=None: fake):
         _poll(FakeSelf(retries=3, max_retries=3), str(ctx.job.id), handle, future)
     job = _read_job(db_engine, ctx.job.id)
     assert job.status == QuizJobStatus.FAILED

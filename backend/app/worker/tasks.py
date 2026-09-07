@@ -54,7 +54,7 @@ from app.infrastructure.ingestion.factory import (
 )
 from app.infrastructure.ingestion.images import PillowImageEncoder
 from app.infrastructure.ingestion.markup import Bs4MarkupConverter
-from app.infrastructure.quiz import build_quiz_adapter
+from app.infrastructure.quiz import UndeclaredProviderError, build_quiz_adapter
 from app.infrastructure.scheduling import build_scheduling_adapter
 from app.infrastructure.storage.s3 import S3StorageAdapter
 from app.infrastructure.worker.steps import (
@@ -478,6 +478,7 @@ def _build_refresh_note_cards(conn: Connection) -> RefreshNoteCards:
 # Fixed, non-secret durable failure text (mirrors the ingestion redaction).
 _DECK_FAILURE_ERROR = "Quiz deck generation failed."
 _DECK_TIMEOUT_ERROR = "Quiz deck generation timed out."
+_DECK_PROVIDER_ERROR = "Quiz deck generation provider is no longer configured."
 
 
 def _build_budget(conn: Connection) -> DailyBudget:
@@ -610,10 +611,12 @@ def _generate_quiz_deck_body(self, jid, sid, job_id, log, start):  # noqa: ANN00
     logger.info("quiz.generate_deck: started", extra=log)
 
     # 2. Start the pass and collect once. A provider fault here retries the task.
+    #    The inline collect is pinned to the provider the handle records — the one
+    #    ``begin_deck`` just used — so the collect can never drift from the begin.
     try:
         with get_engine().begin() as conn:
             handle = _build_run_deck(conn).begin_deck(sid)
-        result = build_quiz_adapter(get_settings()).collect_deck(handle)
+        result = build_quiz_adapter(get_settings(), provider=handle.provider).collect_deck(handle)
     except Exception as exc:  # noqa: BLE001 — classified as retryable/terminal below
         return _retry_or_fail_deck(self, jid, exc, log, start)
 
@@ -643,7 +646,10 @@ def poll_quiz_deck(  # noqa: ANN001 — bound task ``self``
     A still-pending batch reschedules this task after ``quiz_batch_poll_interval_s`` until
     the absolute ``deadline_iso`` is reached, at which point the job is failed with a
     timeout (edge case). A completed batch is finalized (idempotent). A provider fault
-    retries with backoff, then fails the job.
+    retries with backoff, then fails the job. The poll is pinned to the provider the
+    handle records: a handle naming a provider the current configuration no longer
+    declares fails the job terminally — never a retry loop, never a foreign provider
+    polling the beginning provider's batch id.
     """
     jid = UUID(job_id)
     log = {"job_id": job_id}
@@ -658,8 +664,25 @@ def poll_quiz_deck(  # noqa: ANN001 — bound task ``self``
 
 def _poll_quiz_deck_body(self, jid, job_id, handle_payload, deadline_iso, log, start):  # noqa: ANN001, ANN202
     handle = QuizDeckHandle.from_payload(handle_payload)
+    # Build the adapter for the provider that began the deck — before the retry
+    # try, so an undeclared provider is a terminal failure rather than a retry
+    # loop, and no adapter is built (no provider touched) when it is.
     try:
-        result = build_quiz_adapter(get_settings()).collect_deck(handle)
+        adapter = build_quiz_adapter(get_settings(), provider=handle.provider)
+    except UndeclaredProviderError:
+        with get_engine().begin() as conn:
+            _build_run_deck(conn).fail(jid, _DECK_PROVIDER_ERROR)
+        logger.error(
+            "quiz.poll_deck: handle names provider %r, which the current configuration "
+            "does not declare; job failed terminally with no poll attempted — declare "
+            "that provider (or re-generate the deck) to collect this batch",
+            handle.provider,
+            extra={**log, "provider": handle.provider, "duration_ms": _elapsed_ms(start)},
+        )
+        return None
+
+    try:
+        result = adapter.collect_deck(handle)
     except Exception as exc:  # noqa: BLE001 — classified as retryable/terminal below
         return _retry_or_fail_deck(self, jid, exc, log, start)
 

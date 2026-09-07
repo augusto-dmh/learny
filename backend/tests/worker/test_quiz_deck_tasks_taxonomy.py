@@ -70,7 +70,7 @@ def test_a_translated_transport_failure_still_takes_the_retry_path(error: Except
     handle = QuizDeckHandle(provider="anthropic", batch_id="batch-1", payload={}).to_payload()
     future = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
 
-    with patch("app.worker.tasks.build_quiz_adapter", lambda settings: fake):
+    with patch("app.worker.tasks.build_quiz_adapter", lambda settings, provider=None: fake):
         with pytest.raises(FakeSelf.RetrySignal):
             _poll(bound, str(uuid4()), handle, future)
 
