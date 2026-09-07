@@ -64,9 +64,7 @@ def test_hit_arms_the_window_expiry_on_the_first_count() -> None:
     client = _live_redis()
     key = f"arm-{uuid4()}"
     redis_key = f"learny:rl:{key}"
-    limiter = RedisFixedWindowRateLimiter.from_url(
-        _REDIS_URL, max_attempts=5, window_seconds=60
-    )
+    limiter = RedisFixedWindowRateLimiter.from_url(_REDIS_URL, max_attempts=5, window_seconds=60)
     try:
         assert limiter.hit(key) == (True, 0)
         ttl = int(client.ttl(redis_key))

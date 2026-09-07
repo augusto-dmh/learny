@@ -83,7 +83,9 @@ def test_media_object_key_is_the_one_shared_shape() -> None:
         source_id=_SOURCE,
         digest=_HASH,
     )
-    assert key == f"sources/{UUID('11111111-2222-3333-4444-555555555555')}/{_SOURCE}/media/{_HASH}.webp"
+    assert key == (
+        f"sources/{UUID('11111111-2222-3333-4444-555555555555')}/{_SOURCE}/media/{_HASH}.webp"
+    )
 
 
 def test_media_object_key_matches_the_embedded_markdown_url() -> None:

@@ -191,8 +191,19 @@ def test_prod_runs_on_one_fixed_subnet_and_pins_the_trusted_proxy_list(prod: dic
 
     # Every service that talks to another sits on that network (a service with
     # explicit networks leaves the default, so a straggler would lose DNS).
-    for svc in ("db", "redis", "minio", "api", "worker", "worker-pdf", "backup",
-                "db-restore", "monitoring", "web", "caddy"):
+    for svc in (
+        "db",
+        "redis",
+        "minio",
+        "api",
+        "worker",
+        "worker-pdf",
+        "backup",
+        "db-restore",
+        "monitoring",
+        "web",
+        "caddy",
+    ):
         assert prod[svc].get("networks") == ["learny"], svc
 
     # The api trusts exactly that subnet — narrow, and equal to it.

@@ -22,7 +22,6 @@ from app.application.errors import (
     NotAuthorized,
     ValidationError,
 )
-from app.application.media import media_object_key
 from app.application.identity import (
     SESSION_TOUCH_INTERVAL,
     AuthenticateUser,
@@ -32,6 +31,7 @@ from app.application.identity import (
     Logout,
     RegisterUser,
 )
+from app.application.media import media_object_key
 from app.application.validation import SAMPLE_OPERATOR_EMAIL
 from app.domain.entities import CorpusSectionRecord, ParsedSection, Source, User
 from tests.fakes import (

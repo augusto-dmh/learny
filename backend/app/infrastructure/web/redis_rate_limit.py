@@ -74,7 +74,8 @@ class RedisFixedWindowRateLimiter:
     def hit(self, key: str) -> tuple[bool, int]:
         redis_key = f"learny:rl:{key}"
         try:
-            count, ttl = (int(v) for v in self._window_script(keys=[redis_key], args=[self._window]))
+            script = self._window_script(keys=[redis_key], args=[self._window])
+            count, ttl = (int(v) for v in script)
             if count > self._max:
                 retry_after = ttl if ttl > 0 else self._window
                 return False, max(1, retry_after)

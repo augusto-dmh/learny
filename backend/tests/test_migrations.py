@@ -3777,7 +3777,9 @@ def test_migration_0028_adds_the_one_time_deck_spend_marker(monkeypatch) -> None
     try:
         inspector = inspect(engine)
         column = next(
-            c for c in inspector.get_columns("quiz_generation_jobs") if c["name"] == "spend_recorded_at"
+            c
+            for c in inspector.get_columns("quiz_generation_jobs")
+            if c["name"] == "spend_recorded_at"
         )
         assert column["nullable"] is True
 
