@@ -167,6 +167,10 @@ class EvalInput:
     generation_model: str
     citation_valid: bool
     found: bool = True
+    # The serving profile's id, as the routing adapter stamped it on the answer
+    # (AD-344) and the producer carried here — never re-read from settings, which
+    # may have moved on between the case running and the eval judging it (EVAL-01).
+    generation_profile: str | None = None
 
 
 class _MessagesClient(Protocol):
@@ -318,12 +322,12 @@ def run_eval(
 
     Caps the case count first (cost bound, research §8), scores faithfulness and
     relevancy per case, and writes ``evals/results/<date>-<git-sha>.jsonl`` with one
-    line per case: ``{case_id, ts, git_sha, generation_model, judge_model,
-    prompt_hash, faithfulness, relevancy, citation_valid, found}``. Declined cases
-    (``found=False``) make no judge calls and carry ``null`` scores — a decline is
-    a different outcome class, not a low-quality answer (ADR-028). When ``gate`` is
-    true (defaults to ``LEARNY_EVAL_GATE=1``) the aggregate thresholds are
-    asserted; otherwise the run is report-only (calibration-first). Returns the
+    line per case: ``{case_id, ts, git_sha, generation_model, generation_profile,
+    judge_model, prompt_hash, faithfulness, relevancy, citation_valid, found}``.
+    Declined cases (``found=False``) make no judge calls and carry ``null`` scores —
+    a decline is a different outcome class, not a low-quality answer (ADR-028). When
+    ``gate`` is true (defaults to ``LEARNY_EVAL_GATE=1``) the aggregate thresholds
+    are asserted; otherwise the run is report-only (calibration-first). Returns the
     written lines.
     """
     if gate is None:
@@ -350,6 +354,7 @@ def run_eval(
                 "ts": datetime.now(UTC).isoformat(),
                 "git_sha": git_sha,
                 "generation_model": item.generation_model,
+                "generation_profile": item.generation_profile,
                 "judge_model": judge.model,
                 "prompt_hash": phash,
                 "faithfulness": faithfulness,

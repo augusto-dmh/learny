@@ -168,6 +168,7 @@ def test_run_eval_writes_jsonl_line_per_case_with_full_schema(tmp_path: Path) ->
         "ts",
         "git_sha",
         "generation_model",
+        "generation_profile",
         "judge_model",
         "prompt_hash",
         "faithfulness",
@@ -177,6 +178,9 @@ def test_run_eval_writes_jsonl_line_per_case_with_full_schema(tmp_path: Path) ->
     }
     assert first["case_id"] == "case-0"
     assert first["generation_model"] == "claude-sonnet-4-6"
+    # A producer that carries no stamp (pre-registry snapshots) records null —
+    # the field is carried, never inferred from settings.
+    assert first["generation_profile"] is None
     assert first["judge_model"] == _JUDGE_MODEL
     assert first["prompt_hash"] == prompt_hash()
     assert first["faithfulness"] == 1.0
@@ -184,6 +188,40 @@ def test_run_eval_writes_jsonl_line_per_case_with_full_schema(tmp_path: Path) ->
     assert first["citation_valid"] is True
     assert written[1]["faithfulness"] == pytest.approx(0.5)
     assert written[1]["relevancy"] == 3
+
+
+def test_run_eval_records_the_stamped_serving_profile_in_the_jsonl_case(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # EVAL-01: the JSONL identifies the serving profile beside the model. The id is
+    # the one the routing adapter stamped on the answer and the producer carried on
+    # the input — never re-read from settings, which may have moved on since the
+    # case ran: the registry declared below names a different profile, and the
+    # record must still carry the stamp.
+    monkeypatch.setenv(
+        "LEARNY_GENERATION_PROFILES",
+        '[{"id": "primary", "kind": "local", "model": "m", "max_tokens": 1, '
+        '"price_input_usd_per_million_tokens": 3.0, '
+        '"price_output_usd_per_million_tokens": 15.0, '
+        '"price_cache_read_usd_per_million_tokens": 0.3, '
+        '"price_cache_creation_usd_per_million_tokens": 3.75, '
+        '"grounding": "verified-spans", "ask_enabled": true, "teach_enabled": true}]',
+    )
+    judge, _ = _judge([_faithfulness_payload(True), {"score": 5}])
+    case = EvalInput(
+        case_id="case-candidate",
+        question="q",
+        evidence_text="passages",
+        answer_text="a",
+        generation_model="glm-5.3-flash",
+        generation_profile="cheap-candidate",
+        citation_valid=True,
+    )
+
+    [line] = run_eval([case], judge=judge, max_cases=10, results_dir=tmp_path, gate=False)
+
+    assert line["generation_profile"] == "cheap-candidate"
+    assert line["generation_model"] == "glm-5.3-flash"
 
 
 # --- Decline semantics (ADR-028 / RECAL-02, RECAL-03) --------------------------

@@ -15,6 +15,16 @@ on:
   schedule:
     - cron: "0 3 * * *"
   workflow_dispatch:
+    inputs:
+      generation_profiles:
+        description:
+          "Optional LEARNY_GENERATION_PROFILES JSON override for a candidate run —
+          the registry the eval serves and records per case. Left empty, the
+          scheduled default applies. Promotion stays a recorded registry-reorder
+          act gated on a green nightly, never automatic."
+        required: false
+        type: string
+        default: ""
 
 # The job only reads the repository and writes an artifact; keep the token least-privilege.
 permissions:
@@ -83,6 +93,12 @@ jobs:
           LEARNY_OPENAI_API_KEY: ${{ secrets.LEARNY_OPENAI_API_KEY }}
           LEARNY_EVAL_GATE: "1"
           LEARNY_EVAL_MAX_CASES: "20"
+          # Candidate runs: the workflow_dispatch input overrides the profile
+          # registry the suite serves from. An absent/empty input must become an
+          # empty JSON list, not an empty string — the settings fail to parse ""
+          # as JSON, while "[]" is their own "nothing declared" value, so the
+          # scheduled nightly keeps the legacy default byte-for-byte.
+          LEARNY_GENERATION_PROFILES: ${{ inputs.generation_profiles || '[]' }}
           LEARNY_TEST_DATABASE_URL: postgresql+psycopg://learny:learny@localhost:5432/learny_test
       # The judge appends to evals/results/*.jsonl at the repo root; upload it so
       # the run's results survive as an artifact. These files, and the branch copy

@@ -35,6 +35,40 @@ def _step_by_name(job: str, name: str) -> dict:
 
 
 _PUBLISH = "Publish eval results to the eval-results branch"
+_RUN = "Run the live smoke + judge suite"
+
+
+def _trigger() -> dict:
+    # YAML 1.1 parses the bare `on:` key as the boolean True.
+    return _WORKFLOW["on"] if "on" in _WORKFLOW else _WORKFLOW[True]
+
+
+# --- The workflow_dispatch candidate-run input (EVAL-02) -------------------------
+
+
+def test_workflow_dispatch_declares_a_generation_profiles_override_input() -> None:
+    dispatch = _trigger()["workflow_dispatch"]
+    inputs = dispatch["inputs"]
+    assert inputs["generation_profiles"]["type"] == "string"
+    assert inputs["generation_profiles"]["required"] is False
+    assert inputs["generation_profiles"]["default"] == ""
+
+
+def test_the_judge_suite_step_maps_the_input_to_the_registry_env_the_settings_read() -> None:
+    # The override rides step-level env exactly like the provider secrets above
+    # it. The `|| '[]'` fallback matters: an absent/empty input still sets the
+    # variable, and an empty string would fail the settings' JSON parsing — an
+    # empty list is the settings' own "nothing declared" value, so the scheduled
+    # nightly keeps the legacy default byte-for-byte.
+    env = _step_by_name("generation-eval", _RUN)["env"]
+    assert env["LEARNY_GENERATION_PROFILES"] == "${{ inputs.generation_profiles || '[]' }}"
+
+
+def test_the_registry_override_adds_no_gating_to_the_scheduled_run() -> None:
+    # The candidate input must not touch the secret-skip gate: the suite still
+    # runs (and self-skips green) exactly as before when no key is configured.
+    step = _step_by_name("generation-eval", _RUN)
+    assert step["if"] == "steps.secret.outputs.present == 'true'"
 
 
 # --- DEP-14: the job holds job-scoped contents: write for the commit -------------
