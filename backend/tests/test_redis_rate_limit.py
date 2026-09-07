@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from uuid import uuid4
 
 import pytest
@@ -49,6 +50,52 @@ def test_dead_redis_fails_closed() -> None:
     )
     with pytest.raises(LimiterUnavailable):
         limiter.hit("anything")
+
+
+def test_hit_arms_the_window_expiry_on_the_first_count() -> None:
+    client = _live_redis()
+    key = f"arm-{uuid4()}"
+    redis_key = f"learny:rl:{key}"
+    limiter = RedisFixedWindowRateLimiter.from_url(
+        _REDIS_URL, max_attempts=5, window_seconds=60
+    )
+    try:
+        assert limiter.hit(key) == (True, 0)
+        ttl = int(client.ttl(redis_key))
+        assert 0 < ttl <= 60
+    finally:
+        client.delete(redis_key)
+
+
+def test_window_without_a_ttl_is_re_armed_and_eventually_releases() -> None:
+    # A crash between INCR and EXPIRE (or an older binary) leaves a key with no
+    # expiry: under a non-atomic INCR/conditional-EXPIRE limiter every later hit
+    # skips the EXPIRE branch, the TTL stays -1, and the budget 429s forever.
+    client = _live_redis()
+    key = f"persisted-{uuid4()}"
+    redis_key = f"learny:rl:{key}"
+    window = 2
+    limiter = RedisFixedWindowRateLimiter.from_url(
+        _REDIS_URL, max_attempts=2, window_seconds=window
+    )
+    try:
+        # Seed the partial-failure remnant: over budget, persisted, no TTL.
+        client.set(redis_key, "3")
+        assert int(client.ttl(redis_key)) == -1
+
+        # The limiter refuses the hit and reports the FULL window as the wait,
+        # because the hit itself re-armed the missing expiry.
+        allowed, retry_after = limiter.hit(key)
+        assert allowed is False
+        assert retry_after == window
+        assert 0 < int(client.ttl(redis_key)) <= window
+
+        # The window is finite again: once it passes, the caller is let back in
+        # (no manual DEL, no indefinite lockout).
+        time.sleep(window + 0.5)
+        assert limiter.hit(key) == (True, 0)
+    finally:
+        client.delete(redis_key)
 
 
 def test_create_app_installs_the_redis_limiter() -> None:
