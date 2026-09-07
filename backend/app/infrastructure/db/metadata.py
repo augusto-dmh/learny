@@ -85,6 +85,12 @@ users = Table(
     # citext extension is created by the migration; email is case-insensitively unique.
     Column("email", CITEXT, nullable=False, unique=True),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    # When the account accepted the ToS (register stamps it, DOOR-25). NULL for
+    # accounts created without the form (the sample operator).
+    Column("accepted_tos_at", DateTime(timezone=True), nullable=True),
+    # When the account confirmed its address with the single-use verify token
+    # (DOOR-35). NULL until then; verification never gates the session (AD-327).
+    Column("email_verified_at", DateTime(timezone=True), nullable=True),
 )
 
 user_credentials = Table(
@@ -650,6 +656,10 @@ quiz_generation_jobs = Table(
     # sum to ``discarded_count``. Existing rows take ``{}`` with no backfill.
     Column("discard_reasons", JSONB, nullable=False, server_default="{}"),
     Column("last_error", Text, nullable=True),
+    # One-time deck-spend marker (0028): the deck worker stamps it with a
+    # conditional UPDATE in the same transaction that debits the pass's usage
+    # and finalizes, so a redelivery observes the stamp and skips the debit.
+    Column("spend_recorded_at", DateTime(timezone=True), nullable=True),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
 )
@@ -833,6 +843,72 @@ study_days = Table(
     # caller's own anchor claims, on an endpoint with no rate limit — so an overflow is
     # reachable, and it would abort the position write sharing the same transaction.
     Column("words_advanced", BigInteger, nullable=False, server_default="0"),
+)
+
+# --- Daily AI spend ledger (RFC-0007 Cycle F; design §Data Models) ----------------
+# One row per (user, UTC day) durably recording what the day's AI calls cost: the
+# USD total in micros (64-bit — many calls accumulate into one cell) plus the
+# free-tier integer counters (asks, teach-session starts). Written by an atomic
+# ``INSERT ... ON CONFLICT (user_id, day_utc) DO UPDATE`` increment, so N same-day
+# calls leave exactly one row whose totals equal the sum — two increments never
+# lose one. The FK cascades: a ledger names nobody once its user is gone.
+
+ai_spend_days = Table(
+    "ai_spend_days",
+    metadata,
+    Column(
+        "user_id",
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column("day_utc", Date, nullable=False, primary_key=True),
+    Column("usd_micros", BigInteger, nullable=False, server_default="0"),
+    Column("ask_count", Integer, nullable=False, server_default="0"),
+    Column("teach_starts", Integer, nullable=False, server_default="0"),
+)
+
+# --- Registration invites (RFC-0007 Cycle F; design §Data Models) ----------------
+# Operator-minted codes gating register where ``LEARNY_INVITE_REQUIRED`` is on.
+# The code is the identity (primary key, unique); ``remaining_uses`` counts down
+# per successful register and a NULL ``expires_at`` never expires. No user FK —
+# a code exists before, and independently of, the account it admits.
+
+invite_codes = Table(
+    "invite_codes",
+    metadata,
+    Column("code", Text, primary_key=True),
+    Column("remaining_uses", Integer, nullable=False),
+    Column("expires_at", DateTime(timezone=True), nullable=True),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+)
+
+# --- Single-use email tokens (RFC-0007 Cycle F; design §Data Models) -------------
+# Verify and password-reset tokens. Only the SHA-256 of the raw opaque token is
+# persisted (``secret_hash``, the sessions ``token_hash`` contract, unique); the
+# raw token exists solely in the outbound mail body — never at rest (DOOR-34).
+# ``purpose`` is the closed ``verify``|``reset`` vocabulary the application
+# constants own, and the consume is one conditional UPDATE on
+# (hash, purpose, unconsumed, unexpired), so single-use holds atomically. The FK
+# cascades: a token names nobody once its user is gone.
+
+email_tokens = Table(
+    "email_tokens",
+    metadata,
+    Column("id", UUID(as_uuid=True), primary_key=True),
+    Column(
+        "user_id",
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    Column("purpose", Text, nullable=False),
+    Column("secret_hash", String(128), nullable=False, unique=True),
+    Column("expires_at", DateTime(timezone=True), nullable=False),
+    # The single-use marker: set by the consuming UPDATE, never cleared.
+    Column("consumed_at", DateTime(timezone=True), nullable=True),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
 )
 
 # Once-per-user first-session events (account_created, sample_opened,

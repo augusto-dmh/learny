@@ -25,6 +25,7 @@ from app.application.errors import (
     SourceNotFound,
 )
 from app.application.identity import AuthorizeOwnership
+from app.application.quotas import Quotas
 from app.domain.entities import (
     ACTIVE_STATUSES,
     IngestionEvent,
@@ -133,6 +134,7 @@ class StartIngestion:
         authorize: AuthorizeOwnership,
         clock: Clock,
         ids: Callable[[], UUID],
+        quotas: Quotas | None = None,
     ) -> None:
         self._sources = sources
         self._jobs = jobs
@@ -140,6 +142,7 @@ class StartIngestion:
         self._authorize = authorize
         self._clock = clock
         self._ids = ids
+        self._quotas = quotas
 
     def __call__(
         self, *, user: User, source_id: UUID
@@ -150,6 +153,13 @@ class StartIngestion:
             sources=self._sources,
             authorize=self._authorize,
         )
+
+        # One in-flight ingest per caller (DOOR-18), checked after ownership (an
+        # unowned source is a 404, never a quota leak) and before any job is
+        # created. The per-source partial unique index below stays the race
+        # backstop; this is the caller-scoped guard it cannot express.
+        if self._quotas is not None:
+            self._quotas.assert_ingest_start(user)
 
         # At most one active job per source (ING-03). Only the latest job can be
         # active — a terminal latest means the source is free to (re)start (ING-05).

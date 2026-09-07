@@ -7,7 +7,8 @@ a durable row, and on an enqueue failure opens UoW2 to drive the job to terminal
 ``failed`` (leaving no phantom active job, ING-11) before returning ``502``.
 
 Contract (also consumed by the Next.js proxy):
-- ``POST /api/sources/{id}/ingestion`` → 202, start ingestion; auth + CSRF/Origin.
+- ``POST /api/sources/{id}/ingestion`` → 202, start ingestion; auth + per-user
+  rate limit + CSRF/Origin.
 - ``GET  /api/sources/{id}/ingestion`` → 200 latest job + ordered events (auth).
 
 Application errors are translated to HTTP status codes by the global handlers in
@@ -41,6 +42,7 @@ from app.infrastructure.web.dependencies import (
     get_ingestion_uow,
     get_read_ingestion,
 )
+from app.infrastructure.web.rate_limit import rate_limit_upload
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +100,11 @@ Enqueuer = Annotated[IngestionEnqueuer, Depends(get_ingestion_enqueuer)]
 @router.post(
     "/{source_id}/ingestion",
     status_code=status.HTTP_202_ACCEPTED,
-    dependencies=[Depends(enforce_origin), Depends(enforce_csrf)],
+    dependencies=[
+        Depends(rate_limit_upload),
+        Depends(enforce_origin),
+        Depends(enforce_csrf),
+    ],
 )
 def start_ingestion(
     source_id: UUID,
@@ -106,8 +112,11 @@ def start_ingestion(
     uow_factory: UowFactory,
     enqueuer: Enqueuer,
 ) -> IngestionSummary:
-    """Create a queued job and enqueue it (202); 409/404/502 per the ingestion ACs.
+    """Create a queued job and enqueue it (202); 404/409/429/502 per the ingestion ACs.
 
+    The start write rides the same per-user ``rate_limit_upload`` limiter as the
+    upload POST (listed first, so an unauthenticated request is a 401 and an
+    exhausted budget a 429 before the CSRF gates run).
     ``StartIngestion`` guards the active-job invariant with an application
     pre-check (→ 409); the ``IntegrityError`` catch here is defense-in-depth for
     the true-race loser whose INSERT hits the partial unique index (ING-03).

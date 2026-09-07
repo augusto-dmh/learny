@@ -19,6 +19,8 @@ from app.application.errors import (
 )
 from app.application.identity import AuthorizeOwnership
 from app.application.ingestion import readable_source
+from app.application.media import media_object_key
+from app.application.quotas import Quotas
 from app.application.validation import extension_of, validate_source_upload
 from app.domain.entities import Source, User
 from app.domain.ports import (
@@ -49,6 +51,7 @@ class CreateSource:
         ids: Callable[[], UUID],
         max_bytes: int,
         pdf_max_bytes: int | None = None,
+        quotas: Quotas | None = None,
     ) -> None:
         self._sources = sources
         self._storage = storage
@@ -56,6 +59,7 @@ class CreateSource:
         self._ids = ids
         self._max_bytes = max_bytes
         self._pdf_max_bytes = max_bytes if pdf_max_bytes is None else pdf_max_bytes
+        self._quotas = quotas
 
     def __call__(
         self,
@@ -75,6 +79,11 @@ class CreateSource:
             max_bytes=self._max_bytes,
             pdf_max_bytes=self._pdf_max_bytes,
         )
+        # The library quota runs after format validation and *before* the bytes are
+        # put to storage (DOOR-15/17): a rejected upload must never leave an object
+        # behind that no source row will ever name.
+        if self._quotas is not None:
+            self._quotas.assert_upload(user, byte_size=byte_size)
 
         source_id = self._ids()
         # Opaque, owner-partitioned key — no email or title (SRC-06 / data
@@ -162,7 +171,7 @@ class ReadSourceMedia:
         source = self._get_source(user=user, source_id=source_id)
         if _FIGURE_DIGEST.fullmatch(sha256) is None:
             raise SourceNotFound("Source not found.")
-        key = f"sources/{source.user_id}/{source.id}/media/{sha256}.webp"
+        key = media_object_key(user_id=source.user_id, source_id=source.id, digest=sha256)
         try:
             return self._storage.get_object(key)
         except StorageUnavailable:

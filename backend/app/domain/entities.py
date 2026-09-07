@@ -34,6 +34,13 @@ class User:
     id: UUID
     email: str
     created_at: datetime
+    # When the account accepted the Terms of Service (register stamps it); NULL
+    # for the sample operator account, which registers through no form.
+    accepted_tos_at: datetime | None = None
+    # When the account confirmed its address with the single-use verify token
+    # (DOOR-35). NULL until then — and verification never gates the session
+    # (AD-327): an invited, unverified account may Ask and upload.
+    email_verified_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -462,6 +469,20 @@ class CitedSpan:
 
 
 @dataclass(frozen=True)
+class TokenUsage:
+    """The token counts one provider call consumed (design §Components, DailyBudget).
+
+    A Learny-owned DTO so a provider's usage object never crosses a port boundary:
+    adapters that can read usage map it onto this, and the budget service multiplies
+    it into the price catalog to debit the day's USD. ``None`` usage (an adapter that
+    does not report — the deterministic local ones) means a 0 USD debit.
+    """
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+
+@dataclass(frozen=True)
 class GeneratedAnswer:
     """The raw output of the answer-generation port (QA-05, ADR-0007 §4).
 
@@ -482,6 +503,9 @@ class GeneratedAnswer:
     model: str
     found: bool
     spans: tuple[CitedSpan, ...] = ()
+    # The call's token counts when the adapter can read them (an adapter capability,
+    # not a port requirement — like ``spans``). Absent → the debit is 0 USD.
+    usage: TokenUsage | None = None
 
 
 # The exact reply a generation adapter instructs the model to return, alone, when
@@ -825,6 +849,9 @@ class QuizDeckResult:
 
     candidates: tuple[QuizCandidate, ...]
     errors: tuple[str, ...]
+    # The batch's summed token counts when the adapter can read them; absent → the
+    # deck's debit is 0 USD.
+    usage: TokenUsage | None = None
 
 
 @dataclass(frozen=True)
@@ -1252,6 +1279,23 @@ class StudyDay:
     reviews_count: int
     reading_updates: int
     words_advanced: int = 0
+
+
+@dataclass(frozen=True)
+class AiSpendDay:
+    """One UTC day of the caller's AI spend (design §Data Models, ``ai_spend_days``).
+
+    ``usd_micros`` is the day's accumulated generation + embedding cost (1 USD =
+    1_000_000 micros); ``ask_count`` / ``teach_starts`` are the free-tier integer
+    counters. Written by an atomic upsert-increment keyed ``(user_id, day_utc)``, so
+    the row always equals the sum of the day's debits.
+    """
+
+    user_id: UUID
+    day_utc: date
+    usd_micros: int = 0
+    ask_count: int = 0
+    teach_starts: int = 0
 
 
 @dataclass(frozen=True)

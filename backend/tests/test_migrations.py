@@ -83,7 +83,10 @@ def test_migration_metadata_compiles() -> None:
         "note_links",
         "reading_positions",
         "study_days",
+        "ai_spend_days",
         "activation_events",
+        "invite_codes",
+        "email_tokens",
     }
     # Unique email + unique session token_hash are the security-critical constraints.
     user_uniques = {c.name for c in users.constraints if c.__class__.__name__ == "UniqueConstraint"}
@@ -2949,7 +2952,10 @@ def test_migration_0021_adds_review_quality_columns(monkeypatch) -> None:
 
         for table in (quiz_generation_jobs, quiz_items, review_log):
             reflected = {c["name"]: c["nullable"] for c in inspector.get_columns(table.name)}
-            assert reflected == {c.name: c.nullable for c in table.columns}
+            declared = {c.name: c.nullable for c in table.columns}
+            # Live 0021 columns must match metadata; later revisions may add more.
+            assert reflected.keys() <= declared.keys()
+            assert all(declared[name] is nullable for name, nullable in reflected.items())
     finally:
         engine.dispose()
 
@@ -3339,6 +3345,254 @@ def test_migration_0023_starter_unique_is_per_learner_not_per_source(monkeypatch
 
 
 @pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
+def test_migration_0024_creates_ai_spend_days(monkeypatch) -> None:
+    """0024 up: creates the ``ai_spend_days`` ledger keyed ``(user_id, day_utc)`` with
+    ``usd_micros`` (BIGINT NOT NULL DEFAULT 0) and the ``ask_count``/``teach_starts``
+    integer counters, and a CASCADE FK to ``users``. An inserted row defaults all three
+    totals to 0. Down one step to 0023 drops the table (users survives); a further
+    upgrade re-creates it — the ledger round-trips clean.
+    """
+    monkeypatch.setenv("LEARNY_DATABASE_URL", TEST_DB_URL)
+    cfg = _alembic_config(TEST_DB_URL)
+
+    # Land on 0023 (pre-ledger) so the upgrade below is the one under test.
+    command.upgrade(cfg, "head")
+    command.downgrade(cfg, "0023_starter_quiz_origin")
+
+    user_id = uuid.uuid4()
+    engine = create_engine(TEST_DB_URL)
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("INSERT INTO users (id, email) VALUES (:id, :email)"),
+                {"id": user_id, "email": f"{user_id}@example.test"},
+            )
+    finally:
+        engine.dispose()
+
+    command.upgrade(cfg, "0024_safety_rails")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        inspector = inspect(engine)
+        assert "ai_spend_days" in set(inspector.get_table_names())
+
+        columns = {c["name"]: c for c in inspector.get_columns("ai_spend_days")}
+        assert set(columns) == {"user_id", "day_utc", "usd_micros", "ask_count", "teach_starts"}
+        assert columns["day_utc"]["nullable"] is False
+        for total in ("usd_micros", "ask_count", "teach_starts"):
+            assert columns[total]["nullable"] is False
+
+        pk = inspector.get_pk_constraint("ai_spend_days")["constrained_columns"]
+        assert pk == ["user_id", "day_utc"]
+
+        user_fk = next(
+            fk
+            for fk in inspector.get_foreign_keys("ai_spend_days")
+            if fk["constrained_columns"] == ["user_id"]
+        )
+        assert user_fk["referred_table"] == "users"
+        assert user_fk["options"].get("ondelete") == "CASCADE"
+
+        # An inserted row with no totals supplied defaults all three to 0.
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO ai_spend_days (user_id, day_utc) VALUES (:uid, DATE '2026-09-06')"
+                ),
+                {"uid": user_id},
+            )
+        with engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT usd_micros, ask_count, teach_starts FROM ai_spend_days "
+                    "WHERE user_id = :uid"
+                ),
+                {"uid": user_id},
+            ).one()
+        assert (row.usd_micros, row.ask_count, row.teach_starts) == (0, 0, 0)
+
+        # Real cascade: deleting the user removes their ledger rows.
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM users WHERE id = :uid"), {"uid": user_id})
+        with engine.connect() as conn:
+            remaining = conn.execute(
+                text("SELECT count(*) FROM ai_spend_days WHERE user_id = :uid"),
+                {"uid": user_id},
+            ).scalar_one()
+        assert remaining == 0
+    finally:
+        engine.dispose()
+
+    # Down one step to 0023: the table drops; users survives.
+    command.downgrade(cfg, "0023_starter_quiz_origin")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        tables = set(inspect(engine).get_table_names())
+        assert "ai_spend_days" not in tables
+        assert "users" in tables
+    finally:
+        engine.dispose()
+
+    # Round-trip: a further upgrade re-creates the ledger at head.
+    command.upgrade(cfg, "0024_safety_rails")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        assert "ai_spend_days" in set(inspect(engine).get_table_names())
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
+def test_migration_0025_creates_invite_codes(monkeypatch) -> None:
+    """0025 up: creates ``invite_codes`` keyed by the unique code, with
+    ``remaining_uses`` (INTEGER NOT NULL), a nullable ``expires_at`` (NULL never
+    expires) and ``created_at``. Down one step to 0024 drops the table (users
+    survives); a further upgrade re-creates it — the invite table round-trips
+    clean.
+    """
+    monkeypatch.setenv("LEARNY_DATABASE_URL", TEST_DB_URL)
+    cfg = _alembic_config(TEST_DB_URL)
+
+    # Land on 0024 (pre-invites) so the upgrade below is the one under test.
+    command.upgrade(cfg, "head")
+    command.downgrade(cfg, "0024_safety_rails")
+    command.upgrade(cfg, "0025_invite_codes")
+
+    engine = create_engine(TEST_DB_URL)
+    try:
+        inspector = inspect(engine)
+        assert "invite_codes" in set(inspector.get_table_names())
+
+        columns = {c["name"]: c for c in inspector.get_columns("invite_codes")}
+        assert set(columns) == {"code", "remaining_uses", "expires_at", "created_at"}
+        assert columns["remaining_uses"]["nullable"] is False
+        assert columns["expires_at"]["nullable"] is True
+        assert columns["code"]["nullable"] is False
+
+        pk = inspector.get_pk_constraint("invite_codes")["constrained_columns"]
+        assert pk == ["code"]
+
+        # An expired code is representable: expires_at takes a real timestamp.
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO invite_codes (code, remaining_uses, expires_at) "
+                    "VALUES ('ROUNDTRIP', 2, now() - interval '1 hour')"
+                )
+            )
+        with engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT remaining_uses FROM invite_codes WHERE code = 'ROUNDTRIP'")
+            ).one()
+        assert row.remaining_uses == 2
+
+        # The code is unique: a second row with the same code is rejected.
+        with pytest.raises(IntegrityError), engine.begin() as conn:
+            conn.execute(
+                text("INSERT INTO invite_codes (code, remaining_uses) VALUES ('ROUNDTRIP', 1)")
+            )
+
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM invite_codes WHERE code = 'ROUNDTRIP'"))
+    finally:
+        engine.dispose()
+
+    # Down one step to 0024: the table drops; users survives.
+    command.downgrade(cfg, "0024_safety_rails")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        tables = set(inspect(engine).get_table_names())
+        assert "invite_codes" not in tables
+        assert "users" in tables
+    finally:
+        engine.dispose()
+
+    # Round-trip: a further upgrade re-creates the table at head.
+    command.upgrade(cfg, "0025_invite_codes")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        assert "invite_codes" in set(inspect(engine).get_table_names())
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
+def test_migration_0026_stamps_user_tos_acceptance(monkeypatch) -> None:
+    """0026 up: adds a nullable ``accepted_tos_at`` timestamp to ``users`` (register
+    stamps it when the account accepts the ToS; the sample operator stays NULL).
+    Down one step to 0025 drops the column; a further upgrade re-adds it — the
+    stamp round-trips clean.
+    """
+    monkeypatch.setenv("LEARNY_DATABASE_URL", TEST_DB_URL)
+    cfg = _alembic_config(TEST_DB_URL)
+
+    command.upgrade(cfg, "head")
+    command.downgrade(cfg, "0025_invite_codes")
+
+    user_id = uuid.uuid4()
+    engine = create_engine(TEST_DB_URL)
+    try:
+        inspector = inspect(engine)
+        assert "accepted_tos_at" not in {c["name"] for c in inspector.get_columns("users")}
+    finally:
+        engine.dispose()
+
+    command.upgrade(cfg, "0026_user_tos_stamp")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        inspector = inspect(engine)
+        columns = {c["name"]: c for c in inspector.get_columns("users")}
+        assert "accepted_tos_at" in columns
+        assert columns["accepted_tos_at"]["nullable"] is True
+
+        # Existing rows (and new inserts without the stamp) stay NULL; an explicit
+        # acceptance time is stored as given.
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO users (id, email, accepted_tos_at) "
+                    "VALUES (:id, :email, DATE '2026-09-06')"
+                ),
+                {"id": user_id, "email": f"{user_id}@example.test"},
+            )
+            unstamped = uuid.uuid4()
+            conn.execute(
+                text("INSERT INTO users (id, email) VALUES (:id, :email)"),
+                {"id": unstamped, "email": f"{unstamped}@example.test"},
+            )
+        with engine.connect() as conn:
+            stamped = conn.execute(
+                text("SELECT accepted_tos_at FROM users WHERE id = :id"), {"id": user_id}
+            ).scalar_one()
+            null_stamp = conn.execute(
+                text("SELECT accepted_tos_at FROM users WHERE id = :id"), {"id": unstamped}
+            ).scalar_one()
+        assert stamped is not None
+        assert null_stamp is None
+
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM users WHERE email LIKE '%@example.test'"))
+    finally:
+        engine.dispose()
+
+    # Down one step to 0025: the column drops; the table survives.
+    command.downgrade(cfg, "0025_invite_codes")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        assert "accepted_tos_at" not in {c["name"] for c in inspect(engine).get_columns("users")}
+    finally:
+        engine.dispose()
+
+    # Round-trip: a further upgrade re-adds the column at head.
+    command.upgrade(cfg, "0026_user_tos_stamp")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        assert "accepted_tos_at" in {c["name"] for c in inspect(engine).get_columns("users")}
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
 def test_in_process_migration_preserves_app_root_logging(monkeypatch) -> None:
     """An in-process migration must not reconfigure the app-owned root logger.
 
@@ -3369,3 +3623,229 @@ def test_in_process_migration_preserves_app_root_logging(monkeypatch) -> None:
         root.handlers[:] = saved_handlers
         for handler in saved_handlers:
             handler.removeFilter(marker)
+
+
+@pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
+def test_migration_0027_creates_email_tokens_and_verified_stamp(monkeypatch) -> None:
+    """0027 up: creates ``email_tokens`` (hash-at-rest single-use verify/reset
+    tokens, FK CASCADE to users, unique ``secret_hash``) and adds a nullable
+    ``users.email_verified_at`` stamp. Down one step to 0026 drops both; a
+    further upgrade re-creates them — the pair round-trips clean.
+    """
+    monkeypatch.setenv("LEARNY_DATABASE_URL", TEST_DB_URL)
+    cfg = _alembic_config(TEST_DB_URL)
+
+    command.upgrade(cfg, "head")
+    command.downgrade(cfg, "0026_user_tos_stamp")
+
+    user_id = uuid.uuid4()
+    token_id = uuid.uuid4()
+    engine = create_engine(TEST_DB_URL)
+    try:
+        inspector = inspect(engine)
+        assert "email_tokens" not in set(inspector.get_table_names())
+        assert "email_verified_at" not in {c["name"] for c in inspector.get_columns("users")}
+    finally:
+        engine.dispose()
+
+    command.upgrade(cfg, "0027_email_verify_reset")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        inspector = inspect(engine)
+        columns = {c["name"]: c for c in inspector.get_columns("email_tokens")}
+        assert set(columns) == {
+            "id",
+            "user_id",
+            "purpose",
+            "secret_hash",
+            "expires_at",
+            "consumed_at",
+            "created_at",
+        }
+        assert columns["secret_hash"]["nullable"] is False
+        assert columns["expires_at"]["nullable"] is False
+        # The single-use marker starts NULL.
+        assert columns["consumed_at"]["nullable"] is True
+
+        fks = inspector.get_foreign_keys("email_tokens")
+        token_fk = next(fk for fk in fks if fk["constrained_columns"] == ["user_id"])
+        assert token_fk["referred_table"] == "users"
+        assert token_fk["options"].get("ondelete") == "CASCADE"
+
+        user_columns = {c["name"]: c for c in inspector.get_columns("users")}
+        assert user_columns["email_verified_at"]["nullable"] is True
+
+        # A token row and a verified stamp are both representable; the stored
+        # value is whatever was written (the hash, never a raw token, is the
+        # application's contract — the schema just stores the column).
+        with engine.begin() as conn:
+            conn.execute(
+                text("INSERT INTO users (id, email) VALUES (:id, :email)"),
+                {"id": user_id, "email": f"{user_id}@example.test"},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO email_tokens (id, user_id, purpose, secret_hash, expires_at) "
+                    "VALUES (:id, :user_id, 'verify', :secret_hash, now() + interval '1 day')"
+                ),
+                {"id": token_id, "user_id": user_id, "secret_hash": "a" * 64},
+            )
+            conn.execute(
+                text("UPDATE users SET email_verified_at = now() WHERE id = :id"),
+                {"id": user_id},
+            )
+        with engine.connect() as conn:
+            verified = conn.execute(
+                text("SELECT email_verified_at FROM users WHERE id = :id"), {"id": user_id}
+            ).scalar_one()
+            token_row = conn.execute(
+                text("SELECT purpose, secret_hash, consumed_at FROM email_tokens WHERE id = :id"),
+                {"id": token_id},
+            ).one()
+        assert verified is not None
+        assert token_row.purpose == "verify"
+        assert token_row.secret_hash == "a" * 64
+        assert token_row.consumed_at is None
+
+        # ``secret_hash`` is unique: a second token storing the same hash is
+        # rejected (the at-rest identity of a raw token).
+        with pytest.raises(IntegrityError), engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO email_tokens (id, user_id, purpose, secret_hash, expires_at) "
+                    "VALUES (:id, :user_id, 'reset', :secret_hash, now() + interval '1 day')"
+                ),
+                {"id": uuid.uuid4(), "user_id": user_id, "secret_hash": "a" * 64},
+            )
+
+        # Deleting the user cascades the token rows away.
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM users WHERE id = :id"), {"id": user_id})
+        with engine.connect() as conn:
+            remaining = conn.execute(
+                text("SELECT count(*) FROM email_tokens WHERE user_id = :id"), {"id": user_id}
+            ).scalar_one()
+        assert remaining == 0
+    finally:
+        engine.dispose()
+
+    # Down one step to 0026: the table drops and the column goes; users survives.
+    command.downgrade(cfg, "0026_user_tos_stamp")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        assert "email_tokens" not in set(inspect(engine).get_table_names())
+        assert "email_verified_at" not in {c["name"] for c in inspect(engine).get_columns("users")}
+    finally:
+        engine.dispose()
+
+    # Round-trip: a further upgrade re-creates both at head.
+    command.upgrade(cfg, "0027_email_verify_reset")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        assert "email_tokens" in set(inspect(engine).get_table_names())
+        assert "email_verified_at" in {c["name"] for c in inspect(engine).get_columns("users")}
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
+def test_migration_0028_adds_the_one_time_deck_spend_marker(monkeypatch) -> None:
+    """0028 up: adds a nullable ``spend_recorded_at`` marker to
+    ``quiz_generation_jobs`` — the one-time stamp the deck worker's conditional
+    UPDATE sets in the same transaction that debits and finalizes, so a
+    redelivered deck pass cannot charge twice. Down one step to 0027 drops the
+    column; a further upgrade re-adds it — the marker round-trips clean.
+    """
+    monkeypatch.setenv("LEARNY_DATABASE_URL", TEST_DB_URL)
+    cfg = _alembic_config(TEST_DB_URL)
+
+    command.upgrade(cfg, "head")
+    command.downgrade(cfg, "0027_email_verify_reset")
+
+    engine = create_engine(TEST_DB_URL)
+    try:
+        columns = {c["name"] for c in inspect(engine).get_columns("quiz_generation_jobs")}
+        assert "spend_recorded_at" not in columns
+    finally:
+        engine.dispose()
+
+    command.upgrade(cfg, "0028_quiz_deck_spend_marker")
+    user_id = uuid.uuid4()
+    source_id = uuid.uuid4()
+    job_id = uuid.uuid4()
+    engine = create_engine(TEST_DB_URL)
+    try:
+        inspector = inspect(engine)
+        column = next(
+            c
+            for c in inspector.get_columns("quiz_generation_jobs")
+            if c["name"] == "spend_recorded_at"
+        )
+        assert column["nullable"] is True
+
+        # The marker starts NULL (no backfill) and stamps to an explicit value —
+        # the schema contract the settle transaction's conditional UPDATE needs.
+        with engine.begin() as conn:
+            conn.execute(
+                text("INSERT INTO users (id, email) VALUES (:id, :email)"),
+                {"id": user_id, "email": f"{user_id}@example.test"},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO sources (id, user_id, title, filename, content_type, "
+                    "byte_size, checksum, object_key, status) "
+                    "VALUES (:id, :user_id, 'A Book', 'a.epub', 'application/epub+zip', "
+                    "1024, :checksum, :object_key, 'ready')"
+                ),
+                {
+                    "id": source_id,
+                    "user_id": user_id,
+                    "checksum": "e" * 64,
+                    "object_key": f"sources/{user_id}/{source_id}.epub",
+                },
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO quiz_generation_jobs (id, source_id, status) "
+                    "VALUES (:id, :source_id, 'running')"
+                ),
+                {"id": job_id, "source_id": source_id},
+            )
+        with engine.connect() as conn:
+            unstamped = conn.execute(
+                text("SELECT spend_recorded_at FROM quiz_generation_jobs WHERE id = :id"),
+                {"id": job_id},
+            ).scalar_one()
+        assert unstamped is None
+        with engine.begin() as conn:
+            stamped = conn.execute(
+                text(
+                    "UPDATE quiz_generation_jobs SET spend_recorded_at = now() "
+                    "WHERE id = :id AND spend_recorded_at IS NULL "
+                    "RETURNING spend_recorded_at"
+                ),
+                {"id": job_id},
+            ).first()
+        assert stamped is not None
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM users WHERE id = :id"), {"id": user_id})
+    finally:
+        engine.dispose()
+
+    # Down one step to 0027: the column drops; the job table survives.
+    command.downgrade(cfg, "0027_email_verify_reset")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        columns = {c["name"] for c in inspect(engine).get_columns("quiz_generation_jobs")}
+        assert "spend_recorded_at" not in columns
+    finally:
+        engine.dispose()
+
+    # Round-trip: a further upgrade re-adds the column at head.
+    command.upgrade(cfg, "0028_quiz_deck_spend_marker")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        columns = {c["name"] for c in inspect(engine).get_columns("quiz_generation_jobs")}
+        assert "spend_recorded_at" in columns
+    finally:
+        engine.dispose()

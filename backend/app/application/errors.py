@@ -88,6 +88,15 @@ class EnqueueFailed(Exception):
     """
 
 
+class AccountDeleteFailed(Exception):
+    """Object storage refused to delete the account's files (DOOR-32).
+
+    Deletion is fail closed: the user row is deliberately left intact and the
+    web layer maps this to 502 so the client can retry (the object deletes are
+    idempotent, so a retry converges).
+    """
+
+
 class InvalidDocumentError(Exception):
     """The source bytes are not a parseable document of the parser's format (CORP-06).
 
@@ -289,4 +298,62 @@ class StaleCaptureTarget(Exception):
     The section the reader selected against has since been replaced (a mid-flight
     re-ingest), so the quote no longer resolves to a block; nothing is persisted and
     the web layer maps this to 409 so the reader re-reads and re-selects.
+    """
+
+
+class DailyBudgetExhausted(Exception):
+    """The caller's UTC day of AI spend is used up (design §Error Handling).
+
+    Raised by the budget assertion *before* any provider call, so a refused turn or
+    deck costs nothing and the conversation (or the absence of a job) is untouched.
+    The message is the honest come-back-tomorrow copy — today's limit, and when it
+    resets — never which cap tripped or how much anything costs. The web layer maps
+    this to 429 without a ``Retry-After``: the honest signal is the reset time in
+    the copy, not a per-second hint borrowed from the rate limiter.
+    """
+
+
+class AiPaused(Exception):
+    """The operator's generation kill switch is on (DOOR-12).
+
+    Raised by the budget assertion before any provider SDK is touched, so a paused
+    Ask/Teach turn, deck POST, or embedding-producing ingest step cannot spend
+    anything. The message is the honest pause copy: the AI is off, the library and
+    reviews are not. The web layer maps this to 503.
+    """
+
+
+class SourceCountQuotaExceeded(Exception):
+    """The caller already owns the maximum number of non-sample sources (DOOR-15).
+
+    Raised by the upload quota before ``put_object`` runs, so a refused upload
+    never stores bytes; the web layer maps this to 403 with the delete-a-book copy.
+    """
+
+
+class StoredBytesQuotaExceeded(Exception):
+    """The caller's stored bytes plus this upload would breach the cap (DOOR-17).
+
+    Like the count quota, raised before any bytes are stored; the web layer maps
+    this to 413 with the smaller-file-or-delete copy.
+    """
+
+
+class InviteRequired(Exception):
+    """Register was called without a live invite code where one is required (DOOR-20).
+
+    One uniform failure for an absent code, an unknown code, an exhausted one
+    (remaining uses hit 0), and an expired one alike — the response must never
+    say which of the four it was. Raised by the invite gate before any user row
+    or session is written; the web layer maps this to 403 with the invite-only
+    copy.
+    """
+
+
+class InvalidToken(Exception):
+    """A submitted verify/reset email token is not live (DOOR-35).
+
+    One uniform failure for an unknown token, a replayed (consumed) one, an
+    expired one, and a token minted for the other purpose alike — the response
+    never says which. The web layer maps this to 403.
     """

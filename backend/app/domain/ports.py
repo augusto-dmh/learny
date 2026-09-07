@@ -22,6 +22,7 @@ from typing import Protocol, runtime_checkable
 from uuid import UUID
 
 from app.domain.entities import (
+    AiSpendDay,
     AnchorSection,
     AnswerStreamEvent,
     Backlink,
@@ -134,6 +135,14 @@ class UserRepository(Protocol):
         """Return the user with ``email`` (case-insensitive), or ``None``."""
         ...
 
+    def set_email_verified(self, user_id: UUID, verified_at: datetime) -> None:
+        """Stamp ``email_verified_at`` (the verify-token confirmation, DOOR-35)."""
+        ...
+
+    def delete(self, user_id: UUID) -> None:
+        """Remove the user row; child rows go with it (FK CASCADE)."""
+        ...
+
 
 @runtime_checkable
 class CredentialRepository(Protocol):
@@ -181,6 +190,32 @@ class SessionRepository(Protocol):
 
     def delete(self, session_id: UUID) -> None:
         """Remove a session (instant revocation / logout)."""
+        ...
+
+
+@runtime_checkable
+class EmailTokenRepository(Protocol):
+    """Persistence port for single-use email tokens (RFC-0007 Cycle F).
+
+    Verify/reset tokens follow the session-token contract: the adapter stores
+    only the SHA-256 of the raw opaque token (``secret_hash``) and the raw token
+    exists solely in the outbound mail body — never at rest. ``consume`` is one
+    conditional write so single-use holds atomically.
+    """
+
+    def create(self, *, user_id: UUID, purpose: str, raw_token: str, expires_at: datetime) -> None:
+        """Persist a token for ``user_id``, storing only the hash of ``raw_token``."""
+        ...
+
+    def consume(self, raw_token: str, *, purpose: str, now: datetime) -> UUID | None:
+        """Consume the live ``purpose`` token for ``raw_token``; return its ``user_id``.
+
+        A token is live when it exists, is unconsumed, is unexpired at ``now``,
+        and was minted for exactly ``purpose``. Success stamps ``consumed_at``
+        and returns the owning ``user_id``; every other case — unknown, replayed,
+        expired, wrong-purpose — returns ``None`` uniformly, so the failure never
+        says which of the four it was (DOOR-35).
+        """
         ...
 
 
@@ -236,6 +271,14 @@ class IngestionJobRepository(Protocol):
 
     def get_latest_for_source(self, source_id: UUID) -> IngestionJob | None:
         """Return the newest job for ``source_id`` (by ``created_at``), or ``None``."""
+        ...
+
+    def count_active_for_user(self, user_id: UUID) -> int:
+        """Count the caller's queued/running jobs across every source they own.
+
+        The one-in-flight-ingest quota's read (DOOR-18): jobs on sources the caller
+        owns only — another user's queue never blocks a start.
+        """
         ...
 
     def update(self, job: IngestionJob) -> IngestionJob:
@@ -325,6 +368,28 @@ class StoragePort(Protocol):
         """Return the bytes stored under ``key``. Raises if absent."""
         ...
 
+    def delete_object(self, key: str) -> None:
+        """Remove the object at ``key``. A missing key is already gone: success."""
+        ...
+
+
+@runtime_checkable
+class EmailPort(Protocol):
+    """Outbound mail port (RFC-0007 Cycle F; design §EmailPort).
+
+    The transport — stdlib SMTP in production, the log adapter where no host is
+    configured — lives only in the adapter; callers hand over a plain message
+    triple and never import a mail library or ESP SDK (AD-326). No HTML: bodies
+    are plain text this letter.
+
+    Failures raise: deciding what a failed send means (retry, log, swallow) is
+    the *caller's* policy, not the transport's.
+    """
+
+    def send(self, *, to: str, subject: str, body: str) -> None:
+        """Send one plain-text message to ``to``. Raises on transport failure."""
+        ...
+
 
 @runtime_checkable
 class ImageEncoderPort(Protocol):
@@ -410,6 +475,15 @@ class CorpusRepository(Protocol):
 
     def get_section(self, source_id: UUID, anchor: str) -> SectionContent | None:
         """Return ``source_id``'s section at ``anchor``, or ``None`` if none matches."""
+        ...
+
+    def list_section_markdown(self, source_id: UUID) -> Sequence[str]:
+        """Return every section's derived Markdown for ``source_id``, in order.
+
+        The application-side source of truth for enumerating a source's media
+        objects (the digests embedded in ``/api/sources/{id}/media/{digest}``
+        references) without ever listing the bucket.
+        """
         ...
 
     def get_chapter_index(self, source_id: UUID) -> tuple[ChapterIndexRow, ...] | None:
@@ -1379,3 +1453,29 @@ class StudyDayRepository(Protocol):
     def window(self, user_id: UUID, *, start: date, end: date) -> list[StudyDay]:
         """Return the caller's study days with ``start <= day <= end``, day-ordered."""
         ...
+
+
+@runtime_checkable
+class AiSpendDayRepository(Protocol):
+    """Persistence port for the ``ai_spend_days`` ledger (design §Data Models).
+
+    ``record`` is an atomic upsert-increment on the ``(user_id, day_utc)`` key, so N
+    same-day debits (including concurrent commits) leave exactly one row whose totals
+    equal the sum. ``get_for_day`` reads the day's row for the check-before-call
+    assertion; a missing row means nothing was spent that day. Operates on the
+    caller's ``Connection`` so a debit shares the triggering write's transaction.
+    """
+
+    def record(
+        self,
+        user_id: UUID,
+        day_utc: date,
+        *,
+        usd_micros: int = 0,
+        asks: int = 0,
+        teach_starts: int = 0,
+    ) -> None:
+        """Add the passed deltas to ``(user_id, day_utc)``, inserting the row if absent."""
+
+    def get_for_day(self, user_id: UUID, day_utc: date) -> AiSpendDay | None:
+        """Return the caller's ledger row for ``day_utc``, or ``None`` if nothing yet."""

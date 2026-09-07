@@ -151,9 +151,8 @@ def auth_client(db_conn: Connection, monkeypatch: pytest.MonkeyPatch):  # noqa: 
     # Fresh, generous limiter per test so the shared module singleton does not
     # leak counts across tests (dedicated rate-limit tests install their own).
     previous_limiter = get_rate_limiter()
-    set_rate_limiter(InMemoryFixedWindowRateLimiter(max_attempts=1000))
-
     app = create_app()
+    set_rate_limiter(InMemoryFixedWindowRateLimiter(max_attempts=1000))
 
     def _override() -> Iterator[Connection]:
         yield db_conn
@@ -201,9 +200,8 @@ def ingestion_client(db_conn: Connection, monkeypatch: pytest.MonkeyPatch):  # n
     get_settings.cache_clear()
 
     previous_limiter = get_rate_limiter()
-    set_rate_limiter(InMemoryFixedWindowRateLimiter(max_attempts=1000))
-
     app = create_app()
+    set_rate_limiter(InMemoryFixedWindowRateLimiter(max_attempts=1000))
 
     def _override_conn() -> Iterator[Connection]:
         yield db_conn
@@ -265,9 +263,8 @@ def quiz_client(db_conn: Connection, monkeypatch: pytest.MonkeyPatch):  # noqa: 
     get_settings.cache_clear()
 
     previous_limiter = get_rate_limiter()
-    set_rate_limiter(InMemoryFixedWindowRateLimiter(max_attempts=1000))
-
     app = create_app()
+    set_rate_limiter(InMemoryFixedWindowRateLimiter(max_attempts=1000))
 
     def _override_conn() -> Iterator[Connection]:
         yield db_conn
@@ -325,9 +322,8 @@ def sources_client(db_conn: Connection, monkeypatch: pytest.MonkeyPatch):  # noq
     get_settings.cache_clear()
 
     previous_limiter = get_rate_limiter()
-    set_rate_limiter(InMemoryFixedWindowRateLimiter(max_attempts=1000))
-
     app = create_app()
+    set_rate_limiter(InMemoryFixedWindowRateLimiter(max_attempts=1000))
 
     def _override() -> Iterator[Connection]:
         yield db_conn
@@ -368,11 +364,10 @@ def throttled_sources_client(  # noqa: ANN201
 
     previous_limiter = get_rate_limiter()
     # Allow 3 attempts per long window so the 4th trips deterministically. The
-    # limiter key is per-IP+route, so the auth register/csrf setup calls consume
+    # limiter key is per-user+route, so the auth register/csrf setup calls consume
     # separate buckets and never eat into the upload budget.
-    set_rate_limiter(InMemoryFixedWindowRateLimiter(max_attempts=3, window_seconds=300))
-
     app = create_app()
+    set_rate_limiter(InMemoryFixedWindowRateLimiter(max_attempts=3, window_seconds=300))
 
     def _override() -> Iterator[Connection]:
         yield db_conn

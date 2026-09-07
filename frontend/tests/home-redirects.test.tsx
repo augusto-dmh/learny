@@ -51,7 +51,8 @@ describe("auth redirects (HOME-17)", () => {
   });
 
   it("redirects to /home after a successful registration", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(201, user)));
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(201, user));
+    vi.stubGlobal("fetch", fetchMock);
 
     render(<RegisterPage />);
     fireEvent.change(screen.getByLabelText("Email"), {
@@ -60,8 +61,12 @@ describe("auth redirects (HOME-17)", () => {
     fireEvent.change(screen.getByLabelText("Password"), {
       target: { value: "pw" },
     });
+    // A successful registration now includes ToS consent (DOOR-25): the
+    // required checkbox gates submit and the consent rides the register body.
+    fireEvent.click(screen.getByLabelText(/Terms of Service/));
     fireEvent.click(screen.getByRole("button", { name: "Create account" }));
 
     await waitFor(() => expect(push).toHaveBeenCalledWith("/home"));
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body as string).accepted_tos).toBe(true);
   });
 });

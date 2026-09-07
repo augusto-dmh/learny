@@ -29,7 +29,12 @@ _SECRET_FIELD_HINTS = ("password", "secret", "hash", "token")
 def test_user_has_no_password_material() -> None:
     """User must not expose password/secret material (spec AC-4 / NFR-SEC-004)."""
     field_names = {f.name for f in dataclasses.fields(User)}
-    assert field_names == {"id", "email", "created_at"}
+    # ``accepted_tos_at`` joined the entity with the register ToS rail (DOOR-25):
+    # a consent timestamp, carrying no secret material.
+    # ``email_verified_at`` joins with the verify rail (DOOR-35): a confirmation
+    # timestamp, likewise carrying no secret material (the token's hash lives on
+    # ``email_tokens``, the raw token only in the mail).
+    assert field_names == {"id", "email", "created_at", "accepted_tos_at", "email_verified_at"}
     for name in field_names:
         assert not any(hint in name for hint in _SECRET_FIELD_HINTS), name
 

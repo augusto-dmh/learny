@@ -33,6 +33,7 @@ from app.domain.entities import (
     QuizDeckResult,
     QuizItemType,
     QuizSection,
+    TokenUsage,
 )
 from app.infrastructure.answering.anthropic import AnthropicAdapterBase
 
@@ -329,6 +330,9 @@ class AnthropicQuizAdapter(AnthropicAdapterBase):
 
         candidates: list[QuizCandidate] = []
         errors: list[str] = []
+        input_tokens = 0
+        output_tokens = 0
+        saw_usage = False
         for response in client.messages.batches.results(handle.batch_id):
             result = response.result
             if result.type != "succeeded":
@@ -338,4 +342,17 @@ class AnthropicQuizAdapter(AnthropicAdapterBase):
                 candidates.extend(_parse_items(result.message))
             except (ValueError, KeyError, json.JSONDecodeError) as exc:
                 errors.append(f"{response.custom_id}: {exc}")
-        return QuizDeckResult(candidates=tuple(candidates), errors=tuple(errors))
+            # Sum the batch's per-request usage onto the result so the daily spend
+            # debit prices what the pass actually consumed.
+            usage = getattr(result.message, "usage", None)
+            if usage is not None:
+                saw_usage = True
+                input_tokens += getattr(usage, "input_tokens", 0) or 0
+                output_tokens += getattr(usage, "output_tokens", 0) or 0
+        return QuizDeckResult(
+            candidates=tuple(candidates),
+            errors=tuple(errors),
+            usage=TokenUsage(input_tokens=input_tokens, output_tokens=output_tokens)
+            if saw_usage
+            else None,
+        )

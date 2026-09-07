@@ -21,7 +21,9 @@ from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 
 from app.application.errors import (
+    AccountDeleteFailed,
     ActiveIngestionExists,
+    AiPaused,
     AnswerGenerationFailed,
     CardAlreadyExists,
     CardNotEditable,
@@ -30,6 +32,7 @@ from app.application.errors import (
     ConversationTargetUnavailable,
     ConversationTurnConflict,
     CorpusNotFound,
+    DailyBudgetExhausted,
     EmailAlreadyExists,
     EnqueueFailed,
     IngestionNotFound,
@@ -39,6 +42,8 @@ from app.application.errors import (
     InvalidConversationTitle,
     InvalidCredentials,
     InvalidSourceUpload,
+    InvalidToken,
+    InviteRequired,
     NotAuthenticated,
     NotAuthorized,
     NoteBodyTooLong,
@@ -47,10 +52,12 @@ from app.application.errors import (
     QuizItemNotFound,
     QuizItemNotReviewable,
     QuizReviewNotUndoable,
+    SourceCountQuotaExceeded,
     SourceNotFound,
     SourceNotReady,
     StaleCaptureTarget,
     StorageUnavailable,
+    StoredBytesQuotaExceeded,
     ValidationError,
 )
 
@@ -84,6 +91,11 @@ _STATUS_BY_ERROR = {
     ActiveIngestionExists: status.HTTP_409_CONFLICT,
     IngestionNotFound: status.HTTP_404_NOT_FOUND,
     EnqueueFailed: status.HTTP_502_BAD_GATEWAY,
+    # Account deletion fails closed (DOOR-32): the user row survives and the
+    # client is told to retry. This is deliberately *not* the global
+    # StorageUnavailable → 503 — a failed erase is this caller's failed write,
+    # not a service-wide outage signal.
+    AccountDeleteFailed: status.HTTP_502_BAD_GATEWAY,
     CorpusNotFound: status.HTTP_404_NOT_FOUND,
     SourceNotReady: status.HTTP_409_CONFLICT,
     ConversationNotFound: status.HTTP_404_NOT_FOUND,
@@ -103,6 +115,24 @@ _STATUS_BY_ERROR = {
     InvalidCardText: _HTTP_422,
     CardNotEditable: status.HTTP_409_CONFLICT,
     CardAlreadyExists: status.HTTP_409_CONFLICT,
+    # The daily-budget refusal: 429 with the honest come-back-tomorrow copy carried
+    # in the message, and deliberately no ``Retry-After`` — the reset signal is the
+    # 00:00 UTC boundary in the copy, not a limiter-style seconds hint.
+    DailyBudgetExhausted: status.HTTP_429_TOO_MANY_REQUESTS,
+    # The operator kill switch: 503 with the honest pause copy; reads and reviews
+    # are untouched and never route through this error.
+    AiPaused: status.HTTP_503_SERVICE_UNAVAILABLE,
+    # Library quotas: count → 403 (delete a book), stored bytes → 413 (smaller
+    # file). Both are raised before ``put_object``, so neither orphans storage.
+    SourceCountQuotaExceeded: status.HTTP_403_FORBIDDEN,
+    StoredBytesQuotaExceeded: _HTTP_413,
+    # The invite gate (DOOR-20): one uniform 403 for an absent, unknown,
+    # exhausted, or expired code — the copy never says which of the four it was,
+    # so the refusal cannot be probed.
+    InviteRequired: status.HTTP_403_FORBIDDEN,
+    # A verify/reset email token that is not live (DOOR-35): one uniform 403 for
+    # unknown, replayed, expired, and wrong-purpose alike.
+    InvalidToken: status.HTTP_403_FORBIDDEN,
 }
 
 # An invalid upload maps to a status keyed by its ``kind`` (design §Error Handling):

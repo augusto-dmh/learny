@@ -72,6 +72,9 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     celery_broker_url: str = ""
     celery_result_backend: str = ""
+    # Peers allowed to set ``X-Real-IP`` for auth rate-limit keys. Includes the
+    # Starlette TestClient host (``testclient``) and RFC1918 Docker networks.
+    trusted_proxy_hosts: str = "127.0.0.1,::1,testclient,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
 
     def broker_url(self) -> str:
         """Effective Celery broker URL (falls back to ``redis_url``)."""
@@ -80,6 +83,10 @@ class Settings(BaseSettings):
     def result_backend(self) -> str:
         """Effective Celery result backend URL (falls back to ``redis_url``)."""
         return self.celery_result_backend or self.redis_url
+
+    def trusted_proxy_host_list(self) -> tuple[str, ...]:
+        """Parsed peer hosts/CIDRs that may stamp ``X-Real-IP``."""
+        return tuple(part.strip() for part in self.trusted_proxy_hosts.split(",") if part.strip())
 
     # Session cookie attributes (NFR-SEC-002) — wired fully in Phase C.
     session_cookie_name: str = "learny_session"
@@ -237,6 +244,53 @@ class Settings(BaseSettings):
     # the amount is the operator cap set at RFC-005 Cycle B). Modeled, not
     # billed — the runbook's spend report reconciles against actual spend.
     eval_budget_usd: float = 10.0
+
+    # Daily AI spend rails (RFC-0007 Cycle F). ``daily_ai_spend_usd`` is the
+    # per-learner per-UTC-day ceiling the ledger is checked against before any
+    # provider call; ``price_*_usd_per_million_tokens`` is the operator's price
+    # catalog a successful call's token usage is multiplied into when the day's
+    # USD is debited. Micros (1 USD = 1_000_000) keep the accumulation integral.
+    # The free-tier integer caps sit beside the USD cap: Ask turns and Teach
+    # session starts per UTC day, whichever trips first.
+    daily_ai_spend_usd: float = 0.5
+    price_input_usd_per_million_tokens: float = 3.0
+    price_output_usd_per_million_tokens: float = 15.0
+    price_embed_usd_per_million_tokens: float = 0.13
+    daily_ask_cap: int = Field(default=8, ge=0)
+    daily_teach_start_cap: int = Field(default=1, ge=0)
+    # The operator pause (DOOR-12): while true, every generation surface — and the
+    # embedding-producing ingest step — refuses before any provider SDK is touched,
+    # with the honest pause copy. Reads and review grading are untouched.
+    ai_kill_switch: bool = False
+
+    # Library quotas (DOOR-15..17): owned (non-sample) sources per learner and the
+    # summed stored ``byte_size`` they may reach. 256 MiB — sized so the 100 MiB
+    # PDF cap twice over stays legal — plus the new upload must fit under it.
+    library_max_owned_sources: int = Field(default=2, ge=0)
+    library_max_stored_bytes: int = Field(default=268435456, ge=0)
+
+    # Registration invite rail (DOOR-20..22). While true, register demands a live
+    # invite code and refuses without one with a uniform 403. The default (false)
+    # keeps self-host and CI registers code-free; the hosted deployment sets it
+    # true (see ``.env.production.example``).
+    invite_required: bool = False
+
+    # Outbound mail (RFC-0007 Cycle F; AD-326). ``smtp_host`` is the adapter
+    # selector: set (with ``smtp_from``) → the stdlib SMTP adapter is the
+    # production default; empty (the default) → the log adapter, so local dev
+    # and the offline suite send nothing and open no socket. The two TTLs bound
+    # the single-use verify/reset token rows (``email_tokens.expires_at``).
+    # ``smtp_use_tls`` upgrades the connection with STARTTLS (the submission
+    # standard on port 587); ``smtp_username``/``smtp_password`` authenticate
+    # against the relay — most real relays require both.
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_from: str = ""
+    smtp_use_tls: bool = True
+    smtp_username: str = ""
+    smtp_password: str = ""
+    email_verify_ttl_minutes: int = Field(default=1440, ge=1)
+    email_reset_ttl_minutes: int = Field(default=60, ge=1)
 
     # Active recall — quiz deck generation (RFC-002 Cycle E). The provider SDK and
     # model name live only in the quiz adapter; these knobs stay LEARNY_-prefixed and

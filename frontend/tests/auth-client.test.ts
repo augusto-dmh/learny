@@ -25,18 +25,50 @@ function fetchMockFn(
 }
 
 describe("auth client (D2)", () => {
-  it("register posts credentials to the proxy /api/auth/register", async () => {
+  it("register posts credentials, the invite code, and the ToS consent to the proxy", async () => {
     const fetchMock = fetchMockFn(async () =>
       jsonResponse(201, { id: "u1", email: "a@b.c", created_at: "now" }),
     );
-    const user = await register("a@b.c", "pw", fetchMock as unknown as typeof fetch);
+    const user = await register(
+      "a@b.c",
+      "pw",
+      { acceptedTos: true, inviteCode: "WELCOME" },
+      fetchMock as unknown as typeof fetch,
+    );
 
     expect(user.email).toBe("a@b.c");
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe("/api/auth/register");
     expect(init.method).toBe("POST");
     expect(init.credentials).toBe("same-origin");
-    expect(JSON.parse(init.body as string)).toEqual({ email: "a@b.c", password: "pw" });
+    // The exact payload: consent and the invite ride along, and no captcha
+    // token field exists anywhere in the body.
+    expect(JSON.parse(init.body as string)).toEqual({
+      email: "a@b.c",
+      password: "pw",
+      invite_code: "WELCOME",
+      accepted_tos: true,
+    });
+  });
+
+  it("register without an invite code still posts its explicit ToS consent", async () => {
+    const fetchMock = fetchMockFn(async () =>
+      jsonResponse(201, { id: "u1", email: "a@b.c", created_at: "now" }),
+    );
+    await register(
+      "a@b.c",
+      "pw",
+      { acceptedTos: true },
+      fetchMock as unknown as typeof fetch,
+    );
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(JSON.parse(init.body as string)).toEqual({
+      email: "a@b.c",
+      password: "pw",
+      invite_code: null,
+      accepted_tos: true,
+    });
   });
 
   it("login posts credentials to the proxy /api/auth/login", async () => {

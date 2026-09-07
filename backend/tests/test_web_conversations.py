@@ -100,7 +100,9 @@ _BOOK_TITLE = "A Book"
 
 
 def _register(client: TestClient, email: str) -> str:
-    resp = client.post("/api/auth/register", json={"email": email, "password": TEST_PASSWORD})
+    resp = client.post(
+        "/api/auth/register", json={"email": email, "password": TEST_PASSWORD, "accepted_tos": True}
+    )
     assert resp.status_code == 201, resp.text
     return resp.json()["id"]
 
@@ -2925,9 +2927,8 @@ def throttled_conversations_client(  # noqa: ANN201
     get_settings.cache_clear()
 
     previous = get_rate_limiter()
-    set_rate_limiter(InMemoryFixedWindowRateLimiter(max_attempts=3, window_seconds=300))
-
     app = create_app()
+    set_rate_limiter(InMemoryFixedWindowRateLimiter(max_attempts=3, window_seconds=300))
 
     def _override() -> Iterator[Connection]:
         yield db_conn
@@ -3038,7 +3039,9 @@ def test_every_mutating_conversation_route_carries_the_one_policy() -> None:
             assert declared == [], f"{sorted(route.methods)} {route.path}"
 
 
-def test_no_mutating_conversation_route_answers_while_the_budget_is_spent() -> None:
+def test_no_mutating_conversation_route_answers_while_the_budget_is_spent(
+    db_conn: Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # WSC-15: the retired surface carried its own limiter dependencies, and they went
     # with it. What has to survive that deletion is not a declaration but an effect,
     # so this drives the assembled application with an exhausted limiter and requires
@@ -3046,10 +3049,15 @@ def test_no_mutating_conversation_route_answers_while_the_budget_is_spent() -> N
     # both that the app mounts them all and that the throttle is actually reached.
     #
     # The route set is read off the router, never listed here, so a route added later
-    # is covered the day it is declared. No session is established: a throttled route
-    # rejects before it asks who is calling, so an unthrottled one answers 401/403/422
-    # and fails this test rather than passing it by a different door.
+    # is covered the day it is declared. The throttle now keys on the caller, so it
+    # asks who is calling before it counts: the routes are driven with a registered
+    # learner's session, and an unthrottled one would answer 404/409/422 and fail
+    # this test rather than passing it by a different door. (An anonymous request is
+    # a 401 that spends no budget — that outcome is pinned in the rate-limit
+    # validation suite.)
+    from app.core.config import get_settings
     from app.infrastructure.web.conversations import router
+    from app.infrastructure.web.dependencies import get_db_connection
     from app.infrastructure.web.rate_limit import (
         InMemoryFixedWindowRateLimiter,
         get_rate_limiter,
@@ -3058,7 +3066,18 @@ def test_no_mutating_conversation_route_answers_while_the_budget_is_spent() -> N
     from app.main import create_app
     from tests.conftest import declared_routes
 
+    # The registered session needs the same env the client fixtures pin: a trusted
+    # Origin for the register write and a non-Secure cookie the TestClient resends.
+    monkeypatch.setenv("LEARNY_SESSION_COOKIE_SECURE", "false")
+    monkeypatch.setenv("LEARNY_CSRF_TRUSTED_ORIGINS", TEST_ORIGIN)
+    get_settings.cache_clear()
+
     app = create_app()
+
+    def _override() -> Iterator[Connection]:
+        yield db_conn
+
+    app.dependency_overrides[get_db_connection] = _override
     declared = {route.path for route in router.routes}
     mounted = [route for route in declared_routes(app) if route.path in declared]
     assert {route.path for route in mounted} == declared
@@ -3071,12 +3090,27 @@ def test_no_mutating_conversation_route_answers_while_the_budget_is_spent() -> N
     assert mutating, "the surface must declare mutating routes, or this proves nothing"
 
     previous = get_rate_limiter()
-    set_rate_limiter(InMemoryFixedWindowRateLimiter(max_attempts=0, window_seconds=300))
     try:
-        with TestClient(app) as client:
+        # Register under a working limiter so the learner's session exists, then
+        # exhaust the budget: every mutating route must now be refused by the
+        # throttle itself, never answered.
+        set_rate_limiter(InMemoryFixedWindowRateLimiter(max_attempts=1000))
+        with TestClient(app, headers={"Origin": TEST_ORIGIN}) as client:
+            registered = client.post(
+                "/api/auth/register",
+                json={
+                    "email": "budget-spent@example.com",
+                    "password": TEST_PASSWORD,
+                    "accepted_tos": True,
+                },
+            )
+            assert registered.status_code == 201, registered.text
+            set_rate_limiter(InMemoryFixedWindowRateLimiter(max_attempts=0, window_seconds=300))
             for method, template in mutating:
                 path = template.replace("{conversation_id}", str(uuid4()))
                 resp = client.request(method, path, json={}, headers={"Origin": TEST_ORIGIN})
                 assert resp.status_code == 429, f"{method} {template} -> {resp.status_code}"
     finally:
         set_rate_limiter(previous)
+        app.dependency_overrides.clear()
+        get_settings.cache_clear()

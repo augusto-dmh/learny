@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager
+from datetime import timedelta
 from functools import lru_cache
 from typing import Annotated
 from uuid import UUID, uuid4
@@ -25,6 +26,11 @@ from fastapi import Depends, Request
 from sqlalchemy import Connection
 
 from app.application.activation import RecordActivation
+from app.application.budget import (
+    DailyBudget,
+    TokenPrices,
+    usd_to_micros,
+)
 from app.application.cards import (
     AcceptCard,
     AcceptNoteCard,
@@ -47,8 +53,13 @@ from app.application.identity import (
     AuthenticateUser,
     AuthorizeOwnership,
     CurrentUser,
+    DeleteAccount,
     Logout,
     RegisterUser,
+    RequestPasswordReset,
+    ResetPassword,
+    SendEmailVerification,
+    VerifyEmail,
 )
 from app.application.ingestion import ReadIngestion, RunIngestion, StartIngestion
 from app.application.notes import (
@@ -66,6 +77,7 @@ from app.application.quiz import (
     PlanDeckGeneration,
     RunDeckGeneration,
 )
+from app.application.quotas import Quotas
 from app.application.reading import (
     ListSourceHighlights,
     ReadChapter,
@@ -86,6 +98,7 @@ from app.core.config import Settings, get_settings
 from app.core.tracing import bind_trace
 from app.domain.entities import Session, User
 from app.domain.ports import (
+    EmailPort,
     EmbeddingPort,
     GenerationPort,
     IngestionEnqueuer,
@@ -101,12 +114,15 @@ from app.infrastructure.clock import SystemClock
 from app.infrastructure.db.engine import get_engine
 from app.infrastructure.db.repositories import (
     SqlAlchemyActivationEventRepository,
+    SqlAlchemyAiSpendDayRepository,
     SqlAlchemyConversationRepository,
     SqlAlchemyConversationTurnRepository,
     SqlAlchemyCorpusRepository,
     SqlAlchemyCredentialRepository,
+    SqlAlchemyEmailTokenRepository,
     SqlAlchemyIngestionEventRepository,
     SqlAlchemyIngestionJobRepository,
+    SqlAlchemyInviteRepository,
     SqlAlchemyNoteRepository,
     SqlAlchemyQuizItemRepository,
     SqlAlchemyQuizJobRepository,
@@ -117,6 +133,7 @@ from app.infrastructure.db.repositories import (
     SqlAlchemyUserRepository,
 )
 from app.infrastructure.db.retrieval import SqlAlchemyRetrievalRepository
+from app.infrastructure.email import build_email_sender
 from app.infrastructure.embeddings import build_embedding_adapter
 from app.infrastructure.ingestion.markup import Bs4MarkupConverter
 from app.infrastructure.quiz import build_quiz_adapter
@@ -190,7 +207,73 @@ DbConnection = Annotated[Connection, Depends(get_db_connection)]
 AppSettings = Annotated[Settings, Depends(get_settings)]
 
 
-def get_register_user(conn: DbConnection) -> RegisterUser:
+def build_budget(conn: Connection) -> DailyBudget:
+    """Wire the daily AI spend budget on ``conn`` (the caller's transaction).
+
+    Built per request / per worker call — never cached — so the cap, prices, and
+    (in a later task) the kill switch are read from the *current* settings rather
+    than a stale construction-time snapshot. The clock is the shared adapter; the
+    ledger row it resolves is the caller's UTC day.
+    """
+    settings = get_settings()
+    return DailyBudget(
+        repo=SqlAlchemyAiSpendDayRepository(conn),
+        clock=_clock,
+        daily_cap_micros=usd_to_micros(settings.daily_ai_spend_usd),
+        prices=TokenPrices(
+            input_micros_per_million=usd_to_micros(settings.price_input_usd_per_million_tokens),
+            output_micros_per_million=usd_to_micros(settings.price_output_usd_per_million_tokens),
+            embed_micros_per_million=usd_to_micros(settings.price_embed_usd_per_million_tokens),
+        ),
+        ask_daily_cap=settings.daily_ask_cap,
+        teach_start_daily_cap=settings.daily_teach_start_cap,
+        ai_paused=settings.ai_kill_switch,
+    )
+
+
+def get_email_sender() -> EmailPort:
+    """FastAPI dependency: the settings-selected email adapter (overridable in tests).
+
+    Built per request — deliberately not a cached or import-time singleton like
+    ``_storage`` — so the SMTP-vs-log choice reads the *current* settings (a
+    flipped ``LEARNY_SMTP_HOST`` needs no restart) and tests override it with a
+    capturing fake via ``dependency_overrides[get_email_sender]``.
+    """
+    return build_email_sender(get_settings())
+
+
+EmailSender = Annotated[EmailPort, Depends(get_email_sender)]
+
+
+def get_send_email_verification(conn: DbConnection, emails: EmailSender) -> SendEmailVerification:
+    """Wire the best-effort verify mailer on the request transaction (DOOR-34).
+
+    The TTL comes from settings per request (like every composition-root knob),
+    and the token row write shares the caller's transaction; the send itself
+    swallows its failures inside the service (DOOR-40).
+    """
+    return SendEmailVerification(
+        email_tokens=SqlAlchemyEmailTokenRepository(conn),
+        emails=emails,
+        tokens=_tokens,
+        clock=_clock,
+        ttl=timedelta(minutes=get_settings().email_verify_ttl_minutes),
+    )
+
+
+def get_register_user(
+    conn: DbConnection,
+    send_verification: Annotated[SendEmailVerification, Depends(get_send_email_verification)],
+) -> RegisterUser:
+    """Wire ``RegisterUser`` on the request transaction.
+
+    The invite gate is wired only where ``LEARNY_INVITE_REQUIRED`` is on; the
+    default (flag off) passes no gate at all, so register behaves exactly as
+    before the rail existed (DOOR-26). Read per request, not cached, so the
+    flag is taken from the current settings rather than a stale snapshot. The
+    verify mailer is always wired: register sends one verify message per
+    successful register (DOOR-34), best-effort (DOOR-40).
+    """
     return RegisterUser(
         users=SqlAlchemyUserRepository(conn),
         credentials=SqlAlchemyCredentialRepository(conn),
@@ -202,6 +285,43 @@ def get_register_user(conn: DbConnection) -> RegisterUser:
             activations=SqlAlchemyActivationEventRepository(conn),
             clock=_clock,
         ),
+        invites=(SqlAlchemyInviteRepository(conn) if get_settings().invite_required else None),
+        send_verification=send_verification,
+    )
+
+
+def get_verify_email(conn: DbConnection) -> VerifyEmail:
+    """Wire the token confirmation on the request transaction (DOOR-35)."""
+    return VerifyEmail(
+        email_tokens=SqlAlchemyEmailTokenRepository(conn),
+        users=SqlAlchemyUserRepository(conn),
+        clock=_clock,
+    )
+
+
+def get_request_password_reset(conn: DbConnection, emails: EmailSender) -> RequestPasswordReset:
+    """Wire the reset request on the request transaction (DOOR-36).
+
+    The endpoint answers 204 whether or not the email exists; the service sends
+    nothing for an unknown address.
+    """
+    return RequestPasswordReset(
+        users=SqlAlchemyUserRepository(conn),
+        email_tokens=SqlAlchemyEmailTokenRepository(conn),
+        emails=emails,
+        tokens=_tokens,
+        clock=_clock,
+        ttl=timedelta(minutes=get_settings().email_reset_ttl_minutes),
+    )
+
+
+def get_reset_password(conn: DbConnection) -> ResetPassword:
+    """Wire the password reset on the request transaction (DOOR-37)."""
+    return ResetPassword(
+        email_tokens=SqlAlchemyEmailTokenRepository(conn),
+        credentials=SqlAlchemyCredentialRepository(conn),
+        hasher=_hasher,
+        clock=_clock,
     )
 
 
@@ -218,6 +338,16 @@ def get_authenticate_user(conn: DbConnection) -> AuthenticateUser:
 
 def get_logout(conn: DbConnection) -> Logout:
     return Logout(sessions=SqlAlchemySessionRepository(conn))
+
+
+def get_delete_account(conn: DbConnection, storage: Storage) -> DeleteAccount:
+    """Wire ``DeleteAccount`` on the request transaction + process storage."""
+    return DeleteAccount(
+        users=SqlAlchemyUserRepository(conn),
+        sources=SqlAlchemySourceRepository(conn),
+        corpus=SqlAlchemyCorpusRepository(conn),
+        storage=storage,
+    )
 
 
 def get_current_user_service(conn: DbConnection) -> CurrentUser:
@@ -273,6 +403,16 @@ def get_storage() -> StoragePort:
 Storage = Annotated[StoragePort, Depends(get_storage)]
 
 
+def build_quotas(conn: Connection, settings: Settings) -> Quotas:
+    """Wire the library quotas on ``conn`` from the configured caps (DOOR-15..18)."""
+    return Quotas(
+        sources=SqlAlchemySourceRepository(conn),
+        jobs=SqlAlchemyIngestionJobRepository(conn),
+        max_sources=settings.library_max_owned_sources,
+        max_stored_bytes=settings.library_max_stored_bytes,
+    )
+
+
 def get_create_source(conn: DbConnection, storage: Storage, settings: AppSettings) -> CreateSource:
     return CreateSource(
         sources=SqlAlchemySourceRepository(conn),
@@ -281,6 +421,7 @@ def get_create_source(conn: DbConnection, storage: Storage, settings: AppSetting
         ids=uuid4,
         max_bytes=settings.epub_max_bytes,
         pdf_max_bytes=settings.pdf_max_bytes,
+        quotas=build_quotas(conn, settings),
     )
 
 
@@ -343,6 +484,7 @@ def build_start_ingestion(conn: Connection) -> StartIngestion:
         authorize=AuthorizeOwnership(),
         clock=_clock,
         ids=uuid4,
+        quotas=build_quotas(conn, get_settings()),
     )
 
 
@@ -569,6 +711,7 @@ def get_post_conversation_turn(
             activations=SqlAlchemyActivationEventRepository(conn),
             clock=_clock,
         ),
+        budget=build_budget(conn),
     )
 
 
@@ -612,6 +755,7 @@ def build_plan_deck_generation(conn: Connection) -> PlanDeckGeneration:
         authorize=AuthorizeOwnership(),
         clock=_clock,
         ids=uuid4,
+        budget=build_budget(conn),
     )
 
 

@@ -162,6 +162,9 @@ def test_ingestion_job_repository_is_runtime_checkable_protocol() -> None:
         def get_latest_for_source(self, source_id):  # noqa: ANN001, ANN201
             return None
 
+        def count_active_for_user(self, user_id):  # noqa: ANN001, ANN201
+            return 0
+
         def update(self, job):  # noqa: ANN001, ANN201
             return job
 

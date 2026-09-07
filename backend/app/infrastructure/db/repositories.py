@@ -36,10 +36,13 @@ from sqlalchemy import delete as sa_delete
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 
-from app.application.errors import ConversationTurnConflict
+from app.application.errors import ConversationTurnConflict, InviteRequired
+from app.application.invites import INVITE_REQUIRED_MESSAGE
 from app.application.text_search import resolve_text_search_config
 from app.domain.entities import (
     ACTIVE_QUIZ_JOB_STATUSES,
+    ACTIVE_STATUSES,
+    AiSpendDay,
     AnchorBlockSnapshot,
     AnchorSection,
     Backlink,
@@ -84,6 +87,7 @@ from app.domain.entities import (
 )
 from app.infrastructure.db.metadata import (
     activation_events,
+    ai_spend_days,
     conversation_turn_citations,
     conversation_turns,
     conversations,
@@ -91,8 +95,10 @@ from app.infrastructure.db.metadata import (
     corpus_chunks,
     corpus_documents,
     corpus_sections,
+    email_tokens,
     ingestion_events,
     ingestion_jobs,
+    invite_codes,
     note_anchors,
     note_links,
     note_tags,
@@ -125,6 +131,8 @@ class SqlAlchemyUserRepository:
                 id=user.id,
                 email=user.email,
                 created_at=user.created_at,
+                accepted_tos_at=user.accepted_tos_at,
+                email_verified_at=user.email_verified_at,
             )
         )
         return user
@@ -137,6 +145,16 @@ class SqlAlchemyUserRepository:
         # citext makes this comparison case-insensitive at the DB level.
         row = self._conn.execute(select(users).where(users.c.email == email)).one_or_none()
         return _to_user(row) if row is not None else None
+
+    def set_email_verified(self, user_id: UUID, verified_at: datetime) -> None:
+        """Stamp ``email_verified_at`` (the verify-token confirmation, DOOR-35)."""
+        self._conn.execute(
+            update(users).where(users.c.id == user_id).values(email_verified_at=verified_at)
+        )
+
+    def delete(self, user_id: UUID) -> None:
+        """Remove the user row; credentials/sessions/sources/... CASCADE away."""
+        self._conn.execute(sa_delete(users).where(users.c.id == user_id))
 
 
 class SqlAlchemyCredentialRepository:
@@ -221,6 +239,72 @@ class SqlAlchemySessionRepository:
 
     def delete(self, session_id: UUID) -> None:
         self._conn.execute(sa_delete(sessions).where(sessions.c.id == session_id))
+
+
+class SqlAlchemyInviteRepository:
+    """``InviteRepository`` backed by the ``invite_codes`` table.
+
+    Consumption is one conditional ``UPDATE ... RETURNING``-shaped statement: the
+    liveness check (exists, uses left, not expired) and the decrement are a
+    single atomic write, so two concurrent registers racing for the last
+    remaining use cannot both pass — the loser updates zero rows and answers the
+    uniform ``InviteRequired`` (DOOR-20/22).
+    """
+
+    def __init__(self, connection: Connection) -> None:
+        self._conn = connection
+
+    def consume(self, code: str, *, now: datetime) -> None:
+        result = self._conn.execute(
+            update(invite_codes)
+            .where(
+                invite_codes.c.code == code,
+                invite_codes.c.remaining_uses > 0,
+                or_(invite_codes.c.expires_at.is_(None), invite_codes.c.expires_at > now),
+            )
+            .values(remaining_uses=invite_codes.c.remaining_uses - 1)
+        )
+        if result.rowcount == 0:
+            raise InviteRequired(INVITE_REQUIRED_MESSAGE)
+
+
+class SqlAlchemyEmailTokenRepository:
+    """``EmailTokenRepository`` backed by the ``email_tokens`` table.
+
+    Hash-at-rest like the session repository; the consume mirrors the invite
+    repository's single-statement contract: liveness (exists, unconsumed,
+    unexpired, purpose matches) and the ``consumed_at`` stamp are one
+    conditional ``UPDATE ... RETURNING``, so two replays of the same raw token
+    cannot both win — the loser updates zero rows and gets ``None`` (DOOR-35).
+    """
+
+    def __init__(self, connection: Connection) -> None:
+        self._conn = connection
+
+    def create(self, *, user_id: UUID, purpose: str, raw_token: str, expires_at: datetime) -> None:
+        self._conn.execute(
+            insert(email_tokens).values(
+                id=uuid4(),
+                user_id=user_id,
+                purpose=purpose,
+                secret_hash=hash_token(raw_token),
+                expires_at=expires_at,
+            )
+        )
+
+    def consume(self, raw_token: str, *, purpose: str, now: datetime) -> UUID | None:
+        row = self._conn.execute(
+            update(email_tokens)
+            .where(
+                email_tokens.c.secret_hash == hash_token(raw_token),
+                email_tokens.c.purpose == purpose,
+                email_tokens.c.consumed_at.is_(None),
+                email_tokens.c.expires_at > now,
+            )
+            .values(consumed_at=now)
+            .returning(email_tokens.c.user_id)
+        ).first()
+        return row.user_id if row is not None else None
 
 
 class SqlAlchemySourceRepository:
@@ -339,6 +423,21 @@ class SqlAlchemyIngestionJobRepository:
             .limit(1)
         ).one_or_none()
         return _to_ingestion_job(row) if row is not None else None
+
+    def count_active_for_user(self, user_id: UUID) -> int:
+        """Count queued/running jobs across the caller's sources (DOOR-18).
+
+        Joined through ``sources`` so the count is the caller's own queue exactly;
+        terminal jobs on any source never count.
+        """
+        stmt = (
+            select(func.count())
+            .select_from(ingestion_jobs)
+            .join(sources, sources.c.id == ingestion_jobs.c.source_id)
+            .where(sources.c.user_id == user_id)
+            .where(ingestion_jobs.c.status.in_(ACTIVE_STATUSES))
+        )
+        return int(self._conn.execute(stmt).scalar_one())
 
     def update(self, job: IngestionJob) -> IngestionJob:
         """Persist ``status``/``attempts``/``last_error``/``updated_at``."""
@@ -520,6 +619,16 @@ class SqlAlchemyCorpusRepository:
             language=document.language,
             sections=sections,
         )
+
+    def list_section_markdown(self, source_id: UUID) -> list[str]:
+        """Return every section's derived Markdown for ``source_id``, in order."""
+        rows = self._conn.execute(
+            select(corpus_sections.c.markdown)
+            .join(corpus_documents, corpus_sections.c.document_id == corpus_documents.c.id)
+            .where(corpus_documents.c.source_id == source_id)
+            .order_by(corpus_sections.c.position)
+        ).fetchall()
+        return [row.markdown for row in rows]
 
     def get_section(self, source_id: UUID, anchor: str) -> SectionContent | None:
         # Owner-agnostic read: ownership is enforced one layer up via the source
@@ -1878,6 +1987,25 @@ class SqlAlchemyQuizJobRepository:
         )
         return job
 
+    def claim_spend(self, job_id: UUID, *, now: datetime) -> bool:
+        """Stamp the one-time deck-spend marker; ``True`` only for the first claimer.
+
+        One conditional UPDATE (mirrors the invite/email-token consume): the
+        marker must still be NULL for the stamp to land, so two concurrent or
+        redelivered settles of the same job cannot both win — the loser updates
+        zero rows and must skip the debit. Lives in the caller's transaction so
+        the stamp commits (or rolls back) together with the debit it guards.
+        """
+        result = self._conn.execute(
+            update(quiz_generation_jobs)
+            .where(
+                quiz_generation_jobs.c.id == job_id,
+                quiz_generation_jobs.c.spend_recorded_at.is_(None),
+            )
+            .values(spend_recorded_at=now)
+        )
+        return result.rowcount > 0
+
 
 class SqlAlchemyNoteRepository:
     """``NoteRepository`` backed by the notes/anchors/tags/links tables (ADR-0026 §2).
@@ -2413,8 +2541,79 @@ class SqlAlchemyStudyDayRepository:
         ]
 
 
+class SqlAlchemyAiSpendDayRepository:
+    """Postgres ``ai_spend_days`` ledger (design §Data Models).
+
+    ``record`` is the atomic ``INSERT ... ON CONFLICT DO UPDATE`` increment (the
+    ``study_days`` counter precedent): the stored values are incremented in SQL, not
+    read-then-written, so two same-day debits — including concurrent commits — both
+    land and neither is lost. ``get_for_day`` reads one day's row for the
+    check-before-call budget assertion. Operates on the caller's ``Connection`` so a
+    debit shares the triggering write's transaction.
+    """
+
+    def __init__(self, connection: Connection) -> None:
+        self._conn = connection
+
+    def record(
+        self,
+        user_id: UUID,
+        day_utc: date,
+        *,
+        usd_micros: int = 0,
+        asks: int = 0,
+        teach_starts: int = 0,
+    ) -> None:
+        stmt = pg_insert(ai_spend_days).values(
+            user_id=user_id,
+            day_utc=day_utc,
+            usd_micros=usd_micros,
+            ask_count=asks,
+            teach_starts=teach_starts,
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[ai_spend_days.c.user_id, ai_spend_days.c.day_utc],
+            set_={
+                # Atomic increment against the stored value (not a read-then-write),
+                # so concurrent commits both count.
+                "usd_micros": ai_spend_days.c.usd_micros + stmt.excluded.usd_micros,
+                "ask_count": ai_spend_days.c.ask_count + stmt.excluded.ask_count,
+                "teach_starts": ai_spend_days.c.teach_starts + stmt.excluded.teach_starts,
+            },
+        )
+        self._conn.execute(stmt)
+
+    def get_for_day(self, user_id: UUID, day_utc: date) -> AiSpendDay | None:
+        row = self._conn.execute(
+            select(
+                ai_spend_days.c.user_id,
+                ai_spend_days.c.day_utc,
+                ai_spend_days.c.usd_micros,
+                ai_spend_days.c.ask_count,
+                ai_spend_days.c.teach_starts,
+            )
+            .where(ai_spend_days.c.user_id == user_id)
+            .where(ai_spend_days.c.day_utc == day_utc)
+        ).first()
+        if row is None:
+            return None
+        return AiSpendDay(
+            user_id=row.user_id,
+            day_utc=row.day_utc,
+            usd_micros=row.usd_micros,
+            ask_count=row.ask_count,
+            teach_starts=row.teach_starts,
+        )
+
+
 def _to_user(row) -> User:  # noqa: ANN001 — Row is an internal SQLAlchemy type
-    return User(id=row.id, email=row.email, created_at=row.created_at)
+    return User(
+        id=row.id,
+        email=row.email,
+        created_at=row.created_at,
+        accepted_tos_at=row.accepted_tos_at,
+        email_verified_at=row.email_verified_at,
+    )
 
 
 def _to_credential(row) -> PasswordCredential:  # noqa: ANN001

@@ -37,6 +37,7 @@ from app.domain.entities import (
     Evidence,
     GeneratedAnswer,
     HistoryTurn,
+    TokenUsage,
     citation_marker,
 )
 from app.infrastructure.answering.prompts import (
@@ -214,6 +215,24 @@ class _CitationMarks:
         self.spans.append(CitedSpan(chunk_id=document.chunk_id, quote=quote, start=start, end=end))
 
 
+def _usage_of(message: Any) -> TokenUsage | None:
+    """Map a provider message's ``usage`` onto the Learny usage DTO (design §Reuse).
+
+    The budget debit needs the tokens a successful call actually consumed, and today
+    they only reach ``_log_call`` — so the same object is now carried on the returned
+    :class:`~app.domain.entities.GeneratedAnswer` instead of living solely in the
+    log. Input and output counts only: cache-read tokens are not metered this letter.
+    A message without usage parses to ``None`` → the debit is 0 USD.
+    """
+    usage = getattr(message, "usage", None)
+    if usage is None:
+        return None
+    return TokenUsage(
+        input_tokens=getattr(usage, "input_tokens", 0) or 0,
+        output_tokens=getattr(usage, "output_tokens", 0) or 0,
+    )
+
+
 def _parse_message(
     message: Any, documents: Sequence[_SentDocument], *, model: str
 ) -> GeneratedAnswer:
@@ -226,7 +245,8 @@ def _parse_message(
     ``found=False`` with empty text, citations, and spans; an embedded occurrence
     stays as prose. The sentinel comparison deliberately runs on the *unmarked* text,
     so no marker can turn a decline into an answer. A ``max_tokens`` stop reason
-    returns the partial text like any other reply (never raises).
+    returns the partial text like any other reply (never raises). The message's
+    ``usage`` rides along for the daily spend debit.
     """
     marks = _CitationMarks(documents)
     text_parts: list[str] = []
@@ -238,13 +258,20 @@ def _parse_message(
         text_parts.append(block.text)
         text_parts.append(marks.run_for(getattr(block, "citations", None)))
     if "".join(unmarked_parts).strip() == SENTINEL:
-        return GeneratedAnswer(text="", cited_chunk_ids=(), model=model, found=False)
+        return GeneratedAnswer(
+            text="",
+            cited_chunk_ids=(),
+            model=model,
+            found=False,
+            usage=_usage_of(message),
+        )
     return GeneratedAnswer(
         text="".join(text_parts),
         cited_chunk_ids=tuple(marks.cited),
         model=model,
         found=True,
         spans=tuple(marks.spans),
+        usage=_usage_of(message),
     )
 
 

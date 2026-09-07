@@ -142,4 +142,5 @@ v7 is proposed in [RFC-0007](../../docs/rfc/0007-public-launch-roadmap.md) (**Dr
 | `teach-becomes-tutor` | C / Bet 3 | Frozen teach playbook; tutor-opens; Chat dock merge; one FSRS card on passed check | Done (PR #65) |
 | `review-worth-returning` | D / Bet 4 | Empty-deck honesty, formulation gates, undo/session, flag/edit | Done (PR #66) |
 | `first-session-converts` | E / Bet 5 | Shared sample, canned Ask, starter deck, library honesty, landing, activation | Done (PR #67) |
-| *(Bets 6–7)* | F–G | Safety rails; cheaper intelligence | Not started |
+| `safe-to-open-the-doors` | F / Bet 6 | Safety rails: limiter, spend, quotas, invite, legal, deletion, mail | Done (PR #68) |
+| `cheaper-intelligence` | G / Bet 7 | Cheaper intelligence (effort/cache/fallback; ADR-0020 amendment first) | Not started |

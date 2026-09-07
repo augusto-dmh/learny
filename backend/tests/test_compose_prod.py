@@ -175,3 +175,41 @@ def test_api_and_worker_receive_object_storage_configuration() -> None:
         assert env["LEARNY_STORAGE_ENDPOINT"] == "http://minio:9000", svc
         assert env["LEARNY_STORAGE_BUCKET"] == "learny-sources", svc
         assert env["LEARNY_STORAGE_REGION"] == "us-east-1", svc
+
+
+def test_prod_runs_on_one_fixed_subnet_and_pins_the_trusted_proxy_list(prod: dict) -> None:
+    # The api's X-Real-IP trust list must be this stack's own compose network,
+    # not the wide RFC1918 code default: in a hosted stack, any private-range
+    # peer that could reach the api would otherwise stamp X-Real-IP and mint
+    # fresh auth rate-limit budgets (review finding 3).
+    overlay = _load(_PROD)
+    networks = overlay.get("networks") or {}
+    assert list(networks) == ["learny"], "prod must own exactly one fixed network"
+    config = networks["learny"]["ipam"]["config"]
+    subnet = config[0]["subnet"]
+    assert subnet, "the fixed network must declare an explicit subnet"
+
+    # Every service that talks to another sits on that network (a service with
+    # explicit networks leaves the default, so a straggler would lose DNS).
+    for svc in (
+        "db",
+        "redis",
+        "minio",
+        "api",
+        "worker",
+        "worker-pdf",
+        "backup",
+        "db-restore",
+        "monitoring",
+        "web",
+        "caddy",
+    ):
+        assert prod[svc].get("networks") == ["learny"], svc
+
+    # The api trusts exactly that subnet — narrow, and equal to it.
+    trusted = prod["api"]["environment"]["LEARNY_TRUSTED_PROXY_HOSTS"]
+    assert trusted == subnet
+    assert trusted != "127.0.0.1,::1,testclient,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+    # ...and the base file never pins one (the choice is prod-only).
+    base_api_env = _load(_BASE)["services"]["api"].get("environment", {})
+    assert "LEARNY_TRUSTED_PROXY_HOSTS" not in base_api_env

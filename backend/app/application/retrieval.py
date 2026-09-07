@@ -14,6 +14,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from uuid import UUID
 
+from app.application.budget import KIND_EMBED, DailyBudget
 from app.application.identity import AuthorizeOwnership
 from app.application.ingestion import readable_source
 from app.domain.entities import Evidence, IngestionEvent, IngestionJob, Source, User
@@ -53,6 +54,7 @@ class EmbedCorpus:
         clock: Clock,
         ids: Callable[[], UUID],
         batch_size: int,
+        budget: DailyBudget | None = None,
     ) -> None:
         self._embeddings = embeddings
         self._index = index
@@ -60,8 +62,15 @@ class EmbedCorpus:
         self._clock = clock
         self._ids = ids
         self._batch_size = batch_size
+        self._budget = budget
 
     def __call__(self, *, source: Source, job: IngestionJob) -> None:
+        # The budget guard runs before the embedding port is touched, so an operator
+        # pause (or an exhausted day) stops this step before any provider SDK is
+        # reached — the chunk read is Postgres-only, the embed calls are not.
+        if self._budget is not None:
+            self._budget.assert_generation(source.user_id, kind=KIND_EMBED)
+
         chunks = self._index.chunks_for_source(source.id)
         if not chunks:
             self._append_built_event(job, 0)

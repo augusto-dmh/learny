@@ -326,6 +326,19 @@ def test_buffered_answer_ignores_thinking_blocks_in_the_reply() -> None:
     assert result.cited_chunk_ids == (evidence[0].chunk_id,)
 
 
+def test_buffered_answer_carries_the_call_usage_for_the_spend_debit() -> None:
+    # The daily budget debits what a successful call actually consumed, so the
+    # provider's usage object must reach the answer as the Learny TokenUsage DTO —
+    # not stay behind in the adapter's log line.
+    evidence = [_evidence("alpha")]
+    adapter, _ = _adapter(_FakeMessage([_FakeTextBlock("ok")]))
+
+    result = adapter.generate(mode=MODE_ANSWER, message="q", evidence=evidence)
+
+    assert result.usage is not None
+    assert (result.usage.input_tokens, result.usage.output_tokens) == (42, 7)
+
+
 def test_buffered_call_logs_the_effort_it_spent(caplog) -> None:
     adapter, _ = _adapter(_FakeMessage([_FakeTextBlock("ok")]))
 

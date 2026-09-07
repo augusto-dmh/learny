@@ -77,6 +77,25 @@ def test_get_missing_key_raises_object_not_found(storage: S3StorageAdapter) -> N
         storage.get_object("sources/user/does-not-exist.epub")
 
 
+def test_put_then_delete_then_get_raises_object_not_found(storage: S3StorageAdapter) -> None:
+    key = "sources/user/gone.epub"
+
+    storage.put_object(key, b"doomed", content_type="application/epub+zip")
+    storage.delete_object(key)
+
+    with pytest.raises(ObjectNotFound):
+        storage.get_object(key)
+
+
+def test_delete_of_a_never_existing_key_is_success(storage: S3StorageAdapter) -> None:
+    # S3 DELETE is idempotent: removing a key that never existed must not raise
+    # (account deletion replays keys that may already be gone).
+    storage.delete_object("sources/user/never-uploaded.epub")
+
+    with pytest.raises(ObjectNotFound):
+        storage.get_object("sources/user/never-uploaded.epub")
+
+
 class _FaultingClient:
     """boto3-client stub raising a configured error from selected operations."""
 
@@ -87,12 +106,14 @@ class _FaultingClient:
         create_bucket: Exception | None = None,
         get_object: Exception | None = None,
         put_object: Exception | None = None,
+        delete_object: Exception | None = None,
     ) -> None:
         self._faults = {
             "head_bucket": head_bucket,
             "create_bucket": create_bucket,
             "get_object": get_object,
             "put_object": put_object,
+            "delete_object": delete_object,
         }
         self.calls: list[str] = []
 
@@ -116,6 +137,9 @@ class _FaultingClient:
 
     def put_object(self, **_kwargs) -> dict:  # noqa: ANN003
         return self._op("put_object")
+
+    def delete_object(self, **_kwargs) -> dict:  # noqa: ANN003
+        return self._op("delete_object")
 
 
 def _adapter_with(**faults: Exception) -> S3StorageAdapter:
@@ -187,6 +211,18 @@ def test_put_transient_client_error_raises_storage_unavailable() -> None:
         _adapter_with(put_object=error).put_object(
             "sources/a-book.epub", b"bytes", content_type="application/epub+zip"
         )
+
+
+def test_delete_transient_client_error_raises_storage_unavailable() -> None:
+    error = ClientError({"Error": {"Code": "SlowDown", "Message": "slow"}}, "DeleteObject")
+
+    with pytest.raises(StorageUnavailable):
+        _adapter_with(delete_object=error).delete_object("sources/a-book.epub")
+
+
+def test_delete_botocore_error_raises_storage_unavailable() -> None:
+    with pytest.raises(StorageUnavailable):
+        _adapter_with(delete_object=BotoCoreError()).delete_object("sources/a-book.epub")
 
 
 def test_bucket_create_failure_raises_storage_unavailable() -> None:

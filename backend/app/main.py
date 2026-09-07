@@ -25,6 +25,8 @@ from app.infrastructure.web.instrument import router as instrument_router
 from app.infrastructure.web.middleware import RequestContextMiddleware
 from app.infrastructure.web.notes import router as notes_router
 from app.infrastructure.web.quiz import router as quiz_router
+from app.infrastructure.web.rate_limit import set_rate_limiter
+from app.infrastructure.web.redis_rate_limit import make_redis_limiter
 from app.infrastructure.web.retrieval import router as retrieval_router
 from app.infrastructure.web.sources import router as sources_router
 from app.infrastructure.web.study import router as study_router
@@ -94,6 +96,7 @@ def create_app() -> FastAPI:
     """Application factory — build and configure the FastAPI app."""
     configure_logging()
     settings = get_settings()
+    set_rate_limiter(make_redis_limiter(settings.redis_url))
     app = FastAPI(title=settings.app_name)
     # The instrument's bounds are configuration, so the recorder the process uses
     # is built here rather than left at its module defaults — otherwise

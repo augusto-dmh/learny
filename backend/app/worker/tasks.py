@@ -22,6 +22,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import Connection, text
 
+from app.application.budget import KIND_GENERATION, DailyBudget, TokenPrices, usd_to_micros
 from app.application.cards import RefreshNoteCards
 from app.application.corpus import BuildCorpus
 from app.application.ingestion import INGESTION_FAILURE_ERROR, RunIngestion
@@ -30,11 +31,12 @@ from app.application.quiz import ReconcileQuizItems, RunDeckGeneration
 from app.application.retrieval import EmbedCorpus
 from app.core.config import get_settings
 from app.core.tracing import bind_trace, new_trace_scope, reset_trace
-from app.domain.entities import ParsedBook, QuizDeckHandle
+from app.domain.entities import ParsedBook, QuizDeckHandle, QuizDeckResult
 from app.domain.ports import IngestionStep, StoragePort
 from app.infrastructure.clock import SystemClock
 from app.infrastructure.db.engine import get_engine
 from app.infrastructure.db.repositories import (
+    SqlAlchemyAiSpendDayRepository,
     SqlAlchemyCorpusRepository,
     SqlAlchemyEmbeddingIndexRepository,
     SqlAlchemyIngestionEventRepository,
@@ -179,6 +181,7 @@ def _build_embed_step(conn: Connection) -> IngestionStep:
             clock=_clock,
             ids=uuid4,
             batch_size=get_settings().embedding_batch_size,
+            budget=_build_budget(conn),
         )
     )
 
@@ -467,12 +470,56 @@ def _build_refresh_note_cards(conn: Connection) -> RefreshNoteCards:
 # owns every durable transition. The local adapter computes candidates inline, so the
 # task finalizes in one invocation; the Anthropic adapter returns a pending batch, so
 # the task schedules ``poll_quiz_deck`` to self-reschedule until the batch ends or the
-# deadline passes. ``finalize`` is idempotent (upserts), so redelivery under
-# ``acks_late`` never duplicates items or resets scheduling.
+# deadline passes. Settling a result — the debit and the finalize — is one transaction
+# gated by the job row's one-time spend marker (``claim_spend``), so a redelivery
+# under ``acks_late`` never charges one generation twice; ``finalize`` itself stays
+# idempotent (upserts), so items and scheduling are never duplicated either.
 
 # Fixed, non-secret durable failure text (mirrors the ingestion redaction).
 _DECK_FAILURE_ERROR = "Quiz deck generation failed."
 _DECK_TIMEOUT_ERROR = "Quiz deck generation timed out."
+
+
+def _build_budget(conn: Connection) -> DailyBudget:
+    """Wire the daily AI spend budget on ``conn`` (the worker's budget composition).
+
+    Mirrors the web layer's ``build_budget`` — built per call, never cached, so the
+    cap and price catalog come from the settings this task run actually sees. The
+    worker debit needs the same ledger the HTTP check reads, so a deck refused at
+    the POST and a pass debited here can never disagree about the day.
+    """
+    settings = get_settings()
+    return DailyBudget(
+        repo=SqlAlchemyAiSpendDayRepository(conn),
+        clock=_clock,
+        daily_cap_micros=usd_to_micros(settings.daily_ai_spend_usd),
+        prices=TokenPrices(
+            input_micros_per_million=usd_to_micros(settings.price_input_usd_per_million_tokens),
+            output_micros_per_million=usd_to_micros(settings.price_output_usd_per_million_tokens),
+            embed_micros_per_million=usd_to_micros(settings.price_embed_usd_per_million_tokens),
+        ),
+        ask_daily_cap=settings.daily_ask_cap,
+        teach_start_daily_cap=settings.daily_teach_start_cap,
+        ai_paused=settings.ai_kill_switch,
+    )
+
+
+def _record_deck_spend(conn: Connection, source_id: UUID, result: QuizDeckResult) -> None:
+    """Debit a completed deck pass's actual usage to its owner's current UTC day.
+
+    Runs on the caller's transaction (the settle unit of work claims the spend
+    marker, debits, and finalizes atomically). An adapter that reports no usage
+    (the deterministic local one) debits 0, which writes nothing.
+    """
+    source = SqlAlchemySourceRepository(conn).get_by_id(source_id)
+    if source is None:
+        return
+    budget = _build_budget(conn)
+    budget.record(
+        source.user_id,
+        usd_micros=budget.usage_micros(result.usage),
+        kind=KIND_GENERATION,
+    )
 
 
 def _build_run_deck(conn: Connection) -> RunDeckGeneration:
@@ -510,9 +557,22 @@ def _retry_or_fail_deck(self, jid, exc, log, start):  # noqa: ANN001, ANN202 —
     return None
 
 
-def _finalize_deck(jid, result, log, start):  # noqa: ANN001, ANN202
-    """Persist a completed pass and log success (idempotent; safe under redelivery)."""
+def _settle_deck(jid, source_id, result, log, start):  # noqa: ANN001, ANN202
+    """Debit a completed pass once, then persist it (atomic; safe under redelivery).
+
+    ONE transaction claims the job row's one-time spend marker with a conditional
+    UPDATE (``claim_spend``'s rowcount gate), debits the pass's actual usage, and
+    finalizes. The old shape debited and finalized in two separate commits, so a
+    redelivery that landed between them charged one generation twice; now a
+    redelivery observes the stamped marker and skips the debit, and a failure
+    inside the transaction rolls the debit and the stamp back together.
+    """
     with get_engine().begin() as conn:
+        if not SqlAlchemyQuizJobRepository(conn).claim_spend(jid, now=_clock.now()):
+            logger.info("quiz: settle already done, debit skipped", extra=log)
+            return
+        if source_id is not None:
+            _record_deck_spend(conn, source_id, result)
         _build_run_deck(conn).finalize(jid, result)
     logger.info(
         "quiz.generate_deck: succeeded",
@@ -568,8 +628,9 @@ def _generate_quiz_deck_body(self, jid, sid, job_id, log, start):  # noqa: ANN00
         logger.info("quiz.generate_deck: batch pending, scheduled poll", extra=log)
         return None
 
-    # 3b. Inline result (local provider or an already-finished batch): finalize now.
-    _finalize_deck(jid, result, log, start)
+    # 3b. Inline result (local provider or an already-finished batch): settle now —
+    #     debit the pass's actual usage once, then finalize, atomically.
+    _settle_deck(jid, sid, result, log, start)
     return None
 
 
@@ -619,5 +680,10 @@ def _poll_quiz_deck_body(self, jid, job_id, handle_payload, deadline_iso, log, s
         logger.info("quiz.poll_deck: still pending, rescheduled", extra=log)
         return None
 
-    _finalize_deck(jid, result, log, start)
+    # The batch ended: settle — debit the pass's actual usage once, then persist,
+    # atomically. The job row carries the owner (through its source), resolved here.
+    with get_engine().begin() as conn:
+        job = SqlAlchemyQuizJobRepository(conn).get_by_id(jid)
+        source_id = job.source_id if job is not None else None
+    _settle_deck(jid, source_id, result, log, start)
     return None

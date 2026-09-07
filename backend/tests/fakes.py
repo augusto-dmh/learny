@@ -13,9 +13,10 @@ from datetime import UTC, date, datetime
 from itertools import count
 from uuid import UUID, uuid4
 
-from app.application.errors import StorageUnavailable
+from app.application.errors import InviteRequired, StorageUnavailable
 from app.domain.entities import (
     ACTIVE_STATUSES,
+    AiSpendDay,
     AnchorSection,
     AnswerCompleted,
     AnswerStreamEvent,
@@ -111,6 +112,14 @@ class FakeUserRepository:
                 return user
         return None
 
+    def set_email_verified(self, user_id: UUID, verified_at: datetime) -> None:
+        user = self._by_id.get(user_id)
+        if user is not None:
+            self._by_id[user_id] = replace(user, email_verified_at=verified_at)
+
+    def delete(self, user_id: UUID) -> None:
+        self._by_id.pop(user_id, None)
+
 
 class FakeCredentialRepository:
     def __init__(self) -> None:
@@ -174,6 +183,91 @@ class FakeSessionRepository:
             self._hash_to_id.pop(session.token_hash, None)
 
 
+class FakeInviteRepository:
+    """In-memory ``InviteRepository``: codes with remaining uses and expiry.
+
+    Mirrors the SQL adapter's liveness predicate — a code consumes exactly one
+    use when it exists, has uses left, and is not expired (``expires_at`` absent
+    means never expires) — and raises the uniform ``InviteRequired`` otherwise,
+    recording each consumption so service tests can assert a rejected register
+    burned nothing and a successful one burned exactly one use.
+    """
+
+    def __init__(
+        self,
+        *,
+        codes: dict[str, int] | None = None,
+        expires_at: dict[str, datetime] | None = None,
+    ) -> None:
+        self._remaining: dict[str, int] = dict(codes or {})
+        self._expires_at: dict[str, datetime] = dict(expires_at or {})
+        self.consumed: list[str] = []
+
+    def consume(self, code: str, *, now: datetime) -> None:
+        expires_at = self._expires_at.get(code)
+        if self._remaining.get(code, 0) <= 0 or (expires_at is not None and expires_at <= now):
+            raise InviteRequired("This instance is invite-only.")
+        self._remaining[code] -= 1
+        self.consumed.append(code)
+
+    def remaining_uses(self, code: str) -> int:
+        """Test accessor: how many uses the code has left."""
+        return self._remaining.get(code, 0)
+
+
+class FakeEmailTokenRepository:
+    """In-memory ``EmailTokenRepository``: hash-at-rest, atomic single-use consume.
+
+    Mirrors the SQL adapter's contract: only the SHA-256 of the raw token is
+    stored; ``consume`` succeeds exactly once per token and only when the
+    purpose matches and ``expires_at`` is in the future — unknown, replayed,
+    expired, and wrong-purpose raw tokens all answer ``None`` uniformly.
+    """
+
+    def __init__(self) -> None:
+        # rows: {user_id, purpose, secret_hash, expires_at, consumed_at}
+        self._rows: list[dict[str, object]] = []
+
+    @staticmethod
+    def _hash(raw_token: str) -> str:
+        return hashlib.sha256(raw_token.encode()).hexdigest()
+
+    def create(self, *, user_id: UUID, purpose: str, raw_token: str, expires_at: datetime) -> None:
+        self._rows.append(
+            {
+                "user_id": user_id,
+                "purpose": purpose,
+                "secret_hash": self._hash(raw_token),
+                "expires_at": expires_at,
+                "consumed_at": None,
+            }
+        )
+
+    def consume(self, raw_token: str, *, purpose: str, now: datetime) -> UUID | None:
+        for row in self._rows:
+            if (
+                row["secret_hash"] == self._hash(raw_token)
+                and row["purpose"] == purpose
+                and row["consumed_at"] is None
+                and row["expires_at"] > now  # type: ignore[operator]
+            ):
+                row["consumed_at"] = now
+                return row["user_id"]  # type: ignore[no-any-return]
+        return None
+
+    def stored_hashes(self) -> list[str]:
+        """Test accessor: every secret hash at rest (raw tokens must be absent)."""
+        return [row["secret_hash"] for row in self._rows]  # type: ignore[misc]
+
+    def hashes_for_user(self, user_id: UUID) -> list[str]:
+        """Test accessor: the hashes minted for one user, in creation order."""
+        return [
+            row["secret_hash"]  # type: ignore[misc]
+            for row in self._rows
+            if row["user_id"] == user_id
+        ]
+
+
 class FakeSourceRepository:
     """In-memory ``SourceRepository``: newest-first list, unique ``object_key``."""
 
@@ -224,11 +318,12 @@ class FakeActivationEventRepository:
 
 
 class FakeStorage:
-    """In-memory ``StoragePort``: records puts so tests can assert key/bytes."""
+    """In-memory ``StoragePort``: records puts/deletes so tests can assert keys."""
 
     def __init__(self) -> None:
         self.objects: dict[str, bytes] = {}
         self.put_calls: list[tuple[str, str]] = []
+        self.deleted_keys: list[str] = []
 
     def put_object(self, key: str, data: bytes, *, content_type: str) -> None:
         self.put_calls.append((key, content_type))
@@ -236,6 +331,11 @@ class FakeStorage:
 
     def get_object(self, key: str) -> bytes:
         return self.objects[key]
+
+    def delete_object(self, key: str) -> None:
+        # Idempotent like the real S3 DELETE: a missing key is not an error.
+        self.deleted_keys.append(key)
+        self.objects.pop(key, None)
 
 
 class FakeImageEncoder:
@@ -251,12 +351,15 @@ class FakeImageEncoder:
 
 
 class FailingStorage:
-    """``StoragePort`` whose ``put_object`` always fails (storage-down path)."""
+    """``StoragePort`` whose every call fails (storage-down path)."""
 
     def put_object(self, key: str, data: bytes, *, content_type: str) -> None:
         raise RuntimeError("storage down")
 
     def get_object(self, key: str) -> bytes:
+        raise RuntimeError("storage down")
+
+    def delete_object(self, key: str) -> None:
         raise RuntimeError("storage down")
 
 
@@ -267,6 +370,9 @@ class UnavailableStorage:
         raise StorageUnavailable("storage down")
 
     def get_object(self, key: str) -> bytes:
+        raise StorageUnavailable("storage down")
+
+    def delete_object(self, key: str) -> None:
         raise StorageUnavailable("storage down")
 
 
@@ -283,6 +389,7 @@ class FakeIngestionJobRepository:
     def __init__(self) -> None:
         self._by_id: dict[UUID, IngestionJob] = {}
         self._order: list[UUID] = []
+        self._owners: dict[UUID, UUID] = {}
         self.add_calls = 0
 
     def add(self, job: IngestionJob) -> IngestionJob:
@@ -305,6 +412,20 @@ class FakeIngestionJobRepository:
             if job.source_id == source_id:
                 return job
         return None
+
+    def count_active_for_user(self, user_id: UUID) -> int:
+        # Jobs belong to a source, and a source to an owner; this fake has no
+        # sources, so tests seed the owner mapping via source ownership on the
+        # jobs they insert (job.source_id is resolved by the caller's test).
+        return sum(
+            1
+            for job in self._by_id.values()
+            if job.status in ACTIVE_STATUSES and self._owners.get(job.source_id) == user_id
+        )
+
+    def set_owner(self, source_id: UUID, user_id: UUID) -> None:
+        """Declare which user owns a source id (the fake has no source repo)."""
+        self._owners[source_id] = user_id
 
     def update(self, job: IngestionJob) -> IngestionJob:
         self._by_id[job.id] = job
@@ -351,6 +472,24 @@ class FakeIngestionEnqueuer:
 
     def enqueue_ingestion(self, *, source_id: UUID, job_id: UUID, content_type: str) -> None:
         self.calls.append((source_id, job_id, content_type))
+        if self._error is not None:
+            raise self._error
+
+
+class FakeEmailSender:
+    """``EmailPort`` double: captures sent messages, or raises if configured.
+
+    Records each ``send`` call's ``to``/``subject``/``body`` so tests assert the
+    message payload by value; a configured ``error`` reproduces an SMTP
+    transport failure (register must still mint the session, DOOR-40).
+    """
+
+    def __init__(self, *, error: Exception | None = None) -> None:
+        self._error = error
+        self.sent: list[dict[str, str]] = []
+
+    def send(self, *, to: str, subject: str, body: str) -> None:
+        self.sent.append({"to": to, "subject": subject, "body": body})
         if self._error is not None:
             raise self._error
 
@@ -483,6 +622,10 @@ class FakeCorpusRepository:
     def get_section(self, source_id: UUID, anchor: str) -> SectionContent | None:
         sections = self._sections_by_source.get(source_id, ())
         return next((s for s in sections if s.anchor == anchor), None)
+
+    def list_section_markdown(self, source_id: UUID) -> list[str]:
+        records = self._records_by_source.get(source_id, ())
+        return [record.markdown for record in records]
 
     def get_chapter_index(self, source_id: UUID) -> tuple[ChapterIndexRow, ...] | None:
         if source_id not in self._records_by_source:
@@ -1035,6 +1178,43 @@ class FakeStudyDayRepository:
             ),
             key=lambda row: row.day,
         )
+
+
+class FakeAiSpendDayRepository:
+    """In-memory ``AiSpendDayRepository``: upsert-increment on the (user, day) key.
+
+    ``record`` adds the passed deltas to the stored totals (creating the row if
+    absent), mirroring the real ON CONFLICT increment, and records each call so a
+    test can assert exactly what was debited — and that a refused call debited
+    nothing.
+    """
+
+    def __init__(self) -> None:
+        self._rows: dict[tuple[UUID, date], AiSpendDay] = {}
+        self.record_calls: list[tuple[UUID, date, int, int, int]] = []
+
+    def record(
+        self,
+        user_id: UUID,
+        day_utc: date,
+        *,
+        usd_micros: int = 0,
+        asks: int = 0,
+        teach_starts: int = 0,
+    ) -> None:
+        self.record_calls.append((user_id, day_utc, usd_micros, asks, teach_starts))
+        existing = self._rows.get((user_id, day_utc))
+        base = existing or AiSpendDay(user_id=user_id, day_utc=day_utc)
+        self._rows[(user_id, day_utc)] = AiSpendDay(
+            user_id=user_id,
+            day_utc=day_utc,
+            usd_micros=base.usd_micros + usd_micros,
+            ask_count=base.ask_count + asks,
+            teach_starts=base.teach_starts + teach_starts,
+        )
+
+    def get_for_day(self, user_id: UUID, day_utc: date) -> AiSpendDay | None:
+        return self._rows.get((user_id, day_utc))
 
 
 class FakeRetrievalPort:

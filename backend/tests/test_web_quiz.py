@@ -73,7 +73,9 @@ def _assert_interval_labels(labels: dict) -> None:
 
 
 def _register(client: TestClient, email: str) -> str:
-    resp = client.post("/api/auth/register", json={"email": email, "password": TEST_PASSWORD})
+    resp = client.post(
+        "/api/auth/register", json={"email": email, "password": TEST_PASSWORD, "accepted_tos": True}
+    )
     assert resp.status_code == 201, resp.text
     return resp.json()["id"]
 
@@ -507,9 +509,8 @@ def throttled_quiz_client(  # noqa: ANN201
     get_settings.cache_clear()
 
     previous = get_rate_limiter()
-    set_rate_limiter(InMemoryFixedWindowRateLimiter(max_attempts=3, window_seconds=300))
-
     app = create_app()
+    set_rate_limiter(InMemoryFixedWindowRateLimiter(max_attempts=3, window_seconds=300))
 
     def _override_conn() -> Iterator[Connection]:
         yield db_conn
@@ -532,7 +533,7 @@ def throttled_quiz_client(  # noqa: ANN201
 def test_deck_post_rate_limit_returns_429(
     throttled_quiz_client: TestClient, db_conn: Connection
 ) -> None:
-    # The limiter (per-IP+route) trips before the handler: the first POST creates the
+    # The limiter (per-user+route) trips before the handler: the first POST creates the
     # queued job (202), the next two hit the single-in-flight 409, and the 4th is
     # throttled to 429 regardless — the rate limit is enforced ahead of the conflict.
     source_id, csrf = _seed_ready_source(throttled_quiz_client, db_conn, "deck-rl@example.com")

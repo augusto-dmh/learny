@@ -23,7 +23,7 @@ pytestmark = requires_db
 def _register(client: TestClient, email: str) -> None:
     resp = client.post(
         "/api/auth/register",
-        json={"email": email, "password": TEST_PASSWORD},
+        json={"email": email, "password": TEST_PASSWORD, "accepted_tos": True},
     )
     assert resp.status_code == 201, resp.text
 
@@ -79,7 +79,7 @@ def test_register_from_untrusted_origin_is_rejected(auth_client: TestClient) -> 
     # Pre-session endpoints are Origin-checked even though they carry no token.
     resp = auth_client.post(
         "/api/auth/register",
-        json={"email": "csrf-pre@example.com", "password": TEST_PASSWORD},
+        json={"email": "csrf-pre@example.com", "password": TEST_PASSWORD, "accepted_tos": True},
         headers={"Origin": "http://evil.example.com"},
     )
     assert resp.status_code == 403, resp.text
