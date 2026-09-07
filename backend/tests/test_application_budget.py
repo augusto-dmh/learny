@@ -85,6 +85,11 @@ pytestmark = requires_db
 _NOW = datetime(2026, 9, 6, 12, 0, 0, tzinfo=UTC)
 _DAY = _NOW.date()
 
+#: The web composition budgets on the real system clock, so the tests that drive
+#: HTTP endpoints seed the LIVE UTC day — a frozen seed date goes stale at UTC
+#: midnight and the cap silently stops firing (the seed would pay "yesterday").
+_LIVE_DAY = datetime.now(UTC).date()
+
 #: $1 per million input tokens, $2 per million output tokens — round numbers so a
 #: debit's expected micros are hand-checkable.
 _PRICES = TokenPrices(
@@ -847,7 +852,7 @@ def test_ask_turn_past_the_usd_cap_is_429_and_keeps_the_thread(
             updated_at=_NOW,
         )
     )
-    _ledger(db_conn).record(UUID(user_id), _DAY, usd_micros=500_000)
+    _ledger(db_conn).record(UUID(user_id), _LIVE_DAY, usd_micros=500_000)
 
     class _NeverCalled:
         model = "never"
@@ -919,7 +924,7 @@ def test_ninth_ask_at_the_route_is_429_and_keeps_the_conversation(
             created_at=_NOW,
         )
     )
-    _ledger(db_conn).record(UUID(user_id), _DAY, asks=8)
+    _ledger(db_conn).record(UUID(user_id), _LIVE_DAY, asks=8)
 
     class _NeverCalled:
         model = "never"
@@ -956,7 +961,7 @@ def test_deck_post_past_the_usd_cap_is_429_and_starts_nothing(
     user_id = _register(quiz_client, "budget-deck-web@example.com")
     csrf = _csrf(quiz_client)
     source_id = _seed_web_source(db_conn, user_id)
-    _ledger(db_conn).record(UUID(user_id), _DAY, usd_micros=500_000)
+    _ledger(db_conn).record(UUID(user_id), _LIVE_DAY, usd_micros=500_000)
 
     resp = quiz_client.post(
         f"/api/sources/{source_id}/quiz/deck",
