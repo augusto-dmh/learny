@@ -31,8 +31,9 @@ class _Block:
 
 
 class _Message:
-    def __init__(self, text: str) -> None:
+    def __init__(self, text: str, usage: object | None = None) -> None:
         self.content = [_Block(text)]
+        self.usage = usage
 
 
 class _Result:
@@ -73,29 +74,36 @@ class _FakeBatches:
 
 
 class _FakeMessages:
-    def __init__(self, batches: _FakeBatches, reply: str | None = None) -> None:
+    def __init__(
+        self, batches: _FakeBatches, reply: str | None = None, usage: object | None = None
+    ) -> None:
         self.batches = batches
         self._reply = reply
+        self._usage = usage
         self.create_kwargs: dict | None = None
         self.create_calls = 0
 
     def create(self, **kwargs):  # noqa: ANN003, ANN201
         self.create_calls += 1
         self.create_kwargs = kwargs
-        return _Message(self._reply or "")
+        return _Message(self._reply or "", self._usage)
 
 
 class _FakeClient:
-    def __init__(self, batches: _FakeBatches, reply: str | None = None) -> None:
-        self.messages = _FakeMessages(batches, reply)
+    def __init__(
+        self, batches: _FakeBatches, reply: str | None = None, usage: object | None = None
+    ) -> None:
+        self.messages = _FakeMessages(batches, reply, usage)
 
 
-def _adapter(batches: _FakeBatches, *, reply: str | None = None) -> AnthropicQuizAdapter:
+def _adapter(
+    batches: _FakeBatches, *, reply: str | None = None, usage: object | None = None
+) -> AnthropicQuizAdapter:
     return AnthropicQuizAdapter(
         api_key="sk-test",
         model="claude-haiku-4-5",
         max_tokens=1024,
-        client=_FakeClient(batches, reply),
+        client=_FakeClient(batches, reply, usage),
     )
 
 
@@ -289,7 +297,7 @@ def test_suggest_cards_never_exceeds_the_limit() -> None:
     # The stubbed reply carries two items; a limit of one must truncate it.
     adapter = _adapter(_FakeBatches(), reply=_items_json(chunk))
 
-    candidates = adapter.suggest_cards(_section("A", [chunk]), "The key term.", 1)
+    candidates = adapter.suggest_cards(_section("A", [chunk]), "The key term.", 1).candidates
 
     assert len(candidates) == 1
 
@@ -298,7 +306,7 @@ def test_suggest_cards_parses_candidates_from_the_structured_reply() -> None:
     chunk = uuid4()
     adapter = _adapter(_FakeBatches(), reply=_items_json(chunk))
 
-    candidates = adapter.suggest_cards(_section("A", [chunk]), "The key term.", 3)
+    candidates = adapter.suggest_cards(_section("A", [chunk]), "The key term.", 3).candidates
 
     assert {c.item_type for c in candidates} == {
         QuizItemType.FREE_RECALL,
@@ -319,7 +327,7 @@ def test_suggest_cards_with_a_non_positive_limit_calls_no_provider() -> None:
     chunk = uuid4()
     adapter = _adapter(_FakeBatches(), reply=_items_json(chunk))
 
-    assert adapter.suggest_cards(_section("A", [chunk]), "The key term.", 0) == []
+    assert adapter.suggest_cards(_section("A", [chunk]), "The key term.", 0).candidates == ()
     assert adapter._get_client().messages.create_calls == 0
 
 
@@ -374,7 +382,7 @@ def test_suggest_note_cards_issues_exactly_one_message_and_no_batch() -> None:
 def test_suggest_note_cards_parses_candidates_without_a_chunk_id() -> None:
     adapter = _adapter(_FakeBatches(), reply=_note_items_json())
 
-    candidates = adapter.suggest_note_cards("A note body.", "", 3)
+    candidates = adapter.suggest_note_cards("A note body.", "", 3).candidates
 
     assert {c.item_type for c in candidates} == {
         QuizItemType.FREE_RECALL,
@@ -386,7 +394,7 @@ def test_suggest_note_cards_parses_candidates_without_a_chunk_id() -> None:
 def test_suggest_note_cards_never_exceeds_the_limit() -> None:
     adapter = _adapter(_FakeBatches(), reply=_note_items_json())
 
-    candidates = adapter.suggest_note_cards("A note body.", "", 1)
+    candidates = adapter.suggest_note_cards("A note body.", "", 1).candidates
 
     assert len(candidates) == 1
 
@@ -413,14 +421,14 @@ def test_suggest_note_cards_malformed_reply_raises_for_a_retryable_failure() -> 
 def test_suggest_note_cards_with_a_non_positive_limit_calls_no_provider() -> None:
     adapter = _adapter(_FakeBatches(), reply=_note_items_json())
 
-    assert adapter.suggest_note_cards("A note body.", "", 0) == []
+    assert adapter.suggest_note_cards("A note body.", "", 0).candidates == ()
     assert adapter._get_client().messages.create_calls == 0
 
 
 def test_suggest_note_cards_with_an_empty_body_calls_no_provider() -> None:
     adapter = _adapter(_FakeBatches(), reply=_note_items_json())
 
-    assert adapter.suggest_note_cards("   ", "", 3) == []
+    assert adapter.suggest_note_cards("   ", "", 3).candidates == ()
     assert adapter._get_client().messages.create_calls == 0
 
 
@@ -554,3 +562,49 @@ def test_note_suggestion_request_sends_a_json_schema_and_no_document_blocks() ->
     kwargs = adapter._get_client().messages.create_kwargs
     assert kwargs["output_config"]["format"]["type"] == "json_schema"
     assert _document_blocks(kwargs["messages"]) == []
+
+
+# --- Suggest usage rides out for the debit (AD-341/PRICE-03) ---------------------
+
+
+class _SuggestUsage:
+    """The usage object a Messages response carries (input/output, no cache detail)."""
+
+    def __init__(self) -> None:
+        self.input_tokens = 210
+        self.output_tokens = 88
+
+
+def test_suggest_cards_carries_the_call_usage_for_the_spend_debit() -> None:
+    chunk = uuid4()
+    adapter = _adapter(_FakeBatches(), reply=_items_json(chunk), usage=_SuggestUsage())
+
+    result = adapter.suggest_cards(_section("A", [chunk]), "The key term.", 3)
+
+    assert result.usage is not None
+    assert (result.usage.input_tokens, result.usage.output_tokens) == (210, 88)
+    # The suggest call sets no cache breakpoints, so the cache counts parse to zero.
+    assert (
+        result.usage.cache_read_input_tokens,
+        result.usage.cache_creation_input_tokens,
+    ) == (0, 0)
+
+
+def test_suggest_note_cards_carries_the_call_usage_for_the_spend_debit() -> None:
+    adapter = _adapter(_FakeBatches(), reply=_note_items_json(), usage=_SuggestUsage())
+
+    result = adapter.suggest_note_cards("A note body.", "", 3)
+
+    assert result.usage is not None
+    assert (result.usage.input_tokens, result.usage.output_tokens) == (210, 88)
+
+
+def test_a_suggest_response_without_usage_carries_none() -> None:
+    # No reported usage → the debit-0 shape, exactly like the turn paths' rule.
+    chunk = uuid4()
+    adapter = _adapter(_FakeBatches(), reply=_items_json(chunk))
+
+    result = adapter.suggest_cards(_section("A", [chunk]), "The key term.", 3)
+
+    assert result.usage is None
+    assert result.candidates

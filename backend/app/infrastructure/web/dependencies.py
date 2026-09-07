@@ -1012,7 +1012,11 @@ def get_card_embeddings() -> EmbeddingPort:
 
 
 def get_suggest_cards(conn: DbConnection) -> SuggestCards:
-    """Wire ``SuggestCards`` on the request-scoped connection (CAP-01..04)."""
+    """Wire ``SuggestCards`` on the request-scoped connection (CAP-01..04).
+
+    The budget rides along so the completed suggest call debits its actual usage
+    to the caller's day (AD-341) — USD only, sharing the request's transaction.
+    """
     settings = get_settings()
     return SuggestCards(
         sources=SqlAlchemySourceRepository(conn),
@@ -1021,6 +1025,7 @@ def get_suggest_cards(conn: DbConnection) -> SuggestCards:
         generation=get_card_generation(),
         authorize=AuthorizeOwnership(),
         max_suggestions=settings.quiz_max_suggestions,
+        budget=build_budget(conn),
     )
 
 
@@ -1074,12 +1079,17 @@ def get_update_card(conn: DbConnection) -> UpdateCard:
 
 
 def get_suggest_note_cards(conn: DbConnection) -> SuggestNoteCards:
-    """Wire ``SuggestNoteCards`` on the request-scoped connection (NL-08)."""
+    """Wire ``SuggestNoteCards`` on the request-scoped connection (NL-08).
+
+    Budgeted like the highlight path: the suggest call debits its usage when it
+    completes (AD-341).
+    """
     settings = get_settings()
     return SuggestNoteCards(
         notes=SqlAlchemyNoteRepository(conn),
         generation=get_card_generation(),
         max_suggestions=settings.quiz_max_suggestions,
+        budget=build_budget(conn),
     )
 
 

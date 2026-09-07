@@ -43,6 +43,7 @@ import math
 from collections.abc import Callable, Sequence
 from uuid import UUID
 
+from app.application.budget import KIND_GENERATION, DailyBudget
 from app.application.conversations import authorized_conversation
 from app.application.errors import (
     CardAlreadyExists,
@@ -73,6 +74,7 @@ from app.domain.entities import (
     QuizItemStatus,
     QuizItemType,
     QuizSection,
+    TokenUsage,
     User,
 )
 from app.domain.ports import (
@@ -138,6 +140,21 @@ def _validated_text(value: str, field: str, max_chars: int) -> str:
     return text
 
 
+def _debit_suggest(budget: DailyBudget | None, user_id: UUID, usage: TokenUsage | None) -> None:
+    """Debit a completed suggest call's usage to the caller's day (AD-341/PRICE-03).
+
+    Runs after the port returned — a refused or failed call debits nothing — and
+    prices the usage at the wired catalog (the serving profile's, via the budget's
+    resolution). USD only: unlike the ask/teach free-tier kinds there is **no**
+    integer counter here (AD-341 invents no suggest cap), so a call with no
+    reported usage (the deterministic adapters) writes nothing. A ``budget`` of
+    ``None`` (compositions that never wired the ledger) debits nothing.
+    """
+    if budget is None:
+        return
+    budget.record(user_id, usd_micros=budget.usage_micros(usage), kind=KIND_GENERATION)
+
+
 class SuggestCards:
     """Generate QC-passing card candidates for one highlighted passage (CAP-01..04, 09).
 
@@ -162,6 +179,7 @@ class SuggestCards:
         generation: QuizGenerationPort,
         authorize: AuthorizeOwnership,
         max_suggestions: int,
+        budget: DailyBudget | None = None,
     ) -> None:
         self._sources = sources
         self._notes = notes
@@ -169,6 +187,7 @@ class SuggestCards:
         self._generation = generation
         self._authorize = authorize
         self._max_suggestions = max_suggestions
+        self._budget = budget
 
     def __call__(self, *, user: User, source_id: UUID, note_anchor_id: UUID) -> list[QuizCandidate]:
         authorized_source(
@@ -184,11 +203,12 @@ class SuggestCards:
             # The corpus was replaced under the highlight; nothing to generate from.
             raise StaleCaptureTarget("The selected passage no longer matches the source.")
 
-        candidates = self._generation.suggest_cards(
-            section, anchor.quote_exact, self._max_suggestions
-        )
+        result = self._generation.suggest_cards(section, anchor.quote_exact, self._max_suggestions)
+        # The provider call completed — its tokens are spent whether or not any
+        # candidate survives the QC below, so the debit lands before filtering.
+        _debit_suggest(self._budget, user.id, result.usage)
         section_text = _section_text(section)
-        survivors = [c for c in candidates if _passes_qc(c, section_text)]
+        survivors = [c for c in result.candidates if _passes_qc(c, section_text)]
         return survivors[: self._max_suggestions]
 
 
@@ -521,19 +541,24 @@ class SuggestNoteCards:
         notes: NoteRepository,
         generation: QuizGenerationPort,
         max_suggestions: int,
+        budget: DailyBudget | None = None,
     ) -> None:
         self._notes = notes
         self._generation = generation
         self._max_suggestions = max_suggestions
+        self._budget = budget
 
     def __call__(self, *, user: User, note_id: UUID) -> list[QuizCandidate]:
         note = _owned_note(self._notes, user, note_id)
         context = _note_context(self._notes.anchors_for_note(note_id))
 
-        candidates = self._generation.suggest_note_cards(
+        result = self._generation.suggest_note_cards(
             note.body_markdown, context, self._max_suggestions
         )
-        survivors = [c for c in candidates if note_card_passes_qc(c, note.body_markdown)]
+        # Debit before QC for the same reason as the highlight path: the call's
+        # tokens are spent whether or not a candidate survives (AD-341).
+        _debit_suggest(self._budget, user.id, result.usage)
+        survivors = [c for c in result.candidates if note_card_passes_qc(c, note.body_markdown)]
         return survivors[: self._max_suggestions]
 
 
@@ -710,6 +735,7 @@ class RefreshNoteCards:
         max_suggestions: int,
         excerpt_chars: int,
         match_threshold: float,
+        budget: DailyBudget | None = None,
     ) -> None:
         self._notes = notes
         self._items = items
@@ -719,6 +745,7 @@ class RefreshNoteCards:
         self._max_suggestions = max_suggestions
         self._excerpt_chars = excerpt_chars
         self._match_threshold = match_threshold
+        self._budget = budget
 
     def __call__(self, *, note_id: UUID) -> None:
         note = self._notes.get_by_id(note_id)
@@ -729,9 +756,13 @@ class RefreshNoteCards:
             return  # nothing promoted (defensive; the enqueue gate already checks)
 
         context = _note_context(self._notes.anchors_for_note(note_id))
-        candidates = self._generation.suggest_note_cards(
+        result = self._generation.suggest_note_cards(
             note.body_markdown, context, self._max_suggestions
         )
+        # The regeneration call completed; it debits like every other suggest call
+        # (AD-341), to the note's owner — the worker runs with no user in hand.
+        _debit_suggest(self._budget, note.user_id, result.usage)
+        candidates = result.candidates
         survivors = [c for c in candidates if note_card_passes_qc(c, note.body_markdown)]
         embeddings = (
             self._embeddings.embed_documents([f"{c.question}\n{c.answer}" for c in survivors])

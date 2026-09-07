@@ -449,7 +449,12 @@ def refresh_note_cards(self, note_id: str) -> None:  # noqa: ANN001 — bound ta
 
 
 def _build_refresh_note_cards(conn: Connection) -> RefreshNoteCards:
-    """Wire ``RefreshNoteCards`` on ``conn`` (the refresh task's root)."""
+    """Wire ``RefreshNoteCards`` on ``conn`` (the refresh task's root).
+
+    Budgeted like the deck settle: the regeneration call debits its usage to the
+    note's owner's current UTC day (AD-341) — the ledger row shares the task's
+    transaction, so a rolled-back refresh un-does its debit with its writes.
+    """
     settings = get_settings()
     return RefreshNoteCards(
         notes=SqlAlchemyNoteRepository(conn),
@@ -460,6 +465,7 @@ def _build_refresh_note_cards(conn: Connection) -> RefreshNoteCards:
         max_suggestions=settings.quiz_max_suggestions,
         excerpt_chars=settings.quiz_note_excerpt_chars,
         match_threshold=settings.quiz_note_match_threshold,
+        budget=_build_budget(conn),
     )
 
 

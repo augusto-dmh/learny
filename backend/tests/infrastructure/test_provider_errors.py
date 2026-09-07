@@ -16,6 +16,7 @@ from __future__ import annotations
 import ast
 import importlib
 import pathlib
+import sys
 
 import pytest
 
@@ -110,6 +111,9 @@ def test_the_package_imports_the_standard_library_only() -> None:
                 imported.update(alias.name.split(".")[0] for alias in node.names)
             elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
                 imported.add(node.module.split(".")[0])
-    # Absolute ``app.*`` imports are the repo convention; anything third-party
-    # (a provider SDK above all) is the violation this sensor exists for.
-    assert imported <= {"__future__", "app"}
+    # Absolute ``app.*`` imports are the repo convention and the standard library
+    # is free; anything third-party (a provider SDK above all) is the violation
+    # this sensor exists for. The one sanctioned non-stdlib exception is
+    # ``pydantic``: the profile registry's settings model lives here by design
+    # (cheaper-intelligence, design §2) and is config, never a provider SDK.
+    assert imported <= {"__future__", "app", "pydantic"} | set(sys.stdlib_module_names)

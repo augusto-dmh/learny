@@ -862,6 +862,21 @@ class QuizDeckResult:
 
 
 @dataclass(frozen=True)
+class SuggestResult:
+    """A foreground suggest pass's outcome: candidates plus the call's usage (AD-341).
+
+    The carrier lets the suggest call debit like the turn paths do (PRICE-03)
+    without widening the port's *semantics*: ``candidates`` is exactly the list
+    the suggest methods always returned, and ``usage`` rides beside it the way it
+    rides on :class:`GeneratedAnswer` and :class:`QuizDeckResult` — an adapter
+    capability, absent (``None`` → 0 USD debit) for the deterministic adapters.
+    """
+
+    candidates: tuple[QuizCandidate, ...]
+    usage: TokenUsage | None = None
+
+
+@dataclass(frozen=True)
 class QuizDeckHandle:
     """A provider-agnostic handle to an in-flight (or inline) generation pass.
 

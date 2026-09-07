@@ -33,9 +33,14 @@ from app.domain.entities import (
     QuizDeckResult,
     QuizItemType,
     QuizSection,
+    SuggestResult,
     TokenUsage,
 )
-from app.infrastructure.answering.anthropic import AnthropicAdapterBase, raise_translated
+from app.infrastructure.answering.anthropic import (
+    AnthropicAdapterBase,
+    _usage_of,
+    raise_translated,
+)
 
 # Wall-clock bound for the one foreground generation call (card suggestions). The deck
 # path is batched and asynchronous, so it is deliberately unaffected. Chosen well under
@@ -264,7 +269,7 @@ class AnthropicQuizAdapter(AnthropicAdapterBase):
             payload={"sections": section_meta},
         )
 
-    def suggest_cards(self, section: QuizSection, quote: str, limit: int) -> list[QuizCandidate]:
+    def suggest_cards(self, section: QuizSection, quote: str, limit: int) -> SuggestResult:
         """Issue one Messages call for ``quote`` and return at most ``limit`` candidates.
 
         Synchronous by design (AD-134) — the student is waiting — but structurally the
@@ -272,10 +277,11 @@ class AnthropicQuizAdapter(AnthropicAdapterBase):
         ``source_chunk_id`` constrained to this section's chunk ids, so grounding stays
         schema-enforced. Malformed structured output raises ``ValueError`` for the caller
         to surface as a retryable failure; the QC pipeline still re-verifies whatever
-        parses.
+        parses. The response's usage rides back on the result so the caller debits the
+        call like the turn paths (AD-341/PRICE-03).
         """
         if limit <= 0 or not section.chunks:
-            return []
+            return SuggestResult(candidates=())
         chunk_ids = [str(chunk_id) for chunk_id, _ in section.chunks]
         try:
             message = self._get_client().messages.create(
@@ -299,9 +305,9 @@ class AnthropicQuizAdapter(AnthropicAdapterBase):
             candidates = _parse_items(message)
         except (KeyError, json.JSONDecodeError) as exc:
             raise ValueError(f"suggestion response was not usable: {exc}") from exc
-        return candidates[:limit]
+        return SuggestResult(candidates=tuple(candidates[:limit]), usage=_usage_of(message))
 
-    def suggest_note_cards(self, note_body: str, context: str, limit: int) -> list[QuizCandidate]:
+    def suggest_note_cards(self, note_body: str, context: str, limit: int) -> SuggestResult:
         """Issue one Messages call for a note and return at most ``limit`` candidates.
 
         Synchronous by design (AD-134) — the reader is waiting — and structurally the
@@ -309,10 +315,11 @@ class AnthropicQuizAdapter(AnthropicAdapterBase):
         ``_note_items_schema`` drops ``source_chunk_id`` (a note is not chunked) and the
         prompt carries the note's book context only when present. Malformed structured
         output raises ``ValueError`` for the caller to surface as a retryable failure; the
-        QC pipeline still re-verifies whatever parses against the note body.
+        QC pipeline still re-verifies whatever parses against the note body. The usage
+        rides back on the result exactly as on :meth:`suggest_cards`.
         """
         if limit <= 0 or not note_body.strip():
-            return []
+            return SuggestResult(candidates=())
         try:
             message = self._get_client().messages.create(
                 model=self._model,
@@ -327,7 +334,7 @@ class AnthropicQuizAdapter(AnthropicAdapterBase):
             candidates = _parse_note_items(message)
         except (KeyError, json.JSONDecodeError) as exc:
             raise ValueError(f"note suggestion response was not usable: {exc}") from exc
-        return candidates[:limit]
+        return SuggestResult(candidates=tuple(candidates[:limit]), usage=_usage_of(message))
 
     def collect_deck(self, handle: QuizDeckHandle) -> QuizDeckResult | None:
         """Poll the batch; ``None`` while processing, else the mapped result (QUIZ-05)."""
