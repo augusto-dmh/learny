@@ -656,6 +656,10 @@ quiz_generation_jobs = Table(
     # sum to ``discarded_count``. Existing rows take ``{}`` with no backfill.
     Column("discard_reasons", JSONB, nullable=False, server_default="{}"),
     Column("last_error", Text, nullable=True),
+    # One-time deck-spend marker (0028): the deck worker stamps it with a
+    # conditional UPDATE in the same transaction that debits the pass's usage
+    # and finalizes, so a redelivery observes the stamp and skips the debit.
+    Column("spend_recorded_at", DateTime(timezone=True), nullable=True),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
 )

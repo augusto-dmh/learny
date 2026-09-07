@@ -2952,7 +2952,10 @@ def test_migration_0021_adds_review_quality_columns(monkeypatch) -> None:
 
         for table in (quiz_generation_jobs, quiz_items, review_log):
             reflected = {c["name"]: c["nullable"] for c in inspector.get_columns(table.name)}
-            assert reflected == {c.name: c.nullable for c in table.columns}
+            declared = {c.name: c.nullable for c in table.columns}
+            # Live 0021 columns must match metadata; later revisions may add more.
+            assert reflected.keys() <= declared.keys()
+            assert all(declared[name] is nullable for name, nullable in reflected.items())
     finally:
         engine.dispose()
 
@@ -3741,5 +3744,106 @@ def test_migration_0027_creates_email_tokens_and_verified_stamp(monkeypatch) -> 
     try:
         assert "email_tokens" in set(inspect(engine).get_table_names())
         assert "email_verified_at" in {c["name"] for c in inspect(engine).get_columns("users")}
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
+def test_migration_0028_adds_the_one_time_deck_spend_marker(monkeypatch) -> None:
+    """0028 up: adds a nullable ``spend_recorded_at`` marker to
+    ``quiz_generation_jobs`` — the one-time stamp the deck worker's conditional
+    UPDATE sets in the same transaction that debits and finalizes, so a
+    redelivered deck pass cannot charge twice. Down one step to 0027 drops the
+    column; a further upgrade re-adds it — the marker round-trips clean.
+    """
+    monkeypatch.setenv("LEARNY_DATABASE_URL", TEST_DB_URL)
+    cfg = _alembic_config(TEST_DB_URL)
+
+    command.upgrade(cfg, "head")
+    command.downgrade(cfg, "0027_email_verify_reset")
+
+    engine = create_engine(TEST_DB_URL)
+    try:
+        columns = {c["name"] for c in inspect(engine).get_columns("quiz_generation_jobs")}
+        assert "spend_recorded_at" not in columns
+    finally:
+        engine.dispose()
+
+    command.upgrade(cfg, "0028_quiz_deck_spend_marker")
+    user_id = uuid.uuid4()
+    source_id = uuid.uuid4()
+    job_id = uuid.uuid4()
+    engine = create_engine(TEST_DB_URL)
+    try:
+        inspector = inspect(engine)
+        column = next(
+            c for c in inspector.get_columns("quiz_generation_jobs") if c["name"] == "spend_recorded_at"
+        )
+        assert column["nullable"] is True
+
+        # The marker starts NULL (no backfill) and stamps to an explicit value —
+        # the schema contract the settle transaction's conditional UPDATE needs.
+        with engine.begin() as conn:
+            conn.execute(
+                text("INSERT INTO users (id, email) VALUES (:id, :email)"),
+                {"id": user_id, "email": f"{user_id}@example.test"},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO sources (id, user_id, title, filename, content_type, "
+                    "byte_size, checksum, object_key, status) "
+                    "VALUES (:id, :user_id, 'A Book', 'a.epub', 'application/epub+zip', "
+                    "1024, :checksum, :object_key, 'ready')"
+                ),
+                {
+                    "id": source_id,
+                    "user_id": user_id,
+                    "checksum": "e" * 64,
+                    "object_key": f"sources/{user_id}/{source_id}.epub",
+                },
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO quiz_generation_jobs (id, source_id, status) "
+                    "VALUES (:id, :source_id, 'running')"
+                ),
+                {"id": job_id, "source_id": source_id},
+            )
+        with engine.connect() as conn:
+            unstamped = conn.execute(
+                text("SELECT spend_recorded_at FROM quiz_generation_jobs WHERE id = :id"),
+                {"id": job_id},
+            ).scalar_one()
+        assert unstamped is None
+        with engine.begin() as conn:
+            stamped = conn.execute(
+                text(
+                    "UPDATE quiz_generation_jobs SET spend_recorded_at = now() "
+                    "WHERE id = :id AND spend_recorded_at IS NULL "
+                    "RETURNING spend_recorded_at"
+                ),
+                {"id": job_id},
+            ).first()
+        assert stamped is not None
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM users WHERE id = :id"), {"id": user_id})
+    finally:
+        engine.dispose()
+
+    # Down one step to 0027: the column drops; the job table survives.
+    command.downgrade(cfg, "0027_email_verify_reset")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        columns = {c["name"] for c in inspect(engine).get_columns("quiz_generation_jobs")}
+        assert "spend_recorded_at" not in columns
+    finally:
+        engine.dispose()
+
+    # Round-trip: a further upgrade re-adds the column at head.
+    command.upgrade(cfg, "0028_quiz_deck_spend_marker")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        columns = {c["name"] for c in inspect(engine).get_columns("quiz_generation_jobs")}
+        assert "spend_recorded_at" in columns
     finally:
         engine.dispose()

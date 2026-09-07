@@ -14,6 +14,7 @@ budget/kill integration behaviour:
 
 from __future__ import annotations
 
+import time
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
@@ -50,9 +51,11 @@ from app.domain.entities import (
     GeneratedAnswer,
     IngestionJob,
     ParsedSection,
+    QuizGenerationJob,
     QuizItem,
     QuizItemStatus,
     QuizItemType,
+    QuizJobStatus,
     SchedulingSnapshot,
     SectionChunk,
     Source,
@@ -65,6 +68,7 @@ from app.infrastructure.db.repositories import (
     SqlAlchemyConversationTurnRepository,
     SqlAlchemyCorpusRepository,
     SqlAlchemyQuizItemRepository,
+    SqlAlchemyQuizJobRepository,
     SqlAlchemySourceRepository,
     SqlAlchemyStudyDayRepository,
     SqlAlchemyUserRepository,
@@ -481,7 +485,8 @@ def test_deck_worker_debits_the_pass_usage_to_its_owner(
             errors = ()
             usage = TokenUsage(input_tokens=2000, output_tokens=1000)
 
-        deck_tasks._record_deck_spend(source.id, _Result())
+        with db_engine.begin() as conn:
+            deck_tasks._record_deck_spend(conn, source.id, _Result())
 
         # Priced with the operator's default catalog ($3/M in, $15/M out):
         # 2000 in + 1000 out = 21_000 micros.
@@ -508,13 +513,80 @@ def test_deck_worker_local_result_debits_nothing(
             errors = ()
             usage = None
 
-        deck_tasks._record_deck_spend(source.id, _LocalResult())
+        with db_engine.begin() as conn:
+            deck_tasks._record_deck_spend(conn, source.id, _LocalResult())
 
         with db_engine.connect() as conn:
             assert (
                 SqlAlchemyAiSpendDayRepository(conn).get_for_day(user.id, datetime.now(UTC).date())
                 is None
             )
+    finally:
+        _committed_spend(db_engine, user.id)
+
+
+def _seed_deck_job(db_engine, source_id: UUID) -> UUID:
+    """Seed a committed ``running`` deck job for ``source_id``; return its id.
+
+    ``_settle_deck`` claims and finalizes through fresh worker connections, so the
+    job row must be committed — the per-test ``db_conn`` transaction is invisible
+    to it. Removed with the source by the caller's cleanup (the FK cascades).
+    """
+    jid = uuid4()
+    now = datetime.now(UTC)
+    with db_engine.begin() as conn:
+        SqlAlchemyQuizJobRepository(conn).add(
+            QuizGenerationJob(
+                id=jid,
+                source_id=source_id,
+                status=QuizJobStatus.RUNNING,
+                attempts=1,
+                generated_count=0,
+                discarded_count=0,
+                failed_sections=0,
+                last_error=None,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+    return jid
+
+
+def test_deck_settle_debits_a_redelivered_pass_exactly_once(
+    db_engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The debit+finalize settle is one transaction gated by the job row's one-time
+    # spend marker: a redelivery that arrives after a committed settle (worker died
+    # between the old separate debit and finalize commits) must not debit again.
+    from app.worker import tasks as deck_tasks
+
+    monkeypatch.setattr(deck_tasks, "get_engine", lambda: db_engine)
+    user, source = _seed_committed_turn_world(db_engine, "budget-deck-redelivery@example.com")
+    jid = _seed_deck_job(db_engine, source.id)
+    try:
+
+        class _Result:
+            candidates = ()
+            errors = ()
+            usage = TokenUsage(input_tokens=2000, output_tokens=1000)
+
+        log = {"job_id": str(jid), "source_id": str(source.id)}
+        deck_tasks._settle_deck(jid, source.id, _Result(), log, time.perf_counter())
+        # The redelivery of the same job: the marker is already stamped.
+        deck_tasks._settle_deck(jid, source.id, _Result(), log, time.perf_counter())
+
+        # Exactly one debit: 21_000 micros, not 42_000.
+        with db_engine.connect() as conn:
+            row = SqlAlchemyAiSpendDayRepository(conn).get_for_day(
+                user.id, datetime.now(UTC).date()
+            )
+        assert row is not None and row.usd_micros == 21_000
+
+        # The pass still finalized exactly once (terminal success, marker stamped).
+        with db_engine.connect() as conn:
+            job = SqlAlchemyQuizJobRepository(conn).get_by_id(jid)
+        assert job is not None
+        assert job.status == QuizJobStatus.SUCCEEDED
     finally:
         _committed_spend(db_engine, user.id)
 

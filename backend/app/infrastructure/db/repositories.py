@@ -1987,6 +1987,25 @@ class SqlAlchemyQuizJobRepository:
         )
         return job
 
+    def claim_spend(self, job_id: UUID, *, now: datetime) -> bool:
+        """Stamp the one-time deck-spend marker; ``True`` only for the first claimer.
+
+        One conditional UPDATE (mirrors the invite/email-token consume): the
+        marker must still be NULL for the stamp to land, so two concurrent or
+        redelivered settles of the same job cannot both win — the loser updates
+        zero rows and must skip the debit. Lives in the caller's transaction so
+        the stamp commits (or rolls back) together with the debit it guards.
+        """
+        result = self._conn.execute(
+            update(quiz_generation_jobs)
+            .where(
+                quiz_generation_jobs.c.id == job_id,
+                quiz_generation_jobs.c.spend_recorded_at.is_(None),
+            )
+            .values(spend_recorded_at=now)
+        )
+        return result.rowcount > 0
+
 
 class SqlAlchemyNoteRepository:
     """``NoteRepository`` backed by the notes/anchors/tags/links tables (ADR-0026 §2).
