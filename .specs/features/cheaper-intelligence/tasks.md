@@ -10,7 +10,7 @@ Implement these tasks with the `tlc-spec-driven` skill: **activate it by name an
 
 **Design**: `.specs/features/cheaper-intelligence/design.md`
 **Context / ADs**: `.specs/features/cheaper-intelligence/context.md`, STATE.md AD-334..AD-345
-**Status**: In Progress
+**Status**: In Progress — Phase 0 done (T1 `0d7e69cb`); Phase 1 done (T2 `644f5428`, T3 `38343de2`, T4 `9f2c8f18`, T5 `f9cf3cb9`); Phase 2 done (T6 `a8666a3f`, T7 `dfb23d65`, T8 `4d8d6c56`, T9 `ec6b1d7c`; migration 0029 not needed — ledger record is USD-only; worker note: `RefreshNoteCards` instrumented as the third suggest debit site, `AcceptTutorCard` makes no provider call); Phase 3 done (T10 `76cdc975`, T11 `fb5e7674`, T12 `6fc42f76`, T13 `41fb91d6`, T14 `fddb6e03`; worker note: the per-request budget now carries every declared profile's price catalog so router-stamped results debit at the serving profile's prices; explain-origin seam reuses the SDK's per-send body options — no new transport; boundary green: backend 2815/12 with the known pre-existing `.env` flake `test_eval_retrieval_metrics` firing (reproduced at `ec6b1d7c`), frontend 899)
 
 ---
 
