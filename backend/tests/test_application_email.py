@@ -79,18 +79,25 @@ def test_empty_host_selects_the_log_adapter() -> None:
 # ---- SMTP transport: the message assembly, with the client class patched ------
 
 
-def test_smtp_adapter_hands_one_plain_text_message_to_smtplib() -> None:
+def test_smtp_adapter_upgrades_to_tls_and_authenticates_before_sendmail() -> None:
     with patch("app.infrastructure.email.smtp.smtplib.SMTP") as smtp_cls:
         client = smtp_cls.return_value.__enter__.return_value
-        sender = SmtpEmailSender(host="mail.example.com", port=2525, sender="learny@example.com")
+        sender = SmtpEmailSender(
+            host="mail.example.com",
+            port=2525,
+            sender="learny@example.com",
+            use_tls=True,
+            username="learny",
+            password="relay-secret",
+        )
 
         sender.send(to="reader@example.com", subject="Verify your email", body="token-1")
 
-        # One SMTP client, pointed at the configured host/port, no TLS/socket
-        # work of our own beyond what smtplib does internally.
+        # TLS first, then credentials, then the payload — all before sendmail,
+        # so the token body never crosses a plaintext or anonymous hop.
         smtp_cls.assert_called_once_with("mail.example.com", 2525)
-        # The full payload is asserted by value: envelope sender, recipient, and
-        # a message whose headers and body carry the subject/body we were given.
+        client.starttls.assert_called_once()
+        client.login.assert_called_once_with("learny", "relay-secret")
         client.sendmail.assert_called_once_with(
             "learny@example.com",
             ["reader@example.com"],
@@ -100,6 +107,56 @@ def test_smtp_adapter_hands_one_plain_text_message_to_smtplib() -> None:
             "\r\n"
             "token-1",
         )
+        # Order matters: the upgrade precedes the login precedes the send.
+        calls = [name for name, _args, _kwargs in client.method_calls]
+        assert calls.index("starttls") < calls.index("login") < calls.index("sendmail")
+
+
+def test_smtp_adapter_without_tls_or_username_stays_plain_and_anonymous() -> None:
+    with patch("app.infrastructure.email.smtp.smtplib.SMTP") as smtp_cls:
+        client = smtp_cls.return_value.__enter__.return_value
+        sender = SmtpEmailSender(
+            host="mail.example.com",
+            port=25,
+            sender="learny@example.com",
+            use_tls=False,
+            username="",
+            password="",
+        )
+
+        sender.send(to="reader@example.com", subject="Verify your email", body="token-1")
+
+        # An explicitly unauthenticated, un-upgraded relay is the operator's
+        # choice: no starttls, no login — just the send.
+        client.starttls.assert_not_called()
+        client.login.assert_not_called()
+        client.sendmail.assert_called_once()
+        smtp_cls.assert_called_once_with("mail.example.com", 25)
+
+
+def test_build_email_sender_passes_the_tls_and_credential_settings_through() -> None:
+    sender = build_email_sender(
+        _settings(
+            smtp_host="mail.example.com",
+            smtp_from="learny@example.com",
+            smtp_use_tls=False,
+            smtp_username="learny",
+            smtp_password="relay-secret",
+        )
+    )
+    assert isinstance(sender, SmtpEmailSender)
+    assert sender._use_tls is False
+    assert sender._username == "learny"
+    assert sender._password == "relay-secret"
+
+    # Defaults: TLS on, no credentials, with the settings built without .env.
+    default_sender = build_email_sender(
+        _settings(smtp_host="mail.example.com", smtp_from="learny@example.com")
+    )
+    assert isinstance(default_sender, SmtpEmailSender)
+    assert default_sender._use_tls is True
+    assert default_sender._username == ""
+    assert default_sender._password == ""
 
 
 # ---- Log transport: host-less default, no socket ------------------------------

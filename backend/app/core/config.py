@@ -280,9 +280,15 @@ class Settings(BaseSettings):
     # production default; empty (the default) → the log adapter, so local dev
     # and the offline suite send nothing and open no socket. The two TTLs bound
     # the single-use verify/reset token rows (``email_tokens.expires_at``).
+    # ``smtp_use_tls`` upgrades the connection with STARTTLS (the submission
+    # standard on port 587); ``smtp_username``/``smtp_password`` authenticate
+    # against the relay — most real relays require both.
     smtp_host: str = ""
     smtp_port: int = 587
     smtp_from: str = ""
+    smtp_use_tls: bool = True
+    smtp_username: str = ""
+    smtp_password: str = ""
     email_verify_ttl_minutes: int = Field(default=1440, ge=1)
     email_reset_ttl_minutes: int = Field(default=60, ge=1)
 

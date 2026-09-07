@@ -39,5 +39,8 @@ def build_email_sender(settings: Settings) -> EmailPort:
             host=settings.smtp_host,
             port=settings.smtp_port,
             sender=settings.smtp_from,
+            use_tls=settings.smtp_use_tls,
+            username=settings.smtp_username,
+            password=settings.smtp_password,
         )
     return LogEmailSender()
