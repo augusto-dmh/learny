@@ -18,6 +18,7 @@ crosses this boundary (fitness gate).
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import TYPE_CHECKING, Literal
 
@@ -25,6 +26,8 @@ from pydantic import BaseModel, ConfigDict
 
 if TYPE_CHECKING:
     from app.core.config import Settings
+
+logger = logging.getLogger(__name__)
 
 #: The adapter kinds a profile may name. ``local`` is the deterministic offline
 #: adapter; ``anthropic`` the Claude Citations adapter; ``openai-compatible`` the
@@ -172,3 +175,30 @@ def resolve_generation_profiles(settings: Settings) -> tuple[GenerationProfileSe
         return (_legacy_seed_profile(settings),)
     _validate_declared(declared)
     return tuple(declared)
+
+
+def resolve_serving_profile(
+    profiles: tuple[GenerationProfileSettings, ...],
+    profile_id: str | None,
+) -> GenerationProfileSettings | None:
+    """Return the profile a result's stamp names, for pricing and attribution.
+
+    Resolution order (AD-344/PRICE-04): a stamp names its profile exactly — the
+    exact match is what keeps two profiles sharing one model unambiguous. No stamp
+    is the single-profile world, priced and attributed at the primary. A stamp
+    that names no declared profile falls back to the primary **with a warning** —
+    a correct-or-conservative debit, never a silent misprice. ``None`` when the
+    registry itself is empty.
+    """
+    primary = profiles[0] if profiles else None
+    if profile_id is None:
+        return primary
+    for profile in profiles:
+        if profile.id == profile_id:
+            return profile
+    logger.warning(
+        "generation profile '%s' is not declared; falling back to the primary profile '%s'",
+        profile_id,
+        primary.id if primary else "<none>",
+    )
+    return primary

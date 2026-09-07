@@ -14,12 +14,15 @@ production (``Clock.now`` is timezone-aware UTC).
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from uuid import UUID
 
 from app.application.errors import AiPaused, DailyBudgetExhausted
 from app.domain.entities import TokenUsage
 from app.domain.ports import AiSpendDayRepository, Clock
+
+logger = logging.getLogger(__name__)
 
 #: Budget kinds (design §Components). ``generation`` is a plain provider call with no
 #: free-tier counter of its own; ``ask`` / ``teach_start`` carry the free-tier integer
@@ -45,6 +48,13 @@ EXHAUSTED_COPY = (
 #: parts of the product that never call a provider are still fine.
 PAUSED_COPY = "AI is paused right now. Your library and reviews still work."
 
+#: Derived cache-price factors applied to the input price when a catalog does not
+#: name its own (design §Tech Decisions — Anthropic Sonnet actuals). The profile
+#: registry's legacy seed derives the same pair from the same factors; this copy
+#: exists because the application layer cannot import the providers package.
+_CACHE_READ_DEFAULT_FACTOR = 0.1
+_CACHE_CREATION_DEFAULT_FACTOR = 1.25
+
 
 def usd_to_micros(usd: float) -> int:
     """Convert an operator's USD amount to whole ledger micros (rounded)."""
@@ -53,11 +63,34 @@ def usd_to_micros(usd: float) -> int:
 
 @dataclass(frozen=True)
 class TokenPrices:
-    """The operator's price catalog in USD micros per million tokens."""
+    """The operator's price catalog in USD micros per million tokens.
+
+    The cache prices are profile-overridable; omitted, they take the derived
+    defaults (read 0.1× input, creation 1.25× input — design §Tech Decisions),
+    so the pre-registry global ``price_*`` pair keeps pricing honest for a
+    cache-reporting adapter without new operator knobs. ``__post_init__`` fills
+    the derived values once at construction; they are plain ints afterwards.
+    """
 
     input_micros_per_million: int
     output_micros_per_million: int
     embed_micros_per_million: int
+    cache_read_micros_per_million: int = -1  # derived 0.1 × input when omitted
+    cache_creation_micros_per_million: int = -1  # derived 1.25 × input when omitted
+
+    def __post_init__(self) -> None:
+        if self.cache_read_micros_per_million < 0:
+            object.__setattr__(
+                self,
+                "cache_read_micros_per_million",
+                int(round(self.input_micros_per_million * _CACHE_READ_DEFAULT_FACTOR)),
+            )
+        if self.cache_creation_micros_per_million < 0:
+            object.__setattr__(
+                self,
+                "cache_creation_micros_per_million",
+                int(round(self.input_micros_per_million * _CACHE_CREATION_DEFAULT_FACTOR)),
+            )
 
 
 class DailyBudget:
@@ -81,6 +114,7 @@ class DailyBudget:
         ask_daily_cap: int,
         teach_start_daily_cap: int,
         ai_paused: bool = False,
+        profile_catalogs: dict[str, TokenPrices] | None = None,
     ) -> None:
         self._repo = repo
         self._clock = clock
@@ -89,6 +123,7 @@ class DailyBudget:
         self._ask_daily_cap = ask_daily_cap
         self._teach_start_daily_cap = teach_start_daily_cap
         self._ai_paused = ai_paused
+        self._profile_catalogs = profile_catalogs or {}
 
     def assert_generation(self, user_id: UUID, *, kind: str) -> None:
         """Refuse the call unless the operator's pause and the caller's day allow it.
@@ -112,13 +147,34 @@ class DailyBudget:
         if kind == KIND_TEACH_START and row.teach_starts >= self._teach_start_daily_cap:
             raise DailyBudgetExhausted(EXHAUSTED_COPY)
 
-    def usage_micros(self, usage: TokenUsage | None) -> int:
-        """Price one call's reported usage into ledger micros; absent usage is 0."""
+    def usage_micros(self, usage: TokenUsage | None, profile_id: str | None = None) -> int:
+        """Price one call's reported usage into ledger micros; absent usage is 0.
+
+        Pricing uses the **serving profile's** catalog (PRICE-01): a stamped call
+        is priced at the catalog the composition root wired for that profile id.
+        A stamp that names no declared profile falls back to the primary catalog
+        **with a warning** — never a silent misprice (PRICE-04). No stamp is the
+        single-profile world: the primary catalog *is* the serving profile's, so
+        it prices without a warning.
+        """
         if usage is None:
             return 0
+        prices = self._prices
+        if profile_id is not None:
+            catalog = self._profile_catalogs.get(profile_id)
+            if catalog is None:
+                logger.warning(
+                    "generation profile '%s' is not declared; debiting at the "
+                    "primary profile's catalog",
+                    profile_id,
+                )
+            else:
+                prices = catalog
         return (
-            usage.input_tokens * self._prices.input_micros_per_million
-            + usage.output_tokens * self._prices.output_micros_per_million
+            usage.input_tokens * prices.input_micros_per_million
+            + usage.output_tokens * prices.output_micros_per_million
+            + usage.cache_read_input_tokens * prices.cache_read_micros_per_million
+            + usage.cache_creation_input_tokens * prices.cache_creation_micros_per_million
         ) // 1_000_000
 
     def record(self, user_id: UUID, *, usd_micros: int, kind: str) -> None:

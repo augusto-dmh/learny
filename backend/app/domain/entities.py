@@ -476,10 +476,17 @@ class TokenUsage:
     adapters that can read usage map it onto this, and the budget service multiplies
     it into the price catalog to debit the day's USD. ``None`` usage (an adapter that
     does not report — the deterministic local ones) means a 0 USD debit.
+
+    The cache fields default to zero so an adapter (or provider) that reports no
+    cache detail debits exactly as it did before they existed: input+output only.
+    An Anthropic call with prompt caching active populates them from the usage
+    block (PRICE-02), and both are priced at the serving profile's cache prices.
     """
 
     input_tokens: int = 0
     output_tokens: int = 0
+    cache_read_input_tokens: int = 0
+    cache_creation_input_tokens: int = 0
 
 
 @dataclass(frozen=True)

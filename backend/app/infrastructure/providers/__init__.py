@@ -18,6 +18,7 @@ from app.infrastructure.providers.errors import (
 from app.infrastructure.providers.profiles import (
     GenerationProfileSettings,
     resolve_generation_profiles,
+    resolve_serving_profile,
 )
 
 __all__ = [
@@ -28,4 +29,5 @@ __all__ = [
     "RequestRejected",
     "Timeout",
     "resolve_generation_profiles",
+    "resolve_serving_profile",
 ]
