@@ -56,6 +56,7 @@ from app.domain.entities import (
     TUTOR_OPENING_MESSAGE,
     AnswerCompleted,
     AnswerReasoningDelta,
+    AnswerStreamEvent,
     AnswerTextDelta,
     CitedSpan,
     Conversation,
@@ -1792,6 +1793,188 @@ def test_post_turn_unauthenticated_returns_401(
         auth_client, conversation.id, {"message": "hi", "mode": MODE_ANSWER}, csrf="x"
     )
     assert resp.status_code == 401, resp.text
+
+
+# --- The selection-Explain origin selects the chain (COST-04, AD-345) -----------
+
+
+class _ChainSpy:
+    """A ``GenerationPort`` double that names the chain it stands for.
+
+    The answer cites the retrieved evidence so the grounding guard keeps it (an
+    ``answered`` turn, not a not-found collapse), and the model identity it
+    records is the spy's name — the turn's ``model`` field is the sensor for
+    which chain served the turn (AD-345).
+    """
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.calls = 0
+        self.stream_calls = 0
+
+    @property
+    def model(self) -> str:
+        return self.name
+
+    def _answer(self, evidence: Sequence[Evidence]) -> GeneratedAnswer:
+        cited = (evidence[0].chunk_id,) if evidence else ()
+        return GeneratedAnswer(
+            text=f"served by {self.name}",
+            cited_chunk_ids=cited,
+            model=self.name,
+            found=True,
+        )
+
+    def generate(self, *, evidence: Sequence[Evidence], **_kwargs: object) -> GeneratedAnswer:
+        self.calls += 1
+        return self._answer(evidence)
+
+    def generate_stream(  # noqa: ANN003 — port kwargs
+        self, *, evidence: Sequence[Evidence], **_kwargs: object
+    ) -> Iterator[AnswerStreamEvent]:
+        self.stream_calls += 1
+        answer = self._answer(evidence)
+
+        def _stream() -> Iterator[AnswerStreamEvent]:
+            yield AnswerTextDelta(text=answer.text)
+            yield AnswerCompleted(answer=answer)
+
+        return _stream()
+
+
+@pytest.fixture
+def chain_spies(auth_client: TestClient):  # noqa: ANN001, ANN201
+    """Both generation chains overridden by name-spying doubles (AD-345)."""
+    from app.infrastructure.web.dependencies import get_explain_generation, get_generation
+
+    primary, explain = _ChainSpy("primary-chain"), _ChainSpy("explain-chain")
+    auth_client.app.dependency_overrides[get_generation] = lambda: primary
+    auth_client.app.dependency_overrides[get_explain_generation] = lambda: explain
+    try:
+        yield primary, explain
+    finally:
+        auth_client.app.dependency_overrides.pop(get_generation, None)
+        auth_client.app.dependency_overrides.pop(get_explain_generation, None)
+
+
+def test_an_explain_origin_turn_is_served_by_the_explain_chain(
+    auth_client: TestClient,
+    db_conn: Connection,
+    chain_spies,  # noqa: ANN001
+) -> None:
+    # COST-04 / AD-340: the capture popover's Explain verb marks its ask turn,
+    # and the marked turn is served by the selection-Explain chain (the cheap
+    # grounded profile first) — not by the primary every other ask uses.
+    primary, explain = chain_spies
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "explain-origin@example.com")
+    _embed_all(db_conn, UUID(source_id))
+    conversation = _seed_conversation(db_conn, UUID(source_id))
+
+    resp = _post_turn(
+        auth_client,
+        conversation.id,
+        {
+            "message": "photosynthesis sunlight energy",
+            "mode": MODE_ANSWER,
+            "origin": "explain_selection",
+        },
+        csrf=csrf,
+    )
+
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["answer_status"] == ANSWERED
+    assert body["text"] == "served by explain-chain"
+    assert body["model"] == "explain-chain"
+    assert explain.calls == 1
+    assert primary.calls == 0
+
+
+def test_a_plain_turn_is_served_by_the_primary_chain(
+    auth_client: TestClient,
+    db_conn: Connection,
+    chain_spies,  # noqa: ANN001
+) -> None:
+    # COST-04: absent origin is exactly today's behavior — the primary chain.
+    primary, explain = chain_spies
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "plain-origin@example.com")
+    _embed_all(db_conn, UUID(source_id))
+    conversation = _seed_conversation(db_conn, UUID(source_id))
+
+    resp = _post_turn(
+        auth_client,
+        conversation.id,
+        {"message": "photosynthesis sunlight energy", "mode": MODE_ANSWER},
+        csrf=csrf,
+    )
+
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["answer_status"] == ANSWERED
+    assert body["model"] == "primary-chain"
+    assert primary.calls == 1
+    assert explain.calls == 0
+
+
+def test_an_unknown_origin_value_returns_422_before_any_chain_runs(
+    auth_client: TestClient,
+    db_conn: Connection,
+    chain_spies,  # noqa: ANN001
+) -> None:
+    # The schema accepts only the one declared origin literal: anything else is a
+    # rejected request before the service — and so any chain — is reached.
+    primary, explain = chain_spies
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "origin-422@example.com")
+    _embed_all(db_conn, UUID(source_id))
+    conversation = _seed_conversation(db_conn, UUID(source_id))
+
+    resp = _post_turn(
+        auth_client,
+        conversation.id,
+        {
+            "message": "photosynthesis sunlight energy",
+            "mode": MODE_ANSWER,
+            "origin": "cheap-model",
+        },
+        csrf=csrf,
+    )
+
+    assert resp.status_code == 422, resp.text
+    assert primary.calls == 0
+    assert explain.calls == 0
+
+
+def test_an_explain_origin_stream_is_served_by_the_explain_chain(
+    auth_client: TestClient,
+    db_conn: Connection,
+    chain_spies,  # noqa: ANN001
+) -> None:
+    # The streaming route shares the request schema, so the marker selects the
+    # chain there too, and the persisted turn records the serving chain's model.
+    primary, explain = chain_spies
+    source_id, csrf = _seed_ready_source(auth_client, db_conn, "explain-stream@example.com")
+    _embed_all(db_conn, UUID(source_id))
+    conversation = _seed_conversation(db_conn, UUID(source_id))
+
+    streamed = _turn_stream(
+        auth_client,
+        conversation.id,
+        {
+            "message": "photosynthesis sunlight energy",
+            "mode": MODE_ANSWER,
+            "origin": "explain_selection",
+        },
+        csrf=csrf,
+    )
+
+    assert streamed.status_code == 200, streamed.text
+    assert "served by explain-chain" in streamed.text
+    assert explain.stream_calls == 1
+    assert primary.stream_calls == 0
+
+    read = auth_client.get(f"/api/conversations/{conversation.id}")
+    assert read.status_code == 200, read.text
+    assert read.json()["turns"][0]["model"] == "explain-chain"
 
 
 # --- POST /api/conversations/{id}/turns/stream (CONV-21) -----------------------

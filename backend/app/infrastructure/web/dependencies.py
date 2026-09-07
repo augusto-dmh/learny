@@ -725,12 +725,16 @@ def get_delete_conversation(conn: DbConnection) -> DeleteConversation:
 def get_post_conversation_turn(
     conn: DbConnection,
     generation: Generation,
+    explain_generation: ExplainGeneration,
 ) -> PostConversationTurn:
     """Wire ``PostConversationTurn`` on the request-scoped connection (CONV-10..14, 20/21).
 
     One generation port serves both modes — the mode is a per-turn argument, not a
-    per-wiring choice. Injecting it via ``Depends`` keeps it test-overridable, and
-    the evidence budget / history window come from the ``conversation_*`` settings.
+    per-wiring choice — and the selection-Explain chain rides beside it (AD-345):
+    the service resolves which of the two serves a turn from the request's
+    ``origin``, and routing policy stays inside the chains. Injecting them via
+    ``Depends`` keeps both test-overridable, and the evidence budget / history
+    window come from the ``conversation_*`` settings.
     """
     settings = get_settings()
     return PostConversationTurn(
@@ -740,6 +744,7 @@ def get_post_conversation_turn(
         corpus=SqlAlchemyCorpusRepository(conn),
         retrieve=get_retrieve_evidence(conn),
         generation=generation,
+        explain_generation=explain_generation,
         authorize=AuthorizeOwnership(),
         clock=_clock,
         ids=uuid4,
