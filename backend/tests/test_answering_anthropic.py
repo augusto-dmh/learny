@@ -1290,6 +1290,189 @@ def test_out_of_range_index_yields_no_citation_and_grounds_to_not_found() -> Non
 _CACHE_1H = {"type": "ephemeral", "ttl": "1h"}
 
 
+# --- Teach cache reorder: documents before the breakpoint (COST-02, COST-03) -----
+#
+# Derived from COST-02/COST-03 (rq15 win 3): the section's documents are the
+# expensive-but-stable part of a scoped teach session (the retrieval already
+# filters to the target anchors), so they must sit INSIDE the 1h cached prefix —
+# leading the message list, with the breakpoint on the last document block — while
+# every volatile per-turn input (the section header with phase/hint, the new
+# message) stays after it. The API keeps document blocks out of ``system``, so the
+# prefix is system prompt + leading documents + settled history. The playbook text
+# itself is byte-unchanged, and the saving is measured: a cached second turn
+# reports cache-read tokens on its usage (COST-03), never assumed.
+
+
+def test_teach_documents_sit_before_the_cache_breakpoint() -> None:
+    evidence = [_evidence("alpha"), _evidence("beta")]
+    history = [HistoryTurn(message="Hi", response_text="Hello, let's begin.")]
+    adapter, client = _teaching_adapter(_FakeMessage([_FakeTextBlock("ok")]))
+
+    adapter.generate(
+        mode=MODE_TEACH,
+        message="Go on",
+        target_section_path=("Chapter 1", "Section A"),
+        history=history,
+        evidence=evidence,
+    )
+
+    call = client.messages.calls[0]
+    # The system prompt carries no breakpoint: the 1h one moved behind the documents.
+    assert call["system"] == [{"type": "text", "text": TEACHING_SYSTEM_PROMPT}]
+    # The documents lead the message list, before the breakpoint on the LAST one;
+    # the settled first turn's text and every later turn follow.
+    first = call["messages"][0]
+    assert first["role"] == "user"
+    content = first["content"]
+    assert [block["type"] for block in content] == ["document", "document", "text"]
+    for doc, item in zip(content[:-1], evidence, strict=True):
+        assert doc["source"]["data"] == item.snippet
+        assert doc["citations"] == {"enabled": True}
+    assert content[-1]["text"] == "Hi"
+    assert content[-2]["cache_control"] == _CACHE_1H
+    for block in content[:-2]:
+        assert "cache_control" not in block
+
+
+def test_teach_with_empty_history_leads_with_the_documents_too() -> None:
+    evidence = [_evidence("alpha"), _evidence("beta")]
+    adapter, client = _teaching_adapter(_FakeMessage([_FakeTextBlock("ok")]))
+
+    adapter.generate(
+        mode=MODE_TEACH,
+        message="teach me",
+        target_section_path=("Ch", "A"),
+        history=[],
+        evidence=evidence,
+    )
+
+    call = client.messages.calls[0]
+    # One user message: documents (breakpoint on the last) then the turn text.
+    assert len(call["messages"]) == 1
+    content = call["messages"][0]["content"]
+    assert [block["type"] for block in content] == ["document", "document", "text"]
+    assert content[-2]["cache_control"] == _CACHE_1H
+    assert content[-1]["text"].endswith("teach me")
+
+
+def test_teach_without_documents_keeps_the_breakpoint_on_the_playbook() -> None:
+    # No documents to front-run the prefix, so the 1h breakpoint falls back to the
+    # system prompt block — the shape the teach request had before the reorder.
+    adapter, client = _teaching_adapter(_FakeMessage([_FakeTextBlock("ok")]))
+
+    adapter.generate(
+        mode=MODE_TEACH,
+        message="hello",
+        target_section_path=("Ch", "A"),
+        history=[],
+        evidence=[],
+    )
+
+    call = client.messages.calls[0]
+    assert call["system"] == [
+        {"type": "text", "text": TEACHING_SYSTEM_PROMPT, "cache_control": _CACHE_1H}
+    ]
+    assert call["messages"][0]["content"][-1]["type"] == "text"
+
+
+def test_teach_prefix_is_byte_stable_from_turn_one_to_turn_two() -> None:
+    # Reachability precondition for the cache hit: the second turn's request
+    # repeats the first turn's cached prefix (system prompt + leading documents)
+    # byte for byte, so a strict prefix match finds it. History grows AFTER it.
+    evidence = [_evidence("alpha"), _evidence("beta")]
+    adapter, client = _teaching_adapter(_FakeMessage([_FakeTextBlock("ok")]))
+
+    adapter.generate(
+        mode=MODE_TEACH,
+        message="What is X?",
+        target_section_path=("Ch", "A"),
+        history=[],
+        evidence=evidence,
+    )
+    adapter.generate(
+        mode=MODE_TEACH,
+        message="And why?",
+        target_section_path=("Ch", "A"),
+        history=[HistoryTurn(message="What is X?", response_text="It is this.")],
+        evidence=evidence,
+    )
+
+    first, second = client.messages.calls
+    # The cached prefix: system + the first user message up to (and including) the
+    # breakpointed document — identical across the two turns.
+    first_prefix = [first["system"], first["messages"][0]["content"][:-1]]
+    second_prefix = [second["system"], second["messages"][0]["content"][:-1]]
+    assert first_prefix == second_prefix
+    # ...and the second turn really did grow after the prefix (history + new text).
+    assert second["messages"][1]["role"] == "assistant"
+    assert second["messages"][1]["content"][0]["cache_control"] == _CACHE_1H
+
+
+def test_simulated_teach_turn_two_reports_cache_read_tokens() -> None:
+    # COST-03's measurement sensor: with the reorder in place, the provider answers
+    # turn 2 from the cached prefix, and its usage says so. The stub replays exactly
+    # that shape — write on turn 1 (creation only), read on turn 2 — and the adapter
+    # must carry both on the answer's TokenUsage so the saving is measured, never
+    # assumed.
+    evidence = [_evidence("alpha"), _evidence("beta")]
+    write_message = _FakeMessage([_FakeTextBlock("Turn one.")])
+    write_message.usage.cache_creation_input_tokens = 4_090
+    read_message = _FakeMessage([_FakeTextBlock("Turn two.")])
+    read_message.usage.cache_creation_input_tokens = 120
+    read_message.usage.cache_read_input_tokens = 4_090
+    client = _FakeClient(write_message)
+    adapter = AnthropicGenerationAdapter(
+        api_key="unused-fake", model=_MODEL, max_tokens=_MAX_TOKENS, client=client
+    )
+
+    first = adapter.generate(
+        mode=MODE_TEACH,
+        message="What is X?",
+        target_section_path=("Ch", "A"),
+        history=[],
+        evidence=evidence,
+    )
+    client.messages._message = read_message
+    second = adapter.generate(
+        mode=MODE_TEACH,
+        message="And why?",
+        target_section_path=("Ch", "A"),
+        history=[HistoryTurn(message="What is X?", response_text="Turn one.")],
+        evidence=evidence,
+    )
+
+    assert first.usage is not None
+    assert (first.usage.cache_read_input_tokens, first.usage.cache_creation_input_tokens) == (
+        0,
+        4_090,
+    )
+    assert second.usage is not None
+    assert (second.usage.cache_read_input_tokens, second.usage.cache_creation_input_tokens) == (
+        4_090,
+        120,
+    )
+
+
+def test_teach_playbook_text_is_byte_unchanged_by_the_reorder() -> None:
+    # COST-02's frozen-string pin: the reorder moves blocks and breakpoints only —
+    # the teach playbook text that the eval tier and the tutor ladder were tuned
+    # against must stay these exact bytes.
+    frozen = (
+        "You are Learny's patient book tutor. Teach the learner about the passage "
+        "they are studying using only the information contained in the provided "
+        "documents, building naturally on the conversation so far. "
+        "One move per turn. Prefer a single question. Do not dump the section. "
+        "Follow the ladder pump then hint then prompt then assert. After two failed "
+        "elicitations, assert and cite. If the learner asks to be told, tell and "
+        "demand a restatement. Socratic questions and checks may omit citations. "
+        "Claims about the book must cite. Do not use outside knowledge and do not "
+        "speculate beyond what the documents state. If the provided documents cannot "
+        "support a claim, reply with exactly NOT_FOUND_IN_SOURCE and nothing else. "
+        "End after a passing unaided check."
+    )
+    assert TEACHING_SYSTEM_PROMPT.encode("utf-8") == frozen.encode("utf-8")
+
+
 def _teaching_adapter(
     message: _FakeMessage,
 ) -> tuple[AnthropicGenerationAdapter, _FakeClient]:
@@ -1323,28 +1506,29 @@ def test_teaching_request_layout_history_evidence_and_final_turn() -> None:
     call = client.messages.calls[0]
     assert call["model"] == _MODEL
     assert call["max_tokens"] == _MAX_TOKENS
-    assert call["system"] == [
-        {"type": "text", "text": TEACHING_SYSTEM_PROMPT, "cache_control": _CACHE_1H}
-    ]
+    # The frozen teaching system prompt carries no breakpoint: the 1h one moved
+    # behind the stable section documents (COST-02).
+    assert call["system"] == [{"type": "text", "text": TEACHING_SYSTEM_PROMPT}]
     messages = call["messages"]
-    # Alternating history: plain-text user turn, block-list assistant turn.
-    assert messages[0] == {"role": "user", "content": "Hi"}
-    assert messages[1]["role"] == "assistant"
-    assert messages[1]["content"][0]["type"] == "text"
-    assert messages[1]["content"][0]["text"] == "Hello, let's begin."
-    assert messages[2] == {"role": "user", "content": "Go on"}
-    assert messages[3]["role"] == "assistant"
-    assert messages[3]["content"][0]["text"] == "Here is more."
-    # Final user turn: this turn's evidence documents (citations-enabled, in order),
-    # then the section + message text — all volatile content, after the cached prefix.
-    final = messages[4]
-    assert final["role"] == "user"
-    documents = final["content"][:-1]
-    assert len(documents) == len(evidence)
-    for doc, item in zip(documents, evidence, strict=True):
+    # The stable documents lead the message list, inside the cached prefix:
+    # breakpoint on the LAST document, the first turn's text after it.
+    lead = messages[0]["content"]
+    assert messages[0]["role"] == "user"
+    assert [block["type"] for block in lead] == ["document", "document", "text"]
+    for doc, item in zip(lead[:-1], evidence, strict=True):
         assert doc["type"] == "document"
         assert doc["source"]["data"] == item.snippet
         assert doc["citations"] == {"enabled": True}
+    assert lead[-1]["text"] == "Hi"
+    assert lead[-2]["cache_control"] == _CACHE_1H
+    # Alternating history follows: plain-text user turn, block-list assistant turn.
+    assert messages[2] == {"role": "user", "content": "Go on"}
+    assert messages[3]["role"] == "assistant"
+    assert messages[3]["content"][0]["text"] == "Here is more."
+    # The final user turn carries only this turn's volatile text: the section
+    # header + message, strictly after the cached prefix.
+    final = messages[4]
+    assert final["role"] == "user"
     assert final["content"][-1]["type"] == "text"
 
 
@@ -1375,7 +1559,11 @@ def test_teaching_system_prompt_is_frozen_and_byte_stable_across_calls() -> None
     assert first_system == second_system
     assert first_system[0]["text"] == TEACHING_SYSTEM_PROMPT
     assert first_system[0]["text"].encode("utf-8") == TEACHING_SYSTEM_PROMPT.encode("utf-8")
-    assert first_system[0]["cache_control"] == _CACHE_1H
+    # The 1h breakpoint rides the leading section documents now, not the system
+    # block (COST-02) — on the last document of each turn's cached prefix.
+    for call in client.messages.calls:
+        lead = call["messages"][0]["content"]
+        assert lead[-2]["cache_control"] == _CACHE_1H
     # Phase and hint belong on the user turn (TUTOR-03); the cache prefix must
     # not grow them, timestamps, or format slots.
     prompt = first_system[0]["text"]
@@ -1444,15 +1632,16 @@ def test_only_latest_history_block_carries_second_breakpoint() -> None:
     )
 
     messages = client.messages.calls[0]["messages"]
-    # Assistant history turns are messages[1] and messages[3]; only the latest one
-    # carries the second cache breakpoint. User turns never carry a breakpoint.
+    # The first user turn leads with the breakpointed section documents (the 1h
+    # prefix); among the assistant history turns, only the latest carries the
+    # second breakpoint. Later user turns stay plain strings.
     assert "cache_control" not in messages[1]["content"][0]
     assert messages[3]["content"][0]["cache_control"] == _CACHE_1H
-    assert isinstance(messages[0]["content"], str)
+    assert isinstance(messages[0]["content"], list)
     assert isinstance(messages[2]["content"], str)
 
 
-def test_empty_history_has_only_the_system_breakpoint() -> None:
+def test_empty_history_carries_a_single_breakpoint_on_the_leading_document() -> None:
     adapter, client = _teaching_adapter(_FakeMessage([_FakeTextBlock("ok")]))
 
     adapter.generate(
@@ -1465,13 +1654,15 @@ def test_empty_history_has_only_the_system_breakpoint() -> None:
 
     call = client.messages.calls[0]
     messages = call["messages"]
-    # Only the final user turn; no cache_control anywhere in the message list.
+    # Only the final user turn; exactly one breakpoint in the whole request — the
+    # 1h one on the leading section document (COST-02), none on the system block.
     assert len(messages) == 1
     assert messages[0]["role"] == "user"
-    for block in messages[0]["content"]:
-        assert "cache_control" not in block
-    # The system prompt still carries its breakpoint.
-    assert call["system"][0]["cache_control"] == _CACHE_1H
+    content = messages[0]["content"]
+    assert [block["type"] for block in content] == ["document", "text"]
+    assert content[-2]["cache_control"] == _CACHE_1H
+    assert "cache_control" not in content[-1]
+    assert call["system"] == [{"type": "text", "text": TEACHING_SYSTEM_PROMPT}]
 
 
 def test_target_section_rendered_with_arrow_separator_and_message() -> None:
@@ -1549,9 +1740,11 @@ def test_teach_user_turn_carries_phase_and_hint_not_the_system_prompt() -> None:
     call = client.messages.calls[0]
     system_text = call["system"][0]["text"]
     user_text = call["messages"][0]["content"][-1]["text"]
-    assert call["system"] == [
-        {"type": "text", "text": TEACHING_SYSTEM_PROMPT, "cache_control": _CACHE_1H}
-    ]
+    # The system prompt is the frozen playbook, breakpoint-free: the 1h one rides
+    # the leading section document (COST-02).
+    assert call["system"] == [{"type": "text", "text": TEACHING_SYSTEM_PROMPT}]
+    lead = call["messages"][0]["content"]
+    assert lead[-2]["cache_control"] == _CACHE_1H
     assert "Phase:" not in system_text
     assert "HintLevel:" not in system_text
     assert "I am currently studying this section: Chapter 3." in user_text
@@ -2104,11 +2297,13 @@ def test_teaching_stream_maps_deltas_and_carries_cached_system() -> None:
     deltas = [e for e in events if isinstance(e, AnswerTextDelta)]
     assert deltas == [AnswerTextDelta(text="Teach "), AnswerTextDelta(text="this")]
     assert isinstance(events[-1], AnswerCompleted)
-    # The streaming teaching request carries the frozen, cache-broken system prompt.
+    # The streamed teaching request leads with the breakpointed documents too:
+    # the frozen system prompt is breakpoint-free, the 1h one rides the last
+    # document at the head of the message list (COST-02).
     call = client.messages.stream_calls[0]
-    assert call["system"] == [
-        {"type": "text", "text": TEACHING_SYSTEM_PROMPT, "cache_control": _CACHE_1H}
-    ]
+    assert call["system"] == [{"type": "text", "text": TEACHING_SYSTEM_PROMPT}]
+    lead = call["messages"][0]["content"]
+    assert lead[-2]["cache_control"] == _CACHE_1H
 
 
 def test_anthropic_adapter_conforms_to_the_port_protocol() -> None:

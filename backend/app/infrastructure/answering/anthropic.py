@@ -55,9 +55,10 @@ from app.infrastructure.providers import (
 logger = logging.getLogger(__name__)
 
 # One-hour ephemeral cache breakpoint (research §5): teaching sessions have human
-# think-time, so the 5-min TTL would silently re-pay the write between turns. Used
-# on the frozen system prompt and the latest history block so the cacheable prefix
-# grows with the conversation.
+# think-time, so the 5-min TTL would silently re-pay the write between turns. On
+# teach turns it sits on the leading section documents (the expensive-but-stable
+# prefix) — or on the frozen system prompt when a turn carries no documents — and
+# on the latest history block, so the cacheable prefix grows with the conversation.
 _CACHE_CONTROL = {"type": "ephemeral", "ttl": "1h"}
 
 # Adaptive is the model's own decision about how much to think; ``summarized``
@@ -567,25 +568,29 @@ class AnthropicGenerationAdapter(AnthropicAdapterBase):
     One adapter for both modes, dispatching **only on the explicit ``mode``** —
     never on whether a target section path was supplied, which a scoped answer
     conversation carries too (AD-194). The document builder, response parser, and
-    sentinel logic are shared; the request differs by mode in exactly two places,
-    the system prompt and the final user turn:
+    sentinel logic are shared; the request differs by mode in three places, the
+    system prompt, the placement of the evidence documents, and the final user
+    turn:
 
-    - ``answer``: the frozen ``ANSWER_SYSTEM_PROMPT`` with no cache breakpoint, and
-      the question as the final user text. With no history that is the single-shot
-      ask it has always been.
-    - ``teach``: the frozen ``TEACHING_SYSTEM_PROMPT`` carrying a 1-hour
-      ``cache_control`` breakpoint, and a final user turn naming the target section
-      ahead of the learner's message.
+    - ``answer``: the frozen ``ANSWER_SYSTEM_PROMPT`` with no cache breakpoint,
+      the documents in the final user turn ahead of the question, and the
+      question as that turn's text. With no history that is the single-shot ask
+      it has always been.
+    - ``teach``: the frozen ``TEACHING_SYSTEM_PROMPT`` (breakpoint-free — the 1h
+      ``cache_control`` moved behind the stable per-section documents), the
+      documents leading the message list with the breakpoint on the last of them
+      so a scoped session reads its evidence from cache (COST-02), and a final
+      user turn naming the target section ahead of the learner's message.
 
     Either way prior turns render as alternating user/assistant messages with a
-    second breakpoint on the latest history block, so the cacheable prefix (system +
-    settled history) is byte-stable across a session while every volatile input for
-    this turn — the retrieved evidence documents, the target section, and the new
-    message — sits strictly *after* the prefix (research §5). The buffered path
-    calls ``messages.create`` (``max_tokens`` is far below the SDK's non-streaming
-    guard) under :data:`_GENERATE_TIMEOUT_S` and carries the same thinking/effort
-    config as the streamed one, with no sampling params; the client is built lazily
-    by the shared base so an injected fake needs no key/network.
+    second breakpoint on the latest history block, so the cacheable prefix grows
+    turn over turn while every volatile input for this turn — the target section,
+    and the new message — sits strictly *after* the prefix (research §5). The
+    buffered path calls ``messages.create`` (``max_tokens`` is far below the SDK's
+    non-streaming guard) under :data:`_GENERATE_TIMEOUT_S` and carries the same
+    thinking/effort config as the streamed one, with no sampling params; the
+    client is built lazily by the shared base so an injected fake needs no
+    key/network.
     """
 
     def _build_request(
@@ -602,10 +607,19 @@ class AnthropicGenerationAdapter(AnthropicAdapterBase):
         """Assemble the system prompt, the message list, and the sent-document map.
 
         Shared by the buffered and streaming paths so both send the byte-identical
-        request, and by both modes so only the two mode-specific pieces differ. The
+        request, and by both modes so only the mode-specific pieces differ. The
         teach turn's section header is built from the target the caller resolved;
         the answer turn sends the message alone, whatever target the conversation
         happens to be scoped to.
+
+        Teach places the stable per-section documents **inside** the cached prefix
+        (COST-02, rq15 win 3): they lead the message list with the 1h breakpoint on
+        the last document block, so a scoped session's second and later turns read
+        the expensive-but-stable evidence from cache instead of re-paying it. The
+        API keeps document blocks out of ``system``, so the leading user turn
+        carries them ahead of the settled history; the volatile per-turn input —
+        the section header and the new message — stays strictly after the prefix.
+        With no documents the breakpoint falls back to the system prompt block.
         """
         documents, sent = _build_documents(evidence)
         messages = _build_history_messages(history)
@@ -617,22 +631,45 @@ class AnthropicGenerationAdapter(AnthropicAdapterBase):
             if hint_level is not None:
                 header.append(f"HintLevel: {hint_level}")
             turn_text = "\n".join(header) + f"\n\n{message}"
-            system = [
-                {
-                    "type": "text",
-                    "text": TEACHING_SYSTEM_PROMPT,
-                    "cache_control": _CACHE_CONTROL,
+            system = [{"type": "text", "text": TEACHING_SYSTEM_PROMPT}]
+            if documents:
+                # Stable per-section evidence leads the message list, inside the
+                # 1h cached prefix (breakpoint on the last document block); with
+                # no documents to front-run it, the breakpoint falls back to the
+                # system prompt block.
+                documents[-1]["cache_control"] = _CACHE_CONTROL
+            else:
+                system[0]["cache_control"] = _CACHE_CONTROL
+            if documents and messages:
+                # The settled prefix already carries the documents: replay them at
+                # the head of the first user turn so the cached prefix stays
+                # byte-stable turn over turn.
+                messages[0] = {
+                    "role": "user",
+                    "content": [
+                        *documents,
+                        {"type": "text", "text": messages[0]["content"]},
+                    ],
                 }
-            ]
+            # This turn's documents: an empty history has nothing preceding them,
+            # so they lead the final user turn; a settled history carries them at
+            # its head already.
+            lead = [] if (documents and messages) else documents
+            messages.append(
+                {
+                    "role": "user",
+                    "content": [*lead, {"type": "text", "text": turn_text}],
+                }
+            )
         else:
             turn_text = message
             system = [{"type": "text", "text": ANSWER_SYSTEM_PROMPT}]
-        messages.append(
-            {
-                "role": "user",
-                "content": [*documents, {"type": "text", "text": turn_text}],
-            }
-        )
+            messages.append(
+                {
+                    "role": "user",
+                    "content": [*documents, {"type": "text", "text": turn_text}],
+                }
+            )
         return system, messages, sent
 
     def generate(
