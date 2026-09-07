@@ -45,6 +45,7 @@ from app.infrastructure.answering.prompts import (
     SENTINEL,
     TEACHING_SYSTEM_PROMPT,
 )
+from app.infrastructure.providers import RequestRejected
 
 _MODEL = "claude-sonnet-4-6"
 _MAX_TOKENS = 1024
@@ -433,9 +434,13 @@ def _rejecting_adapter(error: Exception) -> AnthropicGenerationAdapter:
 
 
 def _rejected_call_lines(caplog, error: Exception, *, stream: bool) -> list[str]:
-    """Drive one rejected call and return this adapter's log lines."""
+    """Drive one rejected call and return this adapter's log lines.
+
+    The 400 raises the Learny ``RequestRejected`` the adapter translates it into;
+    the redaction assertions below are about the log line, which is unchanged.
+    """
     adapter = _rejecting_adapter(error)
-    with caplog.at_level(logging.WARNING, logger=_LOGGER), pytest.raises(_FakeAPIStatusError):
+    with caplog.at_level(logging.WARNING, logger=_LOGGER), pytest.raises(RequestRejected):
         if stream:
             list(
                 adapter.generate_stream(

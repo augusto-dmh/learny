@@ -23,7 +23,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Iterator, Sequence
-from typing import Any, NamedTuple, Protocol
+from typing import Any, NamedTuple, NoReturn, Protocol
 from uuid import UUID
 
 from app.domain.entities import (
@@ -44,6 +44,12 @@ from app.infrastructure.answering.prompts import (
     ANSWER_SYSTEM_PROMPT,
     SENTINEL,
     TEACHING_SYSTEM_PROMPT,
+)
+from app.infrastructure.providers import (
+    ProviderUnavailable,
+    RateLimited,
+    RequestRejected,
+    Timeout,
 )
 
 logger = logging.getLogger(__name__)
@@ -345,6 +351,58 @@ def _provider_error_type(exc: BaseException) -> str | None:
     return kind if isinstance(kind, str) and kind else None
 
 
+def _classify_provider_failure(exc: BaseException) -> BaseException:
+    """Return the Learny taxonomy error ``exc`` translates to, else ``exc`` itself.
+
+    Status failures are classified by the same read the redacted 4xx line makes —
+    the status off the exception, not an SDK type — so a rejection that logs as a
+    4xx also raises ``RequestRejected``, a 429 a ``RateLimited``, and a 5xx or the
+    529 overload a ``ProviderUnavailable``. Timeouts (the SDK's own timeout error,
+    httpx's timeout family, the builtin) translate to ``Timeout``; an unreachable
+    provider (connection error without a timeout) to ``ProviderUnavailable``.
+
+    Anything else — an adapter bug, a malformed reply, a shaped test double — is
+    not a transport signal and is returned unchanged, so the caller sees exactly
+    the raise it has always seen (the port contract is untouched either way: an
+    operational failure still raises).
+    """
+    import httpx  # local import, like every transport reference in this module
+
+    if isinstance(exc, (TimeoutError, httpx.TimeoutException)):
+        return Timeout("the provider call exceeded its wall-clock bound")
+    status = getattr(exc, "status_code", None)
+    if isinstance(status, int):
+        if status == 429:
+            return RateLimited("the provider answered 429")
+        if status >= 500:
+            return ProviderUnavailable(f"the provider answered {status}")
+        if status >= 400:
+            return RequestRejected(f"the provider rejected the request ({status})")
+    import anthropic  # local import — the sole SDK reference (ADR-0007/0009)
+
+    if isinstance(exc, anthropic.APITimeoutError):
+        return Timeout("the provider call exceeded its wall-clock bound")
+    if isinstance(exc, anthropic.APIConnectionError):
+        return ProviderUnavailable("the provider could not be reached")
+    return exc
+
+
+def raise_translated(exc: BaseException) -> NoReturn:
+    """Re-raise a caught provider failure as its Learny taxonomy class.
+
+    A recognized SDK/HTTP failure is re-raised as the mapped Learny error with the
+    original attached as ``__cause__``, so server tracebacks keep the provider
+    detail while callers classify on Learny classes only. An unrecognized
+    exception is re-raised unchanged and identity-preserved. The messages on the
+    translated errors name the failure class and status only, never the SDK's
+    exception message, which quotes the rejected request back (NFR-SEC-004).
+    """
+    translated = _classify_provider_failure(exc)
+    if translated is exc:
+        raise exc
+    raise translated from exc
+
+
 def _build_history_messages(
     history: Sequence[HistoryTurn],
 ) -> list[dict[str, Any]]:
@@ -479,7 +537,7 @@ class AnthropicAdapterBase:
                 final = stream.get_final_message()
         except Exception as exc:
             _log_client_error(exc)
-            raise
+            raise_translated(exc)
         answer = _parse_message(final, documents, model=self._model)
         _log_call(final, model=self._model, effort=self._effort, found=answer.found)
         yield AnswerCompleted(answer=answer)
@@ -592,7 +650,7 @@ class AnthropicGenerationAdapter(AnthropicAdapterBase):
             )
         except Exception as exc:
             _log_client_error(exc)
-            raise
+            raise_translated(exc)
         answer = _parse_message(response, sent, model=self._model)
         _log_call(response, model=self._model, effort=self._effort, found=answer.found)
         return answer
