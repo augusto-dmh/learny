@@ -99,6 +99,37 @@ def test_profile_registry_env_rejects_an_unknown_kind(monkeypatch) -> None:
 # --- Composition-time validation branches (ROUTE-05) ------------------------------
 
 
+def test_a_compat_kind_profile_builds_with_effort_values_it_cannot_express(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # ECON-05 sensor: a profile whose adapter kind cannot express effort builds fine
+    # with effort values set — declared degradation, never a validation error (the
+    # adapter kind that ignores them at request time is the openai-compatible one).
+    monkeypatch.setenv("LEARNY_TEST_PROFILE_KEY", "sk-test")
+    profile = GenerationProfileSettings(
+        id="economy",
+        kind="openai-compatible",
+        model="glm-5.3-flash",
+        base_url="https://us.example-inference/v1",
+        api_key_env="LEARNY_TEST_PROFILE_KEY",
+        effort_ask="low",
+        effort_teach="max",
+        max_tokens=4096,
+        price_input_usd_per_million_tokens=0.2,
+        price_output_usd_per_million_tokens=0.75,
+        price_cache_read_usd_per_million_tokens=0.02,
+        price_cache_creation_usd_per_million_tokens=0.25,
+        grounding="prompt-cited",
+        ask_enabled=False,
+        teach_enabled=False,
+    )
+
+    # The values ride along uninterpreted and the declared registry resolves.
+    assert (profile.effort_ask, profile.effort_teach) == ("low", "max")
+    resolved = resolve_generation_profiles(Settings(_env_file=None, generation_profiles=[profile]))
+    assert [p.id for p in resolved] == ["economy"]
+
+
 def test_declared_registry_resolves_in_declared_order(monkeypatch) -> None:
     monkeypatch.setenv("LEARNY_TEST_PROFILE_KEY", "sk-test")
     settings = _settings_with_profiles(

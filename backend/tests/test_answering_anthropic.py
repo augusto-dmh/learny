@@ -317,6 +317,88 @@ def test_stream_request_asks_for_summarized_thinking_at_the_configured_effort(
     assert "timeout" not in call
 
 
+# --- Per-mode effort (COST-01, AD-339) ------------------------------------------
+#
+# Derived from COST-01: effort comes from the serving profile's per-mode value —
+# ask and teach may differ — and the request that goes out carries the one the
+# call's mode spends, on both the buffered and the streamed path. The legacy
+# single-value keyword keeps working (it configures both modes), and nothing set
+# means today's ``medium`` on both: the Ask→low flip is the operator's later,
+# judge-gated act, never a code default. The port gains no effort argument.
+
+
+def _per_mode_effort_client(
+    stream: bool,
+) -> tuple[AnthropicGenerationAdapter, _FakeClient | _FakeStreamingClient]:
+    """One adapter fed distinct per-mode efforts, over the requested call path."""
+    if stream:
+        client = _FakeStreamingClient(
+            _FakeStream(deltas=["ok"], final_message=_FakeMessage([_FakeTextBlock("ok")]))
+        )
+    else:
+        client = _FakeClient(_FakeMessage([_FakeTextBlock("ok")]))
+    adapter = AnthropicGenerationAdapter(
+        api_key="unused-fake",
+        model=_MODEL,
+        max_tokens=_MAX_TOKENS,
+        effort_ask="low",
+        effort_teach="high",
+        client=client,
+    )
+    return adapter, client
+
+
+def _drive_mode(adapter: AnthropicGenerationAdapter, mode: str, *, stream: bool) -> None:
+    if stream:
+        list(adapter.generate_stream(mode=mode, message="q", evidence=[_evidence("alpha")]))
+    else:
+        adapter.generate(mode=mode, message="q", evidence=[_evidence("alpha")])
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["buffered", "stream"])
+def test_ask_and_teach_turns_request_their_own_mode_effort(stream: bool) -> None:
+    adapter, client = _per_mode_effort_client(stream)
+
+    _drive_mode(adapter, MODE_ANSWER, stream=stream)
+    _drive_mode(adapter, MODE_TEACH, stream=stream)
+
+    calls = client.messages.stream_calls if stream else client.messages.calls
+    assert calls[0]["output_config"] == {"effort": "low"}
+    assert calls[1]["output_config"] == {"effort": "high"}
+
+
+def test_the_call_log_names_the_effort_the_mode_spent(caplog) -> None:  # noqa: ANN001
+    # The log exists so spend can be read against the knob that bought it; with the
+    # modes differing, it must name the serving mode's effort, not a stale single one.
+    adapter, _ = _per_mode_effort_client(stream=False)
+
+    with caplog.at_level(logging.INFO, logger=_LOGGER):
+        adapter.generate(mode=MODE_TEACH, message="q", evidence=[_evidence("alpha")])
+
+    lines = [r.getMessage() for r in caplog.records if r.name == _LOGGER]
+    assert len(lines) == 1
+    assert "effort=high" in lines[0]
+
+
+@pytest.mark.parametrize("mode", [MODE_ANSWER, MODE_TEACH])
+def test_without_any_effort_argument_both_modes_spend_medium(mode: str) -> None:
+    # The shipped default is today's behavior: one implicit ``medium`` on both modes
+    # (COST-01 — the flip to low is configuration, never a code default).
+    client = _FakeClient(_FakeMessage([_FakeTextBlock("ok")]))
+    adapter = AnthropicGenerationAdapter(
+        api_key="unused-fake", model=_MODEL, max_tokens=_MAX_TOKENS, client=client
+    )
+
+    adapter.generate(
+        mode=mode,
+        message="q",
+        evidence=[_evidence("alpha")],
+        target_section_path=("Ch", "A") if mode == MODE_TEACH else None,
+    )
+
+    assert client.messages.calls[0]["output_config"] == {"effort": "medium"}
+
+
 def test_buffered_answer_ignores_thinking_blocks_in_the_reply() -> None:
     # Summarized thinking arrives as its own block type; it is the model's scratchpad,
     # never part of the answer text or its citations.

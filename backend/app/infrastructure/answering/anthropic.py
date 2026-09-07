@@ -451,7 +451,9 @@ class AnthropicAdapterBase:
     """Shared construction and lazy client seam for the Anthropic adapters.
 
     Constructed with the API key, model id, ``max_tokens``, and the thinking
-    ``effort`` the composition root read from settings; the real
+    effort the composition root read from the serving profile — per mode
+    (``effort_ask``/``effort_teach``, COST-01/AD-339), with the legacy single
+    ``effort`` keyword kept working (it configures both modes). The real
     ``anthropic.Anthropic`` client is built lazily on first use (so the SDK import
     stays inside this module and an injected fake needs no key/network, mirroring
     the OpenAI embedding adapter). Subclasses add the port-specific ``generate``.
@@ -463,19 +465,27 @@ class AnthropicAdapterBase:
         api_key: str,
         model: str,
         max_tokens: int,
-        effort: str = "medium",
+        effort: str | None = None,
+        effort_ask: str | None = None,
+        effort_teach: str | None = None,
         client: _MessagesClient | None = None,
     ) -> None:
         self._api_key = api_key
         self._model = model
         self._max_tokens = max_tokens
-        self._effort = effort
+        legacy = effort if effort is not None else "medium"
+        self._effort_ask = effort_ask if effort_ask is not None else legacy
+        self._effort_teach = effort_teach if effort_teach is not None else legacy
         self._client = client
 
     @property
     def model(self) -> str:
         """Stable model identity, readable without a ``generate`` call (QA-04)."""
         return self._model
+
+    def _effort_for(self, mode: str) -> str:
+        """The thinking effort this call's mode spends (ask and teach may differ)."""
+        return self._effort_teach if mode == MODE_TEACH else self._effort_ask
 
     def _get_client(self) -> _MessagesClient:
         """Return the injected client, or lazily build ``anthropic.Anthropic``."""
@@ -491,6 +501,7 @@ class AnthropicAdapterBase:
         system: list[dict[str, Any]],
         messages: list[dict[str, Any]],
         documents: Sequence[_SentDocument],
+        effort: str,
     ) -> Iterator[AnswerStreamEvent]:
         """Stream generation events, closing the SDK stream on early cancellation.
 
@@ -525,7 +536,7 @@ class AnthropicAdapterBase:
                 model=self._model,
                 max_tokens=self._max_tokens,
                 thinking=_THINKING,
-                output_config={"effort": self._effort},
+                output_config={"effort": effort},
                 system=system,
                 messages=messages,
             ) as stream:
@@ -546,7 +557,7 @@ class AnthropicAdapterBase:
             _log_client_error(exc)
             raise_translated(exc)
         answer = _parse_message(final, documents, model=self._model)
-        _log_call(final, model=self._model, effort=self._effort, found=answer.found)
+        _log_call(final, model=self._model, effort=effort, found=answer.found)
         yield AnswerCompleted(answer=answer)
 
 
@@ -645,12 +656,13 @@ class AnthropicGenerationAdapter(AnthropicAdapterBase):
             tutor_phase=tutor_phase,
             hint_level=hint_level,
         )
+        effort = self._effort_for(mode)
         try:
             response = self._get_client().messages.create(
                 model=self._model,
                 max_tokens=self._max_tokens,
                 thinking=_THINKING,
-                output_config={"effort": self._effort},
+                output_config={"effort": effort},
                 system=system,
                 messages=messages,
                 timeout=_GENERATE_TIMEOUT_S,
@@ -659,7 +671,7 @@ class AnthropicGenerationAdapter(AnthropicAdapterBase):
             _log_client_error(exc)
             raise_translated(exc)
         answer = _parse_message(response, sent, model=self._model)
-        _log_call(response, model=self._model, effort=self._effort, found=answer.found)
+        _log_call(response, model=self._model, effort=effort, found=answer.found)
         return answer
 
     def generate_stream(
@@ -683,4 +695,6 @@ class AnthropicGenerationAdapter(AnthropicAdapterBase):
             tutor_phase=tutor_phase,
             hint_level=hint_level,
         )
-        return self._run_stream(system=system, messages=messages, documents=sent)
+        return self._run_stream(
+            system=system, messages=messages, documents=sent, effort=self._effort_for(mode)
+        )

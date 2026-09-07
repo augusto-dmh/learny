@@ -100,7 +100,36 @@ def test_an_anthropic_legacy_seed_builds_the_claude_adapter_from_legacy_settings
     assert isinstance(adapter, AnthropicGenerationAdapter)
     assert adapter.model == "claude-sonnet-4-6"
     assert adapter._max_tokens == 2048
-    assert adapter._effort == "xhigh"
+    # The legacy single effort seeds BOTH modes (COST-01/AD-342 equivalence): one
+    # knob yesterday, one value on both modes today, until a registry is declared.
+    assert (adapter._effort_ask, adapter._effort_teach) == ("xhigh", "xhigh")
+
+
+def test_a_profile_feeds_its_per_mode_effort_values_to_the_sub_adapter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # COST-01/AD-339: the profile's per-mode values reach the adapter constructor —
+    # ask and teach may differ — so a turn's effort is the serving profile's value
+    # for that turn's mode, never a global setting read.
+    monkeypatch.setenv("LEARNY_TEST_PROFILE_KEY", "sk-ant-test")
+    settings = Settings(
+        _env_file=None,
+        generation_profiles=[
+            _profile(
+                id="scout",
+                kind="anthropic",
+                api_key_env="LEARNY_TEST_PROFILE_KEY",
+                effort_ask="low",
+                effort_teach="high",
+            ),
+        ],
+    )
+
+    chain = build_generation_chain(settings)
+
+    adapter = chain._chain[0].adapter
+    assert isinstance(adapter, AnthropicGenerationAdapter)
+    assert (adapter._effort_ask, adapter._effort_teach) == ("low", "high")
 
 
 # --- ROUTE-01/05: the declared registry builds in order and fails fast ------------

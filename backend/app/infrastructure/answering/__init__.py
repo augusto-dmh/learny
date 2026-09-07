@@ -72,10 +72,10 @@ def _build_sub_adapter(profile: GenerationProfileSettings, settings: Settings) -
     ``api_key_env`` at; the legacy-seeded profile validated
     ``settings.anthropic_api_key``, which pydantic may have loaded from the env
     file rather than the process env — the settings value is that same
-    variable's configured value, so it is the anthropic fallback. Per-mode
-    effort lands with the profile values (the registry carries them; the
-    adapter constructor takes one effort until then, fed the ask value — the
-    legacy seed keeps both modes equal so today's behavior is unchanged).
+    variable's configured value, so it is the anthropic fallback. The profile's
+    per-mode effort values feed the constructor (COST-01/AD-339): the legacy
+    seed carries ``generation_effort`` on both modes, so today's behavior is
+    unchanged until an operator declares otherwise.
     """
     if profile.kind == "local":
         return DeterministicGenerationAdapter()
@@ -84,7 +84,8 @@ def _build_sub_adapter(profile: GenerationProfileSettings, settings: Settings) -
             api_key=os.environ.get(profile.api_key_env) or settings.anthropic_api_key,
             model=profile.model,
             max_tokens=profile.max_tokens,
-            effort=profile.effort_ask,
+            effort_ask=profile.effort_ask,
+            effort_teach=profile.effort_teach,
         )
     raise ValueError(
         f"generation profile '{profile.id}' names adapter kind '{profile.kind}', "
