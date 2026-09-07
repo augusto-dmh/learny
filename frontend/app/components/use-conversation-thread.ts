@@ -30,6 +30,7 @@ import {
 } from "@/app/lib/conversations";
 import {
   createConversationTransport,
+  type ExplainSelectionOrigin,
   messageText,
   StreamRequestError,
   type LearnyUIMessage,
@@ -53,8 +54,14 @@ export type ConversationThread = {
   banner: string | null;
   /** The in-thread failure Retry is bound to, or `null` when none has failed. */
   failedTurn: FailedTurnState | null;
-  /** Send one message, creating the conversation first if the thread has none. */
-  send: (text: string) => void;
+  /** Send one message, creating the conversation first if the thread has none.
+   *
+   * `options.origin` is the per-turn selection-Explain marker (COST-04): it
+   * rides this one send's request body and nothing else. Every turn that is not
+   * the capture popover's Explain verb omits it, keeping its body exactly
+   * `{message, mode}`.
+   */
+  send: (text: string, options?: { origin?: ExplainSelectionOrigin }) => void;
   /** Stop an in-flight turn; the conversation and its question stay. */
   stop: () => void;
 };
@@ -176,13 +183,18 @@ export function useConversationThread({
   const isStreaming = status === "submitted" || status === "streaming";
 
   const send = useCallback(
-    (text: string) => {
+    (text: string, options?: { origin?: ExplainSelectionOrigin }) => {
       if (!text || isStreaming) {
         return;
       }
       lastSentRef.current = text;
       setBanner(null);
-      void sendMessage({ text });
+      void sendMessage(
+        { text },
+        options?.origin
+          ? { body: { origin: options.origin } }
+          : undefined,
+      );
     },
     [isStreaming, sendMessage],
   );

@@ -1544,7 +1544,7 @@ describe("AskPanel save to note (RA-20/22)", () => {
 });
 
 describe("AskPanel selection verbs (RA-17/18)", () => {
-  it("auto-submits the fixed Explain template for an explain pending request", async () => {
+  it("auto-submits the fixed Explain template for an explain pending request, marked with the selection-Explain origin", async () => {
     const stream = sseStream();
     const fetchMock = routedFetch(baseHandlers(() => stream.response));
     vi.stubGlobal("fetch", fetchMock);
@@ -1563,15 +1563,37 @@ describe("AskPanel selection verbs (RA-17/18)", () => {
       />,
     );
 
-    // The explain verb submits, one tap, with the exact fixed template.
+    // The explain verb submits, one tap, with the exact fixed template — and
+    // with the origin marker that tells the backend this turn came from the
+    // popover's Explain verb, so it is served by the cheap explain chain
+    // (COST-04, AD-340).
     await waitFor(() => expect(callsTo(fetchMock, STREAM_URL)).toHaveLength(1));
     expect(bodyOf(callsTo(fetchMock, STREAM_URL)[0])).toEqual({
       message: 'Explain this passage from the book:\n\n"the selected sentence"',
       mode: "answer",
+      origin: "explain_selection",
     });
     // The request is consumed exactly once, so it never re-submits.
     expect(onPendingConsumed).toHaveBeenCalledTimes(1);
     expect(callsTo(fetchMock, STREAM_URL)).toHaveLength(1);
+  });
+
+  it("sends no origin marker for a panel-initiated question", async () => {
+    // COST-04 cuts both ways: only the popover's Explain turn is marked. A
+    // question typed into the panel carries a body of exactly {message, mode}
+    // — an absent origin is what keeps every ordinary ask on the primary chain.
+    const stream = sseStream();
+    const fetchMock = routedFetch(baseHandlers(() => stream.response));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+
+    await ask("What does this mean?");
+    await waitFor(() => expect(callsTo(fetchMock, STREAM_URL)).toHaveLength(1));
+    expect(bodyOf(callsTo(fetchMock, STREAM_URL)[0])).toEqual({
+      message: "What does this mean?",
+      mode: "answer",
+    });
   });
 
   it("attaches the quote as context and submits it with the typed question", async () => {

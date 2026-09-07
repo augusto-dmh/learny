@@ -41,17 +41,20 @@ function prepareOf(
 }
 
 /** Invoke the prepare hook with a full options object; `api: "IGNORED"` proves the
- * transport supplies its own URL rather than echoing the caller's. */
+ * transport supplies its own URL rather than echoing the caller's. `callBody` is
+ * the per-send body options a `sendMessage` call can carry (the seam the
+ * selection-Explain marker rides). */
 async function callPrepare(
   transport: unknown,
   messages: LearnyUIMessage[],
+  callBody?: Record<string, unknown>,
 ): Promise<Prepared> {
   const prepare = prepareOf(transport);
   return (await prepare({
     id: "chat-1",
     messages,
     requestMetadata: undefined,
-    body: undefined,
+    body: callBody,
     credentials: undefined,
     headers: undefined,
     api: "IGNORED",
@@ -143,6 +146,35 @@ describe("createConversationTransport request shaping", () => {
     expect(first.api).toBe("/api/conversations/conv3/turns/stream");
     expect(second.api).toBe("/api/conversations/conv3/turns/stream");
     expect(resolved).toHaveLength(2);
+  });
+
+  it("carries the selection-Explain origin only on the send that hands it over", async () => {
+    // COST-04 / AD-340: the capture popover's Explain turn is marked so the
+    // backend can serve it from the cheap explain chain. The marker rides the
+    // per-send body options, and a turn without it keeps a body of exactly
+    // {message, mode} — every other ask path sends nothing at all.
+    const transport = createConversationTransport({
+      mode: "answer",
+      csrfToken: "c",
+      resolveConversationId: async () => "conv4",
+    });
+
+    const marked = await callPrepare(
+      transport,
+      [userMessage("m1", 'Explain this passage from the book:\n\n"a quote"')],
+      { origin: "explain_selection" },
+    );
+    const plain = await callPrepare(transport, [userMessage("m2", "a typed question")]);
+
+    expect(marked.body).toEqual({
+      message: 'Explain this passage from the book:\n\n"a quote"',
+      mode: "answer",
+      origin: "explain_selection",
+    });
+    expect(plain.body).toEqual({
+      message: "a typed question",
+      mode: "answer",
+    });
   });
 });
 

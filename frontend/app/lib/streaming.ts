@@ -22,6 +22,17 @@ import type { ConversationAnswerStatus, ConversationMode } from "./conversations
 import { type Citation } from "./citations";
 
 /**
+ * The origin marker a capture-popover Explain turn carries (COST-04, AD-340).
+ * The backend accepts exactly this literal and nothing else; a turn marked with
+ * it is served by the selection-Explain chain instead of the ask primary, and
+ * every turn that is not the popover's Explain verb sends no origin at all.
+ */
+export const EXPLAIN_SELECTION_ORIGIN = "explain_selection";
+
+/** The origin literal an ask turn may carry; see {@link EXPLAIN_SELECTION_ORIGIN}. */
+export type ExplainSelectionOrigin = typeof EXPLAIN_SELECTION_ORIGIN;
+
+/**
  * The answer outcome a surface reports, mirroring the backend status. The
  * unified surface carries all four values on the wire, `not_found_in_scope`
  * included — a scoped conversation coming up empty is a different fact from the
@@ -237,6 +248,10 @@ const streamingFetch: typeof fetch = async (input, init) => {
  * scope, because a chapter-scoped conversation may still be answering rather
  * than teaching. The notes choice is *not* sent per turn: it belongs to the
  * conversation and is fixed when it is created.
+ *
+ * A send may hand the transport a per-call body carrying the selection-Explain
+ * origin (COST-04); only that literal is forwarded, and only on the turn that
+ * carries it — every other turn's body stays exactly `{message, mode}`.
  */
 export function createConversationTransport({
   mode,
@@ -251,11 +266,16 @@ export function createConversationTransport({
     api: "/api/conversations",
     credentials: "same-origin",
     fetch: streamingFetch,
-    prepareSendMessagesRequest: async ({ messages }) => {
+    prepareSendMessagesRequest: async ({ messages, body }) => {
       const conversationId = await resolveConversationId();
+      const origin = (body as { origin?: ExplainSelectionOrigin } | undefined)
+        ?.origin;
       return {
         api: `/api/conversations/${conversationId}/turns/stream`,
-        body: { message: latestUserText(messages), mode },
+        body:
+          origin !== undefined
+            ? { message: latestUserText(messages), mode, origin }
+            : { message: latestUserText(messages), mode },
         headers: { "X-CSRF-Token": csrfToken },
       };
     },
