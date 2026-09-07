@@ -1,4 +1,4 @@
-"""RoutingGenerationAdapter — buffered fallback policy + attribution (unit, fakes).
+"""RoutingGenerationAdapter — fallback policy, streaming rule, attribution (fakes).
 
 Derived from the routing acceptance criteria: the router implements
 ``GenerationPort`` over an ordered profile chain and serves from the first entry
@@ -7,8 +7,11 @@ entry, ``RateLimited`` earns exactly one same-entry retry before crossing, and
 ``RequestRejected`` crosses only to an entry whose adapter builds a different
 request shape (ROUTE-02, AD-337); an exhausted chain re-raises the last
 translated error so the application's ``AnswerGenerationFailed`` envelope is
-unchanged (TAX-03); and every result names the profile that served it
-(ROUTE-08, AD-344) so spend maps to the serving catalog.
+unchanged (TAX-03); every result names the profile that served it (ROUTE-08,
+AD-344) so spend maps to the serving catalog; a stream fails over only before
+its first delta and the completed answer carries the stamp (ROUTE-04); and a
+grounded mode routes only over entries enabled for it, failing honest with zero
+provider touches when none is (ROUTE-03).
 
 No network and no provider SDK: the chain entries wrap scripted fakes whose
 outcomes drive each policy branch.
@@ -16,9 +19,18 @@ outcomes drive each policy branch.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import pytest
 
-from app.domain.entities import GeneratedAnswer
+from app.domain.entities import (
+    MODE_TEACH,
+    SENTINEL,
+    AnswerCompleted,
+    AnswerStreamEvent,
+    AnswerTextDelta,
+    GeneratedAnswer,
+)
 from app.infrastructure.answering.routing import ChainEntry, RoutingGenerationAdapter
 from app.infrastructure.providers import (
     GenerationProfileSettings,
@@ -65,6 +77,9 @@ def _answer(text: str) -> GeneratedAnswer:
 def _profile(
     id: str,  # noqa: A002 — the settings field is named ``id``
     kind: str = "anthropic",
+    *,
+    ask: bool = True,
+    teach: bool = True,
 ) -> GenerationProfileSettings:
     return GenerationProfileSettings(
         id=id,
@@ -76,8 +91,8 @@ def _profile(
         price_cache_read_usd_per_million_tokens=0.3,
         price_cache_creation_usd_per_million_tokens=3.75,
         grounding="verified-spans",
-        ask_enabled=True,
-        teach_enabled=True,
+        ask_enabled=ask,
+        teach_enabled=teach,
     )
 
 
@@ -89,6 +104,17 @@ def _chain(*specs: tuple[str, str, _ScriptedAdapter]) -> tuple[ChainEntry, ...]:
 
 def _router(*specs: tuple[str, str, _ScriptedAdapter]) -> RoutingGenerationAdapter:
     return RoutingGenerationAdapter(_chain(*specs))
+
+
+def _entry(
+    id: str,  # noqa: A002 — the settings field is named ``id``
+    adapter: _ScriptedAdapter,
+    *,
+    kind: str = "anthropic",
+    ask: bool = True,
+    teach: bool = True,
+) -> ChainEntry:
+    return ChainEntry(adapter=adapter, profile=_profile(id, kind, ask=ask, teach=teach))
 
 
 # --- First eligible entry serves, and the result carries its stamp -----------------
@@ -269,3 +295,227 @@ def test_the_stamp_names_whichever_entry_served(position: int) -> None:
 
     assert answer.profile_id == ids[position]
     assert answer.text == f"from {ids[position]}"
+
+
+# --- Streaming doubles --------------------------------------------------------------
+
+
+class _StreamScriptedAdapter:
+    """``GenerationPort`` double for the streaming rule.
+
+    Each ``generate_stream`` call pops the next script: a list whose items are
+    either events (yielded in order) or exceptions (raised at that point). A
+    script whose first item is an exception fails **before any delta** — the
+    fail-over window; an exception after a yielded event is a post-delta
+    failure. ``closed`` records whether the consumer closed the last stream it
+    opened, so the cancellation contract is observable.
+    """
+
+    def __init__(self, model: str, scripts: list[list[object]]) -> None:
+        self.model = model
+        self._scripts = [list(script) for script in scripts]
+        self.stream_calls = 0
+        self.closed = False
+
+    def generate(self, **_kwargs: object) -> GeneratedAnswer:  # noqa: ANN003
+        raise AssertionError("buffered policy is covered by the scripted double above")
+
+    def generate_stream(self, **_kwargs: object) -> Iterator[AnswerStreamEvent]:  # noqa: ANN003
+        self.stream_calls += 1
+        script = self._scripts.pop(0)
+        adapter = self
+
+        def _gen() -> Iterator[AnswerStreamEvent]:
+            try:
+                for item in script:
+                    if isinstance(item, Exception):
+                        raise item
+                    assert isinstance(item, (AnswerTextDelta, AnswerCompleted))
+                    yield item
+            except GeneratorExit:
+                adapter.closed = True
+                raise
+
+        return _gen()
+
+
+def _stream_router(*entries: ChainEntry) -> RoutingGenerationAdapter:
+    return RoutingGenerationAdapter(tuple(entries))
+
+
+def _collect(events: Iterator[AnswerStreamEvent]) -> list[AnswerStreamEvent]:
+    return list(events)
+
+
+# --- ROUTE-04: fail over only before the first delta --------------------------------
+
+
+def test_a_pre_delta_stream_failure_fails_over_to_the_next_entry() -> None:
+    first = _StreamScriptedAdapter("a-model", [[Timeout("hung before speaking")]])
+    second = _StreamScriptedAdapter(
+        "b-model", [[AnswerTextDelta(text="hello"), AnswerCompleted(answer=_answer("hello"))]]
+    )
+    router = _stream_router(_entry("primary", first), _entry("fallback", second, kind="local"))
+
+    events = _collect(router.generate_stream(mode=_MODE, message="q", evidence=[]))
+
+    assert [type(event) for event in events] == [AnswerTextDelta, AnswerCompleted]
+    assert second.stream_calls == 1
+    # The completed answer is authoritative and names the profile that served it.
+    assert isinstance(events[-1], AnswerCompleted)
+    assert events[-1].answer.profile_id == "fallback"
+
+
+def test_a_post_delta_failure_propagates_once_with_no_second_completed() -> None:
+    first = _StreamScriptedAdapter(
+        "a-model",
+        [[AnswerTextDelta(text="partial"), ProviderUnavailable("mid-answer outage")]],
+    )
+    second = _StreamScriptedAdapter("b-model", [[AnswerCompleted(answer=_answer("x"))]])
+    router = _stream_router(_entry("primary", first), _entry("fallback", second, kind="local"))
+
+    seen: list[AnswerStreamEvent] = []
+    with pytest.raises(ProviderUnavailable) as excinfo:
+        for event in router.generate_stream(mode=_MODE, message="q", evidence=[]):
+            seen.append(event)
+
+    # The delta went out, then the error — exactly once, with no fail-over and
+    # no second AnswerCompleted after it.
+    assert [type(event) for event in seen] == [AnswerTextDelta]
+    assert excinfo.value.args == ("mid-answer outage",)
+    assert second.stream_calls == 0
+
+
+def test_the_stream_policy_walk_matches_the_buffered_one_pre_delta() -> None:
+    # The same policy governs the pre-delta window: the rate-limited entry earns
+    # exactly one same-entry retry before the chain crosses.
+    first = _StreamScriptedAdapter("a-model", [[RateLimited("429")], [RateLimited("429 again")]])
+    second = _StreamScriptedAdapter("b-model", [[AnswerCompleted(answer=_answer("from fallback"))]])
+    router = _stream_router(_entry("primary", first), _entry("fallback", second, kind="local"))
+
+    events = _collect(router.generate_stream(mode=_MODE, message="q", evidence=[]))
+
+    assert first.stream_calls == 2
+    assert second.stream_calls == 1
+    assert isinstance(events[-1], AnswerCompleted)
+    assert events[-1].answer.profile_id == "fallback"
+
+
+def test_a_pre_delta_rejection_crosses_only_to_a_different_kind() -> None:
+    first = _StreamScriptedAdapter("a-model", [[RequestRejected("400")]])
+    second = _StreamScriptedAdapter("b-model", [[AnswerCompleted(answer=_answer("other shape"))]])
+    router = _stream_router(_entry("primary", first), _entry("fallback", second, kind="local"))
+
+    events = _collect(router.generate_stream(mode=_MODE, message="q", evidence=[]))
+
+    assert second.stream_calls == 1
+    assert isinstance(events[-1], AnswerCompleted)
+
+
+# --- The not-found sentinel never rides a fail-over ---------------------------------
+
+
+def test_a_not_found_completion_is_terminal_and_never_fails_over() -> None:
+    # A completed not-found (the sentinel reply, no deltas) is an honest outcome,
+    # not a failure: the router forwards it alone and never lets the next entry
+    # silently answer instead.
+    not_found = GeneratedAnswer(text="", cited_chunk_ids=(), model="a-model", found=False)
+    first = _StreamScriptedAdapter("a-model", [[AnswerCompleted(answer=not_found)]])
+    second = _StreamScriptedAdapter("b-model", [[AnswerCompleted(answer=_answer("x"))]])
+    router = _stream_router(_entry("primary", first), _entry("fallback", second, kind="local"))
+
+    events = _collect(router.generate_stream(mode=_MODE, message="q", evidence=[]))
+
+    assert [type(event) for event in events] == [AnswerCompleted]
+    assert isinstance(events[0], AnswerCompleted)
+    assert not events[0].answer.found
+    assert events[0].answer.profile_id == "primary"
+    assert second.stream_calls == 0
+
+
+def test_a_sentinel_first_delta_commits_the_stream_without_failover() -> None:
+    # The hold-back that keeps the sentinel from the client lives above the
+    # router; the router's duty is to not act on the text: a first delta — even
+    # the sentinel itself — commits the stream, and nothing from another entry
+    # may follow it.
+    sentinel_reply = GeneratedAnswer(text=SENTINEL, cited_chunk_ids=(), model="a", found=False)
+    first = _StreamScriptedAdapter(
+        "a-model", [[AnswerTextDelta(text=SENTINEL), AnswerCompleted(answer=sentinel_reply)]]
+    )
+    second = _StreamScriptedAdapter("b-model", [[AnswerCompleted(answer=_answer("x"))]])
+    router = _stream_router(_entry("primary", first), _entry("fallback", second, kind="local"))
+
+    events = _collect(router.generate_stream(mode=_MODE, message="q", evidence=[]))
+
+    assert [type(event) for event in events] == [AnswerTextDelta, AnswerCompleted]
+    assert second.stream_calls == 0
+
+
+def test_closing_the_router_stream_closes_the_serving_candidate() -> None:
+    # Closing the iterator early cancels the underlying generation (port
+    # contract): the router must pass the close through to the serving entry's
+    # stream so a client disconnect never leaks a provider generation.
+    first = _StreamScriptedAdapter(
+        "a-model", [[AnswerTextDelta(text="partial"), AnswerTextDelta(text=" more")]]
+    )
+    router = _stream_router(_entry("primary", first))
+
+    stream = router.generate_stream(mode=_MODE, message="q", evidence=[])
+    next(stream)  # one delta out
+    stream.close()
+
+    assert first.closed is True
+
+
+# --- ROUTE-03: mode-scoped eligibility, honest failure before any provider touch ----
+
+
+def test_an_ask_turn_on_an_ask_disabled_chain_fails_with_zero_adapter_calls() -> None:
+    # Every profile ask-ineligible: the only honest outcome is the turn failure
+    # the application already maps to its error envelope — raised before any
+    # provider is touched, so the zero-calls sensor stays at zero.
+    disabled = _ScriptedAdapter("a-model", [])
+    router = RoutingGenerationAdapter((_entry("quiet", disabled, ask=False),))
+
+    with pytest.raises(RuntimeError, match="no generation profile is enabled"):
+        router.generate(mode=_MODE, message="q", evidence=[])
+
+    assert disabled.calls == 0
+
+
+def test_an_ask_turn_skips_ask_disabled_entries_to_the_first_enabled_one() -> None:
+    disabled = _ScriptedAdapter("a-model", [])
+    enabled = _ScriptedAdapter("b-model", [_answer("from the ask-enabled entry")])
+    router = RoutingGenerationAdapter(
+        (_entry("quiet", disabled, ask=False), _entry("loud", enabled, kind="local"))
+    )
+
+    answer = router.generate(mode=_MODE, message="q", evidence=[])
+
+    assert answer.text == "from the ask-enabled entry"
+    assert answer.profile_id == "loud"
+    assert disabled.calls == 0
+
+
+def test_a_teach_turn_routes_only_over_teach_enabled_entries() -> None:
+    ask_only = _ScriptedAdapter("a-model", [])
+    teachable = _ScriptedAdapter("b-model", [_answer("the teachable entry")])
+    router = RoutingGenerationAdapter(
+        (_entry("ask-only", ask_only, teach=False), _entry("teachable", teachable, kind="local"))
+    )
+
+    answer = router.generate(mode=MODE_TEACH, message="q", evidence=[])
+
+    assert answer.text == "the teachable entry"
+    assert answer.profile_id == "teachable"
+    assert ask_only.calls == 0
+
+
+def test_a_teach_turn_on_a_teach_disabled_chain_fails_honest() -> None:
+    disabled = _ScriptedAdapter("a-model", [])
+    router = RoutingGenerationAdapter((_entry("quiet", disabled, teach=False),))
+
+    with pytest.raises(RuntimeError, match="mode 'teach'"):
+        router.generate(mode=MODE_TEACH, message="q", evidence=[])
+
+    assert disabled.calls == 0
