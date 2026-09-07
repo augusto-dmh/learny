@@ -62,6 +62,7 @@ from app.domain.entities import (
     TokenUsage,
     User,
 )
+from app.infrastructure.answering import ChainEntry, RoutingGenerationAdapter
 from app.infrastructure.db.repositories import (
     SqlAlchemyAiSpendDayRepository,
     SqlAlchemyConversationRepository,
@@ -73,6 +74,7 @@ from app.infrastructure.db.repositories import (
     SqlAlchemyStudyDayRepository,
     SqlAlchemyUserRepository,
 )
+from app.infrastructure.providers import GenerationProfileSettings
 from app.infrastructure.scheduling import FsrsSchedulingAdapter
 from app.infrastructure.web.dependencies import get_generation
 from tests.conftest import TEST_ORIGIN, TEST_PASSWORD, requires_db
@@ -1431,3 +1433,46 @@ def test_kill_switch_leaves_reads_working(
     resp = auth_client.get("/api/sources")
 
     assert resp.status_code == 200, resp.text
+
+
+def test_an_exhausted_usd_day_refuses_before_any_chain_entry(db_conn: Connection) -> None:
+    # ROUTE-07: the rails are per-user, not per-profile. With the routing adapter
+    # serving (two entries behind the port), an exhausted day refuses exactly as
+    # the single-adapter world does — before retrieval, before any chain entry.
+    user, source, conversation = _seed_turn_world(db_conn, "budget-chain@example.com")
+    _ledger(db_conn).record(user.id, _DAY, usd_micros=_CAP_MICROS)
+    first = _RecordingGeneration(_declining_answer(usage=None))
+    second = _RecordingGeneration(_declining_answer(usage=None))
+    router = RoutingGenerationAdapter(
+        (
+            ChainEntry(adapter=first, profile=_chain_profile("primary")),
+            ChainEntry(adapter=second, profile=_chain_profile("fallback", kind="local")),
+        )
+    )
+    retrieve = _StubRetrieve([_evidence(source.id)])
+    service = _turn_service(db_conn, generation=router, retrieve=retrieve, budget=_budget(db_conn))
+
+    with pytest.raises(DailyBudgetExhausted) as refused:
+        service(user=user, conversation_id=conversation.id, message="Why?", mode=MODE_ANSWER)
+
+    assert EXHAUSTED_COPY in str(refused.value)
+    assert first.calls == 0
+    assert second.calls == 0
+    assert retrieve.calls == []
+
+
+def _chain_profile(id: str, *, kind: str = "anthropic") -> GenerationProfileSettings:
+    """A minimal chain profile for router-wiring tests (pricing is never read)."""
+    return GenerationProfileSettings(
+        id=id,
+        kind=kind,  # type: ignore[arg-type]
+        model=f"{id}-model",
+        max_tokens=1024,
+        price_input_usd_per_million_tokens=3.0,
+        price_output_usd_per_million_tokens=15.0,
+        price_cache_read_usd_per_million_tokens=0.3,
+        price_cache_creation_usd_per_million_tokens=3.75,
+        grounding="verified-spans",
+        ask_enabled=True,
+        teach_enabled=True,
+    )

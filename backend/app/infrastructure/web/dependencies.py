@@ -108,7 +108,7 @@ from app.domain.ports import (
     StoragePort,
 )
 from app.infrastructure.answering import (
-    build_generation_adapter,
+    build_generation_chain,
 )
 from app.infrastructure.clock import SystemClock
 from app.infrastructure.db.engine import get_engine
@@ -136,6 +136,7 @@ from app.infrastructure.db.retrieval import SqlAlchemyRetrievalRepository
 from app.infrastructure.email import build_email_sender
 from app.infrastructure.embeddings import build_embedding_adapter
 from app.infrastructure.ingestion.markup import Bs4MarkupConverter
+from app.infrastructure.providers import resolve_generation_profiles
 from app.infrastructure.quiz import build_quiz_adapter
 from app.infrastructure.scheduling import build_scheduling_adapter
 from app.infrastructure.security.password_hasher import Argon2PasswordHasher
@@ -213,7 +214,11 @@ def build_budget(conn: Connection) -> DailyBudget:
     Built per request / per worker call — never cached — so the cap, prices, and
     (in a later task) the kill switch are read from the *current* settings rather
     than a stale construction-time snapshot. The clock is the shared adapter; the
-    ledger row it resolves is the caller's UTC day.
+    ledger row it resolves is the caller's UTC day. Every declared profile's
+    price catalog rides along keyed by its id (AD-344/PRICE-01), so a
+    router-stamped result debits at the catalog of the profile that served it —
+    and a stamp on the legacy-seeded profile resolves exactly instead of
+    triggering the unknown-stamp fallback warning.
     """
     settings = get_settings()
     return DailyBudget(
@@ -228,7 +233,30 @@ def build_budget(conn: Connection) -> DailyBudget:
         ask_daily_cap=settings.daily_ask_cap,
         teach_start_daily_cap=settings.daily_teach_start_cap,
         ai_paused=settings.ai_kill_switch,
+        profile_catalogs=_profile_catalogs(settings),
     )
+
+
+def _profile_catalogs(settings: Settings) -> dict[str, TokenPrices]:
+    """Each declared profile's price catalog, keyed by its id (AD-344).
+
+    Embeddings are priced by the global catalog as always (PRICE-05) — a
+    generation profile's catalog prices generation tokens only.
+    """
+    return {
+        profile.id: TokenPrices(
+            input_micros_per_million=usd_to_micros(profile.price_input_usd_per_million_tokens),
+            output_micros_per_million=usd_to_micros(profile.price_output_usd_per_million_tokens),
+            embed_micros_per_million=0,
+            cache_read_micros_per_million=usd_to_micros(
+                profile.price_cache_read_usd_per_million_tokens
+            ),
+            cache_creation_micros_per_million=usd_to_micros(
+                profile.price_cache_creation_usd_per_million_tokens
+            ),
+        )
+        for profile in resolve_generation_profiles(settings)
+    }
 
 
 def get_email_sender() -> EmailPort:
@@ -611,18 +639,29 @@ def get_retrieve_evidence(conn: DbConnection) -> RetrieveEvidence:
     )
 
 
-# Process-wide generator, selected from settings at first use (ADR-0020). One
-# generator serves both modes: ``local`` (default) stays deterministic and
-# network-free; ``anthropic`` builds the Claude adapter. Cached like ``get_settings``
-# so the provider is resolved once per process, and overridable in tests via
-# ``dependency_overrides[get_generation]``.
+# Process-wide generation chains, selected from settings at first use
+# (ADR-0020, AD-345). The normal chain serves ask/teach with the primary first;
+# the explain chain leads with the profile ``generation_explain_profile`` names
+# (when declared and ask-eligible) for selection-Explain turns. Both wrap the
+# same settings-declared profile registry and are cached like ``get_settings``
+# so the chain is resolved once per process; each is overridable in tests via
+# ``dependency_overrides[...]``.
 @lru_cache
 def get_generation() -> GenerationPort:
-    """FastAPI dependency: the settings-selected generator (overridable in tests)."""
-    return build_generation_adapter(get_settings())
+    """FastAPI dependency: the ask/teach generation chain (overridable in tests)."""
+    return build_generation_chain(get_settings())
 
 
 Generation = Annotated[GenerationPort, Depends(get_generation)]
+
+
+@lru_cache
+def get_explain_generation() -> GenerationPort:
+    """FastAPI dependency: the selection-Explain chain (overridable in tests)."""
+    return build_generation_chain(get_settings(), explain=True)
+
+
+ExplainGeneration = Annotated[GenerationPort, Depends(get_explain_generation)]
 
 
 # --- Unified conversations (ADR-0029) ------------------------------------------
