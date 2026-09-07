@@ -378,6 +378,49 @@ def test_successful_ask_debits_the_usage_it_actually_used(db_conn: Connection) -
     assert generation.calls == 1
 
 
+def test_successful_ask_debits_at_the_fixture_profile_catalog_including_cache(
+    db_conn: Connection,
+) -> None:
+    # PRICE-01/02 on the turn path: the debit prices the adapter's reported usage —
+    # cache fields included — at the wired catalog, here a fixture profile whose
+    # prices differ from the 3.0/15.0 defaults. Hand-checked with the derived cache
+    # prices (read 0.1× → 200_000, creation 1.25× → 250_000):
+    # (900×200k) + (400×1M) + (10k×20k) + (2k×250k) = 1280 micros — the default
+    # catalog would debit 19200, so this pins *which* catalog priced the turn.
+    user, source, conversation = _seed_turn_world(db_conn, "budget-profile@example.com")
+    generation = _RecordingGeneration(
+        _declining_answer(
+            usage=TokenUsage(
+                input_tokens=900,
+                output_tokens=400,
+                cache_read_input_tokens=10_000,
+                cache_creation_input_tokens=2_000,
+            )
+        )
+    )
+    retrieve = _StubRetrieve([_evidence(source.id)])
+    profile_prices = TokenPrices(
+        input_micros_per_million=200_000,
+        output_micros_per_million=1_000_000,
+        embed_micros_per_million=0,
+    )
+    budget = DailyBudget(
+        repo=_ledger(db_conn),
+        clock=FakeClock(_NOW),
+        daily_cap_micros=_CAP_MICROS,
+        prices=profile_prices,
+        ask_daily_cap=8,
+        teach_start_daily_cap=1,
+    )
+    service = _turn_service(db_conn, generation=generation, retrieve=retrieve, budget=budget)
+
+    service(user=user, conversation_id=conversation.id, message="Why?", mode=MODE_ANSWER)
+
+    row = _ledger(db_conn).get_for_day(user.id, _DAY)
+    assert row is not None and row.usd_micros == 1280
+    assert generation.calls == 1
+
+
 def test_generation_without_reported_usage_debits_nothing(db_conn: Connection) -> None:
     # DOOR-14: the deterministic local adapters report no usage, so no USD is
     # recorded — but the free-tier Ask counter still counts the call (DOOR-10),

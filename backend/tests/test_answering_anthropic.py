@@ -101,6 +101,14 @@ class _FakeUsage:
         self.cache_read_input_tokens = 0
 
 
+class _BareUsage:
+    """A usage object with no cache detail at all — an un-cached call's shape."""
+
+    def __init__(self) -> None:
+        self.input_tokens = 5
+        self.output_tokens = 2
+
+
 class _FakeMessage:
     def __init__(self, content: list[_FakeTextBlock], stop_reason: str = "end_turn") -> None:
         self.content = content
@@ -338,6 +346,81 @@ def test_buffered_answer_carries_the_call_usage_for_the_spend_debit() -> None:
 
     assert result.usage is not None
     assert (result.usage.input_tokens, result.usage.output_tokens) == (42, 7)
+
+
+def test_buffered_usage_carries_the_cache_token_counts() -> None:
+    # PRICE-02/COST-03: a prompt-cached call reports cache-read and cache-creation
+    # tokens on its usage block; the debit prices them, so both must reach the
+    # answer's TokenUsage instead of stopping at the log line.
+    message = _FakeMessage([_FakeTextBlock("ok")])
+    message.usage.cache_read_input_tokens = 100
+    message.usage.cache_creation_input_tokens = 40
+    adapter, _ = _adapter(message)
+
+    result = adapter.generate(mode=MODE_ANSWER, message="q", evidence=[_evidence("alpha")])
+
+    assert result.usage is not None
+    assert (
+        result.usage.input_tokens,
+        result.usage.output_tokens,
+        result.usage.cache_read_input_tokens,
+        result.usage.cache_creation_input_tokens,
+    ) == (42, 7, 100, 40)
+
+
+def test_usage_without_cache_detail_parses_to_zero_cache_counts() -> None:
+    # An un-cached call (or provider shape) reports no cache fields; the debit
+    # must stay input+output only, exactly as before the fields existed.
+    message = _FakeMessage([_FakeTextBlock("ok")])
+    message.usage = _BareUsage()
+    adapter, _ = _adapter(message)
+
+    result = adapter.generate(mode=MODE_ANSWER, message="q", evidence=[_evidence("alpha")])
+
+    assert result.usage is not None
+    assert (result.usage.input_tokens, result.usage.output_tokens) == (5, 2)
+    assert (
+        result.usage.cache_read_input_tokens,
+        result.usage.cache_creation_input_tokens,
+    ) == (0, 0)
+
+
+def test_streamed_completed_answer_carries_the_cache_token_counts() -> None:
+    # On a stream the cache tokens ride the message_delta aggregation, which the
+    # final message exposes — the authoritative AnswerCompleted parsed from it must
+    # carry them, or every streamed teach turn would under-price its cached prefix.
+    final = _FakeMessage([_FakeTextBlock("ok")])
+    final.usage.cache_read_input_tokens = 55_000
+    final.usage.cache_creation_input_tokens = 1_234
+    stream_adapter, _ = _streaming_answer_adapter(_FakeStream(deltas=["ok"], final_message=final))
+
+    completed = list(
+        stream_adapter.generate_stream(mode=MODE_ANSWER, message="q", evidence=[_evidence("alpha")])
+    )[-1]
+
+    assert isinstance(completed, AnswerCompleted)
+    assert completed.answer.usage is not None
+    assert (
+        completed.answer.usage.cache_read_input_tokens,
+        completed.answer.usage.cache_creation_input_tokens,
+    ) == (55_000, 1_234)
+
+
+def test_the_call_log_names_both_cache_token_counts(caplog) -> None:
+    # COST-03's log half: the reorder's saving is measured, not assumed, so the
+    # one-line-per-call log carries the cache-read AND cache-creation counts.
+    message = _FakeMessage([_FakeTextBlock("ok")])
+    message.usage.cache_read_input_tokens = 100
+    message.usage.cache_creation_input_tokens = 40
+    adapter, _ = _adapter(message)
+
+    with caplog.at_level(logging.INFO, logger=_LOGGER):
+        adapter.generate(mode=MODE_ANSWER, message="q", evidence=[_evidence("alpha")])
+
+    lines = [r.getMessage() for r in caplog.records if r.name == _LOGGER]
+    assert len(lines) == 1
+    assert "cache_read_input_tokens=100" in lines[0]
+    assert "cache_creation_input_tokens=40" in lines[0]
 
 
 def test_buffered_call_logs_the_effort_it_spent(caplog) -> None:

@@ -227,7 +227,11 @@ def _usage_of(message: Any) -> TokenUsage | None:
     The budget debit needs the tokens a successful call actually consumed, and today
     they only reach ``_log_call`` — so the same object is now carried on the returned
     :class:`~app.domain.entities.GeneratedAnswer` instead of living solely in the
-    log. Input and output counts only: cache-read tokens are not metered this letter.
+    log. Input and output counts plus the prompt-cache detail (cache-read and
+    cache-creation tokens, COST-03/PRICE-02): the cached prefix a teach session
+    re-reads is real spend, and the debit prices it at the serving profile's cache
+    prices. A provider that reports no cache detail (the fields absent, as on an
+    un-cached call) parses to zero, so the debit stays input+output only.
     A message without usage parses to ``None`` → the debit is 0 USD.
     """
     usage = getattr(message, "usage", None)
@@ -236,6 +240,8 @@ def _usage_of(message: Any) -> TokenUsage | None:
     return TokenUsage(
         input_tokens=getattr(usage, "input_tokens", 0) or 0,
         output_tokens=getattr(usage, "output_tokens", 0) or 0,
+        cache_read_input_tokens=getattr(usage, "cache_read_input_tokens", 0) or 0,
+        cache_creation_input_tokens=getattr(usage, "cache_creation_input_tokens", 0) or 0,
     )
 
 
@@ -291,12 +297,13 @@ def _log_call(message: Any, *, model: str, effort: str, found: bool) -> None:
     usage = getattr(message, "usage", None)
     logger.info(
         "anthropic generation model=%s effort=%s input_tokens=%s output_tokens=%s "
-        "cache_read_input_tokens=%s stop_reason=%s found=%s",
+        "cache_read_input_tokens=%s cache_creation_input_tokens=%s stop_reason=%s found=%s",
         model,
         effort,
         getattr(usage, "input_tokens", None),
         getattr(usage, "output_tokens", None),
         getattr(usage, "cache_read_input_tokens", None),
+        getattr(usage, "cache_creation_input_tokens", None),
         getattr(message, "stop_reason", None),
         found,
     )
