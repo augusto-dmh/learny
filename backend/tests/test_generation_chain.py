@@ -9,20 +9,28 @@ single-entry legacy chain — today's behavior, byte for byte (ROUTE-06); a
 malformed registry or missing key env fails fast here at composition instead of
 per request (ROUTE-05); and the selection-Explain ordering (AD-345) leads with
 the profile ``generation_explain_profile`` names when it is declared and
-ask-eligible. The cached FastAPI accessors expose the two chains.
+ask-eligible. The cached FastAPI accessors expose the two chains. The first
+economy profile (ECON-04/AD-336) ships declared-in-docs but inert: nothing is
+declared by default, the shipped example carries it ask/teach-ineligible, and a
+chain built from exactly that declaration refuses grounded turns honest with
+zero adapter calls.
 """
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from uuid import UUID
 
 import pytest
 
 from app.core.config import Settings
+from app.domain.entities import MODE_ANSWER, MODE_TEACH
 from app.infrastructure.answering import (
     AnthropicGenerationAdapter,
     ChainEntry,
     DeterministicGenerationAdapter,
+    OpenAICompatibleGenerationAdapter,
     RoutingGenerationAdapter,
     build_generation_chain,
 )
@@ -462,3 +470,124 @@ def test_the_rate_limit_fires_before_any_chain_entry(
     assert reached == 3
     assert throttled.status_code == 429, throttled.text
     assert first.calls + second.calls == 3
+
+
+# --- ECON-04/AD-336: the economy profile ships declared-in-docs, inert in code -----
+
+
+def test_the_economy_profile_is_not_in_the_shipped_defaults() -> None:
+    # Inertness, half one (AD-343): nothing ships declared. The default
+    # deployment's registry is the legacy single profile (the ROUTE-06 tests
+    # above, unmodified); the economy profile exists only where an operator
+    # declares it, and the shipped example declares it grounded-ineligible.
+    assert Settings(_env_file=None).generation_profiles == []
+
+
+def test_the_shipped_env_example_declares_the_economy_profile_inert() -> None:
+    """Inertness, half two: the shipped declaration artifact itself (ECON-04).
+
+    The example registry in ``backend/.env.example`` is commented out (nothing
+    is declared by default) and carries the first economy profile —
+    Fireworks-US-hosted GLM — Ask-ineligible, Teach-ineligible, prompt-cited,
+    with its price pair and its key env-var name: exactly the declaration an
+    operator flips after a green nightly to promote it. The example must also
+    stay internally consistent with the shipped accessors: the profile
+    ``LEARNY_GENERATION_EXPLAIN_PROFILE`` names exists and is ask-eligible, so
+    the documented example actually leads the explain chain if declared.
+    """
+    example = Path(__file__).resolve().parents[1] / ".env.example"
+    declared: str | None = None
+    explain_name: str | None = None
+    for line in example.read_text(encoding="utf-8").splitlines():
+        if line.startswith("# LEARNY_GENERATION_PROFILES="):
+            declared = line.removeprefix("# LEARNY_GENERATION_PROFILES=")
+        elif line.startswith("# LEARNY_GENERATION_EXPLAIN_PROFILE="):
+            explain_name = line.removeprefix("# LEARNY_GENERATION_EXPLAIN_PROFILE=").strip()
+    assert declared is not None  # the example ships a registry declaration
+    profiles = [GenerationProfileSettings(**item) for item in json.loads(declared)]
+    economy = next(profile for profile in profiles if profile.id == "economy-glm")
+    assert economy.kind == "openai-compatible"
+    assert economy.ask_enabled is False
+    assert economy.teach_enabled is False
+    assert economy.grounding == "prompt-cited"
+    assert economy.price_input_usd_per_million_tokens == 0.22
+    assert economy.price_output_usd_per_million_tokens == 0.75
+    assert economy.api_key_env == "LEARNY_FIREWORKS_API_KEY"
+    assert economy.base_url != ""
+
+    named = next(profile for profile in profiles if profile.id == explain_name)
+    assert named.ask_enabled is True
+
+
+def test_the_declared_economy_chain_builds_and_refuses_ask_turns_with_zero_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Inertness, half three (AD-343): a chain built from exactly the shipped
+    # economy declaration builds fine but refuses every grounded turn honest —
+    # the application's existing error envelope — before any adapter is
+    # touched. The lazy client is the zero-calls sensor: it is only built on
+    # first use, and it never is.
+    monkeypatch.setenv("LEARNY_FIREWORKS_API_KEY", "fw-test")
+    settings = Settings(
+        _env_file=None,
+        generation_profiles=[
+            _profile(
+                id="economy-glm",
+                kind="openai-compatible",
+                model="zai-org/glm-5.3-flash",
+                api_key_env="LEARNY_FIREWORKS_API_KEY",
+                base_url="https://api.fireworks.ai/inference/v1",
+                grounding="prompt-cited",
+                ask_enabled=False,
+                teach_enabled=False,
+            ),
+        ],
+    )
+
+    chain = build_generation_chain(settings)
+
+    adapter = chain._chain[0].adapter
+    assert isinstance(adapter, OpenAICompatibleGenerationAdapter)
+    assert chain.model == "zai-org/glm-5.3-flash"
+
+    with pytest.raises(RuntimeError, match="no generation profile is enabled"):
+        chain.generate(mode=MODE_ANSWER, message="q", evidence=[])
+    with pytest.raises(RuntimeError, match="no generation profile is enabled"):
+        chain.generate(mode=MODE_TEACH, message="q", evidence=[])
+
+    assert adapter._client is None
+
+
+def test_an_openai_compatible_profile_builds_the_compat_adapter_from_its_declaration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The kind the economy profile names must actually build (ROUTE-01): the
+    # declared model, host base_url, token budget, and per-mode effort values
+    # are the ones the sub-adapter carries (the effort values accepted, never
+    # sent — ECON-05 is the adapter's own contract).
+    monkeypatch.setenv("LEARNY_FIREWORKS_API_KEY", "fw-test")
+    settings = Settings(
+        _env_file=None,
+        generation_profiles=[
+            _profile(
+                id="economy-glm",
+                kind="openai-compatible",
+                model="zai-org/glm-5.3-flash",
+                api_key_env="LEARNY_FIREWORKS_API_KEY",
+                base_url="https://api.fireworks.ai/inference/v1",
+                max_tokens=2048,
+                grounding="prompt-cited",
+                effort_ask="low",
+                effort_teach="high",
+            ),
+        ],
+    )
+
+    chain = build_generation_chain(settings)
+    adapter = chain._chain[0].adapter
+
+    assert isinstance(adapter, OpenAICompatibleGenerationAdapter)
+    assert adapter.model == "zai-org/glm-5.3-flash"
+    assert adapter._base_url == "https://api.fireworks.ai/inference/v1"
+    assert adapter._max_tokens == 2048
+    assert (adapter._effort_ask, adapter._effort_teach) == ("low", "high")

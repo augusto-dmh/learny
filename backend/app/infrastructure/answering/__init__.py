@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 
 from app.infrastructure.answering.anthropic import AnthropicGenerationAdapter
 from app.infrastructure.answering.local import DeterministicGenerationAdapter
+from app.infrastructure.answering.openai_compat import OpenAICompatibleGenerationAdapter
 from app.infrastructure.answering.routing import ChainEntry, RoutingGenerationAdapter
 from app.infrastructure.providers import resolve_generation_profiles
 
@@ -28,6 +29,7 @@ if TYPE_CHECKING:
 __all__ = [
     "AnthropicGenerationAdapter",
     "DeterministicGenerationAdapter",
+    "OpenAICompatibleGenerationAdapter",
     "RoutingGenerationAdapter",
     "build_generation_adapter",
     "build_generation_chain",
@@ -83,6 +85,19 @@ def _build_sub_adapter(profile: GenerationProfileSettings, settings: Settings) -
         return AnthropicGenerationAdapter(
             api_key=os.environ.get(profile.api_key_env) or settings.anthropic_api_key,
             model=profile.model,
+            max_tokens=profile.max_tokens,
+            effort_ask=profile.effort_ask,
+            effort_teach=profile.effort_teach,
+        )
+    if profile.kind == "openai-compatible":
+        # The prompt-cited second adapter (ECON-01): the profile's key env was
+        # validated present at resolution (ROUTE-05), the host base_url is the
+        # profile's own, and the per-mode effort values are passed through even
+        # though this kind never sends them (ECON-05, declared degradation).
+        return OpenAICompatibleGenerationAdapter(
+            api_key=os.environ.get(profile.api_key_env) or "",
+            model=profile.model,
+            base_url=profile.base_url,
             max_tokens=profile.max_tokens,
             effort_ask=profile.effort_ask,
             effort_teach=profile.effort_teach,
