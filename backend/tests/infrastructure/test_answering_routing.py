@@ -102,8 +102,16 @@ def _chain(*specs: tuple[str, str, _ScriptedAdapter]) -> tuple[ChainEntry, ...]:
     )
 
 
-def _router(*specs: tuple[str, str, _ScriptedAdapter]) -> RoutingGenerationAdapter:
-    return RoutingGenerationAdapter(_chain(*specs))
+def _router(
+    *specs: tuple[str, str, _ScriptedAdapter], rate_retry_delay: float = 0.0
+) -> RoutingGenerationAdapter:
+    """A router over the scripted chain.
+
+    Tests default the rate-limit backoff to 0 so the suite stays offline and
+    fast; the backoff's *amounts* are the subject of the dedicated tests below,
+    which patch the sleep and pass their own values.
+    """
+    return RoutingGenerationAdapter(_chain(*specs), rate_retry_delay=rate_retry_delay)
 
 
 def _entry(
@@ -207,6 +215,94 @@ def test_each_entry_earns_its_own_single_rate_limit_retry() -> None:
     assert answer.profile_id == "fallback"
     assert primary.calls == 2
     assert second.calls == 2  # the fallback earned (and used) its own one retry
+
+
+# --- The same-entry retry waits a bounded backoff first (ROUTE-02) ------------------
+
+
+def test_the_same_entry_retry_is_requested_only_after_one_bounded_backoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    waits: list[float] = []
+    monkeypatch.setattr("app.infrastructure.answering.routing.time.sleep", waits.append)
+    primary = _ScriptedAdapter("a-model", [RateLimited("429"), _answer("retry ok")])
+    second = _ScriptedAdapter("b-model", [])
+    router = _router(
+        ("primary", "anthropic", primary),
+        ("fallback", "local", second),
+        rate_retry_delay=0.0,
+    )
+
+    answer = router.generate(mode=_MODE, message="q", evidence=[])
+
+    # The wait was requested exactly once, before the one same-entry retry —
+    # not around the fail-over, and not twice for one throttle.
+    assert waits == [0.0]
+    assert answer.text == "retry ok"
+    assert answer.profile_id == "primary"
+    assert primary.calls == 2
+    assert second.calls == 0
+
+
+def test_the_backoff_defaults_to_the_router_delay_without_a_provider_hint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    waits: list[float] = []
+    monkeypatch.setattr("app.infrastructure.answering.routing.time.sleep", waits.append)
+    primary = _ScriptedAdapter("a-model", [RateLimited("429"), _answer("retry ok")])
+    router = _router(("primary", "anthropic", primary), rate_retry_delay=1.0)
+
+    answer = router.generate(mode=_MODE, message="q", evidence=[])
+
+    # No hint from the adapter, so the router's default backoff is what was
+    # requested (patched, so the suite never actually sleeps).
+    assert waits == [1.0]
+    assert answer.text == "retry ok"
+
+
+@pytest.mark.parametrize(
+    ("hint", "expected"),
+    [
+        pytest.param(2.0, 2.0, id="short-hint-honored"),
+        pytest.param(99.0, 5.0, id="long-hint-capped"),
+    ],
+)
+def test_the_backoff_honors_the_provider_hint_capped_to_bound_the_turn(
+    hint: float,
+    expected: float,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    waits: list[float] = []
+    monkeypatch.setattr("app.infrastructure.answering.routing.time.sleep", waits.append)
+    primary = _ScriptedAdapter(
+        "a-model", [RateLimited("429", retry_after=hint), _answer("retry ok")]
+    )
+    router = _router(("primary", "anthropic", primary), rate_retry_delay=0.0)
+
+    answer = router.generate(mode=_MODE, message="q", evidence=[])
+
+    # The provider's hint wins over the default, but the cap — not the hint —
+    # sets the worst case a reader's turn can be made to wait.
+    assert waits == [expected]
+    assert answer.text == "retry ok"
+
+
+def test_a_pre_delta_rate_limit_retry_sleeps_before_reentering_too(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    waits: list[float] = []
+    monkeypatch.setattr("app.infrastructure.answering.routing.time.sleep", waits.append)
+    first = _StreamScriptedAdapter(
+        "a-model", [[RateLimited("429")], [AnswerCompleted(answer=_answer("retry ok"))]]
+    )
+    router = _stream_router(_entry("primary", first), rate_retry_delay=0.0)
+
+    events = _collect(router.generate_stream(mode=_MODE, message="q", evidence=[]))
+
+    # The pre-delta window obeys the buffered policy exactly — backoff included.
+    assert waits == [0.0]
+    assert first.stream_calls == 2
+    assert isinstance(events[-1], AnswerCompleted)
 
 
 def test_a_request_rejection_crosses_only_to_a_different_request_shape() -> None:
@@ -339,8 +435,9 @@ class _StreamScriptedAdapter:
         return _gen()
 
 
-def _stream_router(*entries: ChainEntry) -> RoutingGenerationAdapter:
-    return RoutingGenerationAdapter(tuple(entries))
+def _stream_router(*entries: ChainEntry, rate_retry_delay: float = 0.0) -> RoutingGenerationAdapter:
+    """A streaming router over the scripted entries (see ``_router`` for the 0 backoff)."""
+    return RoutingGenerationAdapter(tuple(entries), rate_retry_delay=rate_retry_delay)
 
 
 def _collect(events: Iterator[AnswerStreamEvent]) -> list[AnswerStreamEvent]:

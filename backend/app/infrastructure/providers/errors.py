@@ -39,8 +39,17 @@ class RateLimited(ProviderError):
 
     One same-provider backoff retry is earned first (the throttle is usually
     measured in seconds and the same provider may serve the retry), and after
-    that backoff the retry may cross to another provider.
+    that backoff the retry may cross to another provider. ``retry_after`` is the
+    wait the provider itself reported (a ``Retry-After``-style hint, in seconds)
+    when its surface carries one: the router waits it out — capped so a turn's
+    latency stays bounded — before re-entering the same provider. An adapter
+    whose SDK/HTTP failure reports no hint leaves it ``None``, and the router
+    applies its own default backoff.
     """
+
+    def __init__(self, message: str, *, retry_after: float | None = None) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
 
 
 class ProviderUnavailable(ProviderError):

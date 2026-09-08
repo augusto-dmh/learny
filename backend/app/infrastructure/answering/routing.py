@@ -11,7 +11,10 @@ Policy (ROUTE-02 / AD-337), walked over the ordered chain:
 
 - the first entry that can serve, serves;
 - ``Timeout`` / ``ProviderUnavailable`` → the next entry;
-- ``RateLimited`` → one same-entry retry, then the next entry;
+- ``RateLimited`` → one same-entry retry after a bounded backoff, then the next
+  entry — the backoff is the provider's ``retry_after`` hint when it reports
+  one (capped so a turn's latency stays bounded), or the router's default wait
+  when it does not; an immediate re-entry would just re-earn the 429;
 - ``RequestRejected`` → only an entry whose adapter builds a **different**
   request shape (another kind) may be tried — the same shape would earn the
   same rejection;
@@ -35,6 +38,7 @@ providers package (taxonomy + profile settings) and the domain only.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
@@ -70,6 +74,24 @@ class ChainEntry:
 
     adapter: GenerationPort
     profile: GenerationProfileSettings
+
+
+#: The ceiling on the wait before a same-entry retry, whatever the provider's
+#: ``retry_after`` hint says: the cap is the turn's latency bound (ROUTE-02).
+_RATE_RETRY_CAP_S = 5.0
+
+
+def _backoff_seconds(error: RateLimited, default: float) -> float:
+    """The bounded wait before the throttled entry is re-entered (ROUTE-02).
+
+    The provider's own ``retry_after`` hint wins when an adapter carried one —
+    a near-immediate retry would just re-earn the 429 — capped at
+    :data:`_RATE_RETRY_CAP_S` so a provider asking for minutes cannot hold a
+    reader's turn hostage. Without a hint, the router's default backoff applies.
+    """
+    if error.retry_after is None:
+        return default
+    return min(error.retry_after, _RATE_RETRY_CAP_S)
 
 
 def _next_index(
@@ -124,13 +146,17 @@ class RoutingGenerationAdapter:
     (``build_generation_chain``); ``model`` reads the primary profile's identity
     so the not-found short-circuit can name a model without any provider touch
     (QA-04). Buffered fallback walks the chain per the module policy and stamps
-    whichever entry served onto the returned answer.
+    whichever entry served onto the returned answer. ``rate_retry_delay`` is the
+    default backoff before a same-entry retry when the provider reported no
+    ``retry_after`` hint — injectable so tests stay offline (the cap on the hint
+    is not negotiable; the default is a composition choice).
     """
 
-    def __init__(self, chain: tuple[ChainEntry, ...]) -> None:
+    def __init__(self, chain: tuple[ChainEntry, ...], *, rate_retry_delay: float = 1.0) -> None:
         if not chain:
             raise ValueError("a generation chain needs at least one profile")
         self._chain = chain
+        self._rate_retry_delay = rate_retry_delay
 
     @property
     def model(self) -> str:
@@ -185,6 +211,11 @@ class RoutingGenerationAdapter:
                 nxt = _next_index(eligible, index, error, retried)
                 if nxt is None:
                     raise
+                if nxt == index and isinstance(error, RateLimited):
+                    # The only same-entry re-entry is the RateLimited retry:
+                    # wait the bounded backoff first, or the retry re-earns
+                    # the 429 it is meant to survive.
+                    time.sleep(_backoff_seconds(error, self._rate_retry_delay))
                 index = nxt
                 continue
             return replace(answer, profile_id=entry.profile.id)
@@ -243,6 +274,10 @@ class RoutingGenerationAdapter:
                 nxt = _next_index(eligible, index, error, retried)
                 if nxt is None:
                     raise
+                if nxt == index and isinstance(error, RateLimited):
+                    # Pre-delta the stream obeys the buffered policy exactly,
+                    # backoff included.
+                    time.sleep(_backoff_seconds(error, self._rate_retry_delay))
                 index = nxt
             finally:
                 close = getattr(stream, "close", None)
