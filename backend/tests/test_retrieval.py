@@ -637,7 +637,11 @@ def test_unmatched_bound_anchor_yields_zero_book_evidence_and_warns(
         )
 
     assert results == []
-    records = [r for r in caplog.records if r.getMessage() == "retrieval.position_bound_unmatched"]
+    expected_message = (
+        "retrieval.position_bound_unmatched: anchor ghost.xhtml#missing"
+        f" matches no section of source {source.id}"
+    )
+    records = [r for r in caplog.records if r.getMessage() == expected_message]
     assert records
     assert records[0].source_id == str(source.id)
     assert records[0].anchor == "ghost.xhtml#missing"

@@ -445,7 +445,11 @@ def test_stale_bound_leaves_note_arms_unaffected(
             not_past_anchor="ghost.xhtml#missing",
         )
 
-    records = [r for r in caplog.records if r.getMessage() == "retrieval.position_bound_unmatched"]
+    expected_message = (
+        "retrieval.position_bound_unmatched: anchor ghost.xhtml#missing"
+        f" matches no section of source {source.id}"
+    )
+    records = [r for r in caplog.records if r.getMessage() == expected_message]
     assert records
     assert records[0].source_id == str(source.id)
     assert records[0].anchor == "ghost.xhtml#missing"

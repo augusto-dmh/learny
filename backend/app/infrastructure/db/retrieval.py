@@ -373,7 +373,9 @@ class SqlAlchemyRetrievalRepository:
             ).scalar()
             if not exists:
                 logger.warning(
-                    "retrieval.position_bound_unmatched",
+                    "retrieval.position_bound_unmatched: anchor %s matches no section of source %s",
+                    not_past_anchor,
+                    source_id,
                     extra={"source_id": str(source_id), "anchor": not_past_anchor},
                 )
             params["not_past_anchor"] = not_past_anchor
