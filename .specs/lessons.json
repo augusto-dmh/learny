@@ -3,26 +3,8 @@
   "promote_threshold": 2,
   "window_days": 45,
   "quarantine_threshold": 2,
-  "next_id": 26,
+  "next_id": 28,
   "lessons": [
-    {
-      "id": "L-015",
-      "key": "surviving_mutant::a conditional guard e g only set if absent whose protected branch is db key gated needs its own offline discriminating test that reproduces the pre condition ordering e g a class scoped fixture presetting the value before the function scoped autouse fixture or the discrimination sensor flags the guard as uncovered",
-      "text": "A conditional guard (e.g. only-set-if-absent) whose protected branch is DB/key-gated needs its own offline discriminating test that reproduces the pre-condition ordering — e.g. a class-scoped fixture presetting the value before the function-scoped autouse fixture — or the discrimination sensor flags the guard as uncovered.",
-      "signal": "surviving_mutant",
-      "scope": "backend/tests/conftest-fixtures",
-      "status": "candidate",
-      "features": [
-        "v5-offline-suite-honesty"
-      ],
-      "recurrence": 1,
-      "harmful": 0,
-      "evidence": [
-        "M3 (test_offline_provider_pin.py) (backend/tests/conftest-fixtures)"
-      ],
-      "created": "2026-07-24T16:53:30Z",
-      "last_seen": "2026-07-24T16:53:30Z"
-    },
     {
       "id": "L-016",
       "key": "spec_precision_gap::when an implicit requirement sweep resolves a bounds limits dimension name the concrete bound page size cap or deliberately unbounded because x bounded like the shipped list conventions names no assertion and wsn 11 shipped with the validation half sensed and the bounds half neither implemented nor tested",
@@ -202,6 +184,42 @@
       ],
       "created": "2026-09-06T23:47:27Z",
       "last_seen": "2026-09-06T23:47:27Z"
+    },
+    {
+      "id": "L-026",
+      "key": "ac_gap::when a spec enumerates edge cases explicitly pin each one with a direct test a sectionless source under a position bound empty evidence warning was left to subsumption reasoning instead of an assertion",
+      "text": "When a spec enumerates edge cases explicitly, pin each one with a direct test — a sectionless source under a position bound (empty evidence + warning) was left to subsumption reasoning instead of an assertion.",
+      "signal": "ac_gap",
+      "scope": "backend/db-gated retrieval tests",
+      "status": "candidate",
+      "features": [
+        "v5-spoiler-safe-retrieval"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "SPOILER Edge Cases / backend/tests/test_retrieval.py (backend/db-gated retrieval tests)"
+      ],
+      "created": "2026-09-08T17:32:10Z",
+      "last_seen": "2026-09-08T17:32:10Z"
+    },
+    {
+      "id": "L-027",
+      "key": "ac_gap::pin spec edge fixtures with their literal boundary values no test saved percent 0 00 to prove the anchor not the percent defines the reading position bound even though the sql never reads percent",
+      "text": "Pin spec edge fixtures with their literal boundary values: no test saved percent=0.00 to prove the anchor (not the percent) defines the reading-position bound, even though the SQL never reads percent.",
+      "signal": "ac_gap",
+      "scope": "backend/db-gated retrieval tests",
+      "status": "candidate",
+      "features": [
+        "v5-spoiler-safe-retrieval"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "SPOILER Edge Cases / backend/tests/test_retrieval.py (backend/db-gated retrieval tests)"
+      ],
+      "created": "2026-09-08T17:32:10Z",
+      "last_seen": "2026-09-08T17:32:10Z"
     }
   ]
 }
