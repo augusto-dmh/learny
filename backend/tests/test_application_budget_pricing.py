@@ -10,6 +10,8 @@ to the primary catalog with a warning instead of mispricing silently (PRICE-04).
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
+from functools import partial
 
 import pytest
 
@@ -47,6 +49,13 @@ _USAGE = TokenUsage(
 
 
 def _budget(**kwargs: object) -> DailyBudget:
+    """A pricing budget, wired the way the composition root wires production.
+
+    The shared stamp resolver is bound to the ``profiles`` kwarg (default: an
+    empty registry, the no-stamp world) exactly as ``build_budget`` binds it to
+    the declared registry — one PRICE-04 resolution between them.
+    """
+    profiles: Sequence[GenerationProfileSettings] = kwargs.pop("profiles", ())
     return DailyBudget(
         repo=FakeAiSpendDayRepository(),  # pricing never touches the ledger
         clock=FakeClock(None),  # pricing never reads the clock
@@ -54,6 +63,7 @@ def _budget(**kwargs: object) -> DailyBudget:
         prices=_PREMIUM_PRICES,
         ask_daily_cap=8,
         teach_start_daily_cap=1,
+        resolve_serving_profile=partial(resolve_serving_profile, tuple(profiles)),
         **kwargs,  # type: ignore[arg-type]
     )
 
@@ -62,7 +72,10 @@ def _budget(**kwargs: object) -> DailyBudget:
 
 
 def test_the_same_usage_prices_differently_through_two_profile_catalogs() -> None:
-    budget = _budget(profile_catalogs={"economy": _ECONOMY_PRICES})
+    budget = _budget(
+        profile_catalogs={"economy": _ECONOMY_PRICES},
+        profiles=(_profile("primary", "claude-sonnet-5"), _profile("economy", "claude-haiku-4-5")),
+    )
 
     economy = budget.usage_micros(_USAGE, profile_id="economy")
     premium = budget.usage_micros(_USAGE, profile_id="primary")
@@ -78,7 +91,10 @@ def test_the_same_usage_prices_differently_through_two_profile_catalogs() -> Non
 
 
 def test_cache_fields_are_priced_at_the_catalog_cache_prices() -> None:
-    economy_only = _budget(profile_catalogs={"economy": _ECONOMY_PRICES})
+    economy_only = _budget(
+        profile_catalogs={"economy": _ECONOMY_PRICES},
+        profiles=(_profile("primary", "claude-sonnet-5"), _profile("economy", "claude-haiku-4-5")),
+    )
 
     with_cache = economy_only.usage_micros(_USAGE, profile_id="economy")
     without_cache = economy_only.usage_micros(
@@ -107,7 +123,10 @@ def test_a_profile_may_override_the_derived_cache_prices() -> None:
         cache_read_micros_per_million=50_000,
         cache_creation_micros_per_million=2_000_000,
     )
-    budget = _budget(profile_catalogs={"p": overridden})
+    budget = _budget(
+        profile_catalogs={"p": overridden},
+        profiles=(_profile("primary", "claude-sonnet-5"), _profile("p", "claude-haiku-4-5")),
+    )
 
     micros = budget.usage_micros(TokenUsage(cache_read_input_tokens=1_000_000), profile_id="p")
 
@@ -132,9 +151,12 @@ def test_omitted_cache_prices_derive_from_the_input_price() -> None:
 def test_an_unknown_stamp_falls_back_to_the_primary_catalog_with_a_warning(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    # The warning is the shared resolver's (one PRICE-04 implementation, one
+    # warning): the budget only maps what the resolver resolved back to a
+    # catalog, and an unresolved stamp prices at the primary.
     budget = _budget(profile_catalogs={"economy": _ECONOMY_PRICES})
 
-    with caplog.at_level(logging.WARNING, logger="app.application.budget"):
+    with caplog.at_level(logging.WARNING, logger="app.infrastructure.providers.profiles"):
         micros = budget.usage_micros(_USAGE, profile_id="ghost")
 
     assert micros == 6400  # the primary catalog's arithmetic, not the economy's
@@ -148,7 +170,7 @@ def test_a_missing_stamp_prices_at_the_primary_without_a_warning(
 ) -> None:
     budget = _budget(profile_catalogs={"economy": _ECONOMY_PRICES})
 
-    with caplog.at_level(logging.WARNING, logger="app.application.budget"):
+    with caplog.at_level(logging.WARNING, logger="app.infrastructure.providers.profiles"):
         micros = budget.usage_micros(_USAGE)
 
     assert micros == 6400

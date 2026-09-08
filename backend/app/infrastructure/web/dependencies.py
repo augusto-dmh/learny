@@ -18,7 +18,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager
 from datetime import timedelta
-from functools import lru_cache
+from functools import lru_cache, partial
 from typing import Annotated
 from uuid import UUID, uuid4
 
@@ -136,7 +136,10 @@ from app.infrastructure.db.retrieval import SqlAlchemyRetrievalRepository
 from app.infrastructure.email import build_email_sender
 from app.infrastructure.embeddings import build_embedding_adapter
 from app.infrastructure.ingestion.markup import Bs4MarkupConverter
-from app.infrastructure.providers import resolve_generation_profiles
+from app.infrastructure.providers import (
+    resolve_generation_profiles,
+    resolve_serving_profile,
+)
 from app.infrastructure.quiz import build_quiz_adapter
 from app.infrastructure.scheduling import build_scheduling_adapter
 from app.infrastructure.security.password_hasher import Argon2PasswordHasher
@@ -217,8 +220,10 @@ def build_budget(conn: Connection) -> DailyBudget:
     ledger row it resolves is the caller's UTC day. Every declared profile's
     price catalog rides along keyed by its id (AD-344/PRICE-01), so a
     router-stamped result debits at the catalog of the profile that served it —
-    and a stamp on the legacy-seeded profile resolves exactly instead of
-    triggering the unknown-stamp fallback warning.
+    and the shared stamp resolver, bound to the declared registry, is wired with
+    it: one PRICE-04 resolution rule (with its warning) serves both the debits
+    and the registry's own callers, and a stamp on the legacy-seeded profile
+    resolves exactly instead of triggering the unknown-stamp fallback warning.
     """
     settings = get_settings()
     return DailyBudget(
@@ -234,6 +239,10 @@ def build_budget(conn: Connection) -> DailyBudget:
         teach_start_daily_cap=settings.daily_teach_start_cap,
         ai_paused=settings.ai_kill_switch,
         profile_catalogs=_profile_catalogs(settings),
+        resolve_serving_profile=partial(
+            resolve_serving_profile,
+            resolve_generation_profiles(settings),
+        ),
     )
 
 

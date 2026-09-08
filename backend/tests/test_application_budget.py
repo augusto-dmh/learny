@@ -17,6 +17,7 @@ from __future__ import annotations
 import time
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from uuid import UUID, uuid4
 
 import pytest
@@ -74,7 +75,7 @@ from app.infrastructure.db.repositories import (
     SqlAlchemyStudyDayRepository,
     SqlAlchemyUserRepository,
 )
-from app.infrastructure.providers import GenerationProfileSettings
+from app.infrastructure.providers import GenerationProfileSettings, resolve_serving_profile
 from app.infrastructure.scheduling import FsrsSchedulingAdapter
 from app.infrastructure.web.dependencies import get_generation
 from tests.conftest import TEST_ORIGIN, TEST_PASSWORD, requires_db
@@ -423,6 +424,23 @@ def test_successful_ask_debits_at_the_fixture_profile_catalog_including_cache(
     assert generation.calls == 1
 
 
+def _registry_profile(id: str) -> GenerationProfileSettings:
+    """A minimal declared profile, so the shared stamp resolver can resolve."""
+    return GenerationProfileSettings(
+        id=id,
+        kind="local",
+        model=f"{id}-model",
+        max_tokens=1024,
+        price_input_usd_per_million_tokens=3.0,
+        price_output_usd_per_million_tokens=15.0,
+        price_cache_read_usd_per_million_tokens=0.3,
+        price_cache_creation_usd_per_million_tokens=3.75,
+        grounding="verified-spans",
+        ask_enabled=True,
+        teach_enabled=True,
+    )
+
+
 def test_a_stamped_answer_debits_at_the_stamped_profile_catalog(db_conn: Connection) -> None:
     # AD-344/PRICE-01 on the turn path: the routing adapter stamps the serving
     # profile on the answer and the debit prices that stamp's catalog. Here an
@@ -455,6 +473,12 @@ def test_a_stamped_answer_debits_at_the_stamped_profile_catalog(db_conn: Connect
                 embed_micros_per_million=0,
             )
         },
+        # The shared stamp resolver, bound to the declared registry exactly as
+        # the composition root binds it — one PRICE-04 resolution.
+        resolve_serving_profile=partial(
+            resolve_serving_profile,
+            (_registry_profile("primary"), _registry_profile("economy")),
+        ),
     )
     service = _turn_service(db_conn, generation=generation, retrieve=retrieve, budget=budget)
 
