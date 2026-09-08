@@ -20,12 +20,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 
 from app.core.config import Settings
-from app.domain.entities import MODE_ANSWER, MODE_TEACH
+from app.domain.entities import MODE_ANSWER, MODE_TEACH, Evidence, GeneratedAnswer
 from app.infrastructure.answering import (
     AnthropicGenerationAdapter,
     ChainEntry,
@@ -34,7 +34,7 @@ from app.infrastructure.answering import (
     RoutingGenerationAdapter,
     build_generation_chain,
 )
-from app.infrastructure.providers import GenerationProfileSettings
+from app.infrastructure.providers import GenerationProfileSettings, Timeout
 
 _PROFILE = {
     "id": "primary",
@@ -216,6 +216,106 @@ def test_an_unset_or_ineligible_explain_name_keeps_the_primary_first() -> None:
     # A name that is not ask-eligible cannot lead an ask chain → primary first.
     ineligible = settings.model_copy(update={"generation_explain_profile": "quiet"})
     assert _chain_ids(build_generation_chain(ineligible, explain=True)) == ["primary", "quiet"]
+
+
+# --- COST-04 composed: the explain lead's transport failure fails over --------------
+
+
+class _FailingLead:
+    """A ``GenerationPort`` double for the cheap explain lead: every call fails."""
+
+    def __init__(self, error: Exception) -> None:
+        self._error = error
+        self.calls = 0
+
+    @property
+    def model(self) -> str:
+        return "cheap-model"
+
+    def generate(self, **_kwargs: object) -> GeneratedAnswer:  # noqa: ANN003 — port kwargs
+        self.calls += 1
+        raise self._error
+
+    def generate_stream(self, **_kwargs: object) -> object:  # noqa: ANN003, ANN202
+        self.calls += 1
+        raise self._error
+
+
+class _AttemptRecorder:
+    """Wraps a real adapter, writing down the attempt order the composition walks."""
+
+    def __init__(
+        self, name: str, inner: DeterministicGenerationAdapter, attempted: list[str]
+    ) -> None:
+        self._name = name
+        self._inner = inner
+        self._attempted = attempted
+
+    @property
+    def model(self) -> str:
+        return self._inner.model
+
+    def generate(self, **kwargs: object) -> object:  # noqa: ANN003 — port kwargs
+        self._attempted.append(self._name)
+        return self._inner.generate(**kwargs)  # type: ignore[arg-type]
+
+    def generate_stream(self, **kwargs: object) -> object:  # noqa: ANN003
+        self._attempted.append(self._name)
+        return self._inner.generate_stream(**kwargs)  # type: ignore[arg-type]
+
+
+def test_an_explain_lead_transport_failure_fails_over_to_the_ask_primary() -> None:
+    """COST-04's fallback leg, composed end to end.
+
+    The halves live in different suites — the routing policy tests fail a
+    scripted entry over (ROUTE-02), and the AD-345 tests above order the explain
+    chain ``["cheap", "primary"]``. This one walks the composed chain: the cheap
+    lead raises a transport-class error, the router fails over, and the Ask
+    primary serves the turn and takes the attribution stamp. Both adapters are
+    attempted, in order, each exactly once (a ``Timeout`` earns no retry).
+    """
+    evidence = [
+        Evidence(
+            chunk_id=uuid4(),
+            source_id=uuid4(),
+            section_path=("Biology",),
+            anchor="bio.xhtml",
+            page_span=None,
+            snippet="photosynthesis converts sunlight into chemical energy",
+            score=0.5,
+        )
+    ]
+    settings = Settings(
+        _env_file=None,
+        generation_profiles=[_profile(id="primary"), _profile(id="cheap")],
+        generation_explain_profile="cheap",
+    )
+    chain = build_generation_chain(settings, explain=True)
+    assert _chain_ids(chain) == ["cheap", "primary"]  # the premise: the cheap lead serves first
+
+    attempted: list[str] = []
+    router = RoutingGenerationAdapter(
+        (
+            ChainEntry(
+                adapter=_AttemptRecorder(
+                    "cheap", _FailingLead(Timeout("the cheap lead is down")), attempted
+                ),
+                profile=chain._chain[0].profile,
+            ),
+            ChainEntry(
+                adapter=_AttemptRecorder("primary", chain._chain[1].adapter, attempted),
+                profile=chain._chain[1].profile,
+            ),
+        )
+    )
+
+    answer = router.generate(mode=MODE_ANSWER, message="why?", evidence=evidence)
+
+    assert attempted == ["cheap", "primary"]  # both attempted, in order, once each
+    assert answer.profile_id == "primary"  # the Ask primary served and is billed for it
+    assert answer.model == "local-extractive"
+    assert answer.found
+    assert "photosynthesis" in answer.text
 
 
 # --- The cached FastAPI accessors expose the two chains (AD-345) --------------------
