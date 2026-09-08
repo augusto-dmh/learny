@@ -25,6 +25,7 @@ from app.domain.entities import (
     QuizDeckResult,
     QuizItemType,
     QuizSection,
+    SuggestResult,
 )
 
 _MODEL = "local-deterministic"
@@ -186,33 +187,37 @@ class DeterministicQuizAdapter:
             provider="local", batch_id=None, payload={"candidates": candidates, "errors": []}
         )
 
-    def suggest_cards(self, section: QuizSection, quote: str, limit: int) -> list[QuizCandidate]:
+    def suggest_cards(self, section: QuizSection, quote: str, limit: int) -> SuggestResult:
         """Derive candidates from ``quote`` itself, capped at ``limit`` (AD-134).
 
         The deck path's construction narrowed to the passage the student highlighted:
         the quote *is* the anchor quote, so the pair stays grounded by construction. A
-        quote that no chunk of ``section`` contains yields nothing — the caller reports
-        "no cards for this passage" rather than an error.
+        quote that no chunk of ``section`` contains yields no candidates — the caller
+        reports "no cards for this passage" rather than an error. Usage is ``None``:
+        the deterministic adapter consumes no provider tokens.
         """
         if limit <= 0:
-            return []
+            return SuggestResult(candidates=())
         chunk_id = _locate_quote(section, quote)
         if chunk_id is None:
-            return []
-        return _candidates_from(quote.strip(), chunk_id, section.title)[:limit]
+            return SuggestResult(candidates=())
+        pair = _candidates_from(quote.strip(), chunk_id, section.title)
+        return SuggestResult(candidates=tuple(pair[:limit]))
 
-    def suggest_note_cards(self, note_body: str, context: str, limit: int) -> list[QuizCandidate]:
+    def suggest_note_cards(self, note_body: str, context: str, limit: int) -> SuggestResult:
         """Derive candidates from the note body's leading sentence, capped (NL-08).
 
         Deterministic and grounded by construction (the sentence is verbatim from the
         note body), so the offline promotion path is reproducible. ``context`` — the book
         anchor context an anchored note carries — is a generation hint the real provider
         uses; grounding here is against the note body alone, so this adapter ignores it.
-        An empty body (or a sentence with no maskable word) yields nothing.
+        An empty body (or a sentence with no maskable word) yields nothing; usage is
+        ``None`` for the same reason as :meth:`suggest_cards`.
         """
         if limit <= 0:
-            return []
-        return _note_candidates_from(_leading_sentence(note_body))[:limit]
+            return SuggestResult(candidates=())
+        pair = _note_candidates_from(_leading_sentence(note_body))
+        return SuggestResult(candidates=tuple(pair[:limit]))
 
     def collect_deck(self, handle: QuizDeckHandle) -> QuizDeckResult | None:
         """Return the inline result immediately — the local adapter never pends."""

@@ -133,7 +133,7 @@ def test_suggest_cards_never_exceeds_the_limit() -> None:
     adapter = DeterministicQuizAdapter()
 
     for limit in (1, 2, 3):
-        candidates = adapter.suggest_cards(section, _SECOND, limit)
+        candidates = adapter.suggest_cards(section, _SECOND, limit).candidates
         # Non-empty first: `<= limit` alone holds for an adapter that returns nothing,
         # which would satisfy the cap while silently producing no cards.
         assert candidates
@@ -145,7 +145,7 @@ def test_suggest_cards_are_scoped_to_the_quote_not_the_section() -> None:
     section, chunk_id = _section(_TEXT)
     quote = _SECOND
 
-    candidates = DeterministicQuizAdapter().suggest_cards(section, quote, 3)
+    candidates = DeterministicQuizAdapter().suggest_cards(section, quote, 3).candidates
 
     assert candidates
     for candidate in candidates:
@@ -159,18 +159,19 @@ def test_suggest_cards_are_scoped_to_the_quote_not_the_section() -> None:
 
 def test_suggest_cards_only_free_recall_and_cloze_types() -> None:
     section, _ = _section(_TEXT)
-    candidates = DeterministicQuizAdapter().suggest_cards(section, _TEXT, 5)
+    candidates = DeterministicQuizAdapter().suggest_cards(section, _TEXT, 5).candidates
     assert all(c.item_type in {QuizItemType.FREE_RECALL, QuizItemType.CLOZE} for c in candidates)
 
 
 def test_suggest_cards_for_a_quote_absent_from_the_section_yields_none() -> None:
     section, _ = _section(_TEXT)
-    assert DeterministicQuizAdapter().suggest_cards(section, "Not in this book.", 3) == []
+    result = DeterministicQuizAdapter().suggest_cards(section, "Not in this book.", 3)
+    assert result.candidates == ()
 
 
 def test_suggest_cards_with_a_non_positive_limit_yields_none() -> None:
     section, _ = _section(_TEXT)
-    assert DeterministicQuizAdapter().suggest_cards(section, _TEXT, 0) == []
+    assert DeterministicQuizAdapter().suggest_cards(section, _TEXT, 0).candidates == ()
 
 
 # --- suggest_note_cards (the note IS the source, NL-08) --------------------------
@@ -180,7 +181,7 @@ _NOTE_SENTENCE = "Spaced repetition schedules reviews at expanding intervals."
 
 
 def test_suggest_note_cards_pairs_free_recall_and_cloze_from_the_leading_sentence() -> None:
-    candidates = DeterministicQuizAdapter().suggest_note_cards(_NOTE_BODY, "", 5)
+    candidates = DeterministicQuizAdapter().suggest_note_cards(_NOTE_BODY, "", 5).candidates
 
     assert len(candidates) == 2
     by_type = {c.item_type: c for c in candidates}
@@ -200,13 +201,13 @@ def test_suggest_note_cards_pairs_free_recall_and_cloze_from_the_leading_sentenc
 
 def test_suggest_note_cards_carry_no_source_chunk_id() -> None:
     # A note is not chunked, so its candidates cite no chunk (NL-08).
-    candidates = DeterministicQuizAdapter().suggest_note_cards(_NOTE_BODY, "", 5)
+    candidates = DeterministicQuizAdapter().suggest_note_cards(_NOTE_BODY, "", 5).candidates
     assert candidates
     assert all(c.source_chunk_id is None for c in candidates)
 
 
 def test_suggest_note_cards_are_grounded_in_the_note_body() -> None:
-    candidates = DeterministicQuizAdapter().suggest_note_cards(_NOTE_BODY, "", 5)
+    candidates = DeterministicQuizAdapter().suggest_note_cards(_NOTE_BODY, "", 5).candidates
     for candidate in candidates:
         # anchor_quote is a verbatim span of the note body (NL-08).
         assert quote_in_text(candidate.anchor_quote, _NOTE_BODY)
@@ -217,7 +218,7 @@ def test_suggest_note_cards_are_grounded_in_the_note_body() -> None:
 def test_suggest_note_cards_never_exceeds_the_limit() -> None:
     adapter = DeterministicQuizAdapter()
     for limit in (1, 2, 3):
-        candidates = adapter.suggest_note_cards(_NOTE_BODY, "", limit)
+        candidates = adapter.suggest_note_cards(_NOTE_BODY, "", limit).candidates
         assert candidates
         assert len(candidates) <= limit
 
@@ -226,29 +227,30 @@ def test_suggest_note_cards_ignore_the_anchor_context_for_grounding() -> None:
     # `context` is a generation hint the real provider uses; the offline adapter grounds
     # against the note body alone, so passing context changes nothing.
     adapter = DeterministicQuizAdapter()
-    without = adapter.suggest_note_cards(_NOTE_BODY, "", 5)
-    with_context = adapter.suggest_note_cards(_NOTE_BODY, "Book chapter on memory.", 5)
+    without = adapter.suggest_note_cards(_NOTE_BODY, "", 5).candidates
+    with_context = adapter.suggest_note_cards(_NOTE_BODY, "Book chapter on memory.", 5).candidates
     assert without == with_context
 
 
 def test_suggest_note_cards_are_deterministic() -> None:
     adapter = DeterministicQuizAdapter()
-    assert adapter.suggest_note_cards(_NOTE_BODY, "", 5) == adapter.suggest_note_cards(
-        _NOTE_BODY, "", 5
+    assert (
+        adapter.suggest_note_cards(_NOTE_BODY, "", 5).candidates
+        == adapter.suggest_note_cards(_NOTE_BODY, "", 5).candidates
     )
 
 
 def test_suggest_note_cards_for_an_empty_body_yields_none() -> None:
-    assert DeterministicQuizAdapter().suggest_note_cards("   ", "", 5) == []
+    assert DeterministicQuizAdapter().suggest_note_cards("   ", "", 5).candidates == ()
 
 
 def test_suggest_note_cards_for_a_body_without_a_maskable_word_yields_none() -> None:
     # A leading "sentence" of only punctuation has no word to derive candidates from.
-    assert DeterministicQuizAdapter().suggest_note_cards("...", "", 5) == []
+    assert DeterministicQuizAdapter().suggest_note_cards("...", "", 5).candidates == ()
 
 
 def test_suggest_note_cards_with_a_non_positive_limit_yields_none() -> None:
-    assert DeterministicQuizAdapter().suggest_note_cards(_NOTE_BODY, "", 0) == []
+    assert DeterministicQuizAdapter().suggest_note_cards(_NOTE_BODY, "", 0).candidates == ()
 
 
 def test_handle_survives_json_payload_roundtrip() -> None:

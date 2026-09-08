@@ -17,6 +17,8 @@ from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic_settings.sources import PydanticBaseSettingsSource
 
+from app.infrastructure.providers.profiles import GenerationProfileSettings
+
 logger = logging.getLogger(__name__)
 
 # Environment variables the unified conversation settings replaced, mapped to the
@@ -237,6 +239,17 @@ class Settings(BaseSettings):
     generation_model: str = "claude-sonnet-5"
     generation_effort: Literal["low", "medium", "high", "xhigh", "max"] = "medium"
     generation_max_tokens: int = 4096
+    # The settings-declared generation profile registry (cheaper-intelligence,
+    # ROUTE-01). ``LEARNY_GENERATION_PROFILES`` is a JSON list of profile objects
+    # (id, kind, model, per-mode effort, max_tokens, the profile's own four price
+    # fields, grounding kind, ask/teach eligibility); the ordered list is the chain
+    # the routing adapter walks, primary first. Empty (the default) means the
+    # legacy settings above still govern: one profile is synthesized from them at
+    # composition (AD-342), so the default deployment behaves exactly as before.
+    # ``generation_explain_profile`` names the profile that serves selection-Explain
+    # ask turns (empty → the primary; COST-04, wired by the composition root).
+    generation_profiles: list[GenerationProfileSettings] = []
+    generation_explain_profile: str = ""
     judge_model: str = "claude-opus-4-8"
     eval_max_cases: int = 50
     # Modeled-cost ceiling (USD) for operator-triggered live studies: the study

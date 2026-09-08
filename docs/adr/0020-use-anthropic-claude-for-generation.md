@@ -1,7 +1,7 @@
 # ADR-020: Use Anthropic Claude For Cited Answer And Teaching Generation
 
 - **Date**: 2026-07-16
-- **Status**: Accepted
+- **Status**: Accepted; amended 2026-09-07 — see Amendment below
 - **Deciders**: Augusto, Codex
 - **Tags**: architecture, ai, generation, teaching, anthropic, citations, evaluation
 
@@ -162,3 +162,72 @@ adapters (the embedding half was closed by ADR-0019).
 - Anthropic Citations guide: https://platform.claude.com/docs/en/build-with-claude/citations
 - Anthropic Prompt Caching guide: https://platform.claude.com/docs/en/build-with-claude/prompt-caching
 - Anthropic Structured Outputs guide: https://platform.claude.com/docs/en/build-with-claude/structured-outputs
+
+## Amendment (2026-09-07): Multi-Profile Generation Routing
+
+**Trigger.** RFC-0007 Cycle G — "Cheaper intelligence, same trust" (Bet 7) — layers
+effort, caching, and fallback levers on top of this ADR's provider choice, and its
+fallback-adapter work is gated on an accepted amendment to this ADR. The decisions
+below answer the twelve decision inputs recorded in the research evidence:
+`docs/research/2026-09-07/` (`provider-adapter-architecture.md` §4, backed by
+`provider-landscape-update.md` and `subscription-as-api.md`). The original decision
+above stands unchanged — Anthropic Claude is the generation primary behind the
+Learny-owned ports — and this amendment governs how additional provider profiles
+join, are routed, priced, promoted, and constrained.
+
+1. **Claude remains the Ask/Teach primary.** The Citations API is still the only
+   provider-computed, offset-verified citation source, and citations are the product
+   promise (ADR-0003); the amendment adds tiers beside the primary, it does not
+   dethrone it.
+2. **The second adapter lands with the first concrete profile, not speculatively.**
+   A generic OpenAI-compatible adapter is built when the first concrete economy
+   profile is actually selected; the factory pattern makes waiting cheap.
+3. **Degradation is declared per profile via capability flags in the settings
+   registry** ("grounded-primary" vs "economy"), consumed by the router — never a
+   port method, never a runtime probe. Ask/Teach fall back only to profiles that
+   preserve acceptable grounding; otherwise they fail honest (`found=False` /
+   `AnswerGenerationFailed`).
+4. **Effort stays an adapter constructor parameter fed per profile.** The port never
+   grows an effort argument; effort diets land as profile values after the judge
+   gate.
+5. **Fallback scope is split by path, and the streaming rule bounds the turn path.**
+   Turn-path auto-fallback may fail over only before the first emitted delta; once
+   answer deltas are on the wire the router has committed. The deck path pins its
+   provider at `begin_deck` — the provider recorded on the deck handle — and
+   retries within that provider, with no cross-provider batch retry, because a
+   half-submitted batch has no portable second home.
+6. **A Learny-owned error taxonomy defines retryability**: `Timeout`,
+   `RateLimited`, `ProviderUnavailable`, `RequestRejected`, translated inside each
+   adapter. Only timeout and provider-unavailable failures cross providers; rate
+   limits retry on the same provider after backoff; request rejections never
+   cross, because request shapes differ per profile.
+7. **Spend accounting uses per-profile price catalogs**, resolved from the serving
+   (routed) profile at the debit site; the ledger, daily caps, kill switch, and the
+   deck spend marker's idempotency are unchanged.
+8. **Promotion of a model to default is eval-gated process**: a candidate profile
+   must run green on the nightly judge gate before an operator reorders the profile
+   registry. A flip without a green nightly is a documented exception, not a habit.
+9. **The spend rails apply to every profile**: the pre-flight budget assertion runs
+   before any port touch regardless of which adapter serves the call, and rate
+   limits stay user-keyed.
+10. **Embeddings do not diversify; ADR-0019 stands.** The `dimensions` parameter is
+    not portable across providers, the stored vector width is coupled to it, and a
+    switch is a full re-embed.
+11. **End-user provider choice is explicitly deferred.** Operator-curated house
+    profiles per learner are recorded as the future one-cycle path; BYO API keys
+    are a pricing-gated roadmap of their own. Nothing decided here forecloses
+    either.
+12. **The ADR-0009 line is restated for the new surface**: no LiteLLM, OpenRouter,
+    or Portkey in the composition root; routing logic lives in a Learny-owned
+    adapter; user-supplied endpoints are never a configuration input.
+
+Throughout, the generation port stays frozen: profile metadata — capabilities,
+prices, effort — lives beside the port, in the settings-declared profile registry,
+never inside it.
+
+### Amendment references
+
+- [RFC-0007: Public-Launch Roadmap](../rfc/0007-public-launch-roadmap.md) (Cycle G, Bet 7)
+- Provider adapter architecture research (2026-09-07): `../research/2026-09-07/provider-adapter-architecture.md`
+- Provider landscape update (2026-09-07): `../research/2026-09-07/provider-landscape-update.md`
+- Subscription-as-API research (2026-09-07): `../research/2026-09-07/subscription-as-api.md`

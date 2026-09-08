@@ -30,6 +30,7 @@ import {
 } from "@/app/lib/conversations";
 import {
   createConversationTransport,
+  type ExplainSelectionOrigin,
   messageText,
   StreamRequestError,
   type LearnyUIMessage,
@@ -40,6 +41,9 @@ export type FailedTurnState = {
   error: string;
   userText: string;
   messageId: string | null;
+  /** The per-turn origin the failed send carried, so Retry rides it again —
+   * a retried selection-Explain turn must stay on the explain chain (COST-04). */
+  origin?: ExplainSelectionOrigin;
 };
 
 export type ConversationThread = {
@@ -53,8 +57,14 @@ export type ConversationThread = {
   banner: string | null;
   /** The in-thread failure Retry is bound to, or `null` when none has failed. */
   failedTurn: FailedTurnState | null;
-  /** Send one message, creating the conversation first if the thread has none. */
-  send: (text: string) => void;
+  /** Send one message, creating the conversation first if the thread has none.
+   *
+   * `options.origin` is the per-turn selection-Explain marker (COST-04): it
+   * rides this one send's request body and nothing else. Every turn that is not
+   * the capture popover's Explain verb omits it, keeping its body exactly
+   * `{message, mode}`.
+   */
+  send: (text: string, options?: { origin?: ExplainSelectionOrigin }) => void;
   /** Stop an in-flight turn; the conversation and its question stay. */
   stop: () => void;
 };
@@ -96,6 +106,10 @@ export function useConversationThread({
   const [failedTurn, setFailedTurn] = useState<FailedTurnState | null>(null);
   const messagesRef = useRef<LearnyUIMessage[]>([]);
   const lastSentRef = useRef("");
+  // The origin the in-flight send carried, read when it fails so the failure
+  // record keeps it and Retry can re-mark the resend (COST-04). Only one send
+  // is ever in flight (send refuses while streaming), so "last" is "this one".
+  const lastOriginRef = useRef<ExplainSelectionOrigin | undefined>(undefined);
 
   // The id the *transport* streams into. It has to be a ref because it is read
   // and written inside one send, before React has re-rendered with the new value.
@@ -157,6 +171,7 @@ export function useConversationThread({
         error: err.message,
         userText: lastUserText(current) || lastSentRef.current,
         messageId: current[current.length - 1]?.id ?? null,
+        origin: lastOriginRef.current,
       });
     },
     onFinish: () => {
@@ -176,13 +191,19 @@ export function useConversationThread({
   const isStreaming = status === "submitted" || status === "streaming";
 
   const send = useCallback(
-    (text: string) => {
+    (text: string, options?: { origin?: ExplainSelectionOrigin }) => {
       if (!text || isStreaming) {
         return;
       }
       lastSentRef.current = text;
+      lastOriginRef.current = options?.origin;
       setBanner(null);
-      void sendMessage({ text });
+      void sendMessage(
+        { text },
+        options?.origin
+          ? { body: { origin: options.origin } }
+          : undefined,
+      );
     },
     [isStreaming, sendMessage],
   );

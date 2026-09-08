@@ -476,10 +476,17 @@ class TokenUsage:
     adapters that can read usage map it onto this, and the budget service multiplies
     it into the price catalog to debit the day's USD. ``None`` usage (an adapter that
     does not report — the deterministic local ones) means a 0 USD debit.
+
+    The cache fields default to zero so an adapter (or provider) that reports no
+    cache detail debits exactly as it did before they existed: input+output only.
+    An Anthropic call with prompt caching active populates them from the usage
+    block (PRICE-02), and both are priced at the serving profile's cache prices.
     """
 
     input_tokens: int = 0
     output_tokens: int = 0
+    cache_read_input_tokens: int = 0
+    cache_creation_input_tokens: int = 0
 
 
 @dataclass(frozen=True)
@@ -506,6 +513,10 @@ class GeneratedAnswer:
     # The call's token counts when the adapter can read them (an adapter capability,
     # not a port requirement — like ``spans``). Absent → the debit is 0 USD.
     usage: TokenUsage | None = None
+    # The serving profile's id, stamped by the routing adapter (AD-344) so the
+    # debit prices the call at the serving profile's catalog (PRICE-01). Absent
+    # (a direct sub-adapter's answer) → the primary catalog, as before routing.
+    profile_id: str | None = None
 
 
 # The exact reply a generation adapter instructs the model to return, alone, when
@@ -851,6 +862,21 @@ class QuizDeckResult:
     errors: tuple[str, ...]
     # The batch's summed token counts when the adapter can read them; absent → the
     # deck's debit is 0 USD.
+    usage: TokenUsage | None = None
+
+
+@dataclass(frozen=True)
+class SuggestResult:
+    """A foreground suggest pass's outcome: candidates plus the call's usage (AD-341).
+
+    The carrier lets the suggest call debit like the turn paths do (PRICE-03)
+    without widening the port's *semantics*: ``candidates`` is exactly the list
+    the suggest methods always returned, and ``usage`` rides beside it the way it
+    rides on :class:`GeneratedAnswer` and :class:`QuizDeckResult` — an adapter
+    capability, absent (``None`` → 0 USD debit) for the deterministic adapters.
+    """
+
+    candidates: tuple[QuizCandidate, ...]
     usage: TokenUsage | None = None
 
 

@@ -23,7 +23,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Iterator, Sequence
-from typing import Any, NamedTuple, Protocol
+from typing import Any, NamedTuple, NoReturn, Protocol
 from uuid import UUID
 
 from app.domain.entities import (
@@ -37,7 +37,6 @@ from app.domain.entities import (
     Evidence,
     GeneratedAnswer,
     HistoryTurn,
-    TokenUsage,
     citation_marker,
 )
 from app.infrastructure.answering.prompts import (
@@ -45,13 +44,18 @@ from app.infrastructure.answering.prompts import (
     SENTINEL,
     TEACHING_SYSTEM_PROMPT,
 )
+from app.infrastructure.providers import usage_of
+from app.infrastructure.providers.translation import (
+    raise_translated as _raise_translated_shared,
+)
 
 logger = logging.getLogger(__name__)
 
 # One-hour ephemeral cache breakpoint (research §5): teaching sessions have human
-# think-time, so the 5-min TTL would silently re-pay the write between turns. Used
-# on the frozen system prompt and the latest history block so the cacheable prefix
-# grows with the conversation.
+# think-time, so the 5-min TTL would silently re-pay the write between turns. On
+# teach turns it sits on the leading section documents (the expensive-but-stable
+# prefix) — or on the frozen system prompt when a turn carries no documents — and
+# on the latest history block, so the cacheable prefix grows with the conversation.
 _CACHE_CONTROL = {"type": "ephemeral", "ttl": "1h"}
 
 # Adaptive is the model's own decision about how much to think; ``summarized``
@@ -215,24 +219,6 @@ class _CitationMarks:
         self.spans.append(CitedSpan(chunk_id=document.chunk_id, quote=quote, start=start, end=end))
 
 
-def _usage_of(message: Any) -> TokenUsage | None:
-    """Map a provider message's ``usage`` onto the Learny usage DTO (design §Reuse).
-
-    The budget debit needs the tokens a successful call actually consumed, and today
-    they only reach ``_log_call`` — so the same object is now carried on the returned
-    :class:`~app.domain.entities.GeneratedAnswer` instead of living solely in the
-    log. Input and output counts only: cache-read tokens are not metered this letter.
-    A message without usage parses to ``None`` → the debit is 0 USD.
-    """
-    usage = getattr(message, "usage", None)
-    if usage is None:
-        return None
-    return TokenUsage(
-        input_tokens=getattr(usage, "input_tokens", 0) or 0,
-        output_tokens=getattr(usage, "output_tokens", 0) or 0,
-    )
-
-
 def _parse_message(
     message: Any, documents: Sequence[_SentDocument], *, model: str
 ) -> GeneratedAnswer:
@@ -263,7 +249,7 @@ def _parse_message(
             cited_chunk_ids=(),
             model=model,
             found=False,
-            usage=_usage_of(message),
+            usage=usage_of(message),
         )
     return GeneratedAnswer(
         text="".join(text_parts),
@@ -271,7 +257,7 @@ def _parse_message(
         model=model,
         found=True,
         spans=tuple(marks.spans),
-        usage=_usage_of(message),
+        usage=usage_of(message),
     )
 
 
@@ -285,12 +271,13 @@ def _log_call(message: Any, *, model: str, effort: str, found: bool) -> None:
     usage = getattr(message, "usage", None)
     logger.info(
         "anthropic generation model=%s effort=%s input_tokens=%s output_tokens=%s "
-        "cache_read_input_tokens=%s stop_reason=%s found=%s",
+        "cache_read_input_tokens=%s cache_creation_input_tokens=%s stop_reason=%s found=%s",
         model,
         effort,
         getattr(usage, "input_tokens", None),
         getattr(usage, "output_tokens", None),
         getattr(usage, "cache_read_input_tokens", None),
+        getattr(usage, "cache_creation_input_tokens", None),
         getattr(message, "stop_reason", None),
         found,
     )
@@ -345,6 +332,25 @@ def _provider_error_type(exc: BaseException) -> str | None:
     return kind if isinstance(kind, str) and kind else None
 
 
+def raise_translated(exc: BaseException) -> NoReturn:
+    """Re-raise a caught provider failure as its Learny taxonomy class (TAX-02).
+
+    The SDK-specific branch is exactly this binding: the shared providers
+    translator (:func:`app.infrastructure.providers.translation.raise_translated`)
+    owns the status classification, the cause chaining, and the identity-
+    preserved passthrough — this adapter supplies the Anthropic SDK's own
+    timeout and connection-error types plus httpx's timeout family as inputs.
+    """
+    import anthropic  # local import — the sole SDK reference (ADR-0007/0009)
+    import httpx  # local import, like every transport reference in this module
+
+    _raise_translated_shared(
+        exc,
+        timeout_exceptions=(TimeoutError, httpx.TimeoutException, anthropic.APITimeoutError),
+        unreachable_exceptions=(anthropic.APIConnectionError,),
+    )
+
+
 def _build_history_messages(
     history: Sequence[HistoryTurn],
 ) -> list[dict[str, Any]]:
@@ -386,7 +392,9 @@ class AnthropicAdapterBase:
     """Shared construction and lazy client seam for the Anthropic adapters.
 
     Constructed with the API key, model id, ``max_tokens``, and the thinking
-    ``effort`` the composition root read from settings; the real
+    effort the composition root read from the serving profile — per mode
+    (``effort_ask``/``effort_teach``, COST-01/AD-339), with the legacy single
+    ``effort`` keyword kept working (it configures both modes). The real
     ``anthropic.Anthropic`` client is built lazily on first use (so the SDK import
     stays inside this module and an injected fake needs no key/network, mirroring
     the OpenAI embedding adapter). Subclasses add the port-specific ``generate``.
@@ -398,19 +406,27 @@ class AnthropicAdapterBase:
         api_key: str,
         model: str,
         max_tokens: int,
-        effort: str = "medium",
+        effort: str | None = None,
+        effort_ask: str | None = None,
+        effort_teach: str | None = None,
         client: _MessagesClient | None = None,
     ) -> None:
         self._api_key = api_key
         self._model = model
         self._max_tokens = max_tokens
-        self._effort = effort
+        legacy = effort if effort is not None else "medium"
+        self._effort_ask = effort_ask if effort_ask is not None else legacy
+        self._effort_teach = effort_teach if effort_teach is not None else legacy
         self._client = client
 
     @property
     def model(self) -> str:
         """Stable model identity, readable without a ``generate`` call (QA-04)."""
         return self._model
+
+    def _effort_for(self, mode: str) -> str:
+        """The thinking effort this call's mode spends (ask and teach may differ)."""
+        return self._effort_teach if mode == MODE_TEACH else self._effort_ask
 
     def _get_client(self) -> _MessagesClient:
         """Return the injected client, or lazily build ``anthropic.Anthropic``."""
@@ -426,6 +442,7 @@ class AnthropicAdapterBase:
         system: list[dict[str, Any]],
         messages: list[dict[str, Any]],
         documents: Sequence[_SentDocument],
+        effort: str,
     ) -> Iterator[AnswerStreamEvent]:
         """Stream generation events, closing the SDK stream on early cancellation.
 
@@ -460,7 +477,7 @@ class AnthropicAdapterBase:
                 model=self._model,
                 max_tokens=self._max_tokens,
                 thinking=_THINKING,
-                output_config={"effort": self._effort},
+                output_config={"effort": effort},
                 system=system,
                 messages=messages,
             ) as stream:
@@ -479,9 +496,9 @@ class AnthropicAdapterBase:
                 final = stream.get_final_message()
         except Exception as exc:
             _log_client_error(exc)
-            raise
+            raise_translated(exc)
         answer = _parse_message(final, documents, model=self._model)
-        _log_call(final, model=self._model, effort=self._effort, found=answer.found)
+        _log_call(final, model=self._model, effort=effort, found=answer.found)
         yield AnswerCompleted(answer=answer)
 
 
@@ -491,25 +508,29 @@ class AnthropicGenerationAdapter(AnthropicAdapterBase):
     One adapter for both modes, dispatching **only on the explicit ``mode``** —
     never on whether a target section path was supplied, which a scoped answer
     conversation carries too (AD-194). The document builder, response parser, and
-    sentinel logic are shared; the request differs by mode in exactly two places,
-    the system prompt and the final user turn:
+    sentinel logic are shared; the request differs by mode in three places, the
+    system prompt, the placement of the evidence documents, and the final user
+    turn:
 
-    - ``answer``: the frozen ``ANSWER_SYSTEM_PROMPT`` with no cache breakpoint, and
-      the question as the final user text. With no history that is the single-shot
-      ask it has always been.
-    - ``teach``: the frozen ``TEACHING_SYSTEM_PROMPT`` carrying a 1-hour
-      ``cache_control`` breakpoint, and a final user turn naming the target section
-      ahead of the learner's message.
+    - ``answer``: the frozen ``ANSWER_SYSTEM_PROMPT`` with no cache breakpoint,
+      the documents in the final user turn ahead of the question, and the
+      question as that turn's text. With no history that is the single-shot ask
+      it has always been.
+    - ``teach``: the frozen ``TEACHING_SYSTEM_PROMPT`` (breakpoint-free — the 1h
+      ``cache_control`` moved behind the stable per-section documents), the
+      documents leading the message list with the breakpoint on the last of them
+      so a scoped session reads its evidence from cache (COST-02), and a final
+      user turn naming the target section ahead of the learner's message.
 
     Either way prior turns render as alternating user/assistant messages with a
-    second breakpoint on the latest history block, so the cacheable prefix (system +
-    settled history) is byte-stable across a session while every volatile input for
-    this turn — the retrieved evidence documents, the target section, and the new
-    message — sits strictly *after* the prefix (research §5). The buffered path
-    calls ``messages.create`` (``max_tokens`` is far below the SDK's non-streaming
-    guard) under :data:`_GENERATE_TIMEOUT_S` and carries the same thinking/effort
-    config as the streamed one, with no sampling params; the client is built lazily
-    by the shared base so an injected fake needs no key/network.
+    second breakpoint on the latest history block, so the cacheable prefix grows
+    turn over turn while every volatile input for this turn — the target section,
+    and the new message — sits strictly *after* the prefix (research §5). The
+    buffered path calls ``messages.create`` (``max_tokens`` is far below the SDK's
+    non-streaming guard) under :data:`_GENERATE_TIMEOUT_S` and carries the same
+    thinking/effort config as the streamed one, with no sampling params; the
+    client is built lazily by the shared base so an injected fake needs no
+    key/network.
     """
 
     def _build_request(
@@ -526,10 +547,19 @@ class AnthropicGenerationAdapter(AnthropicAdapterBase):
         """Assemble the system prompt, the message list, and the sent-document map.
 
         Shared by the buffered and streaming paths so both send the byte-identical
-        request, and by both modes so only the two mode-specific pieces differ. The
+        request, and by both modes so only the mode-specific pieces differ. The
         teach turn's section header is built from the target the caller resolved;
         the answer turn sends the message alone, whatever target the conversation
         happens to be scoped to.
+
+        Teach places the stable per-section documents **inside** the cached prefix
+        (COST-02, rq15 win 3): they lead the message list with the 1h breakpoint on
+        the last document block, so a scoped session's second and later turns read
+        the expensive-but-stable evidence from cache instead of re-paying it. The
+        API keeps document blocks out of ``system``, so the leading user turn
+        carries them ahead of the settled history; the volatile per-turn input —
+        the section header and the new message — stays strictly after the prefix.
+        With no documents the breakpoint falls back to the system prompt block.
         """
         documents, sent = _build_documents(evidence)
         messages = _build_history_messages(history)
@@ -541,22 +571,45 @@ class AnthropicGenerationAdapter(AnthropicAdapterBase):
             if hint_level is not None:
                 header.append(f"HintLevel: {hint_level}")
             turn_text = "\n".join(header) + f"\n\n{message}"
-            system = [
-                {
-                    "type": "text",
-                    "text": TEACHING_SYSTEM_PROMPT,
-                    "cache_control": _CACHE_CONTROL,
+            system = [{"type": "text", "text": TEACHING_SYSTEM_PROMPT}]
+            if documents:
+                # Stable per-section evidence leads the message list, inside the
+                # 1h cached prefix (breakpoint on the last document block); with
+                # no documents to front-run it, the breakpoint falls back to the
+                # system prompt block.
+                documents[-1]["cache_control"] = _CACHE_CONTROL
+            else:
+                system[0]["cache_control"] = _CACHE_CONTROL
+            if documents and messages:
+                # The settled prefix already carries the documents: replay them at
+                # the head of the first user turn so the cached prefix stays
+                # byte-stable turn over turn.
+                messages[0] = {
+                    "role": "user",
+                    "content": [
+                        *documents,
+                        {"type": "text", "text": messages[0]["content"]},
+                    ],
                 }
-            ]
+            # This turn's documents: an empty history has nothing preceding them,
+            # so they lead the final user turn; a settled history carries them at
+            # its head already.
+            lead = [] if (documents and messages) else documents
+            messages.append(
+                {
+                    "role": "user",
+                    "content": [*lead, {"type": "text", "text": turn_text}],
+                }
+            )
         else:
             turn_text = message
             system = [{"type": "text", "text": ANSWER_SYSTEM_PROMPT}]
-        messages.append(
-            {
-                "role": "user",
-                "content": [*documents, {"type": "text", "text": turn_text}],
-            }
-        )
+            messages.append(
+                {
+                    "role": "user",
+                    "content": [*documents, {"type": "text", "text": turn_text}],
+                }
+            )
         return system, messages, sent
 
     def generate(
@@ -580,21 +633,22 @@ class AnthropicGenerationAdapter(AnthropicAdapterBase):
             tutor_phase=tutor_phase,
             hint_level=hint_level,
         )
+        effort = self._effort_for(mode)
         try:
             response = self._get_client().messages.create(
                 model=self._model,
                 max_tokens=self._max_tokens,
                 thinking=_THINKING,
-                output_config={"effort": self._effort},
+                output_config={"effort": effort},
                 system=system,
                 messages=messages,
                 timeout=_GENERATE_TIMEOUT_S,
             )
         except Exception as exc:
             _log_client_error(exc)
-            raise
+            raise_translated(exc)
         answer = _parse_message(response, sent, model=self._model)
-        _log_call(response, model=self._model, effort=self._effort, found=answer.found)
+        _log_call(response, model=self._model, effort=effort, found=answer.found)
         return answer
 
     def generate_stream(
@@ -618,4 +672,6 @@ class AnthropicGenerationAdapter(AnthropicAdapterBase):
             tutor_phase=tutor_phase,
             hint_level=hint_level,
         )
-        return self._run_stream(system=system, messages=messages, documents=sent)
+        return self._run_stream(
+            system=system, messages=messages, documents=sent, effort=self._effort_for(mode)
+        )

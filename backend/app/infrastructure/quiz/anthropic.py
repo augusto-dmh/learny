@@ -24,7 +24,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, NoReturn
 from uuid import UUID
 
 from app.domain.entities import (
@@ -33,15 +33,40 @@ from app.domain.entities import (
     QuizDeckResult,
     QuizItemType,
     QuizSection,
+    SuggestResult,
     TokenUsage,
 )
 from app.infrastructure.answering.anthropic import AnthropicAdapterBase
+from app.infrastructure.providers import usage_of
+from app.infrastructure.providers.translation import (
+    raise_translated as _raise_translated_shared,
+)
 
 # Wall-clock bound for the one foreground generation call (card suggestions). The deck
 # path is batched and asynchronous, so it is deliberately unaffected. Chosen well under
 # a reader's patience: past this the student has already given up, and holding the
 # threadpool slot only makes the next request worse.
 _SUGGEST_TIMEOUT_S = 30.0
+
+
+def _raise_translated(exc: BaseException) -> NoReturn:
+    """Translate a caught provider failure through the shared translator (TAX-02).
+
+    The SDK-specific branch is exactly this binding: the providers package's
+    shared translator owns the status classification and cause chaining, and
+    this adapter — which owns the ``anthropic`` SDK here just as the answering
+    adapter does — supplies its timeout and connection-error types plus httpx's
+    timeout family as inputs.
+    """
+    import anthropic  # local import — the sole SDK reference (ADR-0007/0009)
+    import httpx  # local transport reference, like in every adapter
+
+    _raise_translated_shared(
+        exc,
+        timeout_exceptions=(TimeoutError, httpx.TimeoutException, anthropic.APITimeoutError),
+        unreachable_exceptions=(anthropic.APIConnectionError,),
+    )
+
 
 # Formulation bar both deck and quote prompts must carry (REV-20).
 _FORMULATION_RUBRIC = (
@@ -254,14 +279,17 @@ class AnthropicQuizAdapter(AnthropicAdapterBase):
         if not requests:
             return QuizDeckHandle(provider="anthropic", batch_id=None, payload={"sections": {}})
 
-        batch = self._get_client().messages.batches.create(requests=requests)
+        try:
+            batch = self._get_client().messages.batches.create(requests=requests)
+        except Exception as exc:
+            _raise_translated(exc)
         return QuizDeckHandle(
             provider="anthropic",
             batch_id=batch.id,
             payload={"sections": section_meta},
         )
 
-    def suggest_cards(self, section: QuizSection, quote: str, limit: int) -> list[QuizCandidate]:
+    def suggest_cards(self, section: QuizSection, quote: str, limit: int) -> SuggestResult:
         """Issue one Messages call for ``quote`` and return at most ``limit`` candidates.
 
         Synchronous by design (AD-134) — the student is waiting — but structurally the
@@ -269,31 +297,37 @@ class AnthropicQuizAdapter(AnthropicAdapterBase):
         ``source_chunk_id`` constrained to this section's chunk ids, so grounding stays
         schema-enforced. Malformed structured output raises ``ValueError`` for the caller
         to surface as a retryable failure; the QC pipeline still re-verifies whatever
-        parses.
+        parses. The response's usage rides back on the result so the caller debits the
+        call like the turn paths (AD-341/PRICE-03).
         """
         if limit <= 0 or not section.chunks:
-            return []
+            return SuggestResult(candidates=())
         chunk_ids = [str(chunk_id) for chunk_id, _ in section.chunks]
-        message = self._get_client().messages.create(
-            model=self._model,
-            max_tokens=self._max_tokens,
-            messages=[{"role": "user", "content": _quote_prompt(section, quote, limit)}],
-            output_config={"format": {"type": "json_schema", "schema": _items_schema(chunk_ids)}},
-            # Bounded per call rather than on the shared client, which the streaming
-            # answer path also uses and where a long read is legitimate. This one is a
-            # student waiting on a popover, and it occupies a threadpool slot while it
-            # waits: on the SDK default a hung connection would hold that slot for ten
-            # minutes. Rate limiting caps how often this is entered, not how long it
-            # stays, so the bound has to live here.
-            timeout=_SUGGEST_TIMEOUT_S,
-        )
+        try:
+            message = self._get_client().messages.create(
+                model=self._model,
+                max_tokens=self._max_tokens,
+                messages=[{"role": "user", "content": _quote_prompt(section, quote, limit)}],
+                output_config={
+                    "format": {"type": "json_schema", "schema": _items_schema(chunk_ids)}
+                },
+                # Bounded per call rather than on the shared client, which the streaming
+                # answer path also uses and where a long read is legitimate. This one is a
+                # student waiting on a popover, and it occupies a threadpool slot while it
+                # waits: on the SDK default a hung connection would hold that slot for ten
+                # minutes. Rate limiting caps how often this is entered, not how long it
+                # stays, so the bound has to live here.
+                timeout=_SUGGEST_TIMEOUT_S,
+            )
+        except Exception as exc:
+            _raise_translated(exc)
         try:
             candidates = _parse_items(message)
         except (KeyError, json.JSONDecodeError) as exc:
             raise ValueError(f"suggestion response was not usable: {exc}") from exc
-        return candidates[:limit]
+        return SuggestResult(candidates=tuple(candidates[:limit]), usage=usage_of(message))
 
-    def suggest_note_cards(self, note_body: str, context: str, limit: int) -> list[QuizCandidate]:
+    def suggest_note_cards(self, note_body: str, context: str, limit: int) -> SuggestResult:
         """Issue one Messages call for a note and return at most ``limit`` candidates.
 
         Synchronous by design (AD-134) — the reader is waiting — and structurally the
@@ -301,22 +335,26 @@ class AnthropicQuizAdapter(AnthropicAdapterBase):
         ``_note_items_schema`` drops ``source_chunk_id`` (a note is not chunked) and the
         prompt carries the note's book context only when present. Malformed structured
         output raises ``ValueError`` for the caller to surface as a retryable failure; the
-        QC pipeline still re-verifies whatever parses against the note body.
+        QC pipeline still re-verifies whatever parses against the note body. The usage
+        rides back on the result exactly as on :meth:`suggest_cards`.
         """
         if limit <= 0 or not note_body.strip():
-            return []
-        message = self._get_client().messages.create(
-            model=self._model,
-            max_tokens=self._max_tokens,
-            messages=[{"role": "user", "content": _note_prompt(note_body, context, limit)}],
-            output_config={"format": {"type": "json_schema", "schema": _note_items_schema()}},
-            timeout=_SUGGEST_TIMEOUT_S,
-        )
+            return SuggestResult(candidates=())
+        try:
+            message = self._get_client().messages.create(
+                model=self._model,
+                max_tokens=self._max_tokens,
+                messages=[{"role": "user", "content": _note_prompt(note_body, context, limit)}],
+                output_config={"format": {"type": "json_schema", "schema": _note_items_schema()}},
+                timeout=_SUGGEST_TIMEOUT_S,
+            )
+        except Exception as exc:
+            _raise_translated(exc)
         try:
             candidates = _parse_note_items(message)
         except (KeyError, json.JSONDecodeError) as exc:
             raise ValueError(f"note suggestion response was not usable: {exc}") from exc
-        return candidates[:limit]
+        return SuggestResult(candidates=tuple(candidates[:limit]), usage=usage_of(message))
 
     def collect_deck(self, handle: QuizDeckHandle) -> QuizDeckResult | None:
         """Poll the batch; ``None`` while processing, else the mapped result (QUIZ-05)."""
@@ -324,7 +362,10 @@ class AnthropicQuizAdapter(AnthropicAdapterBase):
             return QuizDeckResult(candidates=(), errors=())
 
         client = self._get_client()
-        batch = client.messages.batches.retrieve(handle.batch_id)
+        try:
+            batch = client.messages.batches.retrieve(handle.batch_id)
+        except Exception as exc:
+            _raise_translated(exc)
         if batch.processing_status != "ended":
             return None
 
@@ -333,22 +374,28 @@ class AnthropicQuizAdapter(AnthropicAdapterBase):
         input_tokens = 0
         output_tokens = 0
         saw_usage = False
-        for response in client.messages.batches.results(handle.batch_id):
-            result = response.result
-            if result.type != "succeeded":
-                errors.append(f"{response.custom_id}: {result.type}")
-                continue
-            try:
-                candidates.extend(_parse_items(result.message))
-            except (ValueError, KeyError, json.JSONDecodeError) as exc:
-                errors.append(f"{response.custom_id}: {exc}")
-            # Sum the batch's per-request usage onto the result so the daily spend
-            # debit prices what the pass actually consumed.
-            usage = getattr(result.message, "usage", None)
-            if usage is not None:
-                saw_usage = True
-                input_tokens += getattr(usage, "input_tokens", 0) or 0
-                output_tokens += getattr(usage, "output_tokens", 0) or 0
+        try:
+            for response in client.messages.batches.results(handle.batch_id):
+                result = response.result
+                if result.type != "succeeded":
+                    errors.append(f"{response.custom_id}: {result.type}")
+                    continue
+                try:
+                    candidates.extend(_parse_items(result.message))
+                except (ValueError, KeyError, json.JSONDecodeError) as exc:
+                    errors.append(f"{response.custom_id}: {exc}")
+                # Sum the batch's per-request usage onto the result so the daily spend
+                # debit prices what the pass actually consumed.
+                usage = getattr(result.message, "usage", None)
+                if usage is not None:
+                    saw_usage = True
+                    input_tokens += getattr(usage, "input_tokens", 0) or 0
+                    output_tokens += getattr(usage, "output_tokens", 0) or 0
+        except Exception as exc:
+            # Only a transport failure reaches this handler (per-request parse
+            # failures are consumed as section errors above), so the paginated
+            # results read translates exactly like the other batch calls.
+            _raise_translated(exc)
         return QuizDeckResult(
             candidates=tuple(candidates),
             errors=tuple(errors),

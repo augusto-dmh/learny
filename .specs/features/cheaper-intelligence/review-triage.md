@@ -1,0 +1,22 @@
+# cheaper-intelligence — Review Triage (Stage 4)
+
+PR #69, reviewed 2026-09-07/08 by the fresh-context `pr-review` run (6 roles; findings posted as
+7 inline comments + 1 requirements comment + 1 summary comment). Every finding checked against
+the code as it exists. The comments are deleted after fixes land (Stage 6); this file is the
+surviving record.
+
+| # | Source (id) | Location | Verdict | Action | Rationale |
+|---|---|---|---|---|---|
+| 1 | inline 3953496618 (architecture ⚠️) | `backend/app/infrastructure/answering/routing.py:93` | real | **fix** | Confirmed: `_next_index` re-enters the same entry immediately on `RateLimited`; ROUTE-02 and the accepted ADR amendment both say "after backoff". A near-immediate retry re-earns the 429, making the one-retry budget decorative. Fix: bounded backoff before the same-entry retry (optional `retry_after` honored when an adapter supplies it, capped to bound turn latency; delay injectable so tests stay offline). |
+| 2 | inline 3953497626 (regression ⚠️) | `backend/app/infrastructure/providers/profiles.py:180` | real | **fix** | Confirmed: `resolve_serving_profile` has no production caller (tests + package export only) while `DailyBudget.usage_micros` re-implements the same stamp→catalog-with-warning rule. Two live implementations of the PRICE-04 guard will drift. Fix: budget consumes the shared resolver; one implementation, existing warning/budget tests stay green. |
+| 3 | inline 3953497771 (performance ⚡) | `backend/app/infrastructure/web/dependencies.py:236` | real | **fix** | Confirmed: `build_budget` re-resolves/re-validates the registry per request though settings are a process singleton. Small but free. Fix: memoize per process using the house zero-arg `lru_cache` pattern already used for the generation accessors. |
+| 4 | inline 3953496672 (architecture 💡) | `backend/app/core/config.py:20` | real | **won't-fix** | The reviewer's own framing: "a note, not a violation". Runtime dependency is acyclic (`config → providers.profiles` at runtime; `Settings` behind `TYPE_CHECKING` in the reverse direction), the fitness gate is clean, and the placement is the recorded design decision (design §2, AD-342's legacy-seed home). Moving the model out of infrastructure now would churn three landed phases for aesthetics. Recorded for a future cycle if the coupling bites. |
+| 5 | inline 3953496742 (architecture 💡) | `backend/app/infrastructure/quiz/anthropic.py:41` | real | **fix** | Confirmed: quiz adapter imports `_usage_of`/`raise_translated`, underscore-private to the answering adapter — a rename there breaks quiz paths at runtime. Fix: promote the shared translation + usage-extraction helpers to the `providers` package's public surface; both adapters import from there. |
+| 6 | inline 3953497688 (regression 💡) | `backend/app/infrastructure/answering/openai_compat.py:272` | real | **fix** | Confirmed: ~45-line classifier/raise duplication across the two adapters. Same fix as #5 — one shared implementation, SDK-specific exception branches stay per-adapter. |
+| 7 | inline 3953497731 (regression 💡) | `backend/app/infrastructure/answering/openai_compat.py:227` | real | **fix** | Confirmed: `cited: list[Any]` + `# type: ignore[arg-type]` suppresses exactly the check that matters; the appended values are `UUID`s. Fix: `list[UUID]`, drop the ignore. |
+| 8 | issue 5577552546 (requirements ❌, COST-04 frontend) | `frontend/app/components/ask-panel.tsx:340` | real | **fix** | Confirmed: `retryFailedTurn` re-sends `failedTurn.userText` without the origin marker — a retried selection-Explain turn is served (and billed) by the primary chain instead of the explain chain. Fix: carry the failed turn's origin through the retry path; vitest pins marker presence on retry and absence on fresh sends. |
+| 9 | Verifier nuance (non-blocking gap 1) | tests (composition) | real | **fix** | COST-04's transport-error fallback leg (explain profile fails → Ask primary serves) is covered only as two halves in different suites; add the single composed test. |
+| 10 | Verifier nuance (non-blocking gap 2) | tests (bounds) | real | **fix** | TAX-01's 120s/30s bounds asserted inequality-style; pin the exact adapter constants so an accidental bound change fails loudly. |
+
+Counts: 10 findings — 10 real (8 from review incl. the unanchored requirements item, 2 Verifier
+nuances); 9 fix, 1 won't-fix (#4, recorded rationale above). Security: 0 findings. Critical: 0.

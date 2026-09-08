@@ -48,6 +48,7 @@ import {
 import { type PendingPanelRequest } from "@/app/lib/panel";
 import { getSource } from "@/app/lib/sources";
 import {
+  EXPLAIN_SELECTION_ORIGIN,
   assistantView,
   errorMessageFor,
   messageText,
@@ -311,8 +312,11 @@ function AskChat({
     });
 
   // Consume a selection verb exactly once (ref-guarded against effect re-runs):
-  // `explain` auto-submits the fixed template; `ask` stows the quote as context
-  // for the reader's next question. The reader clears the request afterward.
+  // `explain` auto-submits the fixed template around the quote, marked with the
+  // selection-Explain origin so the backend serves it from the cheap explain
+  // chain (COST-04, AD-340); `ask` stows the quote as context for the reader's
+  // next question, unmarked like every other path. The reader clears the
+  // request afterward.
   const consumedRef = useRef<PendingPanelRequest | null>(null);
   useEffect(() => {
     if (!pendingRequest || consumedRef.current === pendingRequest) {
@@ -320,7 +324,9 @@ function AskChat({
     }
     consumedRef.current = pendingRequest;
     if (pendingRequest.kind === "explain") {
-      send(explainPrompt(pendingRequest.quote));
+      send(explainPrompt(pendingRequest.quote), {
+        origin: EXPLAIN_SELECTION_ORIGIN,
+      });
     } else {
       setAttachedQuote(pendingRequest.quote);
     }
@@ -331,7 +337,13 @@ function AskChat({
     if (!failedTurn?.userText) {
       return;
     }
-    send(failedTurn.userText);
+    // The failed turn's origin rides the retry (COST-04): a retried
+    // selection-Explain turn must stay on the explain chain, an unmarked turn
+    // must stay on the primary one.
+    send(
+      failedTurn.userText,
+      failedTurn.origin ? { origin: failedTurn.origin } : undefined,
+    );
   }, [failedTurn, send]);
 
   const handleSubmit = useCallback(
@@ -478,6 +490,9 @@ function AskChat({
                       onRetry={() =>
                         send(
                           (liveFailed && failedTurn?.userText) || question,
+                          liveFailed && failedTurn?.origin
+                            ? { origin: failedTurn.origin }
+                            : undefined,
                         )
                       }
                       retryDisabled={isStreaming}

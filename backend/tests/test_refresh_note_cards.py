@@ -52,10 +52,10 @@ _BODY = "Spaced repetition schedules reviews at expanding intervals. It aids rec
 def _free_recall_suggestion():  # noqa: ANN202
     """The free-recall candidate the local adapter regenerates from :data:`_BODY`."""
     settings = get_settings()
-    candidates = build_quiz_adapter(settings).suggest_note_cards(
+    result = build_quiz_adapter(settings).suggest_note_cards(
         _BODY, "", settings.quiz_max_suggestions
     )
-    return next(c for c in candidates if c.item_type == QuizItemType.FREE_RECALL)
+    return next(c for c in result.candidates if c.item_type == QuizItemType.FREE_RECALL)
 
 
 def _embedding_of(question: str, answer: str) -> list[float]:

@@ -627,6 +627,136 @@ describe("AskPanel retries a failed turn on the same conversation", () => {
   });
 });
 
+describe("AskPanel retry keeps the failed turn's origin (COST-04)", () => {
+  /** One explain send that fails before any answer frame comes back. */
+  async function renderFailingExplain(
+    streams: ReturnType<typeof sseStream>[],
+  ): Promise<ReturnType<typeof routedFetch>> {
+    let streamCalls = 0;
+    const fetchMock = routedFetch(
+      baseHandlers(() => streams[Math.min(streamCalls++, streams.length - 1)].response),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <AskPanel
+        sourceId="s1"
+        csrf="csrf-xyz"
+        pendingRequest={{
+          kind: "explain",
+          quote: "the selected sentence",
+          anchor: "c1.xhtml#s1",
+        }}
+      />,
+    );
+
+    await waitFor(() => expect(callsTo(fetchMock, STREAM_URL)).toHaveLength(1));
+    expect(bodyOf(callsTo(fetchMock, STREAM_URL)[0])).toMatchObject({
+      origin: "explain_selection",
+    });
+    await streams[0].push({
+      type: "error",
+      errorText: "Answer generation failed. Please try again.",
+    });
+    return fetchMock;
+  }
+
+  it("re-marks a retried selection-Explain turn so it stays on the explain chain", async () => {
+    // Failure before the answer message exists: the failed-turn card binds to
+    // the user's question (the retryFailedTurn path).
+    const streams = [sseStream(), sseStream()];
+    const fetchMock = await renderFailingExplain(streams);
+
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    await act(async () => {
+      fireEvent.click(retry);
+    });
+
+    await waitFor(() => expect(callsTo(fetchMock, STREAM_URL)).toHaveLength(2));
+    // The resend is the same marked Explain turn — a retried selection-Explain
+    // turn must be served (and billed) by the explain chain again, not silently
+    // demoted to the primary one.
+    expect(bodyOf(callsTo(fetchMock, STREAM_URL)[1])).toEqual({
+      message: 'Explain this passage from the book:\n\n"the selected sentence"',
+      mode: "answer",
+      origin: "explain_selection",
+    });
+  });
+
+  it("keeps the marker when retrying from the in-thread card after a started stream", async () => {
+    // Start frame first, so the assistant message exists and the failed-turn
+    // card binds to it (the inline retry path) — the marker rides there too.
+    const streams = [sseStream(), sseStream()];
+    let streamCalls = 0;
+    const fetchMock = routedFetch(
+      baseHandlers(() => streams[Math.min(streamCalls++, 1)].response),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <AskPanel
+        sourceId="s1"
+        csrf="csrf-xyz"
+        pendingRequest={{
+          kind: "explain",
+          quote: "the selected sentence",
+          anchor: "c1.xhtml#s1",
+        }}
+      />,
+    );
+
+    await waitFor(() => expect(callsTo(fetchMock, STREAM_URL)).toHaveLength(1));
+    await streams[0].push({ type: "start", messageId: "m1" });
+    await streams[0].push({
+      type: "error",
+      errorText: "Answer generation failed. Please try again.",
+    });
+
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    await act(async () => {
+      fireEvent.click(retry);
+    });
+
+    await waitFor(() => expect(callsTo(fetchMock, STREAM_URL)).toHaveLength(2));
+    expect(bodyOf(callsTo(fetchMock, STREAM_URL)[1])).toEqual({
+      message: 'Explain this passage from the book:\n\n"the selected sentence"',
+      mode: "answer",
+      origin: "explain_selection",
+    });
+  });
+
+  it("retries an unmarked failed turn without an origin marker", async () => {
+    // COST-04 cuts both ways on retry: a typed question that failed resends
+    // with a body of exactly {message, mode} — no marker, so the retry stays
+    // on the primary chain.
+    const streams = [sseStream(), sseStream()];
+    let streamCalls = 0;
+    const fetchMock = routedFetch(
+      baseHandlers(() => streams[Math.min(streamCalls++, 1)].response),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+    await ask("a typed question");
+
+    await streams[0].push({ type: "start", messageId: "m1" });
+    await streams[0].push({
+      type: "error",
+      errorText: "Answer generation failed. Please try again.",
+    });
+
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    await act(async () => {
+      fireEvent.click(retry);
+    });
+
+    await waitFor(() => expect(callsTo(fetchMock, STREAM_URL)).toHaveLength(2));
+    expect(bodyOf(callsTo(fetchMock, STREAM_URL)[1])).toEqual({
+      message: "a typed question",
+      mode: "answer",
+    });
+  });
+});
+
 describe("AskPanel notes scope (NL-04)", () => {
   it("carries the reader's notes choice into the conversation it creates", async () => {
     const fetchMock = routedFetch(baseHandlers(() => sseStream().response));
@@ -1544,7 +1674,7 @@ describe("AskPanel save to note (RA-20/22)", () => {
 });
 
 describe("AskPanel selection verbs (RA-17/18)", () => {
-  it("auto-submits the fixed Explain template for an explain pending request", async () => {
+  it("auto-submits the fixed Explain template for an explain pending request, marked with the selection-Explain origin", async () => {
     const stream = sseStream();
     const fetchMock = routedFetch(baseHandlers(() => stream.response));
     vi.stubGlobal("fetch", fetchMock);
@@ -1563,15 +1693,37 @@ describe("AskPanel selection verbs (RA-17/18)", () => {
       />,
     );
 
-    // The explain verb submits, one tap, with the exact fixed template.
+    // The explain verb submits, one tap, with the exact fixed template — and
+    // with the origin marker that tells the backend this turn came from the
+    // popover's Explain verb, so it is served by the cheap explain chain
+    // (COST-04, AD-340).
     await waitFor(() => expect(callsTo(fetchMock, STREAM_URL)).toHaveLength(1));
     expect(bodyOf(callsTo(fetchMock, STREAM_URL)[0])).toEqual({
       message: 'Explain this passage from the book:\n\n"the selected sentence"',
       mode: "answer",
+      origin: "explain_selection",
     });
     // The request is consumed exactly once, so it never re-submits.
     expect(onPendingConsumed).toHaveBeenCalledTimes(1);
     expect(callsTo(fetchMock, STREAM_URL)).toHaveLength(1);
+  });
+
+  it("sends no origin marker for a panel-initiated question", async () => {
+    // COST-04 cuts both ways: only the popover's Explain turn is marked. A
+    // question typed into the panel carries a body of exactly {message, mode}
+    // — an absent origin is what keeps every ordinary ask on the primary chain.
+    const stream = sseStream();
+    const fetchMock = routedFetch(baseHandlers(() => stream.response));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+
+    await ask("What does this mean?");
+    await waitFor(() => expect(callsTo(fetchMock, STREAM_URL)).toHaveLength(1));
+    expect(bodyOf(callsTo(fetchMock, STREAM_URL)[0])).toEqual({
+      message: "What does this mean?",
+      mode: "answer",
+    });
   });
 
   it("attaches the quote as context and submits it with the typed question", async () => {

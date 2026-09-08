@@ -143,4 +143,4 @@ v7 is proposed in [RFC-0007](../../docs/rfc/0007-public-launch-roadmap.md) (**Dr
 | `review-worth-returning` | D / Bet 4 | Empty-deck honesty, formulation gates, undo/session, flag/edit | Done (PR #66) |
 | `first-session-converts` | E / Bet 5 | Shared sample, canned Ask, starter deck, library honesty, landing, activation | Done (PR #67) |
 | `safe-to-open-the-doors` | F / Bet 6 | Safety rails: limiter, spend, quotas, invite, legal, deletion, mail | Done (PR #68) |
-| `cheaper-intelligence` | G / Bet 7 | Cheaper intelligence (effort/cache/fallback; ADR-0020 amendment first) | Not started |
+| `cheaper-intelligence` | G / Bet 7 | Cheaper intelligence (effort/cache/fallback; ADR-0020 amendment first) | Done (PR #69) — profiles+router+compat adapter shipped; economy profile inert until the nightly gate promotes it |

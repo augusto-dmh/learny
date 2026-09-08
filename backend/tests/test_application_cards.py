@@ -15,6 +15,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from app.application.budget import DailyBudget, TokenPrices
 from app.application.cards import (
     AcceptCard,
     AcceptNoteCard,
@@ -55,9 +56,16 @@ from app.domain.entities import (
     QuizSection,
     SchedulingSnapshot,
     Source,
+    SuggestResult,
+    TokenUsage,
     User,
 )
-from tests.fakes import FakeClock, FakeNoteRepository, FakeSourceRepository
+from tests.fakes import (
+    FakeAiSpendDayRepository,
+    FakeClock,
+    FakeNoteRepository,
+    FakeSourceRepository,
+)
 
 _NOW = datetime(2026, 7, 19, 12, 0, 0, tzinfo=UTC)
 
@@ -266,7 +274,11 @@ class FakeCardEmbedding:
 
 
 class FakeSuggestGeneration:
-    """``QuizGenerationPort`` double: replays preset candidates, records the call."""
+    """``QuizGenerationPort`` double: replays preset candidates, records the call.
+
+    The optional ``usage``/``note_usage`` model an adapter that can read the call's
+    token counts; ``error`` models a provider failure (the debit must not fire).
+    """
 
     model = "fake-generation@1"
 
@@ -274,19 +286,29 @@ class FakeSuggestGeneration:
         self,
         candidates: list[QuizCandidate] | None = None,
         note_candidates: list[QuizCandidate] | None = None,
+        usage: TokenUsage | None = None,
+        note_usage: TokenUsage | None = None,
+        error: Exception | None = None,
     ) -> None:
         self._candidates = candidates or []
         self._note_candidates = note_candidates or []
+        self._usage = usage
+        self._note_usage = note_usage
+        self._error = error
         self.calls: list[tuple[QuizSection, str, int]] = []
         self.note_calls: list[tuple[str, str, int]] = []
 
     def suggest_cards(self, section, quote, limit):  # noqa: ANN001, ANN201
         self.calls.append((section, quote, limit))
-        return list(self._candidates)
+        if self._error is not None:
+            raise self._error
+        return SuggestResult(candidates=tuple(self._candidates), usage=self._usage)
 
     def suggest_note_cards(self, note_body, context, limit):  # noqa: ANN001, ANN201
         self.note_calls.append((note_body, context, limit))
-        return list(self._note_candidates)
+        if self._error is not None:
+            raise self._error
+        return SuggestResult(candidates=tuple(self._note_candidates), usage=self._note_usage)
 
     def begin_deck(self, sections):  # noqa: ANN001, ANN201
         raise NotImplementedError
@@ -375,6 +397,9 @@ class _World:
         max_card_chars: int = 2000,
         anchor_resolves: bool = True,
         owner: User = _OWNER,
+        budget: DailyBudget | None = None,
+        usage: TokenUsage | None = None,
+        error: Exception | None = None,
     ) -> None:
         self.sources = FakeSourceRepository()
         self.notes = FakeNoteRepository()
@@ -394,7 +419,7 @@ class _World:
 
         sections = {"ch1#cells": _section()} if anchor_resolves else {}
         self.items = FakeCardItemRepository(sections)
-        self.generation = FakeSuggestGeneration(candidates)
+        self.generation = FakeSuggestGeneration(candidates, usage=usage, error=error)
         self.embeddings = FakeCardEmbedding()
         self.clock = FakeClock(_NOW)
         self.suggest = SuggestCards(
@@ -404,6 +429,7 @@ class _World:
             generation=self.generation,
             authorize=AuthorizeOwnership(),
             max_suggestions=max_suggestions,
+            budget=budget,
         )
         self.accept = AcceptCard(
             sources=self.sources,
@@ -1248,6 +1274,9 @@ class _NoteWorld:
         max_card_chars: int = 2000,
         excerpt_chars: int = 2000,
         owner: User = _OWNER,
+        budget: DailyBudget | None = None,
+        note_usage: TokenUsage | None = None,
+        error: Exception | None = None,
     ) -> None:
         self.notes = FakeNoteRepository()
         self.note = Note(
@@ -1264,13 +1293,16 @@ class _NoteWorld:
             self.anchor = self.notes.add_anchor(_anchor(self.note.id, self.source.id))
 
         self.items = FakeCardItemRepository()
-        self.generation = FakeSuggestGeneration(note_candidates=note_candidates)
+        self.generation = FakeSuggestGeneration(
+            note_candidates=note_candidates, note_usage=note_usage, error=error
+        )
         self.embeddings = FakeCardEmbedding()
         self.clock = FakeClock(_NOW)
         self.suggest = SuggestNoteCards(
             notes=self.notes,
             generation=self.generation,
             max_suggestions=max_suggestions,
+            budget=budget,
         )
         self.accept = AcceptNoteCard(
             notes=self.notes,
@@ -1543,6 +1575,8 @@ class _RefreshWorld:
         excerpt_chars: int = 2000,
         match_threshold: float = 0.80,
         owner: User = _OWNER,
+        budget: DailyBudget | None = None,
+        note_usage: TokenUsage | None = None,
     ) -> None:
         self.notes = FakeNoteRepository()
         self.note = Note(
@@ -1555,7 +1589,9 @@ class _RefreshWorld:
         )
         self.notes.add(self.note)
         self.items = FakeCardItemRepository()
-        self.generation = FakeSuggestGeneration(note_candidates=note_candidates)
+        self.generation = FakeSuggestGeneration(
+            note_candidates=note_candidates, note_usage=note_usage
+        )
         self.embeddings = FakeCardEmbedding(suggestion_vector or _MATCH_VECTOR)
         self.clock = FakeClock(_NOW)
         self.refresh = RefreshNoteCards(
@@ -1567,6 +1603,7 @@ class _RefreshWorld:
             max_suggestions=max_suggestions,
             excerpt_chars=excerpt_chars,
             match_threshold=match_threshold,
+            budget=budget,
         )
 
     def seed_card(self, **kwargs) -> QuizItem:  # noqa: ANN003
@@ -1878,3 +1915,115 @@ def test_accept_by_a_stranger_or_on_a_missing_thread_is_the_same_not_found() -> 
 
     assert world.items.list_all() == []
     assert world.generation.calls == []
+
+
+# --- Suggest metering: completed calls debit their usage (AD-341/PRICE-03) -------
+
+#: $0.20/$1.00 per million — far from the 3.0/15.0 defaults so the catalog that
+#: priced the call is identifiable from the ledger micros alone.
+_SUGGEST_PRICES = TokenPrices(
+    input_micros_per_million=200_000,
+    output_micros_per_million=1_000_000,
+    embed_micros_per_million=0,
+)
+
+
+def _suggest_budget() -> tuple[DailyBudget, FakeAiSpendDayRepository]:
+    """A budget over an inspectable ledger at the fixture suggest prices."""
+    repo = FakeAiSpendDayRepository()
+    budget = DailyBudget(
+        repo=repo,
+        clock=FakeClock(_NOW),
+        daily_cap_micros=1_000_000,
+        prices=_SUGGEST_PRICES,
+        ask_daily_cap=8,
+        teach_start_daily_cap=1,
+    )
+    return budget, repo
+
+
+def test_a_completed_highlight_suggest_debits_its_usage_usd_only() -> None:
+    # The completed suggest call debits like the turn paths: usage × the wired
+    # catalog, USD only — no ask/teach counter moves (AD-341 invents no suggest
+    # cap). Hand-checked: (900 in × 200k) + (400 out × 1M) = 580 micros. The debit
+    # lands even though the second candidate fails QC below: tokens are spent
+    # whether or not a suggestion survives the caller's re-verification.
+    grounded = _candidate()
+    fabricated = _candidate(
+        question="Who discovered ribosomes?",
+        answer="Palade",
+        anchor_quote="Ribosomes were discovered in 1955.",
+    )
+    budget, repo = _suggest_budget()
+    world = _World(
+        candidates=[grounded, fabricated],
+        budget=budget,
+        usage=TokenUsage(input_tokens=900, output_tokens=400),
+    )
+
+    result = world.suggest(user=_OWNER, source_id=world.source.id, note_anchor_id=world.anchor.id)
+
+    assert result == [grounded]  # QC still filters; the debit is independent of it
+    row = repo.get_for_day(_OWNER.id, _NOW.date())
+    assert row is not None
+    assert (row.usd_micros, row.ask_count, row.teach_starts) == (580, 0, 0)
+
+
+def test_a_failed_highlight_suggest_debits_nothing() -> None:
+    # The debit runs after the port returns: a provider failure propagates and
+    # writes nothing to the ledger.
+    budget, repo = _suggest_budget()
+    world = _World(budget=budget, error=RuntimeError("provider down"))
+
+    with pytest.raises(RuntimeError):
+        world.suggest(user=_OWNER, source_id=world.source.id, note_anchor_id=world.anchor.id)
+
+    assert repo.get_for_day(_OWNER.id, _NOW.date()) is None
+
+
+def test_a_completed_note_suggest_debits_its_usage_usd_only() -> None:
+    grounded = _note_candidate()
+    budget, repo = _suggest_budget()
+    world = _NoteWorld(
+        note_candidates=[grounded],
+        budget=budget,
+        note_usage=TokenUsage(input_tokens=1200, output_tokens=300),
+    )
+
+    result = world.suggest(user=_OWNER, note_id=world.note.id)
+
+    assert result == [grounded]
+    row = repo.get_for_day(_OWNER.id, _NOW.date())
+    assert row is not None
+    # (1200 × 200k) + (300 × 1M) = 540 micros; the integer caps never moved.
+    assert (row.usd_micros, row.ask_count, row.teach_starts) == (540, 0, 0)
+
+
+def test_a_failed_note_suggest_debits_nothing() -> None:
+    budget, repo = _suggest_budget()
+    world = _NoteWorld(budget=budget, error=RuntimeError("provider down"))
+
+    with pytest.raises(RuntimeError):
+        world.suggest(user=_OWNER, note_id=world.note.id)
+
+    assert repo.get_for_day(_OWNER.id, _NOW.date()) is None
+
+
+def test_a_completed_refresh_suggest_debits_to_the_notes_owner() -> None:
+    # The worker-invoked regeneration debits the same way, to the note's owner —
+    # the ledger row shares the refresh's transaction like every other debit.
+    reworded = _note_candidate(question="Reworded?", answer="Reworded answer")
+    budget, repo = _suggest_budget()
+    world = _RefreshWorld(
+        note_candidates=[reworded],
+        budget=budget,
+        note_usage=TokenUsage(input_tokens=1000, output_tokens=500),
+    )
+    world.seed_card(question="Original?", answer="Original answer", embedding=_MATCH_VECTOR)
+
+    world.refresh(note_id=world.note.id)
+
+    row = repo.get_for_day(world.note.user_id, _NOW.date())
+    assert row is not None
+    # (1000 × 200k) + (500 × 1M) = 700 micros.
+    assert row.usd_micros == 700

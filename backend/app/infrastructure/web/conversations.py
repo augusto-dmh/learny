@@ -39,7 +39,7 @@ alone, as elsewhere.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Response, status
@@ -49,6 +49,7 @@ from app.application.cards import AcceptTutorCard
 from app.application.conversations import (
     DEFAULT_PAGE_LIMIT,
     MAX_PAGE_LIMIT,
+    ORIGIN_EXPLAIN_SELECTION,
     TITLE_MAX_CHARS,
     DeleteConversation,
     ListConversations,
@@ -184,10 +185,16 @@ class TurnRequest(BaseModel):
     returns the **trimmed** value, so the service receives a normalized message.
     ``mode`` must name one of the two turn modes — an unknown mode is a 422 before
     the service runs, so the service's own guard is never the thing a client meets.
+    ``origin`` is optional and accepts exactly the selection-Explain literal
+    (COST-04, AD-340): the capture popover's Explain verb marks its ask turn with
+    it so the turn is served by the selection-Explain chain (AD-345). Any other
+    value is a rejected request, and every path that does not carry the marker —
+    panel asks, teach turns, tutor sessions — sends nothing at all.
     """
 
     message: str = Field(min_length=1)
     mode: str
+    origin: Literal[ORIGIN_EXPLAIN_SELECTION] | None = None
 
     @field_validator("message")
     @classmethod
@@ -499,6 +506,7 @@ def post_conversation_turn(
         conversation_id=conversation_id,
         message=body.message,
         mode=body.mode,
+        origin=body.origin,
     )
     return ConversationTurnView.from_turn(turn)
 
@@ -535,6 +543,7 @@ def post_conversation_turn_stream(
         conversation_id=conversation_id,
         message=body.message,
         mode=body.mode,
+        origin=body.origin,
     )
     return to_sse_response(events)
 

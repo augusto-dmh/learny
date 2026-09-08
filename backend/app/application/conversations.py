@@ -96,6 +96,12 @@ TITLE_MAX_CHARS = 200
 DEFAULT_PAGE_LIMIT = 20
 MAX_PAGE_LIMIT = 100
 
+# The request origin that marks one ask turn as a selection-Explain (COST-04,
+# AD-340): the reader ran the capture popover's Explain verb, and the turn is
+# served by the explain chain instead of the primary (AD-345). The web schema
+# accepts exactly this literal and nothing else.
+ORIGIN_EXPLAIN_SELECTION = "explain_selection"
+
 
 def spend_kind(mode: str, turn_index: int) -> str:
     """Name the budget kind one turn is paid as (DOOR-10/11).
@@ -574,6 +580,7 @@ class PostConversationTurn:
         evidence_top_k: int,
         history_turns: int,
         tutor_check_after_turns: int,
+        explain_generation: GenerationPort | None = None,
         record_activation: RecordActivation | None = None,
         budget: DailyBudget | None = None,
     ) -> None:
@@ -583,6 +590,7 @@ class PostConversationTurn:
         self._corpus = corpus
         self._retrieve = retrieve
         self._generation = generation
+        self._explain_generation = explain_generation
         self._authorize = authorize
         self._clock = clock
         self._ids = ids
@@ -592,6 +600,20 @@ class PostConversationTurn:
         self._record_activation = record_activation
         self._budget = budget
 
+    def _chain_for(self, origin: str | None) -> GenerationPort:
+        """The generation chain the turn's origin selects (COST-04, AD-345).
+
+        The service knows a turn-kind resolver exists — the composition root
+        hands it the normal and selection-Explain chains — but no routing policy
+        lives here: it only picks which ``GenerationPort`` serves this turn, and
+        an unmarked (or unrecognized-but-schema-validated) turn keeps the normal
+        chain. A service built without an explain chain answers even a marked
+        turn from the normal one, so every existing wiring keeps working.
+        """
+        if origin == ORIGIN_EXPLAIN_SELECTION and self._explain_generation is not None:
+            return self._explain_generation
+        return self._generation
+
     def __call__(
         self,
         *,
@@ -599,14 +621,16 @@ class PostConversationTurn:
         conversation_id: UUID,
         message: str,
         mode: str,
+        origin: str | None = None,
     ) -> ConversationTurn:
+        generation = self._chain_for(origin)
         prep = self._preflight(
             user=user, conversation_id=conversation_id, mode=mode, message=message
         )
         if _is_closing_restatement(prep):
             return self._persist(
                 self._unsearched_plan(prep),
-                self._restatement_turn(prep, message, mode),
+                self._restatement_turn(prep, message, mode, generation),
                 mode,
             )
         plan = self._retrieve_evidence(user=user, prep=prep, message=message, mode=mode)
@@ -614,12 +638,14 @@ class PostConversationTurn:
         if not plan.evidence:
             # Nothing in scope to answer from → not-found; the port is never invoked,
             # so the model identity comes from the port attribute.
-            turn = self._not_found_turn(plan, message, mode, 0, self._generation.model)
+            turn = self._not_found_turn(plan, message, mode, 0, generation.model)
         else:
             try:
-                generated = self._generate(mode=mode, message=message, plan=plan)
+                generated = self._generate(
+                    mode=mode, message=message, plan=plan, generation=generation
+                )
             except Exception as exc:  # any port failure maps to 502
-                self._persist_failed(plan, message, mode)
+                self._persist_failed(plan, message, mode, generation)
                 raise AnswerGenerationFailed("Answer generation failed.") from exc
 
             self._debit(plan.user_id, spend_kind(mode, plan.turn_index), generated)
@@ -636,6 +662,7 @@ class PostConversationTurn:
         conversation_id: UUID,
         message: str,
         mode: str,
+        origin: str | None = None,
     ) -> Iterator[TurnStreamEvent]:
         """Run one turn incrementally, persisting only on stream completion.
 
@@ -660,15 +687,23 @@ class PostConversationTurn:
         prep = self._preflight(
             user=user, conversation_id=conversation_id, mode=mode, message=message
         )
-        return self._turn_stream(user=user, prep=prep, message=message, mode=mode)
+        return self._turn_stream(
+            user=user, prep=prep, message=message, mode=mode, generation=self._chain_for(origin)
+        )
 
     def _turn_stream(
-        self, *, user: User, prep: _TurnPrep, message: str, mode: str
+        self,
+        *,
+        user: User,
+        prep: _TurnPrep,
+        message: str,
+        mode: str,
+        generation: GenerationPort,
     ) -> Iterator[TurnStreamEvent]:
         if _is_closing_restatement(prep):
             yield self._stream_turn(
                 self._unsearched_plan(prep),
-                self._restatement_turn(prep, message, mode),
+                self._restatement_turn(prep, message, mode, generation),
                 mode,
             )
             return
@@ -685,22 +720,22 @@ class PostConversationTurn:
                 prep.conversation.source_id,
                 mode,
             )
-            self._persist_failed(self._unsearched_plan(prep), message, mode)
+            self._persist_failed(self._unsearched_plan(prep), message, mode, generation)
             raise AnswerGenerationFailed("Answer generation failed.") from exc
 
         if not plan.evidence:
-            turn = self._not_found_turn(plan, message, mode, 0, self._generation.model)
+            turn = self._not_found_turn(plan, message, mode, 0, generation.model)
             yield self._stream_turn(plan, turn, mode)
             return
 
-        stream = self._generate_stream(mode=mode, message=message, plan=plan)
+        stream = self._generate_stream(mode=mode, message=message, plan=plan, generation=generation)
         # Hold-back yields presentable deltas and returns the authoritative answer;
         # no *answered* turn is persisted until it completes (so cancellation persists
         # nothing), but a provider break writes the failed turn before it propagates.
         try:
             answer = yield from hold_back_deltas(stream)
         except AnswerGenerationFailed:
-            self._persist_failed(plan, message, mode)
+            self._persist_failed(plan, message, mode, generation)
             raise
         # SPEC_DEVIATION: a reader who stops the stream still persists nothing; only a
         # failure the reader did not ask for writes the ``failed`` turn.
@@ -921,8 +956,15 @@ class PostConversationTurn:
         assert plan.target is not None  # the preflight resolved it or raised
         return plan.target.section_path
 
-    def _generate(self, *, mode: str, message: str, plan: _TurnPlan) -> GeneratedAnswer:
-        return self._generation.generate(
+    def _generate(
+        self,
+        *,
+        mode: str,
+        message: str,
+        plan: _TurnPlan,
+        generation: GenerationPort,
+    ) -> GeneratedAnswer:
+        return generation.generate(
             message=message,
             mode=mode,
             evidence=plan.evidence,
@@ -933,9 +975,9 @@ class PostConversationTurn:
         )
 
     def _generate_stream(
-        self, *, mode: str, message: str, plan: _TurnPlan
+        self, *, mode: str, message: str, plan: _TurnPlan, generation: GenerationPort
     ) -> Iterator[AnswerStreamEvent]:
-        return self._generation.generate_stream(
+        return generation.generate_stream(
             message=message,
             mode=mode,
             evidence=plan.evidence,
@@ -958,7 +1000,7 @@ class PostConversationTurn:
             return
         self._budget.record(
             user_id,
-            usd_micros=self._budget.usage_micros(generated.usage),
+            usd_micros=self._budget.usage_micros(generated.usage, generated.profile_id),
             kind=kind,
         )
 
@@ -1042,7 +1084,9 @@ class PostConversationTurn:
             created_at=self._clock.now(),
         )
 
-    def _failed_turn(self, plan: _TurnPlan, message: str, mode: str) -> ConversationTurn:
+    def _failed_turn(
+        self, plan: _TurnPlan, message: str, mode: str, generation: GenerationPort
+    ) -> ConversationTurn:
         """The turn a broken generation leaves behind: the question, and no answer.
 
         A not-found turn is a verdict about the book; this one is the absence of a
@@ -1050,8 +1094,9 @@ class PostConversationTurn:
         the failure (AD-262). Reload is the test: a thread that only ever held the
         question in the browser loses it to a refresh, which is how a first ask
         vanished entirely. Empty text and no citations say there is nothing to read
-        rather than something to distrust, and the model is the configured one
-        because a call that failed returned no identity to record.
+        rather than something to distrust, and the model is the one configured on
+        the chain that would have served, because a call that failed returned no
+        identity to record.
         """
         return ConversationTurn(
             id=self._ids(),
@@ -1061,13 +1106,15 @@ class PostConversationTurn:
             mode=mode,
             answer_status=FAILED,
             answer_text="",
-            model=self._generation.model,
+            model=generation.model,
             evidence_count=len(plan.evidence),
             citations=(),
             created_at=self._clock.now(),
         )
 
-    def _persist_failed(self, plan: _TurnPlan, message: str, mode: str) -> None:
+    def _persist_failed(
+        self, plan: _TurnPlan, message: str, mode: str, generation: GenerationPort
+    ) -> None:
         """Write the failed turn, then let the caller surface the failure as before.
 
         Persisting first and raising second keeps both halves of the contract: the
@@ -1077,7 +1124,7 @@ class PostConversationTurn:
         other turn, so a conversation that has been working for an hour keeps its
         history and gains one failed row (ASK-05).
         """
-        self._persist(plan, self._failed_turn(plan, message, mode), mode)
+        self._persist(plan, self._failed_turn(plan, message, mode, generation), mode)
 
     @staticmethod
     def _unsearched_plan(prep: _TurnPrep) -> _TurnPlan:
@@ -1171,7 +1218,9 @@ class PostConversationTurn:
             current, message=message, check_after=self._tutor_check_after_turns
         )
 
-    def _restatement_turn(self, prep: _TurnPrep, message: str, mode: str) -> ConversationTurn:
+    def _restatement_turn(
+        self, prep: _TurnPrep, message: str, mode: str, generation: GenerationPort
+    ) -> ConversationTurn:
         return ConversationTurn(
             id=self._ids(),
             conversation_id=prep.conversation.id,
@@ -1180,7 +1229,7 @@ class PostConversationTurn:
             mode=mode,
             answer_status=ANSWERED,
             answer_text="",
-            model=self._generation.model,
+            model=generation.model,
             evidence_count=0,
             citations=(),
             created_at=self._clock.now(),

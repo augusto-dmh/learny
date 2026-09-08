@@ -47,7 +47,6 @@ from app.domain.entities import (
     NoteSummary,
     ParsedBook,
     PasswordCredential,
-    QuizCandidate,
     QuizDeckHandle,
     QuizDeckResult,
     QuizGenerationJob,
@@ -64,6 +63,7 @@ from app.domain.entities import (
     Source,
     SourceHighlight,
     StudyDay,
+    SuggestResult,
     UndoableReview,
     User,
 )
@@ -871,20 +871,22 @@ class QuizGenerationPort(Protocol):
         """
         ...
 
-    def suggest_cards(self, section: QuizSection, quote: str, limit: int) -> list[QuizCandidate]:
+    def suggest_cards(self, section: QuizSection, quote: str, limit: int) -> SuggestResult:
         """Return at most ``limit`` candidates scoped to ``quote`` within ``section``.
 
         The foreground counterpart of the batched deck path (AD-134): the student is
         waiting on a popover, so this is synchronous — the local adapter derives its
-        candidates inline and the Anthropic adapter issues one Messages call with the
-        same structured-output schema, its ``source_chunk_id`` enum still constrained to
+        candidates inline and the Anthropic adapter issues one Messages call with
+        the same structured-output schema, its ``source_chunk_id`` enum still constrained to
         ``section``'s chunks. Candidates are ungrounded until the caller's QC pipeline
         re-verifies them; a ``quote`` that appears in none of ``section``'s chunks yields
-        an empty list rather than an error.
+        no candidates rather than an error. The result carries the call's
+        :class:`~app.domain.entities.TokenUsage` when the adapter can read it, so the
+        caller debits the pass like the turn paths (AD-341/PRICE-03).
         """
         ...
 
-    def suggest_note_cards(self, note_body: str, context: str, limit: int) -> list[QuizCandidate]:
+    def suggest_note_cards(self, note_body: str, context: str, limit: int) -> SuggestResult:
         """Return at most ``limit`` candidates grounded in ``note_body`` (NL-08).
 
         The note→quiz counterpart of :meth:`suggest_cards`: the note *is* the source, so
@@ -892,8 +894,9 @@ class QuizGenerationPort(Protocol):
         Anthropic adapter drops the chunk-id enum from its schema). ``context`` is the
         note's book-anchor context, carried into generation only when the note is anchored
         (empty otherwise); grounding is always re-verified against ``note_body`` alone by
-        the caller's QC pipeline. An empty ``note_body`` (or ``limit <= 0``) yields an
-        empty list rather than an error.
+        the caller's QC pipeline. An empty ``note_body`` (or ``limit <= 0``) yields no
+        candidates rather than an error; the usage rides along as on
+        :meth:`suggest_cards` (AD-341/PRICE-03).
         """
         ...
 

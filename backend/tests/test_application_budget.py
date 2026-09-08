@@ -17,6 +17,7 @@ from __future__ import annotations
 import time
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from uuid import UUID, uuid4
 
 import pytest
@@ -62,6 +63,7 @@ from app.domain.entities import (
     TokenUsage,
     User,
 )
+from app.infrastructure.answering import ChainEntry, RoutingGenerationAdapter
 from app.infrastructure.db.repositories import (
     SqlAlchemyAiSpendDayRepository,
     SqlAlchemyConversationRepository,
@@ -73,6 +75,7 @@ from app.infrastructure.db.repositories import (
     SqlAlchemyStudyDayRepository,
     SqlAlchemyUserRepository,
 )
+from app.infrastructure.providers import GenerationProfileSettings, resolve_serving_profile
 from app.infrastructure.scheduling import FsrsSchedulingAdapter
 from app.infrastructure.web.dependencies import get_generation
 from tests.conftest import TEST_ORIGIN, TEST_PASSWORD, requires_db
@@ -375,6 +378,114 @@ def test_successful_ask_debits_the_usage_it_actually_used(db_conn: Connection) -
 
     row = _ledger(db_conn).get_for_day(user.id, _DAY)
     assert row is not None and row.usd_micros == 2000
+    assert generation.calls == 1
+
+
+def test_successful_ask_debits_at_the_fixture_profile_catalog_including_cache(
+    db_conn: Connection,
+) -> None:
+    # PRICE-01/02 on the turn path: the debit prices the adapter's reported usage —
+    # cache fields included — at the wired catalog, here a fixture profile whose
+    # prices differ from the 3.0/15.0 defaults. Hand-checked with the derived cache
+    # prices (read 0.1× → 200_000, creation 1.25× → 250_000):
+    # (900×200k) + (400×1M) + (10k×20k) + (2k×250k) = 1280 micros — the default
+    # catalog would debit 19200, so this pins *which* catalog priced the turn.
+    user, source, conversation = _seed_turn_world(db_conn, "budget-profile@example.com")
+    generation = _RecordingGeneration(
+        _declining_answer(
+            usage=TokenUsage(
+                input_tokens=900,
+                output_tokens=400,
+                cache_read_input_tokens=10_000,
+                cache_creation_input_tokens=2_000,
+            )
+        )
+    )
+    retrieve = _StubRetrieve([_evidence(source.id)])
+    profile_prices = TokenPrices(
+        input_micros_per_million=200_000,
+        output_micros_per_million=1_000_000,
+        embed_micros_per_million=0,
+    )
+    budget = DailyBudget(
+        repo=_ledger(db_conn),
+        clock=FakeClock(_NOW),
+        daily_cap_micros=_CAP_MICROS,
+        prices=profile_prices,
+        ask_daily_cap=8,
+        teach_start_daily_cap=1,
+    )
+    service = _turn_service(db_conn, generation=generation, retrieve=retrieve, budget=budget)
+
+    service(user=user, conversation_id=conversation.id, message="Why?", mode=MODE_ANSWER)
+
+    row = _ledger(db_conn).get_for_day(user.id, _DAY)
+    assert row is not None and row.usd_micros == 1280
+    assert generation.calls == 1
+
+
+def _registry_profile(id: str) -> GenerationProfileSettings:
+    """A minimal declared profile, so the shared stamp resolver can resolve."""
+    return GenerationProfileSettings(
+        id=id,
+        kind="local",
+        model=f"{id}-model",
+        max_tokens=1024,
+        price_input_usd_per_million_tokens=3.0,
+        price_output_usd_per_million_tokens=15.0,
+        price_cache_read_usd_per_million_tokens=0.3,
+        price_cache_creation_usd_per_million_tokens=3.75,
+        grounding="verified-spans",
+        ask_enabled=True,
+        teach_enabled=True,
+    )
+
+
+def test_a_stamped_answer_debits_at_the_stamped_profile_catalog(db_conn: Connection) -> None:
+    # AD-344/PRICE-01 on the turn path: the routing adapter stamps the serving
+    # profile on the answer and the debit prices that stamp's catalog. Here an
+    # economy-stamped answer debits the economy arithmetic — (900×0.2) +
+    # (400×1.0) = 580 micros — where the primary catalog would debit 1700, so
+    # the test pins *which* catalog the stamp selected.
+    user, source, conversation = _seed_turn_world(db_conn, "budget-stamp@example.com")
+    generation = _RecordingGeneration(
+        GeneratedAnswer(
+            text="",
+            cited_chunk_ids=(),
+            model="economy-model",
+            found=False,
+            usage=TokenUsage(input_tokens=900, output_tokens=400),
+            profile_id="economy",
+        )
+    )
+    retrieve = _StubRetrieve([_evidence(source.id)])
+    budget = DailyBudget(
+        repo=_ledger(db_conn),
+        clock=FakeClock(_NOW),
+        daily_cap_micros=_CAP_MICROS,
+        prices=_PRICES,
+        ask_daily_cap=8,
+        teach_start_daily_cap=1,
+        profile_catalogs={
+            "economy": TokenPrices(
+                input_micros_per_million=200_000,
+                output_micros_per_million=1_000_000,
+                embed_micros_per_million=0,
+            )
+        },
+        # The shared stamp resolver, bound to the declared registry exactly as
+        # the composition root binds it — one PRICE-04 resolution.
+        resolve_serving_profile=partial(
+            resolve_serving_profile,
+            (_registry_profile("primary"), _registry_profile("economy")),
+        ),
+    )
+    service = _turn_service(db_conn, generation=generation, retrieve=retrieve, budget=budget)
+
+    service(user=user, conversation_id=conversation.id, message="Why?", mode=MODE_ANSWER)
+
+    row = _ledger(db_conn).get_for_day(user.id, _DAY)
+    assert row is not None and row.usd_micros == 580
     assert generation.calls == 1
 
 
@@ -1346,3 +1457,46 @@ def test_kill_switch_leaves_reads_working(
     resp = auth_client.get("/api/sources")
 
     assert resp.status_code == 200, resp.text
+
+
+def test_an_exhausted_usd_day_refuses_before_any_chain_entry(db_conn: Connection) -> None:
+    # ROUTE-07: the rails are per-user, not per-profile. With the routing adapter
+    # serving (two entries behind the port), an exhausted day refuses exactly as
+    # the single-adapter world does — before retrieval, before any chain entry.
+    user, source, conversation = _seed_turn_world(db_conn, "budget-chain@example.com")
+    _ledger(db_conn).record(user.id, _DAY, usd_micros=_CAP_MICROS)
+    first = _RecordingGeneration(_declining_answer(usage=None))
+    second = _RecordingGeneration(_declining_answer(usage=None))
+    router = RoutingGenerationAdapter(
+        (
+            ChainEntry(adapter=first, profile=_chain_profile("primary")),
+            ChainEntry(adapter=second, profile=_chain_profile("fallback", kind="local")),
+        )
+    )
+    retrieve = _StubRetrieve([_evidence(source.id)])
+    service = _turn_service(db_conn, generation=router, retrieve=retrieve, budget=_budget(db_conn))
+
+    with pytest.raises(DailyBudgetExhausted) as refused:
+        service(user=user, conversation_id=conversation.id, message="Why?", mode=MODE_ANSWER)
+
+    assert EXHAUSTED_COPY in str(refused.value)
+    assert first.calls == 0
+    assert second.calls == 0
+    assert retrieve.calls == []
+
+
+def _chain_profile(id: str, *, kind: str = "anthropic") -> GenerationProfileSettings:
+    """A minimal chain profile for router-wiring tests (pricing is never read)."""
+    return GenerationProfileSettings(
+        id=id,
+        kind=kind,  # type: ignore[arg-type]
+        model=f"{id}-model",
+        max_tokens=1024,
+        price_input_usd_per_million_tokens=3.0,
+        price_output_usd_per_million_tokens=15.0,
+        price_cache_read_usd_per_million_tokens=0.3,
+        price_cache_creation_usd_per_million_tokens=3.75,
+        grounding="verified-spans",
+        ask_enabled=True,
+        teach_enabled=True,
+    )
