@@ -24,6 +24,7 @@ from app.domain.ports import (
     EmbeddingIndexRepository,
     EmbeddingPort,
     IngestionEventRepository,
+    ReadingPositionRepository,
     RetrievalPort,
     SourceRepository,
 )
@@ -110,6 +111,18 @@ class RetrieveEvidence:
     limits, RRF ``k``, and HNSW ``ef_search``, returning the fused
     :class:`~app.domain.entities.Evidence` list (possibly empty).
 
+    When ``respect_reading_position`` is true, the caller's own reading-position
+    row for the source is read first — by ``(user_id, source_id)`` via the
+    injected :class:`~app.domain.ports.ReadingPositionRepository` — and its
+    canonical section anchor is passed to the port as ``not_past_anchor``, so
+    book-arm evidence stops at the reader's position (SPOILER-01). A missing row
+    is an unread book and passes ``None``: unfiltered, never empty evidence
+    (SPOILER-05). The bound is never derived from another user's row (SPOILER-06).
+    With the flag false — the default, and every pre-cycle caller — the position
+    repository is never consulted at all (SPOILER-13), and a position-repository
+    failure propagates to the caller's existing error envelope rather than ever
+    degrading to unfiltered retrieval (AD-349 parity with the stale-bound case).
+
     Query-string validation is not done here — the web layer owns 422 for an
     empty query and out-of-range ``top_k``; this service assumes a validated
     query. When ``top_k`` is omitted it falls back to ``default_top_k``
@@ -123,6 +136,7 @@ class RetrieveEvidence:
         sources: SourceRepository,
         retrieval: RetrievalPort,
         embeddings: EmbeddingPort,
+        positions: ReadingPositionRepository,
         authorize: AuthorizeOwnership,
         semantic_limit: int,
         lexical_limit: int,
@@ -135,6 +149,7 @@ class RetrieveEvidence:
         self._sources = sources
         self._retrieval = retrieval
         self._embeddings = embeddings
+        self._positions = positions
         self._authorize = authorize
         self._semantic_limit = semantic_limit
         self._lexical_limit = lexical_limit
@@ -153,6 +168,7 @@ class RetrieveEvidence:
         top_k: int | None = None,
         anchors: Sequence[str] | None = None,
         include_notes: bool = False,
+        respect_reading_position: bool = False,
     ) -> list[Evidence]:
         readable_source(
             user=user,
@@ -163,6 +179,14 @@ class RetrieveEvidence:
             clock=self._clock,
         )
         query_vec = self._embeddings.embed_query(query)
+        # The bound is resolved only when a caller opts in; the flag-off path (every
+        # pre-cycle caller) must not so much as read the position repository. The
+        # ownership check above stays upstream, so the row read is always for a
+        # source this user may read.
+        not_past_anchor: str | None = None
+        if respect_reading_position:
+            position = self._positions.get(user.id, source_id)
+            not_past_anchor = None if position is None else position.anchor
         # The owner is always forwarded so the port can scope the note arms to this
         # user (NL-05); ``include_notes`` gates whether those arms run at all (NL-04).
         return self._retrieval.search(
@@ -177,4 +201,5 @@ class RetrieveEvidence:
             anchors=anchors,
             user_id=user.id,
             include_notes=include_notes,
+            not_past_anchor=not_past_anchor,
         )

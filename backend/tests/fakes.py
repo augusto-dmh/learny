@@ -738,6 +738,8 @@ class FakeRetrieveEvidence:
         # verbatim stays unchanged.
         self.include_notes_calls: list[bool] = []
         self.anchor_calls: list[tuple[str, ...] | None] = []
+        # The position-respect toggle rides beside them for the same reason.
+        self.respect_position_calls: list[bool] = []
 
     def __call__(
         self,
@@ -748,10 +750,12 @@ class FakeRetrieveEvidence:
         top_k: int | None = None,
         anchors: Sequence[str] | None = None,
         include_notes: bool = False,
+        respect_reading_position: bool = False,
     ) -> list[Evidence]:
         self.calls.append({"user": user, "source_id": source_id, "query": query, "top_k": top_k})
         self.include_notes_calls.append(include_notes)
         self.anchor_calls.append(None if anchors is None else tuple(anchors))
+        self.respect_position_calls.append(respect_reading_position)
         if self._error is not None:
             raise self._error
         return self.results
@@ -1096,13 +1100,17 @@ class FakeReadingPositionRepository:
     records each call so a test can assert nothing was written on the 404 path.
     ``get_for_update`` returns the same row as ``get`` — a single-threaded dict has no
     concurrency to hold against; the lock it stands for is exercised against Postgres.
+    ``get`` records its key so a test can prove a caller never read the repository
+    (or never read another user's row).
     """
 
     def __init__(self) -> None:
         self._by_key: dict[tuple[UUID, UUID], ReadingPosition] = {}
         self.upsert_calls: list[tuple[UUID, UUID]] = []
+        self.get_calls: list[tuple[UUID, UUID]] = []
 
     def get(self, user_id: UUID, source_id: UUID) -> ReadingPosition | None:
+        self.get_calls.append((user_id, source_id))
         return self._by_key.get((user_id, source_id))
 
     def get_for_update(self, user_id: UUID, source_id: UUID) -> ReadingPosition | None:
@@ -1224,14 +1232,31 @@ class FakeRetrievalPort:
     assert the service passes the port's return through unchanged, and records the
     full keyword arguments so tests assert the forwarded query vector and the
     settings-sourced limits/k/ef by value, not just that ``search`` was called.
+
+    When seeded with ``sections_by_source`` (each source's canonical section
+    anchors in document order) it also mirrors the SQL adapter's reading-position
+    bound: a ``not_past_anchor`` keeps book evidence in the bound section and every
+    earlier one, never restricts note-origin evidence, and fails closed (zero book
+    evidence) on a bound anchor matching no seeded section — so upper-layer tests
+    exercise the same contract the scoped CTE enforces.
     """
 
-    def __init__(self, results: list[Evidence] | None = None) -> None:
+    def __init__(
+        self,
+        results: list[Evidence] | None = None,
+        *,
+        sections_by_source: dict[UUID, Sequence[str]] | None = None,
+    ) -> None:
         self.results: list[Evidence] = results if results is not None else []
         self.calls: list[dict[str, object]] = []
         # The note-scope kwargs are captured in a parallel list so the historical
         # ``calls`` dict shape (asserted verbatim by the retrieval suite) is unchanged.
         self.note_scope_calls: list[dict[str, object]] = []
+        # The reading-position bound rides beside them for the same reason.
+        self.not_past_calls: list[str | None] = []
+        self._sections_by_source: dict[UUID, list[str]] = {
+            source_id: list(sections) for source_id, sections in (sections_by_source or {}).items()
+        }
 
     def search(
         self,
@@ -1247,6 +1272,7 @@ class FakeRetrievalPort:
         anchors: Sequence[str] | None = None,
         user_id: UUID | None = None,
         include_notes: bool = False,
+        not_past_anchor: str | None = None,
     ) -> list[Evidence]:
         self.calls.append(
             {
@@ -1262,4 +1288,31 @@ class FakeRetrievalPort:
             }
         )
         self.note_scope_calls.append({"user_id": user_id, "include_notes": include_notes})
-        return self.results
+        self.not_past_calls.append(not_past_anchor)
+        if not_past_anchor is None:
+            return self.results
+        return self._apply_position_bound(source_id, not_past_anchor)
+
+    def _apply_position_bound(self, source_id: UUID, bound_anchor: str) -> list[Evidence]:
+        """The section-order bound, mirroring the adapter's scoped-CTE predicate."""
+        sections = self._sections_by_source.get(source_id, [])
+        if bound_anchor not in sections:
+            # Unmatched bound: fail closed — zero book evidence, never unfiltered.
+            return [e for e in self.results if e.origin == "note"]
+        bound_index = sections.index(bound_anchor)
+        kept: list[Evidence] = []
+        for evidence in self.results:
+            if evidence.origin == "note":
+                kept.append(evidence)  # notes have no sections; never bounded
+                continue
+            # The chunk's section: the longest seeded anchor it belongs to (a chunk
+            # anchor is its section's anchor, optionally suffixed with ``#...``).
+            matches = [
+                anchor
+                for anchor in sections
+                if evidence.anchor == anchor or evidence.anchor.startswith(anchor + "#")
+            ]
+            section_index = sections.index(max(matches, key=len)) if matches else None
+            if section_index is not None and section_index <= bound_index:
+                kept.append(evidence)
+        return kept
