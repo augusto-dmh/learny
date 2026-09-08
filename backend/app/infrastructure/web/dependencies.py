@@ -28,6 +28,7 @@ from sqlalchemy import Connection
 from app.application.activation import RecordActivation
 from app.application.budget import (
     DailyBudget,
+    ServingProfile,
     TokenPrices,
     usd_to_micros,
 )
@@ -137,6 +138,7 @@ from app.infrastructure.email import build_email_sender
 from app.infrastructure.embeddings import build_embedding_adapter
 from app.infrastructure.ingestion.markup import Bs4MarkupConverter
 from app.infrastructure.providers import (
+    GenerationProfileSettings,
     resolve_generation_profiles,
     resolve_serving_profile,
 )
@@ -214,16 +216,18 @@ AppSettings = Annotated[Settings, Depends(get_settings)]
 def build_budget(conn: Connection) -> DailyBudget:
     """Wire the daily AI spend budget on ``conn`` (the caller's transaction).
 
-    Built per request / per worker call — never cached — so the cap, prices, and
-    (in a later task) the kill switch are read from the *current* settings rather
-    than a stale construction-time snapshot. The clock is the shared adapter; the
-    ledger row it resolves is the caller's UTC day. Every declared profile's
-    price catalog rides along keyed by its id (AD-344/PRICE-01), so a
-    router-stamped result debits at the catalog of the profile that served it —
-    and the shared stamp resolver, bound to the declared registry, is wired with
-    it: one PRICE-04 resolution rule (with its warning) serves both the debits
-    and the registry's own callers, and a stamp on the legacy-seeded profile
-    resolves exactly instead of triggering the unknown-stamp fallback warning.
+    Built per request / per worker call — never cached as an object — so the
+    cap, prices, and kill switch are read from the *current* settings rather
+    than a stale construction-time snapshot. The clock is the shared adapter;
+    the ledger row it resolves is the caller's UTC day. The registry-derived
+    pieces ride along cached per process (they derive from the same settings
+    singleton ``get_settings`` caches): every declared profile's price catalog
+    keyed by its id (AD-344/PRICE-01), so a router-stamped result debits at the
+    catalog of the profile that served it, and the shared stamp resolver bound
+    to the declared registry — one PRICE-04 resolution rule (with its warning)
+    serving both the debits and the registry's own callers, with a stamp on the
+    legacy-seeded profile resolving exactly instead of triggering the
+    unknown-stamp fallback warning.
     """
     settings = get_settings()
     return DailyBudget(
@@ -238,15 +242,14 @@ def build_budget(conn: Connection) -> DailyBudget:
         ask_daily_cap=settings.daily_ask_cap,
         teach_start_daily_cap=settings.daily_teach_start_cap,
         ai_paused=settings.ai_kill_switch,
-        profile_catalogs=_profile_catalogs(settings),
-        resolve_serving_profile=partial(
-            resolve_serving_profile,
-            resolve_generation_profiles(settings),
-        ),
+        profile_catalogs=_profile_catalogs(),
+        resolve_serving_profile=_serving_profile_resolver(),
     )
 
 
-def _profile_catalogs(settings: Settings) -> dict[str, TokenPrices]:
+def _build_profile_catalogs(
+    profiles: tuple[GenerationProfileSettings, ...],
+) -> dict[str, TokenPrices]:
     """Each declared profile's price catalog, keyed by its id (AD-344).
 
     Embeddings are priced by the global catalog as always (PRICE-05) — a
@@ -264,8 +267,32 @@ def _profile_catalogs(settings: Settings) -> dict[str, TokenPrices]:
                 profile.price_cache_creation_usd_per_million_tokens
             ),
         )
-        for profile in resolve_generation_profiles(settings)
+        for profile in profiles
     }
+
+
+@lru_cache
+def _generation_profiles() -> tuple[GenerationProfileSettings, ...]:
+    """The settings-declared registry, resolved and validated once per process.
+
+    Cached like ``get_settings`` and the generation accessors: settings are a
+    process singleton, so the per-request budget path stops re-resolving and
+    re-validating the registry on every build. Tests that redeclare the registry
+    clear this alongside ``get_settings.cache_clear()``.
+    """
+    return resolve_generation_profiles(get_settings())
+
+
+@lru_cache
+def _profile_catalogs() -> dict[str, TokenPrices]:
+    """The per-profile catalogs, built from the once-resolved registry."""
+    return _build_profile_catalogs(_generation_profiles())
+
+
+@lru_cache
+def _serving_profile_resolver() -> Callable[[str | None], ServingProfile | None]:
+    """The shared stamp resolver bound to the once-resolved registry."""
+    return partial(resolve_serving_profile, _generation_profiles())
 
 
 def get_email_sender() -> EmailPort:

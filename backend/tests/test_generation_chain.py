@@ -264,19 +264,68 @@ def test_the_request_budget_prices_a_stamp_from_the_declared_profiles_catalog(
     """
     from app.core.config import get_settings
     from app.domain.entities import TokenUsage
+    from app.infrastructure.web import dependencies
     from app.infrastructure.web.dependencies import build_budget
 
     monkeypatch.setenv("LEARNY_GENERATION_PROFILES", _TWO_PROFILES_JSON)
     get_settings.cache_clear()
+    dependencies._generation_profiles.cache_clear()
+    dependencies._profile_catalogs.cache_clear()
+    dependencies._serving_profile_resolver.cache_clear()
     try:
         budget = build_budget(db_conn)
     finally:
         get_settings.cache_clear()
+        dependencies._generation_profiles.cache_clear()
+        dependencies._profile_catalogs.cache_clear()
+        dependencies._serving_profile_resolver.cache_clear()
 
     usage = TokenUsage(input_tokens=1_000_000, output_tokens=1_000_000)
     assert budget.usage_micros(usage, "cheap") == 1_200_000  # $0.20 + $1.00 per M
     assert budget.usage_micros(usage, "primary") == 18_000_000  # $3.00 + $15.00 per M
     assert budget.usage_micros(usage) == 18_000_000  # no stamp is the primary catalog
+
+
+def test_build_budget_resolves_the_registry_once_across_two_builds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The catalogs path is memoized per process (the zero-arg accessor pattern).
+
+    Settings are a singleton, so a second ``build_budget`` must re-resolve and
+    re-validate nothing: the counting wrapper around the registry resolver fires
+    exactly once, and both budgets still price from the declared catalogs.
+    """
+    from app.core.config import get_settings
+    from app.domain.entities import TokenUsage
+    from app.infrastructure.web import dependencies
+    from app.infrastructure.web.dependencies import build_budget
+
+    calls = 0
+    real_resolve = dependencies.resolve_generation_profiles
+
+    def counting_resolve(settings: Settings) -> tuple:
+        nonlocal calls
+        calls += 1
+        return real_resolve(settings)
+
+    monkeypatch.setattr(dependencies, "resolve_generation_profiles", counting_resolve)
+    monkeypatch.setenv("LEARNY_GENERATION_PROFILES", _TWO_PROFILES_JSON)
+    get_settings.cache_clear()
+    dependencies._generation_profiles.cache_clear()
+    dependencies._profile_catalogs.cache_clear()
+    dependencies._serving_profile_resolver.cache_clear()
+    try:
+        first = build_budget(None)  # the repo only holds the connection; no DB touch
+        second = build_budget(None)
+    finally:
+        get_settings.cache_clear()
+        dependencies._generation_profiles.cache_clear()
+        dependencies._profile_catalogs.cache_clear()
+        dependencies._serving_profile_resolver.cache_clear()
+
+    assert calls == 1  # resolved once per process, not once per request
+    usage = TokenUsage(input_tokens=1_000_000, output_tokens=1_000_000)
+    assert first.usage_micros(usage, "cheap") == second.usage_micros(usage, "cheap") == 1_200_000
 
 
 # --- ROUTE-07: the rails fire before any chain entry, whatever serves --------------
