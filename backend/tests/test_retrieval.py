@@ -16,10 +16,17 @@ reproducible. Assertions target spec outcomes:
 - scoping: a query scoped to source A returns no source-B chunk (RET-17).
 - anchor scope: an anchor filter restricts both arms to the target subtree and
   never bypasses the source scope (TEACH-09, AD-031).
+- position bound: ``not_past_anchor`` restricts book evidence to sections at or
+  before the bound anchor's section in document order — the bound section itself
+  stays admissible, later sections never; scores/order of admissible rows are
+  the shipped RRF values; PDF sources take the same section-order predicate;
+  notes are never bounded; an unmatched bound anchor yields zero book evidence
+  plus a warning (SPOILER-01..04, 07, 11, 12, 14).
 """
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
@@ -74,14 +81,42 @@ def _persisted_source(db_conn: Connection, email: str) -> Source:
     return SqlAlchemySourceRepository(db_conn).add(source)
 
 
-def _chunk(index: int, text: str, *, title: str, anchor: str) -> SectionChunk:
+def _chunk(
+    index: int,
+    text: str,
+    *,
+    title: str,
+    anchor: str,
+    page_span: tuple[int, int] | None = None,
+) -> SectionChunk:
     return SectionChunk(
         index=index,
         text=text,
         section_path=(title,),
         anchor=anchor,
-        page_span=None,
+        page_span=page_span,
     )
+
+
+def _persisted_pdf_source(db_conn: Connection, email: str) -> Source:
+    """A PDF-flavored source (SPOILER-03 exercises the bound on paged formats)."""
+    now = datetime.now(UTC)
+    user = User(id=uuid4(), email=email, created_at=now)
+    SqlAlchemyUserRepository(db_conn).add(user)
+    source = Source(
+        id=uuid4(),
+        user_id=user.id,
+        title="A PDF",
+        filename="a-book.pdf",
+        content_type="application/pdf",
+        byte_size=1024,
+        checksum="e" * 64,
+        object_key=f"sources/{user.id}/{uuid4()}.pdf",
+        status="ready",
+        created_at=now,
+        updated_at=now,
+    )
+    return SqlAlchemySourceRepository(db_conn).add(source)
 
 
 def _section(
@@ -140,6 +175,7 @@ def _search(
     *,
     top_k: int = _TOP_K,
     anchors: list[str] | None = None,
+    not_past_anchor: str | None = None,
 ):
     query_vec = DeterministicEmbeddingAdapter().embed_query(query)
     return SqlAlchemyRetrievalRepository(db_conn).search(
@@ -152,6 +188,7 @@ def _search(
         rrf_k=_K,
         ef_search=_EF_SEARCH,
         anchors=anchors,
+        not_past_anchor=not_past_anchor,
     )
 
 
@@ -411,3 +448,247 @@ def test_anchor_scope_does_not_bypass_source_scope(db_conn: Connection) -> None:
     assert results, "expected the in-scope source-A chunk"
     assert all(e.source_id == source_a.id for e in results)
     assert {e.chunk_id for e in results}.isdisjoint(b_ids)
+
+
+# --- Position bound (SPOILER-01..04, 07, 12, 14) --------------------------------
+
+
+def test_position_bound_excludes_later_sections(db_conn: Connection) -> None:
+    # SPOILER-01/02: with a bound in the middle section, book evidence carries only
+    # sections at or before it — the bound section itself stays admissible, later
+    # sections are inadmissible. The same query without a bound still surfaces the
+    # later-section chunk (the spec's independent test).
+    source = _persisted_source(db_conn, "bound-mid@example.com")
+    _seed_three_topic_corpus(db_conn, source.id)
+    _embed_all(db_conn, source.id)
+
+    bounded = _search(
+        db_conn, source.id, "quantum entanglement particles", not_past_anchor="geo.xhtml"
+    )
+    unbounded = _search(db_conn, source.id, "quantum entanglement particles")
+
+    assert {e.anchor for e in bounded} == {"bio.xhtml#p", "geo.xhtml#o"}
+    assert "phys.xhtml#q" in {e.anchor for e in unbounded}
+
+
+def test_bound_at_first_section_admits_only_first_section(db_conn: Connection) -> None:
+    # Edge case: a bound on the book's FIRST section admits only first-section chunks.
+    source = _persisted_source(db_conn, "bound-first@example.com")
+    _seed_three_topic_corpus(db_conn, source.id)
+    _embed_all(db_conn, source.id)
+
+    results = _search(
+        db_conn, source.id, "quantum entanglement particles", not_past_anchor="bio.xhtml"
+    )
+
+    assert {e.anchor for e in results} == {"bio.xhtml#p"}
+
+
+def test_bound_at_last_section_admits_whole_book(db_conn: Connection) -> None:
+    # Edge case: a bound on the book's LAST section admits the whole book — and the
+    # full result sequence (ids + scores + order) must be identical to the unbounded
+    # run: a whole-book-admissible bound never perturbs RRF scoring (SPOILER-04).
+    source = _persisted_source(db_conn, "bound-last@example.com")
+    _seed_three_topic_corpus(db_conn, source.id)
+    _embed_all(db_conn, source.id)
+
+    baseline = _search(db_conn, source.id, "quantum entanglement particles")
+    bounded = _search(
+        db_conn, source.id, "quantum entanglement particles", not_past_anchor="phys.xhtml"
+    )
+
+    assert [(e.chunk_id, e.score) for e in bounded] == [(e.chunk_id, e.score) for e in baseline]
+
+
+def test_single_section_book_with_bound_admits_all_chunks(db_conn: Connection) -> None:
+    # Edge case: a single-section book with a bound present admits all chunks.
+    source = _persisted_source(db_conn, "bound-single@example.com")
+    _seed_single_chunk(db_conn, source.id, language="en", body=_PHOTO)
+    _embed_all(db_conn, source.id)
+    target_id = _chunk_id_by_text(db_conn, source.id, _PHOTO)
+
+    results = _search(
+        db_conn, source.id, "photosynthesis sunlight energy", not_past_anchor="cap.xhtml"
+    )
+
+    assert [e.chunk_id for e in results] == [target_id]
+
+
+def test_pdf_source_bound_uses_section_order_not_page_span(db_conn: Connection) -> None:
+    # SPOILER-03: a PDF source takes the same section-order predicate — page_span
+    # plays no part. The seeded page spans run OPPOSITE to section order (the first
+    # section holds the later pages), so no page threshold can reproduce the bound
+    # outcome: only a section-order comparison admits the first section while
+    # excluding the second.
+    source = _persisted_pdf_source(db_conn, "bound-pdf@example.com")
+    _seed_corpus(
+        db_conn,
+        source.id,
+        (
+            _section(
+                0,
+                "Chapter One",
+                "p1.xhtml",
+                (
+                    _chunk(
+                        0,
+                        _PHOTO,
+                        title="Chapter One",
+                        anchor="p1.xhtml",
+                        page_span=(5, 6),
+                    ),
+                ),
+            ),
+            _section(
+                1,
+                "Chapter Two",
+                "p2.xhtml",
+                (
+                    _chunk(
+                        0,
+                        _PHOTO2,
+                        title="Chapter Two",
+                        anchor="p2.xhtml",
+                        page_span=(1, 2),
+                    ),
+                ),
+            ),
+        ),
+    )
+    _embed_all(db_conn, source.id)
+
+    bounded = _search(
+        db_conn, source.id, "photosynthesis sunlight energy", not_past_anchor="p1.xhtml"
+    )
+    unbounded = _search(db_conn, source.id, "photosynthesis sunlight energy")
+
+    assert {e.anchor for e in bounded} == {"p1.xhtml"}
+    assert {e.anchor for e in unbounded} == {"p1.xhtml", "p2.xhtml"}
+
+
+def test_bound_keeps_shipped_rrf_scores_for_admissible_rows(db_conn: Connection) -> None:
+    # SPOILER-04: inside the bounded pool the shipped RRF arithmetic is untouched.
+    # The ocean chunk matches BOTH arms at rank 1 within the bound (only it shares
+    # query tokens), so its score is exactly 1/(k+1) + 1/(k+1) — the fused value the
+    # statement has always produced for a both-arm rank-1 hit, not a re-scored one.
+    source = _persisted_source(db_conn, "bound-score@example.com")
+    _seed_three_topic_corpus(db_conn, source.id)
+    _embed_all(db_conn, source.id)
+    target_id = _chunk_id_by_text(db_conn, source.id, _OCEAN)
+
+    results = _search(db_conn, source.id, "ocean currents heat", not_past_anchor="geo.xhtml")
+
+    assert results, "expected the bounded both-arm hit"
+    top = results[0]
+    assert top.chunk_id == target_id
+    expected = 1.0 / (_K + 1) + 1.0 / (_K + 1)
+    assert top.score == pytest.approx(expected)
+
+
+def test_anchors_scope_and_position_bound_compose_as_conjunction(db_conn: Connection) -> None:
+    # SPOILER-07: the anchor scope and the position bound both constrain the shared
+    # scoped CTE and compose as a logical AND — a scope pointing past the bound takes
+    # the existing empty outcome (no bypass), a scope inside the bound serves exactly
+    # the intersection.
+    source = _persisted_source(db_conn, "bound-and-scope@example.com")
+    _seed_three_topic_corpus(db_conn, source.id)
+    _embed_all(db_conn, source.id)
+
+    past_bound = _search(
+        db_conn,
+        source.id,
+        "quantum entanglement particles",
+        anchors=["phys.xhtml#q"],
+        not_past_anchor="geo.xhtml",
+    )
+    within = _search(
+        db_conn,
+        source.id,
+        "photosynthesis sunlight energy",
+        anchors=["bio.xhtml#p"],
+        not_past_anchor="geo.xhtml",
+    )
+
+    assert past_bound == []
+    assert {e.anchor for e in within} == {"bio.xhtml#p"}
+
+
+def test_unmatched_bound_anchor_yields_zero_book_evidence_and_warns(
+    db_conn: Connection, caplog: pytest.LogCaptureFixture
+) -> None:
+    # SPOILER-14: a bound anchor matching no section of the source fails closed —
+    # ZERO book evidence, never an unfiltered fallback — and a warning is logged
+    # identifying the source and the unmatched anchor.
+    source = _persisted_source(db_conn, "bound-stale@example.com")
+    _seed_three_topic_corpus(db_conn, source.id)
+    _embed_all(db_conn, source.id)
+
+    with caplog.at_level(logging.WARNING, logger="app.infrastructure.db.retrieval"):
+        results = _search(
+            db_conn,
+            source.id,
+            "photosynthesis sunlight energy",
+            not_past_anchor="ghost.xhtml#missing",
+        )
+
+    assert results == []
+    records = [r for r in caplog.records if r.getMessage() == "retrieval.position_bound_unmatched"]
+    assert records
+    assert records[0].source_id == str(source.id)
+    assert records[0].anchor == "ghost.xhtml#missing"
+
+
+def test_explicit_none_bound_matches_unbounded_behavior(db_conn: Connection) -> None:
+    # SPOILER-12: passing ``not_past_anchor=None`` explicitly is exactly the pre-cycle
+    # call — identical results to omitting the parameter.
+    source = _persisted_source(db_conn, "bound-none@example.com")
+    _seed_three_topic_corpus(db_conn, source.id)
+    _embed_all(db_conn, source.id)
+
+    omitted = _search(db_conn, source.id, "quantum entanglement particles")
+    explicit = _search(db_conn, source.id, "quantum entanglement particles", not_past_anchor=None)
+
+    assert [(e.chunk_id, e.score, e.anchor) for e in explicit] == [
+        (e.chunk_id, e.score, e.anchor) for e in omitted
+    ]
+
+
+def test_bound_resolves_within_the_queried_source(db_conn: Connection) -> None:
+    # Edge case: the bound is per-source. An anchor that exists only in source A must
+    # not bound source B by A's section positions — resolved within B it matches
+    # nothing, so B fails closed (empty) rather than being half-bounded by another
+    # book's ordering; B's own anchor bounds B normally, serving only B's rows.
+    source_a = _persisted_source(db_conn, "bound-src-a@example.com")
+    source_b = _persisted_source(db_conn, "bound-src-b@example.com")
+    _seed_three_topic_corpus(db_conn, source_a.id)
+    _seed_corpus(
+        db_conn,
+        source_b.id,
+        (
+            _section(
+                0,
+                "Biology",
+                "bio.xhtml",
+                (_chunk(0, _PHOTO, title="Biology", anchor="bio.xhtml#b"),),
+            ),
+            _section(
+                1,
+                "Geography",
+                "geo.xhtml",
+                (_chunk(0, _OCEAN, title="Geography", anchor="geo.xhtml#b"),),
+            ),
+        ),
+    )
+    _embed_all(db_conn, source_a.id)
+    _embed_all(db_conn, source_b.id)
+
+    foreign_anchor = _search(
+        db_conn, source_b.id, "photosynthesis sunlight energy", not_past_anchor="phys.xhtml"
+    )
+    own_anchor = _search(db_conn, source_b.id, "ocean currents heat", not_past_anchor="geo.xhtml")
+
+    assert foreign_anchor == []
+    # B's own last-section bound admits B's whole (two-section) book — and nothing
+    # from A, even though A shares corpus content and A holds the foreign anchor.
+    assert {e.anchor for e in own_anchor} == {"bio.xhtml#b", "geo.xhtml#b"}
+    assert all(e.source_id == source_b.id for e in own_anchor)

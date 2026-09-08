@@ -637,6 +637,7 @@ class RetrievalPort(Protocol):
         anchors: Sequence[str] | None = None,
         user_id: UUID | None = None,
         include_notes: bool = False,
+        not_past_anchor: str | None = None,
     ) -> list[Evidence]:
         """Return up to ``top_k`` fused ``Evidence`` for ``source_id``, RRF-ordered.
 
@@ -644,12 +645,23 @@ class RetrievalPort(Protocol):
         ``anchor`` is in the set — the target-subtree scope for teaching (TEACH-09,
         AD-031). ``None`` (the default) keeps the whole-source behaviour unchanged.
 
+        When ``not_past_anchor`` is given (a canonical section anchor), book-arm
+        evidence is further restricted to sections at or before that anchor's section
+        in document order — the bound section's own chunks stay admissible, any later
+        section is excluded (SPOILER-01/02) — and it composes with ``anchors`` as a
+        logical AND (SPOILER-07). ``None`` (the default) keeps the whole-source
+        behaviour byte-identical (SPOILER-12). An anchor matching no section of the
+        source yields zero book evidence — the bound fails closed, never degrading to
+        unfiltered — plus a warning naming the source and the unmatched anchor
+        (SPOILER-14).
+
         When ``include_notes`` and ``user_id`` are both provided, two additional RRF
         arms over that user's own notes (semantic + lexical) are fused into the same
         ranking behind a notes weight (ADR-0026 d4, NL-02); note evidence carries
         ``origin='note'`` and the note's identity. Either omitted keeps the book-only
         behaviour byte-identical (the anchors, if any, constrain only the book arms —
-        notes have no anchors).
+        notes have no anchors). The note arms are never restricted by the position
+        bound (SPOILER-11).
         """
         ...
 

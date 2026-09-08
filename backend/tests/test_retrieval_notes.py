@@ -18,13 +18,19 @@ live test DB. Assertions target spec outcomes:
   to the book-only path, even for a user who has notes (invariant 1).
 - composition: the anchored (teaching) variant constrains only the book arms; notes
   (which have no anchors) still fuse in.
+- position bound: ``not_past_anchor`` shrinks only the book ``scoped`` CTE in both
+  notes-included variants — note arms are never restricted, an empty bound×scope
+  intersection empties only the book side, and a stale bound leaves notes flowing
+  (SPOILER-11, 14, 15).
 """
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
+import pytest
 from sqlalchemy import Connection, text
 
 from app.domain.entities import (
@@ -162,6 +168,7 @@ def _search(
     user_id: UUID | None = None,
     include_notes: bool = False,
     anchors: list[str] | None = None,
+    not_past_anchor: str | None = None,
     top_k: int = _TOP_K,
 ):
     qv = DeterministicEmbeddingAdapter().embed_query(query)
@@ -177,6 +184,7 @@ def _search(
         anchors=anchors,
         user_id=user_id,
         include_notes=include_notes,
+        not_past_anchor=not_past_anchor,
     )
 
 
@@ -349,3 +357,97 @@ def test_anchored_variant_constrains_only_book_arms(db_conn: Connection) -> None
     assert "ch1.xhtml" in anchors  # the in-subtree book chunk is served
     assert "ch2.xhtml" not in anchors  # the out-of-subtree book chunk is excluded
     assert any(e.origin == "note" and e.note_id == note_id for e in results)  # note still fuses in
+
+
+# --- Position bound in the notes-included variants (SPOILER-11, 14, 15) ----------
+
+
+def test_note_arms_are_not_restricted_by_the_position_bound(db_conn: Connection) -> None:
+    # SPOILER-11 (whole-source + notes variant): the bound shrinks only the book
+    # ``scoped`` CTE — the user's own notes still fuse in even though the book side
+    # is bounded, and every book row stays within the bound.
+    user, source = _persisted_user_and_source(db_conn, "bound-notes@example.com")
+    _two_topic_book(db_conn, source.id)
+    note_id = _seed_note(db_conn, user.id, title="Ahead of the reader", body=_NOTE_FACT)
+
+    results = _search(
+        db_conn,
+        source.id,
+        "photosynthesis zolgensma sunlight dose",
+        user_id=user.id,
+        include_notes=True,
+        not_past_anchor="bio.xhtml",
+    )
+
+    book = [e for e in results if e.origin == "book"]
+    assert {e.anchor for e in book} == {"bio.xhtml"}  # the later geo section is excluded
+    assert any(e.origin == "note" and e.note_id == note_id for e in results)
+
+
+def test_anchored_notes_variant_applies_bound_to_book_arms_only(db_conn: Connection) -> None:
+    # SPOILER-07/11 (anchored + notes variant): bound and anchor scope compose as a
+    # logical AND in the BOOK arms only — a scope pointing past the bound empties the
+    # book side entirely while the note arms still fuse in; a scope inside the bound
+    # serves exactly the intersection, notes alongside.
+    user, source = _persisted_user_and_source(db_conn, "bound-anchored@example.com")
+    _seed_corpus(
+        db_conn,
+        source.id,
+        (
+            _section(0, "Chapter One", "ch1.xhtml", _PHOTO),
+            _section(1, "Chapter Two", "ch2.xhtml", _PHOTO2),
+        ),
+    )
+    _embed_all(db_conn, source.id)
+    note_id = _seed_note(db_conn, user.id, title="Aside", body=_NOTE_FACT)
+
+    empty_intersection = _search(
+        db_conn,
+        source.id,
+        "photosynthesis zolgensma sunlight dose",
+        user_id=user.id,
+        include_notes=True,
+        anchors=["ch2.xhtml"],
+        not_past_anchor="ch1.xhtml",
+    )
+    assert all(e.origin == "note" for e in empty_intersection)  # book side empty, no bypass
+    assert any(e.note_id == note_id for e in empty_intersection)
+
+    within = _search(
+        db_conn,
+        source.id,
+        "photosynthesis zolgensma sunlight dose",
+        user_id=user.id,
+        include_notes=True,
+        anchors=["ch1.xhtml"],
+        not_past_anchor="ch1.xhtml",
+    )
+    assert {e.anchor for e in within if e.origin == "book"} == {"ch1.xhtml"}
+    assert any(e.origin == "note" and e.note_id == note_id for e in within)
+
+
+def test_stale_bound_leaves_note_arms_unaffected(
+    db_conn: Connection, caplog: pytest.LogCaptureFixture
+) -> None:
+    # SPOILER-14/15: an unmatched bound anchor empties the book arms and logs the
+    # warning naming the source and anchor — the user's notes remain fully retrievable.
+    user, source = _persisted_user_and_source(db_conn, "bound-stale-notes@example.com")
+    _two_topic_book(db_conn, source.id)
+    note_id = _seed_note(db_conn, user.id, title="Aside", body=_NOTE_FACT)
+
+    with caplog.at_level(logging.WARNING, logger="app.infrastructure.db.retrieval"):
+        results = _search(
+            db_conn,
+            source.id,
+            "zolgensma gene therapy dose",
+            user_id=user.id,
+            include_notes=True,
+            not_past_anchor="ghost.xhtml#missing",
+        )
+
+    records = [r for r in caplog.records if r.getMessage() == "retrieval.position_bound_unmatched"]
+    assert records
+    assert records[0].source_id == str(source.id)
+    assert records[0].anchor == "ghost.xhtml#missing"
+    assert all(e.origin == "note" for e in results)
+    assert any(e.note_id == note_id for e in results)
