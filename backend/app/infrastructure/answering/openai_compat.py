@@ -17,9 +17,9 @@ the host reports into the Learny usage DTO; a response without usage parses to
 ``None`` → the debit is 0 (ECON-03). Thinking effort cannot be expressed on this
 kind: the profile's per-mode values are accepted and deliberately never sent
 (ECON-05, declared degradation). SDK/HTTP failures translate to the Learny
-taxonomy inside this module (TAX-02), mirroring the Anthropic adapter's
-classifier; anything unrecognized propagates unchanged so the application's
-error envelope is exactly as before (TAX-03).
+taxonomy through the providers package's shared translator (TAX-02), with this
+adapter's SDK exception types bound in; anything unrecognized propagates
+unchanged so the application's error envelope is exactly as before (TAX-03).
 
 The SDK is imported lazily inside :meth:`_get_client` only, so the module stays
 import-light and an injected fake client needs no key or network (mirrors the
@@ -44,11 +44,8 @@ from app.domain.entities import (
     TokenUsage,
 )
 from app.infrastructure.answering.prompts import SENTINEL
-from app.infrastructure.providers import (
-    ProviderUnavailable,
-    RateLimited,
-    RequestRejected,
-    Timeout,
+from app.infrastructure.providers.translation import (
+    raise_translated as _raise_translated_shared,
 )
 
 logger = logging.getLogger(__name__)
@@ -269,53 +266,24 @@ def _log_client_error(exc: BaseException) -> None:
     )
 
 
-def _classify_provider_failure(exc: BaseException) -> BaseException:
-    """Return the Learny taxonomy error ``exc`` translates to, else ``exc`` itself.
+def _raise_translated(exc: BaseException) -> NoReturn:
+    """Re-raise a caught provider failure as its Learny taxonomy class (TAX-02).
 
-    Status failures are classified by the status read off the exception, not an
-    SDK type: 429 → ``RateLimited``, 5xx (including the 529 overload) →
-    ``ProviderUnavailable``, any other 4xx → ``RequestRejected``. Timeouts (the
-    SDK's own timeout error, httpx's timeout family, the builtin) translate to
-    ``Timeout``; an unreachable provider (connection error without a timeout) to
-    ``ProviderUnavailable``. Anything else — an adapter bug, a malformed reply, a
-    shaped test double — is not a transport signal and is returned unchanged
-    (TAX-03: the caller sees exactly the raise it has always seen).
-    """
-    import httpx  # local import, like every transport reference in this module
-
-    if isinstance(exc, (TimeoutError, httpx.TimeoutException)):
-        return Timeout("the provider call exceeded its wall-clock bound")
-    status = getattr(exc, "status_code", None)
-    if isinstance(status, int):
-        if status == 429:
-            return RateLimited("the provider answered 429")
-        if status >= 500:
-            return ProviderUnavailable(f"the provider answered {status}")
-        if status >= 400:
-            return RequestRejected(f"the provider rejected the request ({status})")
-    import openai  # local import — the sole SDK reference (ADR-0007/0009)
-
-    if isinstance(exc, openai.APITimeoutError):
-        return Timeout("the provider call exceeded its wall-clock bound")
-    if isinstance(exc, openai.APIConnectionError):
-        return ProviderUnavailable("the provider could not be reached")
-    return exc
-
-
-def raise_translated(exc: BaseException) -> NoReturn:
-    """Re-raise a caught provider failure as its Learny taxonomy class.
-
-    A recognized SDK/HTTP failure is re-raised as the mapped Learny error with
-    the original attached as ``__cause__``, so server tracebacks keep the
-    provider detail while callers classify on Learny classes only. An
-    unrecognized exception is re-raised unchanged and identity-preserved. The
+    The SDK-specific branch is exactly this binding: the providers package's
+    shared translator (:func:`app.infrastructure.providers.translation.
+    raise_translated`) owns the status/timeout classification, the cause
+    chaining, and the identity-preserved passthrough — this adapter supplies the
+    OpenAI SDK's own timeout and connection-error types as its inputs. The
     messages on the translated errors name the failure class and status only,
     never the SDK's exception message (NFR-SEC-004).
     """
-    translated = _classify_provider_failure(exc)
-    if translated is exc:
-        raise exc
-    raise translated from exc
+    import openai  # local import — the sole SDK reference (ADR-0007/0009)
+
+    _raise_translated_shared(
+        exc,
+        timeout_exceptions=(openai.APITimeoutError,),
+        unreachable_exceptions=(openai.APIConnectionError,),
+    )
 
 
 class OpenAICompatibleGenerationAdapter:
@@ -419,7 +387,7 @@ class OpenAICompatibleGenerationAdapter:
             )
         except Exception as exc:
             _log_client_error(exc)
-            raise_translated(exc)
+            _raise_translated(exc)
         answer = _parse_answer(
             _text_of(response), evidence, model=self._model, usage=_usage_of(response)
         )
@@ -500,7 +468,7 @@ class OpenAICompatibleGenerationAdapter:
                     close()
         except Exception as exc:
             _log_client_error(exc)
-            raise_translated(exc)
+            _raise_translated(exc)
         answer = _parse_answer("".join(accumulated), evidence, model=self._model, usage=usage)
         _log_call(reported, model=self._model, found=answer.found)
         yield AnswerCompleted(answer=answer)

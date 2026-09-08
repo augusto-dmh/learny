@@ -37,7 +37,6 @@ from app.domain.entities import (
     Evidence,
     GeneratedAnswer,
     HistoryTurn,
-    TokenUsage,
     citation_marker,
 )
 from app.infrastructure.answering.prompts import (
@@ -45,11 +44,9 @@ from app.infrastructure.answering.prompts import (
     SENTINEL,
     TEACHING_SYSTEM_PROMPT,
 )
-from app.infrastructure.providers import (
-    ProviderUnavailable,
-    RateLimited,
-    RequestRejected,
-    Timeout,
+from app.infrastructure.providers import usage_of
+from app.infrastructure.providers.translation import (
+    raise_translated as _raise_translated_shared,
 )
 
 logger = logging.getLogger(__name__)
@@ -222,30 +219,6 @@ class _CitationMarks:
         self.spans.append(CitedSpan(chunk_id=document.chunk_id, quote=quote, start=start, end=end))
 
 
-def _usage_of(message: Any) -> TokenUsage | None:
-    """Map a provider message's ``usage`` onto the Learny usage DTO (design §Reuse).
-
-    The budget debit needs the tokens a successful call actually consumed, and today
-    they only reach ``_log_call`` — so the same object is now carried on the returned
-    :class:`~app.domain.entities.GeneratedAnswer` instead of living solely in the
-    log. Input and output counts plus the prompt-cache detail (cache-read and
-    cache-creation tokens, COST-03/PRICE-02): the cached prefix a teach session
-    re-reads is real spend, and the debit prices it at the serving profile's cache
-    prices. A provider that reports no cache detail (the fields absent, as on an
-    un-cached call) parses to zero, so the debit stays input+output only.
-    A message without usage parses to ``None`` → the debit is 0 USD.
-    """
-    usage = getattr(message, "usage", None)
-    if usage is None:
-        return None
-    return TokenUsage(
-        input_tokens=getattr(usage, "input_tokens", 0) or 0,
-        output_tokens=getattr(usage, "output_tokens", 0) or 0,
-        cache_read_input_tokens=getattr(usage, "cache_read_input_tokens", 0) or 0,
-        cache_creation_input_tokens=getattr(usage, "cache_creation_input_tokens", 0) or 0,
-    )
-
-
 def _parse_message(
     message: Any, documents: Sequence[_SentDocument], *, model: str
 ) -> GeneratedAnswer:
@@ -276,7 +249,7 @@ def _parse_message(
             cited_chunk_ids=(),
             model=model,
             found=False,
-            usage=_usage_of(message),
+            usage=usage_of(message),
         )
     return GeneratedAnswer(
         text="".join(text_parts),
@@ -284,7 +257,7 @@ def _parse_message(
         model=model,
         found=True,
         spans=tuple(marks.spans),
-        usage=_usage_of(message),
+        usage=usage_of(message),
     )
 
 
@@ -359,56 +332,22 @@ def _provider_error_type(exc: BaseException) -> str | None:
     return kind if isinstance(kind, str) and kind else None
 
 
-def _classify_provider_failure(exc: BaseException) -> BaseException:
-    """Return the Learny taxonomy error ``exc`` translates to, else ``exc`` itself.
+def raise_translated(exc: BaseException) -> NoReturn:
+    """Re-raise a caught provider failure as its Learny taxonomy class (TAX-02).
 
-    Status failures are classified by the same read the redacted 4xx line makes —
-    the status off the exception, not an SDK type — so a rejection that logs as a
-    4xx also raises ``RequestRejected``, a 429 a ``RateLimited``, and a 5xx or the
-    529 overload a ``ProviderUnavailable``. Timeouts (the SDK's own timeout error,
-    httpx's timeout family, the builtin) translate to ``Timeout``; an unreachable
-    provider (connection error without a timeout) to ``ProviderUnavailable``.
-
-    Anything else — an adapter bug, a malformed reply, a shaped test double — is
-    not a transport signal and is returned unchanged, so the caller sees exactly
-    the raise it has always seen (the port contract is untouched either way: an
-    operational failure still raises).
+    The SDK-specific branch is exactly this binding: the shared providers
+    translator (:func:`app.infrastructure.providers.translation.raise_translated`)
+    owns the status/timeout classification, the cause chaining, and the
+    identity-preserved passthrough — this adapter supplies the Anthropic SDK's
+    own timeout and connection-error types as its inputs.
     """
-    import httpx  # local import, like every transport reference in this module
-
-    if isinstance(exc, (TimeoutError, httpx.TimeoutException)):
-        return Timeout("the provider call exceeded its wall-clock bound")
-    status = getattr(exc, "status_code", None)
-    if isinstance(status, int):
-        if status == 429:
-            return RateLimited("the provider answered 429")
-        if status >= 500:
-            return ProviderUnavailable(f"the provider answered {status}")
-        if status >= 400:
-            return RequestRejected(f"the provider rejected the request ({status})")
     import anthropic  # local import — the sole SDK reference (ADR-0007/0009)
 
-    if isinstance(exc, anthropic.APITimeoutError):
-        return Timeout("the provider call exceeded its wall-clock bound")
-    if isinstance(exc, anthropic.APIConnectionError):
-        return ProviderUnavailable("the provider could not be reached")
-    return exc
-
-
-def raise_translated(exc: BaseException) -> NoReturn:
-    """Re-raise a caught provider failure as its Learny taxonomy class.
-
-    A recognized SDK/HTTP failure is re-raised as the mapped Learny error with the
-    original attached as ``__cause__``, so server tracebacks keep the provider
-    detail while callers classify on Learny classes only. An unrecognized
-    exception is re-raised unchanged and identity-preserved. The messages on the
-    translated errors name the failure class and status only, never the SDK's
-    exception message, which quotes the rejected request back (NFR-SEC-004).
-    """
-    translated = _classify_provider_failure(exc)
-    if translated is exc:
-        raise exc
-    raise translated from exc
+    _raise_translated_shared(
+        exc,
+        timeout_exceptions=(anthropic.APITimeoutError,),
+        unreachable_exceptions=(anthropic.APIConnectionError,),
+    )
 
 
 def _build_history_messages(

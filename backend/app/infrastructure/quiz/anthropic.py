@@ -24,7 +24,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, NoReturn
 from uuid import UUID
 
 from app.domain.entities import (
@@ -36,10 +36,10 @@ from app.domain.entities import (
     SuggestResult,
     TokenUsage,
 )
-from app.infrastructure.answering.anthropic import (
-    AnthropicAdapterBase,
-    _usage_of,
-    raise_translated,
+from app.infrastructure.answering.anthropic import AnthropicAdapterBase
+from app.infrastructure.providers import usage_of
+from app.infrastructure.providers.translation import (
+    raise_translated as _raise_translated_shared,
 )
 
 # Wall-clock bound for the one foreground generation call (card suggestions). The deck
@@ -47,6 +47,24 @@ from app.infrastructure.answering.anthropic import (
 # a reader's patience: past this the student has already given up, and holding the
 # threadpool slot only makes the next request worse.
 _SUGGEST_TIMEOUT_S = 30.0
+
+
+def _raise_translated(exc: BaseException) -> NoReturn:
+    """Translate a caught provider failure through the shared translator (TAX-02).
+
+    The SDK-specific branch is exactly this binding: the providers package's
+    shared translator owns the status/timeout classification and cause chaining,
+    and this adapter — which owns the ``anthropic`` SDK here just as the answering
+    adapter does — supplies its timeout and connection-error types.
+    """
+    import anthropic  # local import — the sole SDK reference (ADR-0007/0009)
+
+    _raise_translated_shared(
+        exc,
+        timeout_exceptions=(anthropic.APITimeoutError,),
+        unreachable_exceptions=(anthropic.APIConnectionError,),
+    )
+
 
 # Formulation bar both deck and quote prompts must carry (REV-20).
 _FORMULATION_RUBRIC = (
@@ -262,7 +280,7 @@ class AnthropicQuizAdapter(AnthropicAdapterBase):
         try:
             batch = self._get_client().messages.batches.create(requests=requests)
         except Exception as exc:
-            raise_translated(exc)
+            _raise_translated(exc)
         return QuizDeckHandle(
             provider="anthropic",
             batch_id=batch.id,
@@ -300,12 +318,12 @@ class AnthropicQuizAdapter(AnthropicAdapterBase):
                 timeout=_SUGGEST_TIMEOUT_S,
             )
         except Exception as exc:
-            raise_translated(exc)
+            _raise_translated(exc)
         try:
             candidates = _parse_items(message)
         except (KeyError, json.JSONDecodeError) as exc:
             raise ValueError(f"suggestion response was not usable: {exc}") from exc
-        return SuggestResult(candidates=tuple(candidates[:limit]), usage=_usage_of(message))
+        return SuggestResult(candidates=tuple(candidates[:limit]), usage=usage_of(message))
 
     def suggest_note_cards(self, note_body: str, context: str, limit: int) -> SuggestResult:
         """Issue one Messages call for a note and return at most ``limit`` candidates.
@@ -329,12 +347,12 @@ class AnthropicQuizAdapter(AnthropicAdapterBase):
                 timeout=_SUGGEST_TIMEOUT_S,
             )
         except Exception as exc:
-            raise_translated(exc)
+            _raise_translated(exc)
         try:
             candidates = _parse_note_items(message)
         except (KeyError, json.JSONDecodeError) as exc:
             raise ValueError(f"note suggestion response was not usable: {exc}") from exc
-        return SuggestResult(candidates=tuple(candidates[:limit]), usage=_usage_of(message))
+        return SuggestResult(candidates=tuple(candidates[:limit]), usage=usage_of(message))
 
     def collect_deck(self, handle: QuizDeckHandle) -> QuizDeckResult | None:
         """Poll the batch; ``None`` while processing, else the mapped result (QUIZ-05)."""
@@ -345,7 +363,7 @@ class AnthropicQuizAdapter(AnthropicAdapterBase):
         try:
             batch = client.messages.batches.retrieve(handle.batch_id)
         except Exception as exc:
-            raise_translated(exc)
+            _raise_translated(exc)
         if batch.processing_status != "ended":
             return None
 
@@ -375,7 +393,7 @@ class AnthropicQuizAdapter(AnthropicAdapterBase):
             # Only a transport failure reaches this handler (per-request parse
             # failures are consumed as section errors above), so the paginated
             # results read translates exactly like the other batch calls.
-            raise_translated(exc)
+            _raise_translated(exc)
         return QuizDeckResult(
             candidates=tuple(candidates),
             errors=tuple(errors),
