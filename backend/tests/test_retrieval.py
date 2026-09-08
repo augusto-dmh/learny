@@ -21,13 +21,17 @@ reproducible. Assertions target spec outcomes:
   stays admissible, later sections never; scores/order of admissible rows are
   the shipped RRF values; PDF sources take the same section-order predicate;
   notes are never bounded; an unmatched bound anchor yields zero book evidence
-  plus a warning (SPOILER-01..04, 07, 11, 12, 14).
+  plus a warning (SPOILER-01..04, 07, 11, 12, 14). Edge cases: a sectionless
+  source yields no evidence with or without a bound; a 0.00-percent position
+  still bounds at its anchor's section — the anchor, not the percent, defines
+  the bound.
 """
 
 from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
+from decimal import Decimal
 from uuid import UUID, uuid4
 
 import pytest
@@ -43,6 +47,7 @@ from app.domain.entities import (
 from app.infrastructure.db.repositories import (
     SqlAlchemyCorpusRepository,
     SqlAlchemyEmbeddingIndexRepository,
+    SqlAlchemyReadingPositionRepository,
     SqlAlchemySourceRepository,
     SqlAlchemyUserRepository,
 )
@@ -692,3 +697,55 @@ def test_bound_resolves_within_the_queried_source(db_conn: Connection) -> None:
     # from A, even though A shares corpus content and A holds the foreign anchor.
     assert {e.anchor for e in own_anchor} == {"bio.xhtml#b", "geo.xhtml#b"}
     assert all(e.source_id == source_b.id for e in own_anchor)
+
+
+def test_sectionless_source_yields_no_evidence_with_or_without_bound(
+    db_conn: Connection,
+) -> None:
+    # Edge case: a source with NO sections/chunks behaves as today — no evidence
+    # either way. Search returns empty with no bound, and stays empty (no error,
+    # no fallback) when a bound is supplied; the sectionless source has nothing
+    # for any anchor to match, so the bound withholds rather than widening.
+    source = _persisted_source(db_conn, "bound-sectionless@example.com")
+
+    unbounded = _search(db_conn, source.id, "photosynthesis sunlight energy")
+    bounded = _search(
+        db_conn, source.id, "photosynthesis sunlight energy", not_past_anchor="bio.xhtml"
+    )
+
+    assert unbounded == []
+    assert bounded == []
+
+
+def test_zero_percent_position_bounds_at_anchor_section_not_percent(
+    db_conn: Connection,
+) -> None:
+    # Edge case: percent reads 0.00 (book start or prose-free book) — the ANCHOR,
+    # not the percent, defines the bound. A position saved with percent 0.00 on a
+    # MID-book section anchor still bounds at that anchor's section: earlier
+    # sections and the bound section itself stay admissible, later sections are
+    # excluded. A percent-defined bound (0.00 = book start) could admit neither —
+    # the adapter never reads the stored percent; this pins that contract at the
+    # SQL layer.
+    source = _persisted_source(db_conn, "bound-zero@example.com")
+    _seed_three_topic_corpus(db_conn, source.id)
+    _embed_all(db_conn, source.id)
+    SqlAlchemyReadingPositionRepository(db_conn).upsert(
+        source.user_id,
+        source.id,
+        anchor="geo.xhtml",
+        percent=Decimal("0.00"),
+        updated_at=datetime.now(UTC),
+    )
+    saved = SqlAlchemyReadingPositionRepository(db_conn).get(source.user_id, source.id)
+    assert saved is not None
+    assert saved.anchor == "geo.xhtml"
+    assert saved.percent == Decimal("0.00")
+
+    results = _search(
+        db_conn, source.id, "quantum entanglement particles", not_past_anchor="geo.xhtml"
+    )
+
+    # The mid-book anchor's section (Geography) and everything before it are
+    # admissible; the later Physics section never surfaces despite the 0.00.
+    assert {e.anchor for e in results} == {"bio.xhtml#p", "geo.xhtml#o"}
