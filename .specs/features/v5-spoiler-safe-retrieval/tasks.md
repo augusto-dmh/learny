@@ -11,7 +11,7 @@ Implement these tasks with the `tlc-spec-driven` skill: **activate it by name an
 **Design**: `.specs/features/v5-spoiler-safe-retrieval/design.md`
 **Context / ADs**: `.specs/features/v5-spoiler-safe-retrieval/context.md`, STATE.md AD-346..AD-349
 **Spec**: `.specs/features/v5-spoiler-safe-retrieval/spec.md` (SPOILER-01..15)
-**Status**: T1, T2 done (Phases 1–2 of 3 complete); T3 pending.
+**Status**: T1, T2, T3 done (all phases complete).
 
 ---
 

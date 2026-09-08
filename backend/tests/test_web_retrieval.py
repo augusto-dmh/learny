@@ -349,18 +349,30 @@ def test_retrieve_defaults_include_notes_false_and_forwards_explicit_choice(
 ) -> None:
     # AD-147 / NL-04: the diagnostic retrieve endpoint keeps the note arms OFF when
     # the flag is absent (unchanged behaviour), and forwards an explicit choice
-    # verbatim. Asserted by spying on the wired service.
+    # verbatim. Asserted by spying on the wired service. The endpoint always
+    # requests position-respecting retrieval (SPOILER-10) — the bound itself is
+    # inert for a caller with no saved position.
     from app.infrastructure.web.dependencies import get_retrieve_evidence
 
     source_id, csrf = _seed_owned_embedded_source(auth_client, db_conn, "notes@example.com")
 
     seen: list[bool] = []
+    position_flags: list[bool] = []
 
     class _SpyService:
         def __call__(  # noqa: ANN001
-            self, *, user, source_id, query, top_k=None, anchors=None, include_notes=False
+            self,
+            *,
+            user,
+            source_id,
+            query,
+            top_k=None,
+            anchors=None,
+            include_notes=False,
+            respect_reading_position=False,
         ):
             seen.append(include_notes)
+            position_flags.append(respect_reading_position)
             return []
 
     auth_client.app.dependency_overrides[get_retrieve_evidence] = lambda: _SpyService()
@@ -376,3 +388,45 @@ def test_retrieve_defaults_include_notes_false_and_forwards_explicit_choice(
     assert opted_in.status_code == 200, opted_in.text
     # Absent → the endpoint's own default (off); explicit True → forwarded.
     assert seen == [False, True]
+    # Every retrieval this endpoint serves is position-respecting.
+    assert position_flags == [True, True]
+
+
+# --- Reading-position bound (SPOILER-10) -----------------------------------------
+
+
+def test_retrieve_with_a_saved_position_excludes_later_sections(
+    auth_client: TestClient, db_conn: Connection
+) -> None:
+    # SPOILER-10: the endpoint applies the same section-order bound as the turn
+    # path. The identical query from the same user on the same source surfaces the
+    # last-section chunk while no position is saved (unfiltered), then loses it
+    # once a mid-book position exists — the bound section and every earlier one
+    # stay reachable.
+    from decimal import Decimal
+
+    from app.infrastructure.db.repositories import SqlAlchemyReadingPositionRepository
+
+    user_id = _register(auth_client, "bound@example.com")
+    csrf = _csrf(auth_client)
+    source_id = _persist_source(db_conn, user_id)
+    _seed_three_topic_corpus(db_conn, source_id)
+    _embed_all(db_conn, source_id)
+    query = {"query": "quantum entanglement particles"}
+
+    unbounded = _retrieve(auth_client, source_id, query, csrf=csrf)
+    assert unbounded.status_code == 200, unbounded.text
+    assert "phys.xhtml#q" in {r["anchor"] for r in unbounded.json()["results"]}
+
+    SqlAlchemyReadingPositionRepository(db_conn).upsert(
+        UUID(user_id),
+        source_id,
+        anchor="geo.xhtml",
+        percent=Decimal("33.33"),
+        updated_at=datetime.now(UTC),
+    )
+
+    bounded = _retrieve(auth_client, source_id, query, csrf=csrf)
+
+    assert bounded.status_code == 200, bounded.text
+    assert {r["anchor"] for r in bounded.json()["results"]} == {"bio.xhtml#p", "geo.xhtml#o"}

@@ -210,6 +210,7 @@ class _StubRetrieve:
         top_k: int | None = None,
         anchors: Sequence[str] | None = None,
         include_notes: bool = False,
+        respect_reading_position: bool = False,
     ) -> list[Evidence]:
         self.calls.append(source_id)
         return list(self._evidence)

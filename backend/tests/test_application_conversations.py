@@ -18,6 +18,7 @@ import logging
 from collections.abc import Iterator, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from uuid import UUID, uuid4
 
 import pytest
@@ -49,6 +50,7 @@ from app.application.errors import (
     SourceNotReady,
 )
 from app.application.identity import AuthorizeOwnership
+from app.application.retrieval import RetrieveEvidence
 from app.application.streaming import (
     StreamDelta,
     StreamPhase,
@@ -79,7 +81,13 @@ from app.domain.entities import (
     StructureSection,
     User,
 )
-from tests.fakes import FakeActivationEventRepository, FakeClock, FakeSourceRepository
+from tests.fakes import (
+    FakeActivationEventRepository,
+    FakeClock,
+    FakeReadingPositionRepository,
+    FakeRetrievalPort,
+    FakeSourceRepository,
+)
 
 _NOW = datetime(2026, 7, 25, 12, 0, 0, tzinfo=UTC)
 _MODEL = "local-extractive"
@@ -378,6 +386,10 @@ class FakeScopedRetrieveEvidence:
         self.results = results if results is not None else []
         self._error = error
         self.calls: list[dict[str, object]] = []
+        # The position-respect toggle is captured beside ``calls`` (parallel list)
+        # so the historical ``calls`` shape the scope suite asserts verbatim stays
+        # unchanged.
+        self.respect_position_calls: list[bool] = []
 
     def __call__(
         self,
@@ -388,6 +400,7 @@ class FakeScopedRetrieveEvidence:
         top_k: int | None = None,
         anchors: Sequence[str] | None = None,
         include_notes: bool = False,
+        respect_reading_position: bool = False,
     ) -> list[Evidence]:
         self.calls.append(
             {
@@ -399,6 +412,7 @@ class FakeScopedRetrieveEvidence:
                 "include_notes": include_notes,
             }
         )
+        self.respect_position_calls.append(respect_reading_position)
         if self._error is not None:
             raise self._error
         return self.results
@@ -3625,3 +3639,230 @@ def test_turn_against_a_source_that_is_no_longer_ready_persists_nothing() -> Non
 
     assert retrieve.calls == []
     assert turns.add_calls == 0
+
+
+# --- Turn path: reading-position bound -------------------------------------------
+#
+# Every turn shares one retrieval seam, so the bound must be requested on it: ask
+# turns (buffered and streamed) and the tutor-opening turn all retrieve behind
+# the reader's position, a scoped teach composes its scope with the bound (AND),
+# and a scope lying entirely past the position takes the existing zero-evidence
+# turn outcome with no bypass.
+
+
+def test_ask_turn_retrieves_behind_the_readers_position() -> None:
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
+    retrieve = FakeScopedRetrieveEvidence(evidence)
+
+    _post(
+        conversations=conversations,
+        turns=FakeConversationTurnRepository(),
+        sources=sources,
+        corpus=corpus,
+        retrieve=retrieve,
+        generation=FakeGeneration(answer=_answered(*evidence)),
+    )(user=user, conversation_id=conversation.id, message="what is anchoring?", mode=MODE_ANSWER)
+
+    assert retrieve.respect_position_calls == [True]
+
+
+def test_streamed_ask_turn_retrieves_behind_the_readers_position() -> None:
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
+    retrieve = FakeScopedRetrieveEvidence(evidence)
+
+    list(
+        _post(
+            conversations=conversations,
+            turns=FakeConversationTurnRepository(),
+            sources=sources,
+            corpus=corpus,
+            retrieve=retrieve,
+            generation=FakeGeneration(answer=_answered(*evidence)),
+        ).stream(user=user, conversation_id=conversation.id, message="q", mode=MODE_ANSWER)
+    )
+
+    assert retrieve.respect_position_calls == [True]
+
+
+def test_opening_teach_turn_is_position_bounded_like_any_other_turn() -> None:
+    # The tutor-opening turn retrieves with the target title for its query, and it
+    # takes the same position bound as every other turn — opening a teach session
+    # is not a spoiler exemption.
+    user, source, sources, corpus, conversations, conversation = _scoped_world()
+    evidence = [_evidence(source.id, "snippet", anchor="ch1.xhtml")]
+    retrieve = FakeScopedRetrieveEvidence(evidence)
+
+    _post(
+        conversations=conversations,
+        turns=FakeConversationTurnRepository(),
+        sources=sources,
+        corpus=corpus,
+        retrieve=retrieve,
+        generation=FakeGeneration(answer=_answered(*evidence)),
+    )(
+        user=user,
+        conversation_id=conversation.id,
+        message=TUTOR_OPENING_MESSAGE,
+        mode=MODE_TEACH,
+    )
+
+    assert retrieve.respect_position_calls == [True]
+    assert retrieve.calls[0]["query"] == conversation.target_title
+
+
+class _FixedEmbeddings:
+    """``EmbeddingPort`` stub for the real-service turn tests: one fixed vector."""
+
+    def embed_query(self, text: str) -> list[float]:
+        return [1.0]
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        raise AssertionError("conversation turns never embed documents")
+
+
+def _position_bounded_teach_world(*, scope_anchor: str, position_anchor: str):
+    """A three-chapter book, a teach conversation scoped to one chapter, and the
+    reader's saved position — wired through the REAL ``RetrieveEvidence`` over the
+    section-aware retrieval fake, so the bound behaves exactly as the SQL adapter
+    does. Returns ``(user, source, sources, corpus, conversations, conversation,
+    retrieve, port, positions, evidence)`` where ``port`` is the fake retrieval
+    port behind ``retrieve``.
+    """
+    user, source, sources = _owned_world()
+    corpus = FakeCorpus(
+        _structure(
+            _section("ch1.xhtml", ("Chapter 1",), title="Chapter 1"),
+            _section("ch2.xhtml", ("Chapter 2",), title="Chapter 2", position=1),
+            _section("ch3.xhtml", ("Chapter 3",), title="Chapter 3", position=2),
+        )
+    )
+    conversations = FakeConversationRepository(sources)
+    conversation = conversations.add(
+        _conversation(
+            source.id,
+            title="Chapter 3",
+            scope_anchors=(scope_anchor,),
+            target_anchor=scope_anchor,
+            target_section_path=(scope_anchor.rstrip(".xhtml").capitalize(),),
+            target_title="Chapter 3",
+        )
+    )
+    positions = FakeReadingPositionRepository()
+    positions.upsert(
+        user.id, source.id, anchor=position_anchor, percent=Decimal("66.00"), updated_at=_NOW
+    )
+    evidence = [_evidence(source.id, "snippet", anchor=scope_anchor)]
+    retrieval = FakeRetrievalPort(
+        results=evidence,
+        sections_by_source={source.id: ["ch1.xhtml", "ch2.xhtml", "ch3.xhtml"]},
+    )
+    retrieve = RetrieveEvidence(
+        sources=sources,
+        retrieval=retrieval,
+        embeddings=_FixedEmbeddings(),
+        positions=positions,
+        authorize=AuthorizeOwnership(),
+        semantic_limit=8,
+        lexical_limit=8,
+        rrf_k=60,
+        ef_search=40,
+        default_top_k=5,
+    )
+    return (
+        user,
+        source,
+        sources,
+        corpus,
+        conversations,
+        conversation,
+        retrieve,
+        retrieval,
+        positions,
+        evidence,
+    )
+
+
+def test_teach_scope_at_the_position_still_retrieves_and_answers() -> None:
+    # A scope at (or before) the bound intersects it: the evidence flows through
+    # the real service resolution and the turn answers grounded.
+    (
+        user,
+        source,
+        sources,
+        corpus,
+        conversations,
+        conversation,
+        retrieve,
+        port,
+        positions,
+        evidence,
+    ) = _position_bounded_teach_world(scope_anchor="ch2.xhtml", position_anchor="ch2.xhtml")
+    generation = FakeGeneration(answer=_answered(*evidence))
+
+    turn = _post(
+        conversations=conversations,
+        turns=FakeConversationTurnRepository(),
+        sources=sources,
+        corpus=corpus,
+        retrieve=retrieve,
+        generation=generation,
+    )(
+        user=user,
+        conversation_id=conversation.id,
+        message=TUTOR_OPENING_MESSAGE,
+        mode=MODE_TEACH,
+    )
+
+    assert turn.answer_status == "answered"
+    assert turn.evidence_count == 1
+    assert generation.calls[0]["evidence"] == evidence
+    # The bound rode along with the scope: the reader's own anchor reached the port.
+    assert positions.get_calls == [(user.id, source.id)]
+    assert port.not_past_calls == ["ch2.xhtml"]
+
+
+def test_teach_scope_past_the_position_takes_the_honest_not_found_turn() -> None:
+    # A scope lying entirely past the position has an empty intersection with the
+    # bound: the turn takes the existing zero-evidence outcome — the scoped
+    # not-found verdict, empty text, no citations, generation never invoked — and
+    # the system neither bypasses the bound nor falls back to unfiltered retrieval.
+    (
+        user,
+        source,
+        sources,
+        corpus,
+        conversations,
+        conversation,
+        retrieve,
+        port,
+        positions,
+        _evidence_in_scope,
+    ) = _position_bounded_teach_world(scope_anchor="ch3.xhtml", position_anchor="ch2.xhtml")
+    turns = FakeConversationTurnRepository()
+    generation = FakeGeneration()
+
+    turn = _post(
+        conversations=conversations,
+        turns=turns,
+        sources=sources,
+        corpus=corpus,
+        retrieve=retrieve,
+        generation=generation,
+    )(
+        user=user,
+        conversation_id=conversation.id,
+        message=TUTOR_OPENING_MESSAGE,
+        mode=MODE_TEACH,
+    )
+
+    assert turn.answer_status == "not_found_in_scope"
+    assert (turn.answer_text, turn.citations, turn.evidence_count) == ("", (), 0)
+    assert turn.model == _MODEL
+    assert generation.calls == []
+    assert turns.list_for_conversation(conversation.id) == [turn]
+    # The bound was genuinely applied at the seam — the reader's own anchor — so
+    # the empty evidence is the bound's honest outcome, not a skipped filter.
+    assert positions.get_calls == [(user.id, source.id)]
+    assert port.not_past_calls == ["ch2.xhtml"]

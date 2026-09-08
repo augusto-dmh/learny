@@ -837,6 +837,14 @@ class PostConversationTurn:
         Split out of the guards so the streaming path can run it *after* the first
         frame is on the wire while the buffered path still runs it straight through:
         the two paths must see the same evidence, only at different moments.
+
+        Every turn — ask or teach, the tutor-opening turn included, buffered or
+        streamed — retrieves behind the reader's position bound: the service reads
+        the caller's own reading-position row, so book evidence stops at the
+        section the reader has reached (a reader with no saved position is
+        unbounded). A scope that lies entirely past the position therefore comes
+        back empty and takes the ordinary zero-evidence turn outcome — the bound
+        is never bypassed or lifted to keep a scoped teach alive.
         """
         evidence = self._retrieve(
             user=user,
@@ -845,6 +853,7 @@ class PostConversationTurn:
             top_k=self._evidence_top_k,
             anchors=prep.anchors,
             include_notes=prep.conversation.include_notes,
+            respect_reading_position=True,
         )
         return _TurnPlan(
             conversation=prep.conversation,
