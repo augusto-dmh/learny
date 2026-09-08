@@ -41,6 +41,9 @@ export type FailedTurnState = {
   error: string;
   userText: string;
   messageId: string | null;
+  /** The per-turn origin the failed send carried, so Retry rides it again —
+   * a retried selection-Explain turn must stay on the explain chain (COST-04). */
+  origin?: ExplainSelectionOrigin;
 };
 
 export type ConversationThread = {
@@ -103,6 +106,10 @@ export function useConversationThread({
   const [failedTurn, setFailedTurn] = useState<FailedTurnState | null>(null);
   const messagesRef = useRef<LearnyUIMessage[]>([]);
   const lastSentRef = useRef("");
+  // The origin the in-flight send carried, read when it fails so the failure
+  // record keeps it and Retry can re-mark the resend (COST-04). Only one send
+  // is ever in flight (send refuses while streaming), so "last" is "this one".
+  const lastOriginRef = useRef<ExplainSelectionOrigin | undefined>(undefined);
 
   // The id the *transport* streams into. It has to be a ref because it is read
   // and written inside one send, before React has re-rendered with the new value.
@@ -164,6 +171,7 @@ export function useConversationThread({
         error: err.message,
         userText: lastUserText(current) || lastSentRef.current,
         messageId: current[current.length - 1]?.id ?? null,
+        origin: lastOriginRef.current,
       });
     },
     onFinish: () => {
@@ -188,6 +196,7 @@ export function useConversationThread({
         return;
       }
       lastSentRef.current = text;
+      lastOriginRef.current = options?.origin;
       setBanner(null);
       void sendMessage(
         { text },

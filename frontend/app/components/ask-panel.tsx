@@ -337,7 +337,13 @@ function AskChat({
     if (!failedTurn?.userText) {
       return;
     }
-    send(failedTurn.userText);
+    // The failed turn's origin rides the retry (COST-04): a retried
+    // selection-Explain turn must stay on the explain chain, an unmarked turn
+    // must stay on the primary one.
+    send(
+      failedTurn.userText,
+      failedTurn.origin ? { origin: failedTurn.origin } : undefined,
+    );
   }, [failedTurn, send]);
 
   const handleSubmit = useCallback(
@@ -484,6 +490,9 @@ function AskChat({
                       onRetry={() =>
                         send(
                           (liveFailed && failedTurn?.userText) || question,
+                          liveFailed && failedTurn?.origin
+                            ? { origin: failedTurn.origin }
+                            : undefined,
                         )
                       }
                       retryDisabled={isStreaming}
