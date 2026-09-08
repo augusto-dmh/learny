@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import UTC, datetime
+from decimal import Decimal
 from itertools import count
 from uuid import UUID, uuid4
 
@@ -20,12 +21,20 @@ import pytest
 from app.application.errors import SourceNotFound
 from app.application.identity import AuthorizeOwnership
 from app.application.retrieval import EmbedCorpus, RetrieveEvidence
-from app.domain.entities import ChunkToEmbed, Evidence, IngestionJob, Source, User
+from app.domain.entities import (
+    ChunkToEmbed,
+    Evidence,
+    IngestionJob,
+    ReadingPosition,
+    Source,
+    User,
+)
 from tests.fakes import (
     FakeClock,
     FakeEmbeddingIndexRepository,
     FakeEmbeddingPort,
     FakeIngestionEventRepository,
+    FakeReadingPositionRepository,
     FakeRetrievalPort,
     FakeSourceRepository,
 )
@@ -200,6 +209,13 @@ class _StubEmbeddings:
         raise AssertionError("RetrieveEvidence must not embed documents")
 
 
+class _FailingPositions:
+    """``ReadingPositionRepository`` stub whose reads fail (store-down path)."""
+
+    def get(self, user_id: UUID, source_id: UUID) -> ReadingPosition | None:
+        raise RuntimeError("position store down")
+
+
 def _owned_source(user_id: UUID) -> Source:
     return Source(
         id=uuid4(),
@@ -225,11 +241,13 @@ def _retrieve(
     sources: FakeSourceRepository,
     retrieval: FakeRetrievalPort,
     embeddings: _StubEmbeddings,
+    positions: FakeReadingPositionRepository | _FailingPositions | None = None,
 ) -> RetrieveEvidence:
     return RetrieveEvidence(
         sources=sources,
         retrieval=retrieval,
         embeddings=embeddings,
+        positions=positions or FakeReadingPositionRepository(),
         authorize=AuthorizeOwnership(),
         semantic_limit=_SEMANTIC_LIMIT,
         lexical_limit=_LEXICAL_LIMIT,
@@ -387,3 +405,266 @@ def test_retrieve_evidence_defaults_notes_off_but_forwards_owner() -> None:
 
     assert retrieval.note_scope_calls == [{"user_id": owner.id, "include_notes": False}]
     assert retrieval.calls[0]["top_k"] == _DEFAULT_TOP_K
+
+
+# --- Reading-position bound (SPOILER-01/05/06/13) -------------------------------
+#
+# Drives the position resolution: with ``respect_reading_position=True`` the
+# service reads the CALLING user's own position row for the source and passes its
+# canonical anchor down as ``not_past_anchor``; a missing row passes ``None``
+# (unfiltered, not empty evidence); with the flag off the position repository is
+# never read at all. Assertions target the recorded position reads and the bound
+# that reached the retrieval port, never call counts alone.
+
+
+def test_retrieve_evidence_default_never_reads_the_position_repository() -> None:
+    # SPOILER-13: with the flag off (the default) the service must not consult the
+    # position repository at all — even when a saved position exists — and no bound
+    # reaches the port. Proven with the recording fake, not just the absence of a
+    # crash.
+    owner = _user()
+    sources = FakeSourceRepository()
+    source = _owned_source(owner.id)
+    sources.add(source)
+    positions = FakeReadingPositionRepository()
+    positions.upsert(
+        owner.id, source.id, anchor="geo.xhtml", percent=Decimal("40.00"), updated_at=_NOW
+    )
+    expected = [_evidence(source.id)]
+    retrieval = FakeRetrievalPort(results=expected)
+    service = _retrieve(
+        sources=sources, retrieval=retrieval, embeddings=_StubEmbeddings(), positions=positions
+    )
+
+    result = service(user=owner, source_id=source.id, query="photosynthesis")
+
+    assert result is expected
+    assert positions.get_calls == []
+    assert retrieval.not_past_calls == [None]
+
+
+def test_retrieve_evidence_respects_position_by_forwarding_the_saved_anchor() -> None:
+    # SPOILER-01 (propagation) / SPOILER-06: with the flag on, the bound passed to
+    # the port is the canonical anchor of the calling user's own position row for
+    # that source — read by (user_id, source_id) — and evidence at or before the
+    # bound still flows through (a saved position never means empty evidence).
+    owner = _user()
+    sources = FakeSourceRepository()
+    source = _owned_source(owner.id)
+    sources.add(source)
+    positions = FakeReadingPositionRepository()
+    positions.upsert(
+        owner.id, source.id, anchor="geo.xhtml", percent=Decimal("40.00"), updated_at=_NOW
+    )
+    reached = [
+        _anchored_evidence(source.id, "bio.xhtml#p"),
+        _anchored_evidence(source.id, "geo.xhtml#o"),
+    ]
+    retrieval = FakeRetrievalPort(
+        results=reached, sections_by_source={source.id: ["bio.xhtml", "geo.xhtml"]}
+    )
+    service = _retrieve(
+        sources=sources, retrieval=retrieval, embeddings=_StubEmbeddings(), positions=positions
+    )
+
+    result = service(
+        user=owner, source_id=source.id, query="photosynthesis", respect_reading_position=True
+    )
+
+    assert result == reached
+    assert positions.get_calls == [(owner.id, source.id)]
+    assert retrieval.not_past_calls == ["geo.xhtml"]
+
+
+def test_retrieve_evidence_without_a_saved_position_passes_no_bound_not_empty_evidence() -> None:
+    # SPOILER-05: a missing position row means an unread book — the service passes
+    # no bound (None) and the port's evidence flows through unchanged. A missing
+    # row must degrade to unfiltered, never to empty evidence.
+    owner = _user()
+    sources = FakeSourceRepository()
+    source = _owned_source(owner.id)
+    sources.add(source)
+    expected = [_evidence(source.id), _evidence(source.id)]
+    retrieval = FakeRetrievalPort(results=expected)
+    service = _retrieve(
+        sources=sources,
+        retrieval=retrieval,
+        embeddings=_StubEmbeddings(),
+        positions=FakeReadingPositionRepository(),
+    )
+
+    result = service(
+        user=owner, source_id=source.id, query="photosynthesis", respect_reading_position=True
+    )
+
+    assert result is expected
+    assert retrieval.not_past_calls == [None]
+
+
+def test_retrieve_evidence_never_reads_another_users_position_row() -> None:
+    # SPOILER-06: the bound is derived only from the calling user's own row —
+    # another user's position for the same source is never read and never bounds.
+    owner = _user()
+    other = _user()
+    sources = FakeSourceRepository()
+    source = _owned_source(owner.id)
+    sources.add(source)
+    positions = FakeReadingPositionRepository()
+    positions.upsert(
+        other.id, source.id, anchor="phys.xhtml", percent=Decimal("90.00"), updated_at=_NOW
+    )
+    retrieval = FakeRetrievalPort(results=[_evidence(source.id)])
+    service = _retrieve(
+        sources=sources, retrieval=retrieval, embeddings=_StubEmbeddings(), positions=positions
+    )
+
+    service(user=owner, source_id=source.id, query="photosynthesis", respect_reading_position=True)
+
+    assert positions.get_calls == [(owner.id, source.id)]
+    assert retrieval.not_past_calls == [None]
+
+
+def test_retrieve_evidence_ownership_precedes_any_position_read() -> None:
+    # The position repository is only ever queried for a source the user may read:
+    # a non-owner collapses to SourceNotFound (existence never disclosed) before
+    # the position row is touched, and no retrieval runs.
+    owner = _user()
+    intruder = _user()
+    sources = FakeSourceRepository()
+    source = _owned_source(owner.id)
+    sources.add(source)
+    positions = FakeReadingPositionRepository()
+    positions.upsert(
+        owner.id, source.id, anchor="geo.xhtml", percent=Decimal("40.00"), updated_at=_NOW
+    )
+    retrieval = FakeRetrievalPort()
+    service = _retrieve(
+        sources=sources, retrieval=retrieval, embeddings=_StubEmbeddings(), positions=positions
+    )
+
+    with pytest.raises(SourceNotFound):
+        service(
+            user=intruder,
+            source_id=source.id,
+            query="photosynthesis",
+            respect_reading_position=True,
+        )
+
+    assert positions.get_calls == []
+    assert retrieval.calls == []
+
+
+def test_retrieve_evidence_position_read_failure_propagates_fail_closed() -> None:
+    # Fail-closed parity with the stale-bound case: a position-repository read
+    # failure propagates through the existing error envelope and MUST NOT degrade
+    # to unfiltered retrieval — the port is never invoked at all.
+    owner = _user()
+    sources = FakeSourceRepository()
+    source = _owned_source(owner.id)
+    sources.add(source)
+    retrieval = FakeRetrievalPort(results=[_evidence(source.id)])
+    service = _retrieve(
+        sources=sources,
+        retrieval=retrieval,
+        embeddings=_StubEmbeddings(),
+        positions=_FailingPositions(),
+    )
+
+    with pytest.raises(RuntimeError, match="position store down"):
+        service(
+            user=owner, source_id=source.id, query="photosynthesis", respect_reading_position=True
+        )
+
+    # The failure surfaced instead of falling back to an unfiltered search.
+    assert retrieval.calls == []
+    assert retrieval.not_past_calls == []
+
+
+# --- FakeRetrievalPort mirrors the section-order bound (double correctness) -----
+#
+# The matrix requires the fakes to reproduce the SQL adapter's contract so
+# upper-layer tests exercise the real semantics: section-order filtering with the
+# bound section admissible, note evidence unbounded, and fail-closed on an
+# unmatched anchor.
+
+
+def _three_section_port(source_id: UUID, results: list[Evidence]) -> FakeRetrievalPort:
+    return FakeRetrievalPort(
+        results=results,
+        sections_by_source={source_id: ["bio.xhtml", "geo.xhtml", "phys.xhtml"]},
+    )
+
+
+def _anchored_evidence(source_id: UUID, anchor: str, *, origin: str = "book") -> Evidence:
+    return Evidence(
+        chunk_id=uuid4(),
+        source_id=source_id,
+        section_path=("Chapter",),
+        anchor=anchor,
+        page_span=None,
+        snippet="a matching passage",
+        score=0.5,
+        origin=origin,  # type: ignore[arg-type]
+    )
+
+
+def _port_search(
+    port: FakeRetrievalPort, source_id: UUID, *, not_past_anchor: str | None = None
+) -> list[Evidence]:
+    return port.search(
+        source_id=source_id,
+        query_text="photosynthesis",
+        query_vec=[1.0],
+        top_k=5,
+        semantic_limit=7,
+        lexical_limit=9,
+        rrf_k=11,
+        ef_search=13,
+        not_past_anchor=not_past_anchor,
+    )
+
+
+def test_fake_retrieval_port_bound_keeps_sections_at_or_before_the_bound() -> None:
+    # SPOILER-02 (mirrored by the double): the bound section and every earlier
+    # section stay admissible; later sections are inadmissible; a None bound
+    # returns everything.
+    source_id = uuid4()
+    port = _three_section_port(
+        source_id,
+        [
+            _anchored_evidence(source_id, "bio.xhtml#p"),
+            _anchored_evidence(source_id, "geo.xhtml#o"),
+            _anchored_evidence(source_id, "phys.xhtml#q"),
+        ],
+    )
+
+    bounded = _port_search(port, source_id, not_past_anchor="geo.xhtml")
+    unbounded = _port_search(port, source_id, not_past_anchor=None)
+
+    assert {e.anchor for e in bounded} == {"bio.xhtml#p", "geo.xhtml#o"}
+    assert {e.anchor for e in unbounded} == {"bio.xhtml#p", "geo.xhtml#o", "phys.xhtml#q"}
+    assert port.not_past_calls == ["geo.xhtml", None]
+
+
+def test_fake_retrieval_port_unmatched_bound_anchor_fails_closed() -> None:
+    # SPOILER-14 (mirrored by the double): a bound anchor matching no section of
+    # the source yields zero book evidence — never an unfiltered fallback.
+    source_id = uuid4()
+    port = _three_section_port(source_id, [_anchored_evidence(source_id, "bio.xhtml#p")])
+
+    assert _port_search(port, source_id, not_past_anchor="ghost.xhtml") == []
+
+
+def test_fake_retrieval_port_bound_never_restricts_note_evidence() -> None:
+    # SPOILER-11 (mirrored by the double): the user's own notes survive a bound
+    # that eliminates the book evidence.
+    source_id = uuid4()
+    note = _anchored_evidence(source_id, "note:abc", origin="note")
+    port = FakeRetrievalPort(
+        results=[_anchored_evidence(source_id, "phys.xhtml#q"), note],
+        sections_by_source={source_id: ["bio.xhtml"]},
+    )
+
+    bounded = _port_search(port, source_id, not_past_anchor="bio.xhtml")
+
+    assert bounded == [note]

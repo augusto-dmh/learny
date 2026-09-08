@@ -155,7 +155,10 @@ def retrieve(
 
     ``RetrieveEvidence`` authorizes ownership (missing/non-owner → ``SourceNotFound``
     → 404 via the global handler), embeds the validated query, and runs the hybrid
-    RRF search; an unmatched query yields ``results: []`` (200, not an error).
+    RRF search; an unmatched query yields ``results: []`` (200, not an error). The
+    retrieval is position-respecting: a saved reading position bounds the book
+    evidence to the sections the caller has reached — a caller with no saved
+    position is unbounded.
     """
     evidence = service(
         user=user,
@@ -163,5 +166,6 @@ def retrieve(
         query=body.query,
         top_k=body.top_k,
         include_notes=body.include_notes,
+        respect_reading_position=True,
     )
     return RetrieveResponse(results=[EvidenceView.from_evidence(e) for e in evidence])

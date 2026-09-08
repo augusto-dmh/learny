@@ -14,12 +14,6 @@ _none_
 
 Seen once or not yet corroborated. Tracked, not trusted.
 
-### L-015 — A conditional guard (e.g. only-set-if-absent) whose protected branch is DB/key-gated needs its own offline discriminating test that reproduces the pre-condition ordering — e.g. a class-scoped fixture presetting the value before the function-scoped autouse fixture — or the discrimination sensor flags the guard as uncovered.
-- signal: `surviving_mutant` · recurrence: 1 feature(s) · scope: `backend/tests/conftest-fixtures` · harmful: 0
-- features: v5-offline-suite-honesty
-- evidence: M3 (test_offline_provider_pin.py) (backend/tests/conftest-fixtures)
-- last seen: 2026-07-24T16:53:30Z
-
 ### L-016 — When an implicit-requirement sweep resolves a bounds/limits dimension, name the concrete bound (page size, cap, or 'deliberately unbounded because X') — 'bounded like the shipped list conventions' names no assertion, and WSN-11 shipped with the validation half sensed and the bounds half neither implemented nor tested.
 - signal: `spec_precision_gap` · recurrence: 1 feature(s) · scope: `backend/app/infrastructure/web` · harmful: 0
 - features: v6-workspace-notes
@@ -79,6 +73,18 @@ Seen once or not yet corroborated. Tracked, not trusted.
 - features: safe-to-open-the-doors
 - evidence: DOOR-18 / backend/tests/test_web_ingestion.py:394 (backend/tests)
 - last seen: 2026-09-06T23:47:27Z
+
+### L-026 — When a spec enumerates edge cases explicitly, pin each one with a direct test — a sectionless source under a position bound (empty evidence + warning) was left to subsumption reasoning instead of an assertion.
+- signal: `ac_gap` · recurrence: 1 feature(s) · scope: `backend/db-gated retrieval tests` · harmful: 0
+- features: v5-spoiler-safe-retrieval
+- evidence: SPOILER Edge Cases / backend/tests/test_retrieval.py (backend/db-gated retrieval tests)
+- last seen: 2026-09-08T17:32:10Z
+
+### L-027 — Pin spec edge fixtures with their literal boundary values: no test saved percent=0.00 to prove the anchor (not the percent) defines the reading-position bound, even though the SQL never reads percent.
+- signal: `ac_gap` · recurrence: 1 feature(s) · scope: `backend/db-gated retrieval tests` · harmful: 0
+- features: v5-spoiler-safe-retrieval
+- evidence: SPOILER Edge Cases / backend/tests/test_retrieval.py (backend/db-gated retrieval tests)
+- last seen: 2026-09-08T17:32:10Z
 
 ## Quarantined (failed when applied — ignore)
 

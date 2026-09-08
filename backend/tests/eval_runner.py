@@ -43,6 +43,7 @@ from app.infrastructure.db.repositories import (
     SqlAlchemyConversationTurnRepository,
     SqlAlchemyCorpusRepository,
     SqlAlchemyEmbeddingIndexRepository,
+    SqlAlchemyReadingPositionRepository,
     SqlAlchemySourceRepository,
     SqlAlchemyUserRepository,
 )
@@ -228,6 +229,7 @@ def answer(db_conn: Connection, user: User, source: Source, question: str) -> Co
         sources=SqlAlchemySourceRepository(db_conn),
         retrieval=SqlAlchemyRetrievalRepository(db_conn),
         embeddings=build_embedding_adapter(settings),
+        positions=SqlAlchemyReadingPositionRepository(db_conn),
         authorize=AuthorizeOwnership(),
         semantic_limit=settings.retrieval_semantic_limit,
         lexical_limit=settings.retrieval_lexical_limit,

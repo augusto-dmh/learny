@@ -657,13 +657,16 @@ def get_retrieve_evidence(conn: DbConnection) -> RetrieveEvidence:
     hybrid retrieval repo and the settings-selected embedding adapter drive the
     query (so the query embedding matches the document embedding), and the per-arm
     limits / RRF ``k`` / HNSW ``ef_search`` / default ``top_k`` are all sourced from
-    ``LEARNY_``-prefixed settings (never hard-coded).
+    ``LEARNY_``-prefixed settings (never hard-coded). The reading-position repo
+    feeds the optional spoiler-safe bound: it is read only when a caller engages
+    ``respect_reading_position``, never on the default path.
     """
     settings = get_settings()
     return RetrieveEvidence(
         sources=SqlAlchemySourceRepository(conn),
         retrieval=SqlAlchemyRetrievalRepository(conn),
         embeddings=build_embedding_adapter(settings),
+        positions=SqlAlchemyReadingPositionRepository(conn),
         authorize=AuthorizeOwnership(),
         semantic_limit=settings.retrieval_semantic_limit,
         lexical_limit=settings.retrieval_lexical_limit,
