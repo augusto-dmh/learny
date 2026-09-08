@@ -14,11 +14,11 @@ competitively distinctive for an unfinished-book reader.
 
 ## Goals
 
-- [ ] Q&A, teaching, and citation retrieval never surface book content past the reader's saved
+- [x] Q&A, teaching, and citation retrieval never surface book content past the reader's saved
       position (section-entry granularity — the position model's native resolution).
-- [ ] Implemented as a filter inside the shipped hybrid RRF query — no new retrieval component
+- [x] Implemented as a filter inside the shipped hybrid RRF query — no new retrieval component
       (ADR-0006), no re-ranking path (RFC-005 assumption).
-- [ ] Every existing caller and eval path is behavior-identical when the filter is not engaged.
+- [x] Every existing caller and eval path is behavior-identical when the filter is not engaged.
 
 ## Out of Scope
 
@@ -28,7 +28,7 @@ competitively distinctive for an unfinished-book reader.
 | Finer-than-section filtering (in-section word offsets) | The shipped position model stores section-entry percent only (AD-189 / RFC-0006); inventing in-section offsets is a position-model change, not a retrieval filter. |
 | Frontend changes | Citations flow through existing views; they simply never include future content. No FE surface changes. |
 | Re-ranking / recall compensation | RFC-005 assumption: the filter is over shipped RRF. If recall degrades enough to need re-ranking, that reopens an ADR amendment — not this cycle. |
-| Eval harness changes | The eval/nightly path does not use `RetrievalPort` (verified in the seam survey). |
+| Eval harness changes | The eval runner wires the real retrieval service and adapter, but never enables the position flag, so its behavior is unchanged — the out-of-scope point (no eval behavior change) still holds. |
 | Deploy/rollout | Merging to `main` auto-deploys (GHCR→VPS); the rollout decision is presented at the ship-cycle merge gate per AD-346. |
 
 ---
@@ -191,11 +191,11 @@ evidence, warning logged, notes unaffected.
 
 | Requirement ID | Story | Phase | Status |
 | --- | --- | --- | --- |
-| SPOILER-01..06 | P1: Ask is spoiler-safe | Design | Pending |
-| SPOILER-07..09 | P1: Teach is spoiler-safe | Design | Pending |
-| SPOILER-10 | P1: Citation retrieval is spoiler-safe | Design | Pending |
-| SPOILER-11..13 | P1: Notes and no-position behavior | Design | Pending |
-| SPOILER-14..15 | P2: Stale bound degrades closed | Design | Pending |
+| SPOILER-01..06 | P1: Ask is spoiler-safe | Design | Verified |
+| SPOILER-07..09 | P1: Teach is spoiler-safe | Design | Verified |
+| SPOILER-10 | P1: Citation retrieval is spoiler-safe | Design | Verified |
+| SPOILER-11..13 | P1: Notes and no-position behavior | Design | Verified |
+| SPOILER-14..15 | P2: Stale bound degrades closed | Design | Verified |
 
 **Coverage:** 15 ACs across 5 requirement groups — all mapped to tasks in `tasks.md`; 0 unmapped.
 
@@ -203,8 +203,8 @@ evidence, warning logged, notes unaffected.
 
 ## Success Criteria
 
-- [ ] On a book with a mid-book saved position, ask, teach, and `/retrieve` return zero chunks
+- [x] On a book with a mid-book saved position, ask, teach, and `/retrieve` return zero chunks
       from later sections, with notes and no-position behavior unchanged.
-- [ ] All pre-cycle callers are behavior-identical when the filter is not engaged (port default).
-- [ ] Boundary gates green: `make lint` + full backend suite (db-gated tests included) +
+- [x] All pre-cycle callers are behavior-identical when the filter is not engaged (port default).
+- [x] Boundary gates green: `make lint` + full backend suite (db-gated tests included) +
       frontend suite; CI 4/4 on the PR.
