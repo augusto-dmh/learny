@@ -31,6 +31,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterator, Sequence
 from typing import Any, NoReturn, Protocol
+from uuid import UUID
 
 from app.domain.entities import (
     CITATION_MARKER_RE,
@@ -211,7 +212,7 @@ def _parse_answer(
     """
     if CITATION_MARKER_RE.sub("", text).strip() == SENTINEL:
         return GeneratedAnswer(text="", cited_chunk_ids=(), model=model, found=False, usage=usage)
-    cited: list[Any] = []
+    cited: list[UUID] = []
     seen: set[int] = set()
     for match in CITATION_MARKER_RE.finditer(text):
         number = int(match.group()[2:-1])
@@ -221,7 +222,7 @@ def _parse_answer(
         cited.append(evidence[number - 1].chunk_id)
     return GeneratedAnswer(
         text=text,
-        cited_chunk_ids=tuple(cited),  # type: ignore[arg-type]
+        cited_chunk_ids=tuple(cited),
         model=model,
         found=True,
         usage=usage,
