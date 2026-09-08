@@ -288,8 +288,9 @@ def test_buffered_request_asks_for_summarized_thinking_at_the_configured_effort(
     # The budget covers thinking and answer together, so it is part of this contract.
     assert call["max_tokens"] == _MAX_TOKENS
     # The buffered call shows nothing until it returns and holds a threadpool slot
-    # throughout, so it is bounded well under the SDK's ten-minute default.
-    assert 0 < call["timeout"] <= 180
+    # throughout, so it is bounded well under the SDK's ten-minute default. Pinned
+    # exactly (TAX-01): an accidental bound change must fail loudly, not drift.
+    assert call["timeout"] == 120.0
 
 
 @pytest.mark.parametrize("mode", [MODE_ANSWER, MODE_TEACH])

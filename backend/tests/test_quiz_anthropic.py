@@ -441,7 +441,8 @@ def test_suggest_note_cards_bounds_the_foreground_call_with_a_timeout() -> None:
 
     timeout = adapter._get_client().messages.create_kwargs["timeout"]
     assert timeout is not None
-    assert 0 < timeout <= 60
+    # Pinned exactly (TAX-01): an accidental bound change must fail loudly.
+    assert timeout == 30.0
 
 
 def test_model_identity_is_the_configured_quiz_model() -> None:
@@ -462,7 +463,8 @@ def test_suggest_cards_bounds_the_foreground_call_with_a_timeout() -> None:
 
     timeout = adapter._get_client().messages.create_kwargs["timeout"]
     assert timeout is not None
-    assert 0 < timeout <= 60
+    # Pinned exactly (TAX-01): an accidental bound change must fail loudly.
+    assert timeout == 30.0
 
 
 # --- Formulation instructions both helpers must carry (REV-20) -----------------
