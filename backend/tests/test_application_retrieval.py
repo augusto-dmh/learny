@@ -21,7 +21,14 @@ import pytest
 from app.application.errors import SourceNotFound
 from app.application.identity import AuthorizeOwnership
 from app.application.retrieval import EmbedCorpus, RetrieveEvidence
-from app.domain.entities import ChunkToEmbed, Evidence, IngestionJob, Source, User
+from app.domain.entities import (
+    ChunkToEmbed,
+    Evidence,
+    IngestionJob,
+    ReadingPosition,
+    Source,
+    User,
+)
 from tests.fakes import (
     FakeClock,
     FakeEmbeddingIndexRepository,
@@ -202,6 +209,13 @@ class _StubEmbeddings:
         raise AssertionError("RetrieveEvidence must not embed documents")
 
 
+class _FailingPositions:
+    """``ReadingPositionRepository`` stub whose reads fail (store-down path)."""
+
+    def get(self, user_id: UUID, source_id: UUID) -> ReadingPosition | None:
+        raise RuntimeError("position store down")
+
+
 def _owned_source(user_id: UUID) -> Source:
     return Source(
         id=uuid4(),
@@ -227,7 +241,7 @@ def _retrieve(
     sources: FakeSourceRepository,
     retrieval: FakeRetrievalPort,
     embeddings: _StubEmbeddings,
-    positions: FakeReadingPositionRepository | None = None,
+    positions: FakeReadingPositionRepository | _FailingPositions | None = None,
 ) -> RetrieveEvidence:
     return RetrieveEvidence(
         sources=sources,
@@ -538,6 +552,32 @@ def test_retrieve_evidence_ownership_precedes_any_position_read() -> None:
 
     assert positions.get_calls == []
     assert retrieval.calls == []
+
+
+def test_retrieve_evidence_position_read_failure_propagates_fail_closed() -> None:
+    # Fail-closed parity with the stale-bound case: a position-repository read
+    # failure propagates through the existing error envelope and MUST NOT degrade
+    # to unfiltered retrieval — the port is never invoked at all.
+    owner = _user()
+    sources = FakeSourceRepository()
+    source = _owned_source(owner.id)
+    sources.add(source)
+    retrieval = FakeRetrievalPort(results=[_evidence(source.id)])
+    service = _retrieve(
+        sources=sources,
+        retrieval=retrieval,
+        embeddings=_StubEmbeddings(),
+        positions=_FailingPositions(),
+    )
+
+    with pytest.raises(RuntimeError, match="position store down"):
+        service(
+            user=owner, source_id=source.id, query="photosynthesis", respect_reading_position=True
+        )
+
+    # The failure surfaced instead of falling back to an unfiltered search.
+    assert retrieval.calls == []
+    assert retrieval.not_past_calls == []
 
 
 # --- FakeRetrievalPort mirrors the section-order bound (double correctness) -----
