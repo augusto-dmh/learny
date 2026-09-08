@@ -22,6 +22,7 @@ from __future__ import annotations
 import ast
 import inspect
 import logging
+from collections.abc import Iterator
 from typing import Any
 from uuid import uuid4
 
@@ -38,9 +39,12 @@ from openai import (
 )
 
 from app.application.grounding import ground
+from app.application.streaming import hold_back_deltas
 from app.domain.entities import (
     CITATION_MARKER_RE,
     MODE_ANSWER,
+    AnswerCompleted,
+    AnswerTextDelta,
     Evidence,
     GeneratedAnswer,
     TokenUsage,
@@ -104,8 +108,64 @@ class _FakeResponseMessage:
         self.content = content
 
 
+# --- Stream shapes -----------------------------------------------------------------
+
+
+class _FakeDelta:
+    def __init__(self, content: str | None) -> None:
+        self.content = content
+
+
+class _FakeDeltaChoice:
+    def __init__(self, content: str | None) -> None:
+        self.delta = _FakeDelta(content)
+
+
+class _FakeStreamChunk:
+    """One SSE chunk: a delta choice and/or a usage report (the final one)."""
+
+    def __init__(
+        self,
+        *,
+        content: str | None = None,
+        usage: Any = None,
+        with_choices: bool = True,
+    ) -> None:
+        self.choices = [_FakeDeltaChoice(content)] if with_choices else []
+        self.usage = usage
+
+
+class _FakeStream:
+    """Fake SDK stream: iterates chunks, remembers close (early-cancel sensor).
+
+    A chunk that is an ``Exception`` is raised mid-iteration, so a case can put
+    a transport failure after the first delta.
+    """
+
+    def __init__(self, chunks: list[object]) -> None:
+        self._chunks = chunks
+        self.closed = False
+
+    def __iter__(self) -> Iterator[object]:
+        return self._generate()
+
+    def _generate(self) -> Iterator[object]:
+        for chunk in self._chunks:
+            if isinstance(chunk, Exception):
+                raise chunk
+            yield chunk
+
+    def close(self) -> None:
+        self.closed = True
+
+
 class _RecordingCompletions:
-    """The ``chat.completions`` resource: records every create call."""
+    """The ``chat.completions`` resource: records every create call.
+
+    The outcome is returned as-is unless it is an exception, which is raised —
+    so one fake serves the buffered reply, an iterable of stream chunks, and
+    every transport failure the taxonomy matrix drives through either path.
+    """
 
     def __init__(self, outcome: object) -> None:
         self._outcome = outcome
@@ -115,7 +175,6 @@ class _RecordingCompletions:
         self.calls.append(kwargs)
         if isinstance(self._outcome, Exception):
             raise self._outcome
-        assert isinstance(self._outcome, _FakeCompletion)
         return self._outcome
 
 
@@ -427,6 +486,216 @@ def test_a_successful_call_logs_one_content_free_line(caplog) -> None:  # noqa: 
     # Content-free: no answer text, no document body on the line.
     assert "Grounded prose" not in lines[0]
     assert "alpha" not in lines[0]
+
+
+# --- The streaming contract (the port's stream rule, ROUTE-04 fail-over candidacy) -
+#
+# Derived from the port contract and the streaming acceptance criteria: zero or
+# more raw text deltas (markers ride inside them exactly as the Citations
+# adapter streams its block text), then exactly ONE authoritative
+# ``AnswerCompleted`` whose answer is parsed from the accumulated text — so a
+# marker split across SSE chunks still parses. A failure before the first delta
+# raises the translated error (what makes the adapter a legal router fail-over
+# candidate); after a delta is out the failure still translates but can no
+# longer be retried by the router. The sentinel hold-back that keeps
+# ``NOT_FOUND_IN_SOURCE`` from ever reaching a client lives in the application
+# stream path and is provider-independent — proven here over this adapter's
+# stream, exactly as the suite does for the Anthropic one.
+
+
+def _stream_chunks(*, pieces: list[str], usage: Any = _UNSET) -> list[object]:
+    """Content deltas followed by one choice-less usage chunk (the host shape)."""
+    chunks: list[object] = [_FakeStreamChunk(content=piece) for piece in pieces if piece]
+    if usage is not _UNSET:
+        chunks.append(_FakeStreamChunk(with_choices=False, usage=usage))
+    return chunks
+
+
+def _collect(events: Iterator[object]) -> list[object]:
+    return list(events)
+
+
+def test_stream_yields_raw_deltas_then_exactly_one_completed_with_parsed_answer() -> None:
+    first = _evidence("alpha")
+    adapter, _ = _adapter(
+        _FakeStream(
+            _stream_chunks(
+                pieces=["Grounded", " text[^1]", "."],
+                usage=_FakeUsage(prompt=100, completion=20, cached=60),
+            )
+        )
+    )
+
+    events = _collect(adapter.generate_stream(mode=MODE_ANSWER, message="q", evidence=[first]))
+
+    deltas = [event for event in events if isinstance(event, AnswerTextDelta)]
+    completed = [event for event in events if isinstance(event, AnswerCompleted)]
+    assert [delta.text for delta in deltas] == ["Grounded", " text[^1]", "."]
+    # Exactly one terminal event, always last, authoritative.
+    assert len(completed) == 1
+    assert events[-1] is completed[0]
+    answer = completed[0].answer
+    assert answer.text == "Grounded text[^1]."
+    assert answer.found is True
+    assert answer.cited_chunk_ids == (first.chunk_id,)
+    assert answer.usage == TokenUsage(
+        input_tokens=100, output_tokens=20, cache_read_input_tokens=60
+    )
+
+
+def test_a_marker_split_across_deltas_parses_from_the_accumulated_text() -> None:
+    first = _evidence("alpha")
+    adapter, _ = _adapter(_FakeStream(_stream_chunks(pieces=["see [^", "1] done"])))
+
+    events = _collect(adapter.generate_stream(mode=MODE_ANSWER, message="q", evidence=[first]))
+
+    completed = [event for event in events if isinstance(event, AnswerCompleted)]
+    assert len(completed) == 1
+    assert completed[0].answer.text == "see [^1] done"
+    assert completed[0].answer.cited_chunk_ids == (first.chunk_id,)
+
+
+def test_zero_deltas_still_complete_exactly_once() -> None:
+    adapter, _ = _adapter(_FakeStream([_FakeStreamChunk(content="")]))
+
+    events = _collect(
+        adapter.generate_stream(mode=MODE_ANSWER, message="q", evidence=[_evidence("a")])
+    )
+
+    assert len(events) == 1
+    assert isinstance(events[0], AnswerCompleted)
+
+
+def test_a_sentinel_reply_streams_raw_and_completes_not_found() -> None:
+    # Raw passthrough parity: the sentinel text rides the deltas exactly as the
+    # Citations adapter's stream would carry it — the router treats a sentinel
+    # first delta as a commit, and the application hold-back does the leaking.
+    adapter, _ = _adapter(_FakeStream(_stream_chunks(pieces=[SENTINEL[:4], SENTINEL[4:]])))
+
+    events = _collect(
+        adapter.generate_stream(mode=MODE_ANSWER, message="q", evidence=[_evidence("a")])
+    )
+
+    deltas = [event.text for event in events if isinstance(event, AnswerTextDelta)]
+    assert deltas == [SENTINEL[:4], SENTINEL[4:]]
+    completed = [event for event in events if isinstance(event, AnswerCompleted)]
+    assert len(completed) == 1
+    assert completed[0].answer.found is False
+    assert completed[0].answer.text == ""
+
+
+def test_the_sentinel_never_leaks_to_the_client_as_a_delta() -> None:
+    # The provider-independent hold-back (application/streaming.py) is what keeps
+    # the sentinel from the client: over this adapter's stream, nothing at all is
+    # presented and the authoritative answer is the not-found outcome.
+    adapter, _ = _adapter(_FakeStream(_stream_chunks(pieces=[SENTINEL])))
+
+    generator = hold_back_deltas(
+        adapter.generate_stream(mode=MODE_ANSWER, message="q", evidence=[_evidence("a")])
+    )
+    presented: list[object] = []
+    answer = None
+    try:
+        while True:
+            presented.append(next(generator))
+    except StopIteration as stop:  # the generator returns the authoritative answer
+        answer = stop.value
+
+    assert presented == []
+    assert answer is not None
+    assert answer.found is False
+    assert answer.text == ""
+
+
+def test_the_stream_request_matches_the_buffered_shape_and_asks_for_usage() -> None:
+    buffered_adapter, buffered_client = _adapter(_FakeCompletion("ok"))
+    stream_adapter, stream_client = _adapter(_FakeStream(_stream_chunks(pieces=["ok"])))
+
+    buffered_adapter.generate(mode=MODE_ANSWER, message="q", evidence=[_evidence("a")])
+    _collect(
+        stream_adapter.generate_stream(mode=MODE_ANSWER, message="q", evidence=[_evidence("a")])
+    )
+
+    buffered_call = buffered_client.chat.completions.calls[0]
+    stream_call = stream_client.chat.completions.calls[0]
+    # One request shape for both paths — only the streaming half differs.
+    assert stream_call["messages"] == buffered_call["messages"]
+    assert stream_call["model"] == buffered_call["model"]
+    assert stream_call["max_tokens"] == buffered_call["max_tokens"]
+    assert stream_call["stream"] is True
+    # Usage rides the final chunk only when the request asks for it.
+    assert stream_call["stream_options"] == {"include_usage": True}
+    # A stream proves progress as frames arrive: no wall-clock bound here, and
+    # never an effort/thinking parameter (ECON-05 on both paths).
+    assert "timeout" not in stream_call
+    for key in ("effort", "effort_ask", "effort_teach", "thinking", "reasoning_effort"):
+        assert key not in stream_call
+
+
+def test_stream_usage_absent_parses_to_none() -> None:
+    adapter, _ = _adapter(_FakeStream(_stream_chunks(pieces=["ok"], usage=None)))
+
+    events = _collect(
+        adapter.generate_stream(mode=MODE_ANSWER, message="q", evidence=[_evidence("a")])
+    )
+
+    completed = [event for event in events if isinstance(event, AnswerCompleted)]
+    assert len(completed) == 1
+    assert completed[0].answer.usage is None
+
+
+def test_closing_the_stream_early_closes_the_underlying_stream() -> None:
+    stream = _FakeStream(_stream_chunks(pieces=["one", "two"]))
+    adapter, _ = _adapter(stream)
+
+    generator = adapter.generate_stream(mode=MODE_ANSWER, message="q", evidence=[_evidence("a")])
+    next(generator)  # one delta out, then the consumer walks away
+    generator.close()
+
+    # A client disconnect must not leak a provider generation (the port's
+    # early-cancel contract).
+    assert stream.closed is True
+
+
+@pytest.mark.parametrize(("make_error", "expected"), _ERROR_CASES)
+def test_a_pre_delta_stream_failure_raises_its_mapped_learny_type(
+    make_error, expected: type
+) -> None:
+    error = make_error()
+    adapter, _ = _adapter(error)  # type: ignore[arg-type]
+
+    # The request opens lazily: the raise surfaces on first iteration, before
+    # any delta — exactly the window in which the router may fail over.
+    with pytest.raises(expected) as excinfo:
+        _collect(adapter.generate_stream(mode=MODE_ANSWER, message="q", evidence=[]))
+
+    assert isinstance(excinfo.value, ProviderError)
+    assert excinfo.value.__cause__ is error
+
+
+def test_an_error_after_the_first_delta_propagates_translated_exactly_once() -> None:
+    error = _status_error(RateLimitError, 429)
+    adapter, _ = _adapter(_FakeStream([_FakeStreamChunk(content="first"), error]))
+
+    events: list[object] = []
+    with pytest.raises(RateLimited) as excinfo:
+        for event in adapter.generate_stream(mode=MODE_ANSWER, message="q", evidence=[]):
+            events.append(event)
+
+    # The reader saw the delta; the failure surfaced once, translated, chained.
+    assert [event.text for event in events if isinstance(event, AnswerTextDelta)] == ["first"]
+    assert not any(isinstance(event, AnswerCompleted) for event in events)
+    assert excinfo.value.__cause__ is error
+
+
+def test_an_unrecognized_stream_failure_propagates_unchanged() -> None:
+    error = RuntimeError("not a transport signal")
+    adapter, _ = _adapter(error)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        _collect(adapter.generate_stream(mode=MODE_ANSWER, message="q", evidence=[]))
+
+    assert excinfo.value is error
 
 
 # --- ECON-06: the SDK import stays lazy (fitness boundary, mirrored) ---------------

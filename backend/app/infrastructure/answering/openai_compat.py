@@ -35,6 +35,9 @@ from typing import Any, NoReturn, Protocol
 from app.domain.entities import (
     CITATION_MARKER_RE,
     MODE_TEACH,
+    AnswerCompleted,
+    AnswerStreamEvent,
+    AnswerTextDelta,
     Evidence,
     GeneratedAnswer,
     HistoryTurn,
@@ -228,9 +231,13 @@ def _parse_answer(
     )
 
 
-def _log_call(response: Any, *, model: str, found: bool) -> None:
-    """Emit one content-free log line per call — usage counts and outcome only."""
-    usage = getattr(response, "usage", None)
+def _log_call(usage: Any, *, model: str, found: bool) -> None:
+    """Emit one content-free log line per call — usage counts and outcome only.
+
+    ``usage`` is the provider's usage-shaped object when the call reported one
+    (the buffered response's ``.usage``, or the final stream chunk's), else
+    ``None`` — every field reads as ``None`` then, which is the honest line.
+    """
     logger.info(
         "openai-compatible generation model=%s input_tokens=%s output_tokens=%s "
         "cached_input_tokens=%s found=%s",
@@ -416,7 +423,7 @@ class OpenAICompatibleGenerationAdapter:
         answer = _parse_answer(
             _text_of(response), evidence, model=self._model, usage=_usage_of(response)
         )
-        _log_call(response, model=self._model, found=answer.found)
+        _log_call(getattr(response, "usage", None), model=self._model, found=answer.found)
         return answer
 
     def generate_stream(
@@ -429,6 +436,71 @@ class OpenAICompatibleGenerationAdapter:
         target_section_path: tuple[str, ...] | None = None,
         tutor_phase: str | None = None,
         hint_level: str | None = None,
-    ) -> Iterator[Any]:
-        """Stream the same response incrementally (the port's streaming contract)."""
-        raise NotImplementedError("the streaming path is not implemented yet")
+    ) -> Iterator[AnswerStreamEvent]:
+        """Stream the same response: raw text deltas, then the authoritative event.
+
+        The create call carries ``stream_options={"include_usage": True}`` so a
+        host that honors it rides the usage on a final choice-less chunk (the
+        last usage seen wins); a host that ignores it produces no usage → the
+        completed answer's usage is ``None`` → the debit is 0 — the declared
+        degradation (ECON-03). Text deltas pass through **raw**, markers and all,
+        exactly as the Citations adapter streams its block text; the sentinel
+        hold-back that keeps a not-found reply from ever reaching a client lives
+        in the application stream path and is provider-independent. The
+        authoritative :class:`~app.domain.entities.AnswerCompleted` is parsed
+        from the **accumulated** text with the shared parser, so a marker split
+        across chunks parses whole and the completed answer is byte-identical to
+        the buffered one. A failure before the first delta raises the translated
+        error (what makes this adapter a legal router fail-over candidate);
+        after a delta is out the failure still translates, but no router may
+        rewind it (ROUTE-04). The ``finally`` closes the SDK stream, so a
+        consumer disconnect never leaks a provider generation.
+        """
+        request = self._request(
+            message=message,
+            mode=mode,
+            evidence=evidence,
+            history=history,
+            target_section_path=target_section_path,
+            tutor_phase=tutor_phase,
+            hint_level=hint_level,
+        )
+        # A stream proves progress as frames arrive — deliberately unbounded, and
+        # the usage request is the one streaming-only parameter.
+        del request["timeout"]
+        request["stream"] = True
+        request["stream_options"] = {"include_usage": True}
+        return self._stream_events(request, evidence)
+
+    def _stream_events(
+        self, request: dict[str, Any], evidence: Sequence[Evidence]
+    ) -> Iterator[AnswerStreamEvent]:
+        """Drive one streaming create call, translating failures on the way out."""
+        accumulated: list[str] = []
+        usage: TokenUsage | None = None
+        reported: Any = None
+        try:
+            stream = self._get_client().chat.completions.create(**request)
+            try:
+                for chunk in stream:
+                    chunk_usage = getattr(chunk, "usage", None)
+                    if chunk_usage is not None:
+                        reported = chunk_usage
+                        usage = _usage_of(chunk)
+                    choices = getattr(chunk, "choices", None) or ()
+                    if not choices:
+                        continue
+                    content = getattr(getattr(choices[0], "delta", None), "content", None)
+                    if isinstance(content, str) and content:
+                        accumulated.append(content)
+                        yield AnswerTextDelta(text=content)
+            finally:
+                close = getattr(stream, "close", None)
+                if close is not None:
+                    close()
+        except Exception as exc:
+            _log_client_error(exc)
+            raise_translated(exc)
+        answer = _parse_answer("".join(accumulated), evidence, model=self._model, usage=usage)
+        _log_call(reported, model=self._model, found=answer.found)
+        yield AnswerCompleted(answer=answer)
