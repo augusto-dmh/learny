@@ -53,15 +53,17 @@ def _raise_translated(exc: BaseException) -> NoReturn:
     """Translate a caught provider failure through the shared translator (TAX-02).
 
     The SDK-specific branch is exactly this binding: the providers package's
-    shared translator owns the status/timeout classification and cause chaining,
-    and this adapter — which owns the ``anthropic`` SDK here just as the answering
-    adapter does — supplies its timeout and connection-error types.
+    shared translator owns the status classification and cause chaining, and
+    this adapter — which owns the ``anthropic`` SDK here just as the answering
+    adapter does — supplies its timeout and connection-error types plus httpx's
+    timeout family as inputs.
     """
     import anthropic  # local import — the sole SDK reference (ADR-0007/0009)
+    import httpx  # local transport reference, like in every adapter
 
     _raise_translated_shared(
         exc,
-        timeout_exceptions=(anthropic.APITimeoutError,),
+        timeout_exceptions=(TimeoutError, httpx.TimeoutException, anthropic.APITimeoutError),
         unreachable_exceptions=(anthropic.APIConnectionError,),
     )
 

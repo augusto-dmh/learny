@@ -272,17 +272,18 @@ def _raise_translated(exc: BaseException) -> NoReturn:
 
     The SDK-specific branch is exactly this binding: the providers package's
     shared translator (:func:`app.infrastructure.providers.translation.
-    raise_translated`) owns the status/timeout classification, the cause
-    chaining, and the identity-preserved passthrough — this adapter supplies the
-    OpenAI SDK's own timeout and connection-error types as its inputs. The
-    messages on the translated errors name the failure class and status only,
-    never the SDK's exception message (NFR-SEC-004).
+    raise_translated`) owns the status classification, the cause chaining, and
+    the identity-preserved passthrough — this adapter supplies the OpenAI SDK's
+    own timeout and connection-error types plus httpx's timeout family as
+    inputs. The messages on the translated errors name the failure class and
+    status only, never the SDK's exception message (NFR-SEC-004).
     """
+    import httpx  # local import, like every transport reference in this module
     import openai  # local import — the sole SDK reference (ADR-0007/0009)
 
     _raise_translated_shared(
         exc,
-        timeout_exceptions=(openai.APITimeoutError,),
+        timeout_exceptions=(TimeoutError, httpx.TimeoutException, openai.APITimeoutError),
         unreachable_exceptions=(openai.APIConnectionError,),
     )
 

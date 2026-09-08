@@ -337,15 +337,16 @@ def raise_translated(exc: BaseException) -> NoReturn:
 
     The SDK-specific branch is exactly this binding: the shared providers
     translator (:func:`app.infrastructure.providers.translation.raise_translated`)
-    owns the status/timeout classification, the cause chaining, and the
-    identity-preserved passthrough — this adapter supplies the Anthropic SDK's
-    own timeout and connection-error types as its inputs.
+    owns the status classification, the cause chaining, and the identity-
+    preserved passthrough — this adapter supplies the Anthropic SDK's own
+    timeout and connection-error types plus httpx's timeout family as inputs.
     """
     import anthropic  # local import — the sole SDK reference (ADR-0007/0009)
+    import httpx  # local import, like every transport reference in this module
 
     _raise_translated_shared(
         exc,
-        timeout_exceptions=(anthropic.APITimeoutError,),
+        timeout_exceptions=(TimeoutError, httpx.TimeoutException, anthropic.APITimeoutError),
         unreachable_exceptions=(anthropic.APIConnectionError,),
     )
 

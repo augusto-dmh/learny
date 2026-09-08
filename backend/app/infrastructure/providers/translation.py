@@ -4,10 +4,11 @@ The public seam every adapter that owns a provider SDK translates through:
 :func:`raise_translated` maps one caught SDK/HTTP failure onto the Learny error
 taxonomy so callers — the router above the port, the worker tasks — classify on
 Learny classes only, and :func:`usage_of` maps a provider usage payload onto the
-Learny DTO the debit prices. The SDK-specific exception *types* stay in the
-adapter that owns the SDK and enter the shared classifier as inputs, so this
-module — like the rest of the providers package — never imports a provider SDK
-(httpx's transport families are shared, not provider-specific).
+Learny DTO the debit prices. The SDK-specific exception *types* — the provider
+SDK's own errors and its HTTP transport families — stay in the adapter that owns
+the SDK and enter the shared classifier as inputs, so this module imports the
+standard library and the domain usage DTO only (the package's stdlib discipline,
+which the fitness gate's sensor pins).
 """
 
 from __future__ import annotations
@@ -35,7 +36,7 @@ def classify_provider_failure(
     Status failures are classified by the status read off the exception, not an
     SDK type: 429 → :class:`RateLimited`, 5xx (including the 529 overload) →
     :class:`ProviderUnavailable`, any other 4xx → :class:`RequestRejected`.
-    Timeouts — the builtin, httpx's timeout family, and the adapter-supplied SDK
+    Timeouts — the builtin, plus the adapter-supplied SDK and HTTP-transport
     timeout types — translate to :class:`Timeout`; an unreachable provider (the
     adapter-supplied connection-error types, without a timeout) to
     :class:`ProviderUnavailable`. A 4xx that logs as a rejection raises
@@ -47,9 +48,7 @@ def classify_provider_failure(
     the raise it has always seen (the port contract is untouched either way: an
     operational failure still raises).
     """
-    import httpx  # local import — a transport reference, like in every adapter
-
-    if isinstance(exc, (TimeoutError, httpx.TimeoutException, *timeout_exceptions)):
+    if isinstance(exc, (TimeoutError, *timeout_exceptions)):
         return Timeout("the provider call exceeded its wall-clock bound")
     status = getattr(exc, "status_code", None)
     if isinstance(status, int):
