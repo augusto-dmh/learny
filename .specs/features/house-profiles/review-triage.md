@@ -20,3 +20,39 @@ dispositions below are the surviving record (comments are deleted after fixes).
 | 11 | PR-level 5651396983 (summary) | — | Consolidation summary comment (lanes run, marker idempotence) | N/A (no actionable finding) | No action | Bookkeeping; deleted with all comments after fixes; this file is the surviving record |
 
 Counts: **6 inline findings — 6 real, 0 false; dispositions: 6 fix, 1 won't-fix (the roadmap-row observation), 0 rejected-as-misread.** PR-level notes: 3 real doc/spec alignments (fix), 1 won't-fix (protocol), 1 no-action summary.
+
+## Post-triage CI rounds (orchestrator record)
+
+Round 1 (fixes `f6053bf1`..`61e6851f` pushed): the quay image repoint unblocked
+pytest on CI — the whole db-gated suite executed against real Postgres for the
+first time (2956 passed, including migration 0029 round-trip, the repository
+tests, and all 10 `test_web_ai_profile.py` endpoint tests). Four tests failed
+their first-ever execution — all authored blind (db-gated, skipped locally in
+the authoring session):
+
+- `test_a_stored_choice_leads_the_users_turn_chain` — two registrations on one
+  TestClient clobber the shared cookie jar's session, so the first user's
+  captured CSRF token went stale. Fixed by re-entering through
+  `POST /api/auth/login` before that user's turn.
+- `test_a_teach_turn_is_served_from_the_readers_chain` and
+  `test_a_teach_ineligible_choice_leads_ask_but_not_teach` — teach turns refuse
+  whole-book conversations; the seeded conversations now carry the section
+  target (`targeted=True` on the seed helper).
+- `test_the_daily_rails_refuse_before_the_user_chain_serves` — `_seed_conversation`
+  returns the conversation id; the follow-up GET dereferenced `.id` on it.
+
+Round 1 also surfaced the second MinIO artifact: `deploy/backup/Dockerfile`
+pulled the `mc` client from dl.min.io, which now serves 410 for every release
+(including `latest`). Fixed (`569cffe7`) by downloading the same pinned release
+from the minio/mc GitHub releases — byte-identical binary, verified by sha256
+against the Dockerfile's hardcoded digest before the change.
+
+Round 2 (`070ae640`/`569cffe7` CI run): compose-smoke green (full topology builds
+with the quay image + GitHub-served mc), 2958 passed. The two teach tests still
+failed — teach turn 0 must be the session-start message (`(session start)`,
+`TeachingPolicy.is_opening`); fixed in `b2119068` by posting the opening
+constant. The same run failed the frontend job on
+`teach-panel.test.tsx > "Tutor Start speaks first" > "defaults the section
+picker to the chapter currently on screen"` — a file this PR never touched, on
+frontend code byte-identical to the round-1 run where that job passed:
+previously-observed suite flake, not a regression (watched again on the next run).
