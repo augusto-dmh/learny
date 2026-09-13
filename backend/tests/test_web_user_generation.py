@@ -196,7 +196,9 @@ def _seed_source(db_conn: Connection, user_id: str) -> UUID:
     return source_id
 
 
-def _seed_conversation(db_conn: Connection, source_id: UUID, *, scope: tuple[str, ...]) -> UUID:
+def _seed_conversation(
+    db_conn: Connection, source_id: UUID, *, scope: tuple[str, ...], targeted: bool = False
+) -> UUID:
     now = datetime.now(UTC)
     conversation = SqlAlchemyConversationRepository(db_conn).add(
         Conversation(
@@ -205,9 +207,9 @@ def _seed_conversation(db_conn: Connection, source_id: UUID, *, scope: tuple[str
             title="A Book",
             scope_anchors=scope,
             include_notes=False,
-            target_anchor=None,
-            target_section_path=None,
-            target_title=None,
+            target_anchor=_ANCHOR if targeted else None,
+            target_section_path=_SECTION_PATH if targeted else None,
+            target_title="Biology" if targeted else None,
             tutor_phase=None,
             hint_level=None,
             tutor_check_text=None,
@@ -247,20 +249,28 @@ def test_a_stored_choice_leads_the_users_turn_chain(
     client = auth_client
 
     chooser_id = _register(client, "chooser@example.com")
-    chooser_csrf = _csrf(client)
     _store_choice(db_conn, chooser_id, "scout")
     chosen_conversation = _seed_conversation(
         db_conn, _seed_source(db_conn, chooser_id), scope=("missing.xhtml",)
     )
 
+    # Registering the second user replaces the shared cookie jar's session, so
+    # the chooser re-enters through login before their turn is posted.
     plain_id = _register(client, "plain-reader@example.com")
     plain_csrf = _csrf(client)
     plain_conversation = _seed_conversation(
         db_conn, _seed_source(db_conn, plain_id), scope=("missing.xhtml",)
     )
 
-    chosen = _post_turn(client, chosen_conversation, chooser_csrf)
     plain = _post_turn(client, plain_conversation, plain_csrf)
+
+    login = client.post(
+        "/api/auth/login",
+        json={"email": "chooser@example.com", "password": TEST_PASSWORD},
+    )
+    assert login.status_code == 200, login.text
+    chooser_csrf = _csrf(client)
+    chosen = _post_turn(client, chosen_conversation, chooser_csrf)
 
     assert chosen.status_code == 201, chosen.text
     assert plain.status_code == 201, plain.text
@@ -313,7 +323,7 @@ def test_a_teach_turn_is_served_from_the_readers_chain(
     csrf = _csrf(client)
     _store_choice(db_conn, user_id, "scout")
     conversation = _seed_conversation(
-        db_conn, _seed_source(db_conn, user_id), scope=("missing.xhtml",)
+        db_conn, _seed_source(db_conn, user_id), scope=(_ANCHOR,), targeted=True
     )
 
     resp = _post_turn(client, conversation, csrf, mode=MODE_TEACH)
@@ -339,7 +349,7 @@ def test_a_teach_ineligible_choice_leads_ask_but_not_teach(
     _store_choice(db_conn, user_id, "scout-ask")
     source_id = _seed_source(db_conn, user_id)
     ask_conversation = _seed_conversation(db_conn, source_id, scope=("missing.xhtml",))
-    teach_conversation = _seed_conversation(db_conn, source_id, scope=("missing.xhtml",))
+    teach_conversation = _seed_conversation(db_conn, source_id, scope=(_ANCHOR,), targeted=True)
 
     ask = _post_turn(client, ask_conversation, csrf)
     teach = _post_turn(client, teach_conversation, csrf, mode=MODE_TEACH)
@@ -555,8 +565,6 @@ def test_the_daily_rails_refuse_before_the_user_chain_serves(
 
     assert resp.status_code == 429, resp.text
     assert "00:00 UTC" in resp.json()["detail"]
-    still_there = client.get(
-        f"/api/conversations/{conversation.id}", headers={"X-CSRF-Token": csrf}
-    )
+    still_there = client.get(f"/api/conversations/{conversation}", headers={"X-CSRF-Token": csrf})
     assert still_there.status_code == 200, still_there.text
     assert still_there.json()["turns"] == []
