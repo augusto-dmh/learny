@@ -38,6 +38,7 @@ from app.domain.entities import (
     ANSWERED,
     MODE_ANSWER,
     MODE_TEACH,
+    TUTOR_OPENING_MESSAGE,
     AnswerStreamEvent,
     Conversation,
     CorpusSectionRecord,
@@ -326,7 +327,7 @@ def test_a_teach_turn_is_served_from_the_readers_chain(
         db_conn, _seed_source(db_conn, user_id), scope=(_ANCHOR,), targeted=True
     )
 
-    resp = _post_turn(client, conversation, csrf, mode=MODE_TEACH)
+    resp = _post_turn(client, conversation, csrf, mode=MODE_TEACH, message=TUTOR_OPENING_MESSAGE)
 
     assert resp.status_code == 201, resp.text
     # The chosen profile led the teach turn's chain too.
@@ -352,7 +353,9 @@ def test_a_teach_ineligible_choice_leads_ask_but_not_teach(
     teach_conversation = _seed_conversation(db_conn, source_id, scope=(_ANCHOR,), targeted=True)
 
     ask = _post_turn(client, ask_conversation, csrf)
-    teach = _post_turn(client, teach_conversation, csrf, mode=MODE_TEACH)
+    teach = _post_turn(
+        client, teach_conversation, csrf, mode=MODE_TEACH, message=TUTOR_OPENING_MESSAGE
+    )
 
     assert ask.status_code == 201, ask.text
     assert teach.status_code == 201, teach.text
