@@ -773,6 +773,51 @@ def clear_generation_chain_caches() -> None:
     _user_generation_chains.clear()
 
 
+# --- The learner's AI-profile surface -------------------------------------------
+#
+# The account-page catalog is derived per request straight from the settings
+# singleton by the providers layer's pure ``learner_catalog`` — no cache of its
+# own, so a redeclared registry is reflected on the next request with the same
+# ``clear_settings`` dance every other settings-derived surface needs and no
+# new one. The choice is the caller's single preference row, read/written on
+# the request transaction like every other repository use; whether an id may be
+# stored at all (the declared-registry check) is the route's 422 to own, so
+# these dependencies stay storage-only.
+
+
+def get_ai_profile_choice(
+    conn: DbConnection, user: Annotated[User, Depends(get_authenticated_user)]
+) -> str | None:
+    """FastAPI dependency: the caller's stored AI-profile id, or None (401 if unauth).
+
+    Returned exactly as stored: an id the operator renamed or removed is still
+    reported (serving falls back to the deployment default; the row is never
+    rewritten behind the learner's back).
+    """
+    preference = SqlAlchemyAiPreferenceRepository(conn).get_by_user(user.id)
+    return preference.profile_id if preference else None
+
+
+def get_set_ai_profile_choice(
+    conn: DbConnection, user: Annotated[User, Depends(get_authenticated_user)]
+) -> Callable[[str], str]:
+    """FastAPI dependency: store the caller's choice, replacing any previous one."""
+    repo = SqlAlchemyAiPreferenceRepository(conn)
+
+    def _set(profile_id: str) -> str:
+        return repo.upsert(user.id, profile_id).profile_id
+
+    return _set
+
+
+def get_clear_ai_profile_choice(
+    conn: DbConnection, user: Annotated[User, Depends(get_authenticated_user)]
+) -> Callable[[], bool]:
+    """FastAPI dependency: remove the caller's choice (True only when a row existed)."""
+    repo = SqlAlchemyAiPreferenceRepository(conn)
+    return lambda: repo.delete(user.id)
+
+
 # --- Unified conversations (ADR-0029) ------------------------------------------
 #
 # The unified surface is wired on the request-scoped connection like every other
