@@ -833,17 +833,20 @@ def get_delete_conversation(conn: DbConnection) -> DeleteConversation:
 
 def get_post_conversation_turn(
     conn: DbConnection,
-    generation: Generation,
+    generation: UserGeneration,
     explain_generation: ExplainGeneration,
 ) -> PostConversationTurn:
     """Wire ``PostConversationTurn`` on the request-scoped connection (CONV-10..14, 20/21).
 
-    One generation port serves both modes — the mode is a per-turn argument, not a
-    per-wiring choice — and the selection-Explain chain rides beside it (AD-345):
-    the service resolves which of the two serves a turn from the request's
-    ``origin``, and routing policy stays inside the chains. Injecting them via
-    ``Depends`` keeps both test-overridable, and the evidence budget / history
-    window come from the ``conversation_*`` settings.
+    The generation port is resolved per caller: the user's stored AI-profile
+    choice (read on this request's transaction) leads their chain when it
+    resolves, and the operator default chain serves when nothing is stored —
+    the resolution never reaches the service, which keeps receiving a plain
+    ``GenerationPort`` (ADR-0007). The selection-Explain chain rides beside it
+    (AD-345), house-routed always: the service resolves which of the two serves
+    a turn from the request's ``origin``, and routing policy stays inside the
+    chains. Injecting them via ``Depends`` keeps both test-overridable, and the
+    evidence budget / history window come from the ``conversation_*`` settings.
     """
     settings = get_settings()
     return PostConversationTurn(
