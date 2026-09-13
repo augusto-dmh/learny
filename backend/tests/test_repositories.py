@@ -18,6 +18,7 @@ from sqlalchemy.exc import IntegrityError
 from app.application.errors import ConversationTurnConflict
 from app.domain.entities import (
     MODE_TEACH,
+    AiPreference,
     Conversation,
     ConversationTurn,
     CorpusSectionRecord,
@@ -42,9 +43,11 @@ from app.infrastructure.db.metadata import (
     corpus_documents,
     corpus_sections,
     sources,
+    user_ai_preferences,
 )
 from app.infrastructure.db.repositories import (
     SqlAlchemyActivationEventRepository,
+    SqlAlchemyAiPreferenceRepository,
     SqlAlchemyConversationRepository,
     SqlAlchemyConversationTurnRepository,
     SqlAlchemyCorpusRepository,
@@ -119,6 +122,88 @@ def test_get_missing_user_returns_none(db_conn: Connection) -> None:
     repo = SqlAlchemyUserRepository(db_conn)
     assert repo.get_by_id(uuid4()) is None
     assert repo.get_by_email("nobody@example.com") is None
+
+
+def test_ai_preference_upsert_stores_and_replaces_the_single_row(db_conn: Connection) -> None:
+    """get/upsert round-trip: unset reads None, a put stores, a re-put replaces the
+    profile id on the same one row — never a second row (one choice per user)."""
+    prefs = SqlAlchemyAiPreferenceRepository(db_conn)
+    users = SqlAlchemyUserRepository(db_conn)
+    user = _new_user("pref-upsert@example.com")
+    users.add(user)
+
+    assert prefs.get_by_user(user.id) is None
+
+    stored = prefs.upsert(user.id, "primary")
+    assert isinstance(stored, AiPreference)
+    assert (stored.user_id, stored.profile_id) == (user.id, "primary")
+    fetched = prefs.get_by_user(user.id)
+    assert fetched is not None
+    assert (fetched.profile_id, fetched.created_at, fetched.updated_at) == (
+        stored.profile_id,
+        stored.created_at,
+        stored.updated_at,
+    )
+
+    replaced = prefs.upsert(user.id, "economy-glm")
+    assert replaced.profile_id == "economy-glm"
+    # Exactly one row remains, carrying the replaced id.
+    rows = db_conn.execute(
+        select(user_ai_preferences).where(user_ai_preferences.c.user_id == user.id)
+    ).all()
+    assert len(rows) == 1
+    assert rows[0].profile_id == "economy-glm"
+    assert prefs.get_by_user(user.id) is not None
+
+
+def test_ai_preference_upsert_leaves_the_user_untouched(db_conn: Connection) -> None:
+    """Editing the choice changes nothing else about the account: the user row reads
+    back field-for-field identical after a put, a re-put, and a delete."""
+    prefs = SqlAlchemyAiPreferenceRepository(db_conn)
+    users = SqlAlchemyUserRepository(db_conn)
+    user = _new_user("pref-user@example.com")
+    users.add(user)
+    before = users.get_by_id(user.id)
+    assert before is not None
+
+    prefs.upsert(user.id, "primary")
+    prefs.upsert(user.id, "economy-glm")
+    prefs.delete(user.id)
+
+    after = users.get_by_id(user.id)
+    assert after == before
+
+
+def test_ai_preference_delete_is_idempotent_and_owner_scoped(db_conn: Connection) -> None:
+    """Deleting removes only the caller's own row: True the first time, False when
+    nothing is set, and another user's choice is never reachable."""
+    prefs = SqlAlchemyAiPreferenceRepository(db_conn)
+    users = SqlAlchemyUserRepository(db_conn)
+    owner = _new_user("pref-owner@example.com")
+    other = _new_user("pref-other@example.com")
+    users.add(owner)
+    users.add(other)
+    prefs.upsert(owner.id, "primary")
+    prefs.upsert(other.id, "economy-glm")
+
+    assert prefs.delete(owner.id) is True
+    assert prefs.delete(owner.id) is False  # unsetting an unset choice is a no-op
+    assert prefs.get_by_user(owner.id) is None
+    # The other account's row is untouched — no path reaches a foreign row.
+    survivor = prefs.get_by_user(other.id)
+    assert survivor is not None and survivor.profile_id == "economy-glm"
+
+
+def test_ai_preference_row_cascades_with_its_user(db_conn: Connection) -> None:
+    prefs = SqlAlchemyAiPreferenceRepository(db_conn)
+    users = SqlAlchemyUserRepository(db_conn)
+    user = _new_user("pref-cascade@example.com")
+    users.add(user)
+    prefs.upsert(user.id, "primary")
+
+    users.delete(user.id)
+
+    assert prefs.get_by_user(user.id) is None
 
 
 def test_credential_create_fetch_update(db_conn: Connection) -> None:
