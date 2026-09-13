@@ -711,10 +711,14 @@ ExplainGeneration = Annotated[GenerationPort, Depends(get_explain_generation)]
 
 # Per-user chains, cached per *chosen profile id* — never per user and never per
 # row, so two learners who chose the same profile share one chain and two who
-# chose differently never see each other's. The registry is process-static under
-# the cached settings, so a profile id fully determines its chain; sub-adapters
-# build SDK clients lazily on first use, so cached chains cost nothing until a
-# turn actually serves from them.
+# chose differently never see each other's. Only ids present in the declared
+# registry are cached, so the cache is bounded by the registry: an operator who
+# renames or removes profiles leaves no dead entries behind. A stored id outside
+# the registry (stale by definition, rare, and already a warn-and-fall-back
+# path) builds its chain per request instead. The registry is process-static
+# under the cached settings, so a profile id fully determines its chain;
+# sub-adapters build SDK clients lazily on first use, so cached chains cost
+# nothing until a turn actually serves from them.
 _user_generation_chains: dict[str, GenerationPort] = {}
 
 
@@ -724,17 +728,27 @@ def _resolve_user_chain(profile_id: str | None, default: GenerationPort) -> Gene
     ``None`` (nothing stored) is the common case and returns the default chain
     object itself — byte-identical serving to before the choice existed. A stored
     id resolves through :func:`build_user_generation_chain` (unknown ids warn and
-    collapse to the default order there) and caches per id; if the operator later
-    redeclares the registry, :func:`clear_generation_chain_caches` drops these
-    alongside the settings cache.
+    collapse to the default order there); ids the current registry declares cache
+    per id, and if the operator later redeclares the registry,
+    :func:`clear_generation_chain_caches` drops these alongside the settings
+    cache. An unknown id still serves the correct (default-order) chain, built
+    per request rather than cached, so removed profiles cannot accumulate.
     """
     if profile_id is None:
         return default
-    chain = _user_generation_chains.get(profile_id)
-    if chain is None:
-        chain = build_user_generation_chain(get_settings(), profile_id)
-        _user_generation_chains[profile_id] = chain
-    return chain
+    if profile_id in _declared_profile_ids():
+        chain = _user_generation_chains.get(profile_id)
+        if chain is None:
+            chain = build_user_generation_chain(get_settings(), profile_id)
+            _user_generation_chains[profile_id] = chain
+        return chain
+    return build_user_generation_chain(get_settings(), profile_id)
+
+
+@lru_cache
+def _declared_profile_ids() -> frozenset[str]:
+    """The declared registry's ids under the cached settings (never the seed)."""
+    return frozenset(profile.id for profile in get_settings().generation_profiles)
 
 
 def get_generation_for_user(
@@ -770,6 +784,7 @@ def clear_generation_chain_caches() -> None:
     _generation_profiles.cache_clear()
     _profile_catalogs.cache_clear()
     _serving_profile_resolver.cache_clear()
+    _declared_profile_ids.cache_clear()
     _user_generation_chains.clear()
 
 
