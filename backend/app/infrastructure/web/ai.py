@@ -33,7 +33,7 @@ from collections.abc import Callable
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.domain.entities import User
 from app.infrastructure.providers import LearnerProfile, learner_catalog
@@ -45,23 +45,18 @@ from app.infrastructure.web.dependencies import (
     get_clear_ai_profile_choice,
     get_set_ai_profile_choice,
 )
+from app.infrastructure.web.error_handlers import HTTP_422
 
 router = APIRouter(tags=["ai"])
-
-# 422 for the unknown-id refusal; tolerate either spelling across Starlette
-# versions (the same shim the global error handlers use — the old name's access
-# warns, so it is only evaluated when the new one is absent).
-_HTTP_422 = getattr(
-    status,
-    "HTTP_422_UNPROCESSABLE_CONTENT",
-    None,
-) or getattr(status, "HTTP_422_UNPROCESSABLE_ENTITY", 422)
 
 
 class AiProfileChoiceBody(BaseModel):
     """The PUT body: the declared profile id the caller wants to lead their chain."""
 
-    profile_id: str
+    # Profile ids are short operator identifiers by construction; the bound
+    # keeps the unknown-id refusal (which echoes the id back) from reflecting
+    # arbitrarily caller-controlled strings.
+    profile_id: str = Field(min_length=1, max_length=128)
 
 
 class AiProfileChoiceView(BaseModel):
@@ -111,7 +106,7 @@ def put_ai_profile(
     declared = {profile.id for profile in settings.generation_profiles}
     if body.profile_id not in declared:
         raise HTTPException(
-            status_code=_HTTP_422,
+            status_code=HTTP_422,
             detail=(
                 f"generation profile '{body.profile_id}' is not declared by this "
                 "deployment; choose an id from GET /api/ai/profiles"
