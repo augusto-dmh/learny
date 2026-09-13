@@ -37,6 +37,7 @@ from sqlalchemy.exc import OperationalError
 from app.domain.entities import (
     ANSWERED,
     MODE_ANSWER,
+    MODE_TEACH,
     AnswerStreamEvent,
     Conversation,
     CorpusSectionRecord,
@@ -93,6 +94,23 @@ _SCOUT_PROFILES_JSON = (
     '"price_cache_read_usd_per_million_tokens": 0.1, '
     '"price_cache_creation_usd_per_million_tokens": 1.25, "grounding": "verified-spans", '
     '"ask_enabled": true, "teach_enabled": true}]'
+)
+
+# A chosen profile that is ask-eligible but teach-ineligible: the router's walk
+# (not build-time prefiltering) must keep it leading ask turns and falling
+# through to the operator default on teach turns.
+_ASK_ONLY_SCOUT_PROFILES_JSON = (
+    '[{"id": "primary", "kind": "local", "model": "m", "max_tokens": 1, '
+    '"price_input_usd_per_million_tokens": 3.0, "price_output_usd_per_million_tokens": 15.0, '
+    '"price_cache_read_usd_per_million_tokens": 0.3, '
+    '"price_cache_creation_usd_per_million_tokens": 3.75, "grounding": "verified-spans", '
+    '"ask_enabled": true, "teach_enabled": true},'
+    '{"id": "scout-ask", "kind": "anthropic", "model": "claude-ask-only-y", '
+    '"api_key_env": "LEARNY_TEST_PROFILE_KEY", "max_tokens": 8, '
+    '"price_input_usd_per_million_tokens": 1.0, "price_output_usd_per_million_tokens": 5.0, '
+    '"price_cache_read_usd_per_million_tokens": 0.1, '
+    '"price_cache_creation_usd_per_million_tokens": 1.25, "grounding": "verified-spans", '
+    '"ask_enabled": true, "teach_enabled": false}]'
 )
 
 
@@ -278,6 +296,59 @@ def test_a_stale_stored_choice_serves_the_default_chain(
     assert resp.status_code == 201, resp.text
     assert resp.json()["model"] == _DEFAULT_LEAD_MODEL  # the operator default lead
     assert any("removed-profile" in record.message for record in caplog.records)
+
+
+def test_a_teach_turn_is_served_from_the_readers_chain(
+    auth_client: TestClient,
+    db_conn: Connection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The teach half of per-user resolution, at the web surface: a stored,
+    teach-eligible choice leads a teach turn exactly as it leads an ask turn —
+    same process, same mechanism, different mode."""
+    _declare_registry(monkeypatch, _SCOUT_PROFILES_JSON)
+    client = auth_client
+
+    user_id = _register(client, "teach-chooser@example.com")
+    csrf = _csrf(client)
+    _store_choice(db_conn, user_id, "scout")
+    conversation = _seed_conversation(
+        db_conn, _seed_source(db_conn, user_id), scope=("missing.xhtml",)
+    )
+
+    resp = _post_turn(client, conversation, csrf, mode=MODE_TEACH)
+
+    assert resp.status_code == 201, resp.text
+    # The chosen profile led the teach turn's chain too.
+    assert resp.json()["model"] == "claude-scout-x"
+
+
+def test_a_teach_ineligible_choice_leads_ask_but_not_teach(
+    auth_client: TestClient,
+    db_conn: Connection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A chosen profile the deployment declares ask-only keeps leading ask turns
+    while teach turns fall through to the operator default lead — the router's
+    per-mode walk decides, and the wiring never pre-filters the chain."""
+    _declare_registry(monkeypatch, _ASK_ONLY_SCOUT_PROFILES_JSON)
+    client = auth_client
+
+    user_id = _register(client, "ask-only-chooser@example.com")
+    csrf = _csrf(client)
+    _store_choice(db_conn, user_id, "scout-ask")
+    source_id = _seed_source(db_conn, user_id)
+    ask_conversation = _seed_conversation(db_conn, source_id, scope=("missing.xhtml",))
+    teach_conversation = _seed_conversation(db_conn, source_id, scope=("missing.xhtml",))
+
+    ask = _post_turn(client, ask_conversation, csrf)
+    teach = _post_turn(client, teach_conversation, csrf, mode=MODE_TEACH)
+
+    assert ask.status_code == 201, ask.text
+    assert teach.status_code == 201, teach.text
+    # Ask rides the chosen lead; teach falls through to the operator default.
+    assert ask.json()["model"] == "claude-ask-only-y"
+    assert teach.json()["model"] == _DEFAULT_LEAD_MODEL
 
 
 # --- The seam itself: default object, choice-keyed cache, conservative failure ----
