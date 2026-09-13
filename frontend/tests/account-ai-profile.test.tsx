@@ -122,6 +122,7 @@ describe("AccountPanel AI profile section", () => {
   });
 
   it("degrades to section-absent when the catalog read fails, never an error wall", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.stubGlobal(
       "fetch",
       routedFetch(
@@ -139,6 +140,12 @@ describe("AccountPanel AI profile section", () => {
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.getByText("a@b.c")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Log out" })).toBeTruthy();
+    // The degrade is attributable: the failure lands in the console instead of
+    // vanishing behind an intentionally-empty-catalog look.
+    expect(warn).toHaveBeenCalledWith(
+      "ai-profile section unavailable:",
+      expect.anything(),
+    );
   });
 
   it("lists the operator default plus one honest row per catalog profile", async () => {

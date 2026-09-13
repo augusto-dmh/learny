@@ -103,9 +103,13 @@ export function AccountPanel({
         setCatalog(profiles);
         setStoredChoice(choice.profile_id);
       })
-      .catch(() => {
+      .catch((error: unknown) => {
         // Degrade to section-absent: a failed catalog or choice read must never
-        // become an error wall over the rest of the account content.
+        // become an error wall over the rest of the account content. The cause
+        // still lands in the console — an endpoint outage must not be
+        // indistinguishable from an intentionally empty catalog for whoever
+        // diagnoses it.
+        console.warn("ai-profile section unavailable:", error);
         if (!cancelled) {
           setCatalog(null);
         }
