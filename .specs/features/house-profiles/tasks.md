@@ -34,13 +34,16 @@ gate set runs at each phase boundary and before push.
   user-scoped only). Verify (BT): db-gated repo tests — upsert twice leaves one
   row with the second id; get on missing user → None; delete removes; cascade
   deletes with the user. Commit: `feat(domain): ai preference repository`.
-- **T-05**: `build_user_generation_chain(settings, profile_id | None, *,
-  explain=False)` + composition seam `get_generation_for_user(user)` with a
-  profile-id-keyed cache cleared beside `get_settings.cache_clear()`. Unit tests
+- **T-05**: `build_user_generation_chain(settings, profile_id | None)` (shipped
+  without the sketched `explain` flag — a user-resolved Explain chain is
+  unreachable by contract, so the flag would be a misuse trap) + composition
+  seam `get_generation_for_user(...)` with a profile-id-keyed cache (declared
+  ids only) cleared beside `get_settings.cache_clear()`. Unit tests
   (no db): chosen-declared-profile leads; others follow in registry order
-  deduped; None/unknown/stale → default chain; explain flag builds the explain
-  chain regardless of preference; two profile ids resolve different leads in one
-  process; cache clearing works. Verify (BT, scoped module + full at boundary).
+  deduped; None/unknown/stale → default chain; explain chain builds only via
+  `build_generation_chain(explain=True)` (signature pin); two profile ids
+  resolve different leads in one process; cache clearing works. Verify (BT,
+  scoped module + full at boundary).
   Commit: `feat(answering): per-user generation chain resolution`.
 - **T-06**: Ask/Teach wiring: `get_post_conversation_turn` resolves the caller's
   preference via the request connection and passes the user chain; service

@@ -40,7 +40,11 @@ over the registry order; `get_generation()` / `get_explain_generation()`
 Design:
 
 - New pure builder beside the existing one:
-  `build_user_generation_chain(settings, profile_id: str | None, *, explain=False) -> GenerationPort`.
+  `build_user_generation_chain(settings, profile_id: str | None) -> GenerationPort`
+  (shipped without the sketched `explain` flag — a user-resolved Explain chain is
+  unreachable by contract, so the flag would be a misuse trap; Explain keeps
+  building only via `build_generation_chain(explain=True)`, pinned by a signature
+  test).
   Resolution rule (HP-03/AD-352): resolve the registry; if `profile_id` names a
   declared profile, the user chain = [chosen] + [registry others in order,
   deduped]; the `RoutingGenerationAdapter` mode-eligibility walk
@@ -85,7 +89,7 @@ Design:
   synthetic legacy seed (`_legacy_seed_profile`, profiles.py:123). Payload per
   HP-08: `id`, `display_name` (fallback id), `description`, `grounding`,
   `ask_enabled`, `teach_enabled`.
-- Routes (new `infrastructure/web/ai_profiles.py`, `APIRouter`):
+- Routes (new `infrastructure/web/ai.py`, `APIRouter`):
   - `GET /api/ai/profiles` → `{profiles: [ ... ]}` (authenticated user dep;
     401 otherwise — same `get_authenticated_user` chain as other routers).
   - `GET /api/me/ai-profile` → `{profile_id: str | null}`.

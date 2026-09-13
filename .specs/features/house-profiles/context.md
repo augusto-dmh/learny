@@ -120,7 +120,13 @@ PR #69 and PR #70 entries — and recommended by the accepted 2026-09-07 researc
   - *Always visible with a single "Default" row.* Why: stable UI. Why not: dead
     control in every current deployment; implies a choice that does not exist.
 - **Choice:** visibility rule (HP-12); "selectable" = declared in the registry
-  (the synthetic legacy seed never appears — HP-08).
+  (the synthetic legacy seed never appears — HP-08). Resolution of the wording
+  tension with AD-355 ("≥1 selectable **non-default** profile"): HP-12 governs —
+  the section is visible iff the catalog is non-empty. The catalog contains only
+  declared non-seed profiles, so a sole entry IS the operator default and
+  choosing it is an accepted no-op (the honest machinery still works end to
+  end); tightening the rule to two entries would hide a *meaningful* choice in
+  mixed registries where one declared entry is not the primary.
 
 ## D-7 — Stale persisted profile: fall back to operator default, never error → AD-356
 
