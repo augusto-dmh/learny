@@ -112,8 +112,13 @@ describe("AccountPanel (D2)", () => {
           email: "a@b.c",
           created_at: "now",
           csrf_token: "csrf-xyz",
+          ai_profile_id: null,
         }),
       )
+      // the account panel's AI-profile section load (catalog + stored choice);
+      // this deployment's catalog is empty, so the section stays absent.
+      .mockResolvedValueOnce(jsonResponse(200, []))
+      .mockResolvedValueOnce(jsonResponse(200, { profile_id: null }))
       // the logout POST itself — the token from mount is reused, so there is no
       // second /me probe.
       .mockResolvedValueOnce(new Response(null, { status: 204 }));
