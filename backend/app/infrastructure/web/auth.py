@@ -20,7 +20,8 @@ Contract (also consumed by the Next.js proxy in Phase D):
 - ``POST /api/auth/password/reset`` → 204, sets the new password (DOOR-37); 403
   for a token that is not live.
 - ``POST /api/auth/logout``   → 204, clears cookie (auth required; CSRF added in C2).
-- ``GET  /api/auth/me``       → 200 user summary + CSRF token (auth required); 401 otherwise.
+- ``GET  /api/auth/me``       → 200 user summary + CSRF token + stored AI-profile
+  id (auth required); 401 otherwise.
 - ``DELETE /api/auth/account`` → 204, clears cookie (auth + CSRF; 502 leaves the account).
 """
 
@@ -49,6 +50,7 @@ from app.infrastructure.web.csrf import enforce_csrf, enforce_origin
 from app.infrastructure.web.dependencies import (
     AppSettings,
     CurrentPrincipal,
+    get_ai_profile_choice,
     get_authenticate_user,
     get_authenticated_user,
     get_current_session,
@@ -98,9 +100,14 @@ class UserSummary(BaseModel):
 
 class MeResponse(UserSummary):
     """``/me`` payload — user summary plus the session-bound CSRF token the SPA
-    echoes in the ``X-CSRF-Token`` header on writes (AD-007)."""
+    echoes in the ``X-CSRF-Token`` header on writes (AD-007), and the caller's
+    stored AI-profile choice (``ai_profile_id``, null when unset) so the account
+    page has it on first paint. The id is returned exactly as stored: an id the
+    operator renamed or removed is reported as-is — serving falls back to the
+    deployment default, and the UI renders the choice as unset."""
 
     csrf_token: str
+    ai_profile_id: str | None = None
 
 
 class VerifyEmailBody(BaseModel):
@@ -287,12 +294,20 @@ def delete_account(
 
 
 @router.get("/me")
-def me(principal: CurrentPrincipal) -> MeResponse:
-    """Return the authenticated user summary + CSRF token (FR-AUTH-004). 401 if unauth."""
+def me(
+    principal: CurrentPrincipal,
+    ai_profile_choice: Annotated[str | None, Depends(get_ai_profile_choice)],
+) -> MeResponse:
+    """Return the authenticated user summary + CSRF token + stored AI-profile id.
+
+    401 if unauthenticated. The choice rides the existing first paint (null when
+    nothing is stored), so the account page needs no extra roundtrip.
+    """
     user, session = principal
     return MeResponse(
         id=user.id,
         email=user.email,
         created_at=user.created_at,
         csrf_token=session.csrf_token,
+        ai_profile_id=ai_profile_choice,
     )

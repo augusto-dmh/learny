@@ -144,3 +144,13 @@ v7 is proposed in [RFC-0007](../../docs/rfc/0007-public-launch-roadmap.md) (**Dr
 | `first-session-converts` | E / Bet 5 | Shared sample, canned Ask, starter deck, library honesty, landing, activation | Done (PR #67) |
 | `safe-to-open-the-doors` | F / Bet 6 | Safety rails: limiter, spend, quotas, invite, legal, deletion, mail | Done (PR #68) |
 | `cheaper-intelligence` | G / Bet 7 | Cheaper intelligence (effort/cache/fallback; ADR-0020 amendment first) | Done (PR #69) — profiles+router+compat adapter shipped; economy profile inert until the nightly gate promotes it |
+
+## Post-RFC-0007 (handoff-recorded slices)
+
+RFC-0007 is complete; the rows below are the recorded one-cycle slices pulled
+forward from handoffs and the accepted 2026-09-07 research — each authored here
+when picked up, per the ship-cycle's roadmap-row rule.
+
+| tlc Cycle | Source | Scope | Status |
+|---|---|---|---|
+| `house-profiles` | Recorded slice (`docs/research/2026-09-07/provider-adapter-architecture.md` §3.2 Flavor A; PR #69 + PR #70 handoff NEXTs) | Curated per-user house profiles: preference row + two-tier chain resolution + learner-visible profile copy + account selector; ADR-0020 follow-up amendment; BYO keys stay deferred | Not started |

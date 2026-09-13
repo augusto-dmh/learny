@@ -103,7 +103,9 @@ services:
       retries: 10
 
   minio:
-    image: minio/minio:latest
+    # quay, not Docker Hub: MinIO withdrew its Docker Hub images (the pinned
+    # prod tag below is equally unpullable there).
+    image: quay.io/minio/minio:latest
     command: server /data --console-address ":9001"
     # MINIO_ROOT_USER/PASSWORD come from the override (local) or env_file (prod).
     volumes:

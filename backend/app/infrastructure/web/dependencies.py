@@ -110,11 +110,13 @@ from app.domain.ports import (
 )
 from app.infrastructure.answering import (
     build_generation_chain,
+    build_user_generation_chain,
 )
 from app.infrastructure.clock import SystemClock
 from app.infrastructure.db.engine import get_engine
 from app.infrastructure.db.repositories import (
     SqlAlchemyActivationEventRepository,
+    SqlAlchemyAiPreferenceRepository,
     SqlAlchemyAiSpendDayRepository,
     SqlAlchemyConversationRepository,
     SqlAlchemyConversationTurnRepository,
@@ -696,11 +698,139 @@ Generation = Annotated[GenerationPort, Depends(get_generation)]
 
 @lru_cache
 def get_explain_generation() -> GenerationPort:
-    """FastAPI dependency: the selection-Explain chain (overridable in tests)."""
+    """FastAPI dependency: the selection-Explain chain (overridable in tests).
+
+    The Explain chain is a house cost lever and is never user-resolved: no
+    preference is read on this path, whatever a learner has stored.
+    """
     return build_generation_chain(get_settings(), explain=True)
 
 
 ExplainGeneration = Annotated[GenerationPort, Depends(get_explain_generation)]
+
+
+# Per-user chains, cached per *chosen profile id* — never per user and never per
+# row, so two learners who chose the same profile share one chain and two who
+# chose differently never see each other's. Only ids present in the declared
+# registry are cached, so the cache is bounded by the registry: an operator who
+# renames or removes profiles leaves no dead entries behind. A stored id outside
+# the registry (stale by definition, rare, and already a warn-and-fall-back
+# path) builds its chain per request instead. The registry is process-static
+# under the cached settings, so a profile id fully determines its chain;
+# sub-adapters build SDK clients lazily on first use, so cached chains cost
+# nothing until a turn actually serves from them.
+_user_generation_chains: dict[str, GenerationPort] = {}
+
+
+def _resolve_user_chain(profile_id: str | None, default: GenerationPort) -> GenerationPort:
+    """The chain for one user's stored choice, or the operator default unchanged.
+
+    ``None`` (nothing stored) is the common case and returns the default chain
+    object itself — byte-identical serving to before the choice existed. A stored
+    id resolves through :func:`build_user_generation_chain` (unknown ids warn and
+    collapse to the default order there); ids the current registry declares cache
+    per id, and if the operator later redeclares the registry,
+    :func:`clear_generation_chain_caches` drops these alongside the settings
+    cache. An unknown id still serves the correct (default-order) chain, built
+    per request rather than cached, so removed profiles cannot accumulate.
+    """
+    if profile_id is None:
+        return default
+    if profile_id in _declared_profile_ids():
+        chain = _user_generation_chains.get(profile_id)
+        if chain is None:
+            chain = build_user_generation_chain(get_settings(), profile_id)
+            _user_generation_chains[profile_id] = chain
+        return chain
+    return build_user_generation_chain(get_settings(), profile_id)
+
+
+@lru_cache
+def _declared_profile_ids() -> frozenset[str]:
+    """The declared registry's ids under the cached settings (never the seed)."""
+    return frozenset(profile.id for profile in get_settings().generation_profiles)
+
+
+def get_generation_for_user(
+    conn: DbConnection,
+    user: Annotated[User, Depends(get_authenticated_user)],
+    generation: Generation,
+) -> GenerationPort:
+    """FastAPI dependency: the ask/teach chain the caller's stored choice leads.
+
+    Reads the caller's preference row on the request transaction; the read is a
+    plain repository call whose failures propagate like every sibling
+    repository's — a real outage surfaces as a failed request, never silently
+    masked by the default chain. The Explain chain is not resolved here: it is
+    house-routed always.
+    """
+    preference = SqlAlchemyAiPreferenceRepository(conn).get_by_user(user.id)
+    return _resolve_user_chain(preference.profile_id if preference else None, generation)
+
+
+UserGeneration = Annotated[GenerationPort, Depends(get_generation_for_user)]
+
+
+def clear_generation_chain_caches() -> None:
+    """Drop every process-cached generation chain and its settings-derived inputs.
+
+    The lru_cached accessors and the per-user dict all key on settings-derived
+    state, so anything that redeclares the registry must reset them beside
+    ``get_settings.cache_clear()`` — a stale cache would silently serve one
+    deployment's chains into another's requests.
+    """
+    get_generation.cache_clear()
+    get_explain_generation.cache_clear()
+    _generation_profiles.cache_clear()
+    _profile_catalogs.cache_clear()
+    _serving_profile_resolver.cache_clear()
+    _declared_profile_ids.cache_clear()
+    _user_generation_chains.clear()
+
+
+# --- The learner's AI-profile surface -------------------------------------------
+#
+# The account-page catalog is derived per request straight from the settings
+# singleton by the providers layer's pure ``learner_catalog`` — no cache of its
+# own, so a redeclared registry is reflected on the next request with the same
+# ``clear_settings`` dance every other settings-derived surface needs and no
+# new one. The choice is the caller's single preference row, read/written on
+# the request transaction like every other repository use; whether an id may be
+# stored at all (the declared-registry check) is the route's 422 to own, so
+# these dependencies stay storage-only.
+
+
+def get_ai_profile_choice(
+    conn: DbConnection, user: Annotated[User, Depends(get_authenticated_user)]
+) -> str | None:
+    """FastAPI dependency: the caller's stored AI-profile id, or None (401 if unauth).
+
+    Returned exactly as stored: an id the operator renamed or removed is still
+    reported (serving falls back to the deployment default; the row is never
+    rewritten behind the learner's back).
+    """
+    preference = SqlAlchemyAiPreferenceRepository(conn).get_by_user(user.id)
+    return preference.profile_id if preference else None
+
+
+def get_set_ai_profile_choice(
+    conn: DbConnection, user: Annotated[User, Depends(get_authenticated_user)]
+) -> Callable[[str], str]:
+    """FastAPI dependency: store the caller's choice, replacing any previous one."""
+    repo = SqlAlchemyAiPreferenceRepository(conn)
+
+    def _set(profile_id: str) -> str:
+        return repo.upsert(user.id, profile_id).profile_id
+
+    return _set
+
+
+def get_clear_ai_profile_choice(
+    conn: DbConnection, user: Annotated[User, Depends(get_authenticated_user)]
+) -> Callable[[], bool]:
+    """FastAPI dependency: remove the caller's choice (True only when a row existed)."""
+    repo = SqlAlchemyAiPreferenceRepository(conn)
+    return lambda: repo.delete(user.id)
 
 
 # --- Unified conversations (ADR-0029) ------------------------------------------
@@ -763,17 +893,20 @@ def get_delete_conversation(conn: DbConnection) -> DeleteConversation:
 
 def get_post_conversation_turn(
     conn: DbConnection,
-    generation: Generation,
+    generation: UserGeneration,
     explain_generation: ExplainGeneration,
 ) -> PostConversationTurn:
     """Wire ``PostConversationTurn`` on the request-scoped connection (CONV-10..14, 20/21).
 
-    One generation port serves both modes — the mode is a per-turn argument, not a
-    per-wiring choice — and the selection-Explain chain rides beside it (AD-345):
-    the service resolves which of the two serves a turn from the request's
-    ``origin``, and routing policy stays inside the chains. Injecting them via
-    ``Depends`` keeps both test-overridable, and the evidence budget / history
-    window come from the ``conversation_*`` settings.
+    The generation port is resolved per caller: the user's stored AI-profile
+    choice (read on this request's transaction) leads their chain when it
+    resolves, and the operator default chain serves when nothing is stored —
+    the resolution never reaches the service, which keeps receiving a plain
+    ``GenerationPort`` (ADR-0007). The selection-Explain chain rides beside it
+    (AD-345), house-routed always: the service resolves which of the two serves
+    a turn from the request's ``origin``, and routing policy stays inside the
+    chains. Injecting them via ``Depends`` keeps both test-overridable, and the
+    evidence budget / history window come from the ``conversation_*`` settings.
     """
     settings = get_settings()
     return PostConversationTurn(

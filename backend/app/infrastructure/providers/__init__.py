@@ -20,6 +20,8 @@ from app.infrastructure.providers.errors import (
 )
 from app.infrastructure.providers.profiles import (
     GenerationProfileSettings,
+    LearnerProfile,
+    learner_catalog,
     resolve_generation_profiles,
     resolve_serving_profile,
 )
@@ -31,12 +33,14 @@ from app.infrastructure.providers.translation import (
 
 __all__ = [
     "GenerationProfileSettings",
+    "LearnerProfile",
     "ProviderError",
     "ProviderUnavailable",
     "RateLimited",
     "RequestRejected",
     "Timeout",
     "classify_provider_failure",
+    "learner_catalog",
     "raise_translated",
     "resolve_generation_profiles",
     "resolve_serving_profile",

@@ -14,6 +14,7 @@ from fastapi import FastAPI
 from app.core.config import Settings, get_settings
 from app.core.instrumentation import InstrumentRecorder, set_recorder
 from app.core.logging import configure_logging
+from app.infrastructure.web.ai import router as ai_router
 from app.infrastructure.web.auth import router as auth_router
 from app.infrastructure.web.cards import router as cards_router
 from app.infrastructure.web.conversations import router as conversations_router
@@ -119,6 +120,7 @@ def create_app() -> FastAPI:
     register_error_handlers(app)
     app.include_router(health_router)
     app.include_router(auth_router)
+    app.include_router(ai_router)
     app.include_router(sources_router)
     app.include_router(ingestion_router)
     app.include_router(retrieval_router)

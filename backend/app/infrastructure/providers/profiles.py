@@ -12,6 +12,11 @@ synthesized from the pre-registry settings (``generation_provider`` /
 ``generation_model`` / ``generation_effort`` / the global ``price_*`` pair), so the
 default deployment keeps today's single-provider behavior byte-for-byte.
 
+The registry also carries the learner-visible copy (``display_name`` /
+``description``) and :func:`learner_catalog` derives from it the account-page
+catalog — the one place that states what a learner may choose from and what each
+choice trades away.
+
 This module imports the standard library and pydantic only — no provider SDK
 crosses this boundary (fitness gate).
 """
@@ -80,6 +85,29 @@ class GenerationProfileSettings(BaseModel):
     price_output_usd_per_million_tokens: float
     price_cache_read_usd_per_million_tokens: float
     price_cache_creation_usd_per_million_tokens: float
+    grounding: Literal["verified-spans", "prompt-cited", "none"]
+    ask_enabled: bool
+    teach_enabled: bool
+    # Learner-visible copy (optional): the honest "what this is / what it trades
+    # away" the account page shows. Empty ``display_name`` falls back to the id and
+    # an empty ``description`` hides the copy line — so omitting both (as every
+    # existing deployment's env JSON does) changes nothing about parsing or serving.
+    display_name: str = ""
+    description: str = ""
+
+
+class LearnerProfile(BaseModel):
+    """The learner-facing view of one declared profile.
+
+    Exactly the metadata the account-page catalog shows — identity, honest copy,
+    grounding mechanism, and per-mode eligibility. The operational declaration
+    (adapter kind, the key env-var *name*, base URL, prices, effort, token
+    budget) stays operator-side: none of it appears here.
+    """
+
+    id: str
+    display_name: str
+    description: str
     grounding: Literal["verified-spans", "prompt-cited", "none"]
     ask_enabled: bool
     teach_enabled: bool
@@ -202,3 +230,32 @@ def resolve_serving_profile(
         primary.id if primary else "<none>",
     )
     return primary
+
+
+def learner_catalog(settings: Settings) -> tuple[LearnerProfile, ...]:
+    """Return the selectable catalog derived from the declared registry.
+
+    Exactly the declared profiles in registry order, each carrying its honest
+    copy: ``display_name`` falls back to the id when the operator left it empty
+    (or omitted the field), and ``description`` may be empty — the UI hides the
+    copy line rather than inventing one. An undeclared registry contributes
+    nothing: the synthetic legacy seed never appears in the catalog by
+    construction rather than by id-sniffing, so a deployment that declares a
+    profile literally named ``default`` still lists it. A pure function of the
+    current settings, so a redeclared registry changes the catalog on the next
+    request.
+    """
+    declared = settings.generation_profiles
+    if not declared:
+        return ()
+    return tuple(
+        LearnerProfile(
+            id=profile.id,
+            display_name=profile.display_name or profile.id,
+            description=profile.description,
+            grounding=profile.grounding,
+            ask_enabled=profile.ask_enabled,
+            teach_enabled=profile.teach_enabled,
+        )
+        for profile in declared
+    )
