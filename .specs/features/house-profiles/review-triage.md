@@ -56,3 +56,20 @@ constant. The same run failed the frontend job on
 picker to the chapter currently on screen"` — a file this PR never touched, on
 frontend code byte-identical to the round-1 run where that job passed:
 previously-observed suite flake, not a regression (watched again on the next run).
+
+Round 3 (`b2119068` run): 2958 passed, frontend + compose-smoke green (the
+teach-panel failure confirmed a pre-existing suite flake — passed with identical
+frontend code). One teach test still failed, and its CI log exposed a test-design
+error: a targeted teach turn retrieves its target section and REALLY generates
+(`outcome=answered evidence_count=1`), so with a fake provider key the chosen
+lead is rejected and the shipped policy fails over to the house entry — the
+`model` equality on an answered teach turn can never observe the chosen lead
+(and the ask test only "sees" its lead because a not-found never touches the
+port). Redesigned in `5fa3031f`: a dedicated all-anthropic registry makes the
+rejection exhaust the chain honestly (no different kind to fail over to), the
+turn fails 502, and the persisted failed turn stamps the CHOSEN chain's lead
+identity (`_failed_turn` records `generation.model`) — discriminating: a
+default-serving implementation would record the operator primary's model.
+Deterministic under both network conditions (401 → RequestRejected with no
+cross-kind target; connection error → Timeout walks to the same-kind sibling and
+propagates).
