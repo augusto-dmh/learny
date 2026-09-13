@@ -114,6 +114,28 @@ _ASK_ONLY_SCOUT_PROFILES_JSON = (
     '"ask_enabled": true, "teach_enabled": false}]'
 )
 
+# A registry whose entries are all the same (anthropic) kind and whose keys are
+# the test fake: a teach turn on the chosen lead reaches its provider, gets
+# rejected, and — with no other kind to fail over to — fails honest, leaving a
+# failed turn stamped with the CHOSEN chain's lead identity. This is the one
+# teach surface where the lead is observable without a real provider: a teach
+# turn that answers always did so from whichever entry survived the walk, and a
+# not-found never touches the port, so neither distinguishes whose chain led.
+_TEACH_SCOUT_PROFILES_JSON = (
+    '[{"id": "primary", "kind": "anthropic", "model": "claude-primary-z", '
+    '"api_key_env": "LEARNY_TEST_PROFILE_KEY", "max_tokens": 8, '
+    '"price_input_usd_per_million_tokens": 3.0, "price_output_usd_per_million_tokens": 15.0, '
+    '"price_cache_read_usd_per_million_tokens": 0.3, '
+    '"price_cache_creation_usd_per_million_tokens": 3.75, "grounding": "verified-spans", '
+    '"ask_enabled": true, "teach_enabled": true},'
+    '{"id": "scout", "kind": "anthropic", "model": "claude-scout-x", '
+    '"api_key_env": "LEARNY_TEST_PROFILE_KEY", "max_tokens": 8, '
+    '"price_input_usd_per_million_tokens": 1.0, "price_output_usd_per_million_tokens": 5.0, '
+    '"price_cache_read_usd_per_million_tokens": 0.1, '
+    '"price_cache_creation_usd_per_million_tokens": 1.25, "grounding": "verified-spans", '
+    '"ask_enabled": true, "teach_enabled": true}]'
+)
+
 
 def _declare_registry(monkeypatch: pytest.MonkeyPatch, profiles_json: str) -> None:
     """Declare a registry for this test and reset the settings-derived chain caches."""
@@ -315,9 +337,13 @@ def test_a_teach_turn_is_served_from_the_readers_chain(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The teach half of per-user resolution, at the web surface: a stored,
-    teach-eligible choice leads a teach turn exactly as it leads an ask turn —
-    same process, same mechanism, different mode."""
-    _declare_registry(monkeypatch, _SCOUT_PROFILES_JSON)
+    teach-eligible choice leads a teach turn's chain exactly as it leads an ask
+    turn's. A targeted teach turn retrieves its target section, so generation
+    really runs on the chosen lead; with the lead's provider rejecting and no
+    other kind to fail over to, the turn fails honest and the persisted turn
+    records the CHOSEN chain's identity — a default-serving implementation would
+    record the operator primary's instead."""
+    _declare_registry(monkeypatch, _TEACH_SCOUT_PROFILES_JSON)
     client = auth_client
 
     user_id = _register(client, "teach-chooser@example.com")
@@ -329,9 +355,14 @@ def test_a_teach_turn_is_served_from_the_readers_chain(
 
     resp = _post_turn(client, conversation, csrf, mode=MODE_TEACH, message=TUTOR_OPENING_MESSAGE)
 
-    assert resp.status_code == 201, resp.text
-    # The chosen profile led the teach turn's chain too.
-    assert resp.json()["model"] == "claude-scout-x"
+    assert resp.status_code == 502, resp.text
+    turns = client.get(f"/api/conversations/{conversation}", headers={"X-CSRF-Token": csrf}).json()[
+        "turns"
+    ]
+    assert len(turns) == 1
+    assert turns[0]["answer_status"] == "failed"
+    # The chosen profile led the teach turn's chain.
+    assert turns[0]["model"] == "claude-scout-x"
 
 
 def test_a_teach_ineligible_choice_leads_ask_but_not_teach(
