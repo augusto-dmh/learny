@@ -7,11 +7,15 @@ adapter (AD-024) that makes the answer path testable offline;
 ``build_generation_adapter`` selects the single concrete adapter from settings,
 and ``build_generation_chain`` wraps the settings-declared profile registry in
 the routing adapter — the composition root, so provider choice and chain order
-never leak into application/domain code.
+never leak into application/domain code. ``build_user_generation_chain`` is the
+per-user sibling: the same registry reordered so a learner's stored choice leads
+the chain, with the operator default order untouched when the choice does not
+resolve.
 """
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import TYPE_CHECKING
 
@@ -26,6 +30,8 @@ if TYPE_CHECKING:
     from app.domain.ports import GenerationPort
     from app.infrastructure.providers.profiles import GenerationProfileSettings
 
+logger = logging.getLogger(__name__)
+
 __all__ = [
     "AnthropicGenerationAdapter",
     "DeterministicGenerationAdapter",
@@ -33,6 +39,7 @@ __all__ = [
     "RoutingGenerationAdapter",
     "build_generation_adapter",
     "build_generation_chain",
+    "build_user_generation_chain",
 ]
 
 
@@ -130,6 +137,44 @@ def build_generation_chain(settings: Settings, *, explain: bool = False) -> Gene
         head = next((p for p in profiles if p.id == named and p.ask_enabled), None)
         if head is not None:
             profiles = tuple([head, *(p for p in profiles if p is not head)])
+    return RoutingGenerationAdapter(
+        tuple(
+            ChainEntry(adapter=_build_sub_adapter(profile, settings), profile=profile)
+            for profile in profiles
+        )
+    )
+
+
+def build_user_generation_chain(
+    settings: Settings,
+    profile_id: str | None,
+) -> GenerationPort:
+    """Return the chain a user's stored choice leads — reordered, never pinned.
+
+    The user choice among house profiles is a reorder, not a hard pin (ADR-0020
+    amendment): when ``profile_id`` names a declared profile, that profile leads
+    and the remaining registry entries follow in registry order (deduped), so the
+    router's transport fail-over and stream-before-first-delta bound keep working
+    exactly as for the operator default. An unset, unknown, or stale id is a
+    hint that no longer resolves — it logs one warning and serves the operator
+    default chain, never an erroring turn. Mode eligibility is deliberately NOT
+    applied here: the router's eligibility walk is the single authority, and a
+    chosen profile that cannot serve the requested mode is skipped by that walk,
+    which is today's behavior when the lead is ineligible. The selection-Explain
+    chain is a house cost lever and is never user-resolved — only
+    ``build_generation_chain(explain=True)`` builds it.
+    """
+    profiles = resolve_generation_profiles(settings)
+    if profile_id is not None:
+        chosen = next((p for p in profiles if p.id == profile_id), None)
+        if chosen is not None:
+            profiles = tuple([chosen, *(p for p in profiles if p is not chosen)])
+        else:
+            logger.warning(
+                "stored generation profile '%s' is not declared; "
+                "serving the operator default chain",
+                profile_id,
+            )
     return RoutingGenerationAdapter(
         tuple(
             ChainEntry(adapter=_build_sub_adapter(profile, settings), profile=profile)

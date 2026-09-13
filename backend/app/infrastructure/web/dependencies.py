@@ -110,11 +110,13 @@ from app.domain.ports import (
 )
 from app.infrastructure.answering import (
     build_generation_chain,
+    build_user_generation_chain,
 )
 from app.infrastructure.clock import SystemClock
 from app.infrastructure.db.engine import get_engine
 from app.infrastructure.db.repositories import (
     SqlAlchemyActivationEventRepository,
+    SqlAlchemyAiPreferenceRepository,
     SqlAlchemyAiSpendDayRepository,
     SqlAlchemyConversationRepository,
     SqlAlchemyConversationTurnRepository,
@@ -696,11 +698,79 @@ Generation = Annotated[GenerationPort, Depends(get_generation)]
 
 @lru_cache
 def get_explain_generation() -> GenerationPort:
-    """FastAPI dependency: the selection-Explain chain (overridable in tests)."""
+    """FastAPI dependency: the selection-Explain chain (overridable in tests).
+
+    The Explain chain is a house cost lever and is never user-resolved: no
+    preference is read on this path, whatever a learner has stored.
+    """
     return build_generation_chain(get_settings(), explain=True)
 
 
 ExplainGeneration = Annotated[GenerationPort, Depends(get_explain_generation)]
+
+
+# Per-user chains, cached per *chosen profile id* — never per user and never per
+# row, so two learners who chose the same profile share one chain and two who
+# chose differently never see each other's. The registry is process-static under
+# the cached settings, so a profile id fully determines its chain; sub-adapters
+# build SDK clients lazily on first use, so cached chains cost nothing until a
+# turn actually serves from them.
+_user_generation_chains: dict[str, GenerationPort] = {}
+
+
+def _resolve_user_chain(profile_id: str | None, default: GenerationPort) -> GenerationPort:
+    """The chain for one user's stored choice, or the operator default unchanged.
+
+    ``None`` (nothing stored) is the common case and returns the default chain
+    object itself — byte-identical serving to before the choice existed. A stored
+    id resolves through :func:`build_user_generation_chain` (unknown ids warn and
+    collapse to the default order there) and caches per id; if the operator later
+    redeclares the registry, :func:`clear_generation_chain_caches` drops these
+    alongside the settings cache.
+    """
+    if profile_id is None:
+        return default
+    chain = _user_generation_chains.get(profile_id)
+    if chain is None:
+        chain = build_user_generation_chain(get_settings(), profile_id)
+        _user_generation_chains[profile_id] = chain
+    return chain
+
+
+def get_generation_for_user(
+    conn: DbConnection,
+    user: Annotated[User, Depends(get_authenticated_user)],
+    generation: Generation,
+) -> GenerationPort:
+    """FastAPI dependency: the ask/teach chain the caller's stored choice leads.
+
+    Reads the caller's preference row on the request transaction; the read is a
+    plain repository call whose failures propagate like every sibling
+    repository's — a real outage surfaces as a failed request, never silently
+    masked by the default chain. The Explain chain is not resolved here: it is
+    house-routed always.
+    """
+    preference = SqlAlchemyAiPreferenceRepository(conn).get_by_user(user.id)
+    return _resolve_user_chain(preference.profile_id if preference else None, generation)
+
+
+UserGeneration = Annotated[GenerationPort, Depends(get_generation_for_user)]
+
+
+def clear_generation_chain_caches() -> None:
+    """Drop every process-cached generation chain and its settings-derived inputs.
+
+    The lru_cached accessors and the per-user dict all key on settings-derived
+    state, so anything that redeclares the registry must reset them beside
+    ``get_settings.cache_clear()`` — a stale cache would silently serve one
+    deployment's chains into another's requests.
+    """
+    get_generation.cache_clear()
+    get_explain_generation.cache_clear()
+    _generation_profiles.cache_clear()
+    _profile_catalogs.cache_clear()
+    _serving_profile_resolver.cache_clear()
+    _user_generation_chains.clear()
 
 
 # --- Unified conversations (ADR-0029) ------------------------------------------

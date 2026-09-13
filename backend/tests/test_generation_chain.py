@@ -19,6 +19,7 @@ zero adapter calls.
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -33,6 +34,7 @@ from app.infrastructure.answering import (
     OpenAICompatibleGenerationAdapter,
     RoutingGenerationAdapter,
     build_generation_chain,
+    build_user_generation_chain,
 )
 from app.infrastructure.providers import GenerationProfileSettings, Timeout
 
@@ -740,3 +742,212 @@ def test_an_openai_compatible_profile_builds_the_compat_adapter_from_its_declara
     assert adapter._base_url == "https://api.fireworks.ai/inference/v1"
     assert adapter._max_tokens == 2048
     assert (adapter._effort_ask, adapter._effort_teach) == ("low", "high")
+
+
+# --- Per-user resolution: the stored choice leads, the registry follows -----------
+#
+# The learner's choice among house profiles is a reorder with fail-over preserved,
+# never a hard pin: the chosen profile stands first, the rest of the registry keeps
+# registry order (deduped), and unset / unknown / mode-ineligible choices collapse
+# to exactly today's operator default chain. The selection-Explain chain and the
+# quiz/card adapters are house-routed always — no preference reaches them.
+
+
+def test_an_unset_choice_builds_the_operator_default_chain() -> None:
+    settings = Settings(
+        _env_file=None, generation_profiles=[_profile(id="primary"), _profile(id="cheap")]
+    )
+
+    assert _chain_ids(build_user_generation_chain(settings, None)) == ["primary", "cheap"]
+
+    # The default deployment (legacy seed only) is unchanged too: an unset choice
+    # there is today's single-entry chain byte for byte.
+    assert _chain_ids(build_user_generation_chain(Settings(_env_file=None), None)) == ["default"]
+
+
+def test_a_stored_choice_leads_and_the_registry_follows_deduped() -> None:
+    settings = Settings(
+        _env_file=None, generation_profiles=[_profile(id="primary"), _profile(id="cheap")]
+    )
+
+    assert _chain_ids(build_user_generation_chain(settings, "cheap")) == [
+        "cheap",
+        "primary",
+    ]
+    # Choosing the registry lead is the same order as the default chain.
+    assert _chain_ids(build_user_generation_chain(settings, "primary")) == [
+        "primary",
+        "cheap",
+    ]
+    # Choosing the legacy seed in a legacy deployment resolves to itself.
+    assert _chain_ids(build_user_generation_chain(Settings(_env_file=None), "default")) == [
+        "default"
+    ]
+
+
+def test_an_unknown_stored_choice_falls_back_to_the_default_chain_with_a_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A stale id is a hint, not a correctness invariant: the operator may have
+    renamed or removed the profile, so the turn serves the default chain and one
+    warning records the miss — it never errors the learner's asking."""
+    settings = Settings(
+        _env_file=None, generation_profiles=[_profile(id="primary"), _profile(id="cheap")]
+    )
+
+    with caplog.at_level(logging.WARNING, logger="app.infrastructure.answering"):
+        chain = build_user_generation_chain(settings, "removed-profile")
+
+    assert _chain_ids(chain) == ["primary", "cheap"]
+    assert any("removed-profile" in record.message for record in caplog.records)
+
+
+def test_a_mode_ineligible_choice_is_not_prefiltered_the_router_walk_decides() -> None:
+    """Eligibility has one authority — the router's per-mode walk. The chosen
+    profile keeps its lead in the chain even when it cannot serve the mode (no
+    build-time filtering that could drift from the router), and the walk simply
+    falls through to the registry remainder, which is today's ineligible-lead
+    behavior."""
+    evidence = [
+        Evidence(
+            chunk_id=uuid4(),
+            source_id=uuid4(),
+            section_path=("Biology",),
+            anchor="bio.xhtml",
+            page_span=None,
+            snippet="photosynthesis converts sunlight into chemical energy",
+            score=0.5,
+        )
+    ]
+    settings = Settings(
+        _env_file=None,
+        generation_profiles=[_profile(id="quiet", ask_enabled=False), _profile(id="primary")],
+    )
+
+    chain = build_user_generation_chain(settings, "quiet")
+    assert _chain_ids(chain) == ["quiet", "primary"]
+
+    answer = chain.generate(mode=MODE_ANSWER, message="why?", evidence=evidence)
+    assert answer.profile_id == "primary"  # the walk skipped the ask-ineligible lead
+
+
+def test_a_chosen_lead_that_fails_serves_the_rest_in_todays_fail_over_shape() -> None:
+    """Reorder composes with the router unchanged: a transport failure on the
+    chosen lead fails over to the registry remainder, the answer is shaped exactly
+    like today's fail-over answers, and the profile that actually served takes the
+    stamp (so the debit resolves its catalog)."""
+    evidence = [
+        Evidence(
+            chunk_id=uuid4(),
+            source_id=uuid4(),
+            section_path=("Biology",),
+            anchor="bio.xhtml",
+            page_span=None,
+            snippet="photosynthesis converts sunlight into chemical energy",
+            score=0.5,
+        )
+    ]
+    settings = Settings(
+        _env_file=None, generation_profiles=[_profile(id="primary"), _profile(id="cheap")]
+    )
+    chain = build_user_generation_chain(settings, "cheap")
+    assert _chain_ids(chain) == ["cheap", "primary"]  # premise: the choice leads
+
+    attempted: list[str] = []
+    router = RoutingGenerationAdapter(
+        (
+            ChainEntry(
+                adapter=_AttemptRecorder(
+                    "cheap", _FailingLead(Timeout("the chosen lead is down")), attempted
+                ),
+                profile=chain._chain[0].profile,
+            ),
+            ChainEntry(
+                adapter=_AttemptRecorder("primary", chain._chain[1].adapter, attempted),
+                profile=chain._chain[1].profile,
+            ),
+        )
+    )
+
+    answer = router.generate(mode=MODE_ANSWER, message="why?", evidence=evidence)
+
+    assert attempted == ["cheap", "primary"]
+    assert answer.profile_id == "primary"
+    assert answer.found and "photosynthesis" in answer.text
+
+
+# --- The composition seam: per-profile caching with the choice always per user -----
+
+
+def _declare_two_profile_registry(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LEARNY_GENERATION_PROFILES", _TWO_PROFILES_JSON)
+
+
+def test_unset_choice_serves_the_default_chain_object_itself(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A user with no stored choice resolves the operator default chain object —
+    behavior byte-identical to before per-user resolution existed, and (unlike a
+    rebuilt chain) not even a second adapter set."""
+    from app.infrastructure.web import dependencies
+
+    _declare_two_profile_registry(monkeypatch)
+    dependencies.clear_generation_chain_caches()
+
+    sentinel = dependencies.get_generation()
+    assert dependencies._resolve_user_chain(None, sentinel) is sentinel
+
+
+def test_two_users_with_different_choices_resolve_different_leads_in_one_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The cache is keyed per chosen profile id, never per user object and never
+    shared: two learners who chose differently resolve chains with different leads
+    in the same process, and the same choice re-resolves to the one cached chain."""
+    from app.infrastructure.web import dependencies
+
+    _declare_two_profile_registry(monkeypatch)
+    dependencies.clear_generation_chain_caches()
+
+    sentinel = dependencies.get_generation()
+    cheap = dependencies._resolve_user_chain("cheap", sentinel)
+    primary = dependencies._resolve_user_chain("primary", sentinel)
+
+    assert cheap is not primary
+    assert _chain_ids(cheap) == ["cheap", "primary"]
+    assert _chain_ids(primary) == ["primary", "cheap"]
+    # One chain per profile id per process: repeat resolutions reuse it.
+    assert dependencies._resolve_user_chain("cheap", sentinel) is cheap
+    assert dependencies._resolve_user_chain("primary", sentinel) is primary
+
+
+def test_clear_generation_chain_caches_drops_the_per_user_chains(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The test hook that clears ``get_settings`` also drops the per-user chain
+    cache — a redeclared registry must never keep serving chains built from the
+    previous one."""
+    from app.infrastructure.web import dependencies
+
+    _declare_two_profile_registry(monkeypatch)
+    dependencies.clear_generation_chain_caches()
+    sentinel = dependencies.get_generation()
+    cheap = dependencies._resolve_user_chain("cheap", sentinel)
+
+    dependencies.clear_generation_chain_caches()
+
+    assert dependencies._resolve_user_chain("cheap", dependencies.get_generation()) is not cheap
+
+
+def test_the_explain_and_card_adapters_never_gain_a_preference_parameter() -> None:
+    """The selection-Explain chain and the quiz/card adapters are house-routed
+    always: their composition seams accept no user/profile/preference input, so no
+    stored choice can reach them through wiring drift."""
+    import inspect
+
+    from app.infrastructure.quiz import build_quiz_adapter
+    from app.infrastructure.web import dependencies
+
+    assert inspect.signature(dependencies.get_explain_generation).parameters == {}
+    assert list(inspect.signature(build_quiz_adapter).parameters) == ["settings", "provider"]
+    assert inspect.signature(dependencies.get_card_generation).parameters == {}
