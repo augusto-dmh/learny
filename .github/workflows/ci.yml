@@ -56,13 +56,14 @@ jobs:
       - uses: actions/checkout@v4
       # The web-layer upload tests and the storage adapter integration tests run
       # end-to-end against a real S3 endpoint. GitHub service containers cannot
-      # pass an image command (which minio/minio requires), so start the official
-      # image — same pinned tag as the production overlay — as a plain container.
+      # pass an image command (which the minio image requires), so start the
+      # official image — same pinned tag as the production overlay — as a plain
+      # container. Served from quay: MinIO withdrew its Docker Hub images.
       - name: Start MinIO
         run: |
           docker run -d --name minio -p 9000:9000 \
             -e MINIO_ROOT_USER=learny -e MINIO_ROOT_PASSWORD=learny-dev-secret \
-            minio/minio:RELEASE.2024-10-13T13-34-11Z server /data
+            quay.io/minio/minio:RELEASE.2024-10-13T13-34-11Z server /data
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true

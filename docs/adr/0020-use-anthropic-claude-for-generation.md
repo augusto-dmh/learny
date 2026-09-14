@@ -231,3 +231,64 @@ never inside it.
 - Provider adapter architecture research (2026-09-07): `../research/2026-09-07/provider-adapter-architecture.md`
 - Provider landscape update (2026-09-07): `../research/2026-09-07/provider-landscape-update.md`
 - Subscription-as-API research (2026-09-07): `../research/2026-09-07/subscription-as-api.md`
+
+## Amendment (2026-09): End-User Choice Among House Profiles
+
+**Trigger.** The `house-profiles` cycle implements the slice the previous amendment
+deferred: point 11 recorded "operator-curated house profiles per learner" as the
+future one-cycle path once the router and per-profile pricing existed. Both now
+ship (2026-09-07 amendment, implemented in RFC-0007 Cycle G), so the deferral is
+resolved. The original decision and the 2026-09-07 amendment above stand
+unchanged; this amendment governs only what the learner may choose and what they
+may not.
+
+1. **Flavor A is accepted: the learner picks among operator-curated house
+   profiles.** One stored preference per user names a declared profile; unsetting
+   it restores the operator default. The catalog is exactly the declared registry
+   minus the synthetic legacy seed — the operator's configuration is the curation;
+   there is no separate user-facing catalog to keep in sync.
+2. **Resolution reorders the chain; it never hard-pins it.** The user's chosen
+   profile leads their Ask/Teach generation chain when it is declared and
+   eligible for the mode; the remaining registry entries follow in order. All
+   routing policy stays in `RoutingGenerationAdapter` — transport fail-over, the
+   rate-limit backoff, the before-first-delta streaming bound, and the
+   mode-eligibility walk behave exactly as for the operator default. A failing
+   chosen profile degrades to the next chain entry, never to an error the house
+   infrastructure could have absorbed.
+3. **The choice covers Ask/Teach turn generation only.** The selection-Explain
+   chain, quiz decks, and card suggestions stay house-routed: the quiz port sits
+   outside the profile registry and decks pin their provider at `begin_deck`, and
+   the explain chain is a house cost lever. Per-user quiz routing is a coherent
+   follow-up if demand appears, not part of this acceptance.
+4. **Effort stays a profile value.** The learner chooses between profiles; per-user
+   effort dials would reopen what amendment point 4 closed.
+5. **Honest degradation copy travels with the profile.** The registry gains
+   optional learner-facing fields (`display_name`, `description`) so an operator
+   can state what a profile trades away ("answers may cite less precisely"); the
+   account surface shows this copy and hides itself entirely when the deployment
+   declares no selectable non-default profile. Budget and rails are unchanged:
+   answers stamp the serving profile, the debit resolves that profile's catalog,
+   the pre-flight assertion precedes any port touch, and limits stay user-keyed
+   (points 7 and 9 apply to the learner-chosen surface verbatim).
+6. **A stale preference is a hint, not a contract.** If the operator renames or
+   removes a profile a user had chosen, turns resolve to the operator default
+   with a logged warning; the stored choice must never break asking. (Contrast
+   the spoiler-safety fail-closed rule, AD-349: that one guards a correctness
+   invariant; a stale profile hint does not.)
+7. **BYO API keys remain deferred**, unchanged from point 11: a pricing-gated
+   roadmap of their own (RQ10), with the research's abuse analysis (a
+   user-supplied endpoint is never a configuration input) standing as written.
+8. **The device-local precedent (AD-147) is scoped, not overturned.** Account-level
+   AI serving choice is account state and lives in its own table; the
+   device-local hooks for reading, home, note filters, and active conversation
+   remain device-local — this amendment does not create a general per-user
+   preferences mechanism.
+9. **The port stays frozen.** Profile metadata — now including learner-facing copy
+   — lives beside the port in the settings-declared registry, never inside it
+   (ADR-0007; point 12's no-gateway line is restated for the new surface).
+
+### Follow-up amendment references
+
+- Provider adapter architecture research (2026-09-07), §3.2 Flavor A and §4 Q11:
+  `../research/2026-09-07/provider-adapter-architecture.md`
+- `house-profiles` cycle spec: `.specs/features/house-profiles/spec.md`

@@ -68,12 +68,15 @@ ANSWER_GENERATION_FAILED_DETAIL = "Answer generation failed. Please try again."
 
 # 422 for validation; tolerate either spelling across Starlette versions
 # (HTTP_422_UNPROCESSABLE_ENTITY was renamed to ..._CONTENT). Avoid evaluating
-# the deprecated name unless the new one is absent (its access warns).
-_HTTP_422 = getattr(
+# the deprecated name unless the new one is absent (its access warns). Public so
+# the web layer has a single home for this compat decision.
+HTTP_422 = getattr(
     status,
     "HTTP_422_UNPROCESSABLE_CONTENT",
     None,
 ) or getattr(status, "HTTP_422_UNPROCESSABLE_ENTITY", 422)
+
+_HTTP_422 = HTTP_422
 
 # 413 was likewise renamed (REQUEST_ENTITY_TOO_LARGE → CONTENT_TOO_LARGE).
 _HTTP_413 = getattr(status, "HTTP_413_CONTENT_TOO_LARGE", None) or getattr(

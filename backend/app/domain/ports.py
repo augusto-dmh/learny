@@ -22,6 +22,7 @@ from typing import Protocol, runtime_checkable
 from uuid import UUID
 
 from app.domain.entities import (
+    AiPreference,
     AiSpendDay,
     AnchorSection,
     AnswerStreamEvent,
@@ -141,6 +142,29 @@ class UserRepository(Protocol):
 
     def delete(self, user_id: UUID) -> None:
         """Remove the user row; child rows go with it (FK CASCADE)."""
+        ...
+
+
+@runtime_checkable
+class AiPreferenceRepository(Protocol):
+    """Persistence port for :class:`~app.domain.entities.AiPreference`.
+
+    One row per user (the primary key is ``user_id``), and every method filters
+    by ``user_id`` — a preference is only ever read, replaced, or cleared by its
+    owning account; there is no listing surface. Operates on the caller's
+    ``Connection`` so the write shares the request's transaction.
+    """
+
+    def get_by_user(self, user_id: UUID) -> AiPreference | None:
+        """Return the user's stored choice, or ``None`` when nothing is set."""
+        ...
+
+    def upsert(self, user_id: UUID, profile_id: str) -> AiPreference:
+        """Store the choice, replacing any previous one on the single row."""
+        ...
+
+    def delete(self, user_id: UUID) -> bool:
+        """Remove the choice; ``True`` when a row was removed (unset is idempotent)."""
         ...
 
 

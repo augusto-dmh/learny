@@ -927,3 +927,25 @@ activation_events = Table(
     Column("name", Text, nullable=False, primary_key=True),
     Column("occurred_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
 )
+
+# --- Per-user AI serving choice (house profiles; ADR-0020 amendment) -------------
+# One row per user naming the declared generation profile that should lead their
+# Ask/Teach chain. The id is a hint, never a pin: resolution reorders the
+# operator's registry with fail-over preserved, and a stored id that is no
+# longer declared (or is not eligible for the requested mode) serves the
+# operator default chain. Upsert keeps exactly one row per user; the FK
+# cascades, so the choice dies with its account.
+
+user_ai_preferences = Table(
+    "user_ai_preferences",
+    metadata,
+    Column(
+        "user_id",
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column("profile_id", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+)

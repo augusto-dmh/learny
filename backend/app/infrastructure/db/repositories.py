@@ -42,6 +42,7 @@ from app.application.text_search import resolve_text_search_config
 from app.domain.entities import (
     ACTIVE_QUIZ_JOB_STATUSES,
     ACTIVE_STATUSES,
+    AiPreference,
     AiSpendDay,
     AnchorBlockSnapshot,
     AnchorSection,
@@ -112,6 +113,7 @@ from app.infrastructure.db.metadata import (
     sources,
     study_days,
     tags,
+    user_ai_preferences,
     user_credentials,
     users,
 )
@@ -155,6 +157,42 @@ class SqlAlchemyUserRepository:
     def delete(self, user_id: UUID) -> None:
         """Remove the user row; credentials/sessions/sources/... CASCADE away."""
         self._conn.execute(sa_delete(users).where(users.c.id == user_id))
+
+
+class SqlAlchemyAiPreferenceRepository:
+    """``AiPreferenceRepository`` backed by the ``user_ai_preferences`` table.
+
+    The ``user_id`` primary key is the one-row-per-user contract: ``upsert`` is a
+    single ``INSERT ... ON CONFLICT DO UPDATE`` on it, so a re-put replaces the
+    profile id (and stamps ``updated_at``) without ever growing a second row, and
+    every statement is scoped to its own ``user_id`` — no path touches another
+    account's row.
+    """
+
+    def __init__(self, connection: Connection) -> None:
+        self._conn = connection
+
+    def get_by_user(self, user_id: UUID) -> AiPreference | None:
+        row = self._conn.execute(
+            select(user_ai_preferences).where(user_ai_preferences.c.user_id == user_id)
+        ).one_or_none()
+        return _to_ai_preference(row) if row is not None else None
+
+    def upsert(self, user_id: UUID, profile_id: str) -> AiPreference:
+        stmt = pg_insert(user_ai_preferences).values(user_id=user_id, profile_id=profile_id)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[user_ai_preferences.c.user_id],
+            set_={"profile_id": stmt.excluded.profile_id, "updated_at": func.now()},
+        ).returning(user_ai_preferences)
+        row = self._conn.execute(stmt).one()
+        return _to_ai_preference(row)
+
+    def delete(self, user_id: UUID) -> bool:
+        """Remove the user's row; ``True`` only when one existed (idempotent unset)."""
+        result = self._conn.execute(
+            sa_delete(user_ai_preferences).where(user_ai_preferences.c.user_id == user_id)
+        )
+        return bool(result.rowcount)
 
 
 class SqlAlchemyCredentialRepository:
@@ -2613,6 +2651,15 @@ def _to_user(row) -> User:  # noqa: ANN001 — Row is an internal SQLAlchemy typ
         created_at=row.created_at,
         accepted_tos_at=row.accepted_tos_at,
         email_verified_at=row.email_verified_at,
+    )
+
+
+def _to_ai_preference(row) -> AiPreference:  # noqa: ANN001 — Row is an internal SQLAlchemy type
+    return AiPreference(
+        user_id=row.user_id,
+        profile_id=row.profile_id,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
     )
 
 

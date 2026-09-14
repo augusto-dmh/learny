@@ -87,6 +87,7 @@ def test_migration_metadata_compiles() -> None:
         "activation_events",
         "invite_codes",
         "email_tokens",
+        "user_ai_preferences",
     }
     # Unique email + unique session token_hash are the security-critical constraints.
     user_uniques = {c.name for c in users.constraints if c.__class__.__name__ == "UniqueConstraint"}
@@ -3847,5 +3848,111 @@ def test_migration_0028_adds_the_one_time_deck_spend_marker(monkeypatch) -> None
     try:
         columns = {c["name"] for c in inspect(engine).get_columns("quiz_generation_jobs")}
         assert "spend_recorded_at" in columns
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
+def test_migration_0029_creates_user_ai_preferences(monkeypatch) -> None:
+    """0029 up: creates ``user_ai_preferences`` — one row per user (PK ``user_id``,
+    FK to ``users.id`` ON DELETE CASCADE), a NOT NULL ``profile_id`` naming the
+    declared generation profile the learner chose, and UTC ``created_at``/
+    ``updated_at`` server defaults. Down one step to 0028 drops the table (users
+    survives); a further upgrade re-creates it — the preference table round-trips
+    clean."""
+    monkeypatch.setenv("LEARNY_DATABASE_URL", TEST_DB_URL)
+    cfg = _alembic_config(TEST_DB_URL)
+
+    # Land on 0028 (pre-preferences) so the upgrade below is the one under test.
+    command.upgrade(cfg, "head")
+    command.downgrade(cfg, "0028_quiz_deck_spend_marker")
+
+    user_id = uuid.uuid4()
+    engine = create_engine(TEST_DB_URL)
+    try:
+        assert "user_ai_preferences" not in set(inspect(engine).get_table_names())
+    finally:
+        engine.dispose()
+
+    command.upgrade(cfg, "0029_user_ai_preferences")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        inspector = inspect(engine)
+        assert "user_ai_preferences" in set(inspector.get_table_names())
+
+        columns = {c["name"]: c for c in inspector.get_columns("user_ai_preferences")}
+        assert set(columns) == {"user_id", "profile_id", "created_at", "updated_at"}
+        assert columns["profile_id"]["nullable"] is False
+        assert columns["created_at"]["nullable"] is False
+        assert columns["updated_at"]["nullable"] is False
+
+        pk = inspector.get_pk_constraint("user_ai_preferences")["constrained_columns"]
+        assert pk == ["user_id"]
+
+        pref_fk = next(
+            fk
+            for fk in inspector.get_foreign_keys("user_ai_preferences")
+            if fk["constrained_columns"] == ["user_id"]
+        )
+        assert pref_fk["referred_table"] == "users"
+        assert pref_fk["options"].get("ondelete") == "CASCADE"
+
+        # One row per user is representable with server-defaulted timestamps, and
+        # a preference without a profile id is not (the NOT NULL contract).
+        with engine.begin() as conn:
+            conn.execute(
+                text("INSERT INTO users (id, email) VALUES (:id, :email)"),
+                {"id": user_id, "email": f"{user_id}@example.test"},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO user_ai_preferences (user_id, profile_id) "
+                    "VALUES (:uid, 'economy-glm')"
+                ),
+                {"uid": user_id},
+            )
+        with pytest.raises(IntegrityError), engine.begin() as conn:
+            conn.execute(
+                text("INSERT INTO user_ai_preferences (user_id) VALUES (:uid)"),
+                {"uid": user_id},
+            )
+        with engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT profile_id, created_at, updated_at "
+                    "FROM user_ai_preferences WHERE user_id = :uid"
+                ),
+                {"uid": user_id},
+            ).one()
+        assert row.profile_id == "economy-glm"
+        assert row.created_at is not None and row.updated_at is not None
+
+        # Real cascade: the choice dies with its account.
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM users WHERE id = :id"), {"id": user_id})
+        with engine.connect() as conn:
+            remaining = conn.execute(
+                text("SELECT count(*) FROM user_ai_preferences WHERE user_id = :uid"),
+                {"uid": user_id},
+            ).scalar_one()
+        assert remaining == 0
+    finally:
+        engine.dispose()
+
+    # Down one step to 0028: the table drops; users survives.
+    command.downgrade(cfg, "0028_quiz_deck_spend_marker")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        tables = set(inspect(engine).get_table_names())
+        assert "user_ai_preferences" not in tables
+        assert "users" in tables
+    finally:
+        engine.dispose()
+
+    # Round-trip: a further upgrade re-creates the table at head.
+    command.upgrade(cfg, "0029_user_ai_preferences")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        assert "user_ai_preferences" in set(inspect(engine).get_table_names())
     finally:
         engine.dispose()

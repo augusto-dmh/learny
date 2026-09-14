@@ -44,6 +44,23 @@ class User:
 
 
 @dataclass(frozen=True)
+class AiPreference:
+    """A learner's stored AI serving choice (ADR-0020 amendment).
+
+    One row per user naming the declared generation profile that should lead
+    their Ask/Teach chain. ``profile_id`` is a hint, never a pin: resolution
+    reorders the operator's registry with fail-over preserved, and a stored id
+    that is no longer declared — or cannot serve the requested mode — serves
+    the operator default chain instead.
+    """
+
+    user_id: UUID
+    profile_id: str
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
 class PasswordCredential:
     """An Argon2id password hash for a user (AD-006).
 

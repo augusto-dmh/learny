@@ -53,8 +53,9 @@ services:
     networks:
       - learny
     # Pin to a vetted MinIO release (never :latest). Operators bump this tag
-    # deliberately after testing.
-    image: minio/minio:RELEASE.2024-10-13T13-34-11Z
+    # deliberately after testing. quay, not Docker Hub: MinIO withdrew its
+    # Docker Hub images.
+    image: quay.io/minio/minio:RELEASE.2024-10-13T13-34-11Z
     env_file:
       - path: ./secrets/minio.env
         required: true

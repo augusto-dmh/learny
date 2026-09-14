@@ -23,6 +23,22 @@ TEST_DB_URL = os.environ.get("LEARNY_TEST_DATABASE_URL")
 requires_db = pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
 
 
+def clear_settings_and_generation_caches() -> None:
+    """Clear the settings cache and every generation chain derived from it.
+
+    The composition root caches generation chains per process — the operator
+    default, the selection-Explain chain, the registry-derived budget catalogs,
+    and the per-user chains keyed by chosen profile id — all of them keyed on
+    settings-derived state. Every place that clears ``get_settings`` clears these
+    too, or a stale chain serves one deployment's adapters into another's test.
+    """
+    from app.core.config import get_settings
+    from app.infrastructure.web.dependencies import clear_generation_chain_caches
+
+    get_settings.cache_clear()
+    clear_generation_chain_caches()
+
+
 def declared_routes(app: object) -> list:
     """Every route the assembled application declares, included routers flattened.
 
@@ -78,14 +94,12 @@ def _force_local_providers(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     nightly eval workflow, where no ``.env`` is present and providers are set
     explicitly.
     """
-    from app.core.config import get_settings
-
     for var in ("LEARNY_GENERATION_PROVIDER", "LEARNY_EMBEDDING_PROVIDER"):
         if var not in os.environ:
             monkeypatch.setenv(var, "local")
-    get_settings.cache_clear()
+    clear_settings_and_generation_caches()
     yield
-    get_settings.cache_clear()
+    clear_settings_and_generation_caches()
 
 
 @pytest.fixture(scope="session")
@@ -135,7 +149,6 @@ def auth_client(db_conn: Connection, monkeypatch: pytest.MonkeyPatch):  # noqa: 
     """
     from fastapi.testclient import TestClient
 
-    from app.core.config import get_settings
     from app.infrastructure.web.dependencies import get_db_connection
     from app.infrastructure.web.rate_limit import (
         InMemoryFixedWindowRateLimiter,
@@ -146,7 +159,7 @@ def auth_client(db_conn: Connection, monkeypatch: pytest.MonkeyPatch):  # noqa: 
 
     monkeypatch.setenv("LEARNY_SESSION_COOKIE_SECURE", "false")
     monkeypatch.setenv("LEARNY_CSRF_TRUSTED_ORIGINS", TEST_ORIGIN)
-    get_settings.cache_clear()
+    clear_settings_and_generation_caches()
 
     # Fresh, generous limiter per test so the shared module singleton does not
     # leak counts across tests (dedicated rate-limit tests install their own).
@@ -162,7 +175,7 @@ def auth_client(db_conn: Connection, monkeypatch: pytest.MonkeyPatch):  # noqa: 
         yield c
     app.dependency_overrides.clear()
     set_rate_limiter(previous_limiter)
-    get_settings.cache_clear()
+    clear_settings_and_generation_caches()
 
 
 @pytest.fixture
@@ -181,7 +194,6 @@ def ingestion_client(db_conn: Connection, monkeypatch: pytest.MonkeyPatch):  # n
 
     from fastapi.testclient import TestClient
 
-    from app.core.config import get_settings
     from app.infrastructure.web.dependencies import (
         get_db_connection,
         get_ingestion_enqueuer,
@@ -197,7 +209,7 @@ def ingestion_client(db_conn: Connection, monkeypatch: pytest.MonkeyPatch):  # n
 
     monkeypatch.setenv("LEARNY_SESSION_COOKIE_SECURE", "false")
     monkeypatch.setenv("LEARNY_CSRF_TRUSTED_ORIGINS", TEST_ORIGIN)
-    get_settings.cache_clear()
+    clear_settings_and_generation_caches()
 
     previous_limiter = get_rate_limiter()
     app = create_app()
@@ -226,7 +238,7 @@ def ingestion_client(db_conn: Connection, monkeypatch: pytest.MonkeyPatch):  # n
         yield c
     app.dependency_overrides.clear()
     set_rate_limiter(previous_limiter)
-    get_settings.cache_clear()
+    clear_settings_and_generation_caches()
 
 
 @pytest.fixture
@@ -244,7 +256,6 @@ def quiz_client(db_conn: Connection, monkeypatch: pytest.MonkeyPatch):  # noqa: 
 
     from fastapi.testclient import TestClient
 
-    from app.core.config import get_settings
     from app.infrastructure.web.dependencies import (
         get_db_connection,
         get_quiz_deck_enqueuer,
@@ -260,7 +271,7 @@ def quiz_client(db_conn: Connection, monkeypatch: pytest.MonkeyPatch):  # noqa: 
 
     monkeypatch.setenv("LEARNY_SESSION_COOKIE_SECURE", "false")
     monkeypatch.setenv("LEARNY_CSRF_TRUSTED_ORIGINS", TEST_ORIGIN)
-    get_settings.cache_clear()
+    clear_settings_and_generation_caches()
 
     previous_limiter = get_rate_limiter()
     app = create_app()
@@ -288,7 +299,7 @@ def quiz_client(db_conn: Connection, monkeypatch: pytest.MonkeyPatch):  # noqa: 
         yield c
     app.dependency_overrides.clear()
     set_rate_limiter(previous_limiter)
-    get_settings.cache_clear()
+    clear_settings_and_generation_caches()
 
 
 # A small EPUB byte-cap so the oversize-upload path is exercised cheaply (the
@@ -307,7 +318,6 @@ def sources_client(db_conn: Connection, monkeypatch: pytest.MonkeyPatch):  # noq
     """
     from fastapi.testclient import TestClient
 
-    from app.core.config import get_settings
     from app.infrastructure.web.dependencies import get_db_connection
     from app.infrastructure.web.rate_limit import (
         InMemoryFixedWindowRateLimiter,
@@ -319,7 +329,7 @@ def sources_client(db_conn: Connection, monkeypatch: pytest.MonkeyPatch):  # noq
     monkeypatch.setenv("LEARNY_SESSION_COOKIE_SECURE", "false")
     monkeypatch.setenv("LEARNY_CSRF_TRUSTED_ORIGINS", TEST_ORIGIN)
     monkeypatch.setenv("LEARNY_EPUB_MAX_BYTES", str(SOURCES_MAX_BYTES))
-    get_settings.cache_clear()
+    clear_settings_and_generation_caches()
 
     previous_limiter = get_rate_limiter()
     app = create_app()
@@ -333,7 +343,7 @@ def sources_client(db_conn: Connection, monkeypatch: pytest.MonkeyPatch):  # noq
         yield c
     app.dependency_overrides.clear()
     set_rate_limiter(previous_limiter)
-    get_settings.cache_clear()
+    clear_settings_and_generation_caches()
 
 
 @pytest.fixture
@@ -348,7 +358,6 @@ def throttled_sources_client(  # noqa: ANN201
     """
     from fastapi.testclient import TestClient
 
-    from app.core.config import get_settings
     from app.infrastructure.web.dependencies import get_db_connection
     from app.infrastructure.web.rate_limit import (
         InMemoryFixedWindowRateLimiter,
@@ -360,7 +369,7 @@ def throttled_sources_client(  # noqa: ANN201
     monkeypatch.setenv("LEARNY_SESSION_COOKIE_SECURE", "false")
     monkeypatch.setenv("LEARNY_CSRF_TRUSTED_ORIGINS", TEST_ORIGIN)
     monkeypatch.setenv("LEARNY_EPUB_MAX_BYTES", str(SOURCES_MAX_BYTES))
-    get_settings.cache_clear()
+    clear_settings_and_generation_caches()
 
     previous_limiter = get_rate_limiter()
     # Allow 3 attempts per long window so the 4th trips deterministically. The
@@ -377,4 +386,4 @@ def throttled_sources_client(  # noqa: ANN201
         yield c
     app.dependency_overrides.clear()
     set_rate_limiter(previous_limiter)
-    get_settings.cache_clear()
+    clear_settings_and_generation_caches()

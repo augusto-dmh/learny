@@ -21,6 +21,13 @@ export type UserSummary = {
 
 export type MeResponse = UserSummary & {
   csrf_token: string;
+  /**
+   * The caller's stored AI-generation-profile choice, exactly as stored — an id
+   * the deployment no longer declares can still appear here; null means the
+   * operator default serves. The authoritative read for the account selector is
+   * the choice endpoint (`/api/me/ai-profile`).
+   */
+  ai_profile_id: string | null;
 };
 
 /** Auth state as the UI sees it: either a signed-in user or anonymous. */
