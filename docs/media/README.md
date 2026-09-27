@@ -1,107 +1,75 @@
 # Demo Media: Capture Guide
 
-This guide scripts a <90-second demo of Learny's core user flows: upload a book → ask a question
-and receive a cited answer → generate a quiz → review a spaced-repetition card. This guide defines
-the asset structure and capture checklist; Phase E's README will embed these assets.
+This guide produces the four assets the main README embeds: one GIF of the money path — upload a book, ask a cited question, generate a quiz, review a spaced-repetition card — and three stills. The assets are **committed** under `docs/media/` so the README renders them from any clone; keep the GIF at or under 10 MB and the stills as PNG.
 
-## Money-Path Script (≤90 seconds)
+## Asset slots
 
-The demo captures four moments in sequence:
+| File | Scene | What it must show |
+|---|---|---|
+| `docs/media/demo.gif` | The whole money path, one take, ≤ 90 s | Upload → cited answer → quiz → review, in that order |
+| `docs/media/screenshot-library.png` | Library after upload | The sample book listed as ready |
+| `docs/media/screenshot-ask.png` | A cited answer in the reader dock | Question, answer, and at least one inline citation resolving to a passage |
+| `docs/media/screenshot-review.png` | A review card | The card, its passage context, and the recall rating buttons |
 
-| Scene | Action | Timing | Asset Slot | Notes |
-|---|---|---|---|---|
-| **1. Library** | Upload a book (EPUB) to the learner's library | 0–15s | `docs/media/screenshot-library.png` | Static screenshot after upload succeeds; shows the uploaded title in the list |
-| **2. Ask** | Open the book, ask a cited question, receive a grounded answer with citations | 15–50s | `docs/media/screenshot-ask.png` | Static screenshot of the Q&A interface with visible citations; shows question + answer + cited passage |
-| **3. Quiz** | Generate a quiz from the same passage | 50–70s | Implied in video flow | (Video only; no static screenshot required; shows quiz generation UX) |
-| **4. Review** | Review a spaced-repetition card for the passage | 70–90s | `docs/media/screenshot-review.png` | Static screenshot of the card-review interface; shows the card, passage context, and recall rating options |
+The README embeds exactly the files that exist here (`backend/tests/test_readme_truth.py` fails the suite if the README embeds a missing file or omits a present one), so commit the four files together with the README change that embeds them.
 
-Total runtime: ≤90 seconds. Total assets: 1 video (demo.gif) + 3 screenshots.
+## Prerequisites
 
-## Capture Checklist
+- Docker with the Compose plugin, and `ffmpeg` for the GIF encode (`sudo apt install ffmpeg` on Debian/Ubuntu).
+- A screen recorder: `wf-recorder` or `simplescreenrecorder` on Linux, QuickTime on macOS.
+- **A funded Anthropic key and an OpenAI key.** The deterministic adapters that CI runs on return extractive snippets, not the product's answers; a demo recorded on them would misrepresent Learny. Set, in `backend/.env` (git-ignored; see `backend/.env.example`):
 
-### Prerequisites
+  ```
+  LEARNY_GENERATION_PROVIDER=anthropic
+  LEARNY_ANTHROPIC_API_KEY=sk-ant-...
+  LEARNY_EMBEDDING_PROVIDER=openai
+  LEARNY_OPENAI_API_KEY=sk-...
+  ```
 
-- A Learny instance running locally or on staging (all features green locally; no deploy required)
-- A test book (EPUB format) loaded and ready to upload
-- Tooling:
-  - **Screen capture**: QuickTime (macOS), OBS/SimpleScreenRecorder (Linux), or Windows 10+ Screen Recorder
-  - **GIF encoding** (if recording as video): `ffmpeg` (e.g., `brew install ffmpeg` on macOS)
-  - **Screenshot tool**: Built-in screenshot tool (Cmd+Shift+3 macOS, Shift+Print Windows/Linux)
+- The public-domain sample book. `make seed-sample` stores and ingests it as the shared sample (the same book every new account sees), so the recording shows real chapters and real citations without any copyrighted text.
 
-### Capture Steps
+## Capture (about twenty minutes)
 
-1. **Test walkthrough locally**
-   - Start Learny: `docker compose up -d` (or your local dev server)
-   - Log in as a test user (or create one)
-   - Verify the upload, Q&A, quiz, and review flows work end-to-end
-   - Timing: ~5 minutes
+1. **Bring the stack up with real providers.**
 
-2. **Record the money-path video**
-   - Open screen recorder (OBS, QuickTime, or built-in)
-   - Set resolution: 1920×1080 or 1280×720 (readable text at typical embed sizes)
-   - Perform the four scenes in order (upload → ask → quiz → review), speaking naturally about each step
-   - Target: one continuous take, ≤90 seconds
-   - Save as `.mp4` or `.webm`
+   ```bash
+   docker compose up --build -d
+   make seed-sample
+   ```
 
-3. **Encode video as GIF** (optional; helps GitHub + READMEs render inline)
-   - If recording as video, convert to GIF:
-     ```bash
-     ffmpeg -i demo.mp4 -vf fps=10,scale=1280:-1 -loop 0 demo.gif
-     ```
-   - Target size: <10 MB (readable at standard embed width ~800px)
-   - Save to `docs/media/demo.gif`
+   Wait until the sample's ingestion reads *ready* on the library page (`http://localhost:3000/sources`); embedding a full book takes a few minutes on first run.
 
-4. **Capture scene stills**
-   - After the video, take individual static screenshots for scenes 1, 2, and 4:
-     - **Library screenshot**: Show the list of uploaded books (scene 1 state)
-     - **Ask screenshot**: Show the Q&A panel with question, answer, and visible citations (scene 2 result)
-     - **Review screenshot**: Show the card review interface with the card, passage context, and rating buttons (scene 4 state)
-   - Save as `PNG` format for lossless quality:
-     - `docs/media/screenshot-library.png`
-     - `docs/media/screenshot-ask.png`
-     - `docs/media/screenshot-review.png`
+2. **Register a fresh account** at `http://localhost:3000/register`. A new account opens onto the shared sample and the canned first Ask, which is the sequence the GIF should show.
 
-## Asset Files
+3. **Record one take at 1280×720**, in this order, without narration:
+   - Library: open the sample (or upload your own EPUB and wait for *ready*) — still 1.
+   - Reader: ask a question the book answers; wait for the streamed answer with its inline citation; click the citation so the passage highlights — still 2.
+   - Quiz: back on the library page, use **Generate quiz deck** on the sample and wait for the deck to be ready.
+   - Review: open Review, grade one card — still 3.
 
-Place completed media in `docs/media/`:
+4. **Encode the GIF** and check its size:
 
-```
-docs/media/
-├── README.md                    (this file)
-├── demo.gif                     (or .mp4/.webm if GIF conversion not used)
-├── screenshot-library.png
-├── screenshot-ask.png
-└── screenshot-review.png
-```
+   ```bash
+   ffmpeg -i demo.mp4 -vf "fps=10,scale=1280:-1:flags=lanczos" -loop 0 docs/media/demo.gif
+   ls -l docs/media/demo.gif   # must be ≤ 10 MB; lower fps or scale if not
+   ```
 
-**File naming:** lowercase, hyphen-separated, no spaces. Filenames are referenced in the main README
-as `docs/media/<filename>`.
+5. **Take the three stills** as PNG at the moments named above, and save them under the slot names.
 
-**Not committed:** `.gitignore` excludes `*.gif`, `*.png`, and video files. Commit this guide only;
-media is stored separately (e.g., in a release or external CDN after QA).
+6. **Embed and verify.** Replace the pending paragraph in the README's `## Demo` section with:
 
-## Verification
+   ```markdown
+   ![Demo: upload, ask, quiz, review](docs/media/demo.gif)
 
-Before submitting the demo for review:
+   | Library | Ask | Review |
+   |---|---|---|
+   | ![Library](docs/media/screenshot-library.png) | ![Ask](docs/media/screenshot-ask.png) | ![Review](docs/media/screenshot-review.png) |
+   ```
 
-1. **Video flow**: Play the GIF/video end-to-end; confirm it's <90 seconds, audio is clear, and all four
-   scenes are present.
-2. **Screenshot clarity**: Verify each `.png` is readable (text size >10px on typical screen), shows
-   the intended UI state, and the filename matches the asset slot name.
-3. **Asset slot mapping**: Confirm filenames match the table above exactly.
+   Then run `cd backend && uv run pytest tests/test_readme_truth.py -q` — it passes only when every embedded file exists and every present slot is embedded.
 
-## Embedding in README
+## Before committing
 
-The main README (Phase E) will reference these assets as:
-
-```markdown
-## Demo
-
-<video or GIF embed here>
-![Library Screenshot](docs/media/screenshot-library.png)
-![Ask Screenshot](docs/media/screenshot-ask.png)
-![Review Screenshot](docs/media/screenshot-review.png)
-```
-
-If any asset slot is missing, the README link will break at review time. No other tooling is required;
-the README will handle markdown/HTML embedding.
+- The recording shows no real name, email, or key: register the demo account with a throwaway address and keep the account page out of frame.
+- The GIF plays end to end in under 90 seconds and the text is readable at the README's embed width (~800 px).
+- Nothing in the take was produced by the deterministic adapters — the answer streams, and the citation resolves to a passage in the book.

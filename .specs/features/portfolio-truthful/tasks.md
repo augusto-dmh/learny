@@ -235,7 +235,7 @@ T3 → T9
 
 ---
 
-### T7: Make the demo capture guide runnable and honest
+### T7: Make the demo capture guide runnable and honest ✅ Complete
 
 **What**: Rewrite `docs/media/README.md` so it describes a capture against `docker compose up` with a funded Anthropic key and the public-domain sample book, names the four committed asset files, and drops the false claim that media is git-ignored.
 **Where**: `docs/media/README.md`
@@ -250,11 +250,12 @@ T3 → T9
 
 **Done when**:
 
-- [ ] Prerequisites name the key and the sample book; steps are runnable in under thirty minutes on Linux.
-- [ ] The "Not committed" paragraph is gone; the guide states the assets are committed and size-capped (GIF ≤ 10 MB).
-- [ ] Gate check passes: build gate.
+- [x] Prerequisites name the key and the sample book; steps are runnable in under thirty minutes on Linux.
+- [x] The "Not committed" paragraph is gone; the guide states the assets are committed and size-capped (GIF ≤ 10 MB).
+- [x] Gate check passes: build gate.
 
 **Tests**: none
+**Evidence**: build gate as T2 (docs only)
 **Gate**: build
 
 **Commit**: `docs(media): make the demo capture guide runnable against the current stack`

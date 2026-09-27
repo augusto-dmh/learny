@@ -175,7 +175,7 @@ Learny's engineering is four roadmaps ahead of its public face: the README, the 
 | TRUTH-20 | P2: Dependabot — bumps applied | Tasks | Pending |
 | TRUTH-23 | P2: Dependabot — PRs closed as superseded | Merge gate | Pending |
 | TRUTH-24 | P1: README (manifest versions) | Tasks | Pending |
-| TRUTH-21 | P3: Media guide | Tasks | Pending |
+| TRUTH-21 | P3: Media guide | Tasks | Implementing (T7) |
 | TRUTH-22 | P3: Media files + embeds | Operator-gated | Pending |
 
 **Coverage:** 24 total, 24 mapped, 0 unmapped
