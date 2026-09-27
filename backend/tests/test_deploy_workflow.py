@@ -19,7 +19,8 @@ from pathlib import Path
 import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_DEPLOY = _REPO_ROOT / ".github" / "workflows" / "deploy.yml"
+_WORKFLOWS_DIR = _REPO_ROOT / ".github" / "workflows"
+_DEPLOY = _WORKFLOWS_DIR / "deploy.yml"
 
 _RAW = _DEPLOY.read_text()
 _WORKFLOW = yaml.safe_load(_RAW)
@@ -227,6 +228,24 @@ def test_docker_action_versions_are_pinned_to_real_majors() -> None:
     assert "docker/build-push-action@v6" in _RAW
     assert "actions/checkout@v6" in _RAW
     assert "actions/checkout@v4" not in _RAW
+
+
+def test_every_workflow_uses_the_current_action_majors() -> None:
+    # One pin for the whole .github/workflows tree, so a stale major in any
+    # workflow (not only deploy.yml) fails here.
+    expected = {
+        "actions/checkout": "v6",
+        "actions/setup-node": "v6",
+        "actions/upload-artifact": "v7",
+    }
+    workflows = sorted((_WORKFLOWS_DIR).glob("*.yml"))
+    assert workflows
+    seen: dict[str, set[str]] = {}
+    for path in workflows:
+        for action, major in re.findall(r"uses: (actions/[a-z-]+)@(v\d+)", path.read_text()):
+            seen.setdefault(action, set()).add(major)
+    for action, major in expected.items():
+        assert seen.get(action) == {major}, (action, seen.get(action))
 
 
 # --- DEP-10: the deploy job runs only after the images are published -------------

@@ -48,11 +48,12 @@ def test_status_paragraph_names_the_current_release_and_not_a_superseded_one() -
 
 def test_roadmap_section_lists_each_shipped_rfc_with_a_link() -> None:
     roadmap = _section("## Roadmap")
+    shipped_lines = [line for line in roadmap.splitlines() if line.startswith("- ✅")]
     for rfc in _SHIPPED_RFCS:
-        assert f"]({rfc})" in roadmap, rfc
         assert (_ROOT / rfc).is_file(), rfc
-    shipped_bullets = [line for line in roadmap.splitlines() if line.startswith("- ✅")]
-    assert len(shipped_bullets) >= len(_SHIPPED_RFCS)
+        # The link and the shipped marker must sit on the same bullet: a link
+        # elsewhere in the section does not make the arc "shipped".
+        assert any(f"]({rfc})" in line for line in shipped_lines), rfc
 
 
 def test_roadmap_section_names_the_recorded_candidates_as_not_scheduled() -> None:
@@ -87,12 +88,13 @@ def _demo_assets() -> list[str]:
 def test_demo_section_embeds_present_assets_and_declares_the_rest_pending() -> None:
     demo = _section("## Demo")
     embedded = set(re.findall(r"!\[[^\]]*\]\(docs/media/([^)]+)\)", demo))
-    for name in _demo_assets():
-        present = (_ROOT / "docs" / "media" / name).is_file()
-        if present:
+    # Any embed of a docs/media file must resolve — not only the named slots.
+    for name in embedded:
+        assert (_ROOT / "docs" / "media" / name).is_file(), f"{name} is embedded but missing"
+    slots = _demo_assets()
+    for name in slots:
+        if (_ROOT / "docs" / "media" / name).is_file():
             assert name in embedded, f"{name} exists but is not embedded"
-        else:
-            assert name not in embedded, f"{name} is embedded but missing"
-    if embedded != set(_demo_assets()):
+    if embedded != set(slots):
         assert "not recorded yet" in demo
         assert "docs/media/README.md" in demo
