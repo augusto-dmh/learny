@@ -44,6 +44,18 @@ Seen once or not yet corroborated. Tracked, not trusted.
 - evidence: SPOILER Edge Cases / backend/tests/test_retrieval.py (backend/db-gated retrieval tests)
 - last seen: 2026-09-08T17:32:10Z
 
+### L-028 - When a guide names where to put secrets for a compose run, check it against the compose env_file entries and .dockerignore: a host-side .env is invisible to containers.
+- signal: `spec_precision_gap` · recurrence: 1 feature(s) · scope: `docs` · harmful: 0
+- features: portfolio-truthful
+- evidence: docs/media/README.md:20 (TRUTH-21) (docs)
+- last seen: 2026-09-27T02:26:03Z
+
+### L-029 - A 'listed as shipped' claim needs the link and the shipped marker asserted on the same line; a section-wide substring plus a bullet count lets any one item be demoted.
+- signal: `surviving_mutant` · recurrence: 1 feature(s) · scope: `backend/tests` · harmful: 0
+- features: portfolio-truthful
+- evidence: backend/tests/test_readme_truth.py:49 (TRUTH-02) (backend/tests)
+- last seen: 2026-09-27T02:26:03Z
+
 ## Quarantined (failed when applied - ignore)
 
 A confirmed lesson that recurred alongside failure. Kept for the maintainer to review.

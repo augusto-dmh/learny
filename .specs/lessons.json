@@ -3,7 +3,7 @@
   "promote_threshold": 2,
   "window_days": 45,
   "quarantine_threshold": 2,
-  "next_id": 28,
+  "next_id": 30,
   "lessons": [
     {
       "id": "L-023",
@@ -94,6 +94,42 @@
       ],
       "created": "2026-09-08T17:32:10Z",
       "last_seen": "2026-09-08T17:32:10Z"
+    },
+    {
+      "id": "L-028",
+      "key": "spec_precision_gap::when a guide names where to put secrets for a compose run check it against the compose env file entries and dockerignore a host side env is invisible to containers",
+      "text": "When a guide names where to put secrets for a compose run, check it against the compose env_file entries and .dockerignore: a host-side .env is invisible to containers.",
+      "signal": "spec_precision_gap",
+      "scope": "docs",
+      "status": "candidate",
+      "features": [
+        "portfolio-truthful"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "docs/media/README.md:20 (TRUTH-21) (docs)"
+      ],
+      "created": "2026-09-27T02:26:03Z",
+      "last_seen": "2026-09-27T02:26:03Z"
+    },
+    {
+      "id": "L-029",
+      "key": "surviving_mutant::a listed as shipped claim needs the link and the shipped marker asserted on the same line a section wide substring plus a bullet count lets any one item be demoted",
+      "text": "A 'listed as shipped' claim needs the link and the shipped marker asserted on the same line; a section-wide substring plus a bullet count lets any one item be demoted.",
+      "signal": "surviving_mutant",
+      "scope": "backend/tests",
+      "status": "candidate",
+      "features": [
+        "portfolio-truthful"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "backend/tests/test_readme_truth.py:49 (TRUTH-02) (backend/tests)"
+      ],
+      "created": "2026-09-27T02:26:03Z",
+      "last_seen": "2026-09-27T02:26:03Z"
     }
   ]
 }
