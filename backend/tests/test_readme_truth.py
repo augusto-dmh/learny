@@ -13,6 +13,8 @@ import re
 import tomllib
 from pathlib import Path
 
+import yaml
+
 _ROOT = Path(__file__).resolve().parents[2]
 _README = (_ROOT / "README.md").read_text()
 _MEDIA_GUIDE = (_ROOT / "docs" / "media" / "README.md").read_text()
@@ -132,3 +134,18 @@ def test_demo_section_embeds_present_assets_and_declares_the_rest_pending() -> N
     if embedded != set(slots):
         assert "not recorded yet" in demo
         assert "docs/media/README.md" in demo
+
+
+# --- The deployment section names every image the deploy workflow publishes -----
+
+
+def test_deployment_section_counts_and_names_the_published_images() -> None:
+    # The old sentence said "three images" for two roadmaps after the matrix grew
+    # to five; the count and the brace list are derived from the matrix here.
+    workflow = yaml.safe_load((_ROOT / ".github" / "workflows" / "deploy.yml").read_text())
+    names = [entry["name"] for entry in workflow["jobs"]["build"]["strategy"]["matrix"]["include"]]
+    number_words = {3: "three", 4: "four", 5: "five", 6: "six", 7: "seven", 8: "eight"}
+    section = _section("### Deployment (CI → GHCR → VPS)")
+    assert f"publishes {number_words[len(names)]} images" in section
+    short = ",".join(name.removeprefix("learny-") for name in names)
+    assert f"`ghcr.io/augusto-dmh/learny-{{{short}}}`" in section
