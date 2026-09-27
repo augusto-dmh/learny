@@ -159,7 +159,7 @@ Learny's engineering is four roadmaps ahead of its public face: the README, the 
 | TRUTH-04 | P1: README | Tasks | Implementing (T3) |
 | TRUTH-05 | P1: README | Tasks | Implementing (T3) |
 | TRUTH-06 | P1: README | Tasks | Implementing (T3) |
-| TRUTH-07 | P1: README (CLAUDE.md) | Tasks | Pending |
+| TRUTH-07 | P1: README (CLAUDE.md) | Tasks | Implementing (T5) |
 | TRUTH-08 | P1: README (drift test) | Tasks | Implementing (T4) |
 | TRUTH-09 | P1: Nightly smoke — signature | Tasks | Implementing (T1) |
 | TRUTH-10 | P1: Nightly smoke — offline sensor | Tasks | Implementing (T1) |

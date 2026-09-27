@@ -181,7 +181,7 @@ T3 → T9
 
 ---
 
-### T5: Bring `CLAUDE.md`'s Current Status to the same state
+### T5: Bring `CLAUDE.md`'s Current Status to the same state ✅ Complete
 
 **What**: Replace the Current Status bullets that describe v3 as the driving roadmap with bullets naming RFC-004 through RFC-0007 as shipped, the post-arc slices as the current state, and the recorded candidates.
 **Where**: `CLAUDE.md`
@@ -196,11 +196,12 @@ T3 → T9
 
 **Done when**:
 
-- [ ] Current Status names RFC-0007 complete and the two post-arc slices merged; no bullet says v3 work is driven by RFC-003.
-- [ ] The operational and constraints sections are untouched except where they name a stale version.
-- [ ] Gate check passes: build gate.
+- [x] Current Status names RFC-0007 complete and the two post-arc slices merged; no bullet says v3 work is driven by RFC-003.
+- [x] The operational and constraints sections are untouched except where they name a stale version.
+- [x] Gate check passes: build gate.
 
 **Tests**: none
+**Evidence**: build gate as T2 (docs only)
 **Gate**: build
 
 **Commit**: `docs: bring the project context file to the current roadmap state`
