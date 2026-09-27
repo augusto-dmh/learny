@@ -11,13 +11,13 @@ This guide produces the four assets the main README embeds: one GIF of the money
 | `docs/media/screenshot-ask.png` | A cited answer in the reader dock | Question, answer, and at least one inline citation resolving to a passage |
 | `docs/media/screenshot-review.png` | A review card | The card, its passage context, and the recall rating buttons |
 
-The README embeds exactly the files that exist here (`backend/tests/test_readme_truth.py` fails the suite if the README embeds a missing file or omits a present one), so commit the four files together with the README change that embeds them.
+The README embeds exactly the files that exist here: `backend/tests/test_readme_truth.py` fails the suite if the demo section embeds any `docs/media/` file that is missing, or omits one of the four slots above that is present. Commit the four files together with the README change that embeds them.
 
 ## Prerequisites
 
 - Docker with the Compose plugin, and `ffmpeg` for the GIF encode (`sudo apt install ffmpeg` on Debian/Ubuntu).
 - A screen recorder: `wf-recorder` or `simplescreenrecorder` on Linux, QuickTime on macOS.
-- **A funded Anthropic key and an OpenAI key.** The deterministic adapters that CI runs on return extractive snippets, not the product's answers; a demo recorded on them would misrepresent Learny. Set, in `backend/.env` (git-ignored; see `backend/.env.example`):
+- **A funded Anthropic key and an OpenAI key.** The deterministic adapters that CI runs on return extractive snippets, not the product's answers; a demo recorded on them would misrepresent Learny. The containers read provider keys from `secrets/local-ai.env` (git-ignored; the local compose override mounts it into `api`, `worker`, and `worker-pdf` — a host-side `backend/.env` is invisible to them). Create it with:
 
   ```
   LEARNY_GENERATION_PROVIDER=anthropic
@@ -25,6 +25,8 @@ The README embeds exactly the files that exist here (`backend/tests/test_readme_
   LEARNY_EMBEDDING_PROVIDER=openai
   LEARNY_OPENAI_API_KEY=sk-...
   ```
+
+  Before recording, confirm the stack picked the keys up: the answer must stream token by token and the API log must show an `anthropic` generation call, not the deterministic adapter.
 
 - The public-domain sample book. `make seed-sample` stores and ingests it as the shared sample (the same book every new account sees), so the recording shows real chapters and real citations without any copyrighted text.
 
