@@ -154,7 +154,7 @@ T3 → T9
 
 ---
 
-### T4: Pin the README's truth claims with a test
+### T4: Pin the README's truth claims with a test ✅ Complete
 
 **What**: A test module reads `README.md` and asserts the release name, the shipped-RFC list, the ADR/RFC counts against the filesystem, and that no `docs/media/` embed points at a missing file.
 **Where**: `backend/tests/test_readme_truth.py`
@@ -169,11 +169,12 @@ T3 → T9
 
 **Done when**:
 
-- [ ] One test per README AC 1, 2, 3, 6 — four tests, each failing on the specific drift it names (a wrong count, a missing RFC link, a stale release string, a dangling image).
-- [ ] The count assertions read `docs/adr/` and `docs/rfc/` at test time, not a hard-coded number.
-- [ ] Gate check passes: quick gate on `tests/test_readme_truth.py`.
+- [x] One test per README AC 1, 2, 3, 6 — four tests, each failing on the specific drift it names (a wrong count, a missing RFC link, a stale release string, a dangling image).
+- [x] The count assertions read `docs/adr/` and `docs/rfc/` at test time, not a hard-coded number.
+- [x] Gate check passes: quick gate on `tests/test_readme_truth.py`.
 
 **Tests**: unit
+**Evidence**: quick gate 5 passed; sensor: a stale count or release string fails the module
 **Gate**: quick
 
 **Commit**: `test(docs): fail the suite when the readme drifts from the repository`
