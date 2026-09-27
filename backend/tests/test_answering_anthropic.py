@@ -2421,6 +2421,42 @@ def _live_answer_adapter() -> AnthropicGenerationAdapter:
     )
 
 
+# The live tests build their calls through these two helpers so that the exact
+# keyword set they send is visible offline: `test_live_call_shapes_bind_to_the_
+# adapter_signature` binds each helper's kwargs to `generate`'s signature, so a
+# renamed or dropped keyword fails `pytest -m "not live"` instead of surfacing
+# months later as a TypeError in the nightly.
+
+
+def _live_answer_call(question: str, evidence: list[Evidence]) -> dict[str, object]:
+    return {"mode": MODE_ANSWER, "message": question, "evidence": evidence}
+
+
+def _live_teach_call(question: str, evidence: list[Evidence]) -> dict[str, object]:
+    return {
+        "mode": MODE_TEACH,
+        "message": question,
+        "target_section_path": ("How Volcanoes Erupt",),
+        "history": [],
+        "evidence": evidence,
+    }
+
+
+def test_live_call_shapes_bind_to_the_adapter_signature() -> None:
+    # Offline sensor for the live smoke tests: every keyword the live calls send
+    # must be one `generate` accepts today. `Signature.bind` raises TypeError on
+    # an unknown keyword, which is exactly the failure the nightly hit.
+    signature = inspect.signature(AnthropicGenerationAdapter.generate)
+    evidence = [_evidence(_TIDES)]
+
+    for call in (
+        _live_answer_call("Why do ocean tides rise and fall?", evidence),
+        _live_teach_call("How does a volcano erupt?", evidence),
+    ):
+        bound = signature.bind(object(), **call)
+        assert set(call) <= set(bound.arguments), call
+
+
 @pytest.mark.live
 @pytest.mark.eval
 @_LIVE_SKIP
@@ -2428,7 +2464,7 @@ def test_live_answer_returns_cited_prose() -> None:
     evidence = [_evidence(_TIDES)]
 
     result = _live_answer_adapter().generate(
-        question="Why do ocean tides rise and fall?", evidence=evidence
+        **_live_answer_call("Why do ocean tides rise and fall?", evidence)
     )
 
     assert result.found is True
@@ -2443,16 +2479,9 @@ def test_live_answer_returns_cited_prose() -> None:
 @_LIVE_SKIP
 def test_live_teaching_turn_returns_cited_prose() -> None:
     evidence = [_evidence(_VOLCANO)]
-    adapter = AnthropicGenerationAdapter(
-        api_key=os.environ["LEARNY_ANTHROPIC_API_KEY"], model=_MODEL, max_tokens=_MAX_TOKENS
-    )
 
-    result = adapter.generate(
-        mode=MODE_TEACH,
-        message="How does a volcano erupt?",
-        target_section_path=("How Volcanoes Erupt",),
-        history=[],
-        evidence=evidence,
+    result = _live_answer_adapter().generate(
+        **_live_teach_call("How does a volcano erupt?", evidence)
     )
 
     assert result.found is True
@@ -2470,8 +2499,9 @@ def test_live_irrelevant_evidence_returns_sentinel_not_found() -> None:
     evidence = [_evidence(_PRINTING)]
 
     result = _live_answer_adapter().generate(
-        question="How does photosynthesis convert sunlight inside plant leaves?",
-        evidence=evidence,
+        **_live_answer_call(
+            "How does photosynthesis convert sunlight inside plant leaves?", evidence
+        )
     )
 
     assert result.found is False
