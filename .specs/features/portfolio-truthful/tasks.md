@@ -57,6 +57,13 @@ T3 → T7
 T6
 ```
 
+### Phase 3: Versions and dependencies
+
+```
+T8
+T3 → T9
+```
+
 ---
 
 ## Task Breakdown
@@ -88,7 +95,7 @@ T6
 
 ---
 
-### T2: Name the operator action when the nightly dies on an exhausted balance
+### T2: Name the operator action when the nightly dies on an exhausted balance ✅ Complete
 
 **What**: The nightly job captures pytest output and, when the run failed and the output carries Anthropic's credit-exhausted message, emits a `::error::` annotation that names the action (fund `LEARNY_ANTHROPIC_API_KEY`'s account) while the job still fails.
 **Where**: `.github/workflows/eval.yml`
@@ -103,12 +110,13 @@ T6
 
 **Done when**:
 
-- [ ] The pytest step's output is preserved for a later step without changing its exit code.
-- [ ] A step guarded by `if: failure()` (and the secret gate) greps for the credit-exhausted message and emits `::error::` naming the operator action; it never masks the failure.
-- [ ] `backend/tests/test_eval_workflow.py` asserts the annotation step's presence, its `failure()` guard, and that no step downgrades the job's failure (e.g. no `continue-on-error` on the pytest step).
-- [ ] Gate check passes: quick gate on `tests/test_eval_workflow.py`.
+- [x] The pytest step's output is preserved for a later step without changing its exit code.
+- [x] A step guarded by `if: failure()` (and the secret gate) greps for the credit-exhausted message and emits `::error::` naming the operator action; it never masks the failure.
+- [x] `backend/tests/test_eval_workflow.py` asserts the annotation step's presence, its `failure()` guard, and that no step downgrades the job's failure (e.g. no `continue-on-error` on the pytest step).
+- [x] Gate check passes: quick gate on `tests/test_eval_workflow.py`.
 
 **Tests**: unit
+**Evidence**: quick gate 16 passed (test_eval_workflow.py); build gate: make lint green, backend suite 2057 passed + 79 storage-module passes after MinIO came up (env-only failures), 15 skipped
 **Gate**: build
 
 **Commit**: `ci(eval): name the operator action when the nightly dies on an exhausted balance`
@@ -249,6 +257,58 @@ T6
 
 ---
 
+### T8: Apply the pending GitHub Actions major bumps with their pin tests
+
+**What**: Every workflow uses `actions/checkout@v6`, `actions/setup-node@v6`, and `actions/upload-artifact@v7`, and the tests that pin action majors assert those versions.
+**Where**: `.github/workflows/` (ci.yml, deploy.yml, eval.yml) and the pin assertions in `backend/tests/test_deploy_workflow.py` / `backend/tests/test_eval_workflow.py`
+**Depends on**: None
+**Reuses**: Dependabot PRs #55–#57 as the diff reference (same bumps)
+**Requirement**: TRUTH-20
+
+**Tools**:
+
+- MCP: NONE
+- Skill: NONE
+
+**Done when**:
+
+- [ ] `grep -rn "uses: actions/" .github/workflows` shows only `checkout@v6`, `setup-node@v6`, `upload-artifact@v7`.
+- [ ] The pin tests assert the new majors (and would fail on `@v4`).
+- [ ] Gate check passes: quick gate on `tests/test_deploy_workflow.py tests/test_eval_workflow.py`.
+
+**Tests**: unit
+**Gate**: quick
+
+**Commit**: `build(ci): move to the current majors of checkout, setup-node, and upload-artifact`
+
+---
+
+### T9: Declare the release version in both package manifests
+
+**What**: `backend/pyproject.toml` (with `uv.lock`) and `frontend/package.json` (with `package-lock.json`) declare `0.7.0`, and `backend/tests/test_versions.py` asserts both equal the README's current release.
+**Where**: the two package manifests and their lock files, plus `backend/tests/test_versions.py`
+**Depends on**: T3
+**Reuses**: `uv version 0.7.0`; `npm version 0.7.0 --no-git-tag-version`
+**Requirement**: TRUTH-24
+
+**Tools**:
+
+- MCP: NONE
+- Skill: NONE
+
+**Done when**:
+
+- [ ] Both manifests and both lock files carry `0.7.0`.
+- [ ] `test_versions.py` reads the release from the README status paragraph and asserts both manifests equal it (no hard-coded `0.3.0` remains).
+- [ ] Gate check passes: build gate.
+
+**Tests**: unit
+**Gate**: build
+
+**Commit**: `build: declare version 0.7.0 in the backend and frontend manifests`
+
+---
+
 ## Merge-gate checklist (not branch tasks — remote, run after Stage 7 approval)
 
 These carry requirement IDs but are executed against `origin`/GitHub only after the user approves the merge; they are recorded here so the Verifier and the wrap report can account for them.
@@ -257,7 +317,7 @@ These carry requirement IDs but are executed against `origin`/GitHub only after 
 |---|---|---|
 | Tags + releases `v0.4.0` (#45 `1b85c61`), `v0.5.0` (#58 `b8b3d30`), `v0.6.0` (#70 `0b04a6c`), `v0.7.0` (merge commit) | TRUTH-12, 13, 14 | `git tag vX.Y.0 <sha> && git push origin vX.Y.0 && gh release create vX.Y.0 --generate-notes --notes-start-tag <prev> --notes-file <body>` |
 | Repo description + topics (+ homepage if supplied) | TRUTH-15, 16, 17 | `gh repo edit --description ... --add-topic ...` |
-| Dependabot #55/#56/#57 rebase + merge when green | TRUTH-20 | `gh pr comment N --body "@dependabot rebase"`, then `gh pr merge N --merge` |
+| Dependabot #55/#56/#57 closed as superseded by this PR | TRUTH-23 | `gh pr close N --comment "Superseded by #<this PR>, which applies the same bump together with the tests that pin the action majors."` |
 | Demo capture (needs a funded key) + README embeds | TRUTH-22 | per `docs/media/README.md`; a follow-up commit on `main` |
 
 ---
@@ -272,9 +332,11 @@ Phase 2:  T3 ------→ T4
           T3 ------→ T5
           T6
           T3 ------→ T7
+Phase 3:  T8
+          T3 ------→ T9
 ```
 
-Seven tasks — one batch, executed inline; the Verifier runs as a fresh sub-agent after T7.
+Nine tasks — executed inline (the ship-cycle orchestrator is the single worker); the Verifier runs as a fresh sub-agent after T9.
 
 ## Task Granularity Check
 
@@ -287,6 +349,8 @@ Seven tasks — one batch, executed inline; the Verifier runs as a fresh sub-age
 | T5 | 1 file | ✅ Granular |
 | T6 | 1 file | ✅ Granular |
 | T7 | 1 file | ✅ Granular |
+| T8 | 1 dependency bump (3 workflow files + 2 pin assertions) | ⚠️ cohesive: one bump, one commit |
+| T9 | 1 version bump (2 manifests + locks + 1 test) | ⚠️ cohesive: one bump, one commit |
 
 ## Diagram-Definition Cross-Check
 
@@ -299,6 +363,8 @@ Seven tasks — one batch, executed inline; the Verifier runs as a fresh sub-age
 | T5 | T3 | T3 → T5 | ✅ Match |
 | T6 | None | standalone | ✅ Match |
 | T7 | T3 | T3 → T7 | ✅ Match |
+| T8 | None | standalone | ✅ Match |
+| T9 | T3 | T3 → T9 | ✅ Match |
 
 ## Test Co-location Validation
 
@@ -311,3 +377,5 @@ Seven tasks — one batch, executed inline; the Verifier runs as a fresh sub-age
 | T5 | prose docs | none | none | ✅ OK |
 | T6 | prose docs | none | none | ✅ OK |
 | T7 | prose docs | none | none | ✅ OK |
+| T8 | workflow files | unit | unit | ✅ OK |
+| T9 | manifests + version test | unit | unit | ✅ OK |

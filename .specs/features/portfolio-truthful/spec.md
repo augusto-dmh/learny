@@ -33,7 +33,7 @@ Learny's engineering is four roadmaps ahead of its public face: the README, the 
 | Demo capture needs real Claude answers | The capture task is operator-gated on a funded `LEARNY_ANTHROPIC_API_KEY`; until it runs, the README's demo section states plainly that media is pending and links the capture guide — the commented-out embeds stay out | A deterministic-adapter demo would show extractive answers as if they were the product. Rejected: record with deterministic adapters | auto (AD-358) |
 | Release numbering for the four arcs shipped since `v0.3.0` | Retroactive lightweight tags at each arc's completion merge, numbered by completion date: `v0.4.0` = RFC-004 (#45), `v0.5.0` = RFC-006 (#58), `v0.6.0` = RFC-005 (#70), `v0.7.0` = RFC-0007 + this cycle (HEAD after merge); notes generated per range | Precedent: `v0.3.0` was cut retroactively at the RFC-003 completion merge. Version order must follow commit order, so RFC-006 (July) precedes RFC-005 (September). Rejected: one `v0.7.0` only (hides three arcs from the release list) | auto (AD-359) |
 | Nightly eval on an exhausted balance | Keep the schedule and keep failing loudly; add no skip. The workflow's failure stays a real signal. The signature-rotted tests are fixed and pinned offline | A green-by-skip nightly is the dishonest state this cycle exists to remove. Rejected: `workflow_dispatch`-only (loses the daily regression signal once credit returns) | auto (AD-360) |
-| Dependabot PRs #55/#57 fail `backend-test` on a stale base | Rebase via `@dependabot rebase`, merge when green; if a failure survives a rebase it is investigated, not force-merged | The failing job is unrelated to the action bump; base drift is the usual cause. Rejected: close them (leaves action majors behind) | auto (AD-361) |
+| Dependabot PRs #55/#57 fail `backend-test` | The bumps are applied in this cycle (checkout v6, setup-node v6, upload-artifact v7) together with the tests that pin the action majors; the three PRs are closed at the merge gate with a comment naming this PR as the superseding change | The failures are real: `test_deploy_workflow.py` and `test_eval_workflow.py` pin `@v4` literally, so a Dependabot branch can never go green on its own. Rejected: rebasing (the pin test fails on any rebase), editing Dependabot's branches (three PRs to babysit for one line each) | auto (AD-361, revised after reading the failing job) |
 | Deployed instance URL for the repo homepage | Left blank until the operator supplies it at the merge gate | Only the operator knows whether the VPS instance is meant to be public | n — asked at Stage 7 |
 
 **Open questions:** none - all resolved or logged above.
@@ -58,6 +58,7 @@ Learny's engineering is four roadmaps ahead of its public face: the README, the 
 6. IF a demo media file named in `docs/media/README.md` is absent from `docs/media/` THEN the README SHALL not embed it and SHALL state that the capture is pending.  <!-- unwanted-behavior -->
 7. `CLAUDE.md`'s Current Status SHALL name RFC-0007 as complete and the post-arc slices as the current state, and SHALL not describe v3 as the driving roadmap.  <!-- ubiquitous -->
 8. A test SHALL assert criteria 1, 2, 3, and 6 by reading the README, so drift fails CI.  <!-- ubiquitous -->
+9. `backend/pyproject.toml` and `frontend/package.json` SHALL declare the version named as the current release in the README status paragraph, and a test SHALL assert both.  <!-- ubiquitous -->
 
 **Independent Test**: Open `README.md` on `main` and compare every version, count, and "shipped" claim against the files it cites.
 
@@ -122,7 +123,8 @@ Learny's engineering is four roadmaps ahead of its public face: the README, the 
 
 **Acceptance Criteria**:
 
-1. WHEN the merge gate is approved THEN each of PRs #55, #56, and #57 SHALL be merged with a green `ci.yml`, or closed with a comment naming the reason.  <!-- event-driven -->
+1. The workflows under `.github/workflows/` SHALL use `actions/checkout@v6`, `actions/setup-node@v6`, and `actions/upload-artifact@v7`, and the tests that pin action majors SHALL assert those versions.  <!-- ubiquitous -->
+2. WHEN the merge gate is approved THEN each of PRs #55, #56, and #57 SHALL be closed with a comment naming the PR that superseded it.  <!-- event-driven -->
 
 ---
 
@@ -161,7 +163,7 @@ Learny's engineering is four roadmaps ahead of its public face: the README, the 
 | TRUTH-08 | P1: README (drift test) | Tasks | Pending |
 | TRUTH-09 | P1: Nightly smoke — signature | Tasks | Implementing (T1) |
 | TRUTH-10 | P1: Nightly smoke — offline sensor | Tasks | Implementing (T1) |
-| TRUTH-11 | P1: Nightly smoke — credit annotation | Tasks | Pending |
+| TRUTH-11 | P1: Nightly smoke — credit annotation | Tasks | Implementing (T2) |
 | TRUTH-12 | P1: Releases — tags | Merge gate | Pending |
 | TRUTH-13 | P1: Releases — notes | Merge gate | Pending |
 | TRUTH-14 | P1: Releases — after approval only | Merge gate | Pending |
@@ -170,11 +172,13 @@ Learny's engineering is four roadmaps ahead of its public face: the README, the 
 | TRUTH-17 | P2: Repo metadata — homepage | Merge gate | Pending |
 | TRUTH-18 | P2: RFC-0007 outcome | Tasks | Pending |
 | TRUTH-19 | P2: RFC-0007 action items | Tasks | Pending |
-| TRUTH-20 | P2: Dependabot | Merge gate | Pending |
+| TRUTH-20 | P2: Dependabot — bumps applied | Tasks | Pending |
+| TRUTH-23 | P2: Dependabot — PRs closed as superseded | Merge gate | Pending |
+| TRUTH-24 | P1: README (manifest versions) | Tasks | Pending |
 | TRUTH-21 | P3: Media guide | Tasks | Pending |
 | TRUTH-22 | P3: Media files + embeds | Operator-gated | Pending |
 
-**Coverage:** 22 total, 22 mapped, 0 unmapped
+**Coverage:** 24 total, 24 mapped, 0 unmapped
 
 ---
 
