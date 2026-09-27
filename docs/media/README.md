@@ -17,7 +17,7 @@ The README embeds exactly the files that exist here: `backend/tests/test_readme_
 
 - Docker with the Compose plugin, and `ffmpeg` for the GIF encode (`sudo apt install ffmpeg` on Debian/Ubuntu).
 - A screen recorder: `wf-recorder` or `simplescreenrecorder` on Linux, QuickTime on macOS.
-- **A funded Anthropic key and an OpenAI key.** The deterministic adapters that CI runs on return extractive snippets, not the product's answers; a demo recorded on them would misrepresent Learny. The containers read provider keys from `secrets/local-ai.env` (git-ignored; the local compose override mounts it into `api`, `worker`, and `worker-pdf` — a host-side `backend/.env` is invisible to them). Create it with:
+- **A funded Anthropic key and an OpenAI key.** The deterministic adapters that CI runs on return extractive snippets, not the product's answers; a demo recorded on them would misrepresent Learny. The containers read provider keys from `secrets/local-ai.env` (git-ignored; the local compose override loads it through `env_file` into `api`, `worker`, and `worker-pdf` — a host-side `backend/.env` is invisible to them). Create it with:
 
   ```
   LEARNY_GENERATION_PROVIDER=anthropic
