@@ -10,14 +10,23 @@ of a reader noticing it months later. Content is asserted, not executed.
 from __future__ import annotations
 
 import re
+import tomllib
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[2]
 _README = (_ROOT / "README.md").read_text()
 _MEDIA_GUIDE = (_ROOT / "docs" / "media" / "README.md").read_text()
 
-_CURRENT_RELEASE = "v0.7.0"
+# The release the README must name is the one the backend manifest declares
+# (test_versions.py pins the frontend manifest and lock to the same value), so a
+# release cut edits the manifests and the README — never a test constant.
+with open(_ROOT / "backend" / "pyproject.toml", "rb") as _pyproject:
+    _CURRENT_RELEASE = "v" + tomllib.load(_pyproject)["project"]["version"]
+# The arcs this README must list as shipped. The test also reads every RFC a ✅
+# bullet links and requires the RFC itself to say it was accepted.
 _SHIPPED_RFCS = (
+    "docs/rfc/0002-learny-v2-roadmap.md",
+    "docs/rfc/0003-learny-v3-roadmap.md",
     "docs/rfc/0004-student-experience-roadmap.md",
     "docs/rfc/0005-evidence-gated-hardening-roadmap.md",
     "docs/rfc/0006-reading-first-ux-overhaul.md",
@@ -46,14 +55,39 @@ def test_status_paragraph_names_the_current_release_and_not_a_superseded_one() -
 # --- The roadmap section lists every shipped arc and the unscheduled candidates ----
 
 
-def test_roadmap_section_lists_each_shipped_rfc_with_a_link() -> None:
+def _shipped_bullet_links() -> dict[str, str]:
+    """Map each RFC linked from a ``- ✅`` roadmap bullet to that bullet."""
     roadmap = _section("## Roadmap")
-    shipped_lines = [line for line in roadmap.splitlines() if line.startswith("- ✅")]
+    links: dict[str, str] = {}
+    for line in roadmap.splitlines():
+        if line.startswith("- ✅"):
+            for rfc in re.findall(r"\]\((docs/rfc/[^)]+\.md)\)", line):
+                links[rfc] = line
+    return links
+
+
+def test_roadmap_section_lists_each_shipped_rfc_with_a_link() -> None:
+    # The link and the shipped marker must sit on the same bullet: a link
+    # elsewhere in the section does not make the arc "shipped".
+    links = _shipped_bullet_links()
     for rfc in _SHIPPED_RFCS:
         assert (_ROOT / rfc).is_file(), rfc
-        # The link and the shipped marker must sit on the same bullet: a link
-        # elsewhere in the section does not make the arc "shipped".
-        assert any(f"]({rfc})" in line for line in shipped_lines), rfc
+        assert rfc in links, rfc
+
+
+def test_every_rfc_the_roadmap_calls_shipped_says_so_itself() -> None:
+    # A ✅ bullet is a claim about the RFC; the RFC's own status line must agree,
+    # or the front page calls an arc shipped that its decision record still
+    # holds open (RFC-005 and RFC-006 sat in that state for two months).
+    links = _shipped_bullet_links()
+    assert links, "no ✅ bullet links an RFC"
+    for rfc in links:
+        status = next(
+            line
+            for line in (_ROOT / rfc).read_text().splitlines()
+            if line.startswith("- **Status**:")
+        )
+        assert status.startswith("- **Status**: Accepted"), (rfc, status)
 
 
 def test_roadmap_section_names_the_recorded_candidates_as_not_scheduled() -> None:

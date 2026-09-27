@@ -151,8 +151,9 @@ def test_artifact_upload_step_is_retained() -> None:
 
 # --- A red nightly names the operator action on an exhausted balance ------------
 #
-# The nightly failed daily from 2026-09-22 on Anthropic's credit-exhausted 400
-# with nothing in the job summary saying so. The run step tees its output to a
+# The nightly has been red every day since 2026-07-27 (last green run 2026-07-26):
+# first a stale test keyword, then — from mid-August — Anthropic's credit-exhausted
+# 400 as well, with nothing in the job summary saying so. The run step tees its output to a
 # file and a failure-only step turns that sentence into an `::error::` annotation
 # naming the action (fund the key). It adds an annotation and nothing else: the
 # job still fails, and nothing downgrades the pytest step's exit code.

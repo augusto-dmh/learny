@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import re
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -2453,8 +2454,39 @@ def test_live_call_shapes_bind_to_the_adapter_signature() -> None:
         _live_answer_call("Why do ocean tides rise and fall?", evidence),
         _live_teach_call("How does a volcano erupt?", evidence),
     ):
-        bound = signature.bind(object(), **call)
-        assert set(call) <= set(bound.arguments), call
+        signature.bind(object(), **call)  # raises TypeError on a stale keyword
+
+
+def test_live_tests_only_call_generate_through_the_bound_helpers() -> None:
+    # The binding sensor above covers the helpers; this ties the live tests to
+    # them, so a live test that spells its own keywords (the shape that broke the
+    # nightly) fails offline instead of waiting for a funded run.
+    tree = ast.parse(Path(__file__).read_text())
+    live_tests = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name.startswith("test_live_")
+        and node.name != "test_live_call_shapes_bind_to_the_adapter_signature"
+        and node.name != "test_live_tests_only_call_generate_through_the_bound_helpers"
+    ]
+    assert len(live_tests) == 3, [node.name for node in live_tests]
+    for node in live_tests:
+        generate_calls = [
+            call
+            for call in ast.walk(node)
+            if isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Attribute)
+            and call.func.attr == "generate"
+        ]
+        assert generate_calls, node.name
+        for call in generate_calls:
+            assert not call.args and len(call.keywords) == 1, node.name
+            (spread,) = call.keywords
+            assert spread.arg is None, node.name  # a `**helper(...)` unpack, nothing inline
+            assert isinstance(spread.value, ast.Call), node.name
+            assert isinstance(spread.value.func, ast.Name), node.name
+            assert spread.value.func.id in {"_live_answer_call", "_live_teach_call"}, node.name
 
 
 @pytest.mark.live

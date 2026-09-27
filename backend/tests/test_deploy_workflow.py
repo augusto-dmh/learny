@@ -227,26 +227,36 @@ def test_docker_action_versions_are_pinned_to_real_majors() -> None:
     assert "docker/setup-buildx-action@v3" in _RAW
     assert "docker/login-action@v3" in _RAW
     assert "docker/build-push-action@v6" in _RAW
-    assert "actions/checkout@v6" in _RAW
-    assert "actions/checkout@v4" not in _RAW
+    checkout_majors = {int(m) for m in re.findall(r"actions/checkout@v(\d+)", _RAW)}
+    assert checkout_majors and min(checkout_majors) >= 6, checkout_majors
 
 
-def test_every_workflow_uses_the_current_action_majors() -> None:
-    # One pin for the whole .github/workflows tree, so a stale major in any
-    # workflow (not only deploy.yml) fails here.
-    expected = {
-        "actions/checkout": "v6",
-        "actions/setup-node": "v6",
-        "actions/upload-artifact": "v7",
+def test_every_workflow_pins_each_action_to_at_least_the_adopted_major() -> None:
+    # One check for the whole .github/workflows tree. Every `uses:` of these
+    # actions must be a plain `vN` major (a branch or a SHA ref is invisible to a
+    # major comparison, so it fails here rather than slipping past), and N may not
+    # fall below the major this repository adopted — a floor, not an exact pin,
+    # so the next Dependabot major bump can go green instead of tripping this
+    # test the way the v6/v7 bumps once did.
+    floor = {
+        "actions/checkout": 6,
+        "actions/setup-node": 6,
+        "actions/upload-artifact": 7,
     }
-    workflows = sorted((_WORKFLOWS_DIR).glob("*.yml"))
+    workflows = sorted(_WORKFLOWS_DIR.glob("*.yml"))
     assert workflows
     seen: dict[str, set[str]] = {}
     for path in workflows:
-        for action, major in re.findall(r"uses: (actions/[a-z-]+)@(v\d+)", path.read_text()):
-            seen.setdefault(action, set()).add(major)
-    for action, major in expected.items():
-        assert seen.get(action) == {major}, (action, seen.get(action))
+        for action, ref in re.findall(r"uses: (actions/[a-z-]+)@(\S+)", path.read_text()):
+            if action in floor:
+                seen.setdefault(action, set()).add(ref)
+    for action, minimum in floor.items():
+        refs = seen.get(action)
+        assert refs, f"{action} is used by no workflow"
+        for ref in refs:
+            match = re.fullmatch(r"v(\d+)", ref)
+            assert match, f"{action}@{ref} is not pinned to a plain major"
+            assert int(match.group(1)) >= minimum, f"{action}@{ref} is below v{minimum}"
 
 
 # --- DEP-10: the deploy job runs only after the images are published -------------
