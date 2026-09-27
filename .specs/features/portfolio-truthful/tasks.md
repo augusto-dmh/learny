@@ -208,7 +208,7 @@ T3 → T9
 
 ---
 
-### T6: Close RFC-0007 on the record
+### T6: Close RFC-0007 on the record ✅ Complete
 
 **What**: Fill RFC-0007's Status line, Outcome block, and Action Items table with the decisions and PRs that closed them.
 **Where**: `docs/rfc/0007-public-launch-roadmap.md`
@@ -223,11 +223,12 @@ T3 → T9
 
 **Done when**:
 
-- [ ] Status reads `Accepted (2026-09-27)`; Outcome names decision, date, decider, rationale.
-- [ ] Every Action Items row reads `DONE` with its closing PR.
-- [ ] Gate check passes: build gate.
+- [x] Status reads `Accepted (2026-09-27)`; Outcome names decision, date, decider, rationale.
+- [x] Every Action Items row reads `DONE` with its closing PR.
+- [x] Gate check passes: build gate.
 
 **Tests**: none
+**Evidence**: build gate as T2 (docs only)
 **Gate**: build
 
 **Commit**: `docs(rfc): close the public-launch roadmap on the record`

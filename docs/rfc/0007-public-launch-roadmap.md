@@ -1,6 +1,6 @@
 # RFC-0007: Public-Launch Roadmap
 
-- **Status**: Draft — proposed 2026-09-03
+- **Status**: Accepted (2026-09-27) — all seven cycles shipped (PRs #63–#69) plus the recorded house-profiles slice (PR #71); accepted retroactively at the completion of the arc
 - **Date**: 2026-09-03
 - **Driver**: Augusto
 - **Approvers**: Augusto
@@ -244,12 +244,12 @@ Two exclusions from earlier RFCs are deliberately and narrowly reversed here, on
 
 | Action | Owner | Status |
 |--------|-------|--------|
-| Accept or amend this RFC | Augusto | NOT STARTED |
-| Run Cycle A (`trustworthy-cited-ask`) | Augusto | IN PROGRESS — this PR |
-| Capture and record the live Anthropic 400 dump (status, `request_id` class, shape sent) | Augusto | IN PROGRESS — Cycle A |
-| Draft the ADR-0020 amendment before Cycle G's fallback work | Augusto | NOT STARTED |
-| Decide the RFC-005 Cycle F resumption point relative to this arc | Augusto | NOT STARTED |
-| Cycles B–G in the stated order | Augusto | NOT STARTED |
+| Accept or amend this RFC | Augusto | DONE — accepted 2026-09-27, in the release-hygiene PR that closed this record |
+| Run Cycle A (`trustworthy-cited-ask`) | Augusto | DONE — PR #63 |
+| Capture and record the live Anthropic 400 dump (status, `request_id` class, shape sent) | Augusto | DONE — PR #63 (both request shapes pinned) |
+| Draft the ADR-0020 amendment before Cycle G's fallback work | Augusto | DONE — PR #69 (amendment ratified in-cycle); second amendment "End-User Choice Among House Profiles" in PR #71 |
+| Decide the RFC-005 Cycle F resumption point relative to this arc | Augusto | DONE — resumed after Cycle G, merged as PR #70 (2026-09-08) |
+| Cycles B–G in the stated order | Augusto | DONE — PRs #64, #65, #66, #67, #68, #69 |
 
 ## Open Questions
 
@@ -259,10 +259,10 @@ Two exclusions from earlier RFCs are deliberately and narrowly reversed here, on
 
 ## Outcome
 
-**Decision**: _pending — drafted 2026-09-03 from the same-day research folder; Cycle A started under it. Formal acceptance to follow review._
+**Decision**: Accepted — Option 1 (seven bets, trust first, safety gates the doors) was executed in the stated order and every cycle merged: Bet 1 trustworthy cited Ask (PR #63), Bet 2 a reader people read in (PR #64), Bet 3 Teach becomes a tutor (PR #65), Bet 4 review worth returning to (PR #66), Bet 5 a first session that converts (PR #67), Bet 6 safe to open the doors (PR #68), Bet 7 cheaper intelligence (PR #69). The recorded post-arc slice, learner-chosen house profiles, merged as PR #71. The launch motion (Show HN with the self-host and sample-book paths) remains an operator action outside any cycle.
 
-**Decision Date**: —
+**Decision Date**: 2026-09-27
 
-**Decided By**: —
+**Decided By**: Augusto
 
-**Rationale**: —
+**Rationale**: The RFC was drafted from the 2026-09-03 research folder and Cycle A started under it the same week; formal acceptance was deferred to "after review" and never recorded while the remaining six cycles shipped. Accepting it retroactively at the completion of the arc keeps the decision log truthful: the roadmap it proposed is the roadmap that was built, with one deviation worth naming — Cycle G shipped as a single cycle (rails + router + first economy profile) rather than the G1/G2 split the 2026-09-07 research offered, and the economy profile stays inert until a candidate nightly promotes it.
