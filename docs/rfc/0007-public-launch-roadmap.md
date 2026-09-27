@@ -244,7 +244,7 @@ Two exclusions from earlier RFCs are deliberately and narrowly reversed here, on
 
 | Action | Owner | Status |
 |--------|-------|--------|
-| Accept or amend this RFC | Augusto | DONE — accepted 2026-09-27, in the release-hygiene PR that closed this record |
+| Accept or amend this RFC | Augusto | DONE — accepted 2026-09-27, PR #72 |
 | Run Cycle A (`trustworthy-cited-ask`) | Augusto | DONE — PR #63 |
 | Capture and record the live Anthropic 400 dump (status, `request_id` class, shape sent) | Augusto | DONE — PR #63 (both request shapes pinned) |
 | Draft the ADR-0020 amendment before Cycle G's fallback work | Augusto | DONE — PR #69 (amendment ratified in-cycle); second amendment "End-User Choice Among House Profiles" in PR #71 |
