@@ -1,6 +1,6 @@
 # RFC-005: Evidence-Gated Hardening with a Product Beachhead
 
-- **Status**: Draft, **RESUMED at Cycle B** (2026-07-31, RFC-006 complete) — Cycle A shipped (PR #47); Cycle B shipped (PR #59): ADR-0028 settled the decline-faithfulness convention, the Opus baselines were re-derived over the widened replay tier, and the judge default flipped to `claude-opus-4-8` with thresholds re-pinned. Cycles C–F stay queued (C depends on B's settled judge); Cycle E (worker liveness) remains pullable forward. Formal acceptance remains pending the RFC-004 dogfood retrospective (~2026-08-04)
+- **Status**: Accepted (2026-09-27) — all six cycles shipped: A PR #47, B PR #59 (ADR-0028, Opus judge flip), C PR #60, D PR #61, E PR #62 (ADR-0030), F PR #70; accepted retroactively at the completion of the arc, after the RFC-004 dogfood window it was written into had closed
 - **Date**: 2026-07-24
 - **Driver**: Augusto
 - **Approvers**: Augusto
@@ -125,4 +125,10 @@ A contingent reader palette re-tune (RFC-004 Assumptions table) and all sensor-b
 
 ## Outcome
 
-_Draft. To be filled at acceptance — which waits on the RFC-004 dogfood retrospective (~2026-08-04), since that retrospective's findings seed the sibling RFC-006 and confirm that Cycles A–E stayed invisible to the study window._
+**Decision**: Accepted — the roadmap was executed as proposed, with the pause and resumption it recorded: Cycle A (offline-suite honesty, PR #47) shipped inside the RFC-004 dogfood window; the RFC paused for RFC-006; Cycles B–F then shipped in order — the Opus judge recalibration under the decline-faithfulness contract (PR #59, ADR-0028), the multi-run generation study that kept Sonnet as the default (PR #60), the dev-only eval dashboard (PR #61), worker-loss recovery with point-in-time restore proven by a CI drill (PR #62, ADR-0030), and position-scoped retrieval (PR #70, deployed on merge rather than after a retrospective).
+
+**Decision Date**: 2026-09-27
+
+**Decided By**: Augusto
+
+**Rationale**: Formal acceptance was tied to the RFC-004 dogfood retrospective, which never became its own document; the cycles shipped anyway, each under its own review and merge gate, and the sibling RFC-006 consumed the window this RFC gave up. Accepting it retroactively records the roadmap that was actually built. Two deviations worth naming: Cycle E's "WAL on top of the logical dump" was not implementable as written (a dump carries no WAL position) and became WAL archiving over periodic physical base backups; Cycle F was built and deployed in one step because auto-deploy took the rollout, not "deploy after the retrospective".

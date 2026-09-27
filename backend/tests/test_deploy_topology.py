@@ -139,6 +139,7 @@ _GHCR_REFS = {
     "worker": f"ghcr.io/augusto-dmh/learny-backend:{_IMAGE_TAG}",
     "worker-pdf": f"ghcr.io/augusto-dmh/learny-pdf-worker:{_IMAGE_TAG}",
     "web": f"ghcr.io/augusto-dmh/learny-web:{_IMAGE_TAG}",
+    "minio": f"ghcr.io/augusto-dmh/learny-minio:{_IMAGE_TAG}",
 }
 
 

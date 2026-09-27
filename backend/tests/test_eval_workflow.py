@@ -36,6 +36,7 @@ def _step_by_name(job: str, name: str) -> dict:
 
 _PUBLISH = "Publish eval results to the eval-results branch"
 _RUN = "Run the live smoke + judge suite"
+_BALANCE = "Name the operator action when the balance is exhausted"
 
 
 def _trigger() -> dict:
@@ -141,8 +142,46 @@ def test_publish_step_never_force_pushes() -> None:
 
 def test_artifact_upload_step_is_retained() -> None:
     upload = _step_by_name("generation-eval", "Upload eval results")
-    assert "actions/upload-artifact@v4" in str(upload["uses"])
+    assert "actions/upload-artifact@v7" in str(upload["uses"])
     assert upload["with"]["name"] == "eval-results"
     assert upload["with"]["path"] == "evals/results/*.jsonl"
     assert upload["with"]["if-no-files-found"] == "warn"
     assert upload["if"] == "steps.secret.outputs.present == 'true'"
+
+
+# --- A red nightly names the operator action on an exhausted balance ------------
+#
+# The nightly has been red every day since 2026-07-27 (last green run 2026-07-26):
+# first a stale test keyword, then — from mid-August — Anthropic's credit-exhausted
+# 400 as well, with nothing in the job summary saying so. The run step tees its output to a
+# file and a failure-only step turns that sentence into an `::error::` annotation
+# naming the action (fund the key). It adds an annotation and nothing else: the
+# job still fails, and nothing downgrades the pytest step's exit code.
+
+
+def test_run_step_tees_its_output_and_keeps_pytests_exit_code() -> None:
+    run = _step_by_name("generation-eval", _RUN)["run"]
+    assert "set -o pipefail" in run
+    assert 'uv run pytest -m "live and eval" -q 2>&1 | tee /tmp/nightly-pytest.log' in run
+
+
+def test_balance_step_runs_only_after_a_failure_with_the_key_present() -> None:
+    step = _step_by_name("generation-eval", _BALANCE)
+    assert step["if"] == "failure() && steps.secret.outputs.present == 'true'"
+
+
+def test_balance_step_emits_an_error_annotation_naming_the_operator_action() -> None:
+    run = _step_by_name("generation-eval", _BALANCE)["run"]
+    assert 'grep -q "credit balance is too low" /tmp/nightly-pytest.log' in run
+    assert "::error title=Anthropic balance exhausted::" in run
+    assert "LEARNY_ANTHROPIC_API_KEY" in run
+    assert "fund the account" in run
+
+
+def test_nothing_downgrades_the_nightly_failure() -> None:
+    # The annotation is informational: no step may soften the job's failure.
+    for step in _job("generation-eval")["steps"]:
+        assert "continue-on-error" not in step, step.get("name")
+    balance = _step_by_name("generation-eval", _BALANCE)["run"]
+    assert "exit 0" not in balance
+    assert "::notice::" not in balance

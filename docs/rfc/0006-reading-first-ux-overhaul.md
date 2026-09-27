@@ -1,6 +1,6 @@
 # RFC-006: Reading-First UX Overhaul
 
-- **Status**: Draft — proposed 2026-07-24; supersedes RFC-005's window (RFC-005 paused, see Background)
+- **Status**: Accepted (2026-09-27) — all five cycles shipped: A PR #49, B PR #51, C PR #52 (ADR-0029), D PRs #53 + #54, E PR #58; accepted retroactively at the completion of the arc. Proposed 2026-07-24 in the window RFC-005 gave up (RFC-005 paused, see Background)
 - **Date**: 2026-07-24
 - **Driver**: Augusto
 - **Approvers**: Augusto
@@ -204,12 +204,12 @@ Ordering rationale: A is independent and gates every performance claim. B is the
 | Action | Owner | Status |
 |--------|-------|--------|
 | Record the pause in RFC-005's status line | Claude | DONE (this change set) |
-| Accept or amend this RFC | Augusto | NOT STARTED |
+| Accept or amend this RFC | Augusto | DONE — accepted 2026-09-27, PR #72 |
 | Run Cycle A via `learny-ship-cycle` | Augusto + Claude | DONE — cycle `v6-instrument` built on `feat/app-instrumentation`; ROADMAP has the v6 section |
 | Run Cycle B (heatmap artifact is the accepted spec) | Augusto + Claude | DONE — cycle `v6-page-unit`, PR #51 |
 | Draft ADR-0029 for acceptance before Cycle C | Claude | DONE — `docs/adr/0029-unified-grounded-conversations.md`, ships with Cycle C (PR #52) |
-| Cycles C, D, E in order | Augusto + Claude | C DONE (PR #52); D, E NOT STARTED |
-| Decide RFC-005 resumption point after Cycle E (or earlier if this RFC pauses) | Augusto | NOT STARTED |
+| Cycles C, D, E in order | Augusto + Claude | DONE — C PR #52; D split by axis into PR #53 (conversations) and PR #54 (notes + review); E PR #58 |
+| Decide RFC-005 resumption point after Cycle E (or earlier if this RFC pauses) | Augusto | DONE — RFC-005 resumed at its Cycle B (PR #59) once Cycle E merged |
 
 ## Open Questions
 
@@ -219,10 +219,10 @@ Ordering rationale: A is independent and gates every performance claim. B is the
 
 ## Outcome
 
-**Decision**: _pending — sequencing decisions (Option 1; C before D; RFC-005 paused) made by the driver on 2026-07-24; formal acceptance of the full RFC to follow review._
+**Decision**: Accepted — Option 1 as sequenced by the driver on 2026-07-24 (foundations first, C before D, RFC-005 paused): instrumentation (PR #49), the page unit with live progress and the study heatmap (PR #51), the unified grounded-conversation model with ADR-0029 (PR #52), the workspace dock split along two axes — conversations (PR #53) and notes + review (PR #54) — and the streaming answer experience with inline citations (PR #58). Three of Cycle D's listed deliverables had already shipped under RFC-004 and were not rebuilt.
 
-**Decision Date**: —
+**Decision Date**: 2026-09-27
 
-**Decided By**: —
+**Decided By**: Augusto
 
-**Rationale**: —
+**Rationale**: The RFC was drafted from the 2026-07-24 dogfood findings and Cycle A started the same day; formal acceptance was left "to follow review" and never recorded while the remaining cycles shipped. Accepting it retroactively records the roadmap that was built. The one structural deviation is Cycle D's split by axis rather than the RFC's literal seam, decided at spec time as the RFC authorized.

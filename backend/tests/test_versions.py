@@ -1,42 +1,45 @@
-"""
-Test version consistency across backend and frontend packages.
+"""Version consistency across the README, the backend, and the frontend (unit).
 
-Ensures that backend/pyproject.toml and frontend/package.json both declare version 0.3.0
-and are in sync, preventing accidental version drift (DEP-20).
+The README's status paragraph names the current release; both package manifests
+must declare that same version, so a release cut against one of them can never
+disagree with the other or with the front page.
 """
 
 import json
+import re
 import tomllib
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_backend_version_is_0_3_0():
-    """Backend version in pyproject.toml equals 0.3.0."""
-    pyproject_path = _REPO_ROOT / "backend" / "pyproject.toml"
-    with open(pyproject_path, "rb") as f:
+def _readme_release() -> str:
+    status = next(
+        line
+        for line in (_REPO_ROOT / "README.md").read_text().splitlines()
+        if line.startswith("> Status:")
+    )
+    match = re.search(r"\*\*v(\d+\.\d+\.\d+)\*\*", status)
+    assert match is not None, "the README status paragraph names no **vX.Y.Z** release"
+    return match.group(1)
+
+
+def test_backend_version_matches_the_readme_release() -> None:
+    with open(_REPO_ROOT / "backend" / "pyproject.toml", "rb") as f:
         data = tomllib.load(f)
-    assert data["project"]["version"] == "0.3.0"
+    assert data["project"]["version"] == _readme_release()
 
 
-def test_frontend_version_is_0_3_0():
-    """Frontend version in package.json equals 0.3.0."""
-    package_path = _REPO_ROOT / "frontend" / "package.json"
-    with open(package_path) as f:
+def test_frontend_version_matches_the_readme_release() -> None:
+    with open(_REPO_ROOT / "frontend" / "package.json") as f:
         data = json.load(f)
-    assert data["version"] == "0.3.0"
+    assert data["version"] == _readme_release()
 
 
-def test_backend_and_frontend_versions_match():
-    """Backend and frontend versions agree."""
-    pyproject_path = _REPO_ROOT / "backend" / "pyproject.toml"
-    package_path = _REPO_ROOT / "frontend" / "package.json"
-
-    with open(pyproject_path, "rb") as f:
-        backend_version = tomllib.load(f)["project"]["version"]
-
-    with open(package_path) as f:
-        frontend_version = json.load(f)["version"]
-
-    assert backend_version == frontend_version
+def test_frontend_lockfile_root_matches_the_manifest() -> None:
+    with open(_REPO_ROOT / "frontend" / "package-lock.json") as f:
+        lock = json.load(f)
+    with open(_REPO_ROOT / "frontend" / "package.json") as f:
+        manifest = json.load(f)
+    assert lock["version"] == manifest["version"]
+    assert lock["packages"][""]["version"] == manifest["version"]

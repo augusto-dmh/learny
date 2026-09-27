@@ -52,7 +52,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       # Secrets cannot be referenced in an `if:` condition, so map the secret to
       # an env var in a step and publish a boolean output the later steps gate on.
       # Absent secret → notice + success exit (the remaining steps are skipped).
@@ -84,10 +84,15 @@ jobs:
         if: steps.secret.outputs.present == 'true'
         working-directory: backend
         run: uv sync --locked --all-extras
+      # The suite's output is teed to a file so the step below can read it after
+      # a failure. `pipefail` keeps pytest's exit code as the step's — the tee
+      # never turns a red run green.
       - name: Run the live smoke + judge suite
         if: steps.secret.outputs.present == 'true'
         working-directory: backend
-        run: uv run pytest -m "live and eval" -q
+        run: |
+          set -o pipefail
+          uv run pytest -m "live and eval" -q 2>&1 | tee /tmp/nightly-pytest.log
         env:
           LEARNY_ANTHROPIC_API_KEY: ${{ secrets.LEARNY_ANTHROPIC_API_KEY }}
           LEARNY_OPENAI_API_KEY: ${{ secrets.LEARNY_OPENAI_API_KEY }}
@@ -100,12 +105,23 @@ jobs:
           # scheduled nightly keeps the legacy default byte-for-byte.
           LEARNY_GENERATION_PROFILES: ${{ inputs.generation_profiles || '[]' }}
           LEARNY_TEST_DATABASE_URL: postgresql+psycopg://learny:learny@localhost:5432/learny_test
+      # A red nightly must say why. When the run failed because Anthropic refused
+      # the request for an exhausted balance, the log carries that sentence; this
+      # step turns it into a job annotation that names the operator action. It
+      # only ever adds an annotation — the job stays failed, and every other
+      # failure cause is left to the pytest summary above.
+      - name: Name the operator action when the balance is exhausted
+        if: failure() && steps.secret.outputs.present == 'true'
+        run: |
+          if grep -q "credit balance is too low" /tmp/nightly-pytest.log; then
+            echo "::error title=Anthropic balance exhausted::The nightly eval failed because the Anthropic account behind LEARNY_ANTHROPIC_API_KEY has no credit. Operator action: fund the account, then re-run this workflow. Until then every nightly stays red — no result was recorded."
+          fi
       # The judge appends to evals/results/*.jsonl at the repo root; upload it so
       # the run's results survive as an artifact. These files, and the branch copy
       # below, are what the dev-only dashboard at /dev/evals renders (evals/README.md).
       - name: Upload eval results
         if: steps.secret.outputs.present == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: eval-results
           path: evals/results/*.jsonl

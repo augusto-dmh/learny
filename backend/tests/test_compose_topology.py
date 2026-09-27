@@ -21,6 +21,7 @@ Pure text/YAML — no Docker required, deterministic.
 
 from __future__ import annotations
 
+import re
 import shlex
 from pathlib import Path
 
@@ -36,6 +37,7 @@ _CI = _REPO_ROOT / ".github" / "workflows" / "ci.yml"
 
 _PG_DIR = _REPO_ROOT / "deploy" / "postgres"
 _PG_DOCKERFILE = (_PG_DIR / "Dockerfile").read_text()
+_MINIO_DOCKERFILE = (_REPO_ROOT / "deploy" / "minio" / "Dockerfile").read_text()
 _PG_HBA = (_PG_DIR / "pg_hba.conf").read_text()
 
 _INGEST_PDF_QUEUE = "ingest-pdf"
@@ -253,6 +255,57 @@ def test_db_builds_from_the_repo_owned_postgres_image(base: dict) -> None:
     assert "image" not in base["db"], "the base db service must build, not pull a stock image"
     assert _PG_DOCKERFILE.startswith("#")  # header comment retained
     assert "FROM pgvector/pgvector:pg16" in _PG_DOCKERFILE
+
+
+def test_minio_builds_from_the_repo_owned_image(base: dict) -> None:
+    # MinIO withdrew its public container images (Docker Hub, then anonymous pulls
+    # from quay.io/minio/minio), so the server is built here from the official
+    # GitHub release binary with a digest pinned in the Dockerfile. A pull from
+    # any MinIO-controlled registry, anywhere in the stack, is the regression.
+    assert base["minio"]["build"]["context"] == "./deploy/minio"
+    assert "image" not in base["minio"], "the base minio service must build, not pull"
+    # The pin must have the shape of a real release stamp and a real digest — an
+    # empty or placeholder value would only fail at docker build time.
+    stamp = r"^ARG MINIO_RELEASE=RELEASE\.\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z$"
+    assert re.search(stamp, _MINIO_DOCKERFILE, re.M)
+    assert re.search(r"^ARG MINIO_SHA256=[0-9a-f]{64}$", _MINIO_DOCKERFILE, re.M)
+    download = (
+        "github.com/minio/minio/releases/download/${MINIO_RELEASE}"
+        "/minio.linux-amd64.${MINIO_RELEASE}"
+    )
+    assert download in _MINIO_DOCKERFILE
+    assert "sha256sum -c" in _MINIO_DOCKERFILE
+    for path in (
+        _REPO_ROOT / "docker-compose.yml",
+        _REPO_ROOT / "docker-compose.override.yml",
+        _REPO_ROOT / "docker-compose.prod.yml",
+        *sorted((_REPO_ROOT / ".github" / "workflows").glob("*.yml")),
+    ):
+        for line in path.read_text().splitlines():
+            if line.lstrip().startswith("#"):
+                continue
+            for marker in ("quay.io/minio", "minio/minio", "minio/mc", "dl.min.io"):
+                assert marker not in line, (path.name, marker, line)
+
+
+def test_ci_builds_the_repo_owned_minio_image_from_the_workspace_root() -> None:
+    # The backend job's steps run with backend/ as the working directory, so the
+    # build context must be anchored at the workspace root or the path is not
+    # found (the first CI run of this change failed exactly there).
+    ci = _load(_CI)
+    step = next(s for s in ci["jobs"]["backend-test"]["steps"] if s.get("name") == "Start MinIO")
+    assert 'docker build -t learny-minio:ci "$GITHUB_WORKSPACE/deploy/minio"' in step["run"]
+    assert "learny-minio:ci server /data" in step["run"]
+
+
+def test_minio_healthcheck_uses_the_health_endpoint(base: dict) -> None:
+    # The upstream image bundled `mc` for `mc ready local`; the repo-owned image
+    # ships curl instead, so the check must target the server's own endpoint —
+    # with -f, or a 503 from an up-but-not-serving MinIO would count as healthy
+    # for every `up --wait` that trusts this exit code.
+    test = base["minio"]["healthcheck"]["test"]
+    assert test == ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/live"]
+    assert re.search(r"^RUN apk add --no-cache [^\n]*\bcurl\b", _MINIO_DOCKERFILE, re.M)
 
 
 def test_db_archives_completed_wal_segments(db_settings: dict[str, str]) -> None:
