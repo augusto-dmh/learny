@@ -123,7 +123,7 @@ T3 → T9
 
 ---
 
-### T3: Bring the README to the state of `main`
+### T3: Bring the README to the state of `main` ✅ Complete
 
 **What**: Rewrite the README's status paragraph, Demo section, Engineering process paragraph, Roadmap section, and add a "Reading-first workspace" section, so every version, count, and shipped claim matches the repository at PR #71.
 **Where**: `README.md`
@@ -138,15 +138,16 @@ T3 → T9
 
 **Done when**:
 
-- [ ] Status paragraph names `v0.7.0`; the string `v3 shipped` is gone.
-- [ ] Roadmap section lists RFC-004/005/006/0007 as shipped with links, plus the two recorded, unscheduled candidates.
-- [ ] Engineering process paragraph states the ADR and RFC counts equal to the files under `docs/adr/` and `docs/rfc/`.
-- [ ] Every named version (Next.js, React, Python, PostgreSQL) matches its manifest or compose tag.
-- [ ] A "Reading-first workspace" section covers reader hub + Chat dock, page unit, position-bound retrieval, learner-chosen AI profiles, safety rails — each linking its ADR/RFC.
-- [ ] Demo section embeds nothing that is absent from `docs/media/` and says the capture is pending, linking the guide.
-- [ ] Gate check passes: build gate.
+- [x] Status paragraph names `v0.7.0`; the string `v3 shipped` is gone.
+- [x] Roadmap section lists RFC-004/005/006/0007 as shipped with links, plus the two recorded, unscheduled candidates.
+- [x] Engineering process paragraph states the ADR and RFC counts equal to the files under `docs/adr/` and `docs/rfc/`.
+- [x] Every named version (Next.js, React, Python, PostgreSQL) matches its manifest or compose tag.
+- [x] A "Reading-first workspace" section covers reader hub + Chat dock, page unit, position-bound retrieval, learner-chosen AI profiles, safety rails — each linking its ADR/RFC.
+- [x] Demo section embeds nothing that is absent from `docs/media/` and says the capture is pending, linking the guide.
+- [x] Gate check passes: build gate.
 
 **Tests**: none
+**Evidence**: build gate as T2; README drift test (T4) passes on this text
 **Gate**: build
 
 **Commit**: `docs(readme): describe the repository as it is after the public-launch arc`
