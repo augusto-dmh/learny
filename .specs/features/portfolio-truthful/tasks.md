@@ -288,7 +288,7 @@ T3 → T9
 
 ---
 
-### T9: Declare the release version in both package manifests
+### T9: Declare the release version in both package manifests ✅ Complete
 
 **What**: `backend/pyproject.toml` (with `uv.lock`) and `frontend/package.json` (with `package-lock.json`) declare `0.7.0`, and `backend/tests/test_versions.py` asserts both equal the README's current release.
 **Where**: the two package manifests and their lock files, plus `backend/tests/test_versions.py`
@@ -303,11 +303,12 @@ T3 → T9
 
 **Done when**:
 
-- [ ] Both manifests and both lock files carry `0.7.0`.
-- [ ] `test_versions.py` reads the release from the README status paragraph and asserts both manifests equal it (no hard-coded `0.3.0` remains).
-- [ ] Gate check passes: build gate.
+- [x] Both manifests and both lock files carry `0.7.0`.
+- [x] `test_versions.py` reads the release from the README status paragraph and asserts both manifests equal it (no hard-coded `0.3.0` remains).
+- [x] Gate check passes: build gate.
 
 **Tests**: unit
+**Evidence**: quick gate 3 passed (test_versions.py); uv lock --check clean
 **Gate**: build
 
 **Commit**: `build: declare version 0.7.0 in the backend and frontend manifests`
