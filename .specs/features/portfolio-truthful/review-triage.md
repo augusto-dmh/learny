@@ -16,3 +16,20 @@ Comments fetched 2026-09-27 from the pr-review lanes (8 inline, 1 PR-level). Eac
 | — | Verifier T10 caveat (not a PR comment) | backend/tests/test_compose_topology.py:282 | real | fixed in 697f973 | Registry guard widened to `minio/mc` and `dl.min.io`. The GHCR `learny-minio` package is private on first push — flip at the merge gate (report item). |
 
 Lanes with no findings: security (0 comments; annotation string is fixed, log never uploaded), performance (0 comments). Consolidation comment, if posted, is deleted with the rest.
+
+## Delta pass (posted after the first cleanup, against `340c71b`)
+
+The review lanes re-ran on the MinIO commits and the four review-fix commits and posted 6 inline + 2 PR-level comments. Same procedure.
+
+| # | Source comment | File:line | Verdict | Action | Rationale |
+|---|---|---|---|---|---|
+| 10 | 4113877621 (security) | deploy/minio/Dockerfile:33 | real | fix (document) | The server runs as root like the upstream image; parity, not a regression, but undocumented. Recorded in the Dockerfile header and as an ADR-0031 consequence with the follow-up (chown of existing volumes + `USER`). Not dropping privileges in this PR: it is a data-volume migration. |
+| 11 | 4113879024 (tests) | backend/tests/test_compose_topology.py:301 | real | fix | The healthcheck test did not pin `-f`; without it a 503 counts as healthy for every `up --wait`. The test now asserts the exact command and that the Dockerfile installs curl. |
+| 12 | 4113879065 (tests) | backend/tests/test_compose_topology.py:267 | real | fix | Presence-only assertions accepted an empty digest. Release stamp and 64-hex digest are now matched by shape. |
+| 13 | 4113880450 (architecture) | docs/ops/deploy.md:258 (README.md:176) | real | fix | README's deployment section still said "three images" from v2. Corrected to six with the brace list, and a drift test derives both from the deploy matrix. |
+| 14 | 4113880493 (architecture) | backend/tests/test_compose_topology.py:290 | real | fix | The CI test re-derived the `ci.yml` path and loader the module owns and took an unused fixture. Uses `_load(_CI)`; `_MINIO_DOCKERFILE` constant mirrors `_PG_DOCKERFILE`. |
+| 15 | 4113881535 (regression) | .specs/features/portfolio-truthful/spec.md:183 | real | fix | The coverage line counted a TRUTH-25 row the table never got (the earlier replace missed because the anchor row had already been marked). Row added. |
+| 16 | 5852119739 (requirements, PR-level) | — | real | fix | ✅ 18 / ❌ 2 / 🔲 12; its two ❌ are #13 and #15. |
+| 17 | 5852138004 (summary, PR-level) | — | — | delete | Consolidation of the above. |
+
+Also from the owner at the merge gate: no public instance is hosted yet, so the README status sentence now says the production path is built and exercised in CI rather than implying a running deployment; and the branch's 21 commits carried the corporate author email from the global git config — the repository-local identity is now the personal address and the branch was rewritten with it before the merge.

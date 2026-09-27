@@ -37,4 +37,6 @@ Option 1. `deploy/minio/Dockerfile` downloads `minio.linux-amd64.<release>` from
 - Good: bumping MinIO is one Dockerfile change with a fresh digest, reviewed like any other dependency.
 - Bad: the image is ours to rebuild when MinIO publishes a security release; nothing upstream notifies us. Dependabot does not track it.
 - Bad: one more image in the deploy matrix (~100 MB, single stage).
+- Bad: the server still runs as root inside its container, as the upstream image did (parity, not a regression). Dropping privileges needs a one-time `chown` of every existing `minio_data` volume plus a `USER` line, so it is a follow-up with its own runbook step, recorded here rather than done silently.
+- Operator step: GHCR creates `learny-minio` as a private package on its first push; it must be flipped to public (the deploy runbook lists it) before a VPS can pull it.
 - Watch: if MinIO stops publishing GitHub release assets as well, option 3 becomes the fallback and gets its own decision.

@@ -3,7 +3,7 @@
   "promote_threshold": 2,
   "window_days": 45,
   "quarantine_threshold": 2,
-  "next_id": 30,
+  "next_id": 32,
   "lessons": [
     {
       "id": "L-023",
@@ -130,6 +130,42 @@
       ],
       "created": "2026-09-27T02:26:03Z",
       "last_seen": "2026-09-27T02:26:03Z"
+    },
+    {
+      "id": "L-030",
+      "key": "spec_deviation::a failing since date claim about ci must come from the full run history gh run list limit 100 not from the last handful of runs the streak here was two months not five days",
+      "text": "A 'failing since <date>' claim about CI must come from the full run history (gh run list --limit 100), not from the last handful of runs; the streak here was two months, not five days.",
+      "signal": "spec_deviation",
+      "scope": "docs",
+      "status": "candidate",
+      "features": [
+        "portfolio-truthful"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "backend/tests/test_eval_workflow.py:154 (review comment 4113848206) (docs)"
+      ],
+      "created": "2026-09-27T02:51:59Z",
+      "last_seen": "2026-09-27T02:51:59Z"
+    },
+    {
+      "id": "L-031",
+      "key": "surviving_mutant::when a docs claim points at a decision record shipped accepted the sensor must read the record s own status line not only that the link exists",
+      "text": "When a docs claim points at a decision record ('shipped', 'accepted'), the sensor must read the record's own status line, not only that the link exists.",
+      "signal": "surviving_mutant",
+      "scope": "backend/tests",
+      "status": "candidate",
+      "features": [
+        "portfolio-truthful"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "backend/tests/test_readme_truth.py:56 (review comment 4113841854) (backend/tests)"
+      ],
+      "created": "2026-09-27T02:51:59Z",
+      "last_seen": "2026-09-27T02:51:59Z"
     }
   ]
 }

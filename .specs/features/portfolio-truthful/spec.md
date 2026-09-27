@@ -177,6 +177,7 @@ Learny's engineering is four roadmaps ahead of its public face: the README, the 
 | TRUTH-20 | P2: Dependabot — bumps applied | Tasks | Implementing (T8) |
 | TRUTH-23 | P2: Dependabot — PRs closed as superseded | Merge gate | Pending |
 | TRUTH-24 | P1: README (manifest versions) | Tasks | Implementing (T9) |
+| TRUTH-25 | P2: MinIO image from the official release binary (ADR-0031) | Tasks | Implementing (T10) |
 | TRUTH-21 | P3: Media guide | Tasks | Implementing (T7) |
 | TRUTH-22 | P3: Media files + embeds | Operator-gated | Pending |
 

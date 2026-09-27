@@ -7,6 +7,12 @@
 # the compose healthcheck. Configuration (root credentials, data path, console
 # address) stays exactly where it was — MINIO_ROOT_USER/PASSWORD from the compose
 # env, `server /data --console-address ":9001"` from the compose command.
+#
+# The server runs as root, as the upstream image did: existing `minio_data` volumes
+# are root-owned, and MinIO reaches nothing outside its own container (no host
+# ports; S3 and console only on the compose network). Dropping to an unprivileged
+# user is a recorded follow-up in ADR-0031 because it needs a one-time chown of
+# every existing data volume, which is a migration step, not an image change.
 FROM alpine:3.22
 
 # Pinned MinIO server release — the same release the production overlay ran from

@@ -56,6 +56,18 @@ Seen once or not yet corroborated. Tracked, not trusted.
 - evidence: backend/tests/test_readme_truth.py:49 (TRUTH-02) (backend/tests)
 - last seen: 2026-09-27T02:26:03Z
 
+### L-030 - A 'failing since <date>' claim about CI must come from the full run history (gh run list --limit 100), not from the last handful of runs; the streak here was two months, not five days.
+- signal: `spec_deviation` · recurrence: 1 feature(s) · scope: `docs` · harmful: 0
+- features: portfolio-truthful
+- evidence: backend/tests/test_eval_workflow.py:154 (review comment 4113848206) (docs)
+- last seen: 2026-09-27T02:51:59Z
+
+### L-031 - When a docs claim points at a decision record ('shipped', 'accepted'), the sensor must read the record's own status line, not only that the link exists.
+- signal: `surviving_mutant` · recurrence: 1 feature(s) · scope: `backend/tests` · harmful: 0
+- features: portfolio-truthful
+- evidence: backend/tests/test_readme_truth.py:56 (review comment 4113841854) (backend/tests)
+- last seen: 2026-09-27T02:51:59Z
+
 ## Quarantined (failed when applied - ignore)
 
 A confirmed lesson that recurred alongside failure. Kept for the maintainer to review.
