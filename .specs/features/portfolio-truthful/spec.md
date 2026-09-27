@@ -2,7 +2,7 @@
 
 ## Problem Statement
 
-Learny's engineering is four roadmaps ahead of its public face: the README, the latest release (`v0.3.0`), the repository metadata, and the demo slots all describe the v3 state, while `main` carries RFC-004 through RFC-0007 plus two post-arc slices (PRs #36–#71). The nightly eval has failed every day since 2026-09-22 — half on an exhausted Anthropic balance, half on two live tests whose call shape rotted when the adapter signature changed and no offline test noticed. For a project whose stated purpose is to be shown in interviews, the first sixty seconds on GitHub currently misrepresent it.
+Learny's engineering is four roadmaps ahead of its public face: the README, the latest release (`v0.3.0`), the repository metadata, and the demo slots all describe the v3 state, while `main` carries RFC-004 through RFC-0007 plus two post-arc slices (PRs #36–#71). The nightly eval has failed every day since 2026-07-27 (last green run 2026-07-26): two live tests' call shape rotted the day the adapter signature changed and no offline test noticed, and from mid-August the Anthropic balance behind the CI key was exhausted as well. For a project whose stated purpose is to be shown in interviews, the first sixty seconds on GitHub currently misrepresent it.
 
 ## Goals
 
@@ -52,7 +52,7 @@ Learny's engineering is four roadmaps ahead of its public face: the README, the 
 **Acceptance Criteria** (each line is one EARS pattern):
 
 1. The README status paragraph SHALL name the current release as `v0.7.0` and SHALL not contain the string `v3 shipped`.  <!-- ubiquitous -->
-2. The README Roadmap section SHALL list RFC-004, RFC-005, RFC-006, and RFC-0007 as shipped, each linking its RFC file, and SHALL list the two recorded candidates (economy-profile promotion, house-profile BYO keys) as not scheduled.  <!-- ubiquitous -->
+2. The README Roadmap section SHALL list RFC-002 through RFC-0007 as shipped, each linking its RFC file from a ✅ bullet, every RFC so linked SHALL carry `Status: Accepted` in its own file, and the section SHALL list the two recorded candidates (economy-profile promotion, house-profile BYO keys) as not scheduled.  <!-- ubiquitous -->
 3. The README Engineering process paragraph SHALL state the ADR count and RFC count equal to the number of files under `docs/adr/` and `docs/rfc/`.  <!-- ubiquitous -->
 4. WHEN a README section names a version of Next.js, React, Python, or PostgreSQL THEN it SHALL match the pinned version in `frontend/package.json`, `backend/pyproject.toml`, or the compose image tag.  <!-- event-driven -->
 5. The README SHALL contain a section describing the reading-first workspace (reader hub with Chat dock, page unit, position-bound retrieval, learner-chosen AI profiles, safety rails), each item linking the ADR or RFC that introduced it.  <!-- ubiquitous -->
@@ -113,7 +113,7 @@ Learny's engineering is four roadmaps ahead of its public face: the README, the 
 
 **Acceptance Criteria**:
 
-1. RFC-0007's Status line SHALL read `Accepted` with the date `2026-09-27`, and its Outcome block SHALL name the decision, date, decider, and rationale.  <!-- ubiquitous -->
+1. RFC-0007's Status line SHALL read `Accepted` with the date `2026-09-27`, and its Outcome block SHALL name the decision, date, decider, and rationale; RFC-005 and RFC-006, whose cycles all merged, SHALL be closed the same way (found in review).  <!-- ubiquitous -->
 2. Every row of RFC-0007's Action Items table SHALL read `DONE` with the PR that closed it.  <!-- ubiquitous -->
 
 ---

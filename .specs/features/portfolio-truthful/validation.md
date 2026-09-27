@@ -4,7 +4,7 @@
 
 **Date**: 2026-09-26 (re-verification, iteration 2 of max 3)
 **Spec**: `.specs/features/portfolio-truthful/spec.md`
-**Diff range**: `main..HEAD` on `feat/portfolio-truthful` (`30520e1`..`2a366ad`, 12 commits: plan + T1–T9 + fixes `00f9ebd` docs, `2a366ad` tests)
+**Diff range**: `main..HEAD` on `feat/portfolio-truthful` (`30520e1`..`2a366ad`, 12 commits: plan + T1–T9 + fixes `00f9ebd` docs, `2a366ad` tests); extended to `30520e1`..`b772cc2` (16 commits) by the T10 addendum below
 **Verifier**: independent sub-agent (author ≠ verifier)
 **Verdict**: **PASS** — all 16 branch-claimed ACs met; 24/24 mutants killed. Two merge-gate caveats remain by design (TRUTH-19 PR number, TRUTH-12/13 tags).
 
@@ -195,3 +195,64 @@ The rewritten demo test dropped the explicit "missing slot not embedded" branch.
 **Lessons**: already recorded by the orchestrator as L-028/L-029; `lessons.py` was not run by the Verifier.
 
 **Next steps**: open the PR and fill the RFC-0007 row-247 PR number, then run the merge-gate checklist (tags/releases, repo metadata, Dependabot closures) and mark the roadmap row Done at wrap.
+
+---
+
+## T10 addendum — MinIO image built from the official release binary (TRUTH-25)
+
+**Date**: 2026-09-26 (scoped verification of one task added after the iteration-2 PASS)
+**Diff range**: `main..HEAD` = `30520e1`..`b772cc2` (16 commits); T10 is commit `b772cc2`. The commits between `2a366ad` and `b772cc2` (`b45b32b`, `48284ce`, `4baba3a`) are docs-only follow-ups, outside this scope.
+**T10 verdict**: **PASS**, so the top-level verdict stays **PASS**. One spec-precision gap is flagged below; it is not blocking because the artifact itself satisfies the clause.
+
+### Spec-anchored check
+
+| Clause of TRUTH-25 (`spec.md:127`) | Evidence (`file:line`) | Test assertion | Result |
+|---|---|---|---|
+| Base Compose builds `minio` from `deploy/minio/` | `docker-compose.yml:105-113` | `backend/tests/test_compose_topology.py:263` `base["minio"]["build"]["context"] == "./deploy/minio"`; `:264` `"image" not in base["minio"]` | ✅ |
+| Dockerfile pins a MinIO release | `deploy/minio/Dockerfile:14` `ARG MINIO_RELEASE=RELEASE.2024-10-13T13-34-11Z` | `test_compose_topology.py:266` | ✅ |
+| …and its sha256 | `deploy/minio/Dockerfile:20` (digest), `:27` `sha256sum -c -` | `test_compose_topology.py:267`, `:272` | ✅ The digest's correctness is enforced at `docker build`, not by pytest (probe p1). It equals the release's published `.sha256sum` (see reproducibility) |
+| …downloads from MinIO's GitHub releases | `deploy/minio/Dockerfile:26` | `test_compose_topology.py:268-271` exact URL template | ✅ |
+| Prod overlay runs `ghcr.io/augusto-dmh/learny-minio:${LEARNY_IMAGE_TAG}` | `docker-compose.prod.yml:60` | `backend/tests/test_deploy_topology.py:142` (parametrized `test_prod_app_services_use_the_ghcr_image_ref`) | ✅ |
+| Deploy matrix builds it | `.github/workflows/deploy.yml:60-61` | `backend/tests/test_deploy_workflow.py:128` (`test_build_matrix_covers_every_published_image`); runbook list and count tests derive from the matrix | ✅ |
+| No non-comment compose/workflow line references a MinIO-controlled registry | Independent grep over all six tracked compose/workflow files: the only non-comment MinIO lines are `ci.yml:65,68` (`learny-minio:ci`, local build), `ci.yml:80` and `docker-compose.yml:118` (health URL), and `docker-compose.prod.yml:60` (GHCR) | `test_compose_topology.py:274-282` scans those files for `quay.io/minio` and `minio/minio` | ✅ artifact / ⚠️ Spec-precision gap: the guard is narrower than the clause (probe p2) |
+| (task scope) healthcheck on `/minio/health/live` | `docker-compose.yml:118`; CI wait loop `ci.yml:80` | `test_compose_topology.py:289-290` | ✅ |
+| (task scope) runbook names six images | `docs/ops/deploy.md:232` (visibility list), `:258` ("Six images") | `test_deploy_workflow.py` runbook count and list tests | ✅ |
+| (task scope) README ADR count | `README.md:214` "31 [ADRs]"; `docs/adr/` holds 31 files | `test_readme_truth.py:74` (passes at `b772cc2`) | ✅ |
+
+### Discrimination sensor
+
+Scratch: `git worktree add <scratchpad>/verify-wt HEAD` at `b772cc2`, shared venv. The tests only parse YAML, so no docker was run. Baseline: 82 passed across `test_compose_topology.py`, `test_deploy_topology.py`, `test_deploy_workflow.py`.
+
+| # | Mutation | Failing test(s) | Result |
+|---|---|---|---|
+| m1 | `deploy/minio/Dockerfile:27` `sha256sum -c` line removed | `test_minio_builds_from_the_repo_owned_image` | ✅ Killed |
+| m2 | base `minio` build block replaced by `image: quay.io/minio/minio:latest` | `test_minio_builds_from_the_repo_owned_image`, `test_base_app_services_still_build_from_source` | ✅ Killed |
+| m3 | `learny-minio` dropped from the deploy matrix | `test_build_matrix_covers_every_published_image`, `test_every_ghcr_image_the_prod_overlay_runs_is_published`, `test_the_runbook_lists_every_published_image_for_the_visibility_flip`, `test_the_runbook_states_the_right_number_of_published_images` | ✅ Killed |
+| m4 | healthcheck back to `["CMD", "mc", "ready", "local"]` | `test_minio_healthcheck_uses_the_health_endpoint` | ✅ Killed |
+| m5 | `docs/ops/deploy.md:258` "Six images" → "Five images" | `test_the_runbook_states_the_right_number_of_published_images` | ✅ Killed |
+| m6 | prod overlay back to `quay.io/minio/minio:RELEASE.2024-10-13T13-34-11Z` | `test_minio_builds_from_the_repo_owned_image`, `test_prod_app_services_use_the_ghcr_image_ref[minio-…]` | ✅ Killed |
+| m7 | `ci.yml:68` Start MinIO runs the quay image again | `test_minio_builds_from_the_repo_owned_image` | ✅ Killed |
+| m8 | Dockerfile URL moved to `dl.min.io` | `test_minio_builds_from_the_repo_owned_image` | ✅ Killed |
+| m9 | `docs/ops/deploy.md:232` visibility list drops `learny-minio` | `test_the_runbook_lists_every_published_image_for_the_visibility_flip` | ✅ Killed |
+| p1 | probe: pinned digest altered | none | Survived. Expected: a wrong digest fails `docker build` at `sha256sum -c` in CI's Start MinIO and compose-smoke jobs, and pytest cannot check it offline without downloading the ~104 MB binary. The committed digest was checked by hand against the published checksum |
+| p2 | probe: override gains a non-comment `image: minio/mc:latest` (Docker Hub, MinIO-controlled) | none (`-k test_minio_builds_from_the_repo_owned_image`) | ❌ Survived → spec-precision gap |
+
+**Result**: 9/9 task mutants killed - PASS. Probe p1 is a build-time-enforced limit. Probe p2 is a hardening item.
+
+**Isolation**: the real tree's `git status --porcelain` was empty before and identical after `git worktree remove --force` + `prune`. `make lint` was run in the real tree afterwards (exit 0) and restored the editable install; `app` resolves to `/home/augusto/projects/learny/backend/app`. Post-cleanup in the real tree: `test_readme_truth.py` + the three topology/workflow modules give 87 passed.
+
+### ADR-0031 claims, reproduced from this session (curl/gh, no docker)
+
+| Claim (`docs/adr/0031-build-minio-from-the-official-release-binary.md:12,14`) | Probe | Observed |
+|---|---|---|
+| `dl.min.io` answers 410 for the server binary (as for `mc`) | `curl -I` on `…/server/minio/release/linux-amd64/archive/minio.RELEASE.2024-10-13T13-34-11Z`, `…/linux-amd64/minio`, `…/client/mc/release/linux-amd64/mc` | 410, 410, 410 ✅ |
+| `quay.io/minio/minio` refuses anonymous pulls for the pinned tag while other public quay repos pull | anonymous registry token then manifest GET | `minio/minio:RELEASE.2024-10-13T13-34-11Z` → 401 `UNAUTHORIZED`; control `prometheus/prometheus:latest` → 200 ✅ |
+| GitHub release assets exist for the pinned tag, with a checksum per asset | `gh release view RELEASE.2024-10-13T13-34-11Z -R minio/minio`; `curl -I -L` on the binary; fetch `.sha256sum` | `minio.linux-amd64.RELEASE.2024-10-13T13-34-11Z` (104,063,128 bytes) → 200; its `.sha256sum` reads `1126bbb3276321e7fed0167682d92a03572862f73802658f616af43d9a951e6a`, **identical** to `deploy/minio/Dockerfile:20` ✅ |
+
+"For later ones" (later releases also publish assets) was not probed.
+
+### Gaps and caveats (T10)
+
+1. **[Spec-precision, non-blocking]** `backend/tests/test_compose_topology.py:282` guards only `quay.io/minio` and `minio/minio`, while `spec.md:127` forbids any MinIO-controlled registry. A Docker Hub `minio/mc`, a `docker.io/minio/...`, or a `dl.min.io` fetch in a workflow would pass (probe p2). No such line exists today. Hardening: match `quay.io/minio`, `dl.min.io`, and any image reference whose namespace is `minio/` (excluding `learny-minio` and `./deploy/minio`).
+2. **[Operator, merge gate]** GHCR creates `learny-minio` as a private package on its first push. The VPS pulls anonymously, so the first deploy after merge fails until the package is flipped to Public. This is already listed at `docs/ops/deploy.md:232`; it belongs on the merge-gate checklist.
+3. **[Note]** The Dockerfile fetches `linux-amd64` only, which matches GitHub's `ubuntu-latest` runners and the amd64 VPS. An arm64 host would need a second pinned asset and digest.
