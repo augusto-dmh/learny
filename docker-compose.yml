@@ -103,15 +103,19 @@ services:
       retries: 10
 
   minio:
-    # quay, not Docker Hub: MinIO withdrew its Docker Hub images (the pinned
-    # prod tag below is equally unpullable there).
-    image: quay.io/minio/minio:latest
+    # Built from ./deploy/minio — the pinned MinIO server release from the official
+    # GitHub release binary (sha256-verified at build time). MinIO withdrew its
+    # public container images: Docker Hub first, then quay.io/minio/minio began
+    # refusing anonymous pulls for every tag. See the Dockerfile there.
+    build:
+      context: ./deploy/minio
+      dockerfile: Dockerfile
     command: server /data --console-address ":9001"
     # MINIO_ROOT_USER/PASSWORD come from the override (local) or env_file (prod).
     volumes:
       - minio_data:/data
     healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
+      test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/live"]
       interval: 5s
       timeout: 5s
       retries: 10

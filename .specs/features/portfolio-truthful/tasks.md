@@ -316,6 +316,41 @@ T3 → T9
 
 ---
 
+### Phase 4 (added after PR #72's first CI run): the stack boots without MinIO's registry
+
+```
+T10
+```
+
+### T10: Build the MinIO image from the official release binary ✅ Complete
+
+**What**: `deploy/minio/Dockerfile` builds the pinned MinIO release from its GitHub release binary with a hard-coded sha256; the base Compose file builds the `minio` service from it (curl healthcheck), the production overlay runs `ghcr.io/augusto-dmh/learny-minio:${LEARNY_IMAGE_TAG}`, the deploy matrix publishes it, CI's backend job builds it in place of the quay pull; ADR-0031 records the decision; the runbook and the topology/workflow tests pin all of it.
+**Where**: `deploy/minio/Dockerfile` (new) plus the compose files, the two workflows, `docs/adr/0031-*.md`, `docs/ops/deploy.md`, and the topology/workflow test modules
+**Depends on**: T8
+**Reuses**: `deploy/backup/Dockerfile` (GitHub-release download + digest pin pattern); `deploy/postgres` (repo-owned image precedent in compose + matrix + tests)
+**Requirement**: TRUTH-25
+
+**Tools**:
+
+- MCP: NONE
+- Skill: NONE
+
+**Done when**:
+
+- [x] `docker build deploy/minio` succeeds and the container answers `/minio/health/live`, reporting the pinned release.
+- [x] `docker compose config` valid for base+override and base+prod; no non-comment `quay.io/minio` or `minio/minio` line remains in compose files or workflows.
+- [x] Tests pin: matrix entry, prod image ref, base build context + Dockerfile digest pin, healthcheck endpoint; the deploy runbook names the image.
+- [x] README ADR count updated (31); the README drift test passes.
+- [x] Gate check passes: build gate; storage-backed modules pass against the new image.
+
+**Tests**: unit
+**Evidence**: docker build ok, /minio/health/live 200, version RELEASE.2024-10-13T13-34-11Z; compose config ok (base+override, base+prod); 269 passed across topology/workflow/runbook/README modules; 63 passed in test_web_sources+test_storage_s3 against the new image
+**Gate**: build
+
+**Commit**: `build(storage): build the minio image from the official release binary`
+
+---
+
 ## Merge-gate checklist (not branch tasks — remote, run after Stage 7 approval)
 
 These carry requirement IDs but are executed against `origin`/GitHub only after the user approves the merge; they are recorded here so the Verifier and the wrap report can account for them.

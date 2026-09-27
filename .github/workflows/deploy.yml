@@ -55,6 +55,10 @@ jobs:
           # replication pg_hba.conf. Single-stage — no build target.
           - name: learny-postgres
             context: ./deploy/postgres
+          # The pinned MinIO server release built from the official GitHub
+          # binary (MinIO withdrew its public container images). Single-stage.
+          - name: learny-minio
+            context: ./deploy/minio
     steps:
       # Build the exact commit CI validated (head_sha on workflow_run), or the
       # dispatched ref's sha. Same expression drives the image tags below.

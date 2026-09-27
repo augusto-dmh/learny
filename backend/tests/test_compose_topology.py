@@ -255,6 +255,41 @@ def test_db_builds_from_the_repo_owned_postgres_image(base: dict) -> None:
     assert "FROM pgvector/pgvector:pg16" in _PG_DOCKERFILE
 
 
+def test_minio_builds_from_the_repo_owned_image(base: dict) -> None:
+    # MinIO withdrew its public container images (Docker Hub, then anonymous pulls
+    # from quay.io/minio/minio), so the server is built here from the official
+    # GitHub release binary with a digest pinned in the Dockerfile. A pull from
+    # any MinIO-controlled registry, anywhere in the stack, is the regression.
+    assert base["minio"]["build"]["context"] == "./deploy/minio"
+    assert "image" not in base["minio"], "the base minio service must build, not pull"
+    dockerfile = (_REPO_ROOT / "deploy" / "minio" / "Dockerfile").read_text()
+    assert "ARG MINIO_RELEASE=RELEASE." in dockerfile
+    assert "ARG MINIO_SHA256=" in dockerfile
+    assert (
+        "github.com/minio/minio/releases/download/${MINIO_RELEASE}/minio.linux-amd64.${MINIO_RELEASE}"
+        in dockerfile
+    )
+    assert "sha256sum -c" in dockerfile
+    for path in (
+        _REPO_ROOT / "docker-compose.yml",
+        _REPO_ROOT / "docker-compose.override.yml",
+        _REPO_ROOT / "docker-compose.prod.yml",
+        *sorted((_REPO_ROOT / ".github" / "workflows").glob("*.yml")),
+    ):
+        for line in path.read_text().splitlines():
+            if line.lstrip().startswith("#"):
+                continue
+            assert "quay.io/minio" not in line and "minio/minio" not in line, (path.name, line)
+
+
+def test_minio_healthcheck_uses_the_health_endpoint(base: dict) -> None:
+    # The upstream image bundled `mc` for `mc ready local`; the repo-owned image
+    # ships curl instead, so the check must target the server's own endpoint.
+    test = base["minio"]["healthcheck"]["test"]
+    assert test[:2] == ["CMD", "curl"]
+    assert test[-1] == "http://localhost:9000/minio/health/live"
+
+
 def test_db_archives_completed_wal_segments(db_settings: dict[str, str]) -> None:
     # PITR-01: archiving is on and writes into the archive directory.
     assert db_settings["archive_mode"] == "on"

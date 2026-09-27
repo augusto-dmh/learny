@@ -229,6 +229,7 @@ unauthorized pull of it fails the deploy and takes down everything that depends 
    - `learny-web`
    - `learny-backup`
    - `learny-postgres`
+   - `learny-minio`
 3. Confirm each one reads "Public" in its card.
 
 After this, the VPS can `docker compose pull` without credentials. This list is asserted against
@@ -254,7 +255,7 @@ gh run view <run-id> --log
 ```
 
 Expected output:
-- Five images build and push to GHCR (learny-backend, learny-pdf-worker, learny-web, learny-backup, learny-postgres), tagged `:latest` and `:<commit-sha>`.
+- Six images build and push to GHCR (learny-backend, learny-pdf-worker, learny-web, learny-backup, learny-postgres, learny-minio), tagged `:latest` and `:<commit-sha>`.
 - Deploy job runs (or skips green if VPS secrets are not yet set).
 - If secrets are set, the deploy job scp's compose files to `/opt/learny`, runs `docker compose pull`, then `up -d --no-build --wait`.
 

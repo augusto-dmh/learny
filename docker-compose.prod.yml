@@ -52,10 +52,12 @@ services:
     restart: unless-stopped
     networks:
       - learny
-    # Pin to a vetted MinIO release (never :latest). Operators bump this tag
-    # deliberately after testing. quay, not Docker Hub: MinIO withdrew its
-    # Docker Hub images.
-    image: quay.io/minio/minio:RELEASE.2024-10-13T13-34-11Z
+    # Learny's own MinIO image (deploy/minio/Dockerfile): the pinned server
+    # release built from the official GitHub binary and published to GHCR beside
+    # the app images, because MinIO withdrew its public container images. The
+    # release is pinned in the Dockerfile; operators bump it deliberately after
+    # testing, and the image tag follows the deploy like every other service.
+    image: ghcr.io/augusto-dmh/learny-minio:${LEARNY_IMAGE_TAG:-latest}
     env_file:
       - path: ./secrets/minio.env
         required: true

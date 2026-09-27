@@ -125,6 +125,7 @@ def test_build_matrix_covers_every_published_image() -> None:
         "learny-web": ("./frontend", "prod"),
         "learny-backup": ("./deploy/backup", None),
         "learny-postgres": ("./deploy/postgres", None),
+        "learny-minio": ("./deploy/minio", None),
     }
 
 
