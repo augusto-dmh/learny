@@ -142,7 +142,7 @@ def test_publish_step_never_force_pushes() -> None:
 
 def test_artifact_upload_step_is_retained() -> None:
     upload = _step_by_name("generation-eval", "Upload eval results")
-    assert "actions/upload-artifact@v4" in str(upload["uses"])
+    assert "actions/upload-artifact@v7" in str(upload["uses"])
     assert upload["with"]["name"] == "eval-results"
     assert upload["with"]["path"] == "evals/results/*.jsonl"
     assert upload["with"]["if-no-files-found"] == "warn"

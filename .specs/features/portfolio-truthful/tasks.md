@@ -262,7 +262,7 @@ T3 → T9
 
 ---
 
-### T8: Apply the pending GitHub Actions major bumps with their pin tests
+### T8: Apply the pending GitHub Actions major bumps with their pin tests ✅ Complete
 
 **What**: Every workflow uses `actions/checkout@v6`, `actions/setup-node@v6`, and `actions/upload-artifact@v7`, and the tests that pin action majors assert those versions.
 **Where**: `.github/workflows/` (ci.yml, deploy.yml, eval.yml) and the pin assertions in `backend/tests/test_deploy_workflow.py` / `backend/tests/test_eval_workflow.py`
@@ -277,11 +277,12 @@ T3 → T9
 
 **Done when**:
 
-- [ ] `grep -rn "uses: actions/" .github/workflows` shows only `checkout@v6`, `setup-node@v6`, `upload-artifact@v7`.
-- [ ] The pin tests assert the new majors (and would fail on `@v4`).
-- [ ] Gate check passes: quick gate on `tests/test_deploy_workflow.py tests/test_eval_workflow.py`.
+- [x] `grep -rn "uses: actions/" .github/workflows` shows only `checkout@v6`, `setup-node@v6`, `upload-artifact@v7`.
+- [x] The pin tests assert the new majors (and would fail on `@v4`).
+- [x] Gate check passes: quick gate on `tests/test_deploy_workflow.py tests/test_eval_workflow.py`.
 
 **Tests**: unit
+**Evidence**: quick gate 40 passed (deploy + eval workflow tests); grep shows only v6/v6/v7
 **Gate**: quick
 
 **Commit**: `build(ci): move to the current majors of checkout, setup-node, and upload-artifact`

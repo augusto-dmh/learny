@@ -52,7 +52,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       # Secrets cannot be referenced in an `if:` condition, so map the secret to
       # an env var in a step and publish a boolean output the later steps gate on.
       # Absent secret → notice + success exit (the remaining steps are skipped).
@@ -121,7 +121,7 @@ jobs:
       # below, are what the dev-only dashboard at /dev/evals renders (evals/README.md).
       - name: Upload eval results
         if: steps.secret.outputs.present == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: eval-results
           path: evals/results/*.jsonl

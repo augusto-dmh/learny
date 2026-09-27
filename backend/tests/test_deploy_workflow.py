@@ -225,7 +225,8 @@ def test_docker_action_versions_are_pinned_to_real_majors() -> None:
     assert "docker/setup-buildx-action@v3" in _RAW
     assert "docker/login-action@v3" in _RAW
     assert "docker/build-push-action@v6" in _RAW
-    assert "actions/checkout@v4" in _RAW
+    assert "actions/checkout@v6" in _RAW
+    assert "actions/checkout@v4" not in _RAW
 
 
 # --- DEP-10: the deploy job runs only after the images are published -------------
