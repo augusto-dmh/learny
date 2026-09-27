@@ -279,7 +279,18 @@ def test_minio_builds_from_the_repo_owned_image(base: dict) -> None:
         for line in path.read_text().splitlines():
             if line.lstrip().startswith("#"):
                 continue
-            assert "quay.io/minio" not in line and "minio/minio" not in line, (path.name, line)
+            for marker in ("quay.io/minio", "minio/minio", "minio/mc", "dl.min.io"):
+                assert marker not in line, (path.name, marker, line)
+
+
+def test_ci_builds_the_repo_owned_minio_image_from_the_workspace_root(base: dict) -> None:
+    # The backend job's steps run with backend/ as the working directory, so the
+    # build context must be anchored at the workspace root or the path is not
+    # found (the first CI run of this change failed exactly there).
+    ci = yaml.safe_load((_REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text())
+    step = next(s for s in ci["jobs"]["backend-test"]["steps"] if s.get("name") == "Start MinIO")
+    assert 'docker build -t learny-minio:ci "$GITHUB_WORKSPACE/deploy/minio"' in step["run"]
+    assert "learny-minio:ci server /data" in step["run"]
 
 
 def test_minio_healthcheck_uses_the_health_endpoint(base: dict) -> None:

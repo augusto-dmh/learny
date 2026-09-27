@@ -62,7 +62,7 @@ jobs:
       # as a plain container.
       - name: Start MinIO
         run: |
-          docker build -t learny-minio:ci ./deploy/minio
+          docker build -t learny-minio:ci "$GITHUB_WORKSPACE/deploy/minio"
           docker run -d --name minio -p 9000:9000 \
             -e MINIO_ROOT_USER=learny -e MINIO_ROOT_PASSWORD=learny-dev-secret \
             learny-minio:ci server /data
