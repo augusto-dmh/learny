@@ -106,7 +106,7 @@ Proof: `uv run pytest tests/test_web_byok_generation.py -k "learner_key_debits_z
 **C26** - With `ai_kill_switch` on, a learner with a stored key gets the pause refusal (`503`) and no adapter is called (AC 26)
 Proof: `uv run pytest tests/test_web_byok_generation.py -k "kill_switch_refuses_learner_key"`
 
-**C27** - A profile with `user_key_provider` and no `api_key_env` never appears in `build_generation_chain`, in the explain chain or in `learner_catalog`. A registry whose only non-local profiles are user-key-only and that has no house-servable profile fails resolution with an error naming the problem. A non-local profile with neither field still fails as today (AC 27)
+**C27** - A profile with `user_key_provider` and no `api_key_env` never appears in `build_generation_chain`, in the explain chain or in `learner_catalog`. A registry whose only non-local profiles are user-key-only and that has no house-servable profile fails resolution with an error naming the problem. A non-local profile with neither field still fails as today (AC 27) ✅
 Proof: `uv run pytest tests/infrastructure/test_provider_profiles.py -k "user_key_only"`
 
 **C44** - The adapter cache holds at most its bound (256) entries, evicting least-recently-used, and an entry older than its TTL is rebuilt on the next lookup (Landing door 4)

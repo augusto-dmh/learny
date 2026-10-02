@@ -271,3 +271,123 @@ def test_legacy_anthropic_seed_without_a_key_fails_fast_with_todays_message(
         match="LEARNY_ANTHROPIC_API_KEY is required when the generation provider is 'anthropic'",
     ):
         resolve_generation_profiles(settings)
+
+
+# --- Learner-key binding: user-key-only profiles never join a house chain ----------
+#
+# A profile opts in to learner keys with ``user_key_provider``. One that names
+# no ``api_key_env`` is user-key-only: the house has no key for it, so it must
+# never appear in a house chain (default, selection-Explain, or a learner's
+# preference chain) nor in the house catalog. A registry left with nothing the
+# house can serve fails resolution; a non-local profile with neither a house key
+# nor a binding still fails exactly as before.
+
+_USER_KEY_ONLY = dict(
+    _PROFILE_JSON,
+    id="byok-claude",
+    model="claude-byok",
+    api_key_env="",
+    user_key_provider="anthropic",
+)
+_HOUSE_LOCAL = dict(
+    _PROFILE_JSON,
+    id="house-local",
+    kind="local",
+    model="local-extractive",
+    api_key_env="",
+)
+
+
+def _chain_ids(chain: object) -> list[str]:
+    return [entry.profile.id for entry in chain._chain]  # type: ignore[attr-defined]
+
+
+def test_user_key_only_profile_passes_validation_without_a_key_env() -> None:
+    settings = _settings_with_profiles([_HOUSE_LOCAL, _USER_KEY_ONLY])
+
+    resolved = resolve_generation_profiles(settings)
+
+    assert [p.id for p in resolved] == ["house-local", "byok-claude"]
+    assert resolved[1].user_key_provider == "anthropic"
+
+
+def test_user_key_only_profile_never_joins_a_house_chain_or_the_catalog(monkeypatch) -> None:
+    from app.infrastructure.answering import build_generation_chain, build_user_generation_chain
+    from app.infrastructure.providers import learner_catalog
+
+    monkeypatch.setenv("LEARNY_TEST_PROFILE_KEY", "sk-test")
+    keyed_house = dict(_PROFILE_JSON, id="house-claude")
+    settings = Settings(
+        _env_file=None,
+        generation_profiles=[
+            GenerationProfileSettings(**p) for p in (_USER_KEY_ONLY, keyed_house, _HOUSE_LOCAL)
+        ],
+        # Even when the operator names it as the Explain profile.
+        generation_explain_profile="byok-claude",
+    )
+
+    assert _chain_ids(build_generation_chain(settings)) == ["house-claude", "house-local"]
+    assert _chain_ids(build_generation_chain(settings, explain=True)) == [
+        "house-claude",
+        "house-local",
+    ]
+    # A stored preference naming it cannot pull it into the learner's house chain.
+    assert _chain_ids(build_user_generation_chain(settings, "byok-claude")) == [
+        "house-claude",
+        "house-local",
+    ]
+    assert [p.id for p in learner_catalog(settings)] == ["house-claude", "house-local"]
+
+
+def test_user_key_only_registry_without_a_house_servable_profile_fails() -> None:
+    settings = _settings_with_profiles(
+        [_USER_KEY_ONLY, dict(_USER_KEY_ONLY, id="byok-gpt", user_key_provider="openai")]
+    )
+
+    with pytest.raises(ValueError) as excinfo:
+        resolve_generation_profiles(settings)
+
+    message = str(excinfo.value)
+    assert "house" in message
+    assert "user_key_provider" in message
+
+
+def test_user_key_only_rule_still_rejects_a_profile_with_neither_key_source() -> None:
+    # Neither a house key env nor a learner-key binding: today's failure, unchanged.
+    settings = _settings_with_profiles([_HOUSE_LOCAL, dict(_PROFILE_JSON, api_key_env="")])
+
+    with pytest.raises(ValueError, match="api_key_env"):
+        resolve_generation_profiles(settings)
+
+
+def test_user_key_only_binding_keeps_the_unset_key_env_rule_for_house_keyed_profiles(
+    monkeypatch,
+) -> None:
+    # A profile that names a house key env still needs it set, binding or not.
+    monkeypatch.delenv("LEARNY_TEST_PROFILE_KEY", raising=False)
+    both = dict(_PROFILE_JSON, user_key_provider="anthropic")
+    settings = _settings_with_profiles([_HOUSE_LOCAL, both])
+
+    with pytest.raises(ValueError, match="LEARNY_TEST_PROFILE_KEY"):
+        resolve_generation_profiles(settings)
+
+
+def test_user_key_only_field_defaults_to_unbound_for_existing_registries(monkeypatch) -> None:
+    # Every registry declared before the field existed parses unchanged.
+    monkeypatch.setenv("LEARNY_GENERATION_PROFILES", json.dumps([_PROFILE_JSON]))
+
+    settings = Settings(_env_file=None)
+
+    assert settings.generation_profiles[0].user_key_provider is None
+
+
+def test_user_key_only_binding_rejects_an_unknown_provider() -> None:
+    with pytest.raises(ValidationError):
+        GenerationProfileSettings(**dict(_USER_KEY_ONLY, user_key_provider="mistral"))
+
+
+def test_user_key_only_binding_on_a_local_profile_fails() -> None:
+    settings = _settings_with_profiles([dict(_HOUSE_LOCAL, user_key_provider="anthropic")])
+
+    with pytest.raises(ValueError, match="local"):
+        resolve_generation_profiles(settings)

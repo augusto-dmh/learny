@@ -23,7 +23,7 @@ from app.infrastructure.answering.anthropic import AnthropicGenerationAdapter
 from app.infrastructure.answering.local import DeterministicGenerationAdapter
 from app.infrastructure.answering.openai_compat import OpenAICompatibleGenerationAdapter
 from app.infrastructure.answering.routing import ChainEntry, RoutingGenerationAdapter
-from app.infrastructure.providers import resolve_generation_profiles
+from app.infrastructure.providers import resolve_house_profiles
 
 if TYPE_CHECKING:
     from app.core.config import Settings
@@ -73,7 +73,12 @@ def build_generation_adapter(settings: Settings) -> GenerationPort:
     raise ValueError(f"unknown generation provider: {provider}")
 
 
-def _build_sub_adapter(profile: GenerationProfileSettings, settings: Settings) -> GenerationPort:
+def _build_sub_adapter(
+    profile: GenerationProfileSettings,
+    settings: Settings,
+    *,
+    api_key: str | None = None,
+) -> GenerationPort:
     """Build the one adapter a profile names, from the settings it declares.
 
     A declared profile's key was validated present in its named env variable
@@ -85,12 +90,20 @@ def _build_sub_adapter(profile: GenerationProfileSettings, settings: Settings) -
     per-mode effort values feed the constructor (COST-01/AD-339): the legacy
     seed carries ``generation_effort`` on both modes, so today's behavior is
     unchanged until an operator declares otherwise.
+
+    ``api_key`` is a learner's own key (ADR-0032): when given it is the only key
+    the adapter is built with, so a learner-keyed adapter can never fall back to
+    the house key.
     """
     if profile.kind == "local":
         return DeterministicGenerationAdapter()
     if profile.kind == "anthropic":
         return AnthropicGenerationAdapter(
-            api_key=os.environ.get(profile.api_key_env) or settings.anthropic_api_key,
+            api_key=(
+                api_key
+                if api_key is not None
+                else os.environ.get(profile.api_key_env) or settings.anthropic_api_key
+            ),
             model=profile.model,
             max_tokens=profile.max_tokens,
             effort_ask=profile.effort_ask,
@@ -102,7 +115,7 @@ def _build_sub_adapter(profile: GenerationProfileSettings, settings: Settings) -
         # profile's own, and the per-mode effort values are passed through even
         # though this kind never sends them (ECON-05, declared degradation).
         return OpenAICompatibleGenerationAdapter(
-            api_key=os.environ.get(profile.api_key_env) or "",
+            api_key=api_key if api_key is not None else os.environ.get(profile.api_key_env) or "",
             model=profile.model,
             base_url=profile.base_url,
             max_tokens=profile.max_tokens,
@@ -130,8 +143,11 @@ def build_generation_chain(settings: Settings, *, explain: bool = False) -> Gene
     declared **and** ask-eligible, and the rest keep the registry order; an
     unset or ineligible name leaves the primary first. Routing policy itself
     stays inside the router — this only decides who stands first in line.
+
+    House chains hold house-servable profiles only: a user-key-only profile has
+    no house key and never joins one, even when it is the named Explain profile.
     """
-    profiles = resolve_generation_profiles(settings)
+    profiles = resolve_house_profiles(settings)
     if explain:
         named = settings.generation_explain_profile
         head = next((p for p in profiles if p.id == named and p.ask_enabled), None)
@@ -162,9 +178,11 @@ def build_user_generation_chain(
     chosen profile that cannot serve the requested mode is skipped by that walk,
     which is today's behavior when the lead is ineligible. The selection-Explain
     chain is a house cost lever and is never user-resolved — only
-    ``build_generation_chain(explain=True)`` builds it.
+    ``build_generation_chain(explain=True)`` builds it. Like every house
+    chain, it holds house-servable profiles only, so a stored id naming a
+    user-key-only profile does not resolve here.
     """
-    profiles = resolve_generation_profiles(settings)
+    profiles = resolve_house_profiles(settings)
     if profile_id is not None:
         chosen = next((p for p in profiles if p.id == profile_id), None)
         if chosen is not None:
@@ -181,3 +199,4 @@ def build_user_generation_chain(
             for profile in profiles
         )
     )
+
