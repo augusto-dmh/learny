@@ -1,6 +1,6 @@
 # Canonical verification vocabulary — same names locally, in agent sessions, and in docs.
 
-.PHONY: infra test test-backend test-frontend lint lint-backend lint-frontend fitness check seed-sample
+.PHONY: infra test test-backend test-frontend lint lint-backend lint-frontend lint-commits fitness check seed-sample
 
 infra: ## Start the local services DB/golden tests depend on
 	docker compose up -d db minio redis
@@ -20,10 +20,15 @@ lint-backend:
 lint-frontend:
 	cd frontend && npx tsc --noEmit
 
+# Same commit contract CI enforces on every pull-request commit (header type, the
+# Assisted-by trailer, no agent co-author trailers), over this branch's commits.
+lint-commits:
+	python3 backend/scripts/check_commits.py origin/main..HEAD
+
 fitness: ## Architecture boundaries (provider-SDK isolation, layering)
 	python3 backend/scripts/check_boundaries.py
 
-lint: lint-backend lint-frontend fitness
+lint: lint-backend lint-frontend lint-commits fitness
 
 check: lint test
 
