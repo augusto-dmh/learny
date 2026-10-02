@@ -98,6 +98,7 @@ from app.application.vault import ExportVault
 from app.core.config import Settings, get_settings
 from app.core.tracing import bind_trace
 from app.domain.entities import ProviderCredential, Session, User
+from app.domain.locale import is_supported_locale
 from app.domain.ports import (
     EmailPort,
     EmbeddingPort,
@@ -132,6 +133,7 @@ from app.infrastructure.db.repositories import (
     SqlAlchemyIngestionEventRepository,
     SqlAlchemyIngestionJobRepository,
     SqlAlchemyInviteRepository,
+    SqlAlchemyLocalePreferenceRepository,
     SqlAlchemyNoteRepository,
     SqlAlchemyQuizItemRepository,
     SqlAlchemyQuizJobRepository,
@@ -950,6 +952,44 @@ def get_clear_ai_profile_choice(
 ) -> Callable[[], bool]:
     """FastAPI dependency: remove the caller's choice (True only when a row existed)."""
     repo = SqlAlchemyAiPreferenceRepository(conn)
+    return lambda: repo.delete(user.id)
+
+
+# --- The learner's interface-language choice ------------------------------------
+#
+# Storage-only like the AI-profile trio above: whether a value may be stored at
+# all (the supported-set check) is the route's 422 to own. An unsupported value
+# already in the table — a locale removed after it was chosen — reads as unset
+# here, so every consumer sees only supported locales or None.
+
+
+def get_locale_choice(
+    conn: DbConnection, user: Annotated[User, Depends(get_authenticated_user)]
+) -> str | None:
+    """FastAPI dependency: the caller's stored locale, or None (401 if unauth)."""
+    preference = SqlAlchemyLocalePreferenceRepository(conn).get_by_user(user.id)
+    if preference is None or not is_supported_locale(preference.locale):
+        return None
+    return preference.locale
+
+
+def get_set_locale_choice(
+    conn: DbConnection, user: Annotated[User, Depends(get_authenticated_user)]
+) -> Callable[[str], str]:
+    """FastAPI dependency: store the caller's locale, replacing any previous one."""
+    repo = SqlAlchemyLocalePreferenceRepository(conn)
+
+    def _set(locale: str) -> str:
+        return repo.upsert(user.id, locale).locale
+
+    return _set
+
+
+def get_clear_locale_choice(
+    conn: DbConnection, user: Annotated[User, Depends(get_authenticated_user)]
+) -> Callable[[], bool]:
+    """FastAPI dependency: remove the caller's locale (True only when a row existed)."""
+    repo = SqlAlchemyLocalePreferenceRepository(conn)
     return lambda: repo.delete(user.id)
 
 

@@ -55,6 +55,7 @@ from app.infrastructure.web.dependencies import (
     get_authenticated_user,
     get_current_session,
     get_delete_account,
+    get_locale_choice,
     get_logout,
     get_register_user,
     get_request_password_reset,
@@ -104,10 +105,13 @@ class MeResponse(UserSummary):
     stored AI-profile choice (``ai_profile_id``, null when unset) so the account
     page has it on first paint. The id is returned exactly as stored: an id the
     operator renamed or removed is reported as-is — serving falls back to the
-    deployment default, and the UI renders the choice as unset."""
+    deployment default, and the UI renders the choice as unset. ``locale`` is the
+    stored interface language (``en`` / ``pt-BR``), null when unset or when the
+    stored value is no longer supported."""
 
     csrf_token: str
     ai_profile_id: str | None = None
+    locale: str | None = None
 
 
 class VerifyEmailBody(BaseModel):
@@ -297,6 +301,7 @@ def delete_account(
 def me(
     principal: CurrentPrincipal,
     ai_profile_choice: Annotated[str | None, Depends(get_ai_profile_choice)],
+    locale_choice: Annotated[str | None, Depends(get_locale_choice)],
 ) -> MeResponse:
     """Return the authenticated user summary + CSRF token + stored AI-profile id.
 
@@ -310,4 +315,5 @@ def me(
         created_at=user.created_at,
         csrf_token=session.csrf_token,
         ai_profile_id=ai_profile_choice,
+        locale=locale_choice,
     )

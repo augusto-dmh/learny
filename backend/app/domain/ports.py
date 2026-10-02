@@ -43,6 +43,7 @@ from app.domain.entities import (
     HistoryTurn,
     IngestionEvent,
     IngestionJob,
+    LocalePreference,
     Note,
     NoteAnchor,
     NoteSummary,
@@ -194,6 +195,29 @@ class ProviderCredentialRepository(Protocol):
 
     def delete(self, user_id: UUID, provider: str) -> bool:
         """Remove the key; ``True`` when a row was removed (delete is idempotent)."""
+        ...
+
+
+@runtime_checkable
+class LocalePreferenceRepository(Protocol):
+    """Persistence port for :class:`~app.domain.entities.LocalePreference`.
+
+    One row per user (the primary key is ``user_id``) and every method filters by
+    ``user_id``, so a preference is only ever read, replaced or cleared by its
+    owning account. Operates on the caller's ``Connection`` so the write shares
+    the request's transaction.
+    """
+
+    def get_by_user(self, user_id: UUID) -> LocalePreference | None:
+        """Return the user's stored locale, or ``None`` when nothing is set."""
+        ...
+
+    def upsert(self, user_id: UUID, locale: str) -> LocalePreference:
+        """Store the locale, replacing any previous one on the single row."""
+        ...
+
+    def delete(self, user_id: UUID) -> bool:
+        """Remove the choice; ``True`` when a row was removed (unset is idempotent)."""
         ...
 
 

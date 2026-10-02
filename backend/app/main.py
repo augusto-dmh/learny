@@ -23,6 +23,7 @@ from app.infrastructure.web.evals import router as evals_router
 from app.infrastructure.web.health import router as health_router
 from app.infrastructure.web.ingestion import router as ingestion_router
 from app.infrastructure.web.instrument import router as instrument_router
+from app.infrastructure.web.locale import router as locale_router
 from app.infrastructure.web.middleware import RequestContextMiddleware
 from app.infrastructure.web.notes import router as notes_router
 from app.infrastructure.web.quiz import router as quiz_router
@@ -121,6 +122,7 @@ def create_app() -> FastAPI:
     app.include_router(health_router)
     app.include_router(auth_router)
     app.include_router(ai_router)
+    app.include_router(locale_router)
     app.include_router(sources_router)
     app.include_router(ingestion_router)
     app.include_router(retrieval_router)

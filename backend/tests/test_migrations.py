@@ -89,6 +89,7 @@ def test_migration_metadata_compiles() -> None:
         "email_tokens",
         "user_ai_preferences",
         "user_provider_credentials",
+        "user_locale_preferences",
     }
     # Unique email + unique session token_hash are the security-critical constraints.
     user_uniques = {c.name for c in users.constraints if c.__class__.__name__ == "UniqueConstraint"}
@@ -4066,3 +4067,54 @@ def test_migration_0030_creates_user_provider_credentials(monkeypatch) -> None:
         assert "user_provider_credentials" in set(inspect(engine).get_table_names())
     finally:
         engine.dispose()
+
+
+@pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
+def test_migration_0031_creates_user_locale_preferences(monkeypatch) -> None:
+    """0031 up: creates ``user_locale_preferences`` — one row per user (PK
+    ``user_id``, FK to ``users.id`` ON DELETE CASCADE), a NOT NULL ``locale`` with no
+    CHECK constraint (the supported set lives in code), and UTC ``created_at``/
+    ``updated_at`` server defaults. Down one step drops the table (users survives);
+    a further upgrade re-creates it."""
+    monkeypatch.setenv("LEARNY_DATABASE_URL", TEST_DB_URL)
+    cfg = _alembic_config(TEST_DB_URL)
+
+    command.upgrade(cfg, "head")
+    command.downgrade(cfg, "0030_user_provider_credentials")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        assert "user_locale_preferences" not in set(inspect(engine).get_table_names())
+    finally:
+        engine.dispose()
+
+    command.upgrade(cfg, "0031_user_locale_preferences")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        inspector = inspect(engine)
+        columns = {c["name"]: c for c in inspector.get_columns("user_locale_preferences")}
+        assert set(columns) == {"user_id", "locale", "created_at", "updated_at"}
+        assert columns["locale"]["nullable"] is False
+        assert inspector.get_pk_constraint("user_locale_preferences")["constrained_columns"] == [
+            "user_id"
+        ]
+        fk = next(
+            fk
+            for fk in inspector.get_foreign_keys("user_locale_preferences")
+            if fk["constrained_columns"] == ["user_id"]
+        )
+        assert fk["referred_table"] == "users"
+        assert fk["options"].get("ondelete") == "CASCADE"
+        assert inspector.get_check_constraints("user_locale_preferences") == []
+    finally:
+        engine.dispose()
+
+    command.downgrade(cfg, "0030_user_provider_credentials")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        tables = set(inspect(engine).get_table_names())
+        assert "user_locale_preferences" not in tables
+        assert "users" in tables
+    finally:
+        engine.dispose()
+
+    command.upgrade(cfg, "head")

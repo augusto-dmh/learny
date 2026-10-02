@@ -981,3 +981,23 @@ user_provider_credentials = Table(
     Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     UniqueConstraint("user_id", "provider"),
 )
+
+
+# The learner's interface-language choice: one row per user, deleted with the
+# account. A missing row means "automatic" (negotiate from the browser). The
+# supported set lives in code (``app.domain.locale``), not in a CHECK constraint,
+# so adding a locale is not a migration.
+
+user_locale_preferences = Table(
+    "user_locale_preferences",
+    metadata,
+    Column(
+        "user_id",
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column("locale", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+)
