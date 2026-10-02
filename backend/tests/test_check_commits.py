@@ -241,3 +241,11 @@ def test_range_checks_the_non_bot_commit_next_to_a_bot_one(repo: Path) -> None:
     result = _run(repo, f"{base}..HEAD")
     assert result.returncode == 1
     assert bad[:12] in result.stdout + result.stderr
+
+
+def test_range_that_git_cannot_read_exits_two_not_zero(repo: Path) -> None:
+    # A bad range or a shallow checkout must never read as "every commit passed":
+    # the job would go green over a pull request it never looked at.
+    result = _run(repo, "no-such-ref..HEAD")
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "no-such-ref..HEAD" in result.stderr

@@ -3,7 +3,7 @@
 Profile: standard
 Plan: `.specs/features/harness-reset/plan.md`
 
-22 checks in 6 slices · 3 one-way doors · 0 open
+24 checks in 7 slices · 3 one-way doors · 0 open
 
 ## Checks
 
@@ -87,6 +87,14 @@ Proof: `cd /home/augusto/projects/learny/.worktrees/harness-reset && f=.claude/s
 **C22** - `ROADMAP.md` has a `## Harness` section whose table has a `harness-reset` PR A row and a PR B row marked `Not started` (AC 21)
 Proof: `cd /home/augusto/projects/learny/.worktrees/harness-reset && python3 -c "import re,sys; t=open('.specs/project/ROADMAP.md').read(); s=t[t.index('## Harness'):]; s=s[:s.find('\n## ',1) if s.find('\n## ',1)>0 else len(s)]; sys.exit(0 if re.search(r'harness-reset.*PR A', s) and re.search(r'harness-reset.*PR B.*Not started', s) else 1)"`
 
+### S7 - The Verifier cannot pass over a skipped database suite (added after Verifier round 1) · 2 files · ~2k
+
+**C23** - The `learny-ship-cycle` hygiene rules require every Verifier run to use `LEARNY_REQUIRE_DB=1` and start the test database with `make infra` first (AC 22)
+Proof: `cd /home/augusto/projects/learny/.worktrees/harness-reset && grep -E "Verifier run uses \`LEARNY_REQUIRE_DB=1\`.*\`make infra\`" .claude/skills/learny-ship-cycle/SKILL.md`
+
+**C24** - A range git cannot read makes the checker exit 2 with the range named on stderr (AC 23)
+Proof: `uv run pytest -q tests/test_check_commits.py -k cannot_read`
+
 ## Coverage
 
 | Set (size) | Member -> proof | Unproven |
@@ -95,8 +103,9 @@ Proof: `cd /home/augusto/projects/learny/.worktrees/harness-reset && python3 -c 
 | agent names rejected in `Co-authored-by` (10) | C7, table-driven over all 10 | - |
 | other rejected trailer (1) | `Made-with` C7 | - |
 | commits skipped by the range walk (2) | merge C8 · `[bot]` author C8 | - |
+| checker exit codes (3) | 0 C8 · 1 C8 · 2 C24 | - |
 | upstream image reference kinds (4) | Dockerfile `FROM` C10 · `COPY --from` C10 · Compose `image:` C10 · workflow `services.*.image` C10 | - |
-| places that must run pytest with the flag (1) | CI `backend-test` C3 | - |
+| places that must run pytest with the flag (2) | CI `backend-test` C3 · Verifier brief (`learny-ship-cycle` hygiene) C23 | - |
 | places that run the commit checker (2) | CI `commits` job C4 · `make lint` C9 | - |
 | places that state the nightly reason (3) | `eval.yml` C13 · `CLAUDE.md` C13 · `README.md` C13 | - |
 | removed skills (8) | `tlc-spec-driven` C16, C18 · `redis-observability` C16, C18 · `redis-security` C16, C18 · `domain-analysis` C16, C18 · `skill-architect` C16, C18 · `grilling` C16, C18 · `grill-me` C16, C18 · `create-technical-design-doc` C16, C18 | - |

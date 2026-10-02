@@ -114,6 +114,13 @@ Reuses the existing CI jobs (`backend-test`, `lint`), the stdlib-script pattern 
 
 21. The roadmap `.specs/project/ROADMAP.md` SHALL have a `Harness` section with a `harness-reset` PR A row (this PR) and a PR B row (`Not started`)
 
+### S7: The Verifier cannot pass over a skipped database suite (P1) - added after Verifier round 1
+
+**Acceptance Criteria**
+
+22. The `learny-ship-cycle` skill SHALL require every Verifier run to use `LEARNY_REQUIRE_DB=1` with the test database started (`make infra`) first
+23. IF `git log` cannot read the requested range THEN the commit checker SHALL exit 2 and name the range, never 0
+
 ## Out of scope
 
 | Excluded | Why |
@@ -128,6 +135,7 @@ Reuses the existing CI jobs (`backend-test`, `lint`), the stdlib-script pattern 
 | Assumption | Chosen default | Rationale | Confirmed? |
 | --- | --- | --- | --- |
 | Which skills to keep despite rq03 F8 | keep `modular-design-principles` (pr-review loads it by path, `pr-review/SKILL.md:61,168`) and `redis-core` (four kept skills point to it) | pruning them breaks a skill a running cycle uses | y |
+| `web-design-guidelines`, listed by rq03 F8 as never referenced | keep it | the owner's brief for this cycle names it among the skills running cycles use; the v8 rows now in flight (`pt-br-interface`, installable launch) are UI work | y |
 | `LEARNY_REQUIRE_DB` scope | database only; Redis and S3 reachability skips stay as they are | the 940-skip incident was DB-gated; Redis/S3 skip 2 modules and are a candidate follow-up | y |
 | `make test-backend` default | does not set `LEARNY_REQUIRE_DB`; CI and the Verifier brief do | keeps a fast unit-only local loop; the honest gate is CI + Verifier | y |
 | Ruleset timing | applied after this PR merges, so the `commits` check exists on `main` before it is required | a required check that no workflow on `main` reports blocks every PR | y |
@@ -141,7 +149,7 @@ Reuses the existing CI jobs (`backend-test`, `lint`), the stdlib-script pattern 
 
 | Surface | Decision | Landing |
 | --- | --- | --- |
-| command `check_commits.py` | output format and exit codes | AC 5, 6, 7 (exit 1 naming SHAs; 0 otherwise) |
+| command `check_commits.py` | output format and exit codes | AC 5, 6, 7 (exit 1 naming SHAs), AC 23 (exit 2 naming the range when git cannot read it); 0 otherwise |
 | command `check_commits.py` | flags and defaults | AC 9 (range defaults to `origin/main..HEAD`) |
 | command `check_commits.py` | what it prints when it fails halfway | every commit is checked and all failures listed before exit (AC 5–7) |
 | command `pytest` under `LEARNY_REQUIRE_DB=1` | output and exit code on failure | AC 1 |
