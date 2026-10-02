@@ -77,7 +77,7 @@ A visitor's cookie or browser language picks `en` or `pt-BR`, `<html lang>` foll
 
 1. The system SHALL support exactly the locales `en` and `pt-BR`, with `en` as the fallback.
 2. WHEN a request carries a `learny_locale` cookie with a supported value THEN the system SHALL render that locale regardless of `Accept-Language`.
-3. WHEN no valid `learny_locale` cookie is present and `Accept-Language` lists a `pt` or `pt-*` tag before any `en` tag THEN the system SHALL render `pt-BR`.
+3. WHEN no valid `learny_locale` cookie is present and `Accept-Language`, ordered by q-value then position, reaches a `pt` or `pt-*` tag before any `en` tag THEN the system SHALL render `pt-BR`.
 4. IF the `learny_locale` cookie holds a value outside `{en, pt-BR}` THEN the system SHALL ignore it and negotiate from `Accept-Language`.
 5. IF `Accept-Language` is absent, malformed or lists no supported language THEN the system SHALL render `en`.
 6. The system SHALL set `<html lang>` to the rendered locale, `en` or `pt-BR`.
@@ -103,7 +103,7 @@ Account stores the choice per learner; the cookie is the render-time cache; anon
 17. WHEN a user row is deleted THEN the system SHALL delete that user's stored locale.
 18. WHEN an authenticated page loads and `GET /api/me` returns a `locale` different from the `learny_locale` cookie THEN the system SHALL rewrite the cookie to the stored value and refresh once; WHEN it returns `null` or the same value THEN the system SHALL NOT refresh.
 19. WHEN an anonymous visitor picks a language on the landing or sign-in switcher THEN the system SHALL set the `learny_locale` cookie (`Path=/`, `Max-Age=31536000`, `SameSite=Lax`) and re-render without any API call.
-20. WHILE the locale refresh is in flight the system SHALL keep unsent Chat input and the reader position.
+20. WHEN the locale changes THEN the system SHALL re-render through `router.refresh()` and SHALL NOT reload the page, so client state (unsent Chat input, reader position) survives.
 
 **Independent test:** pick Português (Brasil) in Account, clear cookies, sign in again, and the interface renders in pt-BR.
 
@@ -225,17 +225,17 @@ Request clients throw typed errors; the catalog supplies the sentence.
 
 | Assumption | Chosen default | Rationale | Confirmed? |
 | --- | --- | --- | --- |
-| Door gate | Doors 1-7 above are approved as written | Library and no-prefix routing are the handoff's own recommendations; the rest mirror existing patterns | n |
+| Door gate | Doors 1-7 above are approved as written | Library and no-prefix routing are the handoff's own recommendations; the rest mirror existing patterns | y (owner, door gate) |
 | The cookie is the render-time cache of the stored choice | Server render reads the cookie only; the logged-in client reconciles from `/api/me` (backend wins) and refreshes once | Avoids a backend round-trip in the root layout on every render, including the public landing | n |
 | Anonymous switcher | A compact language switcher on landing and sign-in sets the cookie only | Account is unreachable to anonymous visitors | n |
 | `Accept-Language` mapping | any `pt` or `pt-*` before `en` negotiates to `pt-BR`; q-values honored, `q=0` ignored | One Portuguese catalog; two locales do not justify a matcher library | n |
 | Frontend tests keep asserting English | Vitest `setupFiles` binds `next-intl` to the real `use-intl` translator over `en`; `setTestLocale` switches; one layout test uses the real provider | Real ICU behavior without wrapping ~77 test files | n |
-| Backend `detail` never reaches the learner | The localized sentence comes from operation and status; `detail` stays on the error for logs | `detail` is English API text; informative English detail disappears from the English UI too | n |
-| `en` sends no response-language instruction | Only non-`en` locales add the note | Keeps frozen prompts, replay snapshots and the cacheable prefix byte-identical | n |
-| Answer-language source for an unset learner | `Accept-Language` negotiation | A pt-BR browser user who never opens Account still gets Portuguese answers | n |
+| Backend `detail` never reaches the learner | The localized sentence comes from operation and status; `detail` stays on the error for logs | `detail` is English API text; informative English detail disappears from the English UI too | y (owner, door gate) |
+| `en` sends no response-language instruction | Only non-`en` locales add the note | Keeps frozen prompts, replay snapshots and the cacheable prefix byte-identical | y (owner, door gate) |
+| Answer-language source for an unset learner | `Accept-Language` negotiation | A pt-BR browser user who never opens Account still gets Portuguese answers | y (owner, door gate) |
 | Portuguese golden source | In-code EPUB from short excerpts of a Machado de Assis work (public domain, author d. 1908), text fetched from Project Gutenberg, provenance in the module | Matches the in-code golden pattern; no committed EPUB binary | n |
 | Sensor shape | TypeScript-AST scan with a documented allowlist (brand "Learny", `dev/evals` operator page, legal pages by path) and a ratchet list of unmigrated files that must be empty by the last PR and fails on stale entries | Practical heuristic; limits documented | n |
-| Delivery | Several PRs by batch of whole slices (see Deviations); `main` carries a half-translated UI between merges, behind a default of `en` | Review size; no release is cut between them | n |
+| Delivery | Several PRs by batch of whole slices (see Deviations); `main` carries a half-translated UI between merges, behind a default of `en` | Review size; no release is cut between them | y (owner, door gate) |
 
 **Open questions:** none - all resolved or logged above.
 
