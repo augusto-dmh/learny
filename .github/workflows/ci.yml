@@ -32,7 +32,7 @@ jobs:
         working-directory: backend
     services:
       postgres:
-        image: pgvector/pgvector:pg16
+        image: pgvector/pgvector:pg16@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a
         env:
           POSTGRES_USER: learny
           POSTGRES_PASSWORD: learny
@@ -45,7 +45,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
       redis:
-        image: redis:7-alpine
+        image: redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
         ports:
           - "6379:6379"
         options: >-

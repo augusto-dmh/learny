@@ -2,7 +2,7 @@
 # runs scheduled PostgreSQL dumps plus optional offsite object mirroring via crond,
 # and ships a manual restore script. It talks to db/minio over the compose network
 # only and needs no host access, so it runs as the default user.
-FROM alpine:3.22
+FROM alpine:3.22@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8
 
 # Pinned MinIO client release. Verified to exist before pinning.
 ARG MC_RELEASE=RELEASE.2025-08-13T08-35-41Z

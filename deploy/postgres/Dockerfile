@@ -22,7 +22,7 @@
 #
 # The image carries no credentials: the password stays in POSTGRES_PASSWORD from
 # the env_file, exactly as before.
-FROM pgvector/pgvector:pg16
+FROM pgvector/pgvector:pg16@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a
 
 # Archive target for archive_command. 0700 and postgres-owned: the db writes it,
 # and the backup sidecar (which runs as root) reads and prunes it.

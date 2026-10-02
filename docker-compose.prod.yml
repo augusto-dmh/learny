@@ -46,7 +46,7 @@ services:
     restart: unless-stopped
     networks:
       - learny
-    image: redis:7.4-alpine
+    image: redis:7.4-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
 
   minio:
     restart: unless-stopped
@@ -160,7 +160,7 @@ services:
       - learny
     # netdata/netdata:v2.10.4 verified present on Docker Hub before pinning (never
     # :latest). Operators bump this tag deliberately after testing.
-    image: netdata/netdata:v2.10.4
+    image: netdata/netdata:v2.10.4@sha256:689145f603fed0ca341b4d8a0fb9910cd9d8c0590b0530cd24ae1912a9c7f8f3
     environment:
       # Disable netdata's anonymous statistics — the agent must not phone home
       # (netdata's documented Docker opt-out env var). No data leaves the VPS.
@@ -209,7 +209,7 @@ services:
     restart: unless-stopped
     networks:
       - learny
-    image: caddy:2.10-alpine
+    image: caddy:2.10-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
     ports:
       - "80:80"
       - "443:443"
