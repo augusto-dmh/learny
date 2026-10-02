@@ -278,6 +278,9 @@ may not.
 7. **BYO API keys remain deferred**, unchanged from point 11: a pricing-gated
    roadmap of their own (RQ10), with the research's abuse analysis (a
    user-supplied endpoint is never a configuration input) standing as written.
+   *Superseded by [ADR-0032](0032-learner-provider-keys-bound-to-house-profiles.md)
+   (2026-10-02): learner keys ship before a paid tier, bound to curated profiles;
+   the user-supplied-endpoint exclusion stands.*
 8. **The device-local precedent (AD-147) is scoped, not overturned.** Account-level
    AI serving choice is account state and lives in its own table; the
    device-local hooks for reading, home, note filters, and active conversation
