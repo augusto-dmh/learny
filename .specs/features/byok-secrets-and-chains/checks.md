@@ -18,10 +18,10 @@ exported (DB-gated tests skip without it, and a skip is not green). Frontend pro
 **C1** - A stored key leaves only ciphertext, nonce, wrapped DEK, DEK nonce, `kek_id`, fingerprint and last four in the row. Neither the plaintext nor the plaintext DEK appears in any column (AC 1)
 Proof: `uv run pytest tests/test_provider_credentials_repository.py -k "row_holds_no_plaintext"`
 
-**C2** - Sealing the same key twice yields different DEKs, nonces and ciphertexts, and both open to the same plaintext (AC 2)
+**C2** - Sealing the same key twice yields different DEKs, nonces and ciphertexts, and both open to the same plaintext (AC 2) ✅
 Proof: `uv run pytest tests/infrastructure/test_secrets_envelope.py -k "fresh_dek_and_nonce_per_seal"`
 
-**C3** - Opening a sealed secret with a different user id or a different provider in the associated data raises, and a flipped ciphertext byte raises (AC 3)
+**C3** - Opening a sealed secret with a different user id or a different provider in the associated data raises, and a flipped ciphertext byte raises (AC 3) ✅
 Proof: `uv run pytest tests/infrastructure/test_secrets_envelope.py -k "associated_data_binds_owner"`
 Proof: `uv run pytest tests/infrastructure/test_secrets_envelope.py -k "tampered_ciphertext_rejected"`
 
@@ -32,7 +32,7 @@ Proof: `uv run pytest tests/test_cli_rotate_secrets_kek.py -k "rewraps_without_t
 Proof: `uv run pytest tests/test_cli_rotate_secrets_kek.py -k "unknown_kek_exits_one"`
 Proof: `uv run pytest tests/test_web_byok_generation.py -k "unknown_kek_serves_house_chain"`
 
-**C6** - `LEARNY_SECRETS_KEK` set to non-base64, or to base64 of 16 or 33 bytes, fails `Settings()` with a message naming `LEARNY_SECRETS_KEK` that does not contain the value. A valid KEK or an unset one loads (AC 6)
+**C6** - `LEARNY_SECRETS_KEK` set to non-base64, or to base64 of 16 or 33 bytes, fails `Settings()` with a message naming `LEARNY_SECRETS_KEK` that does not contain the value. A valid KEK or an unset one loads (AC 6) ✅
 Proof: `uv run pytest tests/test_config.py -k "secrets_kek"`
 
 **C7** - Deleting a user through `DELETE /api/auth/account` removes every `user_provider_credentials` row of that user and leaves another user's row in place (AC 7)

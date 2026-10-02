@@ -6,6 +6,8 @@ nothing here is committed with real values. See `.env.example` for the contract.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import logging
 import os
 from contextvars import ContextVar
@@ -13,7 +15,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic_settings.sources import PydanticBaseSettingsSource
 
@@ -41,6 +43,37 @@ _RETIRED_KNOBS = {
 # instance (``_env_file`` may override the class default) is knowable only from the
 # source that read it, and never reaches the model itself.
 _env_file_vars: ContextVar[frozenset[str]] = ContextVar("_env_file_vars", default=frozenset())
+
+
+#: How many bytes a learner-key KEK must decode to (AES-256).
+SECRETS_KEK_BYTES = 32
+
+
+class SecretsKekInvalid(RuntimeError):
+    """``LEARNY_SECRETS_KEK`` (or a previous KEK) is not base64 of exactly 32 bytes.
+
+    Deliberately not a ``ValueError``: pydantic wraps a ``ValueError`` raised by a
+    validator into a ``ValidationError`` whose text repeats the input value, and
+    this input is a secret. Raising anything else propagates unchanged out of
+    ``Settings()``, so the startup failure names the variable and nothing more.
+    """
+
+
+def _decode_kek(value: str, variable: str) -> bytes:
+    """Decode one base64 KEK, failing with copy that never contains the value."""
+    try:
+        raw = base64.b64decode(value.strip(), validate=True)
+    except (binascii.Error, ValueError):
+        raise SecretsKekInvalid(
+            f"{variable} must be base64 of exactly {SECRETS_KEK_BYTES} bytes; "
+            "the configured value is not valid base64"
+        ) from None
+    if len(raw) != SECRETS_KEK_BYTES:
+        raise SecretsKekInvalid(
+            f"{variable} must be base64 of exactly {SECRETS_KEK_BYTES} bytes; "
+            f"the configured value decodes to {len(raw)} bytes"
+        )
+    return raw
 
 
 class Settings(BaseSettings):
@@ -400,6 +433,52 @@ class Settings(BaseSettings):
     # Shared sample seed (RFC-0007 first session). Path is relative to the backend
     # working directory unless absolute. The operator account has no password.
     sample_epub_path: Path = Path("data/samples/sun-tzu_the-art-of-war_lionel-giles.epub")
+
+    # Learner-provided API keys (ADR-0032). ``secrets_kek`` is the key-encryption
+    # key that wraps every learner key's data key: base64 of exactly 32 bytes.
+    # Unset (or blank) means the feature is off, which is the default; a
+    # malformed value fails startup naming the variable, never the value.
+    # ``secrets_kek_previous`` lists retired KEKs (comma-separated) that may still
+    # unwrap until ``python -m app.cli.rotate_secrets_kek`` re-wraps their rows.
+    # Both are ``SecretStr`` so a printed settings object never shows them.
+    secrets_kek: SecretStr | None = None
+    secrets_kek_previous: SecretStr | None = None
+
+    @field_validator("secrets_kek", "secrets_kek_previous", mode="before")
+    @classmethod
+    def _validate_secrets_kek(cls, value: object, info: object) -> object:
+        """Reject a malformed KEK at startup; blank means unset."""
+        if isinstance(value, SecretStr):
+            value = value.get_secret_value()
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise SecretsKekInvalid("the secrets KEK settings must be strings")
+        if not value.strip():
+            return None
+        field_name = getattr(info, "field_name", "secrets_kek")
+        variable = f"LEARNY_{field_name.upper()}"
+        if field_name == "secrets_kek_previous":
+            for part in value.split(","):
+                if part.strip():
+                    _decode_kek(part, variable)
+        else:
+            _decode_kek(value, variable)
+        return SecretStr(value)
+
+    def secrets_keks(self) -> tuple[bytes, tuple[bytes, ...]] | None:
+        """The decoded (current, previous) KEKs, or ``None`` when the feature is off."""
+        if self.secrets_kek is None:
+            return None
+        current = _decode_kek(self.secrets_kek.get_secret_value(), "LEARNY_SECRETS_KEK")
+        previous: tuple[bytes, ...] = ()
+        if self.secrets_kek_previous is not None:
+            previous = tuple(
+                _decode_kek(part, "LEARNY_SECRETS_KEK_PREVIOUS")
+                for part in self.secrets_kek_previous.get_secret_value().split(",")
+                if part.strip()
+            )
+        return current, previous
 
     @classmethod
     def settings_customise_sources(
