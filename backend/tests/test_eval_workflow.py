@@ -185,3 +185,24 @@ def test_nothing_downgrades_the_nightly_failure() -> None:
     balance = _step_by_name("generation-eval", _BALANCE)["run"]
     assert "exit 0" not in balance
     assert "::notice::" not in balance
+
+
+# --- The schedule is off while the CI provider key is unfunded -------------------
+
+
+def test_no_schedule_trigger_keeps_manual_dispatch() -> None:
+    # A key with no credit made every scheduled run fail (66 in a row), and a
+    # permanently red workflow teaches everyone to ignore red. Runs are manual.
+    trigger = _trigger()
+    assert "schedule" not in trigger
+    assert "generation_profiles" in trigger["workflow_dispatch"]["inputs"]
+
+
+def test_schedule_off_reason_is_stated_where_people_look() -> None:
+    # The reason travels with the decision: the workflow itself, the agent
+    # context, and the front page each say why the schedule is off and how a run
+    # happens now, so nobody re-adds the cron or reads silence as health.
+    for path in (_EVAL, _REPO_ROOT / "CLAUDE.md", _REPO_ROOT / "README.md"):
+        text = path.read_text().lower()
+        assert "unfunded" in text, path
+        assert "manual dispatch" in text, path

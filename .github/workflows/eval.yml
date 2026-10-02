@@ -9,18 +9,22 @@
 # optional: when `LEARNY_ANTHROPIC_API_KEY` is unset the job exits successfully
 # with a notice, so a fork or a key-less repo stays green; a missing
 # `LEARNY_OPENAI_API_KEY` only skips the retrieval arm (its tests self-skip).
+#
+# Schedule off since 2026-10-02: the CI provider key is unfunded, so every
+# scheduled run failed on the provider's credit check (66 nights in a row) and a
+# permanently red workflow only taught everyone to ignore red. Runs are by
+# manual dispatch (Actions → Nightly eval → Run workflow) after funding the key;
+# restore the `schedule: - cron: "0 3 * * *"` trigger once it is funded for good.
 name: Nightly eval
 
 on:
-  schedule:
-    - cron: "0 3 * * *"
   workflow_dispatch:
     inputs:
       generation_profiles:
         description:
           "Optional LEARNY_GENERATION_PROFILES JSON override for a candidate run —
           the registry the eval serves and records per case. Left empty, the
-          scheduled default applies. Promotion stays a recorded registry-reorder
+          default registry applies. Promotion stays a recorded registry-reorder
           act gated on a green nightly, never automatic."
         required: false
         type: string
