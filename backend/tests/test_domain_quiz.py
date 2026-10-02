@@ -329,19 +329,20 @@ def test_quiz_item_is_frozen() -> None:
 # --- Card origin and provenance (CAP-10, CAP-16, CAP-19) -------------------------
 
 
-def test_item_origins_are_exactly_deck_highlight_note_tutor_and_starter() -> None:
+def test_item_origins_are_exactly_deck_highlight_note_tutor_starter_and_checkpoint() -> None:
     """The vocabulary is closed: each origin has its own identity rule.
 
     ``note`` is the only source-less origin (AD-148). ``tutor`` is source-backed and
     identified by ``conversation_id`` (AD-297), not by content hash or highlight.
     ``starter`` clones are per-learner on a source, distinct from operator decks.
+    ``checkpoint`` cards are learner-owned and reused per section at the service level.
     """
     origins = {
         value
         for key, value in vars(QuizItemOrigin).items()
         if not key.startswith("_") and isinstance(value, str)
     }
-    assert origins == {"deck", "highlight", "note", "tutor", "starter"}
+    assert origins == {"deck", "highlight", "note", "tutor", "starter", "checkpoint"}
 
 
 def test_item_origin_vocabulary() -> None:
