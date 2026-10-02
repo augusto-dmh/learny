@@ -555,6 +555,12 @@ class GeneratedAnswer:
     # debit prices the call at the serving profile's catalog (PRICE-01). Absent
     # (a direct sub-adapter's answer) → the primary catalog, as before routing.
     profile_id: str | None = None
+    # Who paid for the call, stamped by the routing adapter beside the profile id
+    # (ADR-0032): ``True`` when an entry built with the learner's own provider key
+    # served it, so the house ledger debits 0 USD while the call still counts.
+    # The router stamps the same ``profile_id`` for either payer, which is why
+    # this needs its own field. Absent → the house paid, as before.
+    user_keyed: bool = False
 
 
 # The exact reply a generation adapter instructs the model to return, alone, when

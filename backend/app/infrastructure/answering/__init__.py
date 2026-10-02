@@ -39,7 +39,10 @@ __all__ = [
     "RoutingGenerationAdapter",
     "build_generation_adapter",
     "build_generation_chain",
+    "build_learner_keyed_chain",
     "build_user_generation_chain",
+    "build_user_keyed_adapter",
+    "order_learner_profiles",
 ]
 
 
@@ -200,3 +203,45 @@ def build_user_generation_chain(
         )
     )
 
+
+def order_learner_profiles(
+    profiles: tuple[GenerationProfileSettings, ...],
+    providers: frozenset[str],
+    *,
+    lead: str | None = None,
+) -> tuple[GenerationProfileSettings, ...]:
+    """The profiles a learner's keys can serve, in registry order, ``lead`` first.
+
+    A profile qualifies when it binds one of ``providers`` (the providers the
+    learner holds a usable key for). ``lead`` — the learner's stored choice on
+    the Ask/Teach chain, or ``generation_explain_profile`` on the Explain chain —
+    moves to the front when it qualifies and is otherwise ignored. Mode
+    eligibility stays the router's to decide.
+    """
+    bound = tuple(p for p in profiles if p.user_key_provider in providers)
+    head = next((p for p in bound if p.id == lead), None) if lead else None
+    if head is None:
+        return bound
+    return (head, *(p for p in bound if p is not head))
+
+
+def build_user_keyed_adapter(
+    profile: GenerationProfileSettings, settings: Settings, api_key: str
+) -> GenerationPort:
+    """Build the adapter one bound profile names, with a learner's own key."""
+    return _build_sub_adapter(profile, settings, api_key=api_key)
+
+
+def build_learner_keyed_chain(
+    entries: tuple[ChainEntry, ...], house: GenerationPort
+) -> GenerationPort:
+    """The chain a learner with keys is served by: their entries lead, the house rides beside.
+
+    ``entries`` are user-keyed; ``house`` is the chain a learner without a key
+    would get (their preference chain, or the Explain chain), and it serves,
+    unchanged, every mode none of the entries is eligible for. With no entries
+    the house chain is returned as is.
+    """
+    if not entries:
+        return house
+    return RoutingGenerationAdapter(entries, house=house)

@@ -28,7 +28,7 @@ Proof: `uv run pytest tests/infrastructure/test_secrets_envelope.py -k "tampered
 **C4** - Rotation with a new current KEK and the old one in `LEARNY_SECRETS_KEK_PREVIOUS` re-wraps every row, leaves `ciphertext` byte-identical, sets `kek_id` to the new KEK's id, keeps every key decryptable, and a second run reports 0 rewrapped (AC 4) ✅
 Proof: `uv run pytest tests/test_cli_rotate_secrets_kek.py -k "rewraps_without_touching_ciphertext"`
 
-**C5** - A row under an unknown KEK makes the rotation print it in the unknown count and exit `1`. The credential resolver returns "no credential" for that user instead of raising (AC 5)
+**C5** - A row under an unknown KEK makes the rotation print it in the unknown count and exit `1`. The credential resolver returns "no credential" for that user instead of raising (AC 5) ✅
 Proof: `uv run pytest tests/test_cli_rotate_secrets_kek.py -k "unknown_kek_exits_one"`
 Proof: `uv run pytest tests/test_web_byok_generation.py -k "unknown_kek_serves_house_chain"`
 
@@ -80,36 +80,36 @@ Proof: `uv run pytest tests/test_web_provider_keys.py -k "routes_require_session
 
 ### S3 - Learner chains for Ask, Tutor and Explain · batch A
 
-**C19** - A learner with a stored key for a bound provider is served an ask turn and a teach turn by the bound profile, through an adapter constructed with that learner's key, ahead of the house primary (AC 19)
+**C19** - A learner with a stored key for a bound provider is served an ask turn and a teach turn by the bound profile, through an adapter constructed with that learner's key, ahead of the house primary (AC 19) ✅
 Proof: `uv run pytest tests/test_web_byok_generation.py -k "turn_served_by_learner_key"`
 
-**C20** - A learner's selection-Explain is served by a profile bound to their provider with their key. When `generation_explain_profile` names a bound profile, that profile serves first (AC 20)
+**C20** - A learner's selection-Explain is served by a profile bound to their provider with their key. When `generation_explain_profile` names a bound profile, that profile serves first (AC 20) ✅
 Proof: `uv run pytest tests/test_web_byok_generation.py -k "explain_served_by_learner_key"`
 
-**C21** - When every eligible user-keyed entry raises `RequestRejected`, `ProviderUnavailable` or `Timeout`, the router raises the generation failure and the house entries in the same chain are never called (AC 21)
+**C21** - When every eligible user-keyed entry raises `RequestRejected`, `ProviderUnavailable` or `Timeout`, the router raises the generation failure and the house entries in the same chain are never called (AC 21) ✅
 Proof: `uv run pytest tests/infrastructure/test_answering_routing.py -k "never_falls_from_user_key_to_house"`
 
-**C22** - When no user-keyed entry is eligible for the requested mode (for example, the bound profile has `ask_enabled=false`), the call is served by the house chain's first eligible entry (AC 22)
+**C22** - When no user-keyed entry is eligible for the requested mode (for example, the bound profile has `ask_enabled=false`), the call is served by the house chain's first eligible entry (AC 22) ✅
 Proof: `uv run pytest tests/infrastructure/test_answering_routing.py -k "uncovered_mode_served_by_house"`
 Proof: `uv run pytest tests/test_web_byok_generation.py -k "uncovered_mode_served_by_house"`
 
-**C23** - Two learners with different keys for the same provider, asking in the same process, each reach an adapter built with their own key, and the cache holds two distinct entries (AC 23)
+**C23** - Two learners with different keys for the same provider, asking in the same process, each reach an adapter built with their own key, and the cache holds two distinct entries (AC 23) ✅
 Proof: `uv run pytest tests/test_web_byok_generation.py -k "two_learners_two_keys"`
 Proof: `uv run pytest tests/infrastructure/test_user_adapter_cache.py -k "keys_on_fingerprint"`
 
-**C24** - After a replace, the learner's next turn is served by an adapter built with the new key. After a delete, it is served by the house chain. The old key's adapter is never called again (AC 24)
+**C24** - After a replace, the learner's next turn is served by an adapter built with the new key. After a delete, it is served by the house chain. The old key's adapter is never called again (AC 24) ✅
 Proof: `uv run pytest tests/test_web_byok_generation.py -k "replace_and_delete_take_effect_next_request"`
 
-**C25** - A turn served by a user-keyed entry that reports token usage leaves the ledger's `usd_micros` for that day at 0 and increments `ask_count` by 1. The same turn served by a house entry debits more than 0 (AC 25)
+**C25** - A turn served by a user-keyed entry that reports token usage leaves the ledger's `usd_micros` for that day at 0 and increments `ask_count` by 1. The same turn served by a house entry debits more than 0 (AC 25) ✅
 Proof: `uv run pytest tests/test_web_byok_generation.py -k "learner_key_debits_zero_usd_counts_call"`
 
-**C26** - With `ai_kill_switch` on, a learner with a stored key gets the pause refusal (`503`) and no adapter is called (AC 26)
+**C26** - With `ai_kill_switch` on, a learner with a stored key gets the pause refusal (`503`) and no adapter is called (AC 26) ✅
 Proof: `uv run pytest tests/test_web_byok_generation.py -k "kill_switch_refuses_learner_key"`
 
 **C27** - A profile with `user_key_provider` and no `api_key_env` never appears in `build_generation_chain`, in the explain chain or in `learner_catalog`. A registry whose only non-local profiles are user-key-only and that has no house-servable profile fails resolution with an error naming the problem. A non-local profile with neither field still fails as today (AC 27) ✅
 Proof: `uv run pytest tests/infrastructure/test_provider_profiles.py -k "user_key_only"`
 
-**C44** - The adapter cache holds at most its bound (256) entries, evicting least-recently-used, and an entry older than its TTL is rebuilt on the next lookup (Landing door 4)
+**C44** - The adapter cache holds at most its bound (256) entries, evicting least-recently-used, and an entry older than its TTL is rebuilt on the next lookup (Landing door 4) ✅
 Proof: `uv run pytest tests/infrastructure/test_user_adapter_cache.py -k "lru_bound_and_ttl"`
 
 ### S4 - Cards and decks under the learner's key · batch B

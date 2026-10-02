@@ -616,3 +616,188 @@ def test_a_teach_turn_on_a_teach_disabled_chain_fails_honest() -> None:
         router.generate(mode=MODE_TEACH, message="q", evidence=[])
 
     assert disabled.calls == 0
+
+
+# --- Learner-keyed entries: lead, never fall over into the house (ADR-0032) ----------
+#
+# A learner who holds a key has user-keyed entries leading their chain. Every
+# fail-over rule still applies among those entries, but no failure ever walks
+# from a user-keyed entry to a house-keyed one: a broken learner key surfaces as
+# the honest generation failure instead of being silently billed to the house.
+# A mode that no user-keyed entry is eligible for is served by the house, as
+# for a learner without a key.
+
+
+def _keyed(
+    id: str,  # noqa: A002 — the settings field is named ``id``
+    adapter: object,
+    *,
+    kind: str = "anthropic",
+    ask: bool = True,
+    teach: bool = True,
+) -> ChainEntry:
+    return ChainEntry(
+        adapter=adapter,  # type: ignore[arg-type]
+        profile=_profile(id, kind, ask=ask, teach=teach),
+        user_keyed=True,
+    )
+
+
+_FAILURES = [
+    pytest.param(RequestRejected("401 invalid x-api-key"), id="rejected"),
+    pytest.param(ProviderUnavailable("503"), id="unavailable"),
+    pytest.param(Timeout("timed out"), id="timeout"),
+    pytest.param(RateLimited("429"), id="rate_limited"),
+]
+
+
+def _fails_always(model: str, error: Exception) -> _ScriptedAdapter:
+    return _ScriptedAdapter(model, [error, error, error, error])
+
+
+@pytest.mark.parametrize("error", _FAILURES)
+def test_never_falls_from_user_key_to_house_in_a_mixed_chain(error: Exception) -> None:
+    # Two user-keyed entries of different kinds (so a rejection may cross between
+    # them), then house entries of yet other kinds that the walk could reach if
+    # the owner rule were missing.
+    keyed_a = _fails_always("keyed-a", error)
+    keyed_b = _fails_always("keyed-b", error)
+    house_local = _ScriptedAdapter("house-local", [_answer("house local")])
+    house_compat = _ScriptedAdapter("house-compat", [_answer("house compat")])
+    router = RoutingGenerationAdapter(
+        (
+            _keyed("byok-a", keyed_a, kind="anthropic"),
+            _keyed("byok-b", keyed_b, kind="openai-compatible"),
+            _entry("house-local", house_local, kind="local"),
+            _entry("house-compat", house_compat, kind="openai-compatible"),
+        ),
+        rate_retry_delay=0.0,
+    )
+
+    with pytest.raises(type(error)):
+        router.generate(mode=_MODE, message="q", evidence=[])
+
+    assert keyed_a.calls >= 1
+    assert house_local.calls == 0
+    assert house_compat.calls == 0
+
+
+@pytest.mark.parametrize("error", _FAILURES)
+def test_never_falls_from_user_key_to_house_behind_the_house_port(error: Exception) -> None:
+    # The composition shape: the learner's router holds only user-keyed entries
+    # and the house chain rides beside it as a port. A failure among the keyed
+    # entries never reaches it.
+    keyed = _fails_always("keyed", error)
+    house_entry = _ScriptedAdapter("house", [_answer("house")])
+    house = RoutingGenerationAdapter((_entry("house", house_entry, kind="local"),))
+    router = RoutingGenerationAdapter((_keyed("byok", keyed),), rate_retry_delay=0.0, house=house)
+
+    with pytest.raises(type(error)):
+        router.generate(mode=_MODE, message="q", evidence=[])
+
+    assert keyed.calls >= 1
+    assert house_entry.calls == 0
+
+
+def test_never_falls_from_user_key_to_house_while_fail_over_among_keyed_entries_holds() -> None:
+    keyed_a = _ScriptedAdapter("keyed-a", [ProviderUnavailable("503")])
+    keyed_b = _ScriptedAdapter("keyed-b", [_answer("from the second learner entry")])
+    house = _ScriptedAdapter("house", [_answer("house")])
+    router = RoutingGenerationAdapter(
+        (
+            _keyed("byok-a", keyed_a),
+            _keyed("byok-b", keyed_b),
+            _entry("house", house, kind="local"),
+        ),
+        rate_retry_delay=0.0,
+    )
+
+    answer = router.generate(mode=_MODE, message="q", evidence=[])
+
+    assert answer.text == "from the second learner entry"
+    assert answer.profile_id == "byok-b"
+    assert answer.user_keyed is True
+    assert house.calls == 0
+
+
+@pytest.mark.parametrize("error", _FAILURES)
+def test_never_falls_from_user_key_to_house_before_the_first_stream_delta(
+    error: Exception,
+) -> None:
+    keyed = _StreamScriptedAdapter("keyed", [[error], [error]])
+    house = _StreamScriptedAdapter("house", [[AnswerCompleted(answer=_answer("house"))]])
+    router = RoutingGenerationAdapter(
+        (_keyed("byok", keyed), _entry("house", house, kind="local")),
+        rate_retry_delay=0.0,
+    )
+
+    with pytest.raises(type(error)):
+        _collect(router.generate_stream(mode=_MODE, message="q", evidence=[]))
+
+    assert keyed.stream_calls >= 1
+    assert house.stream_calls == 0
+
+
+def test_uncovered_mode_served_by_house_entries_in_a_mixed_chain() -> None:
+    keyed = _ScriptedAdapter("keyed", [])
+    house = _ScriptedAdapter("house", [_answer("house answer")])
+    router = RoutingGenerationAdapter(
+        (_keyed("byok", keyed, ask=False), _entry("house", house, kind="local"))
+    )
+
+    answer = router.generate(mode=_MODE, message="q", evidence=[])
+
+    assert answer.text == "house answer"
+    assert answer.profile_id == "house"
+    assert answer.user_keyed is False
+    assert keyed.calls == 0
+
+
+def test_uncovered_mode_served_by_house_port_exactly_as_the_house_answers() -> None:
+    keyed = _ScriptedAdapter("keyed", [])
+    house_entry = _ScriptedAdapter("house", [_answer("house answer")])
+    house = RoutingGenerationAdapter((_entry("house-primary", house_entry, kind="local"),))
+    router = RoutingGenerationAdapter((_keyed("byok", keyed, teach=False),), house=house)
+
+    answer = router.generate(mode=MODE_TEACH, message="q", evidence=[])
+
+    assert answer.text == "house answer"
+    assert answer.profile_id == "house-primary"
+    assert answer.user_keyed is False
+    assert keyed.calls == 0
+
+
+def test_uncovered_mode_served_by_house_port_when_streaming() -> None:
+    keyed = _StreamScriptedAdapter("keyed", [])
+    house_entry = _StreamScriptedAdapter(
+        "house", [[AnswerTextDelta(text="hi"), AnswerCompleted(answer=_answer("hi"))]]
+    )
+    house = RoutingGenerationAdapter((_entry("house-primary", house_entry, kind="local"),))
+    router = RoutingGenerationAdapter((_keyed("byok", keyed, ask=False),), house=house)
+
+    events = _collect(router.generate_stream(mode=_MODE, message="q", evidence=[]))
+
+    completed = events[-1]
+    assert isinstance(completed, AnswerCompleted)
+    assert completed.answer.profile_id == "house-primary"
+    assert completed.answer.user_keyed is False
+    assert keyed.stream_calls == 0
+
+
+def test_a_user_keyed_answer_is_stamped_as_learner_paid() -> None:
+    keyed = _ScriptedAdapter("keyed", [_answer("learner answer")])
+    house = _ScriptedAdapter("house", [])
+    router = RoutingGenerationAdapter((_keyed("byok", keyed), _entry("house", house, kind="local")))
+
+    answer = router.generate(mode=_MODE, message="q", evidence=[])
+
+    assert answer.profile_id == "byok"
+    assert answer.user_keyed is True
+    assert house.calls == 0
+
+
+def test_a_house_answer_is_never_stamped_as_learner_paid() -> None:
+    house = _ScriptedAdapter("house", [_answer("house answer")])
+    router = RoutingGenerationAdapter((_entry("house", house),))
+
+    assert router.generate(mode=_MODE, message="q", evidence=[]).user_keyed is False

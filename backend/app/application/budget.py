@@ -159,7 +159,13 @@ class DailyBudget:
         if kind == KIND_TEACH_START and row.teach_starts >= self._teach_start_daily_cap:
             raise DailyBudgetExhausted(EXHAUSTED_COPY)
 
-    def usage_micros(self, usage: TokenUsage | None, profile_id: str | None = None) -> int:
+    def usage_micros(
+        self,
+        usage: TokenUsage | None,
+        profile_id: str | None = None,
+        *,
+        user_keyed: bool = False,
+    ) -> int:
         """Price one call's reported usage into ledger micros; absent usage is 0.
 
         Pricing uses the **serving profile's** catalog (PRICE-01): the stamp is
@@ -171,8 +177,13 @@ class DailyBudget:
         (the resolver's — never a silent misprice, PRICE-04) and prices at the
         primary catalog. No resolver wired is the single-catalog world a caller
         without stamps lives in: everything prices at ``prices``.
+
+        A call served with the learner's own provider key (``user_keyed``) costs
+        the house nothing, so it prices at 0 USD whatever it reported (ADR-0032).
+        Its call counters still apply: :meth:`record` counts an ask or a teach
+        start whatever the amount.
         """
-        if usage is None:
+        if usage is None or user_keyed:
             return 0
         prices = self._prices
         if self._resolve_serving_profile is not None:
