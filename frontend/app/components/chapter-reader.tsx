@@ -50,6 +50,7 @@ import {
   type CaptureAction,
   type CaptureSelection,
 } from "@/app/components/notes/capture-popover";
+import { CheckpointDialog } from "@/app/components/checkpoint-dialog";
 import { InkLine } from "@/app/components/ink-line";
 import { MarginRail } from "@/app/components/margin-rail";
 import {
@@ -104,6 +105,12 @@ let pendingCitationQuote: { anchor: string; quote: string } | null = null;
 
 /** A stable empty highlight list, so sections without highlights never repaint. */
 const NO_HIGHLIGHTS: SourceHighlightView[] = [];
+
+/**
+ * A section shorter than this gets no checkpoint invitation: below it a section
+ * is a heading stub, and inviting a retrieval there is noise.
+ */
+export const CHECKPOINT_MIN_WORDS = 150;
 
 /**
  * What the reader says when the served evidence no longer matches the section — a
@@ -453,6 +460,11 @@ export function ChapterFlow({
   // Bumped whenever a capture writes a note, so the dock's Notes tab — which may
   // be the very tab the reader is looking at — shows it without a reload.
   const [notesToken, setNotesToken] = useState(0);
+  // The section whose end-of-section checkpoint is open, if any.
+  const [checkpointSection, setCheckpointSection] = useState<{
+    anchor: string;
+    title: string;
+  } | null>(null);
 
   // Track the topmost visible section as the reader scrolls, and persist the
   // position after each scroll-idle (RD-07/13).
@@ -899,15 +911,24 @@ export function ChapterFlow({
             {chapter.chapter_title}
           </h1>
           {chapter.sections.map((section, index) => (
-            <FlowSection
-              key={section.anchor}
-              section={section}
-              wordsBefore={offsets[index]}
-              wordsPerPage={chapter.words_per_page}
-              flashing={flashAnchor === section.anchor}
-              highlights={highlightsWithSpan.get(section.anchor) ?? NO_HIGHLIGHTS}
-              onSelectionRelease={() => handleSelectionRelease(section)}
-            />
+            <Fragment key={section.anchor}>
+              <FlowSection
+                section={section}
+                wordsBefore={offsets[index]}
+                wordsPerPage={chapter.words_per_page}
+                flashing={flashAnchor === section.anchor}
+                highlights={highlightsWithSpan.get(section.anchor) ?? NO_HIGHLIGHTS}
+                onSelectionRelease={() => handleSelectionRelease(section)}
+              />
+              {csrf && section.word_count >= CHECKPOINT_MIN_WORDS ? (
+                <CheckpointInvite
+                  sectionTitle={section.title}
+                  onOpen={() =>
+                    setCheckpointSection({ anchor: section.anchor, title: section.title })
+                  }
+                />
+              ) : null}
+            </Fragment>
           ))}
           <ChapterNav
             sourceId={sourceId}
@@ -972,7 +993,48 @@ export function ChapterFlow({
         ) : null}
       </div>
       {returnAnchor ? <ReturnChip onReturn={handleReturn} /> : null}
+      {checkpointSection && csrf ? (
+        <CheckpointDialog
+          key={checkpointSection.anchor}
+          open
+          sourceId={sourceId}
+          anchor={checkpointSection.anchor}
+          sectionTitle={checkpointSection.title}
+          csrf={csrf}
+          onClose={() => setCheckpointSection(null)}
+        />
+      ) : null}
     </div>
+  );
+}
+
+/**
+ * The end-of-section invitation: one quiet line after a section long enough to
+ * be worth retrieving. It opens nothing until tapped, so scrolling past it is
+ * skipping it. Reading never stops for a checkpoint.
+ */
+function CheckpointInvite({
+  sectionTitle,
+  onOpen,
+}: {
+  sectionTitle: string;
+  onOpen: () => void;
+}) {
+  return (
+    <aside
+      data-testid="checkpoint-invite"
+      className="not-prose my-6 flex items-center justify-between gap-3 border-y py-2 text-sm text-muted-foreground"
+    >
+      <span>Finished this section?</span>
+      <button
+        type="button"
+        onClick={onOpen}
+        aria-label={`Check yourself on ${sectionTitle}`}
+        className="text-primary underline-offset-4 hover:underline"
+      >
+        Check yourself
+      </button>
+    </aside>
   );
 }
 

@@ -2210,3 +2210,55 @@ describe("ChapterFlow reading control targets (READ-25)", () => {
     }
   });
 });
+
+describe("ChapterFlow end-of-section checkpoint invitation", () => {
+  it("checkpoint invitation only after sections of at least 150 words", async () => {
+    const mixed: ChapterView = {
+      ...chapter,
+      sections: [
+        { ...chapter.sections[0], word_count: 150 },
+        { ...chapter.sections[1], word_count: 149 },
+      ],
+    };
+    // The table of contents loads the book structure on mount; anything else
+    // reaching the network here would be the checkpoint, which must wait for a tap.
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url === "/api/sources/s1/structure") {
+        return jsonResponse(200, { sections: [] });
+      }
+      throw new Error(`no request expected: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const checkpointCalls = () =>
+      fetchMock.mock.calls.filter(([url]) => String(url).includes("checkpoint"));
+    const { container } = render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={mixed} scrollTarget={null} />,
+    );
+    await screen.findByText("Ada Lovelace wrote the first algorithm.");
+
+    const invites = screen.getAllByTestId("checkpoint-invite");
+    expect(invites).toHaveLength(1);
+    // Placed right after the long section's body, not over or inside it.
+    const longSection = container.querySelector(`[data-section-anchor="${S1}"]`)!;
+    expect(longSection.nextElementSibling).toBe(invites[0]);
+    expect(longSection.contains(invites[0])).toBe(false);
+    // Nothing opens until it is tapped.
+    expect(screen.queryByTestId("checkpoint-dialog")).toBeNull();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Check yourself on The First Algorithm" }),
+    );
+    expect(await screen.findByTestId("checkpoint-dialog")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Little" })).toBeTruthy();
+    expect(checkpointCalls()).toEqual([]);
+
+    // Closing returns to the same chapter: the dialog unmounts, the sections stay.
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByTestId("checkpoint-dialog")).toBeNull());
+    expect(
+      Array.from(container.querySelectorAll("[data-section-anchor]")).map((w) => w.id),
+    ).toEqual([S1, S2]);
+    expect(checkpointCalls()).toEqual([]);
+    vi.unstubAllGlobals();
+  });
+});
