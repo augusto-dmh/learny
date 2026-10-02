@@ -25,7 +25,7 @@ Proof: `uv run pytest tests/infrastructure/test_secrets_envelope.py -k "fresh_de
 Proof: `uv run pytest tests/infrastructure/test_secrets_envelope.py -k "associated_data_binds_owner"`
 Proof: `uv run pytest tests/infrastructure/test_secrets_envelope.py -k "tampered_ciphertext_rejected"`
 
-**C4** - Rotation with a new current KEK and the old one in `LEARNY_SECRETS_KEK_PREVIOUS` re-wraps every row, leaves `ciphertext` byte-identical, sets `kek_id` to the new KEK's id, keeps every key decryptable, and a second run reports 0 rewrapped (AC 4)
+**C4** - Rotation with a new current KEK and the old one in `LEARNY_SECRETS_KEK_PREVIOUS` re-wraps every row, leaves `ciphertext` byte-identical, sets `kek_id` to the new KEK's id, keeps every key decryptable, and a second run reports 0 rewrapped (AC 4) ✅
 Proof: `uv run pytest tests/test_cli_rotate_secrets_kek.py -k "rewraps_without_touching_ciphertext"`
 
 **C5** - A row under an unknown KEK makes the rotation print it in the unknown count and exit `1`. The credential resolver returns "no credential" for that user instead of raising (AC 5)
