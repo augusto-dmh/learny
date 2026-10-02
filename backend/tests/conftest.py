@@ -58,6 +58,20 @@ def declared_routes(app: object) -> list:
     return flattened
 
 
+def pytest_configure(config: pytest.Config) -> None:
+    """Refuse a run that would skip the database suite while ``LEARNY_REQUIRE_DB=1``.
+
+    Database tests skip quietly without ``LEARNY_TEST_DATABASE_URL``, so a run in a
+    session with no database reports green over hundreds of skips. CI and the
+    Verifier set the flag, which turns that silent skip into a failed run.
+    """
+    if os.environ.get("LEARNY_REQUIRE_DB") == "1" and not TEST_DB_URL:
+        raise pytest.UsageError(
+            "LEARNY_REQUIRE_DB=1 but LEARNY_TEST_DATABASE_URL is not set: the database "
+            "tests would not run. Start the database (make infra) and set the URL."
+        )
+
+
 def pytest_addoption(parser: pytest.Parser) -> None:
     """Register ``--record-generation`` for the generation replay harness (design §8).
 
