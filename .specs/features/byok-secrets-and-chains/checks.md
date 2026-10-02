@@ -15,7 +15,7 @@ exported (DB-gated tests skip without it, and a skip is not green). Frontend pro
 
 ### S1 - Sealed key storage · batch A
 
-**C1** - A stored key leaves only ciphertext, nonce, wrapped DEK, DEK nonce, `kek_id`, fingerprint and last four in the row. Neither the plaintext nor the plaintext DEK appears in any column (AC 1)
+**C1** - A stored key leaves only ciphertext, nonce, wrapped DEK, DEK nonce, `kek_id`, fingerprint and last four in the row. Neither the plaintext nor the plaintext DEK appears in any column (AC 1) ✅
 Proof: `uv run pytest tests/test_provider_credentials_repository.py -k "row_holds_no_plaintext"`
 
 **C2** - Sealing the same key twice yields different DEKs, nonces and ciphertexts, and both open to the same plaintext (AC 2) ✅
@@ -35,7 +35,7 @@ Proof: `uv run pytest tests/test_web_byok_generation.py -k "unknown_kek_serves_h
 **C6** - `LEARNY_SECRETS_KEK` set to non-base64, or to base64 of 16 or 33 bytes, fails `Settings()` with a message naming `LEARNY_SECRETS_KEK` that does not contain the value. A valid KEK or an unset one loads (AC 6) ✅
 Proof: `uv run pytest tests/test_config.py -k "secrets_kek"`
 
-**C7** - Deleting a user through `DELETE /api/auth/account` removes every `user_provider_credentials` row of that user and leaves another user's row in place (AC 7)
+**C7** - Deleting a user through `DELETE /api/auth/account` removes every `user_provider_credentials` row of that user and leaves another user's row in place (AC 7) ✅
 Proof: `uv run pytest tests/test_provider_credentials_repository.py -k "cascades_with_its_user"`
 Proof: `uv run pytest tests/test_web_auth.py -k "delete_account_erases_provider_keys"`
 

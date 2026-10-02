@@ -508,6 +508,52 @@ def test_delete_account_erases_objects_rows_and_leaves_the_sample(
     assert survivor.status_code == 200, survivor.text
 
 
+def test_delete_account_erases_provider_keys(auth_client: TestClient, db_conn: Connection) -> None:
+    """A learner's stored provider keys die with their account; another learner's
+    key, stored the same way, survives the deletion untouched."""
+    import os
+
+    from app.infrastructure.db.metadata import user_provider_credentials
+    from app.infrastructure.db.provider_credentials import (
+        SqlAlchemyProviderCredentialRepository,
+    )
+    from app.infrastructure.security.secrets_envelope import SecretsEnvelope
+
+    _register(auth_client, "keyholder@example.com")
+    _register(auth_client, "other-keyholder@example.com")
+    owner_id = _user_id(db_conn, "keyholder@example.com")
+    other_id = _user_id(db_conn, "other-keyholder@example.com")
+    repo = SqlAlchemyProviderCredentialRepository(db_conn, SecretsEnvelope(os.urandom(32)))
+    repo.replace(owner_id, "anthropic", "sk-ant-api03-account-delete-key-1111")
+    repo.replace(owner_id, "openai", "sk-proj-account-delete-key-22222222")
+    survivor = repo.replace(other_id, "anthropic", "sk-ant-api03-survivor-key-333333333")
+    auth_client.app.dependency_overrides[get_storage] = lambda: FakeStorage()
+
+    auth_client.cookies.clear()
+    login = auth_client.post(
+        "/api/auth/login",
+        json={"email": "keyholder@example.com", "password": TEST_PASSWORD, "accepted_tos": True},
+    )
+    assert login.status_code == 200, login.text
+    resp = auth_client.delete(
+        "/api/auth/account", headers={"X-CSRF-Token": _csrf_token(auth_client)}
+    )
+
+    assert resp.status_code == 204, resp.text
+    owner_rows = db_conn.execute(
+        select(func.count())
+        .select_from(user_provider_credentials)
+        .where(user_provider_credentials.c.user_id == owner_id)
+    ).scalar_one()
+    assert owner_rows == 0
+    remaining = db_conn.execute(
+        select(user_provider_credentials.c.id).where(
+            user_provider_credentials.c.user_id == other_id
+        )
+    ).all()
+    assert [row.id for row in remaining] == [survivor.id]
+
+
 def test_delete_account_unauthenticated_is_401(auth_client: TestClient) -> None:
     # Authentication resolves before the CSRF gate (logout/notes shape).
     resp = auth_client.delete("/api/auth/account")

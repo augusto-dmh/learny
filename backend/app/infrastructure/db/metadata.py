@@ -55,6 +55,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     MetaData,
     Numeric,
     SmallInteger,
@@ -948,4 +949,35 @@ user_ai_preferences = Table(
     Column("profile_id", Text, nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+)
+
+# --- Learner provider keys, sealed at rest (ADR-0032) -----------------------------
+# One row per (user, provider) holding a learner's API key in envelope-encrypted
+# form: the AES-256-GCM ciphertext and its nonce, the per-row data key wrapped by
+# the operator's KEK and that wrap's nonce, the KEK id, a fingerprint bound to the
+# owner, and the last four characters the account page may show. Never the
+# plaintext key or an unwrapped data key. A replace is delete + insert (a new id),
+# never an in-place update; the FK cascades, so the keys die with their account.
+
+user_provider_credentials = Table(
+    "user_provider_credentials",
+    metadata,
+    Column("id", UUID(as_uuid=True), primary_key=True),
+    Column(
+        "user_id",
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("provider", Text, nullable=False),
+    Column("ciphertext", LargeBinary, nullable=False),
+    Column("nonce", LargeBinary, nullable=False),
+    Column("wrapped_dek", LargeBinary, nullable=False),
+    Column("dek_nonce", LargeBinary, nullable=False),
+    Column("kek_id", Text, nullable=False),
+    Column("fingerprint", Text, nullable=False),
+    Column("last4", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    UniqueConstraint("user_id", "provider"),
 )

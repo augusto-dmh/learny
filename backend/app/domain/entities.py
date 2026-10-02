@@ -61,6 +61,27 @@ class AiPreference:
 
 
 @dataclass(frozen=True)
+class ProviderCredential:
+    """One learner's stored API key for one provider, as metadata only (ADR-0032).
+
+    The key itself never leaves the infrastructure layer: it is stored sealed
+    (envelope-encrypted) and opened only where an adapter is built. What crosses
+    layers is this: which row, whose, for which provider, the last four
+    characters the account page may show, and ``fingerprint``, a non-secret name
+    of this exact key write that changes whenever the key is replaced (so
+    anything cached on it stops resolving). At most one per (user, provider).
+    """
+
+    id: UUID
+    user_id: UUID
+    provider: str
+    last4: str
+    fingerprint: str
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
 class PasswordCredential:
     """An Argon2id password hash for a user (AD-006).
 
