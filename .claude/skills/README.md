@@ -11,20 +11,16 @@ that have no official skill).
 
 Source: `https://github.com/tech-leads-club/agent-skills`
 
-- `domain-analysis`
 - `modular-design-principles`
 - `create-adr`
 - `create-rfc`
-- `create-technical-design-doc`
-- `tlc-spec-driven`
-- `skill-architect`
 - `pr-review`
 - `learny-finalize` (Learny-specific publishing conventions)
 
 Install notes: the architecture/artifact skills were brought in from the Tech
-Leads Club installs used during the first research pass; `tlc-spec-driven` and
-`skill-architect` were installed with
-`npx @tech-leads-club/agent-skills install --skill tlc-spec-driven skill-architect --agent codex --force`.
+Leads Club installs used during the first research pass. Feature cycles run on
+the user-level `tlc-spec-lean`; the vendored spec-driven copy and the skills no
+cycle ever loaded were removed on 2026-10-02 (recoverable from git history).
 
 ## Vendored official stack skills
 
@@ -41,26 +37,11 @@ Socket security scan. Provenance and content hashes are pinned in the repo-root
 | `fastapi` | `fastapi/fastapi` | framework-official (FastAPI team) | Backend framework conventions |
 | `redis-core` | `redis/agent-skills` | Redis Inc (vendor/core-team) | Data modeling & key naming |
 | `redis-connections` | `redis/agent-skills` | Redis Inc | Client pooling/pipelining (Celery broker) |
-| `redis-observability` | `redis/agent-skills` | Redis Inc | Monitoring & incident triage |
-| `redis-security` | `redis/agent-skills` | Redis Inc | Auth/ACL/TLS hardening for prod |
 | `ruff` | `astral-sh/claude-code-plugins` | Astral (ruff author) | Python lint/format |
 | `uv` | `astral-sh/claude-code-plugins` | Astral (uv author) | Python package/project manager |
 | `vercel-react-best-practices` | `vercel-labs/agent-skills` | Vercel Engineering | React/Next.js App Router performance |
 | `vercel-composition-patterns` | `vercel-labs/agent-skills` | Vercel Engineering | React composition/component APIs |
 | `web-design-guidelines` | `vercel-labs/agent-skills` | Vercel (Web Interface Guidelines) | UI/accessibility review |
-
-## Community workflow skills (user-accepted)
-
-Added 2026-07-18 at the user's explicit request (reviewed before install, per the
-CLAUDE.md third-party-skill constraint). Installed with `npx skills add
-mattpocock/skills --skill grill-me --skill grilling --copy`; pinned in
-`skills-lock.json`. These are interactive planning aids, not authoritative
-project guidance.
-
-| Skill | Source repo | Provenance | Why |
-|---|---|---|---|
-| `grill-me` | `mattpocock/skills` | Matt Pocock (community) | `/grill-me` launcher for a grilling session |
-| `grilling` | `mattpocock/skills` | Matt Pocock (community) | Relentless one-question-at-a-time interview to stress-test a plan before a cycle |
 
 Deliberately **not** installed and why:
 - `vercel/next.js` skills (`next-cache-components-*`, `next-dev-loop`) — built for

@@ -7,18 +7,6 @@
       "skillPath": "fastapi/.agents/skills/fastapi/SKILL.md",
       "computedHash": "e85d9e223fbc3183b1a599bbe8b02d2edf275d046ff5bcfd14352c92cdff52b3"
     },
-    "grill-me": {
-      "source": "mattpocock/skills",
-      "sourceType": "github",
-      "skillPath": "skills/productivity/grill-me/SKILL.md",
-      "computedHash": "f361db4e15e6bfd562a9282b1dccda513910a50061f9e838ce017be9c69dde3f"
-    },
-    "grilling": {
-      "source": "mattpocock/skills",
-      "sourceType": "github",
-      "skillPath": "skills/productivity/grilling/SKILL.md",
-      "computedHash": "368d3dd7251247c69f3656d93dc83c8f1577792eacac2111f1e7981db2ece49b"
-    },
     "redis-connections": {
       "source": "redis/agent-skills",
       "sourceType": "github",
@@ -30,18 +18,6 @@
       "sourceType": "github",
       "skillPath": "skills/redis-core/SKILL.md",
       "computedHash": "5b342de2555699d1785335711883711ff6ef7e213a1ea57d6bf693184a5c8683"
-    },
-    "redis-observability": {
-      "source": "redis/agent-skills",
-      "sourceType": "github",
-      "skillPath": "skills/redis-observability/SKILL.md",
-      "computedHash": "29a9044c3e72ab9ea7145efe917584e3c2f3739b64d8a68e7c77fc6f4a70b1cb"
-    },
-    "redis-security": {
-      "source": "redis/agent-skills",
-      "sourceType": "github",
-      "skillPath": "skills/redis-security/SKILL.md",
-      "computedHash": "8ed04a12265b088c75a6d415db576e051b920bd2f8dd37357636b0144b3118a6"
     },
     "ruff": {
       "source": "astral-sh/claude-code-plugins",
