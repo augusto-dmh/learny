@@ -64,7 +64,7 @@ Invoke `tlc-spec-driven` for the cycle (Specify → Design → Tasks → Execute
 
 Execute honors the full tlc contract (tests from acceptance criteria, gate per task, atomic commits, mandatory fresh Verifier). A Verifier FAIL stops the pipeline with the report — do not continue to Stage 2.
 
-When Execute runs one worker per phase, set each worker's model per the **Cost discipline** section (Opus for any phase with a design decision or correctness invariant; Haiku only for a chore dispatched as its own unit; Verifier always Opus), write each brief per **Worker briefs — state the goal, not the steps**, and give each worker scoped gate commands (affected module per commit, full suite at phase boundary).
+When Execute delegates a phase, set the worker's model per the **Cost discipline** table (build on Opus; Verifier on Opus; never Fable for a sub-agent), write each brief per **Worker briefs — state the goal, not the steps**, and give each worker scoped gate commands (affected module per commit, full suite at phase boundary).
 
 ## Stage 2 — Publish (learny-finalize)
 
@@ -84,7 +84,7 @@ Spawn ONE subagent via the Agent tool (`general-purpose`, fresh context) with a 
 
 ## Stage 5 — Fix
 
-Apply every "fix" finding. Group into atomic Conventional Commits per `learny-finalize` rules (plain-language messages, no internal IDs, no AI attribution). Re-run the cycle's gates (backend tests, frontend tests, ruff, tsc — whatever the cycle used) before pushing. Push to the PR branch.
+Apply every "fix" finding. Group into atomic Conventional Commits per `learny-finalize` rules (plain-language messages, no internal IDs, the `Assisted-by: Claude Code` trailer and no other attribution). Re-run the cycle's gates (backend tests, frontend tests, ruff, tsc — whatever the cycle used) before pushing. Push to the PR branch.
 
 ## Stage 6 — Clean Comments
 
@@ -99,13 +99,13 @@ Re-fetch both endpoints and verify zero remain. If a submitted *review* (not a c
 
 Present a compact ship report: cycle, PR number, Verifier result, triage counts (real/false, fixed/won't-fix), fix commits, gate results, comment cleanup status. In `once` mode, ask the user (AskUserQuestion): merge now or hold. In `auto`/`until` mode with a clean report, merge without asking.
 
-On approval: `gh pr merge {N} --merge` (merge commit, matching PRs #4–#9), then `git checkout main && git pull` and delete the local feature branch.
+On approval: `gh pr merge {N} --merge` (merge commit, matching PRs #4–#9; never `--admin` — the `main` ruleset refuses a merge with red required checks, and that refusal is the point), then `git checkout main && git pull` and delete the local feature branch.
 
 ## Stage 8 — Wrap
 
-Confirm the merged ROADMAP row shows the cycle done (it shipped inside the PR; fix on `main` only if it was missed, as a tiny follow-up). Delete `.specs/.ship-status`. When updating a session-memory topic file (`memory/learny-*-progress.md`), Read it before writing — a Write on an unread file fails.
+Confirm the merged ROADMAP row shows the cycle done (it shipped inside the PR; fix on `main` only if it was missed, as a tiny follow-up). A wrap commit pushed straight to `main` (`git pull --rebase` first) is a recorded admin bypass of the `main` ruleset; keep it to `docs(specs)` changes under `.specs/`. Delete `.specs/.ship-status`. When updating a session-memory topic file (`memory/learny-*-progress.md`), Read it before writing — a Write on an unread file fails.
 
-End the wrap report with, in order: (a) the cycle closed + PR merged; (b) the **next roadmap row** and its scope in one line; (c) a **model recommendation** for that row per Cost discipline, with a one-line rationale — so the user never has to ask "Opus or Fable for the next one?"; (d) a per-subagent output-token table if the data is at hand, noting that `/cost` is the billed authority. Do not start the next cycle automatically — the next run of this skill picks it up.
+End the wrap report with, in order: (a) the cycle closed + PR merged; (b) the **next roadmap row** and its scope in one line; (c) a **model recommendation** for that row's main thread per the Cost discipline table (Fable or Opus), with a one-line rationale; (d) a per-subagent output-token table if the data is at hand, noting that `/cost` is the billed authority. Do not start the next cycle automatically — the next run of this skill picks it up.
 
 ## Delegation resilience (Stages 1 and 3)
 
@@ -117,54 +117,35 @@ End the wrap report with, in order: (a) the cycle closed + PR merged; (b) the **
 
 ## Cost discipline — model selection, gates, context (applies across stages)
 
-Default model is **Opus**. Downshift a delegated unit to **Haiku only** — never Sonnet (its per-task output is far larger, erasing the price gap for this pipeline's work). A wrong cheap worker is not free: it costs the bad output *plus* the Verifier catching it *plus* a fix task *plus* re-verification, which can exceed the Opus baseline. So Haiku is a bet on **low slip-probability**, taken only when the task guarantees it.
+The model policy is the owner's real practice, recorded in the 2026-09-30 harness research (`docs/research/2026-09-30/harness/synthesis.md`, "Model policy"):
 
-**Haiku-safe test — downshift a unit only when ALL four hold:**
-1. **Fully specified** — exact files, signatures, and steps already in spec/design; no design decision or trade-off left to the worker (it transcribes, it does not invent).
-2. **No correctness-critical invariant** — nothing touching idempotency, transaction boundaries, migrations, concurrency, ordering, injection/auth. A weak model fails *quietly* there: passes a thin gate, caught only by the Verifier — or not at all.
-3. **A fast local gate catches a slip** — a failing `pytest`/`ruff`/`tsc` surfaces the mistake immediately, so an error is a retry, not a silent defect.
-4. **Small blast radius** — few files, no ripple into shared schema/state.
-
-Fail any one → **Opus**. **When unsure → Opus.**
-
-**Per-stage default:**
-
-| Unit | Model |
+| Role | Model |
 |---|---|
-| Stage 0 preflight · Stage 6 comment cleanup · Stage 8 wrap (pure git/gh/file ops) | Haiku |
-| Stage 1 doc-only chores dispatched as their own unit — ADR prose, `.env.example`, settings/deps scaffolding | Haiku |
-| Stage 1 phase workers carrying any design decision or correctness invariant (schema/migrations, retrieval, workers, auth, idempotency, ordering) | Opus |
-| Stage 1 Verifier | Opus — **never downshift**; it is the confidence backbone, and a weak verifier that misses a surviving mutant defeats the pipeline |
-| Stage 3 review | governed by `pr-review` — do not override its models |
-| Stage 4 triage (real-vs-false against the code) | Opus — adversarial reasoning |
-| Stage 5 fixes | Opus by default; Haiku only for a truly local, fully-specified fix that passes the four-condition test |
+| Plan and door gate (main thread) | Fable or Opus |
+| Build | Opus |
+| Verifier | Opus, never the cheapest tier |
+| Review lanes | Sonnet for mechanical lanes, Opus for correctness, security and architecture |
+| Sub-agents | Never Fable |
 
-**Upshifting to Fable 5.** Fable is the strongest model on long-horizon autonomy, on navigating ambiguity, and on reading code for what it *can* do rather than what it currently does — the axis this pipeline is weakest on, since a discrimination sensor can only mutate branches a test already reaches. It costs exactly 2× Opus in both directions ($10/$50 vs $5/$25 per MTok) and takes materially longer per turn, so it is an upshift for specific roles, never a blanket default.
+**Delegation default: inline.** Spawn a sub-agent only for the Verifier, the review lanes, or work that would genuinely swamp the main context. Mechanical stages (0, 6, 8) run inline in the main thread — a sub-agent for a handful of `git`/`gh` calls costs more than it saves.
 
-Two preconditions, both hard: the org must allow **30-day data retention** (a zero-retention org gets a 400 on every Fable request, with a valid payload — check this before diagnosing anything else), and Fable's safety classifiers target most cybersecurity content, with its bug-finding gains explicitly **excluding security-focused analysis**.
+**Fable on the main thread.** Two hard preconditions: the org must allow **30-day data retention** (a zero-retention org gets a 400 on every Fable request, with a valid payload — check this before diagnosing anything else), and Fable's safety classifiers target most cybersecurity content, so security-focused analysis stays on Opus.
 
-| Role | Fable 5? |
-|---|---|
-| Stage 1 Verifier · Stage 4 triage | **Candidate upshift** — short goal-shaped prompts, small token share, and the exact reasoning these roles need |
-| `pr-review` Security lane | **Never** — classifier false positives on security-adjacent work, and no bug-finding gain there |
-| Stage 1 phase workers | Only after their briefs are goal-stated (below) — a step-listed brief measurably *reduces* Fable's output quality, so it would underperform Opus at double the price |
-| Stage 0 / 6 / 8 mechanical ops | Never — Haiku territory |
-
-A ship-cycle **phase is one worker** even when it mixes scaffolding with a hard kernel (e.g. env+settings alongside a batching algorithm or a sub-batch-ordering edge): the kernel sets the model, so keep the whole phase on Opus. Split a chore to Haiku only when it is dispatched as its own unit. Do **not** treat the Verifier as license to Haiku-ify hard work — its sensor only catches faults it mutates; sensor-blind gaps slip.
+**The Verifier is not a license to cheapen the build.** Its sensor only catches faults it mutates; sensor-blind gaps slip, so the builder of anything with a design decision or a correctness invariant (schema, migrations, retrieval, workers, auth, idempotency, ordering) stays on Opus.
 
 ## Worker briefs — state the goal, not the steps
 
-A delegated worker's brief must give it **what must be true when it finishes**, and leave *how* to the worker. An ordered recipe caps the worker at what the orchestrator already thought of, which is the wrong ceiling: the expensive defects in this pipeline are the ones nobody enumerated. In the capture-pipeline cycle both real bugs lived on branches no test executed — a worker reasoning about what the code can do finds those; a worker transcribing a checklist does not. Over-prescription also measurably degrades Fable 5, so goal-shaped briefs are the prerequisite for upshifting at all.
+A delegated worker's brief must give it **what must be true when it finishes**, and leave *how* to the worker. An ordered recipe caps the worker at what the orchestrator already thought of, which is the wrong ceiling: the expensive defects in this pipeline are the ones nobody enumerated. In the capture-pipeline cycle both real bugs lived on branches no test executed — a worker reasoning about what the code can do finds those; a worker transcribing a checklist does not. Over-prescription also measurably degrades the strongest models, so a goal-shaped brief is the default for every worker.
 
 **Always give (these are context, not prescription):**
 - The **seams** — signatures and `file:line` refs from the Explore survey, not file bodies.
 - The **binding decisions** — the ADRs and `AD-NNN` rows the phase must conform to, and any accepted assumption it must not relitigate.
 - The **invariants that must hold**, named as invariants: "editing a card must not disturb its schedule", "ownership failures must be indistinguishable to the caller". Require a sensor for each; do **not** dictate the test's shape or name.
 - **Environment facts** that cost time to rediscover — interpreter path, env vars the suite needs, the verified baseline counts, services that must be running.
-- The **non-negotiable contract** — tests derive from acceptance criteria, gate green before done, one atomic commit per task, no attribution, no internal IDs. This is the definition of done, not a method.
+- The **non-negotiable contract** — tests derive from acceptance criteria, gate green before done, one atomic commit per task, the `Assisted-by: Claude Code` trailer and no other attribution, no internal IDs. This is the definition of done, not a method.
 - The **report contract** — what the closing summary must contain, including that deviations be stated plainly rather than buried.
 
-**Don't give:** an ordered list of edits; an enumerated list of tests to write; "cover each of these points" checklists; or a solution the worker is meant to transcribe. If you find yourself writing the implementation into the brief, either the phase is a Haiku chore (where a step list is correct — it transcribes by design) or you are doing the worker's thinking and should hand it the constraint instead.
+**Don't give:** an ordered list of edits; an enumerated list of tests to write; "cover each of these points" checklists; or a solution the worker is meant to transcribe. If you find yourself writing the implementation into the brief, either the work is a mechanical chore better done inline, or you are doing the worker's thinking and should hand it the constraint instead.
 
 **Traps are the exception worth naming.** A known landmine — a defaulted field that silently produces the wrong value, a repository method with no guard the caller must supply — belongs in the brief, because it is knowledge the worker cannot derive from the seams. State the trap and the consequence, then require a sensor. That is a constraint, not a step.
 
@@ -174,7 +155,8 @@ A delegated worker's brief must give it **what must be true when it finishes**, 
 
 ## Hygiene (applies to every stage)
 
-- No AI/tooling attribution anywhere public (commits, PR, comments).
+- Commits carry exactly one attribution, the trailer `Assisted-by: Claude Code` (owner decision D3; CI's `commits` job rejects a commit without it and any agent `Co-authored-by`/`Made-with`). PR bodies and PR comments carry no attribution.
+- Every Verifier run uses `LEARNY_REQUIRE_DB=1` with the test database up (`make infra` first): a PASS over skipped database tests is not a PASS.
 - No internal IDs (task/AD/FR/cycle/Gate) in commits, PR bodies, or PR comments — they live only under `.specs/`.
 - Multiline `gh` bodies go through `--body-file`/`-F body=@file`, never `-f body=@file`.
 - Never post PR-level content as a review (`gh pr review`) — reviews cannot be deleted.

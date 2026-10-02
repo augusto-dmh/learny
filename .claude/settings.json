@@ -1,5 +1,8 @@
 {
-  "includeCoAuthoredBy": false,
+  "attribution": {
+    "commit": "Assisted-by: Claude Code",
+    "pr": ""
+  },
   "env": {
     "LEARNY_TEST_DATABASE_URL": "postgresql+psycopg://learny:learny@localhost:5432/learny_test"
   },
