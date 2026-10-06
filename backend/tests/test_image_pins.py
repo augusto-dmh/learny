@@ -3,7 +3,8 @@
 A mutable tag lets upstream change what CI and a deploy run without a commit in
 this repository; that rot broke CI twice in September. So every image the repo
 pulls from someone else — a Dockerfile ``FROM`` or ``COPY --from=<image>``, a
-Compose ``image:``, a workflow service container — is written
+Compose ``image:``, a workflow service or job container, a ``uses: docker://``
+step, or a ``docker run``/``docker pull`` in a workflow script — is written
 ``<name>:<tag>@sha256:<64 hex>``. The tag stays for the reader; the digest is what
 Docker resolves. Learny's own GHCR images are pinned by the deployed commit tag
 instead, and build-stage names are not images at all.
@@ -58,12 +59,35 @@ def _compose_refs(path: Path) -> list[str]:
     return [svc["image"] for svc in services.values() if "image" in svc]
 
 
-def _workflow_refs(path: Path) -> list[str]:
-    jobs = (yaml.safe_load(path.read_text()) or {}).get("jobs", {}) or {}
+def _script_refs(script: str) -> list[str]:
+    # A ``docker run``/``docker pull`` in a step script pulls an image unless it
+    # names a tag the same script just built. Flags make the image argument hard
+    # to isolate, so an unbuilt command is reported whole: it passes only when the
+    # image in it is pinned.
+    joined = script.replace("\\\n", " ")
+    built = set(re.findall(r"docker build\b[^\n]*?-t\s+(\S+)", joined))
     refs = []
-    for job in jobs.values():
+    for command in re.findall(r"docker (?:run|pull)\b[^\n]*", joined):
+        if any(tag in command.split() for tag in built):
+            continue
+        pinned = re.search(r"\S+@sha256:[0-9a-f]{64}", command)
+        refs.append(pinned.group(0) if pinned else command.strip())
+    return refs
+
+
+def _workflow_refs(workflow: dict) -> list[str]:
+    refs = []
+    for job in (workflow.get("jobs") or {}).values():
         for service in (job.get("services") or {}).values():
             refs.append(service["image"])
+        container = job.get("container")
+        if container:
+            refs.append(container if isinstance(container, str) else container["image"])
+        for step in job.get("steps") or []:
+            uses = str(step.get("uses", ""))
+            if uses.startswith("docker://"):
+                refs.append(uses.removeprefix("docker://"))
+            refs += _script_refs(str(step.get("run", "")))
     return refs
 
 
@@ -71,10 +95,11 @@ def _all_refs() -> list[tuple[str, str]]:
     found: list[tuple[str, str]] = []
     for path in _tracked("*Dockerfile*"):
         found += [(str(path.relative_to(_ROOT)), ref) for ref in _dockerfile_refs(path)]
-    for path in _tracked("docker-compose*.yml"):
+    for path in _tracked("docker-compose*.yml", "docker-compose*.yaml", "compose*.y*ml"):
         found += [(str(path.relative_to(_ROOT)), ref) for ref in _compose_refs(path)]
-    for path in _tracked(".github/workflows/*.yml"):
-        found += [(str(path.relative_to(_ROOT)), ref) for ref in _workflow_refs(path)]
+    for path in _tracked(".github/workflows/*.yml", ".github/workflows/*.yaml"):
+        workflow = yaml.safe_load(path.read_text()) or {}
+        found += [(str(path.relative_to(_ROOT)), ref) for ref in _workflow_refs(workflow)]
     return found
 
 
@@ -90,6 +115,28 @@ def test_the_scan_reaches_every_kind_of_image_reference() -> None:
     assert any(s.startswith(".github/workflows/") for s in sources)
     copy_from = _dockerfile_refs(_ROOT / "backend" / "Dockerfile")
     assert any("astral-sh/uv" in ref for ref in copy_from), "COPY --from images not scanned"
+
+
+def test_the_workflow_scan_sees_every_way_a_job_pulls_an_image() -> None:
+    # Negative control: each form a workflow can pull an upstream image through
+    # is reported, and a tag the same script built is not.
+    digest = "@sha256:" + "0" * 64
+    workflow = {
+        "jobs": {
+            "a": {"container": "node:20"},
+            "b": {"container": {"image": "python:3.13" + digest}},
+            "c": {"steps": [{"uses": "docker://alpine:3"}]},
+            "d": {
+                "steps": [
+                    {"run": "docker pull postgres:16"},
+                    {"run": "docker run --rm -e A=b \\\n  redis:7 redis-cli ping"},
+                    {"run": "docker build -t learny-x:ci .\ndocker run -d learny-x:ci"},
+                ]
+            },
+        }
+    }
+    refs = _workflow_refs(workflow)
+    assert [bool(_PINNED.match(r)) for r in refs] == [False, True, False, False, False], refs
 
 
 @pytest.mark.parametrize(("source", "ref"), _UPSTREAM, ids=lambda v: str(v))

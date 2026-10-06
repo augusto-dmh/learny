@@ -27,7 +27,9 @@ That happened twice in September 2026: MinIO's image moved and then refused anon
 
 ## Decision Outcome
 
-Option 1. Every image the repository pulls from someone else is written with its tag and the multi-architecture index digest, for example `node:20-slim@sha256:2cf0…bfc0`. Docker resolves the digest and ignores the tag; the tag stays for the reader. This covers Dockerfile `FROM` lines, `COPY --from=<image>`, Compose `image:` keys and GitHub Actions service containers. Learny's own `ghcr.io/augusto-dmh/` images are exempt: they are already pinned to the deployed commit tag. `backend/tests/test_image_pins.py` fails on any upstream reference without a digest.
+Option 1. Every image the repository pulls from someone else is written with its tag and the multi-architecture index digest, for example `node:20-slim@sha256:2cf0…bfc0`. Docker resolves the digest and ignores the tag; the tag stays for the reader. This covers Dockerfile `FROM` lines, `COPY --from=<image>`, Compose `image:` keys and GitHub Actions service containers. Learny's own `ghcr.io/augusto-dmh/` images are exempt: they are already pinned to the deployed commit tag. `backend/tests/test_image_pins.py` fails on any upstream reference without a digest, including a workflow job `container:`, a `uses: docker://` step and a `docker run`/`docker pull` of an image the same step did not build.
+
+GitHub Actions `uses:` references (`actions/checkout@v6` and the rest) are out of scope: they are code, not images, and pinning them to commit SHAs needs an update path (Dependabot's `github-actions` ecosystem or a bump procedure) that this decision does not set up. A moved action tag can still change what CI runs, including in the jobs that hold provider secrets or push to GHCR, so pinning actions is recorded as a follow-up decision.
 
 ### Bumping a digest
 
