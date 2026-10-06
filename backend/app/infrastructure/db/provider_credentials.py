@@ -38,6 +38,11 @@ logger = logging.getLogger(__name__)
 
 #: How many trailing characters of a key the account page may show.
 LAST4_CHARS = 4
+
+#: The shortest key the repository will seal. Every supported provider's keys
+#: are far longer; the floor keeps ``last4`` from ever holding a whole key.
+MIN_KEY_CHARS = 20
+
 #: What :meth:`SqlAlchemyProviderCredentialRepository.rewrap` did to one row.
 RewrapOutcome = Literal["rewrapped", "current", "gone", "unknown_kek", "unreadable"]
 
@@ -117,7 +122,15 @@ class SqlAlchemyProviderCredentialRepository:
         return _to_credential(row)
 
     def replace(self, user_id: UUID, provider: str, api_key: str) -> ProviderCredential:
-        """Seal ``api_key`` into a new row, removing any previous row for the provider."""
+        """Seal ``api_key`` into a new row, removing any previous row for the provider.
+
+        A key shorter than :data:`MIN_KEY_CHARS` or holding whitespace raises
+        ``ValueError`` with fixed copy that never echoes the value.
+        """
+        if len(api_key) < MIN_KEY_CHARS or any(ch.isspace() for ch in api_key):
+            raise ValueError(
+                f"a provider key must be at least {MIN_KEY_CHARS} characters with no whitespace"
+            )
         sealed = self._envelope.seal(api_key, user_id=user_id, provider=provider)
         self.delete(user_id, provider)
         row = self._conn.execute(

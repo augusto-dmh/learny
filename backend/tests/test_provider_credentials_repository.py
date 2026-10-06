@@ -215,6 +215,27 @@ def test_a_row_whose_wrapped_dek_fails_authentication_reveals_nothing(
     assert str(stored.id) in caplog.text
 
 
+@pytest.mark.parametrize(
+    "bad_key",
+    [
+        pytest.param("sk-ant-short", id="shorter-than-the-floor"),
+        pytest.param("abcd", id="four-characters"),
+        pytest.param("sk-ant-api03-pasted-with-newline\n", id="trailing-newline"),
+        pytest.param("sk-ant-api03 with-a-space-inside-it", id="inner-space"),
+    ],
+)
+def test_a_key_too_short_or_holding_whitespace_is_never_sealed(
+    db_conn: Connection, bad_key: str
+) -> None:
+    user = _user(db_conn)
+
+    with pytest.raises(ValueError) as excinfo:
+        _repo(db_conn).replace(user.id, "anthropic", bad_key)
+
+    assert bad_key.strip() not in str(excinfo.value)
+    assert _repo(db_conn).get(user.id, "anthropic") is None
+
+
 def test_rewrap_reports_each_outcome_of_one_row(db_conn: Connection) -> None:
     old_kek, new_kek, stray_kek = os.urandom(32), os.urandom(32), os.urandom(32)
     old_repo = _repo(db_conn, old_kek)
