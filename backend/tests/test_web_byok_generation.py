@@ -241,6 +241,49 @@ def test_stored_choice_leads_the_learner_keyed_profiles(
     assert _calls(fakes, _HOUSE_KEY) == 0
 
 
+def test_a_stored_choice_not_bound_to_the_key_is_ignored(
+    auth_client: TestClient,
+    db_conn: Connection,
+    monkeypatch: pytest.MonkeyPatch,
+    fakes: list[_KeyedFake],
+) -> None:
+    # The learner once chose the house profile, which binds no provider: holding
+    # a key, they are still served by the profile bound to it, on their key.
+    _declare(monkeypatch, [_HOUSE, _BYOK])
+    client = auth_client
+    user_id, csrf, conversation = _learner(client, db_conn, "byok-unbound-choice@example.com")
+    SqlAlchemyAiPreferenceRepository(db_conn).upsert(UUID(user_id), "house")
+    _store_key(db_conn, user_id, _KEY_A)
+
+    turn = _post_turn(client, conversation, csrf)
+
+    assert turn.status_code == 201, turn.text
+    assert turn.json()["model"] == "claude-byok"
+    assert _calls(fakes, _KEY_A) == 1
+    assert _calls(fakes, _HOUSE_KEY) == 0
+
+
+def test_an_explain_profile_not_bound_to_the_key_is_ignored(
+    auth_client: TestClient,
+    db_conn: Connection,
+    monkeypatch: pytest.MonkeyPatch,
+    fakes: list[_KeyedFake],
+) -> None:
+    # The operator's Explain profile is the house one; a learner holding a key
+    # is still served their Explain by the profile bound to it, on their key.
+    _declare(monkeypatch, [_HOUSE, _BYOK], explain_profile="house")
+    client = auth_client
+    user_id, csrf, conversation = _learner(client, db_conn, "byok-unbound-explain@example.com")
+    _store_key(db_conn, user_id, _KEY_A)
+
+    explained = _post_turn(client, conversation, csrf, origin="explain_selection")
+
+    assert explained.status_code == 201, explained.text
+    assert explained.json()["model"] == "claude-byok"
+    assert _calls(fakes, _KEY_A) == 1
+    assert _calls(fakes, _HOUSE_KEY) == 0
+
+
 # --- C20: selection-Explain runs on the learner's key -------------------------------
 
 

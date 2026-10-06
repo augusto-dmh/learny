@@ -31,6 +31,7 @@ from app.domain.entities import (
     AnswerTextDelta,
     GeneratedAnswer,
 )
+from app.infrastructure.answering import order_learner_profiles
 from app.infrastructure.answering.routing import ChainEntry, RoutingGenerationAdapter
 from app.infrastructure.providers import (
     GenerationProfileSettings,
@@ -801,3 +802,36 @@ def test_a_house_answer_is_never_stamped_as_learner_paid() -> None:
     router = RoutingGenerationAdapter((_entry("house", house),))
 
     assert router.generate(mode=_MODE, message="q", evidence=[]).user_keyed is False
+
+
+# --- Which bound profiles a learner's keys serve, and in what order -----------------
+
+
+def _bound(id: str, provider: str | None) -> GenerationProfileSettings:  # noqa: A002
+    return _profile(id).model_copy(update={"user_key_provider": provider})
+
+
+_REGISTRY = (
+    _bound("house", None),
+    _bound("byok-a", "anthropic"),
+    _bound("byok-o", "openai"),
+    _bound("byok-a2", "anthropic"),
+)
+
+
+@pytest.mark.parametrize(
+    ("lead", "expected"),
+    [
+        pytest.param(None, ["byok-a", "byok-a2"], id="no-lead-registry-order"),
+        pytest.param("byok-a2", ["byok-a2", "byok-a"], id="bound-lead-moves-first"),
+        pytest.param("house", ["byok-a", "byok-a2"], id="unbound-lead-ignored"),
+        pytest.param("byok-o", ["byok-a", "byok-a2"], id="other-provider-lead-ignored"),
+        pytest.param("missing", ["byok-a", "byok-a2"], id="unknown-lead-ignored"),
+    ],
+)
+def test_learner_profiles_follow_registry_order_with_only_a_bound_lead_moved(
+    lead: str | None, expected: list[str]
+) -> None:
+    ordered = order_learner_profiles(_REGISTRY, frozenset({"anthropic"}), lead=lead)
+
+    assert [p.id for p in ordered] == expected
