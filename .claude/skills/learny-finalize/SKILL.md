@@ -39,7 +39,15 @@ PR titles follow the same Conventional Commit format as commits and summarize th
 
 ## Commit And PR Hygiene
 
-Never add authorship or tooling attribution to commits or pull requests. Commit messages and PR bodies must not contain `Co-Authored-By` trailers, "Generated with" lines, model names, or any other identification of an AI assistant or the tool used to produce the change.
+Every commit ends with exactly one attribution trailer, as the last line of its own final paragraph:
+
+```text
+Assisted-by: Claude Code
+```
+
+This is the owner's attribution decision (D3, 2026-10-02) and the project's override of `tlc-spec-lean`'s rule against any agent trailer. `.claude/settings.json` sets it through `attribution.commit`, and CI's `commits` job (`backend/scripts/check_commits.py`, also run by `make lint`) rejects a pull request whose commits lack it. Nothing else identifies the assistant: no `Co-authored-by` naming an AI agent, no `Made-with`, no "Generated with" line, no model names. PR titles, PR bodies and PR comments carry no attribution at all (`attribution.pr` is empty).
+
+Before pushing, run `make lint-commits` to check every commit on the branch.
 
 Write PR-body and issue paragraphs as single unwrapped lines. Never hard-wrap prose at a column width — GitHub renders the wraps literally, squeezing the text into a narrow left column.
 

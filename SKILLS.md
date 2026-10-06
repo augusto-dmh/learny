@@ -6,33 +6,30 @@ Learny uses skills as project-local playbooks for repeatable research, design, i
 
 **Research and architecture**
 
-- `domain-analysis` maps business domains and bounded contexts.
-- `modular-design-principles` reviews boundaries, contracts, state ownership, and failure isolation.
+- `modular-design-principles` reviews boundaries, contracts, state ownership, and failure isolation (the `pr-review` architecture lane loads it).
 
 **Decision and design artifacts**
 
 - `create-rfc` documents open proposals and trade-offs.
 - `create-adr` records accepted architectural decisions.
-- `create-technical-design-doc` creates implementation-ready technical designs when a decision is ready to build.
 
 **Workflow**
 
-- `tlc-spec-driven` drives feature cycles with Specify, Design, Tasks, and Execute. Use it when a feature needs traceable requirements or task decomposition. Let it create `.specs/` only when invoked.
-- `skill-architect` creates future repository-specific skills after discovery and architecture.
+- `tlc-spec-lean` (profile `standard`) plans and builds feature cycles: one reviewed plan with its one-way doors, proof-backed checks, the build, and an independent Verifier. It is a user-level skill today; the next harness cycle vendors it into the repo.
 - `pr-review` runs a multi-agent pull-request review (security, requirements, tests, architecture, regression, performance) and posts inline + summary comments via `gh`. Use only when explicitly asked to review a PR.
 - `learny-finalize` applies Learny's branch, commit, verification, and PR conventions.
-- `learny-ship-cycle` orchestrates one full roadmap PR end-to-end: next cycle → `tlc-spec-driven` (auto-selecting recommended options) → `learny-finalize` → fresh-context `pr-review` → finding triage (persisted to `review-triage.md`) → fixes → comment cleanup → user-gated merge.
+- `learny-ship-cycle` orchestrates one full roadmap PR end-to-end: next cycle → Stage 1 plan and build (the skill text still names `tlc-spec-driven`; the next harness cycle rewires it to `tlc-spec-lean` with its door gate) → `learny-finalize` → fresh-context `pr-review` → finding triage (persisted to `review-triage.md`) → fixes → comment cleanup → user-gated merge.
 
 ## Workflow Shape
 
 ```text
-RESEARCH -> RFC / ADR -> TDD or tlc-spec-driven feature cycle -> IMPLEMENT -> FINALIZE
+RESEARCH -> RFC / ADR -> TDD or tlc-spec-lean feature cycle -> IMPLEMENT -> FINALIZE
 ```
 
 - Research docs hold evidence and references.
 - RFCs hold undecided proposals.
 - ADRs hold accepted decisions.
-- TDDs and `tlc-spec-driven` artifacts hold implementation plans.
+- TDDs and `tlc-spec-lean` artifacts (`plan.md`, `checks.md`, `verification.md`) hold implementation plans.
 - Publishing conventions live in `learny-finalize`.
 
 ## Stack-Specific Skills
@@ -48,7 +45,7 @@ survey that selected them.
 `skills` CLI):
 
 - `fastapi` — FastAPI team.
-- `redis-core`, `redis-connections`, `redis-observability`, `redis-security` — Redis Inc.
+- `redis-core`, `redis-connections` — Redis Inc.
 - `ruff`, `uv` — Astral.
 - `vercel-react-best-practices`, `vercel-composition-patterns`, `web-design-guidelines` — Vercel Engineering.
 

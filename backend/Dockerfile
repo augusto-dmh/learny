@@ -5,10 +5,10 @@
 #   * `pdf-worker` — the isolated PDF ingestion worker: the `pdf` extra (docling)
 #                    with its models baked in. Built only on demand (compose
 #                    `target: pdf-worker`); the default image never installs it.
-FROM python:3.13-slim AS base
+FROM python:3.13-slim@sha256:bb2988715db2cf7ace7b53f38f3cffbef7c7046a656bee66245eb0ed386e2e81 AS base
 
 # uv for fast, locked installs (CONVENTIONS.md).
-COPY --from=ghcr.io/astral-sh/uv:0.11 /uv /uvx /bin/
+COPY --from=ghcr.io/astral-sh/uv:0.11@sha256:77280f2f771df71f90786c314fe1bbc1e023feac652969bbf139c280babf2eb7 /uv /uvx /bin/
 
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \

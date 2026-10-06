@@ -7,13 +7,13 @@
 #     compose (`docker compose up`), which sets no build target.
 
 # --- deps: install from the committed lockfile (reproducible) ------------------
-FROM node:20-slim AS deps
+FROM node:20-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 
 # --- build: produce the standalone production bundle ---------------------------
-FROM node:20-slim AS build
+FROM node:20-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 AS build
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 COPY --from=deps /app/node_modules ./node_modules
@@ -21,7 +21,7 @@ COPY . .
 RUN npm run build
 
 # --- prod: run the built standalone server as non-root -------------------------
-FROM node:20-slim AS prod
+FROM node:20-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 AS prod
 WORKDIR /app
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
@@ -37,7 +37,7 @@ EXPOSE 3000
 CMD ["node", "server.js"]
 
 # --- dev (default): the Next dev server for local Docker Compose ---------------
-FROM node:20-slim AS dev
+FROM node:20-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 AS dev
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci

@@ -13,7 +13,7 @@
 # ports; S3 and console only on the compose network). Dropping to an unprivileged
 # user is a recorded follow-up in ADR-0031 because it needs a one-time chown of
 # every existing data volume, which is a migration step, not an image change.
-FROM alpine:3.22
+FROM alpine:3.22@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8
 
 # Pinned MinIO server release — the same release the production overlay ran from
 # quay, so a rebuilt image changes the distribution channel and nothing else.

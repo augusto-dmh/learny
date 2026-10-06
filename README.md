@@ -116,7 +116,7 @@ The app is study-shaped, not tool-shaped ([RFC-004](docs/rfc/0004-student-experi
 - **One conversation model.** Asking and being taught are the same grounded conversation scoped to a book, a section, or the whole library ([ADR-0029](docs/adr/0029-unified-grounded-conversations.md)); a failed turn keeps its thread, and the tutor opens the session with a frozen teaching playbook that ends in one FSRS card when the check passes.
 - **A page unit and a position.** Pages are derived (~275 words), progress is live, and a study heatmap on Home shows reading and review days. Retrieval for Ask and Teach is bound to the reader's position, so a cited answer never spoils what comes later ([RFC-005](docs/rfc/0005-evidence-gated-hardening-roadmap.md) Cycle F).
 - **Answers you can audit.** Streaming shows thinking, phases, and inline citations as claim-level spans; a refusal is logged under its own name and excluded from judge means ([ADR-0028](docs/adr/0028-decline-answers-in-judge-aggregates.md)).
-- **Learner-chosen AI profiles.** Generation routes across priced profiles with a Learny-owned error taxonomy and per-profile price catalogs; the learner picks among operator-curated house profiles from the account page, and an economy tier stays inert until the nightly judge gate promotes it ([ADR-0020](docs/adr/0020-use-anthropic-claude-for-generation.md) amendments, [RFC-0007](docs/rfc/0007-public-launch-roadmap.md) Cycle G).
+- **Learner-chosen AI profiles.** Generation routes across priced profiles with a Learny-owned error taxonomy and per-profile price catalogs; the learner picks among operator-curated house profiles from the account page, and an economy tier stays inert until the judge gate promotes it ([ADR-0020](docs/adr/0020-use-anthropic-claude-for-generation.md) amendments, [RFC-0007](docs/rfc/0007-public-launch-roadmap.md) Cycle G).
 - **Safe to open the doors.** Registration is open behind a Redis rate limiter, per-user spend and quota caps, invite codes, legal pages, account deletion, and transactional mail; a shared sample book, a canned first Ask, and a starter deck make the first session convert ([RFC-0007](docs/rfc/0007-public-launch-roadmap.md) Cycles E–F).
 
 ### Security model
@@ -187,7 +187,7 @@ cd backend && uv run pytest                      # set LEARNY_TEST_DATABASE_URL 
 cd frontend && npm test
 ```
 
-Evaluation uses **golden fixtures**: a hand-authored EPUB is run through the *real* ingestion/retrieval/answer pipeline and compared against hand-written expected corpus structure, retrieval rankings, and citations (`backend/tests/test_golden_*.py`). Deterministic adapters make this reproducible with zero network.
+Evaluation uses **golden fixtures**: a hand-authored EPUB is run through the *real* ingestion/retrieval/answer pipeline and compared against hand-written expected corpus structure, retrieval rankings, and citations (`backend/tests/test_golden_*.py`). Deterministic adapters make this reproducible with zero network. The live-provider evaluation (`.github/workflows/eval.yml`: smoke, LLM judge, and the keyed retrieval arm) runs on manual dispatch only: its nightly schedule is off because the CI provider key is unfunded, and a run that cannot reach the provider would only stay red.
 
 ## API surface (summary)
 
@@ -211,7 +211,7 @@ Evaluation uses **golden fixtures**: a hand-authored EPUB is run through the *re
 
 ## Engineering process
 
-The repository is decision-driven: 31 [ADRs](docs/adr/) record accepted architecture choices with context and trade-offs, 7 [RFCs](docs/rfc/) hold the stack selection (RFC-001) and the six roadmap proposals that drove each arc (RFC-002 v2, RFC-003 v3, RFC-004 the student experience, RFC-005 evidence-gated hardening, RFC-006 the reading-first overhaul, RFC-0007 the public launch), and a [technical design doc](docs/tdd/0001-mvp-architecture.md) maps the MVP. Features were built in spec-driven cycles (specify → design → tasks → execute, with an independent verifier that mutates the code to prove the tests can fail) and each cycle shipped as one reviewed pull request. Operational runbooks live in [docs/ops/](docs/ops/) (deploy, backups, monitoring, rollback, instrumentation, [end-to-end QA](docs/ops/e2e-qa.md)). Research that fed a decision is archived under [`docs/research/`](docs/research/) by date; retrospectives live under [`docs/retrospectives/`](docs/retrospectives/).
+The repository is decision-driven: 32 [ADRs](docs/adr/) record accepted architecture choices with context and trade-offs, 7 [RFCs](docs/rfc/) hold the stack selection (RFC-001) and the six roadmap proposals that drove each arc (RFC-002 v2, RFC-003 v3, RFC-004 the student experience, RFC-005 evidence-gated hardening, RFC-006 the reading-first overhaul, RFC-0007 the public launch), and a [technical design doc](docs/tdd/0001-mvp-architecture.md) maps the MVP. Features were built in spec-driven cycles (specify → design → tasks → execute, with an independent verifier that mutates the code to prove the tests can fail) and each cycle shipped as one reviewed pull request. Operational runbooks live in [docs/ops/](docs/ops/) (deploy, backups, monitoring, rollback, instrumentation, [end-to-end QA](docs/ops/e2e-qa.md)). Research that fed a decision is archived under [`docs/research/`](docs/research/) by date; retrospectives live under [`docs/retrospectives/`](docs/retrospectives/).
 
 ## Roadmap
 
@@ -225,7 +225,7 @@ Every roadmap written so far is shipped. Releases track arcs, not calendar: **v0
 
 Recorded candidates, not scheduled (each needs its own roadmap row and decision first):
 
-- Promoting the economy generation profile once a candidate nightly is green on it.
+- Promoting the economy generation profile once a funded, manually dispatched candidate eval run is green on it.
 - Bring-your-own API keys for house profiles (the 2026-09-07 research sized it at three or more cycles and named the encryption-at-rest and open-relay problems it must solve first).
 - Paragraph-level note chunking for retrieval; a dedicated vector database or reranker if PostgreSQL hybrid search stops scaling.
 

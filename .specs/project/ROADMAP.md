@@ -182,3 +182,12 @@ ADR-0020 amendment point 7; `local-models-self-host` needs an ADR-0019 amendment
 | `shelf-ask` | rq01 move 10; Readwise Global Ghostreader | Cited Ask across a learner-chosen set of their books in one conversation; citations keep book+section anchors | Not started |
 | `library-mcp` | Research 2026-09-30 (Readwise/Recall/Lantern MCP) | Per-user, read-only MCP server exposing cited retrieval and due items to external assistants; passage-length caps | Not started |
 | `paid-hosted-tier` | RFC-0007 finding 11 (Paddle); research 2026-09-30 (Pix Automático, PPP) | Paddle MoR checkout, BRL + PPP pricing, Pix Automático, one-click cancel, house profiles as the paid convenience | Not started |
+
+## Harness (owner-accepted research 2026-09-30, decisions D1–D6 of 2026-10-02)
+
+Delivery-harness rows from `docs/research/2026-09-30/harness/synthesis.md` (Moves 1–2). Their own lane, run in parallel with the v8 rows; PR B starts after PR A merges.
+
+| tlc Cycle | Source | Scope | Status |
+|---|---|---|---|
+| `harness-reset` PR A — sensors and hygiene | Synthesis Move 1; sensors 1–5; paperwork diet | `LEARNY_REQUIRE_DB=1` in CI and the Verifier; CI `commits` job (`Assisted-by: Claude Code` required, agent `Co-authored-by`/`Made-with` rejected); upstream images pinned by digest (ADR-0032); live eval schedule off, manual dispatch kept; `STATE.md` archived to a slim live file; lessons layer, vendored `tlc-spec-driven` and never-used skills removed; ship-cycle model table rewritten; `attribution` setting + `learny-finalize` trailer rule; `main` ruleset applied after merge on the owner's yes | Shipped (PR #75; `main-guard` ruleset awaits the owner's yes) |
+| `harness-reset` PR B — the loop | Synthesis Move 2; rq04 B10–B11 | Vendor `tlc-spec-lean` (with the D2/D3 deviations); rewire ship-cycle Stage Detection and Stage 1; `pr-review` Track A with a legacy fallback for driven folders; `learny-finalize`, `SKILLS.md`, CLAUDE.md profile block; two rule-chosen lanes (S, F) and the door gate | Not started |

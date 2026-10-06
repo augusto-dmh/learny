@@ -10,7 +10,7 @@ how to re-derive them when a model changes. Companion to the nightly workflow
 | Surface | Runs | Gated by |
 |---|---|---|
 | PR CI (`ci.yml`) | Deterministic suite, replay snapshots, deterministic retrieval arm | Test assertions only — no provider, no keys, no judge gate |
-| Nightly (`eval.yml`) | Live judge tier + keyed OpenAI retrieval arm (`pytest -m "live and eval"`) | `LEARNY_EVAL_GATE=1` → aggregate thresholds below fail the run |
+| Live eval (`eval.yml`, manual dispatch — schedule off while the CI provider key is unfunded) | Live judge tier + keyed OpenAI retrieval arm (`pytest -m "live and eval"`) | `LEARNY_EVAL_GATE=1` → aggregate thresholds below fail the run |
 
 Secrets (repository → Actions): `LEARNY_ANTHROPIC_API_KEY` (required — absent
 means the whole nightly green-skips with a notice), `LEARNY_OPENAI_API_KEY`

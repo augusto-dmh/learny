@@ -1,6 +1,6 @@
 # CI gates for every PR and main push (RFC-002 Cycle A).
 #
-# Four parallel jobs mirroring the local gates:
+# Five parallel jobs mirroring the local gates:
 #   backend-test — pytest against real Postgres(pgvector)+Redis service containers;
 #                  the suite's own bootstrap applies Alembic migrations, so every
 #                  run also proves migrations work from an empty database.
@@ -8,6 +8,7 @@
 #                  repo-wide reformat) + architecture boundary fitness check.
 #   frontend     — vitest, tsc, and the production Next.js build.
 #   compose-smoke— builds the compose topology and boots it to a healthy API.
+#   commits      — (pull requests only) every commit message follows the contract.
 name: CI
 
 on:
@@ -31,7 +32,7 @@ jobs:
         working-directory: backend
     services:
       postgres:
-        image: pgvector/pgvector:pg16
+        image: pgvector/pgvector:pg16@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a
         env:
           POSTGRES_USER: learny
           POSTGRES_PASSWORD: learny
@@ -44,7 +45,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
       redis:
-        image: redis:7-alpine
+        image: redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
         ports:
           - "6379:6379"
         options: >-
@@ -78,13 +79,29 @@ jobs:
       - run: uv sync --locked --extra dev
       - name: Wait for MinIO to accept requests
         run: timeout 60 bash -c 'until curl -fsS http://localhost:9000/minio/health/live; do sleep 2; done'
+      # LEARNY_REQUIRE_DB turns a missing test database into a failed run: the
+      # database tests otherwise skip quietly and the job would pass over them.
       - run: uv run pytest -q
         env:
+          LEARNY_REQUIRE_DB: "1"
           LEARNY_TEST_DATABASE_URL: postgresql+psycopg://learny:learny@localhost:5432/learny_test
           LEARNY_REDIS_URL: redis://localhost:6379/0
           LEARNY_STORAGE_ENDPOINT: http://localhost:9000
           LEARNY_STORAGE_ACCESS_KEY: learny
           LEARNY_STORAGE_SECRET_KEY: learny-dev-secret
+
+  # Every pull-request commit follows the commit contract: a Conventional Commit
+  # header, the `Assisted-by: Claude Code` trailer, and no agent Co-authored-by or
+  # Made-with trailers. Merge and bot (Dependabot) commits are not checked.
+  commits:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Check every commit message in the pull request
+        run: python3 backend/scripts/check_commits.py "${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
 
   lint:
     runs-on: ubuntu-latest
