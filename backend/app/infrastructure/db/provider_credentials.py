@@ -1,6 +1,6 @@
 """Learner provider keys at rest: the ``user_provider_credentials`` repository.
 
-Seals on write and opens on demand through the envelope (ADR-0032 point 1).
+Seals on write and opens on demand through the envelope (ADR-0033 point 1).
 Every statement is scoped by ``user_id``. What leaves this module through the
 port is :class:`~app.domain.entities.ProviderCredential` metadata only; the one
 method that returns a plaintext key, :meth:`reveal`, is not on the port, so

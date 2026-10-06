@@ -1,4 +1,4 @@
-"""The per-learner adapter cache (ADR-0032 point 7).
+"""The per-learner adapter cache (ADR-0033 point 7).
 
 House chains are cached per process by ``lru_cache`` because they derive from
 settings alone. A learner-keyed adapter carries one learner's key, so it can

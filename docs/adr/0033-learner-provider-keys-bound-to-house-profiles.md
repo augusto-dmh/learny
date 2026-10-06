@@ -1,4 +1,4 @@
-# ADR-032: Learner-Provided API Keys, Sealed At Rest And Bound To Curated House Profiles
+# ADR-033: Learner-Provided API Keys, Sealed At Rest And Bound To Curated House Profiles
 
 - **Date**: 2026-10-02
 - **Status**: Accepted (2026-10-02, owner approval at the implementing cycle's design gate; rides its merge gate)

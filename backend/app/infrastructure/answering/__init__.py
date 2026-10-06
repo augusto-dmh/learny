@@ -94,7 +94,7 @@ def _build_sub_adapter(
     seed carries ``generation_effort`` on both modes, so today's behavior is
     unchanged until an operator declares otherwise.
 
-    ``api_key`` is a learner's own key (ADR-0032): when given it is the only key
+    ``api_key`` is a learner's own key (ADR-0033): when given it is the only key
     the adapter is built with, so a learner-keyed adapter can never fall back to
     the house key.
     """

@@ -618,7 +618,7 @@ def test_a_teach_turn_on_a_teach_disabled_chain_fails_honest() -> None:
     assert disabled.calls == 0
 
 
-# --- Learner-keyed entries: lead, never fall over into the house (ADR-0032) ----------
+# --- Learner-keyed entries: lead, never fall over into the house (ADR-0033) ----------
 #
 # A learner who holds a key has user-keyed entries leading their chain. Every
 # fail-over rule still applies among those entries, but no failure ever walks

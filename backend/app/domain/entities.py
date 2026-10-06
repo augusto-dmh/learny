@@ -62,7 +62,7 @@ class AiPreference:
 
 @dataclass(frozen=True)
 class ProviderCredential:
-    """One learner's stored API key for one provider, as metadata only (ADR-0032).
+    """One learner's stored API key for one provider, as metadata only (ADR-0033).
 
     The key itself never leaves the infrastructure layer: it is stored sealed
     (envelope-encrypted) and opened only where an adapter is built. What crosses
@@ -556,7 +556,7 @@ class GeneratedAnswer:
     # (a direct sub-adapter's answer) → the primary catalog, as before routing.
     profile_id: str | None = None
     # Who paid for the call, stamped by the routing adapter beside the profile id
-    # (ADR-0032): ``True`` when an entry built with the learner's own provider key
+    # (ADR-0033): ``True`` when an entry built with the learner's own provider key
     # served it, so the house ledger debits 0 USD while the call still counts.
     # The router stamps the same ``profile_id`` for either payer, which is why
     # this needs its own field. Absent → the house paid, as before.

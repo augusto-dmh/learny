@@ -22,7 +22,7 @@ Policy (ROUTE-02 / AD-337), walked over the ordered chain:
   ``AnswerGenerationFailed`` envelope is exactly today's (TAX-03); an
   unrecognized failure propagates unchanged, identity-preserved.
 
-Learner-keyed entries (ADR-0032): an entry built with a learner's own provider
+Learner-keyed entries (ADR-0033): an entry built with a learner's own provider
 key is ``user_keyed``. When any user-keyed entry is eligible for the mode, the
 walk covers the user-keyed entries only, so every rule above applies among them
 and no failure — rejection, outage, timeout, a spent rate-limit retry, or a
@@ -87,7 +87,7 @@ class ChainEntry:
     profile: GenerationProfileSettings
     # True when the adapter was built with a learner's own provider key: such an
     # entry never fails over into a house-keyed one, and its answers are stamped
-    # as learner-paid so the house ledger debits 0 USD (ADR-0032).
+    # as learner-paid so the house ledger debits 0 USD (ADR-0033).
     user_keyed: bool = False
 
     def __repr__(self) -> str:
@@ -129,7 +129,7 @@ def _next_index(
     """
     nxt = _policy_next_index(chain, index, error, retried)
     if nxt is not None and chain[index].user_keyed and not chain[nxt].user_keyed:
-        return None  # never from a learner's key onto a house key (ADR-0032)
+        return None  # never from a learner's key onto a house key (ADR-0033)
     return nxt
 
 
@@ -178,7 +178,7 @@ def _serving_entries(chain: tuple[ChainEntry, ...], mode: str) -> tuple[ChainEnt
 
     A learner who holds a key is served by their own key for every mode a bound
     profile covers, and only by it; a mode no user-keyed entry covers falls to
-    the eligible house entries, as for a learner without a key (ADR-0032).
+    the eligible house entries, as for a learner without a key (ADR-0033).
     """
     eligible = _eligible_entries(chain, mode)
     keyed = tuple(entry for entry in eligible if entry.user_keyed)

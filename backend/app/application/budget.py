@@ -179,7 +179,7 @@ class DailyBudget:
         without stamps lives in: everything prices at ``prices``.
 
         A call served with the learner's own provider key (``user_keyed``) costs
-        the house nothing, so it prices at 0 USD whatever it reported (ADR-0032).
+        the house nothing, so it prices at 0 USD whatever it reported (ADR-0033).
         Its call counters still apply: :meth:`record` counts an ask or a teach
         start whatever the amount.
         """

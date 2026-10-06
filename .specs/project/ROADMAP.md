@@ -164,14 +164,14 @@ Not yet accepted into an RFC; order is the research's recommendation (rows 1–5
 slice, 6–8 learning-science slice, 9–12 growth/ecosystem; 6–8 may interleave with 2–5).
 Operator prerequisites, not cycles: fund the CI Anthropic key (nightly red since
 2026-07-27), choose a host + flip the GHCR `learny-minio` package public, LGPD legal pass
-for Brazil, record the demo. `byok-secrets-and-chains` records ADR-0032 superseding
+for Brazil, record the demo. `byok-secrets-and-chains` records ADR-0033 superseding
 ADR-0020 amendment point 7; `local-models-self-host` needs an ADR-0019 amendment
 (self-host only); `shelf-ask` needs an ADR-0029 amendment (multi-source scope).
 
 | tlc Cycle | Source | Scope | Status |
 |---|---|---|---|
 | `pt-br-interface` | Research 2026-09-30 (Brazil priority; ledger KQ4) | UI i18n framework + pt-BR/en catalogs + locale negotiation; tutor/answers speak the learner's language while quoting citations in the book's language; pt-BR golden fixture (public-domain Portuguese book) in the offline eval set | Not started |
-| `byok-secrets-and-chains` | Research 2026-09-30 + 2026-09-07 §3.3 Flavor B; ADR-0020 amendment pt. 7 reversal (new ADR) | Envelope-encrypted per-user provider keys (AES-256-GCM, env KEK, rotation job); per-user adapter cache keyed on (provider, model, key fingerprint); workers receive credential row id, never the key; keys bind to curated house profiles only | In progress (batch A of 2; plan `.specs/features/byok-secrets-and-chains/`, ADR-0032) |
+| `byok-secrets-and-chains` | Research 2026-09-30 + 2026-09-07 §3.3 Flavor B; ADR-0020 amendment pt. 7 reversal (new ADR) | Envelope-encrypted per-user provider keys (AES-256-GCM, env KEK, rotation job); per-user adapter cache keyed on (provider, model, key fingerprint); workers receive credential row id, never the key; keys bind to curated house profiles only | In progress (batch A of 2; plan `.specs/features/byok-secrets-and-chains/`, ADR-0033) |
 | `byok-hosted-policy` | Research 2026-09-30 (base_url CVEs; provider terms) | Hosted provider allow-list (Anthropic, OpenAI, Gemini-compat), no user base_url; BYOK users exempt from house spend cap but keep rate limits + per-corpus prompt-token ceiling; per-answer token/cost display + soft monthly budget; provider privacy badges (Gemini unpaid trains); disclosure copy; security review checklist | Not started |
 | `local-models-self-host` | Research 2026-09-30 (Ollama/LM Studio compat); ADR-0019 amendment (self-host local embeddings) | Documented + tested operator profile for an OpenAI-compatible local runtime; optional local embedding model for self-host with per-corpus model/dimension and forced re-embed on change; golden results recorded for one pt-BR-capable local model | Not started |
 | `installable-and-adult-launch` | Research 2026-09-30 (Brazil mobile/LGPD); AD-320/AD-325 deferrals | PWA manifest + service worker; offline cache of the current book's chapters; low-bandwidth budgets; 18+ attestation at signup; pt-BR legal pages; capped guest sample Ask (AD-320 thaw) | Not started |

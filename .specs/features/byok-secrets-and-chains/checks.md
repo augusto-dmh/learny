@@ -233,6 +233,6 @@ Size, from `wc -c` on the files each slice reads or writes, divided by four (new
 - S5 = logging 7k + tests ~35k ≈ **11k**
 - S6 = AccountPanel 9k + new client lib ~6k + tests ~21k ≈ **9k**
 - Total ≈ **251k**, over the 150k budget. Per owner decision D2, the mechanism is pre-answered **handoff**: sequential batches cut at slice boundaries, one PR each, the next batch starting only after the previous one merges
-- **Batch A = S1 + S3 (138k)**, the engine: sealed storage, rotation, learner chains, ledger rule, and ADR-0032. The feature stays unreachable (no route stores a key) and off by default
+- **Batch A = S1 + S3 (138k)**, the engine: sealed storage, rotation, learner chains, ledger rule, and ADR-0033. The feature stays unreachable (no route stores a key) and off by default
 - **Batch B = S2 + S4 + S5 + S6 (113k)**, the controls: key routes, cards and decks, leak sensors, Account UI. The Verifier runs scoped to batch A's checks (C1-C7, C19-C27, C44) before PR A, and over every check before PR B
 - Mechanism: handoff (D2 pre-answer, recorded 2026-10-02)

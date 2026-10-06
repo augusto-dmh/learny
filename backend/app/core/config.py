@@ -434,7 +434,7 @@ class Settings(BaseSettings):
     # working directory unless absolute. The operator account has no password.
     sample_epub_path: Path = Path("data/samples/sun-tzu_the-art-of-war_lionel-giles.epub")
 
-    # Learner-provided API keys (ADR-0032). ``secrets_kek`` is the key-encryption
+    # Learner-provided API keys (ADR-0033). ``secrets_kek`` is the key-encryption
     # key that wraps every learner key's data key: base64 of exactly 32 bytes.
     # Unset (or blank) means the feature is off, which is the default; a
     # malformed value fails startup naming the variable, never the value.

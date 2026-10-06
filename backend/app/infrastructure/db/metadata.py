@@ -951,7 +951,7 @@ user_ai_preferences = Table(
     Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
 )
 
-# --- Learner provider keys, sealed at rest (ADR-0032) -----------------------------
+# --- Learner provider keys, sealed at rest (ADR-0033) -----------------------------
 # One row per (user, provider) holding a learner's API key in envelope-encrypted
 # form: the AES-256-GCM ciphertext and its nonce, the per-row data key wrapped by
 # the operator's KEK and that wrap's nonce, the KEK id, a fingerprint bound to the

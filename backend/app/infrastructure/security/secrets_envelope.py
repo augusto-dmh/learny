@@ -1,4 +1,4 @@
-"""Envelope encryption for learner-provided API keys (ADR-0032, points 1-2).
+"""Envelope encryption for learner-provided API keys (ADR-0033, points 1-2).
 
 Each secret is sealed with AES-256-GCM under a fresh 32-byte data key (DEK) and
 a fresh 96-bit nonce. The DEK is then wrapped with AES-256-GCM by the operator's

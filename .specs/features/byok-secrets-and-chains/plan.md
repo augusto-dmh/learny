@@ -94,7 +94,7 @@ Operator command, not an HTTP route: `python -m app.cli.rotate_secrets_kek` read
 | 5. registry binding field + provider names | `GenerationProfileSettings.user_key_provider: Literal["anthropic","openai","gemini"] \| None = None`. A profile with `user_key_provider` set and no `api_key_env` is user-key-only and never joins a house chain. Route and payload `provider` values are the same literals | inferring the binding from `kind`+`base_url`, which lets a host change silently re-bind learner keys; a user-chosen model or `base_url`, which the research rules out (Lobe Chat GHSA, CVE-2024-7959) |
 | 6. deck pin carries the credential | `QuizDeckHandle.to_payload()` gains `"credential_id": "<uuid>" \| null`. The poll re-reads that row (owner-scoped) and fails the job terminally with fixed copy when it is gone. Replace = delete + insert = new id | pin by provider only, which would collect a user-key batch with the house key or with a replaced key from another org |
 | 7. API routes | the four `/api/me/provider-keys*` routes above. `GET` always answers `200` with `enabled: false` when the feature is off; writes answer `404` then | folding into `/api/me/ai-profile`, which mixes a non-secret choice with secret material and its stricter redaction rules |
-| 8. decision record | new ADR-0032 superseding ADR-0020 amendment point 7 (BYOK no longer waits for a paid tier). It states that BYOK on a hosted public instance stays disabled until `byok-hosted-policy` ships | amend ADR-0020 a third time, which buries a reversal of a recorded deferral inside a provider-choice ADR |
+| 8. decision record | new ADR-0033 superseding ADR-0020 amendment point 7 (BYOK no longer waits for a paid tier). It states that BYOK on a hosted public instance stays disabled until `byok-hosted-policy` ships | amend ADR-0020 a third time, which buries a reversal of a recorded deferral inside a provider-choice ADR |
 | 9. credential fingerprint | `fingerprint` = hex SHA-256 of `learny/provider-credential-fingerprint/v1\0` ‖ the row's associated data ‖ `\0` ‖ `nonce` ‖ `ciphertext`. It is recomputed on every read for the asking user, and a row whose stored value differs reads as no credential. Rotation leaves it unchanged because the ciphertext is untouched | SHA-256 of the plaintext key, which lets anyone holding a dump confirm a guessed key, and which is identical across rows, so a row copied onto another account would hit the first learner's cached adapter |
 
 - Nothing else in this change is hard to reverse
@@ -221,14 +221,14 @@ The Account page lets a learner add, test, replace and delete a key, and see wha
 | house USD ledger for user-keyed calls | debit 0 USD; counters, kill switch and the pre-flight USD assertion are unchanged | the house did not pay. The exemption from the house cap and the cost display belong to `byok-hosted-policy` | y |
 | how the operator offers a provider | an explicit per-profile `user_key_provider` field, so the registry is the allow-list on self-host | curation stays operator-owned, and nothing re-binds when a host changes | y |
 | enabling switch | KEK set AND at least one profile binds a provider; no separate boolean | one switch the operator cannot half-set; the brief requires "off unless the operator configures a KEK" | y |
-| hosted-instance guard | documented in ADR-0032 and `.env.production.example` (leave the KEK unset until `byok-hosted-policy`); no code guard | the code cannot tell a public host from a private VPS self-host; a heuristic guard would misfire on self-hosters | y |
+| hosted-instance guard | documented in ADR-0033 and `.env.production.example` (leave the KEK unset until `byok-hosted-policy`); no code guard | the code cannot tell a public host from a private VPS self-host; a heuristic guard would misfire on self-hosters | y |
 | learner's house-profile preference when they have a key | it reorders the user-keyed entries when the chosen profile is bound to their provider, and is otherwise ignored for those modes | keeps one choice surface and does not invent a second preference | y |
 | key format validation | length 20-256, no whitespace, prefix `sk-ant-` / `sk-` for anthropic / openai, no prefix check for gemini | catches pasted typos without coupling to undocumented key formats | y |
 | test route cost | model-list call (no tokens billed) | the test must not spend the learner's money | y |
 | delivery mechanism | over lean's 150k budget (~251k): two sequential PRs - batch A = sealed storage + rotation + learner chains + ADR (engine unreachable, off by default), batch B = key routes + cards/decks + leak sensors + Account UI | one builder would compact over a security-critical slice set | y |
 | sealing scheme | AES-256-GCM envelope, fresh DEK + nonce per write, KEK from `LEARNY_SECRETS_KEK`, AAD `learny/provider-credential/v1/<user_id>/<provider>` on both layers, `kek_id` = SHA-256(KEK)[:16 hex]; rotation re-wraps DEKs with `LEARNY_SECRETS_KEK_PREVIOUS` | rejected: a fixed IV (GCM nonce reuse), a single app-wide Fernet key (rotation re-encrypts everything), KMS (no SDK, no self-host KMS) | y |
 | routing of explain/quiz/cards for a learner holding a key | user-keyed entries lead the learner's chain for every mode a bound profile covers (an Anthropic key powers cards/decks with `quiz_model`); supersedes the archived "explain/quiz/cards house-routed" decision (AD-351) for those learners only | rejected: inferring the binding from kind + base_url | y |
-| ADR-0032 needs the user's acceptance | accepted at the door gate (2026-10-02) | it reverses a recorded deferral (ADR-0020 amendment point 7) | y |
+| ADR-0033 needs the user's acceptance | accepted at the door gate (2026-10-02) | it reverses a recorded deferral (ADR-0020 amendment point 7) | y |
 
 **Open questions:** none - all resolved or logged above.
 
@@ -253,11 +253,11 @@ The Account page lets a learner add, test, replace and delete a key, and see wha
 | command `rotate_secrets_kek` | output format and exit codes | AC 4, AC 5 |
 | command `rotate_secrets_kek` | failure halfway | AC 4 (each row re-wrapped in its own transaction, so a re-run resumes) |
 | command `rotate_secrets_kek` | flags | n/a - configuration comes from the same env the app reads; there are no flags |
-| document ADR-0032 | structure, tone, reader's next step | AC 42 copy, plus the ADR in the repo's MADR format |
+| document ADR-0033 | structure, tone, reader's next step | AC 42 copy, plus the ADR in the repo's MADR format |
 | copy Account disclosure | what the reader does next | AC 42 |
 
 ## Sources
 
 - `.specs/project/ROADMAP.md` v8 row `byok-secrets-and-chains` - authoritative scope line
 - `docs/research/2026-09-30/synthesis.md` §BYOK and row details 2-3 - binding architecture and the row-3 split
-- `docs/adr/0020-use-anthropic-claude-for-generation.md` amendments - routing rules this conforms to; point 7 superseded by ADR-0032
+- `docs/adr/0020-use-anthropic-claude-for-generation.md` amendments - routing rules this conforms to; point 7 superseded by ADR-0033

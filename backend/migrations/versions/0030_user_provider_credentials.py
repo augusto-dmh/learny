@@ -1,7 +1,7 @@
 """Learner provider keys, sealed at rest
 
 Creates ``user_provider_credentials``: at most one row per (user, provider)
-holding a learner's API key in envelope-encrypted form (ADR-0032). The row
+holding a learner's API key in envelope-encrypted form (ADR-0033). The row
 keeps the AES-256-GCM ciphertext and its nonce, the data key wrapped by the
 operator's key-encryption key and that wrap's nonce, the KEK's id, a
 fingerprint, and the key's last four characters. It never holds the plaintext

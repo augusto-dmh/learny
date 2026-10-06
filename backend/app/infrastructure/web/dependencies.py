@@ -711,7 +711,7 @@ def get_explain_generation() -> GenerationPort:
     The house Explain chain is a house cost lever and is never preference-
     resolved: no stored choice is read on this path. A learner who holds a key
     is served by :func:`get_explain_generation_for_user`, which rides their
-    key-bound profiles ahead of this chain (ADR-0032).
+    key-bound profiles ahead of this chain (ADR-0033).
     """
     return build_generation_chain(get_settings(), explain=True)
 
@@ -761,7 +761,7 @@ def _declared_profile_ids() -> frozenset[str]:
     return frozenset(profile.id for profile in get_settings().generation_profiles)
 
 
-# --- Learner-provided keys (ADR-0032) --------------------------------------------
+# --- Learner-provided keys (ADR-0033) --------------------------------------------
 #
 # The feature is on only when a KEK is configured AND at least one declared
 # profile binds a provider; off, no credential row is ever read and every
@@ -875,7 +875,7 @@ def get_explain_generation_for_user(
     A learner without a key gets the house Explain chain itself: no preference
     is read here. A learner holding a key is served on it by the profiles bound
     to their provider, ``generation_explain_profile`` first when it is one of
-    them (ADR-0032), with the house Explain chain beside them.
+    them (ADR-0033), with the house Explain chain beside them.
     """
     lead = get_settings().generation_explain_profile or None
     return build_learner_keyed_chain(_learner_entries(conn, user.id, lead=lead), explain_generation)
@@ -1021,7 +1021,7 @@ def get_post_conversation_turn(
     the resolution never reaches the service, which keeps receiving a plain
     ``GenerationPort`` (ADR-0007). The selection-Explain chain rides beside it
     (AD-345), house-routed unless the caller holds a key for a bound provider
-    (ADR-0032), in which case both chains lead with the caller's key-bound
+    (ADR-0033), in which case both chains lead with the caller's key-bound
     profiles. The service resolves which of the two serves
     a turn from the request's ``origin``, and routing policy stays inside the
     chains. Injecting them via ``Depends`` keeps both test-overridable, and the

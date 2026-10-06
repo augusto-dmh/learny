@@ -50,7 +50,7 @@ EFFORT_LITERALS = ("low", "medium", "high", "xhigh", "max")
 #: adapter). ``none``: no citations (never eligible for grounded modes).
 GROUNDING_KINDS = ("verified-spans", "prompt-cited", "none")
 
-#: The providers whose learner keys a profile may accept (ADR-0032). The same
+#: The providers whose learner keys a profile may accept (ADR-0033). The same
 #: literals name a provider in the key routes and payloads.
 USER_KEY_PROVIDERS = ("anthropic", "openai", "gemini")
 
@@ -98,7 +98,7 @@ class GenerationProfileSettings(BaseModel):
     # existing deployment's env JSON does) changes nothing about parsing or serving.
     display_name: str = ""
     description: str = ""
-    # Learner-provided keys (ADR-0032): the provider whose learner keys may
+    # Learner-provided keys (ADR-0033): the provider whose learner keys may
     # serve this profile. Unset (the default, so every existing registry parses
     # unchanged) means the profile serves on the house key only. Set together
     # with ``api_key_env`` the profile serves both; set without it, the profile
