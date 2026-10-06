@@ -97,7 +97,7 @@ from app.application.study import ContinueReading, GetStudySummary
 from app.application.vault import ExportVault
 from app.core.config import Settings, get_settings
 from app.core.tracing import bind_trace
-from app.domain.entities import Session, User
+from app.domain.entities import ProviderCredential, Session, User
 from app.domain.ports import (
     EmailPort,
     EmbeddingPort,
@@ -817,12 +817,15 @@ def _learner_entries(
     for profile in order_learner_profiles(
         _generation_profiles(), frozenset(credentials), lead=lead
     ):
-        credential = credentials[profile.user_key_provider]  # type: ignore[index]
+        provider = profile.user_key_provider
+        assert provider is not None  # order_learner_profiles yields bound profiles only
+        credential = credentials[provider]
 
         def _build(
-            profile: GenerationProfileSettings = profile, credential: object = credential
+            profile: GenerationProfileSettings = profile,
+            credential: ProviderCredential = credential,
         ) -> GenerationPort | None:
-            api_key = repo.reveal(credential)  # type: ignore[arg-type]
+            api_key = repo.reveal(credential)
             if api_key is None:
                 return None
             return build_user_keyed_adapter(profile, settings, api_key)
