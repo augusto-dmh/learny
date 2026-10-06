@@ -21,7 +21,7 @@ from app.domain.entities import User
 from app.infrastructure.db.metadata import user_provider_credentials
 from app.infrastructure.db.provider_credentials import SqlAlchemyProviderCredentialRepository
 from app.infrastructure.db.repositories import SqlAlchemyUserRepository
-from app.infrastructure.security.secrets_envelope import SecretsEnvelope
+from app.infrastructure.security.secrets_envelope import SecretsEnvelope, kek_id_for
 from tests.conftest import requires_db
 
 pytestmark = requires_db
@@ -183,3 +183,53 @@ def test_each_provider_literal_round_trips(db_conn: Connection, provider: str) -
     stored = repo.replace(user.id, provider, "k" * 30 + provider)
 
     assert repo.reveal(stored) == "k" * 30 + provider
+
+
+def _damage_wrapped_dek(db_conn: Connection, credential_id: object) -> None:
+    row = db_conn.execute(
+        select(user_provider_credentials).where(user_provider_credentials.c.id == credential_id)
+    ).one()
+    wrapped = bytearray(row.wrapped_dek)
+    wrapped[0] ^= 0x01
+    db_conn.execute(
+        update(user_provider_credentials)
+        .where(user_provider_credentials.c.id == credential_id)
+        .values(wrapped_dek=bytes(wrapped))
+    )
+
+
+def test_a_row_whose_wrapped_dek_fails_authentication_reveals_nothing(
+    db_conn: Connection, caplog: pytest.LogCaptureFixture
+) -> None:
+    # The fingerprint covers the ciphertext and nonce, not the wrapped DEK, so a
+    # damaged DEK passes the usability check and only the open itself fails.
+    user = _user(db_conn)
+    stored = _repo(db_conn).replace(user.id, "anthropic", _KEY)
+    _damage_wrapped_dek(db_conn, stored.id)
+
+    with caplog.at_level("DEBUG"):
+        assert _repo(db_conn).reveal(stored) is None
+
+    assert _repo(db_conn).get(user.id, "anthropic") is not None
+    assert _KEY not in caplog.text
+    assert str(stored.id) in caplog.text
+
+
+def test_rewrap_reports_each_outcome_of_one_row(db_conn: Connection) -> None:
+    old_kek, new_kek, stray_kek = os.urandom(32), os.urandom(32), os.urandom(32)
+    old_repo = _repo(db_conn, old_kek)
+    movable = old_repo.replace(_user(db_conn).id, "anthropic", _KEY)
+    damaged = old_repo.replace(_user(db_conn).id, "anthropic", _KEY)
+    _damage_wrapped_dek(db_conn, damaged.id)
+    stray = _repo(db_conn, stray_kek).replace(_user(db_conn).id, "openai", "sk-proj-" + "x" * 24)
+    rotating = SqlAlchemyProviderCredentialRepository(db_conn, SecretsEnvelope(new_kek, [old_kek]))
+
+    assert rotating.rewrap(movable.id) == "rewrapped"
+    assert rotating.rewrap(movable.id) == "current"  # a second run, or a concurrent one
+    assert rotating.rewrap(damaged.id) == "unreadable"
+    assert rotating.rewrap(stray.id) == "unknown_kek"
+    assert rotating.rewrap(uuid4()) == "gone"  # deleted since it was listed
+    assert _repo(db_conn, new_kek).reveal(movable) == _KEY
+    listing = dict(rotating.kek_listing())
+    assert set(listing) == {movable.id, damaged.id, stray.id}
+    assert listing[movable.id] == kek_id_for(new_kek)

@@ -26,13 +26,12 @@ from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from uuid import UUID
 
-from sqlalchemy import Connection, func, select, update
+from sqlalchemy import Connection
 
 from app.core.config import get_settings
 from app.infrastructure.db.engine import get_engine
-from app.infrastructure.db.metadata import user_provider_credentials
-from app.infrastructure.db.provider_credentials import sealed_from_row
-from app.infrastructure.security.secrets_envelope import SealedSecretError, SecretsEnvelope
+from app.infrastructure.db.provider_credentials import SqlAlchemyProviderCredentialRepository
+from app.infrastructure.security.secrets_envelope import SecretsEnvelope
 
 
 def _default_uow() -> AbstractContextManager[Connection]:
@@ -64,11 +63,7 @@ def rotate(
     """Re-wrap every row not under the current KEK, one transaction per row."""
     report = RotationReport()
     with uow() as conn:
-        listing = conn.execute(
-            select(user_provider_credentials.c.id, user_provider_credentials.c.kek_id).order_by(
-                user_provider_credentials.c.created_at, user_provider_credentials.c.id
-            )
-        ).all()
+        listing = SqlAlchemyProviderCredentialRepository(conn, envelope).kek_listing()
     for row_id, kek_id in listing:
         if kek_id == envelope.current_kek_id:
             report.already_current += 1
@@ -77,34 +72,16 @@ def rotate(
             report.unknown_kek.append(row_id)
             continue
         with uow() as conn:
-            row = conn.execute(
-                select(user_provider_credentials)
-                .where(user_provider_credentials.c.id == row_id)
-                .with_for_update()
-            ).one_or_none()
-            if row is None:  # deleted since the listing: nothing left to rotate
-                continue
-            if row.kek_id == envelope.current_kek_id:  # a concurrent run got there first
-                report.already_current += 1
-                continue
-            try:
-                rewrapped = envelope.rewrap(
-                    sealed_from_row(row), user_id=row.user_id, provider=row.provider
-                )
-            except SealedSecretError:
-                report.unreadable.append(row_id)
-                continue
-            conn.execute(
-                update(user_provider_credentials)
-                .where(user_provider_credentials.c.id == row_id)
-                .values(
-                    wrapped_dek=rewrapped.wrapped_dek,
-                    dek_nonce=rewrapped.dek_nonce,
-                    kek_id=rewrapped.kek_id,
-                    updated_at=func.now(),
-                )
-            )
+            outcome = SqlAlchemyProviderCredentialRepository(conn, envelope).rewrap(row_id)
+        if outcome == "rewrapped":
             report.rewrapped += 1
+        elif outcome == "current":  # a concurrent run got there first
+            report.already_current += 1
+        elif outcome == "unknown_kek":
+            report.unknown_kek.append(row_id)
+        elif outcome == "unreadable":
+            report.unreadable.append(row_id)
+        # "gone": deleted since the listing, nothing left to rotate
     return report
 
 

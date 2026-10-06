@@ -186,6 +186,30 @@ def test_unreadable_row_exits_one_and_is_left_untouched(
     assert damaged_after.kek_id == damaged_before.kek_id
 
 
+def test_a_run_that_stopped_halfway_resumes_where_it_left_off(
+    db_conn: Connection,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    savepoint_uow: None,
+) -> None:
+    # One row already moved by the interrupted run, one still under the old KEK.
+    SqlAlchemyProviderCredentialRepository(db_conn, SecretsEnvelope(_NEW_KEK)).replace(
+        _user(db_conn).id, "anthropic", "sk-ant-api03-already-moved-key-777777"
+    )
+    pending = SqlAlchemyProviderCredentialRepository(db_conn, SecretsEnvelope(_OLD_KEK)).replace(
+        _user(db_conn).id, "anthropic", "sk-ant-api03-still-pending-key-888888"
+    )
+
+    _configure(monkeypatch, _NEW_KEK, _OLD_KEK)
+    exit_code = rotate_secrets_kek.main([])
+    out = capsys.readouterr().out
+
+    assert exit_code == 0
+    assert "rewrapped=1" in out
+    assert "already_current=1" in out
+    assert _rows(db_conn)[pending.id].kek_id == hashlib.sha256(_NEW_KEK).hexdigest()[:16]
+
+
 def test_without_a_kek_the_command_refuses_with_exit_two(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

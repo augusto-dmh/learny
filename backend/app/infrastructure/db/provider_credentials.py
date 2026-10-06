@@ -10,14 +10,19 @@ A row counts as "no credential" when it cannot be used: its KEK is not
 configured here, or its stored fingerprint does not match the one recomputed
 for the learner asking (a row copied onto another account). Neither case
 raises on the request path.
+
+The two operator methods behind KEK rotation, :meth:`kek_listing` and
+:meth:`rewrap`, are the only statements not scoped by ``user_id``; the rotation
+command is their one caller, and neither ever opens a key.
 """
 
 from __future__ import annotations
 
 import logging
+from typing import Literal
 from uuid import UUID, uuid4
 
-from sqlalchemy import Connection, Row, insert, select
+from sqlalchemy import Connection, Row, func, insert, select, update
 from sqlalchemy import delete as sa_delete
 
 from app.domain.entities import ProviderCredential
@@ -33,6 +38,8 @@ logger = logging.getLogger(__name__)
 
 #: How many trailing characters of a key the account page may show.
 LAST4_CHARS = 4
+#: What :meth:`SqlAlchemyProviderCredentialRepository.rewrap` did to one row.
+RewrapOutcome = Literal["rewrapped", "current", "gone", "unknown_kek", "unreadable"]
 
 
 def sealed_from_row(row: Row) -> SealedSecret:
@@ -166,3 +173,49 @@ class SqlAlchemyProviderCredentialRepository:
                 "provider credential %s could not be opened; treating it as absent", row.id
             )
             return None
+
+    def kek_listing(self) -> list[tuple[UUID, str]]:
+        """Every stored row's id and ``kek_id``, oldest first (operator rotation only)."""
+        rows = self._conn.execute(
+            select(user_provider_credentials.c.id, user_provider_credentials.c.kek_id).order_by(
+                user_provider_credentials.c.created_at, user_provider_credentials.c.id
+            )
+        ).all()
+        return [(row.id, row.kek_id) for row in rows]
+
+    def rewrap(self, credential_id: UUID) -> RewrapOutcome:
+        """Re-wrap one row's DEK under the current KEK, locking the row first.
+
+        The ciphertext is never touched and the key is never opened. A row
+        deleted since it was listed is ``gone``; one another run already moved
+        is ``current``; one whose wrapped DEK fails authentication is
+        ``unreadable`` and stays as it was. Operator rotation only.
+        """
+        row = self._conn.execute(
+            select(user_provider_credentials)
+            .where(user_provider_credentials.c.id == credential_id)
+            .with_for_update()
+        ).one_or_none()
+        if row is None:
+            return "gone"
+        if row.kek_id == self._envelope.current_kek_id:
+            return "current"
+        if not self._envelope.knows(row.kek_id):
+            return "unknown_kek"
+        try:
+            rewrapped = self._envelope.rewrap(
+                sealed_from_row(row), user_id=row.user_id, provider=row.provider
+            )
+        except SealedSecretError:
+            return "unreadable"
+        self._conn.execute(
+            update(user_provider_credentials)
+            .where(user_provider_credentials.c.id == credential_id)
+            .values(
+                wrapped_dek=rewrapped.wrapped_dek,
+                dek_nonce=rewrapped.dek_nonce,
+                kek_id=rewrapped.kek_id,
+                updated_at=func.now(),
+            )
+        )
+        return "rewrapped"
