@@ -341,7 +341,17 @@ def test_user_key_only_profile_never_joins_a_house_chain_or_the_catalog(monkeypa
 
 def test_user_key_only_registry_without_a_house_servable_profile_fails() -> None:
     settings = _settings_with_profiles(
-        [_USER_KEY_ONLY, dict(_USER_KEY_ONLY, id="byok-gpt", user_key_provider="openai")]
+        [
+            _USER_KEY_ONLY,
+            dict(
+                _USER_KEY_ONLY,
+                id="byok-gpt",
+                kind="openai-compatible",
+                model="gpt-byok",
+                grounding="prompt-cited",
+                user_key_provider="openai",
+            ),
+        ]
     )
 
     with pytest.raises(ValueError) as excinfo:
@@ -391,3 +401,104 @@ def test_user_key_only_binding_on_a_local_profile_fails() -> None:
 
     with pytest.raises(ValueError, match="local"):
         resolve_generation_profiles(settings)
+
+
+# --- A binding must agree with where the profile sends the key -----------------
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        pytest.param(
+            {"kind": "openai-compatible", "grounding": "prompt-cited"}, id="anthropic-on-compat"
+        ),
+        pytest.param({"user_key_provider": "openai"}, id="openai-on-anthropic-kind"),
+        pytest.param({"user_key_provider": "gemini"}, id="gemini-on-anthropic-kind"),
+        pytest.param(
+            {
+                "kind": "openai-compatible",
+                "grounding": "prompt-cited",
+                "user_key_provider": "openai",
+                "base_url": "https://api.fireworks.ai/inference/v1",
+            },
+            id="openai-to-another-host",
+        ),
+        pytest.param(
+            {
+                "kind": "openai-compatible",
+                "grounding": "prompt-cited",
+                "user_key_provider": "openai",
+                "base_url": "http://api.openai.com/v1",
+            },
+            id="openai-over-plain-http",
+        ),
+        pytest.param(
+            {
+                "kind": "openai-compatible",
+                "grounding": "prompt-cited",
+                "user_key_provider": "gemini",
+                "base_url": "",
+            },
+            id="gemini-on-the-openai-default-host",
+        ),
+        pytest.param(
+            {
+                "kind": "openai-compatible",
+                "grounding": "prompt-cited",
+                "user_key_provider": "gemini",
+                "base_url": "https://generativelanguage.googleapis.com.evil.example/v1beta/openai/",
+            },
+            id="gemini-to-a-lookalike-host",
+        ),
+    ],
+)
+def test_a_binding_that_would_send_the_key_elsewhere_fails(overrides: dict[str, Any]) -> None:
+    settings = _settings_with_profiles([_HOUSE_LOCAL, dict(_USER_KEY_ONLY, **overrides)])
+
+    with pytest.raises(ValueError) as excinfo:
+        resolve_generation_profiles(settings)
+
+    message = str(excinfo.value)
+    assert "byok-claude" in message
+    assert "would send them elsewhere" in message
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        pytest.param({}, id="anthropic-on-anthropic-kind"),
+        pytest.param(
+            {
+                "kind": "openai-compatible",
+                "grounding": "prompt-cited",
+                "user_key_provider": "openai",
+                "base_url": "",
+            },
+            id="openai-on-the-sdk-default",
+        ),
+        pytest.param(
+            {
+                "kind": "openai-compatible",
+                "grounding": "prompt-cited",
+                "user_key_provider": "openai",
+                "base_url": "https://api.openai.com/v1",
+            },
+            id="openai-on-its-host",
+        ),
+        pytest.param(
+            {
+                "kind": "openai-compatible",
+                "grounding": "prompt-cited",
+                "user_key_provider": "gemini",
+                "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+            },
+            id="gemini-on-its-host",
+        ),
+    ],
+)
+def test_a_binding_that_matches_its_provider_resolves(overrides: dict[str, Any]) -> None:
+    settings = _settings_with_profiles([_HOUSE_LOCAL, dict(_USER_KEY_ONLY, **overrides)])
+
+    ids = [profile.id for profile in resolve_generation_profiles(settings)]
+
+    assert ids == ["house-local", "byok-claude"]

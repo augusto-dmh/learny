@@ -25,7 +25,8 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, get_args
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict
 
@@ -52,7 +53,19 @@ GROUNDING_KINDS = ("verified-spans", "prompt-cited", "none")
 
 #: The providers whose learner keys a profile may accept (ADR-0033). The same
 #: literals name a provider in the key routes and payloads.
-USER_KEY_PROVIDERS = ("anthropic", "openai", "gemini")
+UserKeyProvider = Literal["anthropic", "openai", "gemini"]
+USER_KEY_PROVIDERS: tuple[str, ...] = get_args(UserKeyProvider)
+
+#: Where a bound profile must send each provider's learner keys. A learner key
+#: authenticates to one provider only, so a profile whose kind or host disagrees
+#: with its binding would hand that key to a third party (ADR-0033). Anthropic keys
+#: go to the native ``anthropic`` kind; OpenAI and Gemini keys go through
+#: ``openai-compatible`` to the provider's own HTTPS host (an empty ``base_url`` is
+#: the OpenAI SDK default, so only an ``openai`` binding may leave it empty).
+_USER_KEY_HOSTS = {
+    "openai": "api.openai.com",
+    "gemini": "generativelanguage.googleapis.com",
+}
 
 #: The id of the profile synthesized from the legacy settings when no registry is
 #: declared (ROUTE-06). Stable so debits and eval records can name it.
@@ -104,7 +117,7 @@ class GenerationProfileSettings(BaseModel):
     # with ``api_key_env`` the profile serves both; set without it, the profile
     # is user-key-only and never joins a house chain. The learner supplies the
     # key and nothing else: the model, host and kind stay the operator's.
-    user_key_provider: Literal["anthropic", "openai", "gemini"] | None = None
+    user_key_provider: UserKeyProvider | None = None
 
 
 def is_user_key_only(profile: GenerationProfileSettings) -> bool:
@@ -145,6 +158,27 @@ class LearnerProfile(BaseModel):
     teach_enabled: bool
 
 
+def _binding_mismatch(profile: GenerationProfileSettings) -> str | None:
+    """Why a profile's learner-key binding disagrees with where it sends keys, if it does."""
+    provider = profile.user_key_provider
+    if provider is None:
+        return None
+    if provider == "anthropic":
+        if profile.kind != "anthropic":
+            return "an 'anthropic' binding needs kind 'anthropic'"
+        return None
+    if profile.kind != "openai-compatible":
+        return f"a '{provider}' binding needs kind 'openai-compatible'"
+    if not profile.base_url:
+        if provider == "openai":
+            return None
+        return f"a '{provider}' binding needs base_url on https://{_USER_KEY_HOSTS[provider]}"
+    parsed = urlparse(profile.base_url)
+    if parsed.scheme != "https" or parsed.hostname != _USER_KEY_HOSTS[provider]:
+        return f"a '{provider}' binding needs base_url on https://{_USER_KEY_HOSTS[provider]}"
+    return None
+
+
 def _validate_declared(profiles: list[GenerationProfileSettings]) -> None:
     """Reject a malformed declared registry before anything is built (ROUTE-05).
 
@@ -174,6 +208,12 @@ def _validate_declared(profiles: list[GenerationProfileSettings]) -> None:
                     "key, so it cannot bind learner keys (user_key_provider)"
                 )
             continue
+        mismatch = _binding_mismatch(profile)
+        if mismatch is not None:
+            raise ValueError(
+                f"generation profile '{profile.id}' binds learner keys for "
+                f"'{profile.user_key_provider}' but would send them elsewhere: {mismatch}"
+            )
         if not profile.api_key_env:
             if profile.user_key_provider is not None:
                 continue  # user-key-only: served by learner keys, never by the house
