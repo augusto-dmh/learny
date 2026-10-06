@@ -20,3 +20,6 @@ evals/silver/
 # Agent-harness copies of project-local skills (canonical tree is .claude/skills/).
 .cursor/skills/
 .windsurf/skills/
+
+# Python bytecode caches anywhere in the tree (tests load skill scripts by path).
+__pycache__/
