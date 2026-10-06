@@ -9,6 +9,8 @@ used, and an entry older than its TTL is rebuilt on the next lookup.
 
 from __future__ import annotations
 
+import threading
+
 from app.infrastructure.answering.user_adapters import (
     DEFAULT_MAX_ENTRIES,
     DEFAULT_TTL_SECONDS,
@@ -135,3 +137,52 @@ def test_clear_drops_every_entry() -> None:
     cache.clear()
 
     assert len(cache) == 0
+
+
+def test_a_slow_build_does_not_block_another_learners_lookup() -> None:
+    # A miss reads the credential row and decrypts the key; while it does, a
+    # cached learner's lookup must still return.
+    cache = UserAdapterCache()
+    cache.get_or_build(_key("cached"), lambda: _Built("cached"))
+    building, release = threading.Event(), threading.Event()
+
+    def slow_build() -> _Built:
+        building.set()
+        release.wait(timeout=5)
+        return _Built("slow")
+
+    miss = threading.Thread(target=cache.get_or_build, args=(_key("missing"), slow_build))
+    miss.start()
+    assert building.wait(timeout=5)
+    hits: list[object] = []
+    hit = threading.Thread(
+        target=lambda: hits.append(cache.get_or_build(_key("cached"), lambda: _Built("rebuilt")))
+    )
+    hit.start()
+    hit.join(timeout=2)
+    hit_waited = hit.is_alive()
+    release.set()
+    miss.join(timeout=5)
+    hit.join(timeout=5)
+
+    assert not hit_waited, "a cache hit waited on another learner's build"
+    assert [h.label for h in hits] == ["cached"]  # type: ignore[attr-defined]
+    assert set(cache.keys()) == {_key("cached"), _key("missing")}
+
+
+def test_a_build_that_loses_a_race_hands_back_the_cached_adapter() -> None:
+    # Another thread inserts the same key while this build runs: every caller
+    # then shares the first adapter, and the late one is dropped unused.
+    cache = UserAdapterCache()
+    winner = _Built("winner")
+
+    def racing_build() -> _Built:
+        other = threading.Thread(
+            target=cache.get_or_build, args=(_key("fp"), lambda: winner), daemon=True
+        )
+        other.start()
+        other.join(timeout=2)
+        return _Built("late")
+
+    assert cache.get_or_build(_key("fp"), racing_build) is winner
+    assert len(cache) == 1

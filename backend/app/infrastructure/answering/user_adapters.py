@@ -74,24 +74,40 @@ class UserAdapterCache:
 
         An entry older than the TTL counts as a miss and is rebuilt. ``build``
         returning ``None`` (the key could not be opened) caches nothing, so the
-        next lookup tries again rather than remembering a failure.
+        next lookup tries again rather than remembering a failure. ``build`` runs
+        outside the lock: it reads the credential row and decrypts the key, and
+        one learner's miss must not stall every other learner's lookup. Two
+        threads missing the same key may both build; the first insert wins and
+        the other's adapter is dropped unused (clients are created lazily).
         """
         now = self._clock()
         with self._lock:
-            cached = self._entries.get(key)
-            if cached is not None:
-                built_at, adapter = cached
-                if now - built_at < self._ttl_seconds:
-                    self._entries.move_to_end(key)
-                    return adapter
-                del self._entries[key]
-            adapter = build()
-            if adapter is None:
-                return None
+            hit = self._live(key, now)
+        if hit is not None:
+            return hit
+        adapter = build()
+        if adapter is None:
+            return None
+        with self._lock:
+            raced = self._live(key, now)
+            if raced is not None:
+                return raced
             self._entries[key] = (now, adapter)
             while len(self._entries) > self._max_entries:
                 self._entries.popitem(last=False)
-            return adapter
+        return adapter
+
+    def _live(self, key: UserAdapterKey, now: float) -> GenerationPort | None:
+        """The unexpired entry for ``key``, marked recently used; the caller holds the lock."""
+        cached = self._entries.get(key)
+        if cached is None:
+            return None
+        built_at, adapter = cached
+        if now - built_at >= self._ttl_seconds:
+            del self._entries[key]
+            return None
+        self._entries.move_to_end(key)
+        return adapter
 
     def keys(self) -> tuple[UserAdapterKey, ...]:
         """The cached keys, least recently used first (introspection for tests)."""
