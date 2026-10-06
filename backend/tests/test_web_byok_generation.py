@@ -34,7 +34,10 @@ from app.domain.entities import (
     User,
 )
 from app.infrastructure.db.provider_credentials import SqlAlchemyProviderCredentialRepository
-from app.infrastructure.db.repositories import SqlAlchemyAiSpendDayRepository
+from app.infrastructure.db.repositories import (
+    SqlAlchemyAiPreferenceRepository,
+    SqlAlchemyAiSpendDayRepository,
+)
 from app.infrastructure.security.secrets_envelope import SecretsEnvelope
 from tests.conftest import TEST_PASSWORD, clear_settings_and_generation_caches, requires_db
 from tests.test_web_user_generation import (
@@ -199,6 +202,42 @@ def test_turn_served_by_learner_key(
     assert _calls(fakes, _KEY_A) == 2
     assert all(fake.model == "claude-byok" for fake in _by_key(fakes, _KEY_A))
     # ...and the house primary, built with the operator key, was never called.
+    assert _calls(fakes, _HOUSE_KEY) == 0
+
+
+def test_stored_choice_leads_the_learner_keyed_profiles(
+    auth_client: TestClient,
+    db_conn: Connection,
+    monkeypatch: pytest.MonkeyPatch,
+    fakes: list[_KeyedFake],
+) -> None:
+    # Two profiles bind anthropic; registry order puts the user-key-only one first.
+    dual = _profile(
+        "dual-claude",
+        "claude-dual",
+        api_key_env="LEARNY_TEST_HOUSE_KEY",
+        user_key_provider="anthropic",
+    )
+    _declare(monkeypatch, [_HOUSE, _BYOK, dual])
+    client = auth_client
+    user_id, csrf, conversation = _learner(client, db_conn, "byok-choice@example.com")
+    _store_key(db_conn, user_id, _KEY_A)
+
+    unchosen = _post_turn(client, conversation, csrf)
+    assert unchosen.status_code == 201, unchosen.text
+    assert unchosen.json()["model"] == "claude-byok"
+
+    SqlAlchemyAiPreferenceRepository(db_conn).upsert(UUID(user_id), "dual-claude")
+    chosen = _post_turn(client, conversation, csrf)
+
+    assert chosen.status_code == 201, chosen.text
+    # The stored choice is bound to the learner's provider, so it leads their keyed
+    # entries, and it is served with the learner's key, not the house key.
+    assert chosen.json()["model"] == "claude-dual"
+    assert [fake.model for fake in _by_key(fakes, _KEY_A) if fake.calls] == [
+        "claude-byok",
+        "claude-dual",
+    ]
     assert _calls(fakes, _HOUSE_KEY) == 0
 
 
