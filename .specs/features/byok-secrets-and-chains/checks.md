@@ -236,3 +236,4 @@ Size, from `wc -c` on the files each slice reads or writes, divided by four (new
 - **Batch A = S1 + S3 (138k)**, the engine: sealed storage, rotation, learner chains, ledger rule, and ADR-0033. The feature stays unreachable (no route stores a key) and off by default
 - **Batch B = S2 + S4 + S5 + S6 (113k)**, the controls: key routes, cards and decks, leak sensors, Account UI. The Verifier runs scoped to batch A's checks (C1-C7, C19-C27, C44) before PR A, and over every check before PR B
 - Mechanism: handoff (D2 pre-answer, recorded 2026-10-02)
+- Carried into batch B from the PR #76 review (`review-triage.md` #3, #11): resolve a learner's credentials once per request through one request-scoped dependency shared by the Ask/Teach and Explain chain dependencies (today each reads them), and consider moving the learner-entry assembly next to `order_learner_profiles` when that dependency lands
