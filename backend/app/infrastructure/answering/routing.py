@@ -128,8 +128,12 @@ def _next_index(
     once per turn: ``retried`` carries the indices whose one retry was spent.
     """
     nxt = _policy_next_index(chain, index, error, retried)
+    # Defense in depth: ``_serving_entries`` already hands the walk a slice that
+    # is all learner-keyed or all house, so today this never fires. It keeps the
+    # no-fall-over rule (ADR-0033) true for any future caller that walks a mixed
+    # chain, and it has a direct test of its own.
     if nxt is not None and chain[index].user_keyed and not chain[nxt].user_keyed:
-        return None  # never from a learner's key onto a house key (ADR-0033)
+        return None
     return nxt
 
 

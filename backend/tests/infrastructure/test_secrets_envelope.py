@@ -127,6 +127,42 @@ def test_rewrap_moves_the_dek_to_the_current_kek_and_keeps_the_ciphertext() -> N
     assert SecretsEnvelope(new_kek).open(rewrapped, user_id=owner, provider="openai") == _KEY
 
 
+def test_rewrap_never_opens_the_ciphertext() -> None:
+    # A ciphertext that no longer authenticates still re-wraps: rewrap moves the
+    # DEK only and never decrypts the key itself.
+    owner = uuid4()
+    old_kek, new_kek = os.urandom(32), os.urandom(32)
+    sealed = SecretsEnvelope(old_kek).seal(_KEY, user_id=owner, provider="anthropic")
+    broken = SealedSecret(
+        ciphertext=bytes([sealed.ciphertext[0] ^ 0x01]) + sealed.ciphertext[1:],
+        nonce=sealed.nonce,
+        wrapped_dek=sealed.wrapped_dek,
+        dek_nonce=sealed.dek_nonce,
+        kek_id=sealed.kek_id,
+    )
+
+    rewrapped = SecretsEnvelope(new_kek, previous=[old_kek]).rewrap(
+        broken, user_id=owner, provider="anthropic"
+    )
+
+    assert rewrapped.ciphertext == broken.ciphertext
+    assert rewrapped.kek_id == kek_id_for(new_kek)
+
+
+def test_a_secret_under_a_previous_kek_still_opens() -> None:
+    # The rotation window: the new KEK is current, the command has not run yet,
+    # and every request reads rows still wrapped by the old one.
+    owner = uuid4()
+    old_kek, new_kek = os.urandom(32), os.urandom(32)
+    sealed = SecretsEnvelope(old_kek).seal(_KEY, user_id=owner, provider="gemini")
+
+    opened = SecretsEnvelope(new_kek, previous=[old_kek]).open(
+        sealed, user_id=owner, provider="gemini"
+    )
+
+    assert opened == _KEY
+
+
 def test_a_kek_of_the_wrong_length_is_refused() -> None:
     with pytest.raises(ValueError, match="32 bytes"):
         SecretsEnvelope(b"\x00" * 16)

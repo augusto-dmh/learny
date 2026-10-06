@@ -32,7 +32,11 @@ from app.domain.entities import (
     GeneratedAnswer,
 )
 from app.infrastructure.answering import order_learner_profiles
-from app.infrastructure.answering.routing import ChainEntry, RoutingGenerationAdapter
+from app.infrastructure.answering.routing import (
+    ChainEntry,
+    RoutingGenerationAdapter,
+    _next_index,
+)
 from app.infrastructure.providers import (
     GenerationProfileSettings,
     ProviderUnavailable,
@@ -802,6 +806,40 @@ def test_a_house_answer_is_never_stamped_as_learner_paid() -> None:
     router = RoutingGenerationAdapter((_entry("house", house),))
 
     assert router.generate(mode=_MODE, message="q", evidence=[]).user_keyed is False
+
+
+def test_a_streamed_user_keyed_answer_is_stamped_as_learner_paid() -> None:
+    # The streamed debit prices the completed answer through this stamp, so a
+    # learner-keyed stream must come out learner-paid, as a buffered call does.
+    keyed = _StreamScriptedAdapter(
+        "keyed", [[AnswerTextDelta(text="hi"), AnswerCompleted(answer=_answer("hi"))]]
+    )
+    house = _StreamScriptedAdapter("house", [])
+    router = RoutingGenerationAdapter((_keyed("byok", keyed), _entry("house", house, kind="local")))
+
+    completed = _collect(router.generate_stream(mode=_MODE, message="q", evidence=[]))[-1]
+
+    assert isinstance(completed, AnswerCompleted)
+    assert completed.answer.profile_id == "byok"
+    assert completed.answer.user_keyed is True
+    assert house.stream_calls == 0
+
+
+@pytest.mark.parametrize("error", _FAILURES)
+def test_the_walk_never_steps_from_a_user_keyed_entry_onto_a_house_one(error: Exception) -> None:
+    # The serving slice is never mixed today; this pins the guard for a walk that is.
+    mixed = (
+        _keyed("byok", _ScriptedAdapter("byok", [])),
+        _entry("house", _ScriptedAdapter("house", []), kind="local"),
+    )
+    # A different kind next, so even a rejection would cross to it.
+    house_only = (
+        _entry("house-a", _ScriptedAdapter("a", [])),
+        _entry("house-b", _ScriptedAdapter("b", []), kind="local"),
+    )
+
+    assert _next_index(mixed, 0, error, {0}) is None
+    assert _next_index(house_only, 0, error, {0}) == 1
 
 
 # --- Which bound profiles a learner's keys serve, and in what order -----------------
