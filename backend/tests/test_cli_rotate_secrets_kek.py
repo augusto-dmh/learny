@@ -151,6 +151,41 @@ def test_unknown_kek_exits_one(
     assert orphan_after.kek_id == orphan_before.kek_id
 
 
+def test_unreadable_row_exits_one_and_is_left_untouched(
+    db_conn: Connection,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    savepoint_uow: None,
+) -> None:
+    repo = SqlAlchemyProviderCredentialRepository(db_conn, SecretsEnvelope(_OLD_KEK))
+    damaged = repo.replace(_user(db_conn).id, "anthropic", "sk-ant-api03-damaged-key-55555555")
+    repo.replace(_user(db_conn).id, "anthropic", "sk-ant-api03-healthy-key-666666666")
+    # A wrapped DEK that no longer authenticates under the KEK its row names.
+    wrapped = bytearray(_rows(db_conn)[damaged.id].wrapped_dek)
+    wrapped[0] ^= 0x01
+    db_conn.execute(
+        user_provider_credentials.update()
+        .where(user_provider_credentials.c.id == damaged.id)
+        .values(wrapped_dek=bytes(wrapped))
+    )
+    damaged_before = _rows(db_conn)[damaged.id]
+
+    _configure(monkeypatch, _NEW_KEK, _OLD_KEK)
+    exit_code = rotate_secrets_kek.main([])
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "unreadable=1" in captured.out
+    assert "unknown_kek=0" in captured.out
+    assert "rewrapped=1" in captured.out
+    assert f"credential {damaged.id}: failed authentication" in captured.err
+    assert "damaged-key" not in captured.out + captured.err
+    # The unreadable row is reported, never rewritten.
+    damaged_after = _rows(db_conn)[damaged.id]
+    assert bytes(damaged_after.wrapped_dek) == bytes(damaged_before.wrapped_dek)
+    assert damaged_after.kek_id == damaged_before.kek_id
+
+
 def test_without_a_kek_the_command_refuses_with_exit_two(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
