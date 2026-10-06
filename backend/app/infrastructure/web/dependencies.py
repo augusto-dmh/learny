@@ -110,10 +110,16 @@ from app.domain.ports import (
 )
 from app.infrastructure.answering import (
     build_generation_chain,
+    build_learner_keyed_chain,
     build_user_generation_chain,
+    build_user_keyed_adapter,
+    order_learner_profiles,
 )
+from app.infrastructure.answering.routing import ChainEntry
+from app.infrastructure.answering.user_adapters import UserAdapterCache, UserAdapterKey
 from app.infrastructure.clock import SystemClock
 from app.infrastructure.db.engine import get_engine
+from app.infrastructure.db.provider_credentials import SqlAlchemyProviderCredentialRepository
 from app.infrastructure.db.repositories import (
     SqlAlchemyActivationEventRepository,
     SqlAlchemyAiPreferenceRepository,
@@ -141,12 +147,14 @@ from app.infrastructure.embeddings import build_embedding_adapter
 from app.infrastructure.ingestion.markup import Bs4MarkupConverter
 from app.infrastructure.providers import (
     GenerationProfileSettings,
+    offered_providers,
     resolve_generation_profiles,
     resolve_serving_profile,
 )
 from app.infrastructure.quiz import build_quiz_adapter
 from app.infrastructure.scheduling import build_scheduling_adapter
 from app.infrastructure.security.password_hasher import Argon2PasswordHasher
+from app.infrastructure.security.secrets_envelope import SecretsEnvelope
 from app.infrastructure.security.tokens import SecretsTokenGenerator
 from app.infrastructure.storage.s3 import S3StorageAdapter
 from app.infrastructure.worker.enqueuer import (
@@ -698,10 +706,12 @@ Generation = Annotated[GenerationPort, Depends(get_generation)]
 
 @lru_cache
 def get_explain_generation() -> GenerationPort:
-    """FastAPI dependency: the selection-Explain chain (overridable in tests).
+    """FastAPI dependency: the house selection-Explain chain (overridable in tests).
 
-    The Explain chain is a house cost lever and is never user-resolved: no
-    preference is read on this path, whatever a learner has stored.
+    The house Explain chain is a house cost lever and is never preference-
+    resolved: no stored choice is read on this path. A learner who holds a key
+    is served by :func:`get_explain_generation_for_user`, which rides their
+    key-bound profiles ahead of this chain (ADR-0033).
     """
     return build_generation_chain(get_settings(), explain=True)
 
@@ -751,24 +761,127 @@ def _declared_profile_ids() -> frozenset[str]:
     return frozenset(profile.id for profile in get_settings().generation_profiles)
 
 
+# --- Learner-provided keys (ADR-0033) --------------------------------------------
+#
+# The feature is on only when a KEK is configured AND at least one declared
+# profile binds a provider; off, no credential row is ever read and every
+# learner gets the house chain object itself. Working out which keys a learner
+# holds is this composition root's job: the application keeps receiving a
+# plain ``GenerationPort``, and routing policy stays in the router.
+#
+# Learner-keyed adapters never enter the process-wide caches above (those key
+# on settings alone and would serve one learner's key to everyone). They live in
+# ``_user_adapters``, keyed on (provider, profile id, model, fingerprint), and a
+# lookup reaches it only through the fingerprint of a live row read on this
+# request, so a replaced or deleted key never resolves again. The plaintext is
+# decrypted only on a cache miss.
+
+_user_adapters = UserAdapterCache()
+
+
+@lru_cache
+def _secrets_envelope() -> SecretsEnvelope | None:
+    """The envelope over the configured KEKs, or ``None`` when no KEK is set."""
+    keks = get_settings().secrets_keks()
+    if keks is None:
+        return None
+    current, previous = keks
+    return SecretsEnvelope(current, previous)
+
+
+@lru_cache
+def _offered_providers() -> frozenset[str]:
+    """The providers the declared registry binds learner keys to."""
+    return frozenset(offered_providers(_generation_profiles()))
+
+
+def _learner_entries(
+    conn: Connection, user_id: UUID, *, lead: str | None
+) -> tuple[ChainEntry, ...]:
+    """The user-keyed chain entries one learner's stored keys build, lead first.
+
+    Empty when the feature is off, when the learner holds no usable key for an
+    offered provider, or when a key cannot be opened (an unknown KEK, a failed
+    owner binding): each of those reads as "no credential", never as an error.
+    """
+    envelope = _secrets_envelope()
+    offered = _offered_providers()
+    if envelope is None or not offered:
+        return ()
+    repo = SqlAlchemyProviderCredentialRepository(conn, envelope)
+    credentials = {c.provider: c for c in repo.list_for_user(user_id) if c.provider in offered}
+    if not credentials:
+        return ()
+    settings = get_settings()
+    entries: list[ChainEntry] = []
+    for profile in order_learner_profiles(
+        _generation_profiles(), frozenset(credentials), lead=lead
+    ):
+        credential = credentials[profile.user_key_provider]  # type: ignore[index]
+
+        def _build(
+            profile: GenerationProfileSettings = profile, credential: object = credential
+        ) -> GenerationPort | None:
+            api_key = repo.reveal(credential)  # type: ignore[arg-type]
+            if api_key is None:
+                return None
+            return build_user_keyed_adapter(profile, settings, api_key)
+
+        adapter = _user_adapters.get_or_build(
+            UserAdapterKey(
+                provider=credential.provider,
+                profile_id=profile.id,
+                model=profile.model,
+                fingerprint=credential.fingerprint,
+            ),
+            _build,
+        )
+        if adapter is not None:
+            entries.append(ChainEntry(adapter=adapter, profile=profile, user_keyed=True))
+    return tuple(entries)
+
+
 def get_generation_for_user(
     conn: DbConnection,
     user: Annotated[User, Depends(get_authenticated_user)],
     generation: Generation,
 ) -> GenerationPort:
-    """FastAPI dependency: the ask/teach chain the caller's stored choice leads.
+    """FastAPI dependency: the ask/teach chain for the caller.
 
     Reads the caller's preference row on the request transaction; the read is a
     plain repository call whose failures propagate like every sibling
     repository's — a real outage surfaces as a failed request, never silently
-    masked by the default chain. The Explain chain is not resolved here: it is
-    house-routed always.
+    masked by the default chain. A learner holding a key for a bound provider
+    gets their key-bound profiles leading (their stored choice first when it is
+    one of them), with that house chain beside them for any mode the bound
+    profiles do not cover; anyone else gets the house chain unchanged.
     """
     preference = SqlAlchemyAiPreferenceRepository(conn).get_by_user(user.id)
-    return _resolve_user_chain(preference.profile_id if preference else None, generation)
+    chosen = preference.profile_id if preference else None
+    house = _resolve_user_chain(chosen, generation)
+    return build_learner_keyed_chain(_learner_entries(conn, user.id, lead=chosen), house)
 
 
 UserGeneration = Annotated[GenerationPort, Depends(get_generation_for_user)]
+
+
+def get_explain_generation_for_user(
+    conn: DbConnection,
+    user: Annotated[User, Depends(get_authenticated_user)],
+    explain_generation: ExplainGeneration,
+) -> GenerationPort:
+    """FastAPI dependency: the selection-Explain chain for the caller.
+
+    A learner without a key gets the house Explain chain itself: no preference
+    is read here. A learner holding a key is served on it by the profiles bound
+    to their provider, ``generation_explain_profile`` first when it is one of
+    them (ADR-0033), with the house Explain chain beside them.
+    """
+    lead = get_settings().generation_explain_profile or None
+    return build_learner_keyed_chain(_learner_entries(conn, user.id, lead=lead), explain_generation)
+
+
+UserExplainGeneration = Annotated[GenerationPort, Depends(get_explain_generation_for_user)]
 
 
 def clear_generation_chain_caches() -> None:
@@ -777,7 +890,8 @@ def clear_generation_chain_caches() -> None:
     The lru_cached accessors and the per-user dict all key on settings-derived
     state, so anything that redeclares the registry must reset them beside
     ``get_settings.cache_clear()`` — a stale cache would silently serve one
-    deployment's chains into another's requests.
+    deployment's chains into another's requests. The learner-keyed adapter
+    cache and the KEK envelope are dropped here too.
     """
     get_generation.cache_clear()
     get_explain_generation.cache_clear()
@@ -786,6 +900,9 @@ def clear_generation_chain_caches() -> None:
     _serving_profile_resolver.cache_clear()
     _declared_profile_ids.cache_clear()
     _user_generation_chains.clear()
+    _secrets_envelope.cache_clear()
+    _offered_providers.cache_clear()
+    _user_adapters.clear()
 
 
 # --- The learner's AI-profile surface -------------------------------------------
@@ -894,7 +1011,7 @@ def get_delete_conversation(conn: DbConnection) -> DeleteConversation:
 def get_post_conversation_turn(
     conn: DbConnection,
     generation: UserGeneration,
-    explain_generation: ExplainGeneration,
+    explain_generation: UserExplainGeneration,
 ) -> PostConversationTurn:
     """Wire ``PostConversationTurn`` on the request-scoped connection (CONV-10..14, 20/21).
 
@@ -903,7 +1020,9 @@ def get_post_conversation_turn(
     resolves, and the operator default chain serves when nothing is stored —
     the resolution never reaches the service, which keeps receiving a plain
     ``GenerationPort`` (ADR-0007). The selection-Explain chain rides beside it
-    (AD-345), house-routed always: the service resolves which of the two serves
+    (AD-345), house-routed unless the caller holds a key for a bound provider
+    (ADR-0033), in which case both chains lead with the caller's key-bound
+    profiles. The service resolves which of the two serves
     a turn from the request's ``origin``, and routing policy stays inside the
     chains. Injecting them via ``Depends`` keeps both test-overridable, and the
     evidence budget / history window come from the ``conversation_*`` settings.

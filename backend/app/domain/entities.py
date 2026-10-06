@@ -61,6 +61,27 @@ class AiPreference:
 
 
 @dataclass(frozen=True)
+class ProviderCredential:
+    """One learner's stored API key for one provider, as metadata only (ADR-0033).
+
+    The key itself never leaves the infrastructure layer: it is stored sealed
+    (envelope-encrypted) and opened only where an adapter is built. What crosses
+    layers is this: which row, whose, for which provider, the last four
+    characters the account page may show, and ``fingerprint``, a non-secret name
+    of this exact key write that changes whenever the key is replaced (so
+    anything cached on it stops resolving). At most one per (user, provider).
+    """
+
+    id: UUID
+    user_id: UUID
+    provider: str
+    last4: str
+    fingerprint: str
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
 class PasswordCredential:
     """An Argon2id password hash for a user (AD-006).
 
@@ -534,6 +555,12 @@ class GeneratedAnswer:
     # debit prices the call at the serving profile's catalog (PRICE-01). Absent
     # (a direct sub-adapter's answer) → the primary catalog, as before routing.
     profile_id: str | None = None
+    # Who paid for the call, stamped by the routing adapter beside the profile id
+    # (ADR-0033): ``True`` when an entry built with the learner's own provider key
+    # served it, so the house ledger debits 0 USD while the call still counts.
+    # The router stamps the same ``profile_id`` for either payer, which is why
+    # this needs its own field. Absent → the house paid, as before.
+    user_keyed: bool = False
 
 
 # The exact reply a generation adapter instructs the model to return, alone, when

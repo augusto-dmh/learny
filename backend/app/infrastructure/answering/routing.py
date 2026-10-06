@@ -22,6 +22,17 @@ Policy (ROUTE-02 / AD-337), walked over the ordered chain:
   ``AnswerGenerationFailed`` envelope is exactly today's (TAX-03); an
   unrecognized failure propagates unchanged, identity-preserved.
 
+Learner-keyed entries (ADR-0033): an entry built with a learner's own provider
+key is ``user_keyed``. When any user-keyed entry is eligible for the mode, the
+walk covers the user-keyed entries only, so every rule above applies among them
+and no failure — rejection, outage, timeout, a spent rate-limit retry, or a
+pre-delta stream failure — ever walks from a learner's key onto a house key:
+a broken learner key surfaces as the honest failure, never as a silent house
+charge. When none is eligible, the house serves exactly as it would for a
+learner without a key: the chain's house entries, or the ``house`` port the
+composition root rides beside a learner's entries. Each answer is stamped with
+who paid (``user_keyed``) beside the serving profile's id.
+
 A grounded mode routes only over entries enabled for it (ask/teach flags,
 ROUTE-03): an empty eligible chain raises before any provider is touched, the
 honest failure the application already maps to its error envelope. Streams obey
@@ -74,6 +85,16 @@ class ChainEntry:
 
     adapter: GenerationPort
     profile: GenerationProfileSettings
+    # True when the adapter was built with a learner's own provider key: such an
+    # entry never fails over into a house-keyed one, and its answers are stamped
+    # as learner-paid so the house ledger debits 0 USD (ADR-0033).
+    user_keyed: bool = False
+
+    def __repr__(self) -> str:
+        return (
+            f"ChainEntry(profile={self.profile.id!r}, user_keyed={self.user_keyed!r}, "
+            f"adapter={type(self.adapter).__name__})"
+        )
 
 
 #: The ceiling on the wait before a same-entry retry, whatever the provider's
@@ -106,6 +127,19 @@ def _next_index(
     failure — is re-raised as-is. A ``RateLimited`` entry is retried at most
     once per turn: ``retried`` carries the indices whose one retry was spent.
     """
+    nxt = _policy_next_index(chain, index, error, retried)
+    if nxt is not None and chain[index].user_keyed and not chain[nxt].user_keyed:
+        return None  # never from a learner's key onto a house key (ADR-0033)
+    return nxt
+
+
+def _policy_next_index(
+    chain: tuple[ChainEntry, ...],
+    index: int,
+    error: Exception,
+    retried: set[int],
+) -> int | None:
+    """The ADR-0020 fail-over walk, before the learner-key owner rule is applied."""
     last = len(chain) - 1
     if isinstance(error, (Timeout, ProviderUnavailable)):
         return index + 1 if index < last else None
@@ -139,6 +173,18 @@ def _eligible_entries(chain: tuple[ChainEntry, ...], mode: str) -> tuple[ChainEn
     raise ValueError(f"unknown conversation mode: {mode!r}")
 
 
+def _serving_entries(chain: tuple[ChainEntry, ...], mode: str) -> tuple[ChainEntry, ...]:
+    """The entries one call walks: the eligible user-keyed ones when any exist.
+
+    A learner who holds a key is served by their own key for every mode a bound
+    profile covers, and only by it; a mode no user-keyed entry covers falls to
+    the eligible house entries, as for a learner without a key (ADR-0033).
+    """
+    eligible = _eligible_entries(chain, mode)
+    keyed = tuple(entry for entry in eligible if entry.user_keyed)
+    return keyed or eligible
+
+
 class RoutingGenerationAdapter:
     """``GenerationPort`` over the ordered profile chain — the policy's only home.
 
@@ -152,11 +198,26 @@ class RoutingGenerationAdapter:
     is not negotiable; the default is a composition choice).
     """
 
-    def __init__(self, chain: tuple[ChainEntry, ...], *, rate_retry_delay: float = 1.0) -> None:
+    def __init__(
+        self,
+        chain: tuple[ChainEntry, ...],
+        *,
+        rate_retry_delay: float = 1.0,
+        house: GenerationPort | None = None,
+    ) -> None:
         if not chain:
             raise ValueError("a generation chain needs at least one profile")
         self._chain = chain
         self._rate_retry_delay = rate_retry_delay
+        # The house chain a learner's chain rides beside: it serves, unchanged,
+        # every mode none of this chain's entries is eligible for.
+        self._house = house
+
+    def __repr__(self) -> str:
+        return (
+            f"RoutingGenerationAdapter(profiles={[e.profile.id for e in self._chain]!r}, "
+            f"house={'yes' if self._house is not None else 'no'})"
+        )
 
     @property
     def model(self) -> str:
@@ -171,7 +232,7 @@ class RoutingGenerationAdapter:
         ``AnswerGenerationFailed`` envelope, so the turn fails honest instead of
         being silently served by a degraded profile.
         """
-        eligible = _eligible_entries(self._chain, mode)
+        eligible = _serving_entries(self._chain, mode)
         if not eligible:
             raise RuntimeError(
                 f"no generation profile is enabled for mode '{mode}': "
@@ -200,6 +261,8 @@ class RoutingGenerationAdapter:
             "tutor_phase": tutor_phase,
             "hint_level": hint_level,
         }
+        if self._house is not None and not _serving_entries(self._chain, mode):
+            return self._house.generate(**kwargs)  # type: ignore[arg-type]
         eligible = self._require_eligible(mode)
         retried: set[int] = set()
         index = 0
@@ -218,7 +281,7 @@ class RoutingGenerationAdapter:
                     time.sleep(_backoff_seconds(error, self._rate_retry_delay))
                 index = nxt
                 continue
-            return replace(answer, profile_id=entry.profile.id)
+            return replace(answer, profile_id=entry.profile.id, user_keyed=entry.user_keyed)
 
     def generate_stream(
         self,
@@ -242,7 +305,6 @@ class RoutingGenerationAdapter:
         candidate's stream, so a client disconnect cancels the underlying
         generation.
         """
-        eligible = self._require_eligible(mode)
         kwargs: dict[str, object] = {
             "message": message,
             "mode": mode,
@@ -252,6 +314,10 @@ class RoutingGenerationAdapter:
             "tutor_phase": tutor_phase,
             "hint_level": hint_level,
         }
+        if self._house is not None and not _serving_entries(self._chain, mode):
+            yield from self._house.generate_stream(**kwargs)  # type: ignore[arg-type]
+            return
+        eligible = self._require_eligible(mode)
         retried: set[int] = set()
         index = 0
         while True:
@@ -263,7 +329,11 @@ class RoutingGenerationAdapter:
                     committed = True  # anything emitted commits the stream
                     if isinstance(event, AnswerCompleted):
                         yield AnswerCompleted(
-                            answer=replace(event.answer, profile_id=entry.profile.id)
+                            answer=replace(
+                                event.answer,
+                                profile_id=entry.profile.id,
+                                user_keyed=entry.user_keyed,
+                            )
                         )
                     else:
                         yield event

@@ -48,6 +48,7 @@ from app.domain.entities import (
     NoteSummary,
     ParsedBook,
     PasswordCredential,
+    ProviderCredential,
     QuizDeckHandle,
     QuizDeckResult,
     QuizGenerationJob,
@@ -165,6 +166,34 @@ class AiPreferenceRepository(Protocol):
 
     def delete(self, user_id: UUID) -> bool:
         """Remove the choice; ``True`` when a row was removed (unset is idempotent)."""
+        ...
+
+
+class ProviderCredentialRepository(Protocol):
+    """Persistence port for :class:`~app.domain.entities.ProviderCredential`.
+
+    Every method filters by ``user_id``: a learner's key is only ever read,
+    replaced or removed by its owning account. ``replace`` takes the plaintext
+    key and seals it before anything is written; nothing on this port ever
+    returns key material. A stored row that cannot be used on this process (its
+    key-encryption key is not configured, or it fails its owner binding) reads
+    as no credential rather than raising.
+    """
+
+    def list_for_user(self, user_id: UUID) -> list[ProviderCredential]:
+        """The learner's usable credentials, one per provider."""
+        ...
+
+    def get(self, user_id: UUID, provider: str) -> ProviderCredential | None:
+        """The learner's usable credential for ``provider``, or ``None``."""
+        ...
+
+    def replace(self, user_id: UUID, provider: str, api_key: str) -> ProviderCredential:
+        """Seal and store ``api_key`` under a new row id, removing any previous one."""
+        ...
+
+    def delete(self, user_id: UUID, provider: str) -> bool:
+        """Remove the key; ``True`` when a row was removed (delete is idempotent)."""
         ...
 
 
