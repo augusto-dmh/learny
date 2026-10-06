@@ -28,6 +28,19 @@ assert _spec is not None and _spec.loader is not None
 check_commits = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(check_commits)
 
+_VALIDATOR = (
+    Path(__file__).resolve().parents[2]
+    / ".claude"
+    / "skills"
+    / "learny-finalize"
+    / "scripts"
+    / "validate_metadata.py"
+)
+_vspec = importlib.util.spec_from_file_location("validate_metadata", _VALIDATOR)
+assert _vspec is not None and _vspec.loader is not None
+validate_metadata = importlib.util.module_from_spec(_vspec)
+_vspec.loader.exec_module(validate_metadata)
+
 _TRAILER = "Assisted-by: Claude Code"
 _TYPES = (
     "feat",
@@ -124,9 +137,19 @@ def test_assisted_by_outside_the_trailer_block_fails() -> None:
     assert any("Assisted-by" in e for e in errors), errors
 
 
-def test_assisted_by_as_the_only_line_is_not_a_trailer() -> None:
-    errors = check_commits.check_message("Assisted-by: Claude Code\n")
-    assert errors, "a header-only message carries no trailer block"
+def test_assisted_by_glued_to_the_subject_is_not_a_trailer() -> None:
+    # A one-paragraph message has no trailer block, even when its second line
+    # looks like a trailer: the header passes on its own, so only the trailer
+    # rule can reject it.
+    errors = check_commits.check_message("ci: gate commit messages\nAssisted-by: Claude Code\n")
+    assert any("Assisted-by" in e for e in errors), errors
+
+
+def test_header_contract_matches_the_publishing_validator() -> None:
+    # The pre-publish validator and this CI gate enforce one header contract;
+    # if either drifts, a commit passes one and fails the other.
+    assert check_commits.TYPES == validate_metadata.TYPES
+    assert check_commits.HEADER_RE.pattern == validate_metadata.CONVENTIONAL_PATTERN.pattern
 
 
 # --- agent attribution trailers --------------------------------------------------

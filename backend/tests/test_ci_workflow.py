@@ -51,6 +51,15 @@ def test_commits_job_checks_the_pull_request_range() -> None:
     )
 
 
+def test_nothing_softens_the_commits_gate() -> None:
+    # A gate that cannot fail is the green-over-unread-commits outcome again.
+    job = _CI["jobs"]["commits"]
+    assert "continue-on-error" not in job
+    for step in job["steps"]:
+        assert "continue-on-error" not in step, step
+        assert "|| true" not in str(step.get("run", "")), step
+
+
 def _recipe(target: str) -> tuple[list[str], str]:
     match = re.search(rf"^{re.escape(target)}:([^\n]*)\n((?:\t[^\n]*\n?)*)", _MAKEFILE, re.M)
     assert match is not None, f"no Makefile target {target!r}"
