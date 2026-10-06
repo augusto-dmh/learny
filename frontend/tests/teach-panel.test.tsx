@@ -1073,8 +1073,12 @@ describe("Tutor Start speaks first (TUTOR-08/13/14/29/30)", () => {
     render(
       <TeachPanel sourceId="s1" csrf="csrf-xyz" currentAnchor="c2.xhtml" />,
     );
+    // The picker renders before the book structure loads, so wait for the
+    // default rather than reading the value the moment the select appears.
     const target = await screen.findByLabelText("Target");
-    expect((target as HTMLSelectElement).value).toBe("c2.xhtml");
+    await waitFor(() =>
+      expect((target as HTMLSelectElement).value).toBe("c2.xhtml"),
+    );
     expect(screen.getByRole("button", { name: "Start session" })).toBeTruthy();
   });
 
