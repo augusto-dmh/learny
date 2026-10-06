@@ -18,8 +18,9 @@ Source: `https://github.com/tech-leads-club/agent-skills`
 - `learny-finalize` (Learny-specific publishing conventions)
 
 Install notes: the architecture/artifact skills were brought in from the Tech
-Leads Club installs used during the first research pass. Feature cycles run on
-the user-level `tlc-spec-lean`; the vendored spec-driven copy and the skills no
+Leads Club installs used during the first research pass. Feature cycles are
+moving to the user-level `tlc-spec-lean` (the ship-cycle skill is rewired to it
+in the next harness cycle); the vendored spec-driven copy and the skills no
 cycle ever loaded were removed on 2026-10-02 (recoverable from git history).
 
 ## Vendored official stack skills

@@ -55,7 +55,7 @@ Announce the detected stage and the cycle/PR it applies to before proceeding.
 
 Invoke `tlc-spec-driven` for the cycle (Specify → Design → Tasks → Execute per its auto-sizing).
 
-**Auto-decision rule** (replaces the human answering Discuss questions): at every decision point, formulate the options — each with why-recommend AND why-not — pick the recommended one, and record option set, choice, and rationale in the cycle's `context.md` and as an `AD-NNN` row in `.specs/project/STATE.md`. The decision must be auditable later without the conversation.
+**Auto-decision rule** (replaces the human answering Discuss questions): at every decision point, formulate the options — each with why-recommend AND why-not — pick the recommended one, and record option set, choice, and rationale in the cycle's own plan (`plan.md` `## Assumptions`, or `context.md` for a spec-driven cycle). Only a decision that binds other cycles becomes an `AD-NNN` row under `## Open decisions` in `.specs/project/STATE.md`, which holds nothing per-cycle. The decision must be auditable later without the conversation.
 
 **Escalation rule** — ask the user (AskUserQuestion) instead of auto-deciding only when:
 - the decision changes product direction or MVP scope beyond the cycle,
@@ -111,7 +111,7 @@ End the wrap report with, in order: (a) the cycle closed + PR merged; (b) the **
 
 **Idle protocol (bounded):** an idle notification from a worker/reviewer that arrives WITHOUT a completion summary is a stall, not completion. Check observable progress first (Stage 3: inline + issue comment counts via `gh api`; Stage 1: the worker's reported commits/task state). If below expectation, send exactly ONE nudge naming what is missing (e.g. "0 comments posted — continue the review and consolidate"). If a second idle arrives with no new progress, TaskStop the agent and re-dispatch a fresh one with the same brief. Do not babysit beyond this protocol — no ScheduleWakeup loops whose only purpose is re-nudging.
 
-**Limit-death degradation:** a `failed` notification citing a session/usage limit → re-dispatch the agent once. If the re-dispatch also fails, execute that stage's remaining work inline in this session, in the same turn, and record the deviation (e.g. "author = verifier this cycle") in `.specs/project/STATE.md`. If this session is itself rate-limited, write the heartbeat with exact resume instructions before stopping.
+**Limit-death degradation:** a `failed` notification citing a session/usage limit → re-dispatch the agent once. If the re-dispatch also fails, execute that stage's remaining work inline in this session, in the same turn, and record the deviation (e.g. "author = verifier this cycle") in the cycle's `verification.md` (or its plan when no Verifier has run yet). If this session is itself rate-limited, write the heartbeat with exact resume instructions before stopping.
 
 **Outages:** on 2+ consecutive provider 5xx/529 or `gh` connection errors, check the status page once. If a real outage is confirmed: write the heartbeat, schedule ONE long wakeup (15–30 min), and park with a one-line "waiting on <provider>, resuming ~HH:MM" message. Never blocking poll loops, never blind retries.
 
