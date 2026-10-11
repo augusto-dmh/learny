@@ -12,19 +12,40 @@ The filter redacts:
 - the same keys inside dict/sequence values, recursively;
 - ``%``-style log args that are dict / sequence of such structures.
 
-It intentionally does not try to scrub free-form message strings (a brittle,
-incomplete approach); the application logs structured fields, and the
-secret-free ``User`` summary is what auth flows log.
+Free-form text is scrubbed for one shape only: provider API keys (ADR-0033).
+A learner's key can reach a log line by a path nobody wrote on purpose, such
+as an SDK exception that quotes the request, so every string the record
+carries (the rendered message, ``extra`` values, exception and stack text) has
+any substring shaped like an Anthropic, OpenAI or Gemini key replaced with
+:data:`KEY_REDACTED`. Field-name redaction stays the rule for everything else.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import re
+import traceback
 from collections.abc import Mapping
 from datetime import UTC, datetime
 
 REDACTED = "***REDACTED***"
+
+#: What a provider-key-shaped substring becomes in an emitted record.
+KEY_REDACTED = "***KEY-REDACTED***"
+
+# Anthropic (``sk-ant-...``), OpenAI (``sk-...``, ``sk-proj-...``) and Gemini
+# (``AIza...``) keys. The tail floor sits below the shortest key the key routes
+# accept (20 characters in all), so every storable key is covered. The prefix
+# must start a token, so ``task-<uuid>`` or ``disk-...`` stay readable. The scan
+# is linear (one character class, no nesting).
+_PROVIDER_KEY_PATTERN = re.compile(r"(?<![A-Za-z0-9_])(?:sk-|AIza)[A-Za-z0-9_\-]{16,}")
+
+
+def mask_provider_keys(text: str) -> str:
+    """Return ``text`` with every provider-key-shaped substring replaced."""
+    return _PROVIDER_KEY_PATTERN.sub(KEY_REDACTED, text)
+
 
 # Substrings that mark a field name as sensitive (case-insensitive). Matching a
 # substring catches variants like ``raw_token``, ``session_token``, ``api_key``.
@@ -54,12 +75,17 @@ def _is_sensitive_key(key: object) -> bool:
 
 
 def _redact(value: object) -> object:
-    """Return ``value`` with any sensitive keys masked, recursively."""
+    """Return ``value`` with any sensitive keys masked, recursively.
+
+    String values keep their content except for provider-key-shaped substrings,
+    which are masked wherever they sit.
+    """
     if isinstance(value, Mapping):
         return {k: (REDACTED if _is_sensitive_key(k) else _redact(v)) for k, v in value.items()}
-    # Strings/bytes are sequences but must be left intact (they are values, not
-    # containers of key/value pairs).
-    if isinstance(value, str | bytes):
+    if isinstance(value, str):
+        return mask_provider_keys(value)
+    # Bytes are sequences but must be left intact (values, not containers).
+    if isinstance(value, bytes):
         return value
     if isinstance(value, list):
         return [_redact(v) for v in value]
@@ -68,8 +94,34 @@ def _redact(value: object) -> object:
     return value
 
 
+def _mask_record_text(record: logging.LogRecord) -> None:
+    """Mask provider keys in the rendered message, exception text and stack text.
+
+    The message is rendered once (``msg % args``); when masking changes it, the
+    record carries the masked text with no args, so no formatter can re-render
+    the key from an argument whose ``str()`` holds it. The exception is
+    formatted here into ``exc_text``, which formatters reuse instead of
+    formatting ``exc_info`` again.
+    """
+    try:
+        rendered = record.getMessage()
+    except Exception:  # noqa: BLE001 — a malformed record still gets emitted
+        rendered = None
+    if rendered is not None:
+        masked = mask_provider_keys(rendered)
+        if masked != rendered:
+            record.msg = masked
+            record.args = None
+    if record.exc_info and record.exc_info[0] is not None and not record.exc_text:
+        record.exc_text = "".join(traceback.format_exception(*record.exc_info)).rstrip("\n")
+    if record.exc_text:
+        record.exc_text = mask_provider_keys(record.exc_text)
+    if record.stack_info:
+        record.stack_info = mask_provider_keys(record.stack_info)
+
+
 class SensitiveDataFilter(logging.Filter):
-    """Mask sensitive structured fields on each ``LogRecord`` before emission."""
+    """Mask sensitive structured fields and provider keys on each ``LogRecord``."""
 
     def filter(self, record: logging.LogRecord) -> bool:
         # Redact structured ``extra=`` fields set directly on the record.
@@ -87,10 +139,26 @@ class SensitiveDataFilter(logging.Filter):
                 record.args = _redact(record.args)
             elif isinstance(record.args, tuple):
                 record.args = tuple(_redact(a) for a in record.args)
+        _mask_record_text(record)
         return True
 
 
 _HUMAN_FORMAT = "%(asctime)s %(levelname)s %(name)s %(message)s"
+
+
+class HumanFormatter(logging.Formatter):
+    """The human line format, with provider keys masked in the final text.
+
+    The filter already masks the record; masking the formatted line as well
+    covers what the filter cannot see, such as an ``extra`` object whose
+    ``str()`` carries a key.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(_HUMAN_FORMAT)
+
+    def format(self, record: logging.LogRecord) -> str:
+        return mask_provider_keys(super().format(record))
 
 
 class JsonFormatter(logging.Formatter):
@@ -115,11 +183,16 @@ class JsonFormatter(logging.Formatter):
             if key in _RESERVED_RECORD_ATTRS or key == "message" or key.startswith("_"):
                 continue
             payload[key] = value
-        if record.exc_info:
+        if record.exc_text:
+            # Already formatted (and key-masked) by ``SensitiveDataFilter``.
+            payload["exc_info"] = record.exc_text
+        elif record.exc_info:
             payload["exc_info"] = self.formatException(record.exc_info)
         if record.stack_info:
             payload["stack_info"] = self.formatStack(record.stack_info)
-        return json.dumps(payload, default=str, ensure_ascii=False)
+        # The final line is masked too: ``default=str`` may render an ``extra``
+        # object whose text carries a provider key the filter could not see.
+        return mask_provider_keys(json.dumps(payload, default=str, ensure_ascii=False))
 
 
 def _learny_handler(root: logging.Logger) -> logging.StreamHandler:
@@ -163,9 +236,7 @@ def configure_logging(level: int = logging.INFO, log_format: str | None = None) 
     root.setLevel(level)
 
     handler = _learny_handler(root)
-    handler.setFormatter(
-        JsonFormatter() if resolved == "json" else logging.Formatter(_HUMAN_FORMAT)
-    )
+    handler.setFormatter(JsonFormatter() if resolved == "json" else HumanFormatter())
     # Redaction must run before trace enrichment cannot re-introduce secrets — both
     # are on the emitting handler so JSON/human output is masked + correlated.
     _ensure_filter(handler, SensitiveDataFilter)
