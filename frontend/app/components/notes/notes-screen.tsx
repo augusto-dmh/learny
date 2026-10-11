@@ -27,6 +27,7 @@
  */
 
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import { useCallback, useEffect, useState } from "react";
 
 import { fetchAuthState } from "@/app/lib/auth";
@@ -48,6 +49,8 @@ export function NotesScreen({
 }: {
   onRequireAuth?: () => void;
 }) {
+  const t = useTranslations("notes");
+  const tCommon = useTranslations("common");
   const errorMessage = useErrorMessage();
   const [authed, setAuthed] = useState<boolean | null>(null);
   const [notes, setNotes] = useState<NoteSummary[] | null>(null);
@@ -103,21 +106,21 @@ export function NotesScreen({
   }, [authed]);
 
   if (authed === null) {
-    return <p className="text-muted-foreground">Loading…</p>;
+    return <p className="text-muted-foreground">{tCommon("loading")}</p>;
   }
   if (!authed) {
-    return <p className="text-muted-foreground">You are signed out.</p>;
+    return <p className="text-muted-foreground">{tCommon("signedOut")}</p>;
   }
 
   return (
-    <section aria-label="notes" className="space-y-6">
+    <section aria-label={t("regionLabel")} className="space-y-6">
       <div className="flex items-center justify-between gap-2">
-        <h1 className="text-xl font-semibold">Notes</h1>
+        <h1 className="text-xl font-semibold">{t("title")}</h1>
         {/* Plain same-origin GET download (auth cookie, no CSRF) — the proxy streams
             the deterministic Obsidian vault zip straight from FastAPI (NL-16). */}
         <Button asChild variant="outline">
           <a href="/api/export/vault" download="learny-vault.zip">
-            Download notes
+            {t("download")}
           </a>
         </Button>
       </div>
@@ -125,7 +128,7 @@ export function NotesScreen({
       {sources.length > 0 ? (
         <div className="flex items-center gap-2 text-sm">
           <label htmlFor="notes-book-filter" className="text-muted-foreground">
-            Book
+            {t("bookFilter")}
           </label>
           <select
             id="notes-book-filter"
@@ -137,7 +140,7 @@ export function NotesScreen({
           >
             {/* Clearing the filter is picking every book again, so it is the
                 same control rather than a separate reset. */}
-            <option value="">All books</option>
+            <option value="">{t("allBooks")}</option>
             {sources.map((source) => (
               <option key={source.id} value={source.id}>
                 {source.title}
@@ -149,7 +152,7 @@ export function NotesScreen({
 
       {activeTag ? (
         <div className="flex items-center gap-2 text-sm">
-          <span className="text-muted-foreground">Filtered by</span>
+          <span className="text-muted-foreground">{t("filteredBy")}</span>
           <Badge variant="secondary">{activeTag}</Badge>
           <Button
             type="button"
@@ -157,7 +160,7 @@ export function NotesScreen({
             variant="ghost"
             onClick={() => setActiveTag(null)}
           >
-            Clear filter
+            {t("clearFilter")}
           </Button>
         </div>
       ) : null}
@@ -167,14 +170,14 @@ export function NotesScreen({
           {loadError}
         </p>
       ) : notes === null ? (
-        <p className="text-muted-foreground">Loading your notes…</p>
+        <p className="text-muted-foreground">{t("loading")}</p>
       ) : notes.length === 0 ? (
         <p className="text-muted-foreground">
           {activeTag
-            ? "No notes with that tag."
+            ? t("empty.tag")
             : activeSourceId
-              ? "No notes from this book yet."
-              : "No notes yet. Open a book and select a passage to start one."}
+              ? t("empty.book")
+              : t("empty.all")}
         </p>
       ) : (
         <ul className="grid gap-4 sm:grid-cols-2">
@@ -199,7 +202,7 @@ export function NotesScreen({
                           key={tag}
                           type="button"
                           onClick={() => setActiveTag(tag)}
-                          aria-label={`Filter by ${tag}`}
+                          aria-label={t("filterByTag", { tag })}
                         >
                           <Badge variant="secondary">{tag}</Badge>
                         </button>

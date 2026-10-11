@@ -18,6 +18,7 @@
  * not a failure.
  */
 
+import { useTranslations } from "next-intl";
 import { useEffect, useState } from "react";
 
 import { acceptCard, type Card, type CardSuggestion } from "@/app/lib/cards";
@@ -47,6 +48,7 @@ export function CardSuggestions({
 }) {
   // Which chips the student has already resolved (accepted or discarded). Indexes
   // into `suggestions`, reset whenever a fresh batch arrives.
+  const t = useTranslations("notes.suggestions");
   const [resolved, setResolved] = useState<number[]>([]);
   useEffect(() => {
     setResolved([]);
@@ -64,15 +66,15 @@ export function CardSuggestions({
 
   return (
     <section
-      aria-label="Card suggestions"
+      aria-label={t("label")}
       className="mt-2 flex flex-col gap-2 rounded-md border bg-card p-2"
     >
       {suggestions.length === 0 ? (
         // A generation that yielded nothing usable is reported as an outcome, not
         // an error: there is simply nothing here worth remembering.
-        <p className="text-xs text-muted-foreground">No cards for this passage.</p>
+        <p className="text-xs text-muted-foreground">{t("noneForPassage")}</p>
       ) : remaining.length === 0 ? (
-        <p className="text-xs text-muted-foreground">All suggestions handled.</p>
+        <p className="text-xs text-muted-foreground">{t("allHandled")}</p>
       ) : (
         <ul className="flex flex-col gap-2">
           {suggestions.map((suggestion, index) =>
@@ -120,6 +122,7 @@ function SuggestionChip({
   onAccepted: (card: Card) => void;
   onDiscard: () => void;
 }) {
+  const t = useTranslations("notes.suggestions");
   const errorMessage = useErrorMessage();
   const [editing, setEditing] = useState(false);
   const [question, setQuestion] = useState(suggestion.question);
@@ -165,14 +168,14 @@ function SuggestionChip({
       {editing ? (
         <>
           <textarea
-            aria-label="Question"
+            aria-label={t("question")}
             value={question}
             onChange={(event) => setQuestion(event.target.value)}
             className="w-full rounded-sm border bg-background p-1 text-sm"
             rows={2}
           />
           <textarea
-            aria-label="Answer"
+            aria-label={t("answer")}
             value={answer}
             onChange={(event) => setAnswer(event.target.value)}
             className="w-full rounded-sm border bg-background p-1 text-sm"
@@ -193,7 +196,7 @@ function SuggestionChip({
           disabled={pending}
           onClick={handleAccept}
         >
-          Accept
+          {t("accept")}
         </Button>
         {editing ? null : (
           <Button
@@ -203,7 +206,7 @@ function SuggestionChip({
             disabled={pending}
             onClick={() => setEditing(true)}
           >
-            Edit
+            {t("edit")}
           </Button>
         )}
         <Button
@@ -213,7 +216,7 @@ function SuggestionChip({
           disabled={pending}
           onClick={onDiscard}
         >
-          Discard
+          {t("discard")}
         </Button>
       </div>
       {error ? (

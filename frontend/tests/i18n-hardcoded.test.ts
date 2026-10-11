@@ -73,17 +73,11 @@ const EXEMPT_PATHS = [
 ];
 
 /**
- * Files not yet migrated to the catalogs. Shrinks with every surface that
- * migrates; a clean file listed here fails the test.
+ * Files not yet migrated to the catalogs. Empty: every learner surface reads
+ * its copy from the catalogs. A new surface that lands before its copy does can
+ * be listed here; a clean file listed here fails the test.
  */
-const PENDING_MIGRATION: string[] = [
-  "app/(app)/notes/page.tsx",
-  "app/components/notes/capture-popover.tsx",
-  "app/components/notes/card-suggestions.tsx",
-  "app/components/notes/note-card-suggestions.tsx",
-  "app/components/notes/note-detail-screen.tsx",
-  "app/components/notes/notes-screen.tsx",
-];
+const PENDING_MIGRATION: string[] = [];
 
 type Finding = { file: string; line: number; text: string };
 

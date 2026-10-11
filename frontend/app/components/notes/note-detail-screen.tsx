@@ -21,6 +21,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { useCallback, useEffect, useState } from "react";
 
 import { fetchAuthState } from "@/app/lib/auth";
@@ -61,6 +62,8 @@ export function NoteDetailScreen({
   noteId: string;
   onRequireAuth?: () => void;
 }) {
+  const t = useTranslations("notes.detail");
+  const tCommon = useTranslations("common");
   const errorMessage = useErrorMessage();
   const router = useRouter();
   const [csrf, setCsrf] = useState<string | null>(null);
@@ -138,7 +141,7 @@ export function NoteDetailScreen({
     } catch (err) {
       setSaveError(
         err instanceof NoteError && err.kind === "body_too_long"
-          ? "This note is too long to save."
+          ? t("tooLong")
           : errorMessage(err, "notesSave"),
       );
     } finally {
@@ -162,10 +165,10 @@ export function NoteDetailScreen({
   }
 
   if (authed === null) {
-    return <p className="text-muted-foreground">Loading…</p>;
+    return <p className="text-muted-foreground">{tCommon("loading")}</p>;
   }
   if (!authed) {
-    return <p className="text-muted-foreground">You are signed out.</p>;
+    return <p className="text-muted-foreground">{tCommon("signedOut")}</p>;
   }
   if (loadError) {
     return (
@@ -177,20 +180,20 @@ export function NoteDetailScreen({
           href="/notes"
           className="text-primary underline-offset-4 hover:underline"
         >
-          Back to your notes
+          {t("backToNotes")}
         </Link>
       </div>
     );
   }
   if (note === null) {
-    return <p className="text-muted-foreground">Loading the note…</p>;
+    return <p className="text-muted-foreground">{t("loading")}</p>;
   }
 
   return (
-    <section aria-label="note" className="mx-auto max-w-2xl space-y-6">
+    <section aria-label={t("regionLabel")} className="mx-auto max-w-2xl space-y-6">
       <div className="space-y-1.5">
         <label htmlFor="note-title" className="text-sm font-medium">
-          Title
+          {t("titleLabel")}
         </label>
         <Input
           id="note-title"
@@ -203,7 +206,7 @@ export function NoteDetailScreen({
       <div className="space-y-1.5">
         <div className="flex items-center justify-between">
           <label htmlFor="note-body" className="text-sm font-medium">
-            Body
+            {t("body")}
           </label>
           <Button
             type="button"
@@ -211,7 +214,7 @@ export function NoteDetailScreen({
             variant="ghost"
             onClick={() => setPreview((p) => !p)}
           >
-            {preview ? "Edit" : "Preview"}
+            {preview ? t("edit") : t("preview")}
           </Button>
         </div>
         {preview ? (
@@ -233,13 +236,13 @@ export function NoteDetailScreen({
 
       <div className="space-y-1.5">
         <label htmlFor="note-tags" className="text-sm font-medium">
-          Tags
+          {t("tags")}
         </label>
         <Input
           id="note-tags"
           type="text"
           value={tagsText}
-          placeholder="comma, separated, tags"
+          placeholder={t("tagsPlaceholder")}
           onChange={(e) => setTagsText(e.target.value)}
         />
       </div>
@@ -256,11 +259,11 @@ export function NoteDetailScreen({
           onClick={() => void handleSave()}
           disabled={!dirty || saving}
         >
-          {saving ? "Saving…" : "Save"}
+          {saving ? t("saving") : t("save")}
         </Button>
         {confirmingDelete ? (
           <div className="flex items-center gap-2">
-            <span className="text-sm text-muted-foreground">Delete this note?</span>
+            <span className="text-sm text-muted-foreground">{t("deleteConfirm")}</span>
             <Button
               type="button"
               variant="outline"
@@ -268,7 +271,7 @@ export function NoteDetailScreen({
               onClick={() => void handleDelete()}
               disabled={deleting}
             >
-              {deleting ? "Deleting…" : "Confirm delete"}
+              {deleting ? t("deleting") : t("confirmDelete")}
             </Button>
             <Button
               type="button"
@@ -277,7 +280,7 @@ export function NoteDetailScreen({
               onClick={() => setConfirmingDelete(false)}
               disabled={deleting}
             >
-              Cancel
+              {tCommon("cancel")}
             </Button>
           </div>
         ) : (
@@ -287,7 +290,7 @@ export function NoteDetailScreen({
             size="sm"
             onClick={() => setConfirmingDelete(true)}
           >
-            Delete
+            {t("delete")}
           </Button>
         )}
       </div>
@@ -295,7 +298,7 @@ export function NoteDetailScreen({
       {csrf ? (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Review</CardTitle>
+            <CardTitle className="text-base">{t("review")}</CardTitle>
           </CardHeader>
           <CardContent>
             <NoteCardSuggestions noteId={noteId} csrf={csrf} />
@@ -305,12 +308,12 @@ export function NoteDetailScreen({
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Anchored passages</CardTitle>
+          <CardTitle className="text-base">{t("anchors")}</CardTitle>
         </CardHeader>
         <CardContent>
           {note.anchors.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              No highlights anchored to this note.
+              {t("noAnchors")}
             </p>
           ) : (
             <ul className="space-y-3">
@@ -327,7 +330,7 @@ export function NoteDetailScreen({
                   </blockquote>
                   {anchor.status === "orphaned" ? (
                     <p className="text-xs text-muted-foreground">
-                      This passage is no longer in the book.
+                      {t("orphaned")}
                     </p>
                   ) : (
                     <Link
@@ -336,7 +339,7 @@ export function NoteDetailScreen({
                       )}`}
                       className="text-sm text-primary underline-offset-4 hover:underline"
                     >
-                      Jump to passage
+                      {t("jump")}
                     </Link>
                   )}
                 </li>
@@ -348,12 +351,12 @@ export function NoteDetailScreen({
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Backlinks</CardTitle>
+          <CardTitle className="text-base">{t("backlinks")}</CardTitle>
         </CardHeader>
         <CardContent>
           {backlinks.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              No notes link here yet.
+              {t("noBacklinks")}
             </p>
           ) : (
             <ul className="space-y-1.5">

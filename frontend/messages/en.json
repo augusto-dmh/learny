@@ -455,5 +455,72 @@
       "reviews": "reviews",
       "pages": "pages"
     }
+  },
+  "notes": {
+    "title": "Notes",
+    "regionLabel": "notes",
+    "download": "Download notes",
+    "bookFilter": "Book",
+    "allBooks": "All books",
+    "filteredBy": "Filtered by",
+    "clearFilter": "Clear filter",
+    "loading": "Loading your notes…",
+    "empty": {
+      "tag": "No notes with that tag.",
+      "book": "No notes from this book yet.",
+      "all": "No notes yet. Open a book and select a passage to start one."
+    },
+    "filterByTag": "Filter by {tag}",
+    "anchorStatus": "{status, select, active {active} stale {stale} orphaned {orphaned} other {{status}}}",
+    "detail": {
+      "tooLong": "This note is too long to save.",
+      "backToNotes": "Back to your notes",
+      "loading": "Loading the note…",
+      "regionLabel": "note",
+      "titleLabel": "Title",
+      "body": "Body",
+      "edit": "Edit",
+      "preview": "Preview",
+      "tags": "Tags",
+      "tagsPlaceholder": "comma, separated, tags",
+      "save": "Save",
+      "saving": "Saving…",
+      "deleteConfirm": "Delete this note?",
+      "deleting": "Deleting…",
+      "confirmDelete": "Confirm delete",
+      "delete": "Delete",
+      "review": "Review",
+      "anchors": "Anchored passages",
+      "noAnchors": "No highlights anchored to this note.",
+      "orphaned": "This passage is no longer in the book.",
+      "jump": "Jump to passage",
+      "backlinks": "Backlinks",
+      "noBacklinks": "No notes link here yet."
+    },
+    "capture": {
+      "label": "Capture highlight",
+      "highlight": "Highlight",
+      "note": "Note",
+      "highlightNote": "Highlight + note",
+      "explain": "Explain",
+      "ask": "Ask",
+      "createCard": "Create card",
+      "more": "More capture actions"
+    },
+    "suggestions": {
+      "label": "Card suggestions",
+      "noneForPassage": "No cards for this passage.",
+      "allHandled": "All suggestions handled.",
+      "question": "Question",
+      "answer": "Answer",
+      "accept": "Accept",
+      "edit": "Edit",
+      "discard": "Discard",
+      "addToReview": "Add to review",
+      "generating": "Generating…",
+      "inReview": "{count, plural, one {# card} other {# cards}} in review from this note",
+      "alreadyInReview": "That card is already in review — re-promoting the same text never duplicates it.",
+      "noneForNote": "No cards could be grounded in this note."
+    }
   }
 }
