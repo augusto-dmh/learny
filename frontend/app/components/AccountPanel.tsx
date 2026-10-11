@@ -205,7 +205,7 @@ export function AccountPanel({
     return <p className="text-muted-foreground">{tCommon("loading")}</p>;
   }
   if (!state.authenticated) {
-    return <p className="text-muted-foreground">{t("signedOut")}</p>;
+    return <p className="text-muted-foreground">{tCommon("signedOut")}</p>;
   }
 
   // A stored id absent from the catalog is stale (the operator renamed or

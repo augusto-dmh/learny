@@ -5,6 +5,7 @@
   },
   "common": {
     "loading": "Carregando…",
+    "signedOut": "Você não está conectado.",
     "locale": {
       "label": "Idioma",
       "names": {
@@ -84,7 +85,6 @@
   "account": {
     "pageTitle": "Sua conta",
     "regionLabel": "conta",
-    "signedOut": "Você não está conectado.",
     "signedInAs": "Conectado como <strong>{email}</strong>",
     "logout": "Sair",
     "language": {
@@ -179,7 +179,6 @@
   "library": {
     "title": "Biblioteca",
     "regionLabel": "biblioteca",
-    "signedOut": "Você não está conectado.",
     "loadingSources": "Carregando seus livros…",
     "empty": "Nenhum livro ainda.",
     "count": "{count, plural, =0 {0 livros} one {# livro} other {# livros}}",
@@ -226,7 +225,6 @@
     }
   },
   "reader": {
-    "signedOut": "Você não está conectado.",
     "notFound": "Não encontramos esse capítulo.",
     "backToLibrary": "Voltar para a biblioteca",
     "tocToggle": "Sumário",

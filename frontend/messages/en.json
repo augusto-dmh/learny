@@ -5,6 +5,7 @@
   },
   "common": {
     "loading": "Loading…",
+    "signedOut": "You are signed out.",
     "locale": {
       "label": "Language",
       "names": {
@@ -84,7 +85,6 @@
   "account": {
     "pageTitle": "Your account",
     "regionLabel": "account",
-    "signedOut": "You are signed out.",
     "signedInAs": "Signed in as <strong>{email}</strong>",
     "logout": "Log out",
     "language": {
@@ -179,7 +179,6 @@
   "library": {
     "title": "Library",
     "regionLabel": "library",
-    "signedOut": "You are signed out.",
     "loadingSources": "Loading your sources…",
     "empty": "No sources yet.",
     "count": "{count, plural, one {# book} other {# books}}",
@@ -226,7 +225,6 @@
     }
   },
   "reader": {
-    "signedOut": "You are signed out.",
     "notFound": "We couldn’t find that chapter.",
     "backToLibrary": "Back to your library",
     "tocToggle": "Table of contents",

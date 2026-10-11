@@ -148,6 +148,7 @@ export function ChapterReader({
   onRequireAuth?: () => void;
 }) {
   const t = useTranslations("reader");
+  const tCommon = useTranslations("common");
   const errorMessage = useErrorMessage();
   // `useSearchParams().get()` decodes the percent-encoded anchor; `null` when
   // absent, which asks the server to resume the stored reading position.
@@ -253,7 +254,7 @@ export function ChapterReader({
     return <ReadingSkeleton />;
   }
   if (state.kind === "signed-out") {
-    return <p className="text-muted-foreground">{t("signedOut")}</p>;
+    return <p className="text-muted-foreground">{tCommon("signedOut")}</p>;
   }
   if (state.kind === "not-found") {
     return (

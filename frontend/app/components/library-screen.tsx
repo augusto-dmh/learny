@@ -20,7 +20,7 @@
 
 import Link from "next/link";
 import { useLocale, useTranslations } from "next-intl";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { fetchAuthState, type AuthState } from "@/app/lib/auth";
 import { getIngestion } from "@/app/lib/ingestion";
@@ -383,6 +383,12 @@ export function LibraryScreen({
   const t = useTranslations("library");
   const tCommon = useTranslations("common");
   const locale = useLocale();
+  // One formatter per locale, not one per card per render (the list re-renders
+  // on every title keystroke and poll tick).
+  const dateFormat = useMemo(
+    () => new Intl.DateTimeFormat(locale, { dateStyle: "medium" }),
+    [locale],
+  );
   const errorMessage = useErrorMessage();
   const [state, setState] = useState<AuthState | null>(null);
   const [sources, setSources] = useState<SourceSummary[] | null>(null);
@@ -520,7 +526,7 @@ export function LibraryScreen({
     return <p className="text-muted-foreground">{tCommon("loading")}</p>;
   }
   if (!state.authenticated) {
-    return <p className="text-muted-foreground">{t("signedOut")}</p>;
+    return <p className="text-muted-foreground">{tCommon("signedOut")}</p>;
   }
 
   return (
@@ -610,7 +616,7 @@ export function LibraryScreen({
                       </Badge>
                     </CardHeader>
                     <CardContent className="space-y-3">
-                      <AddedOn createdAt={source.created_at} locale={locale} />
+                      <AddedOn createdAt={source.created_at} dateFormat={dateFormat} />
                       {source.status === "ready" ? (
                         <>
                           <div className="flex items-center gap-4 text-sm">
@@ -714,13 +720,19 @@ export function LibraryScreen({
  * When the book was added, in the interface locale's date format. The date is
  * the backend's `created_at`; one that does not parse renders nothing.
  */
-function AddedOn({ createdAt, locale }: { createdAt: string; locale: string }) {
+function AddedOn({
+  createdAt,
+  dateFormat,
+}: {
+  createdAt: string;
+  dateFormat: Intl.DateTimeFormat;
+}) {
   const t = useTranslations("library");
   const added = new Date(createdAt);
   if (Number.isNaN(added.getTime())) {
     return null;
   }
-  const date = new Intl.DateTimeFormat(locale, { dateStyle: "medium" }).format(added);
+  const date = dateFormat.format(added);
   return (
     <p data-testid="source-added" className="text-xs text-muted-foreground">
       {t("added", { date })}
