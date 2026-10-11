@@ -84,7 +84,7 @@
   "account": {
     "pageTitle": "Sua conta",
     "regionLabel": "conta",
-    "signedOut": "Você saiu da conta.",
+    "signedOut": "Você não está conectado.",
     "signedInAs": "Conectado como <strong>{email}</strong>",
     "logout": "Sair",
     "language": {
@@ -179,13 +179,13 @@
   "library": {
     "title": "Biblioteca",
     "regionLabel": "biblioteca",
-    "signedOut": "Você saiu da conta.",
+    "signedOut": "Você não está conectado.",
     "loadingSources": "Carregando seus livros…",
     "empty": "Nenhum livro ainda.",
     "count": "{count, plural, =0 {0 livros} one {# livro} other {# livros}}",
     "added": "Adicionado em {date}",
     "sampleReady": "O livro de exemplo já pode ser usado enquanto você espera.",
-    "status": "{status, select, uploaded {enviado} processing {processando} ready {pronto} failed {falhou} other {{status}}}",
+    "status": "{status, select, uploaded {enviado} processing {processando} ready {pronto} failed {com falha} other {{status}}}",
     "upload": {
       "heading": "Adicionar um livro",
       "formLabel": "enviar livro",
@@ -199,10 +199,10 @@
       "open": "Abrir",
       "moreActions": "Mais ações",
       "ask": "Perguntar",
-      "tutor": "Tutor",
+      "tutor": "Ensinar",
       "review": "Revisar",
       "reingest": "Reprocessar",
-      "reingestWarning": "Reprocessar reconstrói o acervo deste livro com os provedores atuais. Os itens de quiz existentes podem ficar desatualizados ou órfãos.",
+      "reingestWarning": "Reprocessar refaz o processamento deste livro com os provedores atuais. Os itens de quiz existentes podem ficar desatualizados ou órfãos.",
       "confirmReingest": "Confirmar reprocessamento",
       "reingesting": "Reprocessando…",
       "startIngestion": "Iniciar processamento",
@@ -222,11 +222,11 @@
       "noSection": "Este livro não tem nenhuma seção longa o bastante para um quiz (um capítulo sem subseções precisa de uns 200 caracteres ou mais). Em vez disso, <link>destaque um trecho</link>.",
       "noneSurvived": "Os rascunhos foram escritos, mas nenhum passou nas verificações de qualidade ({discarded, plural, one {# descartado} other {# descartados}}).",
       "discardFootnote": "{discarded, plural, one {# descartado} other {# descartados}} durante a geração.",
-      "partial": "{saved, plural, =0 {0 salvos} one {# salvo} other {# salvos}}. {failed, plural, one {# seção falhou} other {# seções falharam}}."
+      "partial": "{saved, plural, =0 {0 itens salvos} one {# item salvo} other {# itens salvos}}. {failed, plural, one {# seção falhou} other {# seções falharam}}."
     }
   },
   "reader": {
-    "signedOut": "Você saiu da conta.",
+    "signedOut": "Você não está conectado.",
     "notFound": "Não encontramos esse capítulo.",
     "backToLibrary": "Voltar para a biblioteca",
     "tocToggle": "Sumário",
