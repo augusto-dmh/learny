@@ -1,0 +1,104 @@
+{
+  "meta": {
+    "title": "Learny",
+    "description": "Learny — book intelligence"
+  },
+  "common": {
+    "loading": "Loading…"
+  },
+  "errors": {
+    "generic": "Something went wrong. Please try again.",
+    "status": {
+      "unauthorized": "Your session has expired. Please sign in again.",
+      "rateLimited": "Too many requests. Please wait a moment and try again.",
+      "server": "The server had a problem. Please try again.",
+      "network": "Something went wrong reaching the server. Please try again."
+    },
+    "stream": {
+      "forbidden": "Your session could not be verified. Refresh the page and try again.",
+      "notFound": "This book could not be found.",
+      "notReady": "This book is still processing. Try again once it is ready.",
+      "unprocessable": "That request could not be processed. Please revise it and try again."
+    },
+    "operation": {
+      "authRegister": "Registration failed.",
+      "authLogin": "Invalid email or password.",
+      "authLogout": "Logout failed.",
+      "sourcesList": "Could not load your sources.",
+      "sourcesGet": "Could not load that source.",
+      "sourcesUpload": "Upload failed.",
+      "sourcesIngest": "Could not start ingestion.",
+      "sourcesStructure": "Could not load the book structure.",
+      "ingestionStatus": "Could not load ingestion status.",
+      "sectionLoad": "Could not load that section.",
+      "aiProfilesList": "Could not load the available AI profiles.",
+      "aiProfileGet": "Could not load your AI profile choice.",
+      "aiProfileSave": "Could not save your AI profile choice.",
+      "aiProfileReset": "Could not reset your AI profile choice.",
+      "localeSave": "Could not save your language.",
+      "localeReset": "Could not reset your language.",
+      "quizOverview": "Could not load the quiz overview.",
+      "quizGenerate": "Could not start quiz deck generation.",
+      "quizStarters": "Could not prepare starter cards.",
+      "quizDue": "Could not load your due reviews.",
+      "quizReview": "Could not submit your review.",
+      "quizReset": "Could not reset this card's schedule.",
+      "quizUndo": "Could not undo your last review.",
+      "quizFlag": "Could not flag this card.",
+      "quizSave": "Could not save this card.",
+      "studyProgress": "Could not load your reading progress.",
+      "studyActivity": "Could not load your study activity.",
+      "readingChapter": "Could not load that chapter.",
+      "readingPosition": "Could not save your reading position.",
+      "readingHighlights": "Could not load your highlights.",
+      "notesList": "Could not load your notes.",
+      "notesGet": "Could not load that note.",
+      "notesSave": "Could not save the note.",
+      "notesDelete": "Could not delete the note.",
+      "notesBacklinks": "Could not load the backlinks.",
+      "notesCapture": "Could not capture the highlight.",
+      "conversationsList": "Could not load your conversations.",
+      "conversationsGet": "Could not load that conversation.",
+      "conversationsRename": "Could not rename that conversation.",
+      "conversationsDelete": "Could not delete that conversation.",
+      "conversationsStart": "Something went wrong. Please try again.",
+      "chatTurn": "Something went wrong. Please try again.",
+      "cardsSuggestPassage": "Could not suggest cards for this passage.",
+      "cardsSave": "Could not save this card.",
+      "cardsSuggestNote": "Could not suggest cards for this note.",
+      "cardsAddToReview": "Could not add this card to review.",
+      "tutorCardSave": "Could not save this review card."
+    }
+  },
+  "account": {
+    "pageTitle": "Your account",
+    "regionLabel": "account",
+    "signedOut": "You are signed out.",
+    "signedInAs": "Signed in as <strong>{email}</strong>",
+    "logout": "Log out",
+    "language": {
+      "heading": "Language",
+      "intro": "Choose the language Learny speaks to you in. Book text and your notes are never translated.",
+      "automatic": "Automatic (follow my browser)",
+      "english": "English",
+      "portuguese": "Português (Brasil)"
+    },
+    "aiProfile": {
+      "heading": "AI profile",
+      "intro": "Choose how Ask and Teach generate answers for you.",
+      "defaultTitle": "Operator default (recommended)",
+      "defaultHint": "Serving follows the operator's default chain.",
+      "grounding": {
+        "verifiedSpans": "Citations are verified against the book.",
+        "promptCited": "Citations are model-claimed and may be less precise.",
+        "none": "Answers do not cite the book."
+      },
+      "availability": {
+        "both": "Works in Ask and Teach.",
+        "askOnly": "Works in Ask only.",
+        "teachOnly": "Works in Teach only.",
+        "neither": "Currently works in neither Ask nor Teach."
+      }
+    }
+  }
+}

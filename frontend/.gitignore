@@ -15,3 +15,6 @@ coverage/
 
 # misc
 *.tsbuildinfo
+
+# type-check scratch from tests/i18n-typed-keys.test.ts
+.typecheck-scratch/
