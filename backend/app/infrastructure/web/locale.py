@@ -4,7 +4,7 @@ Thin FastAPI adapter over the caller's single locale preference row, mirroring t
 AI-profile choice surface. The supported-set check is the boundary's own input
 validation; storage is the dependencies' job.
 
-Contract (also consumed by the Next.js proxy; the stored value rides ``GET /api/me``):
+Contract (also consumed by the Next.js proxy; the stored value rides ``GET /api/auth/me``):
 - ``PUT    /api/me/locale`` → 200 ``{locale}``; auth + CSRF; a re-put replaces; a
   value outside ``{en, pt-BR}`` is a 422 and persists nothing.
 - ``DELETE /api/me/locale`` → 204, idempotent (204 even when nothing was set);
