@@ -375,6 +375,11 @@ class RespondToAttempt:
         if not claimed:
             raise CheckpointAttemptConflict("This attempt already has a response.")
 
+    def _store(self, attempt_id: UUID, feedback: ExplainFeedback) -> None:
+        self._checkpoints.store_feedback(
+            attempt_id, feedback=feedback.feedback, feedback_citations=feedback.citations
+        )
+
     def _recall(self, owned: OwnedAttempt, response: str, confidence: int) -> RecallReveal:
         item_id = owned.attempt.quiz_item_id
         item = self._items.get_by_id(item_id) if item_id is not None else None
@@ -411,6 +416,10 @@ class RespondToAttempt:
 
         if self._budget is not None:
             self._budget.assert_generation(user.id, kind=KIND_GENERATION)
+        # Claim before paying for the provider. The conditional UPDATE holds the
+        # attempt's row lock until this request commits, so a concurrent second
+        # response waits, then matches nothing and is refused without generating.
+        self._claim(owned.attempt.id, response, confidence)
         message = EXPLAIN_BACK_MESSAGE.format(
             title=checkpoint.section_title, explanation=response.strip()
         )
@@ -424,11 +433,11 @@ class RespondToAttempt:
                 extra={"attempt_id": str(owned.attempt.id)},
                 exc_info=True,
             )
-            self._claim(owned.attempt.id, response, confidence, fallback)
+            self._store(owned.attempt.id, fallback)
             return fallback
 
         feedback = _feedback(generated, evidence) or fallback
-        self._claim(owned.attempt.id, response, confidence, feedback)
+        self._store(owned.attempt.id, feedback)
         if self._budget is not None:
             self._budget.record(
                 user.id,

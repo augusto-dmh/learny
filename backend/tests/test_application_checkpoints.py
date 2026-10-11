@@ -25,6 +25,7 @@ from app.application.checkpoints import (
     StartCheckpoint,
 )
 from app.application.dates import local_day
+from app.application.errors import CheckpointAttemptConflict
 from app.application.identity import AuthorizeOwnership
 from app.application.reviews import SubmitReview
 from app.domain.entities import (
@@ -503,6 +504,59 @@ def test_explain_debits_usage_as_generation(db_conn: Connection) -> None:
     assert row.usd_micros == budget.usage_micros(usage, None) == 2000
     assert row.ask_count == 0
     assert row.teach_starts == 0
+
+
+def test_explain_lost_to_a_concurrent_response_never_calls_the_provider(
+    db_conn: Connection,
+) -> None:
+    # A second response that read the attempt unanswered, then lost the claim to a
+    # concurrent first response, must be refused before it pays for a generation:
+    # its spend would roll back with it, so it would never be debited.
+    user, source_id = _book(db_conn)
+    started = _start(db_conn)(user=user, source_id=source_id, anchor=ANCHOR, prediction=None)
+    attempt_id = _explain_attempt_id(started)
+    ids = _chunk_ids(db_conn, source_id)
+    usage = TokenUsage(input_tokens=1000, output_tokens=500)
+    generation = FakeAnswerGeneration(
+        answer=GeneratedAnswer(
+            text="Nice.", cited_chunk_ids=(ids[CHUNKS[1]],), model="m", found=True, usage=usage
+        )
+    )
+
+    class _RacedBudget(DailyBudget):
+        def assert_generation(self, user_id, *, kind):  # type: ignore[no-untyped-def]
+            super().assert_generation(user_id, kind=kind)
+            # The concurrent winner commits its response here.
+            SqlAlchemyCheckpointRepository(db_conn).claim_response(
+                attempt_id,
+                response="the winner",
+                confidence=2,
+                feedback=None,
+                feedback_citations=(),
+                now=_NOW,
+            )
+
+    budget = _RacedBudget(
+        repo=SqlAlchemyAiSpendDayRepository(db_conn),
+        clock=FakeClock(_NOW),
+        daily_cap_micros=1_000_000,
+        prices=_PRICES,
+        ask_daily_cap=8,
+        teach_start_daily_cap=1,
+    )
+
+    with pytest.raises(CheckpointAttemptConflict):
+        _respond(db_conn, generation, budget)(
+            user=user, attempt_id=attempt_id, response="workers", confidence=3
+        )
+
+    assert generation.calls == []
+    stored = db_conn.execute(
+        select(checkpoint_attempts.c.response, checkpoint_attempts.c.confidence).where(
+            checkpoint_attempts.c.id == attempt_id
+        )
+    ).one()
+    assert tuple(stored) == ("the winner", 2)
 
 
 # --- C31: assistance is whether the passage was revealed before the response -----

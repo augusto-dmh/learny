@@ -1349,6 +1349,16 @@ class CheckpointRepository(Protocol):
         """Store the attempt's response once; ``False`` when it already had one."""
         ...
 
+    def store_feedback(
+        self,
+        attempt_id: UUID,
+        *,
+        feedback: str,
+        feedback_citations: Sequence[FeedbackCitation],
+    ) -> None:
+        """Write the feedback for an attempt this request has already claimed."""
+        ...
+
     def claim_grade(self, attempt_id: UUID, now: datetime) -> bool:
         """Stamp a responded, ungraded attempt graded; ``False`` otherwise."""
         ...

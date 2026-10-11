@@ -2937,6 +2937,17 @@ def _to_anchor_block(row) -> AnchorBlockSnapshot:  # noqa: ANN001
     )
 
 
+def _citations_json(citations: Sequence[FeedbackCitation]) -> list[dict[str, object]]:
+    return [
+        {
+            "anchor": citation.anchor,
+            "section_path": list(citation.section_path),
+            "quote": citation.quote,
+        }
+        for citation in citations
+    ]
+
+
 class SqlAlchemyCheckpointRepository:
     """``CheckpointRepository`` over ``section_checkpoints`` + ``checkpoint_attempts``.
 
@@ -3080,18 +3091,27 @@ class SqlAlchemyCheckpointRepository:
                 confidence=confidence,
                 responded_at=now,
                 feedback=feedback,
-                feedback_citations=[
-                    {
-                        "anchor": citation.anchor,
-                        "section_path": list(citation.section_path),
-                        "quote": citation.quote,
-                    }
-                    for citation in feedback_citations
-                ],
+                feedback_citations=_citations_json(feedback_citations),
             )
             .returning(checkpoint_attempts.c.id)
         ).first()
         return claimed is not None
+
+    def store_feedback(
+        self,
+        attempt_id: UUID,
+        *,
+        feedback: str,
+        feedback_citations: Sequence[FeedbackCitation],
+    ) -> None:
+        self._conn.execute(
+            update(checkpoint_attempts)
+            .where(checkpoint_attempts.c.id == attempt_id)
+            .values(
+                feedback=feedback,
+                feedback_citations=_citations_json(feedback_citations),
+            )
+        )
 
     def claim_grade(self, attempt_id: UUID, now: datetime) -> bool:
         claimed = self._conn.execute(
