@@ -35,7 +35,6 @@ from app.domain.entities import ParsedBook, QuizDeckHandle, QuizDeckResult
 from app.domain.ports import IngestionStep, QuizGenerationPort, StoragePort
 from app.infrastructure.clock import SystemClock
 from app.infrastructure.db.engine import get_engine
-from app.infrastructure.db.provider_credentials import SqlAlchemyProviderCredentialRepository
 from app.infrastructure.db.repositories import (
     SqlAlchemyAiSpendDayRepository,
     SqlAlchemyCorpusRepository,
@@ -55,11 +54,10 @@ from app.infrastructure.ingestion.factory import (
 )
 from app.infrastructure.ingestion.images import PillowImageEncoder
 from app.infrastructure.ingestion.markup import Bs4MarkupConverter
-from app.infrastructure.providers import offered_providers
+from app.infrastructure.learner_keys import envelope_from_settings, learner_key_access
 from app.infrastructure.quiz import UndeclaredProviderError, build_quiz_adapter
 from app.infrastructure.quiz.learner import QUIZ_KEY_PROVIDER, build_user_keyed_quiz_adapter
 from app.infrastructure.scheduling import build_scheduling_adapter
-from app.infrastructure.security.secrets_envelope import SecretsEnvelope
 from app.infrastructure.storage.s3 import S3StorageAdapter
 from app.infrastructure.worker.steps import (
     CorpusIngestionStep,
@@ -521,16 +519,15 @@ def _learner_quiz_adapter(
     replaced since (a new row id) or deleted reads as ``None``.
     """
     settings = get_settings()
-    keks = settings.secrets_keks()
-    if keks is None:
+    access = learner_key_access(
+        conn, envelope_from_settings(settings), tuple(settings.generation_profiles)
+    )
+    if access is None:
         return None
-    if QUIZ_KEY_PROVIDER not in offered_providers(tuple(settings.generation_profiles)):
-        return None
-    repo = SqlAlchemyProviderCredentialRepository(conn, SecretsEnvelope(*keks))
-    credential = repo.get(user_id, QUIZ_KEY_PROVIDER)
+    credential = access.credential(user_id, QUIZ_KEY_PROVIDER)
     if credential is None or (pinned is not None and credential.id != pinned):
         return None
-    api_key = repo.reveal(credential)
+    api_key = access.repo.reveal(credential)
     if api_key is None:
         return None
     return build_user_keyed_quiz_adapter(settings, api_key, credential_id=credential.id)

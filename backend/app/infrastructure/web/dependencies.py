@@ -148,6 +148,7 @@ from app.infrastructure.db.retrieval import SqlAlchemyRetrievalRepository
 from app.infrastructure.email import build_email_sender
 from app.infrastructure.embeddings import build_embedding_adapter
 from app.infrastructure.ingestion.markup import Bs4MarkupConverter
+from app.infrastructure.learner_keys import envelope_from_settings, learner_key_access
 from app.infrastructure.providers import (
     GenerationProfileSettings,
     offered_providers,
@@ -792,11 +793,7 @@ _QUIZ_CACHE_SLOT = "quiz"
 @lru_cache
 def _secrets_envelope() -> SecretsEnvelope | None:
     """The envelope over the configured KEKs, or ``None`` when no KEK is set."""
-    keks = get_settings().secrets_keks()
-    if keks is None:
-        return None
-    current, previous = keks
-    return SecretsEnvelope(current, previous)
+    return envelope_from_settings(get_settings())
 
 
 @lru_cache
@@ -825,10 +822,8 @@ def build_provider_credential_repository(
     conn: Connection,
 ) -> SqlAlchemyProviderCredentialRepository | None:
     """The credential repository on ``conn``, or ``None`` when the feature is off."""
-    envelope = _secrets_envelope()
-    if envelope is None or not _offered_providers():
-        return None
-    return SqlAlchemyProviderCredentialRepository(conn, envelope)
+    access = learner_key_access(conn, _secrets_envelope(), _generation_profiles())
+    return access.repo if access is not None else None
 
 
 def evict_learner_adapters(fingerprint: str) -> None:

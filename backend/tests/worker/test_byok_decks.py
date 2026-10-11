@@ -299,6 +299,41 @@ def test_refresh_cards_resolves_owner_key(
     assert _usd_today(db_engine, ctx.user.id) == 0
 
 
+@pytest.mark.parametrize("off", ["no_kek", "anthropic_unbound"])
+def test_a_stored_key_is_ignored_while_the_feature_is_off(
+    off: str,
+    byok: None,
+    seed,  # noqa: ANN001
+    db_engine: Engine,
+    fakes: list[_KeyedQuizFake],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctx = seed()
+    _store(db_engine, ctx.user.id, _KEY)  # stored while the feature was on
+    if off == "no_kek":
+        monkeypatch.delenv("LEARNY_SECRETS_KEK")
+    else:
+        monkeypatch.setenv("LEARNY_GENERATION_PROFILES", json.dumps([_HOUSE]))
+    clear_settings_and_generation_caches()
+    house = _RecordingFactory(
+        SimpleNamespace(
+            model="house-quiz",
+            begin_deck=lambda sections: QuizDeckHandle(provider="local"),
+            collect_deck=lambda handle: None,
+        )
+    )
+
+    with (
+        patch("app.worker.tasks.build_quiz_adapter", house),
+        patch("app.worker.tasks.poll_quiz_deck.apply_async") as apply_async,
+    ):
+        _generate(FakeSelf(), str(ctx.source.id), str(ctx.job.id))
+
+    assert fakes == []  # the learner's key was never opened
+    assert house.requested  # the house adapter began and collected the deck
+    assert apply_async.call_args.kwargs["args"][1]["credential_id"] is None
+
+
 # --- C30: the handle pins the credential row; the poll collects with it -----------
 
 
