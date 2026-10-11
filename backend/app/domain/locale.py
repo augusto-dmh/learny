@@ -11,9 +11,10 @@ the first tag whose primary subtag is ``pt`` or ``en`` decides, and any ``pt`` o
 ``pt-*`` maps to ``pt-BR``. A q-value must match the RFC 9110 ``qvalue`` grammar
 (``0`` to ``1``, at most three decimals); anything else makes its tag malformed.
 
-``effective_locale`` and ``response_language_for`` are staged for the
-answer-language work (the generation port's response-language argument); until
-that lands, the preference API is their only neighbour and they have no caller.
+``effective_locale`` and ``response_language_for`` pick the language a
+conversation turn's answer is requested in (the generation port's
+``response_language``): the web layer feeds them the stored choice and the
+request's ``Accept-Language`` and passes on only the resulting locale name.
 """
 
 from __future__ import annotations

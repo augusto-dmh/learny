@@ -43,6 +43,7 @@ from app.infrastructure.answering.prompts import (
     ANSWER_SYSTEM_PROMPT,
     SENTINEL,
     TEACHING_SYSTEM_PROMPT,
+    response_language_note,
 )
 from app.infrastructure.providers import usage_of
 from app.infrastructure.providers.translation import (
@@ -543,6 +544,7 @@ class AnthropicGenerationAdapter(AnthropicAdapterBase):
         target_section_path: tuple[str, ...] | None,
         tutor_phase: str | None = None,
         hint_level: str | None = None,
+        response_language: str | None = None,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[_SentDocument]]:
         """Assemble the system prompt, the message list, and the sent-document map.
 
@@ -560,7 +562,13 @@ class AnthropicGenerationAdapter(AnthropicAdapterBase):
         carries them ahead of the settled history; the volatile per-turn input —
         the section header and the new message — stays strictly after the prefix.
         With no documents the breakpoint falls back to the system prompt block.
+
+        A response language appends its fixed note to this turn's text, after the
+        learner's message, in either mode — inside the volatile tail, so the system
+        block, the documents and both breakpoints are byte-identical with or
+        without it, and ``None`` sends exactly the request it always did.
         """
+        note = response_language_note(response_language)
         documents, sent = _build_documents(evidence)
         messages = _build_history_messages(history)
         if mode == MODE_TEACH:
@@ -571,6 +579,8 @@ class AnthropicGenerationAdapter(AnthropicAdapterBase):
             if hint_level is not None:
                 header.append(f"HintLevel: {hint_level}")
             turn_text = "\n".join(header) + f"\n\n{message}"
+            if note is not None:
+                turn_text = f"{turn_text}\n\n{note}"
             system = [{"type": "text", "text": TEACHING_SYSTEM_PROMPT}]
             if documents:
                 # Stable per-section evidence leads the message list, inside the
@@ -602,7 +612,7 @@ class AnthropicGenerationAdapter(AnthropicAdapterBase):
                 }
             )
         else:
-            turn_text = message
+            turn_text = message if note is None else f"{message}\n\n{note}"
             system = [{"type": "text", "text": ANSWER_SYSTEM_PROMPT}]
             messages.append(
                 {
@@ -622,6 +632,7 @@ class AnthropicGenerationAdapter(AnthropicAdapterBase):
         target_section_path: tuple[str, ...] | None = None,
         tutor_phase: str | None = None,
         hint_level: str | None = None,
+        response_language: str | None = None,
     ) -> GeneratedAnswer:
         """Generate a cited response grounded in ``evidence`` (single-shot call)."""
         system, messages, sent = self._build_request(
@@ -632,6 +643,7 @@ class AnthropicGenerationAdapter(AnthropicAdapterBase):
             target_section_path=target_section_path,
             tutor_phase=tutor_phase,
             hint_level=hint_level,
+            response_language=response_language,
         )
         effort = self._effort_for(mode)
         try:
@@ -661,6 +673,7 @@ class AnthropicGenerationAdapter(AnthropicAdapterBase):
         target_section_path: tuple[str, ...] | None = None,
         tutor_phase: str | None = None,
         hint_level: str | None = None,
+        response_language: str | None = None,
     ) -> Iterator[AnswerStreamEvent]:
         """Stream a cited response: text deltas, then the authoritative completed event."""
         system, messages, sent = self._build_request(
@@ -671,6 +684,7 @@ class AnthropicGenerationAdapter(AnthropicAdapterBase):
             target_section_path=target_section_path,
             tutor_phase=tutor_phase,
             hint_level=hint_level,
+            response_language=response_language,
         )
         return self._run_stream(
             system=system, messages=messages, documents=sent, effort=self._effort_for(mode)

@@ -74,11 +74,11 @@ class DeterministicGenerationAdapter:
 
     Needs no provider client: constructed with no arguments and makes no network
     call, so both the answer and the teach path are testable offline (AD-024). The
-    ``mode``, ``target_section_path``, and prior ``history`` are accepted and do not
-    shape the prose — it is composed solely from the scoped evidence, so a turn's
-    output is exactly what it was before the ports converged, and before
-    conversations carried history at all. A real conversational adapter dispatches
-    on ``mode`` behind this same port.
+    ``mode``, ``target_section_path``, prior ``history`` and ``response_language``
+    are accepted and do not shape the prose — it is composed solely from the
+    scoped evidence, so a turn's output is exactly what it was before the ports
+    converged, and before conversations carried history at all. A real
+    conversational adapter dispatches on ``mode`` behind this same port.
     """
 
     # Stable model identity, readable without a ``generate`` call so the turn
@@ -96,6 +96,7 @@ class DeterministicGenerationAdapter:
         target_section_path: tuple[str, ...] | None = None,
         tutor_phase: str | None = None,
         hint_level: str | None = None,
+        response_language: str | None = None,
     ) -> GeneratedAnswer:
         """Compose a response from the top evidence snippets, citing those chunks."""
         return _extractive_answer(evidence, model=self.model)
@@ -110,6 +111,7 @@ class DeterministicGenerationAdapter:
         target_section_path: tuple[str, ...] | None = None,
         tutor_phase: str | None = None,
         hint_level: str | None = None,
+        response_language: str | None = None,
     ) -> Iterator[AnswerStreamEvent]:
         """Stream the extractive response (one full-text delta, then completed)."""
         return _extractive_stream(evidence, model=self.model)

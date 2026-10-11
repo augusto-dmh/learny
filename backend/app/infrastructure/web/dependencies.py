@@ -23,7 +23,7 @@ from functools import lru_cache, partial
 from typing import Annotated
 from uuid import UUID, uuid4
 
-from fastapi import Depends, Request
+from fastapi import Depends, Header, Request
 from sqlalchemy import Connection
 
 from app.application.activation import RecordActivation
@@ -99,7 +99,7 @@ from app.application.vault import ExportVault
 from app.core.config import Settings, get_settings
 from app.core.tracing import bind_trace
 from app.domain.entities import ProviderCredential, Session, User
-from app.domain.locale import is_supported_locale
+from app.domain.locale import effective_locale, is_supported_locale, response_language_for
 from app.domain.ports import (
     EmailPort,
     EmbeddingPort,
@@ -1044,6 +1044,20 @@ def get_locale_choice(
     if preference is None or not is_supported_locale(preference.locale):
         return None
     return preference.locale
+
+
+def get_response_language(
+    stored: Annotated[str | None, Depends(get_locale_choice)],
+    accept_language: Annotated[str | None, Header()] = None,
+) -> str | None:
+    """FastAPI dependency: the language the caller's answers are requested in.
+
+    The stored choice wins, else ``Accept-Language`` negotiation, else English;
+    English is ``None`` so the generation request is the one it always was. Only
+    the negotiated locale name leaves here — never the header text — and the
+    adapters look its instruction up from fixed constants.
+    """
+    return response_language_for(effective_locale(stored, accept_language))
 
 
 def get_set_locale_choice(
