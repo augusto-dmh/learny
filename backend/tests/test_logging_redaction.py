@@ -201,3 +201,31 @@ def test_both_process_assemblies_install_the_masking_filter() -> None:
         assert any(isinstance(f, SensitiveDataFilter) for f in handler.filters)
         assert isinstance(handler.formatter, formatter)
     configure_logging(log_format="human")
+
+
+def test_uvicorn_records_are_masked_on_their_own_handlers() -> None:
+    """Uvicorn's loggers keep their own handlers and do not propagate to ours;
+    a traceback they log (an unhandled exception) is still masked."""
+    import io
+
+    key = _KEY_SHAPES["anthropic"]
+    configure_logging()
+    server = logging.getLogger("uvicorn.error")
+    buffer = io.StringIO()
+    handler = logging.StreamHandler(buffer)  # uvicorn's handlers carry no filter of ours
+    previous = server.propagate
+    server.addHandler(handler)
+    server.propagate = False
+    try:
+        try:
+            raise RuntimeError(f"request failed with {key}")
+        except RuntimeError:
+            server.exception("Exception in ASGI application")
+    finally:
+        server.removeHandler(handler)
+        server.propagate = previous
+
+    output = buffer.getvalue()
+    assert "Exception in ASGI application" in output
+    assert key not in output
+    assert "***KEY-REDACTED***" in output

@@ -145,6 +145,9 @@ class SensitiveDataFilter(logging.Filter):
 
 _HUMAN_FORMAT = "%(asctime)s %(levelname)s %(name)s %(message)s"
 
+#: The ASGI server's own loggers, which do not propagate to the Learny handler.
+_SERVER_LOGGERS = ("uvicorn", "uvicorn.error", "uvicorn.access")
+
 
 class HumanFormatter(logging.Formatter):
     """The human line format, with provider keys masked in the final text.
@@ -244,3 +247,9 @@ def configure_logging(level: int = logging.INFO, log_format: str | None = None) 
     # Also on the root logger for records emitted directly on it (parity w/ prior).
     _ensure_filter(root, SensitiveDataFilter)
     _ensure_filter(root, TraceContextFilter)
+    # Uvicorn's loggers emit through their own handlers and do not propagate to
+    # ours, so a server-level record (an unhandled exception's traceback) would
+    # skip the masking. A logger filter runs for every record logged on that
+    # logger whatever handlers uvicorn later installs.
+    for name in _SERVER_LOGGERS:
+        _ensure_filter(logging.getLogger(name), SensitiveDataFilter)
