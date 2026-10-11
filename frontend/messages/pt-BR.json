@@ -18,7 +18,8 @@
       "forbidden": "Não foi possível verificar sua sessão. Atualize a página e tente novamente.",
       "notFound": "Não foi possível encontrar este livro.",
       "notReady": "Este livro ainda está sendo processado. Tente novamente quando estiver pronto.",
-      "unprocessable": "Não foi possível processar essa solicitação. Revise-a e tente novamente."
+      "unprocessable": "Não foi possível processar essa solicitação. Revise-a e tente novamente.",
+      "generationFailed": "Não foi possível gerar a resposta. Tente novamente."
     },
     "operation": {
       "authRegister": "Não foi possível criar a conta.",

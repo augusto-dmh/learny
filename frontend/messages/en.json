@@ -18,7 +18,8 @@
       "forbidden": "Your session could not be verified. Refresh the page and try again.",
       "notFound": "This book could not be found.",
       "notReady": "This book is still processing. Try again once it is ready.",
-      "unprocessable": "That request could not be processed. Please revise it and try again."
+      "unprocessable": "That request could not be processed. Please revise it and try again.",
+      "generationFailed": "Answer generation failed. Please try again."
     },
     "operation": {
       "authRegister": "Registration failed.",
