@@ -45,26 +45,13 @@ async function renderRequest(cookie: string | undefined, acceptLanguage: string 
   return factory();
 }
 
-// The shared vector table: backend/tests/test_locale.py::NEGOTIATION_VECTORS asserts
-// the same inputs against the same outputs, so the two implementations cannot drift.
-const NEGOTIATION_VECTORS: [string | null, string][] = [
-  ["pt", "pt-BR"],
-  ["pt-BR", "pt-BR"],
-  ["pt-PT", "pt-BR"],
-  ["pt;q=0.9,en;q=0.8", "pt-BR"],
-  ["en,pt", "en"],
-  ["en;q=0.5,pt;q=0.9", "pt-BR"],
-  ["pt-BR,pt;q=0.9,en;q=0.8", "pt-BR"],
-  ["en-US,en;q=0.9", "en"],
-  ["fr,pt;q=0.5", "pt-BR"],
-  [null, "en"],
-  ["", "en"],
-  [";;;", "en"],
-  ["pt;q=abc", "en"],
-  ["fr,de", "en"],
-  ["*", "en"],
-  ["pt;q=0", "en"],
-];
+// The shared vector table, read from the same file as
+// backend/tests/test_locale.py, so the two negotiators cannot drift apart.
+const NEGOTIATION_VECTORS = (
+  JSON.parse(
+    readFileSync(`${root}../backend/tests/locale_negotiation_vectors.json`, "utf8"),
+  ) as { vectors: [string | null, string][] }
+).vectors;
 
 describe("locale config", () => {
   it("supports exactly en and pt-BR", () => {
@@ -79,6 +66,7 @@ describe("locale config", () => {
   });
 
   it("negotiates pt-BR from Accept-Language by q-value then position", () => {
+    expect(NEGOTIATION_VECTORS.length).toBeGreaterThan(20);
     for (const [header, expected] of NEGOTIATION_VECTORS) {
       expect(negotiateLocale(header), String(header)).toBe(expected);
     }

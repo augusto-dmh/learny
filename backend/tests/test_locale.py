@@ -1,11 +1,14 @@
 """Interface-language rules (pure): negotiation and effective locale.
 
-``NEGOTIATION_VECTORS`` is the shared vector table: the frontend's
-``negotiateLocale`` (``frontend/tests/i18n-config.test.ts``) asserts the same
-inputs against the same outputs, so the two implementations cannot drift.
+``NEGOTIATION_VECTORS`` comes from ``locale_negotiation_vectors.json``, which the
+frontend's ``negotiateLocale`` test (``frontend/tests/i18n-config.test.ts``) also
+reads, so the two implementations are held to the same inputs and outputs.
 """
 
 from __future__ import annotations
+
+import json
+from pathlib import Path
 
 import pytest
 
@@ -17,30 +20,23 @@ from app.domain.locale import (
     response_language_for,
 )
 
+# The shared vector table: the frontend's ``negotiateLocale`` test reads the same
+# file, so the two implementations are held to one list rather than two copies.
+_VECTORS_FILE = Path(__file__).with_name("locale_negotiation_vectors.json")
 NEGOTIATION_VECTORS: list[tuple[str | None, str]] = [
-    ("pt", "pt-BR"),
-    ("pt-BR", "pt-BR"),
-    ("pt-PT", "pt-BR"),
-    ("pt;q=0.9,en;q=0.8", "pt-BR"),
-    ("en,pt", "en"),
-    ("en;q=0.5,pt;q=0.9", "pt-BR"),
-    ("pt-BR,pt;q=0.9,en;q=0.8", "pt-BR"),
-    ("en-US,en;q=0.9", "en"),
-    ("fr,pt;q=0.5", "pt-BR"),
-    # Fall-back to en: absent, malformed, unsupported-only, not acceptable.
-    (None, "en"),
-    ("", "en"),
-    (";;;", "en"),
-    ("pt;q=abc", "en"),
-    ("fr,de", "en"),
-    ("*", "en"),
-    ("pt;q=0", "en"),
+    (header, expected) for header, expected in json.loads(_VECTORS_FILE.read_text())["vectors"]
 ]
 
 
 def test_the_supported_locales_are_exactly_en_and_pt_br() -> None:
     assert SUPPORTED_LOCALES == ("en", "pt-BR")
     assert DEFAULT_LOCALE == "en"
+
+
+def test_the_shared_vector_table_is_loaded() -> None:
+    """An empty or unreadable table would make the parametrized test vacuous."""
+    assert len(NEGOTIATION_VECTORS) > 20
+    assert {expected for _, expected in NEGOTIATION_VECTORS} == set(SUPPORTED_LOCALES)
 
 
 @pytest.mark.parametrize(("header", "expected"), NEGOTIATION_VECTORS)

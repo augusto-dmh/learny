@@ -5,13 +5,20 @@ in code, rather than in a database constraint so a third locale is a catalog
 change and not a migration; a stored value outside the set reads as unset.
 
 ``negotiate_locale`` and the frontend's ``negotiateLocale`` implement the same
-rule over the same vector table (``tests/test_locale.py::NEGOTIATION_VECTORS``
-and ``frontend/tests/i18n-config.test.ts``): order the header's tags by q-value,
-then by position; the first tag whose primary subtag is ``pt`` or ``en`` decides,
-and any ``pt`` or ``pt-*`` maps to ``pt-BR``.
+rule over the same vector table (``backend/tests/locale_negotiation_vectors.json``,
+read by both test suites): order the header's tags by q-value, then by position;
+the first tag whose primary subtag is ``pt`` or ``en`` decides, and any ``pt`` or
+``pt-*`` maps to ``pt-BR``. A q-value must match the RFC 9110 ``qvalue`` grammar
+(``0`` to ``1``, at most three decimals); anything else makes its tag malformed.
+
+``effective_locale`` and ``response_language_for`` are staged for the
+answer-language work (the generation port's response-language argument); until
+that lands, the preference API is their only neighbour and they have no caller.
 """
 
 from __future__ import annotations
+
+import re
 
 SUPPORTED_LOCALES: tuple[str, ...] = ("en", "pt-BR")
 DEFAULT_LOCALE = "en"
@@ -21,6 +28,9 @@ DEFAULT_LOCALE = "en"
 _UNINSTRUCTED_LOCALE = "en"
 
 _PRIMARY_SUBTAG_TO_LOCALE = {"en": "en", "pt": "pt-BR"}
+
+# RFC 9110 qvalue: "0" or "1" with up to three decimals, never above 1.
+_QVALUE = re.compile(r"0(\.\d{0,3})?|1(\.0{0,3})?")
 
 
 def is_supported_locale(value: object) -> bool:
@@ -57,10 +67,8 @@ def _quality(params: list[str]) -> float | None:
     for param in params:
         name, _, value = param.partition("=")
         if name.strip().lower() == "q":
-            try:
-                return float(value)
-            except ValueError:
-                return None
+            value = value.strip()
+            return float(value) if _QVALUE.fullmatch(value) else None
     return 1.0
 
 

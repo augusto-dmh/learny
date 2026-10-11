@@ -4,9 +4,10 @@
  * the tests all share it.
  *
  * `negotiateLocale` and the backend's `negotiate_locale` implement the same rule
- * over the same vector table (`backend/tests/test_locale.py`): order the header's
- * tags by q-value, then position; the first tag whose primary subtag is `pt` or
- * `en` decides, and any `pt` / `pt-*` maps to `pt-BR`.
+ * over the same vector table (`backend/tests/locale_negotiation_vectors.json`,
+ * read by both test suites): order the header's tags by q-value, then position;
+ * the first tag whose primary subtag is `pt` or `en` decides, and any `pt` /
+ * `pt-*` maps to `pt-BR`. A q-value must match the RFC 9110 qvalue grammar.
  */
 
 export const LOCALES = ["en", "pt-BR"] as const;
@@ -53,13 +54,17 @@ export function negotiateLocale(acceptLanguage: string | null | undefined): AppL
   return DEFAULT_LOCALE;
 }
 
+/** RFC 9110 qvalue: "0" or "1" with up to three decimals, never above 1. */
+const QVALUE = /^(?:0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/;
+
 /** The q-value among a tag's parameters (1 when absent); null when malformed. */
 function qualityOf(params: string[]): number | null {
   for (const param of params) {
-    const [name, value = ""] = param.split("=");
+    const eq = param.indexOf("=");
+    const name = eq === -1 ? param : param.slice(0, eq);
     if (name.trim().toLowerCase() === "q") {
-      const parsed = Number(value);
-      return value.trim() !== "" && Number.isFinite(parsed) ? parsed : null;
+      const value = eq === -1 ? "" : param.slice(eq + 1).trim();
+      return QVALUE.test(value) ? Number(value) : null;
     }
   }
   return 1;
