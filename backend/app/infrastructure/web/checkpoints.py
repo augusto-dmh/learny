@@ -24,7 +24,7 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.application.checkpoints import (
     MAX_RESPONSE_CHARS,
@@ -106,7 +106,13 @@ class PassageView(BaseModel):
 
 
 class GradeRequest(BaseModel):
-    """FSRS rating. A recall takes 1–4; an explanation 1–3 (enforced by the service)."""
+    """FSRS rating. A recall takes 1–4; an explanation 1–3 (enforced by the service).
+
+    Extra fields are refused rather than ignored: confidence and assistance are
+    already held server-side, and a client that sends them is told so (422).
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     rating: int = Field(ge=1, le=4)
 

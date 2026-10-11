@@ -446,3 +446,20 @@ def test_recall_grade_rating_bounds(
         select(review_log.c.rating).where(review_log.c.quiz_item_id == card.id)
     ).all()
     assert [r.rating for r in rows] == ([rating] if expected == 200 else [])
+
+
+def test_grade_refuses_a_client_assisted_field(
+    quiz_client: TestClient, db_conn: Connection
+) -> None:
+    # Assistance is the server's call: a revealed explanation cannot be graded as
+    # unaided by a client that says so.
+    _, csrf, source_id = _book(quiz_client, db_conn)
+    attempt_id = _attempts(_create(quiz_client, source_id, csrf))[0]["attempt_id"]
+    _post(quiz_client, attempt_id, "reveal", csrf)
+    _post(quiz_client, attempt_id, "response", csrf, {"response": "", "confidence": 3})
+    before = _log_count(db_conn)
+
+    resp = _post(quiz_client, attempt_id, "grade", csrf, {"rating": 3, "assisted": False})
+
+    assert resp.status_code == 422
+    assert _log_count(db_conn) == before
