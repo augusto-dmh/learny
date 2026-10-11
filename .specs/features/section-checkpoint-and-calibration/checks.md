@@ -115,8 +115,9 @@ Proof: `vitest tests/checkpoint-dialog.test.tsx -t "is sent as"`
 
 ### S5 - assisted attempts are recorded as assisted · batch 1
 
-**C28** - On the explain step, the primary submit buttons are the confidence buttons under the textarea, and `Just explain` is a non-primary (link/ghost) button. No request is sent until one of them is used (AC 28)
+**C28** - On the explain step, the primary submit buttons are the confidence buttons under the textarea, and `Just explain` is a non-primary (link/ghost) button. No request is sent until one of them is used. Using `Just explain` sends one reveal request, shows the returned passage with its section path, removes the action, and keeps the explanation and confidence buttons (AC 28, 29)
 Proof: `vitest tests/checkpoint-dialog.test.tsx -t "just explain is a secondary action on the explain step"`
+Proof: `vitest tests/checkpoint-dialog.test.tsx -t "just explain shows the passage and still asks for the explanation"`
 
 **C29** - `reveal` on an unresponded explain attempt stamps `revealed_at` and returns the section's first chunk as `passage` (AC 29)
 Proof: `pytest tests/test_web_checkpoints.py -k "reveal_stamps_and_returns_first_chunk"`
