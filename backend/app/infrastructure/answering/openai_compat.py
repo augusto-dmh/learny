@@ -44,7 +44,7 @@ from app.domain.entities import (
     HistoryTurn,
     TokenUsage,
 )
-from app.infrastructure.answering.prompts import SENTINEL
+from app.infrastructure.answering.prompts import SENTINEL, response_language_note
 from app.infrastructure.providers.translation import (
     raise_translated as _raise_translated_shared,
 )
@@ -99,6 +99,7 @@ def _build_user_content(
     target_section_path: tuple[str, ...] | None,
     tutor_phase: str | None,
     hint_level: str | None,
+    response_language: str | None = None,
 ) -> str:
     """Assemble the user turn: the numbered documents, then the learner's input.
 
@@ -107,6 +108,8 @@ def _build_user_content(
     ordered ``evidence`` sequence. A teach turn opens with the section header
     the tutor envelope carries (mirroring the Anthropic adapter's user-turn
     placement); with no documents the turn is the header and the message alone.
+    A response language closes the turn with its fixed note, after the message,
+    so the system prompt never varies by language.
     """
     parts: list[str] = []
     if mode == MODE_TEACH:
@@ -119,6 +122,9 @@ def _build_user_content(
         parts.append("\n".join(header))
     parts.extend(f"[{number}]\n{item.snippet}" for number, item in enumerate(evidence, start=1))
     parts.append(message)
+    note = response_language_note(response_language)
+    if note is not None:
+        parts.append(note)
     return "\n\n".join(parts)
 
 
@@ -131,6 +137,7 @@ def _build_messages(
     target_section_path: tuple[str, ...] | None,
     tutor_phase: str | None,
     hint_level: str | None,
+    response_language: str | None = None,
 ) -> list[dict[str, str]]:
     """The chat messages: frozen system prompt, bounded history, this turn."""
     messages: list[dict[str, str]] = [{"role": "system", "content": COMPAT_SYSTEM_PROMPT}]
@@ -152,6 +159,7 @@ def _build_messages(
                 target_section_path=target_section_path,
                 tutor_phase=tutor_phase,
                 hint_level=hint_level,
+                response_language=response_language,
             ),
         }
     )
@@ -346,6 +354,7 @@ class OpenAICompatibleGenerationAdapter:
         target_section_path: tuple[str, ...] | None,
         tutor_phase: str | None,
         hint_level: str | None,
+        response_language: str | None,
     ) -> dict[str, Any]:
         """The shared create-call kwargs — one request shape for both paths."""
         return {
@@ -359,6 +368,7 @@ class OpenAICompatibleGenerationAdapter:
                 target_section_path=target_section_path,
                 tutor_phase=tutor_phase,
                 hint_level=hint_level,
+                response_language=response_language,
             ),
             "timeout": _GENERATE_TIMEOUT_S,
         }
@@ -373,6 +383,7 @@ class OpenAICompatibleGenerationAdapter:
         target_section_path: tuple[str, ...] | None = None,
         tutor_phase: str | None = None,
         hint_level: str | None = None,
+        response_language: str | None = None,
     ) -> GeneratedAnswer:
         """Generate a prompt-cited response grounded in ``evidence`` (single-shot)."""
         try:
@@ -385,6 +396,7 @@ class OpenAICompatibleGenerationAdapter:
                     target_section_path=target_section_path,
                     tutor_phase=tutor_phase,
                     hint_level=hint_level,
+                    response_language=response_language,
                 )
             )
         except Exception as exc:
@@ -406,6 +418,7 @@ class OpenAICompatibleGenerationAdapter:
         target_section_path: tuple[str, ...] | None = None,
         tutor_phase: str | None = None,
         hint_level: str | None = None,
+        response_language: str | None = None,
     ) -> Iterator[AnswerStreamEvent]:
         """Stream the same response: raw text deltas, then the authoritative event.
 
@@ -434,6 +447,7 @@ class OpenAICompatibleGenerationAdapter:
             target_section_path=target_section_path,
             tutor_phase=tutor_phase,
             hint_level=hint_level,
+            response_language=response_language,
         )
         # A stream proves progress as frames arrive — deliberately unbounded, and
         # the usage request is the one streaming-only parameter.

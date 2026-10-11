@@ -795,6 +795,9 @@ class FakeAnswerGeneration:
         # The bounded history is captured alongside ``calls`` (parallel lists) so the
         # historical ``calls`` shape the Q&A suite asserts verbatim stays unchanged.
         self.history_calls: list[list[HistoryTurn]] = []
+        # The response language of every call, buffered and streamed alike, in
+        # call order — a parallel list for the same reason as ``history_calls``.
+        self.response_languages: list[str | None] = []
 
     def generate(
         self,
@@ -806,6 +809,7 @@ class FakeAnswerGeneration:
         target_section_path: tuple[str, ...] | None = None,
         tutor_phase: str | None = None,
         hint_level: str | None = None,
+        response_language: str | None = None,
     ) -> GeneratedAnswer:
         self.calls.append(
             {
@@ -816,6 +820,7 @@ class FakeAnswerGeneration:
             }
         )
         self.history_calls.append(list(history))
+        self.response_languages.append(response_language)
         if self._error is not None:
             raise self._error
         assert self._answer is not None, "no preset answer configured"
@@ -831,6 +836,7 @@ class FakeAnswerGeneration:
         target_section_path: tuple[str, ...] | None = None,
         tutor_phase: str | None = None,
         hint_level: str | None = None,
+        response_language: str | None = None,
     ) -> Iterator[AnswerStreamEvent]:
         self.stream_calls.append(
             {
@@ -841,6 +847,7 @@ class FakeAnswerGeneration:
             }
         )
         self.history_calls.append(list(history))
+        self.response_languages.append(response_language)
         if self._error is not None:
             raise self._error
         assert self._answer is not None, "no preset answer configured"

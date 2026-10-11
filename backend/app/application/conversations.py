@@ -548,7 +548,9 @@ class PostConversationTurn:
     request can bend it for one turn.
 
     Generation goes to the one :class:`~app.domain.ports.GenerationPort` with the
-    mode, the bounded prior history, and — for ``teach`` — the target's section
+    mode, the bounded prior history, the caller's response language (``None`` for
+    English; the web adapter derives it from the learner's locale and only the
+    adapter turns it into prompt text) and — for ``teach`` — the target's section
     path. There is no port to choose and so no branch that chooses one, and the
     model identity a turn records has a single type. The port's answer passes
     through the shared grounding guard (AD-027), any port raise becomes
@@ -622,6 +624,7 @@ class PostConversationTurn:
         message: str,
         mode: str,
         origin: str | None = None,
+        response_language: str | None = None,
     ) -> ConversationTurn:
         generation = self._chain_for(origin)
         prep = self._preflight(
@@ -642,7 +645,11 @@ class PostConversationTurn:
         else:
             try:
                 generated = self._generate(
-                    mode=mode, message=message, plan=plan, generation=generation
+                    mode=mode,
+                    message=message,
+                    plan=plan,
+                    generation=generation,
+                    response_language=response_language,
                 )
             except Exception as exc:  # any port failure maps to 502
                 self._persist_failed(plan, message, mode, generation)
@@ -663,6 +670,7 @@ class PostConversationTurn:
         message: str,
         mode: str,
         origin: str | None = None,
+        response_language: str | None = None,
     ) -> Iterator[TurnStreamEvent]:
         """Run one turn incrementally, persisting only on stream completion.
 
@@ -688,7 +696,12 @@ class PostConversationTurn:
             user=user, conversation_id=conversation_id, mode=mode, message=message
         )
         return self._turn_stream(
-            user=user, prep=prep, message=message, mode=mode, generation=self._chain_for(origin)
+            user=user,
+            prep=prep,
+            message=message,
+            mode=mode,
+            generation=self._chain_for(origin),
+            response_language=response_language,
         )
 
     def _turn_stream(
@@ -699,6 +712,7 @@ class PostConversationTurn:
         message: str,
         mode: str,
         generation: GenerationPort,
+        response_language: str | None,
     ) -> Iterator[TurnStreamEvent]:
         if _is_closing_restatement(prep):
             yield self._stream_turn(
@@ -728,7 +742,13 @@ class PostConversationTurn:
             yield self._stream_turn(plan, turn, mode)
             return
 
-        stream = self._generate_stream(mode=mode, message=message, plan=plan, generation=generation)
+        stream = self._generate_stream(
+            mode=mode,
+            message=message,
+            plan=plan,
+            generation=generation,
+            response_language=response_language,
+        )
         # Hold-back yields presentable deltas and returns the authoritative answer;
         # no *answered* turn is persisted until it completes (so cancellation persists
         # nothing), but a provider break writes the failed turn before it propagates.
@@ -972,6 +992,7 @@ class PostConversationTurn:
         message: str,
         plan: _TurnPlan,
         generation: GenerationPort,
+        response_language: str | None,
     ) -> GeneratedAnswer:
         return generation.generate(
             message=message,
@@ -981,10 +1002,17 @@ class PostConversationTurn:
             target_section_path=self._target_path(mode, plan),
             tutor_phase=plan.tutor_state.phase if mode == MODE_TEACH else None,
             hint_level=plan.tutor_state.hint_level if mode == MODE_TEACH else None,
+            response_language=response_language,
         )
 
     def _generate_stream(
-        self, *, mode: str, message: str, plan: _TurnPlan, generation: GenerationPort
+        self,
+        *,
+        mode: str,
+        message: str,
+        plan: _TurnPlan,
+        generation: GenerationPort,
+        response_language: str | None,
     ) -> Iterator[AnswerStreamEvent]:
         return generation.generate_stream(
             message=message,
@@ -994,6 +1022,7 @@ class PostConversationTurn:
             target_section_path=self._target_path(mode, plan),
             tutor_phase=plan.tutor_state.phase if mode == MODE_TEACH else None,
             hint_level=plan.tutor_state.hint_level if mode == MODE_TEACH else None,
+            response_language=response_language,
         )
 
     def _debit(self, user_id: UUID, kind: str, generated: GeneratedAnswer) -> None:

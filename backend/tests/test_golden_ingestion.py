@@ -8,9 +8,15 @@ chunk text*. Pure — no DB, no network (EVAL-10).
 
 from __future__ import annotations
 
-import pytest
+from uuid import uuid4
 
-from tests.eval_runner import run_ingestion
+import pytest
+from sqlalchemy import Connection, text
+
+from app.infrastructure.db.repositories import SqlAlchemyEmbeddingIndexRepository
+from tests.conftest import requires_db
+from tests.eval_runner import build_corpus_in_db, run_ingestion, seed_source
+from tests.golden_corpus_pt import EXPECTED_PT_GOLDEN_SECTIONS, portuguese_golden_book
 from tests.golden_expected import GOLDEN_FIXTURES
 
 
@@ -61,3 +67,31 @@ def test_block_and_chunk_totals_match_golden(fixture) -> None:  # noqa: ANN001
     built = run_ingestion(fixture.epub())
     assert built.block_count == fixture.expected.block_count
     assert built.chunk_count == fixture.expected.chunk_count
+
+
+@requires_db
+def test_portuguese_book_ingests_with_portuguese_search_config(db_conn: Connection) -> None:
+    # The persisted chunks of the Portuguese book stem in Portuguese: OPF ``pt``
+    # resolves to the ``portuguese`` regconfig on every chunk, and the stored
+    # chunks carry the golden sections and anchors in reading order.
+    _, source = seed_source(db_conn, email=f"golden-pt-{uuid4()}@example.com")
+    build_corpus_in_db(db_conn, source, portuguese_golden_book())
+    chunk_ids = [
+        chunk.id
+        for chunk in SqlAlchemyEmbeddingIndexRepository(db_conn).chunks_for_source(source.id)
+    ]
+
+    rows = db_conn.execute(
+        text(
+            "SELECT c.anchor, c.section_path, c.text, c.search_config FROM corpus_chunks c "
+            "JOIN corpus_sections s ON s.id = c.section_id "
+            "WHERE c.id = ANY(:ids) ORDER BY s.position, c.chunk_index"
+        ),
+        {"ids": chunk_ids},
+    ).all()
+
+    assert {row.search_config for row in rows} == {"portuguese"}
+    assert [(row.anchor, tuple(row.section_path), row.text) for row in rows] == [
+        (section["anchor"], section["section_path"], section["chunk_texts"][0])
+        for section in EXPECTED_PT_GOLDEN_SECTIONS
+    ]

@@ -276,6 +276,28 @@ def test_tutor_phase_kwargs_do_not_change_extractive_output() -> None:
     assert enveloped == plain
 
 
+@_MODES
+def test_response_language_does_not_change_the_extractive_answer(mode: str) -> None:
+    # The extractive default writes no prose of its own — it quotes the evidence —
+    # so the learner's language changes nothing, buffered or streamed.
+    adapter = DeterministicGenerationAdapter()
+    evidence = [_evidence("alpha"), _evidence("beta")]
+    call = {
+        "message": "q",
+        "mode": mode,
+        "evidence": evidence,
+        "target_section_path": _target(mode),
+    }
+
+    baseline = adapter.generate(**call)
+    streamed = list(adapter.generate_stream(**call))
+    for language in (None, "en", "pt-BR"):
+        assert adapter.generate(**call, response_language=language) == baseline
+        assert list(adapter.generate_stream(**call, response_language=language)) == streamed
+    assert baseline.text == "alpha\n\nbeta"
+    assert baseline.cited_chunk_ids == (evidence[0].chunk_id, evidence[1].chunk_id)
+
+
 def test_model_identity_readable_without_a_generate_call() -> None:
     # QA-04/QA-13, TEACH-11/TEACH-24: the turn service reads this stable identity on
     # the empty-evidence not-found path, where the port is never invoked.

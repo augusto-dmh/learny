@@ -15,6 +15,8 @@ is judged — the adapter maps a whole-reply sentinel to ``found=False`` (F5).
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 # Re-exported from the domain so the prompt text and the streaming hold-back guard
 # (application layer) share one source of truth. Exact string the model must
 # return, alone, when the documents cannot answer the question. Whole-reply match
@@ -22,7 +24,13 @@ from __future__ import annotations
 # against sentinel leakage in prose).
 from app.domain.entities import SENTINEL
 
-__all__ = ["ANSWER_SYSTEM_PROMPT", "SENTINEL", "TEACHING_SYSTEM_PROMPT"]
+__all__ = [
+    "ANSWER_SYSTEM_PROMPT",
+    "RESPONSE_LANGUAGE_NOTES",
+    "SENTINEL",
+    "TEACHING_SYSTEM_PROMPT",
+    "response_language_note",
+]
 
 ANSWER_SYSTEM_PROMPT = (
     "You are Learny's book-grounded answering assistant. Answer the reader's "
@@ -46,3 +54,25 @@ TEACHING_SYSTEM_PROMPT = (
     f"support a claim, reply with exactly {SENTINEL} and nothing else. "
     "End after a passing unaided check."
 )
+
+# The answer-language instruction, one frozen sentence per non-English response
+# language (ADR-0034, "AI output language"). It rides at the end of the **user** turn so the
+# system prompts above — and the cache prefix built on them — never vary by
+# language, and it is looked up, never composed: nothing a caller sends (an
+# ``Accept-Language`` header included) can reach a prompt through it. Quotes stay
+# in the book's language because citations are verbatim evidence, and the
+# not-found sentinel is restated so a translated reply cannot hide it.
+RESPONSE_LANGUAGE_NOTES: Mapping[str, str] = {
+    "pt-BR": (
+        "Write your reply in Brazilian Portuguese. Keep any quotation from the "
+        "documents exactly as written, in its original language. If you reply "
+        f"with {SENTINEL}, write it exactly as given, untranslated."
+    ),
+}
+
+
+def response_language_note(response_language: str | None) -> str | None:
+    """The fixed instruction for ``response_language``; ``None`` for none or unknown."""
+    if response_language is None:
+        return None
+    return RESPONSE_LANGUAGE_NOTES.get(response_language)
