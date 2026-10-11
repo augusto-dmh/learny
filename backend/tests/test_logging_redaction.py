@@ -203,14 +203,15 @@ def test_both_process_assemblies_install_the_masking_filter() -> None:
     configure_logging(log_format="human")
 
 
-def test_uvicorn_records_are_masked_on_their_own_handlers() -> None:
+@pytest.mark.parametrize("name", ["uvicorn", "uvicorn.error", "uvicorn.access"])
+def test_uvicorn_records_are_masked_on_their_own_handlers(name: str) -> None:
     """Uvicorn's loggers keep their own handlers and do not propagate to ours;
     a traceback they log (an unhandled exception) is still masked."""
     import io
 
     key = _KEY_SHAPES["anthropic"]
     configure_logging()
-    server = logging.getLogger("uvicorn.error")
+    server = logging.getLogger(name)
     buffer = io.StringIO()
     handler = logging.StreamHandler(buffer)  # uvicorn's handlers carry no filter of ours
     previous = server.propagate
