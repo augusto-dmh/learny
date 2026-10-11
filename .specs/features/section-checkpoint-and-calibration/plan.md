@@ -46,7 +46,7 @@ flowchart TD
 | existing backend | `ReviewLogEntry` gains `confidence` and `assisted`. `append_log` writes them |
 | existing UI | `FlowSection` gets a trailing invitation row. In batch 2, `ReviewCard` gets three confidence-reveal buttons beside "Reveal answer" and the dock Review tab gets a calibration block |
 | existing generation | no adapter or prompt changes. Explain-back uses answer mode with a frozen application-owned message, so the `pt-br-interface` changes to the port do not collide |
-| stored data | nothing to migrate. Two new tables. Three nullable columns on `review_log`, NULL on existing rows. A new origin value in a `text` column that has no CHECK |
+| stored data | nothing to migrate. Two new tables. Two nullable columns on `review_log` (`confidence`, `assisted`), NULL on existing rows. A new origin value in a `text` column that has no CHECK |
 
 ## Relations
 

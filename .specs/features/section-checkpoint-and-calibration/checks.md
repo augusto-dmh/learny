@@ -45,8 +45,9 @@ Proof: `pytest tests/test_web_checkpoints.py -k "create_validation_422"`
 **C9** - A recall response with confidence 2 stores `response` and `confidence=2` and returns the card's `answer`, `source_excerpt`, `anchor` and `section_path`. An empty response is accepted (AC 9)
 Proof: `pytest tests/test_web_checkpoints.py -k "recall_response_reveals_answer_after_storing"`
 
-**C10** - A second response to the same attempt returns 409, and the stored response and confidence equal the first submission (AC 10)
+**C10** - A second response to the same attempt returns 409, and the stored response and confidence equal the first submission. An explanation that loses the claim to a concurrent response is refused without calling the provider (AC 10)
 Proof: `pytest tests/test_web_checkpoints.py -k "second_response_is_409_and_keeps_first"`
+Proof: `pytest tests/test_application_checkpoints.py -k "explain_lost_to_a_concurrent_response_never_calls_the_provider"`
 
 **C11** - A response with no confidence, confidence 0, confidence 4, or a 4001-character response returns 422 and leaves `responded_at` NULL (AC 11)
 Proof: `pytest tests/test_web_checkpoints.py -k "response_validation_422"`
@@ -57,16 +58,18 @@ Proof: `pytest tests/test_web_checkpoints.py -k "attempt_routes_404_for_foreign_
 **C42** - Each of the four new checkpoint POST routes returns 401 without a session and 403 without the CSRF token, and writes nothing (AC 8, 12; existing auth/CSRF guards)
 Proof: `pytest tests/test_web_checkpoints.py -k "new_routes_require_session_and_csrf"`
 
-**C13** - In the dialog, a recall step shows the question and no answer text. The answer appears only after a confidence button submits the response and its promise resolves (AC 13)
+**C13** - In the dialog, a recall step shows the question and no answer text. The answer appears only after a confidence button submits the response and its promise resolves. Grading the recall moves to the next attempt with an empty draft (AC 13)
 Proof: `vitest tests/checkpoint-dialog.test.tsx -t "recall answer appears only after a confidence submit resolves"`
+Proof: `vitest tests/checkpoint-dialog.test.tsx -t "grading a recall moves on to the explanation with an empty draft"`
 
 ### S3 - every attempt is scheduled by FSRS · batch 1
 
 **C14** - Grading a responded recall attempt with rating 1 does four things. It changes the card's `quiz_item_scheduling` to what `SchedulingPort.review(snapshot, 1, now)` returns. It appends one `review_log` row with `rating=1`, the attempt's `confidence` and `assisted=false`. It stamps the attempt's `review_log_id`. It increments today's `study_days.reviews_count` by 1 (AC 14)
 Proof: `pytest tests/test_application_checkpoints.py -k "grade_recall_reviews_card_with_confidence_unassisted"`
 
-**C15** - Grading an attempt with no response returns 409 and appends no `review_log` row (AC 15)
+**C15** - Grading an attempt with no response returns 409 and appends no `review_log` row. Grading a recall whose card was deleted returns 404, appends no row and leaves the attempt ungraded (AC 15)
 Proof: `pytest tests/test_web_checkpoints.py -k "grade_before_response_is_409"`
+Proof: `pytest tests/test_web_checkpoints.py -k "grade_on_a_deleted_card_is_404_and_leaves_the_attempt_ungraded"`
 
 **C16** - Two sequential grades on one attempt leave exactly one `review_log` row, and the second returns 409 (AC 16)
 Proof: `pytest tests/test_web_checkpoints.py -k "second_grade_is_409_one_log_row"`
@@ -102,8 +105,9 @@ Proof: `pytest tests/test_application_checkpoints.py -k "explain_fallback_on_not
 **C24** - A blank explanation (empty or whitespace) makes zero `generate` calls and returns the least-covered chunk as the single citation (AC 24)
 Proof: `pytest tests/test_application_checkpoints.py -k "blank_explanation_skips_generation"`
 
-**C25** - With the day's spend at the cap, the explain response returns 429. With AI paused it returns 503. In both cases the attempt's `responded_at` stays NULL (AC 25)
+**C25** - With the day's spend at the cap, the explain response returns 429. With AI paused it returns 503. In both cases the attempt's `responded_at` stays NULL, and the dialog shows the server's reason with the draft kept (AC 25)
 Proof: `pytest tests/test_web_checkpoints.py -k "explain_budget_exhausted_429_paused_503"`
+Proof: `vitest tests/checkpoint-dialog.test.tsx -t "a refused explanation shows the server's reason and keeps the draft"`
 
 **C26** - A port result reporting usage debits `usage_micros(usage, profile_id)` to the caller's `ai_spend_days` row, as `KIND_GENERATION`, and does not increment `ask_count` (AC 26)
 Proof: `pytest tests/test_application_checkpoints.py -k "explain_debits_usage_as_generation"`
@@ -119,8 +123,9 @@ Proof: `vitest tests/checkpoint-dialog.test.tsx -t "is sent as"`
 Proof: `vitest tests/checkpoint-dialog.test.tsx -t "just explain is a secondary action on the explain step"`
 Proof: `vitest tests/checkpoint-dialog.test.tsx -t "just explain shows the passage and still asks for the explanation"`
 
-**C29** - `reveal` on an unresponded explain attempt stamps `revealed_at` and returns the section's first chunk as `passage` (AC 29)
+**C29** - `reveal` on an unresponded explain attempt stamps `revealed_at` and returns the section's first chunk as `passage`. A repeated reveal returns the same passage and keeps the first stamp (AC 29)
 Proof: `pytest tests/test_web_checkpoints.py -k "reveal_stamps_and_returns_first_chunk"`
+Proof: `pytest tests/test_web_checkpoints.py -k "second_reveal_keeps_the_first_stamp"`
 
 **C30** - `reveal` on a recall attempt, and on an explain attempt that already has a response, returns 409 and leaves `revealed_at` unchanged (AC 30)
 Proof: `pytest tests/test_web_checkpoints.py -k "reveal_409_on_recall_or_after_response"`
