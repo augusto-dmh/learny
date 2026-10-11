@@ -2439,6 +2439,15 @@ def _final_text(request: dict[str, object]) -> str:
     return request["messages"][-1]["content"][-1]["text"]  # type: ignore[index]
 
 
+def test_the_portuguese_note_asks_for_portuguese_and_keeps_the_sentinel() -> None:
+    # The note's own words carry the contract: Brazilian Portuguese prose, quotes
+    # left in the book's language, and the not-found token written untranslated.
+    assert "Brazilian Portuguese" in _PT_NOTE
+    assert "original language" in _PT_NOTE
+    assert f"with {SENTINEL}, write it exactly as given, untranslated" in _PT_NOTE
+    assert set(RESPONSE_LANGUAGE_NOTES) == {"pt-BR"}  # English sends no note
+
+
 @pytest.mark.parametrize("stream", [False, True], ids=["buffered", "stream"])
 @pytest.mark.parametrize("mode", [MODE_ANSWER, MODE_TEACH])
 def test_no_response_language_leaves_the_request_unchanged(mode: str, stream: bool) -> None:

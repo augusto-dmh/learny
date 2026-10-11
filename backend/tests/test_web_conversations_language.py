@@ -22,6 +22,7 @@ from app.domain.entities import (
     MODE_ANSWER,
     MODE_TEACH,
     TUTOR_DONT_KNOW_MESSAGE,
+    TUTOR_JUST_EXPLAIN_MESSAGE,
     TUTOR_OPENING_MESSAGE,
     GeneratedAnswer,
 )
@@ -204,14 +205,26 @@ def test_header_text_never_reaches_a_prompt(
     assert json.dumps(_PT_NOTE)[1:-1] in sent
 
 
+# (chip message, the tutor state it leads to from the opening's open/pump)
+_CHIPS = [
+    pytest.param(TUTOR_DONT_KNOW_MESSAGE, ("scaffold", "hint"), id="dont-know"),
+    pytest.param(TUTOR_JUST_EXPLAIN_MESSAGE, ("check", "assert"), id="just-explain"),
+]
+
+
+@pytest.mark.parametrize(("chip", "state"), _CHIPS)
 @pytest.mark.parametrize("stream", [False, True], ids=["json", "stream"])
 def test_a_tutor_chip_sentinel_still_drives_the_tutor_in_portuguese(
-    auth_client: TestClient, db_conn: Connection, stream: bool
+    auth_client: TestClient,
+    db_conn: Connection,
+    stream: bool,
+    chip: str,
+    state: tuple[str, str],
 ) -> None:
     # The tutor chips send fixed English sentinels the teaching policy matches on;
-    # the response language is an adapter-side note, so a Portuguese learner's "I
-    # don't know." still escalates the hint, and the port receives the sentinel as
-    # sent — nothing appended to the learner's message.
+    # the response language is an adapter-side note, so a Portuguese learner's chip
+    # still moves the tutor exactly as it does in English, and the port receives
+    # the sentinel as sent — nothing appended to the learner's message.
     from app.infrastructure.web.dependencies import get_generation
 
     conversation_id, csrf = _world(auth_client, db_conn, "language-chip@example.com")
@@ -220,7 +233,7 @@ def test_a_tutor_chip_sentinel_still_drives_the_tutor_in_portuguese(
     )
     auth_client.app.dependency_overrides[get_generation] = lambda: port
     try:
-        for message in (TUTOR_OPENING_MESSAGE, TUTOR_DONT_KNOW_MESSAGE):
+        for message in (TUTOR_OPENING_MESSAGE, chip):
             headers = _headers(csrf) | {"Accept-Language": "pt-BR"}
             path = f"/api/conversations/{conversation_id}/turns" + ("/stream" if stream else "")
             resp = auth_client.post(
@@ -231,7 +244,41 @@ def test_a_tutor_chip_sentinel_still_drives_the_tutor_in_portuguese(
         auth_client.app.dependency_overrides.pop(get_generation, None)
 
     calls = port.stream_calls if stream else port.calls
-    assert [call["message"] for call in calls] == [TUTOR_OPENING_MESSAGE, TUTOR_DONT_KNOW_MESSAGE]
+    assert [call["message"] for call in calls] == [TUTOR_OPENING_MESSAGE, chip]
     assert port.response_languages == ["pt-BR", "pt-BR"]
-    state = auth_client.get(f"/api/conversations/{conversation_id}").json()
-    assert (state["tutor_phase"], state["hint_level"]) == ("scaffold", "hint")
+    current = auth_client.get(f"/api/conversations/{conversation_id}").json()
+    assert (current["tutor_phase"], current["hint_level"]) == state
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["json", "stream"])
+def test_a_selection_explain_turn_is_requested_in_portuguese_too(
+    auth_client: TestClient, db_conn: Connection, stream: bool
+) -> None:
+    # The capture popover's Explain verb is served by its own chain; the learner's
+    # language reaches that chain the same way, and the primary is never asked.
+    from app.infrastructure.web.dependencies import get_explain_generation, get_generation
+
+    conversation_id, csrf = _world(auth_client, db_conn, "language-explain@example.com")
+    answer = GeneratedAnswer(text="ok", cited_chunk_ids=(), model="fake", found=True)
+    primary, explain = FakeAnswerGeneration(answer=answer), FakeAnswerGeneration(answer=answer)
+    auth_client.app.dependency_overrides[get_generation] = lambda: primary
+    auth_client.app.dependency_overrides[get_explain_generation] = lambda: explain
+    try:
+        headers = _headers(csrf) | {"Accept-Language": "pt-BR,pt;q=0.9"}
+        path = f"/api/conversations/{conversation_id}/turns" + ("/stream" if stream else "")
+        resp = auth_client.post(
+            path,
+            json={
+                "message": "photosynthesis sunlight energy",
+                "mode": MODE_ANSWER,
+                "origin": "explain_selection",
+            },
+            headers=headers,
+        )
+        assert resp.status_code == (200 if stream else 201), resp.text
+    finally:
+        auth_client.app.dependency_overrides.pop(get_generation, None)
+        auth_client.app.dependency_overrides.pop(get_explain_generation, None)
+
+    assert explain.response_languages == ["pt-BR"]
+    assert primary.response_languages == []

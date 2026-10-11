@@ -88,3 +88,7 @@ def test_portuguese_inflected_terms_reach_their_section(db_conn: Connection, cas
     results = retrieve(db_conn, source.id, case.question)
 
     assert case.expected_anchor in [evidence.anchor for evidence in results[:3]]
+    # On a three-chapter book "top 3" holds for any ranking, so the production
+    # query must also rank the chapter first: its unique lexical hit is the only
+    # thing that lifts it above the semantic-only neighbours in the fused order.
+    assert results[0].anchor == case.expected_anchor
