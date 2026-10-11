@@ -533,10 +533,13 @@ class GradeAttempt:
             confidence=attempt.confidence,
             client_tz=client_tz,
         )
-        if reviewed.log_id is not None:
-            self._checkpoints.link_grade(
-                attempt.id, quiz_item_id=item_id, review_log_id=reviewed.log_id
-            )
+        if reviewed.log_id is None:
+            # SubmitReview always appends a log row; without its id the attempt
+            # could not be joined to its review, so refuse rather than drop the link.
+            raise RuntimeError("A graded review returned no review-log id.")
+        self._checkpoints.link_grade(
+            attempt.id, quiz_item_id=item_id, review_log_id=reviewed.log_id
+        )
         return GradedAttempt(quiz_item_id=item_id, reviewed=reviewed)
 
     def _checkpoint_card(self, user: User, owned: OwnedAttempt) -> QuizItem:

@@ -51,6 +51,7 @@ from app.domain.entities import (
     ChapterIndexRow,
     ChapterSection,
     CheckpointAttempt,
+    CheckpointAttemptKind,
     ChunkToEmbed,
     Conversation,
     ConversationSummary,
@@ -3062,7 +3063,7 @@ class SqlAlchemyCheckpointRepository:
             update(checkpoint_attempts)
             .where(
                 checkpoint_attempts.c.id == attempt_id,
-                checkpoint_attempts.c.kind == "explain",
+                checkpoint_attempts.c.kind == CheckpointAttemptKind.EXPLAIN,
                 checkpoint_attempts.c.responded_at.is_(None),
             )
             .values(revealed_at=func.coalesce(checkpoint_attempts.c.revealed_at, now))
