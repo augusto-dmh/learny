@@ -13,6 +13,7 @@
  */
 
 import { useRouter, useSearchParams } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { Suspense } from "react";
 
 import { InkLine } from "@/app/components/ink-line";
@@ -31,13 +32,17 @@ function ReviewSession() {
 }
 
 export default function ReviewPage() {
+  const t = useTranslations("review");
+  const tCommon = useTranslations("common");
   return (
     <main className="flex-1 p-6">
       <header className="mb-6 space-y-2">
-        <h1 className="text-2xl font-semibold">Review</h1>
+        <h1 className="text-2xl font-semibold">{t("title")}</h1>
         <InkLine />
       </header>
-      <Suspense fallback={<p className="text-muted-foreground">Loading…</p>}>
+      <Suspense
+        fallback={<p className="text-muted-foreground">{tCommon("loading")}</p>}
+      >
         <ReviewSession />
       </Suspense>
     </main>

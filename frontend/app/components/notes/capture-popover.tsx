@@ -17,6 +17,7 @@
  * the reader shows no popover.
  */
 
+import { useTranslations } from "next-intl";
 import { useState, type ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -104,6 +105,7 @@ export function CapturePopover({
 }) {
   // The full verb set only when the reader wires the panel- and card-bound verbs;
   // otherwise the popover is the original two-action capture control (RA-15/16).
+  const t = useTranslations("notes.capture");
   const verbs = Boolean(onExplain && onAskAbout && onCreateCard);
   const belowLg = useBelowLg();
   const compact = verbs && belowLg;
@@ -121,7 +123,7 @@ export function CapturePopover({
   return (
     <div
       role="dialog"
-      aria-label="Capture highlight"
+      aria-label={t("label")}
       className="absolute z-10 flex flex-col gap-1 rounded-md border bg-popover p-1 shadow-md"
       style={{ top, left }}
       // Keep the browser selection alive while the popover is clicked so the
@@ -138,7 +140,7 @@ export function CapturePopover({
           disabled={pending}
           onClick={() => onCapture("highlight")}
         >
-          Highlight
+          {t("highlight")}
         </Button>
         {compact ? (
           <CaptureOverflow pending={pending}>{extras}</CaptureOverflow>
@@ -172,6 +174,7 @@ function CaptureExtraVerbs({
   onAskAbout?: (quote: string) => void;
   onCreateCard?: () => void;
 }) {
+  const t = useTranslations("notes.capture");
   return (
     <>
       <Button
@@ -181,7 +184,7 @@ function CaptureExtraVerbs({
         disabled={pending}
         onClick={() => onCapture("highlight-note")}
       >
-        {verbs ? "Note" : "Highlight + note"}
+        {verbs ? t("note") : t("highlightNote")}
       </Button>
       {verbs ? (
         <>
@@ -192,7 +195,7 @@ function CaptureExtraVerbs({
             disabled={pending}
             onClick={() => onExplain?.(quote ?? "")}
           >
-            Explain
+            {t("explain")}
           </Button>
           <Button
             type="button"
@@ -201,7 +204,7 @@ function CaptureExtraVerbs({
             disabled={pending}
             onClick={() => onAskAbout?.(quote ?? "")}
           >
-            Ask
+            {t("ask")}
           </Button>
           <Button
             type="button"
@@ -210,7 +213,7 @@ function CaptureExtraVerbs({
             disabled={pending}
             onClick={() => onCreateCard?.()}
           >
-            Create card
+            {t("createCard")}
           </Button>
         </>
       ) : null}
@@ -225,6 +228,7 @@ function CaptureOverflow({
   pending: boolean;
   children: ReactNode;
 }) {
+  const t = useTranslations("notes.capture");
   const [open, setOpen] = useState(false);
   return (
     <div className="relative">
@@ -234,7 +238,7 @@ function CaptureOverflow({
         variant="ghost"
         className="min-h-11 min-w-11"
         style={readControlMinStyle}
-        aria-label="More capture actions"
+        aria-label={t("more")}
         aria-expanded={open}
         aria-haspopup="menu"
         disabled={pending}

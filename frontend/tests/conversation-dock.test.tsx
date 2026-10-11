@@ -23,6 +23,8 @@ import {
   readActiveConversation,
   writeActiveConversation,
 } from "../app/lib/active-conversation";
+import { expectNoEnglishCopy } from "./i18n-copy";
+import { setTestLocale } from "./setup-intl";
 
 beforeAll(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
@@ -324,5 +326,314 @@ describe("deleting a conversation from the dock", () => {
     expect(screen.queryByText("Who wrote the first algorithm?")).toBeNull();
     expect(screen.getByLabelText("suggested prompts")).toBeTruthy();
     expect(readActiveConversation("s1", "ask")).toBeNull();
+  });
+});
+
+describe("the dock in pt-BR", () => {
+  /** Hold a response until the test releases it, to see the in-flight state. */
+  function deferred() {
+    let release: (response: Response) => void = () => {};
+    const promise = new Promise<Response>((resolve) => {
+      release = resolve;
+    });
+    return { promise, release };
+  }
+
+  const authedMe = {
+    id: "u1",
+    email: "a@b.c",
+    created_at: "now",
+    csrf_token: "csrf-xyz",
+  };
+
+  function dueCard(id: string) {
+    return {
+      id,
+      source_id: "s1",
+      source_title: "Livro",
+      item_type: "free_recall",
+      question: `Pergunta ${id}`,
+      answer: `Resposta ${id}`,
+      citation: {
+        section_path: ["Capítulo 1"],
+        anchor: "c1.xhtml#s1",
+        source_excerpt: "Um trecho.",
+      },
+      provenance: null,
+      status: "active",
+      due: "2026-07-16T00:00:00Z",
+      note_changed: false,
+      interval_labels: {},
+    };
+  }
+
+  /** Route by path prefix; the conversation list and notes can be held. */
+  function stubDock({
+    list,
+    notes,
+    due,
+    rename,
+  }: {
+    list: () => Promise<Response> | Response;
+    notes: () => Promise<Response> | Response;
+    due: number;
+    rename?: () => Response;
+  }) {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/auth/me") return jsonResponse(200, authedMe);
+      if (url.startsWith("/api/conversations?")) return list();
+      if (init?.method === "PATCH" && url === CONVERSATION_URL && rename) {
+        return rename();
+      }
+      if (url.startsWith("/api/notes")) return notes();
+      if (url.startsWith("/api/reviews/due")) {
+        // The queue holds at most a few cards; `total_due` is the whole count.
+        const items = Array.from({ length: Math.min(due, 3) }, (_, i) => dueCard(`i${i}`));
+        return jsonResponse(200, { items, total_due: due });
+      }
+      if (url === "/api/sources/s1") {
+        return jsonResponse(200, {
+          id: "s1",
+          title: "Livro",
+          filename: "s1.epub",
+          byte_size: 3,
+          content_type: "application/epub+zip",
+          status: "ready",
+          created_at: "now",
+          is_sample: false,
+          suggested_question: null,
+        });
+      }
+      throw new Error(`unexpected fetch: ${init?.method ?? "GET"} ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  function renderTab(tab: "chat" | "notes" | "review") {
+    return render(
+      <ReaderPanel
+        sourceId="s1"
+        csrf="csrf-xyz"
+        tab={tab}
+        onTabChange={() => {}}
+        onClose={() => {}}
+      />,
+    );
+  }
+
+  const DOCK_NAMESPACES = [
+    "chat.conversations",
+    "chat.dockNotes",
+    "chat.dockReview",
+    "reader.dock",
+    "errors.operation.conversationsRename",
+    "common",
+  ];
+
+  it("conversation list, rename and its failure: renders in pt-BR", async () => {
+    setTestLocale("pt-BR");
+    const list = deferred();
+    stubDock({
+      list: () => list.promise,
+      notes: () => jsonResponse(200, []),
+      due: 0,
+      rename: () => jsonResponse(422, { detail: [{ msg: "too long" }] }),
+    });
+    renderTab("chat");
+
+    // Loading, then the list with its Portuguese controls and turn count.
+    const region = await screen.findByRole("region", { name: "conversas" });
+    expect(region.textContent).toContain("Conversas");
+    expect(region.textContent).toContain("Carregando…");
+    expect(screen.getByRole("tab", { name: /^Conversa/ })).toBeTruthy();
+    expectNoEnglishCopy(region.textContent ?? "", ...DOCK_NAMESPACES);
+    await act(async () => {
+      list.release(jsonResponse(200, [summary]));
+    });
+    const resume = await screen.findByRole("button", {
+      name: "Retomar Ada Lovelace",
+    });
+    expect(resume.textContent).toContain("(1 interação)");
+    expect(screen.getByRole("button", { name: "Nova conversa" })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Excluir Ada Lovelace" }),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Renomear Ada Lovelace" }));
+    fireEvent.change(screen.getByLabelText("Novo título"), {
+      target: { value: "Algoritmos" },
+    });
+    expect(screen.getByRole("button", { name: "Cancelar renomeação" })).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Salvar título" }));
+    });
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "Não foi possível renomear essa conversa.",
+    );
+    expectNoEnglishCopy(region.textContent ?? "", ...DOCK_NAMESPACES);
+  });
+
+  it("empty list and older pages: renders in pt-BR", async () => {
+    setTestLocale("pt-BR");
+    const page = Array.from({ length: 20 }, (_, index) => ({
+      ...summary,
+      id: `c${index}`,
+      title: `Conversa ${index}`,
+      turn_count: index,
+    }));
+    const older = deferred();
+    let pages = 0;
+    stubDock({
+      list: () => (pages++ === 0 ? jsonResponse(200, page) : older.promise),
+      notes: () => jsonResponse(200, []),
+      due: 0,
+    });
+    renderTab("chat");
+
+    const more = await screen.findByRole("button", {
+      name: "Mostrar conversas mais antigas",
+    });
+    expect(
+      screen.getByRole("button", { name: "Retomar Conversa 0" }).textContent,
+    ).toContain("(nenhuma interação)");
+    expect(
+      screen.getByRole("button", { name: "Retomar Conversa 2" }).textContent,
+    ).toContain("(2 interações)");
+
+    // Asking for the older page shows it is loading, in Portuguese.
+    await act(async () => {
+      fireEvent.click(more);
+    });
+    expect(more.textContent).toBe("Carregando…");
+    await act(async () => {
+      older.release(jsonResponse(200, []));
+    });
+    cleanup();
+
+    stubDock({
+      list: () => jsonResponse(200, []),
+      notes: () => jsonResponse(200, []),
+      due: 0,
+    });
+    renderTab("chat");
+    expect(await screen.findByText("Nenhuma conversa ainda.")).toBeTruthy();
+  });
+
+  it("Notes tab, loading, empty and listed: renders in pt-BR", async () => {
+    setTestLocale("pt-BR");
+    const notes = deferred();
+    stubDock({
+      list: () => jsonResponse(200, []),
+      notes: () => notes.promise,
+      due: 0,
+    });
+    renderTab("notes");
+
+    const panel = await screen.findByTestId("reader-panel");
+    await waitFor(() =>
+      expect(panel.textContent).toContain("Carregando suas notas…"),
+    );
+    expect(screen.getByRole("tab", { name: /^Notas/ })).toBeTruthy();
+    expectNoEnglishCopy(panel.textContent ?? "", ...DOCK_NAMESPACES);
+    await act(async () => {
+      notes.release(
+        jsonResponse(200, [
+          {
+            id: "n1",
+            title: "Sobre o começo",
+            tags: [],
+            anchor_statuses: ["active"],
+            anchor: {
+              anchor: "Prefacio.xhtml#s1",
+              section_title: "Prefácio",
+              section_path: ["Prefácio"],
+              quote_exact: "o primeiro algoritmo",
+              status: "active",
+              page: 62,
+            },
+            created_at: "now",
+            updated_at: "now",
+          },
+        ]),
+      );
+    });
+    expect(
+      await screen.findByRole("list", { name: "Notas sobre este livro" }),
+    ).toBeTruthy();
+    expect(panel.textContent).toContain("Prefácio · p. 62");
+    expectNoEnglishCopy(panel.textContent ?? "", ...DOCK_NAMESPACES);
+    cleanup();
+
+    stubDock({
+      list: () => jsonResponse(200, []),
+      notes: () => jsonResponse(200, []),
+      due: 0,
+    });
+    renderTab("notes");
+    expect(
+      await screen.findByText(/Só as notas deste livro aparecem aqui/),
+    ).toBeTruthy();
+  });
+
+  it("Review tab, due and nothing due: renders in pt-BR", async () => {
+    setTestLocale("pt-BR");
+    stubDock({
+      list: () => jsonResponse(200, []),
+      notes: () => jsonResponse(200, []),
+      due: 1,
+    });
+    renderTab("review");
+
+    expect((await screen.findByTestId("due-count")).textContent).toBe("1");
+    const panel = screen.getByTestId("reader-panel");
+    expect(panel.textContent).toContain("cartão deste livro para revisar");
+    expect(screen.getByRole("tab", { name: /^Revisão/ })).toBeTruthy();
+    expectNoEnglishCopy(panel.textContent ?? "", ...DOCK_NAMESPACES);
+    cleanup();
+
+    stubDock({
+      list: () => jsonResponse(200, []),
+      notes: () => jsonResponse(200, []),
+      due: 0,
+    });
+    renderTab("review");
+    expect(
+      await screen.findByText("Nada deste livro para revisar agora."),
+    ).toBeTruthy();
+    cleanup();
+
+    // A large count is grouped the Portuguese way.
+    stubDock({
+      list: () => jsonResponse(200, []),
+      notes: () => jsonResponse(200, []),
+      due: 1234,
+    });
+    renderTab("review");
+    expect((await screen.findByTestId("due-count")).textContent).toBe("1.234");
+    expect(screen.getByTestId("reader-panel").textContent).toContain(
+      "cartões deste livro para revisar",
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: /^Revisão/ }).textContent).toBe(
+        "Revisão1.234",
+      ),
+    );
+    cleanup();
+
+    // English groups the same count its own way.
+    setTestLocale("en");
+    stubDock({
+      list: () => jsonResponse(200, []),
+      notes: () => jsonResponse(200, []),
+      due: 1234,
+    });
+    renderTab("review");
+    expect((await screen.findByTestId("due-count")).textContent).toBe("1,234");
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: /^Review/ }).textContent).toBe(
+        "Review1,234",
+      ),
+    );
   });
 });

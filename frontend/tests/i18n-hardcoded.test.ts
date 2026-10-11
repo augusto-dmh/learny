@@ -73,35 +73,11 @@ const EXEMPT_PATHS = [
 ];
 
 /**
- * Files not yet migrated to the catalogs. Shrinks with every surface that
- * migrates; a clean file listed here fails the test.
+ * Files not yet migrated to the catalogs. Empty, and held empty: every learner
+ * surface reads its copy from the catalogs, so a new one lands with its copy.
+ * The stale-entry rule (`stalePending`) is still proven on a synthetic list.
  */
-const PENDING_MIGRATION: string[] = [
-  "app/(app)/notes/page.tsx",
-  "app/(app)/review/page.tsx",
-  "app/components/answer-phase.tsx",
-  "app/components/ask-panel.tsx",
-  "app/components/citations.tsx",
-  "app/components/conversation-list.tsx",
-  "app/components/dock-notes-panel.tsx",
-  "app/components/dock-review-panel.tsx",
-  "app/components/failed-turn.tsx",
-  "app/components/include-notes-toggle.tsx",
-  "app/components/notes/capture-popover.tsx",
-  "app/components/notes/card-suggestions.tsx",
-  "app/components/notes/note-card-suggestions.tsx",
-  "app/components/notes/note-detail-screen.tsx",
-  "app/components/notes/notes-screen.tsx",
-  "app/components/review-screen.tsx",
-  "app/components/save-to-note-action.tsx",
-  "app/components/study-heatmap.tsx",
-  "app/components/teach-panel.tsx",
-  "components/ai-elements/inline-citation.tsx",
-  "components/ai-elements/message.tsx",
-  "components/ai-elements/prompt-input.tsx",
-  "components/ai-elements/sources.tsx",
-  "components/ui/carousel.tsx",
-];
+const PENDING_MIGRATION: string[] = [];
 
 type Finding = { file: string; line: number; text: string };
 
@@ -217,6 +193,11 @@ function describeFindings(findings: Finding[]): string[] {
   return findings.map(({ file, line, text }) => `${file}:${line} ${text}`);
 }
 
+/** Pending files the scan found nothing in — entries that must be dropped. */
+function stalePending(pending: string[], findings: Map<string, Finding[]>): string[] {
+  return pending.filter((file) => !findings.has(file));
+}
+
 describe("hard-coded strings", () => {
   it("flags English JSX text and attribute literals", () => {
     const code = [
@@ -256,9 +237,20 @@ describe("hard-coded strings", () => {
   });
 
   it("a clean file cannot stay pending", () => {
+    // The rule itself, on a synthetic list: a listed file with no findings is stale.
+    const dirty = scanComponent("app/components/dirty.tsx", "export const A = () => <p>Hello there</p>;");
+    expect(
+      stalePending(
+        ["app/components/clean.tsx", "app/components/dirty.tsx"],
+        new Map([["app/components/dirty.tsx", dirty]]),
+      ),
+    ).toEqual(["app/components/clean.tsx"]);
+
     const findings = scanTree();
-    const stale = PENDING_MIGRATION.filter((file) => !findings.has(file));
+    const stale = stalePending(PENDING_MIGRATION, findings);
     expect(stale, "pending files that are already clean — remove them from PENDING_MIGRATION").toEqual([]);
+    // Every surface has migrated; the list stays empty from here on.
+    expect(PENDING_MIGRATION, "every learner surface has migrated — keep the list empty").toEqual([]);
     const sorted = [...PENDING_MIGRATION].sort();
     expect(PENDING_MIGRATION, "keep PENDING_MIGRATION sorted and unique").toEqual([...new Set(sorted)]);
   });

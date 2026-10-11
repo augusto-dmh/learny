@@ -19,6 +19,7 @@
  */
 
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import { useCallback, useEffect, useState } from "react";
 
 import { listNotes, type NoteSummary } from "@/app/lib/notes";
@@ -66,6 +67,7 @@ export function DockNotesPanel({
   error,
   onShowInBook,
 }: BookNotes & { onShowInBook?: (anchor: string) => void }) {
+  const t = useTranslations("chat.dockNotes");
   if (error) {
     return (
       <p role="alert" className="text-sm text-destructive">
@@ -74,19 +76,18 @@ export function DockNotesPanel({
     );
   }
   if (notes === null) {
-    return <p className="text-sm text-muted-foreground">Loading your notes…</p>;
+    return <p className="text-sm text-muted-foreground">{t("loading")}</p>;
   }
   if (notes.length === 0) {
     return (
       <p className="text-sm text-muted-foreground">
-        Notes on this book only. Select a passage to start a new one — every note
-        keeps the passage it came from.
+        {t("empty")}
       </p>
     );
   }
 
   return (
-    <ul aria-label="Notes on this book" className="space-y-3">
+    <ul aria-label={t("listLabel")} className="space-y-3">
       {notes.map((note) => (
         <li key={note.id} className="space-y-1 border-b pb-3 last:border-b-0">
           <Link
@@ -122,10 +123,11 @@ function NoteRowPassage({
   // section-level anchor has no quote at all — an answer saved when its citation
   // carried no quotable words, or a capture with nothing selected — so the quote
   // block is omitted rather than drawn empty.
+  const t = useTranslations("chat.dockNotes");
   const where =
     anchor.page === null
       ? anchor.section_title
-      : `${anchor.section_title} · p. ${anchor.page}`;
+      : t("where", { section: anchor.section_title, page: anchor.page });
 
   return (
     <>

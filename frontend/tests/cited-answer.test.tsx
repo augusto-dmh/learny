@@ -17,6 +17,9 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { CitedAnswer } from "../app/components/cited-answer";
 import { type Citation } from "../app/lib/citations";
+import en from "../messages/en.json";
+import ptBR from "../messages/pt-BR.json";
+import { setTestLocale } from "./setup-intl";
 
 afterEach(() => {
   cleanup();
@@ -358,5 +361,39 @@ describe("CitedAnswer Streamdown harden (READ-14)", () => {
     expect(source).not.toContain("allowedImagePrefixes");
     expect(source).not.toContain("/api/sources/");
     expect(source).not.toContain("allowDataImages");
+  });
+});
+
+// Spelled out rather than imported, so a drifted constant in the code fails here.
+const NOT_FOUND_SENTINEL = "NOT_FOUND_IN_SOURCE";
+
+describe("CitedAnswer and the not-found sentinel", () => {
+  it("sentinel is never rendered", async () => {
+    // The whole-reply token is a machine contract: no catalog may carry it, so
+    // it can never be translated or shown as copy.
+    for (const catalog of [en, ptBR]) {
+      expect(JSON.stringify(catalog)).not.toContain(NOT_FOUND_SENTINEL);
+    }
+
+    for (const locale of ["en", "pt-BR"] as const) {
+      setTestLocale(locale);
+      const { container, unmount } = render(
+        <CitedAnswer sourceId="s1" text={` ${NOT_FOUND_SENTINEL}\n`} citations={null} />,
+      );
+      expect(container.textContent ?? "").not.toContain(NOT_FOUND_SENTINEL);
+      unmount();
+    }
+
+    // Prose that merely mentions the token is an answer, and renders whole.
+    render(
+      <CitedAnswer
+        sourceId="s1"
+        text={`The marker ${NOT_FOUND_SENTINEL} appears in the logs.`}
+        citations={null}
+      />,
+    );
+    await waitFor(() =>
+      expect(document.body.textContent).toContain("appears in the logs"),
+    );
   });
 });

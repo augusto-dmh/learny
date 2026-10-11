@@ -28,6 +28,7 @@
  * on every call regardless of client-side routing (FR-AUTH-007, ADR-017).
  */
 
+import { useTranslations } from "next-intl";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
@@ -122,6 +123,8 @@ export function TeachPanel({
   /** Switch Chat to a new Answer conversation on this book (TUTOR-33). */
   onAskAboutThis?: () => void;
 }) {
+  const t = useTranslations("chat.teach");
+  const tCommon = useTranslations("common");
   const errorMessage = useErrorMessage();
   const [structure, setStructure] = useState<SourceStructure | null>(null);
   const [selectedAnchor, setSelectedAnchor] = useState("");
@@ -298,7 +301,7 @@ export function TeachPanel({
   }
 
   if (restoring) {
-    return <p className="text-muted-foreground">Loading…</p>;
+    return <p className="text-muted-foreground">{tCommon("loading")}</p>;
   }
 
   if (thread !== null) {
@@ -325,19 +328,18 @@ export function TeachPanel({
   }
 
   return (
-    <section aria-label="teach" className="space-y-6">
+    <section aria-label={t("regionLabel")} className="space-y-6">
       <p className="text-sm text-muted-foreground">
-        Tutor walks you through a section. Answer is for questions about the
-        book.
+        {t("intro")}
       </p>
-      <form onSubmit={handleStart} aria-label="start session" className="space-y-3">
+      <form onSubmit={handleStart} aria-label={t("startLabel")} className="space-y-3">
         <div className="space-y-1.5">
           <label htmlFor="teach-target" className="text-sm font-medium">
-            Target
+            {t("target")}
           </label>
           <select
             id="teach-target"
-            aria-label="Target"
+            aria-label={t("target")}
             value={selectedAnchor}
             onChange={(e) => {
               pickerTouchedRef.current = true;
@@ -358,7 +360,7 @@ export function TeachPanel({
           </p>
         ) : null}
         <Button type="submit" disabled={selectedAnchor === "" || starting}>
-          Start session
+          {t("start")}
         </Button>
       </form>
     </section>
@@ -399,6 +401,15 @@ function TeachChat({
   onConversationKept: () => void;
   onAskAboutThis?: () => void;
 }) {
+  const t = useTranslations("chat.teach");
+  // The tutor chips send fixed English sentinels the backend matches on; the
+  // thread shows them as the chip the learner pressed, in their language.
+  const tutorReplyLabel = (text: string) =>
+    text.trim() === TUTOR_JUST_EXPLAIN_MESSAGE
+      ? t("justExplain")
+      : text.trim() === TUTOR_DONT_KNOW_MESSAGE
+        ? t("dontKnow")
+        : text;
   const errorMessage = useErrorMessage();
   // The notes choice belongs to the conversation, so it is fixed when the thread
   // creates one and is always sent explicitly rather than left to a server guess.
@@ -527,7 +538,7 @@ function TeachChat({
   );
 
   return (
-    <section aria-label="teach conversation" className="flex h-full flex-col gap-4">
+    <section aria-label={t("conversationLabel")} className="flex h-full flex-col gap-4">
       <h2 className="text-lg font-semibold">{target}</h2>
       <Conversation>
         <ConversationContent>
@@ -542,7 +553,7 @@ function TeachChat({
                         {message.parts.map((part, i) =>
                           part.type === "text" ? (
                             <span data-testid="user-message" key={i}>
-                              {part.text}
+                              {tutorReplyLabel(part.text)}
                             </span>
                           ) : null,
                         )}
@@ -691,6 +702,7 @@ function TutorChips({
   onDontKnow: () => void;
   disabled: boolean;
 }) {
+  const t = useTranslations("chat.teach");
   return (
     <div className="flex flex-wrap gap-2">
       <Button
@@ -700,7 +712,7 @@ function TutorChips({
         disabled={disabled}
         onClick={onJustExplain}
       >
-        {TUTOR_JUST_EXPLAIN_MESSAGE}
+        {t("justExplain")}
       </Button>
       <Button
         type="button"
@@ -709,7 +721,7 @@ function TutorChips({
         disabled={disabled}
         onClick={onDontKnow}
       >
-        {TUTOR_DONT_KNOW_MESSAGE}
+        {t("dontKnow")}
       </Button>
     </div>
   );
@@ -738,6 +750,7 @@ function TutorComposer({
   onStop: () => void;
   streaming: boolean;
 }) {
+  const t = useTranslations("chat.teach");
   return (
     <>
       <IncludeNotesToggle
@@ -753,7 +766,7 @@ function TutorComposer({
       <PromptInput onSubmit={onSubmit}>
         <PromptInputBody>
           <PromptInputTextarea
-            placeholder="Send a message…"
+            placeholder={t("placeholder")}
             disabled={streaming}
           />
         </PromptInputBody>
@@ -770,9 +783,10 @@ function ClosedSessionHandoff({
 }: {
   onAskAboutThis?: () => void;
 }) {
+  const t = useTranslations("chat.teach");
   return (
     <Button type="button" onClick={() => onAskAboutThis?.()}>
-      Ask about this
+      {t("askAboutThis")}
     </Button>
   );
 }
@@ -790,9 +804,14 @@ function TutorCardOffer({
   onAccept: () => void;
   onDismiss: () => void;
 }) {
+  const t = useTranslations("chat.teach");
   return (
-    <article aria-label="review card offer" className="space-y-3 rounded-md border p-3">
-      <p className="text-sm font-medium">{question}</p>
+    <article aria-label={t("cardOffer.label")} className="space-y-3 rounded-md border p-3">
+      {/* The question is the card the backend saves, which is English for now
+          (card copy follows the book, not the interface). */}
+      <p lang="en" className="text-sm font-medium">
+        {question}
+      </p>
       <p className="text-sm text-muted-foreground">{answer}</p>
       {error ? (
         <p role="alert" className="text-sm text-destructive">
@@ -801,10 +820,10 @@ function TutorCardOffer({
       ) : null}
       <div className="flex flex-wrap gap-2">
         <Button type="button" onClick={onAccept}>
-          Accept
+          {t("cardOffer.accept")}
         </Button>
         <Button type="button" variant="outline" onClick={onDismiss}>
-          Dismiss
+          {t("cardOffer.dismiss")}
         </Button>
       </div>
     </article>

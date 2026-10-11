@@ -2,6 +2,105 @@
 
 **Verdict**: PASS
 **Profile**: standard
+**Diff range**: origin/main..c12ddeb (batch 3: c737b7a..207f75d; round-2 fixes 207f75d..88beef1; round-3 fix range 88beef1..c12ddeb, 2 commits: aa0abca tests only, c12ddeb the round-2 report)
+**Round**: 3 - scoped (batch 3 of 4 scope)
+**Verifier**: independent sub-agent (author != verifier)
+
+Scope: batch 3 = checks C37-C41, plus the ratchet checks C44, C47 and C48. Round 3 covers two things:
+
+- **The fix diff `88beef1..c12ddeb`.** It changes three test files, `conversation-dock`, `review-screen` and `ask-panel`, and no component source.
+- **Every round-2 verdict that was not PASS.** That is the two surviving faults: N3, the dock due count's locale formatting, and N6, the review page's Suspense fallback.
+
+Both are now killed, and so are three adjacent faults on the new assertion surfaces. The round-2 report is kept unchanged under `## Earlier batches`, with round 1, batch 2 and batch 1 nested inside it.
+
+## Binding sources
+
+Carried from 88beef1. The fix touches neither the ADR nor `plan.md`, nor any component, so step 1 has nothing new to compare.
+
+| Source | Opened | Contradiction | Uncovered |
+| --- | --- | --- | --- |
+| `docs/adr/0034-ui-internationalization.md` | yes (carried from 88beef1) | none | - |
+| `plan.md` `## Assumptions` rows marked "(batch 3)" | yes (carried from 88beef1; `git diff 88beef1..c12ddeb -- .specs/features/pt-br-interface/plan.md` is empty) | none | - |
+
+## Checks
+
+How the proofs ran at c12ddeb:
+
+- **One invocation**, `npx vitest run --maxWorkers=2 --minWorkers=1 --reporter=verbose`, over the three changed files: `conversation-dock`, `review-screen` and `ask-panel`. Exit 0: 3 files and 111 tests passed.
+- **Every claim-carrying test in these files appears by name**: `ask-panel` 7 `renders in pt-BR`, `conversation-dock` 4, and `review-screen` 5 plus `heatmap uses locale names`. The `review-screen` flake did not show up.
+- **The `stubDock` helper change** (`Math.min(due, 3)` queue items) is covered by `conversation-dock` running whole.
+- `npx tsc --noEmit -p .` - exit 0.
+
+Citation status:
+
+- **Refreshed at c12ddeb**: C37 (the dock Review tab member) and C39 (the review-page fallback member).
+- **Carried from 88beef1**: every other row. Their files are untouched, or the new lines sit below the cited ones (`conversation-dock` adds from `:604`, `review-screen` from `:1549` apart from the mock at `:30-40`). Their proofs passed again in this run where they live in the three files above. C38, C40, C41, C44, C47 and C48 have files the fix does not touch, so they carry their 88beef1 run.
+
+| Check | Claim | Proof run | Evidence | Result |
+| --- | --- | --- | --- | --- |
+| C37 | Ask and Tutor panels, answer phases, not-found answer, failed turns, conversation list, include-notes toggle, save-to-note and the dock Notes/Review tabs render from the catalog (pt-BR) | `ask-panel` 7 and `conversation-dock` 4 `renders in pt-BR` passed (verified at c12ddeb); `teach-panel` 2 carried from 88beef1 | New: `frontend/tests/conversation-dock.test.tsx:613` `expect((await screen.findByTestId("due-count")).textContent).toBe("1.234")`; `:615` `"cartões deste livro para revisar"` (the 1234 caption takes the `other` branch). The round-2 evidence stands (carried from 88beef1) | PASS |
+| C38 | sentinel never shown or translated | carried from 88beef1 (`cited-answer` untouched) | `frontend/tests/cited-answer.test.tsx:368`, `:375`, `:383` (carried) | PASS |
+| C39 | review sessions, grades, intervals, empty deck, done for today, quiz progress and the heatmap render from the catalog and locale rules (pt-BR) | `review-screen` 5 `renders in pt-BR` plus `heatmap uses locale names` passed (verified at c12ddeb) | New: `frontend/tests/review-screen.test.tsx:1552` `nav.suspend = true` (the mock at `:36` throws a pending promise, so the page's Suspense boundary shows its fallback); `:1555` `expect(await screen.findByText("Carregando…")).toBeTruthy()`. The rest is carried from 88beef1 (`:1385`, `:1392`, `:1519`, `:1539`, `:1584`, `:1611`, `:1614`) | PASS |
+| C40 | notes list, detail, capture popover, card suggestions and anchor badges render from the catalog (pt-BR) | carried from 88beef1 (files untouched) | `frontend/tests/notes-screen.test.tsx:394`, `:404` (carried) | PASS |
+| C41 | user-authored note text unchanged (pt-BR) | carried from 88beef1 | `frontend/tests/note-detail-screen.test.tsx:494`, `:496`, `:503` (carried) | PASS |
+| C44 | shipped catalogs in parity | carried from 88beef1 (no catalog change) | `frontend/tests/i18n-parity.test.ts:218-219` (carried) | PASS |
+| C47 | stale pending entry fails; the list is empty | carried from 88beef1 | `frontend/tests/i18n-hardcoded.test.ts:247`, `:253`, `:80` (carried) | PASS |
+| C48 | source tree clean | carried from 88beef1 (no component change) | `frontend/tests/i18n-hardcoded.test.ts:263` (carried) | PASS |
+
+## Coverage
+
+These two rows were recomputed at c12ddeb, because the round-2 report left them `Unproven`. The other rows are carried from 88beef1 with nothing unproven.
+
+| Set (size) | Recomputed from | Member -> proof | Unproven |
+| --- | --- | --- | --- |
+| locale-formatted numbers added in round 2 (3) | `frontend/app/components/study-heatmap.tsx:505`, `frontend/app/components/dock-review-panel.tsx:95` | study reviews total `review-screen.test.tsx:1611` · study pages total (same formatter instance) · dock due count `conversation-dock.test.tsx:613` | - |
+| review page states (title, fallback) | `frontend/app/(app)/review/page.tsx` | title `review-screen.test.tsx:1539` · fallback `:1555` | - |
+
+## Test policy rows
+
+`checks.md` has no `Test policy` section, so there are no rows to judge.
+
+## Faults injected
+
+Each fault was applied in place, one at a time, by a script that replaces one exact text occurrence, runs only the target file with the frozen `-t "renders in pt-BR"` filter (`--maxWorkers=2 --minWorkers=1`), then restores the file with `git checkout --`. Afterwards `git status --porcelain` showed only ` M docker-compose.override.yml`.
+
+| Mutation | Location | Killed |
+| --- | --- | --- |
+| N3 dock due count -> raw `{total}` (round-2 survivor) | `frontend/app/components/dock-review-panel.tsx:95` | yes - `conversation-dock > Review tab, due and nothing due: renders in pt-BR` (`1234` vs `1.234`) |
+| N3b dock due count formatted with `"en-US"` instead of the locale | `frontend/app/components/dock-review-panel.tsx:95` | yes - same test (`1,234` vs `1.234`) |
+| N3c pt-BR `dueCaption` `other` branch collapsed to the singular | `frontend/messages/pt-BR.json:218` | yes - same test (`cartão deste livro` for 1234) |
+| N6 review page fallback -> `{"Loading…"}` (round-2 survivor) | `frontend/app/(app)/review/page.tsx:44` | yes - `review-screen > page title and loading fallback: renders in pt-BR` |
+| N6b review page fallback removed (`fallback={null}`) | `frontend/app/(app)/review/page.tsx:44` | yes - same test |
+
+## Gate
+
+- The three changed test files - exit 0: 111 passed, 0 failed.
+- `npx tsc --noEmit -p .` - exit 0.
+- Full frontend suite: not re-run this round. The fix changes only three test files. Their one shared-helper change is local to `conversation-dock`, and that file ran whole. The last full run, at 88beef1, was 91 files and 1042 passed.
+- Backend: not run (no backend change).
+- Tree after verification: `git status --porcelain` shows ` M docker-compose.override.yml` (the owner's file, untouched) and this report.
+
+## Findings
+
+- **B3-R3-F1 - non-blocking - one raw number left on the same screen.** The dock's Review tab badge (`TabCount`, `frontend/app/components/reader-panel.tsx:183`) still renders `{value}` raw. In the N3c run the panel read `Revisão1234` in the tab next to `1.234` in the panel body. This file belongs to batch 2's reader surface, and number grouping is not part of any catalog check, but it is the same fix as `dock-review-panel.tsx:95`.
+- **B3-R2-F1 (carried) - non-blocking.** The review position `{index + 1}/{queue.length}` is still raw.
+- **The round-2 test-hygiene finding is closed.** `IntersectionObserver` is now restored (`frontend/tests/ask-panel.test.tsx:2189`, `:2275`).
+- **Note on the N6 proof.** The suspending mock throws a promise that never resolves (`frontend/tests/review-screen.test.tsx:36`). It is harmless here because `cleanup` unmounts the tree, and `nav.suspend` is reset in a `finally` block.
+
+## Deferred to owner
+
+- `npm run build` and the commit and architecture parts of `make lint`. CI runs them.
+- A browser and screen-reader walk of the batch-3 surfaces in pt-BR.
+- `tests/review-screen.test.tsx`'s known flake under memory pressure. It did not reproduce in this round.
+
+## Earlier batches
+
+Batch 3's failed rounds 1 and 2 are kept unchanged in `verification-batch3-rounds.md`, so this file holds one verdict per batch. Batch 2 (its report carries batch 1 under its own `## Earlier batches`), moved unchanged:
+
+# pt-br-interface verification
+
+**Verdict**: PASS
+**Profile**: standard
 **Diff range**: origin/main..736c2c3 (batch 2: 8c11ad3..c04b2d5; round-2 fix range 860b949..736c2c3, 3 commits: a795693, 946afda, 736c2c3)
 **Round**: 2 - scoped (batch 2 of 4 scope)
 **Verifier**: independent sub-agent (author != verifier)

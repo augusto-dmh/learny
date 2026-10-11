@@ -16,6 +16,7 @@ import {
   InputGroupAddon,
 } from "@/components/ui/input-group"
 import { SearchIcon, CheckIcon } from "lucide-react"
+import { useTranslations } from "next-intl"
 
 function Command({
   className,
@@ -34,8 +35,8 @@ function Command({
 }
 
 function CommandDialog({
-  title = "Command Palette",
-  description = "Search for a command to run...",
+  title,
+  description,
   children,
   className,
   showCloseButton = false,
@@ -46,11 +47,12 @@ function CommandDialog({
   className?: string
   showCloseButton?: boolean
 }) {
+  const t = useTranslations("common.command")
   return (
     <Dialog {...props}>
       <DialogHeader className="sr-only">
-        <DialogTitle>{title}</DialogTitle>
-        <DialogDescription>{description}</DialogDescription>
+        <DialogTitle>{title ?? t("title")}</DialogTitle>
+        <DialogDescription>{description ?? t("description")}</DialogDescription>
       </DialogHeader>
       <DialogContent
         className={cn(

@@ -7,6 +7,8 @@
  * the state that lives on the turn itself.
  */
 
+import { useTranslations } from "next-intl";
+
 import { Button } from "@/components/ui/button";
 
 export function FailedTurn({
@@ -18,6 +20,7 @@ export function FailedTurn({
   onRetry: () => void;
   retryDisabled: boolean;
 }) {
+  const t = useTranslations("chat");
   return (
     <div data-testid="failed-turn" className="space-y-2">
       <p className="text-sm text-destructive">{error}</p>
@@ -28,7 +31,7 @@ export function FailedTurn({
         disabled={retryDisabled}
         onClick={onRetry}
       >
-        Retry
+        {t("retry")}
       </Button>
     </div>
   );

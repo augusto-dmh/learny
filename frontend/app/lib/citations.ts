@@ -55,6 +55,14 @@ const MARKER = /\[\^(\d+)\]/g;
 const MARK_HREF_PREFIX = "#citation-";
 
 /**
+ * The backend's whole-reply "not in this book" token. The backend maps it to a
+ * not-found status and holds it back from the stream, so it is a machine
+ * sentinel, never copy: an answer that is only this token renders as no answer
+ * (the not-found notice says why), in every locale.
+ */
+export const NOT_FOUND_SENTINEL = "NOT_FOUND_IN_SOURCE";
+
+/**
  * Rewrite each marker backed by one of `count` citations into a Markdown link the
  * answer renderer turns into an interactive mark.
  *

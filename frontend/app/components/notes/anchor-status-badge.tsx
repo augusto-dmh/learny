@@ -8,15 +8,18 @@
  * label rather than vanishing.
  */
 
+import { useTranslations } from "next-intl";
+
 import { Badge } from "@/components/ui/badge";
 
 export function AnchorStatusBadge({ status }: { status: string }) {
+  const t = useTranslations("notes");
   return (
     <Badge
       variant={status === "orphaned" ? "destructive" : "outline"}
       data-testid={`anchor-status-${status}`}
     >
-      {status}
+      {t("anchorStatus", { status })}
     </Badge>
   );
 }
