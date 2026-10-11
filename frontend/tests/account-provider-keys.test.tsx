@@ -175,6 +175,12 @@ describe("AccountPanel provider keys section", () => {
     for (const element of document.querySelectorAll("input")) {
       expect(element.value).not.toContain(KEY.slice(-12));
     }
+
+    // Opening the input again (Replace) starts empty: the saved key is gone
+    // from the component, not merely hidden.
+    fireEvent.click(within(row("openai")).getByRole("button", { name: "Replace key" }));
+    const reopened = within(row("openai")).getByLabelText("API key for OpenAI") as HTMLInputElement;
+    expect(reopened.value).toBe("");
   });
 
   it("test outcome messages", async () => {
