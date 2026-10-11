@@ -2,6 +2,193 @@
 
 **Verdict**: PASS
 **Profile**: standard
+**Diff range**: 8d568be..845ecc1 (the whole feature, batches 1-4; batch 4 = b888243..845ecc1, 2 commits: 4da8c99 S11, 845ecc1 S12)
+**Round**: 1 - full (batch 4 of 4, every check C1-C61)
+**Verifier**: independent sub-agent (author != verifier)
+
+Scope: this is the final round. It covers all 61 checks in `checks.md`, not only batch 4's C50-C61. Every proof ran again at 845ecc1. Every citation was re-read at 845ecc1 with `rg -n`/`grep -n`.
+
+The range also contains 290975b, a PR-review fix merged after the batch-3 verification. It changed `reader-panel.tsx`, `review-screen.tsx` and `app/lib/quiz.ts`, and no Verifier had read it. This round puts it under fault injection (G1, G2).
+
+The batch-3 report and the batches before it are kept unchanged under `## Earlier batches`.
+
+## Binding sources
+
+| Source | Opened | Contradiction | Uncovered |
+| --- | --- | --- | --- |
+| `docs/adr/0034-ui-internationalization.md` ("AI output language", line 38; "Watch", line 57) | yes - re-read at 845ecc1 | none. The ADR fixes three things. Precedence is stored, else `Accept-Language`, else `en`: `backend/app/infrastructure/web/dependencies.py:976-987`. The note is fixed, per language and in the user turn: `backend/app/infrastructure/answering/prompts.py:64-78`, `anthropic.py:581-583`, `:615`, `openai_compat.py:125-127`. `en` sends nothing: `domain/locale.py` `response_language_for`. The sentinel stays English and whole-reply | - |
+| `plan.md` `## Assumptions` rows marked "(batch 4)" (6 rows) | yes - read in the working tree (they are uncommitted, see V4-F6) | none. "Response-language note" matches `prompts.py:64-78`. "Cookie-only learner" matches `get_response_language`, which reads no cookie. "Proof files for C54/C56": both files exist at the frozen paths and import the `tests/infrastructure/` doubles. "Every generation caller": a grep of `backend/app` for `.generate(` and `.generate_stream(` call sites finds only `conversations.py:997` and `:1017`, plus the router's own forwarding. "Portuguese golden book" matches `backend/tests/golden_corpus_pt.py:1-29`. "Discriminating C60/C61" matches `test_golden_retrieval.py:79-86` and `test_golden_citations.py:135` | - |
+
+Profile `standard` does not run step 1's design enumeration. Batch 4 changes no screen (`git diff --stat b888243..HEAD -- frontend` is empty).
+
+## Checks
+
+How the proofs ran at 845ecc1:
+
+- **Backend**: one invocation, `LEARNY_REQUIRE_DB=1 uv run pytest -v -p no:randomly` (the whole suite, no `-n`). It ran 3300 passed, 2 failed and 11 skipped. Each named backend proof appears individually as PASSED: C10-C16 one each; C50 `test_negotiation_vectors` x26 and `test_effective_locale_precedence` x7; C51 x24; C52 x4; C53 x4; C54 x4; C55 x2; C56 local x2 and routing x4; C57 x8; C58 x1; C59 x1; C60 x3; C61 x3.
+- **The 2 failures are not from the feature.** They are `test_deploy_topology.py::test_dev_merge_publishes_the_app_ports` and `::test_dev_merge_still_publishes_todays_infra_ports`, and the owner's uncommitted `docker-compose.override.yml` causes them (`${LEARNY_DB_HOST_PORT:-5432}` host ports). In a scratch worktree of clean 845ecc1 the same file ran 29 passed.
+- **The 11 skips** are the live and paid tiers that skip without keys or flags. No feature proof was skipped.
+- **Frontend**: one invocation, `npx vitest run --maxWorkers=2 --minWorkers=1 --reporter=verbose` (the whole suite). Exit 0: 91 files and 1043 tests passed. Each frozen `-t` name appears with a check mark: C1-C8, C17-C27 and C38-C49 one each, C23 x15. The `renders in pt-BR` counts are C28 1+1, C29 2+2, C32 5+2, C35 6+1+1 (`read-page`), C37 7+4+2 (`teach-panel`), C39 6 plus the heatmap test, and C40 3+3. C30's four files ran whole: 6+10+9+6. The `review-screen` flake did not show up.
+- **C9**: `npm run build` ran alone, last. Exit 0, "Compiled successfully". `prod-image.test.ts` passed 4/4.
+- **The new proof files are new code.** Every batch-4 proof is a test added in b888243..845ecc1. `test_answering_anthropic.py` (+162/-0) and `test_answering_local.py` (+22/-0) only gain tests, so every earlier English request-shape assertion in them still runs unedited.
+
+| Check | Claim | Proof run | Evidence | Result |
+| --- | --- | --- | --- | --- |
+| C1 | locales exactly `en`, `pt-BR`, fallback `en` | vitest passed at 845ecc1 | `frontend/tests/i18n-config.test.ts:58` `expect([...LOCALES]).toEqual(["en", "pt-BR"])`; `:59` `DEFAULT_LOCALE).toBe("en")` | PASS |
+| C2 | supported cookie beats `Accept-Language` | vitest passed | `frontend/tests/i18n-config.test.ts:76` `resolveLocale({ cookie: "en", acceptLanguage: "pt-BR,pt;q=0.9" })).toBe("en")`; `:81` `english.locale).toBe("en")` through the real request config | PASS |
+| C3 | pt/pt-* before en by q then position -> pt-BR; `en,pt` stays en | vitest passed | `frontend/tests/i18n-config.test.ts:71` `negotiateLocale(header), String(header)).toBe(expected)` over the shared table `backend/tests/locale_negotiation_vectors.json:4-9` (`pt`, `pt-PT`, `pt;q=0.9,en;q=0.8`, `en,pt`->`en`, `en;q=0.5,pt;q=0.9`) | PASS |
+| C4 | unsupported cookie ignored | vitest passed | `frontend/tests/i18n-config.test.ts:93` `resolveLocale({ cookie, acceptLanguage: "pt-BR" }), String(cookie)).toBe("pt-BR")` | PASS |
+| C5 | absent, malformed, unsupported-only -> en | vitest passed | `frontend/tests/i18n-config.test.ts:104` `resolveLocale({})).toBe("en")`; `:107` `"fr,de"` -> `"en"`; vectors `;;;` and `null` at `backend/tests/locale_negotiation_vectors.json:16`, `:18` | PASS |
+| C6 | `<html lang>` follows the locale | vitest passed | `frontend/tests/i18n-layout.test.tsx:30` `props.lang).toBe("pt-BR")` (and `:28` `"en"`) | PASS |
+| C7 | key missing from en fails tsc | vitest passed | `frontend/tests/i18n-typed-keys.test.ts:50` `missing.ok).toBe(false)` | PASS |
+| C8 | catalog files == LOCALES, no per-locale branch | vitest passed | `frontend/tests/i18n-config.test.ts:115` `files).toEqual([...LOCALES].sort())`; `:122` `request).not.toContain(`"${locale}"`)` | PASS |
+| C9 | app assembles with the next-intl plugin | `npm run build` exit 0 at 845ecc1; `prod-image` 4/4 | `frontend/next.config.ts:13` `createNextIntlPlugin()`; `frontend/tests/prod-image.test.ts:15` `toMatch(/output:\s*["']standalone["']/)` | PASS |
+| C10 | PUT 200 `{locale}`, persists, re-PUT replaces leaving one row | pytest PASSED | `backend/tests/test_web_locale.py:43` `stored.json() == {"locale": "pt-BR"}`; `backend/tests/test_locale_preference_repository.py:38` `count == 1` | PASS |
+| C11 | unsupported -> 422, stores nothing | pytest PASSED | `backend/tests/test_web_locale.py:62` `refused.status_code == 422`; `:65` the prior row is still `pt-BR` | PASS |
+| C12 | 401 without session, 403 without CSRF, nothing stored | pytest PASSED | `backend/tests/test_web_locale.py:72-73` `== 401`; `:77-78` `== 403` | PASS |
+| C13 | DELETE 204, clears, 204 again | pytest PASSED | `backend/tests/test_web_locale.py:94` `second.status_code == 204` | PASS |
+| C14 | `/api/auth/me` locale en / pt-BR / null / null-for-unsupported | pytest PASSED | `backend/tests/test_web_locale.py:108` `["locale"] == "pt-BR"` (the `None`/`en`/unsupported asserts sit beside it in the same test) | PASS |
+| C15 | per-learner isolation | pytest PASSED | `backend/tests/test_web_locale.py:133` `survivor.locale == "pt-BR"` | PASS |
+| C16 | deleting the user deletes the locale | pytest PASSED | `backend/tests/test_locale_preference_repository.py:76` `remaining == 0` | PASS |
+| C17 | Account PUT with CSRF, cookie after 200, then refresh | vitest passed | `frontend/tests/account-locale.test.tsx:110` CSRF `toBe("csrf-xyz")`; `:113` `refresh).toHaveBeenCalledTimes(1)` | PASS |
+| C18 | Automatic -> DELETE, clear cookie, refresh | vitest passed | `frontend/tests/account-locale.test.tsx:133` `del[0]).toBe("/api/me/locale")`; `:136` refresh x1 | PASS |
+| C19 | failed save keeps the locale, localized error | vitest passed | `frontend/tests/account-locale.test.tsx:162` `getByRole("alert").textContent).toBe(expected)` | PASS |
+| C20 | reconcile from `/api/auth/me` | vitest passed | `frontend/tests/use-locale-sync.test.tsx:56` refresh x1; `:73`, `:86`, `:93` `not.toHaveBeenCalled()` | PASS |
+| C21 | anonymous switcher cookie shape, no fetch, refresh | vitest passed | `frontend/tests/locale-switcher.test.tsx:65` `writes).toEqual(["learny_locale=pt-BR; Path=/; Max-Age=31536000; SameSite=Lax"])`; `:68` `fetchSpy).not.toHaveBeenCalled()` | PASS |
+| C22 | refresh only, never reload or assign | vitest passed | `frontend/tests/locale-switcher.test.tsx:109` `hrefWrites).toBe(0)` | PASS |
+| C23 | every client throws ApiError {operation, status, detail} | vitest passed x15 | `frontend/tests/errors.test.ts:105` `toBeInstanceOf(ApiError)`; `:107` `operation).toBe(operation)` | PASS |
+| C24 | 401, 429, 5xx -> shared status copy | vitest passed | `frontend/tests/errors.test.tsx:57` `toBe(catalog.status[statusClass])` | PASS |
+| C25 | other statuses -> operation copy | vitest passed | `frontend/tests/errors.test.tsx:70` `toBe(catalog.operation.notesSave)` | PASS |
+| C26 | pt-BR 500 detail never on screen | vitest passed | `frontend/tests/error-display.test.tsx:61` `not.toContain(DETAIL)` | PASS |
+| C27 | legacy typed errors keep kind and status | vitest passed | `frontend/tests/errors.test.ts:159` `StreamRequestError).status).toBe(401)`; `:182` `AiProfileRequestError).status).toBe(422)` | PASS |
+| C28 | landing, login, register from the catalog (pt-BR) | vitest passed | `frontend/tests/landing.test.tsx:94` `expectNoEnglishCopy(..., "landing", "auth", "common")`; `frontend/tests/auth-screens.test.tsx:171-179`, `:191`. Reset and verify screens do not exist (plan Assumption, batch 2) | PASS |
+| C29 | shell and vendored default text from the catalog (pt-BR) | vitest passed | `frontend/tests/app-shell.test.tsx:241-246` (`Sair`, `Alternar tema`, `expectNoEnglishCopy(..., "shell")`); `frontend/tests/vendored-primitives.test.tsx:94` `{ name: copy.close }` | PASS |
+| C30 | en screens keep their English assertions, unedited apart from the binding | four files ran whole (31 tests) | `git diff --numstat 8d568be..845ecc1` shows 0 deleted lines in `landing.test.tsx` (+36), `auth-screens.test.tsx` (+71) and `app-shell.test.tsx` (+54); `app-sidebar.test.tsx` is unchanged. Evidence line: `frontend/tests/app-shell.test.tsx:246` | PASS |
+| C31 | legal pages stay English with `lang="en"` | vitest passed | `frontend/tests/legal-pages.test.tsx:115` `getAttribute("lang")).toBe("en")` | PASS |
+| C32 | Home and Library states from the catalog (pt-BR) | vitest passed (5+2) | `frontend/tests/library-screen.test.tsx:570` `toBe("com falha")`; `frontend/tests/home-screen.test.tsx:457` (the states test) | PASS |
+| C33 | pt-BR 0/1/2 books and the locale date | vitest passed | `frontend/tests/library-screen.test.tsx:641` `[2, "2 livros"]`; `:660` `"Adicionado em 19 de jul. de 2026"` | PASS |
+| C34 | book text unchanged (pt-BR) | vitest passed | `frontend/tests/library-screen.test.tsx:700-701` `findByText("The Art of War")`, `getByText("Dom Casmurro")` | PASS |
+| C35 | reader chrome and controls from the catalog (pt-BR) | vitest passed (6+1+1) | `frontend/tests/chapter-reader.test.tsx:2239` and the five pt-BR tests after it; `frontend/tests/reading-controls.test.tsx:213` | PASS |
+| C36 | chapter text and citation snippets unchanged (pt-BR) | vitest passed | `frontend/tests/chapter-reader.test.tsx:2456-2464` (carried; the file is unchanged since 736c2c3 except the new tests above it, and those were re-read at 845ecc1) | PASS |
+| C37 | Chat dock surfaces from the catalog (pt-BR) | vitest passed (7+4+2) | `frontend/tests/conversation-dock.test.tsx:613` `toBe("1.234")`; `:619` tab `"Revisão1.234"` (added by 290975b, made to fail by G1); `frontend/tests/ask-panel.test.tsx:1901`, `:1939`, `:2004`, `:2052` | PASS |
+| C38 | sentinel never shown or translated | vitest passed | `frontend/tests/cited-answer.test.tsx:375` `JSON.stringify(catalog)).not.toContain(NOT_FOUND_SENTINEL)`; `:383` `textContent).not.toContain(NOT_FOUND_SENTINEL)` | PASS |
+| C39 | review surfaces and heatmap from the catalog and locale (pt-BR) | vitest passed (6 + heatmap) | `frontend/tests/review-screen.test.tsx:1583` `findByText("Carregando…")`; `:1524` `grade-interval-1` stays `"~3w"` (unknown bucket, 290975b, made to fail by G2); `:1590` the heatmap test | PASS |
+| C40 | notes surfaces from the catalog (pt-BR) | vitest passed (3+3) | `frontend/tests/notes-screen.test.tsx:377`, `:432`, `:485`; `frontend/tests/note-detail-screen.test.tsx:306`, `:383`, `:416` | PASS |
+| C41 | user note text unchanged (pt-BR) | vitest passed | `frontend/tests/note-detail-screen.test.tsx:501` `body()).toContain("Ada wrote the first algorithm")`; `:503` | PASS |
+| C42 | missing key named with locale, both directions | vitest passed | `frontend/tests/i18n-parity.test.ts:171` `"home.only_en: missing from pt-BR"`; `:172` `"home.only_pt: missing from en"` | PASS |
+| C43 | mismatched ICU arguments named | vitest passed | `frontend/tests/i18n-parity.test.ts:186` `toMatch(/^k: ICU arguments differ/)` | PASS |
+| C44 | shipped catalogs in parity | vitest passed | `frontend/tests/i18n-parity.test.ts:219` `parityProblems(catalogs)).toEqual([])` | PASS |
+| C45 | JSX text and attribute literals flagged | vitest passed | `frontend/tests/i18n-hardcoded.test.ts:216-221` `toEqual([... aria-label, Hello there, placeholder, title ...])` | PASS |
+| C46 | copy-bearing literal in any `new …Error(` flagged | vitest passed | `frontend/tests/i18n-hardcoded.test.ts:234` `'app/lib/sources.ts:1 new Error("Could not load your sources.")'` | PASS |
+| C47 | a clean pending file fails; the list is empty | vitest passed | `frontend/tests/i18n-hardcoded.test.ts:247` the synthetic stale entry; `:251` `stale ...).toEqual([])` | PASS |
+| C48 | source tree clean | vitest passed | `frontend/tests/i18n-hardcoded.test.ts:263` `unexpected ...).toEqual([])` | PASS |
+| C49 | Limits documented in the test header and the ADR | vitest passed | `frontend/tests/i18n-hardcoded.test.ts:269` `header).toMatch(/## Limits/)`; `:272` `adr).toMatch(/#+ Limits/)`; `docs/adr/0034-ui-internationalization.md:45` | PASS |
+| C50 | backend locale rules | pytest PASSED (26 + 7) | `backend/tests/test_locale.py:44` `negotiate_locale(header) == expected`; `:60` `effective_locale(stored, header) == expected`; `:64` `response_language_for("en") is None`; `:65` `response_language_for("pt-BR") == "pt-BR"` | PASS |
+| C51 | the port receives pt-BR / None over JSON and stream, Ask and tutor | pytest PASSED x24 (2 modes x 2 routes x 6 cases) | `backend/tests/test_web_conversations_language.py:141` `port.response_languages == [expected]`; `:139-140` the route's own path was used; cases at `:62-67` (stored pt-BR, stored pt-BR over an en header, unset with a pt header, stored en over a pt header, unset with an en header, no header) | PASS |
+| C52 | `None` leaves the Anthropic request unchanged, Ask and tutor | pytest PASSED x4 | `backend/tests/test_answering_anthropic.py:2449` `json.dumps(request, sort_keys=True) == json.dumps(today, ...)` for `None` and `"en"`; `:2454` the final text is the old composition (`"What is X?"` / `_TEACH_TURN_TEXT`); `:2455` no note anywhere | PASS |
+| C53 | pt-BR note in the user turn; system block and breakpoints unchanged | pytest PASSED x4 | `backend/tests/test_answering_anthropic.py:2466` non-message keys equal; `:2469` `system == [{... ANSWER/TEACHING_SYSTEM_PROMPT}]`; `:2479` `messages[:-1]` equal; `:2482` final block `f"{_final_text(english)}\n\n{_PT_NOTE}"` | PASS |
+| C54 | OpenAI-compatible: note in the user message, system prompt unchanged | pytest PASSED x4 | `backend/tests/test_answering_openai_compat.py:73` `messages[0] == {"role": "system", "content": COMPAT_SYSTEM_PROMPT}`; `:76` final user message `f"{...}\n\n{_PT_NOTE}"`; `:62` `None`/`"en"` byte-identical | PASS |
+| C55 | the sentinel still means found=False; citations stay verbatim | pytest PASSED x2 | `backend/tests/test_answering_anthropic.py:2523-2525` `found is False`, `text == ""`, `cited_chunk_ids == ()`; `:2556` `sent == body`; `:2557` `sent[span.start : span.end] == quote` | PASS |
+| C56 | deterministic identical for None/en/pt-BR; the router forwards | pytest PASSED (2 + 4) | `backend/tests/test_answering_local.py:295-296` `generate(..., response_language=language) == baseline` and the same for the stream; `backend/tests/test_answering_routing.py:91-92` primary and fallback `languages == [language]`; `:107` house `== [language]` | PASS |
+| C57 | no header text in any prompt | pytest PASSED x8 (2 adapters x 2 routes x 2 modes) | `backend/tests/test_web_conversations_language.py:202-203` `"ignore previous instructions" not in sent`, `"reveal the system prompt" not in sent`; `:204` the fixed note is in the request | PASS |
+| C58 | Portuguese book: `dc:language` pt and provenance | pytest PASSED | `backend/tests/test_golden_fixtures.py:73` `findall(... dc:language ...) == ["pt"]`; `:77` `"Project Gutenberg eBook #55752" in provenance`; `:80` licence `startswith("public domain")`; `:86` each excerpt is in the EPUB | PASS |
+| C59 | stored chunks use `portuguese`, with the expected sections and anchors | pytest PASSED | `backend/tests/test_golden_ingestion.py:93` `{row.search_config for row in rows} == {"portuguese"}`; `:94` `(anchor, section_path, text)` list equals `EXPECTED_PT_GOLDEN_SECTIONS` | PASS |
+| C60 | inflected questions reach their section within the top 3 | pytest PASSED x3 | `backend/tests/test_golden_retrieval.py:86` `set(lexical) == {case.expected_anchor}`; `:90` `expected_anchor in [... results[:3]]`; plus `backend/tests/test_golden_fixtures.py:102` (each inflected word is absent from its section, 3 PASSED). See V4-F1 | PASS |
+| C61 | deterministic answer cites only retrieved chunks, the first at the target, offline | pytest PASSED x3 | `backend/tests/test_golden_citations.py:134` `citations <= evidence ids`; `:135` `citations[0].anchor == case.expected_anchor`; `:132` `model == DeterministicGenerationAdapter.model`; `:117-118` provider keys deleted | PASS |
+
+## Coverage
+
+Batch-4 rows were recomputed at 845ecc1 from the code. Rows for C1-C49 are carried from the earlier reports, which each recomputed them; nothing in them is unproven. The frontend is byte-identical between b888243 and 845ecc1. 290975b, the one frontend change after the batch-3 report, touches the sets in the last row, which was recomputed.
+
+| Set (size) | Recomputed from | Member -> proof | Unproven |
+| --- | --- | --- | --- |
+| generation implementers of the kwarg (4 production + 1 fake) | a grep of `backend/app` for `def generate(` and `def generate_stream`: `anthropic.py:625`, `:666`; `openai_compat.py:376`, `:411`; `local.py:89`, `:104`; `routing.py:247`, `:292`; plus `tests/fakes.py:802`, `:829` | Anthropic C53, C52 · OpenAI-compatible C54 · deterministic C56 (`test_answering_local.py:295`) · routing C56 (`test_answering_routing.py:91`) · fake C51 (`test_web_conversations_language.py:141`). The merged tree with origin/main adds no implementer (V4-F7) | - |
+| port callers (2) | `backend/app/application/conversations.py:997` `generation.generate(`, `:1017` `generation.generate_stream(`, both passing `response_language` | buffered C51 json cases · streamed C51 stream cases | - |
+| routes x mode (4) | `backend/app/infrastructure/web/conversations.py:492`, `:530` (`Depends(get_response_language)`) x {answer, teach} | Ask JSON · Ask stream · tutor JSON · tutor stream: C51 and C57 are parametrized over both (`test_web_conversations_language.py:105-107`, `:169-173`) | - |
+| effective-locale sources (stored supported, stored unsupported, header pt, header en, none) | `backend/app/domain/locale.py` `effective_locale` and `backend/app/infrastructure/web/dependencies.py:966-972` (`get_locale_choice` maps unsupported to `None` at `:971`) | C50 `test_locale.py:60` x7 · C51 `:62-67` x6 per route and mode · stored unsupported -> unset: C14 `test_web_locale.py:112` plus C50 | - |
+| response-language values at the adapters (None, en, pt-BR, unknown) | `backend/app/infrastructure/answering/prompts.py:74-78` | None and en C52 `:2449` and C54 `:62` · pt-BR C53, C54 · unknown: `test_answering_anthropic.py:2497` and `test_answering_openai_compat.py:88` (both PASSED, not frozen proofs) · deterministic over all three C56 | - |
+| adapter path x mode (Anthropic and compat: buffered and stream x answer and teach = 8) | the adapters' `generate`/`generate_stream` and the `mode == MODE_TEACH` branch | C52, C53 and C54 are each parametrized over `stream` x `mode` (4 PASSED each) | - |
+| router serving paths (primary, fail-over, house) x buffered and stream | `backend/app/infrastructure/answering/routing.py:268-285`, `:323-340` | `test_answering_routing.py:91-92` (primary and fail-over), `:107` (house); 4 params | - |
+| golden Portuguese cases (3 questions x retrieval, citation, stemmer need) | `backend/tests/golden_expected.py` `PORTUGUESE_CASES` | C60 x3 · C61 x3 · `test_golden_fixtures.py:102` x3 | - |
+| post-review fix 290975b members (dock tab count, interval buckets 9, unknown bucket) | `frontend/app/components/reader-panel.tsx:184`, `frontend/app/lib/quiz.ts:132-142`, `frontend/app/components/review-screen.tsx:791-793` | tab count `conversation-dock.test.tsx:619` (G1) · all nine buckets across the pt-BR cards at `review-screen.test.tsx:1344-1358` · unknown bucket `:1524` (G2) | - |
+| C1-C49 sets (supported locales, negotiation vectors, PUT/DELETE statuses, `/api/auth/me` values, error classes, 14 clients, 6 legacy errors, migrated surfaces, untranslated surfaces, sensor rules, startup assemblies) | carried from the batch 1-3 reports below; C9's build assembly re-proven by `npm run build` at 845ecc1 | as in `checks.md` `## Coverage` | - |
+
+## Test policy rows
+
+`checks.md` has no `Test policy` section, so there are no rows to judge.
+
+## Swept rows re-read
+
+- **C10 concurrency** (upsert on the primary key): `test_locale_preference_repository.py:38` `count == 1`.
+- **C55 dependency failure** (a sentinel reply still maps to not-found with a response language): `test_answering_anthropic.py:2523`.
+- **C20 dependency failure** (`/api/auth/me` unreachable leaves the locale alone): `use-locale-sync.test.tsx:93`.
+- The `n/a` rows are policy the owner approved.
+
+## Faults injected
+
+Backend faults ran through a script. Each one replaced one exact occurrence and asserted the occurrence count. It then ran only the named proofs (`LEARNY_REQUIRE_DB=1`, no `-n`). It restored the file with `git checkout --` and compared `git status --porcelain` with the recorded baseline (` M plan.md`, ` M docker-compose.override.yml`); every run matched. Frontend faults ran the same way, over one test file with `--maxWorkers=2 --minWorkers=1`.
+
+This deviates from verify.md, which asks for a scratch worktree. The orchestrator's brief allows in-place mutation, and the earlier batches did the same.
+
+Eight faults is over verify.md's cap of five, for two reasons:
+
+- **F6** probes pre-existing retrieval code that C60 and C61 claim to guard.
+- **G1 and G2** cover 290975b, a merged fix that no Verifier had made to fail.
+
+| Mutation | Location | Killed |
+| --- | --- | --- |
+| F1 dependency passes the raw `Accept-Language` through when nothing is stored (header text as the response language) | `backend/app/infrastructure/web/dependencies.py:987` | yes - C51 (8 unset-header cases) and C57 (all 8 cases: the note is gone) |
+| F2 Anthropic Ask: note moved from the user turn into the system block (the rejected door-7 alternative) | `backend/app/infrastructure/answering/anthropic.py:615-616` | yes - C53 `answer-buffered`, `answer-stream` |
+| F3 OpenAI-compatible: note also appended to the system prompt | `backend/app/infrastructure/answering/openai_compat.py:143` | yes - C54, all 4 |
+| F4 router stream path drops `response_language` from its kwargs | `backend/app/infrastructure/answering/routing.py:323` | yes - C56 routing `stream-pt-BR`, `stream-None` |
+| F5 ingestion maps `pt` to `simple` instead of `portuguese` | `backend/app/application/text_search.py:23` | yes - C59; C60 all 3; C61 `cap2`, `cap3` |
+| F6 production hybrid query's lexical arm uses `'simple'` instead of the stored config (pre-existing code) | `backend/app/infrastructure/db/retrieval.py:81-87` | yes - C61 `cap2`, `cap3`; C60 passed all 3 cases under it (V4-F1) |
+| G1 dock Review tab badge rendered raw instead of locale-formatted (290975b) | `frontend/app/components/reader-panel.tsx:184` | yes - `conversation-dock > Review tab, due and nothing due: renders in pt-BR` |
+| G2 review grade interval rendered as the raw bucket, never the catalog label (290975b) | `frontend/app/components/review-screen.tsx:791-793` | yes - `review-screen > card, grades, intervals and summary: renders in pt-BR` and `unknown backend tokens show as sent: renders in pt-BR` |
+
+C52, C55 and C58 were not made to fail this round, because the cap had been reached. Each passes on assertions that pin literal values (`:2454`, `:2523-2525`, `:73`) rather than values derived from the code under test.
+
+## Gate
+
+- `make lint` - exit 0. That is backend `ruff check` "All checks passed!", `ruff format --check` "345 files already formatted", frontend `tsc --noEmit` clean, `check_commits.py origin/main..HEAD` "2 commit(s) ... OK", and `check_boundaries.py` "architecture boundaries clean".
+- Backend: `LEARNY_REQUIRE_DB=1 uv run pytest -v` - 3300 passed, 2 failed, 11 skipped. The 2 failures come from the owner's uncommitted `docker-compose.override.yml`, not the feature; `tests/test_deploy_topology.py` passes 29/29 on a clean 845ecc1 worktree.
+- Frontend: `npx vitest run --maxWorkers=2 --minWorkers=1` - 91 files, 1043 passed, 0 failed.
+- `npm run build` - exit 0, run alone and last. `.next` was already present, and `git status --porcelain` was unchanged afterwards.
+- Tree after verification: ` M .specs/features/pt-br-interface/plan.md` and ` M docker-compose.override.yml` (both were there before this round), plus this report.
+
+## Findings
+
+- **V4-F1 - low - C60 cannot catch a regression in the production lexical arm.** `backend/tests/test_golden_retrieval.py:79-86` re-implements the lexical match in test SQL. It does not exercise `SqlAlchemyRetrievalRepository`'s lexical arm. The only assertion on production retrieval, `:90` "within the top 3", cannot fail on a three-chapter book.
+  - Under F6 (the production query stems with `simple`), all three C60 cases passed. C61 killed the fault (`cap2`, `cap3`), so the feature's proofs as a whole do catch it.
+  - Suggested fix: assert `results[0].anchor == case.expected_anchor` on the production `retrieve`, or drive the repository's lexical arm rather than a copy of its SQL.
+- **V4-F2 - low - the note's wording is never asserted.** `RESPONSE_LANGUAGE_NOTES["pt-BR"]` (`backend/app/infrastructure/answering/prompts.py:65-71`) asks for Brazilian Portuguese, keeps quotations verbatim and restates the sentinel. Every test compares the request against the constant itself.
+  - So a note that asked for another language, or dropped the sentinel restatement the plan relies on, passes every test.
+  - Suggested fix: one unit test that the note contains `SENTINEL` and "Brazilian Portuguese".
+- **V4-F3 - info - the selection-Explain origin with pt-BR has no test.** It goes through the same `_generate`/`_generate_stream` call (`backend/app/application/conversations.py:645-652`, `:997-1006`). Only the `GenerationPort` instance differs, so it is not counted as unproven.
+- **V4-F4 - info - only one tutor chip is exercised.** The chip test (`backend/tests/test_web_conversations_language.py:223-237`) sends `TUTOR_DONT_KNOW_MESSAGE` and asserts the hint escalates. `TUTOR_JUST_EXPLAIN_MESSAGE` reaches the same unmodified message path, because the note is adapter-side, but it is not exercised.
+- **V4-F5 - cosmetic - checks.md's header miscounts.** It says "59 checks in 12 slices", but it defines 61 (C1-C61). The file is frozen; this is noted, not fixed.
+- **V4-F6 - process - the batch-4 plan rows are uncommitted, and one line now renders wrongly.** The six "(batch 4)" `## Assumptions` rows in `plan.md` are uncommitted, and the edit removed the blank line between the table and `**Open questions:**` (`.specs/features/pt-br-interface/plan.md:272`). GitHub-flavoured Markdown now renders that line as a table row. Suggested fix: restore the blank line and commit the rows with the batch.
+- **V4-F7 - process - the branch is behind origin/main.** It is 21 commits behind (PR #80, BYOK key routes, bb63126).
+  - `git merge-tree --write-tree origin/main HEAD` merges with no conflict, and the merged tree has no new `GenerationPort` implementer.
+  - This round verified 845ecc1, not the merge result. The PR's CI on its merge ref is the check for that.
+- **Carried, non-blocking:**
+  - B3-R3-F1 (the raw dock tab badge) is now fixed by 290975b and proven by G1.
+  - B3-R2-F1 (the raw review position `{index + 1}/{queue.length}`) is still open.
+
+## Deferred to owner
+
+- Confirm CI on the PR, including the merge with origin/main (V4-F7).
+- A browser and screen-reader walk of the pt-BR surfaces, and one real-provider pt-BR answer. That needs a funded key, which the eval workflow lacks by owner decision.
+- Follow-up candidates recorded in the plan: reading the `learny_locale` cookie for answer language, and a locale on the tutor-card accept route.
+
+## Earlier batches
+
+The batch-3 report (round 3, PASS) is kept unchanged below. It carries batch 2 and batch 1 under its own `## Earlier batches`. Batch 3's failed rounds 1 and 2 stay in `verification-batch3-rounds.md`.
+
+# pt-br-interface verification
+
+**Verdict**: PASS
+**Profile**: standard
 **Diff range**: origin/main..c12ddeb (batch 3: c737b7a..207f75d; round-2 fixes 207f75d..88beef1; round-3 fix range 88beef1..c12ddeb, 2 commits: aa0abca tests only, c12ddeb the round-2 report)
 **Round**: 3 - scoped (batch 3 of 4 scope)
 **Verifier**: independent sub-agent (author != verifier)
