@@ -87,7 +87,11 @@
       "cardsSave": "Could not save this card.",
       "cardsSuggestNote": "Could not suggest cards for this note.",
       "cardsAddToReview": "Could not add this card to review.",
-      "tutorCardSave": "Could not save this review card."
+      "tutorCardSave": "Could not save this review card.",
+      "providerKeysList": "Could not load your AI keys.",
+      "providerKeySave": "Could not save your key.",
+      "providerKeyTest": "Could not test your key.",
+      "providerKeyDelete": "Could not delete your key."
     }
   },
   "account": {
@@ -116,6 +120,38 @@
         "teachOnly": "Works in Teach only.",
         "neither": "Currently works in neither Ask nor Teach."
       }
+    },
+    "providerKeys": {
+      "heading": "Your own AI keys",
+      "intro": "Paste an API key from a provider you already pay, and Learny uses it for your own requests.",
+      "disclosure": "Calls made with your key are billed by that provider to you, under your own agreement with them. Learny stores your key encrypted and can never show it again.",
+      "masked": "•••• {last4}",
+      "addedOn": "Added {date}",
+      "notConfigured": "No key saved.",
+      "powers": "Powers:",
+      "profileModes": {
+        "both": "{name}: Ask and Teach",
+        "askOnly": "{name}: Ask only",
+        "teachOnly": "{name}: Teach only",
+        "neither": "{name}: neither Ask nor Teach right now"
+      },
+      "cards": "Flashcards & decks",
+      "inputLabel": "API key for {provider}",
+      "placeholder": "Paste your key",
+      "save": "Save key",
+      "saving": "Saving…",
+      "replace": "Replace key",
+      "test": "Test key",
+      "testing": "Testing…",
+      "testResult": {
+        "ok": "Key works",
+        "rejected": "The provider rejected this key. Check it, then save it again.",
+        "rate_limited": "The provider is limiting requests on this key right now. Try again in a moment.",
+        "unavailable": "The provider could not be reached. Try again later."
+      },
+      "delete": "Delete key",
+      "confirmDelete": "Delete your {provider} key? Your requests go back to Learny's own AI.",
+      "confirmDeleteAction": "Yes, delete it"
     }
   },
   "landing": {

@@ -139,6 +139,21 @@ def test_clear_drops_every_entry() -> None:
     assert len(cache) == 0
 
 
+def test_evicting_a_fingerprint_drops_only_its_entries() -> None:
+    """A replaced or deleted key's adapters go at once; every other key's stay."""
+    cache = UserAdapterCache()
+    cache.get_or_build(_key("old"), lambda: _Built("old-a"))
+    cache.get_or_build(_key("old", profile_id="byok-claude-ask"), lambda: _Built("old-b"))
+    kept = cache.get_or_build(_key("other"), lambda: _Built("other"))
+
+    assert cache.evict_fingerprint("old") == 2
+    assert cache.evict_fingerprint("old") == 0
+
+    assert [key.fingerprint for key in cache.keys()] == ["other"]
+    assert cache.get_or_build(_key("other"), lambda: _Built("rebuilt")) is kept
+    assert cache.get_or_build(_key("old"), lambda: _Built("fresh")).label == "fresh"
+
+
 def test_a_slow_build_does_not_block_another_learners_lookup() -> None:
     # A miss reads the credential row and decrypts the key; while it does, a
     # cached learner's lookup must still return.

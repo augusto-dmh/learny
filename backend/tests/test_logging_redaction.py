@@ -117,3 +117,116 @@ def test_configure_logging_redacts_emitted_output(
     # And no plaintext secret appears anywhere in the captured text.
     assert secret_password not in caplog.text
     assert secret_token not in caplog.text
+
+
+# --- Provider keys in free-form text (ADR-0033, C33) ---------------------------------
+
+_KEY_SHAPES = {
+    "anthropic": "sk-ant-api03-Zr8Kq2mVx7Lp4Nw9Bt6Hc3Yd",
+    "openai": "sk-proj-Q4wE9rT2yU7iO1pA5sD8fG3h",
+    "openai_legacy": "sk-" + "A1b2C3d4E5f6G7h8I9j0K1l2",
+    "gemini": "AIzaSyB3x9Kq2mVx7Lp4Nw9Bt6HcZr8",
+}
+
+
+@pytest.fixture
+def emitted():  # noqa: ANN201
+    """Configure logging in a given format; return a reader of what the handler wrote."""
+    import io
+
+    def _configure(log_format: str):  # noqa: ANN202
+        configure_logging(log_format=log_format)
+        root = logging.getLogger()
+        handler = next(h for h in root.handlers if getattr(h, "_learny", False))
+        buffer = io.StringIO()
+        previous = handler.setStream(buffer)
+        return buffer, lambda: handler.setStream(previous)
+
+    yield _configure
+    configure_logging(log_format="human")
+
+
+@pytest.mark.parametrize("log_format", ["human", "json"])
+@pytest.mark.parametrize("shape", sorted(_KEY_SHAPES))
+def test_masks_provider_key_shapes(shape: str, log_format: str, emitted) -> None:  # noqa: ANN001
+    key = _KEY_SHAPES[shape]
+    buffer, restore = emitted(log_format)
+    logger = logging.getLogger("app.tests.key_masking")
+    try:
+        logger.warning(f"message carries {key}")
+        logger.warning("arg carries %s", key)
+        logger.warning("object arg carries %s", ValueError(f"provider said {key}"))
+        logger.warning("extra carries", extra={"detail": f"prefix {key} suffix"})
+        logger.warning("extra object carries", extra={"cause": ValueError(key)})
+        try:
+            raise RuntimeError(f"SDK rejected the request with {key}")
+        except RuntimeError:
+            logger.exception("exception text carries")
+    finally:
+        restore()
+
+    output = buffer.getvalue()
+    assert output.count("carries") == 6, output  # every record was emitted
+    assert key not in output
+    assert key[-12:] not in output
+    assert "***KEY-REDACTED***" in output
+
+
+def test_masking_keeps_ordinary_text_and_short_lookalikes() -> None:
+    from app.core.logging import mask_provider_keys
+
+    text = (
+        "task-runner sk-short AIza ok; ask-anthropic is fine; "
+        "task-3f2a9c1e-6b7d-4e5f-8a9b-0c1d2e3f4a5b and disk-0123456789abcdefghij"
+    )
+    assert mask_provider_keys(text) == text
+
+
+def test_both_process_assemblies_install_the_masking_filter() -> None:
+    """The API and the worker both configure logging through ``configure_logging``,
+    which installs ``SensitiveDataFilter`` (and the masking formatters) on the
+    emitting handler."""
+    import inspect
+
+    import app.main as api
+    import app.worker.celery_app as worker
+    from app.core.logging import HumanFormatter, JsonFormatter
+
+    assert "configure_logging()" in inspect.getsource(api)
+    assert "configure_logging()" in inspect.getsource(worker)
+    for log_format, formatter in (("human", HumanFormatter), ("json", JsonFormatter)):
+        configure_logging(log_format=log_format)
+        root = logging.getLogger()
+        handler = next(h for h in root.handlers if getattr(h, "_learny", False))
+        assert any(isinstance(f, SensitiveDataFilter) for f in handler.filters)
+        assert isinstance(handler.formatter, formatter)
+    configure_logging(log_format="human")
+
+
+@pytest.mark.parametrize("name", ["uvicorn", "uvicorn.error", "uvicorn.access"])
+def test_uvicorn_records_are_masked_on_their_own_handlers(name: str) -> None:
+    """Uvicorn's loggers keep their own handlers and do not propagate to ours;
+    a traceback they log (an unhandled exception) is still masked."""
+    import io
+
+    key = _KEY_SHAPES["anthropic"]
+    configure_logging()
+    server = logging.getLogger(name)
+    buffer = io.StringIO()
+    handler = logging.StreamHandler(buffer)  # uvicorn's handlers carry no filter of ours
+    previous = server.propagate
+    server.addHandler(handler)
+    server.propagate = False
+    try:
+        try:
+            raise RuntimeError(f"request failed with {key}")
+        except RuntimeError:
+            server.exception("Exception in ASGI application")
+    finally:
+        server.removeHandler(handler)
+        server.propagate = previous
+
+    output = buffer.getvalue()
+    assert "Exception in ASGI application" in output
+    assert key not in output
+    assert "***KEY-REDACTED***" in output

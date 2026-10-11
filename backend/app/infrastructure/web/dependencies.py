@@ -15,8 +15,9 @@ record — and any other exception rolls back.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import AbstractContextManager
+from dataclasses import dataclass
 from datetime import timedelta
 from functools import lru_cache, partial
 from typing import Annotated
@@ -147,6 +148,7 @@ from app.infrastructure.db.retrieval import SqlAlchemyRetrievalRepository
 from app.infrastructure.email import build_email_sender
 from app.infrastructure.embeddings import build_embedding_adapter
 from app.infrastructure.ingestion.markup import Bs4MarkupConverter
+from app.infrastructure.learner_keys import envelope_from_settings, learner_key_access
 from app.infrastructure.providers import (
     GenerationProfileSettings,
     offered_providers,
@@ -154,6 +156,7 @@ from app.infrastructure.providers import (
     resolve_serving_profile,
 )
 from app.infrastructure.quiz import build_quiz_adapter
+from app.infrastructure.quiz.learner import QUIZ_KEY_PROVIDER, build_user_keyed_quiz_adapter
 from app.infrastructure.scheduling import build_scheduling_adapter
 from app.infrastructure.security.password_hasher import Argon2PasswordHasher
 from app.infrastructure.security.secrets_envelope import SecretsEnvelope
@@ -778,27 +781,100 @@ def _declared_profile_ids() -> frozenset[str]:
 # request, so a replaced or deleted key never resolves again. The plaintext is
 # decrypted only on a cache miss.
 
-_user_adapters = UserAdapterCache()
+_user_adapters: UserAdapterCache[GenerationPort] = UserAdapterCache()
+# Learner-keyed quiz adapters behind card suggestions: same cache shape, own
+# instance (a quiz adapter is not a generation adapter).
+_user_quiz_adapters: UserAdapterCache[QuizGenerationPort] = UserAdapterCache()
+# The profile slot a quiz adapter's cache key names: cards are served by the
+# ``quiz_model`` on the provider's native host, not by a registry profile.
+_QUIZ_CACHE_SLOT = "quiz"
 
 
 @lru_cache
 def _secrets_envelope() -> SecretsEnvelope | None:
     """The envelope over the configured KEKs, or ``None`` when no KEK is set."""
-    keks = get_settings().secrets_keks()
-    if keks is None:
-        return None
-    current, previous = keks
-    return SecretsEnvelope(current, previous)
+    return envelope_from_settings(get_settings())
 
 
 @lru_cache
-def _offered_providers() -> frozenset[str]:
-    """The providers the declared registry binds learner keys to."""
-    return frozenset(offered_providers(_generation_profiles()))
+def _offered_providers() -> tuple[str, ...]:
+    """The providers the declared registry binds learner keys to, in registry order."""
+    return offered_providers(_generation_profiles())
+
+
+def offered_key_providers() -> tuple[str, ...]:
+    """The providers a learner may store a key for here; empty when the feature is off.
+
+    Off means no KEK is configured, or no declared profile binds a provider
+    (ADR-0033). The key routes answer 404 for every provider outside this set.
+    """
+    if _secrets_envelope() is None:
+        return ()
+    return _offered_providers()
+
+
+def key_bound_profiles(provider: str) -> tuple[GenerationProfileSettings, ...]:
+    """The declared profiles bound to ``provider``'s learner keys, in registry order."""
+    return tuple(p for p in _generation_profiles() if p.user_key_provider == provider)
+
+
+def build_provider_credential_repository(
+    conn: Connection,
+) -> SqlAlchemyProviderCredentialRepository | None:
+    """The credential repository on ``conn``, or ``None`` when the feature is off."""
+    access = learner_key_access(conn, _secrets_envelope(), _generation_profiles())
+    return access.repo if access is not None else None
+
+
+def evict_learner_adapters(fingerprint: str) -> None:
+    """Release this process's cached adapters built from one key write.
+
+    The key routes call this after a replace or delete. Other processes keep
+    theirs until the TTL, but none can reach them: a lookup needs a live row
+    with that fingerprint.
+    """
+    _user_adapters.evict_fingerprint(fingerprint)
+    _user_quiz_adapters.evict_fingerprint(fingerprint)
+
+
+@dataclass(frozen=True)
+class LearnerCredentials:
+    """The caller's usable provider keys, read once per request.
+
+    ``repo`` is ``None`` when the feature is off; ``by_provider`` then is empty.
+    Only offered providers appear. What this carries is metadata: a key is
+    opened (``repo.reveal``) only when an adapter is built on a cache miss.
+    """
+
+    repo: SqlAlchemyProviderCredentialRepository | None
+    by_provider: Mapping[str, ProviderCredential]
+
+
+def get_learner_credentials(
+    conn: DbConnection, user: Annotated[User, Depends(get_authenticated_user)]
+) -> LearnerCredentials:
+    """FastAPI dependency: the caller's usable keys, one indexed read per request.
+
+    Every learner-keyed composition on a request (the Ask/Teach chain, the
+    Explain chain, the card adapter) depends on this, and FastAPI resolves a
+    dependency once per request, so a turn reads the credential table once.
+    An unusable row (an unknown KEK, a failed owner binding) reads as absent.
+    """
+    repo = build_provider_credential_repository(conn)
+    if repo is None:
+        return LearnerCredentials(repo=None, by_provider={})
+    offered = _offered_providers()
+    return LearnerCredentials(
+        repo=repo,
+        by_provider={c.provider: c for c in repo.list_for_user(user.id) if c.provider in offered},
+    )
+
+
+CallerCredentials = Annotated[LearnerCredentials, Depends(get_learner_credentials)]
 
 
 def _learner_entries(
-    conn: Connection, user_id: UUID, *, lead: str | None
+    credentials: LearnerCredentials, *, lead: str | None
 ) -> tuple[ChainEntry, ...]:
     """The user-keyed chain entries one learner's stored keys build, lead first.
 
@@ -806,22 +882,17 @@ def _learner_entries(
     offered provider, or when a key cannot be opened (an unknown KEK, a failed
     owner binding): each of those reads as "no credential", never as an error.
     """
-    envelope = _secrets_envelope()
-    offered = _offered_providers()
-    if envelope is None or not offered:
-        return ()
-    repo = SqlAlchemyProviderCredentialRepository(conn, envelope)
-    credentials = {c.provider: c for c in repo.list_for_user(user_id) if c.provider in offered}
-    if not credentials:
+    repo = credentials.repo
+    if repo is None or not credentials.by_provider:
         return ()
     settings = get_settings()
     entries: list[ChainEntry] = []
     for profile in order_learner_profiles(
-        _generation_profiles(), frozenset(credentials), lead=lead
+        _generation_profiles(), frozenset(credentials.by_provider), lead=lead
     ):
         provider = profile.user_key_provider
         assert provider is not None  # order_learner_profiles yields bound profiles only
-        credential = credentials[provider]
+        credential = credentials.by_provider[provider]
 
         def _build(
             profile: GenerationProfileSettings = profile,
@@ -850,6 +921,7 @@ def get_generation_for_user(
     conn: DbConnection,
     user: Annotated[User, Depends(get_authenticated_user)],
     generation: Generation,
+    credentials: CallerCredentials,
 ) -> GenerationPort:
     """FastAPI dependency: the ask/teach chain for the caller.
 
@@ -864,26 +936,26 @@ def get_generation_for_user(
     preference = SqlAlchemyAiPreferenceRepository(conn).get_by_user(user.id)
     chosen = preference.profile_id if preference else None
     house = _resolve_user_chain(chosen, generation)
-    return build_learner_keyed_chain(_learner_entries(conn, user.id, lead=chosen), house)
+    return build_learner_keyed_chain(_learner_entries(credentials, lead=chosen), house)
 
 
 UserGeneration = Annotated[GenerationPort, Depends(get_generation_for_user)]
 
 
 def get_explain_generation_for_user(
-    conn: DbConnection,
-    user: Annotated[User, Depends(get_authenticated_user)],
     explain_generation: ExplainGeneration,
+    credentials: CallerCredentials,
 ) -> GenerationPort:
     """FastAPI dependency: the selection-Explain chain for the caller.
 
     A learner without a key gets the house Explain chain itself: no preference
     is read here. A learner holding a key is served on it by the profiles bound
     to their provider, ``generation_explain_profile`` first when it is one of
-    them (ADR-0033), with the house Explain chain beside them.
+    them (ADR-0033), with the house Explain chain beside them. The caller's
+    keys come from the same per-request read the Ask/Teach chain uses.
     """
     lead = get_settings().generation_explain_profile or None
-    return build_learner_keyed_chain(_learner_entries(conn, user.id, lead=lead), explain_generation)
+    return build_learner_keyed_chain(_learner_entries(credentials, lead=lead), explain_generation)
 
 
 UserExplainGeneration = Annotated[GenerationPort, Depends(get_explain_generation_for_user)]
@@ -908,6 +980,7 @@ def clear_generation_chain_caches() -> None:
     _secrets_envelope.cache_clear()
     _offered_providers.cache_clear()
     _user_adapters.clear()
+    _user_quiz_adapters.clear()
 
 
 # --- The learner's AI-profile surface -------------------------------------------
@@ -1383,43 +1456,81 @@ def get_card_generation() -> QuizGenerationPort:
     return build_quiz_adapter(get_settings())
 
 
+def get_card_generation_for_user(credentials: CallerCredentials) -> QuizGenerationPort:
+    """FastAPI dependency: the caller's card generator (ADR-0033).
+
+    A learner holding an Anthropic key gets a quiz adapter built with it and
+    ``quiz_model``, cached per key write like the learner-keyed chains; its
+    results are stamped ``user_keyed`` so the suggest debit is 0 USD. Anyone
+    else, or a key that cannot be opened, gets the house card generator.
+    """
+    repo = credentials.repo
+    credential = credentials.by_provider.get(QUIZ_KEY_PROVIDER)
+    if repo is None or credential is None:
+        return get_card_generation()
+    settings = get_settings()
+
+    def _build() -> QuizGenerationPort | None:
+        api_key = repo.reveal(credential)
+        if api_key is None:
+            return None
+        return build_user_keyed_quiz_adapter(settings, api_key, credential_id=credential.id)
+
+    adapter = _user_quiz_adapters.get_or_build(
+        UserAdapterKey(
+            provider=credential.provider,
+            profile_id=_QUIZ_CACHE_SLOT,
+            model=settings.quiz_model,
+            fingerprint=credential.fingerprint,
+        ),
+        _build,
+    )
+    return adapter if adapter is not None else get_card_generation()
+
+
+UserCardGeneration = Annotated[QuizGenerationPort, Depends(get_card_generation_for_user)]
+
+
 @lru_cache
 def get_card_embeddings() -> EmbeddingPort:
     """FastAPI dependency: the settings-selected embedder for accepted cards, built once."""
     return build_embedding_adapter(get_settings())
 
 
-def get_suggest_cards(conn: DbConnection) -> SuggestCards:
+def get_suggest_cards(conn: DbConnection, generation: UserCardGeneration) -> SuggestCards:
     """Wire ``SuggestCards`` on the request-scoped connection (CAP-01..04).
 
     The budget rides along so the completed suggest call debits its actual usage
     to the caller's day (AD-341) — USD only, sharing the request's transaction.
+    The generator is the caller's own-key adapter when they hold an Anthropic
+    key (ADR-0033), else the house one.
     """
     settings = get_settings()
     return SuggestCards(
         sources=SqlAlchemySourceRepository(conn),
         notes=SqlAlchemyNoteRepository(conn),
         items=SqlAlchemyQuizItemRepository(conn),
-        generation=get_card_generation(),
+        generation=generation,
         authorize=AuthorizeOwnership(),
         max_suggestions=settings.quiz_max_suggestions,
         budget=build_budget(conn),
     )
 
 
-def get_accept_card(conn: DbConnection) -> AcceptCard:
+def get_accept_card(conn: DbConnection, generation: UserCardGeneration) -> AcceptCard:
     """Wire ``AcceptCard`` on the request-scoped connection (CAP-05..07, 10..12).
 
     The embedding adapter is composed because an accepted card's embedding is still
     stored (so later deck runs dedup against it), even though dedup is deliberately
-    not applied to the card itself (AD-138).
+    not applied to the card itself (AD-138). The generator is the same one the
+    caller's suggestions came from, so the card's recorded model matches.
     """
     settings = get_settings()
     return AcceptCard(
         sources=SqlAlchemySourceRepository(conn),
         notes=SqlAlchemyNoteRepository(conn),
         items=SqlAlchemyQuizItemRepository(conn),
-        generation=get_card_generation(),
+        generation=generation,
         embeddings=get_card_embeddings(),
         scheduling=build_scheduling_adapter(settings),
         authorize=AuthorizeOwnership(),
@@ -1456,22 +1567,23 @@ def get_update_card(conn: DbConnection) -> UpdateCard:
     )
 
 
-def get_suggest_note_cards(conn: DbConnection) -> SuggestNoteCards:
+def get_suggest_note_cards(conn: DbConnection, generation: UserCardGeneration) -> SuggestNoteCards:
     """Wire ``SuggestNoteCards`` on the request-scoped connection (NL-08).
 
     Budgeted like the highlight path: the suggest call debits its usage when it
-    completes (AD-341).
+    completes (AD-341). The generator follows the caller's key like
+    :func:`get_suggest_cards`.
     """
     settings = get_settings()
     return SuggestNoteCards(
         notes=SqlAlchemyNoteRepository(conn),
-        generation=get_card_generation(),
+        generation=generation,
         max_suggestions=settings.quiz_max_suggestions,
         budget=build_budget(conn),
     )
 
 
-def get_accept_note_card(conn: DbConnection) -> AcceptNoteCard:
+def get_accept_note_card(conn: DbConnection, generation: UserCardGeneration) -> AcceptNoteCard:
     """Wire ``AcceptNoteCard`` on the request-scoped connection (NL-09, NL-15).
 
     The embedding is composed for the same reason as the highlight path: a note card's
@@ -1482,7 +1594,7 @@ def get_accept_note_card(conn: DbConnection) -> AcceptNoteCard:
     return AcceptNoteCard(
         notes=SqlAlchemyNoteRepository(conn),
         items=SqlAlchemyQuizItemRepository(conn),
-        generation=get_card_generation(),
+        generation=generation,
         embeddings=get_card_embeddings(),
         scheduling=build_scheduling_adapter(settings),
         clock=_clock,

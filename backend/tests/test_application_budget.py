@@ -596,6 +596,7 @@ def test_deck_worker_debits_the_pass_usage_to_its_owner(
             candidates = ()
             errors = ()
             usage = TokenUsage(input_tokens=2000, output_tokens=1000)
+            user_keyed = False  # a house-keyed pass
 
         with db_engine.begin() as conn:
             deck_tasks._record_deck_spend(conn, source.id, _Result())
@@ -624,6 +625,7 @@ def test_deck_worker_local_result_debits_nothing(
             candidates = ()
             errors = ()
             usage = None
+            user_keyed = False
 
         with db_engine.begin() as conn:
             deck_tasks._record_deck_spend(conn, source.id, _LocalResult())
@@ -681,6 +683,7 @@ def test_deck_settle_debits_a_redelivered_pass_exactly_once(
             candidates = ()
             errors = ()
             usage = TokenUsage(input_tokens=2000, output_tokens=1000)
+            user_keyed = False  # a house-keyed pass
 
         log = {"job_id": str(jid), "source_id": str(source.id)}
         deck_tasks._settle_deck(jid, source.id, _Result(), log, time.perf_counter())

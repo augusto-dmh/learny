@@ -536,8 +536,11 @@ def test_without_a_kek_a_learner_with_a_row_gets_the_house_chain_object(
     explain = dependencies.get_explain_generation()
 
     user = _domain_user(user_id)
-    assert dependencies.get_generation_for_user(db_conn, user, house) is house
-    assert dependencies.get_explain_generation_for_user(db_conn, user, explain) is explain
+    credentials = dependencies.get_learner_credentials(db_conn, user)
+    assert credentials.repo is None
+    assert credentials.by_provider == {}
+    assert dependencies.get_generation_for_user(db_conn, user, house, credentials) is house
+    assert dependencies.get_explain_generation_for_user(explain, credentials) is explain
     assert _by_key(fakes, _KEY_A) == []
 
 
@@ -554,7 +557,10 @@ def test_without_a_bound_profile_the_feature_stays_off(
     _store_key(db_conn, user_id, _KEY_A)
     house = dependencies.get_generation()
 
-    assert dependencies.get_generation_for_user(db_conn, _domain_user(user_id), house) is house
+    user = _domain_user(user_id)
+    credentials = dependencies.get_learner_credentials(db_conn, user)
+    assert credentials.by_provider == {}
+    assert dependencies.get_generation_for_user(db_conn, user, house, credentials) is house
     assert _by_key(fakes, _KEY_A) == []
 
 
@@ -569,8 +575,12 @@ def test_clearing_the_generation_caches_drops_learner_adapters(
     _declare(monkeypatch, [_HOUSE, _BYOK])
     user_id = _register(auth_client, "byok-clear@example.com")
     _store_key(db_conn, user_id, _KEY_A)
+    user = _domain_user(user_id)
     dependencies.get_generation_for_user(
-        db_conn, _domain_user(user_id), dependencies.get_generation()
+        db_conn,
+        user,
+        dependencies.get_generation(),
+        dependencies.get_learner_credentials(db_conn, user),
     )
     assert len(dependencies._user_adapters) == 1
 

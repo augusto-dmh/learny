@@ -87,7 +87,11 @@
       "cardsSave": "Não foi possível salvar este cartão.",
       "cardsSuggestNote": "Não foi possível sugerir cartões para esta nota.",
       "cardsAddToReview": "Não foi possível adicionar este cartão à revisão.",
-      "tutorCardSave": "Não foi possível salvar este cartão de revisão."
+      "tutorCardSave": "Não foi possível salvar este cartão de revisão.",
+      "providerKeysList": "Não foi possível carregar as suas chaves de IA.",
+      "providerKeySave": "Não foi possível salvar a sua chave.",
+      "providerKeyTest": "Não foi possível testar a sua chave.",
+      "providerKeyDelete": "Não foi possível excluir a sua chave."
     }
   },
   "account": {
@@ -116,6 +120,38 @@
         "teachOnly": "Funciona apenas em Ensinar.",
         "neither": "No momento não funciona em Perguntar nem em Ensinar."
       }
+    },
+    "providerKeys": {
+      "heading": "Suas próprias chaves de IA",
+      "intro": "Cole a chave de API de um provedor que você já paga, e o Learny passa a usá-la nas suas próprias solicitações.",
+      "disclosure": "As chamadas feitas com a sua chave são cobradas pelo provedor diretamente de você, conforme o seu próprio contrato com ele. O Learny guarda a sua chave criptografada e nunca mais consegue exibi-la.",
+      "masked": "•••• {last4}",
+      "addedOn": "Adicionada em {date}",
+      "notConfigured": "Nenhuma chave salva.",
+      "powers": "Usada em:",
+      "profileModes": {
+        "both": "{name}: Perguntar e Ensinar",
+        "askOnly": "{name}: apenas Perguntar",
+        "teachOnly": "{name}: apenas Ensinar",
+        "neither": "{name}: no momento, nem Perguntar nem Ensinar"
+      },
+      "cards": "Flashcards e baralhos",
+      "inputLabel": "Chave de API do provedor {provider}",
+      "placeholder": "Cole a sua chave",
+      "save": "Salvar chave",
+      "saving": "Salvando…",
+      "replace": "Trocar chave",
+      "test": "Testar chave",
+      "testing": "Testando…",
+      "testResult": {
+        "ok": "A chave funciona",
+        "rejected": "O provedor recusou esta chave. Confira e salve de novo.",
+        "rate_limited": "O provedor está limitando as solicitações desta chave agora. Tente de novo daqui a pouco.",
+        "unavailable": "Não foi possível falar com o provedor. Tente de novo mais tarde."
+      },
+      "delete": "Excluir chave",
+      "confirmDelete": "Excluir a sua chave do provedor {provider}? As suas solicitações voltam a usar a IA do próprio Learny.",
+      "confirmDeleteAction": "Sim, excluir"
     }
   },
   "landing": {

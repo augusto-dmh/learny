@@ -267,7 +267,7 @@ def _log_client_error(exc: BaseException) -> None:
     )
 
 
-def _raise_translated(exc: BaseException) -> NoReturn:
+def raise_translated(exc: BaseException) -> NoReturn:
     """Re-raise a caught provider failure as its Learny taxonomy class (TAX-02).
 
     The SDK-specific branch is exactly this binding: the providers package's
@@ -389,7 +389,7 @@ class OpenAICompatibleGenerationAdapter:
             )
         except Exception as exc:
             _log_client_error(exc)
-            _raise_translated(exc)
+            raise_translated(exc)
         answer = _parse_answer(
             _text_of(response), evidence, model=self._model, usage=_usage_of(response)
         )
@@ -470,7 +470,7 @@ class OpenAICompatibleGenerationAdapter:
                     close()
         except Exception as exc:
             _log_client_error(exc)
-            _raise_translated(exc)
+            raise_translated(exc)
         answer = _parse_answer("".join(accumulated), evidence, model=self._model, usage=usage)
         _log_call(reported, model=self._model, found=answer.found)
         yield AnswerCompleted(answer=answer)
