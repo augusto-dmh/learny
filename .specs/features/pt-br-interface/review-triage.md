@@ -17,7 +17,7 @@ Tally: 8 findings, 8 real, 0 false; 8 fixed (one by docstring only), 0 won't-fix
 
 # pt-br-interface review triage — batch 2 of 4 (PR #79)
 
-Fresh-context `pr-review` posted 4 inline comments, a requirements review and a summary. Each finding was checked against the code at `36d6d1d` (branch head when the review ran). The PR comments are deleted after this triage, so this file is the surviving record.
+Fresh-context `pr-review` posted 4 inline comments, a requirements review and a summary. Each finding was checked against the code at `51361cc` (branch head when the review ran). The PR comments are deleted after this triage, so this file is the surviving record.
 
 | # | Source | File:line | Finding | Verdict | Action | Rationale |
 | --- | --- | --- | --- | --- | --- | --- |

@@ -207,3 +207,20 @@ describe("auth screens in pt-BR", () => {
     expect(alert.textContent).toBe("E-mail ou senha inválidos.");
   });
 });
+
+describe("AuthForm in-flight label", () => {
+  it.each([
+    ["en", "Working…"],
+    ["pt-BR", "Aguarde…"],
+  ] as const)("shows a disabled in-flight button in %s", async (locale, label) => {
+    setTestLocale(locale);
+    // A sign-in that never settles holds the form in flight.
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => {})));
+    render(<AuthForm mode="login" />);
+
+    fireEvent.submit(screen.getByRole("form"));
+
+    const button = (await screen.findByRole("button", { name: label })) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+  });
+});

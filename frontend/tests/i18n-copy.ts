@@ -3,9 +3,10 @@
  *
  * Collects the English phrases a set of catalog namespaces would put on screen
  * — the static text of every `en` message, with ICU arguments and branches cut
- * out and rich-text tags unwrapped — minus any phrase the pt-BR catalog also
- * uses (brand names, endonyms). A pt-BR render that still shows one of them is
- * reading copy from somewhere other than the catalog.
+ * out and rich-text tags unwrapped — minus the few phrases that are the same in
+ * every language (`SHARED_PHRASES`: the brand and the language endonyms). A
+ * pt-BR render that still shows one of them is reading copy from somewhere
+ * other than the catalog, or from a pt-BR value left in English.
  *
  * It sees rendered text only (`textContent`), so attribute copy (`aria-label`,
  * `title`) is asserted by name in the tests themselves.
@@ -13,7 +14,13 @@
 import { expect } from "vitest";
 
 import en from "@/messages/en.json";
-import ptBR from "@/messages/pt-BR.json";
+
+/**
+ * Phrases that read the same in every locale, so finding them in a pt-BR render
+ * is not a leak. Deliberately explicit: deriving it from the pt-BR catalog would
+ * let a pt-BR value left in English exempt itself.
+ */
+export const SHARED_PHRASES = new Set(["Learny", "English", "Português (Brasil)"]);
 
 type Catalog = { [key: string]: string | Catalog };
 
@@ -66,15 +73,12 @@ function phrases(message: string): string[] {
 
 const rootOf = (catalog: unknown) => catalog as Catalog;
 
-/** English phrases from `namespaces` that the pt-BR catalog never uses. */
+/** English phrases from `namespaces`, minus the ones every locale shares. */
 export function englishPhrases(...namespaces: string[]): string[] {
-  const portuguese = new Set(
-    messagesUnder(rootOf(ptBR), "").flatMap((message) => phrases(message)),
-  );
   const found = namespaces
     .flatMap((namespace) => messagesUnder(rootOf(en), namespace))
     .flatMap((message) => phrases(message))
-    .filter((phrase) => !portuguese.has(phrase));
+    .filter((phrase) => !SHARED_PHRASES.has(phrase));
   return [...new Set(found)];
 }
 
