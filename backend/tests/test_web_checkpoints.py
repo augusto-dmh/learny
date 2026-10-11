@@ -19,6 +19,7 @@ from sqlalchemy import Connection, func, select
 from app.domain.entities import User
 from app.infrastructure.db.metadata import (
     checkpoint_attempts,
+    quiz_items,
     review_log,
     section_checkpoints,
 )
@@ -462,4 +463,27 @@ def test_grade_refuses_a_client_assisted_field(
     resp = _post(quiz_client, attempt_id, "grade", csrf, {"rating": 3, "assisted": False})
 
     assert resp.status_code == 422
+    assert _log_count(db_conn) == before
+
+
+def test_grade_on_a_deleted_card_is_404_and_leaves_the_attempt_ungraded(
+    quiz_client: TestClient, db_conn: Connection
+) -> None:
+    # The grade claim stamps the attempt before the card is resolved; a card deleted
+    # since the response must roll that stamp back, so the attempt is not left graded
+    # with no review behind it.
+    _, csrf, source_id = _book(quiz_client, db_conn)
+    card = add_card(db_conn, source_id)
+    attempt_id = _attempts(_create(quiz_client, source_id, csrf))[0]["attempt_id"]
+    _post(quiz_client, attempt_id, "response", csrf, {"response": "", "confidence": 2})
+    db_conn.execute(quiz_items.delete().where(quiz_items.c.id == card.id))
+    before = _log_count(db_conn)
+
+    resp = _post(quiz_client, attempt_id, "grade", csrf, {"rating": 3})
+
+    assert resp.status_code == 404, resp.text
+    graded = db_conn.execute(
+        select(checkpoint_attempts.c.graded_at).where(checkpoint_attempts.c.id == UUID(attempt_id))
+    ).scalar_one()
+    assert graded is None
     assert _log_count(db_conn) == before

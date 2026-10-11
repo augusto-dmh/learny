@@ -514,6 +514,10 @@ class GradeAttempt:
         explain = attempt.kind == CheckpointAttemptKind.EXPLAIN
         if explain and rating > MAX_EXPLAIN_RATING:
             raise InvalidCheckpointRating("An explanation is rated 1 to 3.")
+        # A recall whose card was deleted since the start is refused before the
+        # claim, so it never leaves a graded stamp with no review behind it.
+        if not explain and attempt.quiz_item_id is None:
+            raise QuizItemNotFound("Quiz item not found.")
         if not self._checkpoints.claim_grade(attempt.id, self._clock.now()):
             raise CheckpointAttemptConflict("This attempt cannot be graded now.")
 
@@ -521,8 +525,7 @@ class GradeAttempt:
             item_id = self._checkpoint_card(user, owned).id
             assisted = attempt.revealed_at is not None
         else:
-            if attempt.quiz_item_id is None:
-                raise QuizItemNotFound("Quiz item not found.")
+            assert attempt.quiz_item_id is not None  # refused above
             item_id = attempt.quiz_item_id
             assisted = False
         reviewed = self._submit_review(
