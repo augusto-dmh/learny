@@ -17,6 +17,7 @@ Proof: `vitest tests/chapter-reader.test.tsx -t "checkpoint invitation only afte
 
 **C2** - Tapping the invitation opens the checkpoint dialog on the prediction step for that section's anchor, and no request is sent before a prediction choice (AC 3, 5)
 Proof: `vitest tests/checkpoint-dialog.test.tsx -t "opens on the prediction step without calling the API"`
+Proof: `vitest tests/chapter-reader.test.tsx -t "starts the checkpoint for the section whose invitation was tapped"`
 
 **C3** - Closing the dialog mid-flow unmounts it, leaves the chapter rendered with the same sections, and sends no further request (AC 4)
 Proof: `vitest tests/checkpoint-dialog.test.tsx -t "closing mid-flow sends nothing more"`
@@ -36,9 +37,10 @@ Proof: `pytest tests/test_application_checkpoints.py -k "start_without_cards_has
 **C7** - The create payload contains no key `answer`, `source_excerpt` or `passage`, and no card answer text appears anywhere in its JSON (AC 7)
 Proof: `pytest tests/test_web_checkpoints.py -k "create_payload_carries_no_answers"`
 
-**C8** - Create on a missing source, on another learner's source, and on an anchor with no section returns 404 with zero `section_checkpoints` rows written. The shared sample is readable and returns 201 (AC 8)
+**C8** - Create on a missing source, on another learner's source, and on an anchor with no section returns 404 with zero `section_checkpoints` rows written. The shared sample is readable and returns 201. A prediction of 0 or 4, or an empty anchor, returns 422 with zero rows written (AC 8)
 Proof: `pytest tests/test_web_checkpoints.py -k "create_404_cases_persist_nothing"`
 Proof: `pytest tests/test_web_checkpoints.py -k "create_on_shared_sample_returns_201"`
+Proof: `pytest tests/test_web_checkpoints.py -k "create_validation_422"`
 
 **C9** - A recall response with confidence 2 stores `response` and `confidence=2` and returns the card's `answer`, `source_excerpt`, `anchor` and `section_path`. An empty response is accepted (AC 9)
 Proof: `pytest tests/test_web_checkpoints.py -k "recall_response_reveals_answer_after_storing"`
@@ -72,9 +74,10 @@ Proof: `pytest tests/test_web_checkpoints.py -k "second_grade_is_409_one_log_row
 **C17** - Two concurrent grade claims on one attempt, on separate connections, produce exactly one winner. The claim is a conditional UPDATE that returns a row once (AC 16)
 Proof: `pytest tests/test_repositories_checkpoints.py -k "concurrent_grade_claim_has_one_winner"`
 
-**C18** - Grading the explain attempt with 1, 2 or 3 reviews the caller's checkpoint card with that rating, minting one when absent, and returns its `quiz_item_id`. Rating 4 or 0 returns 422 (AC 17, 18)
+**C18** - Grading the explain attempt with 1, 2 or 3 reviews the caller's checkpoint card with that rating, minting one when absent, and returns its `quiz_item_id`. Rating 4 or 0 returns 422. A recall attempt accepts rating 4 and refuses 5 with 422 and no log row (AC 17, 18)
 Proof: `pytest tests/test_application_checkpoints.py -k "grade_explain_mints_and_reviews_checkpoint_card"`
 Proof: `pytest tests/test_web_checkpoints.py -k "explain_grade_rating_bounds"`
+Proof: `pytest tests/test_web_checkpoints.py -k "recall_grade_rating_bounds"`
 
 **C19** - A minted checkpoint card has `origin='checkpoint'`, `item_type='free_recall'` and `user_id` set to the caller, including on the shared sample whose source belongs to the operator. Its question is `Explain "<title>" in your own words.`, it carries the section's anchor and path, and its answer and excerpt are the first feedback citation's quote cut to `quiz_max_card_chars`, else the section's first chunk. It is scheduled `initial()` before being reviewed (AC 19)
 Proof: `pytest tests/test_application_checkpoints.py -k "minted_card_shape_and_owner_on_sample"`
@@ -107,6 +110,8 @@ Proof: `pytest tests/test_application_checkpoints.py -k "explain_debits_usage_as
 
 **C27** - The feedback step renders each citation's quote with its section path, then exactly three self-assessment buttons, `Missed it`, `Partly` and `Got it`, which grade with 1, 2 and 3 (AC 27)
 Proof: `vitest tests/checkpoint-dialog.test.tsx -t "feedback quotes passages then offers three self-assessments"`
+Proof: `vitest tests/checkpoint-dialog.test.tsx -t "self-assessment"`
+Proof: `vitest tests/checkpoint-dialog.test.tsx -t "is sent as"`
 
 ### S5 - assisted attempts are recorded as assisted · batch 1
 
@@ -122,6 +127,7 @@ Proof: `pytest tests/test_web_checkpoints.py -k "reveal_409_on_recall_or_after_r
 **C31** - Reveal, respond and grade 3 stores `review_log.assisted = true`. Respond and grade 3 without reveal stores `false`. The grade route accepts no client `assisted` field (AC 31)
 Proof: `pytest tests/test_application_checkpoints.py -k "revealed_explain_grade_is_assisted"`
 Proof: `pytest tests/test_application_checkpoints.py -k "unrevealed_explain_grade_is_unassisted"`
+Proof: `pytest tests/test_web_checkpoints.py -k "grade_refuses_a_client_assisted_field"`
 
 **C32** - `SubmitReview` requires `assisted` as a keyword (calling without it raises `TypeError`), and every row it appends has non-null `assisted`. The migration leaves existing `review_log` rows with `assisted IS NULL` and `confidence IS NULL` (AC 32)
 Proof: `pytest tests/test_application_reviews.py -k "submit_review_requires_assisted_and_stores_it"`
@@ -163,18 +169,18 @@ Proof: `vitest tests/dock-review-tab.test.tsx -t "calibration empty state"`
 
 | Set (size) | Member -> proof | Unproven |
 | --- | --- | --- |
-| `POST /api/sources/{source_id}/checkpoints` statuses (5) | 201 C8 · 401 C42 · 403 C42 · 404 C8 · 422 C11 | - |
+| `POST /api/sources/{source_id}/checkpoints` statuses (5) | 201 C8 · 401 C42 · 403 C42 · 404 C8 · 422 C8 | - |
 | `POST /api/checkpoint-attempts/{attempt_id}/response` statuses (8) | 200 C9 · 401 C42 · 403 C42 · 404 C12 · 409 C10 · 422 C11 · 429 C25 · 503 C25 | - |
 | `POST /api/checkpoint-attempts/{attempt_id}/reveal` statuses (5) | 200 C29 · 401 C42 · 403 C42 · 404 C12 · 409 C30 | - |
-| `POST /api/checkpoint-attempts/{attempt_id}/grade` statuses (6) | 200 C14 · 401 C42 · 403 C42 · 404 C12 · 409 C15 · 422 C18 | - |
+| `POST /api/checkpoint-attempts/{attempt_id}/grade` statuses (6) | 200 C16 · 401 C42 · 403 C42 · 404 C12 · 409 C15 · 422 C18, C31 | - |
 | `POST /api/quiz-items/{item_id}/reviews` added-field statuses (2) | 200 C35 · 422 C35 | - |
 | `GET /api/sources/{source_id}/calibration` statuses (3) | 200 C37 · 401 C38 · 404 C38 | - |
 | attempt states (4) | created C5 · revealed C29 · responded C9 · graded C14 | - |
 | attempt transitions refused (4) | respond-twice C10 · grade-unresponded C15 · grade-twice C16 · reveal-after-response C30 | - |
 | attempt kinds (2) | recall C14 · explain C18 | - |
 | prediction values (4) | 1 C4 · 2 C4 · 3 C4 · null C4 | - |
-| confidence values incl. 2 invalid (5) | 1 C35 · 2 C9 · 3 C14 · 0 C11 · 4 C11 | - |
-| explain self-assessment incl. 1 invalid (4) | 1 C18 · 2 C18 · 3 C31 · 4 C18 | - |
+| confidence values incl. 2 invalid (5) | 1 C27, C35 · 2 C9, C27 · 3 C14, C27 · 0 C11 · 4 C11 | - |
+| explain self-assessment incl. 1 invalid (4) | 1 C18, C27 · 2 C18, C27 · 3 C27, C31 · 4 C18 | - |
 | recall card exclusions (5) | stale C5 · flagged C5 · other anchor C5 · other learner C5 · checkpoint origin C5 | - |
 | explain generation outcomes (5) | grounded C21 · ungrounded C23 · not-found C23 · raise C23 · blank C24 | - |
 | budget refusals (2) | exhausted C25 · paused C25 | - |
