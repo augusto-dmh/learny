@@ -232,6 +232,9 @@ The learner sees how often they recalled what they felt sure of, per book.
 | Explain-back generation chain | House Explain chain, not the learner's chosen profile | AD-351 scopes the preference to Ask/Teach turns. The Explain chain is the house cost lever (AD-345) | n |
 | Feedback language | Whatever the generation port produces today. `pt-br-interface` adds the response-language seam | Whichever of the two merges second adapts | n |
 | Judged real-provider quality of the feedback | Not evaluated this cycle | The CI Anthropic key is unfunded (D5). A funded run should judge `EXPLAIN_BACK_MESSAGE` output for grounding and "no grade" wording | n |
+| Migration number (resume, 2026-10-11) | `0031_section_checkpoints`, revising `0030_user_provider_credentials` | PR #76 landed 0030 on `main` while this branch was paused; renumbering keeps one Alembic head. The tables and columns are unchanged | n |
+| Rebase before Verifier round 2 (resume, 2026-10-11) | Rebase on `main` first, then run the gates and the Verifier once, on the code that ships | Verifying before the rebase would verify a migration chain that cannot merge; the rebase touched only metadata, the migration file and its test | n |
+| Manual stack pass and screenshots (resume, 2026-10-11) | Deferred to the owner, recorded in the PR body | The overnight lane runs without a per-lane Compose stack (memory budget); the flow is pinned by component and HTTP tests | n |
 
 **Open questions:**
 
