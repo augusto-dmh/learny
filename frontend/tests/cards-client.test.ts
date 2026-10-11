@@ -121,7 +121,7 @@ describe("suggestCards (CAP-01)", () => {
     expect(err).toBeInstanceOf(CardError);
     expect(err.kind).toBe("stale_capture");
     expect(err.status).toBe(409);
-    expect(err.message).toBe("The book changed while you were reading.");
+    expect(err.detail).toBe("The book changed while you were reading.");
   });
 
   it("raises an unknown CardError on a 404 missing/non-owned highlight", async () => {
@@ -156,10 +156,10 @@ describe("suggestCards (CAP-01)", () => {
     expect(err).toBeInstanceOf(CardError);
     expect(err.kind).toBe("unknown");
     expect(err.status).toBe(429);
-    expect(err.message).toBe("Too many requests.");
+    expect(err.detail).toBe("Too many requests.");
   });
 
-  it("falls back to a readable message when the error body is not parseable", async () => {
+  it("names the operation when the error body is not parseable", async () => {
     const fetchMock = fetchMockFn(
       async () => new Response("<html>gateway</html>", { status: 502 }),
     );
@@ -173,7 +173,7 @@ describe("suggestCards (CAP-01)", () => {
 
     expect(err).toBeInstanceOf(CardError);
     expect(err.kind).toBe("unknown");
-    expect(err.message).toBe("Could not suggest cards for this passage.");
+    expect(err.operation).toBe("cardsSuggestPassage");
   });
 });
 
@@ -243,10 +243,10 @@ describe("acceptCard (CAP-05)", () => {
     expect(err).toBeInstanceOf(CardError);
     expect(err.kind).toBe("invalid");
     expect(err.status).toBe(422);
-    expect(err.message).toBe("Card text cannot be empty.");
+    expect(err.detail).toBe("Card text cannot be empty.");
   });
 
-  it("falls back to a readable message when a 422 detail is a list, not a string", async () => {
+  it("names the operation when a 422 detail is a list, not a string", async () => {
     const fetchMock = fetchMockFn(async () =>
       jsonResponse(422, {
         detail: [{ type: "string_type", loc: ["body", "question"], msg: "str" }],
@@ -262,7 +262,7 @@ describe("acceptCard (CAP-05)", () => {
 
     expect(err).toBeInstanceOf(CardError);
     expect(err.kind).toBe("invalid");
-    expect(err.message).toBe("Could not save this card.");
+    expect(err.operation).toBe("cardsSave");
   });
 });
 
@@ -300,7 +300,7 @@ describe("suggestNoteCards (NL-08)", () => {
     expect(result).toEqual([]);
   });
 
-  it("surfaces a readable, retryable error on a 502 provider failure", async () => {
+  it("surfaces a typed, retryable error on a 502 provider failure", async () => {
     const fetchMock = fetchMockFn(async () =>
       jsonResponse(502, { detail: "The card generator is unavailable." }),
     );
@@ -314,7 +314,7 @@ describe("suggestNoteCards (NL-08)", () => {
     expect(err).toBeInstanceOf(CardError);
     expect(err.kind).toBe("unknown");
     expect(err.status).toBe(502);
-    expect(err.message).toBe("The card generator is unavailable.");
+    expect(err.detail).toBe("The card generator is unavailable.");
   });
 });
 
@@ -382,6 +382,6 @@ describe("acceptNoteCard (NL-09/NL-15)", () => {
     expect(err).toBeInstanceOf(CardError);
     expect(err.kind).toBe("invalid");
     expect(err.status).toBe(422);
-    expect(err.message).toBe("Card text cannot be empty.");
+    expect(err.detail).toBe("Card text cannot be empty.");
   });
 });

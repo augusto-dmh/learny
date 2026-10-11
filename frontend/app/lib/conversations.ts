@@ -18,12 +18,12 @@
  * half of sending a message, so it raises the same `StreamRequestError` the
  * stream raises: the panel then handles a 401 or a throttle identically whether
  * it happened on the create or on the stream. The management calls raise
- * `ConversationRequestError`, which keeps the backend's readable `detail` and its
- * status so a caller can tell "this conversation is gone" (404) from a transient
- * failure.
+ * `ConversationRequestError`, an `ApiError` that keeps its status so a caller
+ * can tell "this conversation is gone" (404) from a transient failure.
  */
 
 import { type Citation } from "./citations";
+import { ApiError, readDetail, type ApiOperation } from "./errors";
 import { StreamRequestError } from "./streaming";
 
 /** How a single turn is answered. Conversations are not typed by mode. */
@@ -93,17 +93,16 @@ export type ConversationSummaryView = ConversationView & {
 };
 
 /**
- * A failed management call, carrying the backend's readable `detail` and the
- * status that produced it. Callers key off `status` to tell an absent
+ * A failed management call, carrying the operation, the status that produced it
+ * and the backend `detail` as data. Callers key off `status` to tell an absent
  * conversation (404 — a pointer that outlived its thread) from anything else.
  */
-export class ConversationRequestError extends Error {
-  readonly status: number;
+export class ConversationRequestError extends ApiError {
+  declare readonly status: number;
 
-  constructor(status: number, message: string) {
-    super(message);
+  constructor(operation: ApiOperation, status: number, detail: string | null = null) {
+    super(operation, status, detail);
     this.name = "ConversationRequestError";
-    this.status = status;
   }
 }
 
@@ -141,7 +140,7 @@ export async function startConversation(
     }),
   });
   if (!res.ok) {
-    throw new StreamRequestError(res.status);
+    throw new StreamRequestError(res.status, "conversationsStart", await readDetail(res));
   }
   return (await res.json()) as ConversationView;
 }
@@ -168,7 +167,7 @@ export async function listConversations(
     credentials: "same-origin",
   });
   if (!res.ok) {
-    throw await toConversationError(res, "Could not load your conversations.");
+    throw await toConversationError(res, "conversationsList");
   }
   return (await res.json()) as ConversationSummaryView[];
 }
@@ -183,7 +182,7 @@ export async function getConversation(
     credentials: "same-origin",
   });
   if (!res.ok) {
-    throw await toConversationError(res, "Could not load that conversation.");
+    throw await toConversationError(res, "conversationsGet");
   }
   return (await res.json()) as ConversationDetailView;
 }
@@ -205,7 +204,7 @@ export async function renameConversation(
     body: JSON.stringify({ title }),
   });
   if (!res.ok) {
-    throw await toConversationError(res, "Could not rename that conversation.");
+    throw await toConversationError(res, "conversationsRename");
   }
   return (await res.json()) as ConversationView;
 }
@@ -222,27 +221,14 @@ export async function deleteConversation(
     headers: { "X-CSRF-Token": csrfToken },
   });
   if (!res.ok) {
-    throw await toConversationError(res, "Could not delete that conversation.");
+    throw await toConversationError(res, "conversationsDelete");
   }
 }
 
-/**
- * Build an error from a non-OK response, preferring the backend's `detail`.
- * FastAPI validation errors (422) carry `detail` as a list of error objects, not
- * a string — those fall back to the readable message instead of rendering a
- * stringified list, mirroring the other clients.
- */
+/** Build the typed error for a non-OK response to `operation`. */
 async function toConversationError(
   res: Response,
-  fallback: string,
+  operation: ApiOperation,
 ): Promise<ConversationRequestError> {
-  try {
-    const body = (await res.json()) as { detail?: unknown };
-    return new ConversationRequestError(
-      res.status,
-      typeof body.detail === "string" ? body.detail : fallback,
-    );
-  } catch {
-    return new ConversationRequestError(res.status, fallback);
-  }
+  return new ConversationRequestError(operation, res.status, await readDetail(res));
 }

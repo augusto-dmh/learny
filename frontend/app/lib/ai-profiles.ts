@@ -17,11 +17,13 @@
  * or removed is never rewritten here; callers decide how a stale id renders
  * (the account selector treats anything absent from the catalog as unset).
  *
- * Failures raise `AiProfileRequestError`, which keeps the backend's readable
- * `detail` and the status that produced it, so a caller can tell an
- * unauthenticated probe (401) or an unknown id (422) from a transient failure —
- * and can surface the backend's honest copy verbatim.
+ * Failures raise `AiProfileRequestError`, an `ApiError` that keeps the status
+ * that produced it, so a caller can tell an unauthenticated probe (401) or an
+ * unknown id (422) from a transient failure. The backend `detail` rides along as
+ * data; the learner reads catalog copy chosen from the operation and status.
  */
+
+import { ApiError, readDetail, type ApiOperation } from "./errors";
 
 /** How a profile grounds its answers in the book's evidence. */
 export type ProfileGrounding = "verified-spans" | "prompt-cited" | "none";
@@ -49,17 +51,16 @@ export type AiProfileChoice = {
 };
 
 /**
- * A failed call, carrying the backend's readable `detail` and the status that
- * produced it. Callers key off `status` to tell an expired session (401) or a
- * refused id (422) from anything else, and render `message` verbatim.
+ * A failed call, carrying the operation, the status that produced it and the
+ * backend `detail` as data. Callers key off `status` to tell an expired session
+ * (401) or a refused id (422) from anything else.
  */
-export class AiProfileRequestError extends Error {
-  readonly status: number;
+export class AiProfileRequestError extends ApiError {
+  declare readonly status: number;
 
-  constructor(status: number, message: string) {
-    super(message);
+  constructor(operation: ApiOperation, status: number, detail: string | null = null) {
+    super(operation, status, detail);
     this.name = "AiProfileRequestError";
-    this.status = status;
   }
 }
 
@@ -76,7 +77,7 @@ export async function listAiProfiles(
     credentials: "same-origin",
   });
   if (!res.ok) {
-    throw await toAiProfileError(res, "Could not load the available AI profiles.");
+    throw await toAiProfileError(res, "aiProfilesList");
   }
   return (await res.json()) as LearnerProfile[];
 }
@@ -90,7 +91,7 @@ export async function getAiProfileChoice(
     credentials: "same-origin",
   });
   if (!res.ok) {
-    throw await toAiProfileError(res, "Could not load your AI profile choice.");
+    throw await toAiProfileError(res, "aiProfileGet");
   }
   return (await res.json()) as AiProfileChoice;
 }
@@ -114,7 +115,7 @@ export async function putAiProfileChoice(
     body: JSON.stringify({ profile_id: profileId }),
   });
   if (!res.ok) {
-    throw await toAiProfileError(res, "Could not save your AI profile choice.");
+    throw await toAiProfileError(res, "aiProfileSave");
   }
   return (await res.json()) as AiProfileChoice;
 }
@@ -133,27 +134,14 @@ export async function deleteAiProfileChoice(
     headers: { "X-CSRF-Token": csrfToken },
   });
   if (!res.ok) {
-    throw await toAiProfileError(res, "Could not reset your AI profile choice.");
+    throw await toAiProfileError(res, "aiProfileReset");
   }
 }
 
-/**
- * Build an error from a non-OK response, preferring the backend's `detail`.
- * FastAPI validation errors (422) carry `detail` as a list of error objects, not
- * a string — those fall back to the readable message instead of rendering a
- * stringified list, mirroring the other clients.
- */
+/** Build the typed error for a non-OK response to `operation`. */
 async function toAiProfileError(
   res: Response,
-  fallback: string,
+  operation: ApiOperation,
 ): Promise<AiProfileRequestError> {
-  try {
-    const body = (await res.json()) as { detail?: unknown };
-    return new AiProfileRequestError(
-      res.status,
-      typeof body.detail === "string" ? body.detail : fallback,
-    );
-  } catch {
-    return new AiProfileRequestError(res.status, fallback);
-  }
+  return new AiProfileRequestError(operation, res.status, await readDetail(res));
 }

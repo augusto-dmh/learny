@@ -5,7 +5,7 @@
  * view a panel renders (text, citations, status, reasoning); persisted
  * turns map to seeded `useChat` messages carrying the same citation +
  * answer-status parts a live stream assembles; and every pre-stream failure maps
- * to a readable message.
+ * to a distinct catalog message.
  */
 
 import type { PrepareSendMessagesRequest } from "ai";
@@ -13,11 +13,12 @@ import { describe, expect, it } from "vitest";
 
 import { type Citation } from "../app/lib/citations";
 import { type ConversationTurnView } from "../app/lib/conversations";
+import { errorMessageKey } from "../app/lib/errors";
 import {
   assistantView,
   createConversationTransport,
-  errorMessageFor,
   latestTutorState,
+  StreamRequestError,
   tutorStateFrom,
   turnsToUIMessages,
   type LearnyUIMessage,
@@ -394,17 +395,23 @@ describe("tutorStateFrom / latestTutorState", () => {
   });
 });
 
-describe("errorMessageFor", () => {
-  it("maps each pre-stream failure to a distinct readable message", () => {
-    expect(errorMessageFor(401)).toMatch(/sign in/i);
-    expect(errorMessageFor(403)).toMatch(/verif/i);
-    expect(errorMessageFor(404)).toMatch(/could not be found/i);
-    expect(errorMessageFor(409)).toMatch(/still processing/i);
-    expect(errorMessageFor(422)).toMatch(/could not be processed/i);
-    expect(errorMessageFor(429)).toMatch(/too many requests/i);
-    expect(errorMessageFor(502)).toMatch(/generation failed/i);
-    expect(errorMessageFor("network")).toMatch(/reaching the server/i);
-    // An unmapped status still yields a readable fallback.
-    expect(errorMessageFor(500)).toMatch(/something went wrong/i);
+describe("pre-stream failure copy", () => {
+  it("maps each pre-stream failure to a distinct catalog message", () => {
+    const keyFor = (status: number | "network") =>
+      errorMessageKey(new StreamRequestError(status), "stream.generationFailed");
+    expect(keyFor(401)).toBe("status.unauthorized");
+    expect(keyFor(403)).toBe("stream.forbidden");
+    expect(keyFor(404)).toBe("stream.notFound");
+    expect(keyFor(409)).toBe("stream.notReady");
+    expect(keyFor(422)).toBe("stream.unprocessable");
+    expect(keyFor(429)).toBe("status.rateLimited");
+    expect(keyFor(502)).toBe("status.server");
+    expect(keyFor("network")).toBe("status.network");
+    // An unmapped status reads as the chat turn's own failure copy.
+    expect(keyFor(400)).toBe("operation.chatTurn");
+    // The SDK's mid-stream error (backend text) is never a typed failure.
+    expect(
+      errorMessageKey(new Error("Answer generation failed."), "stream.generationFailed"),
+    ).toBe("stream.generationFailed");
   });
 });

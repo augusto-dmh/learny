@@ -20,6 +20,7 @@
  * (HOME-09).
  */
 
+import { apiErrorFrom } from "./errors";
 import { clientTimezone } from "@/app/lib/study";
 
 /** A deck-generation job's public state, mirroring the backend `QuizJobView`. */
@@ -140,8 +141,8 @@ export function intervalLabel(
  * Fetch a source's quiz overview: items + per-status counts + due count + latest
  * deck job. Read-only GET, so no CSRF token; the HttpOnly session cookie rides
  * along automatically. This is the deck-progress polling target. On a non-OK
- * response (401 unauthenticated, 404 missing/non-owned) the backend `detail` is
- * surfaced via `toQuizError`.
+ * response (401 unauthenticated, 404 missing/non-owned) it throws an
+ * `ApiError` carrying the status.
  */
 export async function getQuizOverview(
   sourceId: string,
@@ -152,7 +153,7 @@ export async function getQuizOverview(
     credentials: "same-origin",
   });
   if (!res.ok) {
-    throw await toQuizError(res, "Could not load the quiz overview.");
+    throw await apiErrorFrom(res, "quizOverview");
   }
   return (await res.json()) as QuizOverview;
 }
@@ -162,7 +163,7 @@ export async function getQuizOverview(
  * State-changing, so it carries the session-bound CSRF token in `X-CSRF-Token`
  * (AD-007); the caller passes it in (read from `/api/auth/me`). On a non-OK
  * response (404 missing/non-owned, 409 not-ready/already-running, 429 throttled,
- * 502 enqueue failure) the backend `detail` is surfaced via `toQuizError`.
+ * 502 enqueue failure) it throws an `ApiError`.
  */
 export async function generateDeck(
   sourceId: string,
@@ -175,7 +176,7 @@ export async function generateDeck(
     headers: { "X-CSRF-Token": csrfToken },
   });
   if (!res.ok) {
-    throw await toQuizError(res, "Could not start quiz deck generation.");
+    throw await apiErrorFrom(res, "quizGenerate");
   }
   return (await res.json()) as QuizJob;
 }
@@ -198,15 +199,15 @@ export async function ensureStarterDeck(
     return;
   }
   if (!res.ok) {
-    throw await toQuizError(res, "Could not prepare starter cards.");
+    throw await apiErrorFrom(res, "quizStarters");
   }
 }
 
 /**
  * Fetch the caller's due review queue across their sources (optionally filtered
  * to one source, optionally capped by `limit`). Read-only GET, so no CSRF token.
- * On a non-OK response (401 unauthenticated, 422 over-limit) the backend `detail`
- * is surfaced via `toQuizError`.
+ * On a non-OK response (401 unauthenticated, 422 over-limit) it throws an
+ * `ApiError`.
  */
 export async function getDueReviews(
   { sourceId, limit }: { sourceId?: string; limit?: number } = {},
@@ -225,7 +226,7 @@ export async function getDueReviews(
     credentials: "same-origin",
   });
   if (!res.ok) {
-    throw await toQuizError(res, "Could not load your due reviews.");
+    throw await apiErrorFrom(res, "quizDue");
   }
   return (await res.json()) as DueQueue;
 }
@@ -235,8 +236,8 @@ export async function getDueReviews(
  * scheduling (200). State-changing, so it carries the session-bound CSRF token in
  * `X-CSRF-Token` (AD-007). The optional `review_duration_ms` is the client-timed
  * question-to-grade duration. On a non-OK response (404 missing/non-owned, 409
- * stale/orphaned, 422 rating bounds, 429 throttled) the backend `detail` is
- * surfaced via `toQuizError`.
+ * stale/orphaned, 422 rating bounds, 429 throttled) it throws an
+ * `ApiError` carrying the status.
  */
 export async function submitReview(
   itemId: string,
@@ -259,7 +260,7 @@ export async function submitReview(
     body: JSON.stringify(body),
   });
   if (!res.ok) {
-    throw await toQuizError(res, "Could not submit your review.");
+    throw await apiErrorFrom(res, "quizReview");
   }
   return (await res.json()) as Scheduling;
 }
@@ -271,8 +272,8 @@ export async function submitReview(
  * deliberately relearn a card whose note was revised, and it must never fire except
  * from the explicit reset action. State-changing, so it carries the session-bound
  * CSRF token in `X-CSRF-Token` (AD-007). The append-only review log is untouched.
- * On a non-OK response (404 missing/non-owned, 409 non-active) the backend `detail`
- * is surfaced via `toQuizError`.
+ * On a non-OK response (404 missing/non-owned, 409 non-active) it throws an
+ * `ApiError`.
  */
 export async function resetSchedule(
   itemId: string,
@@ -285,7 +286,7 @@ export async function resetSchedule(
     headers: { "X-CSRF-Token": csrfToken },
   });
   if (!res.ok) {
-    throw await toQuizError(res, "Could not reset this card's schedule.");
+    throw await apiErrorFrom(res, "quizReset");
   }
   return (await res.json()) as Scheduling;
 }
@@ -298,7 +299,7 @@ export type FlagState = {
 
 /**
  * Restore the caller's last grade (200). CSRF + `X-Client-Timezone` match
- * `submitReview`. 409 when nothing is undoable is surfaced as the backend detail.
+ * `submitReview`. 409 when nothing is undoable throws an `ApiError`.
  */
 export async function undoReview(
   csrfToken: string,
@@ -317,7 +318,7 @@ export async function undoReview(
     headers,
   });
   if (!res.ok) {
-    throw await toQuizError(res, "Could not undo your last review.");
+    throw await apiErrorFrom(res, "quizUndo");
   }
   return (await res.json()) as Scheduling;
 }
@@ -342,7 +343,7 @@ export async function flagQuizItem(
     body: JSON.stringify({ flagged }),
   });
   if (!res.ok) {
-    throw await toQuizError(res, "Could not flag this card.");
+    throw await apiErrorFrom(res, "quizFlag");
   }
   return (await res.json()) as FlagState;
 }
@@ -367,7 +368,7 @@ export async function updateQuizItem(
     body: JSON.stringify(body),
   });
   if (!res.ok) {
-    throw await toQuizError(res, "Could not save this card.");
+    throw await apiErrorFrom(res, "quizSave");
   }
   return (await res.json()) as { question: string; answer: string };
 }
@@ -379,19 +380,4 @@ export async function updateQuizItem(
  */
 export function quizExportUrl(sourceId: string): string {
   return `/api/sources/${sourceId}/quiz/export`;
-}
-
-/**
- * Build an Error from a non-OK response, preferring the backend's detail.
- * FastAPI validation errors (422) carry `detail` as a list of error objects, not
- * a string — those fall back to the readable message instead of rendering a
- * stringified list, mirroring `teaching.ts`.
- */
-async function toQuizError(res: Response, fallback: string): Promise<Error> {
-  try {
-    const body = (await res.json()) as { detail?: unknown };
-    return new Error(typeof body.detail === "string" ? body.detail : fallback);
-  } catch {
-    return new Error(fallback);
-  }
 }

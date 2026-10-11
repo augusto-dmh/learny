@@ -13,6 +13,8 @@
  * `not_found` result rather than throwing; other non-OK responses (401, …) throw.
  */
 
+import { apiErrorFrom } from "./errors";
+
 /** One section's readable content, mirroring the backend `SectionContentView`. */
 export type SectionView = {
   anchor: string;
@@ -28,7 +30,7 @@ export type SectionResult =
 
 /**
  * Fetch one section's content by anchor. Returns `{status: "not_found"}` on 404
- * (the reader's not-found state); throws a readable error on any other non-OK
+ * (the reader's not-found state); throws an `ApiError` on any other non-OK
  * response (e.g. 401 unauthenticated).
  */
 export async function getSection(
@@ -44,17 +46,7 @@ export async function getSection(
     return { status: "not_found" };
   }
   if (!res.ok) {
-    throw await toSectionError(res, "Could not load that section.");
+    throw await apiErrorFrom(res, "sectionLoad");
   }
   return { status: "found", section: (await res.json()) as SectionView };
-}
-
-/** Build an Error from a non-OK response, preferring the backend's detail. */
-async function toSectionError(res: Response, fallback: string): Promise<Error> {
-  try {
-    const body = (await res.json()) as { detail?: unknown };
-    return new Error(typeof body.detail === "string" ? body.detail : fallback);
-  } catch {
-    return new Error(fallback);
-  }
 }

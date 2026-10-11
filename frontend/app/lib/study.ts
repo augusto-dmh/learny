@@ -19,6 +19,8 @@
  * exactly so the two never drift.
  */
 
+import { apiErrorFrom } from "./errors";
+
 /** The tz header the day boundary rides on (HOME-09). */
 const CLIENT_TIMEZONE_HEADER = "X-Client-Timezone";
 
@@ -70,7 +72,7 @@ export function clientTimezone(): string | undefined {
 /**
  * Fetch the caller's most-recent reading position as the Home hero, or `null`
  * when they have no positions yet (200 empty shape → the hero's pick-a-book
- * state, HOME-02). Read-only GET, so no CSRF token. Throws a readable error on a
+ * state, HOME-02). Read-only GET, so no CSRF token. Throws an `ApiError` on a
  * non-OK response (e.g. 401 unauthenticated) so the hero can show its own error.
  */
 export async function getContinueReading(
@@ -81,7 +83,7 @@ export async function getContinueReading(
     credentials: "same-origin",
   });
   if (!res.ok) {
-    throw await toStudyError(res, "Could not load your reading progress.");
+    throw await apiErrorFrom(res, "studyProgress");
   }
   return (await res.json()) as ContinueReadingView | null;
 }
@@ -91,7 +93,7 @@ export async function getContinueReading(
  * optional `window` (days) is passed through to the endpoint; when omitted the
  * server applies its 84-day default. Echoes `X-Client-Timezone` so the window
  * ends at the caller's local today, omitting it when the zone is unavailable
- * (HOME-09). Read-only GET, so no CSRF token. Throws a readable error on a
+ * (HOME-09). Read-only GET, so no CSRF token. Throws an `ApiError` on a
  * non-OK response.
  */
 export async function getStudyDays(
@@ -110,21 +112,7 @@ export async function getStudyDays(
     headers,
   });
   if (!res.ok) {
-    throw await toStudyError(res, "Could not load your study activity.");
+    throw await apiErrorFrom(res, "studyActivity");
   }
   return (await res.json()) as StudySummaryView;
-}
-
-/**
- * Build an Error from a non-OK response, preferring the backend's detail. A
- * non-string detail (e.g. a 422 validation list) falls back to the readable
- * message, mirroring `quiz.ts`.
- */
-async function toStudyError(res: Response, fallback: string): Promise<Error> {
-  try {
-    const body = (await res.json()) as { detail?: unknown };
-    return new Error(typeof body.detail === "string" ? body.detail : fallback);
-  } catch {
-    return new Error(fallback);
-  }
 }

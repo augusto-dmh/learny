@@ -89,6 +89,8 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { readControlMinStyle } from "@/app/lib/read-control-size";
+import { type ErrorMessage, useErrorMessage } from "./use-error-message";
+import { type ApiOperation } from "@/app/lib/errors";
 
 /** Ephemeral cited-sentence paint; not a real note — same painter as saved highlights. */
 const CITATION_SPAN_ID = "citation-span";
@@ -151,6 +153,7 @@ export function ChapterReader({
   sourceId: string;
   onRequireAuth?: () => void;
 }) {
+  const errorMessage = useErrorMessage();
   // `useSearchParams().get()` decodes the percent-encoded anchor; `null` when
   // absent, which asks the server to resume the stored reading position.
   const urlAnchor = useSearchParams().get("anchor");
@@ -237,8 +240,7 @@ export function ChapterReader({
         }
         setState({
           kind: "error",
-          message:
-            err instanceof Error ? err.message : "Could not load this chapter.",
+          message: errorMessage(err, "readingChapter"),
         });
       }
     })();
@@ -332,6 +334,7 @@ export function ChapterFlow({
   observerFactory?: ObserverFactory;
   onRequireAuth?: () => void;
 }) {
+  const errorMessage = useErrorMessage();
   const router = useRouter();
   // The open dock tab and the current deep-link anchor are independent URL state.
   // A `panel` value naming no tab renders the panel closed; toggling it or
@@ -603,7 +606,7 @@ export function ChapterFlow({
         router.push(`/notes/${note.id}`);
       }
     } catch (err) {
-      setCaptureError(captureMessage(err, "Could not capture the highlight."));
+      setCaptureError(captureMessage(err, "notesCapture", errorMessage));
     } finally {
       setPending(false);
     }
@@ -644,7 +647,7 @@ export function ChapterFlow({
       }
       setSuggestions(await suggestCards(sourceId, anchorId, csrf));
     } catch (err) {
-      setCaptureError(captureMessage(err, "Could not suggest cards for this passage."));
+      setCaptureError(captureMessage(err, "cardsSuggestPassage", errorMessage));
     } finally {
       setPending(false);
     }
@@ -1104,16 +1107,20 @@ function ReturnChip({ onReturn }: { onReturn: () => void }) {
  * The message for a failed capture-side call. A stale target — the passage moved
  * under the selection — gets the reload prompt whichever call reported it: both the
  * highlight capture (`NoteError`) and the suggestion request (`CardError`) surface
- * the same 409 as kind `stale_capture`. Everything else shows its own message.
+ * the same 409 as kind `stale_capture`. Everything else reads as catalog copy.
  */
-function captureMessage(err: unknown, fallback: string): string {
+function captureMessage(
+  err: unknown,
+  fallback: ApiOperation,
+  errorMessage: ErrorMessage,
+): string {
   if (
     (err instanceof NoteError || err instanceof CardError) &&
     err.kind === "stale_capture"
   ) {
     return STALE_CAPTURE_MESSAGE;
   }
-  return err instanceof Error ? err.message : fallback;
+  return errorMessage(err, fallback);
 }
 
 /**

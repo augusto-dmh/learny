@@ -147,17 +147,17 @@ describe("sources client (T7)", () => {
     expect(init.credentials).toBe("same-origin");
   });
 
-  it("fetchSourceStructure surfaces the backend error detail on a non-OK response", async () => {
+  it("fetchSourceStructure carries the backend error detail on a non-OK response", async () => {
     const fetchMock = fetchMockFn(async () =>
       jsonResponse(404, { detail: "That source has no structure yet." }),
     );
 
     await expect(
       fetchSourceStructure("s1", fetchMock as unknown as typeof fetch),
-    ).rejects.toThrow("That source has no structure yet.");
+    ).rejects.toMatchObject({ detail: "That source has no structure yet." });
   });
 
-  it("uploadSource surfaces the backend error detail on a rejected upload", async () => {
+  it("uploadSource carries the backend error detail on a rejected upload", async () => {
     const fetchMock = fetchMockFn(async () =>
       jsonResponse(415, { detail: "Only EPUB files are supported." }),
     );
@@ -172,6 +172,6 @@ describe("sources client (T7)", () => {
         "csrf-xyz",
         fetchMock as unknown as typeof fetch,
       ),
-    ).rejects.toThrow("Only EPUB files are supported.");
+    ).rejects.toMatchObject({ detail: "Only EPUB files are supported." });
   });
 });

@@ -36,6 +36,8 @@ import {
   type LearnyUIMessage,
 } from "@/app/lib/streaming";
 
+import { useErrorMessage } from "./use-error-message";
+
 /** The turn that failed last, so Retry can resubmit the same question. */
 export type FailedTurnState = {
   error: string;
@@ -102,6 +104,7 @@ export function useConversationThread({
   onConversationKept?: () => void;
   onRequireAuth?: () => void;
 }): ConversationThread {
+  const errorMessage = useErrorMessage();
   const [banner, setBanner] = useState<string | null>(null);
   const [failedTurn, setFailedTurn] = useState<FailedTurnState | null>(null);
   const messagesRef = useRef<LearnyUIMessage[]>([]);
@@ -165,10 +168,14 @@ export function useConversationThread({
         onRequireAuth?.();
         return;
       }
+      // The SDK's own errors carry the backend's mid-stream text, which is
+      // never shown: anything that is not a typed request failure reads as
+      // the catalog's generation-failure copy.
       const current = messagesRef.current;
-      setBanner(err.message);
+      const message = errorMessage(err, "stream.generationFailed");
+      setBanner(message);
       setFailedTurn({
-        error: err.message,
+        error: message,
         userText: lastUserText(current) || lastSentRef.current,
         messageId: current[current.length - 1]?.id ?? null,
         origin: lastOriginRef.current,

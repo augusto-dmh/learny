@@ -1773,7 +1773,8 @@ describe("ChapterFlow create card (CAP-01/08)", () => {
 
     // Generation failed, but the highlight was already saved and stays saved.
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toBe("The card generator is unavailable.");
+    // A 5xx reads as the shared server copy, never the backend detail.
+    expect(alert.textContent).toBe("The server had a problem. Please try again.");
     expect(captures()).toBe(1);
 
     // Pressing the verb again retries generation ONLY — capturing the same

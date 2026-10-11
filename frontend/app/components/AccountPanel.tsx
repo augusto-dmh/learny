@@ -35,6 +35,7 @@ import {
 } from "@/app/lib/ai-profiles";
 import { fetchAuthState, logout, type AuthState } from "@/app/lib/auth";
 import { Button } from "@/components/ui/button";
+import { useErrorMessage } from "./use-error-message";
 
 /** Honest grounding copy — what the learner gives up per mechanism. */
 function groundingHint(grounding: ProfileGrounding): string {
@@ -69,6 +70,7 @@ export function AccountPanel({
   onRequireAuth?: () => void;
   onLoggedOut?: () => void;
 }) {
+  const errorMessage = useErrorMessage();
   const [state, setState] = useState<AuthState | null>(null);
   // null = not loaded (or failed to load): the section stays absent either way.
   const [catalog, setCatalog] = useState<LearnerProfile[] | null>(null);
@@ -149,11 +151,7 @@ export function AccountPanel({
         setStoredChoice(stored.profile_id);
       }
     } catch (error) {
-      setAiError(
-        error instanceof Error
-          ? error.message
-          : "Could not save your AI profile choice.",
-      );
+      setAiError(errorMessage(error, "aiProfileSave"));
     } finally {
       setAiPending(false);
     }

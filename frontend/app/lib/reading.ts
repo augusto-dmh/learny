@@ -23,6 +23,7 @@
  * omitted when the zone is unavailable so the server falls back to UTC (HOME-09).
  */
 
+import { apiErrorFrom } from "./errors";
 import { clientTimezone } from "@/app/lib/study";
 
 /** Words-per-minute for the minutes-left estimate (AD-126; mirrors the backend). */
@@ -87,8 +88,8 @@ export type ChapterResult =
 /**
  * Fetch a chapter by anchor, or resume the stored position when `anchor` is null
  * (the query is omitted so the server picks the stored — or first — chapter).
- * Returns `{status: "not_found"}` on 404 (the reader's not-found state); throws a
- * readable error on any other non-OK response (e.g. 401 unauthenticated).
+ * Returns `{status: "not_found"}` on 404 (the reader's not-found state); throws an
+ * `ApiError` on any other non-OK response (e.g. 401 unauthenticated).
  */
 export async function getChapter(
   sourceId: string,
@@ -104,7 +105,7 @@ export async function getChapter(
     return { status: "not_found" };
   }
   if (!res.ok) {
-    throw await toReadingError(res, "Could not load that chapter.");
+    throw await apiErrorFrom(res, "readingChapter");
   }
   return { status: "found", chapter: (await res.json()) as ChapterView };
 }
@@ -136,7 +137,7 @@ export async function saveReadingPosition(
     body: JSON.stringify({ anchor }),
   });
   if (!res.ok) {
-    throw await toReadingError(res, "Could not save your reading position.");
+    throw await apiErrorFrom(res, "readingPosition");
   }
   return (await res.json()) as ReadingPositionView;
 }
@@ -155,7 +156,7 @@ export async function listHighlights(
     credentials: "same-origin",
   });
   if (!res.ok) {
-    throw await toReadingError(res, "Could not load your highlights.");
+    throw await apiErrorFrom(res, "readingHighlights");
   }
   return (await res.json()) as SourceHighlightView[];
 }
@@ -170,14 +171,4 @@ export function minutesLeft(words: number, wpm: number = WORDS_PER_MINUTE): numb
     return 0;
   }
   return Math.ceil(words / wpm);
-}
-
-/** Build an Error from a non-OK response, preferring the backend's detail. */
-async function toReadingError(res: Response, fallback: string): Promise<Error> {
-  try {
-    const body = (await res.json()) as { detail?: unknown };
-    return new Error(typeof body.detail === "string" ? body.detail : fallback);
-  } catch {
-    return new Error(fallback);
-  }
 }

@@ -41,12 +41,14 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { useErrorMessage } from "../use-error-message";
 
 export function NotesScreen({
   onRequireAuth,
 }: {
   onRequireAuth?: () => void;
 }) {
+  const errorMessage = useErrorMessage();
   const [authed, setAuthed] = useState<boolean | null>(null);
   const [notes, setNotes] = useState<NoteSummary[] | null>(null);
   const [activeTag, setActiveTag] = useState<string | null>(null);
@@ -71,9 +73,7 @@ export function NotesScreen({
         }),
       );
     } catch (err) {
-      setLoadError(
-        err instanceof Error ? err.message : "Could not load your notes.",
-      );
+      setLoadError(errorMessage(err, "notesList"));
     }
   }, [activeTag, activeSourceId, onRequireAuth]);
 

@@ -14,6 +14,7 @@ import Link from "next/link";
 import { login, register, type UserSummary } from "@/app/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { useErrorMessage } from "./use-error-message";
 
 export type AuthMode = "login" | "register";
 
@@ -24,6 +25,7 @@ export function AuthForm({
   mode: AuthMode;
   onAuthenticated?: (user: UserSummary) => void;
 }) {
+  const errorMessage = useErrorMessage();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [inviteCode, setInviteCode] = useState("");
@@ -49,7 +51,7 @@ export function AuthForm({
         onAuthenticated?.(user);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong.");
+      setError(errorMessage(err, "generic"));
     } finally {
       setPending(false);
     }

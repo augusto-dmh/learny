@@ -22,6 +22,7 @@ import { useEffect, useState } from "react";
 
 import { acceptCard, type Card, type CardSuggestion } from "@/app/lib/cards";
 import { Button } from "@/components/ui/button";
+import { useErrorMessage } from "../use-error-message";
 
 /**
  * The chip row for one highlight's candidates. `suggestions` is the batch the
@@ -119,6 +120,7 @@ function SuggestionChip({
   onAccepted: (card: Card) => void;
   onDiscard: () => void;
 }) {
+  const errorMessage = useErrorMessage();
   const [editing, setEditing] = useState(false);
   const [question, setQuestion] = useState(suggestion.question);
   const [answer, setAnswer] = useState(suggestion.answer);
@@ -146,9 +148,7 @@ function SuggestionChip({
       accepted = true;
       onAccepted(card);
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Could not save this card.",
-      );
+      setError(errorMessage(err, "cardsSave"));
     } finally {
       // The chip unmounts on success; only a failure needs its pending flag back.
       if (!accepted) {

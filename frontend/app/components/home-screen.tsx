@@ -37,6 +37,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useErrorMessage } from "./use-error-message";
 
 /** A card's async state: still loading, failed, or resolved with its payload. */
 type Loadable<T> =
@@ -47,6 +48,7 @@ type Loadable<T> =
 type DueView = { job: number; totalDue: number };
 
 export function HomeScreen() {
+  const errorMessage = useErrorMessage();
   const [hero, setHero] = useState<Loadable<ContinueReadingView | null>>({
     status: "loading",
   });
@@ -63,10 +65,7 @@ export function HomeScreen() {
         if (active)
           setHero({
             status: "error",
-            message:
-              err instanceof Error
-                ? err.message
-                : "Could not load your reading progress.",
+            message: errorMessage(err, "studyProgress"),
           });
       });
     return () => {
@@ -92,10 +91,7 @@ export function HomeScreen() {
         if (active)
           setDue({
             status: "error",
-            message:
-              err instanceof Error
-                ? err.message
-                : "Could not load your due reviews.",
+            message: errorMessage(err, "quizDue"),
           });
       }
       if (!active) {

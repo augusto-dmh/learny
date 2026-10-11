@@ -65,6 +65,7 @@ import {
 } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
+import { useErrorMessage } from "./use-error-message";
 
 /** The 4 FSRS self-grades, in ascending rating order (Again=1 … Easy=4). */
 const GRADES: { rating: number; label: string }[] = [
@@ -114,6 +115,7 @@ export function ReviewScreen({
   onRequireAuth?: () => void;
   onGraded?: () => void;
 }) {
+  const errorMessage = useErrorMessage();
   const [csrf, setCsrf] = useState<string | null>(null);
   const [authed, setAuthed] = useState<boolean | null>(null);
   const [queue, setQueue] = useState<SessionCard[] | null>(null);
@@ -153,9 +155,7 @@ export function ReviewScreen({
       setDraft(null);
       lastGrade.current = null;
     } catch (err) {
-      setLoadError(
-        err instanceof Error ? err.message : "Could not load your due reviews.",
-      );
+      setLoadError(errorMessage(err, "quizDue"));
     }
   }, [sourceId]);
 
@@ -223,9 +223,7 @@ export function ReviewScreen({
       setIndex((i) => i + 1);
       onGraded?.();
     } catch (err) {
-      setSubmitError(
-        err instanceof Error ? err.message : "Could not submit your review.",
-      );
+      setSubmitError(errorMessage(err, "quizReview"));
     } finally {
       setSubmitting(false);
     }
@@ -252,9 +250,7 @@ export function ReviewScreen({
           : prev,
       );
     } catch (err) {
-      setResetError(
-        err instanceof Error ? err.message : "Could not reset this card's schedule.",
-      );
+      setResetError(errorMessage(err, "quizReset"));
     } finally {
       setResetting(false);
     }
@@ -300,9 +296,7 @@ export function ReviewScreen({
       }
       setRevealed(false);
     } catch (err) {
-      setSubmitError(
-        err instanceof Error ? err.message : "Could not undo your last review.",
-      );
+      setSubmitError(errorMessage(err, "quizUndo"));
     }
   }
 
@@ -319,9 +313,7 @@ export function ReviewScreen({
       setRevealed(false);
       setDraft(null);
     } catch (err) {
-      setSubmitError(
-        err instanceof Error ? err.message : "Could not flag this card.",
-      );
+      setSubmitError(errorMessage(err, "quizFlag"));
     }
   }
 
@@ -345,9 +337,7 @@ export function ReviewScreen({
       );
       setDraft(null);
     } catch (err) {
-      setSubmitError(
-        err instanceof Error ? err.message : "Could not save this card.",
-      );
+      setSubmitError(errorMessage(err, "quizSave"));
     } finally {
       setSavingEdit(false);
     }

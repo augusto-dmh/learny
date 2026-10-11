@@ -46,6 +46,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 
 import { useHomeSettings } from "./use-home-settings";
+import { useErrorMessage } from "./use-error-message";
 
 /** The heatmap window: 12 weeks, rendered as a week-aligned grid (AD-156). */
 const HEATMAP_WINDOW_DAYS = 84;
@@ -516,6 +517,7 @@ function StudyReadout({ summary }: { summary: StudySummaryView }) {
  * viewer can bring it back; the choice persists device-locally (HOME-14).
  */
 export function StudyStats() {
+  const errorMessage = useErrorMessage();
   const { showStats, setShowStats } = useHomeSettings();
   const [state, setState] = useState<Loadable<StudySummaryView>>({
     status: "loading",
@@ -531,10 +533,7 @@ export function StudyStats() {
         if (active)
           setState({
             status: "error",
-            message:
-              err instanceof Error
-                ? err.message
-                : "Could not load your study activity.",
+            message: errorMessage(err, "studyActivity"),
           });
       });
     return () => {

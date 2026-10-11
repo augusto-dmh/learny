@@ -39,7 +39,7 @@ import {
   getConversation,
   startConversation,
 } from "@/app/lib/conversations";
-import { acceptTutorCard, TutorCardError } from "@/app/lib/tutor-card";
+import { acceptTutorCard } from "@/app/lib/tutor-card";
 import {
   isTutorOpeningMessage,
   TUTOR_DONT_KNOW_MESSAGE,
@@ -50,7 +50,6 @@ import {
 import { fetchSourceStructure, type SourceStructure } from "@/app/lib/sources";
 import {
   assistantView,
-  errorMessageFor,
   latestTutorState,
   messageText,
   StreamRequestError,
@@ -81,6 +80,7 @@ import { isNotFound, NotFoundNotice } from "./not-found-notice";
 import { SaveToNoteAction } from "./save-to-note-action";
 import { useConversationThread, type ConversationThread } from "./use-conversation-thread";
 import { useIncludeNotes } from "./use-include-notes";
+import { useErrorMessage } from "./use-error-message";
 
 /** The surface name the active-conversation pointer is stored under. */
 const SURFACE = "teach";
@@ -122,6 +122,7 @@ export function TeachPanel({
   /** Switch Chat to a new Answer conversation on this book (TUTOR-33). */
   onAskAboutThis?: () => void;
 }) {
+  const errorMessage = useErrorMessage();
   const [structure, setStructure] = useState<SourceStructure | null>(null);
   const [selectedAnchor, setSelectedAnchor] = useState("");
   const [thread, setThread] = useState<TeachThread | null>(null);
@@ -155,9 +156,7 @@ export function TeachPanel({
       })
       .catch((err: unknown) => {
         if (cancelled) return;
-        setError(
-          err instanceof Error ? err.message : "Could not load this book.",
-        );
+        setError(errorMessage(err, "sourcesStructure"));
       });
     return () => {
       cancelled = true;
@@ -208,11 +207,7 @@ export function TeachPanel({
         if (err instanceof ConversationRequestError && err.status === 404) {
           writeActiveConversation(sourceId, SURFACE, null);
         } else {
-          setError(
-            err instanceof Error
-              ? err.message
-              : "Could not load that conversation.",
-          );
+          setError(errorMessage(err, "conversationsGet"));
         }
         setThread(null);
       })
@@ -296,11 +291,7 @@ export function TeachPanel({
         onRequireAuth?.();
         return;
       }
-      setError(
-        err instanceof StreamRequestError
-          ? err.message
-          : "This conversation cannot be created. Please try again.",
-      );
+      setError(errorMessage(err, "conversationsStart"));
     } finally {
       setStarting(false);
     }
@@ -408,6 +399,7 @@ function TeachChat({
   onConversationKept: () => void;
   onAskAboutThis?: () => void;
 }) {
+  const errorMessage = useErrorMessage();
   // The notes choice belongs to the conversation, so it is fixed when the thread
   // creates one and is always sent explicitly rather than left to a server guess.
   const notes = useIncludeNotes(SURFACE);
@@ -512,11 +504,7 @@ function TeachChat({
         setOfferDismissed(true);
       })
       .catch((err: unknown) => {
-        setCardError(
-          err instanceof TutorCardError
-            ? err.message
-            : "Could not save this review card.",
-        );
+        setCardError(errorMessage(err, "tutorCardSave"));
       });
   }, [conversationId, csrf]);
 
@@ -623,7 +611,7 @@ function TeachChat({
                       error={
                         liveFailed && failedTurn
                           ? failedTurn.error
-                          : errorMessageFor(502)
+                          : errorMessage(null, "stream.generationFailed")
                       }
                       onRetry={() =>
                         send(

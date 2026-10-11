@@ -203,7 +203,7 @@ describe("listNotes (NF-11)", () => {
 
     expect(err).toBeInstanceOf(NoteError);
     expect(err.status).toBe(404);
-    expect(err.message).toBe("Source not found.");
+    expect(err.detail).toBe("Source not found.");
   });
 
   it("defaults to no filter when called with no argument", async () => {
@@ -227,7 +227,7 @@ describe("listNotes (NF-11)", () => {
     expect(err).toBeInstanceOf(NoteError);
     expect(err.kind).toBe("unknown");
     expect(err.status).toBe(401);
-    expect(err.message).toBe("Not authenticated.");
+    expect(err.detail).toBe("Not authenticated.");
   });
 });
 
@@ -256,7 +256,7 @@ describe("getNote (NF-11)", () => {
     expect(err).toBeInstanceOf(NoteError);
     expect(err.kind).toBe("unknown");
     expect(err.status).toBe(404);
-    expect(err.message).toBe("Note not found.");
+    expect(err.detail).toBe("Note not found.");
   });
 });
 
@@ -298,10 +298,10 @@ describe("updateNote (NF-11)", () => {
 
     expect(err).toBeInstanceOf(NoteError);
     expect(err.kind).toBe("body_too_long");
-    expect(err.message).toBe("Note body is too long.");
+    expect(err.detail).toBe("Note body is too long.");
   });
 
-  it("falls back to a readable message when a 422 detail is a list, not a string", async () => {
+  it("names the operation when a 422 detail is a list, not a string", async () => {
     const fetchMock = fetchMockFn(async () =>
       jsonResponse(422, {
         detail: [{ type: "string_type", loc: ["body", "title"], msg: "str" }],
@@ -317,7 +317,7 @@ describe("updateNote (NF-11)", () => {
 
     expect(err).toBeInstanceOf(NoteError);
     expect(err.kind).toBe("body_too_long");
-    expect(err.message).toBe("Could not save the note.");
+    expect(err.operation).toBe("notesSave");
   });
 });
 
@@ -413,7 +413,7 @@ describe("captureHighlight (NF-11)", () => {
     expect(err).toBeInstanceOf(NoteError);
     expect(err.kind).toBe("stale_capture");
     expect(err.status).toBe(409);
-    expect(err.message).toBe("The book changed while you were reading.");
+    expect(err.detail).toBe("The book changed while you were reading.");
   });
 
   it("raises a body_too_long NoteError on a 422 over-cap response", async () => {
@@ -432,7 +432,7 @@ describe("captureHighlight (NF-11)", () => {
     expect(err.kind).toBe("body_too_long");
   });
 
-  it("falls back to a readable message when the error body is not parseable", async () => {
+  it("names the operation when the error body is not parseable", async () => {
     const fetchMock = fetchMockFn(
       async () => new Response("<html>gateway</html>", { status: 502 }),
     );
@@ -446,6 +446,6 @@ describe("captureHighlight (NF-11)", () => {
 
     expect(err).toBeInstanceOf(NoteError);
     expect(err.kind).toBe("unknown");
-    expect(err.message).toBe("Could not capture the highlight.");
+    expect(err.operation).toBe("notesCapture");
   });
 });

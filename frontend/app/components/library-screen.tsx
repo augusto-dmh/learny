@@ -58,6 +58,7 @@ import {
 
 import { useIngestionPolling } from "./use-ingestion-polling";
 import { useQuizDeckPolling } from "./use-quiz-deck-polling";
+import { useErrorMessage } from "./use-error-message";
 
 /**
  * Quiz-deck controls for one ready source (QUIZ-20). Loads the source's quiz
@@ -79,6 +80,7 @@ function QuizDeckControls({
   sourceId: string;
   csrfToken: string;
 }) {
+  const errorMessage = useErrorMessage();
   const [overview, setOverview] = useState<QuizOverview | null>(null);
   const [generating, setGenerating] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -119,11 +121,7 @@ function QuizDeckControls({
         latest_job: next,
       }));
     } catch (err) {
-      setActionError(
-        err instanceof Error
-          ? err.message
-          : "Could not start quiz deck generation.",
-      );
+      setActionError(errorMessage(err, "quizGenerate"));
     } finally {
       setGenerating(false);
     }
@@ -379,8 +377,11 @@ export function LibraryScreen({
 }: {
   onRequireAuth?: () => void;
 }) {
+  const errorMessage = useErrorMessage();
   const [state, setState] = useState<AuthState | null>(null);
   const [sources, setSources] = useState<SourceSummary[] | null>(null);
+  // A failed list read, as catalog copy; null while the list loads or loaded.
+  const [listError, setListError] = useState<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [title, setTitle] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -408,7 +409,13 @@ export function LibraryScreen({
       onRequireAuth?.();
       return;
     }
-    setSources(await listSources());
+    try {
+      setSources(await listSources());
+      setListError(null);
+    } catch (err) {
+      setListError(errorMessage(err, "sourcesList"));
+    }
+    // `errorMessage` is rebuilt every render; listing it would refetch forever.
   }, [onRequireAuth]);
 
   useEffect(() => {
@@ -466,7 +473,7 @@ export function LibraryScreen({
       setFile(null);
       setTitle("");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Upload failed.");
+      setError(errorMessage(err, "sourcesUpload"));
     } finally {
       setSubmitting(false);
     }
@@ -494,7 +501,7 @@ export function LibraryScreen({
         ),
       );
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not start ingestion.");
+      setError(errorMessage(err, "sourcesIngest"));
     } finally {
       setStartingId(null);
       setConfirmingId(null);
@@ -563,7 +570,11 @@ export function LibraryScreen({
         </p>
       ) : null}
 
-      {sources === null ? (
+      {sources === null && listError ? (
+        <p role="alert" className="text-sm text-destructive">
+          {listError}
+        </p>
+      ) : sources === null ? (
         <p className="text-muted-foreground">Loading your sources…</p>
       ) : sources.length === 0 ? (
         <p className="text-muted-foreground">No sources yet.</p>

@@ -361,8 +361,10 @@ describe("ReviewScreen session flow (E2)", () => {
 
     render(<ReviewScreen />);
 
+    // A 5xx reads as the shared server copy; the backend detail stays data.
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("Boom.");
+    expect(alert.textContent).toContain("The server had a problem. Please try again.");
+    expect(alert.textContent).not.toContain("Boom.");
 
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
 
@@ -1030,8 +1032,10 @@ describe("ReviewScreen undo, flag, and edit (REV-22/37/45)", () => {
     await screen.findByTestId("question");
     pressKey("u");
 
+    // The undo operation's copy, never the backend detail.
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("Nothing to undo.");
+    expect(alert.textContent).toContain("Could not undo your last review.");
+    expect(alert.textContent).not.toContain("Nothing to undo.");
     expect(screen.getByTestId("question").textContent).toBe(
       "Ada wrote the first ____.",
     );

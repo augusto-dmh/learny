@@ -44,6 +44,7 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { MessageResponse } from "@/components/ai-elements/message";
+import { useErrorMessage } from "../use-error-message";
 
 /** Comma-separated tag text ↔ the tags array the API carries. */
 function parseTags(text: string): string[] {
@@ -60,6 +61,7 @@ export function NoteDetailScreen({
   noteId: string;
   onRequireAuth?: () => void;
 }) {
+  const errorMessage = useErrorMessage();
   const router = useRouter();
   const [csrf, setCsrf] = useState<string | null>(null);
   const [authed, setAuthed] = useState<boolean | null>(null);
@@ -107,9 +109,7 @@ export function NoteDetailScreen({
       hydrate(detail);
       setBacklinks(links);
     } catch (err) {
-      setLoadError(
-        err instanceof Error ? err.message : "Could not load that note.",
-      );
+      setLoadError(errorMessage(err, "notesGet"));
     }
   }, [noteId, hydrate, onRequireAuth]);
 
@@ -139,9 +139,7 @@ export function NoteDetailScreen({
       setSaveError(
         err instanceof NoteError && err.kind === "body_too_long"
           ? "This note is too long to save."
-          : err instanceof Error
-            ? err.message
-            : "Could not save the note.",
+          : errorMessage(err, "notesSave"),
       );
     } finally {
       setSaving(false);
@@ -157,9 +155,7 @@ export function NoteDetailScreen({
       await deleteNote(noteId, csrf);
       router.push("/notes");
     } catch (err) {
-      setSaveError(
-        err instanceof Error ? err.message : "Could not delete the note.",
-      );
+      setSaveError(errorMessage(err, "notesDelete"));
       setDeleting(false);
       setConfirmingDelete(false);
     }

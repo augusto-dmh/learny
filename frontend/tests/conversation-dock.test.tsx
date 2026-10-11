@@ -210,8 +210,10 @@ describe("when the conversation list cannot be loaded", () => {
         jsonResponse(500, { detail: "Your conversations could not be loaded." }),
     });
 
+    // A 5xx reads as the shared server copy, never the backend detail.
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("could not be loaded");
+    expect(alert.textContent).toContain("The server had a problem. Please try again.");
+    expect(alert.textContent).not.toContain("Your conversations could not be loaded.");
     // A failed load is not the same as a book with no threads, and the reader
     // can still start one.
     expect(screen.getByRole("button", { name: "New conversation" })).toBeTruthy();
@@ -239,7 +241,8 @@ describe("when the conversation list cannot be loaded", () => {
     // The failure is readable, what was already read stays, and the reader can
     // try again.
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("The older ones could not be loaded.");
+    expect(alert.textContent).toContain("The server had a problem. Please try again.");
+    expect(alert.textContent).not.toContain("The older ones could not be loaded.");
     expect(screen.getByRole("button", { name: "Resume Thread 0" })).toBeTruthy();
     expect(
       screen.getByRole("button", { name: "Show older conversations" }),
@@ -288,7 +291,8 @@ describe("deleting a conversation from the dock", () => {
     // The reader is told, and nothing is removed on the strength of a request
     // the server refused: the row and the open thread are both still there.
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("could not be deleted");
+    expect(alert.textContent).toContain("The server had a problem. Please try again.");
+    expect(alert.textContent).not.toContain("could not be deleted");
     expect(screen.getByRole("button", { name: "Resume Ada Lovelace" })).toBeTruthy();
     expect(screen.getByText("Ada Lovelace did.")).toBeTruthy();
     expect(readActiveConversation("s1", "ask")).toBe("conv1");

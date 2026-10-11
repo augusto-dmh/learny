@@ -30,6 +30,7 @@ import {
   type CardSuggestion,
 } from "@/app/lib/cards";
 import { Button } from "@/components/ui/button";
+import { useErrorMessage } from "../use-error-message";
 
 export function NoteCardSuggestions({
   noteId,
@@ -38,6 +39,7 @@ export function NoteCardSuggestions({
   noteId: string;
   csrf: string;
 }) {
+  const errorMessage = useErrorMessage();
   // `null` until the reader first asks; then the batch (possibly empty after QC).
   const [suggestions, setSuggestions] = useState<CardSuggestion[] | null>(null);
   const [loading, setLoading] = useState(false);
@@ -56,9 +58,7 @@ export function NoteCardSuggestions({
     try {
       setSuggestions(await suggestNoteCards(noteId, csrf));
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Could not suggest cards for this note.",
-      );
+      setError(errorMessage(err, "cardsSuggestNote"));
       setSuggestions(null);
     } finally {
       setLoading(false);
@@ -144,6 +144,7 @@ function NoteSuggestionChip({
   suggestion: CardSuggestion;
   onAccepted: (card: Card, created: boolean) => void;
 }) {
+  const errorMessage = useErrorMessage();
   const [resolved, setResolved] = useState(false);
   const [editing, setEditing] = useState(false);
   const [question, setQuestion] = useState(suggestion.question);
@@ -166,7 +167,7 @@ function NoteSuggestionChip({
       onAccepted(card, created);
       setResolved(true);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not add this card to review.");
+      setError(errorMessage(err, "cardsAddToReview"));
       setPending(false);
     }
   }

@@ -18,10 +18,13 @@
  * body cap; these helpers just carry inputs in and surface the note/summary/
  * backlink/error out. The response types mirror the backend views in `web/notes.py`
  * exactly so the two never drift. Non-OK responses are surfaced as a typed
- * `NoteError` whose `kind` lets callers branch on the documented failures — a
- * stale capture (409, the reader tells the user to reload) and an over-cap body
- * (422, the editor flags the length) — without matching on message strings.
+ * `NoteError` (an `ApiError`) whose `kind` lets callers branch on the documented
+ * failures — a stale capture (409, the reader tells the user to reload) and an
+ * over-cap body (422, the editor flags the length) — without matching on message
+ * strings.
  */
+
+import { ApiError, readDetail, type ApiOperation } from "./errors";
 
 /** A note's book citation, mirroring the backend `NoteAnchorView` (NF-10). */
 export type NoteAnchor = {
@@ -121,19 +124,23 @@ export type CaptureHighlight = {
 export type NoteErrorKind = "stale_capture" | "body_too_long" | "unknown";
 
 /**
- * A non-OK notes response, carrying the mapped `kind` and the backend `detail`
- * (or a readable fallback) as its message. Callers match on `kind`, not the
+ * A non-OK notes response: an `ApiError` carrying the mapped `kind` besides the
+ * operation, status and backend `detail`. Callers match on `kind`, not the
  * message, so copy changes never break control flow.
  */
-export class NoteError extends Error {
+export class NoteError extends ApiError {
   readonly kind: NoteErrorKind;
-  readonly status: number;
+  declare readonly status: number;
 
-  constructor(kind: NoteErrorKind, status: number, message: string) {
-    super(message);
+  constructor(
+    kind: NoteErrorKind,
+    operation: ApiOperation,
+    status: number,
+    detail: string | null = null,
+  ) {
+    super(operation, status, detail);
     this.name = "NoteError";
     this.kind = kind;
-    this.status = status;
   }
 }
 
@@ -143,8 +150,7 @@ export class NoteError extends Error {
  * list holds only notes anchored to that book — a note anchored to it more than
  * once still appears once — and every row carries the passage it came from; a
  * source the caller does not own collapses to a 404 like every other source read.
- * Read-only GET, so no CSRF token. On a non-OK response the backend `detail` is
- * surfaced via `NoteError`.
+ * Read-only GET, so no CSRF token. On a non-OK response it throws a `NoteError`.
  */
 export async function listNotes(
   { tag, sourceId }: { tag?: string; sourceId?: string } = {},
@@ -163,7 +169,7 @@ export async function listNotes(
     credentials: "same-origin",
   });
   if (!res.ok) {
-    throw await toNoteError(res, "Could not load your notes.");
+    throw await toNoteError(res, "notesList");
   }
   return (await res.json()) as NoteSummary[];
 }
@@ -181,7 +187,7 @@ export async function getNote(
     credentials: "same-origin",
   });
   if (!res.ok) {
-    throw await toNoteError(res, "Could not load that note.");
+    throw await toNoteError(res, "notesGet");
   }
   return (await res.json()) as NoteDetail;
 }
@@ -204,7 +210,7 @@ export async function updateNote(
     body: JSON.stringify(body),
   });
   if (!res.ok) {
-    throw await toNoteError(res, "Could not save the note.");
+    throw await toNoteError(res, "notesSave");
   }
   return (await res.json()) as NoteDetail;
 }
@@ -225,7 +231,7 @@ export async function deleteNote(
     headers: { "X-CSRF-Token": csrfToken },
   });
   if (!res.ok) {
-    throw await toNoteError(res, "Could not delete the note.");
+    throw await toNoteError(res, "notesDelete");
   }
 }
 
@@ -242,7 +248,7 @@ export async function getBacklinks(
     credentials: "same-origin",
   });
   if (!res.ok) {
-    throw await toNoteError(res, "Could not load the backlinks.");
+    throw await toNoteError(res, "notesBacklinks");
   }
   return (await res.json()) as Backlink[];
 }
@@ -267,30 +273,22 @@ export async function captureHighlight(
     body: JSON.stringify(body),
   });
   if (!res.ok) {
-    throw await toNoteError(res, "Could not capture the highlight.");
+    throw await toNoteError(res, "notesCapture");
   }
   return (await res.json()) as NoteDetail;
 }
 
 /**
  * Build a typed `NoteError` from a non-OK response. The status maps to a `kind`
- * (409 → `stale_capture`, 422 → `body_too_long`, else `unknown`) and the backend
- * `detail` string becomes the message; a 422 detail arrives as a list of
- * validation errors, not a string, so those fall back to the readable message
- * rather than a stringified list (mirroring `toQuizError`).
+ * (409 → `stale_capture`, 422 → `body_too_long`, else `unknown`); the backend
+ * `detail` rides along as data.
  */
-async function toNoteError(res: Response, fallback: string): Promise<NoteError> {
+async function toNoteError(res: Response, operation: ApiOperation): Promise<NoteError> {
   const kind: NoteErrorKind =
     res.status === 409
       ? "stale_capture"
       : res.status === 422
         ? "body_too_long"
         : "unknown";
-  try {
-    const body = (await res.json()) as { detail?: unknown };
-    const message = typeof body.detail === "string" ? body.detail : fallback;
-    return new NoteError(kind, res.status, message);
-  } catch {
-    return new NoteError(kind, res.status, fallback);
-  }
+  return new NoteError(kind, operation, res.status, await readDetail(res));
 }

@@ -114,14 +114,14 @@ describe("getContinueReading (HOME-01/02)", () => {
     expect(result).toBeNull();
   });
 
-  it("throws a readable error when unauthenticated (401)", async () => {
+  it("throws an ApiError when unauthenticated (401)", async () => {
     const fetchMock = fetchMockFn(async () =>
       jsonResponse(401, { detail: "Not authenticated." }),
     );
 
     await expect(
       getContinueReading(fetchMock as unknown as typeof fetch),
-    ).rejects.toThrow("Not authenticated.");
+    ).rejects.toMatchObject({ detail: "Not authenticated." });
   });
 });
 
@@ -171,7 +171,7 @@ describe("getStudyDays (HOME-09/11)", () => {
     expect(headers.get("X-Client-Timezone")).not.toBe("undefined");
   });
 
-  it("throws a readable error on a non-OK response", async () => {
+  it("throws an ApiError on a non-OK response", async () => {
     stubZone("America/Sao_Paulo");
     const fetchMock = fetchMockFn(async () =>
       jsonResponse(401, { detail: "Not authenticated." }),
@@ -179,6 +179,6 @@ describe("getStudyDays (HOME-09/11)", () => {
 
     await expect(
       getStudyDays(84, fetchMock as unknown as typeof fetch),
-    ).rejects.toThrow("Not authenticated.");
+    ).rejects.toMatchObject({ detail: "Not authenticated." });
   });
 });

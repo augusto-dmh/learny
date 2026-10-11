@@ -6,7 +6,7 @@
  * anchor `encodeURIComponent`-encoded exactly once (proving a `href#fragment`
  * anchor round-trips without double-encoding), parses the `SectionView` on 200,
  * returns a typed `not_found` result on 404 (never throwing — the reader renders
- * it as a not-found state), and throws a readable error on other non-OK
+ * it as a not-found state), and throws an ApiError on other non-OK
  * responses (401). No real network.
  */
 
@@ -72,13 +72,13 @@ describe("section content client (FE-14/FE-15)", () => {
     expect(result).toEqual({ status: "not_found" });
   });
 
-  it("throws a readable error when unauthenticated (401)", async () => {
+  it("throws an ApiError when unauthenticated (401)", async () => {
     const fetchMock = fetchMockFn(async () =>
       jsonResponse(401, { detail: "Not authenticated." }),
     );
 
     await expect(
       getSection("s1", ANCHOR, fetchMock as unknown as typeof fetch),
-    ).rejects.toThrow("Not authenticated.");
+    ).rejects.toMatchObject({ detail: "Not authenticated." });
   });
 });

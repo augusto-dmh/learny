@@ -164,14 +164,14 @@ describe("getQuizOverview (E1)", () => {
     expect(result.items[1].status).toBe("stale");
   });
 
-  it("surfaces the backend detail on a 404 missing/non-owned response", async () => {
+  it("carries the backend detail as data on a 404 missing/non-owned response", async () => {
     const fetchMock = fetchMockFn(async () =>
       jsonResponse(404, { detail: "Source not found." }),
     );
 
     await expect(
       getQuizOverview("s1", fetchMock as unknown as typeof fetch),
-    ).rejects.toThrow("Source not found.");
+    ).rejects.toMatchObject({ detail: "Source not found." });
   });
 });
 
@@ -194,34 +194,34 @@ describe("generateDeck (E1)", () => {
     expect(result.status).toBe("queued");
   });
 
-  it("surfaces the backend detail on a 409 already-running response", async () => {
+  it("carries the backend detail as data on a 409 already-running response", async () => {
     const fetchMock = fetchMockFn(async () =>
       jsonResponse(409, { detail: "Deck generation already running." }),
     );
 
     await expect(
       generateDeck("s1", "csrf-xyz", fetchMock as unknown as typeof fetch),
-    ).rejects.toThrow("Deck generation already running.");
+    ).rejects.toMatchObject({ detail: "Deck generation already running." });
   });
 
-  it("surfaces the backend detail on a 429 rate-limited response", async () => {
+  it("carries the backend detail as data on a 429 rate-limited response", async () => {
     const fetchMock = fetchMockFn(async () =>
       jsonResponse(429, { detail: "Too many requests. Try again shortly." }),
     );
 
     await expect(
       generateDeck("s1", "csrf-xyz", fetchMock as unknown as typeof fetch),
-    ).rejects.toThrow("Too many requests. Try again shortly.");
+    ).rejects.toMatchObject({ detail: "Too many requests. Try again shortly." });
   });
 
-  it("surfaces the backend detail on a 502 enqueue-failure response", async () => {
+  it("carries the backend detail as data on a 502 enqueue-failure response", async () => {
     const fetchMock = fetchMockFn(async () =>
       jsonResponse(502, { detail: "Could not start quiz deck generation." }),
     );
 
     await expect(
       generateDeck("s1", "csrf-xyz", fetchMock as unknown as typeof fetch),
-    ).rejects.toThrow("Could not start quiz deck generation.");
+    ).rejects.toMatchObject({ operation: "quizGenerate" });
   });
 });
 
@@ -242,14 +242,14 @@ describe("ensureStarterDeck", () => {
     expect(new Headers(init.headers).get("X-CSRF-Token")).toBe("csrf-xyz");
   });
 
-  it("surfaces the backend detail on a 404 missing/non-sample response", async () => {
+  it("carries the backend detail as data on a 404 missing/non-sample response", async () => {
     const fetchMock = fetchMockFn(async () =>
       jsonResponse(404, { detail: "Source not found." }),
     );
 
     await expect(
       ensureStarterDeck("s1", "csrf-xyz", fetchMock as unknown as typeof fetch),
-    ).rejects.toThrow("Source not found.");
+    ).rejects.toMatchObject({ detail: "Source not found." });
   });
 
   it("treats a not-ready sample as a no-op", async () => {
@@ -313,14 +313,14 @@ describe("getDueReviews (E1)", () => {
     expect(fetchMock.mock.calls[0][0]).toBe("/api/reviews/due");
   });
 
-  it("surfaces the backend detail on a 401 unauthenticated response", async () => {
+  it("carries the backend detail as data on a 401 unauthenticated response", async () => {
     const fetchMock = fetchMockFn(async () =>
       jsonResponse(401, { detail: "Not authenticated." }),
     );
 
     await expect(
       getDueReviews({}, fetchMock as unknown as typeof fetch),
-    ).rejects.toThrow("Not authenticated.");
+    ).rejects.toMatchObject({ detail: "Not authenticated." });
   });
 });
 
@@ -369,7 +369,7 @@ describe("submitReview (E1)", () => {
     });
   });
 
-  it("surfaces the backend detail on a 409 stale/orphaned response", async () => {
+  it("carries the backend detail as data on a 409 stale/orphaned response", async () => {
     const fetchMock = fetchMockFn(async () =>
       jsonResponse(409, { detail: "Item suspended after re-ingest." }),
     );
@@ -381,10 +381,10 @@ describe("submitReview (E1)", () => {
         "csrf-xyz",
         fetchMock as unknown as typeof fetch,
       ),
-    ).rejects.toThrow("Item suspended after re-ingest.");
+    ).rejects.toMatchObject({ detail: "Item suspended after re-ingest." });
   });
 
-  it("falls back to a readable message when a 422 detail is a list, not a string", async () => {
+  it("names the operation when a 422 detail is a list, not a string", async () => {
     const fetchMock = fetchMockFn(async () =>
       jsonResponse(422, {
         detail: [
@@ -400,10 +400,10 @@ describe("submitReview (E1)", () => {
         "csrf-xyz",
         fetchMock as unknown as typeof fetch,
       ),
-    ).rejects.toThrow("Could not submit your review.");
+    ).rejects.toMatchObject({ operation: "quizReview" });
   });
 
-  it("falls back to a readable message when the error body is not parseable", async () => {
+  it("names the operation when the error body is not parseable", async () => {
     const fetchMock = fetchMockFn(
       async () => new Response("<html>gateway</html>", { status: 502 }),
     );
@@ -415,7 +415,7 @@ describe("submitReview (E1)", () => {
         "csrf-xyz",
         fetchMock as unknown as typeof fetch,
       ),
-    ).rejects.toThrow("Could not submit your review.");
+    ).rejects.toMatchObject({ operation: "quizReview" });
   });
 
   it("attaches X-Client-Timezone for the study-day boundary when the zone is available (HOME-09)", async () => {
@@ -476,14 +476,14 @@ describe("resetSchedule (NL-12)", () => {
     expect(new Headers(init.headers).get("X-CSRF-Token")).toBe("csrf-xyz");
   });
 
-  it("surfaces the backend detail on a 409 non-active response", async () => {
+  it("carries the backend detail as data on a 409 non-active response", async () => {
     const fetchMock = fetchMockFn(async () =>
       jsonResponse(409, { detail: "This card is not active." }),
     );
 
     await expect(
       resetSchedule("i1", "csrf-xyz", fetchMock as unknown as typeof fetch),
-    ).rejects.toThrow("This card is not active.");
+    ).rejects.toMatchObject({ detail: "This card is not active." });
   });
 });
 
@@ -517,14 +517,14 @@ describe("undoReview (REV-22)", () => {
     expect(headers.has("X-Client-Timezone")).toBe(false);
   });
 
-  it("surfaces the backend detail on a 409 empty-undo response", async () => {
+  it("carries the backend detail as data on a 409 empty-undo response", async () => {
     const fetchMock = fetchMockFn(async () =>
       jsonResponse(409, { detail: "Nothing to undo." }),
     );
 
     await expect(
       undoReview("csrf-xyz", fetchMock as unknown as typeof fetch),
-    ).rejects.toThrow("Nothing to undo.");
+    ).rejects.toMatchObject({ detail: "Nothing to undo." });
   });
 });
 
@@ -549,14 +549,14 @@ describe("flagQuizItem (REV-34)", () => {
     expect(new Headers(init.headers).get("X-CSRF-Token")).toBe("csrf-xyz");
   });
 
-  it("surfaces the backend detail on a 404 flag response", async () => {
+  it("carries the backend detail as data on a 404 flag response", async () => {
     const fetchMock = fetchMockFn(async () =>
       jsonResponse(404, { detail: "Quiz item not found." }),
     );
 
     await expect(
       flagQuizItem("i1", true, "csrf-xyz", fetchMock as unknown as typeof fetch),
-    ).rejects.toThrow("Quiz item not found.");
+    ).rejects.toMatchObject({ detail: "Quiz item not found." });
   });
 });
 
@@ -589,7 +589,7 @@ describe("updateQuizItem (REV-37)", () => {
     expect(new Headers(init.headers).get("X-CSRF-Token")).toBe("csrf-xyz");
   });
 
-  it("surfaces the backend detail on a 409 update response", async () => {
+  it("carries the backend detail as data on a 409 update response", async () => {
     const fetchMock = fetchMockFn(async () =>
       jsonResponse(409, { detail: "This card is not active." }),
     );
@@ -601,6 +601,6 @@ describe("updateQuizItem (REV-37)", () => {
         "csrf-xyz",
         fetchMock as unknown as typeof fetch,
       ),
-    ).rejects.toThrow("This card is not active.");
+    ).rejects.toMatchObject({ detail: "This card is not active." });
   });
 });
