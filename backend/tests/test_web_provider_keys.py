@@ -275,6 +275,21 @@ def test_malformed_key_422_never_echoes(
     assert _rows(db_conn, user_id) == []
 
 
+@pytest.mark.parametrize("length", [20, 256])
+def test_keys_at_the_length_bounds_are_accepted(
+    length: int, auth_client: TestClient, db_conn: Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _declare(monkeypatch, [_HOUSE, _CLAUDE])
+    user_id, headers = _learner(auth_client, f"keys-bound-{length}@example.com")
+    key = "sk-ant-" + "K" * (length - len("sk-ant-"))
+
+    resp = _put(auth_client, headers, key)
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["last4"] == "KKKK"
+    assert len(_rows(db_conn, user_id)) == 1
+
+
 # --- C12: providers this instance does not offer -------------------------------------
 
 

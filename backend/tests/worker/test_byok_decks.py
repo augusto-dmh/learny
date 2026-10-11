@@ -328,7 +328,7 @@ def test_poll_pins_credential(
     assert _usd_today(db_engine, ctx.user.id) == 0
 
 
-def test_a_handle_without_a_pin_polls_with_the_house_adapter(
+def test_poll_pins_credential_only_when_the_handle_names_one(
     byok: None, seed, db_engine: Engine, fakes: list[_KeyedQuizFake]
 ) -> None:  # noqa: ANN001
     ctx = seed(job_status=QuizJobStatus.RUNNING)
