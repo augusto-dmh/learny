@@ -7,6 +7,13 @@
  * signed-in user plus a logout button. Logout sends the session-bound CSRF
  * token in `X-CSRF-Token` (handled inside `auth.logout`, AD-007).
  *
+ * The "Language" section stores the learner's interface language: Automatic
+ * (negotiate from the browser), English or Português (Brasil). Like the AI
+ * profile it is confirm-then-move: the backend stores the choice first, and only
+ * a confirmed save writes the `learny_locale` cookie and asks the caller to
+ * re-render (`onLocaleChanged`, `router.refresh()` on the page) — a failed save
+ * leaves the cookie, the selection and the language untouched.
+ *
  * When the deployment actually offers a generation-profile choice, the panel
  * also renders an "AI profile" section: "Operator default (recommended)" plus
  * one honest row per catalog profile. The section exists only when the catalog
@@ -14,8 +21,8 @@
  * degrades to that absence rather than an error wall over the account content.
  * A stored id the catalog no longer contains renders as the default entry: the
  * UI never shows a phantom selection. Persisting a choice is not optimistic —
- * a failed save leaves the visible selection untouched and surfaces the
- * backend's own error copy.
+ * a failed save leaves the visible selection untouched and shows the
+ * operation's catalog copy.
  *
  * The `onRequireAuth` callback fires when the user is unauthenticated so the
  * caller can perform a UX-only redirect. NOTE: this redirect is convenience
@@ -23,6 +30,7 @@
  * protected endpoint regardless of client-side routing (FR-AUTH-007).
  */
 
+import { useTranslations } from "next-intl";
 import { useCallback, useEffect, useState } from "react";
 
 import {
@@ -34,42 +42,44 @@ import {
   type ProfileGrounding,
 } from "@/app/lib/ai-profiles";
 import { fetchAuthState, logout, type AuthState } from "@/app/lib/auth";
+import { deleteLocale, putLocale, writeLocaleCookie } from "@/app/lib/locale";
+import { useErrorMessage } from "@/app/components/use-error-message";
+import { LOCALES, isLocale, type AppLocale } from "@/i18n/config";
 import { Button } from "@/components/ui/button";
-import { useErrorMessage } from "./use-error-message";
 
-/** Honest grounding copy — what the learner gives up per mechanism. */
-function groundingHint(grounding: ProfileGrounding): string {
-  switch (grounding) {
-    case "verified-spans":
-      return "Citations are verified against the book.";
-    case "prompt-cited":
-      return "Citations are model-claimed and may be less precise.";
-    case "none":
-      return "Answers do not cite the book.";
-  }
-}
+const GROUNDING_KEY = {
+  "verified-spans": "verifiedSpans",
+  "prompt-cited": "promptCited",
+  none: "none",
+} as const satisfies Record<ProfileGrounding, string>;
 
-/** Honest availability copy — where the choice actually applies. */
-function availabilityHint(profile: LearnerProfile): string {
+/** Where the choice actually applies, as a key of `account.aiProfile.availability`. */
+function availabilityKey(profile: LearnerProfile) {
   if (profile.ask_enabled && profile.teach_enabled) {
-    return "Works in Ask and Teach.";
+    return "both" as const;
   }
   if (profile.ask_enabled) {
-    return "Works in Ask only.";
+    return "askOnly" as const;
   }
   if (profile.teach_enabled) {
-    return "Works in Teach only.";
+    return "teachOnly" as const;
   }
-  return "Currently works in neither Ask nor Teach.";
+  return "neither" as const;
 }
 
 export function AccountPanel({
   onRequireAuth,
   onLoggedOut,
+  onLocaleChanged,
 }: {
   onRequireAuth?: () => void;
   onLoggedOut?: () => void;
+  /** Called after a confirmed language change has rewritten the cookie. */
+  onLocaleChanged?: () => void;
 }) {
+  const t = useTranslations("account");
+  const tLocale = useTranslations("common.locale");
+  const tCommon = useTranslations("common");
   const errorMessage = useErrorMessage();
   const [state, setState] = useState<AuthState | null>(null);
   // null = not loaded (or failed to load): the section stays absent either way.
@@ -77,10 +87,17 @@ export function AccountPanel({
   const [storedChoice, setStoredChoice] = useState<string | null>(null);
   const [aiPending, setAiPending] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
+  // The stored interface language; null = automatic.
+  const [storedLocale, setStoredLocale] = useState<AppLocale | null>(null);
+  const [localePending, setLocalePending] = useState(false);
+  const [localeError, setLocaleError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     const next = await fetchAuthState();
     setState(next);
+    if (next.authenticated) {
+      setStoredLocale(isLocale(next.user.locale) ? next.user.locale : null);
+    }
     // UX-only redirect for unauthenticated users (NOT the security boundary).
     if (!next.authenticated) {
       onRequireAuth?.();
@@ -132,9 +149,36 @@ export function AccountPanel({
   }
 
   /**
+   * Persist a language. Nothing optimistic: the backend confirms first, then the
+   * cookie (the render-time cache) is rewritten and the page re-renders.
+   */
+  async function handleChooseLocale(locale: AppLocale | null) {
+    if (!state?.authenticated) {
+      return;
+    }
+    setLocaleError(null);
+    setLocalePending(true);
+    try {
+      if (locale === null) {
+        await deleteLocale(state.user.csrf_token);
+        setStoredLocale(null);
+        writeLocaleCookie(null);
+      } else {
+        const stored = await putLocale(locale, state.user.csrf_token);
+        setStoredLocale(stored);
+        writeLocaleCookie(stored);
+      }
+      onLocaleChanged?.();
+    } catch (error) {
+      setLocaleError(errorMessage(error, locale === null ? "localeReset" : "localeSave"));
+    } finally {
+      setLocalePending(false);
+    }
+  }
+
+  /**
    * Persist a choice. Nothing optimistic: the visible selection moves only
-   * after the backend confirms, so a failed save changes nothing on screen and
-   * the backend's own error copy is surfaced verbatim.
+   * after the backend confirms, so a failed save changes nothing on screen.
    */
   async function handleChooseProfile(profileId: string | null) {
     if (!state?.authenticated) {
@@ -158,10 +202,10 @@ export function AccountPanel({
   }
 
   if (state === null) {
-    return <p className="text-muted-foreground">Loading…</p>;
+    return <p className="text-muted-foreground">{tCommon("loading")}</p>;
   }
   if (!state.authenticated) {
-    return <p className="text-muted-foreground">You are signed out.</p>;
+    return <p className="text-muted-foreground">{t("signedOut")}</p>;
   }
 
   // A stored id absent from the catalog is stale (the operator renamed or
@@ -174,17 +218,49 @@ export function AccountPanel({
       ? storedChoice
       : null;
 
+  const localeOptions: { value: AppLocale | null; label: string }[] = [
+    { value: null, label: t("language.automatic") },
+    ...LOCALES.map((locale) => ({ value: locale, label: tLocale(`names.${locale}`) })),
+  ];
+
   return (
-    <section aria-label="account" className="space-y-4">
+    <section aria-label={t("regionLabel")} className="space-y-4">
       <p className="text-sm">
-        Signed in as <strong className="font-medium">{state.user.email}</strong>
+        {t.rich("signedInAs", {
+          email: state.user.email,
+          strong: (chunks) => <strong className="font-medium">{chunks}</strong>,
+        })}
       </p>
-      {catalog !== null && catalog.length > 0 ? (
-        <section aria-label="AI profile" className="space-y-3">
-          <h2 className="text-sm font-medium">AI profile</h2>
-          <p className="text-sm text-muted-foreground">
-            Choose how Ask and Teach generate answers for you.
+      <section aria-label={t("language.heading")} className="space-y-3">
+        <h2 className="text-sm font-medium">{t("language.heading")}</h2>
+        <p className="text-sm text-muted-foreground">{t("language.intro")}</p>
+        <div className="space-y-2">
+          {localeOptions.map((option) => (
+            <label key={option.value ?? "automatic"} className="flex items-center gap-2.5">
+              <input
+                type="radio"
+                name="locale-choice"
+                checked={storedLocale === option.value}
+                onChange={() => void handleChooseLocale(option.value)}
+                disabled={localePending}
+                lang={option.value ?? undefined}
+              />
+              <span className="text-sm" lang={option.value ?? undefined}>
+                {option.label}
+              </span>
+            </label>
+          ))}
+        </div>
+        {localeError ? (
+          <p role="alert" className="text-sm text-destructive">
+            {localeError}
           </p>
+        ) : null}
+      </section>
+      {catalog !== null && catalog.length > 0 ? (
+        <section aria-label={t("aiProfile.heading")} className="space-y-3">
+          <h2 className="text-sm font-medium">{t("aiProfile.heading")}</h2>
+          <p className="text-sm text-muted-foreground">{t("aiProfile.intro")}</p>
           <div className="space-y-3">
             <label className="flex items-start gap-2.5">
               <input
@@ -193,15 +269,13 @@ export function AccountPanel({
                 checked={effectiveChoice === null}
                 onChange={() => void handleChooseProfile(null)}
                 disabled={aiPending}
-                aria-label="Operator default (recommended)"
+                aria-label={t("aiProfile.defaultTitle")}
                 className="mt-1"
               />
               <span>
-                <span className="block text-sm">
-                  Operator default (recommended)
-                </span>
+                <span className="block text-sm">{t("aiProfile.defaultTitle")}</span>
                 <span className="block text-xs text-muted-foreground">
-                  Serving follows the operator&apos;s default chain.
+                  {t("aiProfile.defaultHint")}
                 </span>
               </span>
             </label>
@@ -224,8 +298,8 @@ export function AccountPanel({
                     </span>
                   ) : null}
                   <span className="block text-xs text-muted-foreground">
-                    {groundingHint(profile.grounding)}{" "}
-                    {availabilityHint(profile)}
+                    {t(`aiProfile.grounding.${GROUNDING_KEY[profile.grounding]}`)}{" "}
+                    {t(`aiProfile.availability.${availabilityKey(profile)}`)}
                   </span>
                 </span>
               </label>
@@ -239,7 +313,7 @@ export function AccountPanel({
         </section>
       ) : null}
       <Button type="button" variant="outline" onClick={handleLogout}>
-        Log out
+        {t("logout")}
       </Button>
     </section>
   );

@@ -71,6 +71,11 @@ function defaultHandlers(overrides: Record<string, Handler> = {}) {
   };
 }
 
+/** The AI-profile radios only (the panel also holds the language choice). */
+function aiProfileRadios(): HTMLInputElement[] {
+  return [...document.querySelectorAll<HTMLInputElement>('input[name="ai-profile-choice"]')];
+}
+
 /** Flush the post-fetch state updates once the routed calls have resolved. */
 async function settle() {
   await act(async () => {});
@@ -116,7 +121,7 @@ describe("AccountPanel AI profile section", () => {
 
     expect(screen.queryByRole("region", { name: "AI profile" })).toBeNull();
     expect(screen.queryByLabelText("Operator default (recommended)")).toBeNull();
-    expect(screen.queryAllByRole("radio")).toHaveLength(0);
+    expect(aiProfileRadios()).toHaveLength(0);
     // The rest of the account panel is untouched by the empty catalog.
     expect(screen.getByRole("button", { name: "Log out" })).toBeTruthy();
   });
@@ -216,7 +221,7 @@ describe("AccountPanel AI profile section", () => {
     expect(screen.queryByLabelText("removed-tier")).toBeNull();
     expect(screen.queryByText("removed-tier")).toBeNull();
     // Exactly the default row plus one row per catalog entry.
-    expect(screen.getAllByRole("radio")).toHaveLength(3);
+    expect(aiProfileRadios()).toHaveLength(3);
   });
 
   it("choosing a profile persists via PUT with the CSRF token, then moves the selection", async () => {

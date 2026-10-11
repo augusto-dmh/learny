@@ -4,7 +4,14 @@
     "description": "Learny — inteligência para livros"
   },
   "common": {
-    "loading": "Carregando…"
+    "loading": "Carregando…",
+    "locale": {
+      "label": "Idioma",
+      "names": {
+        "en": "English",
+        "pt-BR": "Português (Brasil)"
+      }
+    }
   },
   "errors": {
     "generic": "Algo deu errado. Tente novamente.",
@@ -80,9 +87,7 @@
     "language": {
       "heading": "Idioma",
       "intro": "Escolha o idioma em que o Learny fala com você. O texto dos livros e as suas notas nunca são traduzidos.",
-      "automatic": "Automático (seguir meu navegador)",
-      "english": "English",
-      "portuguese": "Português (Brasil)"
+      "automatic": "Automático (seguir meu navegador)"
     },
     "aiProfile": {
       "heading": "Perfil de IA",

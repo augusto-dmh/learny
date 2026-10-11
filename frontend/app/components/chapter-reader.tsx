@@ -70,7 +70,8 @@ import {
   type ObserverFactory,
 } from "@/app/components/use-scroll-position";
 import { CardSuggestions } from "@/app/components/notes/card-suggestions";
-import { fetchAuthState } from "@/app/lib/auth";
+import { fetchAuthState, type AuthState } from "@/app/lib/auth";
+import { useLocaleSync } from "@/app/components/use-locale-sync";
 import { CardError, suggestCards, type CardSuggestion } from "@/app/lib/cards";
 import { paintHighlights, SCAFFOLD_ATTRIBUTE } from "@/app/lib/highlight-paint";
 import { paginateSection, sectionOffsets } from "@/app/lib/pages";
@@ -161,6 +162,10 @@ export function ChapterReader({
   // The CSRF token for the capture write (AD-007), read from the same
   // `/api/auth/me` resolve that gates the chapter read.
   const [csrf, setCsrf] = useState<string | null>(null);
+  // The same resolve, kept so the stored language can reconcile the cookie here
+  // too: the immersive reader sits outside the app shell that does it elsewhere.
+  const [authState, setAuthState] = useState<AuthState | null>(null);
+  useLocaleSync(authState);
   // The caller's existing highlights, painted into the flow once they arrive.
   // They are P2 and non-blocking: the chapter renders without waiting on them,
   // and a failed fetch simply leaves the prose unpainted (RD-28/29).
@@ -206,6 +211,7 @@ export function ChapterReader({
         return;
       }
       setCsrf(auth.user.csrf_token);
+      setAuthState(auth);
       // Fetch highlights alongside consuming the chapter; they paint in when
       // ready without gating first contentful render, and a failure is ignored.
       void listHighlights(sourceId)

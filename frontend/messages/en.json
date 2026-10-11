@@ -4,7 +4,14 @@
     "description": "Learny — book intelligence"
   },
   "common": {
-    "loading": "Loading…"
+    "loading": "Loading…",
+    "locale": {
+      "label": "Language",
+      "names": {
+        "en": "English",
+        "pt-BR": "Português (Brasil)"
+      }
+    }
   },
   "errors": {
     "generic": "Something went wrong. Please try again.",
@@ -80,9 +87,7 @@
     "language": {
       "heading": "Language",
       "intro": "Choose the language Learny speaks to you in. Book text and your notes are never translated.",
-      "automatic": "Automatic (follow my browser)",
-      "english": "English",
-      "portuguese": "Português (Brasil)"
+      "automatic": "Automatic (follow my browser)"
     },
     "aiProfile": {
       "heading": "AI profile",

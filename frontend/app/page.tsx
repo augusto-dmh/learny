@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { LocaleSwitcher } from "@/app/components/locale-switcher";
 import { Button } from "@/components/ui/button";
 
 /**
@@ -13,7 +14,8 @@ import { Button } from "@/components/ui/button";
  */
 export default function LandingPage() {
   return (
-    <main className="flex min-h-svh flex-col items-center justify-center gap-8 bg-background px-6 text-center text-foreground">
+    <main className="relative flex min-h-svh flex-col items-center justify-center gap-8 bg-background px-6 text-center text-foreground">
+      <LocaleSwitcher className="absolute right-4 top-4" />
       <div className="space-y-4">
         <h1 className="text-5xl font-semibold tracking-tight text-primary">
           Learny

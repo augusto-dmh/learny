@@ -30,6 +30,12 @@ export type MeResponse = UserSummary & {
    * the choice endpoint (`/api/me/ai-profile`).
    */
   ai_profile_id: string | null;
+  /**
+   * The caller's stored interface language (`en` or `pt-BR`); null means
+   * "automatic" — the cookie or the browser's `Accept-Language` decides. The
+   * `learny_locale` cookie is reconciled from this value (`useLocaleSync`).
+   */
+  locale: string | null;
 };
 
 /** Auth state as the UI sees it: either a signed-in user or anonymous. */
