@@ -29,3 +29,22 @@ Fresh-context `pr-review` posted 4 inline comments, a requirements review and a 
 | 6 | requirements review / summary | ADR-0034 Limits | The manual pt-BR browser walk is not done | real | deferred to owner | The overnight run skips screenshot passes by owner instruction; listed as deferred in the handoff. |
 
 Tally: 6 findings, 6 real, 0 false; 4 fixed, 1 closed by CI with no change, 1 deferred to the owner.
+
+# pt-br-interface review triage — batch 3 of 4 (PR #81)
+
+Fresh-context `pr-review` posted 5 inline comments (all suggestions), a requirements review and a summary. Each finding was checked against the code at `2ebda30` (branch head when the review ran). The PR comments are deleted after this triage, so this file is the surviving record.
+
+| # | Source | File:line | Finding | Verdict | Action | Rationale |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | inline, architecture (4240857938) | `frontend/app/components/review-screen.tsx:86` | The nine interval-bucket tokens are a wire contract but live inside the component | real (minor) | fix | `app/lib/quiz.ts` now exports `INTERVAL_BUCKETS` and the `IntervalBucket` type beside `intervalLabel`; the component's label map is a `Record<IntervalBucket, …>`, so a bucket added to the contract without a label fails `tsc`. |
+| 2 | inline, tests (4240860421) | `frontend/app/components/ask-panel.tsx:262` | No pt-BR test clicks a suggested prompt and checks the language it is sent in | real | fix | The pt-BR empty-state test now clicks a prompt and asserts the Portuguese text reaches the turn request (the tutor chips' fixed English is already pinned in the teach test). |
+| 3 | inline, tests (4240860467) | `frontend/app/components/review-screen.tsx:786` | The "unknown backend token shows as sent" fallback (interval bucket, `review.itemType` and `notes.anchorStatus` `other` branches) is untested | real | fix | New pt-BR assertions render an unknown interval bucket, item kind and anchor status and expect each verbatim; dropping an `other` branch now throws in the test binding. |
+| 4 | inline, tests (4240860505) | `frontend/components/ai-elements/conversation.tsx:66` | Nothing proves an explicit prop still beats the catalog default, or that `description=""` hides the paragraph | real | fix | The vendored-primitives test now renders explicit props (empty state title/description, command dialog title, prompt placeholder) and checks they win, and that an empty description renders no paragraph. |
+| 5 | inline, regression (4240863861) | `frontend/app/components/study-heatmap.tsx:531` | English counts of 1,000+ now show a thousands separator, contradicting "English renders as before" | real | fix (test + PR text) | Grouped digits are correct English; the change is intended, not reverted. An English assertion pins `1,234` in the dock, and the PR summary now says numbers are grouped for the locale in both languages. Recorded in `plan.md` Assumptions. |
+| 6 | requirements review (6107085094) | `.specs/project/ROADMAP.md` | The `pt-br-interface` row still says batches 3–4 are open | real | fix | Updated with the PR number before merge, as batch 2 did. |
+| 7 | requirements review | ADR-0034 Limits | The manual pt-BR browser and screen-reader walk is not done | real | deferred to owner | The overnight run skips screenshot and browser passes by owner instruction; listed in the handoff. |
+| 8 | requirements review | `plan.md` "Tutor card offer question" | The English tutor-card preview's follow-up has no roadmap row | real | won't-fix here | A roadmap row is authored when a cycle is chosen (CLAUDE.md); the follow-up is recorded as a candidate in the `STATE.md` handoff beside the backend-email localization follow-up. |
+| 9 | requirements review (Verifier B3-R3-F1) | `frontend/app/components/reader-panel.tsx:183` | The dock's Review tab badge shows a raw `1234` beside the body's `1.234` | real | fix | `TabCount` formats through `Intl.NumberFormat(locale)`; the dock test's 1234 case asserts the tab reads `1.234`. |
+| 10 | summary (6107112971) | — | Consolidated summary of the above | n/a | no change | Nothing beyond rows 1–9. |
+
+Tally: 9 findings (plus the summary), 9 real, 0 false; 7 fixed, 1 won't-fix (recorded as a candidate instead), 1 deferred to the owner.
