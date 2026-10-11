@@ -1,5 +1,119 @@
 # BYOK secrets and chains verification
 
+## Round 4 - review-fix diff
+
+**Verdict**: PASS (final, at `52f1df8`). The first pass at `c35b8fe` was FAIL: 2 gaps, each a missing sensor, no behaviour defect. Fix commit `52f1df8` closed both gaps, re-verified in [Gap closure](#gap-closure-re-verified-at-52f1df8).
+**Profile**: standard
+**Diff range**: review-fix diff `549c3da..eff1765` (six commits: `e6433b5`, `e8224f1`, `851ec7f`, `957cd44`, `51da1ab`, `eff1765`), verified at HEAD `c35b8fe` (`eff1765` plus spec/roadmap docs only; `git diff --stat eff1765 c35b8fe` touches no code or test)
+**Round**: 4 - scoped (the six commits' claims, per `review-triage.md`; regression of batch-A C1-C7, C19-C27, C44)
+**Verifier**: independent sub-agent (author != verifier)
+
+First pass at `c35b8fe` (kept as the record). The full backend suite is green and every batch-A check still holds. Five of the seven faults injected on the fix surface were killed by the new tests. Two survived the **full suite**, and each is a behaviour a commit claims in words with no test that exercises it:
+
+1. **Rotation through the repository may decrypt the key undetected (gap, `957cd44`).** `SqlAlchemyProviderCredentialRepository.rewrap` (`backend/app/infrastructure/db/provider_credentials.py:199-234`) is the code rotation now runs. Its docstring (`:202`) and the module docstring (`:16`) say "the key is never opened". Mutant M12 adds `self._envelope.open(...)` before the re-wrap at `:219`; it survives all 3172 tests. The new sensor `test_rewrap_never_opens_the_ciphertext` (`backend/tests/infrastructure/test_secrets_envelope.py:130-149`) proves this only for `SecretsEnvelope.rewrap`, one layer down. Every repository and CLI rotation test uses rows whose ciphertext authenticates, so opening first changes nothing they observe. Fix: in `test_rewrap_reports_each_outcome_of_one_row` (`backend/tests/test_provider_credentials_repository.py:239`), add a row whose `ciphertext` (not wrapped DEK) has one byte flipped, and assert that `rewrap` returns `"rewrapped"`.
+2. **The 20-character floor is not pinned (gap, `51da1ab`).** The commit and triage row 14 claim "refuses a key shorter than 20 characters" (`provider_credentials.py:44`, `:130`). The refusal test's shortest params are 12 chars (`sk-ant-short`) and 4 chars (`abcd`) (`test_provider_credentials_repository.py:218-236`). The shortest key accepted anywhere in the tests is 32 chars (`sk-proj-` + 24). Mutant M13 (`MIN_KEY_CHARS = 13`) survives the full suite, so any floor from 13 to 32 passes. The "last4 never holds a whole key" half is proven (`[four-characters]`). The 20 boundary is plan-owned at the route by C11 (19-char key, batch B), but this commit claims it at the repository. Fix: add a 19-char param to the refusal test and one accepted 20-char key.
+
+Both gaps are closed by `52f1df8`; see Gap closure below. Neither gap is a defect in the code: by reading, `rewrap` does not open the key, and the floor is 20. The claims are unproven, not false. No other gap was found. The won't-fix rows of the triage (#3, #11, #15) were not relitigated.
+
+### Commit claims -> proofs (verified at c35b8fe)
+
+All ran PASSED in one `-v` invocation of the 8 proof files from a clean scratch worktree (`LEARNY_REQUIRE_DB=1`, `learny_test_byok_verify`): **162 passed, 0 failed, 0 skipped**. A second invocation over `test_config.py`, `test_web_auth.py` and `test_migrations.py` with `-k "secrets_kek or provider_keys or 0030 or cascades_with"` gave **13 passed** (C6 x11, C7 web, migration 0030).
+
+| Commit | Claim | Proof | Evidence | Result |
+| --- | --- | --- | --- | --- |
+| `e6433b5` | binding refused unless anthropic -> kind `anthropic`; openai -> `openai-compatible` with empty `base_url` or `https://api.openai.com`; gemini -> `openai-compatible` on `https://generativelanguage.googleapis.com`; lookalike host and plain http refused (`profiles.py:161-179`, called at `:211`) | `test_a_binding_that_would_send_the_key_elsewhere_fails[7]`, `test_a_binding_that_matches_its_provider_resolves[4]` | `backend/tests/infrastructure/test_provider_profiles.py:455-463`: `pytest.raises(ValueError)`, `"byok-claude"`/`"would send them elsewhere" in message` over 7 ids (anthropic-on-compat, openai/gemini-on-anthropic-kind, openai-to-another-host, openai-over-plain-http, gemini-on-the-openai-default-host, gemini-to-a-lookalike-host); `:499-504` `ids == ["house-local", "byok-claude"]` over 4 accepted bindings | PASS |
+| `e6433b5` | one `UserKeyProvider` Literal, `USER_KEY_PROVIDERS = get_args(...)` | existing provider-literal tests | `test_provider_profiles.py` `test_user_key_only_binding_rejects_an_unknown_provider` (`:394`); `test_provider_credentials_repository.py:179` `[3]` round-trip | PASS |
+| `e8224f1` | build runs outside the cache lock; a hit returns while another learner's build is blocked | `test_a_slow_build_does_not_block_another_learners_lookup` | `backend/tests/infrastructure/test_user_adapter_cache.py:142-170`: `:168` `not hit_waited`; hit returns `["cached"]`; both keys cached | PASS |
+| `e8224f1` | first insert wins a race; the late adapter is dropped | `test_a_build_that_loses_a_race_hands_back_the_cached_adapter` | `test_user_adapter_cache.py:173-188`: `:187` `get_or_build(...) is winner`, `len(cache) == 1` | PASS |
+| `851ec7f` | both `# type: ignore`s removed, provider narrowed explicitly | read + suite | `backend/app/infrastructure/web/dependencies.py:820-828`: `assert provider is not None`, `credential: ProviderCredential`; no `type: ignore` left in the hunk; C19-C24 web tests PASSED through it | PASS |
+| `957cd44` | row work moved to `kek_listing` / `rewrap`; every outcome tested; CLI resumes halfway | `test_rewrap_reports_each_outcome_of_one_row`, `test_a_run_that_stopped_halfway_resumes_where_it_left_off` | `test_provider_credentials_repository.py:248-252` `rewrapped`, `current`, `unreadable`, `unknown_kek`, `gone`; `:253` the moved key reveals under the new KEK; `backend/tests/test_cli_rotate_secrets_kek.py:207-210` `exit_code == 0`, `rewrapped=1`, `already_current=1`, pending row's `kek_id` new | PASS |
+| `957cd44` | damaged wrapped DEK -> `reveal` is `None`, key absent from logs, row id logged | `test_a_row_whose_wrapped_dek_fails_authentication_reveals_nothing` | `test_provider_credentials_repository.py:211` `reveal(stored) is None`; `:214` `_KEY not in caplog.text`; `:215` `str(stored.id) in caplog.text` | PASS |
+| `957cd44` | rotation through the repository never opens the key (`provider_credentials.py:16`, `:202`) | at `c35b8fe`: none at this layer; at `52f1df8`: `test_rewrap_moves_a_row_without_opening_its_key` | at `c35b8fe`, M12 survived the full suite (gap 1); at `52f1df8`, `backend/tests/test_provider_credentials_repository.py:263-272`: a row with one ciphertext byte flipped, then `rewrap(stored.id) == "rewrapped"` and `kek_id` new | Unproven at `c35b8fe`, then **PASS at `52f1df8`** |
+| `51da1ab` | a key holding whitespace is never sealed; the refusal never echoes the key | `test_a_key_too_short_or_holding_whitespace_is_never_sealed[trailing-newline, inner-space]` | `test_provider_credentials_repository.py:235` `bad_key.strip() not in str(excinfo.value)`; `:236` no row stored | PASS |
+| `51da1ab` | a key shorter than 20 chars is never sealed | `[shorter-than-the-floor]` (12 chars), `[four-characters]`; at `52f1df8` also `[one-under-the-floor]` (19 chars) and `test_a_key_exactly_at_the_floor_is_sealed` | at `c35b8fe` the 20 boundary was not exercised (gap 2); at `52f1df8`, `test_provider_credentials_repository.py:222` adds `"k" * 19` to the refusal params, and `:240-247` asserts `len(key) == 20` and `reveal(stored) == key` | Unproven at `c35b8fe`, then **PASS at `52f1df8`** |
+| `eff1765` | streamed learner-keyed answer stamped `user_keyed=True` (the streamed 0 USD debit reads it via the shared `_debit`, `backend/app/application/conversations.py:999-1016`) | `test_a_streamed_user_keyed_answer_is_stamped_as_learner_paid` | `backend/tests/infrastructure/test_answering_routing.py:824` `completed.answer.user_keyed is True`; `:825` `house.stream_calls == 0` | PASS |
+| `eff1765` | 0 USD for a learner-keyed call whatever its usage or profile | `test_a_learner_keyed_call_debits_zero_whatever_its_usage_or_stamp` | `backend/tests/test_application_budget_pricing.py:194` non-keyed `== 6400`; `:195-197` keyed `== 0` | PASS |
+| `eff1765` | the walk guard never steps from a keyed entry onto a house one | `test_the_walk_never_steps_from_a_user_keyed_entry_onto_a_house_one[4]` | `test_answering_routing.py:841` `_next_index(mixed, ...) is None`; `:842` house-only control `== 1` | PASS |
+| `eff1765` | `rewrap` never decrypts (envelope); `open` through a previous KEK works | `test_rewrap_never_opens_the_ciphertext`, `test_a_secret_under_a_previous_kek_still_opens` | `test_secrets_envelope.py:148` `rewrapped.ciphertext == broken.ciphertext` (a tampered ciphertext still re-wraps, so an `open` first would raise); `:163` `opened == _KEY` | PASS |
+
+Daily caps for learner-keyed calls: unchanged code (`budget.record(..., kind=kind)` in `_debit`, one call site for streamed and buffered turns) and C25 `ask_count == 1` re-ran PASSED.
+
+### Batch-A regression (verified at c35b8fe)
+
+Every batch-A proof named in round 3 re-ran PASSED in the two invocations above. Assertions and line numbers are unchanged in the files the fix diff did not touch: `test_web_byok_generation.py`, `test_config.py`, `test_web_auth.py`, `test_migrations.py`. In the touched files, lines moved and the assertions did not change:
+
+- `test_answering_routing.py`: the import block grew by 4 lines. C21 is now at `:682-686`, `:700-704` and `:739-743`; C22 at `:756`; the lead rule at `:875`.
+- `test_user_adapter_cache.py`: +2 lines. C44 is now at `:82`, `:101` and `:112`.
+- `test_cli_rotate_secrets_kek.py`: a test was inserted after `:186`, so the no-KEK exit 2 is now in `:213ff`. C4 (`:97-117`) and C5 (`:143-144`) are unmoved.
+- `test_provider_profiles.py`: C27's all-user-key test (`:342-362`) was edited. Its second profile is now `kind openai-compatible` with an openai binding, so that the new binding rule does not fire first. It still asserts `"house" in message` and `"user_key_provider" in message` (`:361-362`), and the mismatch message contains neither `"house"` nor this test's expectation. The proof is not weakened.
+
+The refactors kept their semantics:
+
+- The cache key is still `(provider, profile, model, fingerprint)`, so C23, C24 and C44 hold.
+- The CLI still counts `unknown_kek` from the listing (`rotate_secrets_kek.py:71-73`) and exits 1 on any `unknown_kek` or `unreadable` (`:105`). C5 and the `unreadable` test re-ran PASSED.
+
+### Faults injected (round 4)
+
+Method:
+
+- Scratch worktree: `git worktree add --detach <scratchpad>/r4-wt HEAD`, run with the real venv (`UV_PROJECT_ENVIRONMENT=... uv run --no-sync`).
+- Before mutating, `profiles`, `user_adapters`, `provider_credentials` and `routing` `__file__` resolved inside the scratch.
+- Each fault was applied by a script that asserts exactly one match, then the 8 proof files were run.
+- Each fault was reverted with `git checkout -- .`, and the scratch porcelain was `[]` before the next one.
+- The two survivors were re-run together against the full suite.
+- The scratch was removed with `git worktree remove --force`. Afterwards the real tree's porcelain was empty, as it was at the start.
+
+| Mutation | Location | Killed |
+| --- | --- | --- |
+| M9: host compared by substring (`_USER_KEY_HOSTS[provider] not in (parsed.hostname or "")`) | `profiles.py:177` | yes - `test_a_binding_that_would_send_the_key_elsewhere_fails[gemini-to-a-lookalike-host]` |
+| M10: build back under the lock (`with self._lock: adapter = build()`) | `user_adapters.py:88` | yes - `test_a_slow_build_does_not_block_another_learners_lookup` and `test_a_build_that_loses_a_race_hands_back_the_cached_adapter` (both fail on timeouts, without hanging) |
+| M11: racing insert replaces the cached adapter (`raced = None`) | `user_adapters.py:92` | yes - `test_a_build_that_loses_a_race_hands_back_the_cached_adapter` |
+| M12: repository rotation opens the key before re-wrapping | `provider_credentials.py:218-219` | **no - survived the full suite (3172 passed)** - gap 1 |
+| M13: floor lowered (`MIN_KEY_CHARS = 13`) | `provider_credentials.py:44` | **no - survived the full suite (3172 passed)** - gap 2 |
+| M14: whitespace clause dropped from the refusal | `provider_credentials.py:130` | yes - `[trailing-newline]`, `[inner-space]` |
+| M15: streamed answer stamped house-paid (`user_keyed=False`) | `routing.py:339` | yes - `test_a_streamed_user_keyed_answer_is_stamped_as_learner_paid` |
+
+Carried, all killed in earlier rounds, on code this diff did not change: the AAD, rotation `kek_id`, owner rule, cache fingerprint and `user_keyed` pricing faults (round 1); M1-M3 (round 2); M4-M8 (round 3). The pricing fault is also the one triage row 8 says the new unit test kills: `budget.py:186` did not change.
+
+### Gate (round 4)
+
+- Full backend suite at `c35b8fe`, in a clean scratch worktree, `LEARNY_REQUIRE_DB=1`, `learny_test_byok_verify`: **3172 passed, 0 failed, 12 skipped** (609 s, under concurrent load). Against the round-3 baseline of 3144, the +28 items are exactly the new tests: binding 7+4, cache 2, streamed stamp 1, walk guard 4, envelope 2, pricing 1, CLI resume 1, repository 1+4+1.
+- Frontend and lint were not re-run, because no frontend file changed and the brief records lint as green.
+- To close: add the two sensors named above. Each must turn its mutant (M12, M13) red. Then re-verify scoped to those two tests. Done in `52f1df8`; see below.
+
+### Gap closure (re-verified at 52f1df8)
+
+Fix commit `52f1df8` ("test(db): prove rotation never opens a key and pin the key length floor") changes only `backend/tests/test_provider_credentials_repository.py`, adding 36 lines. No code under `backend/app/` changed, so the code citations above still hold. It adds three test items:
+
+- `[one-under-the-floor]`: a 19-character key (`"k" * 19`), refused (`:222`).
+- `test_a_key_exactly_at_the_floor_is_sealed`: a key of exactly 20 characters is sealed and reveals back (`:240-247`).
+- `test_rewrap_moves_a_row_without_opening_its_key`: a row whose ciphertext was damaged by `_damage_ciphertext` still rewraps to `"rewrapped"`, and its `kek_id` moves to the new KEK (`:250-272`).
+
+Method:
+
+- A fresh scratch worktree at `52f1df8` (`<scratchpad>/r4b-wt`), with the same venv, env and database as above. `provider_credentials.__file__` resolved inside the scratch.
+- The faults were applied by the same exact-match script and reverted with `git checkout -- .`. The scratch porcelain was `[]` after each one.
+- The scratch was removed afterwards.
+
+Baseline: `test_provider_credentials_repository.py` and `test_cli_rotate_secrets_kek.py` gave 23 passed.
+
+| Mutation | Location | Killed at `52f1df8` |
+| --- | --- | --- |
+| M12: repository rotation opens the key before re-wrapping | `provider_credentials.py:218-219` | yes - `test_rewrap_moves_a_row_without_opening_its_key` (1 failed, 22 passed) |
+| M13: floor lowered (`MIN_KEY_CHARS = 13`) | `provider_credentials.py:44` | yes - `test_a_key_too_short_or_holding_whitespace_is_never_sealed[one-under-the-floor]` |
+| M13b (neighbouring reading): the boundary made inclusive (`len(api_key) <= MIN_KEY_CHARS`, so a 20-character key is refused) | `provider_credentials.py:130` | yes - `test_a_key_exactly_at_the_floor_is_sealed` |
+| M13c (off by one): `MIN_KEY_CHARS = 19` | `provider_credentials.py:44` | yes - `[one-under-the-floor]` |
+
+The floor is now pinned on both sides: a 19-character key is refused and a 20-character key is accepted. Together with M13, every lower or inclusive misreading of the floor is killed. A floor raised above 20 is killed by the 20-character acceptance.
+
+Full backend suite at `52f1df8`, in the clean scratch worktree, `LEARNY_REQUIRE_DB=1`, `learny_test_byok_verify`: **3175 passed, 0 failed, 12 skipped** (192 s). That is 3172 plus the 3 new items.
+
+**Final verdict: PASS.** Every claim of the six review-fix commits now has a test that exercises it. The batch-A checks C1-C7, C19-C27 and C44 still hold, and the full suite is green.
+
+---
+
+## Round 3 record
+
 **Verdict**: PASS
 **Profile**: standard
 **Diff range**: ccfb37d..e73640b (`origin/main..HEAD`, branch `feat/byok-secrets-and-chains`); round-3 fix diff `fb2d0a9..e73640b` (one test-only commit, `e73640b`; no file under `backend/app/` changed)
