@@ -11,13 +11,14 @@ from __future__ import annotations
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import Connection
+from sqlalchemy import Connection, text
 
 from app.infrastructure.db.repositories import SqlAlchemyEmbeddingIndexRepository
 from tests.conftest import requires_db
 from tests.eval_runner import build_corpus_in_db, embed_source, retrieve, seed_source
 from tests.golden_corpus import golden_book
-from tests.golden_expected import RETRIEVAL_CASES
+from tests.golden_corpus_pt import portuguese_golden_book
+from tests.golden_expected import PORTUGUESE_CASES, RETRIEVAL_CASES
 
 pytestmark = requires_db
 
@@ -58,3 +59,32 @@ def test_retrieval_is_source_scoped(db_conn: Connection) -> None:
     assert results, "expected source-A hits"
     assert {evidence.chunk_id for evidence in results}.isdisjoint(b_ids)
     assert all(evidence.source_id == source_a.id for evidence in results)
+
+
+@pytest.mark.parametrize("case", PORTUGUESE_CASES, ids=lambda c: c.expected_anchor)
+def test_portuguese_inflected_terms_reach_their_section(db_conn: Connection, case) -> None:  # noqa: ANN001 — InflectedCase
+    # A question that names a chapter's words in another inflection still finds the
+    # chapter. The lexical arm is checked on its own first: its stored Portuguese
+    # config stems both sides, so the full-text match selects the target chapter
+    # and only it (under ``simple`` the inflected words would match nothing). The
+    # fused hybrid ranking then puts that chapter within the top 3.
+    _, source = seed_source(db_conn, email=f"golden-pt-{uuid4()}@example.com")
+    build_corpus_in_db(db_conn, source, portuguese_golden_book())
+    embed_source(db_conn, source.id)
+    chunk_ids = [
+        chunk.id
+        for chunk in SqlAlchemyEmbeddingIndexRepository(db_conn).chunks_for_source(source.id)
+    ]
+
+    lexical = db_conn.execute(
+        text(
+            "SELECT anchor FROM corpus_chunks WHERE id = ANY(:ids) "
+            "AND search_vector @@ websearch_to_tsquery(search_config::regconfig, :q)"
+        ),
+        {"ids": chunk_ids, "q": case.question},
+    ).scalars()
+    assert set(lexical) == {case.expected_anchor}
+
+    results = retrieve(db_conn, source.id, case.question)
+
+    assert case.expected_anchor in [evidence.anchor for evidence in results[:3]]

@@ -7,10 +7,12 @@ keyed on stable identity (``anchor``/``section_path``/snippet text), never on
 per-run chunk UUIDs (AD-038). A drift between these constants and actual pipeline
 output fails the corresponding golden check with a readable diff.
 
-Ingestion golden covers two fixtures: the topically-rich ``golden_book`` (full
-metadata + structure + derived chunks) and the metadata-sparse ``no_toc_book``
-(the A-2 heading/href-stem fallback and null OPF metadata, end to end). Retrieval
-and citation cases run against ``golden_book`` only.
+Ingestion golden covers three fixtures: the topically-rich ``golden_book`` (full
+metadata + structure + derived chunks), the metadata-sparse ``no_toc_book`` (the
+A-2 heading/href-stem fallback and null OPF metadata, end to end) and the
+Portuguese ``portuguese_golden_book`` (public-domain excerpts, ``dc:language`` pt).
+The English retrieval and citation cases run against ``golden_book``; the
+Portuguese cases run against ``portuguese_golden_book``.
 """
 
 from __future__ import annotations
@@ -31,6 +33,18 @@ from tests.golden_corpus import (
     GOLDEN_SECTION_ANCHORS,
     GOLDEN_TITLE,
     golden_book,
+)
+from tests.golden_corpus_pt import (
+    EXPECTED_PT_GOLDEN_BLOCK_COUNT,
+    EXPECTED_PT_GOLDEN_CHUNK_COUNT,
+    EXPECTED_PT_GOLDEN_SECTIONS,
+    PT_CH1_ANCHOR,
+    PT_CH2_ANCHOR,
+    PT_CH3_ANCHOR,
+    PT_GOLDEN_AUTHORS,
+    PT_GOLDEN_LANGUAGE,
+    PT_GOLDEN_TITLE,
+    portuguese_golden_book,
 )
 
 
@@ -121,9 +135,29 @@ _NO_TOC_EXPECTED = ExpectedCorpus(
     chunk_count=1,
 )
 
+_PT_GOLDEN_EXPECTED = ExpectedCorpus(
+    title=PT_GOLDEN_TITLE,
+    authors=PT_GOLDEN_AUTHORS,
+    language=PT_GOLDEN_LANGUAGE,
+    sections=tuple(
+        ExpectedCorpusSection(
+            section_path=section["section_path"],
+            anchor=section["anchor"],
+            depth=section["depth"],
+            chunk_texts=section["chunk_texts"],
+        )
+        for section in EXPECTED_PT_GOLDEN_SECTIONS
+    ),
+    block_count=EXPECTED_PT_GOLDEN_BLOCK_COUNT,
+    chunk_count=EXPECTED_PT_GOLDEN_CHUNK_COUNT,
+)
+
 GOLDEN_FIXTURES = (
     GoldenFixture(name="golden-book", epub=golden_book, expected=_GOLDEN_EXPECTED),
     GoldenFixture(name="no-toc-book", epub=no_toc_book, expected=_NO_TOC_EXPECTED),
+    GoldenFixture(
+        name="portuguese-golden-book", epub=portuguese_golden_book, expected=_PT_GOLDEN_EXPECTED
+    ),
 )
 
 # Retrieval recall: each query's content tokens appear only in its target chapter,
@@ -155,6 +189,40 @@ CITATION_CASES = (
 # retrieval arms are empty, so the answer is the grounded not-found outcome (EVAL-08).
 UNSUPPORTED_QUESTION = "How does photosynthesis convert sunlight inside plant leaves?"
 
+
+@dataclass(frozen=True)
+class InflectedCase:
+    """A Portuguese question whose ``inflected`` words occur in ``expected_anchor``
+    only in another inflection (``recitou`` for ``recitando``), so only the
+    Portuguese stemmer can match them; every other content word is the section's.
+    """
+
+    question: str
+    expected_anchor: str
+    inflected: tuple[str, ...]
+
+
+# Portuguese retrieval and citation cases (one per chapter of the Portuguese book):
+# under ``websearch_to_tsquery('portuguese', …)`` each question's content stems
+# occur in its target chapter and in no other.
+PORTUGUESE_CASES = (
+    InflectedCase(
+        question="Quem recitou um verso no trem?",
+        expected_anchor=PT_CH1_ANCHOR,
+        inflected=("recitou", "verso"),
+    ),
+    InflectedCase(
+        question="Como era a grinalda de flor na parede?",
+        expected_anchor=PT_CH2_ANCHOR,
+        inflected=("grinalda", "flor", "parede"),
+    ),
+    InflectedCase(
+        question="Quem se escondeu na porta da sala?",
+        expected_anchor=PT_CH3_ANCHOR,
+        inflected=("escondeu",),
+    ),
+)
+
 # Re-exported for the grounding-bound assertion (EVAL-07) and case self-consistency.
 __all__ = [
     "CITATION_CASES",
@@ -164,6 +232,8 @@ __all__ = [
     "GOLDEN_FIXTURES",
     "GOLDEN_SECTION_ANCHORS",
     "GoldenFixture",
+    "InflectedCase",
+    "PORTUGUESE_CASES",
     "RETRIEVAL_CASES",
     "RetrievalCase",
     "UNSUPPORTED_QUESTION",

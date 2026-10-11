@@ -28,9 +28,11 @@ from tests.eval_runner import (
     seed_source,
 )
 from tests.golden_corpus import golden_book
+from tests.golden_corpus_pt import PT_GOLDEN_SECTION_ANCHORS, portuguese_golden_book
 from tests.golden_expected import (
     CITATION_CASES,
     GOLDEN_SECTION_ANCHORS,
+    PORTUGUESE_CASES,
     UNSUPPORTED_QUESTION,
 )
 
@@ -101,3 +103,34 @@ def test_unsupported_question_is_grounded_not_found(db_conn: Connection) -> None
 
     assert result.answer_status == "not_found_in_source"
     assert result.citations == ()
+
+
+@pytest.mark.parametrize("case", PORTUGUESE_CASES, ids=lambda c: c.expected_anchor)
+def test_portuguese_answers_cite_the_expected_anchor(
+    db_conn: Connection,
+    case,  # noqa: ANN001 — InflectedCase
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The offline default answers a Portuguese question from the Portuguese book:
+    # every citation is a chunk the retrieval actually returned for the question,
+    # the best-ranked one is the target chapter, and no provider key is in play.
+    for key in ("LEARNY_ANTHROPIC_API_KEY", "LEARNY_OPENAI_API_KEY", "ANTHROPIC_API_KEY"):
+        monkeypatch.delenv(key, raising=False)
+    user, source = seed_source(db_conn, email=f"golden-pt-{uuid4()}@example.com")
+    build_corpus_in_db(db_conn, source, portuguese_golden_book())
+    embed_source(db_conn, source.id)
+
+    result = answer(db_conn, user, source, case.question)
+
+    evidence = retrieve(
+        db_conn,
+        source.id,
+        case.question,
+        top_k=get_settings().conversation_evidence_top_k,
+    )
+    assert result.answer_status == "answered"
+    assert result.model == DeterministicGenerationAdapter.model
+    assert result.citations, "an answered result must carry citations"
+    assert {c.chunk_id for c in result.citations} <= {e.chunk_id for e in evidence}
+    assert result.citations[0].anchor == case.expected_anchor
+    assert {c.anchor for c in result.citations} <= PT_GOLDEN_SECTION_ANCHORS
