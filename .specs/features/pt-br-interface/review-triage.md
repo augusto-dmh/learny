@@ -48,3 +48,20 @@ Fresh-context `pr-review` posted 5 inline comments (all suggestions), a requirem
 | 10 | summary (6107112971) | — | Consolidated summary of the above | n/a | no change | Nothing beyond rows 1–9. |
 
 Tally: 9 findings (plus the summary), 9 real, 0 false; 7 fixed, 1 won't-fix (recorded as a candidate instead), 1 deferred to the owner.
+
+# pt-br-interface review triage — batch 4 of 4 (PR #82)
+
+Fresh-context `pr-review` posted 3 inline comments (architecture, regression, tests), a requirements review and a summary; the security and performance lanes found nothing at 80% confidence. Each finding was checked against the code at `1ca6a37`. The PR comments are deleted after this triage, so this file is the surviving record.
+
+| # | Source | File:line | Finding | Verdict | Action | Rationale |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | inline, architecture (4241027688) | `backend/tests/test_answering_routing.py:25` | The new root-level suites share basenames with `tests/infrastructure/test_answering_{routing,openai_compat}.py` and import those suites' private helpers | real | fix | The split existed only so the frozen C54/C56 proof paths ran verbatim for the Verifier, which has run (PASS at 845ecc1). The cases now live in the existing infrastructure suites under a response-language section and the root files are gone; the `plan.md` "Proof files for C54 and C56" row records where the proofs live now. |
+| 2 | inline, regression (4241028364) | `backend/tests/test_answering_openai_compat.py:1` | Same as row 1 (second same-named suite per adapter) | real | fix | Same fix as row 1. |
+| 3 | inline, tests (4241027831) | `backend/tests/golden_expected.py:208` | The Portuguese golden book has no grounded not-found case | real | fix | Added `PORTUGUESE_UNSUPPORTED_QUESTION`, its not-found twin in `test_golden_citations.py` and a fixture check that its content words occur nowhere in the book. |
+| 4 | requirements review (6107507955) | `.specs/project/ROADMAP.md`, `CLAUDE.md` | Feature close-out: the ROADMAP row still says batch 4 is open and the CLAUDE.md status paragraph says no row is open | real | fix | ROADMAP row marked Done with all four PR numbers and CLAUDE.md's current-state line updated, before merge. |
+| 5 | requirements review | — | No real-provider check of Portuguese answers | real | deferred | Needs the funded CI key; the plan's Out of scope defers the judged pt-BR eval. |
+| 6 | requirements review | `checks.md` header | Says 59 checks, defines 61 | real (cosmetic) | won't-fix | `checks.md` is frozen; recorded as V4-F5 in `verification.md`. |
+| 7 | requirements review | `plan.md` "Answer language for a cookie-only learner" | A cookie-only learner gets a pt-BR interface and English answers | real | won't-fix here | Follows AC 47 and ADR-0034 as written; recorded as a follow-up candidate in the STATE handoff. |
+| 8 | summary (6107526638) | — | Consolidated summary of the above | n/a | no change | Nothing beyond rows 1–7. |
+
+Tally: 7 findings (plus the summary), 7 real, 0 false; 4 fixed (rows 1–2 one fix), 2 won't-fix (recorded), 1 deferred.
