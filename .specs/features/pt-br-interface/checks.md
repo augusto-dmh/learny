@@ -181,7 +181,7 @@ Proof: `cd frontend && npx vitest run tests/i18n-hardcoded.test.ts -t "a clean f
 **C48** - The source tree has no findings outside the allowlist and the pending list (AC 41, AC 42)
 Proof: `cd frontend && npx vitest run tests/i18n-hardcoded.test.ts -t "the source tree is clean"`
 
-**C49** - The hard-coded test header and ADR-0032 both carry a "Limits" section naming what the heuristic cannot see (AC 44)
+**C49** - The hard-coded test header and ADR-0034 both carry a "Limits" section naming what the heuristic cannot see (AC 44)
 Proof: `cd frontend && npx vitest run tests/i18n-hardcoded.test.ts -t "documents its limits"`
 
 ### S11 - Ask and tutor answer in the learner's language · 11 files · 196 KB · ~49k

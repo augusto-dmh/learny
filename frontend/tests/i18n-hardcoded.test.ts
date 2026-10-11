@@ -293,7 +293,7 @@ describe("hard-coded strings", () => {
     const header = self.slice(0, self.indexOf("*/"));
     expect(header).toMatch(/## Limits/);
     expect(header).toMatch(/template literals/);
-    const adr = readFileSync(join(ROOT, "..", "docs/adr/0032-ui-internationalization.md"), "utf8");
+    const adr = readFileSync(join(ROOT, "..", "docs/adr/0034-ui-internationalization.md"), "utf8");
     expect(adr).toMatch(/#+ Limits/);
     expect(adr).toMatch(/template literals/);
   });
