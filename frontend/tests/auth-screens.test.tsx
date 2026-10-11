@@ -131,7 +131,13 @@ describe("AccountPanel (D2)", () => {
       // the logout POST itself — the token from mount is reused, so there is no
       // second /me probe.
       .mockResolvedValueOnce(new Response(null, { status: 204 }));
-    vi.stubGlobal("fetch", fetchMock);
+    // The provider-keys section loads on its own; this instance does not offer it.
+    const routed = vi.fn(async (url: string, init?: RequestInit) =>
+      url === "/api/me/provider-keys"
+        ? jsonResponse(200, { enabled: false, providers: [] })
+        : fetchMock(url, init),
+    );
+    vi.stubGlobal("fetch", routed);
 
     const onLoggedOut = vi.fn();
     render(<AccountPanel onLoggedOut={onLoggedOut} />);
