@@ -2,6 +2,148 @@
 
 **Verdict**: FAIL
 **Profile**: standard
+**Diff range**: origin/main..88beef1 (batch 3: c737b7a..207f75d; round-2 fix range 207f75d..88beef1, 2 commits: ed760ec code and tests, 88beef1 plan rows and the round-1 report)
+**Round**: 2 - scoped (batch 3 of 4 scope)
+**Verifier**: independent sub-agent (author != verifier)
+
+Scope: batch 3 = checks C37-C41, plus the ratchet checks C44, C47 and C48. Round 2 covers two things:
+
+- **The fix diff `207f75d..88beef1`.** On the component side it touches `cited-answer.tsx`, `dock-review-panel.tsx`, `study-heatmap.tsx` and `components/ui/carousel.tsx`, plus both catalogs. On the test side it touches eight files.
+- **Every round-1 verdict that was not PASS.** That is C37, C38, C39, C40 and C47, and the round-1 survivors F4, F6, F7, F8, F9, F12, F13, F14, F18 and F19, plus the English citation mark.
+
+The round-1 report is kept unchanged under `## Earlier batches`, and the batch-2 and batch-1 reports stay nested inside it.
+
+Why FAIL: every round-1 gap is closed. All ten round-1 survivors and the citation-mark English are now killed, and all five reopened checks pass. The FAIL comes from two of the new faults injected on surfaces this fix created, which survive:
+
+- **N3, the dock due count.** It now goes through `Intl.NumberFormat(locale)` (`frontend/app/components/dock-review-panel.tsx:95`), but no test renders a count of 1000 or more, so a raw `{total}` passes.
+- **N6, the review page's loading fallback.** The new test is titled `page title and loading fallback: renders in pt-BR` (`frontend/tests/review-screen.test.tsx:1529`), but it never renders the Suspense fallback: `useSearchParams` is mocked and does not suspend. So `{"Loading…"}` at `frontend/app/(app)/review/page.tsx:44` passes.
+
+Both are one-assertion fixes. Neither is a learner-visible leak today.
+
+## Binding sources
+
+Re-checked at 88beef1 against the fix. The three new "(batch 3)" rows in `plan.md` `## Assumptions` are "Batch-3 Verifier round 1", "Proof locations for C37" and "Dock due caption".
+
+| Source | Opened | Contradiction | Uncovered |
+| --- | --- | --- | --- |
+| `docs/adr/0034-ui-internationalization.md` | yes (carried from 207f75d; the fix does not touch it) | none | - |
+| `plan.md` `## Assumptions` rows marked "(batch 3)" (13 rows, 3 new) | yes - read at 88beef1 | none. Each claim in the "Batch-3 Verifier round 1" row is in the code: the mark label (`frontend/app/components/cited-answer.tsx:67`), the carousel roles (`frontend/components/ui/carousel.tsx:127`, `:165`), the `Intl.NumberFormat` totals (`frontend/app/components/study-heatmap.tsx:505`, `frontend/app/components/dock-review-panel.tsx:95`), the batch-2 `=0` branches, the rewording, and the ratchet test (`frontend/tests/i18n-hardcoded.test.ts:197`, `:247`, `:253`). "Proof locations for C37" names `teach-panel` and `ask-panel`, and I ran both by name. "Dock due caption" records round 1's B3-F1 | - |
+
+## Checks
+
+How the proofs ran at 88beef1:
+
+- **One invocation**, `npx vitest run --maxWorkers=2 --minWorkers=1 --reporter=verbose`, over 14 files: `ask-panel`, `teach-panel`, `conversation-dock`, `cited-answer`, `review-screen`, `notes-screen`, `note-detail-screen`, `i18n-hardcoded`, `i18n-parity`, `reader-panel`, `home-screen`, `library-screen`, `vendored-primitives` and `study-heatmap`. Home and Library were added because the fix changed their pt-BR plurals. Exit 0: 14 files and 296 tests passed.
+- **Every claim-carrying test appears by name**:
+  - `ask-panel`: 7 `renders in pt-BR`, including the new `AskPanel citations in pt-BR > citation marks, note citations and show-in-book` and `vendored chat primitives in pt-BR > default text of the vendored primitives`.
+  - `teach-panel`: 2.
+  - `conversation-dock`: 4.
+  - `review-screen`: 5 `renders in pt-BR`, including the new `page title and loading fallback`, plus `heatmap uses locale names`.
+  - `notes-screen`: 3.
+  - `note-detail-screen`: 3, plus `user text is never translated`.
+  - `cited-answer`: `sentinel is never rendered`.
+  - `i18n-hardcoded`: `a clean file cannot stay pending` and `the source tree is clean`.
+  - `i18n-parity`: `the shipped catalogs are in parity`.
+- **Duplicate-key warning gone**: the round-1 `teach-panel` warning (`two children with the same key`) no longer appears; 0 occurrences.
+
+Citation status:
+
+- **Refreshed at 88beef1**: C37, C38, C39, C40 and C47.
+- **Carried from 207f75d**: C41, C44 and C48. They were PASS in round 1 and their proofs passed again here. Their line numbers did not move, except as noted.
+
+| Check | Claim | Proof run | Evidence | Result |
+| --- | --- | --- | --- | --- |
+| C37 | Ask and Tutor panels, answer phases, not-found answer, failed turns, conversation list, include-notes toggle, save-to-note and the dock Notes/Review tabs render from the catalog (pt-BR) | `ask-panel` 7, `conversation-dock` 4 and `teach-panel` 2 `renders in pt-BR` passed (verified at 88beef1) | Round-1 evidence stands (carried; the lines above `:2100` in `ask-panel.test.tsx` did not move). New: `frontend/tests/ask-panel.test.tsx:2148` `name: "Citação 1"`, `:2156` `Mostrar no livro`, `:2164` `Sua nota — Minha nota`, `:2165` `Abrir nota`, `:2171` `toMatch(/^Sua nota/)`; vendored defaults `:2236` `O que você gostaria de saber?`, `:2241` `Nenhuma fonte usada`, `:2251` `[aria-roledescription="carrossel"]`, `:2270` `Paleta de comandos`; `frontend/tests/conversation-dock.test.tsx:507` `expect(more.textContent).toBe("Carregando…")`. The code: `frontend/app/components/cited-answer.tsx:67` `aria-label={t("mark", { index })}`. Faults F7, F8, F9, F12, F13, F21 and N1 are killed | PASS |
+| C38 | the `NOT_FOUND_IN_SOURCE` sentinel never appears and is never translated | `cited-answer` `sentinel is never rendered` passed (verified at 88beef1) | `frontend/tests/cited-answer.test.tsx:368` `const NOT_FOUND_SENTINEL = "NOT_FOUND_IN_SOURCE";` (spelled out); `:375` `not.toContain(NOT_FOUND_SENTINEL)` over both catalogs; `:383` `expect(container.textContent ?? "").not.toContain(NOT_FOUND_SENTINEL)`. F18 is killed | PASS |
+| C39 | review sessions, grades, intervals, empty deck, done for today, quiz progress and the heatmap names and legend render from the catalog and locale rules (pt-BR) | `review-screen` 5 `renders in pt-BR` plus `heatmap uses locale names` passed (verified at 88beef1) | All 9 interval buckets: `frontend/tests/review-screen.test.tsx:1385` `["~4 dias", "~2 sem.", "~1 mês", "~4 meses"]`, `:1392` `~1 dia`, and `~1 min`/`~10 min`/`~1 h`/`~1 ano` in the first card. `:1519` `Por hoje é só`. `:1539` page `<h1>` `Revisão`. `:1584` `seg., 13 de jul.: 0 revisões · 0 páginas`. `:1611` `1.234revisões3páginas`. `:1614` `Mostrar estatísticas`. F4, F6 and N2 are killed. The page's loading fallback is not proven (N6 survives, see Ranked gaps) | PASS |
+| C40 | notes list, note detail, capture popover, card suggestions and anchor badges render from the catalog (pt-BR) | `notes-screen` 3 and `note-detail-screen` 3 `renders in pt-BR` passed (verified at 88beef1) | `frontend/tests/notes-screen.test.tsx:404` `anchor-status-stale` -> `desatualizado`; `:394` page `<h1>` `Notas`. Round-1 evidence carried. F14 and N5 are killed | PASS |
+| C41 | user-authored note titles and bodies unchanged (pt-BR) | `note-detail-screen` `user text is never translated` passed (verified at 88beef1) | `frontend/tests/note-detail-screen.test.tsx:494`, `:496`, `:503` (carried from 207f75d; the one changed line in that file is `:364`, below these) | PASS |
+| C44 | shipped catalogs in parity | `i18n-parity` passed (verified at 88beef1) | `frontend/tests/i18n-parity.test.ts:218-219` (carried) | PASS |
+| C47 | a stale pending file fails naming it; the list is empty at the last PR | `i18n-hardcoded` `a clean file cannot stay pending` passed (verified at 88beef1) | `frontend/tests/i18n-hardcoded.test.ts:247` `toEqual(["app/components/clean.tsx"])`: the rule is proven on a synthetic list through `stalePending` (`:197`), which the real-tree check also calls. `:253` `expect(PENDING_MIGRATION, …).toEqual([])`; `:80` the list is empty. F19 is killed | PASS |
+| C48 | the source tree has no findings outside the allowlist and the pending list | `i18n-hardcoded` `the source tree is clean` passed (verified at 88beef1) | `frontend/tests/i18n-hardcoded.test.ts:263` `expect(unexpected, …).toEqual([])` (moved down by the new helper; unchanged). The fix diff adds no `ALLOWED_TEXT` or `EXEMPT_PATHS` entry | PASS |
+
+## Coverage
+
+These rows were recomputed at 88beef1 because the fix touched their authority. The other rows are carried from 207f75d.
+
+| Set (size) | Recomputed from | Member -> proof | Unproven |
+| --- | --- | --- | --- |
+| Ask/Tutor citation strings (`chat.citations` 10 keys including the new `mark`) | `frontend/app/components/citations.tsx`, `frontend/app/components/cited-answer.tsx` | regionLabel, sectionChip, closePassage, openInBook (round 1) · mark `ask-panel.test.tsx:2148` · showInBook `:2156` · noteChip `:2164`'s chip · noteTitled `:2164` · openNote `:2165` · note (untitled) `:2171` | - |
+| conversation list states (9) | `frontend/app/components/conversation-list.tsx` | round-1 members · loading-older `conversation-dock.test.tsx:507` | - |
+| FSRS interval buckets (9) | `frontend/app/components/review-screen.tsx:100-108` | all 9 (`review-screen.test.tsx:1385`, `:1392` and the first card's four) | - |
+| study stats card states (shown, hidden, loading, error) | `frontend/app/components/study-heatmap.tsx` | shown `:1611` · hidden `:1614` | loading is a text-free skeleton; error uses the shared `errors` copy, proven in batch 1 (C24) |
+| heatmap activity plural vectors (0, 1, n) | `review.heatmap.activity` | 0 `review-screen.test.tsx:1584` · 1 and n `:1548-1551` | - |
+| anchor statuses (3) | plan row | active · orphaned · stale `notes-screen.test.tsx:404` | - |
+| page headings (2) | the two page files | Revisão `review-screen.test.tsx:1539` · Notas `notes-screen.test.tsx:394` | - |
+| vendored chat-primitive defaults | plan "Vendored chat primitives" row | prompt placeholder, upload, empty state, sources 0 and n, branch prev/next/page, carousel prev/next and slide prev/next, carousel and slide roles, command title and description: `ask-panel.test.tsx:2236-2272` | none learner-visible. `promptInput.addAttachments`, `takeScreenshot` and the three file-error messages are not rendered. Their components still have no consumer in the app, so this is a note, not a gap |
+| locale-formatted numbers added by the fix (3) | `frontend/app/components/study-heatmap.tsx:505`, `frontend/app/components/dock-review-panel.tsx:95` | study reviews total `review-screen.test.tsx:1611` (`1.234`) | dock due count (N3 survives) · study pages total (same formatter instance as reviews, so it rides on N2's kill) |
+| review page states (title, fallback) | `frontend/app/(app)/review/page.tsx` | title `:1539` | loading fallback `frontend/app/(app)/review/page.tsx:44` (N6 survives; the test named for it never renders it) |
+
+## Test policy rows
+
+`checks.md` has no `Test policy` section, so there are no rows to judge.
+
+## Faults injected
+
+Each fault was applied in place, one at a time, by a script that replaces one exact text occurrence, runs only the target file (`--maxWorkers=2 --minWorkers=1`, with the frozen `-t` filter), then restores the file with `git checkout --`. After each group, `git status --porcelain` showed only ` M docker-compose.override.yml`.
+
+| Mutation | Location | Killed |
+| --- | --- | --- |
+| F4 stats toggle -> `"Show stats"` (round-1 survivor) | `frontend/app/components/study-heatmap.tsx:583` | yes - `review-screen > heatmap uses locale names` (no `Mostrar estatísticas`) |
+| F6 pt-BR `review.heatmap.activity` loses its `=0` branches (round-1 survivor) | `frontend/messages/pt-BR.json` | yes - `review-screen > heatmap uses locale names` (no `0 revisões · 0 páginas`) |
+| F7 loading-older -> `"Loading…"` (round-1 survivor) | `frontend/app/components/conversation-list.tsx:268` | yes - `conversation-dock > empty list and older pages: renders in pt-BR` |
+| F8 `{"Show in book"}` (round-1 survivor) | `frontend/app/components/citations.tsx:259` | yes - `ask-panel > citation marks, note citations and show-in-book: renders in pt-BR` |
+| F9 note chip -> `` `Your note: …` `` (round-1 survivor) | `frontend/app/components/citations.tsx:135` | yes - same test |
+| F12 `CommandDialog` title default -> `"Command Palette"` (round-1 survivor) | `frontend/components/ui/command.tsx:54` | yes - `ask-panel > default text of the vendored primitives: renders in pt-BR` |
+| F13 prompt placeholder default -> English (round-1 survivor) | `frontend/components/ai-elements/prompt-input.tsx:1069` | yes - same test |
+| F14 pt-BR `stale {stale}` (round-1 survivor) | `frontend/messages/pt-BR.json` `notes.anchorStatus` | yes - `notes-screen > list, tags, badges and filters: renders in pt-BR` |
+| F18 `NOT_FOUND_SENTINEL` -> `"NOT_FOUND"` (round-1 survivor) | `frontend/app/lib/citations.ts:63` | yes - `cited-answer > sentinel is never rendered` |
+| F19 stale filter disabled (round-1 survivor) | `frontend/tests/i18n-hardcoded.test.ts:198` (`stalePending`) | yes - `i18n-hardcoded > a clean file cannot stay pending` |
+| F21 citation mark back to `` `Citation ${index}` `` (the round-1 English, re-introduced) | `frontend/app/components/cited-answer.tsx:67` | yes - `ask-panel > citation marks, note citations and show-in-book: renders in pt-BR` |
+| N1 carousel `aria-roledescription` -> `"carousel"` | `frontend/components/ui/carousel.tsx:127` | yes - `ask-panel > default text of the vendored primitives: renders in pt-BR` |
+| N2 study reviews total -> raw `{reviews}` | `frontend/app/components/study-heatmap.tsx:531` | yes - `review-screen > heatmap uses locale names` (`1234` vs `1.234`) |
+| N3 dock due count -> raw `{total}` | `frontend/app/components/dock-review-panel.tsx:95` | no - survived `conversation-dock -t "renders in pt-BR"` and `dock-review-tab` run whole; no test uses a count of 1000 or more |
+| N5 notes page `<h1>` -> `{"Notes"}` | `frontend/app/(app)/notes/page.tsx:24` | yes - `notes-screen > list, tags, badges and filters: renders in pt-BR` |
+| N6 review page Suspense fallback -> `{"Loading…"}` | `frontend/app/(app)/review/page.tsx:44` | no - survived `review-screen -t "renders in pt-BR"`; the fallback never renders under the mocked `useSearchParams` |
+| Z1 pt-BR `chat.conversations.turns` loses `=0` | `frontend/messages/pt-BR.json` | yes - `conversation-dock > empty list and older pages` (`(0 interação)`) |
+| Z2 pt-BR `chat.elements.usedSources` loses `=0` | `frontend/messages/pt-BR.json` | yes - `ask-panel > default text of the vendored primitives` |
+| Z3-Z5 pt-BR `home.due.count`, `library.quiz.noneSurvived`, `library.quiz.discardFootnote` lose their new `=0` | `frontend/messages/pt-BR.json` | n/a - equivalent: count 0 cannot reach these messages (`frontend/app/components/home-screen.tsx:90` makes `job` at least 1 whenever the count renders; `noneSurvived` and the footnote render only when `discarded > 0`, `frontend/app/components/library-screen.tsx:257`, `:286`). Not counted |
+| `slideRole` back to `"slide"` | `frontend/components/ui/carousel.tsx:165` | n/a - equivalent: the pt-BR value is also `slide`. Not run |
+
+## Gate
+
+- `npx vitest run --maxWorkers=2 --minWorkers=1` (the whole frontend suite, run once this round) - exit 0: 91 files and 1042 tests passed, 0 failed. The `review-screen` flake did not show up.
+- The 14 targeted files (see Checks) - exit 0: 296 passed, 0 failed.
+- `npx tsc --noEmit -p .` - exit 0.
+- Backend: not run. The fix range touches only `frontend/` and `.specs/`.
+- Tree after verification: `git status --porcelain` shows ` M docker-compose.override.yml` (the owner's file, untouched) and this report.
+
+## Ranked gaps
+
+1. **N3 - the dock due count's locale formatting is unproven.** `frontend/app/components/dock-review-panel.tsx:95` formats with `Intl.NumberFormat(locale)`, but every dock test uses a count below 1000, so the raw number passes. Fix: one pt-BR dock test with `total_due` of 1000 or more, asserting `due-count` reads `1.234`. This is the fix for round 1's B3-F2, and its new surface has never been made to fail.
+2. **N6 - the review page's loading fallback is unproven, though a test is named for it.** `frontend/tests/review-screen.test.tsx:1529` is titled `page title and loading fallback`, but the mocked `useSearchParams` never suspends, so `frontend/app/(app)/review/page.tsx:44` is never rendered. Fix: either make the mock suspend once and assert `Carregando…`, as batch 2 did for the read-page fallback, or rename the test and record the fallback as unreachable under dynamic rendering. - C39
+
+## Findings
+
+- **B3-R2-F1 - non-blocking - carried.** The review position `{index + 1}/{queue.length}` (`frontend/app/components/review-screen.tsx`, `data-testid="position"`) still renders raw numbers. The round-1 row fixed only the totals and the due count. A 1000-card session is unlikely.
+- **B3-R2-F2 - non-blocking - test hygiene.** The vendored-primitives test assigns `globalThis.IntersectionObserver` and never restores it, though it does delete `matchMedia` (`frontend/tests/ask-panel.test.tsx` `:2189`; `matchMedia` is deleted at `:2273`). Later tests in that file inherit the stub.
+- **B3-R2-F3 - non-blocking.** pt-BR `library.quiz.partial`'s `failed` plural still has no `=0` branch, but the message renders only when a section failed.
+- **Translation quality.** The reworded strings read naturally: "Por hoje é só" and "adicionar o mesmo texto de novo não cria uma cópia". So do the new keys: "Citação {index}", "carrossel", and "slide", which is the usual Brazilian term.
+
+## Deferred to owner
+
+- `npm run build` and the commit and architecture parts of `make lint`. Skipped for memory, and CI runs them. `tsc --noEmit` is in the Gate.
+- A browser and screen-reader walk in pt-BR. Skipped by brief.
+- Backend tests. The fix changes no backend code.
+
+## Earlier batches
+
+Batch 3 round 1, moved unchanged. It carries batch 2, and batch 2 carries batch 1, each under its own `## Earlier batches`:
+
+# pt-br-interface verification
+
+**Verdict**: FAIL
+**Profile**: standard
 **Diff range**: origin/main..207f75d (batch 3: c737b7a review, 57ea5e2 chat, cf016a1 notes, 207f75d specs)
 **Round**: 1 - full (batch 3 of 4 scope)
 **Verifier**: independent sub-agent (author != verifier)
