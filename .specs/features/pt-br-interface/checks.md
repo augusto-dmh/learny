@@ -17,7 +17,7 @@ Proof: `cd frontend && npx vitest run tests/i18n-config.test.ts -t "supports exa
 **C2** - A supported `learny_locale` cookie wins over `Accept-Language` (AC 2)
 Proof: `cd frontend && npx vitest run tests/i18n-config.test.ts -t "cookie beats Accept-Language"`
 
-**C3** - Without a valid cookie, `Accept-Language` resolves to `pt-BR` when a `pt`/`pt-*` tag precedes any `en` tag by q-value then position, table-driven over `pt`, `pt-BR`, `pt-PT`, `pt;q=0.9,en;q=0.8`, `en,pt`, `en;q=0.5,pt;q=0.9` (AC 3)
+**C3** - Without a valid cookie, `Accept-Language` resolves to `pt-BR` when a `pt`/`pt-*` tag precedes any `en` tag by q-value then position, table-driven over `pt`, `pt-BR`, `pt-PT`, `pt;q=0.9,en;q=0.8`, `en;q=0.5,pt;q=0.9`, while `en,pt` stays `en` (AC 3)
 Proof: `cd frontend && npx vitest run tests/i18n-config.test.ts -t "negotiates pt-BR"`
 
 **C4** - A cookie outside `{en, pt-BR}` is ignored and negotiation decides (AC 4)
@@ -53,7 +53,7 @@ Proof: `cd backend && uv run pytest tests/test_web_locale.py::test_mutations_nee
 **C13** - `DELETE /api/me/locale` returns `204`, clears a stored choice, and returns `204` again when nothing is stored (AC 14)
 Proof: `cd backend && uv run pytest tests/test_web_locale.py::test_delete_is_idempotent`
 
-**C14** - `GET /api/me` returns `locale` as `en`, `pt-BR`, `null` when unset, and `null` when the stored value is unsupported (AC 15)
+**C14** - `GET /api/auth/me` returns `locale` as `en`, `pt-BR`, `null` when unset, and `null` when the stored value is unsupported (AC 15)
 Proof: `cd backend && uv run pytest tests/test_web_locale.py::test_me_reports_the_stored_locale`
 
 **C15** - A learner reads and changes only their own preference; another learner's row is untouched (AC 16)
@@ -71,7 +71,7 @@ Proof: `cd frontend && npx vitest run tests/account-locale.test.tsx -t "automati
 **C19** - A failed save keeps the previous locale (no cookie write, no refresh) and shows a localized error in Account (AC 11)
 Proof: `cd frontend && npx vitest run tests/account-locale.test.tsx -t "failed save keeps the previous locale"`
 
-**C20** - When `/api/me` `locale` differs from the cookie the cookie is rewritten and one refresh happens; when it is `null` or equal there is no refresh; when `/api/me` fails nothing happens (AC 18)
+**C20** - When `/api/auth/me` `locale` differs from the cookie the cookie is rewritten and one refresh happens; when it is `null` or equal there is no refresh; when `/api/auth/me` fails nothing happens (AC 18)
 Proof: `cd frontend && npx vitest run tests/use-locale-sync.test.tsx -t "reconciles the cookie from the stored locale"`
 
 **C21** - The anonymous switcher sets `learny_locale` with `Path=/`, `Max-Age=31536000`, `SameSite=Lax`, makes no fetch, and refreshes (AC 19)
@@ -172,7 +172,7 @@ Proof: `cd frontend && npx vitest run tests/i18n-parity.test.ts -t "the shipped 
 **C45** - A JSX text node of two or more ASCII letters, or a string in `aria-label`, `title`, `placeholder` or `alt`, in a translated file fails the hard-coded test naming file and line, outside the allowlist (AC 41)
 Proof: `cd frontend && npx vitest run tests/i18n-hardcoded.test.ts -t "flags English JSX text and attribute literals"`
 
-**C46** - A string literal passed to `new Error(` or `new ApiError(` in an `app/lib` file fails the hard-coded test naming file and line (AC 42)
+**C46** - A copy-bearing string literal (letters and whitespace) passed to `new Error(`, `new ApiError(` or any other `new …Error(` in an `app/lib` file, while a camelCase operation key passes, fails the hard-coded test naming file and line (AC 42)
 Proof: `cd frontend && npx vitest run tests/i18n-hardcoded.test.ts -t "flags English error literals in lib files"`
 
 **C47** - A file listed as pending migration that is already clean fails the hard-coded test naming it; the list is empty at the last PR (AC 43)
@@ -234,10 +234,10 @@ Proof: `cd backend && uv run pytest tests/test_golden_citations.py::test_portugu
 | `Accept-Language` negotiation vectors (9) | `pt` C3 · `pt-BR` C3 · `pt-PT` C3 · `pt;q=0.9,en;q=0.8` C3 · `en,pt` C3 · `en;q=0.5,pt;q=0.9` C3 · malformed C5 · unsupported-only C5 · absent C5 | - |
 | `PUT /api/me/locale` statuses (4) | 200 C10 · 401 C12 · 403 C12 · 422 C11 | - |
 | `DELETE /api/me/locale` statuses (3) | 204 C13 · 401 C12 · 403 C12 | - |
-| `GET /api/me` `locale` values (4) | `en` C14 · `pt-BR` C14 · unset `null` C14 · unsupported stored `null` C14 | - |
+| `GET /api/auth/me` `locale` values (4) | `en` C14 · `pt-BR` C14 · unset `null` C14 · unsupported stored `null` C14 | - |
 | request-error classes (4) | `401` C24 · `429` C24 · `5xx` C24 · other C25 | - |
-| request clients (12) | `auth` `sources` `ingestion` `sections` `ai-profiles` `quiz` `study` `reading` `notes` `conversations` `streaming` `cards`: C23, table-driven over all 12 | - |
-| legacy typed errors (3) | `StreamRequestError` C27 · `NoteError` C27 · `AiProfileRequestError` C27 | - |
+| request clients (14) | `auth` `sources` `ingestion` `sections` `ai-profiles` `quiz` `study` `reading` `notes` `conversations` `streaming` `cards` `tutor-card` `locale` (save and reset): C23, table-driven over all 14 | - |
+| legacy typed errors (6) | `StreamRequestError` C27 · `NoteError` C27 · `CardError` C27 · `ConversationRequestError` C27 · `AiProfileRequestError` C27 · `TutorCardError` C27 | - |
 | migrated surfaces in `pt-BR` (11) | landing C28 · auth C28 · shell C29 · vendored primitives C29 · Home C32 · Library C32 · reader C35 · Chat dock C37 · review C39 · notes C40 · Account C19 | - |
 | surfaces that must stay untranslated (5) | legal pages C31 · book text C34, C36 · citation snippets C36 · note bodies C41 · sentinel C38 | - |
 | generation implementers of the new kwarg (5) | Anthropic C53 · OpenAI-compatible C54 · deterministic C56 · routing C56 · test fakes C51 | - |
@@ -258,7 +258,7 @@ Proof: `cd backend && uv run pytest tests/test_golden_citations.py::test_portugu
 - authorization: C12, C15
 - concurrency: C10 - `PUT` upserts on the primary key, so a second write replaces the first and one row remains
 - data lifecycle: C16
-- dependency failure: C20, C55 - `/api/me` unreachable leaves the render locale untouched; a provider reply of the sentinel still maps to not-found
+- dependency failure: C20, C55 - `/api/auth/me` unreachable leaves the render locale untouched; a provider reply of the sentinel still maps to not-found
 - state transitions: n/a - a locale has no states, any supported value may follow any other
 - observability: n/a - no logging or metrics requirement in this change
 

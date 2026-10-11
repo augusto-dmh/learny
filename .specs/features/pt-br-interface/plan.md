@@ -17,7 +17,7 @@ Render path
 
 Choice path
 4. `AccountPanel` (exists) -> `PUT /api/me/locale` through the proxy (exists) -> `web/locale.py` (new, door 5) -> `LocalePreferenceRepository` (new, door 4); on success the client writes the cookie and calls `router.refresh()`
-5. `GET /api/me` (exists) returns `locale`; `useLocaleSync` (new, no door - placement per conventions) rewrites the cookie from it when they differ and refreshes once
+5. `GET /api/auth/me` (exists) returns `locale`; `useLocaleSync` (new, no door - placement per conventions) rewrites the cookie from it when they differ and refreshes once
 
 Answer path
 6. `POST` conversation turn -> `web/conversations.py` (exists) - stored locale, else `Accept-Language`, via `domain/locale.py` (new, door 4, 7)
@@ -51,7 +51,7 @@ One-way constraints: one preference row per user, deleted with the user (door 4)
 | --- | --- | --- | --- |
 | `PUT /api/me/locale` | `locale` | `locale` | `200`, `401`, `403`, `422` |
 | `DELETE /api/me/locale` | none | empty | `204`, `401`, `403` |
-| `GET /api/me` (adds a field) | session cookie | existing user payload plus `locale` (`en` · `pt-BR` · `null`) | `200`, `401` |
+| `GET /api/auth/me` (adds a field) | session cookie | existing user payload plus `locale` (`en` · `pt-BR` · `null`) | `200`, `401` |
 
 ## Landing
 
@@ -61,7 +61,7 @@ One-way constraints: one preference row per user, deleted with the user (door 4)
 | 2. Catalog format | `frontend/messages/{en,pt-BR}.json`, ICU MessageFormat, namespaced by surface (`common`, `errors`, `landing`, `auth`, `shell`, `home`, `library`, `reader`, `chat`, `review`, `notes`, `account`, `meta`), key types from `en` through `AppConfig.Messages` | TS-module catalogs - cannot be diffed or parity-checked without executing code; catalogs colocated per component - no single file for a translator and no key-set to compare |
 | 3. Locale cookie | `learny_locale=en\|pt-BR; Path=/; Max-Age=31536000; SameSite=Lax`, written by the client after the PUT succeeds | a backend-set HttpOnly cookie - the proxy forwards `Set-Cookie` unchanged by design and the layout would need a backend call per render; `NEXT_LOCALE` - next-intl's routing name, we have no routing |
 | 4. Preference storage and the supported set | table `user_locale_preferences`: `user_id` uuid PK, FK `users.id` ON DELETE CASCADE, `locale` text NOT NULL, no CHECK; supported set `en`, `pt-BR` lives in code on both sides, unknown stored value reads as unset | a column on `user_ai_preferences` - that row means "chose a profile" and is deleted when the profile resets; a column on `users` - widens identity, verification and sample-owner paths; a CHECK constraint - a third locale would need a migration |
-| 5. API contract | `PUT`/`DELETE /api/me/locale`, `locale` on `GET /api/me`, values exactly `en` or `pt-BR` | a second `GET /api/me/locale` - nothing would consume it |
+| 5. API contract | `PUT`/`DELETE /api/me/locale`, `locale` on `GET /api/auth/me`, values exactly `en` or `pt-BR` | a second `GET /api/me/locale` - nothing would consume it |
 | 6. Request-error model | `ApiError {operation, status, detail}`; the learner sees `errors.operation.<op>` or `errors.status.<class>`, never `detail` | backend error codes - a cross-cutting API contract change for no learner-visible gain; keep showing `detail` - leaks English into pt-BR whenever the backend explains the failure |
 | 7. Response-language port kwarg | `response_language: str \| None = None` on `GenerationPort.generate`/`generate_stream`; the instruction is a fixed per-language constant appended to the user turn; `en` sends nothing | per-language system prompts - doubles the cacheable frozen prefixes; a post-hoc translation call - a second provider call that can alter citations |
 
@@ -98,10 +98,10 @@ Account stores the choice per learner; the cookie is the render-time cache; anon
 12. WHEN `PUT /api/me/locale` receives `locale` outside `{en, pt-BR}` THEN the system SHALL respond `422` and store nothing.
 13. IF `PUT` or `DELETE /api/me/locale` has no session THEN the system SHALL respond `401`, and with a session but no valid CSRF token `403`, storing nothing.
 14. WHEN `DELETE /api/me/locale` is repeated with no stored row THEN the system SHALL respond `204`.
-15. The system SHALL return the stored locale, or `null` when none is stored or the stored value is unsupported, as `locale` on `GET /api/me`.
+15. The system SHALL return the stored locale, or `null` when none is stored or the stored value is unsupported, as `locale` on `GET /api/auth/me`.
 16. IF a learner calls the locale API THEN the system SHALL read and change only that learner's own preference.
 17. WHEN a user row is deleted THEN the system SHALL delete that user's stored locale.
-18. WHEN an authenticated page loads and `GET /api/me` returns a `locale` different from the `learny_locale` cookie THEN the system SHALL rewrite the cookie to the stored value and refresh once; WHEN it returns `null` or the same value THEN the system SHALL NOT refresh.
+18. WHEN an authenticated page loads and `GET /api/auth/me` returns a `locale` different from the `learny_locale` cookie THEN the system SHALL rewrite the cookie to the stored value and refresh once; WHEN it returns `null` or the same value THEN the system SHALL NOT refresh.
 19. WHEN an anonymous visitor picks a language on the landing or sign-in switcher THEN the system SHALL set the `learny_locale` cookie (`Path=/`, `Max-Age=31536000`, `SameSite=Lax`) and re-render without any API call.
 20. WHEN the locale changes THEN the system SHALL re-render through `router.refresh()` and SHALL NOT reload the page, so client state (unsent Chat input, reader position) survives.
 
@@ -173,7 +173,7 @@ Request clients throw typed errors; the catalog supplies the sentence.
 39. IF a message key exists in one catalog and not the other THEN the parity test SHALL fail naming the key and the missing locale.
 40. IF a message uses different ICU argument names in the two catalogs THEN the parity test SHALL fail naming the key.
 41. IF a translated `.tsx` file contains a JSX text node of two or more ASCII letters, or a string literal in `aria-label`, `title`, `placeholder` or `alt`, outside the documented allowlist THEN the hard-coded-string test SHALL fail naming file and line.
-42. IF an `app/lib` file passes a string literal to `new Error(` or `new ApiError(` THEN the hard-coded-string test SHALL fail naming file and line.
+42. IF an `app/lib` file passes a copy-bearing string literal (letters and whitespace - a sentence, not an operation key) to `new Error(`, `new ApiError(` or any other `new …Error(` THEN the hard-coded-string test SHALL fail naming file and line.
 43. IF a file listed as pending migration is already clean THEN the hard-coded-string test SHALL fail naming the file.
 44. The system SHALL document the hard-coded-string heuristic's limits in the test header and in the ADR.
 
@@ -226,7 +226,7 @@ Request clients throw typed errors; the catalog supplies the sentence.
 | Assumption | Chosen default | Rationale | Confirmed? |
 | --- | --- | --- | --- |
 | Door gate | Doors 1-7 above are approved as written | Library and no-prefix routing are the handoff's own recommendations; the rest mirror existing patterns | y (owner, door gate) |
-| The cookie is the render-time cache of the stored choice | Server render reads the cookie only; the logged-in client reconciles from `/api/me` (backend wins) and refreshes once | Avoids a backend round-trip in the root layout on every render, including the public landing | n |
+| The cookie is the render-time cache of the stored choice | Server render reads the cookie only; the logged-in client reconciles from `/api/auth/me` (backend wins) and refreshes once | Avoids a backend round-trip in the root layout on every render, including the public landing | n |
 | Anonymous switcher | A compact language switcher on landing and sign-in sets the cookie only | Account is unreachable to anonymous visitors | n |
 | `Accept-Language` mapping | any `pt` or `pt-*` before `en` negotiates to `pt-BR`; q-values honored, `q=0` ignored | One Portuguese catalog; two locales do not justify a matcher library | n |
 | Frontend tests keep asserting English | Vitest `setupFiles` binds `next-intl` to the real `use-intl` translator over `en`; `setTestLocale` switches; one layout test uses the real provider | Real ICU behavior without wrapping ~77 test files | n |
@@ -235,6 +235,9 @@ Request clients throw typed errors; the catalog supplies the sentence.
 | Answer-language source for an unset learner | `Accept-Language` negotiation | A pt-BR browser user who never opens Account still gets Portuguese answers | y (owner, door gate) |
 | Portuguese golden source | In-code EPUB from short excerpts of a Machado de Assis work (public domain, author d. 1908), text fetched from Project Gutenberg, provenance in the module | Matches the in-code golden pattern; no committed EPUB binary | n |
 | Sensor shape | TypeScript-AST scan with a documented allowlist (brand "Learny", `dev/evals` operator page, legal pages by path) and a ratchet list of unmigrated files that must be empty by the last PR and fails on stale entries | Practical heuristic; limits documented | n |
+| Locale reconcile placement (batch 1) | `useLocaleSync` runs in the app-shell header, which already fetches `/api/auth/me` on every `(app)` route; the immersive reader (`ChapterReader`, outside the shell) calls the same `syncLocaleCookie` after its own auth fetch | Reuses the existing `/me` reads instead of adding a request; the shell and the reader are the only signed-in entry points | n |
+| Anonymous switcher control (batch 1) | A native `<select>` labelled from the catalog, options are endonyms (`English`, `Português (Brasil)`) identical in both catalogs, under `common.locale`; placed on the landing page and the `(auth)` layout; `tests/landing.test.tsx` gains a `next/navigation` router mock for it, which counts as test-harness binding for C30 | Accessible and phone-native with no new primitive; endonyms are how a visitor who cannot read the current language finds their own | n |
+| Error-constructor rule of the sensor (batch 1) | A literal counts as copy when it holds letters and whitespace (a sentence, not a camelCase operation key), checked on `new Error(`, `new ApiError(` and every other `new …Error(` in `app/lib` | Operation keys are string literals too; subclass constructors (`TutorCardError`, …) carried the same English sentences | n |
 | Delivery | Several PRs by batch of whole slices (see Deviations); `main` carries a half-translated UI between merges, behind a default of `en` | Review size; no release is cut between them | y (owner, door gate) |
 
 **Open questions:** none - all resolved or logged above.
@@ -252,7 +255,7 @@ Request clients throw typed errors; the catalog supplies the sentence.
 | API `PUT /api/me/locale`, `DELETE /api/me/locale` | error shape and codes | AC 12, 13, 14 |
 | API `PUT /api/me/locale`, `DELETE /api/me/locale` | who may call | AC 13, 16 |
 | API `PUT /api/me/locale`, `DELETE /api/me/locale` | versioning, rate limits | n/a - same unversioned `/api/me/*` family as the AI-profile routes, which carry no limiter |
-| API `GET /api/me` | response shape | AC 15 |
+| API `GET /api/auth/me` | response shape | AC 15 |
 | `GenerationPort` callers | error shape | n/a - unchanged; the kwarg adds no failure mode |
 
 ## Sources
