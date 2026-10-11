@@ -219,6 +219,7 @@ def test_a_row_whose_wrapped_dek_fails_authentication_reveals_nothing(
     "bad_key",
     [
         pytest.param("sk-ant-short", id="shorter-than-the-floor"),
+        pytest.param("k" * 19, id="one-under-the-floor"),
         pytest.param("abcd", id="four-characters"),
         pytest.param("sk-ant-api03-pasted-with-newline\n", id="trailing-newline"),
         pytest.param("sk-ant-api03 with-a-space-inside-it", id="inner-space"),
@@ -234,6 +235,41 @@ def test_a_key_too_short_or_holding_whitespace_is_never_sealed(
 
     assert bad_key.strip() not in str(excinfo.value)
     assert _repo(db_conn).get(user.id, "anthropic") is None
+
+
+def test_a_key_exactly_at_the_floor_is_sealed(db_conn: Connection) -> None:
+    user = _user(db_conn)
+    key = "k" * 16 + "wxyz"
+
+    stored = _repo(db_conn).replace(user.id, "anthropic", key)
+
+    assert len(key) == 20
+    assert _repo(db_conn).reveal(stored) == key
+
+
+def _damage_ciphertext(db_conn: Connection, credential_id: object) -> None:
+    row = db_conn.execute(
+        select(user_provider_credentials).where(user_provider_credentials.c.id == credential_id)
+    ).one()
+    ciphertext = bytearray(row.ciphertext)
+    ciphertext[0] ^= 0x01
+    db_conn.execute(
+        update(user_provider_credentials)
+        .where(user_provider_credentials.c.id == credential_id)
+        .values(ciphertext=bytes(ciphertext))
+    )
+
+
+def test_rewrap_moves_a_row_without_opening_its_key(db_conn: Connection) -> None:
+    # A damaged ciphertext only fails when the key is opened; re-wrapping the
+    # DEK alone never looks at it, so the row still moves to the new KEK.
+    old_kek, new_kek = os.urandom(32), os.urandom(32)
+    stored = _repo(db_conn, old_kek).replace(_user(db_conn).id, "anthropic", _KEY)
+    _damage_ciphertext(db_conn, stored.id)
+    rotating = SqlAlchemyProviderCredentialRepository(db_conn, SecretsEnvelope(new_kek, [old_kek]))
+
+    assert rotating.rewrap(stored.id) == "rewrapped"
+    assert dict(rotating.kek_listing())[stored.id] == kek_id_for(new_kek)
 
 
 def test_rewrap_reports_each_outcome_of_one_row(db_conn: Connection) -> None:
