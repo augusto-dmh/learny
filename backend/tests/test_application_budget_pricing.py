@@ -184,6 +184,19 @@ def test_absent_usage_debits_zero_whatever_the_stamp() -> None:
     assert budget.usage_micros(None, profile_id="economy") == 0
 
 
+def test_a_learner_keyed_call_debits_zero_whatever_its_usage_or_stamp() -> None:
+    # The learner paid their provider directly; the house ledger pays nothing.
+    budget = _budget(
+        profile_catalogs={"economy": _ECONOMY_PRICES},
+        profiles=(_profile("primary", "claude-sonnet-5"), _profile("economy", "claude-haiku-4-5")),
+    )
+
+    assert budget.usage_micros(_USAGE, profile_id="primary") == 6400
+    assert budget.usage_micros(_USAGE, profile_id="primary", user_keyed=True) == 0
+    assert budget.usage_micros(_USAGE, profile_id="economy", user_keyed=True) == 0
+    assert budget.usage_micros(_USAGE, user_keyed=True) == 0
+
+
 # --- Registry-level resolution helper (AD-344) ------------------------------------
 
 

@@ -88,6 +88,7 @@ def test_migration_metadata_compiles() -> None:
         "invite_codes",
         "email_tokens",
         "user_ai_preferences",
+        "user_provider_credentials",
     }
     # Unique email + unique session token_hash are the security-critical constraints.
     user_uniques = {c.name for c in users.constraints if c.__class__.__name__ == "UniqueConstraint"}
@@ -3954,5 +3955,114 @@ def test_migration_0029_creates_user_ai_preferences(monkeypatch) -> None:
     engine = create_engine(TEST_DB_URL)
     try:
         assert "user_ai_preferences" in set(inspect(engine).get_table_names())
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
+def test_migration_0030_creates_user_provider_credentials(monkeypatch) -> None:
+    """0030 up: creates ``user_provider_credentials`` — a uuid ``id`` primary key,
+    ``user_id`` FK to ``users.id`` ON DELETE CASCADE, NOT NULL ``provider``, the
+    four sealed bytea columns (``ciphertext``, ``nonce``, ``wrapped_dek``,
+    ``dek_nonce``), ``kek_id``, ``fingerprint``, ``last4``, UTC timestamps, and
+    ``UNIQUE (user_id, provider)``. Down one step to 0029 drops the table (users
+    survives); a further upgrade re-creates it — the table round-trips clean."""
+    monkeypatch.setenv("LEARNY_DATABASE_URL", TEST_DB_URL)
+    cfg = _alembic_config(TEST_DB_URL)
+
+    # Land on 0029 (pre-credentials) so the upgrade below is the one under test.
+    command.upgrade(cfg, "head")
+    command.downgrade(cfg, "0029_user_ai_preferences")
+
+    user_id = uuid.uuid4()
+    engine = create_engine(TEST_DB_URL)
+    try:
+        assert "user_provider_credentials" not in set(inspect(engine).get_table_names())
+    finally:
+        engine.dispose()
+
+    command.upgrade(cfg, "0030_user_provider_credentials")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        inspector = inspect(engine)
+        assert "user_provider_credentials" in set(inspector.get_table_names())
+
+        columns = {c["name"]: c for c in inspector.get_columns("user_provider_credentials")}
+        assert set(columns) == {
+            "id",
+            "user_id",
+            "provider",
+            "ciphertext",
+            "nonce",
+            "wrapped_dek",
+            "dek_nonce",
+            "kek_id",
+            "fingerprint",
+            "last4",
+            "created_at",
+            "updated_at",
+        }
+        assert all(column["nullable"] is False for column in columns.values())
+        for sealed in ("ciphertext", "nonce", "wrapped_dek", "dek_nonce"):
+            assert columns[sealed]["type"].__class__.__name__ == "BYTEA"
+
+        pk = inspector.get_pk_constraint("user_provider_credentials")["constrained_columns"]
+        assert pk == ["id"]
+        uniques = {
+            tuple(uc["column_names"])
+            for uc in inspector.get_unique_constraints("user_provider_credentials")
+        }
+        assert ("user_id", "provider") in uniques
+
+        cred_fk = next(
+            fk
+            for fk in inspector.get_foreign_keys("user_provider_credentials")
+            if fk["constrained_columns"] == ["user_id"]
+        )
+        assert cred_fk["referred_table"] == "users"
+        assert cred_fk["options"].get("ondelete") == "CASCADE"
+
+        insert_row = text(
+            "INSERT INTO user_provider_credentials (id, user_id, provider, ciphertext, "
+            "nonce, wrapped_dek, dek_nonce, kek_id, fingerprint, last4) VALUES (:id, :uid, "
+            "'anthropic', '\\x01', '\\x02', '\\x03', '\\x04', 'kek', 'fp', 'abcd')"
+        )
+        with engine.begin() as conn:
+            conn.execute(
+                text("INSERT INTO users (id, email) VALUES (:id, :email)"),
+                {"id": user_id, "email": f"{user_id}@example.test"},
+            )
+            conn.execute(insert_row, {"id": uuid.uuid4(), "uid": user_id})
+        # A second key for the same provider is not representable.
+        with pytest.raises(IntegrityError), engine.begin() as conn:
+            conn.execute(insert_row, {"id": uuid.uuid4(), "uid": user_id})
+
+        # Real cascade: the keys die with their account.
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM users WHERE id = :id"), {"id": user_id})
+        with engine.connect() as conn:
+            remaining = conn.execute(
+                text("SELECT count(*) FROM user_provider_credentials WHERE user_id = :uid"),
+                {"uid": user_id},
+            ).scalar_one()
+        assert remaining == 0
+    finally:
+        engine.dispose()
+
+    # Down one step to 0029: the table drops; users survives.
+    command.downgrade(cfg, "0029_user_ai_preferences")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        tables = set(inspect(engine).get_table_names())
+        assert "user_provider_credentials" not in tables
+        assert "users" in tables
+    finally:
+        engine.dispose()
+
+    # Round-trip: a further upgrade re-creates the table at head.
+    command.upgrade(cfg, "head")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        assert "user_provider_credentials" in set(inspect(engine).get_table_names())
     finally:
         engine.dispose()

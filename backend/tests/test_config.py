@@ -580,3 +580,86 @@ def test_env_example_documents_the_instrument_contract() -> None:
 
     for name in _INSTRUMENT_VARS:
         assert f"\n{name}=" in contract, f"{name} is missing from .env.example"
+
+
+# --- Learner-key KEK (LEARNY_SECRETS_KEK) ------------------------------------------
+#
+# The KEK is base64 of exactly 32 bytes. Anything else fails ``Settings()`` with
+# a message that names the variable and never echoes the value. Unset (or empty)
+# means the feature is off, which is the default.
+
+
+def _b64(raw: bytes) -> str:
+    import base64
+
+    return base64.b64encode(raw).decode()
+
+
+_BAD_KEKS = [
+    pytest.param("not base64 at all !!", id="non-base64"),
+    pytest.param(_b64(b"\x01" * 16), id="16-bytes"),
+    pytest.param(_b64(b"\x02" * 33), id="33-bytes"),
+]
+
+
+@pytest.mark.parametrize("value", _BAD_KEKS)
+def test_secrets_kek_malformed_fails_naming_the_variable_not_the_value(
+    monkeypatch, value: str
+) -> None:
+    monkeypatch.setenv("LEARNY_SECRETS_KEK", value)
+
+    with pytest.raises(Exception) as excinfo:  # noqa: B017 - any startup failure, checked below
+        Settings(_env_file=None)
+
+    shown = f"{excinfo.value}\n{excinfo.value!r}\n{excinfo.getrepr()}"
+    assert "LEARNY_SECRETS_KEK" in str(excinfo.value)
+    assert value not in shown
+    assert excinfo.value.__cause__ is None
+
+
+@pytest.mark.parametrize("value", _BAD_KEKS)
+def test_secrets_kek_previous_malformed_fails_naming_its_variable(monkeypatch, value: str) -> None:
+    monkeypatch.setenv("LEARNY_SECRETS_KEK", _b64(b"\x03" * 32))
+    retired = _b64(b"\x04" * 32)
+    monkeypatch.setenv("LEARNY_SECRETS_KEK_PREVIOUS", f"{retired},{value}")
+
+    with pytest.raises(Exception) as excinfo:  # noqa: B017 - any startup failure, checked below
+        Settings(_env_file=None)
+
+    assert "LEARNY_SECRETS_KEK_PREVIOUS" in str(excinfo.value)
+    assert value not in f"{excinfo.value}\n{excinfo.value!r}"
+
+
+def test_secrets_kek_valid_loads_and_never_shows_in_repr(monkeypatch) -> None:
+    current, previous = b"\x05" * 32, b"\x06" * 32
+    monkeypatch.setenv("LEARNY_SECRETS_KEK", _b64(current))
+    monkeypatch.setenv("LEARNY_SECRETS_KEK_PREVIOUS", f" {_b64(previous)} ")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.secrets_keks() == (current, (previous,))
+    assert _b64(current) not in repr(settings)
+    assert _b64(previous) not in repr(settings)
+
+
+@pytest.mark.parametrize("value", [None, "", "   "], ids=["unset", "empty", "blank"])
+def test_secrets_kek_unset_loads_with_the_feature_off(monkeypatch, value: str | None) -> None:
+    monkeypatch.delenv("LEARNY_SECRETS_KEK_PREVIOUS", raising=False)
+    if value is None:
+        monkeypatch.delenv("LEARNY_SECRETS_KEK", raising=False)
+    else:
+        monkeypatch.setenv("LEARNY_SECRETS_KEK", value)
+
+    settings = Settings(_env_file=None)
+
+    assert settings.secrets_keks() is None
+
+
+def test_secrets_kek_variables_are_documented_in_both_env_examples() -> None:
+    for example in (_ENV_EXAMPLE, _ENV_PRODUCTION_EXAMPLE):
+        contract = example.read_text()
+        for name in ("LEARNY_SECRETS_KEK", "LEARNY_SECRETS_KEK_PREVIOUS"):
+            assert f"\n{name}=" in contract, f"{name} is missing from {example.name}"
+    # The hosted guard is an operator rule, so the production example states it.
+    production = _ENV_PRODUCTION_EXAMPLE.read_text()
+    assert "byok-hosted-policy" in production

@@ -19,10 +19,15 @@ from app.infrastructure.providers.errors import (
     Timeout,
 )
 from app.infrastructure.providers.profiles import (
+    USER_KEY_PROVIDERS,
     GenerationProfileSettings,
     LearnerProfile,
+    house_profiles,
+    is_user_key_only,
     learner_catalog,
+    offered_providers,
     resolve_generation_profiles,
+    resolve_house_profiles,
     resolve_serving_profile,
 )
 from app.infrastructure.providers.translation import (
@@ -32,6 +37,7 @@ from app.infrastructure.providers.translation import (
 )
 
 __all__ = [
+    "USER_KEY_PROVIDERS",
     "GenerationProfileSettings",
     "LearnerProfile",
     "ProviderError",
@@ -40,9 +46,13 @@ __all__ = [
     "RequestRejected",
     "Timeout",
     "classify_provider_failure",
+    "house_profiles",
+    "is_user_key_only",
     "learner_catalog",
+    "offered_providers",
     "raise_translated",
     "resolve_generation_profiles",
+    "resolve_house_profiles",
     "resolve_serving_profile",
     "usage_of",
 ]

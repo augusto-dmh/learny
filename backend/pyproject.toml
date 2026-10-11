@@ -25,6 +25,7 @@ dependencies = [
     "fsrs>=6,<7",
     "genanki>=0.13,<0.14",
     "pillow>=12,<13",
+    "cryptography>=50.0.2",
 ]
 
 [project.optional-dependencies]

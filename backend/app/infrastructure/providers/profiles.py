@@ -25,7 +25,8 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, get_args
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict
 
@@ -49,6 +50,22 @@ EFFORT_LITERALS = ("low", "medium", "high", "xhigh", "max")
 #: supplied documents, verified by the grounding intersection (the OpenAI-compatible
 #: adapter). ``none``: no citations (never eligible for grounded modes).
 GROUNDING_KINDS = ("verified-spans", "prompt-cited", "none")
+
+#: The providers whose learner keys a profile may accept (ADR-0033). The same
+#: literals name a provider in the key routes and payloads.
+UserKeyProvider = Literal["anthropic", "openai", "gemini"]
+USER_KEY_PROVIDERS: tuple[str, ...] = get_args(UserKeyProvider)
+
+#: Where a bound profile must send each provider's learner keys. A learner key
+#: authenticates to one provider only, so a profile whose kind or host disagrees
+#: with its binding would hand that key to a third party (ADR-0033). Anthropic keys
+#: go to the native ``anthropic`` kind; OpenAI and Gemini keys go through
+#: ``openai-compatible`` to the provider's own HTTPS host (an empty ``base_url`` is
+#: the OpenAI SDK default, so only an ``openai`` binding may leave it empty).
+_USER_KEY_HOSTS = {
+    "openai": "api.openai.com",
+    "gemini": "generativelanguage.googleapis.com",
+}
 
 #: The id of the profile synthesized from the legacy settings when no registry is
 #: declared (ROUTE-06). Stable so debits and eval records can name it.
@@ -94,6 +111,34 @@ class GenerationProfileSettings(BaseModel):
     # existing deployment's env JSON does) changes nothing about parsing or serving.
     display_name: str = ""
     description: str = ""
+    # Learner-provided keys (ADR-0033): the provider whose learner keys may
+    # serve this profile. Unset (the default, so every existing registry parses
+    # unchanged) means the profile serves on the house key only. Set together
+    # with ``api_key_env`` the profile serves both; set without it, the profile
+    # is user-key-only and never joins a house chain. The learner supplies the
+    # key and nothing else: the model, host and kind stay the operator's.
+    user_key_provider: UserKeyProvider | None = None
+
+
+def is_user_key_only(profile: GenerationProfileSettings) -> bool:
+    """Whether only a learner's key can serve this profile (no house key)."""
+    return profile.user_key_provider is not None and not profile.api_key_env
+
+
+def house_profiles(
+    profiles: tuple[GenerationProfileSettings, ...],
+) -> tuple[GenerationProfileSettings, ...]:
+    """The profiles the house can serve, in registry order (user-key-only ones dropped)."""
+    return tuple(profile for profile in profiles if not is_user_key_only(profile))
+
+
+def offered_providers(profiles: tuple[GenerationProfileSettings, ...]) -> tuple[str, ...]:
+    """The providers at least one profile binds, in registry order of first binding."""
+    seen: list[str] = []
+    for profile in profiles:
+        if profile.user_key_provider is not None and profile.user_key_provider not in seen:
+            seen.append(profile.user_key_provider)
+    return tuple(seen)
 
 
 class LearnerProfile(BaseModel):
@@ -111,6 +156,27 @@ class LearnerProfile(BaseModel):
     grounding: Literal["verified-spans", "prompt-cited", "none"]
     ask_enabled: bool
     teach_enabled: bool
+
+
+def _binding_mismatch(profile: GenerationProfileSettings) -> str | None:
+    """Why a profile's learner-key binding disagrees with where it sends keys, if it does."""
+    provider = profile.user_key_provider
+    if provider is None:
+        return None
+    if provider == "anthropic":
+        if profile.kind != "anthropic":
+            return "an 'anthropic' binding needs kind 'anthropic'"
+        return None
+    if profile.kind != "openai-compatible":
+        return f"a '{provider}' binding needs kind 'openai-compatible'"
+    if not profile.base_url:
+        if provider == "openai":
+            return None
+        return f"a '{provider}' binding needs base_url on https://{_USER_KEY_HOSTS[provider]}"
+    parsed = urlparse(profile.base_url)
+    if parsed.scheme != "https" or parsed.hostname != _USER_KEY_HOSTS[provider]:
+        return f"a '{provider}' binding needs base_url on https://{_USER_KEY_HOSTS[provider]}"
+    return None
 
 
 def _validate_declared(profiles: list[GenerationProfileSettings]) -> None:
@@ -135,17 +201,38 @@ def _validate_declared(profiles: list[GenerationProfileSettings]) -> None:
                 f"generation profile '{profile.id}' has unknown kind '{profile.kind}': "
                 f"expected one of {', '.join(PROFILE_KINDS)}"
             )
-        if profile.kind != "local":
-            if not profile.api_key_env:
+        if profile.kind == "local":
+            if profile.user_key_provider is not None:
                 raise ValueError(
-                    f"generation profile '{profile.id}' (kind '{profile.kind}') must name "
-                    "the environment variable carrying its API key (api_key_env)"
+                    f"generation profile '{profile.id}' is kind 'local', which uses no API "
+                    "key, so it cannot bind learner keys (user_key_provider)"
                 )
-            if not os.environ.get(profile.api_key_env):
-                raise ValueError(
-                    f"generation profile '{profile.id}' names api_key_env "
-                    f"'{profile.api_key_env}', but that environment variable is not set"
-                )
+            continue
+        mismatch = _binding_mismatch(profile)
+        if mismatch is not None:
+            raise ValueError(
+                f"generation profile '{profile.id}' binds learner keys for "
+                f"'{profile.user_key_provider}' but would send them elsewhere: {mismatch}"
+            )
+        if not profile.api_key_env:
+            if profile.user_key_provider is not None:
+                continue  # user-key-only: served by learner keys, never by the house
+            raise ValueError(
+                f"generation profile '{profile.id}' (kind '{profile.kind}') must name "
+                "the environment variable carrying its API key (api_key_env)"
+            )
+        if not os.environ.get(profile.api_key_env):
+            raise ValueError(
+                f"generation profile '{profile.id}' names api_key_env "
+                f"'{profile.api_key_env}', but that environment variable is not set"
+            )
+    if not house_profiles(tuple(profiles)):
+        raise ValueError(
+            "the generation profile registry has no house-servable profile: every "
+            "profile is user-key-only (user_key_provider without api_key_env), so a "
+            "learner without a key could not be served; declare a local profile or a "
+            "profile with an api_key_env the house holds"
+        )
 
 
 def _legacy_seed_profile(settings: Settings) -> GenerationProfileSettings:
@@ -205,6 +292,15 @@ def resolve_generation_profiles(settings: Settings) -> tuple[GenerationProfileSe
     return tuple(declared)
 
 
+def resolve_house_profiles(settings: Settings) -> tuple[GenerationProfileSettings, ...]:
+    """The resolved registry minus user-key-only profiles: what house chains walk.
+
+    Never empty: resolution rejects a registry with no house-servable profile,
+    and the legacy seed is always house-servable.
+    """
+    return house_profiles(resolve_generation_profiles(settings))
+
+
 def resolve_serving_profile(
     profiles: tuple[GenerationProfileSettings, ...],
     profile_id: str | None,
@@ -235,7 +331,8 @@ def resolve_serving_profile(
 def learner_catalog(settings: Settings) -> tuple[LearnerProfile, ...]:
     """Return the selectable catalog derived from the declared registry.
 
-    Exactly the declared profiles in registry order, each carrying its honest
+    Exactly the declared house-servable profiles in registry order (a
+    user-key-only profile is not a house choice), each carrying its honest
     copy: ``display_name`` falls back to the id when the operator left it empty
     (or omitted the field), and ``description`` may be empty — the UI hides the
     copy line rather than inventing one. An undeclared registry contributes
@@ -257,5 +354,5 @@ def learner_catalog(settings: Settings) -> tuple[LearnerProfile, ...]:
             ask_enabled=profile.ask_enabled,
             teach_enabled=profile.teach_enabled,
         )
-        for profile in declared
+        for profile in house_profiles(tuple(declared))
     )

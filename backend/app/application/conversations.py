@@ -1003,13 +1003,16 @@ class PostConversationTurn:
         before the turn persists, so the debit shares the turn's transaction and can
         never outlive its record. The kind carries the free-tier counters (an ask
         counts even when the adapter recorded no USD); a generation call without
-        reported usage writes nothing.
+        reported usage writes nothing. A call the learner's own key paid for
+        debits 0 USD and still counts.
         """
         if self._budget is None:
             return
         self._budget.record(
             user_id,
-            usd_micros=self._budget.usage_micros(generated.usage, generated.profile_id),
+            usd_micros=self._budget.usage_micros(
+                generated.usage, generated.profile_id, user_keyed=generated.user_keyed
+            ),
             kind=kind,
         )
 
