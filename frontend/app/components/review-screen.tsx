@@ -43,12 +43,14 @@ import {
   ensureStarterDeck,
   flagQuizItem,
   getDueReviews,
+  INTERVAL_BUCKETS,
   intervalLabel,
   resetSchedule,
   submitReview,
   undoReview,
   updateQuizItem,
   type DueItem,
+  type IntervalBucket,
   type Scheduling,
 } from "@/app/lib/quiz";
 import { listSources } from "@/app/lib/sources";
@@ -80,12 +82,12 @@ const GRADES: { rating: number; key: "again" | "hard" | "good" | "easy" }[] = [
 ];
 
 /**
- * The nine interval-preview buckets the backend sends (`~1m` … `~1y`), keyed to
- * their catalog label under `review.intervals`. An unknown bucket shows as sent.
+ * Each interval-preview bucket the backend sends, keyed to its catalog label
+ * under `review.intervals`. An unknown bucket shows as sent.
  */
 const INTERVAL_KEYS: Readonly<
   Record<
-    string,
+    IntervalBucket,
     | "minute"
     | "tenMinutes"
     | "hour"
@@ -107,6 +109,10 @@ const INTERVAL_KEYS: Readonly<
   "~4mo": "fourMonths",
   "~1y": "year",
 };
+
+function isIntervalBucket(value: string): value is IntervalBucket {
+  return (INTERVAL_BUCKETS as readonly string[]).includes(value);
+}
 
 /** Per-rating tally kept as the session progresses (rating → count). */
 type Tally = Record<number, number>;
@@ -782,8 +788,9 @@ function ReviewCard({
             >
               {GRADES.map((grade) => {
                 const bucket = intervalLabel(item.interval_labels, grade.rating);
-                const intervalKey = INTERVAL_KEYS[bucket];
-                const interval = intervalKey ? t(`intervals.${intervalKey}`) : bucket;
+                const interval = isIntervalBucket(bucket)
+                  ? t(`intervals.${INTERVAL_KEYS[bucket]}`)
+                  : bucket;
                 const label = t(`grades.${grade.key}`);
                 return (
                   <Button

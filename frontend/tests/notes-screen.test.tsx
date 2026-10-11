@@ -385,6 +385,7 @@ describe("NotesScreen in pt-BR", () => {
           jsonResponse(200, [
             ...notes,
             summary("n3", "Terceira", { anchor_statuses: ["stale"] }),
+            summary("n4", "Quarta", { anchor_statuses: ["relocated"] }),
           ]),
         "GET /api/notes?tag=history": () => jsonResponse(200, []),
         "GET /api/notes?source_id=s2": () => jsonResponse(200, []),
@@ -403,6 +404,10 @@ describe("NotesScreen in pt-BR", () => {
     );
     expect(screen.getByTestId("anchor-status-stale").textContent).toBe(
       "desatualizado",
+    );
+    // A status the catalog does not know yet shows as sent.
+    expect(screen.getByTestId("anchor-status-relocated").textContent).toBe(
+      "relocated",
     );
     expectNoEnglishCopy(body(), ...NOTES_NAMESPACES);
 

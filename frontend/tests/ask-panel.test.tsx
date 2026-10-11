@@ -1900,7 +1900,8 @@ describe("AskPanel in pt-BR", () => {
 
   it("empty state, composer and notes toggle: renders in pt-BR", async () => {
     setTestLocale("pt-BR");
-    vi.stubGlobal("fetch", routedFetch(baseHandlers(() => sseStream().response)));
+    const fetchMock = routedFetch(baseHandlers(() => sseStream().response));
+    vi.stubGlobal("fetch", fetchMock);
 
     render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
 
@@ -1923,6 +1924,16 @@ describe("AskPanel in pt-BR", () => {
     ).toBeTruthy();
     expect(screen.getByRole("button", { name: "Enviar" })).toBeTruthy();
     expectNoEnglishCopy(document.body.textContent ?? "", ...CHAT_NAMESPACES);
+
+    // A suggested prompt is the learner's question, sent in their language.
+    fireEvent.click(
+      screen.getByRole("button", { name: "Resuma as ideias principais deste livro." }),
+    );
+    await waitFor(() => expect(callsTo(fetchMock, STREAM_URL)).toHaveLength(1));
+    expect(bodyOf(callsTo(fetchMock, STREAM_URL)[0])).toEqual({
+      message: "Resuma as ideias principais deste livro.",
+      mode: "answer",
+    });
   });
 
   it("answer phases, citations and save-to-note: renders in pt-BR", async () => {
@@ -2271,6 +2282,33 @@ describe("vendored chat primitives in pt-BR", () => {
     expect(await screen.findByText("Paleta de comandos")).toBeTruthy();
     expect(screen.getByText("Busque um comando para executar…")).toBeTruthy();
     expectNoEnglishCopy(document.body.textContent ?? "", "common.command");
+    cleanup();
+
+    // An explicit prop still wins over the catalog default, and an empty
+    // description still hides its paragraph.
+    render(
+      <div>
+        <ConversationEmptyState title="Comece aqui" description="" />
+        <PromptInput onSubmit={() => {}}>
+          <PromptInputBody>
+            <PromptInputTextarea placeholder="Pergunte ao livro" />
+          </PromptInputBody>
+        </PromptInput>
+      </div>,
+    );
+    expect(await screen.findByText("Comece aqui")).toBeTruthy();
+    expect(screen.queryByText("Nenhuma mensagem ainda")).toBeNull();
+    expect(screen.queryByText("Comece uma conversa para ver as mensagens aqui")).toBeNull();
+    expect(screen.getByPlaceholderText("Pergunte ao livro")).toBeTruthy();
+    cleanup();
+    render(
+      <CommandDialog open title="Ir para" description="Escolha um capítulo">
+        <div />
+      </CommandDialog>,
+    );
+    expect(await screen.findByText("Ir para")).toBeTruthy();
+    expect(screen.getByText("Escolha um capítulo")).toBeTruthy();
+    expect(screen.queryByText("Paleta de comandos")).toBeNull();
     Reflect.deleteProperty(window, "matchMedia");
     globalThis.IntersectionObserver = originalObserver;
   });

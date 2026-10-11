@@ -614,5 +614,26 @@ describe("the dock in pt-BR", () => {
     expect(screen.getByTestId("reader-panel").textContent).toContain(
       "cartões deste livro para revisar",
     );
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: /^Revisão/ }).textContent).toBe(
+        "Revisão1.234",
+      ),
+    );
+    cleanup();
+
+    // English groups the same count its own way.
+    setTestLocale("en");
+    stubDock({
+      list: () => jsonResponse(200, []),
+      notes: () => jsonResponse(200, []),
+      due: 1234,
+    });
+    renderTab("review");
+    expect((await screen.findByTestId("due-count")).textContent).toBe("1,234");
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: /^Review/ }).textContent).toBe(
+        "Review1,234",
+      ),
+    );
   });
 });

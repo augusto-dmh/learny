@@ -24,7 +24,7 @@
  */
 
 import { X } from "lucide-react";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 
 import {
@@ -175,12 +175,13 @@ function panelFor(
  * tab, not a "0" — a zero here would be a scoreboard, and the dock keeps no score.
  */
 function TabCount({ value }: { value?: number | null }) {
+  const locale = useLocale();
   if (!value) {
     return null;
   }
   return (
     <span className="ml-1.5 rounded-4xl bg-secondary px-1.5 text-xs font-normal text-secondary-foreground">
-      {value}
+      {new Intl.NumberFormat(locale).format(value)}
     </span>
   );
 }

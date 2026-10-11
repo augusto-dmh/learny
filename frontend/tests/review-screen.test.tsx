@@ -1497,6 +1497,34 @@ describe("ReviewScreen in pt-BR", () => {
     expectNoEnglishCopy(body(), ...REVIEW_NAMESPACES);
   });
 
+  it("unknown backend tokens show as sent: renders in pt-BR", async () => {
+    setTestLocale("pt-BR");
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        [`GET ${DUE}`]: () =>
+          jsonResponse(
+            200,
+            dueQueue([
+              {
+                ...clozeCard,
+                item_type: "multiple_choice",
+                interval_labels: { "1": "~3w", "2": "~10m", "3": "~4d", "4": "~2w" },
+              },
+            ]),
+          ),
+      }),
+    );
+    render(<ReviewScreen />);
+    await screen.findByTestId("question");
+    // A kind or bucket the catalog does not know yet stays visible, untranslated.
+    expect(screen.getByText("multiple_choice")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Mostrar resposta" }));
+    expect(screen.getByTestId("grade-interval-1").textContent).toBe("~3w");
+    expect(screen.getByTestId("grade-interval-2").textContent).toBe("~10 min");
+  });
+
   it("done for today: renders in pt-BR", async () => {
     setTestLocale("pt-BR");
     vi.stubGlobal(

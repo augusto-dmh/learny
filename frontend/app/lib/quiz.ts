@@ -125,6 +125,25 @@ export type Scheduling = {
   interval_labels: IntervalLabels;
 };
 
+/**
+ * The nine interval-preview buckets the backend sends (`INTERVAL_LABELS` in
+ * `app/application/intervals.py`). A wire contract: the review screen labels
+ * each one, so a bucket added here without a label fails `tsc`.
+ */
+export const INTERVAL_BUCKETS = [
+  "~1m",
+  "~10m",
+  "~1h",
+  "~1d",
+  "~4d",
+  "~2w",
+  "~1mo",
+  "~4mo",
+  "~1y",
+] as const;
+
+export type IntervalBucket = (typeof INTERVAL_BUCKETS)[number];
+
 /** Read a rating's bucket label, accepting JSON string keys or numeric keys. */
 export function intervalLabel(
   labels: IntervalLabels | Record<number, string> | undefined,
