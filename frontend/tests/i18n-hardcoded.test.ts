@@ -78,7 +78,6 @@ const EXEMPT_PATHS = [
  */
 const PENDING_MIGRATION: string[] = [
   "app/(app)/notes/page.tsx",
-  "app/(app)/review/page.tsx",
   "app/components/answer-phase.tsx",
   "app/components/ask-panel.tsx",
   "app/components/citations.tsx",
@@ -92,9 +91,7 @@ const PENDING_MIGRATION: string[] = [
   "app/components/notes/note-card-suggestions.tsx",
   "app/components/notes/note-detail-screen.tsx",
   "app/components/notes/notes-screen.tsx",
-  "app/components/review-screen.tsx",
   "app/components/save-to-note-action.tsx",
-  "app/components/study-heatmap.tsx",
   "app/components/teach-panel.tsx",
   "components/ai-elements/inline-citation.tsx",
   "components/ai-elements/message.tsx",

@@ -277,5 +277,71 @@
       "closePanel": "Fechar painel",
       "sheetDescription": "As ferramentas de estudo deste livro, em um painel inferior."
     }
+  },
+  "review": {
+    "title": "Revisão",
+    "regionLabel": "revisão",
+    "summaryLabel": "resumo da revisão",
+    "retry": "Tentar novamente",
+    "tryAgain": "Tentar novamente",
+    "loadingDue": "Carregando suas revisões pendentes…",
+    "nothingDue": "Nada para revisar agora.",
+    "backToLibrary": "Voltar para a biblioteca",
+    "sessionComplete": "Sessão concluída",
+    "reviewedTotal": "{count, plural, =0 {Nenhum cartão revisado} one {# cartão revisado} other {# cartões revisados}}.",
+    "shortTermRemaining": "{count, number} ainda em revisão de curto prazo",
+    "doneForToday": "Pronto por hoje",
+    "doneForTodayBody": "Você terminou esta sessão. Ainda há cartões pendentes para quando quiser.",
+    "keepGoing": "Continuar revisando",
+    "continueReading": "Continuar lendo {title}",
+    "itemType": "{type, select, cloze {lacuna} free_recall {resposta livre} other {{type}}}",
+    "openInBook": "Abrir no livro",
+    "fromNote": "Da nota “{title}”",
+    "noteChanged": "Sua nota mudou",
+    "resetConfirm": "Reiniciar o agendamento deste cartão?",
+    "resetting": "Reiniciando…",
+    "confirmReset": "Confirmar reinício",
+    "resetSchedule": "Reiniciar agendamento",
+    "gradeLabel": "Avalie o quanto você lembrou",
+    "reveal": "Mostrar resposta",
+    "grades": {
+      "again": "Novamente",
+      "hard": "Difícil",
+      "good": "Bom",
+      "easy": "Fácil"
+    },
+    "intervals": {
+      "minute": "~1 min",
+      "tenMinutes": "~10 min",
+      "hour": "~1 h",
+      "day": "~1 dia",
+      "fourDays": "~4 dias",
+      "twoWeeks": "~2 sem.",
+      "month": "~1 mês",
+      "fourMonths": "~4 meses",
+      "year": "~1 ano"
+    },
+    "editor": {
+      "question": "Pergunta",
+      "answer": "Resposta",
+      "save": "Salvar",
+      "saving": "Salvando…"
+    },
+    "heatmap": {
+      "groupLabel": "mapa de atividade de estudo, últimas {weeks, number} semanas",
+      "window": "Últimas {weeks, number} semanas",
+      "less": "Menos",
+      "more": "Mais",
+      "activity": "{reviews, plural, =0 {0 revisões} one {# revisão} other {# revisões}} · {pages, plural, =0 {0 páginas} one {# página} other {# páginas}}"
+    },
+    "stats": {
+      "label": "estatísticas de estudo",
+      "title": "Atividade de estudo",
+      "hide": "Ocultar estatísticas",
+      "show": "Mostrar estatísticas",
+      "studied": "Você estudou em <figure>{studied, number}</figure> dos últimos <window>{days, number}</window> dias",
+      "reviews": "revisões",
+      "pages": "páginas"
+    }
   }
 }

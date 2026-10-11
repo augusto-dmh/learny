@@ -33,6 +33,7 @@
  */
 
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
 import { fetchAuthState } from "@/app/lib/auth";
@@ -67,13 +68,45 @@ import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { useErrorMessage } from "./use-error-message";
 
-/** The 4 FSRS self-grades, in ascending rating order (Again=1 … Easy=4). */
-const GRADES: { rating: number; label: string }[] = [
-  { rating: 1, label: "Again" },
-  { rating: 2, label: "Hard" },
-  { rating: 3, label: "Good" },
-  { rating: 4, label: "Easy" },
+/**
+ * The 4 FSRS self-grades, in ascending rating order (Again=1 … Easy=4). `key`
+ * names the catalog label under `review.grades` and the tally's test id.
+ */
+const GRADES: { rating: number; key: "again" | "hard" | "good" | "easy" }[] = [
+  { rating: 1, key: "again" },
+  { rating: 2, key: "hard" },
+  { rating: 3, key: "good" },
+  { rating: 4, key: "easy" },
 ];
+
+/**
+ * The nine interval-preview buckets the backend sends (`~1m` … `~1y`), keyed to
+ * their catalog label under `review.intervals`. An unknown bucket shows as sent.
+ */
+const INTERVAL_KEYS: Readonly<
+  Record<
+    string,
+    | "minute"
+    | "tenMinutes"
+    | "hour"
+    | "day"
+    | "fourDays"
+    | "twoWeeks"
+    | "month"
+    | "fourMonths"
+    | "year"
+  >
+> = {
+  "~1m": "minute",
+  "~10m": "tenMinutes",
+  "~1h": "hour",
+  "~1d": "day",
+  "~4d": "fourDays",
+  "~2w": "twoWeeks",
+  "~1mo": "month",
+  "~4mo": "fourMonths",
+  "~1y": "year",
+};
 
 /** Per-rating tally kept as the session progresses (rating → count). */
 type Tally = Record<number, number>;
@@ -115,6 +148,8 @@ export function ReviewScreen({
   onRequireAuth?: () => void;
   onGraded?: () => void;
 }) {
+  const t = useTranslations("review");
+  const tCommon = useTranslations("common");
   const errorMessage = useErrorMessage();
   const [csrf, setCsrf] = useState<string | null>(null);
   const [authed, setAuthed] = useState<boolean | null>(null);
@@ -400,25 +435,25 @@ export function ReviewScreen({
   }, [cardOnScreen, csrf, queue, index, submitting]);
 
   if (authed === null) {
-    return <p className="text-muted-foreground">Loading…</p>;
+    return <p className="text-muted-foreground">{tCommon("loading")}</p>;
   }
   if (!authed) {
-    return <p className="text-muted-foreground">You are signed out.</p>;
+    return <p className="text-muted-foreground">{tCommon("signedOut")}</p>;
   }
   if (loadError) {
     return (
-      <section aria-label="review" className="space-y-4">
+      <section aria-label={t("regionLabel")} className="space-y-4">
         <p role="alert" className="text-sm text-destructive">
           {loadError}
         </p>
         <Button type="button" onClick={() => void loadQueue()}>
-          Retry
+          {t("retry")}
         </Button>
       </section>
     );
   }
   if (queue === null) {
-    return <p className="text-muted-foreground">Loading your due reviews…</p>;
+    return <p className="text-muted-foreground">{t("loadingDue")}</p>;
   }
   if (queue.length === 0 || index >= queue.length) {
     if (remainingDue > 0) {
@@ -433,29 +468,31 @@ export function ReviewScreen({
     }
     if (queue.length === 0) {
       return (
-        <section aria-label="review" className="space-y-3">
-          <p className="text-muted-foreground">Nothing due right now.</p>
+        <section aria-label={t("regionLabel")} className="space-y-3">
+          <p className="text-muted-foreground">{t("nothingDue")}</p>
           <Link
             href="/sources"
             className="text-primary underline-offset-4 hover:underline"
           >
-            Back to library
+            {t("backToLibrary")}
           </Link>
         </section>
       );
     }
     const total = GRADES.reduce((sum, g) => sum + tally[g.rating], 0);
     return (
-      <section aria-label="review summary" className="space-y-4">
-        <h2 className="text-lg font-semibold">Session complete</h2>
+      <section aria-label={t("summaryLabel")} className="space-y-4">
+        <h2 className="text-lg font-semibold">{t("sessionComplete")}</h2>
         <p data-testid="reviewed-total" className="text-sm">
-          Reviewed {total} {total === 1 ? "card" : "cards"}.
+          {t("reviewedTotal", { count: total })}
         </p>
         <ul className="space-y-1 text-sm">
           {GRADES.map((grade) => (
             <li key={grade.rating}>
-              <span className="text-muted-foreground">{grade.label}:</span>{" "}
-              <span data-testid={`count-${grade.label.toLowerCase()}`}>
+              <span className="text-muted-foreground">
+                {t(`grades.${grade.key}`)}:
+              </span>{" "}
+              <span data-testid={`count-${grade.key}`}>
                 {tally[grade.rating]}
               </span>
             </li>
@@ -465,7 +502,7 @@ export function ReviewScreen({
           href="/sources"
           className="text-primary underline-offset-4 hover:underline"
         >
-          Back to library
+          {t("backToLibrary")}
         </Link>
       </section>
     );
@@ -474,13 +511,13 @@ export function ReviewScreen({
   const item = queue[index];
   const shortTermLeft = queue.slice(index).filter((card) => card.shortTerm).length;
   return (
-    <section aria-label="review" className="space-y-4">
+    <section aria-label={t("regionLabel")} className="space-y-4">
       <p data-testid="position" className="text-sm text-muted-foreground">
         {index + 1}/{queue.length}
       </p>
       {shortTermLeft > 0 ? (
         <p data-testid="short-term-remaining" className="text-sm text-muted-foreground">
-          {shortTermLeft} still in short-term review
+          {t("shortTermRemaining", { count: shortTermLeft })}
         </p>
       ) : null}
       <ReviewCard
@@ -526,7 +563,7 @@ export function ReviewScreen({
             size="sm"
             onClick={() => setSubmitError(null)}
           >
-            Try again
+            {t("tryAgain")}
           </Button>
         </div>
       ) : null}
@@ -540,6 +577,7 @@ export function ReviewScreen({
  * Fetches continue only in this state so a caught-up summary never asks for it.
  */
 function SessionDoneWithRemainder({ onKeepGoing }: { onKeepGoing: () => void }) {
+  const t = useTranslations("review");
   const [hero, setHero] = useState<ContinueReadingView | null | "loading">(
     "loading",
   );
@@ -563,17 +601,14 @@ function SessionDoneWithRemainder({ onKeepGoing }: { onKeepGoing: () => void }) 
   }, []);
 
   return (
-    <section aria-label="review summary" className="space-y-4">
+    <section aria-label={t("summaryLabel")} className="space-y-4">
       <h2 data-testid="done-for-today" className="text-lg font-semibold">
-        Done for today
+        {t("doneForToday")}
       </h2>
-      <p className="text-sm text-muted-foreground">
-        You&rsquo;ve finished this session. More cards are still due when you
-        want them.
-      </p>
+      <p className="text-sm text-muted-foreground">{t("doneForTodayBody")}</p>
       <div className="flex flex-wrap items-center gap-3">
         <Button type="button" data-testid="keep-going" onClick={onKeepGoing}>
-          Keep going
+          {t("keepGoing")}
         </Button>
         {hero !== "loading" && hero !== null ? (
           <Link
@@ -581,7 +616,7 @@ function SessionDoneWithRemainder({ onKeepGoing }: { onKeepGoing: () => void }) 
             href={readUrl(hero.source_id, null)}
             className="text-primary underline-offset-4 hover:underline"
           >
-            Continue reading {hero.source_title}
+            {t("continueReading", { title: hero.source_title })}
           </Link>
         ) : null}
       </div>
@@ -612,6 +647,8 @@ function ReviewCard({
   // The two-step confirm for the schedule reset lives with the card so a declined
   // confirm fires nothing (NL-12). Advancing to another card drops any open confirm
   // so it never carries forward onto the next card's badge.
+  const t = useTranslations("review");
+  const tCommon = useTranslations("common");
   const [confirmingReset, setConfirmingReset] = useState(false);
   useEffect(() => {
     setConfirmingReset(false);
@@ -621,7 +658,7 @@ function ReviewCard({
     <Card>
       <CardHeader>
         <CardTitle className="text-base">
-          <Badge variant="outline">{item.item_type}</Badge>
+          <Badge variant="outline">{t("itemType", { type: item.item_type })}</Badge>
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -649,7 +686,7 @@ function ReviewCard({
               href={readUrl(item.source_id, item.citation.anchor)}
               className="text-primary underline-offset-4 hover:underline"
             >
-              Open in book
+              {t("openInBook")}
             </Link>
           ) : null}
           {item.provenance ? (
@@ -661,7 +698,7 @@ function ReviewCard({
               href={`/notes/${item.provenance.note_id}`}
               className="text-muted-foreground underline-offset-4 hover:underline"
             >
-              From “{item.provenance.note_title}”
+              {t("fromNote", { title: item.provenance.note_title })}
             </Link>
           ) : null}
         </div>
@@ -681,20 +718,20 @@ function ReviewCard({
                 href={`/notes/${item.provenance.note_id}`}
                 className="rounded-4xl bg-secondary px-2 py-0.5 text-xs font-medium text-secondary-foreground underline-offset-4 hover:underline"
               >
-                Your note changed
+                {t("noteChanged")}
               </Link>
             ) : (
               <span
                 data-testid="note-changed-badge"
                 className="rounded-4xl bg-secondary px-2 py-0.5 text-xs font-medium text-secondary-foreground"
               >
-                Your note changed
+                {t("noteChanged")}
               </span>
             )}
             {confirmingReset ? (
               <span className="flex flex-wrap items-center gap-2">
                 <span className="text-muted-foreground">
-                  Reset this card’s schedule?
+                  {t("resetConfirm")}
                 </span>
                 <Button
                   type="button"
@@ -703,7 +740,7 @@ function ReviewCard({
                   disabled={resetting}
                   onClick={onReset}
                 >
-                  {resetting ? "Resetting…" : "Confirm reset"}
+                  {resetting ? t("resetting") : t("confirmReset")}
                 </Button>
                 <Button
                   type="button"
@@ -712,7 +749,7 @@ function ReviewCard({
                   disabled={resetting}
                   onClick={() => setConfirmingReset(false)}
                 >
-                  Cancel
+                  {tCommon("cancel")}
                 </Button>
               </span>
             ) : (
@@ -722,7 +759,7 @@ function ReviewCard({
                 size="sm"
                 onClick={() => setConfirmingReset(true)}
               >
-                Reset schedule
+                {t("resetSchedule")}
               </Button>
             )}
           </div>
@@ -740,11 +777,14 @@ function ReviewCard({
             </figure>
             <div
               role="group"
-              aria-label="Grade your recall"
+              aria-label={t("gradeLabel")}
               className="flex flex-wrap gap-2"
             >
               {GRADES.map((grade) => {
-                const interval = intervalLabel(item.interval_labels, grade.rating);
+                const bucket = intervalLabel(item.interval_labels, grade.rating);
+                const intervalKey = INTERVAL_KEYS[bucket];
+                const interval = intervalKey ? t(`intervals.${intervalKey}`) : bucket;
+                const label = t(`grades.${grade.key}`);
                 return (
                   <Button
                     key={grade.rating}
@@ -752,10 +792,10 @@ function ReviewCard({
                     variant="outline"
                     size="sm"
                     disabled={submitting}
-                    aria-label={grade.label}
+                    aria-label={label}
                     onClick={() => onGrade(grade.rating)}
                   >
-                    {grade.label}
+                    {label}
                     {interval ? (
                       <span
                         data-testid={`grade-interval-${grade.rating}`}
@@ -771,7 +811,7 @@ function ReviewCard({
           </div>
         ) : (
           <Button type="button" onClick={onReveal}>
-            Reveal answer
+            {t("reveal")}
           </Button>
         )}
       </CardContent>
@@ -796,6 +836,8 @@ function ReviewCardEditor({
   onCancel: () => void;
   saving: boolean;
 }) {
+  const t = useTranslations("review.editor");
+  const tCommon = useTranslations("common");
   return (
     <form
       className="space-y-3"
@@ -806,7 +848,7 @@ function ReviewCardEditor({
     >
       <div className="space-y-1.5">
         <label htmlFor="review-edit-question" className="text-sm font-medium">
-          Question
+          {t("question")}
         </label>
         <Textarea
           id="review-edit-question"
@@ -817,7 +859,7 @@ function ReviewCardEditor({
       </div>
       <div className="space-y-1.5">
         <label htmlFor="review-edit-answer" className="text-sm font-medium">
-          Answer
+          {t("answer")}
         </label>
         <Textarea
           id="review-edit-answer"
@@ -828,7 +870,7 @@ function ReviewCardEditor({
       </div>
       <div className="flex flex-wrap gap-2">
         <Button type="submit" size="sm" disabled={saving}>
-          {saving ? "Saving…" : "Save"}
+          {saving ? t("saving") : t("save")}
         </Button>
         <Button
           type="button"
@@ -837,7 +879,7 @@ function ReviewCardEditor({
           disabled={saving}
           onClick={onCancel}
         >
-          Cancel
+          {tCommon("cancel")}
         </Button>
       </div>
     </form>

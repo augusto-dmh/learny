@@ -277,5 +277,71 @@
       "closePanel": "Close panel",
       "sheetDescription": "Study surfaces for this book, as a bottom sheet."
     }
+  },
+  "review": {
+    "title": "Review",
+    "regionLabel": "review",
+    "summaryLabel": "review summary",
+    "retry": "Retry",
+    "tryAgain": "Try again",
+    "loadingDue": "Loading your due reviews…",
+    "nothingDue": "Nothing due right now.",
+    "backToLibrary": "Back to library",
+    "sessionComplete": "Session complete",
+    "reviewedTotal": "Reviewed {count, plural, one {# card} other {# cards}}.",
+    "shortTermRemaining": "{count, number} still in short-term review",
+    "doneForToday": "Done for today",
+    "doneForTodayBody": "You’ve finished this session. More cards are still due when you want them.",
+    "keepGoing": "Keep going",
+    "continueReading": "Continue reading {title}",
+    "itemType": "{type, select, cloze {cloze} free_recall {free_recall} other {{type}}}",
+    "openInBook": "Open in book",
+    "fromNote": "From “{title}”",
+    "noteChanged": "Your note changed",
+    "resetConfirm": "Reset this card’s schedule?",
+    "resetting": "Resetting…",
+    "confirmReset": "Confirm reset",
+    "resetSchedule": "Reset schedule",
+    "gradeLabel": "Grade your recall",
+    "reveal": "Reveal answer",
+    "grades": {
+      "again": "Again",
+      "hard": "Hard",
+      "good": "Good",
+      "easy": "Easy"
+    },
+    "intervals": {
+      "minute": "~1m",
+      "tenMinutes": "~10m",
+      "hour": "~1h",
+      "day": "~1d",
+      "fourDays": "~4d",
+      "twoWeeks": "~2w",
+      "month": "~1mo",
+      "fourMonths": "~4mo",
+      "year": "~1y"
+    },
+    "editor": {
+      "question": "Question",
+      "answer": "Answer",
+      "save": "Save",
+      "saving": "Saving…"
+    },
+    "heatmap": {
+      "groupLabel": "study activity heatmap, last {weeks, number} weeks",
+      "window": "Last {weeks, number} weeks",
+      "less": "Less",
+      "more": "More",
+      "activity": "{reviews, plural, one {# review} other {# reviews}} · {pages, plural, one {# page} other {# pages}}"
+    },
+    "stats": {
+      "label": "study stats",
+      "title": "Study activity",
+      "hide": "Hide stats",
+      "show": "Show stats",
+      "studied": "Studied <figure>{studied, number}</figure> of the last <window>{days, number}</window> days",
+      "reviews": "reviews",
+      "pages": "pages"
+    }
   }
 }
