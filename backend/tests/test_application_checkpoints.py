@@ -19,7 +19,6 @@ from sqlalchemy import Connection, func, select
 from app.application.budget import DailyBudget, TokenPrices
 from app.application.checkpoints import (
     EXPLAIN_BACK_MESSAGE,
-    MAX_EXPLAIN_EVIDENCE,
     GradeAttempt,
     RespondToAttempt,
     RevealPassage,
@@ -175,6 +174,9 @@ def test_start_selects_due_first_owned_active_cards_on_anchor(db_conn: Connectio
     foreign_source = add_source(db_conn, stranger.id)
     add_corpus(db_conn, foreign_source)
     add_card(db_conn, foreign_source)
+    # Another learner's card on this very source and anchor (a cloned card on a
+    # shared book looks exactly like this): only the owner filter excludes it.
+    add_card(db_conn, source_id, user_id=stranger.id, due=_NOW - timedelta(days=9))
 
     started = _start(db_conn)(user=user, source_id=source_id, anchor=ANCHOR, prediction=2)
 
@@ -304,6 +306,19 @@ def test_minted_card_shape_and_owner_on_sample(db_conn: Connection) -> None:
     assert card.section_path == ("Book I", TITLE)
     assert card.answer == CHUNKS[2][:_MAX_CARD_CHARS]
     assert card.source_excerpt == CHUNKS[2][:_MAX_CARD_CHARS]
+    # Scheduled fresh before its first review: the log row's "previous" snapshot is
+    # exactly what a new card receives.
+    fresh = FsrsSchedulingAdapter(fuzzing=False).initial()
+    prev = db_conn.execute(
+        select(
+            review_log.c.prev_state,
+            review_log.c.prev_step,
+            review_log.c.prev_stability,
+            review_log.c.prev_difficulty,
+            review_log.c.prev_last_review,
+        ).where(review_log.c.quiz_item_id == card.id)
+    ).one()
+    assert tuple(prev) == (fresh.state, fresh.step, fresh.stability, fresh.difficulty, None)
 
 
 def test_minted_card_falls_back_to_first_chunk(db_conn: Connection) -> None:
@@ -371,7 +386,7 @@ def test_explain_calls_answer_mode_once_least_covered_first(db_conn: Connection)
     assert call["mode"] == MODE_ANSWER
     assert call["message"] == EXPLAIN_BACK_MESSAGE.format(title=TITLE, explanation=explanation)
     snippets = [e.snippet for e in call["evidence"]]
-    assert len(snippets) == MAX_EXPLAIN_EVIDENCE
+    assert len(snippets) == 6
     # The chunk the explanation echoes is the most covered: never in the first six
     # when eight untouched passages exist; untouched ones keep reading order.
     assert CHUNKS[0] not in snippets

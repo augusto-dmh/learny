@@ -2262,3 +2262,45 @@ describe("ChapterFlow end-of-section checkpoint invitation", () => {
     vi.unstubAllGlobals();
   });
 });
+
+describe("ChapterFlow checkpoint opens on the tapped section", () => {
+  it("starts the checkpoint for the section whose invitation was tapped", async () => {
+    const both: ChapterView = {
+      ...chapter,
+      sections: [
+        { ...chapter.sections[0], word_count: 400 },
+        { ...chapter.sections[1], word_count: 400 },
+      ],
+    };
+    const started: unknown[] = [];
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/sources/s1/structure") {
+        return jsonResponse(200, { sections: [] });
+      }
+      if (url === "/api/sources/s1/checkpoints" && init?.method === "POST") {
+        started.push(JSON.parse(String(init.body)));
+        return jsonResponse(201, {
+          checkpoint_id: "c1",
+          section_title: "The Analytical Engine",
+          anchor: S2,
+          attempts: [{ attempt_id: "a1", kind: "explain", question: "Explain it." }],
+        });
+      }
+      throw new Error(`no request expected: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={both} scrollTarget={null} />);
+    await screen.findByText("Babbage designed the analytical engine.");
+    expect(screen.getAllByTestId("checkpoint-invite")).toHaveLength(2);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Check yourself on The Analytical Engine" }),
+    );
+    const dialog = await screen.findByTestId("checkpoint-dialog");
+    expect(dialog.textContent).toContain("The Analytical Engine");
+    fireEvent.click(screen.getByRole("button", { name: "Skip" }));
+
+    await waitFor(() => expect(started).toEqual([{ anchor: S2, prediction: null }]));
+    vi.unstubAllGlobals();
+  });
+});

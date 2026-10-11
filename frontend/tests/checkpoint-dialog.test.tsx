@@ -250,6 +250,64 @@ describe("CheckpointDialog", () => {
     );
   });
 
+  it.each([
+    ["Missed it", 1],
+    ["Partly", 2],
+    ["Got it", 3],
+  ])("self-assessment %s grades the explanation %i", async (label, rating) => {
+    const grades: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        [START]: () => jsonResponse(201, explainOnly),
+        "POST /api/checkpoint-attempts/a2/response": () => jsonResponse(200, feedback),
+        "POST /api/checkpoint-attempts/a2/grade": (init) => {
+          grades.push(bodyOf(init));
+          return jsonResponse(200, { quiz_item_id: "q1", due: "2026-10-02", state: 1 });
+        },
+      }),
+    );
+    renderDialog();
+    fireEvent.click(screen.getByRole("button", { name: "Skip" }));
+    await screen.findByTestId("checkpoint-ask-explain");
+    fireEvent.click(screen.getByRole("button", { name: "Sure" }));
+    const step = await screen.findByTestId("checkpoint-feedback");
+
+    fireEvent.click(within(step).getByRole("button", { name: label }));
+
+    await screen.findByRole("button", { name: "Back to the book" });
+    expect(grades).toEqual([{ rating }]);
+  });
+
+  it.each([
+    ["Not sure", 1],
+    ["Fairly sure", 2],
+    ["Sure", 3],
+  ])("confidence %s is sent as %i with the response", async (label, confidence) => {
+    const sent: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        [START]: () => jsonResponse(201, explainOnly),
+        "POST /api/checkpoint-attempts/a2/response": (init) => {
+          sent.push(bodyOf(init));
+          return jsonResponse(200, feedback);
+        },
+      }),
+    );
+    renderDialog();
+    fireEvent.click(screen.getByRole("button", { name: "Skip" }));
+    await screen.findByTestId("checkpoint-ask-explain");
+    fireEvent.change(screen.getByRole("textbox", { name: "Your explanation" }), {
+      target: { value: "workers specialise" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: label }));
+
+    await screen.findByTestId("checkpoint-feedback");
+    expect(sent).toEqual([{ response: "workers specialise", confidence }]);
+  });
+
   it("closing mid-flow sends nothing more", async () => {
     const fetchMock = routedFetch({ [START]: () => jsonResponse(201, recallAndExplain) });
     vi.stubGlobal("fetch", fetchMock);

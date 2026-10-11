@@ -156,10 +156,10 @@ def test_new_routes_require_session_and_csrf(quiz_client: TestClient, db_conn: C
     assert _checkpoint_count(db_conn) == before
     stamps = db_conn.execute(
         select(checkpoint_attempts.c.responded_at, checkpoint_attempts.c.revealed_at).where(
-            checkpoint_attempts.c.id == UUID(recall_id)
+            checkpoint_attempts.c.id.in_([UUID(recall_id), UUID(attempts[1]["attempt_id"])])
         )
-    ).one()
-    assert tuple(stamps) == (None, None)
+    ).all()
+    assert [tuple(s) for s in stamps] == [(None, None), (None, None)]
 
 
 # --- respond ---------------------------------------------------------------------
@@ -243,14 +243,20 @@ def test_attempt_routes_404_for_foreign_and_missing(
     quiz_client.cookies.clear()
     _, csrf_b = _login(quiz_client)
 
+    bodies: dict[str, set[str]] = {"response": set(), "reveal": set(), "grade": set()}
     for attempt_id in (attempts[0]["attempt_id"], attempts[1]["attempt_id"], str(uuid4())):
-        responses = [
-            _post(quiz_client, attempt_id, "response", csrf_b, {"response": "", "confidence": 1}),
-            _post(quiz_client, attempt_id, "reveal", csrf_b),
-            _post(quiz_client, attempt_id, "grade", csrf_b, {"rating": 3}),
-        ]
-        assert [r.status_code for r in responses] == [404, 404, 404]
-        assert len({r.text for r in responses}) == 1
+        responses = {
+            "response": _post(
+                quiz_client, attempt_id, "response", csrf_b, {"response": "", "confidence": 1}
+            ),
+            "reveal": _post(quiz_client, attempt_id, "reveal", csrf_b),
+            "grade": _post(quiz_client, attempt_id, "grade", csrf_b, {"rating": 3}),
+        }
+        assert [r.status_code for r in responses.values()] == [404, 404, 404]
+        for step, resp in responses.items():
+            bodies[step].add(resp.text)
+    # A foreign attempt and a missing one are indistinguishable on every route.
+    assert [len(texts) for texts in bodies.values()] == [1, 1, 1]
 
 
 # --- grade -----------------------------------------------------------------------
@@ -402,3 +408,41 @@ def test_reveal_409_on_recall_or_after_response(
         )
     ).all()
     assert [s.revealed_at for s in stamps] == [None, None]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"anchor": ANCHOR, "prediction": 0},
+        {"anchor": ANCHOR, "prediction": 4},
+        {"anchor": "", "prediction": None},
+    ],
+)
+def test_create_validation_422(quiz_client: TestClient, db_conn: Connection, body: dict) -> None:
+    _, csrf, source_id = _book(quiz_client, db_conn)
+    before = _checkpoint_count(db_conn)
+
+    resp = quiz_client.post(
+        f"/api/sources/{source_id}/checkpoints", json=body, headers={"X-CSRF-Token": csrf}
+    )
+
+    assert resp.status_code == 422
+    assert _checkpoint_count(db_conn) == before
+
+
+@pytest.mark.parametrize("rating,expected", [(4, 200), (5, 422)])
+def test_recall_grade_rating_bounds(
+    quiz_client: TestClient, db_conn: Connection, rating: int, expected: int
+) -> None:
+    _, csrf, source_id = _book(quiz_client, db_conn)
+    card = add_card(db_conn, source_id)
+    attempt_id = _attempts(_create(quiz_client, source_id, csrf))[0]["attempt_id"]
+    _post(quiz_client, attempt_id, "response", csrf, {"response": "", "confidence": 3})
+
+    resp = _post(quiz_client, attempt_id, "grade", csrf, {"rating": rating})
+
+    assert resp.status_code == expected, resp.text
+    rows = db_conn.execute(
+        select(review_log.c.rating).where(review_log.c.quiz_item_id == card.id)
+    ).all()
+    assert [r.rating for r in rows] == ([rating] if expected == 200 else [])
