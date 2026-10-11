@@ -32,9 +32,10 @@ from app.application.retrieval import EmbedCorpus
 from app.core.config import get_settings
 from app.core.tracing import bind_trace, new_trace_scope, reset_trace
 from app.domain.entities import ParsedBook, QuizDeckHandle, QuizDeckResult
-from app.domain.ports import IngestionStep, StoragePort
+from app.domain.ports import IngestionStep, QuizGenerationPort, StoragePort
 from app.infrastructure.clock import SystemClock
 from app.infrastructure.db.engine import get_engine
+from app.infrastructure.db.provider_credentials import SqlAlchemyProviderCredentialRepository
 from app.infrastructure.db.repositories import (
     SqlAlchemyAiSpendDayRepository,
     SqlAlchemyCorpusRepository,
@@ -54,8 +55,11 @@ from app.infrastructure.ingestion.factory import (
 )
 from app.infrastructure.ingestion.images import PillowImageEncoder
 from app.infrastructure.ingestion.markup import Bs4MarkupConverter
+from app.infrastructure.providers import offered_providers
 from app.infrastructure.quiz import UndeclaredProviderError, build_quiz_adapter
+from app.infrastructure.quiz.learner import QUIZ_KEY_PROVIDER, build_user_keyed_quiz_adapter
 from app.infrastructure.scheduling import build_scheduling_adapter
+from app.infrastructure.security.secrets_envelope import SecretsEnvelope
 from app.infrastructure.storage.s3 import S3StorageAdapter
 from app.infrastructure.worker.steps import (
     CorpusIngestionStep,
@@ -443,23 +447,30 @@ def refresh_note_cards(self, note_id: str) -> None:  # noqa: ANN001 — bound ta
     bind_trace(note_id=note_id)
     try:
         with get_engine().begin() as conn:
-            _build_refresh_note_cards(conn)(note_id=UUID(note_id))
+            nid = UUID(note_id)
+            note = SqlAlchemyNoteRepository(conn).get_by_id(nid)
+            learner = _learner_quiz_adapter(conn, note.user_id) if note is not None else None
+            _build_refresh_note_cards(conn, learner)(note_id=nid)
     finally:
         reset_trace(token)
 
 
-def _build_refresh_note_cards(conn: Connection) -> RefreshNoteCards:
+def _build_refresh_note_cards(
+    conn: Connection, generation: QuizGenerationPort | None = None
+) -> RefreshNoteCards:
     """Wire ``RefreshNoteCards`` on ``conn`` (the refresh task's root).
 
     Budgeted like the deck settle: the regeneration call debits its usage to the
     note's owner's current UTC day (AD-341) — the ledger row shares the task's
     transaction, so a rolled-back refresh un-does its debit with its writes.
+    ``generation`` is the owner's own-key quiz adapter when they hold one
+    (ADR-0033); otherwise the house adapter serves.
     """
     settings = get_settings()
     return RefreshNoteCards(
         notes=SqlAlchemyNoteRepository(conn),
         items=SqlAlchemyQuizItemRepository(conn),
-        generation=build_quiz_adapter(settings),
+        generation=generation or build_quiz_adapter(settings),
         embeddings=build_embedding_adapter(settings),
         clock=_clock,
         max_suggestions=settings.quiz_max_suggestions,
@@ -485,6 +496,52 @@ def _build_refresh_note_cards(conn: Connection) -> RefreshNoteCards:
 _DECK_FAILURE_ERROR = "Quiz deck generation failed."
 _DECK_TIMEOUT_ERROR = "Quiz deck generation timed out."
 _DECK_PROVIDER_ERROR = "Quiz deck generation provider is no longer configured."
+_DECK_KEY_GONE_ERROR = (
+    "Quiz deck generation stopped because the provider key it started with was removed or replaced."
+)
+
+
+# --- Learner provider keys (ADR-0033) -------------------------------------------
+#
+# A task carries ids only. The owner's key is resolved here, inside the task,
+# from the credential row: never from a task argument, and never placed in one.
+# A deck begun on a learner's key pins that key's row id on its handle, so the
+# poll collects with exactly that row or fails the job; it never falls back to
+# the house key or to a key added since.
+
+
+def _learner_quiz_adapter(
+    conn: Connection, user_id: UUID, *, pinned: UUID | None = None
+) -> QuizGenerationPort | None:
+    """The quiz adapter built with ``user_id``'s own Anthropic key, or ``None``.
+
+    ``None`` when the feature is off (no KEK, or no profile binds Anthropic),
+    when the learner holds no usable Anthropic key, or when the key cannot be
+    opened. With ``pinned``, only the row with exactly that id may serve: a key
+    replaced since (a new row id) or deleted reads as ``None``.
+    """
+    settings = get_settings()
+    keks = settings.secrets_keks()
+    if keks is None:
+        return None
+    if QUIZ_KEY_PROVIDER not in offered_providers(tuple(settings.generation_profiles)):
+        return None
+    repo = SqlAlchemyProviderCredentialRepository(conn, SecretsEnvelope(*keks))
+    credential = repo.get(user_id, QUIZ_KEY_PROVIDER)
+    if credential is None or (pinned is not None and credential.id != pinned):
+        return None
+    api_key = repo.reveal(credential)
+    if api_key is None:
+        return None
+    return build_user_keyed_quiz_adapter(settings, api_key, credential_id=credential.id)
+
+
+def _owner_of_source(conn: Connection, source_id: UUID | None) -> UUID | None:
+    """The user who owns ``source_id``, or ``None`` when it is gone."""
+    if source_id is None:
+        return None
+    source = SqlAlchemySourceRepository(conn).get_by_id(source_id)
+    return source.user_id if source is not None else None
 
 
 def _build_budget(conn: Connection) -> DailyBudget:
@@ -524,18 +581,24 @@ def _record_deck_spend(conn: Connection, source_id: UUID, result: QuizDeckResult
     budget = _build_budget(conn)
     budget.record(
         source.user_id,
-        usd_micros=budget.usage_micros(result.usage),
+        usd_micros=budget.usage_micros(result.usage, user_keyed=result.user_keyed),
         kind=KIND_GENERATION,
     )
 
 
-def _build_run_deck(conn: Connection) -> RunDeckGeneration:
-    """Wire the ``RunDeckGeneration`` driver on ``conn`` (the deck task's root)."""
+def _build_run_deck(
+    conn: Connection, generation: QuizGenerationPort | None = None
+) -> RunDeckGeneration:
+    """Wire the ``RunDeckGeneration`` driver on ``conn`` (the deck task's root).
+
+    ``generation`` is the owner's own-key quiz adapter for a learner-keyed deck;
+    ``None`` wires the house adapter.
+    """
     settings = get_settings()
     return RunDeckGeneration(
         jobs=SqlAlchemyQuizJobRepository(conn),
         items=SqlAlchemyQuizItemRepository(conn),
-        generation=build_quiz_adapter(settings),
+        generation=generation or build_quiz_adapter(settings),
         embeddings=build_embedding_adapter(settings),
         scheduling=build_scheduling_adapter(settings),
         clock=_clock,
@@ -564,7 +627,7 @@ def _retry_or_fail_deck(self, jid, exc, log, start):  # noqa: ANN001, ANN202 —
     return None
 
 
-def _settle_deck(jid, source_id, result, log, start):  # noqa: ANN001, ANN202
+def _settle_deck(jid, source_id, result, log, start, generation=None):  # noqa: ANN001, ANN202
     """Debit a completed pass once, then persist it (atomic; safe under redelivery).
 
     ONE transaction claims the job row's one-time spend marker with a conditional
@@ -580,7 +643,7 @@ def _settle_deck(jid, source_id, result, log, start):  # noqa: ANN001, ANN202
             return
         if source_id is not None:
             _record_deck_spend(conn, source_id, result)
-        _build_run_deck(conn).finalize(jid, result)
+        _build_run_deck(conn, generation).finalize(jid, result)
     logger.info(
         "quiz.generate_deck: succeeded",
         extra={**log, "duration_ms": _elapsed_ms(start)},
@@ -619,10 +682,15 @@ def _generate_quiz_deck_body(self, jid, sid, job_id, log, start):  # noqa: ANN00
     # 2. Start the pass and collect once. A provider fault here retries the task.
     #    The inline collect is pinned to the provider the handle records — the one
     #    ``begin_deck`` just used — so the collect can never drift from the begin.
+    #    An owner holding an Anthropic key runs the pass on it, resolved here from
+    #    the credential row; the handle then pins that row's id (ADR-0033).
     try:
         with get_engine().begin() as conn:
-            handle = _build_run_deck(conn).begin_deck(sid)
-        result = build_quiz_adapter(get_settings(), provider=handle.provider).collect_deck(handle)
+            owner = _owner_of_source(conn, sid)
+            learner = _learner_quiz_adapter(conn, owner) if owner is not None else None
+            handle = _build_run_deck(conn, learner).begin_deck(sid)
+        collector = learner or build_quiz_adapter(get_settings(), provider=handle.provider)
+        result = collector.collect_deck(handle)
     except Exception as exc:  # noqa: BLE001 — classified as retryable/terminal below
         return _retry_or_fail_deck(self, jid, exc, log, start)
 
@@ -639,7 +707,7 @@ def _generate_quiz_deck_body(self, jid, sid, job_id, log, start):  # noqa: ANN00
 
     # 3b. Inline result (local provider or an already-finished batch): settle now —
     #     debit the pass's actual usage once, then finalize, atomically.
-    _settle_deck(jid, sid, result, log, start)
+    _settle_deck(jid, sid, result, log, start, learner)
     return None
 
 
@@ -670,11 +738,30 @@ def poll_quiz_deck(  # noqa: ANN001 — bound task ``self``
 
 def _poll_quiz_deck_body(self, jid, job_id, handle_payload, deadline_iso, log, start):  # noqa: ANN001, ANN202
     handle = QuizDeckHandle.from_payload(handle_payload)
+    learner: QuizGenerationPort | None = None
+    if handle.credential_id is not None:
+        # Begun on the owner's own key: collect with exactly that credential row,
+        # re-read now, or fail terminally. Never the house key, never a key
+        # added since: a replace mints a new row id, so it does not match.
+        with get_engine().begin() as conn:
+            job = SqlAlchemyQuizJobRepository(conn).get_by_id(jid)
+            owner = _owner_of_source(conn, job.source_id if job is not None else None)
+            if owner is not None:
+                learner = _learner_quiz_adapter(conn, owner, pinned=handle.credential_id)
+            if learner is None:
+                _build_run_deck(conn).fail(jid, _DECK_KEY_GONE_ERROR)
+        if learner is None:
+            logger.warning(
+                "quiz.poll_deck: the provider key this deck began with is gone; job "
+                "failed terminally with no poll attempted",
+                extra={**log, "duration_ms": _elapsed_ms(start)},
+            )
+            return None
     # Build the adapter for the provider that began the deck — before the retry
     # try, so an undeclared provider is a terminal failure rather than a retry
     # loop, and no adapter is built (no provider touched) when it is.
     try:
-        adapter = build_quiz_adapter(get_settings(), provider=handle.provider)
+        adapter = learner or build_quiz_adapter(get_settings(), provider=handle.provider)
     except UndeclaredProviderError:
         with get_engine().begin() as conn:
             _build_run_deck(conn).fail(jid, _DECK_PROVIDER_ERROR)
@@ -714,5 +801,5 @@ def _poll_quiz_deck_body(self, jid, job_id, handle_payload, deadline_iso, log, s
     with get_engine().begin() as conn:
         job = SqlAlchemyQuizJobRepository(conn).get_by_id(jid)
         source_id = job.source_id if job is not None else None
-    _settle_deck(jid, source_id, result, log, start)
+    _settle_deck(jid, source_id, result, log, start, learner)
     return None
