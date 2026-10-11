@@ -20,9 +20,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
 from app.infrastructure.answering.anthropic import raise_translated as _anthropic_translated
-from app.infrastructure.answering.openai_compat import (
-    _raise_translated as _openai_translated,
-)
+from app.infrastructure.answering.openai_compat import raise_translated as _openai_translated
 from app.infrastructure.providers.errors import (
     ProviderUnavailable,
     RateLimited,

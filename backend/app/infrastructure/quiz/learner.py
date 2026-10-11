@@ -48,11 +48,6 @@ class LearnerKeyedQuizAdapter:
     def model(self) -> str:
         return self._inner.model
 
-    @property
-    def credential_id(self) -> UUID:
-        """The credential row whose key built this adapter."""
-        return self._credential_id
-
     def begin_deck(self, sections: Sequence[QuizSection]) -> QuizDeckHandle:
         handle = self._inner.begin_deck(sections)
         return replace(handle, credential_id=self._credential_id)
