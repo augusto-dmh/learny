@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import CopyrightPage, { metadata as copyrightMetadata } from "../app/copyright/page";
 import PrivacyPage, { metadata as privacyMetadata } from "../app/privacy/page";
 import TermsPage, { metadata as termsMetadata } from "../app/terms/page";
+import { setTestLocale } from "./setup-intl";
 
 afterEach(() => {
   cleanup();
@@ -97,5 +98,22 @@ describe("privacy page (DOOR-29)", () => {
     expect(body).not.toMatch(/zero[- ]data[- ]retention/i);
     expect(body).not.toMatch(/zero retention/i);
     expect(body).not.toMatch(/\bno retention\b/i);
+  });
+});
+
+describe("legal pages under pt-BR", () => {
+  it("stay English under pt-BR", () => {
+    setTestLocale("pt-BR");
+    const pages = [
+      [TermsPage, "Terms of Service"],
+      [PrivacyPage, "Privacy Policy"],
+      [CopyrightPage, "Copyright / DMCA"],
+    ] as const;
+    for (const [Page, heading] of pages) {
+      render(<Page />);
+      expect(screen.getByRole("heading", { level: 1 }).textContent).toBe(heading);
+      expect(screen.getByRole("main").getAttribute("lang")).toBe("en");
+      cleanup();
+    }
   });
 });

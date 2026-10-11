@@ -11,7 +11,10 @@
         "en": "English",
         "pt-BR": "Português (Brasil)"
       }
-    }
+    },
+    "close": "Fechar",
+    "cancel": "Cancelar",
+    "loadingLabel": "Carregando"
   },
   "errors": {
     "generic": "Algo deu errado. Tente novamente.",
@@ -105,6 +108,52 @@
         "teachOnly": "Funciona apenas em Ensinar.",
         "neither": "No momento não funciona em Perguntar nem em Ensinar."
       }
+    }
+  },
+  "landing": {
+    "tagline": "Transforme seus livros em respostas com citações e em conhecimento que fica."
+  },
+  "auth": {
+    "createAccount": "Criar conta",
+    "logIn": "Entrar",
+    "login": {
+      "description": "Que bom ter você de volta ao Learny.",
+      "noAccount": "Ainda não tem conta? <link>Crie uma</link>."
+    },
+    "register": {
+      "description": "Comece a aprender com o Learny.",
+      "haveAccount": "Já tem uma conta? <link>Entre</link>."
+    },
+    "form": {
+      "label": "{mode, select, register {formulário de cadastro} other {formulário de entrada}}",
+      "email": "E-mail",
+      "password": "Senha",
+      "inviteCode": "Código de convite",
+      "inviteHint": "(se você tiver um)",
+      "acceptTerms": "Concordo com os <link>Termos de Serviço</link>",
+      "working": "Aguarde…"
+    }
+  },
+  "shell": {
+    "nav": {
+      "home": "Início",
+      "library": "Biblioteca",
+      "review": "Revisão",
+      "notes": "Notas"
+    },
+    "account": "Conta",
+    "toggleTheme": "Alternar tema",
+    "logOut": "Sair",
+    "sidebar": {
+      "title": "Barra lateral",
+      "description": "Mostra a barra lateral no celular.",
+      "toggle": "Alternar barra lateral"
+    }
+  },
+  "chat": {
+    "notFound": {
+      "inScope": "Isso não aparece no trecho do livro que esta conversa abrange. A resposta pode estar em outra parte do livro.",
+      "inSource": "Isso não aparece neste livro."
     }
   }
 }

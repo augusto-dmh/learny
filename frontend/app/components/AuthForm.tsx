@@ -10,6 +10,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 
 import { login, register, type UserSummary } from "@/app/lib/auth";
 import { Button } from "@/components/ui/button";
@@ -25,6 +26,7 @@ export function AuthForm({
   mode: AuthMode;
   onAuthenticated?: (user: UserSummary) => void;
 }) {
+  const t = useTranslations("auth");
   const errorMessage = useErrorMessage();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -33,7 +35,7 @@ export function AuthForm({
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
 
-  const submitLabel = mode === "register" ? "Create account" : "Log in";
+  const submitLabel = mode === "register" ? t("createAccount") : t("logIn");
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
@@ -60,12 +62,12 @@ export function AuthForm({
   return (
     <form
       onSubmit={handleSubmit}
-      aria-label={`${mode} form`}
+      aria-label={t("form.label", { mode })}
       className="space-y-4"
     >
       <div className="space-y-1.5">
         <label htmlFor="auth-email" className="text-sm font-medium">
-          Email
+          {t("form.email")}
         </label>
         <Input
           id="auth-email"
@@ -79,7 +81,7 @@ export function AuthForm({
       </div>
       <div className="space-y-1.5">
         <label htmlFor="auth-password" className="text-sm font-medium">
-          Password
+          {t("form.password")}
         </label>
         <Input
           id="auth-password"
@@ -95,8 +97,10 @@ export function AuthForm({
         <>
           <div className="space-y-1.5">
             <label htmlFor="auth-invite" className="text-sm font-medium">
-              Invite code{" "}
-              <span className="font-normal text-muted-foreground">(if you have one)</span>
+              {t("form.inviteCode")}{" "}
+              <span className="font-normal text-muted-foreground">
+                {t("form.inviteHint")}
+              </span>
             </label>
             <Input
               id="auth-invite"
@@ -117,13 +121,16 @@ export function AuthForm({
               className="mt-1 size-4 accent-primary"
             />
             <label htmlFor="auth-tos" className="text-sm">
-              I agree to the{" "}
-              <Link
-                href="/terms"
-                className="text-primary underline-offset-4 hover:underline"
-              >
-                Terms of Service
-              </Link>
+              {t.rich("form.acceptTerms", {
+                link: (chunks) => (
+                  <Link
+                    href="/terms"
+                    className="text-primary underline-offset-4 hover:underline"
+                  >
+                    {chunks}
+                  </Link>
+                ),
+              })}
             </label>
           </div>
         </>
@@ -134,7 +141,7 @@ export function AuthForm({
         </p>
       ) : null}
       <Button type="submit" disabled={pending} className="w-full">
-        {pending ? "Working…" : submitLabel}
+        {pending ? t("form.working") : submitLabel}
       </Button>
     </form>
   );

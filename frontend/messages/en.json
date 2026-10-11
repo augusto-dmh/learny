@@ -11,7 +11,10 @@
         "en": "English",
         "pt-BR": "Português (Brasil)"
       }
-    }
+    },
+    "close": "Close",
+    "cancel": "Cancel",
+    "loadingLabel": "Loading"
   },
   "errors": {
     "generic": "Something went wrong. Please try again.",
@@ -105,6 +108,52 @@
         "teachOnly": "Works in Teach only.",
         "neither": "Currently works in neither Ask nor Teach."
       }
+    }
+  },
+  "landing": {
+    "tagline": "Turn your books into cited answers and lasting recall."
+  },
+  "auth": {
+    "createAccount": "Create account",
+    "logIn": "Log in",
+    "login": {
+      "description": "Welcome back to Learny.",
+      "noAccount": "No account? <link>Create one</link>."
+    },
+    "register": {
+      "description": "Start learning with Learny.",
+      "haveAccount": "Already have an account? <link>Log in</link>."
+    },
+    "form": {
+      "label": "{mode, select, register {register form} other {login form}}",
+      "email": "Email",
+      "password": "Password",
+      "inviteCode": "Invite code",
+      "inviteHint": "(if you have one)",
+      "acceptTerms": "I agree to the <link>Terms of Service</link>",
+      "working": "Working…"
+    }
+  },
+  "shell": {
+    "nav": {
+      "home": "Home",
+      "library": "Library",
+      "review": "Review",
+      "notes": "Notes"
+    },
+    "account": "Account",
+    "toggleTheme": "Toggle theme",
+    "logOut": "Log out",
+    "sidebar": {
+      "title": "Sidebar",
+      "description": "Displays the mobile sidebar.",
+      "toggle": "Toggle Sidebar"
+    }
+  },
+  "chat": {
+    "notFound": {
+      "inScope": "That was not found in the part of the book this conversation covers. It may be answered elsewhere in the book.",
+      "inSource": "That was not found in this book."
     }
   }
 }

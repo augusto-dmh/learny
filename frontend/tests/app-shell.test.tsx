@@ -14,9 +14,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import AppLayout from "../app/(app)/layout";
 import AuthLayout from "../app/(auth)/layout";
 import ReadLayout from "../app/(read)/layout";
+import { NotFoundNotice } from "../app/components/not-found-notice";
 import { AuthHeader } from "../app/components/shell/auth-header";
 import { ThemeProvider } from "../app/components/theme-provider";
 import { SidebarProvider } from "../components/ui/sidebar";
+import { expectNoEnglishCopy } from "./i18n-copy";
+import { setTestLocale } from "./setup-intl";
 
 const { routerReplace } = vi.hoisted(() => ({ routerReplace: vi.fn() }));
 
@@ -205,5 +208,56 @@ describe("app shell composition", () => {
     expect(screen.queryByRole("link", { name: "Library" })).toBeNull();
     expect(screen.queryByRole("link", { name: "Account" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Log out" })).toBeNull();
+  });
+});
+
+describe("app shell in pt-BR", () => {
+  it("renders in pt-BR", async () => {
+    setTestLocale("pt-BR");
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({ "GET /api/auth/me": () => authedMe.clone() }),
+    );
+
+    render(
+      <AppLayout>
+        <div data-testid="page-content">Page body</div>
+      </AppLayout>,
+    );
+
+    expect(await screen.findByText("a@b.c")).toBeTruthy();
+    const nav = [
+      { name: "Início", href: "/home" },
+      { name: "Biblioteca", href: "/sources" },
+      { name: "Revisão", href: "/review" },
+      { name: "Notas", href: "/notes" },
+    ];
+    for (const { name, href } of nav) {
+      expect(screen.getByRole("link", { name }).getAttribute("href")).toBe(href);
+    }
+    expect(screen.getByRole("link", { name: "Conta" }).getAttribute("href")).toBe(
+      "/account",
+    );
+    expect(screen.getByRole("button", { name: "Sair" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Alternar tema" })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Alternar barra lateral" }),
+    ).toBeTruthy();
+    expectNoEnglishCopy(document.body.textContent ?? "", "shell");
+  });
+
+  it("shows the not-found notice in pt-BR", () => {
+    setTestLocale("pt-BR");
+
+    render(<NotFoundNotice status="not_found_in_source" />);
+    expect(screen.getByTestId("not-found").textContent).toBe(
+      "Isso não aparece neste livro.",
+    );
+    cleanup();
+
+    render(<NotFoundNotice status="not_found_in_scope" />);
+    expect(screen.getByTestId("not-found").textContent).toBe(
+      "Isso não aparece no trecho do livro que esta conversa abrange. A resposta pode estar em outra parte do livro.",
+    );
   });
 });

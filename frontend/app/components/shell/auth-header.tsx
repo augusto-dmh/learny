@@ -13,6 +13,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { useCallback, useEffect, useState } from "react";
 
 import { Moon, Sun } from "lucide-react";
@@ -24,6 +25,7 @@ import { Button } from "@/components/ui/button";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 
 export function AuthHeader() {
+  const t = useTranslations("shell");
   const router = useRouter();
   const { resolvedTheme, setTheme } = useTheme();
   const [state, setState] = useState<AuthState | null>(null);
@@ -61,13 +63,13 @@ export function AuthHeader() {
           </span>
         ) : null}
         <Button variant="ghost" size="sm" asChild>
-          <Link href="/account">Account</Link>
+          <Link href="/account">{t("account")}</Link>
         </Button>
         <Button
           type="button"
           variant="ghost"
           size="icon-sm"
-          aria-label="Toggle theme"
+          aria-label={t("toggleTheme")}
           onClick={() =>
             setTheme(resolvedTheme === "dark" ? "light" : "dark")
           }
@@ -81,7 +83,7 @@ export function AuthHeader() {
           size="sm"
           onClick={handleLogout}
         >
-          Log out
+          {t("logOut")}
         </Button>
       </div>
     </header>
