@@ -225,6 +225,19 @@ def rate_limit_quiz(
     _hit(_user_route_key(user, request))
 
 
+def rate_limit_provider_keys(
+    user: Annotated[User, Depends(get_authenticated_user)], request: Request
+) -> None:
+    """FastAPI dependency: throttle saving and testing a provider key per user (ADR-0033).
+
+    Same user+template key as the other authenticated surfaces (see
+    :func:`_user_route_key`), so saving and testing count separately. Saving
+    seals a key and testing calls the provider with it; the throttle keeps a
+    client from using either as a free key-checking oracle.
+    """
+    _hit(_user_route_key(user, request))
+
+
 def rate_limit_notes(request: Request) -> None:
     """FastAPI dependency: throttle note writes + highlight capture; 429 when exceeded.
 
