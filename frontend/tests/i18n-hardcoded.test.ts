@@ -57,6 +57,8 @@ const ALLOWED_TEXT = new Set([
   "Ctrl",
   "Alt",
   "Cmd",
+  // The reading-settings trigger is a type specimen, not a word.
+  "Aa",
 ]);
 
 /** Path prefixes (relative to `frontend/`, `/`-separated) outside the sensor. */
@@ -77,29 +79,23 @@ const EXEMPT_PATHS = [
 const PENDING_MIGRATION: string[] = [
   "app/(app)/notes/page.tsx",
   "app/(app)/review/page.tsx",
-  "app/(read)/sources/[id]/read/page.tsx",
   "app/components/answer-phase.tsx",
   "app/components/ask-panel.tsx",
-  "app/components/chapter-reader.tsx",
   "app/components/citations.tsx",
   "app/components/conversation-list.tsx",
   "app/components/dock-notes-panel.tsx",
   "app/components/dock-review-panel.tsx",
   "app/components/failed-turn.tsx",
   "app/components/include-notes-toggle.tsx",
-  "app/components/margin-rail.tsx",
   "app/components/notes/capture-popover.tsx",
   "app/components/notes/card-suggestions.tsx",
   "app/components/notes/note-card-suggestions.tsx",
   "app/components/notes/note-detail-screen.tsx",
   "app/components/notes/notes-screen.tsx",
-  "app/components/reader-panel.tsx",
-  "app/components/reading-controls.tsx",
   "app/components/review-screen.tsx",
   "app/components/save-to-note-action.tsx",
   "app/components/study-heatmap.tsx",
   "app/components/teach-panel.tsx",
-  "app/components/toc-panel.tsx",
   "components/ai-elements/inline-citation.tsx",
   "components/ai-elements/message.tsx",
   "components/ai-elements/prompt-input.tsx",

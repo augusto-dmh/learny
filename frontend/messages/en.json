@@ -224,5 +224,60 @@
       "discardFootnote": "{discarded} discarded during generation.",
       "partial": "Saved {saved}. {failed, plural, one {# section} other {# sections}} failed."
     }
+  },
+  "reader": {
+    "signedOut": "You are signed out.",
+    "notFound": "We couldn’t find that chapter.",
+    "backToLibrary": "Back to your library",
+    "tocToggle": "Table of contents",
+    "dockToggle": "Study dock",
+    "progress": "{percent}% read · {minutes} min left",
+    "returnChip": "Return to where you were",
+    "staleCapture": "The book changed while you were reading. Reload the page to capture this highlight.",
+    "toc": {
+      "label": "Table of contents",
+      "chapterNav": "Chapter navigation",
+      "previous": "← Previous chapter",
+      "next": "Next chapter →"
+    },
+    "rail": {
+      "label": "Chapter annotations",
+      "heading": "In this chapter",
+      "empty": "Nothing highlighted in this chapter yet."
+    },
+    "controls": {
+      "label": "Reading settings",
+      "typeSize": "Type size",
+      "typeSizeStep": "Type size {size}",
+      "lineSpacing": "Line spacing",
+      "lineSpacingStep": "Line spacing {step, number}",
+      "appearance": "Appearance",
+      "appearances": {
+        "default": "Default",
+        "paper": "Paper"
+      },
+      "darkNote": "Dark reading uses the night palette.",
+      "theme": "Theme",
+      "themes": {
+        "light": "Light",
+        "dark": "Dark",
+        "system": "System"
+      }
+    },
+    "dock": {
+      "tabsLabel": "Dock tabs",
+      "tabs": {
+        "chat": "Chat",
+        "notes": "Notes",
+        "review": "Review"
+      },
+      "panels": {
+        "chat": "Chat panel",
+        "notes": "Notes panel",
+        "review": "Review panel"
+      },
+      "closePanel": "Close panel",
+      "sheetDescription": "Study surfaces for this book, as a bottom sheet."
+    }
   }
 }

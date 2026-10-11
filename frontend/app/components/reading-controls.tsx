@@ -15,6 +15,7 @@
  * with a note rather than removing the control (RD-20).
  */
 
+import { useFormatter, useTranslations } from "next-intl";
 import { useTheme } from "next-themes";
 
 import {
@@ -32,16 +33,9 @@ import {
 } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 
-const APPEARANCES: readonly [ReadingAppearance, string][] = [
-  ["default", "Default"],
-  ["paper", "Paper"],
-];
+const APPEARANCES: readonly ReadingAppearance[] = ["default", "paper"];
 
-const THEMES: readonly [string, string][] = [
-  ["light", "Light"],
-  ["dark", "Dark"],
-  ["system", "System"],
-];
+const THEMES = ["light", "dark", "system"] as const;
 
 /** One selectable step in a segmented control; `selected` shows the pressed state. */
 function Segment({
@@ -95,6 +89,8 @@ export function ReadingControls({
   onLeadingChange: (leading: ReadingLeading) => void;
   onAppearanceChange: (appearance: ReadingAppearance) => void;
 }) {
+  const t = useTranslations("reader.controls");
+  const format = useFormatter();
   const { theme, resolvedTheme, setTheme } = useTheme();
 
   return (
@@ -104,64 +100,67 @@ export function ReadingControls({
           type="button"
           variant="ghost"
           size="sm"
-          aria-label="Reading settings"
+          aria-label={t("label")}
           className="font-serif"
         >
           Aa
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-64 gap-3.5">
-        <Field label="Type size">
+        <Field label={t("typeSize")}>
           {READING_SIZES.map((step) => (
             <Segment
               key={step}
               selected={step === size}
               onClick={() => onSizeChange(step)}
-              aria-label={`Type size ${step}`}
+              aria-label={t("typeSizeStep", { size: step })}
             >
               <span style={{ fontSize: `${step}px` }}>A</span>
             </Segment>
           ))}
         </Field>
 
-        <Field label="Line spacing">
+        <Field label={t("lineSpacing")}>
           {READING_LEADINGS.map((step) => (
             <Segment
               key={step}
               selected={step === leading}
               onClick={() => onLeadingChange(step)}
-              aria-label={`Line spacing ${step}`}
+              aria-label={t("lineSpacingStep", { step })}
             >
-              {step.toFixed(1)}
+              {format.number(step, {
+                minimumFractionDigits: 1,
+                maximumFractionDigits: 1,
+              })}
             </Segment>
           ))}
         </Field>
 
-        <Field label="Appearance">
-          {APPEARANCES.map(([value, label]) => (
+        <Field label={t("appearance")}>
+          {APPEARANCES.map((value) => (
             <Segment
               key={value}
               selected={value === appearance}
               onClick={() => onAppearanceChange(value)}
             >
-              {label}
+              {t(`appearances.${value}`)}
             </Segment>
           ))}
         </Field>
         {resolvedTheme === "dark" ? (
           <p className="text-xs text-muted-foreground">
-            Dark reading uses the night palette.
+            {t("darkNote")}
           </p>
         ) : null}
 
-        <Field label="Theme">
-          {THEMES.map(([value, label]) => (
+        <Field label={t("theme")}>
+          {THEMES.map((value) => (
             <Segment
               key={value}
               selected={value === theme}
               onClick={() => setTheme(value)}
             >
-              {label}
+              {t(`themes.${value}`)}
             </Segment>
           ))}
         </Field>

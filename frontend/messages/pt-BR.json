@@ -224,5 +224,60 @@
       "discardFootnote": "{discarded, plural, one {# descartado} other {# descartados}} durante a geração.",
       "partial": "{saved, plural, =0 {0 salvos} one {# salvo} other {# salvos}}. {failed, plural, one {# seção falhou} other {# seções falharam}}."
     }
+  },
+  "reader": {
+    "signedOut": "Você saiu da conta.",
+    "notFound": "Não encontramos esse capítulo.",
+    "backToLibrary": "Voltar para a biblioteca",
+    "tocToggle": "Sumário",
+    "dockToggle": "Painel de estudo",
+    "progress": "{percent}% lido · faltam {minutes} min",
+    "returnChip": "Voltar para onde você estava",
+    "staleCapture": "O livro mudou enquanto você lia. Recarregue a página para capturar este destaque.",
+    "toc": {
+      "label": "Sumário",
+      "chapterNav": "Navegação entre capítulos",
+      "previous": "← Capítulo anterior",
+      "next": "Próximo capítulo →"
+    },
+    "rail": {
+      "label": "Anotações do capítulo",
+      "heading": "Neste capítulo",
+      "empty": "Nada destacado neste capítulo ainda."
+    },
+    "controls": {
+      "label": "Ajustes de leitura",
+      "typeSize": "Tamanho do texto",
+      "typeSizeStep": "Tamanho do texto {size}",
+      "lineSpacing": "Espaçamento entre linhas",
+      "lineSpacingStep": "Espaçamento entre linhas {step, number}",
+      "appearance": "Aparência",
+      "appearances": {
+        "default": "Padrão",
+        "paper": "Papel"
+      },
+      "darkNote": "A leitura no modo escuro usa a paleta noturna.",
+      "theme": "Tema",
+      "themes": {
+        "light": "Claro",
+        "dark": "Escuro",
+        "system": "Sistema"
+      }
+    },
+    "dock": {
+      "tabsLabel": "Abas do painel",
+      "tabs": {
+        "chat": "Conversa",
+        "notes": "Notas",
+        "review": "Revisão"
+      },
+      "panels": {
+        "chat": "Painel de conversa",
+        "notes": "Painel de notas",
+        "review": "Painel de revisão"
+      },
+      "closePanel": "Fechar painel",
+      "sheetDescription": "As ferramentas de estudo deste livro, em um painel inferior."
+    }
   }
 }
