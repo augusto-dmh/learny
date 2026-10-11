@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   DEFAULT_LOCALE,
@@ -13,6 +13,37 @@ import {
 } from "@/i18n/config";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
+
+// The per-request config is exercised for real: `next/headers` is stubbed per
+// call and `getRequestConfig` hands back the config factory it wraps.
+const request = vi.hoisted(() => ({
+  cookie: undefined as string | undefined,
+  acceptLanguage: null as string | null,
+}));
+vi.mock("next/headers", () => ({
+  cookies: async () => ({
+    get: (name: string) =>
+      name === "learny_locale" && request.cookie !== undefined
+        ? { name, value: request.cookie }
+        : undefined,
+  }),
+  headers: async () => ({
+    get: (name: string) => (name === "accept-language" ? request.acceptLanguage : null),
+  }),
+}));
+vi.mock("next-intl/server", () => ({
+  getRequestConfig: (factory: unknown) => factory,
+}));
+
+/** Run `i18n/request.ts` for one request; returns the locale and catalog it picks. */
+async function renderRequest(cookie: string | undefined, acceptLanguage: string | null) {
+  request.cookie = cookie;
+  request.acceptLanguage = acceptLanguage;
+  const { default: factory } = (await import("@/i18n/request")) as unknown as {
+    default: () => Promise<{ locale: string; messages: { common: { loading: string } } }>;
+  };
+  return factory();
+}
 
 // The shared vector table: backend/tests/test_locale.py::NEGOTIATION_VECTORS asserts
 // the same inputs against the same outputs, so the two implementations cannot drift.
@@ -53,16 +84,32 @@ describe("locale config", () => {
     }
   });
 
-  it("cookie beats Accept-Language", () => {
+  it("cookie beats Accept-Language", async () => {
     expect(resolveLocale({ cookie: "en", acceptLanguage: "pt-BR,pt;q=0.9" })).toBe("en");
     expect(resolveLocale({ cookie: "pt-BR", acceptLanguage: "en-US" })).toBe("pt-BR");
+
+    // Through the real request config: the cookie decides, and its catalog loads.
+    const english = await renderRequest("en", "pt-BR,pt;q=0.9");
+    expect(english.locale).toBe("en");
+    expect(english.messages.common.loading).toBe("Loading…");
+    const portuguese = await renderRequest("pt-BR", "en-US");
+    expect(portuguese.locale).toBe("pt-BR");
+    expect(portuguese.messages.common.loading).toBe("Carregando…");
+    // No cookie: Accept-Language decides.
+    expect((await renderRequest(undefined, "pt-BR,pt;q=0.9,en;q=0.8")).locale).toBe("pt-BR");
+    expect((await renderRequest(undefined, null)).locale).toBe("en");
   });
 
-  it("ignores an unsupported cookie", () => {
+  it("ignores an unsupported cookie", async () => {
     for (const cookie of ["fr", "pt", "PT-BR", "", undefined, null]) {
       expect(resolveLocale({ cookie, acceptLanguage: "pt-BR" }), String(cookie)).toBe("pt-BR");
       expect(resolveLocale({ cookie, acceptLanguage: "en-US" }), String(cookie)).toBe("en");
     }
+
+    // Through the real request config.
+    expect((await renderRequest("fr", "en-US")).locale).toBe("en");
+    expect((await renderRequest("fr", "pt-BR")).locale).toBe("pt-BR");
+    expect((await renderRequest("PT-BR", "en")).locale).toBe("en");
   });
 
   it("falls back to en", () => {

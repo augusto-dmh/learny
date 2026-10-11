@@ -31,6 +31,7 @@ import { listSources } from "../app/lib/sources";
 import { createConversationTransport, StreamRequestError } from "../app/lib/streaming";
 import { getStudyDays } from "../app/lib/study";
 import { acceptTutorCard, TutorCardError } from "../app/lib/tutor-card";
+import { deleteLocale, putLocale } from "@/app/lib/locale";
 
 const DETAIL = "The backend explains this in English.";
 
@@ -90,6 +91,8 @@ const CLIENTS: Row[] = [
   },
   { client: "cards", operation: "cardsSuggestPassage", call: (f) => suggestCards("s1", "h1", "csrf", f) },
   { client: "tutor-card", operation: "tutorCardSave", call: (f) => acceptTutorCard("c1", "csrf", f) },
+  { client: "locale (save)", operation: "localeSave", call: (f) => putLocale("pt-BR", "csrf", f) },
+  { client: "locale (reset)", operation: "localeReset", call: (f) => deleteLocale("csrf", f) },
 ];
 
 describe("request clients", () => {
