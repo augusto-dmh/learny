@@ -87,6 +87,7 @@ export function CheckpointDialog({
   sectionTitle,
   csrf,
   onClose,
+  onRequireAuth,
 }: {
   open: boolean;
   sourceId: string;
@@ -94,6 +95,8 @@ export function CheckpointDialog({
   sectionTitle: string;
   csrf: string;
   onClose: () => void;
+  /** Called when a request finds the session gone (401), as the reader does. */
+  onRequireAuth?: () => void;
 }) {
   const [phase, setPhase] = useState<Phase>({ step: "predict" });
   const [checkpoint, setCheckpoint] = useState<Checkpoint | null>(null);
@@ -107,6 +110,10 @@ export function CheckpointDialog({
     try {
       await action();
     } catch (err) {
+      if (err instanceof CheckpointError && err.status === 401 && onRequireAuth) {
+        onRequireAuth();
+        return;
+      }
       setError(err instanceof CheckpointError ? err.message : "Something went wrong.");
     } finally {
       setPending(false);

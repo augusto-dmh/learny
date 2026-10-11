@@ -244,6 +244,29 @@ describe("CheckpointDialog", () => {
     );
   });
 
+  it("a lost session hands over to the sign-in redirect", async () => {
+    const onRequireAuth = vi.fn();
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({ [START]: () => jsonResponse(401, { detail: "Not authenticated." }) }),
+    );
+    render(
+      <CheckpointDialog
+        open
+        sourceId="s1"
+        anchor="ch1#s1"
+        sectionTitle="The Division of Labour"
+        csrf="csrf-xyz"
+        onClose={vi.fn()}
+        onRequireAuth={onRequireAuth}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Some" }));
+
+    await waitFor(() => expect(onRequireAuth).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("just explain is a secondary action on the explain step", async () => {
     const fetchMock = routedFetch({ [START]: () => jsonResponse(201, explainOnly) });
     vi.stubGlobal("fetch", fetchMock);

@@ -1002,6 +1002,7 @@ export function ChapterFlow({
           sectionTitle={checkpointSection.title}
           csrf={csrf}
           onClose={() => setCheckpointSection(null)}
+          onRequireAuth={onRequireAuth}
         />
       ) : null}
     </div>
