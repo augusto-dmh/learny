@@ -149,7 +149,7 @@ Proof: `npx vitest run tests/account-provider-keys.test.tsx -t "hidden when disa
 **C37** - With an enabled catalog of one configured anthropic row and one unconfigured openai row, the anthropic row shows `•••• ` plus last4, the added date, each powering profile's display name with Ask/Teach marks, and "flashcards & decks". The openai row shows a password-type input and a Save button (AC 37) ✅
 Proof: `npx vitest run tests/account-provider-keys.test.tsx -t "renders configured and unconfigured rows"`
 
-**C38** - After Save succeeds the input is empty, the row shows the configured state, and no DOM text or input value contains the submitted key (AC 38)
+**C38** - After Save succeeds the input is empty, the row shows the configured state, and no DOM text or input value contains the submitted key (AC 38) ✅
 Proof: `npx vitest run tests/account-provider-keys.test.tsx -t "save clears and never re-renders the key"`
 
 **C39** - Test shows the literal text "Key works" for `ok: true` and a distinct message for each of `rejected`, `rate_limited` and `unavailable` (AC 39) ✅
