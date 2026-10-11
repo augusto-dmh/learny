@@ -211,32 +211,6 @@ def test_put_stores_and_replace_mints_new_row(
     assert repo.reveal(credential) == _NEW_KEY
 
 
-def test_a_racing_save_retries_its_replace_once(
-    auth_client: TestClient, db_conn: Connection, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The unique constraint's loser retries: one row remains, holding its key."""
-    from sqlalchemy.exc import IntegrityError
-
-    _declare(monkeypatch, [_HOUSE, _CLAUDE])
-    user_id, headers = _learner(auth_client, "keys-race@example.com")
-    real_replace = SqlAlchemyProviderCredentialRepository.replace
-    attempts: list[int] = []
-
-    def _lose_once(self: Any, *args: Any) -> Any:  # noqa: ANN401
-        attempts.append(1)
-        if len(attempts) == 1:
-            real_replace(self, *args)  # write, then fail as the race's loser would
-            raise IntegrityError("INSERT", {}, Exception("duplicate key"))
-        return real_replace(self, *args)
-
-    monkeypatch.setattr(SqlAlchemyProviderCredentialRepository, "replace", _lose_once)
-    resp = _put(auth_client, headers, _KEY)
-
-    assert resp.status_code == 200, resp.text
-    assert len(attempts) == 2
-    assert len(_rows(db_conn, user_id)) == 1
-
-
 # --- C11: malformed keys are refused without an echo --------------------------------
 
 
@@ -401,6 +375,30 @@ def test_replace_and_delete_release_the_cached_adapters(
         fingerprints = {key.fingerprint for key in cache.keys()}
         assert replaced not in fingerprints
         assert deleted not in fingerprints
+
+
+def test_one_learners_routes_never_reach_anothers_key(
+    auth_client: TestClient,
+    db_conn: Connection,
+    monkeypatch: pytest.MonkeyPatch,
+    probe: _Probe,
+) -> None:
+    _declare(monkeypatch, [_HOUSE, _CLAUDE])
+    owner_id, owner_headers = _learner(auth_client, "keys-owner@example.com")
+    assert _put(auth_client, owner_headers, _KEY).status_code == 200
+    owner_rows = _rows(db_conn, owner_id)
+
+    _, other_headers = _learner(auth_client, "keys-other@example.com")
+    listed = auth_client.get(_BASE).json()["providers"][0]
+    tested = auth_client.post(f"{_BASE}/anthropic/test", headers=other_headers)
+    deleted = auth_client.delete(f"{_BASE}/anthropic", headers=other_headers)
+
+    assert listed["configured"] is False
+    assert listed["last4"] is None
+    assert tested.status_code == 404  # no key of their own to test
+    assert probe.calls == []
+    assert deleted.status_code == 204  # idempotent, and it removes nothing of the owner's
+    assert _rows(db_conn, owner_id) == owner_rows
 
 
 # --- C16: CSRF ------------------------------------------------------------------------

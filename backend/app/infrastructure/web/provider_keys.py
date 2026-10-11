@@ -30,11 +30,13 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Response, status
 from pydantic import BaseModel
-from sqlalchemy.exc import IntegrityError
 
 from app.domain.entities import ProviderCredential, User
 from app.infrastructure.answering.probe import ProbeOutcome, ProbeReason, probe_key
-from app.infrastructure.db.provider_credentials import SqlAlchemyProviderCredentialRepository
+from app.infrastructure.db.provider_credentials import (
+    MIN_KEY_CHARS,
+    SqlAlchemyProviderCredentialRepository,
+)
 from app.infrastructure.providers import GenerationProfileSettings
 from app.infrastructure.quiz.learner import QUIZ_KEY_PROVIDER
 from app.infrastructure.web.csrf import enforce_csrf
@@ -59,8 +61,8 @@ PROVIDER_LABELS = {
 }
 
 #: Key length bounds the routes accept (plan assumption: catches pasted typos
-#: without coupling to undocumented formats).
-MIN_KEY_CHARS = 20
+#: without coupling to undocumented formats). The floor is the repository's own,
+#: so a key the route accepts is always one the repository will seal.
 MAX_KEY_CHARS = 256
 
 #: The prefix each provider's keys start with; Gemini keys are not checked.
@@ -193,18 +195,12 @@ def put_provider_key(
 
     A replace mints a new row id, so a deck pinned to the old key stops
     collecting and every cached adapter built from it stops resolving. Two
-    racing saves end with one row: the loser of the unique constraint retries
-    its replace once.
+    racing saves end with one row (the repository retries the loser).
     """
     repo = _offered_repo(conn, provider)
     api_key = _key_from_body(provider, body)
     previous = repo.get(user.id, provider)
-    try:
-        with conn.begin_nested():
-            credential = repo.replace(user.id, provider, api_key)
-    except IntegrityError:
-        with conn.begin_nested():
-            credential = repo.replace(user.id, provider, api_key)
+    credential = repo.replace(user.id, provider, api_key)
     if previous is not None:
         evict_learner_adapters(previous.fingerprint)
     return _view(provider, credential)

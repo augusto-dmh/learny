@@ -125,6 +125,37 @@ def test_replace_mints_a_new_row_and_keeps_one_per_provider(db_conn: Connection)
     assert [c.provider for c in repo.list_for_user(user.id)] == ["anthropic"]
 
 
+def test_a_replace_that_loses_the_unique_race_retries_once(
+    db_conn: Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A racing save lands between this replace's delete and its insert: the
+    insert hits the unique constraint, and the replace retries and wins."""
+    user = _user(db_conn)
+    repo = _repo(db_conn)
+    rival = _repo(db_conn)
+    real_delete = SqlAlchemyProviderCredentialRepository.delete
+    deletes: list[int] = []
+
+    def _delete_then_lose(self: SqlAlchemyProviderCredentialRepository, *args: object) -> bool:
+        removed = real_delete(self, *args)
+        if self is repo and not deletes:
+            deletes.append(1)
+            rival.replace(user.id, "anthropic", "sk-ant-api03-the-racing-winner-key-0000")
+        return removed
+
+    monkeypatch.setattr(SqlAlchemyProviderCredentialRepository, "delete", _delete_then_lose)
+
+    credential = repo.replace(user.id, "anthropic", _KEY)
+
+    rows = db_conn.execute(
+        select(user_provider_credentials).where(user_provider_credentials.c.user_id == user.id)
+    ).all()
+    assert deletes == [1]  # the race really happened
+    assert len(rows) == 1
+    assert rows[0].id == credential.id
+    assert repo.reveal(credential) == _KEY
+
+
 def test_reads_are_scoped_to_their_owner(db_conn: Connection) -> None:
     owner, other = _user(db_conn), _user(db_conn)
     repo = _repo(db_conn)
