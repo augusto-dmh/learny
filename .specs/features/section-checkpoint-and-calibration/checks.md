@@ -105,9 +105,9 @@ Proof: `pytest tests/test_application_checkpoints.py -k "explain_fallback_on_not
 **C24** - A blank explanation (empty or whitespace) makes zero `generate` calls and returns the least-covered chunk as the single citation (AC 24)
 Proof: `pytest tests/test_application_checkpoints.py -k "blank_explanation_skips_generation"`
 
-**C25** - With the day's spend at the cap, the explain response returns 429. With AI paused it returns 503. In both cases the attempt's `responded_at` stays NULL, and the dialog shows the server's reason with the draft kept (AC 25)
+**C25** - With the day's spend at the cap, the explain response returns 429. With AI paused it returns 503. In both cases the attempt's `responded_at` stays NULL, and the dialog shows the catalog copy for that status (never the backend's detail) with the draft kept (AC 25)
 Proof: `pytest tests/test_web_checkpoints.py -k "explain_budget_exhausted_429_paused_503"`
-Proof: `vitest tests/checkpoint-dialog.test.tsx -t "a refused explanation shows the server's reason and keeps the draft"`
+Proof: `vitest tests/checkpoint-dialog.test.tsx -t "a refused explanation shows catalog copy, not the server's detail, and keeps the draft"`
 
 **C26** - A port result reporting usage debits `usage_micros(usage, profile_id)` to the caller's `ai_spend_days` row, as `KIND_GENERATION`, and does not increment `ask_count` (AC 26)
 Proof: `pytest tests/test_application_checkpoints.py -k "explain_debits_usage_as_generation"`
