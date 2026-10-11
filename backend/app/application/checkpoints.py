@@ -255,7 +255,7 @@ class StartCheckpoint:
             prediction=prediction,
             created_at=self._clock.now(),
         )
-        cards = self._checkpoints.recall_cards(
+        cards = self._items.recall_cards(
             user.id, source_id, section.anchor, limit=MAX_RECALL_ATTEMPTS
         )
         attempts: list[tuple[CheckpointAttempt, str]] = [
@@ -547,7 +547,7 @@ class GradeAttempt:
 
     def _checkpoint_card(self, user: User, owned: OwnedAttempt) -> QuizItem:
         checkpoint = owned.checkpoint
-        existing = self._checkpoints.active_checkpoint_card(
+        existing = self._items.active_checkpoint_card(
             user.id, checkpoint.source_id, checkpoint.anchor
         )
         if existing is not None:

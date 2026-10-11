@@ -1997,6 +1997,42 @@ class SqlAlchemyQuizItemRepository:
             .values(anchor=anchor, section_path=list(section_path), status=status)
         )
 
+    def recall_cards(
+        self, user_id: UUID, source_id: UUID, anchor: str, *, limit: int
+    ) -> list[QuizItem]:
+        rows = self._conn.execute(
+            select(*_QUIZ_ITEM_READ_COLUMNS)
+            .join(quiz_item_scheduling, quiz_item_scheduling.c.quiz_item_id == quiz_items.c.id)
+            .where(
+                quiz_items.c.user_id == user_id,
+                quiz_items.c.source_id == source_id,
+                quiz_items.c.anchor == anchor,
+                quiz_items.c.status == QuizItemStatus.ACTIVE,
+                quiz_items.c.flagged_at.is_(None),
+                quiz_items.c.origin != QuizItemOrigin.CHECKPOINT,
+            )
+            .order_by(quiz_item_scheduling.c.due.asc(), quiz_items.c.id.asc())
+            .limit(limit)
+        ).all()
+        return [_to_quiz_item(row) for row in rows]
+
+    def active_checkpoint_card(
+        self, user_id: UUID, source_id: UUID, anchor: str
+    ) -> QuizItem | None:
+        row = self._conn.execute(
+            select(*_QUIZ_ITEM_READ_COLUMNS)
+            .where(
+                quiz_items.c.user_id == user_id,
+                quiz_items.c.source_id == source_id,
+                quiz_items.c.anchor == anchor,
+                quiz_items.c.origin == QuizItemOrigin.CHECKPOINT,
+                quiz_items.c.status == QuizItemStatus.ACTIVE,
+            )
+            .order_by(quiz_items.c.created_at.asc(), quiz_items.c.id.asc())
+            .limit(1)
+        ).first()
+        return _to_quiz_item(row) if row is not None else None
+
 
 class SqlAlchemyQuizJobRepository:
     """``QuizJobRepository`` backed by ``quiz_generation_jobs`` (mirrors the ingestion jobs repo).
@@ -2960,25 +2996,6 @@ class SqlAlchemyCheckpointRepository:
     def __init__(self, connection: Connection) -> None:
         self._conn = connection
 
-    def recall_cards(
-        self, user_id: UUID, source_id: UUID, anchor: str, *, limit: int
-    ) -> list[QuizItem]:
-        rows = self._conn.execute(
-            select(*_QUIZ_ITEM_READ_COLUMNS)
-            .join(quiz_item_scheduling, quiz_item_scheduling.c.quiz_item_id == quiz_items.c.id)
-            .where(
-                quiz_items.c.user_id == user_id,
-                quiz_items.c.source_id == source_id,
-                quiz_items.c.anchor == anchor,
-                quiz_items.c.status == QuizItemStatus.ACTIVE,
-                quiz_items.c.flagged_at.is_(None),
-                quiz_items.c.origin != QuizItemOrigin.CHECKPOINT,
-            )
-            .order_by(quiz_item_scheduling.c.due.asc(), quiz_items.c.id.asc())
-            .limit(limit)
-        ).all()
-        return [_to_quiz_item(row) for row in rows]
-
     def add(self, checkpoint: SectionCheckpoint, attempts: Sequence[CheckpointAttempt]) -> None:
         self._conn.execute(
             insert(section_checkpoints).values(
@@ -3133,20 +3150,3 @@ class SqlAlchemyCheckpointRepository:
             .where(checkpoint_attempts.c.id == attempt_id)
             .values(quiz_item_id=quiz_item_id, review_log_id=review_log_id)
         )
-
-    def active_checkpoint_card(
-        self, user_id: UUID, source_id: UUID, anchor: str
-    ) -> QuizItem | None:
-        row = self._conn.execute(
-            select(*_QUIZ_ITEM_READ_COLUMNS)
-            .where(
-                quiz_items.c.user_id == user_id,
-                quiz_items.c.source_id == source_id,
-                quiz_items.c.anchor == anchor,
-                quiz_items.c.origin == QuizItemOrigin.CHECKPOINT,
-                quiz_items.c.status == QuizItemStatus.ACTIVE,
-            )
-            .order_by(quiz_items.c.created_at.asc(), quiz_items.c.id.asc())
-            .limit(1)
-        ).first()
-        return _to_quiz_item(row) if row is not None else None

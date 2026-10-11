@@ -1302,6 +1302,21 @@ class QuizItemRepository(Protocol):
         """
         ...
 
+    def recall_cards(
+        self, user_id: UUID, source_id: UUID, anchor: str, *, limit: int
+    ) -> list[QuizItem]:
+        """Return the caller's active, unflagged, non-checkpoint cards on ``anchor``.
+
+        Ordered by due ascending then id, at most ``limit``.
+        """
+        ...
+
+    def active_checkpoint_card(
+        self, user_id: UUID, source_id: UUID, anchor: str
+    ) -> QuizItem | None:
+        """Return the caller's oldest active ``checkpoint`` card on that section."""
+        ...
+
 
 # --- Notes & second-brain ports (RFC-003 Cycle E; ADR-0026 §1-2) -----------------
 
@@ -1314,15 +1329,6 @@ class CheckpointRepository(Protocol):
     won: a ``False`` means the attempt was already past that step (or another
     request got there first), so the caller refuses rather than writing twice.
     """
-
-    def recall_cards(
-        self, user_id: UUID, source_id: UUID, anchor: str, *, limit: int
-    ) -> list[QuizItem]:
-        """Return the caller's active, unflagged, non-checkpoint cards on ``anchor``.
-
-        Ordered by due ascending then id, at most ``limit``.
-        """
-        ...
 
     def add(self, checkpoint: SectionCheckpoint, attempts: Sequence[CheckpointAttempt]) -> None:
         """Persist a new checkpoint and its attempts."""
@@ -1365,12 +1371,6 @@ class CheckpointRepository(Protocol):
 
     def link_grade(self, attempt_id: UUID, *, quiz_item_id: UUID, review_log_id: UUID) -> None:
         """Record which card the grade reviewed and the log row it wrote."""
-        ...
-
-    def active_checkpoint_card(
-        self, user_id: UUID, source_id: UUID, anchor: str
-    ) -> QuizItem | None:
-        """Return the caller's oldest active ``checkpoint`` card on that section."""
         ...
 
 
