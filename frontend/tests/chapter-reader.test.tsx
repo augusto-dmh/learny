@@ -2303,4 +2303,35 @@ describe("ChapterFlow checkpoint opens on the tapped section", () => {
     await waitFor(() => expect(started).toEqual([{ anchor: S2, prediction: null }]));
     vi.unstubAllGlobals();
   });
+
+  it("hands a checkpoint that finds the session gone to the reader's sign-in redirect", async () => {
+    const onRequireAuth = vi.fn();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/sources/s1/structure") {
+          return jsonResponse(200, { sections: [] });
+        }
+        if (url === "/api/sources/s1/checkpoints" && init?.method === "POST") {
+          return jsonResponse(401, { detail: "Not authenticated." });
+        }
+        throw new Error(`no request expected: ${url}`);
+      }),
+    );
+    render(
+      <ChapterFlow
+        sourceId="s1"
+        csrf="csrf-xyz"
+        chapter={chapter}
+        scrollTarget={null}
+        onRequireAuth={onRequireAuth}
+      />,
+    );
+    fireEvent.click((await screen.findAllByRole("button", { name: /^Check yourself on / }))[0]);
+    await screen.findByTestId("checkpoint-dialog");
+    fireEvent.click(screen.getByRole("button", { name: "Skip" }));
+
+    await waitFor(() => expect(onRequireAuth).toHaveBeenCalledTimes(1));
+    vi.unstubAllGlobals();
+  });
 });

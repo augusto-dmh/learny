@@ -487,9 +487,8 @@ def test_grade_refuses_a_client_assisted_field(
 def test_grade_on_a_deleted_card_is_404_and_leaves_the_attempt_ungraded(
     quiz_client: TestClient, db_conn: Connection
 ) -> None:
-    # The grade claim stamps the attempt before the card is resolved; a card deleted
-    # since the response must roll that stamp back, so the attempt is not left graded
-    # with no review behind it.
+    # A recall whose card was deleted since the response is refused before the grade
+    # claim, so the attempt is never left graded with no review behind it.
     _, csrf, source_id = _book(quiz_client, db_conn)
     card = add_card(db_conn, source_id)
     attempt_id = _attempts(_create(quiz_client, source_id, csrf))[0]["attempt_id"]

@@ -217,13 +217,15 @@ describe("CheckpointDialog", () => {
     expect(explanation.value).toBe("");
   });
 
-  it("a refused explanation shows catalog copy, not the server's detail, and keeps the draft", async () => {
+  it.each([
+    [429, "Daily AI budget reached.", "Too many requests. Please wait a moment and try again."],
+    [503, "AI is paused.", "The server had a problem. Please try again."],
+  ])("a refused explanation (%i) shows catalog copy, not the server's detail, and keeps the draft", async (status, detail, copy) => {
     vi.stubGlobal(
       "fetch",
       routedFetch({
         [START]: () => jsonResponse(201, explainOnly),
-        "POST /api/checkpoint-attempts/a2/response": () =>
-          jsonResponse(429, { detail: "Daily AI budget reached." }),
+        "POST /api/checkpoint-attempts/a2/response": () => jsonResponse(status, { detail }),
       }),
     );
     renderDialog();
@@ -234,10 +236,8 @@ describe("CheckpointDialog", () => {
     });
     fireEvent.click(within(step).getByRole("button", { name: "Sure" }));
 
-    expect((await screen.findByRole("alert")).textContent).toBe(
-      "Too many requests. Please wait a moment and try again.",
-    );
-    expect(screen.queryByText("Daily AI budget reached.")).toBeNull();
+    expect((await screen.findByRole("alert")).textContent).toBe(copy);
+    expect(screen.queryByText(detail)).toBeNull();
     const still = screen.getByTestId("checkpoint-ask-explain");
     const textbox = within(still).getByRole("textbox", {
       name: "Your explanation",

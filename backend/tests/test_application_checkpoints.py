@@ -368,6 +368,45 @@ def test_second_checkpoint_reuses_existing_card(db_conn: Connection) -> None:
     assert [r.rating for r in _log_rows(db_conn, first.quiz_item_id)] == [1, 3]
 
 
+def test_reuse_skips_checkpoint_cards_that_are_not_the_callers_on_this_section(
+    db_conn: Connection,
+) -> None:
+    # On the shared sample, another learner's checkpoint card sits on this very
+    # section, and the caller has checkpoint cards that are stale, on another anchor
+    # or on another book. None of them is the caller's active card here, so grading
+    # mints a new one instead of reviewing (or 404ing on) somebody else's.
+    user, source_id = _book(db_conn, is_sample=True)
+    stranger = add_user(db_conn)
+    other_source = add_source(db_conn, user.id)
+    add_corpus(db_conn, other_source)
+    decoys = [
+        add_card(db_conn, source_id, user_id=stranger.id, origin=QuizItemOrigin.CHECKPOINT),
+        add_card(
+            db_conn,
+            source_id,
+            user_id=user.id,
+            origin=QuizItemOrigin.CHECKPOINT,
+            status=QuizItemStatus.STALE,
+        ),
+        add_card(
+            db_conn,
+            source_id,
+            user_id=user.id,
+            origin=QuizItemOrigin.CHECKPOINT,
+            anchor="ch1#elsewhere",
+        ),
+        add_card(db_conn, other_source, user_id=user.id, origin=QuizItemOrigin.CHECKPOINT),
+    ]
+
+    graded = _grade(db_conn)(user=user, attempt_id=_explained(db_conn, user, source_id), rating=2)
+
+    assert graded.quiz_item_id not in {card.id for card in decoys}
+    minted = SqlAlchemyQuizItemRepository(db_conn).get_by_id(graded.quiz_item_id)
+    assert (minted.user_id, minted.source_id, minted.anchor) == (user.id, source_id, ANCHOR)
+    for card in decoys:
+        assert _log_rows(db_conn, card.id) == []
+
+
 # --- C21–C26: explain-back feedback ----------------------------------------------
 
 
