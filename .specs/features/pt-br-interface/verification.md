@@ -1,5 +1,114 @@
 # pt-br-interface verification
 
+**Verdict**: FAIL
+**Profile**: standard
+**Diff range**: origin/main..c04b2d5 (8c11ad3..c04b2d5, 4 commits: 9eea451, 508c0b7, 43d461c, c04b2d5)
+**Round**: 1 - full (batch 2 of 4 scope)
+**Verifier**: independent sub-agent (author != verifier)
+
+Scope: batch 2 = slices S4, S5 and S6 = checks C28-C36 (AC 26-33). Checks outside C28-C36 are out of this batch's scope. They are not failures. The batch-1 report is kept unchanged under `## Earlier batches`.
+
+Summary: every named proof ran green at c04b2d5. 15 of 18 injected faults were killed. Three faults survived, and each one survived the whole batch-2 suite plus the hard-coded-string sensor. Each puts English copy back into a state that C32 or C35 says renders from the catalog, using the sensor-blind JS-expression form. The product code is correct today, because every one of those states reads through `t()`. What fails is the proof: C32 ("every empty, loading and error state") and C35 ("reader chrome") are each proven on a sample of their members. Fixing this means adding assertions to tests. It needs no change to production code.
+
+## Binding sources
+
+| Source | Opened | Contradiction | Uncovered |
+| --- | --- | --- | --- |
+| `docs/adr/0034-ui-internationalization.md` | yes - read in full at c04b2d5 | none. The landing proof under `lang="en"`, the legal pages under `lang="en"` on `<main>`, ICU plurals and select in the catalogs, and `useTranslations` with no provider in server components all match the decision | - |
+| `plan.md` `## Assumptions` rows marked "(batch 2)" (8 rows) | yes | none. The rows were judged and not relitigated. None of them contradicts AC 26-33 or ADR-0034. Two need a note. (1) "Surfaces AC 26 names that do not exist": I confirmed there are no frontend password-reset, email-verification or shortcut-help surfaces (`find app -type d \| grep -iE "reset\|verif\|forgot\|password"` finds nothing, and a grep for shortcut-help copy finds nothing). (2) "Counts and dates": the new count and added-date also show in `en` (`1 book`, `Added Jul 19, 2026`). That changes the Library's English, which AC 27 does not cover, because AC 27 is scoped to the AC 26 surfaces | - |
+
+## Checks
+
+Proofs were verified at c04b2d5 in one invocation: `npx vitest run --reporter=verbose` over `landing`, `auth-screens`, `app-shell`, `app-sidebar`, `vendored-primitives`, `legal-pages`, `library-screen`, `home-screen`, `chapter-reader`, `reading-controls`, `i18n-hardcoded` and `i18n-parity`. Exit 0, 12 files and 171 tests passed. Every test that a C28-C36 proof names appears individually as passed. I ran the whole files rather than the `-t` filters, because several tests that carry the claims are not matched by their check's `-t "renders in pt-BR"` filter (see finding F3).
+
+| Check | Claim | Proof run | Evidence | Result |
+| --- | --- | --- | --- | --- |
+| C28 | landing, login and register render from the catalog with no English UI copy (pt-BR) | `landing` `renders in pt-BR` and `auth-screens` `renders in pt-BR` passed | `frontend/tests/landing.test.tsx:84` tagline; `:88`/`:91` `Criar conta`/`Entrar` hrefs; `:94` `expectNoEnglishCopy(..., "landing", "auth", "common")`. `frontend/tests/auth-screens.test.tsx:171` `Que bom ter você de volta ao Learny.`; `:172` form `formulário de entrada`; `:175` `Entrar`; `:179` `expectNoEnglishCopy(..., "auth")`; `:183-191` the same for register. Password reset and email verification do not exist (plan Assumption, batch 2, checked above) | PASS |
+| C29 | sidebar, header, theme toggle, not-found notice and vendored dialog/sheet/sidebar/spinner text come from the catalog (pt-BR) | `app-shell` `renders in pt-BR`, `shows the not-found notice in pt-BR`, and `vendored-primitives` `in pt-BR > default text comes from the catalog` and `names the mobile sidebar sheet` passed | `frontend/tests/app-shell.test.tsx:230-231` nav `Início`/`Biblioteca` (plus `Revisão`/`Notas`); `:238` `Conta`; `:241` `Sair`; `:242` `Alternar tema`; `:244` `Alternar barra lateral`; `:246` `expectNoEnglishCopy(..., "shell")`; `:254`/`:260` both not-found sentences. `frontend/tests/vendored-primitives.test.tsx:94` two `Fechar` (dialog); `:105` sheet `Fechar`; `:109` status `Carregando`; `:121-124` toggle name, rail `aria-label` and `title`; `:141-142` mobile sheet title and description. Shortcut help does not exist | PASS |
+| C30 | `en` landing, auth and shell keep their existing English assertions, unedited apart from the intl binding | the four files ran whole: landing, auth-screens, app-shell and app-sidebar all passed | `git diff --numstat origin/main..HEAD` shows 0 deleted lines in `landing.test.tsx` (+31), `auth-screens.test.tsx` (+54) and `app-shell.test.tsx` (+54); `app-sidebar.test.tsx` is untouched. The only non-test addition is the `next/navigation` mock in `auth-screens.test.tsx:19-22` (harness binding). The existing English expectations stand, for example `frontend/tests/app-sidebar.test.tsx:59-62` `Home`/`Library`/`Review`/`Notes` | PASS |
+| C31 | `/terms`, `/privacy` and `/copyright` stay English with `lang="en"` on the content wrapper under pt-BR | `legal-pages` `stay English under pt-BR` passed | `frontend/tests/legal-pages.test.tsx:114` - `heading.textContent).toBe(heading)` for all three; `:115` - `getByRole("main").getAttribute("lang")).toBe("en")`. Code: `frontend/app/terms/page.tsx:16`, `privacy/page.tsx:17` and `copyright/page.tsx:20` `<main lang="en"` | PASS |
+| C32 | Home, Library, ingestion status and every empty, loading and error state render from the catalog (pt-BR) | `home-screen` and `library-screen` `renders in pt-BR` passed, plus the unselected `renders the empty, done and error states in pt-BR` and `renders the empty and failed list states in pt-BR` | Home is fully proven: `frontend/tests/home-screen.test.tsx:438` `Início`; `:448` `43% lido`; `:451` `Você tem 2 cartões pendentes.`; `:470` empty state; `:472` done state; `:486`/`:488` both error states; `:454`/`:490` `expectNoEnglishCopy`. Library is partly proven: `frontend/tests/library-screen.test.tsx:558` `Carregando…`; `:568-570` statuses `pronto`/`enviado`/`falhou`; `:576` `O processamento falhou.`; `:580` counts; `:602` upload error; `:618` empty; `:631` list error; `:605` `expectNoEnglishCopy`. **No pt-BR proof** covers the Library states at `frontend/app/components/library-screen.tsx:523` (signed-out), `:590` (loading sources), `:581` (sample ready), `:143` (generating), `:243`/`:291`/`:299` and `noneSurvived` at `:263` (quiz error states), the `processing` status, or the pending labels at `:569`/`:648`/`:673`/`:696`. Faults F-13 and F-14 survived | FAIL |
+| C33 | pt-BR 0/1/2 books -> `0 livros`/`1 livro`/`2 livros`, and a date in the locale's format | `library-screen` `pt-BR plurals and dates` passed | `frontend/tests/library-screen.test.tsx:639-641` vectors, asserted at `:657` `library-count).textContent).toBe(text)`; `:660` `Adicionado em 19 de jul. de 2026`; `:680-681` the `en` controls `1 book`/`Added Jul 19, 2026` | PASS |
+| C34 | book titles, authors and section titles unchanged (pt-BR) | `library-screen` `book text is never translated` passed | `frontend/tests/library-screen.test.tsx:700-701` `The Art of War`/`Dom Casmurro`; section/chapter title on Home `frontend/tests/home-screen.test.tsx:446-447` `Ready Book`/`Chapter One`. Authors: no batch-2 surface renders an author (`grep -n author` over library/home/reader components finds nothing), so that member is vacuous here | PASS |
+| C35 | reader chrome, TOC, reading controls, margin rail, progress text, aria labels and keyboard help render from the catalog (pt-BR) | `chapter-reader` and `reading-controls` `renders in pt-BR` passed, plus the unselected `renders the margin rail in pt-BR` and `renders the reader's signed-out and not-found states in pt-BR` | `frontend/tests/chapter-reader.test.tsx:2250-2252` the three chrome buttons; `:2254` progress `/^\d+% lido · faltam \d+ min$/`; `:2257` TOC label; `:2261` `Próximo capítulo →`; `:2264` tabs; `:2267` `Fechar painel`; `:2269` `Painel de notas`; `:2297-2299` margin rail; `:2313`/`:2327`/`:2340` not-found, signed-out and error. `frontend/tests/reading-controls.test.tsx:232-238` labels and segments; `:242` `Tamanho do texto 23`; `:247` `1,8` (decimal comma); `:251` `expectNoEnglishCopy`. **No pt-BR proof** covers the return chip at `frontend/app/components/chapter-reader.tsx:1115`, the stale-capture message at `:611`/`:658`, `← Capítulo anterior` at `frontend/app/components/toc-panel.tsx:173`, the mobile dock sheet title, description and close at `frontend/app/components/reader-panel.tsx:461-469`, or the read-page fallback at `frontend/app/(read)/sources/[id]/read/page.tsx:31`. Fault F-15 survived. Keyboard help does not exist | FAIL |
+| C36 | chapter text and citation snippets unchanged (pt-BR) | `chapter-reader` `book text is never translated` passed | `frontend/tests/chapter-reader.test.tsx:2366-2367` section prose; `:2368-2369` headings `Beginnings`/`Mechanism`; `:2370` `Chapter One`; `:2374` the rail quote `toEqual(["Ada Lovelace wrote the first algorithm"])` | PASS |
+
+## Coverage
+
+Recomputed from the code (the authority over which states and elements exist) and, for counts and dates, from the claim's own vectors.
+
+| Set (size) | Recomputed from | Member -> proof | Unproven |
+| --- | --- | --- | --- |
+| migrated surfaces in pt-BR, batch-2 members (7) | checks.md coverage row and the diff | landing C28 · auth C28 · shell C29 · vendored primitives C29 · Home C32 · Library C32 (partial, see the next row) · reader C35 (partial, see the reader row) | - |
+| C32 Library states: empty, loading and error (16) | `frontend/app/components/library-screen.tsx` | auth loading `:558` · empty `:618` · list error `:631` · upload validation `:602` · ingestion failed with no message `:576` · statuses ready/uploaded/failed `:568-570` · quiz counts `:580` | signed-out `:523`; loading sources `:590` (F-14 survived); sample ready `:581`; status `processing`; quiz generating `:143`; quiz noSection `:243`; quiz noneSurvived `:263` (F-13 survived); discardFootnote `:291`; partial `:299` |
+| C32 Home states (6) | `frontend/app/components/home-screen.tsx` | hero empty, hero error, due done, due error, due count and percent are all in `home-screen.test.tsx:446-490`. The loading states are text-free skeletons (`frontend/app/components/home-screen.tsx:169`, `:231`) | - |
+| C33 count and date vectors (4) | the claim | 0, 1, 2 at `library-screen.test.tsx:639-641`; date at `:660` | - |
+| C35 reader chrome and states (17) | the batch-2 reader components | toc toggle · dock toggle · settings trigger · progress · TOC label · chapter nav · next link · tabs · close panel · panel label · margin rail (label, heading, empty) · controls popover · not-found · signed-out · error | return chip `chapter-reader.tsx:1115` (F-15 survived); stale capture `:611`/`:658`; previous link `toc-panel.tsx:173`; mobile dock sheet `reader-panel.tsx:461-469`; read-page fallback `page.tsx:31` |
+| untranslated surfaces, batch-2 members (4) | checks.md coverage row | legal pages C31 · book titles C34 · section/chapter text C34, C36 · citation snippet (rail quote) C36. The landing proof keeps `lang="en"` (`landing.test.tsx:102-104`) | - |
+
+## Test policy rows
+
+`checks.md` has no `Test policy` section, so there are no rows to judge. The repo's own conventions decide: component-level Vitest with jsdom, which is what every batch-2 proof uses.
+
+## Faults injected
+
+Each fault was applied in a scratch sparse worktree at c04b2d5 (`frontend/` only, `node_modules` symlinked). For each one I ran the narrowest covering test files. Afterwards I removed the worktree, and the real tree's `git status --porcelain` matched the baseline (only the owner's ` M docker-compose.override.yml`). F-1 to F-6 ran together, then F-7 to F-12 together, then F-16 to F-18. Each failing test is the one its fault targets, so attribution is unambiguous. In the F-13 to F-15 run, the one red test was `i18n-hardcoded > documents its limits`. It is an artifact of the sparse checkout: it reads `docs/adr/0034-...`, which the sparse checkout omits. No batch-2 test failed in that run.
+
+| Mutation | Location | Killed |
+| --- | --- | --- |
+| F-1 tagline -> English JS-expression literal | `frontend/app/page.tsx:36` | yes - `landing > renders in pt-BR` |
+| F-2 login description -> `{"Welcome back to Learny."}` | `frontend/app/(auth)/login/page.tsx:23` | yes - `auth-screens > renders in pt-BR` |
+| F-3 nav labels from an English JS map (sensor-blind) | `frontend/app/components/shell/app-sidebar.tsx:52` | yes - `app-shell > renders in pt-BR` |
+| F-4 spinner `aria-label="Loading"` | `frontend/components/ui/spinner.tsx:9` | yes - `vendored-primitives > in pt-BR > default text comes from the catalog` |
+| F-5 terms `<main>` loses `lang="en"` | `frontend/app/terms/page.tsx:16` | yes - `legal-pages > stay English under pt-BR` |
+| F-6 line-spacing `format.number` -> `step.toFixed(1)` | `frontend/app/components/reading-controls.tsx:131` | yes - `reading-controls > renders in pt-BR` |
+| F-7 status badge renders the raw `source.status` | `frontend/app/components/library-screen.tsx:609` | yes - `library-screen > renders in pt-BR` |
+| F-8 due count -> English template literal | `frontend/app/components/home-screen.tsx:239` | yes - `home-screen > renders in pt-BR` |
+| F-9 pt-BR `library.count` loses its `=0` branch | `frontend/messages/pt-BR.json` `library.count` | yes - `library-screen > pt-BR plurals and dates` |
+| F-10 title rendered `.toUpperCase()` | `frontend/app/components/library-screen.tsx:604` | yes - `library-screen > book text is never translated` |
+| F-11 progress -> English template literal | `frontend/app/components/chapter-reader.tsx:868` | yes - `chapter-reader > renders in pt-BR` |
+| F-12 rail quote wrapped in typographic quotes | `frontend/app/components/margin-rail.tsx:125` | yes - `chapter-reader > book text is never translated` |
+| F-13 quiz `noneSurvived` -> English template literal | `frontend/app/components/library-screen.tsx:263` | no - survived library-screen, chapter-reader and i18n-hardcoded |
+| F-14 `loadingSources` -> `{"Loading your sources…"}` | `frontend/app/components/library-screen.tsx:590` | no - survived the same three files |
+| F-15 return chip -> `{"Return to where you were"}` | `frontend/app/components/chapter-reader.tsx:1115` | no - survived the same three files |
+| F-16 added date formatted with `"en-US"` | `frontend/app/components/library-screen.tsx:717` `AddedOn` | yes - `library-screen > pt-BR plurals and dates` |
+| F-17 `en` catalog `auth.logIn` -> `Sign in` (C30) | `frontend/messages/en.json` | yes - landing `offers a Log in CTA` and `shows a cited-answer proof`, auth-screens `submitting login` and `renders the backend error` |
+| F-18 `en` catalog `shell.logOut` -> `Sign out` (C30) | `frontend/messages/en.json` | yes - app-shell `shows the signed-in email plus account, logout, and theme controls` and `logout carries X-CSRF-Token` |
+
+Control: when F-14 is written as JSX text (`<p>Loading your sources…</p>`) instead of a JS expression, `i18n-hardcoded > the source tree is clean` kills it. So the three survivors are exactly the sensor-blind JS-expression class that ADR-0034 `#### Limits` names.
+
+## Gate
+
+- `make lint` - exit 0: ruff check passed; ruff format reports 341 files already formatted; `tsc --noEmit` clean; `check_commits` reports 4 commits in `origin/main..HEAD` OK; architecture boundaries clean.
+- `make test-frontend` - exit 0: 90 files and 1002 tests passed. REV-44 did not flake.
+- `LEARNY_REQUIRE_DB=1 make test-backend` (`LEARNY_TEST_DATABASE_URL` from `.claude/settings.json`) - 3227 passed, 2 failed, 11 skipped. Both failures are `tests/test_deploy_topology.py::test_dev_merge_publishes_the_app_ports` and `::test_dev_merge_still_publishes_todays_infra_ports` (`assert '8000' in ['${LEARNY_API_HOST_PORT']`). Both come from the owner's uncommitted `docker-compose.override.yml` (env-var host ports). The branch touches no backend file and not the override, so they are not findings. CI is authoritative. No alembic re-stamp was needed.
+
+## Findings
+
+1. **F1 - blocking - C32 coverage gap.** No pt-BR proof covers several Library states that the claim names: signed-out (`frontend/app/components/library-screen.tsx:523`), loading sources (`:590`), sample ready (`:581`), the `processing` status, quiz generating (`:143`), quiz noSection, noneSurvived, discardFootnote and partial (`:243`, `:263`, `:291`, `:299`), and the pending labels (`:569`, `:648`, `:673`, `:696`). F-13 and F-14 survived. Fix: add a pt-BR test to `frontend/tests/library-screen.test.tsx` whose name matches `renders in pt-BR`. It should drive each of these states and assert its Portuguese text (`Carregando seus livros…`, `Você saiu da conta.`, `processando`, `Gerando baralho…`, the `noneSurvived`, `partial` and `noSection` sentences with their pt plurals, and `O livro de exemplo…`). The ICU plural branches of `quiz.partial`, `quiz.noneSurvived` and `quiz.discardFootnote` are pt-BR-only. No test exercises them today.
+2. **F2 - blocking - C35 coverage gap.** No pt-BR proof covers the return chip (`frontend/app/components/chapter-reader.tsx:1115`), the stale-capture message (`:611`, `:658`), `← Capítulo anterior` (`frontend/app/components/toc-panel.tsx:173`), the mobile dock sheet title, description and `Fechar` (`frontend/app/components/reader-panel.tsx:461-469`), or the read-page Suspense fallback (`frontend/app/(read)/sources/[id]/read/page.tsx:31`). F-15 survived. Fix: extend the `chapter-reader.test.tsx` pt-BR block. The existing English tests at `:1791` (409 reload prompt) and the return-chip and mobile-dock tests already set these states up, so reuse that setup under `setTestLocale("pt-BR")`.
+3. **F3 - non-blocking - proof selectors miss the claim-carrying tests.** The literal proof commands do not select some tests that carry the claims. C29's `-t "renders in pt-BR"` on `app-shell.test.tsx` does not select `shows the not-found notice in pt-BR` (`:249`). C32's filters do not select `renders the empty, done and error states in pt-BR` (`home-screen.test.tsx:457`) or `renders the empty and failed list states in pt-BR` (`library-screen.test.tsx:608`). C35's filter does not select `renders the margin rail in pt-BR` (`chapter-reader.test.tsx:2282`) or `renders the reader's signed-out and not-found states in pt-BR` (`:2302`). Run the commands as written and the not-found notice, the empty and error states and the margin rail go unproven. Fix: rename those tests so that each contains `renders in pt-BR` (for example `renders in pt-BR: empty, done and error states`), because checks.md is frozen.
+4. **F4 - non-blocking - pt-BR wording.**
+   - `frontend/messages/pt-BR.json:202` `library.row.tutor` = `Tutor`. The link opens `?panel=teach` (`library-screen.tsx:345`), and the batch-1 catalog calls that mode `Ensinar` (`account.aiProfile.*`). Suggest `Ensinar`.
+   - `:188` status `failed {falhou}` is a verb on a badge, beside the adjectives `enviado`, `processando` and `pronto`. Suggest `com falha`.
+   - `:205` `reconstrói o acervo deste livro`: `acervo` means a collection or holdings, not a processed corpus. Suggest `reconstrói o conteúdo processado deste livro`.
+   - `:87`, `:182` and `:229` `Você saiu da conta.` reads "you logged out". The state is also reached by an expired session or a visitor who never signed in. Suggest `Você não está conectado.` for all three (`account` included, batch 1).
+   - `:225` `quiz.partial` `# salvos` has no noun. Suggest `{saved, plural, one {# item salvo} other {# itens salvos}}`.
+
+   Everything else reads as natural Brazilian Portuguese and is consistent with batch 1: `Entrar`/`Sair`, `Perguntar`, `processamento`, `baralho`, `Revisão`/`Revisar`, `E-mail`, and `Sumário`.
+5. **F5 - non-blocking - date formatter.** `AddedOn` (`frontend/app/components/library-screen.tsx:717`) builds `new Intl.DateTimeFormat(locale, …)`, while `reading-controls.tsx` uses next-intl's `useFormatter()`. The output is correct (F-16 killed), and the component is client-only, so there is no hydration mismatch. `useFormatter().dateTime(added, {dateStyle: "medium"})` would follow the app-wide timeZone and formats config in one place.
+6. **Sensor and ratchet check: no finding.** `PENDING_MIGRATION` in `frontend/tests/i18n-hardcoded.test.ts` lists none of the batch-2 files. 19 entries were removed. `app-sidebar.tsx` and `not-found-notice.tsx` were never listed, because their copy was sensor-blind JS. The three legal pages are exempt by path. A grep of every batch-2 file for English JS-expression literals, `title`/`aria-*` literals and template literals finds only book data (`frontend/app/page.tsx:21-23` `PROOF`, held under `lang="en"`) and `new Error("Could not anchor this passage to the book.")` (`frontend/app/components/chapter-reader.tsx:645`). That error never renders: `errorMessageKey` maps a non-`ApiError` to the fallback catalog key (`frontend/app/lib/errors.ts:130-133`). `p. {page}` (`chapter-reader.tsx:1095`) is `aria-hidden` and also correct in Portuguese. Numbers: `lineSpacingStep` uses `{step, number}`, and the segment uses `format.number`, which gives a decimal comma. The `{percent}` and `{minutes}` integers need no grouping.
+
+## Deferred to owner
+
+- `npm run build`. I skipped it for the memory budget. CI runs it.
+- A browser or screenshot walk of the batch-2 surfaces in pt-BR, which ADR-0034 `#### Limits` keeps as part of review. Skipped by brief.
+- The two local `test_deploy_topology` dev-port failures, which come from the uncommitted override.
+
+## Earlier batches
+
+# pt-br-interface verification
+
 **Verdict**: PASS
 **Profile**: standard
 **Diff range**: c0dd725..60d8103 (fix range 7cd370f..60d8103)
