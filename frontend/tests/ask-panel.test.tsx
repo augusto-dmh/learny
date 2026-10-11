@@ -38,6 +38,34 @@ import {
   readActiveConversation,
   writeActiveConversation,
 } from "../app/lib/active-conversation";
+import {
+  ConversationEmptyState,
+} from "../components/ai-elements/conversation";
+import {
+  InlineCitationCarousel,
+  InlineCitationCarouselNext,
+  InlineCitationCarouselPrev,
+} from "../components/ai-elements/inline-citation";
+import {
+  MessageBranch,
+  MessageBranchContent,
+  MessageBranchNext,
+  MessageBranchPage,
+  MessageBranchPrevious,
+} from "../components/ai-elements/message";
+import {
+  PromptInput,
+  PromptInputBody,
+  PromptInputTextarea,
+} from "../components/ai-elements/prompt-input";
+import { Sources, SourcesTrigger } from "../components/ai-elements/sources";
+import {
+  CarouselContent,
+  CarouselItem,
+  CarouselNext,
+  CarouselPrevious,
+} from "../components/ui/carousel";
+import { CommandDialog } from "../components/ui/command";
 import { expectNoEnglishCopy } from "./i18n-copy";
 import { setTestLocale } from "./setup-intl";
 
@@ -1846,15 +1874,17 @@ describe("AskPanel selection verbs (RA-17/18)", () => {
   });
 });
 
+/** Type a question into the Portuguese composer and send it. */
+async function perguntarPt(value: string) {
+  fireEvent.change(
+    await screen.findByPlaceholderText("Faça uma pergunta sobre este livro…"),
+    { target: { value } },
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Enviar" }));
+}
+
 describe("AskPanel in pt-BR", () => {
-  /** Type a question into the Portuguese composer and send it. */
-  async function perguntar(value: string) {
-    fireEvent.change(
-      await screen.findByPlaceholderText("Faça uma pergunta sobre este livro…"),
-      { target: { value } },
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Enviar" }));
-  }
+  const perguntar = perguntarPt;
 
   const CHAT_NAMESPACES = [
     "chat.ask",
@@ -2082,5 +2112,164 @@ describe("AskPanel in pt-BR", () => {
     expect(bodyOf(callsTo(fetchMock, STREAM_URL)[1])).toMatchObject({
       message: 'Sobre este trecho:\n\n"um trecho citado"\n\nO que isso quer dizer?',
     });
+  });
+});
+
+describe("AskPanel citations in pt-BR", () => {
+  it("citation marks, note citations and show-in-book: renders in pt-BR", async () => {
+    setTestLocale("pt-BR");
+    const stream = sseStream();
+    vi.stubGlobal("fetch", routedFetch(baseHandlers(() => stream.response)));
+    const onShowInBook = vi.fn();
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" onShowInBook={onShowInBook} />);
+    await perguntarPt("Quem escreveu?");
+    await stream.push({ type: "start", messageId: "m1" });
+    await stream.push({ type: "text-start", id: "t1" });
+    await stream.push({
+      type: "text-delta",
+      id: "t1",
+      delta: "Ada escreveu.[^1] Eu anotei.[^2] Sem título.[^3]",
+    });
+    await stream.push({ type: "text-end", id: "t1" });
+    await stream.push({
+      type: "data-citations",
+      data: [
+        citation,
+        { ...citation, chunk_id: "n1", origin: "note", note_id: "n1", note_title: "Minha nota" },
+        { ...citation, chunk_id: "n2", origin: "note", note_id: "n2", note_title: null },
+      ],
+    });
+    await stream.push({ type: "data-answer-status", data: { status: "answered" } });
+    await stream.push({ type: "finish" });
+    await stream.done();
+
+    // The marks in the prose and the chips under it.
+    expect(await screen.findByRole("button", { name: "Citação 1" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Citação 2" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Sua nota: Minha nota" })).toBeTruthy();
+
+    // A book citation opens with a way back into the book.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Citação: Chapter 1 › Core Idea" }));
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Mostrar no livro" }));
+    expect(onShowInBook).toHaveBeenCalledWith("chapter-1.xhtml#core-idea");
+
+    // A note citation names the note and links it.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Sua nota: Minha nota" }));
+    });
+    const passage = screen.getByTestId("citation-passage");
+    expect(passage.textContent).toContain("Sua nota — Minha nota");
+    expect(screen.getByRole("link", { name: "Abrir nota" })).toBeTruthy();
+
+    // An untitled note still says whose it is.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Sua nota:" }));
+    });
+    expect(screen.getByTestId("citation-passage").textContent).toMatch(/^Sua nota/);
+    expectNoEnglishCopy(document.body.textContent ?? "", "chat.citations", "chat.saveToNote");
+  });
+});
+
+describe("vendored chat primitives in pt-BR", () => {
+  it("default text of the vendored primitives: renders in pt-BR", async () => {
+    setTestLocale("pt-BR");
+    window.matchMedia = ((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    })) as unknown as typeof window.matchMedia;
+    globalThis.IntersectionObserver = class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+      takeRecords() {
+        return [];
+      }
+    } as unknown as typeof IntersectionObserver;
+
+    render(
+      <div>
+        <PromptInput onSubmit={() => {}}>
+          <PromptInputBody>
+            <PromptInputTextarea />
+          </PromptInputBody>
+        </PromptInput>
+        <ConversationEmptyState />
+        <Sources>
+          <SourcesTrigger count={0} />
+        </Sources>
+        <Sources>
+          <SourcesTrigger count={2} />
+        </Sources>
+        <MessageBranch>
+          <MessageBranchContent>
+            <div key="a">a</div>
+            <div key="b">b</div>
+          </MessageBranchContent>
+          <MessageBranchPrevious />
+          <MessageBranchPage />
+          <MessageBranchNext />
+        </MessageBranch>
+        <InlineCitationCarousel>
+          <InlineCitationCarouselPrev />
+          <InlineCitationCarouselNext />
+          <CarouselContent>
+            <CarouselItem>slide</CarouselItem>
+          </CarouselContent>
+          <CarouselPrevious />
+          <CarouselNext />
+        </InlineCitationCarousel>
+      </div>,
+    );
+
+    // A turn left streaming by an earlier test can hold React's act queue, so the
+    // first query waits for this render to commit.
+    expect(
+      await screen.findByPlaceholderText("O que você gostaria de saber?"),
+    ).toBeTruthy();
+    expect(screen.getByLabelText("Enviar arquivos")).toBeTruthy();
+    expect(screen.getByText("Nenhuma mensagem ainda")).toBeTruthy();
+    expect(screen.getByText("Comece uma conversa para ver as mensagens aqui")).toBeTruthy();
+    expect(screen.getByText("Nenhuma fonte usada")).toBeTruthy();
+    expect(screen.getByText("2 fontes usadas")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Versão anterior" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Próxima versão" })).toBeTruthy();
+    expect(await screen.findByText("1 de 2")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Anterior" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Próximo" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Slide anterior" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Próximo slide" })).toBeTruthy();
+    expect(
+      document.querySelector('[aria-roledescription="carrossel"]'),
+    ).toBeTruthy();
+    expect(document.querySelector('[aria-roledescription="slide"]')).toBeTruthy();
+    expectNoEnglishCopy(
+      document.body.textContent ?? "",
+      "chat.elements",
+      "chat.promptInput",
+      "common.command",
+      "common.previousSlide",
+      "common.nextSlide",
+    );
+    cleanup();
+
+    // The command dialog is modal, so it gets a render of its own.
+    render(
+      <CommandDialog open>
+        <div />
+      </CommandDialog>,
+    );
+    expect(await screen.findByText("Paleta de comandos")).toBeTruthy();
+    expect(screen.getByText("Busque um comando para executar…")).toBeTruthy();
+    expectNoEnglishCopy(document.body.textContent ?? "", "common.command");
+    Reflect.deleteProperty(window, "matchMedia");
   });
 });

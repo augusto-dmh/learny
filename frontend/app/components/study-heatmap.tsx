@@ -502,6 +502,7 @@ const TOTAL_LABEL_CLASS =
  */
 function StudyReadout({ summary }: { summary: StudySummaryView }) {
   const t = useTranslations("review.stats");
+  const number = new Intl.NumberFormat(useLocale());
   const reviews = summary.days.reduce((n, day) => n + day.reviews_count, 0);
   const pages = summary.days.reduce((n, day) => n + day.pages, 0);
 
@@ -527,11 +528,11 @@ function StudyReadout({ summary }: { summary: StudySummaryView }) {
         className="flex gap-[26px] border-t border-border pt-4"
       >
         <span data-testid="total-reviews" className="flex flex-col">
-          <span className={TOTAL_VALUE_CLASS}>{reviews}</span>
+          <span className={TOTAL_VALUE_CLASS}>{number.format(reviews)}</span>
           <span className={TOTAL_LABEL_CLASS}>{t("reviews")}</span>
         </span>
         <span data-testid="total-pages" className="flex flex-col">
-          <span className={TOTAL_VALUE_CLASS}>{pages}</span>
+          <span className={TOTAL_VALUE_CLASS}>{number.format(pages)}</span>
           <span className={TOTAL_LABEL_CLASS}>{t("pages")}</span>
         </span>
       </div>

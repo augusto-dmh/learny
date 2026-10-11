@@ -105,6 +105,7 @@ function Carousel({
     }
   }, [api, onSelect])
 
+  const t = useTranslations("common")
   return (
     <CarouselContext.Provider
       value={{
@@ -123,7 +124,7 @@ function Carousel({
         onKeyDownCapture={handleKeyDown}
         className={cn("relative", className)}
         role="region"
-        aria-roledescription="carousel"
+        aria-roledescription={t("carouselRole")}
         data-slot="carousel"
         {...props}
       >
@@ -156,11 +157,12 @@ function CarouselContent({ className, ...props }: React.ComponentProps<"div">) {
 
 function CarouselItem({ className, ...props }: React.ComponentProps<"div">) {
   const { orientation } = useCarousel()
+  const t = useTranslations("common")
 
   return (
     <div
       role="group"
-      aria-roledescription="slide"
+      aria-roledescription={t("slideRole")}
       data-slot="carousel-item"
       className={cn(
         "min-w-0 shrink-0 grow-0 basis-full",

@@ -20,11 +20,17 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
+import ReviewPage from "../app/(app)/review/page";
 import { ReviewScreen } from "../app/components/review-screen";
 import { StudyHeatmap, StudyStats } from "../app/components/study-heatmap";
 import { readUrl } from "../app/lib/read-url";
 import { expectNoEnglishCopy } from "./i18n-copy";
 import { setTestLocale } from "./setup-intl";
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ replace: vi.fn(), push: vi.fn(), prefetch: vi.fn() }),
+  useSearchParams: () => new URLSearchParams(),
+}));
 
 beforeAll(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
@@ -1328,10 +1334,10 @@ describe("ReviewScreen in pt-BR", () => {
           jsonResponse(
             200,
             dueQueue([
-              { ...clozeCard, interval_labels: { "1": "~1m", "2": "~10m", "3": "~1h", "4": "~1d" } },
+              { ...clozeCard, interval_labels: { "1": "~1m", "2": "~10m", "3": "~1h", "4": "~1y" } },
               {
                 ...recallCard,
-                interval_labels: { "1": "~4d", "2": "~2w", "3": "~1mo", "4": "~1y" },
+                interval_labels: { "1": "~4d", "2": "~2w", "3": "~1mo", "4": "~4mo" },
               },
             ]),
           ),
@@ -1339,7 +1345,12 @@ describe("ReviewScreen in pt-BR", () => {
           // The first grade comes due within minutes: a short-term requeue.
           const due = firstReview ? soon : "2026-08-20T00:00:00Z";
           firstReview = false;
-          return jsonResponse(200, scheduling(due));
+          return jsonResponse(
+            200,
+            scheduling(due, {
+              interval_labels: { "1": "~1d", "2": "~1d", "3": "~4d", "4": "~2w" },
+            }),
+          );
         },
         "POST /api/quiz-items/i2/reviews": () =>
           jsonResponse(200, scheduling("2026-08-20T00:00:00Z")),
@@ -1354,7 +1365,7 @@ describe("ReviewScreen in pt-BR", () => {
     expect(screen.getByRole("group", { name: "Avalie o quanto você lembrou" })).toBeTruthy();
     expect(
       [1, 2, 3, 4].map((r) => screen.getByTestId(`grade-interval-${r}`).textContent),
-    ).toEqual(["~1 min", "~10 min", "~1 h", "~1 dia"]);
+    ).toEqual(["~1 min", "~10 min", "~1 h", "~1 ano"]);
     for (const grade of ["Novamente", "Difícil", "Bom", "Fácil"]) {
       expect(screen.getByRole("button", { name: grade })).toBeTruthy();
     }
@@ -1371,12 +1382,14 @@ describe("ReviewScreen in pt-BR", () => {
     fireEvent.click(screen.getByRole("button", { name: "Mostrar resposta" }));
     expect(
       [1, 2, 3, 4].map((r) => screen.getByTestId(`grade-interval-${r}`).textContent),
-    ).toEqual(["~4 dias", "~2 sem.", "~1 mês", "~1 ano"]);
+    ).toEqual(["~4 dias", "~2 sem.", "~1 mês", "~4 meses"]);
     fireEvent.click(screen.getByRole("button", { name: "Bom" }));
     await waitFor(() =>
       expect(screen.getByTestId("position").textContent).toBe("3/3"),
     );
     fireEvent.click(screen.getByRole("button", { name: "Mostrar resposta" }));
+    // The requeued card carries the buckets its first grade returned.
+    expect(screen.getByTestId("grade-interval-1").textContent).toBe("~1 dia");
     fireEvent.click(screen.getByRole("button", { name: "Fácil" }));
 
     expect(await screen.findByText("Sessão concluída")).toBeTruthy();
@@ -1503,7 +1516,7 @@ describe("ReviewScreen in pt-BR", () => {
     fireEvent.click(screen.getByRole("button", { name: "Bom" }));
 
     expect((await screen.findByTestId("done-for-today")).textContent).toBe(
-      "Pronto por hoje",
+      "Por hoje é só",
     );
     expect(body()).toContain("Você terminou esta sessão.");
     expect(screen.getByRole("button", { name: "Continuar revisando" })).toBeTruthy();
@@ -1513,12 +1526,29 @@ describe("ReviewScreen in pt-BR", () => {
     expectNoEnglishCopy(body(), ...REVIEW_NAMESPACES);
   });
 
+  it("page title and loading fallback: renders in pt-BR", async () => {
+    setTestLocale("pt-BR");
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        [`GET ${DUE}`]: () => jsonResponse(200, dueQueue([])),
+      }),
+    );
+    render(<ReviewPage />);
+    expect(screen.getByRole("heading", { level: 1, name: "Revisão" })).toBeTruthy();
+    expect(await screen.findByText("Nada para revisar agora.")).toBeTruthy();
+    expectNoEnglishCopy(body(), ...REVIEW_NAMESPACES);
+  });
+
   it("heatmap uses locale names", async () => {
     setTestLocale("pt-BR");
     const today = new Date(2026, 6, 20); // 2026-07-20 local, a Monday
     const days = [
       { day: "2026-07-20", reviews_count: 7, reading_updates: 2, pages: 9 },
       { day: "2026-07-14", reviews_count: 1, reading_updates: 0, pages: 1 },
+      // Read but not reviewed: zero reads as a plural in Portuguese.
+      { day: "2026-07-13", reviews_count: 0, reading_updates: 2, pages: 0 },
     ];
     const { container } = render(<StudyHeatmap days={days} today={today} />);
 
@@ -1550,6 +1580,9 @@ describe("ReviewScreen in pt-BR", () => {
     expect(
       screen.getByRole("img", { name: "ter., 14 de jul.: 1 revisão · 1 página" }),
     ).toBeTruthy();
+    expect(
+      screen.getByRole("img", { name: "seg., 13 de jul.: 0 revisões · 0 páginas" }),
+    ).toBeTruthy();
     fireEvent.mouseEnter(container.querySelector('[data-day="2026-07-20"]')!);
     expect(screen.getByTestId("tooltip-day").textContent).toBe("seg., 20 de jul.");
     expect(container.textContent).toContain("Últimas 12 semanas");
@@ -1563,7 +1596,7 @@ describe("ReviewScreen in pt-BR", () => {
       vi.fn(async () =>
         jsonResponse(200, {
           days: [
-            { day: "2026-07-20", reviews_count: 1, reading_updates: 0, pages: 3 },
+            { day: "2026-07-20", reviews_count: 1234, reading_updates: 0, pages: 3 },
           ],
           studied_last_14: 9,
         }),
@@ -1575,7 +1608,12 @@ describe("ReviewScreen in pt-BR", () => {
     );
     expect(screen.getByRole("button", { name: "Ocultar estatísticas" })).toBeTruthy();
     expect(screen.getByLabelText("estatísticas de estudo")).toBeTruthy();
-    expect(screen.getByTestId("study-totals").textContent).toBe("1revisões3páginas");
+    expect(screen.getByTestId("study-totals").textContent).toBe("1.234revisões3páginas");
     expectNoEnglishCopy(document.body.textContent ?? "", "review.stats", "review.heatmap");
+    fireEvent.click(screen.getByRole("button", { name: "Ocultar estatísticas" }));
+    expect(screen.getByRole("button", { name: "Mostrar estatísticas" })).toBeTruthy();
+    expect(screen.queryByTestId("study-heatmap")).toBeNull();
+    expectNoEnglishCopy(document.body.textContent ?? "", "review.stats");
+    localStorage.clear();
   });
 });

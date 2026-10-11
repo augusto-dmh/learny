@@ -18,6 +18,7 @@
  * marks: the stored answer carries the same tokens the stream did.
  */
 
+import { useTranslations } from "next-intl";
 import { createContext, useContext, useId, useMemo, useState } from "react";
 
 import {
@@ -55,6 +56,7 @@ const MarkSelectionContext = createContext<{
 
 /** One numbered mark in the prose; a second activation closes what it opened. */
 function CitationMark({ index }: { index: number }) {
+  const t = useTranslations("chat.citations");
   const { selected, passageId, toggle, quotedByMark } =
     useContext(MarkSelectionContext);
   const open = selected === index;
@@ -62,7 +64,7 @@ function CitationMark({ index }: { index: number }) {
   const mark = (
     <button
       type="button"
-      aria-label={`Citation ${index}`}
+      aria-label={t("mark", { index })}
       aria-expanded={open}
       aria-controls={open ? passageId : undefined}
       onClick={() => toggle(index)}

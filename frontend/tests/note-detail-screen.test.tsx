@@ -361,7 +361,7 @@ describe("NoteDetailScreen in pt-BR", () => {
     fireEvent.click(screen.getAllByRole("button", { name: "Aceitar" })[0]);
     expect(
       await screen.findByText(
-        "Esse cartão já está em revisão — promover o mesmo texto de novo nunca o duplica.",
+        "Esse cartão já está em revisão — adicionar o mesmo texto de novo não cria uma cópia.",
       ),
     ).toBeTruthy();
     expectNoEnglishCopy(body(), ...NOTE_NAMESPACES);

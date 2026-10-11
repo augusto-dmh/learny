@@ -73,9 +73,9 @@ const EXEMPT_PATHS = [
 ];
 
 /**
- * Files not yet migrated to the catalogs. Empty: every learner surface reads
- * its copy from the catalogs. A new surface that lands before its copy does can
- * be listed here; a clean file listed here fails the test.
+ * Files not yet migrated to the catalogs. Empty, and held empty: every learner
+ * surface reads its copy from the catalogs, so a new one lands with its copy.
+ * The stale-entry rule (`stalePending`) is still proven on a synthetic list.
  */
 const PENDING_MIGRATION: string[] = [];
 
@@ -193,6 +193,11 @@ function describeFindings(findings: Finding[]): string[] {
   return findings.map(({ file, line, text }) => `${file}:${line} ${text}`);
 }
 
+/** Pending files the scan found nothing in — entries that must be dropped. */
+function stalePending(pending: string[], findings: Map<string, Finding[]>): string[] {
+  return pending.filter((file) => !findings.has(file));
+}
+
 describe("hard-coded strings", () => {
   it("flags English JSX text and attribute literals", () => {
     const code = [
@@ -232,9 +237,20 @@ describe("hard-coded strings", () => {
   });
 
   it("a clean file cannot stay pending", () => {
+    // The rule itself, on a synthetic list: a listed file with no findings is stale.
+    const dirty = scanComponent("app/components/dirty.tsx", "export const A = () => <p>Hello there</p>;");
+    expect(
+      stalePending(
+        ["app/components/clean.tsx", "app/components/dirty.tsx"],
+        new Map([["app/components/dirty.tsx", dirty]]),
+      ),
+    ).toEqual(["app/components/clean.tsx"]);
+
     const findings = scanTree();
-    const stale = PENDING_MIGRATION.filter((file) => !findings.has(file));
+    const stale = stalePending(PENDING_MIGRATION, findings);
     expect(stale, "pending files that are already clean — remove them from PENDING_MIGRATION").toEqual([]);
+    // Every surface has migrated; the list stays empty from here on.
+    expect(PENDING_MIGRATION, "every learner surface has migrated — keep the list empty").toEqual([]);
     const sorted = [...PENDING_MIGRATION].sort();
     expect(PENDING_MIGRATION, "keep PENDING_MIGRATION sorted and unique").toEqual([...new Set(sorted)]);
   });

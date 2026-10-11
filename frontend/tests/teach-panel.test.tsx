@@ -1395,7 +1395,7 @@ describe("TeachPanel in pt-BR", () => {
       (await screen.findAllByTestId("user-message")).map((m) => m.textContent),
     ).toContain("Só me explique isso.");
     expectNoEnglishCopy(document.body.textContent ?? "", ...TEACH_NAMESPACES);
-    await streamTurn(streams[1], []);
+    await streamTurn(streams[1], [], "answered", "m2");
 
     fireEvent.click(await screen.findByRole("button", { name: "Não sei." }));
     await waitFor(() => expect(callsTo(fetchMock, TURN_STREAM)).toHaveLength(3));
@@ -1408,7 +1408,7 @@ describe("TeachPanel in pt-BR", () => {
       ).toContain("Não sei."),
     );
     expectNoEnglishCopy(document.body.textContent ?? "", ...TEACH_NAMESPACES);
-    await streamTurn(streams[2], []);
+    await streamTurn(streams[2], [], "answered", "m3");
   });
 
   it("closed session, card offer and its failure: renders in pt-BR", async () => {

@@ -481,22 +481,33 @@ describe("the dock in pt-BR", () => {
       title: `Conversa ${index}`,
       turn_count: index,
     }));
+    const older = deferred();
+    let pages = 0;
     stubDock({
-      list: () => jsonResponse(200, page),
+      list: () => (pages++ === 0 ? jsonResponse(200, page) : older.promise),
       notes: () => jsonResponse(200, []),
       due: 0,
     });
     renderTab("chat");
 
-    expect(
-      await screen.findByRole("button", { name: "Mostrar conversas mais antigas" }),
-    ).toBeTruthy();
+    const more = await screen.findByRole("button", {
+      name: "Mostrar conversas mais antigas",
+    });
     expect(
       screen.getByRole("button", { name: "Retomar Conversa 0" }).textContent,
     ).toContain("(nenhuma interação)");
     expect(
       screen.getByRole("button", { name: "Retomar Conversa 2" }).textContent,
     ).toContain("(2 interações)");
+
+    // Asking for the older page shows it is loading, in Portuguese.
+    await act(async () => {
+      fireEvent.click(more);
+    });
+    expect(more.textContent).toBe("Carregando…");
+    await act(async () => {
+      older.release(jsonResponse(200, []));
+    });
     cleanup();
 
     stubDock({

@@ -25,11 +25,16 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+import NotesPage from "../app/(app)/notes/page";
 import { CapturePopover } from "../app/components/notes/capture-popover";
 import { CardSuggestions } from "../app/components/notes/card-suggestions";
 import { NotesScreen } from "../app/components/notes/notes-screen";
 import { expectNoEnglishCopy } from "./i18n-copy";
 import { setTestLocale } from "./setup-intl";
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ replace: vi.fn(), push: vi.fn(), prefetch: vi.fn() }),
+}));
 
 beforeAll(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
@@ -376,21 +381,28 @@ describe("NotesScreen in pt-BR", () => {
       routedFetch({
         "GET /api/auth/me": () => authedMe.clone(),
         "GET /api/sources": () => jsonResponse(200, sources),
-        "GET /api/notes": () => jsonResponse(200, notes),
+        "GET /api/notes": () =>
+          jsonResponse(200, [
+            ...notes,
+            summary("n3", "Terceira", { anchor_statuses: ["stale"] }),
+          ]),
         "GET /api/notes?tag=history": () => jsonResponse(200, []),
         "GET /api/notes?source_id=s2": () => jsonResponse(200, []),
       }),
     );
-    render(<NotesScreen />);
+    render(<NotesPage />);
+    expect(screen.getAllByRole("heading", { level: 1, name: "Notas" }).length).toBeGreaterThan(0);
 
     expect(await screen.findByRole("region", { name: "notas" })).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "Notas" })).toBeTruthy();
     expect(screen.getByRole("link", { name: "Baixar notas" })).toBeTruthy();
     expect(await screen.findByLabelText("Livro")).toBeTruthy();
     expect(screen.getByRole("option", { name: "Todos os livros" })).toBeTruthy();
     expect(screen.getByTestId("anchor-status-active").textContent).toBe("ativo");
     expect(screen.getByTestId("anchor-status-orphaned").textContent).toBe(
       "fora do livro",
+    );
+    expect(screen.getByTestId("anchor-status-stale").textContent).toBe(
+      "desatualizado",
     );
     expectNoEnglishCopy(body(), ...NOTES_NAMESPACES);
 

@@ -13,7 +13,7 @@
  * nothing due says so and offers no grading; there is nothing to grade.
  */
 
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { useCallback, useEffect, useState } from "react";
 
 import { getDueReviews } from "@/app/lib/quiz";
@@ -69,6 +69,7 @@ export function DockReviewPanel({
 }: BookDue & { sourceId: string; onRequireAuth?: () => void }) {
   const t = useTranslations("chat.dockReview");
   const tCommon = useTranslations("common");
+  const locale = useLocale();
   if (error) {
     return (
       <p role="alert" className="text-sm text-destructive">
@@ -91,7 +92,7 @@ export function DockReviewPanel({
     <div className="space-y-4">
       <div>
         <p data-testid="due-count" className="text-2xl font-semibold">
-          {total}
+          {new Intl.NumberFormat(locale).format(total)}
         </p>
         <p className="text-sm text-muted-foreground">
           {t("dueCaption", { count: total })}

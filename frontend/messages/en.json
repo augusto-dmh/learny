@@ -21,7 +21,9 @@
     "command": {
       "title": "Command Palette",
       "description": "Search for a command to run..."
-    }
+    },
+    "carouselRole": "carousel",
+    "slideRole": "slide"
   },
   "errors": {
     "generic": "Something went wrong. Please try again.",
@@ -177,7 +179,8 @@
       "closePassage": "Close passage",
       "openNote": "Open note",
       "showInBook": "Show in book",
-      "openInBook": "Open in book"
+      "openInBook": "Open in book",
+      "mark": "Citation {index, number}"
     },
     "includeNotes": {
       "label": "Search my notes too",
