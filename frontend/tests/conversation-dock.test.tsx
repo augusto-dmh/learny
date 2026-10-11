@@ -387,7 +387,8 @@ describe("the dock in pt-BR", () => {
       }
       if (url.startsWith("/api/notes")) return notes();
       if (url.startsWith("/api/reviews/due")) {
-        const items = Array.from({ length: due }, (_, i) => dueCard(`i${i}`));
+        // The queue holds at most a few cards; `total_due` is the whole count.
+        const items = Array.from({ length: Math.min(due, 3) }, (_, i) => dueCard(`i${i}`));
         return jsonResponse(200, { items, total_due: due });
       }
       if (url === "/api/sources/s1") {
@@ -600,5 +601,18 @@ describe("the dock in pt-BR", () => {
     expect(
       await screen.findByText("Nada deste livro para revisar agora."),
     ).toBeTruthy();
+    cleanup();
+
+    // A large count is grouped the Portuguese way.
+    stubDock({
+      list: () => jsonResponse(200, []),
+      notes: () => jsonResponse(200, []),
+      due: 1234,
+    });
+    renderTab("review");
+    expect((await screen.findByTestId("due-count")).textContent).toBe("1.234");
+    expect(screen.getByTestId("reader-panel").textContent).toContain(
+      "cartões deste livro para revisar",
+    );
   });
 });

@@ -27,9 +27,16 @@ import { readUrl } from "../app/lib/read-url";
 import { expectNoEnglishCopy } from "./i18n-copy";
 import { setTestLocale } from "./setup-intl";
 
+// `suspend` holds the review page on its Suspense fallback.
+const nav = vi.hoisted(() => ({ suspend: false }));
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ replace: vi.fn(), push: vi.fn(), prefetch: vi.fn() }),
-  useSearchParams: () => new URLSearchParams(),
+  useSearchParams: () => {
+    if (nav.suspend) {
+      throw new Promise(() => {});
+    }
+    return new URLSearchParams();
+  },
 }));
 
 beforeAll(() => {
@@ -1539,6 +1546,17 @@ describe("ReviewScreen in pt-BR", () => {
     expect(screen.getByRole("heading", { level: 1, name: "Revisão" })).toBeTruthy();
     expect(await screen.findByText("Nada para revisar agora.")).toBeTruthy();
     expectNoEnglishCopy(body(), ...REVIEW_NAMESPACES);
+    cleanup();
+
+    // While the search params are not ready the page shows its own fallback.
+    nav.suspend = true;
+    try {
+      render(<ReviewPage />);
+      expect(await screen.findByText("Carregando…")).toBeTruthy();
+      expectNoEnglishCopy(body(), ...REVIEW_NAMESPACES);
+    } finally {
+      nav.suspend = false;
+    }
   });
 
   it("heatmap uses locale names", async () => {

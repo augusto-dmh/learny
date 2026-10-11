@@ -2186,6 +2186,7 @@ describe("vendored chat primitives in pt-BR", () => {
       removeListener: () => {},
       dispatchEvent: () => false,
     })) as unknown as typeof window.matchMedia;
+    const originalObserver = globalThis.IntersectionObserver;
     globalThis.IntersectionObserver = class {
       observe() {}
       unobserve() {}
@@ -2271,5 +2272,6 @@ describe("vendored chat primitives in pt-BR", () => {
     expect(screen.getByText("Busque um comando para executar…")).toBeTruthy();
     expectNoEnglishCopy(document.body.textContent ?? "", "common.command");
     Reflect.deleteProperty(window, "matchMedia");
+    globalThis.IntersectionObserver = originalObserver;
   });
 });
