@@ -180,6 +180,70 @@ describe("CheckpointDialog", () => {
     }
   });
 
+  it("grading a recall moves on to the explanation with an empty draft", async () => {
+    const grades: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        [START]: () => jsonResponse(201, recallAndExplain),
+        "POST /api/checkpoint-attempts/a1/response": () =>
+          jsonResponse(200, {
+            answer: SECRET,
+            source_excerpt: "Pin making is divided into about eighteen distinct operations.",
+            anchor: "ch1#s1",
+            section_path: ["Book I", "The Division of Labour"],
+          }),
+        "POST /api/checkpoint-attempts/a1/grade": (init) => {
+          grades.push(bodyOf(init));
+          return jsonResponse(200, { quiz_item_id: "q0", due: "2026-10-02", state: 1 });
+        },
+      }),
+    );
+    renderDialog();
+    fireEvent.click(screen.getByRole("button", { name: "Some" }));
+    fireEvent.change(await screen.findByRole("textbox", { name: "Your answer" }), {
+      target: { value: "eighteen?" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Sure" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Good" }));
+
+    const step = await screen.findByTestId("checkpoint-ask-explain");
+    expect(grades).toEqual([{ rating: 3 }]);
+    expect(within(step).getByText("2 of 2")).toBeTruthy();
+    const explanation = within(step).getByRole("textbox", {
+      name: "Your explanation",
+    }) as HTMLTextAreaElement;
+    expect(explanation.value).toBe("");
+  });
+
+  it("a refused explanation shows the server's reason and keeps the draft", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        [START]: () => jsonResponse(201, explainOnly),
+        "POST /api/checkpoint-attempts/a2/response": () =>
+          jsonResponse(429, { detail: "Daily AI budget reached." }),
+      }),
+    );
+    renderDialog();
+    fireEvent.click(screen.getByRole("button", { name: "Skip" }));
+    const step = await screen.findByTestId("checkpoint-ask-explain");
+    fireEvent.change(within(step).getByRole("textbox", { name: "Your explanation" }), {
+      target: { value: "many hands make pins" },
+    });
+    fireEvent.click(within(step).getByRole("button", { name: "Sure" }));
+
+    expect((await screen.findByRole("alert")).textContent).toBe("Daily AI budget reached.");
+    const still = screen.getByTestId("checkpoint-ask-explain");
+    const textbox = within(still).getByRole("textbox", {
+      name: "Your explanation",
+    }) as HTMLTextAreaElement;
+    expect(textbox.value).toBe("many hands make pins");
+    expect(within(still).getByRole("button", { name: "Sure" }).hasAttribute("disabled")).toBe(
+      false,
+    );
+  });
+
   it("just explain is a secondary action on the explain step", async () => {
     const fetchMock = routedFetch({ [START]: () => jsonResponse(201, explainOnly) });
     vi.stubGlobal("fetch", fetchMock);
