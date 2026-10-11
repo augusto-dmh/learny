@@ -35,6 +35,8 @@ import {
   readActiveConversation,
   writeActiveConversation,
 } from "../app/lib/active-conversation";
+import { expectNoEnglishCopy } from "./i18n-copy";
+import { setTestLocale } from "./setup-intl";
 
 // The delete-on-failure sensor: the conversations client is real except for
 // `deleteConversation`, which is replaced by a spy so a reintroduced DELETE is
@@ -1341,5 +1343,113 @@ describe("Tutor review card offer (TUTOR-34/41)", () => {
     expect(screen.queryByRole("article", { name: "review card offer" })).toBeNull();
     expect(callsTo(fetchMock, TUTOR_CARD_URL)).toHaveLength(0);
     expect(screen.getByRole("button", { name: "Ask about this" })).toBeTruthy();
+  });
+});
+
+describe("TeachPanel in pt-BR", () => {
+  const TEACH_NAMESPACES = [
+    "chat.teach",
+    "chat.phase",
+    "chat.citations",
+    "chat.includeNotes",
+    "chat.saveToNote",
+    "chat.promptInput",
+    "chat.notFound",
+    "chat.retry",
+    "errors.operation.tutorCardSave",
+    "common",
+  ];
+
+  it("start form, composer and tutor chips: renders in pt-BR", async () => {
+    setTestLocale("pt-BR");
+    const { fetchMock, streams } = tutorNetwork();
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
+
+    await screen.findByRole("option", { name: "Chapter 1" }, { timeout: 5000 });
+    expect(screen.getByRole("form", { name: "começar sessão" })).toBeTruthy();
+    expect(document.body.textContent).toContain(
+      "Ensinar conduz você por uma seção.",
+    );
+    expectNoEnglishCopy(document.body.textContent ?? "", ...TEACH_NAMESPACES);
+    fireEvent.change(screen.getByLabelText("Seção"), {
+      target: { value: "c2.xhtml" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Começar sessão" }));
+
+    await waitFor(() => expect(streams.length).toBeGreaterThan(0));
+    await streamTurn(streams[0], [], "answered", "open");
+    await screen.findByPlaceholderText("Envie uma mensagem…", {}, { timeout: 5000 });
+    expect(
+      screen.getByRole("region", { name: "conversa de estudo" }),
+    ).toBeTruthy();
+
+    // The chip is labelled in Portuguese but sends the sentinel the backend
+    // matches on, and the thread shows what the learner pressed.
+    fireEvent.click(screen.getByRole("button", { name: "Só me explique isso." }));
+    await waitFor(() => expect(callsTo(fetchMock, TURN_STREAM)).toHaveLength(2));
+    expect(bodyOf(callsTo(fetchMock, TURN_STREAM)[1])).toEqual({
+      message: "Just explain this.",
+      mode: "teach",
+    });
+    expect(
+      (await screen.findAllByTestId("user-message")).map((m) => m.textContent),
+    ).toContain("Só me explique isso.");
+    expectNoEnglishCopy(document.body.textContent ?? "", ...TEACH_NAMESPACES);
+    await streamTurn(streams[1], []);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Não sei." }));
+    await waitFor(() => expect(callsTo(fetchMock, TURN_STREAM)).toHaveLength(3));
+    expect(bodyOf(callsTo(fetchMock, TURN_STREAM)[2])).toMatchObject({
+      message: "I don't know.",
+    });
+    await waitFor(() =>
+      expect(
+        screen.getAllByTestId("user-message").map((m) => m.textContent),
+      ).toContain("Não sei."),
+    );
+    expectNoEnglishCopy(document.body.textContent ?? "", ...TEACH_NAMESPACES);
+    await streamTurn(streams[2], []);
+  });
+
+  it("closed session, card offer and its failure: renders in pt-BR", async () => {
+    setTestLocale("pt-BR");
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/sources/s1/structure": () => jsonResponse(200, structure),
+        [`GET ${READ_URL}`]: () =>
+          jsonResponse(200, {
+            ...restoredDetail,
+            tutor_phase: "close",
+            target_title: "Chapter 1",
+            tutor_check_text: "It argues that anchors stay stable.",
+          }),
+        "POST /api/conversations/conv2/tutor-card": () =>
+          jsonResponse(409, { detail: "Session is not closed." }),
+      }),
+    );
+    writeActiveConversation("s1", "teach", "conv2");
+
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
+    await screen.findByText("It is about early computing.");
+
+    // The restored scope miss reads in Portuguese.
+    expect(document.body.textContent).toContain(
+      "Isso não aparece no trecho do livro que esta conversa abrange.",
+    );
+    const offer = screen.getByRole("article", {
+      name: "sugestão de cartão de revisão",
+    });
+    // The question is the card the backend saves, kept in its own language.
+    expect(offer.querySelector('[lang="en"]')!.textContent).toBe(
+      'In your own words, what is "Chapter 1" arguing?',
+    );
+    expect(screen.getByRole("button", { name: "Perguntar sobre isto" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Dispensar" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Aceitar" }));
+    expect(
+      await screen.findByText("Não foi possível salvar este cartão de revisão."),
+    ).toBeTruthy();
+    expectNoEnglishCopy(document.body.textContent ?? "", ...TEACH_NAMESPACES);
   });
 });

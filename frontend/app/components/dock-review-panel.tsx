@@ -13,6 +13,7 @@
  * nothing due says so and offers no grading; there is nothing to grade.
  */
 
+import { useTranslations } from "next-intl";
 import { useCallback, useEffect, useState } from "react";
 
 import { getDueReviews } from "@/app/lib/quiz";
@@ -66,6 +67,8 @@ export function DockReviewPanel({
   refresh,
   onRequireAuth,
 }: BookDue & { sourceId: string; onRequireAuth?: () => void }) {
+  const t = useTranslations("chat.dockReview");
+  const tCommon = useTranslations("common");
   if (error) {
     return (
       <p role="alert" className="text-sm text-destructive">
@@ -74,12 +77,12 @@ export function DockReviewPanel({
     );
   }
   if (total === null) {
-    return <p className="text-sm text-muted-foreground">Loading…</p>;
+    return <p className="text-sm text-muted-foreground">{tCommon("loading")}</p>;
   }
   if (total === 0) {
     return (
       <p className="text-sm text-muted-foreground">
-        Nothing due from this book right now.
+        {t("nothingDue")}
       </p>
     );
   }
@@ -91,7 +94,7 @@ export function DockReviewPanel({
           {total}
         </p>
         <p className="text-sm text-muted-foreground">
-          cards due from this book
+          {t("dueCaption", { count: total })}
         </p>
       </div>
       <ReviewScreen

@@ -17,6 +17,7 @@
  * than staying flippable and quietly changing nothing.
  */
 
+import { useTranslations } from "next-intl";
 import { useId } from "react";
 
 export function IncludeNotesToggle({
@@ -30,6 +31,7 @@ export function IncludeNotesToggle({
   locked?: boolean;
 }) {
   const descriptionId = useId();
+  const t = useTranslations("chat.includeNotes");
   return (
     <div className="space-y-1">
       <label className="flex w-fit items-center gap-2 text-xs text-muted-foreground">
@@ -41,14 +43,11 @@ export function IncludeNotesToggle({
           onChange={(event) => onChange(event.target.checked)}
           className="size-3.5 accent-primary disabled:opacity-60"
         />
-        Search my notes too
+        {t("label")}
       </label>
       <p id={descriptionId} className="text-xs text-muted-foreground">
-        Your own notes on this book are searched alongside the book itself, so
-        answers can be grounded in what you have written.
-        {locked
-          ? " This conversation was started with this choice — start a new one to change it."
-          : null}
+        {t("description")}
+        {locked ? ` ${t("locked")}` : null}
       </p>
     </div>
   );

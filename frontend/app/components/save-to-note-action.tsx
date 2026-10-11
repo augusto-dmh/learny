@@ -11,6 +11,7 @@
  * rather than as a secondary export of either panel.
  */
 
+import { useTranslations } from "next-intl";
 import { useCallback, useState } from "react";
 
 import { saveAnswerAsNote } from "@/app/lib/answer-notes";
@@ -30,6 +31,7 @@ export function SaveToNoteAction({
   citations: Citation[];
   csrf: string;
 }) {
+  const t = useTranslations("chat.saveToNote");
   const [state, setState] = useState<"idle" | "saving" | "saved" | "error">(
     "idle",
   );
@@ -53,7 +55,7 @@ export function SaveToNoteAction({
   if (state === "saved") {
     return (
       <p data-testid="save-note-status" className="text-xs text-muted-foreground">
-        Saved to notes.
+        {t("saved")}
       </p>
     );
   }
@@ -67,7 +69,7 @@ export function SaveToNoteAction({
         onClick={() => void handleSave()}
         disabled={state === "saving"}
       >
-        {state === "saving" ? "Saving…" : "Save to note"}
+        {state === "saving" ? t("saving") : t("save")}
       </Button>
       {state === "error" ? (
         <p
@@ -75,7 +77,7 @@ export function SaveToNoteAction({
           data-testid="save-note-error"
           className="text-xs text-destructive"
         >
-          Could not save this answer as a note. Please try again.
+          {t("failed")}
         </p>
       ) : null}
     </div>

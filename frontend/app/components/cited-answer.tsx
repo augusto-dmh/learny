@@ -23,6 +23,7 @@ import { createContext, useContext, useId, useMemo, useState } from "react";
 import {
   citationIndexFromHref,
   linkCitationMarkers,
+  NOT_FOUND_SENTINEL,
   type Citation,
 } from "@/app/lib/citations";
 import { MessageResponse } from "@/components/ai-elements/message";
@@ -122,7 +123,10 @@ export function CitedAnswer({
   // renderer parses one document, so a mark mid-sentence stays mid-sentence.
   // Citations arriving after the text is complete change this string, which is
   // also what re-renders the memoized answer body so the marks light up.
-  const body = linkCitationMarkers(text, citations?.length ?? 0);
+  const body =
+    text.trim() === NOT_FOUND_SENTINEL
+      ? ""
+      : linkCitationMarkers(text, citations?.length ?? 0);
 
   return (
     <MarkSelectionContext.Provider value={markSelection}>

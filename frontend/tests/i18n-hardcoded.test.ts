@@ -78,26 +78,11 @@ const EXEMPT_PATHS = [
  */
 const PENDING_MIGRATION: string[] = [
   "app/(app)/notes/page.tsx",
-  "app/components/answer-phase.tsx",
-  "app/components/ask-panel.tsx",
-  "app/components/citations.tsx",
-  "app/components/conversation-list.tsx",
-  "app/components/dock-notes-panel.tsx",
-  "app/components/dock-review-panel.tsx",
-  "app/components/failed-turn.tsx",
-  "app/components/include-notes-toggle.tsx",
   "app/components/notes/capture-popover.tsx",
   "app/components/notes/card-suggestions.tsx",
   "app/components/notes/note-card-suggestions.tsx",
   "app/components/notes/note-detail-screen.tsx",
   "app/components/notes/notes-screen.tsx",
-  "app/components/save-to-note-action.tsx",
-  "app/components/teach-panel.tsx",
-  "components/ai-elements/inline-citation.tsx",
-  "components/ai-elements/message.tsx",
-  "components/ai-elements/prompt-input.tsx",
-  "components/ai-elements/sources.tsx",
-  "components/ui/carousel.tsx",
 ];
 
 type Finding = { file: string; line: number; text: string };

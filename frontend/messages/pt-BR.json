@@ -15,7 +15,13 @@
     },
     "close": "Fechar",
     "cancel": "Cancelar",
-    "loadingLabel": "Carregando"
+    "loadingLabel": "Carregando",
+    "previousSlide": "Slide anterior",
+    "nextSlide": "Próximo slide",
+    "command": {
+      "title": "Paleta de comandos",
+      "description": "Busque um comando para executar…"
+    }
   },
   "errors": {
     "generic": "Algo deu errado. Tente novamente.",
@@ -154,6 +160,112 @@
     "notFound": {
       "inScope": "Isso não aparece no trecho do livro que esta conversa abrange. A resposta pode estar em outra parte do livro.",
       "inSource": "Isso não aparece neste livro."
+    },
+    "retry": "Tentar novamente",
+    "phase": {
+      "searching": "Buscando no livro…",
+      "reasoningLabel": "raciocínio",
+      "thinking": "Pensando…",
+      "thoughtProcess": "Linha de raciocínio"
+    },
+    "citations": {
+      "regionLabel": "citações",
+      "noteChip": "Sua nota: {title}",
+      "sectionChip": "Citação: {path}",
+      "noteTitled": "Sua nota — {title}",
+      "note": "Sua nota",
+      "closePassage": "Fechar trecho",
+      "openNote": "Abrir nota",
+      "showInBook": "Mostrar no livro",
+      "openInBook": "Abrir no livro"
+    },
+    "includeNotes": {
+      "label": "Buscar também nas minhas notas",
+      "description": "Suas notas sobre este livro entram na busca junto com o próprio livro, então as respostas podem se apoiar no que você escreveu.",
+      "locked": "Esta conversa começou com essa escolha — inicie uma nova para mudá-la."
+    },
+    "saveToNote": {
+      "save": "Salvar como nota",
+      "saving": "Salvando…",
+      "saved": "Salva nas suas notas.",
+      "failed": "Não foi possível salvar esta resposta como nota. Tente novamente."
+    },
+    "conversations": {
+      "regionLabel": "conversas",
+      "heading": "Conversas",
+      "new": "Nova conversa",
+      "empty": "Nenhuma conversa ainda.",
+      "newTitle": "Novo título",
+      "saveTitle": "Salvar título",
+      "cancelRename": "Cancelar renomeação",
+      "resume": "Retomar {title}",
+      "turns": "({count, plural, =0 {nenhuma interação} one {# interação} other {# interações}})",
+      "rename": "Renomear {title}",
+      "delete": "Excluir {title}",
+      "showOlder": "Mostrar conversas mais antigas"
+    },
+    "dockNotes": {
+      "loading": "Carregando suas notas…",
+      "empty": "Só as notas deste livro aparecem aqui. Selecione um trecho para começar uma nova — toda nota guarda o trecho de onde veio.",
+      "listLabel": "Notas sobre este livro",
+      "where": "{section} · p. {page}"
+    },
+    "dockReview": {
+      "nothingDue": "Nada deste livro para revisar agora.",
+      "dueCaption": "{count, plural, =0 {cartões deste livro para revisar} one {cartão deste livro para revisar} other {cartões deste livro para revisar}}"
+    },
+    "ask": {
+      "intro": "Aqui você tira dúvidas sobre o livro. Para ser conduzido por uma seção, use Ensinar.",
+      "suggestedLabel": "sugestões de perguntas",
+      "prompts": {
+        "summarize": "Resuma as ideias principais deste livro.",
+        "arguments": "Quais são os principais argumentos do autor?",
+        "difficult": "Explique um conceito deste livro que eu possa achar difícil."
+      },
+      "explainPrompt": "Explique este trecho do livro:\n\n\"{quote}\"",
+      "aboutPrompt": "Sobre este trecho:\n\n\"{quote}\"\n\n{question}",
+      "removeQuote": "Remover trecho anexado",
+      "placeholder": "Faça uma pergunta sobre este livro…"
+    },
+    "teach": {
+      "regionLabel": "ensinar",
+      "intro": "Ensinar conduz você por uma seção. Para dúvidas sobre o livro, use Perguntar.",
+      "startLabel": "começar sessão",
+      "target": "Seção",
+      "start": "Começar sessão",
+      "conversationLabel": "conversa de estudo",
+      "justExplain": "Só me explique isso.",
+      "dontKnow": "Não sei.",
+      "placeholder": "Envie uma mensagem…",
+      "askAboutThis": "Perguntar sobre isto",
+      "cardOffer": {
+        "label": "sugestão de cartão de revisão",
+        "accept": "Aceitar",
+        "dismiss": "Dispensar"
+      }
+    },
+    "promptInput": {
+      "addAttachments": "Adicionar fotos ou arquivos",
+      "takeScreenshot": "Capturar a tela",
+      "uploadFiles": "Enviar arquivos",
+      "placeholder": "O que você gostaria de saber?",
+      "stop": "Parar",
+      "submit": "Enviar",
+      "errors": {
+        "accept": "Nenhum arquivo corresponde aos tipos aceitos.",
+        "maxFileSize": "Todos os arquivos passam do tamanho máximo.",
+        "maxFiles": "Arquivos demais. Alguns não foram adicionados."
+      }
+    },
+    "elements": {
+      "previous": "Anterior",
+      "next": "Próximo",
+      "previousBranch": "Versão anterior",
+      "nextBranch": "Próxima versão",
+      "branchPosition": "{current, number} de {total, number}",
+      "usedSources": "{count, plural, =0 {Nenhuma fonte usada} one {# fonte usada} other {# fontes usadas}}",
+      "emptyTitle": "Nenhuma mensagem ainda",
+      "emptyDescription": "Comece uma conversa para ver as mensagens aqui"
     }
   },
   "home": {

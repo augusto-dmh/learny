@@ -38,6 +38,8 @@ import {
   readActiveConversation,
   writeActiveConversation,
 } from "../app/lib/active-conversation";
+import { expectNoEnglishCopy } from "./i18n-copy";
+import { setTestLocale } from "./setup-intl";
 
 // The delete-on-failure sensor: the conversations client is real except for
 // `deleteConversation`, which is replaced by a spy so a reintroduced DELETE is
@@ -1840,6 +1842,245 @@ describe("AskPanel selection verbs (RA-17/18)", () => {
     expect(bodyOf(callsTo(fetchMock, STREAM_URL)[1])).toEqual({
       message: "And now?",
       mode: "answer",
+    });
+  });
+});
+
+describe("AskPanel in pt-BR", () => {
+  /** Type a question into the Portuguese composer and send it. */
+  async function perguntar(value: string) {
+    fireEvent.change(
+      await screen.findByPlaceholderText("Faça uma pergunta sobre este livro…"),
+      { target: { value } },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Enviar" }));
+  }
+
+  const CHAT_NAMESPACES = [
+    "chat.ask",
+    "chat.phase",
+    "chat.citations",
+    "chat.includeNotes",
+    "chat.saveToNote",
+    "chat.promptInput",
+    "chat.notFound",
+    "errors.stream",
+    "common",
+  ];
+
+  it("empty state, composer and notes toggle: renders in pt-BR", async () => {
+    setTestLocale("pt-BR");
+    vi.stubGlobal("fetch", routedFetch(baseHandlers(() => sseStream().response)));
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+
+    const suggestions = await screen.findByLabelText("sugestões de perguntas");
+    expect(
+      Array.from(suggestions.querySelectorAll("button")).map((b) => b.textContent),
+    ).toEqual([
+      "Resuma as ideias principais deste livro.",
+      "Quais são os principais argumentos do autor?",
+      "Explique um conceito deste livro que eu possa achar difícil.",
+    ]);
+    expect(document.body.textContent).toContain(
+      "Aqui você tira dúvidas sobre o livro.",
+    );
+    expect(
+      screen.getByRole("checkbox", { name: "Buscar também nas minhas notas" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByPlaceholderText("Faça uma pergunta sobre este livro…"),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Enviar" })).toBeTruthy();
+    expectNoEnglishCopy(document.body.textContent ?? "", ...CHAT_NAMESPACES);
+  });
+
+  it("answer phases, citations and save-to-note: renders in pt-BR", async () => {
+    setTestLocale("pt-BR");
+    const stream = sseStream();
+    let finishSave: (response: Response) => void = () => {};
+    vi.stubGlobal(
+      "fetch",
+      routedFetch(
+        baseHandlers(() => stream.response, {
+          [`POST ${HIGHLIGHTS_URL}`]: () =>
+            new Promise<Response>((resolve) => {
+              finishSave = resolve;
+            }),
+        }),
+      ),
+    );
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+    await perguntar("Quem escreveu o primeiro algoritmo?");
+
+    // In flight: the search line, then the live thinking with its stop control.
+    await waitFor(() =>
+      expect(screen.getByText(/Buscando no livro…/)).toBeTruthy(),
+    );
+    expect(screen.getByRole("button", { name: "Parar" })).toBeTruthy();
+    expectNoEnglishCopy(document.body.textContent ?? "", ...CHAT_NAMESPACES);
+    await stream.push({ type: "start", messageId: "m1" });
+    await stream.push({ type: "reasoning-start", id: "r1" });
+    await stream.push({ type: "reasoning-delta", id: "r1", delta: "pensando alto" });
+    await waitFor(() =>
+      expect(screen.getByRole("region", { name: "raciocínio" })).toBeTruthy(),
+    );
+    expect(screen.getByRole("button", { name: /Pensando…/ })).toBeTruthy();
+    expectNoEnglishCopy(document.body.textContent ?? "", ...CHAT_NAMESPACES);
+
+    await stream.push({ type: "reasoning-end", id: "r1" });
+    await streamAnswer(stream, [citation]);
+
+    expect(
+      await screen.findByRole("button", { name: /Linha de raciocínio/ }),
+    ).toBeTruthy();
+    const chip = screen.getByRole("button", {
+      name: "Citação: Chapter 1 › Core Idea",
+    });
+    expect(screen.getByLabelText("citações")).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(chip);
+    });
+    expect(screen.getByRole("button", { name: "Fechar trecho" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Abrir no livro" })).toBeTruthy();
+
+    // Saving: the in-flight label, then the confirmation.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Salvar como nota" }));
+    });
+    expect(screen.getByRole("button", { name: "Salvando…" })).toBeTruthy();
+    expectNoEnglishCopy(document.body.textContent ?? "", ...CHAT_NAMESPACES);
+    await act(async () => {
+      finishSave(jsonResponse(201, noteDetail));
+    });
+    expect((await screen.findByTestId("save-note-status")).textContent).toBe(
+      "Salva nas suas notas.",
+    );
+    expectNoEnglishCopy(document.body.textContent ?? "", ...CHAT_NAMESPACES);
+  });
+
+  it("failed save, failed turn and retry: renders in pt-BR", async () => {
+    setTestLocale("pt-BR");
+    const streams = [sseStream(), sseStream()];
+    let streamCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      routedFetch(
+        baseHandlers(() => streams[Math.min(streamCalls++, 1)].response, {
+          [`POST ${HIGHLIGHTS_URL}`]: () =>
+            jsonResponse(500, { detail: "Internal Server Error" }),
+          [`POST ${NOTES_URL}`]: () =>
+            jsonResponse(500, { detail: "Internal Server Error" }),
+        }),
+      ),
+    );
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+    await perguntar("primeira pergunta");
+    await streamAnswer(streams[0], [citation]);
+    await act(async () => {
+      fireEvent.click(
+        await screen.findByRole("button", { name: "Salvar como nota" }),
+      );
+    });
+    expect((await screen.findByTestId("save-note-error")).textContent).toBe(
+      "Não foi possível salvar esta resposta como nota. Tente novamente.",
+    );
+
+    await perguntar("segunda pergunta");
+    await streams[1].push({ type: "start", messageId: "m2" });
+    await streams[1].push({
+      type: "error",
+      errorText: "Answer generation failed. Please try again.",
+    });
+    expect(
+      await screen.findByRole("button", { name: "Tentar novamente" }),
+    ).toBeTruthy();
+    expect(screen.getByTestId("failed-turn").textContent).toContain(
+      "Não foi possível gerar a resposta.",
+    );
+    expectNoEnglishCopy(
+      document.body.textContent ?? "",
+      ...CHAT_NAMESPACES,
+      "chat.retry",
+      "errors.status",
+    );
+  });
+
+  it("not-found answer and the locked notes choice: renders in pt-BR", async () => {
+    setTestLocale("pt-BR");
+    const stream = sseStream();
+    vi.stubGlobal("fetch", routedFetch(baseHandlers(() => stream.response)));
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+    await perguntar("um termo sem sentido");
+    await stream.push({ type: "start", messageId: "m1" });
+    await stream.push({ type: "text-start", id: "t1" });
+    await stream.push({ type: "text-end", id: "t1" });
+    await stream.push({ type: "data-citations", data: [] });
+    await stream.push({
+      type: "data-answer-status",
+      data: { status: "not_found_in_source" },
+    });
+    await stream.push({ type: "finish" });
+    await stream.done();
+
+    expect((await screen.findByTestId("not-found")).textContent).toContain(
+      "Isso não aparece neste livro.",
+    );
+    const toggle = screen.getByRole("checkbox", {
+      name: "Buscar também nas minhas notas",
+    });
+    await waitFor(() => expect((toggle as HTMLInputElement).disabled).toBe(true));
+    expect(
+      document.getElementById(toggle.getAttribute("aria-describedby")!)!
+        .textContent,
+    ).toContain("Esta conversa começou com essa escolha");
+    expectNoEnglishCopy(document.body.textContent ?? "", ...CHAT_NAMESPACES);
+  });
+
+  it("selection verbs send Portuguese templates: renders in pt-BR", async () => {
+    setTestLocale("pt-BR");
+    const fetchMock = routedFetch(baseHandlers(() => sseStream().response));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { unmount } = render(
+      <AskPanel
+        sourceId="s1"
+        csrf="csrf-xyz"
+        pendingRequest={{
+          kind: "explain",
+          quote: "a frase escolhida",
+          anchor: "c1.xhtml#s1",
+        }}
+      />,
+    );
+    await waitFor(() => expect(callsTo(fetchMock, STREAM_URL)).toHaveLength(1));
+    expect(bodyOf(callsTo(fetchMock, STREAM_URL)[0])).toMatchObject({
+      message: 'Explique este trecho do livro:\n\n"a frase escolhida"',
+    });
+    unmount();
+    localStorage.clear();
+
+    render(
+      <AskPanel
+        sourceId="s1"
+        csrf="csrf-xyz"
+        pendingRequest={{
+          kind: "ask",
+          quote: "um trecho citado",
+          anchor: "c1.xhtml#s1",
+        }}
+      />,
+    );
+    expect(
+      await screen.findByRole("button", { name: "Remover trecho anexado" }),
+    ).toBeTruthy();
+    await perguntar("O que isso quer dizer?");
+    await waitFor(() => expect(callsTo(fetchMock, STREAM_URL)).toHaveLength(2));
+    expect(bodyOf(callsTo(fetchMock, STREAM_URL)[1])).toMatchObject({
+      message: 'Sobre este trecho:\n\n"um trecho citado"\n\nO que isso quer dizer?',
     });
   });
 });
