@@ -14,3 +14,18 @@ Fresh-context `pr-review` posted 6 inline comments plus a requirements review an
 | 8 | requirements review / summary | `backend/app/infrastructure/web/locale.py:7` | The docstring says `GET /api/me`; the route is `GET /api/auth/me` | real | fix | Docstring corrected. |
 
 Tally: 8 findings, 8 real, 0 false; 8 fixed (one by docstring only), 0 won't-fix.
+
+# pt-br-interface review triage — batch 2 of 4 (PR #79)
+
+Fresh-context `pr-review` posted 4 inline comments, a requirements review and a summary. Each finding was checked against the code at `36d6d1d` (branch head when the review ran). The PR comments are deleted after this triage, so this file is the surviving record.
+
+| # | Source | File:line | Finding | Verdict | Action | Rationale |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | inline, performance (4240610341) | `frontend/app/components/library-screen.tsx:723` | `AddedOn` builds an `Intl.DateTimeFormat` per card on every render | real (minor) | fix | Every title keystroke and poll tick re-renders the list. The formatter is now built once per locale with `useMemo` in `LibraryScreen` and passed to each card. |
+| 2 | inline, architecture (4240612799) | `frontend/messages/en.json:182` | The signed-out sentence lives under three keys (`account`, `library`, `reader`) and already drifted once | real | fix | It is one shared state. Moved to `common.signedOut`, dropped the three surface copies, and Account, Library and the reader read the shared key. Batch 3's three remaining literals should use it too (noted in the handoff). |
+| 3 | inline, tests (4240614842) | `frontend/tests/i18n-copy.ts:77` | The English-copy probe exempts any phrase found anywhere in pt-BR, and nothing proves it can fail | real | fix | The exemption is now an explicit `SHARED_PHRASES` list (brand, endonyms), and `tests/i18n-copy.test.ts` proves the probe rejects English, accepts the pt-BR render, and finds phrases in every namespace the render tests pass. A pt-BR value left in English now fails instead of exempting itself. |
+| 4 | inline, tests (4240614875) | `frontend/app/components/AuthForm.tsx:144` | `form.working` has no test in either locale | real | fix | Added an in-flight test: a never-settling login shows a disabled "Working…" in en and "Aguarde…" in pt-BR. It is a new describe block, so the existing English assertions stay unedited (C30). |
+| 5 | requirements review / summary (6106487954, 6106524959) | `frontend/components/ui/spinner.tsx` | `npm run build` unproven for the spinner calling `useTranslations` without `"use client"`; no green full frontend run | real (open at review time) | no change | CI's `frontend` job runs vitest, tsc and `npm run build`; it passed on PR #79 (run 38119872797), which closes both items. |
+| 6 | requirements review / summary | ADR-0034 Limits | The manual pt-BR browser walk is not done | real | deferred to owner | The overnight run skips screenshot passes by owner instruction; listed as deferred in the handoff. |
+
+Tally: 6 findings, 6 real, 0 false; 4 fixed, 1 closed by CI with no change, 1 deferred to the owner.
