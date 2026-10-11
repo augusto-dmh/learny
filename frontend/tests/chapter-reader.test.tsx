@@ -2210,3 +2210,128 @@ describe("ChapterFlow reading control targets (READ-25)", () => {
     }
   });
 });
+
+describe("ChapterFlow end-of-section checkpoint invitation", () => {
+  it("checkpoint invitation only after sections of at least 150 words", async () => {
+    const mixed: ChapterView = {
+      ...chapter,
+      sections: [
+        { ...chapter.sections[0], word_count: 150 },
+        { ...chapter.sections[1], word_count: 149 },
+      ],
+    };
+    // The table of contents loads the book structure on mount; anything else
+    // reaching the network here would be the checkpoint, which must wait for a tap.
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url === "/api/sources/s1/structure") {
+        return jsonResponse(200, { sections: [] });
+      }
+      throw new Error(`no request expected: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const checkpointCalls = () =>
+      fetchMock.mock.calls.filter(([url]) => String(url).includes("checkpoint"));
+    const { container } = render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={mixed} scrollTarget={null} />,
+    );
+    await screen.findByText("Ada Lovelace wrote the first algorithm.");
+
+    const invites = screen.getAllByTestId("checkpoint-invite");
+    expect(invites).toHaveLength(1);
+    // Placed right after the long section's body, not over or inside it.
+    const longSection = container.querySelector(`[data-section-anchor="${S1}"]`)!;
+    expect(longSection.nextElementSibling).toBe(invites[0]);
+    expect(longSection.contains(invites[0])).toBe(false);
+    // Nothing opens until it is tapped.
+    expect(screen.queryByTestId("checkpoint-dialog")).toBeNull();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Check yourself on The First Algorithm" }),
+    );
+    expect(await screen.findByTestId("checkpoint-dialog")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Little" })).toBeTruthy();
+    expect(checkpointCalls()).toEqual([]);
+
+    // Closing returns to the same chapter: the dialog unmounts, the sections stay.
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByTestId("checkpoint-dialog")).toBeNull());
+    expect(
+      Array.from(container.querySelectorAll("[data-section-anchor]")).map((w) => w.id),
+    ).toEqual([S1, S2]);
+    expect(checkpointCalls()).toEqual([]);
+    vi.unstubAllGlobals();
+  });
+});
+
+describe("ChapterFlow checkpoint opens on the tapped section", () => {
+  it("starts the checkpoint for the section whose invitation was tapped", async () => {
+    const both: ChapterView = {
+      ...chapter,
+      sections: [
+        { ...chapter.sections[0], word_count: 400 },
+        { ...chapter.sections[1], word_count: 400 },
+      ],
+    };
+    const started: unknown[] = [];
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/sources/s1/structure") {
+        return jsonResponse(200, { sections: [] });
+      }
+      if (url === "/api/sources/s1/checkpoints" && init?.method === "POST") {
+        started.push(JSON.parse(String(init.body)));
+        return jsonResponse(201, {
+          checkpoint_id: "c1",
+          section_title: "The Analytical Engine",
+          anchor: S2,
+          attempts: [{ attempt_id: "a1", kind: "explain", question: "Explain it." }],
+        });
+      }
+      throw new Error(`no request expected: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={both} scrollTarget={null} />);
+    await screen.findByText("Babbage designed the analytical engine.");
+    expect(screen.getAllByTestId("checkpoint-invite")).toHaveLength(2);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Check yourself on The Analytical Engine" }),
+    );
+    const dialog = await screen.findByTestId("checkpoint-dialog");
+    expect(dialog.textContent).toContain("The Analytical Engine");
+    fireEvent.click(screen.getByRole("button", { name: "Skip" }));
+
+    await waitFor(() => expect(started).toEqual([{ anchor: S2, prediction: null }]));
+    vi.unstubAllGlobals();
+  });
+
+  it("hands a checkpoint that finds the session gone to the reader's sign-in redirect", async () => {
+    const onRequireAuth = vi.fn();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/sources/s1/structure") {
+          return jsonResponse(200, { sections: [] });
+        }
+        if (url === "/api/sources/s1/checkpoints" && init?.method === "POST") {
+          return jsonResponse(401, { detail: "Not authenticated." });
+        }
+        throw new Error(`no request expected: ${url}`);
+      }),
+    );
+    render(
+      <ChapterFlow
+        sourceId="s1"
+        csrf="csrf-xyz"
+        chapter={chapter}
+        scrollTarget={null}
+        onRequireAuth={onRequireAuth}
+      />,
+    );
+    fireEvent.click((await screen.findAllByRole("button", { name: /^Check yourself on / }))[0]);
+    await screen.findByTestId("checkpoint-dialog");
+    fireEvent.click(screen.getByRole("button", { name: "Skip" }));
+
+    await waitFor(() => expect(onRequireAuth).toHaveBeenCalledTimes(1));
+    vi.unstubAllGlobals();
+  });
+});

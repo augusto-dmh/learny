@@ -29,6 +29,7 @@ from app.domain.entities import (
     Backlink,
     ChapterIndexRow,
     ChapterSection,
+    CheckpointAttempt,
     ChunkToEmbed,
     Conversation,
     ConversationSummary,
@@ -39,6 +40,7 @@ from app.domain.entities import (
     DueReviewItem,
     EncodedRaster,
     Evidence,
+    FeedbackCitation,
     GeneratedAnswer,
     HistoryTurn,
     IngestionEvent,
@@ -47,6 +49,7 @@ from app.domain.entities import (
     Note,
     NoteAnchor,
     NoteSummary,
+    OwnedAttempt,
     ParsedBook,
     PasswordCredential,
     ProviderCredential,
@@ -61,6 +64,7 @@ from app.domain.entities import (
     ReconcileSection,
     ReviewLogEntry,
     SchedulingSnapshot,
+    SectionCheckpoint,
     SectionContent,
     Session,
     Source,
@@ -1224,8 +1228,8 @@ class QuizItemRepository(Protocol):
         """Set or clear ``flagged_at``. Never touches scheduling or ``review_log`` (AD-305)."""
         ...
 
-    def append_log(self, quiz_item_id: UUID, entry: ReviewLogEntry) -> None:
-        """Append an immutable review-log entry for the item (QUIZ-12)."""
+    def append_log(self, quiz_item_id: UUID, entry: ReviewLogEntry) -> UUID:
+        """Append an immutable review-log entry for the item (QUIZ-12); return its id."""
         ...
 
     def latest_undoable_review(self, user_id: UUID) -> UndoableReview | None:
@@ -1298,8 +1302,76 @@ class QuizItemRepository(Protocol):
         """
         ...
 
+    def recall_cards(
+        self, user_id: UUID, source_id: UUID, anchor: str, *, limit: int
+    ) -> list[QuizItem]:
+        """Return the caller's active, unflagged, non-checkpoint cards on ``anchor``.
+
+        Ordered by due ascending then id, at most ``limit``.
+        """
+        ...
+
+    def active_checkpoint_card(
+        self, user_id: UUID, source_id: UUID, anchor: str
+    ) -> QuizItem | None:
+        """Return the caller's oldest active ``checkpoint`` card on that section."""
+        ...
+
 
 # --- Notes & second-brain ports (RFC-003 Cycle E; ADR-0026 §1-2) -----------------
+
+
+@runtime_checkable
+class CheckpointRepository(Protocol):
+    """Persistence for end-of-section checkpoints and their attempts.
+
+    The once-only transitions are conditional writes that report whether they
+    won: a ``False`` means the attempt was already past that step (or another
+    request got there first), so the caller refuses rather than writing twice.
+    """
+
+    def add(self, checkpoint: SectionCheckpoint, attempts: Sequence[CheckpointAttempt]) -> None:
+        """Persist a new checkpoint and its attempts."""
+        ...
+
+    def get_attempt(self, attempt_id: UUID) -> OwnedAttempt | None:
+        """Return the attempt joined to its checkpoint, or ``None``."""
+        ...
+
+    def mark_revealed(self, attempt_id: UUID, now: datetime) -> bool:
+        """Stamp an unresponded ``explain`` attempt revealed (keeps the first stamp)."""
+        ...
+
+    def claim_response(
+        self,
+        attempt_id: UUID,
+        *,
+        response: str,
+        confidence: int,
+        feedback: str | None,
+        feedback_citations: Sequence[FeedbackCitation],
+        now: datetime,
+    ) -> bool:
+        """Store the attempt's response once; ``False`` when it already had one."""
+        ...
+
+    def store_feedback(
+        self,
+        attempt_id: UUID,
+        *,
+        feedback: str,
+        feedback_citations: Sequence[FeedbackCitation],
+    ) -> None:
+        """Write the feedback for an attempt this request has already claimed."""
+        ...
+
+    def claim_grade(self, attempt_id: UUID, now: datetime) -> bool:
+        """Stamp a responded, ungraded attempt graded; ``False`` otherwise."""
+        ...
+
+    def link_grade(self, attempt_id: UUID, *, quiz_item_id: UUID, review_log_id: UUID) -> None:
+        """Record which card the grade reviewed and the log row it wrote."""
+        ...
 
 
 @runtime_checkable

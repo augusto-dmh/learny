@@ -50,6 +50,8 @@ from app.domain.entities import (
     CardProvenance,
     ChapterIndexRow,
     ChapterSection,
+    CheckpointAttempt,
+    CheckpointAttemptKind,
     ChunkToEmbed,
     Conversation,
     ConversationSummary,
@@ -59,6 +61,7 @@ from app.domain.entities import (
     DerivedNoteLink,
     DueReviewItem,
     Evidence,
+    FeedbackCitation,
     HistoryTurn,
     IngestionEvent,
     IngestionJob,
@@ -67,6 +70,7 @@ from app.domain.entities import (
     NoteAnchor,
     NoteAnchorStatus,
     NoteSummary,
+    OwnedAttempt,
     PasswordCredential,
     QuizGenerationJob,
     QuizItem,
@@ -78,6 +82,7 @@ from app.domain.entities import (
     ReconcileSection,
     ReviewLogEntry,
     SchedulingSnapshot,
+    SectionCheckpoint,
     SectionContent,
     Session,
     Source,
@@ -90,6 +95,7 @@ from app.domain.entities import (
 from app.infrastructure.db.metadata import (
     activation_events,
     ai_spend_days,
+    checkpoint_attempts,
     conversation_turn_citations,
     conversation_turns,
     conversations,
@@ -110,6 +116,7 @@ from app.infrastructure.db.metadata import (
     quiz_items,
     reading_positions,
     review_log,
+    section_checkpoints,
     sessions,
     sources,
     study_days,
@@ -1759,16 +1766,19 @@ class SqlAlchemyQuizItemRepository:
             update(quiz_items).where(quiz_items.c.id == item_id).values(flagged_at=flagged_at)
         )
 
-    def append_log(self, quiz_item_id: UUID, entry: ReviewLogEntry) -> None:
-        """Append an immutable review-log entry for the item (QUIZ-12)."""
+    def append_log(self, quiz_item_id: UUID, entry: ReviewLogEntry) -> UUID:
+        """Append an immutable review-log entry for the item (QUIZ-12); return its id."""
         previous = entry.previous
+        log_id = uuid4()
         self._conn.execute(
             insert(review_log).values(
-                id=uuid4(),
+                id=log_id,
                 quiz_item_id=quiz_item_id,
                 rating=entry.rating,
                 reviewed_at=entry.reviewed_at,
                 review_duration_ms=entry.review_duration_ms,
+                confidence=entry.confidence,
+                assisted=entry.assisted,
                 prev_state=None if previous is None else previous.state,
                 prev_step=None if previous is None else previous.step,
                 prev_stability=None if previous is None else previous.stability,
@@ -1777,6 +1787,7 @@ class SqlAlchemyQuizItemRepository:
                 prev_last_review=None if previous is None else previous.last_review,
             )
         )
+        return log_id
 
     def latest_undoable_review(self, user_id: UUID) -> UndoableReview | None:
         """Return the caller's most recent not-yet-undone log row, or ``None``."""
@@ -1985,6 +1996,42 @@ class SqlAlchemyQuizItemRepository:
             .where(quiz_items.c.id == item_id)
             .values(anchor=anchor, section_path=list(section_path), status=status)
         )
+
+    def recall_cards(
+        self, user_id: UUID, source_id: UUID, anchor: str, *, limit: int
+    ) -> list[QuizItem]:
+        rows = self._conn.execute(
+            select(*_QUIZ_ITEM_READ_COLUMNS)
+            .join(quiz_item_scheduling, quiz_item_scheduling.c.quiz_item_id == quiz_items.c.id)
+            .where(
+                quiz_items.c.user_id == user_id,
+                quiz_items.c.source_id == source_id,
+                quiz_items.c.anchor == anchor,
+                quiz_items.c.status == QuizItemStatus.ACTIVE,
+                quiz_items.c.flagged_at.is_(None),
+                quiz_items.c.origin != QuizItemOrigin.CHECKPOINT,
+            )
+            .order_by(quiz_item_scheduling.c.due.asc(), quiz_items.c.id.asc())
+            .limit(limit)
+        ).all()
+        return [_to_quiz_item(row) for row in rows]
+
+    def active_checkpoint_card(
+        self, user_id: UUID, source_id: UUID, anchor: str
+    ) -> QuizItem | None:
+        row = self._conn.execute(
+            select(*_QUIZ_ITEM_READ_COLUMNS)
+            .where(
+                quiz_items.c.user_id == user_id,
+                quiz_items.c.source_id == source_id,
+                quiz_items.c.anchor == anchor,
+                quiz_items.c.origin == QuizItemOrigin.CHECKPOINT,
+                quiz_items.c.status == QuizItemStatus.ACTIVE,
+            )
+            .order_by(quiz_items.c.created_at.asc(), quiz_items.c.id.asc())
+            .limit(1)
+        ).first()
+        return _to_quiz_item(row) if row is not None else None
 
 
 class SqlAlchemyQuizJobRepository:
@@ -2925,3 +2972,181 @@ def _to_anchor_block(row) -> AnchorBlockSnapshot:  # noqa: ANN001
         content_hash=row.content_hash,
         html_fragment=row.html_fragment,
     )
+
+
+def _citations_json(citations: Sequence[FeedbackCitation]) -> list[dict[str, object]]:
+    return [
+        {
+            "anchor": citation.anchor,
+            "section_path": list(citation.section_path),
+            "quote": citation.quote,
+        }
+        for citation in citations
+    ]
+
+
+class SqlAlchemyCheckpointRepository:
+    """``CheckpointRepository`` over ``section_checkpoints`` + ``checkpoint_attempts``.
+
+    Respond and grade are conditional UPDATEs whose ``RETURNING`` row is the claim:
+    under concurrent requests exactly one statement matches the ``… IS NULL`` guard,
+    because Postgres re-evaluates the predicate on the row the winner just changed.
+    """
+
+    def __init__(self, connection: Connection) -> None:
+        self._conn = connection
+
+    def add(self, checkpoint: SectionCheckpoint, attempts: Sequence[CheckpointAttempt]) -> None:
+        self._conn.execute(
+            insert(section_checkpoints).values(
+                id=checkpoint.id,
+                user_id=checkpoint.user_id,
+                source_id=checkpoint.source_id,
+                anchor=checkpoint.anchor,
+                section_title=checkpoint.section_title,
+                prediction=checkpoint.prediction,
+                created_at=checkpoint.created_at,
+            )
+        )
+        if attempts:
+            self._conn.execute(
+                insert(checkpoint_attempts),
+                [
+                    {
+                        "id": attempt.id,
+                        "checkpoint_id": checkpoint.id,
+                        "kind": attempt.kind,
+                        "position": attempt.position,
+                        "quiz_item_id": attempt.quiz_item_id,
+                    }
+                    for attempt in attempts
+                ],
+            )
+
+    def get_attempt(self, attempt_id: UUID) -> OwnedAttempt | None:
+        row = self._conn.execute(
+            select(
+                checkpoint_attempts,
+                section_checkpoints.c.user_id,
+                section_checkpoints.c.source_id,
+                section_checkpoints.c.anchor,
+                section_checkpoints.c.section_title,
+                section_checkpoints.c.prediction,
+                section_checkpoints.c.created_at,
+            )
+            .join(
+                section_checkpoints,
+                section_checkpoints.c.id == checkpoint_attempts.c.checkpoint_id,
+            )
+            .where(checkpoint_attempts.c.id == attempt_id)
+        ).one_or_none()
+        if row is None:
+            return None
+        attempt = CheckpointAttempt(
+            id=row.id,
+            checkpoint_id=row.checkpoint_id,
+            kind=row.kind,
+            position=row.position,
+            quiz_item_id=row.quiz_item_id,
+            response=row.response,
+            confidence=row.confidence,
+            revealed_at=row.revealed_at,
+            responded_at=row.responded_at,
+            graded_at=row.graded_at,
+            feedback=row.feedback,
+            feedback_citations=tuple(
+                FeedbackCitation(
+                    anchor=item["anchor"],
+                    section_path=tuple(item["section_path"]),
+                    quote=item["quote"],
+                )
+                for item in row.feedback_citations
+            ),
+            review_log_id=row.review_log_id,
+        )
+        checkpoint = SectionCheckpoint(
+            id=row.checkpoint_id,
+            user_id=row.user_id,
+            source_id=row.source_id,
+            anchor=row.anchor,
+            section_title=row.section_title,
+            prediction=row.prediction,
+            created_at=row.created_at,
+        )
+        return OwnedAttempt(attempt=attempt, checkpoint=checkpoint)
+
+    def mark_revealed(self, attempt_id: UUID, now: datetime) -> bool:
+        claimed = self._conn.execute(
+            update(checkpoint_attempts)
+            .where(
+                checkpoint_attempts.c.id == attempt_id,
+                checkpoint_attempts.c.kind == CheckpointAttemptKind.EXPLAIN,
+                checkpoint_attempts.c.responded_at.is_(None),
+            )
+            .values(revealed_at=func.coalesce(checkpoint_attempts.c.revealed_at, now))
+            .returning(checkpoint_attempts.c.id)
+        ).first()
+        return claimed is not None
+
+    def claim_response(
+        self,
+        attempt_id: UUID,
+        *,
+        response: str,
+        confidence: int,
+        feedback: str | None,
+        feedback_citations: Sequence[FeedbackCitation],
+        now: datetime,
+    ) -> bool:
+        claimed = self._conn.execute(
+            update(checkpoint_attempts)
+            .where(
+                checkpoint_attempts.c.id == attempt_id,
+                checkpoint_attempts.c.responded_at.is_(None),
+            )
+            .values(
+                response=response,
+                confidence=confidence,
+                responded_at=now,
+                feedback=feedback,
+                feedback_citations=_citations_json(feedback_citations),
+            )
+            .returning(checkpoint_attempts.c.id)
+        ).first()
+        return claimed is not None
+
+    def store_feedback(
+        self,
+        attempt_id: UUID,
+        *,
+        feedback: str,
+        feedback_citations: Sequence[FeedbackCitation],
+    ) -> None:
+        self._conn.execute(
+            update(checkpoint_attempts)
+            .where(checkpoint_attempts.c.id == attempt_id)
+            .values(
+                feedback=feedback,
+                feedback_citations=_citations_json(feedback_citations),
+            )
+        )
+
+    def claim_grade(self, attempt_id: UUID, now: datetime) -> bool:
+        claimed = self._conn.execute(
+            update(checkpoint_attempts)
+            .where(
+                checkpoint_attempts.c.id == attempt_id,
+                checkpoint_attempts.c.responded_at.is_not(None),
+                checkpoint_attempts.c.graded_at.is_(None),
+            )
+            .values(graded_at=now)
+            .returning(checkpoint_attempts.c.id)
+        ).first()
+        return claimed is not None
+
+    def link_grade(self, attempt_id: UUID, *, quiz_item_id: UUID, review_log_id: UUID) -> None:
+        self._conn.execute(
+            update(checkpoint_attempts)
+            .where(checkpoint_attempts.c.id == attempt_id)
+            .values(quiz_item_id=quiz_item_id, review_log_id=review_log_id)
+        )

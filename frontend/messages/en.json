@@ -75,7 +75,11 @@
       "cardsSave": "Could not save this card.",
       "cardsSuggestNote": "Could not suggest cards for this note.",
       "cardsAddToReview": "Could not add this card to review.",
-      "tutorCardSave": "Could not save this review card."
+      "tutorCardSave": "Could not save this review card.",
+      "checkpointStart": "Could not start the checkpoint.",
+      "checkpointRespond": "Could not save your answer.",
+      "checkpointReveal": "Could not show the passage.",
+      "checkpointGrade": "Could not save your rating."
     }
   },
   "account": {
@@ -105,6 +109,53 @@
         "teachOnly": "Works in Teach only.",
         "neither": "Currently works in neither Ask nor Teach."
       }
+    }
+  },
+  "checkpoint": {
+    "title": "Check yourself",
+    "invite": {
+      "prompt": "Finished this section?",
+      "action": "Check yourself",
+      "actionLabel": "Check yourself on {section}"
+    },
+    "predict": {
+      "prompt": "Before you start: how much of this section could you explain right now, without looking?",
+      "little": "Little",
+      "some": "Some",
+      "most": "Most",
+      "skip": "Skip"
+    },
+    "ask": {
+      "position": "{position} of {total}",
+      "answerLabel": "Your answer",
+      "explanationLabel": "Your explanation",
+      "answerPlaceholder": "Write what you remember, or leave it blank.",
+      "explanationPlaceholder": "Explain it as if to a friend who has not read it.",
+      "howSure": "How sure are you?",
+      "justExplain": "Just explain"
+    },
+    "confidence": {
+      "notSure": "Not sure",
+      "fairlySure": "Fairly sure",
+      "sure": "Sure"
+    },
+    "recalled": {
+      "answer": "Answer",
+      "howDidItGo": "How did that go?",
+      "again": "Again",
+      "hard": "Hard",
+      "good": "Good",
+      "easy": "Easy"
+    },
+    "feedback": {
+      "compared": "Compared with the passage, your explanation…",
+      "missed": "Missed it",
+      "partly": "Partly",
+      "gotIt": "Got it"
+    },
+    "done": {
+      "saved": "Saved. What you missed comes back soon in Review, and the rest returns when it is due.",
+      "back": "Back to the book"
     }
   }
 }
