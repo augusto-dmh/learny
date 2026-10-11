@@ -164,4 +164,33 @@ describe("Account language", () => {
       cleanup();
     }
   });
+
+  it("failed reset keeps the stored locale", async () => {
+    const failures: [string, () => Response | Promise<Response>, string][] = [
+      ["en", () => jsonResponse(403, { detail: "CSRF token missing" }), "Could not reset your language."],
+      ["pt-BR", () => jsonResponse(403, { detail: "CSRF token missing" }), "Não foi possível redefinir seu idioma."],
+      [
+        "pt-BR",
+        () => Promise.reject(new TypeError("Failed to fetch")),
+        "Não foi possível redefinir seu idioma.",
+      ],
+    ];
+    for (const [locale, respond, expected] of failures) {
+      setTestLocale(locale as "en" | "pt-BR");
+      writeLocaleCookie("pt-BR");
+      await renderAccount(baseHandlers("pt-BR", { "DELETE /api/me/locale": respond }));
+      nav.refresh.mockReset();
+
+      await act(async () => {
+        fireEvent.click(radio(locale === "en" ? "Automatic (follow my browser)" : "Automático (seguir meu navegador)"));
+      });
+
+      expect(readLocaleCookie()).toBe("pt-BR");
+      expect(nav.refresh).not.toHaveBeenCalled();
+      expect(radio("Português (Brasil)").checked).toBe(true);
+      expect(screen.getByRole("alert").textContent).toBe(expected);
+      expect(screen.queryByText(/CSRF token missing/)).toBeNull();
+      cleanup();
+    }
+  });
 });
