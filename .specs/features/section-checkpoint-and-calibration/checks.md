@@ -15,9 +15,11 @@ Proof commands run from the worktree. Backend:
 **C1** - A chapter with one section of ≥150 words and one of <150 words renders exactly one checkpoint invitation, placed after the long section's body (AC 1, 2)
 Proof: `vitest tests/chapter-reader.test.tsx -t "checkpoint invitation only after sections of at least 150 words"`
 
-**C2** - Tapping the invitation opens the checkpoint dialog on the prediction step for that section's anchor, and no request is sent before a prediction choice (AC 3, 5)
+**C2** - Tapping the invitation opens the checkpoint dialog on the prediction step for that section's anchor, and no request is sent before a prediction choice. A 401 inside the dialog hands over to the reader's sign-in redirect (AC 3, 5)
 Proof: `vitest tests/checkpoint-dialog.test.tsx -t "opens on the prediction step without calling the API"`
 Proof: `vitest tests/chapter-reader.test.tsx -t "starts the checkpoint for the section whose invitation was tapped"`
+Proof: `vitest tests/checkpoint-dialog.test.tsx -t "a lost session hands over to the sign-in redirect"`
+Proof: `vitest tests/chapter-reader.test.tsx -t "hands a checkpoint that finds the session gone to the reader's sign-in redirect"`
 
 **C3** - Closing the dialog mid-flow unmounts it, leaves the chapter rendered with the same sections, and sends no further request (AC 4)
 Proof: `vitest tests/checkpoint-dialog.test.tsx -t "closing mid-flow sends nothing more"`
@@ -86,8 +88,9 @@ Proof: `pytest tests/test_web_checkpoints.py -k "recall_grade_rating_bounds"`
 Proof: `pytest tests/test_application_checkpoints.py -k "minted_card_shape_and_owner_on_sample"`
 Proof: `pytest tests/test_application_checkpoints.py -k "minted_card_falls_back_to_first_chunk"`
 
-**C20** - When the caller already has an active checkpoint card on that source and anchor, grading a second checkpoint's explain attempt reviews that card. The count of checkpoint cards stays 1 and its question and answer are unchanged (AC 20)
+**C20** - When the caller already has an active checkpoint card on that source and anchor, grading a second checkpoint's explain attempt reviews that card. The count of checkpoint cards stays 1 and its question and answer are unchanged. Another learner's checkpoint card on the same section, and the caller's stale, other-anchor or other-book checkpoint cards, are never reused (AC 20)
 Proof: `pytest tests/test_application_checkpoints.py -k "second_checkpoint_reuses_existing_card"`
+Proof: `pytest tests/test_application_checkpoints.py -k "reuse_skips_checkpoint_cards_that_are_not_the_callers_on_this_section"`
 
 ### S4 - explain-back gets formative feedback · batch 1
 
@@ -107,7 +110,7 @@ Proof: `pytest tests/test_application_checkpoints.py -k "blank_explanation_skips
 
 **C25** - With the day's spend at the cap, the explain response returns 429. With AI paused it returns 503. In both cases the attempt's `responded_at` stays NULL, and the dialog shows the catalog copy for that status (never the backend's detail) with the draft kept (AC 25)
 Proof: `pytest tests/test_web_checkpoints.py -k "explain_budget_exhausted_429_paused_503"`
-Proof: `vitest tests/checkpoint-dialog.test.tsx -t "a refused explanation shows catalog copy, not the server's detail, and keeps the draft"`
+Proof: `vitest tests/checkpoint-dialog.test.tsx -t "a refused explanation"`
 
 **C26** - A port result reporting usage debits `usage_micros(usage, profile_id)` to the caller's `ai_spend_days` row, as `KIND_GENERATION`, and does not increment `ask_count` (AC 26)
 Proof: `pytest tests/test_application_checkpoints.py -k "explain_debits_usage_as_generation"`
