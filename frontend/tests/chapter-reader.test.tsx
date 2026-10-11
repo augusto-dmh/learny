@@ -2279,7 +2279,7 @@ describe("ChapterFlow in pt-BR", () => {
     );
   });
 
-  it("renders the margin rail in pt-BR", async () => {
+  it("margin rail: renders in pt-BR", async () => {
     setTestLocale("pt-BR");
     nav.params = new URLSearchParams();
     vi.stubGlobal("fetch", quietFetch());
@@ -2299,7 +2299,7 @@ describe("ChapterFlow in pt-BR", () => {
     expect(rail.textContent).toContain("Nada destacado neste capítulo ainda.");
   });
 
-  it("renders the reader's signed-out and not-found states in pt-BR", async () => {
+  it("signed-out, not-found and failed states: renders in pt-BR", async () => {
     setTestLocale("pt-BR");
     nav.params = new URLSearchParams(`anchor=${ENCODED_S2}`);
     vi.stubGlobal(
@@ -2324,7 +2324,7 @@ describe("ChapterFlow in pt-BR", () => {
       }),
     );
     render(<ChapterReader sourceId="s1" onRequireAuth={() => {}} />);
-    expect(await screen.findByText("Você saiu da conta.")).toBeTruthy();
+    expect(await screen.findByText("Você não está conectado.")).toBeTruthy();
     cleanup();
 
     vi.stubGlobal(
@@ -2339,6 +2339,96 @@ describe("ChapterFlow in pt-BR", () => {
     expect((await screen.findByRole("alert")).textContent).toBe(
       "O servidor teve um problema. Tente novamente.",
     );
+  });
+
+  it("previous chapter and return chip: renders in pt-BR", async () => {
+    setTestLocale("pt-BR");
+    nav.params = new URLSearchParams();
+    vi.stubGlobal("fetch", quietFetch());
+
+    // Opened on S2 by a deep link while the stored position is S1: the chip
+    // offers the way back.
+    render(
+      <ChapterFlow
+        sourceId="s1"
+        csrf="csrf-xyz"
+        chapter={{
+          ...chapter,
+          prev_anchor: "part0/ch0.xhtml#s1",
+          next_anchor: null,
+          reading_position: { anchor: S1, percent: 10, updated_at: "now" },
+        }}
+        scrollTarget={S2}
+      />,
+    );
+
+    expect(
+      await screen.findByRole("button", { name: "Voltar para onde você estava" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("link", { name: "← Capítulo anterior" })).toBeTruthy();
+    expectNoEnglishCopy(document.body.textContent ?? "", "reader");
+  });
+
+  it("stale-capture prompt: renders in pt-BR", async () => {
+    setTestLocale("pt-BR");
+    nav.params = new URLSearchParams();
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        [`POST ${HIGHLIGHTS_URL}`]: () =>
+          jsonResponse(409, { detail: "The book changed while you were reading." }),
+      }),
+    );
+
+    const view = render(
+      <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+    );
+    selectText("Ada Lovelace wrote the first algorithm");
+    fireEvent.mouseUp(view.container.querySelector(`[data-section-anchor="${S1}"]`)!);
+    // `h` runs the same highlight capture as the popover's Highlight verb.
+    act(() => {
+      document.body.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "h", bubbles: true, cancelable: true }),
+      );
+    });
+
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "O livro mudou enquanto você lia. Recarregue a página para capturar este destaque.",
+    );
+  });
+
+  it("mobile dock sheet: renders in pt-BR", async () => {
+    setTestLocale("pt-BR");
+    nav.params = new URLSearchParams("panel=notes");
+    vi.stubGlobal("fetch", quietFetch());
+    // Below Tailwind `lg` the dock is a bottom sheet.
+    window.matchMedia = (query: string) =>
+      ({
+        matches: /max-width/.test(query),
+        media: query,
+        onchange: null,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        addListener: () => {},
+        removeListener: () => {},
+        dispatchEvent: () => false,
+      }) as unknown as MediaQueryList;
+
+    try {
+      render(
+        <ChapterFlow sourceId="s1" csrf="csrf-xyz" chapter={chapter} scrollTarget={null} />,
+      );
+
+      expect(
+        await screen.findByRole("dialog", { name: "Painel de notas" }),
+      ).toBeTruthy();
+      expect(
+        screen.getByText("As ferramentas de estudo deste livro, em um painel inferior."),
+      ).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Fechar" })).toBeTruthy();
+    } finally {
+      Reflect.deleteProperty(window, "matchMedia");
+    }
   });
 
   it("book text is never translated", async () => {

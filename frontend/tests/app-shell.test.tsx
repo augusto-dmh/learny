@@ -246,7 +246,7 @@ describe("app shell in pt-BR", () => {
     expectNoEnglishCopy(document.body.textContent ?? "", "shell");
   });
 
-  it("shows the not-found notice in pt-BR", () => {
+  it("not-found notice: renders in pt-BR", () => {
     setTestLocale("pt-BR");
 
     render(<NotFoundNotice status="not_found_in_source" />);

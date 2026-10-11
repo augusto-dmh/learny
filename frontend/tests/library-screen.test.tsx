@@ -567,7 +567,7 @@ describe("LibraryScreen in pt-BR", () => {
 
     expect(screen.getByTestId("status-s1").textContent).toBe("pronto");
     expect(screen.getByTestId("status-s-up").textContent).toBe("enviado");
-    expect(screen.getByTestId("status-s-fail").textContent).toBe("falhou");
+    expect(screen.getByTestId("status-s-fail").textContent).toBe("com falha");
     expect(screen.getByRole("link", { name: "Abrir" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Mais ações" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Iniciar processamento" })).toBeTruthy();
@@ -589,7 +589,7 @@ describe("LibraryScreen in pt-BR", () => {
     fireEvent.click(screen.getByRole("button", { name: "Mais ações" }));
     const menu = screen.getByRole("menu");
     expect(within(menu).getByRole("link", { name: "Perguntar" })).toBeTruthy();
-    expect(within(menu).getByRole("link", { name: "Tutor" })).toBeTruthy();
+    expect(within(menu).getByRole("link", { name: "Ensinar" })).toBeTruthy();
     expect(within(menu).getByRole("link", { name: "Revisar" })).toBeTruthy();
     fireEvent.click(within(menu).getByRole("button", { name: "Reprocessar" }));
     expect(
@@ -605,7 +605,7 @@ describe("LibraryScreen in pt-BR", () => {
     expectNoEnglishCopy(document.body.textContent ?? "", "library", "common");
   });
 
-  it("renders the empty and failed list states in pt-BR", async () => {
+  it("empty and failed list states: renders in pt-BR", async () => {
     setTestLocale("pt-BR");
     vi.stubGlobal(
       "fetch",
@@ -699,5 +699,230 @@ describe("LibraryScreen in pt-BR", () => {
 
     expect(await screen.findByText("The Art of War")).toBeTruthy();
     expect(screen.getByText("Dom Casmurro")).toBeTruthy();
+  });
+});
+
+describe("LibraryScreen states in pt-BR", () => {
+  /** A promise the test resolves, to hold a request in flight. */
+  function held() {
+    let resolve!: (response: Response) => void;
+    const promise = new Promise<Response>((r) => {
+      resolve = r;
+    });
+    return { promise, resolve };
+  }
+
+  function chooseFile(title: string) {
+    const file = new File([new Uint8Array([1, 2, 3])], "livro.epub", {
+      type: "application/epub+zip",
+    });
+    const input = screen.getByLabelText("Arquivo EPUB") as HTMLInputElement;
+    Object.defineProperty(input, "files", { value: [file], configurable: true });
+    fireEvent.change(input);
+    fireEvent.change(screen.getByLabelText("Título"), { target: { value: title } });
+  }
+
+  it("signed-out, loading, sample and processing: renders in pt-BR", async () => {
+    setTestLocale("pt-BR");
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({ "GET /api/auth/me": () => new Response(null, { status: 401 }) }),
+    );
+    render(<LibraryScreen />);
+    expect(await screen.findByText("Você não está conectado.")).toBeTruthy();
+    cleanup();
+
+    const list = held();
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        "GET /api/sources": () => list.promise,
+        "GET /api/sources/s-sample/quiz": () => jsonResponse(200, emptyOverview),
+      }),
+    );
+    render(<LibraryScreen />);
+    expect(await screen.findByText("Carregando seus livros…")).toBeTruthy();
+    list.resolve(
+      jsonResponse(200, [
+        sourceRow("s-proc", "Processing Book", "processing"),
+        sourceRow("s-sample", "The Art of War", "ready", { is_sample: true }),
+      ]),
+    );
+    expect(await screen.findByText("O livro de exemplo já pode ser usado enquanto você espera.")).toBeTruthy();
+    expect(screen.getByTestId("status-s-proc").textContent).toBe("processando");
+    expectNoEnglishCopy(document.body.textContent ?? "", "library");
+  });
+
+  it("every quiz-deck state renders in pt-BR", async () => {
+    setTestLocale("pt-BR");
+    const cases: Array<[unknown, (scope: HTMLElement) => void]> = [
+      [
+        { ...emptyOverview, latest_job: job("queued") },
+        (scope) => expect(scope.textContent).toContain("Gerando baralho…"),
+      ],
+      [
+        failedOverview,
+        (scope) => {
+          // The job's own error is backend data, shown as written.
+          const error = within(scope).getByTestId("quiz-error-s1");
+          expect(error.getAttribute("lang")).toBe("en");
+          expect(
+            within(scope).getByRole("button", { name: "Gerar baralho de quiz" }),
+          ).toBeTruthy();
+        },
+      ],
+      [
+        { ...emptyOverview, latest_job: job("succeeded") },
+        (scope) => {
+          expect(within(scope).getByTestId("quiz-honesty-s1").textContent).toBe(
+            "Este livro não tem nenhuma seção longa o bastante para um quiz (um capítulo sem subseções precisa de uns 200 caracteres ou mais). Em vez disso, destaque um trecho.",
+          );
+          expect(
+            within(scope).getByRole("link", { name: "destaque um trecho" }),
+          ).toBeTruthy();
+        },
+      ],
+      [
+        { ...emptyOverview, latest_job: job("succeeded", { discarded_count: 3 }) },
+        (scope) =>
+          expect(within(scope).getByTestId("quiz-honesty-s1").textContent).toBe(
+            "Os rascunhos foram escritos, mas nenhum passou nas verificações de qualidade (3 descartados).",
+          ),
+      ],
+      [
+        {
+          ...deckOverview,
+          latest_job: job("succeeded", {
+            generated_count: 2,
+            discarded_count: 1,
+            failed_sections: 1,
+          }),
+        },
+        (scope) => {
+          expect(
+            within(scope).getByTestId("quiz-discard-footnote-s1").textContent,
+          ).toBe("1 descartado durante a geração.");
+          expect(within(scope).getByTestId("quiz-partial-s1").textContent).toBe(
+            "2 itens salvos. 1 seção falhou.",
+          );
+          expect(within(scope).getByTestId("quiz-counts-s1").textContent).toBe(
+            "2 itens · 2 pendentes",
+          );
+        },
+      ],
+    ];
+    for (const [overview, expectState] of cases) {
+      vi.stubGlobal(
+        "fetch",
+        routedFetch({
+          "GET /api/auth/me": () => authedMe.clone(),
+          "GET /api/sources": () => jsonResponse(200, [readySource]),
+          [`GET ${QUIZ}`]: () => jsonResponse(200, overview),
+        }),
+      );
+      render(<LibraryScreen />);
+      expectState(await screen.findByTestId("quiz-s1"));
+      expectNoEnglishCopy(document.body.textContent ?? "", "library");
+      cleanup();
+    }
+
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        "GET /api/sources": () => jsonResponse(200, [readySource]),
+        [`GET ${QUIZ}`]: () => jsonResponse(200, emptyOverview),
+        [`POST ${DECK}`]: () => jsonResponse(409, { detail: "Already running." }),
+      }),
+    );
+    render(<LibraryScreen />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Gerar baralho de quiz" }),
+    );
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "Não foi possível iniciar a geração do baralho.",
+    );
+  });
+
+  it("in-flight button labels: renders in pt-BR", async () => {
+    setTestLocale("pt-BR");
+
+    const upload = held();
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        "GET /api/sources": () => jsonResponse(200, []),
+        "POST /api/sources": () => upload.promise,
+      }),
+    );
+    render(<LibraryScreen />);
+    await screen.findByText("Nenhum livro ainda.");
+    chooseFile("Dom Casmurro");
+    fireEvent.submit(screen.getByRole("form", { name: "enviar livro" }));
+    expect(await screen.findByRole("button", { name: "Enviando…" })).toBeTruthy();
+    cleanup();
+
+    const start = held();
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        "GET /api/sources": () =>
+          jsonResponse(200, [sourceRow("s-up", "Uploaded Book", "uploaded")]),
+        "POST /api/sources/s-up/ingestion": () => start.promise,
+      }),
+    );
+    render(<LibraryScreen />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Iniciar processamento" }),
+    );
+    expect(await screen.findByRole("button", { name: "Iniciando…" })).toBeTruthy();
+    cleanup();
+
+    const restart = held();
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        "GET /api/sources": () =>
+          jsonResponse(200, [sourceRow("s-fail", "Failed Book", "failed")]),
+        "GET /api/sources/s-fail/ingestion": () =>
+          jsonResponse(200, { id: "j", status: "failed", error: null, events: [] }),
+        "POST /api/sources/s-fail/ingestion": () => restart.promise,
+      }),
+    );
+    render(<LibraryScreen />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Reiniciar processamento" }),
+    );
+    expect(await screen.findByRole("button", { name: "Reiniciando…" })).toBeTruthy();
+    cleanup();
+
+    const reingest = held();
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        "GET /api/sources": () => jsonResponse(200, [readySource]),
+        [`GET ${QUIZ}`]: () => jsonResponse(200, emptyOverview),
+        "POST /api/sources/s1/ingestion": () => reingest.promise,
+      }),
+    );
+    render(<LibraryScreen />);
+    fireEvent.click(await screen.findByRole("button", { name: "Mais ações" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reprocessar" }));
+    expect(
+      screen.getByText(
+        "Reprocessar refaz o processamento deste livro com os provedores atuais. Os itens de quiz existentes podem ficar desatualizados ou órfãos.",
+      ),
+    ).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Confirmar reprocessamento" }),
+    );
+    expect(
+      await screen.findByRole("button", { name: "Reprocessando…" }),
+    ).toBeTruthy();
   });
 });

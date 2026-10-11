@@ -454,7 +454,7 @@ describe("Home in pt-BR", () => {
     expectNoEnglishCopy(document.body.textContent ?? "", "home");
   });
 
-  it("renders the empty, done and error states in pt-BR", async () => {
+  it("empty, done and error states: renders in pt-BR", async () => {
     setTestLocale("pt-BR");
     vi.stubGlobal(
       "fetch",
