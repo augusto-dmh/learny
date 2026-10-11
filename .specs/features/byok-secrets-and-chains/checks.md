@@ -41,41 +41,41 @@ Proof: `uv run pytest tests/test_web_auth.py -k "delete_account_erases_provider_
 
 ### S2 - Key management API · batch B
 
-**C8** - With no KEK, or with a KEK but no profile setting `user_key_provider`, `GET /api/me/provider-keys` answers `200 {"enabled": false, "providers": []}`, and `PUT`, `POST …/test` and `DELETE` answer `404` (AC 8)
+**C8** - With no KEK, or with a KEK but no profile setting `user_key_provider`, `GET /api/me/provider-keys` answers `200 {"enabled": false, "providers": []}`, and `PUT`, `POST …/test` and `DELETE` answer `404` (AC 8) ✅
 Proof: `uv run pytest tests/test_web_provider_keys.py -k "disabled_feature"`
 
-**C9** - With profiles binding `anthropic` and `openai`, `GET` lists exactly those two providers in registry order of first binding. Each carries `configured`, `last4`, `added_at`, `powers[]` (`profile_id`, `display_name`, `ask`, `teach`) and `powers_cards`, which is true for `anthropic` only (AC 9)
+**C9** - With profiles binding `anthropic` and `openai`, `GET` lists exactly those two providers in registry order of first binding. Each carries `configured`, `last4`, `added_at`, `powers[]` (`profile_id`, `display_name`, `ask`, `teach`) and `powers_cards`, which is true for `anthropic` only (AC 9) ✅
 Proof: `uv run pytest tests/test_web_provider_keys.py -k "lists_offered_providers_with_powers"`
 
-**C10** - `PUT` of a well-formed key answers `200` with `configured: true` and `last4` equal to the key's last four characters. A second `PUT` replaces it: one row remains, its id differs from the first, and it opens to the new key (AC 10)
+**C10** - `PUT` of a well-formed key answers `200` with `configured: true` and `last4` equal to the key's last four characters. A second `PUT` replaces it: one row remains, its id differs from the first, and it opens to the new key (AC 10) ✅
 Proof: `uv run pytest tests/test_web_provider_keys.py -k "put_stores_and_replace_mints_new_row"`
 
-**C11** - `PUT` with a missing key, a key containing whitespace, a 19-character key, a 257-character key, or an anthropic key without `sk-ant-` answers `422`, and the response body contains no part of the submitted value (AC 11)
+**C11** - `PUT` with a missing key, a key containing whitespace, a 19-character key, a 257-character key, or an anthropic key without `sk-ant-` answers `422`, and the response body contains no part of the submitted value (AC 11) ✅
 Proof: `uv run pytest tests/test_web_provider_keys.py -k "malformed_key_422_never_echoes"`
 
-**C12** - `PUT`, `POST …/test` and `DELETE` on a provider value that no profile binds (for example `gemini` when only `anthropic` is bound, and `mistral`) answer `404` (AC 12)
+**C12** - `PUT`, `POST …/test` and `DELETE` on a provider value that no profile binds (for example `gemini` when only `anthropic` is bound, and `mistral`) answer `404` (AC 12) ✅
 Proof: `uv run pytest tests/test_web_provider_keys.py -k "unoffered_provider_404"`
 
-**C13** - The test route answers `200 {"ok": true, "reason": null}` when the probe succeeds and `200 {"ok": false, "reason": r}` for each of `rejected`, `rate_limited` and `unavailable`, which are mapped from the provider error taxonomy. The probe is built with the stored key and the bound profile's `base_url` (AC 13)
+**C13** - The test route answers `200 {"ok": true, "reason": null}` when the probe succeeds and `200 {"ok": false, "reason": r}` for each of `rejected`, `rate_limited` and `unavailable`, which are mapped from the provider error taxonomy. The probe is built with the stored key and the bound profile's `base_url` (AC 13) ✅
 Proof: `uv run pytest tests/test_web_provider_keys.py -k "test_route_maps_probe_outcomes"`
 Proof: `uv run pytest tests/infrastructure/test_credential_probe.py -k "lists_models_with_profile_host"`
 
-**C14** - The test route for an offered provider with no stored key answers `404` (AC 14)
+**C14** - The test route for an offered provider with no stored key answers `404` (AC 14) ✅
 Proof: `uv run pytest tests/test_web_provider_keys.py -k "test_without_key_404"`
 
-**C15** - `DELETE` answers `204` and removes the row; a second `DELETE` also answers `204` (AC 15)
+**C15** - `DELETE` answers `204` and removes the row; a second `DELETE` also answers `204` (AC 15) ✅
 Proof: `uv run pytest tests/test_web_provider_keys.py -k "delete_is_idempotent_204"`
 
-**C16** - `PUT`, `POST …/test` and `DELETE` without the CSRF header answer `403` and leave the stored row unchanged (AC 16)
+**C16** - `PUT`, `POST …/test` and `DELETE` without the CSRF header answer `403` and leave the stored row unchanged (AC 16) ✅
 Proof: `uv run pytest tests/test_web_provider_keys.py -k "writes_require_csrf"`
 
-**C17** - Once the user-keyed limit is exhausted, `PUT` and `POST …/test` answer `429` (AC 17)
+**C17** - Once the user-keyed limit is exhausted, `PUT` and `POST …/test` answer `429` (AC 17) ✅
 Proof: `uv run pytest tests/test_web_provider_keys.py -k "writes_rate_limited_429"`
 
-**C18** - Across list, put, replace, test and delete, no response body contains the stored key or any 8-character substring of it other than the reported `last4` (AC 18)
+**C18** - Across list, put, replace, test and delete, no response body contains the stored key or any 8-character substring of it other than the reported `last4` (AC 18) ✅
 Proof: `uv run pytest tests/test_web_provider_keys.py -k "responses_never_carry_key_material"`
 
-**C43** - All four routes answer `401` without a session
+**C43** - All four routes answer `401` without a session ✅
 Proof: `uv run pytest tests/test_web_provider_keys.py -k "routes_require_session_401"`
 
 ### S3 - Learner chains for Ask, Tutor and Explain · batch A
@@ -114,54 +114,54 @@ Proof: `uv run pytest tests/infrastructure/test_user_adapter_cache.py -k "lru_bo
 
 ### S4 - Cards and decks under the learner's key · batch B
 
-**C28** - A learner with a stored anthropic key requesting card suggestions (source and note paths) is served by a quiz adapter built with their key and `quiz_model`. The day's `usd_micros` stays 0 (AC 28)
+**C28** - A learner with a stored anthropic key requesting card suggestions (source and note paths) is served by a quiz adapter built with their key and `quiz_model`. The day's `usd_micros` stays 0 (AC 28) ✅
 Proof: `uv run pytest tests/test_web_byok_cards.py -k "suggestions_use_learner_key"`
 
-**C29** - `quiz.generate_deck` and `notes.refresh_cards` for an owner with a stored anthropic key build their quiz adapter with that key, resolved from the database inside the task (AC 29)
+**C29** - `quiz.generate_deck` and `notes.refresh_cards` for an owner with a stored anthropic key build their quiz adapter with that key, resolved from the database inside the task (AC 29) ✅
 Proof: `uv run pytest tests/worker/test_byok_decks.py -k "deck_task_resolves_owner_key"`
 Proof: `uv run pytest tests/worker/test_byok_decks.py -k "refresh_cards_resolves_owner_key"`
 
-**C30** - A deck begun under a learner's key yields a handle payload whose `credential_id` is that row's id. The scheduled `poll_quiz_deck` collects with an adapter built from the same credential. A handle without `credential_id` still polls with the house adapter (AC 30)
+**C30** - A deck begun under a learner's key yields a handle payload whose `credential_id` is that row's id. The scheduled `poll_quiz_deck` collects with an adapter built from the same credential. A handle without `credential_id` still polls with the house adapter (AC 30) ✅
 Proof: `uv run pytest tests/worker/test_byok_decks.py -k "poll_pins_credential"`
 
-**C31** - When the pinned credential was deleted, or replaced with a new row id, before the poll, the job ends `failed` with the fixed copy and no adapter `collect_deck` is called (AC 31)
+**C31** - When the pinned credential was deleted, or replaced with a new row id, before the poll, the job ends `failed` with the fixed copy and no adapter `collect_deck` is called (AC 31) ✅
 Proof: `uv run pytest tests/worker/test_byok_decks.py -k "poll_fails_when_pinned_key_gone"`
 
-**C32** - Across deck generate, deck poll scheduling and note refresh enqueueing for a learner with a canary key, every captured Celery `args`/`kwargs` value, serialized to JSON, lacks the canary. The payload keys are limited to ids, the handle and the deadline (AC 32)
+**C32** - Across deck generate, deck poll scheduling and note refresh enqueueing for a learner with a canary key, every captured Celery `args`/`kwargs` value, serialized to JSON, lacks the canary. The payload keys are limited to ids, the handle and the deadline (AC 32) ✅
 Proof: `uv run pytest tests/worker/test_byok_decks.py -k "task_payloads_carry_ids_only"`
 
 ### S5 - Keys never leak · batch B
 
-**C33** - A log record whose message, `%s` args, `extra` values or exception text contains `sk-ant-<20+ chars>`, `sk-<20+ chars>` or `AIza<20+ chars>` is emitted with that substring replaced by a redaction marker. This holds under both the API and the worker logging configuration (AC 33)
+**C33** - A log record whose message, `%s` args, `extra` values or exception text contains `sk-ant-<20+ chars>`, `sk-<20+ chars>` or `AIza<20+ chars>` is emitted with that substring replaced by a redaction marker. This holds under both the API and the worker logging configuration (AC 33) ✅
 Proof: `uv run pytest tests/test_logging_redaction.py -k "masks_provider_key_shapes"`
 
-**C34** - With a canary key, an end-to-end run of add → test → ask turn → explain → card suggest → deck → rotate → replace → delete produces no captured log record (all loggers, DEBUG), API response body, raised exception string, Celery argument, or `repr()` of a credential entity or built adapter that contains the canary (AC 34)
+**C34** - With a canary key, an end-to-end run of add → test → ask turn → explain → card suggest → deck → rotate → replace → delete produces no captured log record (all loggers, DEBUG), API response body, raised exception string, Celery argument, or `repr()` of a credential entity or built adapter that contains the canary (AC 34) ✅
 Proof: `uv run pytest tests/test_byok_leak_canary.py -k "canary_never_surfaces"`
 
-**C35** - The canary sensor's negative control writes the canary through an unmasked handler path and asserts that the same scanner reports it (AC 35)
+**C35** - The canary sensor's negative control writes the canary through an unmasked handler path and asserts that the same scanner reports it (AC 35) ✅
 Proof: `uv run pytest tests/test_byok_leak_canary.py -k "scanner_catches_deliberate_leak"`
 
 ### S6 - Account keys section · batch B
 
-**C36** - With `enabled: false`, `AccountPanel` renders no element with the keys section heading (AC 36)
+**C36** - With `enabled: false`, `AccountPanel` renders no element with the keys section heading (AC 36) ✅
 Proof: `npx vitest run tests/account-provider-keys.test.tsx -t "hidden when disabled"`
 
-**C37** - With an enabled catalog of one configured anthropic row and one unconfigured openai row, the anthropic row shows `•••• ` plus last4, the added date, each powering profile's display name with Ask/Teach marks, and "flashcards & decks". The openai row shows a password-type input and a Save button (AC 37)
+**C37** - With an enabled catalog of one configured anthropic row and one unconfigured openai row, the anthropic row shows `•••• ` plus last4, the added date, each powering profile's display name with Ask/Teach marks, and "flashcards & decks". The openai row shows a password-type input and a Save button (AC 37) ✅
 Proof: `npx vitest run tests/account-provider-keys.test.tsx -t "renders configured and unconfigured rows"`
 
 **C38** - After Save succeeds the input is empty, the row shows the configured state, and no DOM text or input value contains the submitted key (AC 38)
 Proof: `npx vitest run tests/account-provider-keys.test.tsx -t "save clears and never re-renders the key"`
 
-**C39** - Test shows the literal text "Key works" for `ok: true` and a distinct message for each of `rejected`, `rate_limited` and `unavailable` (AC 39)
+**C39** - Test shows the literal text "Key works" for `ok: true` and a distinct message for each of `rejected`, `rate_limited` and `unavailable` (AC 39) ✅
 Proof: `npx vitest run tests/account-provider-keys.test.tsx -t "test outcome messages"`
 
-**C40** - Delete opens a confirmation, and the delete request is sent only after confirming. Cancel sends nothing (AC 40)
+**C40** - Delete opens a confirmation, and the delete request is sent only after confirming. Cancel sends nothing (AC 40) ✅
 Proof: `npx vitest run tests/account-provider-keys.test.tsx -t "delete confirms first"`
 
-**C41** - A failed save, test or delete shows an inline error and keeps the previous row state (AC 41)
+**C41** - A failed save, test or delete shows an inline error and keeps the previous row state (AC 41) ✅
 Proof: `npx vitest run tests/account-provider-keys.test.tsx -t "failure keeps state and shows error"`
 
-**C42** - The section renders the disclosure copy: billed by the provider to the learner under their own agreement, stored encrypted, cannot be shown again (AC 42)
+**C42** - The section renders the disclosure copy: billed by the provider to the learner under their own agreement, stored encrypted, cannot be shown again (AC 42) ✅
 Proof: `npx vitest run tests/account-provider-keys.test.tsx -t "disclosure copy"`
 
 ## Coverage
