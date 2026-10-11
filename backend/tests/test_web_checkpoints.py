@@ -389,6 +389,24 @@ def test_reveal_stamps_and_returns_first_chunk(
     assert revealed is not None
 
 
+def test_second_reveal_keeps_the_first_stamp(quiz_client: TestClient, db_conn: Connection) -> None:
+    # A double-tap or a retried "Just explain" is harmless: same passage, first stamp kept.
+    _, csrf, source_id = _book(quiz_client, db_conn)
+    attempt_id = _attempts(_create(quiz_client, source_id, csrf))[0]["attempt_id"]
+    stamp = select(checkpoint_attempts.c.revealed_at).where(
+        checkpoint_attempts.c.id == UUID(attempt_id)
+    )
+
+    first = _post(quiz_client, attempt_id, "reveal", csrf)
+    first_stamp = db_conn.execute(stamp).scalar_one()
+    second = _post(quiz_client, attempt_id, "reveal", csrf)
+
+    assert [first.status_code, second.status_code] == [200, 200]
+    assert first.json() == second.json()
+    assert first_stamp is not None
+    assert db_conn.execute(stamp).scalar_one() == first_stamp
+
+
 def test_reveal_409_on_recall_or_after_response(
     quiz_client: TestClient, db_conn: Connection
 ) -> None:
