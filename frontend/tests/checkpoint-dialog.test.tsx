@@ -199,6 +199,39 @@ describe("CheckpointDialog", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("just explain shows the passage and still asks for the explanation", async () => {
+    const PASSAGE = "Pin making is divided into about eighteen distinct operations.";
+    const reveals: RequestInit[] = [];
+    const fetchMock = routedFetch({
+      [START]: () => jsonResponse(201, explainOnly),
+      "POST /api/checkpoint-attempts/a2/reveal": (init) => {
+        reveals.push(init);
+        return jsonResponse(200, {
+          anchor: "ch1#s1",
+          section_path: ["Book I", "The Division of Labour"],
+          passage: PASSAGE,
+        });
+      },
+      "POST /api/checkpoint-attempts/a2/response": () => jsonResponse(200, feedback),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderDialog();
+    fireEvent.click(screen.getByRole("button", { name: "Skip" }));
+    const step = await screen.findByTestId("checkpoint-ask-explain");
+    expect(within(step).queryByText(PASSAGE)).toBeNull();
+
+    fireEvent.click(within(step).getByRole("button", { name: "Just explain" }));
+
+    expect(await within(step).findByText(PASSAGE)).toBeTruthy();
+    expect(within(step).getByText("Book I › The Division of Labour")).toBeTruthy();
+    expect(reveals).toHaveLength(1);
+    // Revealed once: the action is gone, and the explanation is still the learner's to write.
+    expect(within(step).queryByRole("button", { name: "Just explain" })).toBeNull();
+    expect(within(step).getByRole("textbox", { name: "Your explanation" })).toBeTruthy();
+    fireEvent.click(within(step).getByRole("button", { name: "Sure" }));
+    expect(await screen.findByText(feedback.citations[0].quote)).toBeTruthy();
+  });
+
   it("feedback quotes passages then offers three self-assessments", async () => {
     const grades: unknown[] = [];
     vi.stubGlobal(

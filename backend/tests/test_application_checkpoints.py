@@ -281,19 +281,29 @@ def test_minted_card_shape_and_owner_on_sample(db_conn: Connection) -> None:
     started = _start(db_conn)(user=user, source_id=source_id, anchor=ANCHOR, prediction=None)
     attempt_id = _explain_attempt_id(started)
     ids = _chunk_ids(db_conn, source_id)
-    # The provider cites the third chunk with a sentence-level span.
+    # The provider cites two chunks, the second chunk first. The explanation echoes
+    # the first two chunks and none of the third, so the third leads the evidence
+    # and therefore the stored feedback: the card takes that first citation, not
+    # the provider's first pick nor the last one.
     generation = FakeAnswerGeneration(
         answer=GeneratedAnswer(
             text="You covered the pins. You left out the machines.",
-            cited_chunk_ids=(ids[CHUNKS[2]],),
+            cited_chunk_ids=(ids[CHUNKS[1]], ids[CHUNKS[2]]),
             model="m",
             found=True,
-            spans=(CitedSpan(chunk_id=ids[CHUNKS[2]], quote=CHUNKS[2], start=0, end=10),),
+            spans=(
+                CitedSpan(chunk_id=ids[CHUNKS[1]], quote=CHUNKS[1], start=0, end=10),
+                CitedSpan(chunk_id=ids[CHUNKS[2]], quote=CHUNKS[2], start=0, end=10),
+            ),
         )
     )
-    _respond(db_conn, generation)(
-        user=user, attempt_id=attempt_id, response="pins are made by many hands", confidence=1
+    responded = _respond(db_conn, generation)(
+        user=user,
+        attempt_id=attempt_id,
+        response="pin making divided distinct operations; dexterity grows when each worker repeats",
+        confidence=1,
     )
+    assert [c.quote for c in responded.citations] == [CHUNKS[2], CHUNKS[1]]
 
     graded = _grade(db_conn)(user=user, attempt_id=attempt_id, rating=1)
 
