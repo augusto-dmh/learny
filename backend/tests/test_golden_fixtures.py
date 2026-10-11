@@ -26,6 +26,7 @@ from tests.golden_expected import (
     GOLDEN_FIXTURES,
     GOLDEN_SECTION_ANCHORS,
     PORTUGUESE_CASES,
+    PORTUGUESE_UNSUPPORTED_QUESTION,
     RETRIEVAL_CASES,
 )
 
@@ -100,3 +101,17 @@ def test_portuguese_case_needs_the_stemmer_to_reach_its_section(case) -> None:  
     for word in case.inflected:
         assert word in case.question
         assert word not in words, f"{word!r} occurs verbatim in {case.expected_anchor}"
+
+
+def test_unsupported_portuguese_question_shares_no_word_with_the_book() -> None:
+    # The not-found case must be unsupported by construction: none of its content
+    # words occurs anywhere in the Portuguese book (its function words may).
+    book_words = {
+        word
+        for section in EXPECTED_PT_GOLDEN_SECTIONS
+        for word in re.findall(r"\w+", section["chunk_texts"][0].lower())
+    }
+    question_words = set(re.findall(r"\w+", PORTUGUESE_UNSUPPORTED_QUESTION.lower()))
+    content_words = {"fotossíntese", "converte", "luz", "sol", "folhas"}
+    assert content_words <= question_words
+    assert content_words.isdisjoint(book_words)

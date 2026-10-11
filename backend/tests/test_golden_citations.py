@@ -33,6 +33,7 @@ from tests.golden_expected import (
     CITATION_CASES,
     GOLDEN_SECTION_ANCHORS,
     PORTUGUESE_CASES,
+    PORTUGUESE_UNSUPPORTED_QUESTION,
     UNSUPPORTED_QUESTION,
 )
 
@@ -134,3 +135,16 @@ def test_portuguese_answers_cite_the_expected_anchor(
     assert {c.chunk_id for c in result.citations} <= {e.chunk_id for e in evidence}
     assert result.citations[0].anchor == case.expected_anchor
     assert {c.anchor for c in result.citations} <= PT_GOLDEN_SECTION_ANCHORS
+
+
+def test_unsupported_portuguese_question_is_grounded_not_found(db_conn: Connection) -> None:
+    # The Portuguese twin of EVAL-08: a question with no support in the Portuguese
+    # book — stopwords and stems resolved by the ``portuguese`` config — retrieves
+    # nothing and ends in the grounded not-found outcome, never a stray citation.
+    user, source = seed_source(db_conn, email=f"golden-pt-nf-{uuid4()}@example.com")
+    build_corpus_in_db(db_conn, source, portuguese_golden_book())  # deliberately not embedded
+
+    result = answer(db_conn, user, source, PORTUGUESE_UNSUPPORTED_QUESTION)
+
+    assert result.answer_status == "not_found_in_source"
+    assert result.citations == ()

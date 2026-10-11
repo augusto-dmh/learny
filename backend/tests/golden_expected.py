@@ -223,6 +223,11 @@ PORTUGUESE_CASES = (
     ),
 )
 
+# A Portuguese question none of whose content stems occurs in the Portuguese book;
+# against its un-embedded corpus both arms are empty, so the answer is the grounded
+# not-found outcome — the Portuguese twin of ``UNSUPPORTED_QUESTION``.
+PORTUGUESE_UNSUPPORTED_QUESTION = "Como a fotossíntese converte a luz do sol nas folhas?"
+
 # Re-exported for the grounding-bound assertion (EVAL-07) and case self-consistency.
 __all__ = [
     "CITATION_CASES",
@@ -234,6 +239,7 @@ __all__ = [
     "GoldenFixture",
     "InflectedCase",
     "PORTUGUESE_CASES",
+    "PORTUGUESE_UNSUPPORTED_QUESTION",
     "RETRIEVAL_CASES",
     "RetrievalCase",
     "UNSUPPORTED_QUESTION",
