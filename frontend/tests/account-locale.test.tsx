@@ -57,6 +57,7 @@ function baseHandlers(locale: string | null, overrides: Record<string, Handler> 
     "GET /api/auth/me": me(locale),
     "GET /api/ai/profiles": () => jsonResponse(200, []),
     "GET /api/me/ai-profile": () => jsonResponse(200, { profile_id: null }),
+    "GET /api/me/provider-keys": () => jsonResponse(200, { enabled: false, providers: [] }),
     ...overrides,
   };
 }
