@@ -155,5 +155,74 @@
       "inScope": "That was not found in the part of the book this conversation covers. It may be answered elsewhere in the book.",
       "inSource": "That was not found in this book."
     }
+  },
+  "home": {
+    "title": "Home",
+    "regionLabel": "home",
+    "continue": {
+      "label": "continue reading",
+      "title": "Continue reading",
+      "empty": "You have no book in progress yet.",
+      "ask": "Ask",
+      "pickBook": "Pick a book",
+      "percentRead": "{percent}% read",
+      "resume": "Resume"
+    },
+    "due": {
+      "label": "due reviews",
+      "title": "Reviews",
+      "count": "You have {count, plural, one {# card} other {# cards}} due.",
+      "review": "Review",
+      "done": "You’re all caught up for today."
+    }
+  },
+  "library": {
+    "title": "Library",
+    "regionLabel": "library",
+    "signedOut": "You are signed out.",
+    "loadingSources": "Loading your sources…",
+    "empty": "No sources yet.",
+    "count": "{count, plural, one {# book} other {# books}}",
+    "added": "Added {date}",
+    "sampleReady": "The sample book is ready to use while you wait.",
+    "status": "{status, select, uploaded {uploaded} processing {processing} ready {ready} failed {failed} other {{status}}}",
+    "upload": {
+      "heading": "Add a book",
+      "formLabel": "upload source",
+      "title": "Title",
+      "file": "EPUB file",
+      "chooseFile": "Choose an EPUB file to upload.",
+      "submit": "Upload",
+      "uploading": "Uploading…"
+    },
+    "row": {
+      "open": "Open",
+      "moreActions": "More actions",
+      "ask": "Ask",
+      "tutor": "Tutor",
+      "review": "Review",
+      "reingest": "Re-ingest",
+      "reingestWarning": "Re-ingesting rebuilds this book's corpus with the current providers. Existing quiz items may go stale or orphaned.",
+      "confirmReingest": "Confirm re-ingest",
+      "reingesting": "Re-ingesting…",
+      "startIngestion": "Start ingestion",
+      "starting": "Starting…",
+      "restartIngestion": "Restart ingestion",
+      "restarting": "Restarting…",
+      "ingestionFailed": "Ingestion failed."
+    },
+    "quiz": {
+      "generate": "Generate quiz deck",
+      "generating": "Generating deck…",
+      "counts": "{items, plural, one {# item} other {# items}} · {due} due",
+      "sourceChanged": "source changed",
+      "sourceChangedHint": "Some items no longer match the book after re-ingestion and are paused until you review them.",
+      "review": "Review",
+      "exportAnki": "Export to Anki",
+      "noSection": "This book has no section long enough to quiz (a leaf chapter needs about 200+ characters). <link>Highlight a passage</link> instead.",
+      "noneSurvived": "Drafts were written but none survived quality checks ({discarded} discarded).",
+      "discardFootnote": "{discarded} discarded during generation.",
+      "partial": "Saved {saved}. {failed, plural, one {# section} other {# sections}} failed."
+    }
   }
 }

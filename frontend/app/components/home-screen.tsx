@@ -19,6 +19,7 @@
  */
 
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import { useEffect, useState } from "react";
 
 import { InkLine } from "@/app/components/ink-line";
@@ -48,6 +49,7 @@ type Loadable<T> =
 type DueView = { job: number; totalDue: number };
 
 export function HomeScreen() {
+  const t = useTranslations("home");
   const errorMessage = useErrorMessage();
   const [hero, setHero] = useState<Loadable<ContinueReadingView | null>>({
     status: "loading",
@@ -137,7 +139,7 @@ export function HomeScreen() {
   return (
     <div className="space-y-6">
       <section
-        aria-label="home"
+        aria-label={t("regionLabel")}
         className="grid gap-4 md:grid-cols-2"
       >
         <ContinueHero state={hero} askSampleHref={askSampleHref} />
@@ -156,10 +158,11 @@ function ContinueHero({
   state: Loadable<ContinueReadingView | null>;
   askSampleHref: string | null;
 }) {
+  const t = useTranslations("home.continue");
   return (
-    <Card aria-label="continue reading">
+    <Card aria-label={t("label")}>
       <CardHeader>
-        <CardTitle>Continue reading</CardTitle>
+        <CardTitle>{t("title")}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
         {state.status === "loading" ? (
@@ -171,19 +174,19 @@ function ContinueHero({
         ) : state.data === null ? (
           <div className="space-y-3">
             <p className="text-sm text-muted-foreground">
-              You have no book in progress yet.
+              {t("empty")}
             </p>
             {askSampleHref ? (
               <Button asChild>
                 <Link href={askSampleHref}>
-                  Ask
+                  {t("ask")}
                   <LinkPendingIndicator />
                 </Link>
               </Button>
             ) : null}
             <Button asChild>
               <Link href="/sources">
-                Pick a book
+                {t("pickBook")}
                 <LinkPendingIndicator />
               </Link>
             </Button>
@@ -198,13 +201,13 @@ function ContinueHero({
                 {state.data.chapter_title}
               </p>
               <p data-testid="hero-percent" className="text-sm text-muted-foreground">
-                {Math.round(state.data.percent)}% read
+                {t("percentRead", { percent: Math.round(state.data.percent) })}
               </p>
             </div>
             <InkLine percent={state.data.percent} />
             <Button asChild>
               <Link href={readUrl(state.data.source_id, null)}>
-                Resume
+                {t("resume")}
                 <LinkPendingIndicator />
               </Link>
             </Button>
@@ -217,10 +220,11 @@ function ContinueHero({
 
 /** The due-reviews card: start a session, or a calm done-for-today state. */
 function DueCard({ state }: { state: Loadable<DueView> }) {
+  const t = useTranslations("home.due");
   return (
-    <Card aria-label="due reviews">
+    <Card aria-label={t("label")}>
       <CardHeader>
-        <CardTitle>Reviews</CardTitle>
+        <CardTitle>{t("title")}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
         {state.status === "loading" ? (
@@ -232,12 +236,11 @@ function DueCard({ state }: { state: Loadable<DueView> }) {
         ) : state.data.totalDue > 0 ? (
           <div className="space-y-3">
             <p data-testid="due-count" className="text-sm">
-              You have {state.data.job}{" "}
-              {state.data.job === 1 ? "card" : "cards"} due.
+              {t("count", { count: state.data.job })}
             </p>
             <Button asChild>
               <Link href="/review">
-                Review
+                {t("review")}
                 <LinkPendingIndicator />
               </Link>
             </Button>
@@ -245,7 +248,7 @@ function DueCard({ state }: { state: Loadable<DueView> }) {
         ) : (
           // Calm done-for-today: no count, CTA, badge, or celebration (I-7).
           <p data-testid="due-done" className="text-sm text-muted-foreground">
-            You&rsquo;re all caught up for today.
+            {t("done")}
           </p>
         )}
       </CardContent>

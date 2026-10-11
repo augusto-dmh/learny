@@ -7,14 +7,17 @@
  * card states.
  */
 
+import { useTranslations } from "next-intl";
+
 import { HomeScreen } from "@/app/components/home-screen";
 import { InkLine } from "@/app/components/ink-line";
 
 export default function HomePage() {
+  const t = useTranslations("home");
   return (
     <main className="flex-1 p-6">
       <header className="mb-6 space-y-2">
-        <h1 className="text-2xl font-semibold">Home</h1>
+        <h1 className="text-2xl font-semibold">{t("title")}</h1>
         <InkLine />
       </header>
       <HomeScreen />

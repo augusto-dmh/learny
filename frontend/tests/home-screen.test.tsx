@@ -16,7 +16,10 @@
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
+import HomePage from "../app/(app)/home/page";
 import { HomeScreen } from "../app/components/home-screen";
+import { expectNoEnglishCopy } from "./i18n-copy";
+import { setTestLocale } from "./setup-intl";
 
 // jsdom performs no App Router navigation, so `useLinkStatus` is never pending
 // on its own; this drives that one export to cover the pending branch (ANSW-10).
@@ -416,5 +419,74 @@ describe("HomeScreen Ask-first", () => {
       screen.getByRole("link", { name: "Review" }).getAttribute("href"),
     ).toBe("/review");
     expect(screen.queryByRole("link", { name: "Ask" })).toBeNull();
+  });
+});
+
+describe("Home in pt-BR", () => {
+  it("renders in pt-BR", async () => {
+    setTestLocale("pt-BR");
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        [CONTINUE]: () => jsonResponse(200, hero),
+        [DUE]: () => jsonResponse(200, dueQueue(2)),
+      }),
+    );
+
+    render(<HomePage />);
+
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Início");
+    expect(screen.getByRole("region", { name: "início" })).toBeTruthy();
+    const continueCard = screen.getByLabelText("continuar lendo");
+    const dueCard = screen.getByLabelText("revisões pendentes");
+    expect(within(continueCard).getByText("Continue lendo")).toBeTruthy();
+    expect(within(dueCard).getByText("Revisões")).toBeTruthy();
+
+    // Book text stays as the book wrote it.
+    expect((await screen.findByTestId("hero-title")).textContent).toBe("Ready Book");
+    expect(screen.getByTestId("hero-chapter").textContent).toBe("Chapter One");
+    expect(screen.getByTestId("hero-percent").textContent).toBe("43% lido");
+    expect(screen.getByRole("link", { name: "Continuar" })).toBeTruthy();
+    expect((await screen.findByTestId("due-count")).textContent).toBe(
+      "Você tem 2 cartões pendentes.",
+    );
+    expect(screen.getByRole("link", { name: "Revisar" })).toBeTruthy();
+    expectNoEnglishCopy(document.body.textContent ?? "", "home");
+  });
+
+  it("renders the empty, done and error states in pt-BR", async () => {
+    setTestLocale("pt-BR");
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        [CONTINUE]: () => jsonResponse(200, null),
+        [DUE]: () => jsonResponse(200, dueQueue(0)),
+      }),
+    );
+    render(<HomeScreen />);
+    expect(
+      await screen.findByText("Você ainda não tem nenhum livro em andamento."),
+    ).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Escolher um livro" })).toBeTruthy();
+    expect((await screen.findByTestId("due-done")).textContent).toBe(
+      "Tudo em dia por hoje.",
+    );
+    cleanup();
+
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        [CONTINUE]: () => jsonResponse(500, { detail: "boom" }),
+        [DUE]: () => jsonResponse(404, { detail: "missing" }),
+      }),
+    );
+    render(<HomeScreen />);
+    const alerts = await screen.findAllByRole("alert");
+    await waitFor(() => expect(screen.getAllByRole("alert")).toHaveLength(2));
+    expect(alerts[0].textContent).toBe("O servidor teve um problema. Tente novamente.");
+    expect(screen.getAllByRole("alert")[1].textContent).toBe(
+      "Não foi possível carregar suas revisões pendentes.",
+    );
+    expectNoEnglishCopy(document.body.textContent ?? "", "home");
   });
 });

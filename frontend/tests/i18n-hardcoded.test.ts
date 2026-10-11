@@ -75,10 +75,8 @@ const EXEMPT_PATHS = [
  * migrates; a clean file listed here fails the test.
  */
 const PENDING_MIGRATION: string[] = [
-  "app/(app)/home/page.tsx",
   "app/(app)/notes/page.tsx",
   "app/(app)/review/page.tsx",
-  "app/(app)/sources/page.tsx",
   "app/(read)/sources/[id]/read/page.tsx",
   "app/components/answer-phase.tsx",
   "app/components/ask-panel.tsx",
@@ -88,9 +86,7 @@ const PENDING_MIGRATION: string[] = [
   "app/components/dock-notes-panel.tsx",
   "app/components/dock-review-panel.tsx",
   "app/components/failed-turn.tsx",
-  "app/components/home-screen.tsx",
   "app/components/include-notes-toggle.tsx",
-  "app/components/library-screen.tsx",
   "app/components/margin-rail.tsx",
   "app/components/notes/capture-popover.tsx",
   "app/components/notes/card-suggestions.tsx",

@@ -24,6 +24,8 @@ import {
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { LibraryScreen } from "../app/components/library-screen";
+import { expectNoEnglishCopy } from "./i18n-copy";
+import { setTestLocale } from "./setup-intl";
 
 // jsdom performs no App Router navigation, so `useLinkStatus` is never pending
 // on its own; this drives that one export to cover the pending branch (ANSW-10).
@@ -520,5 +522,182 @@ describe("LibraryScreen quiz controls scope (E3)", () => {
     expect(
       screen.queryByRole("button", { name: "Generate quiz deck" }),
     ).toBeNull();
+  });
+});
+
+function sourceRow(
+  id: string,
+  title: string,
+  status: string,
+  extra: Record<string, unknown> = {},
+) {
+  return { ...readySource, id, title, filename: `${id}.epub`, status, ...extra };
+}
+
+describe("LibraryScreen in pt-BR", () => {
+  it("renders in pt-BR", async () => {
+    setTestLocale("pt-BR");
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        "GET /api/sources": () =>
+          jsonResponse(200, [
+            readySource,
+            sourceRow("s-up", "Uploaded Book", "uploaded"),
+            sourceRow("s-fail", "Failed Book", "failed"),
+          ]),
+        [`GET ${QUIZ}`]: () => jsonResponse(200, changedOverview),
+        // No event message and no error: the catalog says the ingestion failed.
+        "GET /api/sources/s-fail/ingestion": () =>
+          jsonResponse(200, { id: "j", status: "failed", error: null, events: [] }),
+      }),
+    );
+
+    render(<LibraryScreen />);
+    expect(screen.getByText("Carregando…")).toBeTruthy();
+
+    expect(await screen.findByTestId("quiz-counts-s1")).toBeTruthy();
+    expect(screen.getByRole("region", { name: "biblioteca" })).toBeTruthy();
+    expect(screen.getByText("Adicionar um livro")).toBeTruthy();
+    expect(screen.getByRole("form", { name: "enviar livro" })).toBeTruthy();
+    expect(screen.getByLabelText("Título")).toBeTruthy();
+    expect(screen.getByLabelText("Arquivo EPUB")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Enviar" })).toBeTruthy();
+
+    expect(screen.getByTestId("status-s1").textContent).toBe("pronto");
+    expect(screen.getByTestId("status-s-up").textContent).toBe("enviado");
+    expect(screen.getByTestId("status-s-fail").textContent).toBe("falhou");
+    expect(screen.getByRole("link", { name: "Abrir" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Mais ações" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Iniciar processamento" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Reiniciar processamento" })).toBeTruthy();
+    expect((await screen.findByTestId("failure-s-fail")).textContent).toBe(
+      "O processamento falhou.",
+    );
+
+    expect(screen.getByTestId("quiz-counts-s1").textContent).toBe(
+      "3 itens · 1 pendente",
+    );
+    expect(screen.getByText("livro alterado")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Revisar" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Exportar para o Anki" })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Gerar baralho de quiz" }),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Mais ações" }));
+    const menu = screen.getByRole("menu");
+    expect(within(menu).getByRole("link", { name: "Perguntar" })).toBeTruthy();
+    expect(within(menu).getByRole("link", { name: "Tutor" })).toBeTruthy();
+    expect(within(menu).getByRole("link", { name: "Revisar" })).toBeTruthy();
+    fireEvent.click(within(menu).getByRole("button", { name: "Reprocessar" }));
+    expect(
+      screen.getByRole("button", { name: "Confirmar reprocessamento" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Cancelar" })).toBeTruthy();
+
+    fireEvent.submit(screen.getByRole("form", { name: "enviar livro" }));
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "Escolha um arquivo EPUB para enviar.",
+    );
+
+    expectNoEnglishCopy(document.body.textContent ?? "", "library", "common");
+  });
+
+  it("renders the empty and failed list states in pt-BR", async () => {
+    setTestLocale("pt-BR");
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        "GET /api/sources": () => jsonResponse(200, []),
+      }),
+    );
+    render(<LibraryScreen />);
+    expect(await screen.findByText("Nenhum livro ainda.")).toBeTruthy();
+    cleanup();
+
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        "GET /api/sources": () =>
+          jsonResponse(500, { detail: "Internal Server Error" }),
+      }),
+    );
+    render(<LibraryScreen />);
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "O servidor teve um problema. Tente novamente.",
+    );
+    expect(document.body.textContent).not.toContain("Internal Server Error");
+  });
+
+  it("pt-BR plurals and dates", async () => {
+    setTestLocale("pt-BR");
+    const counts: Array<[number, string]> = [
+      [0, "0 livros"],
+      [1, "1 livro"],
+      [2, "2 livros"],
+    ];
+    for (const [count, text] of counts) {
+      const rows = Array.from({ length: count }, (_, index) =>
+        sourceRow(`s-${index}`, `Book ${index}`, "uploaded", {
+          created_at: "2026-07-19T12:00:00Z",
+        }),
+      );
+      vi.stubGlobal(
+        "fetch",
+        routedFetch({
+          "GET /api/auth/me": () => authedMe.clone(),
+          "GET /api/sources": () => jsonResponse(200, rows),
+        }),
+      );
+      render(<LibraryScreen />);
+      expect((await screen.findByTestId("library-count")).textContent).toBe(text);
+      if (count > 0) {
+        expect(screen.getAllByTestId("source-added")[0].textContent).toBe(
+          "Adicionado em 19 de jul. de 2026",
+        );
+      }
+      cleanup();
+    }
+
+    setTestLocale("en");
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        "GET /api/sources": () =>
+          jsonResponse(200, [
+            sourceRow("s-0", "Book 0", "uploaded", {
+              created_at: "2026-07-19T12:00:00Z",
+            }),
+          ]),
+      }),
+    );
+    render(<LibraryScreen />);
+    expect((await screen.findByTestId("library-count")).textContent).toBe("1 book");
+    expect(screen.getByTestId("source-added").textContent).toBe("Added Jul 19, 2026");
+  });
+
+  it("book text is never translated", async () => {
+    setTestLocale("pt-BR");
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        "GET /api/sources": () =>
+          jsonResponse(200, [
+            sourceRow("s1", "The Art of War", "uploaded"),
+            sourceRow("s2", "Dom Casmurro", "uploaded"),
+          ]),
+      }),
+    );
+
+    render(<LibraryScreen />);
+
+    expect(await screen.findByText("The Art of War")).toBeTruthy();
+    expect(screen.getByText("Dom Casmurro")).toBeTruthy();
   });
 });

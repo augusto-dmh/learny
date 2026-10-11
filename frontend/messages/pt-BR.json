@@ -155,5 +155,74 @@
       "inScope": "Isso não aparece no trecho do livro que esta conversa abrange. A resposta pode estar em outra parte do livro.",
       "inSource": "Isso não aparece neste livro."
     }
+  },
+  "home": {
+    "title": "Início",
+    "regionLabel": "início",
+    "continue": {
+      "label": "continuar lendo",
+      "title": "Continue lendo",
+      "empty": "Você ainda não tem nenhum livro em andamento.",
+      "ask": "Perguntar",
+      "pickBook": "Escolher um livro",
+      "percentRead": "{percent}% lido",
+      "resume": "Continuar"
+    },
+    "due": {
+      "label": "revisões pendentes",
+      "title": "Revisões",
+      "count": "Você tem {count, plural, one {# cartão pendente} other {# cartões pendentes}}.",
+      "review": "Revisar",
+      "done": "Tudo em dia por hoje."
+    }
+  },
+  "library": {
+    "title": "Biblioteca",
+    "regionLabel": "biblioteca",
+    "signedOut": "Você saiu da conta.",
+    "loadingSources": "Carregando seus livros…",
+    "empty": "Nenhum livro ainda.",
+    "count": "{count, plural, =0 {0 livros} one {# livro} other {# livros}}",
+    "added": "Adicionado em {date}",
+    "sampleReady": "O livro de exemplo já pode ser usado enquanto você espera.",
+    "status": "{status, select, uploaded {enviado} processing {processando} ready {pronto} failed {falhou} other {{status}}}",
+    "upload": {
+      "heading": "Adicionar um livro",
+      "formLabel": "enviar livro",
+      "title": "Título",
+      "file": "Arquivo EPUB",
+      "chooseFile": "Escolha um arquivo EPUB para enviar.",
+      "submit": "Enviar",
+      "uploading": "Enviando…"
+    },
+    "row": {
+      "open": "Abrir",
+      "moreActions": "Mais ações",
+      "ask": "Perguntar",
+      "tutor": "Tutor",
+      "review": "Revisar",
+      "reingest": "Reprocessar",
+      "reingestWarning": "Reprocessar reconstrói o acervo deste livro com os provedores atuais. Os itens de quiz existentes podem ficar desatualizados ou órfãos.",
+      "confirmReingest": "Confirmar reprocessamento",
+      "reingesting": "Reprocessando…",
+      "startIngestion": "Iniciar processamento",
+      "starting": "Iniciando…",
+      "restartIngestion": "Reiniciar processamento",
+      "restarting": "Reiniciando…",
+      "ingestionFailed": "O processamento falhou."
+    },
+    "quiz": {
+      "generate": "Gerar baralho de quiz",
+      "generating": "Gerando baralho…",
+      "counts": "{items, plural, =0 {0 itens} one {# item} other {# itens}} · {due, plural, =0 {0 pendentes} one {# pendente} other {# pendentes}}",
+      "sourceChanged": "livro alterado",
+      "sourceChangedHint": "Alguns itens não correspondem mais ao livro depois do reprocessamento e ficam pausados até você revisá-los.",
+      "review": "Revisar",
+      "exportAnki": "Exportar para o Anki",
+      "noSection": "Este livro não tem nenhuma seção longa o bastante para um quiz (um capítulo sem subseções precisa de uns 200 caracteres ou mais). Em vez disso, <link>destaque um trecho</link>.",
+      "noneSurvived": "Os rascunhos foram escritos, mas nenhum passou nas verificações de qualidade ({discarded, plural, one {# descartado} other {# descartados}}).",
+      "discardFootnote": "{discarded, plural, one {# descartado} other {# descartados}} durante a geração.",
+      "partial": "{saved, plural, =0 {0 salvos} one {# salvo} other {# salvos}}. {failed, plural, one {# seção falhou} other {# seções falharam}}."
+    }
   }
 }
