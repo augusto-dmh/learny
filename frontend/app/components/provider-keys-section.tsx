@@ -216,7 +216,13 @@ function ProviderKeyItem({
             onChange={(event) => setDraft(event.target.value)}
             aria-label={t("inputLabel", { provider: row.label })}
             placeholder={t("placeholder")}
-            autoComplete="off"
+            // Browsers ignore "off" on password fields: "new-password" keeps the
+            // learner's Learny password from autofilling here, and the two data
+            // attributes keep 1Password and LastPass from offering to save the
+            // key as this site's password.
+            autoComplete="new-password"
+            data-1p-ignore=""
+            data-lpignore="true"
             spellCheck={false}
             disabled={busy}
             className="min-w-0 flex-1 rounded-md border border-input bg-background px-2 py-1 text-sm"

@@ -150,6 +150,11 @@ describe("AccountPanel provider keys section", () => {
     const openai = within(row("openai"));
     const input = openai.getByLabelText("API key for OpenAI") as HTMLInputElement;
     expect(input.type).toBe("password");
+    // Password managers must neither autofill the account password here nor
+    // offer to save the key as the site's password.
+    expect(input.getAttribute("autocomplete")).toBe("new-password");
+    expect(input.hasAttribute("data-1p-ignore")).toBe(true);
+    expect(input.getAttribute("data-lpignore")).toBe("true");
     expect(openai.getByRole("button", { name: "Save key" })).toBeTruthy();
     expect(openai.getByText("Your GPT: Ask only")).toBeTruthy();
     expect(openai.queryByText("Flashcards & decks")).toBeNull();
@@ -271,6 +276,20 @@ describe("AccountPanel provider keys section", () => {
     await act(async () => {});
     expect(anthropic.getByRole("alert").textContent).toBe("Could not delete your key.");
     expect(anthropic.getByText("•••• a1B2")).toBeTruthy();
+  });
+
+  it("is absent, not an error wall, when the key list fails to load", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await renderPanel(
+      routedFetch(
+        handlers({ "GET /api/me/provider-keys": () => new Response(null, { status: 500 }) }),
+      ),
+    );
+
+    expect(screen.queryByRole("heading", { name: "Your own AI keys" })).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("button", { name: "Log out" })).toBeTruthy();
+    expect(warn).toHaveBeenCalledWith("provider-keys section unavailable:", expect.anything());
   });
 
   it("disclosure copy", async () => {
