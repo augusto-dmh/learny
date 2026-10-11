@@ -285,8 +285,9 @@ describe("the dock's Notes tab", () => {
     vi.stubGlobal("fetch", fetchMock);
     renderNotesTab();
 
+    // The list operation's copy, never the backend detail.
     expect((await screen.findByRole("alert")).textContent).toBe(
-      "Source not found.",
+      "Could not load your notes.",
     );
   });
 });

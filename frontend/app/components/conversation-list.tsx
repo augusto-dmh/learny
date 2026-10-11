@@ -32,6 +32,7 @@ import {
 } from "@/app/lib/conversations";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { useErrorMessage } from "./use-error-message";
 
 /** How many rows one request asks for; a full page means there may be more. */
 const PAGE_SIZE = 20;
@@ -54,6 +55,7 @@ export function ConversationList({
   onNew: () => void;
   onDeleted?: (conversationId: string) => void;
 }) {
+  const errorMessage = useErrorMessage();
   const [rows, setRows] = useState<ConversationSummaryView[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
@@ -76,11 +78,7 @@ export function ConversationList({
         if (cancelled) return;
         setRows([]);
         setHasMore(false);
-        setError(
-          err instanceof Error
-            ? err.message
-            : "Could not load your conversations.",
-        );
+        setError(errorMessage(err, "conversationsList"));
       });
     return () => {
       cancelled = true;
@@ -102,11 +100,7 @@ export function ConversationList({
       setRows([...loaded, ...next.filter((row) => !seen.has(row.id))]);
       setHasMore(next.length === PAGE_SIZE);
     } catch (err: unknown) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Could not load your conversations.",
-      );
+      setError(errorMessage(err, "conversationsList"));
     } finally {
       setLoadingMore(false);
     }
@@ -130,11 +124,7 @@ export function ConversationList({
         );
         setRenamingId(null);
       } catch (err: unknown) {
-        setError(
-          err instanceof Error
-            ? err.message
-            : "Could not rename that conversation.",
-        );
+        setError(errorMessage(err, "conversationsRename"));
       } finally {
         setBusyId(null);
       }
@@ -153,11 +143,7 @@ export function ConversationList({
         );
         onDeleted?.(conversationId);
       } catch (err: unknown) {
-        setError(
-          err instanceof Error
-            ? err.message
-            : "Could not delete that conversation.",
-        );
+        setError(errorMessage(err, "conversationsDelete"));
       } finally {
         setBusyId(null);
       }

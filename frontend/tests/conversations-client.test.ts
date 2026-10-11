@@ -162,10 +162,10 @@ describe("getConversation", () => {
 
     expect(err).toBeInstanceOf(ConversationRequestError);
     expect((err as ConversationRequestError).status).toBe(404);
-    expect((err as Error).message).toBe("Conversation not found.");
+    expect((err as ConversationRequestError).detail).toBe("Conversation not found.");
   });
 
-  it("falls back to a readable message when the error body is not parseable", async () => {
+  it("names the operation when the error body is not parseable", async () => {
     // A gateway or proxy failure answers with HTML, not the backend's JSON.
     const fetchMock = vi.fn(
       async () => new Response("<html>gateway</html>", { status: 502 }),
@@ -178,7 +178,7 @@ describe("getConversation", () => {
     // The caller still gets the typed failure and the status, never the parse error.
     expect(err).toBeInstanceOf(ConversationRequestError);
     expect((err as ConversationRequestError).status).toBe(502);
-    expect((err as Error).message).toBe("Could not load that conversation.");
+    expect((err as ConversationRequestError).operation).toBe("conversationsGet");
   });
 });
 
@@ -202,7 +202,7 @@ describe("renameConversation", () => {
     expect(new Headers(init.headers).get("X-CSRF-Token")).toBe("csrf-xyz");
   });
 
-  it("surfaces a rejected title as a readable failure", async () => {
+  it("surfaces a rejected title as a typed failure", async () => {
     const fetchMock = vi.fn(async () =>
       jsonResponse(422, { detail: [{ msg: "too long" }] }),
     );
@@ -214,7 +214,7 @@ describe("renameConversation", () => {
     ).catch((e: unknown) => e);
 
     // A FastAPI validation list is never rendered raw at the reader.
-    expect((err as Error).message).toBe("Could not rename that conversation.");
+    expect((err as ConversationRequestError).operation).toBe("conversationsRename");
     expect((err as ConversationRequestError).status).toBe(422);
   });
 });

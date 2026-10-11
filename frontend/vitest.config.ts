@@ -16,6 +16,8 @@ export default defineConfig({
   },
   test: {
     environment: "node",
+    // Binds next-intl's hooks to the real translator over the shipped catalogs.
+    setupFiles: ["./tests/setup-intl.ts"],
     include: ["tests/**/*.test.ts", "tests/**/*.test.tsx"],
   },
 });

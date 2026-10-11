@@ -252,7 +252,8 @@ describe("CardSuggestions failure (CAP-08)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Accept" }));
 
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toBe("Card text cannot be empty.");
+    // The save operation's copy, never the backend detail.
+    expect(alert.textContent).toBe("Could not save this card.");
     // The chip survives the failure, so the student can try again in place.
     expect(screen.getByTestId("card-suggestion")).toBeTruthy();
     expect(onAccepted).not.toHaveBeenCalled();

@@ -62,6 +62,7 @@ from app.domain.entities import (
     HistoryTurn,
     IngestionEvent,
     IngestionJob,
+    LocalePreference,
     Note,
     NoteAnchor,
     NoteAnchorStatus,
@@ -115,6 +116,7 @@ from app.infrastructure.db.metadata import (
     tags,
     user_ai_preferences,
     user_credentials,
+    user_locale_preferences,
     users,
 )
 from app.infrastructure.security.tokens import hash_token
@@ -191,6 +193,40 @@ class SqlAlchemyAiPreferenceRepository:
         """Remove the user's row; ``True`` only when one existed (idempotent unset)."""
         result = self._conn.execute(
             sa_delete(user_ai_preferences).where(user_ai_preferences.c.user_id == user_id)
+        )
+        return bool(result.rowcount)
+
+
+class SqlAlchemyLocalePreferenceRepository:
+    """``LocalePreferenceRepository`` backed by the ``user_locale_preferences`` table.
+
+    Same one-row-per-user contract as the AI-preference repository: ``upsert`` is a
+    single ``INSERT ... ON CONFLICT DO UPDATE`` on the ``user_id`` primary key and
+    every statement is scoped to its own ``user_id``.
+    """
+
+    def __init__(self, connection: Connection) -> None:
+        self._conn = connection
+
+    def get_by_user(self, user_id: UUID) -> LocalePreference | None:
+        row = self._conn.execute(
+            select(user_locale_preferences).where(user_locale_preferences.c.user_id == user_id)
+        ).one_or_none()
+        return _to_locale_preference(row) if row is not None else None
+
+    def upsert(self, user_id: UUID, locale: str) -> LocalePreference:
+        stmt = pg_insert(user_locale_preferences).values(user_id=user_id, locale=locale)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[user_locale_preferences.c.user_id],
+            set_={"locale": stmt.excluded.locale, "updated_at": func.now()},
+        ).returning(user_locale_preferences)
+        row = self._conn.execute(stmt).one()
+        return _to_locale_preference(row)
+
+    def delete(self, user_id: UUID) -> bool:
+        """Remove the user's row; ``True`` only when one existed (idempotent unset)."""
+        result = self._conn.execute(
+            sa_delete(user_locale_preferences).where(user_locale_preferences.c.user_id == user_id)
         )
         return bool(result.rowcount)
 
@@ -2658,6 +2694,15 @@ def _to_ai_preference(row) -> AiPreference:  # noqa: ANN001 — Row is an intern
     return AiPreference(
         user_id=row.user_id,
         profile_id=row.profile_id,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+def _to_locale_preference(row) -> LocalePreference:  # noqa: ANN001 — Row is an internal SQLAlchemy type
+    return LocalePreference(
+        user_id=row.user_id,
+        locale=row.locale,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )

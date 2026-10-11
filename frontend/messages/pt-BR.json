@@ -1,0 +1,110 @@
+{
+  "meta": {
+    "title": "Learny",
+    "description": "Learny — inteligência para livros"
+  },
+  "common": {
+    "loading": "Carregando…",
+    "locale": {
+      "label": "Idioma",
+      "names": {
+        "en": "English",
+        "pt-BR": "Português (Brasil)"
+      }
+    }
+  },
+  "errors": {
+    "generic": "Algo deu errado. Tente novamente.",
+    "status": {
+      "unauthorized": "Sua sessão expirou. Entre novamente.",
+      "rateLimited": "Muitas solicitações. Aguarde um momento e tente novamente.",
+      "server": "O servidor teve um problema. Tente novamente.",
+      "network": "Algo deu errado ao acessar o servidor. Tente novamente."
+    },
+    "stream": {
+      "forbidden": "Não foi possível verificar sua sessão. Atualize a página e tente novamente.",
+      "notFound": "Não foi possível encontrar este livro.",
+      "notReady": "Este livro ainda está sendo processado. Tente novamente quando estiver pronto.",
+      "unprocessable": "Não foi possível processar essa solicitação. Revise-a e tente novamente.",
+      "generationFailed": "Não foi possível gerar a resposta. Tente novamente."
+    },
+    "operation": {
+      "authRegister": "Não foi possível criar a conta.",
+      "authLogin": "E-mail ou senha inválidos.",
+      "authLogout": "Não foi possível sair.",
+      "sourcesList": "Não foi possível carregar seus livros.",
+      "sourcesGet": "Não foi possível carregar esse livro.",
+      "sourcesUpload": "Falha no envio.",
+      "sourcesIngest": "Não foi possível iniciar o processamento.",
+      "sourcesStructure": "Não foi possível carregar a estrutura do livro.",
+      "ingestionStatus": "Não foi possível carregar o status do processamento.",
+      "sectionLoad": "Não foi possível carregar essa seção.",
+      "aiProfilesList": "Não foi possível carregar os perfis de IA disponíveis.",
+      "aiProfileGet": "Não foi possível carregar sua escolha de perfil de IA.",
+      "aiProfileSave": "Não foi possível salvar sua escolha de perfil de IA.",
+      "aiProfileReset": "Não foi possível redefinir sua escolha de perfil de IA.",
+      "localeSave": "Não foi possível salvar seu idioma.",
+      "localeReset": "Não foi possível redefinir seu idioma.",
+      "quizOverview": "Não foi possível carregar o resumo do baralho.",
+      "quizGenerate": "Não foi possível iniciar a geração do baralho.",
+      "quizStarters": "Não foi possível preparar os cartões iniciais.",
+      "quizDue": "Não foi possível carregar suas revisões pendentes.",
+      "quizReview": "Não foi possível registrar sua revisão.",
+      "quizReset": "Não foi possível reiniciar o agendamento deste cartão.",
+      "quizUndo": "Não foi possível desfazer sua última revisão.",
+      "quizFlag": "Não foi possível sinalizar este cartão.",
+      "quizSave": "Não foi possível salvar este cartão.",
+      "studyProgress": "Não foi possível carregar seu progresso de leitura.",
+      "studyActivity": "Não foi possível carregar sua atividade de estudo.",
+      "readingChapter": "Não foi possível carregar esse capítulo.",
+      "readingPosition": "Não foi possível salvar sua posição de leitura.",
+      "readingHighlights": "Não foi possível carregar seus destaques.",
+      "notesList": "Não foi possível carregar suas notas.",
+      "notesGet": "Não foi possível carregar essa nota.",
+      "notesSave": "Não foi possível salvar a nota.",
+      "notesDelete": "Não foi possível excluir a nota.",
+      "notesBacklinks": "Não foi possível carregar os links de retorno.",
+      "notesCapture": "Não foi possível capturar o destaque.",
+      "conversationsList": "Não foi possível carregar suas conversas.",
+      "conversationsGet": "Não foi possível carregar essa conversa.",
+      "conversationsRename": "Não foi possível renomear essa conversa.",
+      "conversationsDelete": "Não foi possível excluir essa conversa.",
+      "conversationsStart": "Algo deu errado. Tente novamente.",
+      "chatTurn": "Algo deu errado. Tente novamente.",
+      "cardsSuggestPassage": "Não foi possível sugerir cartões para este trecho.",
+      "cardsSave": "Não foi possível salvar este cartão.",
+      "cardsSuggestNote": "Não foi possível sugerir cartões para esta nota.",
+      "cardsAddToReview": "Não foi possível adicionar este cartão à revisão.",
+      "tutorCardSave": "Não foi possível salvar este cartão de revisão."
+    }
+  },
+  "account": {
+    "pageTitle": "Sua conta",
+    "regionLabel": "conta",
+    "signedOut": "Você saiu da conta.",
+    "signedInAs": "Conectado como <strong>{email}</strong>",
+    "logout": "Sair",
+    "language": {
+      "heading": "Idioma",
+      "intro": "Escolha o idioma em que o Learny fala com você. O texto dos livros e as suas notas nunca são traduzidos.",
+      "automatic": "Automático (seguir meu navegador)"
+    },
+    "aiProfile": {
+      "heading": "Perfil de IA",
+      "intro": "Escolha como o Perguntar e o Ensinar geram respostas para você.",
+      "defaultTitle": "Padrão do operador (recomendado)",
+      "defaultHint": "O atendimento segue a cadeia padrão do operador.",
+      "grounding": {
+        "verifiedSpans": "As citações são verificadas no livro.",
+        "promptCited": "As citações são atribuídas pelo modelo e podem ser menos precisas.",
+        "none": "As respostas não citam o livro."
+      },
+      "availability": {
+        "both": "Funciona em Perguntar e Ensinar.",
+        "askOnly": "Funciona apenas em Perguntar.",
+        "teachOnly": "Funciona apenas em Ensinar.",
+        "neither": "No momento não funciona em Perguntar nem em Ensinar."
+      }
+    }
+  }
+}

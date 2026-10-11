@@ -307,8 +307,9 @@ describe("NotesScreen (NF-13/14)", () => {
     const picker = await screen.findByLabelText("Book");
     fireEvent.change(picker, { target: { value: "s2" } });
 
+    // The list operation's copy, never the backend detail.
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toBe("Source not found.");
+    expect(alert.textContent).toBe("Could not load your notes.");
   });
 
   it("says a picked book has nothing yet rather than nothing at all", async () => {

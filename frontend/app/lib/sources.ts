@@ -12,6 +12,8 @@
  * helpers just carry inputs in and surface success/error out.
  */
 
+import { apiErrorFrom } from "./errors";
+
 /** Secret-free source summary as returned by `/api/sources*`. */
 export type SourceSummary = {
   id: string;
@@ -80,7 +82,7 @@ export async function listSources(
     credentials: "same-origin",
   });
   if (!res.ok) {
-    throw await toSourceError(res, "Could not load your sources.");
+    throw await apiErrorFrom(res, "sourcesList");
   }
   return (await res.json()) as SourceSummary[];
 }
@@ -95,7 +97,7 @@ export async function getSource(
     credentials: "same-origin",
   });
   if (!res.ok) {
-    throw await toSourceError(res, "Could not load that source.");
+    throw await apiErrorFrom(res, "sourcesGet");
   }
   return (await res.json()) as SourceSummary;
 }
@@ -123,7 +125,7 @@ export async function uploadSource(
     body,
   });
   if (!res.ok) {
-    throw await toSourceError(res, "Upload failed.");
+    throw await apiErrorFrom(res, "sourcesUpload");
   }
   return (await res.json()) as SourceSummary;
 }
@@ -134,7 +136,7 @@ export async function uploadSource(
  * `uploadSource`; the caller passes it in (read from `/api/auth/me`). The
  * HttpOnly session cookie rides along automatically (`credentials:
  * "same-origin"`). On a non-OK response (e.g. 409 "already in progress", 502),
- * the backend `detail` is surfaced via `toSourceError`.
+ * it throws an `ApiError`.
  */
 export async function startIngestion(
   sourceId: string,
@@ -147,7 +149,7 @@ export async function startIngestion(
     headers: { "X-CSRF-Token": csrfToken },
   });
   if (!res.ok) {
-    throw await toSourceError(res, "Could not start ingestion.");
+    throw await apiErrorFrom(res, "sourcesIngest");
   }
   return (await res.json()) as IngestionSummary;
 }
@@ -156,8 +158,8 @@ export async function startIngestion(
  * Fetch a source's parsed book structure (metadata + nested section tree)
  * through the same-origin proxy. Read-only GET, so no CSRF token; the HttpOnly
  * session cookie rides along automatically. Non-OK responses (e.g. 404 when the
- * source has no corpus yet) surface the backend `detail` via `toSourceError`,
- * mirroring `listSources`.
+ * source has no corpus yet) throw an `ApiError`, mirroring
+ * `listSources`.
  */
 export async function fetchSourceStructure(
   id: string,
@@ -168,17 +170,7 @@ export async function fetchSourceStructure(
     credentials: "same-origin",
   });
   if (!res.ok) {
-    throw await toSourceError(res, "Could not load the book structure.");
+    throw await apiErrorFrom(res, "sourcesStructure");
   }
   return (await res.json()) as SourceStructure;
-}
-
-/** Build an Error from a non-OK response, preferring the backend's detail. */
-async function toSourceError(res: Response, fallback: string): Promise<Error> {
-  try {
-    const body = (await res.json()) as { detail?: string };
-    return new Error(body.detail ?? fallback);
-  } catch {
-    return new Error(fallback);
-  }
 }

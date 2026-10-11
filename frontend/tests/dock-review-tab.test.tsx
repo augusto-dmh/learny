@@ -239,8 +239,9 @@ describe("the dock's Review tab", () => {
     vi.stubGlobal("fetch", fetchMock);
     renderReviewTab();
 
+    // A 5xx reads as the shared server copy, never the backend detail.
     expect((await screen.findAllByRole("alert"))[0].textContent).toBe(
-      "Could not reach the scheduler.",
+      "The server had a problem. Please try again.",
     );
   });
 });

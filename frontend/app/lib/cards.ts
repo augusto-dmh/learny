@@ -14,10 +14,12 @@
  * carry inputs in and surface the suggestions/card/error out. The response types
  * mirror the backend views in `web/cards.py` exactly so the two never drift.
  *
- * Non-OK responses surface as a typed `CardError` whose `kind` lets callers branch
- * on the documented failures without matching on message strings — following the
- * `NoteError` convention in `notes.ts`, not the bare `Error` that `quiz.ts` throws.
+ * Non-OK responses surface as a typed `CardError` (an `ApiError`) whose `kind`
+ * lets callers branch on the documented failures without matching on message
+ * strings — following the `NoteError` convention in `notes.ts`.
  */
+
+import { ApiError, readDetail, type ApiOperation } from "./errors";
 
 /** One ephemeral card candidate, mirroring the backend `CardSuggestionView`. */
 export type CardSuggestion = {
@@ -88,19 +90,23 @@ export type AcceptNoteCardBody = {
 export type CardErrorKind = "stale_capture" | "invalid" | "unknown";
 
 /**
- * A non-OK cards response, carrying the mapped `kind` and the backend `detail` (or
- * a readable fallback) as its message. Callers match on `kind`, not the message, so
- * copy changes never break control flow.
+ * A non-OK cards response: an `ApiError` carrying the mapped `kind` besides the
+ * operation, status and backend `detail`. Callers match on `kind`, not the
+ * message, so copy changes never break control flow.
  */
-export class CardError extends Error {
+export class CardError extends ApiError {
   readonly kind: CardErrorKind;
-  readonly status: number;
+  declare readonly status: number;
 
-  constructor(kind: CardErrorKind, status: number, message: string) {
-    super(message);
+  constructor(
+    kind: CardErrorKind,
+    operation: ApiOperation,
+    status: number,
+    detail: string | null = null,
+  ) {
+    super(operation, status, detail);
     this.name = "CardError";
     this.kind = kind;
-    this.status = status;
   }
 }
 
@@ -126,7 +132,7 @@ export async function suggestCards(
     body: JSON.stringify({ note_anchor_id: noteAnchorId }),
   });
   if (!res.ok) {
-    throw await toCardError(res, "Could not suggest cards for this passage.");
+    throw await toCardError(res, "cardsSuggestPassage");
   }
   const body = (await res.json()) as { suggestions: CardSuggestion[] };
   return body.suggestions;
@@ -154,7 +160,7 @@ export async function acceptCard(
     body: JSON.stringify(body),
   });
   if (!res.ok) {
-    throw await toCardError(res, "Could not save this card.");
+    throw await toCardError(res, "cardsSave");
   }
   return (await res.json()) as Card;
 }
@@ -169,8 +175,8 @@ export async function acceptCard(
  * State-changing per the backend (CSRF + quiz throttle), so it carries the CSRF
  * token in `X-CSRF-Token`. An empty list is a normal outcome — the QC dropped every
  * candidate as ungrounded ("no cards for this note") — not an error. A generation
- * provider failure (502) surfaces as a `CardError` with kind `unknown`, carrying the
- * backend detail so the caller can show a readable, retryable message.
+ * provider failure (502) surfaces as a `CardError` with kind `unknown`, which the
+ * caller shows as the shared server-error copy with a retry.
  */
 export async function suggestNoteCards(
   noteId: string,
@@ -183,7 +189,7 @@ export async function suggestNoteCards(
     headers: { "content-type": "application/json", "X-CSRF-Token": csrfToken },
   });
   if (!res.ok) {
-    throw await toCardError(res, "Could not suggest cards for this note.");
+    throw await toCardError(res, "cardsSuggestNote");
   }
   const body = (await res.json()) as { suggestions: CardSuggestion[] };
   return body.suggestions;
@@ -213,26 +219,18 @@ export async function acceptNoteCard(
     body: JSON.stringify(body),
   });
   if (!res.ok) {
-    throw await toCardError(res, "Could not add this card to review.");
+    throw await toCardError(res, "cardsAddToReview");
   }
   return { card: (await res.json()) as Card, created: res.status === 201 };
 }
 
 /**
  * Build a typed `CardError` from a non-OK response. 409 maps to `stale_capture`
- * (the passage moved under the highlight) and 422 to `invalid`. The backend
- * `detail` string becomes the message; a 422 detail arrives as a list of validation
- * errors, not a string, so those fall back to the readable message rather than a
- * stringified list.
+ * (the passage moved under the highlight) and 422 to `invalid`; the backend
+ * `detail` rides along as data.
  */
-async function toCardError(res: Response, fallback: string): Promise<CardError> {
+async function toCardError(res: Response, operation: ApiOperation): Promise<CardError> {
   const kind: CardErrorKind =
     res.status === 409 ? "stale_capture" : res.status === 422 ? "invalid" : "unknown";
-  try {
-    const body = (await res.json()) as { detail?: unknown };
-    const message = typeof body.detail === "string" ? body.detail : fallback;
-    return new CardError(kind, res.status, message);
-  } catch {
-    return new CardError(kind, res.status, fallback);
-  }
+  return new CardError(kind, operation, res.status, await readDetail(res));
 }

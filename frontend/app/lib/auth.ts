@@ -13,6 +13,8 @@
  * proxy. FastAPI remains authoritative for every auth decision.
  */
 
+import { apiErrorFrom } from "./errors";
+
 export type UserSummary = {
   id: string;
   email: string;
@@ -28,6 +30,12 @@ export type MeResponse = UserSummary & {
    * the choice endpoint (`/api/me/ai-profile`).
    */
   ai_profile_id: string | null;
+  /**
+   * The caller's stored interface language (`en` or `pt-BR`); null means
+   * "automatic" — the cookie or the browser's `Accept-Language` decides. The
+   * `learny_locale` cookie is reconciled from this value (`useLocaleSync`).
+   */
+  locale: string | null;
 };
 
 /** Auth state as the UI sees it: either a signed-in user or anonymous. */
@@ -82,7 +90,7 @@ export async function register(
     }),
   });
   if (!res.ok) {
-    throw await toAuthError(res, "Registration failed.");
+    throw await apiErrorFrom(res, "authRegister");
   }
   return (await res.json()) as UserSummary;
 }
@@ -100,7 +108,7 @@ export async function login(
     body: JSON.stringify({ email, password }),
   });
   if (!res.ok) {
-    throw await toAuthError(res, "Invalid email or password.");
+    throw await apiErrorFrom(res, "authLogin");
   }
   return (await res.json()) as UserSummary;
 }
@@ -132,16 +140,6 @@ export async function logout(
     headers: { "X-CSRF-Token": token },
   });
   if (!res.ok && res.status !== 401) {
-    throw await toAuthError(res, "Logout failed.");
-  }
-}
-
-/** Build an Error from a non-OK response, preferring the backend's detail. */
-async function toAuthError(res: Response, fallback: string): Promise<Error> {
-  try {
-    const body = (await res.json()) as { detail?: string };
-    return new Error(body.detail ?? fallback);
-  } catch {
-    return new Error(fallback);
+    throw await apiErrorFrom(res, "authLogout");
   }
 }

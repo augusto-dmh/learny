@@ -130,7 +130,7 @@ describe("saveAnswerAsNote section-level fallback (RA-21, P3 AC 3)", () => {
   it("still saves the answer, on the same anchor with no quote, after a stale capture", async () => {
     const captureImpl = vi
       .fn()
-      .mockRejectedValueOnce(new NoteError("stale_capture", 409, "stale"))
+      .mockRejectedValueOnce(new NoteError("stale_capture", "notesCapture", 409))
       .mockResolvedValue({});
 
     const result = await saveAnswerAsNote({
@@ -184,7 +184,7 @@ describe("saveAnswerAsNote error propagation", () => {
   it("rethrows a non-stale NoteError instead of falling back", async () => {
     const captureImpl = vi
       .fn()
-      .mockRejectedValue(new NoteError("body_too_long", 422, "too long"));
+      .mockRejectedValue(new NoteError("body_too_long", "notesCapture", 422));
 
     await expect(
       saveAnswerAsNote({

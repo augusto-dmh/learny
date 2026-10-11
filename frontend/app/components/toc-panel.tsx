@@ -31,6 +31,7 @@ import {
   useNavigateWithTransition,
 } from "@/app/components/nav-pending";
 import { cn } from "@/lib/utils";
+import { useErrorMessage } from "./use-error-message";
 
 export function TocPanel({
   sourceId,
@@ -54,6 +55,7 @@ export function TocPanel({
   onSameChapterNavigate: (anchor: string) => void;
   fetchStructureImpl?: typeof fetchSourceStructure;
 }) {
+  const errorMessage = useErrorMessage();
   const { navigate, isPending } = useNavigateWithTransition();
   const [structure, setStructure] = useState<SourceStructure | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -71,9 +73,7 @@ export function TocPanel({
       })
       .catch((err: unknown) => {
         if (active) {
-          setError(
-            err instanceof Error ? err.message : "Could not load the contents.",
-          );
+          setError(errorMessage(err, "sourcesStructure"));
         }
       });
     return () => {

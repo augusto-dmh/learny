@@ -231,7 +231,10 @@ describe("HomeScreen fetch isolation (spec edge case)", () => {
     render(<HomeScreen />);
 
     // The hero shows its own quiet error…
-    expect((await screen.findByRole("alert")).textContent).toContain("Hero boom.");
+    // The backend detail stays data; the learner reads catalog copy.
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("The server had a problem. Please try again.");
+    expect(alert.textContent).not.toContain("Hero boom.");
     // …while the due card still renders its data.
     expect((await screen.findByTestId("due-count")).textContent).toContain("5");
   });
@@ -252,7 +255,10 @@ describe("HomeScreen fetch isolation (spec edge case)", () => {
       "Ready Book",
     );
     // …while the due card shows its own quiet error.
-    expect((await screen.findByRole("alert")).textContent).toContain("Due boom.");
+    // The backend detail stays data; the learner reads catalog copy.
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("The server had a problem. Please try again.");
+    expect(alert.textContent).not.toContain("Due boom.");
   });
 });
 
@@ -275,7 +281,10 @@ describe("HomeScreen stats isolation (spec edge case)", () => {
     );
     expect((await screen.findByTestId("due-count")).textContent).toContain("5");
     // …while the stats block shows its own quiet error below the fold.
-    expect((await screen.findByRole("alert")).textContent).toContain("Stats boom.");
+    // The backend detail stays data; the learner reads catalog copy.
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("The server had a problem. Please try again.");
+    expect(alert.textContent).not.toContain("Stats boom.");
   });
 });
 

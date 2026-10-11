@@ -13,13 +13,14 @@
  *
  * FastAPI stays authoritative for auth, ownership, readiness, and generation;
  * these helpers just carry the message in and surface the streamed tokens,
- * citations, answer status, tutor ladder, and readable errors out.
+ * citations, answer status, tutor ladder, and typed errors out.
  */
 
 import { DefaultChatTransport, type UIMessage } from "ai";
 
 import type { ConversationAnswerStatus, ConversationMode } from "./conversations";
 import { type Citation } from "./citations";
+import { ApiError, readDetail, type ApiErrorStatus, type ApiOperation } from "./errors";
 
 /**
  * The origin marker a capture-popover Explain turn carries (COST-04, AD-340).
@@ -158,60 +159,35 @@ export function latestTutorState(
 }
 
 /** A pre-stream HTTP failure (network unreachable, or the status code). */
-export type StreamErrorKind = number | "network";
+export type StreamErrorKind = ApiErrorStatus;
 
 /**
- * The readable message each chat surface renders for a stream that fails before
- * the first byte (the eager backend guards return these as plain JSON errors),
- * or for an unreachable server. The backend's mid-stream `error` part carries its
- * own readable text ("Answer generation failed…"), which the surfaces render
- * directly; this maps the pre-stream statuses to the same generation wording for
- * 502 so both failure paths read alike.
+ * A pre-stream request failure: an `ApiError` for a chat operation, carrying the
+ * originating status (or `"network"`). Surfaces read it through
+ * `useErrorMessage`, which gives the chat guards (403/404/409/422) their own copy
+ * and the shared status classes (401, 429, 5xx, network) theirs; a 401 is keyed
+ * off `status` to redirect to login (FE-05).
+ *
+ * The backend's mid-stream `error` part is not one of these: the AI SDK raises a
+ * plain `Error` holding the backend's text, which the surfaces never show — they
+ * read it as the catalog's generation-failure copy instead.
  */
-export function errorMessageFor(kind: StreamErrorKind): string {
-  switch (kind) {
-    case 401:
-      return "Your session has expired. Please sign in again.";
-    case 403:
-      return "Your session could not be verified. Refresh the page and try again.";
-    case 404:
-      return "This book could not be found.";
-    case 409:
-      return "This book is still processing. Try again once it is ready.";
-    case 422:
-      return "That request could not be processed. Please revise it and try again.";
-    case 429:
-      return "Too many requests. Please wait a moment and try again.";
-    case 502:
-      return "Answer generation failed. Please try again.";
-    case "network":
-      return "Something went wrong reaching the server. Please try again.";
-    default:
-      return "Something went wrong. Please try again.";
-  }
-}
-
-/**
- * A pre-stream request failure carrying the originating status (or `"network"`).
- * Its message is the readable string; surfaces show `error.message` and can key
- * a 401 off `status` to redirect to login (FE-05).
- */
-export class StreamRequestError extends Error {
-  readonly status: StreamErrorKind;
-
-  constructor(status: StreamErrorKind) {
-    super(errorMessageFor(status));
+export class StreamRequestError extends ApiError {
+  constructor(
+    status: StreamErrorKind,
+    operation: ApiOperation = "chatTurn",
+    detail: string | null = null,
+  ) {
+    super(operation, status, detail);
     this.name = "StreamRequestError";
-    this.status = status;
   }
 }
 
 /**
  * `fetch` wrapper the transports use so a non-OK stream start (the eager 401/403/
  * 404/409/422/429/502 guards, which respond before the first SSE byte) surfaces
- * as a `StreamRequestError` with a readable message instead of the AI SDK's raw
- * response-body text. Reads `globalThis.fetch` at call time so tests that stub it
- * still apply. A user-initiated abort (the stop button) propagates untouched so
+ * as a `StreamRequestError` instead of the AI SDK's raw response-body text.
+ * Reads `globalThis.fetch` at call time so tests that stub it still apply. A user-initiated abort (the stop button) propagates untouched so
  * the SDK settles to a stopped state rather than a network error.
  */
 const streamingFetch: typeof fetch = async (input, init) => {
@@ -228,7 +204,7 @@ const streamingFetch: typeof fetch = async (input, init) => {
     throw new StreamRequestError("network");
   }
   if (!response.ok) {
-    throw new StreamRequestError(response.status);
+    throw new StreamRequestError(response.status, "chatTurn", await readDetail(response));
   }
   return response;
 };

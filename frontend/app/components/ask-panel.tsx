@@ -50,7 +50,6 @@ import { getSource } from "@/app/lib/sources";
 import {
   EXPLAIN_SELECTION_ORIGIN,
   assistantView,
-  errorMessageFor,
   messageText,
   turnsToUIMessages,
   type LearnyUIMessage,
@@ -78,6 +77,7 @@ import { isNotFound, NotFoundNotice } from "./not-found-notice";
 import { SaveToNoteAction } from "./save-to-note-action";
 import { useConversationThread } from "./use-conversation-thread";
 import { useIncludeNotes } from "./use-include-notes";
+import { useErrorMessage } from "./use-error-message";
 
 /** The surface name the active-conversation pointer is stored under. */
 const SURFACE = "ask";
@@ -128,6 +128,7 @@ export function AskPanel({
   onRequireAuth?: () => void;
   onConversationsChanged?: () => void;
 }) {
+  const errorMessage = useErrorMessage();
   const [thread, setThread] = useState<AskThread | null>(null);
   const [restoreError, setRestoreError] = useState<string | null>(null);
   const [suggestedQuestion, setSuggestedQuestion] = useState<string | null>(null);
@@ -186,11 +187,7 @@ export function AskPanel({
         if (err instanceof ConversationRequestError && err.status === 404) {
           writeActiveConversation(sourceId, SURFACE, null);
         } else {
-          setRestoreError(
-            err instanceof Error
-              ? err.message
-              : "Could not load that conversation.",
-          );
+          setRestoreError(errorMessage(err, "conversationsGet"));
         }
         setThread(fresh());
       });
@@ -267,6 +264,7 @@ function AskChat({
   onConversationKept: () => void;
   suggestedQuestion: string | null;
 }) {
+  const errorMessage = useErrorMessage();
   // A quote the reader chose to "Ask about": it rides along, once, with the next
   // typed question (RA-18) and shows as a dismissable context chip until then.
   const [attachedQuote, setAttachedQuote] = useState<string | null>(null);
@@ -485,7 +483,7 @@ function AskChat({
                       error={
                         liveFailed && failedTurn
                           ? failedTurn.error
-                          : errorMessageFor(502)
+                          : errorMessage(null, "stream.generationFailed")
                       }
                       onRetry={() =>
                         send(

@@ -211,7 +211,8 @@ describe("NoteCardSuggestions failure", () => {
     fireEvent.click(screen.getByRole("button", { name: "Add to review" }));
 
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toBe("The card generator is unavailable.");
+    // A 5xx reads as the shared server copy, never the backend detail.
+    expect(alert.textContent).toBe("The server had a problem. Please try again.");
 
     // The action is retryable in place: a second attempt clears the error and lists.
     fireEvent.click(screen.getByRole("button", { name: "Add to review" }));

@@ -82,11 +82,11 @@ describe("auth client (D2)", () => {
     expect(init.method).toBe("POST");
   });
 
-  it("login surfaces the backend error detail on failure", async () => {
+  it("login carries the backend error detail on failure", async () => {
     const fetchMock = vi.fn(async () => jsonResponse(401, { detail: "Invalid credentials." }));
     await expect(
       login("a@b.c", "wrong", fetchMock as unknown as typeof fetch),
-    ).rejects.toThrow("Invalid credentials.");
+    ).rejects.toMatchObject({ detail: "Invalid credentials." });
   });
 
   it("fetchAuthState maps 200 -> authenticated and 401 -> anonymous", async () => {

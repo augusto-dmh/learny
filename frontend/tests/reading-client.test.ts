@@ -151,14 +151,14 @@ describe("getChapter (RD-01)", () => {
     expect(result).toEqual({ status: "not_found" });
   });
 
-  it("throws a readable error when unauthenticated (401)", async () => {
+  it("throws an ApiError when unauthenticated (401)", async () => {
     const fetchMock = fetchMockFn(async () =>
       jsonResponse(401, { detail: "Not authenticated." }),
     );
 
     await expect(
       getChapter("s1", ANCHOR, fetchMock as unknown as typeof fetch),
-    ).rejects.toThrow("Not authenticated.");
+    ).rejects.toMatchObject({ detail: "Not authenticated." });
   });
 });
 
@@ -194,7 +194,7 @@ describe("saveReadingPosition (RD-07)", () => {
         "csrf-xyz",
         fetchMock as unknown as typeof fetch,
       ),
-    ).rejects.toThrow("Anchor not found.");
+    ).rejects.toMatchObject({ detail: "Anchor not found." });
   });
 
   it("attaches X-Client-Timezone for the study-day boundary when the zone is available (HOME-09)", async () => {
@@ -247,14 +247,14 @@ describe("listHighlights (RD-28)", () => {
     expect(init.credentials).toBe("same-origin");
   });
 
-  it("throws a readable error on a non-OK response", async () => {
+  it("throws an ApiError on a non-OK response", async () => {
     const fetchMock = fetchMockFn(async () =>
       jsonResponse(404, { detail: "Source not found." }),
     );
 
     await expect(
       listHighlights("s1", fetchMock as unknown as typeof fetch),
-    ).rejects.toThrow("Source not found.");
+    ).rejects.toMatchObject({ detail: "Source not found." });
   });
 });
 

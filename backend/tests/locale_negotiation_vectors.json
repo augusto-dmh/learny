@@ -1,0 +1,31 @@
+{
+  "description": "Accept-Language -> interface locale. The one vector table both negotiators are held to: backend/tests/test_locale.py (negotiate_locale) and frontend/tests/i18n-config.test.ts (negotiateLocale) read this file, so the two implementations cannot drift. A q-value must match the RFC 9110 qvalue grammar (0 to 1, at most three decimals); anything else makes its tag malformed and skipped.",
+  "vectors": [
+    ["pt", "pt-BR"],
+    ["pt-BR", "pt-BR"],
+    ["pt-PT", "pt-BR"],
+    ["pt;q=0.9,en;q=0.8", "pt-BR"],
+    ["en,pt", "en"],
+    ["en;q=0.5,pt;q=0.9", "pt-BR"],
+    ["pt-BR,pt;q=0.9,en;q=0.8", "pt-BR"],
+    ["en-US,en;q=0.9", "en"],
+    ["fr,pt;q=0.5", "pt-BR"],
+    ["pt;Q=0.9,en;q=0.8", "pt-BR"],
+    ["pt;q=1.0,en", "pt-BR"],
+    ["en;q=0.500,pt;q=0.5", "en"],
+    [null, "en"],
+    ["", "en"],
+    [";;;", "en"],
+    ["pt;q=abc", "en"],
+    ["fr,de", "en"],
+    ["*", "en"],
+    ["pt;q=0", "en"],
+    ["pt;q=inf,en", "en"],
+    ["pt;q=Infinity", "en"],
+    ["pt;q=nan,en", "en"],
+    ["pt;q=0.9=x,en;q=0.5", "en"],
+    ["pt;q=1.5,en", "en"],
+    ["pt;q=-1", "en"],
+    ["pt;q=0.1234,en;q=0.1", "en"]
+  ]
+}

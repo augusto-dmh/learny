@@ -22,6 +22,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 import { listNotes, type NoteSummary } from "@/app/lib/notes";
+import { useErrorMessage } from "./use-error-message";
 
 /** What the book's Notes tab is showing: its rows, or why it has none. */
 export type BookNotes = {
@@ -38,6 +39,7 @@ export type BookNotes = {
  * be there whether or not the reader is looking at the tab.
  */
 export function useBookNotes(sourceId: string, refreshToken = 0): BookNotes {
+  const errorMessage = useErrorMessage();
   const [notes, setNotes] = useState<NoteSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -47,11 +49,7 @@ export function useBookNotes(sourceId: string, refreshToken = 0): BookNotes {
       setError(null);
     } catch (err) {
       setNotes([]);
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Could not load this book's notes.",
-      );
+      setError(errorMessage(err, "notesList"));
     }
   }, [sourceId]);
 

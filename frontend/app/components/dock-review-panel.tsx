@@ -18,6 +18,7 @@ import { useCallback, useEffect, useState } from "react";
 import { getDueReviews } from "@/app/lib/quiz";
 
 import { ReviewScreen } from "./review-screen";
+import { useErrorMessage } from "./use-error-message";
 
 /** How many of this book's cards are due, or why the figure is missing. */
 export type BookDue = {
@@ -36,6 +37,7 @@ export type BookDue = {
  * be there whether or not the reader is looking at the tab.
  */
 export function useDueCount(sourceId: string): BookDue {
+  const errorMessage = useErrorMessage();
   const [total, setTotal] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -46,11 +48,7 @@ export function useDueCount(sourceId: string): BookDue {
       setError(null);
     } catch (err) {
       setTotal(null);
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Could not load what is due from this book.",
-      );
+      setError(errorMessage(err, "quizDue"));
     }
   }, [sourceId]);
 

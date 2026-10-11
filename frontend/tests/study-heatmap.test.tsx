@@ -564,7 +564,10 @@ describe("StudyStats fetch failure (spec edge)", () => {
 
     render(<StudyStats />);
 
-    expect((await screen.findByRole("alert")).textContent).toContain("Stats boom.");
+    // The backend detail stays data; the learner reads catalog copy.
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("The server had a problem. Please try again.");
+    expect(alert.textContent).not.toContain("Stats boom.");
     // The block failed quietly: no streak line or heatmap, no celebratory role.
     expect(screen.queryByTestId("streak-line")).toBeNull();
     expect(screen.queryByRole("status")).toBeNull();

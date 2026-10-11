@@ -225,7 +225,8 @@ describe("LibraryScreen (upload + list)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Upload" }));
 
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toBe("Only EPUB files are supported.");
+    // The upload operation's copy, never the backend detail.
+    expect(alert.textContent).toBe("Upload failed.");
     expect(screen.queryByText("Not a book")).toBeNull();
     expect(screen.getByText("No sources yet.")).toBeTruthy();
   });
@@ -406,7 +407,8 @@ describe("LibraryScreen (ingestion start)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Start ingestion" }));
 
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toBe("Ingestion is already in progress.");
+    // The start operation's copy, never the backend detail.
+    expect(alert.textContent).toBe("Could not start ingestion.");
     expect(screen.getByTestId("status-s-up").textContent).toBe("uploaded");
     expect(
       screen.getByRole("button", { name: "Start ingestion" }),

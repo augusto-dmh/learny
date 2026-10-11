@@ -13,6 +13,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import LandingPage from "../app/page";
 
+// The page hosts the anonymous language switcher, which re-renders through the router.
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
+}));
+
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();

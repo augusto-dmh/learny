@@ -64,14 +64,14 @@ describe("listAiProfiles", () => {
     ).resolves.toEqual([]);
   });
 
-  it("maps a 401 to the typed error with the fallback copy", async () => {
+  it("maps a 401 to the typed error, keeping the detail as data", async () => {
     const fetchMock = vi.fn(async () => jsonResponse(401, { detail: "Unauthorized" }));
     const err = await listAiProfiles(fetchMock as unknown as typeof fetch).catch(
       (e: unknown) => e,
     );
     expect(err).toBeInstanceOf(AiProfileRequestError);
     expect((err as AiProfileRequestError).status).toBe(401);
-    expect((err as AiProfileRequestError).message).toBe("Unauthorized");
+    expect((err as AiProfileRequestError).detail).toBe("Unauthorized");
   });
 });
 
@@ -117,7 +117,7 @@ describe("putAiProfileChoice", () => {
     expect(headers.get("content-type")).toBe("application/json");
   });
 
-  it("surfaces the backend's honest 422 detail verbatim, with the status", async () => {
+  it("keeps the backend 422 detail as data, with the status", async () => {
     const detail =
       "generation profile 'house-economy' is not declared by this deployment; " +
       "choose an id from GET /api/ai/profiles";
@@ -130,10 +130,10 @@ describe("putAiProfileChoice", () => {
 
     expect(err).toBeInstanceOf(AiProfileRequestError);
     expect((err as AiProfileRequestError).status).toBe(422);
-    expect((err as AiProfileRequestError).message).toBe(detail);
+    expect((err as AiProfileRequestError).detail).toBe(detail);
   });
 
-  it("falls back to readable copy when an error body's detail is not a string", async () => {
+  it("names the operation when an error body's detail is not a string", async () => {
     // FastAPI validation errors carry `detail` as a list of error objects.
     const fetchMock = vi.fn(async () =>
       jsonResponse(422, { detail: [{ loc: ["body", "profile_id"] }] }),
@@ -146,12 +146,10 @@ describe("putAiProfileChoice", () => {
 
     expect(err).toBeInstanceOf(AiProfileRequestError);
     expect((err as AiProfileRequestError).status).toBe(422);
-    expect((err as AiProfileRequestError).message).toBe(
-      "Could not save your AI profile choice.",
-    );
+    expect((err as AiProfileRequestError).operation).toBe("aiProfileSave");
   });
 
-  it("falls back to readable copy when an error body is not JSON at all", async () => {
+  it("names the operation when an error body is not JSON at all", async () => {
     const fetchMock = vi.fn(
       async () => new Response("<html>gateway timeout</html>", { status: 504 }),
     );
@@ -163,9 +161,7 @@ describe("putAiProfileChoice", () => {
 
     expect(err).toBeInstanceOf(AiProfileRequestError);
     expect((err as AiProfileRequestError).status).toBe(504);
-    expect((err as AiProfileRequestError).message).toBe(
-      "Could not save your AI profile choice.",
-    );
+    expect((err as AiProfileRequestError).operation).toBe("aiProfileSave");
   });
 });
 
@@ -184,7 +180,7 @@ describe("deleteAiProfileChoice", () => {
     expect(headers.get("X-CSRF-Token")).toBe("csrf-xyz");
   });
 
-  it("maps a failed unset to the typed error with the fallback copy", async () => {
+  it("maps a failed unset to the typed error with its operation", async () => {
     const fetchMock = vi.fn(async () => jsonResponse(500, { detail: "boom" }));
     const err = await deleteAiProfileChoice(
       "csrf-xyz",
@@ -193,6 +189,6 @@ describe("deleteAiProfileChoice", () => {
 
     expect(err).toBeInstanceOf(AiProfileRequestError);
     expect((err as AiProfileRequestError).status).toBe(500);
-    expect((err as AiProfileRequestError).message).toBe("boom");
+    expect((err as AiProfileRequestError).detail).toBe("boom");
   });
 });

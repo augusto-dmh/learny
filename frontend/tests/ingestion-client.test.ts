@@ -57,24 +57,24 @@ describe("ingestion client (T7)", () => {
     expect(headers.get("X-CSRF-Token")).toBe("csrf-xyz");
   });
 
-  it("surfaces the backend detail when a job is already in progress (409)", async () => {
+  it("carries the backend detail as data when a job is already in progress (409)", async () => {
     const fetchMock = fetchMockFn(async () =>
       jsonResponse(409, { detail: "Ingestion is already in progress." }),
     );
 
     await expect(
       startIngestion("s1", "csrf-xyz", fetchMock as unknown as typeof fetch),
-    ).rejects.toThrow("Ingestion is already in progress.");
+    ).rejects.toMatchObject({ detail: "Ingestion is already in progress." });
   });
 
-  it("surfaces the backend detail when the enqueue fails (502)", async () => {
+  it("carries the backend detail as data when the enqueue fails (502)", async () => {
     const fetchMock = fetchMockFn(async () =>
       jsonResponse(502, { detail: "Could not start ingestion." }),
     );
 
     await expect(
       startIngestion("s1", "csrf-xyz", fetchMock as unknown as typeof fetch),
-    ).rejects.toThrow("Could not start ingestion.");
+    ).rejects.toMatchObject({ operation: "sourcesIngest" });
   });
 });
 
@@ -106,23 +106,23 @@ describe("ingestion status client (FE-18)", () => {
     expect(new Headers(init.headers).has("X-CSRF-Token")).toBe(false);
   });
 
-  it("throws a readable error when unauthenticated (401)", async () => {
+  it("throws an ApiError when unauthenticated (401)", async () => {
     const fetchMock = fetchMockFn(async () =>
       jsonResponse(401, { detail: "Not authenticated." }),
     );
 
     await expect(
       getIngestion("s1", fetchMock as unknown as typeof fetch),
-    ).rejects.toThrow("Not authenticated.");
+    ).rejects.toMatchObject({ detail: "Not authenticated." });
   });
 
-  it("throws a readable error when no job exists yet (404)", async () => {
+  it("throws an ApiError when no job exists yet (404)", async () => {
     const fetchMock = fetchMockFn(async () =>
       jsonResponse(404, { detail: "No ingestion job for this source." }),
     );
 
     await expect(
       getIngestion("s1", fetchMock as unknown as typeof fetch),
-    ).rejects.toThrow("No ingestion job for this source.");
+    ).rejects.toMatchObject({ detail: "No ingestion job for this source." });
   });
 });

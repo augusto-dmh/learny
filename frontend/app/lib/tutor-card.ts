@@ -6,13 +6,15 @@
  * cards is a different product and must not be called from this flow.
  */
 
-export class TutorCardError extends Error {
-  readonly status: number;
+import { ApiError, readDetail } from "./errors";
 
-  constructor(status: number, message: string) {
-    super(message);
+/** A refused tutor-card accept: an `ApiError` whose `status` callers branch on. */
+export class TutorCardError extends ApiError {
+  declare readonly status: number;
+
+  constructor(status: number, detail: string | null = null) {
+    super("tutorCardSave", status, detail);
     this.name = "TutorCardError";
-    this.status = status;
   }
 }
 
@@ -27,6 +29,6 @@ export async function acceptTutorCard(
     headers: { "X-CSRF-Token": csrfToken },
   });
   if (!res.ok) {
-    throw new TutorCardError(res.status, "Could not save this review card.");
+    throw new TutorCardError(res.status, await readDetail(res));
   }
 }

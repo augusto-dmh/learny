@@ -18,6 +18,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Moon, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
 
+import { useLocaleSync } from "@/app/components/use-locale-sync";
 import { fetchAuthState, logout, type AuthState } from "@/app/lib/auth";
 import { Button } from "@/components/ui/button";
 import { SidebarTrigger } from "@/components/ui/sidebar";
@@ -26,6 +27,8 @@ export function AuthHeader() {
   const router = useRouter();
   const { resolvedTheme, setTheme } = useTheme();
   const [state, setState] = useState<AuthState | null>(null);
+  // The stored language wins over a stale cookie (new device, cleared cookies).
+  useLocaleSync(state);
 
   const refresh = useCallback(async () => {
     const next = await fetchAuthState();

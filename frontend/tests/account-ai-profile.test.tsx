@@ -71,6 +71,11 @@ function defaultHandlers(overrides: Record<string, Handler> = {}) {
   };
 }
 
+/** The AI-profile radios only (the panel also holds the language choice). */
+function aiProfileRadios(): HTMLInputElement[] {
+  return [...document.querySelectorAll<HTMLInputElement>('input[name="ai-profile-choice"]')];
+}
+
 /** Flush the post-fetch state updates once the routed calls have resolved. */
 async function settle() {
   await act(async () => {});
@@ -116,7 +121,7 @@ describe("AccountPanel AI profile section", () => {
 
     expect(screen.queryByRole("region", { name: "AI profile" })).toBeNull();
     expect(screen.queryByLabelText("Operator default (recommended)")).toBeNull();
-    expect(screen.queryAllByRole("radio")).toHaveLength(0);
+    expect(aiProfileRadios()).toHaveLength(0);
     // The rest of the account panel is untouched by the empty catalog.
     expect(screen.getByRole("button", { name: "Log out" })).toBeTruthy();
   });
@@ -216,7 +221,7 @@ describe("AccountPanel AI profile section", () => {
     expect(screen.queryByLabelText("removed-tier")).toBeNull();
     expect(screen.queryByText("removed-tier")).toBeNull();
     // Exactly the default row plus one row per catalog entry.
-    expect(screen.getAllByRole("radio")).toHaveLength(3);
+    expect(aiProfileRadios()).toHaveLength(3);
   });
 
   it("choosing a profile persists via PUT with the CSRF token, then moves the selection", async () => {
@@ -247,7 +252,7 @@ describe("AccountPanel AI profile section", () => {
     expect(init.credentials).toBe("same-origin");
   });
 
-  it("a failed PUT changes nothing visible and surfaces the backend's honest copy", async () => {
+  it("a failed PUT changes nothing visible and shows the save copy, not the backend detail", async () => {
     const detail =
       "generation profile 'house-primary' is not declared by this deployment; " +
       "choose an id from GET /api/ai/profiles";
@@ -270,7 +275,8 @@ describe("AccountPanel AI profile section", () => {
     fireEvent.click(radio("House standard"));
 
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toBe(detail);
+    // The save operation's copy; the backend detail stays data.
+    expect(alert.textContent).toBe("Could not save your AI profile choice.");
     // The visible selection did not move on the failed save.
     expect(radio("Economy").checked).toBe(true);
     expect(radio("House standard").checked).toBe(false);

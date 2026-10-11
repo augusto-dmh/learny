@@ -10,6 +10,7 @@
  * drift.
  */
 
+import { apiErrorFrom } from "./errors";
 import { type IngestionSummary } from "./sources";
 
 export type { IngestionSummary } from "./sources";
@@ -17,7 +18,7 @@ export type { IngestionSummary } from "./sources";
 /**
  * Fetch a source's latest ingestion job (status/attempts/error + chronological
  * events). On a non-OK response (401 unauthenticated, 404 when no job exists yet)
- * the backend `detail` is surfaced via `toIngestionError`, mirroring `listSources`.
+ * it throws an `ApiError`, mirroring `listSources`.
  */
 export async function getIngestion(
   sourceId: string,
@@ -28,17 +29,7 @@ export async function getIngestion(
     credentials: "same-origin",
   });
   if (!res.ok) {
-    throw await toIngestionError(res, "Could not load ingestion status.");
+    throw await apiErrorFrom(res, "ingestionStatus");
   }
   return (await res.json()) as IngestionSummary;
-}
-
-/** Build an Error from a non-OK response, preferring the backend's detail. */
-async function toIngestionError(res: Response, fallback: string): Promise<Error> {
-  try {
-    const body = (await res.json()) as { detail?: unknown };
-    return new Error(typeof body.detail === "string" ? body.detail : fallback);
-  } catch {
-    return new Error(fallback);
-  }
 }

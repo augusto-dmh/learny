@@ -44,6 +44,21 @@ class User:
 
 
 @dataclass(frozen=True)
+class LocalePreference:
+    """A learner's stored interface-language choice.
+
+    One row per user. ``locale`` is a hint read back as stored: a value outside
+    the supported set (a locale removed after it was chosen) reads as "unset" at
+    the web boundary, and the row is never rewritten behind the learner's back.
+    """
+
+    user_id: UUID
+    locale: str
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
 class AiPreference:
     """A learner's stored AI serving choice (ADR-0020 amendment).
 
