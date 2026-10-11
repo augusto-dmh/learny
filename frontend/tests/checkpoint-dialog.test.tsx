@@ -15,6 +15,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { CheckpointDialog } from "../app/components/checkpoint-dialog";
+import { setTestLocale } from "./setup-intl";
 
 type Handler = (init: RequestInit) => Promise<Response> | Response;
 
@@ -216,7 +217,7 @@ describe("CheckpointDialog", () => {
     expect(explanation.value).toBe("");
   });
 
-  it("a refused explanation shows the server's reason and keeps the draft", async () => {
+  it("a refused explanation shows catalog copy, not the server's detail, and keeps the draft", async () => {
     vi.stubGlobal(
       "fetch",
       routedFetch({
@@ -233,7 +234,10 @@ describe("CheckpointDialog", () => {
     });
     fireEvent.click(within(step).getByRole("button", { name: "Sure" }));
 
-    expect((await screen.findByRole("alert")).textContent).toBe("Daily AI budget reached.");
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "Too many requests. Please wait a moment and try again.",
+    );
+    expect(screen.queryByText("Daily AI budget reached.")).toBeNull();
     const still = screen.getByTestId("checkpoint-ask-explain");
     const textbox = within(still).getByRole("textbox", {
       name: "Your explanation",
@@ -265,6 +269,22 @@ describe("CheckpointDialog", () => {
 
     await waitFor(() => expect(onRequireAuth).toHaveBeenCalledTimes(1));
     expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("speaks pt-BR when the interface is in Portuguese", async () => {
+    setTestLocale("pt-BR");
+    vi.stubGlobal("fetch", routedFetch({ [START]: () => jsonResponse(201, explainOnly) }));
+    renderDialog();
+
+    expect(screen.getByText("Teste-se")).toBeTruthy();
+    for (const label of ["Pouco", "Uma parte", "Quase tudo", "Pular"]) {
+      expect(screen.getByRole("button", { name: label })).toBeTruthy();
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Pular" }));
+    const step = await screen.findByTestId("checkpoint-ask-explain");
+    expect(within(step).getByText("1 de 1")).toBeTruthy();
+    expect(within(step).getByRole("textbox", { name: "Sua explicação" })).toBeTruthy();
+    expect(within(step).getByRole("button", { name: "Só me explique" })).toBeTruthy();
   });
 
   it("just explain is a secondary action on the explain step", async () => {

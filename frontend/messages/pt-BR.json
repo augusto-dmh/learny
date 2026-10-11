@@ -75,7 +75,11 @@
       "cardsSave": "Não foi possível salvar este cartão.",
       "cardsSuggestNote": "Não foi possível sugerir cartões para esta nota.",
       "cardsAddToReview": "Não foi possível adicionar este cartão à revisão.",
-      "tutorCardSave": "Não foi possível salvar este cartão de revisão."
+      "tutorCardSave": "Não foi possível salvar este cartão de revisão.",
+      "checkpointStart": "Não foi possível iniciar a verificação.",
+      "checkpointRespond": "Não foi possível salvar a sua resposta.",
+      "checkpointReveal": "Não foi possível mostrar o trecho.",
+      "checkpointGrade": "Não foi possível salvar a sua avaliação."
     }
   },
   "account": {
@@ -105,6 +109,53 @@
         "teachOnly": "Funciona apenas em Ensinar.",
         "neither": "No momento não funciona em Perguntar nem em Ensinar."
       }
+    }
+  },
+  "checkpoint": {
+    "title": "Teste-se",
+    "invite": {
+      "prompt": "Terminou esta seção?",
+      "action": "Teste-se",
+      "actionLabel": "Teste-se sobre {section}"
+    },
+    "predict": {
+      "prompt": "Antes de começar: quanto desta seção você conseguiria explicar agora, sem olhar?",
+      "little": "Pouco",
+      "some": "Uma parte",
+      "most": "Quase tudo",
+      "skip": "Pular"
+    },
+    "ask": {
+      "position": "{position} de {total}",
+      "answerLabel": "Sua resposta",
+      "explanationLabel": "Sua explicação",
+      "answerPlaceholder": "Escreva o que você lembra, ou deixe em branco.",
+      "explanationPlaceholder": "Explique como se fosse para alguém que ainda não leu.",
+      "howSure": "Quanta certeza você tem?",
+      "justExplain": "Só me explique"
+    },
+    "confidence": {
+      "notSure": "Não tenho certeza",
+      "fairlySure": "Tenho alguma certeza",
+      "sure": "Tenho certeza"
+    },
+    "recalled": {
+      "answer": "Resposta",
+      "howDidItGo": "Como foi?",
+      "again": "De novo",
+      "hard": "Difícil",
+      "good": "Bom",
+      "easy": "Fácil"
+    },
+    "feedback": {
+      "compared": "Comparada com o trecho, a sua explicação…",
+      "missed": "Errei",
+      "partly": "Em parte",
+      "gotIt": "Acertei"
+    },
+    "done": {
+      "saved": "Salvo. O que você errou volta em breve na Revisão, e o resto retorna quando chegar a hora.",
+      "back": "Voltar ao livro"
     }
   }
 }

@@ -8,9 +8,12 @@
  * unlocks it. The server, not this client, decides whether an attempt was
  * assisted.
  *
- * The response types mirror `web/checkpoints.py`.
+ * The response types mirror `web/checkpoints.py`. A non-OK response throws an
+ * `ApiError` naming its operation; the learner reads catalog copy, never the
+ * backend's `detail`.
  */
 
+import { apiErrorFrom, type ApiOperation } from "@/app/lib/errors";
 import { clientTimezone } from "@/app/lib/study";
 
 /** One-tap confidence before the answer is shown: 1 not sure … 3 sure. */
@@ -62,22 +65,11 @@ export type GradedAttempt = {
   state: number;
 };
 
-/** A non-OK checkpoint response: its status and the backend `detail` (or a fallback). */
-export class CheckpointError extends Error {
-  readonly status: number;
-
-  constructor(status: number, message: string) {
-    super(message);
-    this.name = "CheckpointError";
-    this.status = status;
-  }
-}
-
 async function post<T>(
   path: string,
   body: unknown,
   csrfToken: string,
-  fallback: string,
+  operation: ApiOperation,
   fetchImpl: typeof fetch,
   extraHeaders: Record<string, string> = {},
 ): Promise<T> {
@@ -92,16 +84,7 @@ async function post<T>(
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   if (!res.ok) {
-    let message = fallback;
-    try {
-      const detail = ((await res.json()) as { detail?: unknown }).detail;
-      if (typeof detail === "string") {
-        message = detail;
-      }
-    } catch {
-      // Keep the readable fallback.
-    }
-    throw new CheckpointError(res.status, message);
+    throw await apiErrorFrom(res, operation);
   }
   return (await res.json()) as T;
 }
@@ -118,7 +101,7 @@ export function startCheckpoint(
     `/api/sources/${sourceId}/checkpoints`,
     { anchor, prediction },
     csrfToken,
-    "Could not start the checkpoint.",
+    "checkpointStart",
     fetchImpl,
   );
 }
@@ -135,7 +118,7 @@ export function respondToAttempt<T extends RecallReveal | ExplainFeedback>(
     `/api/checkpoint-attempts/${attemptId}/response`,
     { response, confidence },
     csrfToken,
-    "Could not save your answer.",
+    "checkpointRespond",
     fetchImpl,
   );
 }
@@ -150,7 +133,7 @@ export function revealPassage(
     `/api/checkpoint-attempts/${attemptId}/reveal`,
     undefined,
     csrfToken,
-    "Could not show the passage.",
+    "checkpointReveal",
     fetchImpl,
   );
 }
@@ -167,7 +150,7 @@ export function gradeAttempt(
     `/api/checkpoint-attempts/${attemptId}/grade`,
     { rating },
     csrfToken,
-    "Could not save your rating.",
+    "checkpointGrade",
     fetchImpl,
     tz ? { "X-Client-Timezone": tz } : {},
   );

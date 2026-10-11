@@ -33,6 +33,7 @@
  */
 
 import { List, PanelRight } from "lucide-react";
+import { useTranslations } from "next-intl";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
@@ -1021,19 +1022,20 @@ function CheckpointInvite({
   sectionTitle: string;
   onOpen: () => void;
 }) {
+  const t = useTranslations("checkpoint.invite");
   return (
     <aside
       data-testid="checkpoint-invite"
       className="not-prose my-6 flex items-center justify-between gap-3 border-y py-2 text-sm text-muted-foreground"
     >
-      <span>Finished this section?</span>
+      <span>{t("prompt")}</span>
       <button
         type="button"
         onClick={onOpen}
-        aria-label={`Check yourself on ${sectionTitle}`}
+        aria-label={t("actionLabel", { section: sectionTitle })}
         className="text-primary underline-offset-4 hover:underline"
       >
-        Check yourself
+        {t("action")}
       </button>
     </aside>
   );

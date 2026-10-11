@@ -23,6 +23,7 @@
  *   follows is the learner's own.
  */
 
+import { useTranslations } from "next-intl";
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -34,8 +35,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
+import { useErrorMessage } from "@/app/components/use-error-message";
 import {
-  CheckpointError,
   gradeAttempt,
   respondToAttempt,
   revealPassage,
@@ -47,31 +48,32 @@ import {
   type Prediction,
   type RecallReveal,
 } from "@/app/lib/checkpoints";
+import { ApiError } from "@/app/lib/errors";
 
-const PREDICTIONS: { value: Exclude<Prediction, null>; label: string }[] = [
-  { value: 1, label: "Little" },
-  { value: 2, label: "Some" },
-  { value: 3, label: "Most" },
-];
+const PREDICTIONS = [
+  { value: 1, key: "little" },
+  { value: 2, key: "some" },
+  { value: 3, key: "most" },
+] as const satisfies readonly { value: Exclude<Prediction, null>; key: string }[];
 
-export const CONFIDENCES: { value: Confidence; label: string }[] = [
-  { value: 1, label: "Not sure" },
-  { value: 2, label: "Fairly sure" },
-  { value: 3, label: "Sure" },
-];
+export const CONFIDENCES = [
+  { value: 1, key: "notSure" },
+  { value: 2, key: "fairlySure" },
+  { value: 3, key: "sure" },
+] as const satisfies readonly { value: Confidence; key: string }[];
 
 const RECALL_GRADES = [
-  { rating: 1, label: "Again" },
-  { rating: 2, label: "Hard" },
-  { rating: 3, label: "Good" },
-  { rating: 4, label: "Easy" },
-];
+  { rating: 1, key: "again" },
+  { rating: 2, key: "hard" },
+  { rating: 3, key: "good" },
+  { rating: 4, key: "easy" },
+] as const;
 
 const EXPLAIN_GRADES = [
-  { rating: 1, label: "Missed it" },
-  { rating: 2, label: "Partly" },
-  { rating: 3, label: "Got it" },
-];
+  { rating: 1, key: "missed" },
+  { rating: 2, key: "partly" },
+  { rating: 3, key: "gotIt" },
+] as const;
 
 type Phase =
   | { step: "predict" }
@@ -98,6 +100,8 @@ export function CheckpointDialog({
   /** Called when a request finds the session gone (401), as the reader does. */
   onRequireAuth?: () => void;
 }) {
+  const t = useTranslations("checkpoint");
+  const errorMessage = useErrorMessage();
   const [phase, setPhase] = useState<Phase>({ step: "predict" });
   const [checkpoint, setCheckpoint] = useState<Checkpoint | null>(null);
   const [draft, setDraft] = useState("");
@@ -110,11 +114,11 @@ export function CheckpointDialog({
     try {
       await action();
     } catch (err) {
-      if (err instanceof CheckpointError && err.status === 401 && onRequireAuth) {
+      if (err instanceof ApiError && err.status === 401 && onRequireAuth) {
         onRequireAuth();
         return;
       }
-      setError(err instanceof CheckpointError ? err.message : "Something went wrong.");
+      setError(errorMessage(err, "generic"));
     } finally {
       setPending(false);
     }
@@ -196,15 +200,12 @@ export function CheckpointDialog({
     >
       <DialogContent data-testid="checkpoint-dialog" className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>Check yourself</DialogTitle>
+          <DialogTitle>{t("title")}</DialogTitle>
           <DialogDescription>{sectionTitle}</DialogDescription>
         </DialogHeader>
         {phase.step === "predict" ? (
           <section className="space-y-3">
-            <p className="text-sm">
-              Before you start: how much of this section could you explain right now,
-              without looking?
-            </p>
+            <p className="text-sm">{t("predict.prompt")}</p>
             <div className="flex flex-wrap gap-2">
               {PREDICTIONS.map((option) => (
                 <Button
@@ -214,7 +215,7 @@ export function CheckpointDialog({
                   disabled={pending}
                   onClick={() => handlePredict(option.value)}
                 >
-                  {option.label}
+                  {t(`predict.${option.key}`)}
                 </Button>
               ))}
               <Button
@@ -223,7 +224,7 @@ export function CheckpointDialog({
                 disabled={pending}
                 onClick={() => handlePredict(null)}
               >
-                Skip
+                {t("predict.skip")}
               </Button>
             </div>
           </section>
@@ -244,12 +245,12 @@ export function CheckpointDialog({
         ) : null}
         {phase.step === "recalled" ? (
           <section className="space-y-3" data-testid="checkpoint-recalled">
-            <Quote label="Answer" text={phase.reveal.answer} />
+            <Quote label={t("recalled.answer")} text={phase.reveal.answer} />
             <Quote
               label={phase.reveal.section_path.join(" › ")}
               text={phase.reveal.source_excerpt}
             />
-            <p className="text-sm">How did that go?</p>
+            <p className="text-sm">{t("recalled.howDidItGo")}</p>
             <div className="flex flex-wrap gap-2">
               {RECALL_GRADES.map((grade) => (
                 <Button
@@ -259,7 +260,7 @@ export function CheckpointDialog({
                   disabled={pending}
                   onClick={() => handleGrade(phase.index, grade.rating)}
                 >
-                  {grade.label}
+                  {t(`recalled.${grade.key}`)}
                 </Button>
               ))}
             </div>
@@ -275,7 +276,7 @@ export function CheckpointDialog({
                 text={citation.quote}
               />
             ))}
-            <p className="text-sm">Compared with the passage, your explanation…</p>
+            <p className="text-sm">{t("feedback.compared")}</p>
             <div className="flex flex-wrap gap-2">
               {EXPLAIN_GRADES.map((grade) => (
                 <Button
@@ -285,7 +286,7 @@ export function CheckpointDialog({
                   disabled={pending}
                   onClick={() => handleGrade(phase.index, grade.rating)}
                 >
-                  {grade.label}
+                  {t(`feedback.${grade.key}`)}
                 </Button>
               ))}
             </div>
@@ -293,12 +294,9 @@ export function CheckpointDialog({
         ) : null}
         {phase.step === "done" ? (
           <section className="space-y-3">
-            <p className="text-sm">
-              Saved. What you missed comes back soon in Review, and the rest returns when
-              it is due.
-            </p>
+            <p className="text-sm">{t("done.saved")}</p>
             <Button type="button" onClick={onClose}>
-              Back to the book
+              {t("done.back")}
             </Button>
           </section>
         ) : null}
@@ -335,26 +333,23 @@ function AskStep({
   onRespond: (confidence: Confidence) => void;
   onJustExplain: () => void;
 }) {
+  const t = useTranslations("checkpoint");
   const explain = kind === "explain";
   return (
     <section className="space-y-3" data-testid={`checkpoint-ask-${kind}`}>
       <p className="text-xs text-muted-foreground">
-        {position} of {total}
+        {t("ask.position", { position, total })}
       </p>
       <p className="font-medium">{question}</p>
       {passage ? <Quote label={passage.section_path.join(" › ")} text={passage.quote} /> : null}
       <Textarea
-        aria-label={explain ? "Your explanation" : "Your answer"}
-        placeholder={
-          explain
-            ? "Explain it as if to a friend who has not read it."
-            : "Write what you remember, or leave it blank."
-        }
+        aria-label={explain ? t("ask.explanationLabel") : t("ask.answerLabel")}
+        placeholder={explain ? t("ask.explanationPlaceholder") : t("ask.answerPlaceholder")}
         value={draft}
         maxLength={4000}
         onChange={(event) => onDraftChange(event.target.value)}
       />
-      <p className="text-sm">How sure are you?</p>
+      <p className="text-sm">{t("ask.howSure")}</p>
       <div className="flex flex-wrap gap-2">
         {CONFIDENCES.map((option) => (
           <Button
@@ -363,7 +358,7 @@ function AskStep({
             disabled={pending}
             onClick={() => onRespond(option.value)}
           >
-            {option.label}
+            {t(`confidence.${option.key}`)}
           </Button>
         ))}
       </div>
@@ -376,7 +371,7 @@ function AskStep({
           disabled={pending}
           onClick={onJustExplain}
         >
-          Just explain
+          {t("ask.justExplain")}
         </Button>
       ) : null}
     </section>
