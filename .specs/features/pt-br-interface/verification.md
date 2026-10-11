@@ -2,6 +2,122 @@
 
 **Verdict**: PASS
 **Profile**: standard
+**Diff range**: origin/main..736c2c3 (batch 2: 8c11ad3..c04b2d5; round-2 fix range 860b949..736c2c3, 3 commits: a795693, 946afda, 736c2c3)
+**Round**: 2 - scoped (batch 2 of 4 scope)
+**Verifier**: independent sub-agent (author != verifier)
+
+Scope: batch 2 = slices S4, S5 and S6 = checks C28-C36 (AC 26-33). Checks outside C28-C36 are out of this batch's scope. They are not failures. The batch-1 report is kept unchanged under `## Earlier batches`.
+
+Round 2 covers two things:
+
+- **The fix diff `860b949..736c2c3`.** It changes `frontend/messages/pt-BR.json` (wording only), five test files (`library-screen`, `chapter-reader`, `read-page`, `app-shell`, `home-screen`) and `plan.md`. It changes no component source.
+- **Every round-1 verdict that was not PASS.** That is C32, C35, the three surviving faults F-13, F-14 and F-15, and findings F3 and F4.
+
+All three round-1 survivors are now killed. Five new faults on the new assertion surfaces are killed too. Every batch-2 proof ran again in full at 736c2c3.
+
+## Binding sources
+
+Carried from c04b2d5, re-checked against the fix. The fix touches no component source, so step 1 has nothing new to compare on the interface.
+
+| Source | Opened | Contradiction | Uncovered |
+| --- | --- | --- | --- |
+| `docs/adr/0034-ui-internationalization.md` | yes - read in full at c04b2d5 (carried from c04b2d5) | none | - |
+| `plan.md` `## Assumptions` rows marked "(batch 2)" | yes - re-read at 736c2c3, including the extended "Counts and dates" row and the new "Batch-2 review of the Portuguese" row | none. The F5 rejection holds: no next-intl `timeZone` is configured anywhere (`grep -n timeZone frontend/i18n frontend/app/layout.tsx frontend/tests/setup-intl.ts` finds nothing), and the test formatter fails on any error (`frontend/tests/setup-intl.ts:40,45` `onError: failOnError`). So `useFormatter().dateTime` would report the environment fallback | - |
+
+## Checks
+
+Proofs verified at 736c2c3:
+
+- **Whole files**: one invocation, `npx vitest run --reporter=verbose` over 13 files: `landing`, `auth-screens`, `app-shell`, `app-sidebar`, `vendored-primitives`, `legal-pages`, `library-screen`, `home-screen`, `chapter-reader`, `reading-controls`, `read-page`, `i18n-hardcoded` and `i18n-parity`. Exit 0. 13 files and 181 tests passed.
+- **The frozen filter**: a second invocation, `-t "renders in pt-BR"` over `app-shell`, `library-screen`, `home-screen`, `chapter-reader`, `reading-controls` and `read-page`. 17 passed and 125 were skipped. It selects every claim-carrying pt-BR test, each listed individually: `not-found notice: renders in pt-BR`, `empty, done and error states: renders in pt-BR`, `empty and failed list states: renders in pt-BR`, `signed-out, loading, sample and processing: renders in pt-BR`, `every quiz-deck state renders in pt-BR`, `in-flight button labels: renders in pt-BR`, and the reader's `margin rail`, `signed-out, not-found and failed states`, `previous chapter and return chip`, `stale-capture prompt` and `mobile dock sheet` tests, plus `read page loading fallback > renders in pt-BR`. F3 is closed.
+
+Citation status:
+
+- **Refreshed at 736c2c3**: C32, C35 and C36. C36's lines moved +90 because new tests were inserted above it.
+- **Carried from c04b2d5**: C28-C31, C33 and C34. Their files are untouched, or changed only by in-place 1:1 line edits (a test rename, `falhou` -> `com falha`, `Tutor` -> `Ensinar`), so the cited line numbers have not moved.
+
+| Check | Claim | Proof run | Evidence | Result |
+| --- | --- | --- | --- | --- |
+| C28 | landing, login and register render from the catalog with no English UI copy (pt-BR) | `landing` and `auth-screens` `renders in pt-BR` passed (verified at 736c2c3) | `frontend/tests/landing.test.tsx:84`, `:88`, `:91`, `:94` `expectNoEnglishCopy`; `frontend/tests/auth-screens.test.tsx:171-191` (citations carried from c04b2d5). Password reset and email verification do not exist (plan Assumption, batch 2) | PASS |
+| C29 | sidebar, header, theme toggle, not-found notice and vendored dialog/sheet/sidebar/spinner text come from the catalog (pt-BR) | `app-shell` `renders in pt-BR` and `not-found notice: renders in pt-BR`, and `vendored-primitives` `in pt-BR` passed (verified at 736c2c3) | `frontend/tests/app-shell.test.tsx:230-246`, `:254`/`:260` (the not-found test is now selected by the frozen filter, `:249`); `frontend/tests/vendored-primitives.test.tsx:94-142` (citations carried from c04b2d5) | PASS |
+| C30 | `en` landing, auth and shell keep their existing English assertions, unedited apart from the intl binding | the four files ran whole and passed (verified at 736c2c3) | `git diff --numstat origin/main..736c2c3` shows 0 deleted lines in `landing.test.tsx` (+31), `auth-screens.test.tsx` (+54) and `app-shell.test.tsx` (+54). The round-2 rename touched only a test added in batch 2. `app-sidebar.test.tsx` is untouched. `frontend/tests/app-sidebar.test.tsx:59-62` is unchanged | PASS |
+| C31 | `/terms`, `/privacy` and `/copyright` stay English with `lang="en"` on the content wrapper under pt-BR | `legal-pages` `stay English under pt-BR` passed (verified at 736c2c3) | `frontend/tests/legal-pages.test.tsx:114-115` (citations carried from c04b2d5) | PASS |
+| C32 | Home, Library, ingestion status and every empty, loading and error state render from the catalog (pt-BR) | the six `home-screen`/`library-screen` tests matching `renders in pt-BR` passed (verified at 736c2c3) | Home: `frontend/tests/home-screen.test.tsx:438-490` (carried; only the title at `:457` was renamed). Library: `frontend/tests/library-screen.test.tsx:558`, `:568-570` (`com falha`), `:576`, `:580`, `:602`, `:618`, `:631`. New: `:732` `Você não está conectado.`; `:745` `Carregando seus livros…`; `:752` sample ready; `:753` `processando`; `:762` `Gerando baralho…`; `:779` noSection; `:790` noneSurvived `(3 descartados)`; `:805` `1 descartado durante a geração.`; `:807` `2 itens salvos. 1 seção falhou.`; `:844` generate failure; `:864`/`:881`/`:900`/`:925` `Enviando…`/`Iniciando…`/`Reiniciando…`/`Reprocessando…`; `:918` the re-ingest warning | PASS |
+| C33 | pt-BR 0/1/2 books -> `0 livros`/`1 livro`/`2 livros`, and a date in the locale's format | `library-screen` `pt-BR plurals and dates` passed (verified at 736c2c3) | `frontend/tests/library-screen.test.tsx:639-641`, `:657` `toBe(text)`, `:660` `Adicionado em 19 de jul. de 2026`, `:680` `1 book` (citations carried from c04b2d5) | PASS |
+| C34 | book titles, authors and section titles unchanged (pt-BR) | `library-screen` `book text is never translated` passed (verified at 736c2c3) | `frontend/tests/library-screen.test.tsx:700-701`; `frontend/tests/home-screen.test.tsx:446-447` (carried). No batch-2 surface renders an author | PASS |
+| C35 | reader chrome, TOC, reading controls, margin rail, progress text, aria labels and keyboard help render from the catalog (pt-BR) | the six `chapter-reader` tests and the `reading-controls` test matching `renders in pt-BR` passed; `read-page` `renders in pt-BR` passed (verified at 736c2c3) | `frontend/tests/chapter-reader.test.tsx:2250-2269` chrome, TOC, tabs and panel; `:2297-2299` margin rail; `:2313`/`:2327`/`:2340` not-found, `Você não está conectado.` and error. New: `:2366` `Voltar para onde você estava`; `:2368` `← Capítulo anterior`; `:2396` the stale-capture prompt via the `h` shortcut; `:2423` dialog `Painel de notas`; `:2426` the sheet description; `:2428` `Fechar`. `frontend/tests/reading-controls.test.tsx:232-251` (carried). `frontend/tests/read-page.test.tsx:98` `Carregando…`. Keyboard help does not exist | PASS |
+| C36 | chapter text and citation snippets unchanged (pt-BR) | `chapter-reader` `book text is never translated` passed (verified at 736c2c3) | `frontend/tests/chapter-reader.test.tsx:2456-2457` section prose; `:2458-2459` headings `Beginnings`/`Mechanism`; `:2460` `Chapter One`; `:2464` `toEqual(["Ada Lovelace wrote the first algorithm"])` (refreshed, +90) | PASS |
+
+## Coverage
+
+Recomputed at 736c2c3 for the rows the fix touched (the C32 Library states and the C35 reader members). The other rows are carried from c04b2d5: their authority, the component source, did not change.
+
+| Set (size) | Recomputed from | Member -> proof | Unproven |
+| --- | --- | --- | --- |
+| migrated surfaces in pt-BR, batch-2 members (7) | checks.md coverage row and the diff (carried from c04b2d5) | landing C28 · auth C28 · shell C29 · vendored primitives C29 · Home C32 · Library C32 · reader C35 | - |
+| C32 Library states: empty, loading and error (16) | `frontend/app/components/library-screen.tsx` (verified at 736c2c3) | auth loading `:558` · signed-out `:732` · loading sources `:745` · sample ready `:752` · empty `:618` · list error `:631` · upload validation `:602` · ingestion failed `:576` · statuses ready/uploaded/failed/processing `:568-570`, `:753` · quiz generating `:762` · quiz failed job (backend error under `lang="en"`, with the Portuguese generate button) in `every quiz-deck state renders in pt-BR` · noSection `:779` · noneSurvived `:790` · discardFootnote `:805` · partial `:807` · generate failure `:844` · pending labels `:864`/`:881`/`:900`/`:925` | - |
+| C32 Home states (6) | `frontend/app/components/home-screen.tsx` (carried from c04b2d5) | `home-screen.test.tsx:446-490`. The loading states are text-free skeletons (`frontend/app/components/home-screen.tsx:169`, `:231`) | - |
+| C33 count and date vectors (4) | the claim (carried from c04b2d5) | `library-screen.test.tsx:639-641`, `:660` | - |
+| C35 reader chrome and states (17) | the batch-2 reader components (verified at 736c2c3) | toc toggle · dock toggle · settings trigger · progress · TOC label · chapter nav · next link `chapter-reader.test.tsx:2250-2269` · previous link `:2368` · tabs · close panel · panel label · margin rail `:2297-2299` · controls popover `reading-controls.test.tsx:232-251` · return chip `:2366` · stale capture `:2396` · mobile dock sheet `:2423-2428` · not-found, signed-out and error `:2313-2340` · read-page fallback `read-page.test.tsx:98` | - |
+| untranslated surfaces, batch-2 members (4) | checks.md coverage row (carried from c04b2d5) | legal pages C31 · book titles C34 · section/chapter text C34, C36 · rail citation snippet C36 | - |
+
+Note: the read-page fallback is proven in `frontend/tests/read-page.test.tsx`. C35's proof lines name only `chapter-reader` and `reading-controls`. The member is proven, but a run of C35's literal commands alone would not reach it. The plan records this, and `checks.md` is frozen.
+
+## Test policy rows
+
+`checks.md` has no `Test policy` section, so there are no rows to judge (carried from c04b2d5).
+
+## Faults injected
+
+Round-2 faults were applied in a scratch sparse worktree at 736c2c3 (`frontend/` and `docs/adr/`, `node_modules` symlinked). `docs/adr` was included this time so that `i18n-hardcoded > documents its limits` runs in its real state. The run order was F-13 to F-15 together, then F-19 to F-23 together. Each failing test is the one its fault targets. Afterwards I removed the worktree, and the real tree's `git status --porcelain` matched the baseline (only ` M docker-compose.override.yml`). F-1 to F-12 and F-16 to F-18 are carried from c04b2d5: their mutated source and covering tests did not change, apart from the 1:1 renames, and the full proofs re-ran green.
+
+| Mutation | Location | Killed |
+| --- | --- | --- |
+| F-1 to F-12, F-16 to F-18 (round 1, see the round-1 list in commit 860b949) | as recorded at c04b2d5 | yes (carried from c04b2d5) |
+| F-13 quiz `noneSurvived` -> English template literal (round-1 survivor) | `frontend/app/components/library-screen.tsx:263` | yes - `library-screen > every quiz-deck state renders in pt-BR` |
+| F-14 `loadingSources` -> `{"Loading your sources…"}` (round-1 survivor) | `frontend/app/components/library-screen.tsx:590` | yes - `library-screen > signed-out, loading, sample and processing: renders in pt-BR` |
+| F-15 return chip -> `{"Return to where you were"}` (round-1 survivor) | `frontend/app/components/chapter-reader.tsx:1115` | yes - `chapter-reader > previous chapter and return chip: renders in pt-BR` |
+| F-19 `row.starting` -> `"Starting…"` in the ternary | `frontend/app/components/library-screen.tsx:673` | yes - `library-screen > in-flight button labels: renders in pt-BR` |
+| F-20 stale-capture message -> English literal passed to `captureMessage` | `frontend/app/components/chapter-reader.tsx:611` | yes - `chapter-reader > stale-capture prompt: renders in pt-BR` |
+| F-21 mobile sheet description -> English JS literal | `frontend/app/components/reader-panel.tsx:462` | yes - `chapter-reader > mobile dock sheet: renders in pt-BR` |
+| F-22 read-page fallback -> `{"Loading…"}` | `frontend/app/(read)/sources/[id]/read/page.tsx:31` | yes - `read-page > read page loading fallback > renders in pt-BR` |
+| F-23 pt-BR `quiz.partial` loses its noun (`# salvo`/`# salvos`) | `frontend/messages/pt-BR.json` `library.quiz.partial` | yes - `library-screen > every quiz-deck state renders in pt-BR` |
+
+## Gate
+
+- `make lint` - exit 0: ruff check passed; ruff format reports 341 files already formatted; `tsc --noEmit` clean; `check_commits` reports 8 commits in `origin/main..HEAD` OK; architecture boundaries clean.
+- `make test-frontend` - two runs, each 1008 passed and 1 failed out of 1009 (90 files, 1 failed file). The failure was in `tests/review-screen.test.tsx`, and it was a different test each time: run 1 `REV-44 still reveals on Space` timed out at 5 s; run 2 `ReviewScreen session flow (E2) > grades each card` could not find the `Again` button. Neither the test file nor `frontend/app/components/review-screen.tsx` is touched by `origin/main..HEAD`. The same file run alone at 736c2c3 failed 1 of 2 times (`reveals the answer on the space bar`, 5 s timeout). At `origin/main`, in a scratch worktree, it failed 1 of 3 times, on the same `grades each card` test. So this is an existing timing flake under this machine's memory pressure (swap full), not a branch regression. CI is authoritative. See finding R2-F1.
+- `LEARNY_REQUIRE_DB=1 make test-backend` - 3227 passed, 2 failed, 11 skipped. The two failures are `test_deploy_topology` `test_dev_merge_publishes_the_app_ports` and `test_dev_merge_still_publishes_todays_infra_ports`. Both come from the owner's uncommitted `docker-compose.override.yml`, so they are not findings.
+
+## Round-1 gaps
+
+| Round-1 finding | Status at 736c2c3 |
+| --- | --- |
+| F1 (blocking, C32 Library states) | closed - all 16 members proven (see Coverage); F-13 and F-14 killed |
+| F2 (blocking, C35 reader members) | closed - previous link, return chip, stale capture, mobile sheet and read-page fallback proven; F-15 killed |
+| F3 (selectors missed claim-carrying tests) | closed - every pt-BR test is renamed to contain `renders in pt-BR`, and the frozen filter selects 17 tests (listed above) |
+| F4 (pt-BR wording) | closed - `frontend/messages/pt-BR.json` now reads `Ensinar` (library teach link), `com falha`, `refaz o processamento deste livro`, `Você não está conectado.` for all three signed-out keys, and `# item salvo`/`# itens salvos`. Each reads naturally, and the batch-1 terms are kept. No test anywhere still expects `Você saiu da conta.` (`grep -rn` over `frontend/` finds nothing) |
+| F5 (date formatter) | rejected by the author with a sound reason, recorded in the plan: no `timeZone` is configured, and the test binding fails on the environment fallback. Accepted |
+
+## Findings
+
+- **R2-F1 - non-blocking - flaky test, not on this branch.** `frontend/tests/review-screen.test.tsx` flakes on this machine at both `origin/main` and HEAD: 5 s timeouts and a missing `Again` button under memory pressure. This is outside batch-2 scope; batch 3 migrates `review-screen.tsx`. Suggestion: when batch 3 touches the file, check the waits in `grading shortcuts` and `session flow (E2)`, using `findBy*` instead of a sync `getBy*` after grading.
+- **R2-F2 - non-blocking - proof sits outside C35's named files.** C35's read-page fallback member is proven only in `frontend/tests/read-page.test.tsx`, which no C35 proof line names. The plan records why.
+
+## Deferred to owner
+
+- `npm run build`. Skipped for the memory budget. CI runs it.
+- A browser or screenshot walk of the batch-2 surfaces in pt-BR. Skipped by brief.
+- The two local `test_deploy_topology` dev-port failures, which come from the uncommitted override.
+- A green full `make test-frontend` run. Locally the review-screen flake blocked it (R2-F1). CI is authoritative.
+
+## Earlier batches
+
+
+# pt-br-interface verification
+
+**Verdict**: PASS
+**Profile**: standard
 **Diff range**: c0dd725..60d8103 (fix range 7cd370f..60d8103)
 **Round**: 2 - scoped (batch 1 of 4 scope)
 **Verifier**: independent sub-agent (author != verifier)

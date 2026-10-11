@@ -19,6 +19,7 @@
  */
 
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import { useEffect, useState } from "react";
 
 import { readUrl } from "@/app/lib/read-url";
@@ -55,6 +56,7 @@ export function TocPanel({
   onSameChapterNavigate: (anchor: string) => void;
   fetchStructureImpl?: typeof fetchSourceStructure;
 }) {
+  const t = useTranslations("reader.toc");
   const errorMessage = useErrorMessage();
   const { navigate, isPending } = useNavigateWithTransition();
   const [structure, setStructure] = useState<SourceStructure | null>(null);
@@ -98,7 +100,7 @@ export function TocPanel({
     <aside
       data-testid="toc-panel"
       data-state={open ? "open" : "closed"}
-      aria-label="Table of contents"
+      aria-label={t("label")}
       className={cn(
         "w-64 shrink-0 overflow-y-auto border-r pr-2 text-sm",
         open ? "block" : "hidden",
@@ -152,6 +154,7 @@ export function ChapterNav({
   prevAnchor: string | null;
   nextAnchor: string | null;
 }) {
+  const t = useTranslations("reader.toc");
   // At a book edge with neither neighbour (a single-chapter book) there is
   // nothing to navigate to, so the whole control is absent.
   if (!prevAnchor && !nextAnchor) {
@@ -159,7 +162,7 @@ export function ChapterNav({
   }
   return (
     <nav
-      aria-label="Chapter navigation"
+      aria-label={t("chapterNav")}
       className="mt-8 flex items-center justify-between border-t pt-4 text-sm"
     >
       {prevAnchor ? (
@@ -167,7 +170,7 @@ export function ChapterNav({
           href={readUrl(sourceId, prevAnchor)}
           className="text-primary underline-offset-4 hover:underline"
         >
-          ← Previous chapter
+          {t("previous")}
           <LinkPendingIndicator className="ml-1 align-middle" />
         </Link>
       ) : (
@@ -178,7 +181,7 @@ export function ChapterNav({
           href={readUrl(sourceId, nextAnchor)}
           className="text-primary underline-offset-4 hover:underline"
         >
-          Next chapter →
+          {t("next")}
           <LinkPendingIndicator className="ml-1 align-middle" />
         </Link>
       ) : (

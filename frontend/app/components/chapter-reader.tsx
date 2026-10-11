@@ -35,6 +35,7 @@
 import { List, PanelRight } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useTranslations } from "next-intl";
 import {
   Fragment,
   useEffect,
@@ -105,14 +106,6 @@ let pendingCitationQuote: { anchor: string; quote: string } | null = null;
 /** A stable empty highlight list, so sections without highlights never repaint. */
 const NO_HIGHLIGHTS: SourceHighlightView[] = [];
 
-/**
- * What the reader says when the served evidence no longer matches the section — a
- * mid-flight re-ingest moved the passage out from under the selection. Shared by
- * the highlight capture and the capture-to-card flow, which fail the same way.
- */
-const STALE_CAPTURE_MESSAGE =
-  "The book changed while you were reading. Reload the page to capture this highlight.";
-
 /** Default dock tab when `]` opens the panel with no `?panel=` already set. */
 const DEFAULT_DOCK_TAB: DockTab = "chat";
 
@@ -154,6 +147,8 @@ export function ChapterReader({
   sourceId: string;
   onRequireAuth?: () => void;
 }) {
+  const t = useTranslations("reader");
+  const tCommon = useTranslations("common");
   const errorMessage = useErrorMessage();
   // `useSearchParams().get()` decodes the percent-encoded anchor; `null` when
   // absent, which asks the server to resume the stored reading position.
@@ -259,17 +254,17 @@ export function ChapterReader({
     return <ReadingSkeleton />;
   }
   if (state.kind === "signed-out") {
-    return <p className="text-muted-foreground">You are signed out.</p>;
+    return <p className="text-muted-foreground">{tCommon("signedOut")}</p>;
   }
   if (state.kind === "not-found") {
     return (
       <div className="mx-auto max-w-2xl py-12 text-center">
-        <p className="text-muted-foreground">We couldn’t find that chapter.</p>
+        <p className="text-muted-foreground">{t("notFound")}</p>
         <Link
           href="/sources"
           className="text-primary underline-offset-4 hover:underline"
         >
-          Back to your library
+          {t("backToLibrary")}
         </Link>
       </div>
     );
@@ -340,6 +335,7 @@ export function ChapterFlow({
   observerFactory?: ObserverFactory;
   onRequireAuth?: () => void;
 }) {
+  const t = useTranslations("reader");
   const errorMessage = useErrorMessage();
   const router = useRouter();
   // The open dock tab and the current deep-link anchor are independent URL state.
@@ -612,7 +608,9 @@ export function ChapterFlow({
         router.push(`/notes/${note.id}`);
       }
     } catch (err) {
-      setCaptureError(captureMessage(err, "notesCapture", errorMessage));
+      setCaptureError(
+        captureMessage(err, "notesCapture", errorMessage, t("staleCapture")),
+      );
     } finally {
       setPending(false);
     }
@@ -653,7 +651,14 @@ export function ChapterFlow({
       }
       setSuggestions(await suggestCards(sourceId, anchorId, csrf));
     } catch (err) {
-      setCaptureError(captureMessage(err, "cardsSuggestPassage", errorMessage));
+      setCaptureError(
+        captureMessage(
+          err,
+          "cardsSuggestPassage",
+          errorMessage,
+          t("staleCapture"),
+        ),
+      );
     } finally {
       setPending(false);
     }
@@ -835,7 +840,7 @@ export function ChapterFlow({
               variant="ghost"
               className="size-11"
               style={readControlMinStyle}
-              aria-label="Table of contents"
+              aria-label={t("tocToggle")}
               aria-expanded={tocOpen}
               onClick={() => setTocOpen((prev) => !prev)}
             >
@@ -846,7 +851,7 @@ export function ChapterFlow({
               variant="ghost"
               className="size-11"
               style={readControlMinStyle}
-              aria-label="Study dock"
+              aria-label={t("dockToggle")}
               aria-expanded={Boolean(dockTab)}
               onClick={handleDockToggle}
             >
@@ -861,7 +866,10 @@ export function ChapterFlow({
               data-testid="reading-progress"
               className="text-xs text-muted-foreground tabular-nums"
             >
-              {Math.round(bookPercent)}% read · {chapterMinutesLeft} min left
+              {t("progress", {
+                percent: Math.round(bookPercent),
+                minutes: chapterMinutesLeft,
+              })}
             </span>
             <ReadingControls
               size={reading.size}
@@ -1098,20 +1106,22 @@ function PageRule({ page }: { page: number }) {
  * live, so its presence is itself the "there is somewhere to go back to" signal.
  */
 function ReturnChip({ onReturn }: { onReturn: () => void }) {
+  const t = useTranslations("reader");
   return (
     <button
       type="button"
       onClick={onReturn}
       className="fixed bottom-6 left-1/2 z-30 -translate-x-1/2 rounded-full border bg-card px-4 py-2 text-sm font-medium shadow-md ring-1 ring-foreground/10 transition-colors hover:bg-accent"
     >
-      Return to where you were
+      {t("returnChip")}
     </button>
   );
 }
 
 /**
  * The message for a failed capture-side call. A stale target — the passage moved
- * under the selection — gets the reload prompt whichever call reported it: both the
+ * under the selection, as when a mid-flight re-ingest replaced the section — gets
+ * the reload prompt (`staleMessage`) whichever call reported it: both the
  * highlight capture (`NoteError`) and the suggestion request (`CardError`) surface
  * the same 409 as kind `stale_capture`. Everything else reads as catalog copy.
  */
@@ -1119,12 +1129,13 @@ function captureMessage(
   err: unknown,
   fallback: ApiOperation,
   errorMessage: ErrorMessage,
+  staleMessage: string,
 ): string {
   if (
     (err instanceof NoteError || err instanceof CardError) &&
     err.kind === "stale_capture"
   ) {
-    return STALE_CAPTURE_MESSAGE;
+    return staleMessage;
   }
   return errorMessage(err, fallback);
 }

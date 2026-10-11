@@ -12,6 +12,8 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import LandingPage from "../app/page";
+import { expectNoEnglishCopy } from "./i18n-copy";
+import { setTestLocale } from "./setup-intl";
 
 // The page hosts the anonymous language switcher, which re-renders through the router.
 vi.mock("next/navigation", () => ({
@@ -71,5 +73,34 @@ describe("Landing page (HOME-20)", () => {
       proof.compareDocumentPosition(logIn) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("renders in pt-BR", () => {
+    setTestLocale("pt-BR");
+    render(<LandingPage />);
+
+    expect(
+      screen.getByText(
+        "Transforme seus livros em respostas com citações e em conhecimento que fica.",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("link", { name: "Criar conta" }).getAttribute("href"),
+    ).toBe("/register");
+    expect(
+      screen.getByRole("link", { name: "Entrar" }).getAttribute("href"),
+    ).toBe("/login");
+    expect(screen.getByRole("combobox", { name: "Idioma" })).toBeTruthy();
+    expectNoEnglishCopy(document.body.textContent ?? "", "landing", "auth", "common");
+  });
+
+  it("keeps the book proof verbatim in the book's language under pt-BR", () => {
+    setTestLocale("pt-BR");
+    render(<LandingPage />);
+
+    const quote = screen.getByText("All warfare is based on deception.");
+    expect(quote.getAttribute("lang")).toBe("en");
+    expect(screen.getByText("The Art of War").getAttribute("lang")).toBe("en");
+    expect(screen.getByText("I. Laying Plans").getAttribute("lang")).toBe("en");
   });
 });

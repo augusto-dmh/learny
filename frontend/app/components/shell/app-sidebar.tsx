@@ -10,6 +10,7 @@
  */
 
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 
 import { LinkPendingIndicator } from "@/app/components/nav-pending";
 import {
@@ -24,13 +25,14 @@ import {
 } from "@/components/ui/sidebar";
 
 const NAV_ITEMS = [
-  { label: "Home", href: "/home" },
-  { label: "Library", href: "/sources" },
-  { label: "Review", href: "/review" },
-  { label: "Notes", href: "/notes" },
+  { key: "home", href: "/home" },
+  { key: "library", href: "/sources" },
+  { key: "review", href: "/review" },
+  { key: "notes", href: "/notes" },
 ] as const;
 
 export function AppSidebar() {
+  const t = useTranslations("shell.nav");
   return (
     <Sidebar>
       <SidebarHeader className="px-2 py-3">
@@ -47,7 +49,7 @@ export function AppSidebar() {
                 <SidebarMenuItem key={item.href}>
                   <SidebarMenuButton asChild>
                     <Link href={item.href}>
-                      {item.label}
+                      {t(item.key)}
                       <LinkPendingIndicator className="ml-auto" />
                     </Link>
                   </SidebarMenuButton>

@@ -9,8 +9,17 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import LoginPage from "../app/(auth)/login/page";
+import RegisterPage from "../app/(auth)/register/page";
 import { AccountPanel } from "../app/components/AccountPanel";
 import { AuthForm } from "../app/components/AuthForm";
+import { expectNoEnglishCopy } from "./i18n-copy";
+import { setTestLocale } from "./setup-intl";
+
+// The sign-in pages route through the app router after authenticating.
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
+}));
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -151,5 +160,67 @@ describe("AccountPanel (D2)", () => {
     await waitFor(() => expect(onRequireAuth).toHaveBeenCalledTimes(1));
     // The redirect is client-side convenience only; FastAPI is the real gate.
     expect(await screen.findByText("You are signed out.")).toBeTruthy();
+  });
+});
+
+describe("auth screens in pt-BR", () => {
+  it("renders in pt-BR", () => {
+    setTestLocale("pt-BR");
+
+    render(<LoginPage />);
+    expect(screen.getByText("Que bom ter você de volta ao Learny.")).toBeTruthy();
+    expect(screen.getByRole("form", { name: "formulário de entrada" })).toBeTruthy();
+    expect(screen.getByLabelText("E-mail")).toBeTruthy();
+    expect(screen.getByLabelText("Senha")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Entrar" })).toBeTruthy();
+    expect(
+      screen.getByRole("link", { name: "Crie uma" }).getAttribute("href"),
+    ).toBe("/register");
+    expectNoEnglishCopy(document.body.textContent ?? "", "auth");
+    cleanup();
+
+    render(<RegisterPage />);
+    expect(screen.getByText("Comece a aprender com o Learny.")).toBeTruthy();
+    expect(screen.getByRole("form", { name: "formulário de cadastro" })).toBeTruthy();
+    expect(screen.getByLabelText(/Código de convite/)).toBeTruthy();
+    expect(screen.getByLabelText(/Termos de Serviço/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Criar conta" })).toBeTruthy();
+    expect(
+      screen.getByRole("link", { name: "Entre" }).getAttribute("href"),
+    ).toBe("/login");
+    expectNoEnglishCopy(document.body.textContent ?? "", "auth");
+  });
+
+  it("shows a failed sign-in in Portuguese", async () => {
+    setTestLocale("pt-BR");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonResponse(401, { detail: "Invalid email or password." })),
+    );
+    render(<AuthForm mode="login" />);
+
+    fireEvent.change(screen.getByLabelText("E-mail"), { target: { value: "a@b.c" } });
+    fireEvent.change(screen.getByLabelText("Senha"), { target: { value: "bad" } });
+    fireEvent.click(screen.getByRole("button", { name: "Entrar" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe("E-mail ou senha inválidos.");
+  });
+});
+
+describe("AuthForm in-flight label", () => {
+  it.each([
+    ["en", "Working…"],
+    ["pt-BR", "Aguarde…"],
+  ] as const)("shows a disabled in-flight button in %s", async (locale, label) => {
+    setTestLocale(locale);
+    // A sign-in that never settles holds the form in flight.
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => {})));
+    render(<AuthForm mode="login" />);
+
+    fireEvent.submit(screen.getByRole("form"));
+
+    const button = (await screen.findByRole("button", { name: label })) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
   });
 });

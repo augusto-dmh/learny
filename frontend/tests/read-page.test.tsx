@@ -16,6 +16,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import ReadLayout from "../app/(read)/layout";
 import ReadPage from "../app/(read)/sources/[id]/read/page";
+import { setTestLocale } from "./setup-intl";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({
@@ -30,12 +31,20 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(),
 }));
 
+// `suspend` holds the reader in Suspense to show the route's loading fallback.
+const reader = vi.hoisted(() => ({ suspend: false }));
 vi.mock("@/app/components/chapter-reader", () => ({
-  ChapterReader: () => <div data-testid="chapter-reader">Chapter</div>,
+  ChapterReader: () => {
+    if (reader.suspend) {
+      throw new Promise(() => {});
+    }
+    return <div data-testid="chapter-reader">Chapter</div>;
+  },
 }));
 
 afterEach(() => {
   cleanup();
+  reader.suspend = false;
 });
 
 describe("read page route group (READ-16/21)", () => {
@@ -76,5 +85,16 @@ describe("read page route group (READ-16/21)", () => {
     expect(main!.className).toContain("h-svh");
     expect(main!.className).not.toContain("100vh-3rem");
     expect(main!.className).not.toContain("3rem");
+  });
+});
+
+describe("read page loading fallback", () => {
+  it("renders in pt-BR", () => {
+    setTestLocale("pt-BR");
+    reader.suspend = true;
+
+    render(<ReadPage />);
+
+    expect(screen.getByText("Carregando…")).toBeTruthy();
   });
 });

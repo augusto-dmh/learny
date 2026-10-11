@@ -5,13 +5,17 @@
   },
   "common": {
     "loading": "Carregando…",
+    "signedOut": "Você não está conectado.",
     "locale": {
       "label": "Idioma",
       "names": {
         "en": "English",
         "pt-BR": "Português (Brasil)"
       }
-    }
+    },
+    "close": "Fechar",
+    "cancel": "Cancelar",
+    "loadingLabel": "Carregando"
   },
   "errors": {
     "generic": "Algo deu errado. Tente novamente.",
@@ -81,7 +85,6 @@
   "account": {
     "pageTitle": "Sua conta",
     "regionLabel": "conta",
-    "signedOut": "Você saiu da conta.",
     "signedInAs": "Conectado como <strong>{email}</strong>",
     "logout": "Sair",
     "language": {
@@ -105,6 +108,174 @@
         "teachOnly": "Funciona apenas em Ensinar.",
         "neither": "No momento não funciona em Perguntar nem em Ensinar."
       }
+    }
+  },
+  "landing": {
+    "tagline": "Transforme seus livros em respostas com citações e em conhecimento que fica."
+  },
+  "auth": {
+    "createAccount": "Criar conta",
+    "logIn": "Entrar",
+    "login": {
+      "description": "Que bom ter você de volta ao Learny.",
+      "noAccount": "Ainda não tem conta? <link>Crie uma</link>."
+    },
+    "register": {
+      "description": "Comece a aprender com o Learny.",
+      "haveAccount": "Já tem uma conta? <link>Entre</link>."
+    },
+    "form": {
+      "label": "{mode, select, register {formulário de cadastro} other {formulário de entrada}}",
+      "email": "E-mail",
+      "password": "Senha",
+      "inviteCode": "Código de convite",
+      "inviteHint": "(se você tiver um)",
+      "acceptTerms": "Concordo com os <link>Termos de Serviço</link>",
+      "working": "Aguarde…"
+    }
+  },
+  "shell": {
+    "nav": {
+      "home": "Início",
+      "library": "Biblioteca",
+      "review": "Revisão",
+      "notes": "Notas"
+    },
+    "account": "Conta",
+    "toggleTheme": "Alternar tema",
+    "logOut": "Sair",
+    "sidebar": {
+      "title": "Barra lateral",
+      "description": "Mostra a barra lateral no celular.",
+      "toggle": "Alternar barra lateral"
+    }
+  },
+  "chat": {
+    "notFound": {
+      "inScope": "Isso não aparece no trecho do livro que esta conversa abrange. A resposta pode estar em outra parte do livro.",
+      "inSource": "Isso não aparece neste livro."
+    }
+  },
+  "home": {
+    "title": "Início",
+    "regionLabel": "início",
+    "continue": {
+      "label": "continuar lendo",
+      "title": "Continue lendo",
+      "empty": "Você ainda não tem nenhum livro em andamento.",
+      "ask": "Perguntar",
+      "pickBook": "Escolher um livro",
+      "percentRead": "{percent}% lido",
+      "resume": "Continuar"
+    },
+    "due": {
+      "label": "revisões pendentes",
+      "title": "Revisões",
+      "count": "Você tem {count, plural, one {# cartão pendente} other {# cartões pendentes}}.",
+      "review": "Revisar",
+      "done": "Tudo em dia por hoje."
+    }
+  },
+  "library": {
+    "title": "Biblioteca",
+    "regionLabel": "biblioteca",
+    "loadingSources": "Carregando seus livros…",
+    "empty": "Nenhum livro ainda.",
+    "count": "{count, plural, =0 {0 livros} one {# livro} other {# livros}}",
+    "added": "Adicionado em {date}",
+    "sampleReady": "O livro de exemplo já pode ser usado enquanto você espera.",
+    "status": "{status, select, uploaded {enviado} processing {processando} ready {pronto} failed {com falha} other {{status}}}",
+    "upload": {
+      "heading": "Adicionar um livro",
+      "formLabel": "enviar livro",
+      "title": "Título",
+      "file": "Arquivo EPUB",
+      "chooseFile": "Escolha um arquivo EPUB para enviar.",
+      "submit": "Enviar",
+      "uploading": "Enviando…"
+    },
+    "row": {
+      "open": "Abrir",
+      "moreActions": "Mais ações",
+      "ask": "Perguntar",
+      "tutor": "Ensinar",
+      "review": "Revisar",
+      "reingest": "Reprocessar",
+      "reingestWarning": "Reprocessar refaz o processamento deste livro com os provedores atuais. Os itens de quiz existentes podem ficar desatualizados ou órfãos.",
+      "confirmReingest": "Confirmar reprocessamento",
+      "reingesting": "Reprocessando…",
+      "startIngestion": "Iniciar processamento",
+      "starting": "Iniciando…",
+      "restartIngestion": "Reiniciar processamento",
+      "restarting": "Reiniciando…",
+      "ingestionFailed": "O processamento falhou."
+    },
+    "quiz": {
+      "generate": "Gerar baralho de quiz",
+      "generating": "Gerando baralho…",
+      "counts": "{items, plural, =0 {0 itens} one {# item} other {# itens}} · {due, plural, =0 {0 pendentes} one {# pendente} other {# pendentes}}",
+      "sourceChanged": "livro alterado",
+      "sourceChangedHint": "Alguns itens não correspondem mais ao livro depois do reprocessamento e ficam pausados até você revisá-los.",
+      "review": "Revisar",
+      "exportAnki": "Exportar para o Anki",
+      "noSection": "Este livro não tem nenhuma seção longa o bastante para um quiz (um capítulo sem subseções precisa de uns 200 caracteres ou mais). Em vez disso, <link>destaque um trecho</link>.",
+      "noneSurvived": "Os rascunhos foram escritos, mas nenhum passou nas verificações de qualidade ({discarded, plural, one {# descartado} other {# descartados}}).",
+      "discardFootnote": "{discarded, plural, one {# descartado} other {# descartados}} durante a geração.",
+      "partial": "{saved, plural, =0 {0 itens salvos} one {# item salvo} other {# itens salvos}}. {failed, plural, one {# seção falhou} other {# seções falharam}}."
+    }
+  },
+  "reader": {
+    "notFound": "Não encontramos esse capítulo.",
+    "backToLibrary": "Voltar para a biblioteca",
+    "tocToggle": "Sumário",
+    "dockToggle": "Painel de estudo",
+    "progress": "{percent}% lido · faltam {minutes} min",
+    "returnChip": "Voltar para onde você estava",
+    "staleCapture": "O livro mudou enquanto você lia. Recarregue a página para capturar este destaque.",
+    "toc": {
+      "label": "Sumário",
+      "chapterNav": "Navegação entre capítulos",
+      "previous": "← Capítulo anterior",
+      "next": "Próximo capítulo →"
+    },
+    "rail": {
+      "label": "Anotações do capítulo",
+      "heading": "Neste capítulo",
+      "empty": "Nada destacado neste capítulo ainda."
+    },
+    "controls": {
+      "label": "Ajustes de leitura",
+      "typeSize": "Tamanho do texto",
+      "typeSizeStep": "Tamanho do texto {size}",
+      "lineSpacing": "Espaçamento entre linhas",
+      "lineSpacingStep": "Espaçamento entre linhas {step, number}",
+      "appearance": "Aparência",
+      "appearances": {
+        "default": "Padrão",
+        "paper": "Papel"
+      },
+      "darkNote": "A leitura no modo escuro usa a paleta noturna.",
+      "theme": "Tema",
+      "themes": {
+        "light": "Claro",
+        "dark": "Escuro",
+        "system": "Sistema"
+      }
+    },
+    "dock": {
+      "tabsLabel": "Abas do painel",
+      "tabs": {
+        "chat": "Conversa",
+        "notes": "Notas",
+        "review": "Revisão"
+      },
+      "panels": {
+        "chat": "Painel de conversa",
+        "notes": "Painel de notas",
+        "review": "Painel de revisão"
+      },
+      "closePanel": "Fechar painel",
+      "sheetDescription": "As ferramentas de estudo deste livro, em um painel inferior."
     }
   }
 }
