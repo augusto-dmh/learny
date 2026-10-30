@@ -23,3 +23,6 @@ evals/silver/
 
 # Python bytecode caches anywhere in the tree (tests load skill scripts by path).
 __pycache__/
+
+# Vitest proof-run cache (created at the root when proofs run).
+.vite/

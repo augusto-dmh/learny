@@ -1,0 +1,44 @@
+[
+  {
+    "file": "backend/app/application/checkpoints.py",
+    "old": "response_language=response_language,",
+    "new": "response_language=None,",
+    "proof": "cd backend && uv run pytest tests/test_application_checkpoints.py -k \"explain_asks_for_the_callers_language\"",
+    "label": "explain-back drops the caller's language"
+  },
+  {
+    "file": "backend/app/infrastructure/web/checkpoints.py",
+    "old": "response_language=response_language,",
+    "new": "response_language=None,",
+    "proof": "cd backend && uv run pytest tests/test_web_checkpoints.py -k \"explain_feedback_language_follows_the_learner\"",
+    "label": "the response route stops resolving the learner's language"
+  },
+  {
+    "file": "backend/app/infrastructure/web/dependencies.py",
+    "old": "return response_language_for(effective_locale(stored, accept_language))",
+    "new": "return response_language_for(effective_locale(None, accept_language))",
+    "proof": "cd backend && uv run pytest tests/test_web_checkpoints.py -k \"explain_feedback_language_follows_the_learner\"",
+    "label": "a stored locale loses to the Accept-Language header"
+  },
+  {
+    "file": "backend/app/domain/locale.py",
+    "old": "if locale == _UNINSTRUCTED_LOCALE or not is_supported_locale(locale):",
+    "new": "if not is_supported_locale(locale):",
+    "proof": "cd backend && uv run pytest tests/test_web_checkpoints.py -k \"explain_feedback_language_follows_the_learner\"",
+    "label": "English stops being the uninstructed locale"
+  },
+  {
+    "file": "backend/app/infrastructure/db/repositories.py",
+    "old": "quiz_items.c.origin == QuizItemOrigin.CHECKPOINT,\r\n                quiz_items.c.status == QuizItemStatus.ACTIVE,",
+    "new": "quiz_items.c.origin == QuizItemOrigin.CHECKPOINT,",
+    "proof": "cd backend && uv run pytest tests/test_application_checkpoints.py -k \"reuse_skips_checkpoint_cards_that_are_not_the_callers_on_this_section\"",
+    "label": "the reuse lookup drops the active-status predicate"
+  },
+  {
+    "file": "backend/app/infrastructure/db/repositories.py",
+    "old": "quiz_items.c.status == QuizItemStatus.ACTIVE,\r\n                # The learner hid this card from review; a hidden card is not\r\n                # the one a fresh explanation's grade should land on, so mint\r\n                # past it the way the recall selection does.\r\n                quiz_items.c.flagged_at.is_(None),",
+    "new": "quiz_items.c.status == QuizItemStatus.ACTIVE,",
+    "proof": "cd backend && uv run pytest tests/test_application_checkpoints.py -k \"reuse_skips_checkpoint_cards_that_are_not_the_callers_on_this_section\"",
+    "label": "the reuse lookup stops skipping flagged checkpoint cards"
+  }
+]

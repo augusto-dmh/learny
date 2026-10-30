@@ -631,8 +631,16 @@ review_log = Table(
     Column("prev_difficulty", Float, nullable=True),
     Column("prev_due", DateTime(timezone=True), nullable=True),
     Column("prev_last_review", DateTime(timezone=True), nullable=True),
+    # The learner's one-tap confidence before the answer was shown (1 not sure,
+    # 2 fairly sure, 3 sure); NULL when they did not rate it. Never read by FSRS.
+    Column("confidence", SmallInteger, nullable=True),
+    # Whether the answer or passage was shown before the attempt. NULL on every row
+    # written before 0032 (never recorded); every later row sets it, so an unaided
+    # success is ``assisted IS FALSE``, never "not true".
+    Column("assisted", Boolean, nullable=True),
     # FSRS Rating is Again(1)/Hard(2)/Good(3)/Easy(4) — no other value is valid.
     CheckConstraint("rating BETWEEN 1 AND 4", name="rating_range"),
+    CheckConstraint("confidence IS NULL OR confidence BETWEEN 1 AND 3", name="confidence_range"),
 )
 
 quiz_generation_jobs = Table(
@@ -982,7 +990,6 @@ user_provider_credentials = Table(
     UniqueConstraint("user_id", "provider"),
 )
 
-
 # The learner's interface-language choice: one row per user, deleted with the
 # account. A missing row means "automatic" (negotiate from the browser). The
 # supported set lives in code (``app.domain.locale``), not in a CHECK constraint,
@@ -1000,4 +1007,82 @@ user_locale_preferences = Table(
     Column("locale", Text, nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+)
+
+
+# --- End-of-section checkpoints (v8 section-checkpoint-and-calibration) -----------
+# One optional loop a learner takes at the end of one section: the prediction they
+# made first, then its attempts. Cascades with the user and the source. Attempts
+# cascade with their checkpoint; their links to the recalled card and to the
+# review-log row their grade wrote are SET NULL, so a deleted card or log row never
+# erases the attempt. Respond and grade are once-only conditional UPDATEs over the
+# ``*_at`` stamps — there is no state column to drift from them.
+
+section_checkpoints = Table(
+    "section_checkpoints",
+    metadata,
+    Column("id", UUID(as_uuid=True), primary_key=True),
+    Column(
+        "user_id",
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "source_id",
+        UUID(as_uuid=True),
+        ForeignKey("sources.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    # The section's canonical anchor and title, snapshotted when the checkpoint began.
+    Column("anchor", Text, nullable=False),
+    Column("section_title", Text, nullable=False),
+    # Judgment of learning before any attempt: 1 little, 2 some, 3 most; NULL skipped.
+    Column("prediction", SmallInteger, nullable=True),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    CheckConstraint("prediction IS NULL OR prediction BETWEEN 1 AND 3", name="prediction_range"),
+    Index("ix_section_checkpoints_user_id_source_id", "user_id", "source_id"),
+)
+
+checkpoint_attempts = Table(
+    "checkpoint_attempts",
+    metadata,
+    Column("id", UUID(as_uuid=True), primary_key=True),
+    Column(
+        "checkpoint_id",
+        UUID(as_uuid=True),
+        ForeignKey("section_checkpoints.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    # recall (an existing card) | explain (the learner's explanation of the section).
+    Column("kind", Text, nullable=False),
+    Column("position", SmallInteger, nullable=False),
+    # The card a recall attempt recalls; for explain, the checkpoint card its grade
+    # reviewed (set when graded).
+    Column(
+        "quiz_item_id",
+        UUID(as_uuid=True),
+        ForeignKey("quiz_items.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    ),
+    Column("response", Text, nullable=True),
+    Column("confidence", SmallInteger, nullable=True),
+    # "Just explain" was used before the response: the grade is assisted.
+    Column("revealed_at", DateTime(timezone=True), nullable=True),
+    Column("responded_at", DateTime(timezone=True), nullable=True),
+    Column("graded_at", DateTime(timezone=True), nullable=True),
+    Column("feedback", Text, nullable=True),
+    Column("feedback_citations", JSONB, nullable=False, server_default=text("'[]'::jsonb")),
+    Column(
+        "review_log_id",
+        UUID(as_uuid=True),
+        ForeignKey("review_log.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    ),
+    CheckConstraint("kind IN ('recall', 'explain')", name="kind_values"),
+    CheckConstraint("confidence IS NULL OR confidence BETWEEN 1 AND 3", name="confidence_range"),
+    UniqueConstraint("checkpoint_id", "position"),
 )

@@ -68,14 +68,21 @@ class ReviewedSchedule:
 
     snapshot: SchedulingSnapshot
     interval_labels: dict[int, str]
+    # The ``review_log`` row a grade appended; ``None`` for paths that write none
+    # (undo, reset).
+    log_id: UUID | None = None
 
 
 def _reviewed(
-    scheduling: SchedulingPort, snapshot: SchedulingSnapshot, now: datetime
+    scheduling: SchedulingPort,
+    snapshot: SchedulingSnapshot,
+    now: datetime,
+    log_id: UUID | None = None,
 ) -> ReviewedSchedule:
     return ReviewedSchedule(
         snapshot=snapshot,
         interval_labels=interval_labels_for(scheduling, snapshot, now),
+        log_id=log_id,
     )
 
 
@@ -141,7 +148,10 @@ class SubmitReview:
     409). Early review of a not-yet-due active item is allowed (A-4, cramming). On success
     it advances the scheduling snapshot via :class:`~app.domain.ports.SchedulingPort` and
     appends the review-log row (with any client-supplied duration) in the caller's single
-    transaction (QUIZ-12), returning the updated snapshot. Reviewing a note card naturally
+    transaction (QUIZ-12), returning the updated snapshot. ``assisted`` has no default:
+    every caller states whether the answer was shown before the attempt, so no grade
+    can be recorded as unaided by omission; ``confidence`` is the learner's optional
+    one-tap rating, stored on the log row and never read by FSRS. Reviewing a note card naturally
     retires its "your note changed" badge — the due queue derives it against the last
     review time (NL-12), so no explicit clear is needed here.
 
@@ -173,6 +183,8 @@ class SubmitReview:
         user: User,
         item_id: UUID,
         rating: int,
+        assisted: bool,
+        confidence: int | None = None,
         review_duration_ms: int | None = None,
         client_tz: str | None = None,
     ) -> ReviewedSchedule:
@@ -184,14 +196,20 @@ class SubmitReview:
         snapshot = self._items.get_scheduling(item.id)
         advanced, log = self._scheduling.review(snapshot, rating, now)
         self._items.update_scheduling(item.id, advanced)
-        self._items.append_log(
+        log_id = self._items.append_log(
             item.id,
-            replace(log, review_duration_ms=review_duration_ms, previous=snapshot),
+            replace(
+                log,
+                review_duration_ms=review_duration_ms,
+                previous=snapshot,
+                confidence=confidence,
+                assisted=assisted,
+            ),
         )
         self._study_days.record(user.id, local_day(now, client_tz), reviews=1)
         if self._record_activation is not None:
             self._record_activation(user_id=user.id, name=ACTIVATION_FIRST_REVIEW)
-        return _reviewed(self._scheduling, advanced, now)
+        return _reviewed(self._scheduling, advanced, now, log_id)
 
 
 class UndoLastReview:

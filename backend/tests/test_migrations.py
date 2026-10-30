@@ -90,6 +90,8 @@ def test_migration_metadata_compiles() -> None:
         "user_ai_preferences",
         "user_provider_credentials",
         "user_locale_preferences",
+        "section_checkpoints",
+        "checkpoint_attempts",
     }
     # Unique email + unique session token_hash are the security-critical constraints.
     user_uniques = {c.name for c in users.constraints if c.__class__.__name__ == "UniqueConstraint"}
@@ -812,7 +814,8 @@ def test_migration_0008_creates_quiz_tables(monkeypatch) -> None:
             check_def = conn.execute(
                 text(
                     "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
-                    "WHERE conrelid = 'review_log'::regclass AND contype = 'c'"
+                    "WHERE conrelid = 'review_log'::regclass AND contype = 'c' "
+                    "AND pg_get_constraintdef(oid) LIKE '%rating%'"
                 )
             ).scalar_one()
         assert "1" in check_def and "4" in check_def
@@ -4117,4 +4120,57 @@ def test_migration_0031_creates_user_locale_preferences(monkeypatch) -> None:
     finally:
         engine.dispose()
 
+    command.upgrade(cfg, "head")
+
+
+@pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
+def test_checkpoint_migration_leaves_existing_review_log_unrecorded(monkeypatch) -> None:
+    """0032 up: a review-log row written before it keeps ``confidence`` and
+    ``assisted`` NULL (never recorded, so never labelled unaided), the two
+    checkpoint tables exist, and a confidence outside 1..3 is refused. Down one
+    step drops the tables and both columns; the old row survives the round-trip.
+    """
+    monkeypatch.setenv("LEARNY_DATABASE_URL", TEST_DB_URL)
+    cfg = _alembic_config(TEST_DB_URL)
+
+    command.upgrade(cfg, "head")
+    command.downgrade(cfg, "0031_user_locale_preferences")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        user_id, _, item_id, _, log_id = _seed_quiz_aggregate_at_0020(engine)
+    finally:
+        engine.dispose()
+
+    command.upgrade(cfg, "0032_section_checkpoints")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        tables = set(inspect(engine).get_table_names())
+        assert {"section_checkpoints", "checkpoint_attempts"} <= tables
+        with engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT confidence, assisted FROM review_log WHERE id = :id"),
+                {"id": log_id},
+            ).one()
+        assert tuple(row) == (None, None)
+        with pytest.raises(IntegrityError), engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO review_log (id, quiz_item_id, rating, reviewed_at, confidence) "
+                    "VALUES (:id, :iid, 3, now(), 4)"
+                ),
+                {"id": uuid.uuid4(), "iid": item_id},
+            )
+    finally:
+        engine.dispose()
+
+    command.downgrade(cfg, "0031_user_locale_preferences")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        assert "section_checkpoints" not in set(inspect(engine).get_table_names())
+        columns = {c["name"] for c in inspect(engine).get_columns("review_log")}
+        assert {"confidence", "assisted"}.isdisjoint(columns)
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM users WHERE id = :id"), {"id": user_id})
+    finally:
+        engine.dispose()
     command.upgrade(cfg, "head")
