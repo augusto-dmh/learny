@@ -38,6 +38,36 @@ import {
   readActiveConversation,
   writeActiveConversation,
 } from "../app/lib/active-conversation";
+import {
+  ConversationEmptyState,
+} from "../components/ai-elements/conversation";
+import {
+  InlineCitationCarousel,
+  InlineCitationCarouselNext,
+  InlineCitationCarouselPrev,
+} from "../components/ai-elements/inline-citation";
+import {
+  MessageBranch,
+  MessageBranchContent,
+  MessageBranchNext,
+  MessageBranchPage,
+  MessageBranchPrevious,
+} from "../components/ai-elements/message";
+import {
+  PromptInput,
+  PromptInputBody,
+  PromptInputTextarea,
+} from "../components/ai-elements/prompt-input";
+import { Sources, SourcesTrigger } from "../components/ai-elements/sources";
+import {
+  CarouselContent,
+  CarouselItem,
+  CarouselNext,
+  CarouselPrevious,
+} from "../components/ui/carousel";
+import { CommandDialog } from "../components/ui/command";
+import { expectNoEnglishCopy } from "./i18n-copy";
+import { setTestLocale } from "./setup-intl";
 
 // The delete-on-failure sensor: the conversations client is real except for
 // `deleteConversation`, which is replaced by a spy so a reintroduced DELETE is
@@ -1841,5 +1871,445 @@ describe("AskPanel selection verbs (RA-17/18)", () => {
       message: "And now?",
       mode: "answer",
     });
+  });
+});
+
+/** Type a question into the Portuguese composer and send it. */
+async function perguntarPt(value: string) {
+  fireEvent.change(
+    await screen.findByPlaceholderText("Faça uma pergunta sobre este livro…"),
+    { target: { value } },
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Enviar" }));
+}
+
+describe("AskPanel in pt-BR", () => {
+  const perguntar = perguntarPt;
+
+  const CHAT_NAMESPACES = [
+    "chat.ask",
+    "chat.phase",
+    "chat.citations",
+    "chat.includeNotes",
+    "chat.saveToNote",
+    "chat.promptInput",
+    "chat.notFound",
+    "errors.stream",
+    "common",
+  ];
+
+  it("empty state, composer and notes toggle: renders in pt-BR", async () => {
+    setTestLocale("pt-BR");
+    const fetchMock = routedFetch(baseHandlers(() => sseStream().response));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+
+    const suggestions = await screen.findByLabelText("sugestões de perguntas");
+    expect(
+      Array.from(suggestions.querySelectorAll("button")).map((b) => b.textContent),
+    ).toEqual([
+      "Resuma as ideias principais deste livro.",
+      "Quais são os principais argumentos do autor?",
+      "Explique um conceito deste livro que eu possa achar difícil.",
+    ]);
+    expect(document.body.textContent).toContain(
+      "Aqui você tira dúvidas sobre o livro.",
+    );
+    expect(
+      screen.getByRole("checkbox", { name: "Buscar também nas minhas notas" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByPlaceholderText("Faça uma pergunta sobre este livro…"),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Enviar" })).toBeTruthy();
+    expectNoEnglishCopy(document.body.textContent ?? "", ...CHAT_NAMESPACES);
+
+    // A suggested prompt is the learner's question, sent in their language.
+    fireEvent.click(
+      screen.getByRole("button", { name: "Resuma as ideias principais deste livro." }),
+    );
+    await waitFor(() => expect(callsTo(fetchMock, STREAM_URL)).toHaveLength(1));
+    expect(bodyOf(callsTo(fetchMock, STREAM_URL)[0])).toEqual({
+      message: "Resuma as ideias principais deste livro.",
+      mode: "answer",
+    });
+  });
+
+  it("answer phases, citations and save-to-note: renders in pt-BR", async () => {
+    setTestLocale("pt-BR");
+    const stream = sseStream();
+    let finishSave: (response: Response) => void = () => {};
+    vi.stubGlobal(
+      "fetch",
+      routedFetch(
+        baseHandlers(() => stream.response, {
+          [`POST ${HIGHLIGHTS_URL}`]: () =>
+            new Promise<Response>((resolve) => {
+              finishSave = resolve;
+            }),
+        }),
+      ),
+    );
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+    await perguntar("Quem escreveu o primeiro algoritmo?");
+
+    // In flight: the search line, then the live thinking with its stop control.
+    await waitFor(() =>
+      expect(screen.getByText(/Buscando no livro…/)).toBeTruthy(),
+    );
+    expect(screen.getByRole("button", { name: "Parar" })).toBeTruthy();
+    expectNoEnglishCopy(document.body.textContent ?? "", ...CHAT_NAMESPACES);
+    await stream.push({ type: "start", messageId: "m1" });
+    await stream.push({ type: "reasoning-start", id: "r1" });
+    await stream.push({ type: "reasoning-delta", id: "r1", delta: "pensando alto" });
+    await waitFor(() =>
+      expect(screen.getByRole("region", { name: "raciocínio" })).toBeTruthy(),
+    );
+    expect(screen.getByRole("button", { name: /Pensando…/ })).toBeTruthy();
+    expectNoEnglishCopy(document.body.textContent ?? "", ...CHAT_NAMESPACES);
+
+    await stream.push({ type: "reasoning-end", id: "r1" });
+    await streamAnswer(stream, [citation]);
+
+    expect(
+      await screen.findByRole("button", { name: /Linha de raciocínio/ }),
+    ).toBeTruthy();
+    const chip = screen.getByRole("button", {
+      name: "Citação: Chapter 1 › Core Idea",
+    });
+    expect(screen.getByLabelText("citações")).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(chip);
+    });
+    expect(screen.getByRole("button", { name: "Fechar trecho" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Abrir no livro" })).toBeTruthy();
+
+    // Saving: the in-flight label, then the confirmation.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Salvar como nota" }));
+    });
+    expect(screen.getByRole("button", { name: "Salvando…" })).toBeTruthy();
+    expectNoEnglishCopy(document.body.textContent ?? "", ...CHAT_NAMESPACES);
+    await act(async () => {
+      finishSave(jsonResponse(201, noteDetail));
+    });
+    expect((await screen.findByTestId("save-note-status")).textContent).toBe(
+      "Salva nas suas notas.",
+    );
+    expectNoEnglishCopy(document.body.textContent ?? "", ...CHAT_NAMESPACES);
+  });
+
+  it("failed save, failed turn and retry: renders in pt-BR", async () => {
+    setTestLocale("pt-BR");
+    const streams = [sseStream(), sseStream()];
+    let streamCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      routedFetch(
+        baseHandlers(() => streams[Math.min(streamCalls++, 1)].response, {
+          [`POST ${HIGHLIGHTS_URL}`]: () =>
+            jsonResponse(500, { detail: "Internal Server Error" }),
+          [`POST ${NOTES_URL}`]: () =>
+            jsonResponse(500, { detail: "Internal Server Error" }),
+        }),
+      ),
+    );
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+    await perguntar("primeira pergunta");
+    await streamAnswer(streams[0], [citation]);
+    await act(async () => {
+      fireEvent.click(
+        await screen.findByRole("button", { name: "Salvar como nota" }),
+      );
+    });
+    expect((await screen.findByTestId("save-note-error")).textContent).toBe(
+      "Não foi possível salvar esta resposta como nota. Tente novamente.",
+    );
+
+    await perguntar("segunda pergunta");
+    await streams[1].push({ type: "start", messageId: "m2" });
+    await streams[1].push({
+      type: "error",
+      errorText: "Answer generation failed. Please try again.",
+    });
+    expect(
+      await screen.findByRole("button", { name: "Tentar novamente" }),
+    ).toBeTruthy();
+    expect(screen.getByTestId("failed-turn").textContent).toContain(
+      "Não foi possível gerar a resposta.",
+    );
+    expectNoEnglishCopy(
+      document.body.textContent ?? "",
+      ...CHAT_NAMESPACES,
+      "chat.retry",
+      "errors.status",
+    );
+  });
+
+  it("not-found answer and the locked notes choice: renders in pt-BR", async () => {
+    setTestLocale("pt-BR");
+    const stream = sseStream();
+    vi.stubGlobal("fetch", routedFetch(baseHandlers(() => stream.response)));
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" />);
+    await perguntar("um termo sem sentido");
+    await stream.push({ type: "start", messageId: "m1" });
+    await stream.push({ type: "text-start", id: "t1" });
+    await stream.push({ type: "text-end", id: "t1" });
+    await stream.push({ type: "data-citations", data: [] });
+    await stream.push({
+      type: "data-answer-status",
+      data: { status: "not_found_in_source" },
+    });
+    await stream.push({ type: "finish" });
+    await stream.done();
+
+    expect((await screen.findByTestId("not-found")).textContent).toContain(
+      "Isso não aparece neste livro.",
+    );
+    const toggle = screen.getByRole("checkbox", {
+      name: "Buscar também nas minhas notas",
+    });
+    await waitFor(() => expect((toggle as HTMLInputElement).disabled).toBe(true));
+    expect(
+      document.getElementById(toggle.getAttribute("aria-describedby")!)!
+        .textContent,
+    ).toContain("Esta conversa começou com essa escolha");
+    expectNoEnglishCopy(document.body.textContent ?? "", ...CHAT_NAMESPACES);
+  });
+
+  it("selection verbs send Portuguese templates: renders in pt-BR", async () => {
+    setTestLocale("pt-BR");
+    const fetchMock = routedFetch(baseHandlers(() => sseStream().response));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { unmount } = render(
+      <AskPanel
+        sourceId="s1"
+        csrf="csrf-xyz"
+        pendingRequest={{
+          kind: "explain",
+          quote: "a frase escolhida",
+          anchor: "c1.xhtml#s1",
+        }}
+      />,
+    );
+    await waitFor(() => expect(callsTo(fetchMock, STREAM_URL)).toHaveLength(1));
+    expect(bodyOf(callsTo(fetchMock, STREAM_URL)[0])).toMatchObject({
+      message: 'Explique este trecho do livro:\n\n"a frase escolhida"',
+    });
+    unmount();
+    localStorage.clear();
+
+    render(
+      <AskPanel
+        sourceId="s1"
+        csrf="csrf-xyz"
+        pendingRequest={{
+          kind: "ask",
+          quote: "um trecho citado",
+          anchor: "c1.xhtml#s1",
+        }}
+      />,
+    );
+    expect(
+      await screen.findByRole("button", { name: "Remover trecho anexado" }),
+    ).toBeTruthy();
+    await perguntar("O que isso quer dizer?");
+    await waitFor(() => expect(callsTo(fetchMock, STREAM_URL)).toHaveLength(2));
+    expect(bodyOf(callsTo(fetchMock, STREAM_URL)[1])).toMatchObject({
+      message: 'Sobre este trecho:\n\n"um trecho citado"\n\nO que isso quer dizer?',
+    });
+  });
+});
+
+describe("AskPanel citations in pt-BR", () => {
+  it("citation marks, note citations and show-in-book: renders in pt-BR", async () => {
+    setTestLocale("pt-BR");
+    const stream = sseStream();
+    vi.stubGlobal("fetch", routedFetch(baseHandlers(() => stream.response)));
+    const onShowInBook = vi.fn();
+
+    render(<AskPanel sourceId="s1" csrf="csrf-xyz" onShowInBook={onShowInBook} />);
+    await perguntarPt("Quem escreveu?");
+    await stream.push({ type: "start", messageId: "m1" });
+    await stream.push({ type: "text-start", id: "t1" });
+    await stream.push({
+      type: "text-delta",
+      id: "t1",
+      delta: "Ada escreveu.[^1] Eu anotei.[^2] Sem título.[^3]",
+    });
+    await stream.push({ type: "text-end", id: "t1" });
+    await stream.push({
+      type: "data-citations",
+      data: [
+        citation,
+        { ...citation, chunk_id: "n1", origin: "note", note_id: "n1", note_title: "Minha nota" },
+        { ...citation, chunk_id: "n2", origin: "note", note_id: "n2", note_title: null },
+      ],
+    });
+    await stream.push({ type: "data-answer-status", data: { status: "answered" } });
+    await stream.push({ type: "finish" });
+    await stream.done();
+
+    // The marks in the prose and the chips under it.
+    expect(await screen.findByRole("button", { name: "Citação 1" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Citação 2" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Sua nota: Minha nota" })).toBeTruthy();
+
+    // A book citation opens with a way back into the book.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Citação: Chapter 1 › Core Idea" }));
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Mostrar no livro" }));
+    expect(onShowInBook).toHaveBeenCalledWith("chapter-1.xhtml#core-idea");
+
+    // A note citation names the note and links it.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Sua nota: Minha nota" }));
+    });
+    const passage = screen.getByTestId("citation-passage");
+    expect(passage.textContent).toContain("Sua nota — Minha nota");
+    expect(screen.getByRole("link", { name: "Abrir nota" })).toBeTruthy();
+
+    // An untitled note still says whose it is.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Sua nota:" }));
+    });
+    expect(screen.getByTestId("citation-passage").textContent).toMatch(/^Sua nota/);
+    expectNoEnglishCopy(document.body.textContent ?? "", "chat.citations", "chat.saveToNote");
+  });
+});
+
+describe("vendored chat primitives in pt-BR", () => {
+  it("default text of the vendored primitives: renders in pt-BR", async () => {
+    setTestLocale("pt-BR");
+    window.matchMedia = ((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    })) as unknown as typeof window.matchMedia;
+    const originalObserver = globalThis.IntersectionObserver;
+    globalThis.IntersectionObserver = class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+      takeRecords() {
+        return [];
+      }
+    } as unknown as typeof IntersectionObserver;
+
+    render(
+      <div>
+        <PromptInput onSubmit={() => {}}>
+          <PromptInputBody>
+            <PromptInputTextarea />
+          </PromptInputBody>
+        </PromptInput>
+        <ConversationEmptyState />
+        <Sources>
+          <SourcesTrigger count={0} />
+        </Sources>
+        <Sources>
+          <SourcesTrigger count={2} />
+        </Sources>
+        <MessageBranch>
+          <MessageBranchContent>
+            <div key="a">a</div>
+            <div key="b">b</div>
+          </MessageBranchContent>
+          <MessageBranchPrevious />
+          <MessageBranchPage />
+          <MessageBranchNext />
+        </MessageBranch>
+        <InlineCitationCarousel>
+          <InlineCitationCarouselPrev />
+          <InlineCitationCarouselNext />
+          <CarouselContent>
+            <CarouselItem>slide</CarouselItem>
+          </CarouselContent>
+          <CarouselPrevious />
+          <CarouselNext />
+        </InlineCitationCarousel>
+      </div>,
+    );
+
+    // A turn left streaming by an earlier test can hold React's act queue, so the
+    // first query waits for this render to commit.
+    expect(
+      await screen.findByPlaceholderText("O que você gostaria de saber?"),
+    ).toBeTruthy();
+    expect(screen.getByLabelText("Enviar arquivos")).toBeTruthy();
+    expect(screen.getByText("Nenhuma mensagem ainda")).toBeTruthy();
+    expect(screen.getByText("Comece uma conversa para ver as mensagens aqui")).toBeTruthy();
+    expect(screen.getByText("Nenhuma fonte usada")).toBeTruthy();
+    expect(screen.getByText("2 fontes usadas")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Versão anterior" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Próxima versão" })).toBeTruthy();
+    expect(await screen.findByText("1 de 2")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Anterior" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Próximo" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Slide anterior" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Próximo slide" })).toBeTruthy();
+    expect(
+      document.querySelector('[aria-roledescription="carrossel"]'),
+    ).toBeTruthy();
+    expect(document.querySelector('[aria-roledescription="slide"]')).toBeTruthy();
+    expectNoEnglishCopy(
+      document.body.textContent ?? "",
+      "chat.elements",
+      "chat.promptInput",
+      "common.command",
+      "common.previousSlide",
+      "common.nextSlide",
+    );
+    cleanup();
+
+    // The command dialog is modal, so it gets a render of its own.
+    render(
+      <CommandDialog open>
+        <div />
+      </CommandDialog>,
+    );
+    expect(await screen.findByText("Paleta de comandos")).toBeTruthy();
+    expect(screen.getByText("Busque um comando para executar…")).toBeTruthy();
+    expectNoEnglishCopy(document.body.textContent ?? "", "common.command");
+    cleanup();
+
+    // An explicit prop still wins over the catalog default, and an empty
+    // description still hides its paragraph.
+    render(
+      <div>
+        <ConversationEmptyState title="Comece aqui" description="" />
+        <PromptInput onSubmit={() => {}}>
+          <PromptInputBody>
+            <PromptInputTextarea placeholder="Pergunte ao livro" />
+          </PromptInputBody>
+        </PromptInput>
+      </div>,
+    );
+    expect(await screen.findByText("Comece aqui")).toBeTruthy();
+    expect(screen.queryByText("Nenhuma mensagem ainda")).toBeNull();
+    expect(screen.queryByText("Comece uma conversa para ver as mensagens aqui")).toBeNull();
+    expect(screen.getByPlaceholderText("Pergunte ao livro")).toBeTruthy();
+    cleanup();
+    render(
+      <CommandDialog open title="Ir para" description="Escolha um capítulo">
+        <div />
+      </CommandDialog>,
+    );
+    expect(await screen.findByText("Ir para")).toBeTruthy();
+    expect(screen.getByText("Escolha um capítulo")).toBeTruthy();
+    expect(screen.queryByText("Paleta de comandos")).toBeNull();
+    Reflect.deleteProperty(window, "matchMedia");
+    globalThis.IntersectionObserver = originalObserver;
   });
 });

@@ -10,16 +10,18 @@
  */
 
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 
 import { InkLine } from "@/app/components/ink-line";
 import { NotesScreen } from "@/app/components/notes/notes-screen";
 
 export default function NotesPage() {
   const router = useRouter();
+  const t = useTranslations("notes");
   return (
     <main className="flex-1 p-6">
       <header className="mb-6 space-y-2">
-        <h1 className="text-2xl font-semibold">Notes</h1>
+        <h1 className="text-2xl font-semibold">{t("title")}</h1>
         <InkLine />
       </header>
       <NotesScreen onRequireAuth={() => router.replace("/login")} />

@@ -9,10 +9,19 @@
  * over-cap save, and deletes behind a confirm before returning to the list.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { NoteDetailScreen } from "../app/components/notes/note-detail-screen";
+import { expectNoEnglishCopy } from "./i18n-copy";
+import { setTestLocale } from "./setup-intl";
 
 const nav = vi.hoisted(() => ({ push: vi.fn() }));
 vi.mock("next/navigation", () => ({
@@ -240,5 +249,264 @@ describe("NoteDetailScreen (NF-13/14)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Confirm delete" }));
 
     await waitFor(() => expect(nav.push).toHaveBeenCalledWith("/notes"));
+  });
+});
+
+describe("NoteDetailScreen in pt-BR", () => {
+  /** Hold a response until the test releases it, to see the in-flight state. */
+  function deferred() {
+    let release: (response: Response) => void = () => {};
+    const promise = new Promise<Response>((resolve) => {
+      release = resolve;
+    });
+    return { promise, release };
+  }
+
+  const NOTE_NAMESPACES = [
+    "notes.detail",
+    "notes.suggestions",
+    "notes.anchorStatus",
+    "errors.operation.notesGet",
+    "errors.operation.notesDelete",
+    "errors.operation.cardsSuggestNote",
+    "common",
+  ];
+
+  const body = () => document.body.textContent ?? "";
+
+  // The learner's own text in their language, so the copy probe reads only UI.
+  const notaPt = {
+    ...note,
+    title: "O algoritmo de Ada",
+    body_markdown: "Uma anotação sobre [[Babbage]].",
+  };
+
+  const SUGGEST_URL = "/api/notes/n1/cards/suggest";
+  const CARDS_URL = "/api/notes/n1/cards";
+  const suggestion = {
+    item_type: "free_recall",
+    question: "O que agenda as revisões?",
+    answer: "A repetição espaçada",
+    anchor_quote: "A repetição espaçada agenda as revisões",
+  };
+  const card = {
+    id: "nc1",
+    source_id: null,
+    origin: "note",
+    note_anchor_id: null,
+    item_type: "free_recall",
+    question: suggestion.question,
+    answer: suggestion.answer,
+    citation: { section_path: [], anchor: "", source_excerpt: "x" },
+    status: "active",
+    created_at: "now",
+    updated_at: "now",
+  };
+
+  it("editor, anchors, backlinks and add-to-review: renders in pt-BR", async () => {
+    setTestLocale("pt-BR");
+    const suggest = deferred();
+    let accepts = 0;
+    const remove = deferred();
+    vi.stubGlobal(
+      "fetch",
+      routedFetch(
+        loadHandlers({
+          [`GET ${NOTE_URL}`]: () => jsonResponse(200, notaPt),
+          [`POST ${SUGGEST_URL}`]: () => suggest.promise,
+          // The first promotion creates the card; the second finds it already there.
+          [`POST ${CARDS_URL}`]: () =>
+            jsonResponse(accepts++ === 0 ? 201 : 200, card),
+          [`DELETE ${NOTE_URL}`]: () => remove.promise,
+        }),
+      ),
+    );
+    render(<NoteDetailScreen noteId="n1" />);
+
+    expect(await screen.findByLabelText("Título")).toBeTruthy();
+    expect(screen.getByRole("region", { name: "nota" })).toBeTruthy();
+    expect(screen.getByLabelText("Texto")).toBeTruthy();
+    expect(screen.getByLabelText("Etiquetas")).toBeTruthy();
+    expect(
+      screen.getByPlaceholderText("etiquetas, separadas, por vírgula"),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Salvar" })).toBeTruthy();
+    for (const heading of ["Revisão", "Trechos ancorados", "Referências"]) {
+      expect(screen.getByText(heading)).toBeTruthy();
+    }
+    expect(screen.getByTestId("anchor-status-active").textContent).toBe("ativo");
+    expect(screen.getByTestId("anchor-status-orphaned").textContent).toBe(
+      "fora do livro",
+    );
+    expect(body()).toContain("Este trecho não está mais no livro.");
+    expect(screen.getByRole("link", { name: "Ir para o trecho" })).toBeTruthy();
+    expectNoEnglishCopy(body(), ...NOTE_NAMESPACES);
+
+    fireEvent.click(screen.getByRole("button", { name: "Visualizar" }));
+    expect(screen.getByRole("button", { name: "Editar" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Editar" }));
+
+    // Suggest: in flight, then a chip, promoted twice (created, then existing).
+    fireEvent.click(screen.getByRole("button", { name: "Adicionar à revisão" }));
+    expect(await screen.findByRole("button", { name: "Gerando…" })).toBeTruthy();
+    expectNoEnglishCopy(body(), ...NOTE_NAMESPACES);
+    await act(async () => {
+      suggest.release(jsonResponse(200, { suggestions: [suggestion, suggestion] }));
+    });
+    expect(await screen.findAllByRole("button", { name: "Descartar" })).toHaveLength(2);
+    fireEvent.click(screen.getAllByRole("button", { name: "Aceitar" })[0]);
+    expect((await screen.findByTestId("note-card-count")).textContent).toBe(
+      "1 cartão desta nota em revisão",
+    );
+    fireEvent.click(screen.getAllByRole("button", { name: "Aceitar" })[0]);
+    expect(
+      await screen.findByText(
+        "Esse cartão já está em revisão — adicionar o mesmo texto de novo não cria uma cópia.",
+      ),
+    ).toBeTruthy();
+    expectNoEnglishCopy(body(), ...NOTE_NAMESPACES);
+
+    fireEvent.click(screen.getByRole("button", { name: "Excluir" }));
+    expect(screen.getByText("Excluir esta nota?")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Cancelar" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Confirmar exclusão" }));
+    expect(await screen.findByRole("button", { name: "Excluindo…" })).toBeTruthy();
+    expectNoEnglishCopy(body(), ...NOTE_NAMESPACES);
+    await act(async () => {
+      remove.release(jsonResponse(404, { detail: "Not Found" }));
+    });
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "Não foi possível excluir a nota.",
+    );
+  });
+
+  it("no anchors, no backlinks, no cards and a failed suggest: renders in pt-BR", async () => {
+    setTestLocale("pt-BR");
+    let suggests = 0;
+    vi.stubGlobal(
+      "fetch",
+      routedFetch(
+        loadHandlers({
+          [`GET ${NOTE_URL}`]: () => jsonResponse(200, { ...notaPt, anchors: [] }),
+          [`GET ${BACKLINKS_URL}`]: () => jsonResponse(200, []),
+          [`POST ${SUGGEST_URL}`]: () =>
+            suggests++ === 0
+              ? jsonResponse(200, { suggestions: [] })
+              : jsonResponse(404, { detail: "Not Found" }),
+        }),
+      ),
+    );
+    render(<NoteDetailScreen noteId="n1" />);
+
+    expect(
+      await screen.findByText("Nenhum destaque ancorado a esta nota."),
+    ).toBeTruthy();
+    expect(screen.getByText("Nenhuma nota aponta para cá ainda.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Adicionar à revisão" }));
+    expect(
+      await screen.findByText("Não foi possível basear nenhum cartão nesta nota."),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Adicionar à revisão" }));
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "Não foi possível sugerir cartões para esta nota.",
+    );
+    expectNoEnglishCopy(body(), ...NOTE_NAMESPACES);
+  });
+
+  it("loading, failed load, save errors and signed-out: renders in pt-BR", async () => {
+    setTestLocale("pt-BR");
+    const auth = deferred();
+    const load = deferred();
+    const save = deferred();
+    let patches = 0;
+    vi.stubGlobal(
+      "fetch",
+      routedFetch(
+        loadHandlers({
+          "GET /api/auth/me": () => auth.promise,
+          [`GET ${NOTE_URL}`]: () => load.promise,
+          [`PATCH ${NOTE_URL}`]: () =>
+            patches++ === 0
+              ? jsonResponse(422, { detail: "Note body is too long." })
+              : save.promise,
+        }),
+      ),
+    );
+    render(<NoteDetailScreen noteId="n1" />);
+
+    expect(screen.getByText("Carregando…")).toBeTruthy();
+    await act(async () => {
+      auth.release(authedMe.clone());
+    });
+    expect(await screen.findByText("Carregando a nota…")).toBeTruthy();
+    expectNoEnglishCopy(body(), ...NOTE_NAMESPACES);
+    await act(async () => {
+      load.release(jsonResponse(200, notaPt));
+    });
+
+    fireEvent.change(await screen.findByLabelText("Texto"), {
+      target: { value: "longo demais" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Salvar" }));
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "Esta nota é longa demais para ser salva.",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Salvar" }));
+    expect(await screen.findByRole("button", { name: "Salvando…" })).toBeTruthy();
+    expectNoEnglishCopy(body(), ...NOTE_NAMESPACES);
+    await act(async () => {
+      save.release(jsonResponse(200, { ...notaPt, body_markdown: "longo demais" }));
+    });
+    cleanup();
+
+    vi.stubGlobal(
+      "fetch",
+      routedFetch(
+        loadHandlers({
+          [`GET ${NOTE_URL}`]: () => jsonResponse(404, { detail: "Not Found" }),
+        }),
+      ),
+    );
+    render(<NoteDetailScreen noteId="n1" />);
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "Não foi possível carregar essa nota.",
+    );
+    expect(screen.getByRole("link", { name: "Voltar para suas notas" })).toBeTruthy();
+    expectNoEnglishCopy(body(), ...NOTE_NAMESPACES);
+    cleanup();
+
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({ "GET /api/auth/me": () => new Response(null, { status: 401 }) }),
+    );
+    render(<NoteDetailScreen noteId="n1" />);
+    expect(await screen.findByText("Você não está conectado.")).toBeTruthy();
+  });
+
+  it("user text is never translated", async () => {
+    setTestLocale("pt-BR");
+    vi.stubGlobal("fetch", routedFetch(loadHandlers()));
+    render(<NoteDetailScreen noteId="n1" />);
+
+    // The note is the learner's own words: English stays English in pt-BR.
+    expect(
+      ((await screen.findByLabelText("Título")) as HTMLInputElement).value,
+    ).toBe("Ada's algorithm");
+    expect((screen.getByLabelText("Texto") as HTMLTextAreaElement).value).toBe(
+      "A note about [[Babbage]].",
+    );
+    expect((screen.getByLabelText("Etiquetas") as HTMLInputElement).value).toBe(
+      "history",
+    );
+    expect(body()).toContain("Ada wrote the first algorithm");
+    expect(body()).toContain("A passage that vanished on re-ingest");
+    expect(screen.getByRole("link", { name: "Babbage engine" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Visualizar" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("note-preview").textContent).toContain(
+        "A note about",
+      ),
+    );
   });
 });

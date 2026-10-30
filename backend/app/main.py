@@ -27,6 +27,7 @@ from app.infrastructure.web.instrument import router as instrument_router
 from app.infrastructure.web.locale import router as locale_router
 from app.infrastructure.web.middleware import RequestContextMiddleware
 from app.infrastructure.web.notes import router as notes_router
+from app.infrastructure.web.provider_keys import router as provider_keys_router
 from app.infrastructure.web.quiz import router as quiz_router
 from app.infrastructure.web.rate_limit import set_rate_limiter
 from app.infrastructure.web.redis_rate_limit import make_redis_limiter
@@ -123,6 +124,7 @@ def create_app() -> FastAPI:
     app.include_router(health_router)
     app.include_router(auth_router)
     app.include_router(ai_router)
+    app.include_router(provider_keys_router)
     app.include_router(locale_router)
     app.include_router(sources_router)
     app.include_router(ingestion_router)

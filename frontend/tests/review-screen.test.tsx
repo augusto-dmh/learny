@@ -20,8 +20,24 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
+import ReviewPage from "../app/(app)/review/page";
 import { ReviewScreen } from "../app/components/review-screen";
+import { StudyHeatmap, StudyStats } from "../app/components/study-heatmap";
 import { readUrl } from "../app/lib/read-url";
+import { expectNoEnglishCopy } from "./i18n-copy";
+import { setTestLocale } from "./setup-intl";
+
+// `suspend` holds the review page on its Suspense fallback.
+const nav = vi.hoisted(() => ({ suspend: false }));
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ replace: vi.fn(), push: vi.fn(), prefetch: vi.fn() }),
+  useSearchParams: () => {
+    if (nav.suspend) {
+      throw new Promise(() => {});
+    }
+    return new URLSearchParams();
+  },
+}));
 
 beforeAll(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
@@ -1249,3 +1265,401 @@ describe("ReviewScreen Done-for-today (REV-42/43)", () => {
   });
 });
 
+
+describe("ReviewScreen in pt-BR", () => {
+  /** Hold a response until the test releases it, to see the in-flight state. */
+  function deferred() {
+    let release: (response: Response) => void = () => {};
+    const promise = new Promise<Response>((resolve) => {
+      release = resolve;
+    });
+    return { promise, release };
+  }
+
+  const REVIEW_NAMESPACES = ["review", "errors.status", "common"];
+
+  const body = () => document.body.textContent ?? "";
+
+  it("loading, signed-out, empty and failed states: renders in pt-BR", async () => {
+    setTestLocale("pt-BR");
+    const auth = deferred();
+    const due = deferred();
+    let attempt = 0;
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => auth.promise,
+        [`GET ${DUE}`]: () => {
+          attempt += 1;
+          return attempt === 1 ? due.promise : jsonResponse(200, dueQueue([]));
+        },
+      }),
+    );
+    render(<ReviewScreen />);
+
+    expect(screen.getByText("Carregando…")).toBeTruthy();
+    await act(async () => {
+      auth.release(authedMe.clone());
+    });
+    expect(
+      await screen.findByText("Carregando suas revisões pendentes…"),
+    ).toBeTruthy();
+    expectNoEnglishCopy(body(), ...REVIEW_NAMESPACES);
+    await act(async () => {
+      due.release(jsonResponse(500, { detail: "Boom." }));
+    });
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "O servidor teve um problema. Tente novamente.",
+    );
+    expect(screen.getByRole("region", { name: "revisão" })).toBeTruthy();
+    expectNoEnglishCopy(body(), ...REVIEW_NAMESPACES);
+    fireEvent.click(screen.getByRole("button", { name: "Tentar novamente" }));
+    expect(await screen.findByText("Nada para revisar agora.")).toBeTruthy();
+    expect(
+      screen.getByRole("link", { name: "Voltar para a biblioteca" }),
+    ).toBeTruthy();
+    expectNoEnglishCopy(body(), ...REVIEW_NAMESPACES);
+    cleanup();
+
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({ "GET /api/auth/me": () => jsonResponse(401, {}) }),
+    );
+    render(<ReviewScreen />);
+    expect(await screen.findByText("Você não está conectado.")).toBeTruthy();
+  });
+
+  it("card, grades, intervals and summary: renders in pt-BR", async () => {
+    setTestLocale("pt-BR");
+    const soon = new Date(Date.now() + 60 * 1000).toISOString();
+    let firstReview = true;
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        [`GET ${DUE}`]: () =>
+          jsonResponse(
+            200,
+            dueQueue([
+              { ...clozeCard, interval_labels: { "1": "~1m", "2": "~10m", "3": "~1h", "4": "~1y" } },
+              {
+                ...recallCard,
+                interval_labels: { "1": "~4d", "2": "~2w", "3": "~1mo", "4": "~4mo" },
+              },
+            ]),
+          ),
+        "POST /api/quiz-items/i1/reviews": () => {
+          // The first grade comes due within minutes: a short-term requeue.
+          const due = firstReview ? soon : "2026-08-20T00:00:00Z";
+          firstReview = false;
+          return jsonResponse(
+            200,
+            scheduling(due, {
+              interval_labels: { "1": "~1d", "2": "~1d", "3": "~4d", "4": "~2w" },
+            }),
+          );
+        },
+        "POST /api/quiz-items/i2/reviews": () =>
+          jsonResponse(200, scheduling("2026-08-20T00:00:00Z")),
+      }),
+    );
+    render(<ReviewScreen />);
+
+    await screen.findByTestId("question");
+    expect(screen.getByText("lacuna")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Abrir no livro" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Mostrar resposta" }));
+    expect(screen.getByRole("group", { name: "Avalie o quanto você lembrou" })).toBeTruthy();
+    expect(
+      [1, 2, 3, 4].map((r) => screen.getByTestId(`grade-interval-${r}`).textContent),
+    ).toEqual(["~1 min", "~10 min", "~1 h", "~1 ano"]);
+    for (const grade of ["Novamente", "Difícil", "Bom", "Fácil"]) {
+      expect(screen.getByRole("button", { name: grade })).toBeTruthy();
+    }
+    expectNoEnglishCopy(body(), ...REVIEW_NAMESPACES);
+
+    fireEvent.click(screen.getByRole("button", { name: "Novamente" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("position").textContent).toBe("2/3"),
+    );
+    expect(screen.getByTestId("short-term-remaining").textContent).toBe(
+      "1 ainda em revisão de curto prazo",
+    );
+    expect(screen.getByText("resposta livre")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Mostrar resposta" }));
+    expect(
+      [1, 2, 3, 4].map((r) => screen.getByTestId(`grade-interval-${r}`).textContent),
+    ).toEqual(["~4 dias", "~2 sem.", "~1 mês", "~4 meses"]);
+    fireEvent.click(screen.getByRole("button", { name: "Bom" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("position").textContent).toBe("3/3"),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Mostrar resposta" }));
+    // The requeued card carries the buckets its first grade returned.
+    expect(screen.getByTestId("grade-interval-1").textContent).toBe("~1 dia");
+    fireEvent.click(screen.getByRole("button", { name: "Fácil" }));
+
+    expect(await screen.findByText("Sessão concluída")).toBeTruthy();
+    expect(screen.getByTestId("reviewed-total").textContent).toBe(
+      "3 cartões revisados.",
+    );
+    expect(screen.getByRole("region", { name: "resumo da revisão" })).toBeTruthy();
+    expect(body()).toContain("Novamente:");
+    expect(body()).toContain("Fácil:");
+    expectNoEnglishCopy(body(), ...REVIEW_NAMESPACES);
+  });
+
+  it("note badge, reset, edit and a failed grade: renders in pt-BR", async () => {
+    setTestLocale("pt-BR");
+    const reset = deferred();
+    const save = deferred();
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        [`GET ${DUE}`]: () =>
+          jsonResponse(
+            200,
+            dueQueue([
+              {
+                ...recallCard,
+                provenance: { note_id: "n7", note_title: "Como a memória funciona" },
+                note_changed: true,
+              },
+            ]),
+          ),
+        "POST /api/quiz-items/i2/schedule-reset": () => reset.promise,
+        "PATCH /api/quiz-items/i2": () => save.promise,
+        "POST /api/quiz-items/i2/reviews": () =>
+          jsonResponse(500, { detail: "Boom." }),
+      }),
+    );
+    render(<ReviewScreen />);
+    await screen.findByTestId("question");
+
+    expect(screen.getByTestId("note-changed-badge").textContent).toBe(
+      "Sua nota mudou",
+    );
+    expect(screen.getByTestId("card-provenance").textContent).toBe(
+      "Da nota “Como a memória funciona”",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Reiniciar agendamento" }));
+    expect(body()).toContain("Reiniciar o agendamento deste cartão?");
+    expect(screen.getByRole("button", { name: "Cancelar" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Confirmar reinício" }));
+    expect(
+      await screen.findByRole("button", { name: "Reiniciando…" }),
+    ).toBeTruthy();
+    expectNoEnglishCopy(body(), ...REVIEW_NAMESPACES);
+    await act(async () => {
+      reset.release(
+        jsonResponse(200, {
+          state: 1,
+          step: 0,
+          stability: null,
+          difficulty: null,
+          due: "2026-07-20T00:00:00Z",
+          last_review: null,
+        }),
+      );
+    });
+
+    act(() => {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "e", bubbles: true, cancelable: true }),
+      );
+    });
+    expect(await screen.findByLabelText("Pergunta")).toBeTruthy();
+    expect(screen.getByLabelText("Resposta")).toBeTruthy();
+    fireEvent.change(screen.getByTestId("edit-answer"), {
+      target: { value: "Charles Babbage e Ada" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Salvar" }));
+    expect(await screen.findByRole("button", { name: "Salvando…" })).toBeTruthy();
+    expectNoEnglishCopy(body(), ...REVIEW_NAMESPACES);
+    await act(async () => {
+      save.release(
+        jsonResponse(200, {
+          id: "i2",
+          question: recallCard.question,
+          answer: "Charles Babbage e Ada",
+        }),
+      );
+    });
+
+    await waitFor(() => expect(screen.queryByTestId("edit-question")).toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: "Mostrar resposta" }));
+    fireEvent.click(screen.getByRole("button", { name: "Bom" }));
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "O servidor teve um problema. Tente novamente.",
+    );
+    expect(screen.getByRole("button", { name: "Tentar novamente" })).toBeTruthy();
+    expectNoEnglishCopy(body(), ...REVIEW_NAMESPACES);
+  });
+
+  it("unknown backend tokens show as sent: renders in pt-BR", async () => {
+    setTestLocale("pt-BR");
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        [`GET ${DUE}`]: () =>
+          jsonResponse(
+            200,
+            dueQueue([
+              {
+                ...clozeCard,
+                item_type: "multiple_choice",
+                interval_labels: { "1": "~3w", "2": "~10m", "3": "~4d", "4": "~2w" },
+              },
+            ]),
+          ),
+      }),
+    );
+    render(<ReviewScreen />);
+    await screen.findByTestId("question");
+    // A kind or bucket the catalog does not know yet stays visible, untranslated.
+    expect(screen.getByText("multiple_choice")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Mostrar resposta" }));
+    expect(screen.getByTestId("grade-interval-1").textContent).toBe("~3w");
+    expect(screen.getByTestId("grade-interval-2").textContent).toBe("~10 min");
+  });
+
+  it("done for today: renders in pt-BR", async () => {
+    setTestLocale("pt-BR");
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        [`GET ${DUE}`]: () =>
+          jsonResponse(200, dueQueue([clozeCard], { total_due: 3 })),
+        "POST /api/quiz-items/i1/reviews": () =>
+          jsonResponse(200, scheduling("2026-08-20T00:00:00Z")),
+        "GET /api/reading/continue": () =>
+          jsonResponse(200, {
+            source_id: "s1",
+            source_title: "Dom Casmurro",
+            chapter_title: "Capítulo 1",
+            percent: 42.5,
+            updated_at: "2026-07-19T00:00:00Z",
+          }),
+      }),
+    );
+    render(<ReviewScreen />);
+    await screen.findByTestId("question");
+    fireEvent.click(screen.getByRole("button", { name: "Mostrar resposta" }));
+    fireEvent.click(screen.getByRole("button", { name: "Bom" }));
+
+    expect((await screen.findByTestId("done-for-today")).textContent).toBe(
+      "Por hoje é só",
+    );
+    expect(body()).toContain("Você terminou esta sessão.");
+    expect(screen.getByRole("button", { name: "Continuar revisando" })).toBeTruthy();
+    expect((await screen.findByTestId("continue-reading")).textContent).toBe(
+      "Continuar lendo Dom Casmurro",
+    );
+    expectNoEnglishCopy(body(), ...REVIEW_NAMESPACES);
+  });
+
+  it("page title and loading fallback: renders in pt-BR", async () => {
+    setTestLocale("pt-BR");
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        [`GET ${DUE}`]: () => jsonResponse(200, dueQueue([])),
+      }),
+    );
+    render(<ReviewPage />);
+    expect(screen.getByRole("heading", { level: 1, name: "Revisão" })).toBeTruthy();
+    expect(await screen.findByText("Nada para revisar agora.")).toBeTruthy();
+    expectNoEnglishCopy(body(), ...REVIEW_NAMESPACES);
+    cleanup();
+
+    // While the search params are not ready the page shows its own fallback.
+    nav.suspend = true;
+    try {
+      render(<ReviewPage />);
+      expect(await screen.findByText("Carregando…")).toBeTruthy();
+      expectNoEnglishCopy(body(), ...REVIEW_NAMESPACES);
+    } finally {
+      nav.suspend = false;
+    }
+  });
+
+  it("heatmap uses locale names", async () => {
+    setTestLocale("pt-BR");
+    const today = new Date(2026, 6, 20); // 2026-07-20 local, a Monday
+    const days = [
+      { day: "2026-07-20", reviews_count: 7, reading_updates: 2, pages: 9 },
+      { day: "2026-07-14", reviews_count: 1, reading_updates: 0, pages: 1 },
+      // Read but not reviewed: zero reads as a plural in Portuguese.
+      { day: "2026-07-13", reviews_count: 0, reading_updates: 2, pages: 0 },
+    ];
+    const { container } = render(<StudyHeatmap days={days} today={today} />);
+
+    const weekdays = container.querySelector('[data-testid="heatmap-weekdays"]')!;
+    expect([...weekdays.children].map((row) => row.textContent)).toEqual([
+      "",
+      "seg.",
+      "",
+      "qua.",
+      "",
+      "sex.",
+      "",
+    ]);
+    const months = container.querySelector('[data-testid="heatmap-months"]')!;
+    expect([...months.children].map((m) => m.textContent)).toEqual([
+      "abr.",
+      "mai.",
+      "jun.",
+      "jul.",
+    ]);
+    expect(
+      screen.getByRole("group", {
+        name: "mapa de atividade de estudo, últimas 12 semanas",
+      }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("img", { name: "seg., 20 de jul.: 7 revisões · 9 páginas" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("img", { name: "ter., 14 de jul.: 1 revisão · 1 página" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("img", { name: "seg., 13 de jul.: 0 revisões · 0 páginas" }),
+    ).toBeTruthy();
+    fireEvent.mouseEnter(container.querySelector('[data-day="2026-07-20"]')!);
+    expect(screen.getByTestId("tooltip-day").textContent).toBe("seg., 20 de jul.");
+    expect(container.textContent).toContain("Últimas 12 semanas");
+    expect(screen.getByTestId("heatmap-legend").textContent).toBe("MenosMais");
+    expectNoEnglishCopy(container.textContent ?? "", "review.heatmap");
+    cleanup();
+
+    // The stats card around it: title, toggle, streak line and totals.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        jsonResponse(200, {
+          days: [
+            { day: "2026-07-20", reviews_count: 1234, reading_updates: 0, pages: 3 },
+          ],
+          studied_last_14: 9,
+        }),
+      ),
+    );
+    render(<StudyStats />);
+    expect((await screen.findByTestId("streak-line")).textContent).toBe(
+      "Você estudou em 9 dos últimos 14 dias",
+    );
+    expect(screen.getByRole("button", { name: "Ocultar estatísticas" })).toBeTruthy();
+    expect(screen.getByLabelText("estatísticas de estudo")).toBeTruthy();
+    expect(screen.getByTestId("study-totals").textContent).toBe("1.234revisões3páginas");
+    expectNoEnglishCopy(document.body.textContent ?? "", "review.stats", "review.heatmap");
+    fireEvent.click(screen.getByRole("button", { name: "Ocultar estatísticas" }));
+    expect(screen.getByRole("button", { name: "Mostrar estatísticas" })).toBeTruthy();
+    expect(screen.queryByTestId("study-heatmap")).toBeNull();
+    expectNoEnglishCopy(document.body.textContent ?? "", "review.stats");
+    localStorage.clear();
+  });
+});

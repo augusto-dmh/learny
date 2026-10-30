@@ -19,7 +19,8 @@
  */
 
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useLocale, useTranslations } from "next-intl";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { fetchAuthState, type AuthState } from "@/app/lib/auth";
 import { getIngestion } from "@/app/lib/ingestion";
@@ -80,6 +81,7 @@ function QuizDeckControls({
   sourceId: string;
   csrfToken: string;
 }) {
+  const t = useTranslations("library.quiz");
   const errorMessage = useErrorMessage();
   const [overview, setOverview] = useState<QuizOverview | null>(null);
   const [generating, setGenerating] = useState(false);
@@ -138,7 +140,7 @@ function QuizDeckControls({
     <div className="space-y-2 border-t pt-3" data-testid={`quiz-${sourceId}`}>
       {jobActive ? (
         <Button type="button" size="sm" variant="outline" disabled>
-          <Spinner /> Generating deck…
+          <Spinner /> {t("generating")}
         </Button>
       ) : (
         <Button
@@ -148,7 +150,7 @@ function QuizDeckControls({
           onClick={() => void handleGenerate()}
           disabled={generating}
         >
-          Generate quiz deck
+          {t("generate")}
         </Button>
       )}
 
@@ -156,6 +158,7 @@ function QuizDeckControls({
         <p
           role="alert"
           data-testid={`quiz-error-${sourceId}`}
+          lang="en"
           className="text-sm text-destructive"
         >
           {job.error}
@@ -178,18 +181,15 @@ function QuizDeckControls({
               data-testid={`quiz-counts-${sourceId}`}
               className="text-muted-foreground"
             >
-              {items.length} {items.length === 1 ? "item" : "items"} · {due} due
+              {t("counts", { items: items.length, due })}
             </span>
             {changed > 0 ? (
               <TooltipProvider>
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <Badge variant="outline">source changed</Badge>
+                    <Badge variant="outline">{t("sourceChanged")}</Badge>
                   </TooltipTrigger>
-                  <TooltipContent>
-                    Some items no longer match the book after re-ingestion and are
-                    paused until you review them.
-                  </TooltipContent>
+                  <TooltipContent>{t("sourceChangedHint")}</TooltipContent>
                 </Tooltip>
               </TooltipProvider>
             ) : null}
@@ -198,7 +198,7 @@ function QuizDeckControls({
                 href={`/review?source_id=${sourceId}`}
                 className="text-primary underline-offset-4 hover:underline"
               >
-                Review
+                {t("review")}
                 <LinkPendingIndicator className="ml-1 align-middle" />
               </Link>
             ) : null}
@@ -206,7 +206,7 @@ function QuizDeckControls({
               href={quizExportUrl(sourceId)}
               className="text-primary underline-offset-4 hover:underline"
             >
-              Export to Anki
+              {t("exportAnki")}
             </a>
           </div>
           {job?.status === "succeeded" && job.generated_count >= 1 ? (
@@ -229,6 +229,7 @@ function QuizDeckHonesty({
   sourceId: string;
   job: QuizJob;
 }) {
+  const t = useTranslations("library.quiz");
   const generated = job.generated_count;
   const discarded = job.discarded_count;
   const failed = job.failed_sections;
@@ -239,15 +240,16 @@ function QuizDeckHonesty({
         data-testid={`quiz-honesty-${sourceId}`}
         className="text-sm text-muted-foreground"
       >
-        This book has no section long enough to quiz (a leaf chapter needs about
-        200+ characters).{" "}
-        <Link
-          href={`/sources/${sourceId}/read`}
-          className="text-primary underline-offset-4 hover:underline"
-        >
-          Highlight a passage
-        </Link>{" "}
-        instead.
+        {t.rich("noSection", {
+          link: (chunks) => (
+            <Link
+              href={`/sources/${sourceId}/read`}
+              className="text-primary underline-offset-4 hover:underline"
+            >
+              {chunks}
+            </Link>
+          ),
+        })}
       </p>
     );
   }
@@ -258,8 +260,7 @@ function QuizDeckHonesty({
         data-testid={`quiz-honesty-${sourceId}`}
         className="text-sm text-muted-foreground"
       >
-        Drafts were written but none survived quality checks ({discarded}{" "}
-        discarded).
+        {t("noneSurvived", { discarded })}
       </p>
     );
   }
@@ -275,6 +276,7 @@ function QuizDeckYieldNotes({
   sourceId: string;
   job: QuizJob;
 }) {
+  const t = useTranslations("library.quiz");
   const discarded = job.discarded_count;
   const failed = job.failed_sections;
   const saved = job.generated_count;
@@ -286,7 +288,7 @@ function QuizDeckYieldNotes({
           data-testid={`quiz-discard-footnote-${sourceId}`}
           className="text-xs text-muted-foreground"
         >
-          {discarded} discarded during generation.
+          {t("discardFootnote", { discarded })}
         </p>
       ) : null}
       {failed > 0 ? (
@@ -294,7 +296,7 @@ function QuizDeckYieldNotes({
           data-testid={`quiz-partial-${sourceId}`}
           className="text-sm text-muted-foreground"
         >
-          Saved {saved}. {failed} {failed === 1 ? "section" : "sections"} failed.
+          {t("partial", { saved, failed })}
         </p>
       ) : null}
     </>
@@ -311,6 +313,7 @@ function ReadyRowOverflow({
   confirming: boolean;
   onRequestReingest: () => void;
 }) {
+  const t = useTranslations("library.row");
   const [open, setOpen] = useState(false);
 
   return (
@@ -319,7 +322,7 @@ function ReadyRowOverflow({
         type="button"
         size="sm"
         variant="ghost"
-        aria-label="More actions"
+        aria-label={t("moreActions")}
         aria-expanded={open}
         aria-haspopup="menu"
         onClick={() => setOpen((current) => !current)}
@@ -335,21 +338,21 @@ function ReadyRowOverflow({
             href={readUrl(source.id, null, { panel: "ask" })}
             className="rounded-sm px-2 py-1.5 text-sm text-primary underline-offset-4 hover:underline"
           >
-            Ask
+            {t("ask")}
             <LinkPendingIndicator className="ml-1 align-middle" />
           </Link>
           <Link
             href={readUrl(source.id, null, { panel: "teach" })}
             className="rounded-sm px-2 py-1.5 text-sm text-primary underline-offset-4 hover:underline"
           >
-            Tutor
+            {t("tutor")}
             <LinkPendingIndicator className="ml-1 align-middle" />
           </Link>
           <Link
             href={`/review?source_id=${source.id}`}
             className="rounded-sm px-2 py-1.5 text-sm text-primary underline-offset-4 hover:underline"
           >
-            Review
+            {t("review")}
             <LinkPendingIndicator className="ml-1 align-middle" />
           </Link>
           {!source.is_sample && !confirming ? (
@@ -363,7 +366,7 @@ function ReadyRowOverflow({
                 onRequestReingest();
               }}
             >
-              Re-ingest
+              {t("reingest")}
             </Button>
           ) : null}
         </div>
@@ -377,6 +380,15 @@ export function LibraryScreen({
 }: {
   onRequireAuth?: () => void;
 }) {
+  const t = useTranslations("library");
+  const tCommon = useTranslations("common");
+  const locale = useLocale();
+  // One formatter per locale, not one per card per render (the list re-renders
+  // on every title keystroke and poll tick).
+  const dateFormat = useMemo(
+    () => new Intl.DateTimeFormat(locale, { dateStyle: "medium" }),
+    [locale],
+  );
   const errorMessage = useErrorMessage();
   const [state, setState] = useState<AuthState | null>(null);
   const [sources, setSources] = useState<SourceSummary[] | null>(null);
@@ -395,7 +407,7 @@ export function LibraryScreen({
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
   // Latest ingestion event message per failed source (FE-20).
   const [failureMessages, setFailureMessages] = useState<
-    Record<string, string>
+    Record<string, string | null>
   >({});
   // Source ids whose failure message we have already fetched, so the effect
   // never re-requests (kept in a ref so it is not a render dependency).
@@ -432,7 +444,9 @@ export function LibraryScreen({
   useIngestionPolling(sources, patchStatus);
 
   // For each failed source (on load or after a poll flips one to failed), fetch
-  // its ingestion once and cache the latest event message for display.
+  // its ingestion once and cache the latest event message for display. A message
+  // is the backend's own diagnostic record (English data, shown under
+  // `lang="en"`); with none, the catalog says the ingestion failed.
   useEffect(() => {
     if (!sources) {
       return;
@@ -447,7 +461,7 @@ export function LibraryScreen({
           const latest = [...ingestion.events]
             .reverse()
             .find((event) => event.message)?.message;
-          const message = latest ?? ingestion.error ?? "Ingestion failed.";
+          const message = latest ?? ingestion.error ?? null;
           setFailureMessages((prev) => ({ ...prev, [source.id]: message }));
         })
         .catch(() => {
@@ -463,7 +477,7 @@ export function LibraryScreen({
       return;
     }
     if (!file) {
-      setError("Choose an EPUB file to upload.");
+      setError(t("upload.chooseFile"));
       return;
     }
     setSubmitting(true);
@@ -509,23 +523,27 @@ export function LibraryScreen({
   }
 
   if (state === null) {
-    return <p className="text-muted-foreground">Loading…</p>;
+    return <p className="text-muted-foreground">{tCommon("loading")}</p>;
   }
   if (!state.authenticated) {
-    return <p className="text-muted-foreground">You are signed out.</p>;
+    return <p className="text-muted-foreground">{tCommon("signedOut")}</p>;
   }
 
   return (
-    <section aria-label="library" className="space-y-6">
+    <section aria-label={t("regionLabel")} className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle>Add a book</CardTitle>
+          <CardTitle>{t("upload.heading")}</CardTitle>
         </CardHeader>
         <CardContent>
-          <form onSubmit={handleUpload} aria-label="upload source" className="space-y-4">
+          <form
+            onSubmit={handleUpload}
+            aria-label={t("upload.formLabel")}
+            className="space-y-4"
+          >
             <div className="space-y-1.5">
               <label htmlFor="upload-title" className="text-sm font-medium">
-                Title
+                {t("upload.title")}
               </label>
               <Input
                 id="upload-title"
@@ -538,7 +556,7 @@ export function LibraryScreen({
             </div>
             <div className="space-y-1.5">
               <label htmlFor="upload-file" className="text-sm font-medium">
-                EPUB file
+                {t("upload.file")}
               </label>
               <Input
                 id="upload-file"
@@ -554,7 +572,7 @@ export function LibraryScreen({
               </p>
             ) : null}
             <Button type="submit" disabled={submitting}>
-              {submitting ? "Uploading…" : "Upload"}
+              {submitting ? t("upload.uploading") : t("upload.submit")}
             </Button>
           </form>
         </CardContent>
@@ -566,7 +584,7 @@ export function LibraryScreen({
         (item) => !item.is_sample && item.status === "processing",
       ) ? (
         <p className="text-sm text-muted-foreground">
-          The sample book is ready to use while you wait.
+          {t("sampleReady")}
         </p>
       ) : null}
 
@@ -575,116 +593,149 @@ export function LibraryScreen({
           {listError}
         </p>
       ) : sources === null ? (
-        <p className="text-muted-foreground">Loading your sources…</p>
-      ) : sources.length === 0 ? (
-        <p className="text-muted-foreground">No sources yet.</p>
+        <p className="text-muted-foreground">{t("loadingSources")}</p>
       ) : (
-        <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {sources.map((source) => (
-            <li key={source.id}>
-              <Card>
-                <CardHeader className="flex flex-row items-center justify-between gap-2">
-                  <CardTitle className="text-base">{source.title}</CardTitle>
-                  <Badge
-                    variant={statusVariant(source.status)}
-                    data-testid={`status-${source.id}`}
-                  >
-                    {source.status}
-                  </Badge>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  {source.status === "ready" ? (
-                    <>
-                      <div className="flex items-center gap-4 text-sm">
-                        <Link
-                          href={readUrl(source.id, null)}
-                          className="text-primary underline-offset-4 hover:underline"
-                        >
-                          Open
-                          <LinkPendingIndicator className="ml-1 align-middle" />
-                        </Link>
-                        <ReadyRowOverflow
-                          source={source}
-                          confirming={confirmingId === source.id}
-                          onRequestReingest={() => setConfirmingId(source.id)}
-                        />
-                      </div>
-                      <QuizDeckControls
-                        sourceId={source.id}
-                        csrfToken={state.user.csrf_token}
-                      />
-                      {confirmingId === source.id && !source.is_sample ? (
-                        <div className="space-y-2">
-                          <p className="text-sm text-muted-foreground">
-                            Re-ingesting rebuilds this book&apos;s corpus with
-                            the current providers. Existing quiz items may go
-                            stale or orphaned.
-                          </p>
-                          <div className="flex gap-2">
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="outline"
-                              onClick={() => void handleStart(source)}
-                              disabled={startingId === source.id}
+        <div className="space-y-3">
+          <p data-testid="library-count" className="text-sm text-muted-foreground">
+            {t("count", { count: sources.length })}
+          </p>
+          {sources.length === 0 ? (
+            <p className="text-muted-foreground">{t("empty")}</p>
+          ) : (
+            <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {sources.map((source) => (
+                <li key={source.id}>
+                  <Card>
+                    <CardHeader className="flex flex-row items-center justify-between gap-2">
+                      <CardTitle className="text-base">{source.title}</CardTitle>
+                      <Badge
+                        variant={statusVariant(source.status)}
+                        data-testid={`status-${source.id}`}
+                      >
+                        {t("status", { status: source.status })}
+                      </Badge>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                      <AddedOn createdAt={source.created_at} dateFormat={dateFormat} />
+                      {source.status === "ready" ? (
+                        <>
+                          <div className="flex items-center gap-4 text-sm">
+                            <Link
+                              href={readUrl(source.id, null)}
+                              className="text-primary underline-offset-4 hover:underline"
                             >
-                              {startingId === source.id
-                                ? "Re-ingesting…"
-                                : "Confirm re-ingest"}
-                            </Button>
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="ghost"
-                              onClick={() => setConfirmingId(null)}
-                              disabled={startingId === source.id}
-                            >
-                              Cancel
-                            </Button>
+                              {t("row.open")}
+                              <LinkPendingIndicator className="ml-1 align-middle" />
+                            </Link>
+                            <ReadyRowOverflow
+                              source={source}
+                              confirming={confirmingId === source.id}
+                              onRequestReingest={() => setConfirmingId(source.id)}
+                            />
                           </div>
+                          <QuizDeckControls
+                            sourceId={source.id}
+                            csrfToken={state.user.csrf_token}
+                          />
+                          {confirmingId === source.id && !source.is_sample ? (
+                            <div className="space-y-2">
+                              <p className="text-sm text-muted-foreground">
+                                {t("row.reingestWarning")}
+                              </p>
+                              <div className="flex gap-2">
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => void handleStart(source)}
+                                  disabled={startingId === source.id}
+                                >
+                                  {startingId === source.id
+                                    ? t("row.reingesting")
+                                    : t("row.confirmReingest")}
+                                </Button>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => setConfirmingId(null)}
+                                  disabled={startingId === source.id}
+                                >
+                                  {tCommon("cancel")}
+                                </Button>
+                              </div>
+                            </div>
+                          ) : null}
+                        </>
+                      ) : null}
+                      {source.status === "uploaded" ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          onClick={() => void handleStart(source)}
+                          disabled={startingId === source.id}
+                        >
+                          {startingId === source.id
+                            ? t("row.starting")
+                            : t("row.startIngestion")}
+                        </Button>
+                      ) : null}
+                      {source.status === "failed" ? (
+                        <div className="space-y-2">
+                          {source.id in failureMessages ? (
+                            <p
+                              data-testid={`failure-${source.id}`}
+                              lang={failureMessages[source.id] ? "en" : undefined}
+                              className="text-sm text-destructive"
+                            >
+                              {failureMessages[source.id] ?? t("row.ingestionFailed")}
+                            </p>
+                          ) : null}
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            onClick={() => void handleStart(source)}
+                            disabled={startingId === source.id}
+                          >
+                            {startingId === source.id
+                              ? t("row.restarting")
+                              : t("row.restartIngestion")}
+                          </Button>
                         </div>
                       ) : null}
-                    </>
-                  ) : null}
-                  {source.status === "uploaded" ? (
-                    <Button
-                      type="button"
-                      size="sm"
-                      onClick={() => void handleStart(source)}
-                      disabled={startingId === source.id}
-                    >
-                      {startingId === source.id ? "Starting…" : "Start ingestion"}
-                    </Button>
-                  ) : null}
-                  {source.status === "failed" ? (
-                    <div className="space-y-2">
-                      {failureMessages[source.id] ? (
-                        <p
-                          data-testid={`failure-${source.id}`}
-                          className="text-sm text-destructive"
-                        >
-                          {failureMessages[source.id]}
-                        </p>
-                      ) : null}
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        onClick={() => void handleStart(source)}
-                        disabled={startingId === source.id}
-                      >
-                        {startingId === source.id
-                          ? "Restarting…"
-                          : "Restart ingestion"}
-                      </Button>
-                    </div>
-                  ) : null}
-                </CardContent>
-              </Card>
-            </li>
-          ))}
-        </ul>
+                    </CardContent>
+                  </Card>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       )}
     </section>
+  );
+}
+
+/**
+ * When the book was added, in the interface locale's date format. The date is
+ * the backend's `created_at`; one that does not parse renders nothing.
+ */
+function AddedOn({
+  createdAt,
+  dateFormat,
+}: {
+  createdAt: string;
+  dateFormat: Intl.DateTimeFormat;
+}) {
+  const t = useTranslations("library");
+  const added = new Date(createdAt);
+  if (Number.isNaN(added.getTime())) {
+    return null;
+  }
+  const date = dateFormat.format(added);
+  return (
+    <p data-testid="source-added" className="text-xs text-muted-foreground">
+      {t("added", { date })}
+    </p>
   );
 }

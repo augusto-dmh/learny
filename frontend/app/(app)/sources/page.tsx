@@ -11,16 +11,18 @@
  */
 
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 
 import { InkLine } from "@/app/components/ink-line";
 import { LibraryScreen } from "@/app/components/library-screen";
 
 export default function SourcesPage() {
   const router = useRouter();
+  const t = useTranslations("library");
   return (
     <main className="flex-1 p-6">
       <header className="mb-6 space-y-2">
-        <h1 className="text-2xl font-semibold">Library</h1>
+        <h1 className="text-2xl font-semibold">{t("title")}</h1>
         <InkLine />
       </header>
       <LibraryScreen onRequireAuth={() => router.replace("/login")} />

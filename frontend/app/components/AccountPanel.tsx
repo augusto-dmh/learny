@@ -24,6 +24,9 @@
  * a failed save leaves the visible selection untouched and shows the
  * operation's catalog copy.
  *
+ * The "Your own AI keys" section (`ProviderKeysSection`) follows: it renders
+ * only when the instance offers learner keys, and owns its own requests.
+ *
  * The `onRequireAuth` callback fires when the user is unauthenticated so the
  * caller can perform a UX-only redirect. NOTE: this redirect is convenience
  * only and is NOT the security boundary — FastAPI enforces auth on every
@@ -43,6 +46,7 @@ import {
 } from "@/app/lib/ai-profiles";
 import { fetchAuthState, logout, type AuthState } from "@/app/lib/auth";
 import { deleteLocale, putLocale, writeLocaleCookie } from "@/app/lib/locale";
+import { ProviderKeysSection } from "@/app/components/provider-keys-section";
 import { useErrorMessage } from "@/app/components/use-error-message";
 import { LOCALES, isLocale, type AppLocale } from "@/i18n/config";
 import { Button } from "@/components/ui/button";
@@ -205,7 +209,7 @@ export function AccountPanel({
     return <p className="text-muted-foreground">{tCommon("loading")}</p>;
   }
   if (!state.authenticated) {
-    return <p className="text-muted-foreground">{t("signedOut")}</p>;
+    return <p className="text-muted-foreground">{tCommon("signedOut")}</p>;
   }
 
   // A stored id absent from the catalog is stale (the operator renamed or
@@ -312,6 +316,7 @@ export function AccountPanel({
           ) : null}
         </section>
       ) : null}
+      <ProviderKeysSection csrfToken={state.user.csrf_token} />
       <Button type="button" variant="outline" onClick={handleLogout}>
         {t("logout")}
       </Button>

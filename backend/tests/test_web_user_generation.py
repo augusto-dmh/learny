@@ -402,6 +402,13 @@ def _domain_user(user_id: str) -> User:
     return User(id=UUID(user_id), email=f"{user_id}@example.com", created_at=datetime.now(UTC))
 
 
+def _no_keys():  # noqa: ANN202 — the composition root's own credentials type
+    """The per-request credentials of a learner holding no provider key."""
+    from app.infrastructure.web import dependencies
+
+    return dependencies.LearnerCredentials(repo=None, by_provider={})
+
+
 def test_an_unset_choice_resolves_the_default_chain_object_itself(
     auth_client: TestClient,
     db_conn: Connection,
@@ -412,7 +419,9 @@ def test_an_unset_choice_resolves_the_default_chain_object_itself(
     _declare_registry(monkeypatch, _LOCAL_PROFILES_JSON)
     default = dependencies.get_generation()
 
-    resolved = dependencies.get_generation_for_user(db_conn, _domain_user(str(uuid4())), default)
+    resolved = dependencies.get_generation_for_user(
+        db_conn, _domain_user(str(uuid4())), default, _no_keys()
+    )
 
     assert resolved is default  # byte-identical to the pre-choice wiring
 
@@ -443,11 +452,15 @@ def test_the_chain_cache_is_keyed_on_the_choice_never_the_user(
     prefs.upsert(UUID(other_economy), "cheap")
     prefs.upsert(UUID(premium), "primary")
 
-    economy_chain = dependencies.get_generation_for_user(db_conn, _domain_user(economy), default)
-    other_economy_chain = dependencies.get_generation_for_user(
-        db_conn, _domain_user(other_economy), default
+    economy_chain = dependencies.get_generation_for_user(
+        db_conn, _domain_user(economy), default, _no_keys()
     )
-    premium_chain = dependencies.get_generation_for_user(db_conn, _domain_user(premium), default)
+    other_economy_chain = dependencies.get_generation_for_user(
+        db_conn, _domain_user(other_economy), default, _no_keys()
+    )
+    premium_chain = dependencies.get_generation_for_user(
+        db_conn, _domain_user(premium), default, _no_keys()
+    )
 
     assert isinstance(economy_chain, RoutingGenerationAdapter)
     assert [entry.profile.id for entry in economy_chain._chain] == ["cheap", "primary"]
@@ -479,7 +492,7 @@ def test_a_preference_read_failure_propagates_instead_of_masking(
 
     with pytest.raises(OperationalError):
         dependencies.get_generation_for_user(
-            db_conn, _domain_user(str(uuid4())), dependencies.get_generation()
+            db_conn, _domain_user(str(uuid4())), dependencies.get_generation(), _no_keys()
         )
 
 

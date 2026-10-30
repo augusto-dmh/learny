@@ -24,6 +24,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import Connection, Row, func, insert, select, update
 from sqlalchemy import delete as sa_delete
+from sqlalchemy.exc import IntegrityError
 
 from app.domain.entities import ProviderCredential
 from app.infrastructure.db.metadata import user_provider_credentials
@@ -126,14 +127,28 @@ class SqlAlchemyProviderCredentialRepository:
 
         A key shorter than :data:`MIN_KEY_CHARS` or holding whitespace raises
         ``ValueError`` with fixed copy that never echoes the value.
+
+        Two racing replaces for one (user, provider) end with one row: each
+        attempt runs in a savepoint, and the loser of the unique constraint
+        retries once, deleting the winner's row and inserting its own.
         """
         if len(api_key) < MIN_KEY_CHARS or any(ch.isspace() for ch in api_key):
             raise ValueError(
                 f"a provider key must be at least {MIN_KEY_CHARS} characters with no whitespace"
             )
         sealed = self._envelope.seal(api_key, user_id=user_id, provider=provider)
+        try:
+            with self._conn.begin_nested():
+                row = self._write(user_id, provider, sealed, api_key[-LAST4_CHARS:])
+        except IntegrityError:
+            with self._conn.begin_nested():
+                row = self._write(user_id, provider, sealed, api_key[-LAST4_CHARS:])
+        return _to_credential(row)
+
+    def _write(self, user_id: UUID, provider: str, sealed: SealedSecret, last4: str) -> Row:
+        """Delete the provider's row, if any, and insert ``sealed`` under a new id."""
         self.delete(user_id, provider)
-        row = self._conn.execute(
+        return self._conn.execute(
             insert(user_provider_credentials)
             .values(
                 id=uuid4(),
@@ -145,11 +160,10 @@ class SqlAlchemyProviderCredentialRepository:
                 dek_nonce=sealed.dek_nonce,
                 kek_id=sealed.kek_id,
                 fingerprint=fingerprint_of(sealed, user_id=user_id, provider=provider),
-                last4=api_key[-LAST4_CHARS:],
+                last4=last4,
             )
             .returning(user_provider_credentials)
         ).one()
-        return _to_credential(row)
 
     def delete(self, user_id: UUID, provider: str) -> bool:
         """Remove the learner's key for ``provider``; ``True`` only when a row existed."""

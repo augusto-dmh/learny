@@ -5,13 +5,25 @@
   },
   "common": {
     "loading": "Carregando…",
+    "signedOut": "Você não está conectado.",
     "locale": {
       "label": "Idioma",
       "names": {
         "en": "English",
         "pt-BR": "Português (Brasil)"
       }
-    }
+    },
+    "close": "Fechar",
+    "cancel": "Cancelar",
+    "loadingLabel": "Carregando",
+    "previousSlide": "Slide anterior",
+    "nextSlide": "Próximo slide",
+    "command": {
+      "title": "Paleta de comandos",
+      "description": "Busque um comando para executar…"
+    },
+    "carouselRole": "carrossel",
+    "slideRole": "slide"
   },
   "errors": {
     "generic": "Algo deu errado. Tente novamente.",
@@ -79,13 +91,16 @@
       "checkpointStart": "Não foi possível iniciar a verificação.",
       "checkpointRespond": "Não foi possível salvar a sua resposta.",
       "checkpointReveal": "Não foi possível mostrar o trecho.",
-      "checkpointGrade": "Não foi possível salvar a sua avaliação."
+      "checkpointGrade": "Não foi possível salvar a sua avaliação.",
+      "providerKeysList": "Não foi possível carregar as suas chaves de IA.",
+      "providerKeySave": "Não foi possível salvar a sua chave.",
+      "providerKeyTest": "Não foi possível testar a sua chave.",
+      "providerKeyDelete": "Não foi possível excluir a sua chave."
     }
   },
   "account": {
     "pageTitle": "Sua conta",
     "regionLabel": "conta",
-    "signedOut": "Você saiu da conta.",
     "signedInAs": "Conectado como <strong>{email}</strong>",
     "logout": "Sair",
     "language": {
@@ -109,6 +124,446 @@
         "teachOnly": "Funciona apenas em Ensinar.",
         "neither": "No momento não funciona em Perguntar nem em Ensinar."
       }
+    },
+    "providerKeys": {
+      "heading": "Suas próprias chaves de IA",
+      "intro": "Cole a chave de API de um provedor que você já paga, e o Learny passa a usá-la nas suas próprias solicitações.",
+      "disclosure": "As chamadas feitas com a sua chave são cobradas pelo provedor diretamente de você, conforme o seu próprio contrato com ele. O Learny guarda a sua chave criptografada e nunca mais consegue exibi-la.",
+      "masked": "•••• {last4}",
+      "addedOn": "Adicionada em {date}",
+      "notConfigured": "Nenhuma chave salva.",
+      "powers": "Usada em:",
+      "profileModes": {
+        "both": "{name}: Perguntar e Ensinar",
+        "askOnly": "{name}: apenas Perguntar",
+        "teachOnly": "{name}: apenas Ensinar",
+        "neither": "{name}: no momento, nem Perguntar nem Ensinar"
+      },
+      "cards": "Flashcards e baralhos",
+      "inputLabel": "Chave de API do provedor {provider}",
+      "placeholder": "Cole a sua chave",
+      "save": "Salvar chave",
+      "saving": "Salvando…",
+      "replace": "Trocar chave",
+      "test": "Testar chave",
+      "testing": "Testando…",
+      "testResult": {
+        "ok": "A chave funciona",
+        "rejected": "O provedor recusou esta chave. Confira e salve de novo.",
+        "rate_limited": "O provedor está limitando as solicitações desta chave agora. Tente de novo daqui a pouco.",
+        "unavailable": "Não foi possível falar com o provedor. Tente de novo mais tarde."
+      },
+      "delete": "Excluir chave",
+      "confirmDelete": "Excluir a sua chave do provedor {provider}? As suas solicitações voltam a usar a IA do próprio Learny.",
+      "confirmDeleteAction": "Sim, excluir"
+    }
+  },
+  "landing": {
+    "tagline": "Transforme seus livros em respostas com citações e em conhecimento que fica."
+  },
+  "auth": {
+    "createAccount": "Criar conta",
+    "logIn": "Entrar",
+    "login": {
+      "description": "Que bom ter você de volta ao Learny.",
+      "noAccount": "Ainda não tem conta? <link>Crie uma</link>."
+    },
+    "register": {
+      "description": "Comece a aprender com o Learny.",
+      "haveAccount": "Já tem uma conta? <link>Entre</link>."
+    },
+    "form": {
+      "label": "{mode, select, register {formulário de cadastro} other {formulário de entrada}}",
+      "email": "E-mail",
+      "password": "Senha",
+      "inviteCode": "Código de convite",
+      "inviteHint": "(se você tiver um)",
+      "acceptTerms": "Concordo com os <link>Termos de Serviço</link>",
+      "working": "Aguarde…"
+    }
+  },
+  "shell": {
+    "nav": {
+      "home": "Início",
+      "library": "Biblioteca",
+      "review": "Revisão",
+      "notes": "Notas"
+    },
+    "account": "Conta",
+    "toggleTheme": "Alternar tema",
+    "logOut": "Sair",
+    "sidebar": {
+      "title": "Barra lateral",
+      "description": "Mostra a barra lateral no celular.",
+      "toggle": "Alternar barra lateral"
+    }
+  },
+  "chat": {
+    "notFound": {
+      "inScope": "Isso não aparece no trecho do livro que esta conversa abrange. A resposta pode estar em outra parte do livro.",
+      "inSource": "Isso não aparece neste livro."
+    },
+    "retry": "Tentar novamente",
+    "phase": {
+      "searching": "Buscando no livro…",
+      "reasoningLabel": "raciocínio",
+      "thinking": "Pensando…",
+      "thoughtProcess": "Linha de raciocínio"
+    },
+    "citations": {
+      "regionLabel": "citações",
+      "noteChip": "Sua nota: {title}",
+      "sectionChip": "Citação: {path}",
+      "noteTitled": "Sua nota — {title}",
+      "note": "Sua nota",
+      "closePassage": "Fechar trecho",
+      "openNote": "Abrir nota",
+      "showInBook": "Mostrar no livro",
+      "openInBook": "Abrir no livro",
+      "mark": "Citação {index, number}"
+    },
+    "includeNotes": {
+      "label": "Buscar também nas minhas notas",
+      "description": "Suas notas sobre este livro entram na busca junto com o próprio livro, então as respostas podem se apoiar no que você escreveu.",
+      "locked": "Esta conversa começou com essa escolha — inicie uma nova para mudá-la."
+    },
+    "saveToNote": {
+      "save": "Salvar como nota",
+      "saving": "Salvando…",
+      "saved": "Salva nas suas notas.",
+      "failed": "Não foi possível salvar esta resposta como nota. Tente novamente."
+    },
+    "conversations": {
+      "regionLabel": "conversas",
+      "heading": "Conversas",
+      "new": "Nova conversa",
+      "empty": "Nenhuma conversa ainda.",
+      "newTitle": "Novo título",
+      "saveTitle": "Salvar título",
+      "cancelRename": "Cancelar renomeação",
+      "resume": "Retomar {title}",
+      "turns": "({count, plural, =0 {nenhuma interação} one {# interação} other {# interações}})",
+      "rename": "Renomear {title}",
+      "delete": "Excluir {title}",
+      "showOlder": "Mostrar conversas mais antigas"
+    },
+    "dockNotes": {
+      "loading": "Carregando suas notas…",
+      "empty": "Só as notas deste livro aparecem aqui. Selecione um trecho para começar uma nova — toda nota guarda o trecho de onde veio.",
+      "listLabel": "Notas sobre este livro",
+      "where": "{section} · p. {page}"
+    },
+    "dockReview": {
+      "nothingDue": "Nada deste livro para revisar agora.",
+      "dueCaption": "{count, plural, =0 {cartões deste livro para revisar} one {cartão deste livro para revisar} other {cartões deste livro para revisar}}"
+    },
+    "ask": {
+      "intro": "Aqui você tira dúvidas sobre o livro. Para ser conduzido por uma seção, use Ensinar.",
+      "suggestedLabel": "sugestões de perguntas",
+      "prompts": {
+        "summarize": "Resuma as ideias principais deste livro.",
+        "arguments": "Quais são os principais argumentos do autor?",
+        "difficult": "Explique um conceito deste livro que eu possa achar difícil."
+      },
+      "explainPrompt": "Explique este trecho do livro:\n\n\"{quote}\"",
+      "aboutPrompt": "Sobre este trecho:\n\n\"{quote}\"\n\n{question}",
+      "removeQuote": "Remover trecho anexado",
+      "placeholder": "Faça uma pergunta sobre este livro…"
+    },
+    "teach": {
+      "regionLabel": "ensinar",
+      "intro": "Ensinar conduz você por uma seção. Para dúvidas sobre o livro, use Perguntar.",
+      "startLabel": "começar sessão",
+      "target": "Seção",
+      "start": "Começar sessão",
+      "conversationLabel": "conversa de estudo",
+      "justExplain": "Só me explique isso.",
+      "dontKnow": "Não sei.",
+      "placeholder": "Envie uma mensagem…",
+      "askAboutThis": "Perguntar sobre isto",
+      "cardOffer": {
+        "label": "sugestão de cartão de revisão",
+        "accept": "Aceitar",
+        "dismiss": "Dispensar"
+      }
+    },
+    "promptInput": {
+      "addAttachments": "Adicionar fotos ou arquivos",
+      "takeScreenshot": "Capturar a tela",
+      "uploadFiles": "Enviar arquivos",
+      "placeholder": "O que você gostaria de saber?",
+      "stop": "Parar",
+      "submit": "Enviar",
+      "errors": {
+        "accept": "Nenhum arquivo corresponde aos tipos aceitos.",
+        "maxFileSize": "Todos os arquivos passam do tamanho máximo.",
+        "maxFiles": "Arquivos demais. Alguns não foram adicionados."
+      }
+    },
+    "elements": {
+      "previous": "Anterior",
+      "next": "Próximo",
+      "previousBranch": "Versão anterior",
+      "nextBranch": "Próxima versão",
+      "branchPosition": "{current, number} de {total, number}",
+      "usedSources": "{count, plural, =0 {Nenhuma fonte usada} one {# fonte usada} other {# fontes usadas}}",
+      "emptyTitle": "Nenhuma mensagem ainda",
+      "emptyDescription": "Comece uma conversa para ver as mensagens aqui"
+    }
+  },
+  "home": {
+    "title": "Início",
+    "regionLabel": "início",
+    "continue": {
+      "label": "continuar lendo",
+      "title": "Continue lendo",
+      "empty": "Você ainda não tem nenhum livro em andamento.",
+      "ask": "Perguntar",
+      "pickBook": "Escolher um livro",
+      "percentRead": "{percent}% lido",
+      "resume": "Continuar"
+    },
+    "due": {
+      "label": "revisões pendentes",
+      "title": "Revisões",
+      "count": "Você tem {count, plural, =0 {0 cartões pendentes} one {# cartão pendente} other {# cartões pendentes}}.",
+      "review": "Revisar",
+      "done": "Tudo em dia por hoje."
+    }
+  },
+  "library": {
+    "title": "Biblioteca",
+    "regionLabel": "biblioteca",
+    "loadingSources": "Carregando seus livros…",
+    "empty": "Nenhum livro ainda.",
+    "count": "{count, plural, =0 {0 livros} one {# livro} other {# livros}}",
+    "added": "Adicionado em {date}",
+    "sampleReady": "O livro de exemplo já pode ser usado enquanto você espera.",
+    "status": "{status, select, uploaded {enviado} processing {processando} ready {pronto} failed {com falha} other {{status}}}",
+    "upload": {
+      "heading": "Adicionar um livro",
+      "formLabel": "enviar livro",
+      "title": "Título",
+      "file": "Arquivo EPUB",
+      "chooseFile": "Escolha um arquivo EPUB para enviar.",
+      "submit": "Enviar",
+      "uploading": "Enviando…"
+    },
+    "row": {
+      "open": "Abrir",
+      "moreActions": "Mais ações",
+      "ask": "Perguntar",
+      "tutor": "Ensinar",
+      "review": "Revisar",
+      "reingest": "Reprocessar",
+      "reingestWarning": "Reprocessar refaz o processamento deste livro com os provedores atuais. Os itens de quiz existentes podem ficar desatualizados ou órfãos.",
+      "confirmReingest": "Confirmar reprocessamento",
+      "reingesting": "Reprocessando…",
+      "startIngestion": "Iniciar processamento",
+      "starting": "Iniciando…",
+      "restartIngestion": "Reiniciar processamento",
+      "restarting": "Reiniciando…",
+      "ingestionFailed": "O processamento falhou."
+    },
+    "quiz": {
+      "generate": "Gerar baralho de quiz",
+      "generating": "Gerando baralho…",
+      "counts": "{items, plural, =0 {0 itens} one {# item} other {# itens}} · {due, plural, =0 {0 pendentes} one {# pendente} other {# pendentes}}",
+      "sourceChanged": "livro alterado",
+      "sourceChangedHint": "Alguns itens não correspondem mais ao livro depois do reprocessamento e ficam pausados até você revisá-los.",
+      "review": "Revisar",
+      "exportAnki": "Exportar para o Anki",
+      "noSection": "Este livro não tem nenhuma seção longa o bastante para um quiz (um capítulo sem subseções precisa de uns 200 caracteres ou mais). Em vez disso, <link>destaque um trecho</link>.",
+      "noneSurvived": "Os rascunhos foram escritos, mas nenhum passou nas verificações de qualidade ({discarded, plural, =0 {0 descartados} one {# descartado} other {# descartados}}).",
+      "discardFootnote": "{discarded, plural, =0 {0 descartados} one {# descartado} other {# descartados}} durante a geração.",
+      "partial": "{saved, plural, =0 {0 itens salvos} one {# item salvo} other {# itens salvos}}. {failed, plural, one {# seção falhou} other {# seções falharam}}."
+    }
+  },
+  "reader": {
+    "notFound": "Não encontramos esse capítulo.",
+    "backToLibrary": "Voltar para a biblioteca",
+    "tocToggle": "Sumário",
+    "dockToggle": "Painel de estudo",
+    "progress": "{percent}% lido · faltam {minutes} min",
+    "returnChip": "Voltar para onde você estava",
+    "staleCapture": "O livro mudou enquanto você lia. Recarregue a página para capturar este destaque.",
+    "toc": {
+      "label": "Sumário",
+      "chapterNav": "Navegação entre capítulos",
+      "previous": "← Capítulo anterior",
+      "next": "Próximo capítulo →"
+    },
+    "rail": {
+      "label": "Anotações do capítulo",
+      "heading": "Neste capítulo",
+      "empty": "Nada destacado neste capítulo ainda."
+    },
+    "controls": {
+      "label": "Ajustes de leitura",
+      "typeSize": "Tamanho do texto",
+      "typeSizeStep": "Tamanho do texto {size}",
+      "lineSpacing": "Espaçamento entre linhas",
+      "lineSpacingStep": "Espaçamento entre linhas {step, number}",
+      "appearance": "Aparência",
+      "appearances": {
+        "default": "Padrão",
+        "paper": "Papel"
+      },
+      "darkNote": "A leitura no modo escuro usa a paleta noturna.",
+      "theme": "Tema",
+      "themes": {
+        "light": "Claro",
+        "dark": "Escuro",
+        "system": "Sistema"
+      }
+    },
+    "dock": {
+      "tabsLabel": "Abas do painel",
+      "tabs": {
+        "chat": "Conversa",
+        "notes": "Notas",
+        "review": "Revisão"
+      },
+      "panels": {
+        "chat": "Painel de conversa",
+        "notes": "Painel de notas",
+        "review": "Painel de revisão"
+      },
+      "closePanel": "Fechar painel",
+      "sheetDescription": "As ferramentas de estudo deste livro, em um painel inferior."
+    }
+  },
+  "review": {
+    "title": "Revisão",
+    "regionLabel": "revisão",
+    "summaryLabel": "resumo da revisão",
+    "retry": "Tentar novamente",
+    "tryAgain": "Tentar novamente",
+    "loadingDue": "Carregando suas revisões pendentes…",
+    "nothingDue": "Nada para revisar agora.",
+    "backToLibrary": "Voltar para a biblioteca",
+    "sessionComplete": "Sessão concluída",
+    "reviewedTotal": "{count, plural, =0 {Nenhum cartão revisado} one {# cartão revisado} other {# cartões revisados}}.",
+    "shortTermRemaining": "{count, number} ainda em revisão de curto prazo",
+    "doneForToday": "Por hoje é só",
+    "doneForTodayBody": "Você terminou esta sessão. Ainda há cartões pendentes para quando quiser.",
+    "keepGoing": "Continuar revisando",
+    "continueReading": "Continuar lendo {title}",
+    "itemType": "{type, select, cloze {lacuna} free_recall {resposta livre} other {{type}}}",
+    "openInBook": "Abrir no livro",
+    "fromNote": "Da nota “{title}”",
+    "noteChanged": "Sua nota mudou",
+    "resetConfirm": "Reiniciar o agendamento deste cartão?",
+    "resetting": "Reiniciando…",
+    "confirmReset": "Confirmar reinício",
+    "resetSchedule": "Reiniciar agendamento",
+    "gradeLabel": "Avalie o quanto você lembrou",
+    "reveal": "Mostrar resposta",
+    "grades": {
+      "again": "Novamente",
+      "hard": "Difícil",
+      "good": "Bom",
+      "easy": "Fácil"
+    },
+    "intervals": {
+      "minute": "~1 min",
+      "tenMinutes": "~10 min",
+      "hour": "~1 h",
+      "day": "~1 dia",
+      "fourDays": "~4 dias",
+      "twoWeeks": "~2 sem.",
+      "month": "~1 mês",
+      "fourMonths": "~4 meses",
+      "year": "~1 ano"
+    },
+    "editor": {
+      "question": "Pergunta",
+      "answer": "Resposta",
+      "save": "Salvar",
+      "saving": "Salvando…"
+    },
+    "heatmap": {
+      "groupLabel": "mapa de atividade de estudo, últimas {weeks, number} semanas",
+      "window": "Últimas {weeks, number} semanas",
+      "less": "Menos",
+      "more": "Mais",
+      "activity": "{reviews, plural, =0 {0 revisões} one {# revisão} other {# revisões}} · {pages, plural, =0 {0 páginas} one {# página} other {# páginas}}"
+    },
+    "stats": {
+      "label": "estatísticas de estudo",
+      "title": "Atividade de estudo",
+      "hide": "Ocultar estatísticas",
+      "show": "Mostrar estatísticas",
+      "studied": "Você estudou em <figure>{studied, number}</figure> dos últimos <window>{days, number}</window> dias",
+      "reviews": "revisões",
+      "pages": "páginas"
+    }
+  },
+  "notes": {
+    "title": "Notas",
+    "regionLabel": "notas",
+    "download": "Baixar notas",
+    "bookFilter": "Livro",
+    "allBooks": "Todos os livros",
+    "filteredBy": "Filtrado por",
+    "clearFilter": "Limpar filtro",
+    "loading": "Carregando suas notas…",
+    "empty": {
+      "tag": "Nenhuma nota com essa etiqueta.",
+      "book": "Nenhuma nota deste livro ainda.",
+      "all": "Nenhuma nota ainda. Abra um livro e selecione um trecho para começar uma."
+    },
+    "filterByTag": "Filtrar por {tag}",
+    "anchorStatus": "{status, select, active {ativo} stale {desatualizado} orphaned {fora do livro} other {{status}}}",
+    "detail": {
+      "tooLong": "Esta nota é longa demais para ser salva.",
+      "backToNotes": "Voltar para suas notas",
+      "loading": "Carregando a nota…",
+      "regionLabel": "nota",
+      "titleLabel": "Título",
+      "body": "Texto",
+      "edit": "Editar",
+      "preview": "Visualizar",
+      "tags": "Etiquetas",
+      "tagsPlaceholder": "etiquetas, separadas, por vírgula",
+      "save": "Salvar",
+      "saving": "Salvando…",
+      "deleteConfirm": "Excluir esta nota?",
+      "deleting": "Excluindo…",
+      "confirmDelete": "Confirmar exclusão",
+      "delete": "Excluir",
+      "review": "Revisão",
+      "anchors": "Trechos ancorados",
+      "noAnchors": "Nenhum destaque ancorado a esta nota.",
+      "orphaned": "Este trecho não está mais no livro.",
+      "jump": "Ir para o trecho",
+      "backlinks": "Referências",
+      "noBacklinks": "Nenhuma nota aponta para cá ainda."
+    },
+    "capture": {
+      "label": "Capturar destaque",
+      "highlight": "Destacar",
+      "note": "Anotar",
+      "highlightNote": "Destacar + anotar",
+      "explain": "Explicar",
+      "ask": "Perguntar",
+      "createCard": "Criar cartão",
+      "more": "Mais ações de captura"
+    },
+    "suggestions": {
+      "label": "Sugestões de cartões",
+      "noneForPassage": "Nenhum cartão para este trecho.",
+      "allHandled": "Todas as sugestões foram resolvidas.",
+      "question": "Pergunta",
+      "answer": "Resposta",
+      "accept": "Aceitar",
+      "edit": "Editar",
+      "discard": "Descartar",
+      "addToReview": "Adicionar à revisão",
+      "generating": "Gerando…",
+      "inReview": "{count, plural, =0 {nenhum cartão desta nota em revisão} one {# cartão desta nota em revisão} other {# cartões desta nota em revisão}}",
+      "alreadyInReview": "Esse cartão já está em revisão — adicionar o mesmo texto de novo não cria uma cópia.",
+      "noneForNote": "Não foi possível basear nenhum cartão nesta nota."
     }
   },
   "checkpoint": {

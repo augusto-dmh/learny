@@ -34,6 +34,7 @@
  */
 
 import { X } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 
 import {
@@ -82,22 +83,13 @@ import { useErrorMessage } from "./use-error-message";
 /** The surface name the active-conversation pointer is stored under. */
 const SURFACE = "ask";
 
-/** Fixed empty-state suggestions; clicking one submits it as a question (RA-08). */
-const SUGGESTED_PROMPTS = [
-  "Summarize the key ideas in this book.",
-  "What are the main arguments the author makes?",
-  "Explain a concept from this book I might find difficult.",
-];
-
-/** The fixed template a one-tap Explain submits around the selected passage. */
-function explainPrompt(quote: string): string {
-  return `Explain this passage from the book:\n\n"${quote}"`;
-}
-
-/** The submitted body when a typed question rides along with an attached quote. */
-function askAboutPrompt(quote: string, question: string): string {
-  return `Regarding this passage:\n\n"${quote}"\n\n${question}`;
-}
+/**
+ * Fixed empty-state suggestions; clicking one submits it as a question (RA-08).
+ * They are catalog keys under `chat.ask.prompts`, so the question is sent in the
+ * learner's language. The one-tap Explain template (`chat.ask.explainPrompt`) and
+ * the attached-quote body (`chat.ask.aboutPrompt`) are catalog messages too.
+ */
+const SUGGESTED_PROMPT_KEYS = ["summarize", "arguments", "difficult"] as const;
 
 /** A thread the panel is showing: which conversation, and its restored turns. */
 type AskThread = {
@@ -128,6 +120,7 @@ export function AskPanel({
   onRequireAuth?: () => void;
   onConversationsChanged?: () => void;
 }) {
+  const tCommon = useTranslations("common");
   const errorMessage = useErrorMessage();
   const [thread, setThread] = useState<AskThread | null>(null);
   const [restoreError, setRestoreError] = useState<string | null>(null);
@@ -211,7 +204,7 @@ export function AskPanel({
   }, [onConversationsChanged]);
 
   if (thread === null) {
-    return <p className="text-muted-foreground">Loading…</p>;
+    return <p className="text-muted-foreground">{tCommon("loading")}</p>;
   }
 
   return (
@@ -264,7 +257,9 @@ function AskChat({
   onConversationKept: () => void;
   suggestedQuestion: string | null;
 }) {
+  const t = useTranslations("chat.ask");
   const errorMessage = useErrorMessage();
+  const suggestedPrompts = SUGGESTED_PROMPT_KEYS.map((key) => t(`prompts.${key}`));
   // A quote the reader chose to "Ask about": it rides along, once, with the next
   // typed question (RA-18) and shows as a dismissable context chip until then.
   const [attachedQuote, setAttachedQuote] = useState<string | null>(null);
@@ -322,13 +317,15 @@ function AskChat({
     }
     consumedRef.current = pendingRequest;
     if (pendingRequest.kind === "explain") {
-      send(explainPrompt(pendingRequest.quote), {
+      send(t("explainPrompt", { quote: pendingRequest.quote }), {
         origin: EXPLAIN_SELECTION_ORIGIN,
       });
     } else {
       setAttachedQuote(pendingRequest.quote);
     }
     onPendingConsumed?.();
+    // `t` stays out of the dependencies: the request is consumed once, in the
+    // locale the panel had when it arrived.
   }, [pendingRequest, send, onPendingConsumed]);
 
   const retryFailedTurn = useCallback(() => {
@@ -350,10 +347,14 @@ function AskChat({
       if (!text || isStreaming) {
         return;
       }
-      send(attachedQuote ? askAboutPrompt(attachedQuote, text) : text);
+      send(
+        attachedQuote
+          ? t("aboutPrompt", { quote: attachedQuote, question: text })
+          : text,
+      );
       setAttachedQuote(null);
     },
-    [attachedQuote, isStreaming, send],
+    [attachedQuote, isStreaming, send, t],
   );
 
   const alert = banner ?? restoreError;
@@ -365,18 +366,17 @@ function AskChat({
           {messages.length === 0 ? (
             <div className="space-y-3">
               <p className="text-sm text-muted-foreground">
-                Answer is for questions about the book. Tutor walks you through a
-                section.
+                {t("intro")}
               </p>
-              <div aria-label="suggested prompts" className="space-y-2">
+              <div aria-label={t("suggestedLabel")} className="space-y-2">
                 {(suggestedQuestion
                   ? [
                       suggestedQuestion,
-                      ...SUGGESTED_PROMPTS.filter(
+                      ...suggestedPrompts.filter(
                         (prompt) => prompt !== suggestedQuestion,
                       ),
                     ]
-                  : SUGGESTED_PROMPTS
+                  : suggestedPrompts
                 ).map((prompt) => {
                   const highlighted = prompt === suggestedQuestion;
                   return (
@@ -536,7 +536,7 @@ function AskChat({
             type="button"
             variant="ghost"
             size="icon-sm"
-            aria-label="Remove attached passage"
+            aria-label={t("removeQuote")}
             onClick={() => setAttachedQuote(null)}
           >
             <X />
@@ -553,7 +553,7 @@ function AskChat({
       <PromptInput onSubmit={handleSubmit}>
         <PromptInputBody>
           <PromptInputTextarea
-            placeholder="Ask a question about this book…"
+            placeholder={t("placeholder")}
             disabled={isStreaming}
           />
         </PromptInputBody>

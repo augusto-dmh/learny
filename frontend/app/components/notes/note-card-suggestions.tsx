@@ -21,6 +21,7 @@
  * candidates/card/error out.
  */
 
+import { useTranslations } from "next-intl";
 import { useState } from "react";
 
 import {
@@ -39,6 +40,7 @@ export function NoteCardSuggestions({
   noteId: string;
   csrf: string;
 }) {
+  const t = useTranslations("notes.suggestions");
   const errorMessage = useErrorMessage();
   // `null` until the reader first asks; then the batch (possibly empty after QC).
   const [suggestions, setSuggestions] = useState<CardSuggestion[] | null>(null);
@@ -77,21 +79,21 @@ export function NoteCardSuggestions({
   const count = cardIds.size;
 
   return (
-    <section aria-label="Add to review" className="space-y-3">
+    <section aria-label={t("addToReview")} className="space-y-3">
       <div className="flex items-center gap-3">
         <Button type="button" onClick={() => void handleSuggest()} disabled={loading}>
-          {loading ? "Generating…" : "Add to review"}
+          {loading ? t("generating") : t("addToReview")}
         </Button>
         {count > 0 ? (
           <span data-testid="note-card-count" className="text-sm text-muted-foreground">
-            {count} {count === 1 ? "card" : "cards"} in review from this note
+            {t("inReview", { count })}
           </span>
         ) : null}
       </div>
 
       {lastExisting ? (
         <p className="text-xs text-muted-foreground">
-          That card is already in review — re-promoting the same text never duplicates it.
+          {t("alreadyInReview")}
         </p>
       ) : null}
 
@@ -106,7 +108,7 @@ export function NoteCardSuggestions({
           // A generation that grounded nothing is an outcome, not an error: there is
           // simply nothing here worth remembering.
           <p className="text-sm text-muted-foreground">
-            No cards could be grounded in this note.
+            {t("noneForNote")}
           </p>
         ) : (
           <ul className="flex flex-col gap-2">
@@ -144,6 +146,7 @@ function NoteSuggestionChip({
   suggestion: CardSuggestion;
   onAccepted: (card: Card, created: boolean) => void;
 }) {
+  const t = useTranslations("notes.suggestions");
   const errorMessage = useErrorMessage();
   const [resolved, setResolved] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -184,14 +187,14 @@ function NoteSuggestionChip({
       {editing ? (
         <>
           <textarea
-            aria-label="Question"
+            aria-label={t("question")}
             value={question}
             onChange={(event) => setQuestion(event.target.value)}
             className="w-full rounded-sm border bg-background p-1 text-sm"
             rows={2}
           />
           <textarea
-            aria-label="Answer"
+            aria-label={t("answer")}
             value={answer}
             onChange={(event) => setAnswer(event.target.value)}
             className="w-full rounded-sm border bg-background p-1 text-sm"
@@ -212,7 +215,7 @@ function NoteSuggestionChip({
           disabled={pending}
           onClick={() => void handleAccept()}
         >
-          Accept
+          {t("accept")}
         </Button>
         {editing ? null : (
           <Button
@@ -222,7 +225,7 @@ function NoteSuggestionChip({
             disabled={pending}
             onClick={() => setEditing(true)}
           >
-            Edit
+            {t("edit")}
           </Button>
         )}
         <Button
@@ -232,7 +235,7 @@ function NoteSuggestionChip({
           disabled={pending}
           onClick={() => setResolved(true)}
         >
-          Discard
+          {t("discard")}
         </Button>
       </div>
       {error ? (

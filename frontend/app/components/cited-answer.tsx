@@ -18,11 +18,13 @@
  * marks: the stored answer carries the same tokens the stream did.
  */
 
+import { useTranslations } from "next-intl";
 import { createContext, useContext, useId, useMemo, useState } from "react";
 
 import {
   citationIndexFromHref,
   linkCitationMarkers,
+  NOT_FOUND_SENTINEL,
   type Citation,
 } from "@/app/lib/citations";
 import { MessageResponse } from "@/components/ai-elements/message";
@@ -54,6 +56,7 @@ const MarkSelectionContext = createContext<{
 
 /** One numbered mark in the prose; a second activation closes what it opened. */
 function CitationMark({ index }: { index: number }) {
+  const t = useTranslations("chat.citations");
   const { selected, passageId, toggle, quotedByMark } =
     useContext(MarkSelectionContext);
   const open = selected === index;
@@ -61,7 +64,7 @@ function CitationMark({ index }: { index: number }) {
   const mark = (
     <button
       type="button"
-      aria-label={`Citation ${index}`}
+      aria-label={t("mark", { index })}
       aria-expanded={open}
       aria-controls={open ? passageId : undefined}
       onClick={() => toggle(index)}
@@ -122,7 +125,10 @@ export function CitedAnswer({
   // renderer parses one document, so a mark mid-sentence stays mid-sentence.
   // Citations arriving after the text is complete change this string, which is
   // also what re-renders the memoized answer body so the marks light up.
-  const body = linkCitationMarkers(text, citations?.length ?? 0);
+  const body =
+    text.trim() === NOT_FOUND_SENTINEL
+      ? ""
+      : linkCitationMarkers(text, citations?.length ?? 0);
 
   return (
     <MarkSelectionContext.Provider value={markSelection}>

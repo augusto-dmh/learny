@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/hover-card";
 import { cn } from "@/lib/utils";
 import { ArrowLeftIcon, ArrowRightIcon } from "lucide-react";
+import { useTranslations } from "next-intl";
 import type { ComponentProps } from "react";
 import {
   createContext,
@@ -200,6 +201,7 @@ export const InlineCitationCarouselPrev = ({
   ...props
 }: InlineCitationCarouselPrevProps) => {
   const api = useCarouselApi();
+  const t = useTranslations("chat.elements");
 
   const handleClick = useCallback(() => {
     if (api) {
@@ -209,7 +211,7 @@ export const InlineCitationCarouselPrev = ({
 
   return (
     <button
-      aria-label="Previous"
+      aria-label={t("previous")}
       className={cn("shrink-0", className)}
       onClick={handleClick}
       type="button"
@@ -227,6 +229,7 @@ export const InlineCitationCarouselNext = ({
   ...props
 }: InlineCitationCarouselNextProps) => {
   const api = useCarouselApi();
+  const t = useTranslations("chat.elements");
 
   const handleClick = useCallback(() => {
     if (api) {
@@ -236,7 +239,7 @@ export const InlineCitationCarouselNext = ({
 
   return (
     <button
-      aria-label="Next"
+      aria-label={t("next")}
       className={cn("shrink-0", className)}
       onClick={handleClick}
       type="button"

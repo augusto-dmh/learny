@@ -29,7 +29,14 @@
  * cells at any width.
  */
 
-import { useCallback, useEffect, useState, type CSSProperties } from "react";
+import { useLocale, useTranslations } from "next-intl";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type CSSProperties,
+} from "react";
 
 import {
   getStudyDays,
@@ -70,22 +77,36 @@ const LEVEL_CLASS: Record<number, string> = {
 /** The five levels, low to high — the order the Less→More key names them in. */
 const LEVELS = [0, 1, 2, 3, 4];
 
-const MONTHS = [
-  "Jan",
-  "Feb",
-  "Mar",
-  "Apr",
-  "May",
-  "Jun",
-  "Jul",
-  "Aug",
-  "Sep",
-  "Oct",
-  "Nov",
-  "Dec",
-];
+/** Short month and weekday names, and a cell's day label, in the reader's locale. */
+type CalendarNames = {
+  /** Indexed by zero-based month. */
+  months: string[];
+  /** Indexed by `Date.getDay()` (Sun = 0). */
+  weekdays: string[];
+  dayLabel: (d: Date) => string;
+};
 
-const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+/**
+ * Plain `Intl` rather than next-intl's formatter: no `timeZone` is configured, and
+ * the cells are local calendar days, which is what `Intl` formats by default.
+ */
+function calendarNames(locale: string): CalendarNames {
+  const month = new Intl.DateTimeFormat(locale, { month: "short" });
+  const weekday = new Intl.DateTimeFormat(locale, { weekday: "short" });
+  const day = new Intl.DateTimeFormat(locale, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
+  return {
+    months: Array.from({ length: 12 }, (_, m) => month.format(new Date(2026, m, 1))),
+    // 2026-01-04 is a Sunday, so the i-th day after it is weekday i.
+    weekdays: Array.from({ length: 7 }, (_, i) =>
+      weekday.format(new Date(2026, 0, 4 + i)),
+    ),
+    dayLabel: (d) => day.format(d),
+  };
+}
 
 /**
  * The weekday rows that carry a label. Naming every other row keeps the axis
@@ -189,7 +210,11 @@ const BLANK_CELL = { label: "", month: 0, reviews: 0, pages: 0 };
  * Shading stays a function of `reviews_count + reading_updates` alone; the pages
  * figure rides along for the tooltip and moves no cell's level.
  */
-function buildCells(days: StudyDayView[], today: Date): HeatmapCell[] {
+function buildCells(
+  days: StudyDayView[],
+  today: Date,
+  names: CalendarNames,
+): HeatmapCell[] {
   const rows = new Map<string, StudyDayView>();
   for (const row of days) {
     rows.set(row.day, row);
@@ -221,7 +246,7 @@ function buildCells(days: StudyDayView[], today: Date): HeatmapCell[] {
     cells.push({
       key,
       day: key,
-      label: `${WEEKDAYS[d.getDay()]}, ${MONTHS[d.getMonth()]} ${d.getDate()}`,
+      label: names.dayLabel(d),
       month: d.getMonth(),
       reviews: row?.reviews_count ?? 0,
       pages: row?.pages ?? 0,
@@ -253,7 +278,7 @@ type MonthLabel = { key: string; column: number; label: string };
  * final column is skipped: a label there would name a month the grid has barely
  * started, with no column left to carry it.
  */
-function monthLabels(cells: HeatmapCell[]): MonthLabel[] {
+function monthLabels(cells: HeatmapCell[], names: CalendarNames): MonthLabel[] {
   const columns = cells.length / 7;
   const labels: MonthLabel[] = [];
   let labelled = -1;
@@ -267,21 +292,11 @@ function monthLabels(cells: HeatmapCell[]): MonthLabel[] {
       labels.push({
         key: `${first.month}-${column}`,
         column: column + 1,
-        label: MONTHS[first.month],
+        label: names.months[first.month],
       });
     }
   }
   return labels;
-}
-
-/** `2 reviews`, `1 review` — a count with its word, pluralized. */
-function countWord(n: number, word: string): string {
-  return `${n} ${word}${n === 1 ? "" : "s"}`;
-}
-
-/** A day's activity as the readout says it: `7 reviews · 9 pages`. */
-function activitySummary(cell: HeatmapCell): string {
-  return `${countWord(cell.reviews, "review")} · ${countWord(cell.pages, "page")}`;
 }
 
 /** The floating readout: what a day holds, anchored over the cell it describes. */
@@ -301,8 +316,14 @@ export function StudyHeatmap({
   days: StudyDayView[];
   today?: Date;
 }) {
-  const cells = buildCells(days, today);
-  const months = monthLabels(cells);
+  const t = useTranslations("review.heatmap");
+  const locale = useLocale();
+  const names = useMemo(() => calendarNames(locale), [locale]);
+  const cells = buildCells(days, today, names);
+  const months = monthLabels(cells, names);
+  // A day's activity as the readout says it: `7 reviews · 9 pages`.
+  const activitySummary = (cell: HeatmapCell) =>
+    t("activity", { reviews: cell.reviews, pages: cell.pages });
   const [tooltip, setTooltip] = useState<Tooltip | null>(null);
 
   const hideTooltip = useCallback(() => setTooltip(null), []);
@@ -315,7 +336,8 @@ export function StudyHeatmap({
       left: rect.left + rect.width / 2,
       top: rect.top - 8,
     });
-  }, []);
+    // `activitySummary` reads the catalog; it changes only with the locale.
+  }, [locale]);
 
   // The readout is pinned to the viewport, so any scroll slides the cell out from
   // under it; it goes away rather than pointing at the wrong day. Capture picks up
@@ -331,7 +353,7 @@ export function StudyHeatmap({
       <div className="overflow-x-auto pb-0.5">
         <div
           role="group"
-          aria-label={`study activity heatmap, last ${HEATMAP_WINDOW_WEEKS} weeks`}
+          aria-label={t("groupLabel", { weeks: HEATMAP_WINDOW_WEEKS })}
           className="grid grid-cols-[auto_auto] justify-start gap-1.5"
         >
           <span aria-hidden />
@@ -352,7 +374,7 @@ export function StudyHeatmap({
             data-testid="heatmap-weekdays"
             style={WEEKDAYS_AXIS_STYLE}
           >
-            {WEEKDAYS.map((name, row) => (
+            {names.weekdays.map((name, row) => (
               <span
                 key={name}
                 className={`${AXIS_TEXT_CLASS} text-right leading-[15px]`}
@@ -416,9 +438,9 @@ export function StudyHeatmap({
       <div
         className={`flex items-center justify-between gap-[18px] ${AXIS_TEXT_CLASS}`}
       >
-        <span>Last {HEATMAP_WINDOW_WEEKS} weeks</span>
+        <span>{t("window", { weeks: HEATMAP_WINDOW_WEEKS })}</span>
         <span data-testid="heatmap-legend" className="flex items-center gap-1">
-          <span>Less</span>
+          <span>{t("less")}</span>
           {LEVELS.map((level) => (
             <i
               key={level}
@@ -427,7 +449,7 @@ export function StudyHeatmap({
               className={`block h-[11px] w-[11px] rounded-[2px] inset-ring-1 inset-ring-foreground/5 ${LEVEL_CLASS[level]}`}
             />
           ))}
-          <span>More</span>
+          <span>{t("more")}</span>
         </span>
       </div>
 
@@ -479,6 +501,8 @@ const TOTAL_LABEL_CLASS =
  * it is the server's figure rendered as it arrived.
  */
 function StudyReadout({ summary }: { summary: StudySummaryView }) {
+  const t = useTranslations("review.stats");
+  const number = new Intl.NumberFormat(useLocale());
   const reviews = summary.days.reduce((n, day) => n + day.reviews_count, 0);
   const pages = summary.days.reduce((n, day) => n + day.pages, 0);
 
@@ -488,23 +512,28 @@ function StudyReadout({ summary }: { summary: StudySummaryView }) {
         data-testid="streak-line"
         className="max-w-[22ch] text-sm leading-[1.35] text-muted-foreground"
       >
-        Studied{" "}
-        <span data-testid="adherence-figure" className={FIGURE_CLASS}>
-          {summary.studied_last_14}
-        </span>{" "}
-        of the last <span className={FIGURE_SM_CLASS}>14</span> days
+        {t.rich("studied", {
+          studied: summary.studied_last_14,
+          days: 14,
+          figure: (chunks) => (
+            <span data-testid="adherence-figure" className={FIGURE_CLASS}>
+              {chunks}
+            </span>
+          ),
+          window: (chunks) => <span className={FIGURE_SM_CLASS}>{chunks}</span>,
+        })}
       </p>
       <div
         data-testid="study-totals"
         className="flex gap-[26px] border-t border-border pt-4"
       >
         <span data-testid="total-reviews" className="flex flex-col">
-          <span className={TOTAL_VALUE_CLASS}>{reviews}</span>
-          <span className={TOTAL_LABEL_CLASS}>reviews</span>
+          <span className={TOTAL_VALUE_CLASS}>{number.format(reviews)}</span>
+          <span className={TOTAL_LABEL_CLASS}>{t("reviews")}</span>
         </span>
         <span data-testid="total-pages" className="flex flex-col">
-          <span className={TOTAL_VALUE_CLASS}>{pages}</span>
-          <span className={TOTAL_LABEL_CLASS}>pages</span>
+          <span className={TOTAL_VALUE_CLASS}>{number.format(pages)}</span>
+          <span className={TOTAL_LABEL_CLASS}>{t("pages")}</span>
         </span>
       </div>
     </div>
@@ -517,6 +546,7 @@ function StudyReadout({ summary }: { summary: StudySummaryView }) {
  * viewer can bring it back; the choice persists device-locally (HOME-14).
  */
 export function StudyStats() {
+  const t = useTranslations("review.stats");
   const errorMessage = useErrorMessage();
   const { showStats, setShowStats } = useHomeSettings();
   const [state, setState] = useState<Loadable<StudySummaryView>>({
@@ -542,15 +572,15 @@ export function StudyStats() {
   }, []);
 
   return (
-    <Card aria-label="study stats">
+    <Card aria-label={t("label")}>
       <CardHeader className="flex-row items-center justify-between space-y-0">
-        <CardTitle>Study activity</CardTitle>
+        <CardTitle>{t("title")}</CardTitle>
         <Button
           variant="ghost"
           size="sm"
           onClick={() => setShowStats(!showStats)}
         >
-          {showStats ? "Hide stats" : "Show stats"}
+          {showStats ? t("hide") : t("show")}
         </Button>
       </CardHeader>
       {showStats && (

@@ -254,6 +254,7 @@ class RoutingGenerationAdapter:
         target_section_path: tuple[str, ...] | None = None,
         tutor_phase: str | None = None,
         hint_level: str | None = None,
+        response_language: str | None = None,
     ) -> GeneratedAnswer:
         """Serve from the first eligible entry that can, stamping the serving profile."""
         kwargs: dict[str, object] = {
@@ -264,6 +265,7 @@ class RoutingGenerationAdapter:
             "target_section_path": target_section_path,
             "tutor_phase": tutor_phase,
             "hint_level": hint_level,
+            "response_language": response_language,
         }
         if self._house is not None and not _serving_entries(self._chain, mode):
             return self._house.generate(**kwargs)  # type: ignore[arg-type]
@@ -297,6 +299,7 @@ class RoutingGenerationAdapter:
         target_section_path: tuple[str, ...] | None = None,
         tutor_phase: str | None = None,
         hint_level: str | None = None,
+        response_language: str | None = None,
     ) -> Iterator[AnswerStreamEvent]:
         """Stream from the first eligible entry that can; commit at the first delta.
 
@@ -317,6 +320,7 @@ class RoutingGenerationAdapter:
             "target_section_path": target_section_path,
             "tutor_phase": tutor_phase,
             "hint_level": hint_level,
+            "response_language": response_language,
         }
         if self._house is not None and not _serving_entries(self._chain, mode):
             yield from self._house.generate_stream(**kwargs)  # type: ignore[arg-type]

@@ -930,6 +930,9 @@ class QuizDeckResult:
     # The batch's summed token counts when the adapter can read them; absent → the
     # deck's debit is 0 USD.
     usage: TokenUsage | None = None
+    # True when the pass ran on the owner's own provider key (ADR-0033): the
+    # house paid nothing, so the deck's debit is 0 USD whatever ``usage`` says.
+    user_keyed: bool = False
 
 
 @dataclass(frozen=True)
@@ -945,6 +948,9 @@ class SuggestResult:
 
     candidates: tuple[QuizCandidate, ...]
     usage: TokenUsage | None = None
+    # True when the call ran on the learner's own provider key (ADR-0033): the
+    # suggest debit is then 0 USD.
+    user_keyed: bool = False
 
 
 @dataclass(frozen=True)
@@ -956,11 +962,18 @@ class QuizDeckHandle:
     Message Batch (``None`` for the local adapter); ``payload`` is a provider-owned
     JSON-safe blob (the local adapter carries its inline result there; the Anthropic
     adapter carries per-section metadata for mapping batch results by ``custom_id``).
+
+    ``credential_id`` pins a pass begun on the owner's own provider key to that
+    key's row (ADR-0033): the poll collects with exactly that row or fails the
+    job. ``None`` is a house-keyed pass, and also every handle serialized before
+    the pin existed (an absent key reads as ``None``). Only the row id travels;
+    the key never enters a payload.
     """
 
     provider: str
     batch_id: str | None = None
     payload: dict = field(default_factory=dict)
+    credential_id: UUID | None = None
 
     def to_payload(self) -> dict:
         """Serialize to a JSON-safe dict for the Celery poll task hand-off."""
@@ -968,15 +981,18 @@ class QuizDeckHandle:
             "provider": self.provider,
             "batch_id": self.batch_id,
             "payload": self.payload,
+            "credential_id": str(self.credential_id) if self.credential_id else None,
         }
 
     @classmethod
     def from_payload(cls, data: dict) -> QuizDeckHandle:
         """Reconstruct a handle from :meth:`to_payload` output."""
+        credential_id = data.get("credential_id")
         return cls(
             provider=data["provider"],
             batch_id=data.get("batch_id"),
             payload=data.get("payload", {}),
+            credential_id=UUID(credential_id) if credential_id else None,
         )
 
 

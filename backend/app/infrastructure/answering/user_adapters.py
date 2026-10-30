@@ -9,8 +9,12 @@ and it changes on every write, so a replaced or deleted key can never resolve
 an entry again.
 
 The cache is bounded (least-recently-used eviction) and every entry expires
-after a TTL, so a process never accumulates adapters for keys nobody uses. It
-is thread-safe: FastAPI runs sync dependencies on a thread pool.
+after a TTL, so a process never accumulates adapters for keys nobody uses. A
+key the learner replaces or deletes through this process is also evicted at
+once (:meth:`UserAdapterCache.evict_fingerprint`), so its plaintext does not
+sit in memory until the TTL. It is thread-safe: FastAPI runs sync dependencies
+on a thread pool. The same cache shape holds the learner-keyed quiz adapters
+behind card suggestions, in an instance of its own.
 """
 
 from __future__ import annotations
@@ -20,10 +24,6 @@ import time
 from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from app.domain.ports import GenerationPort
 
 #: Landing door 4: at most 256 built adapters per process, each for 15 minutes.
 DEFAULT_MAX_ENTRIES = 256
@@ -40,8 +40,8 @@ class UserAdapterKey:
     fingerprint: str
 
 
-class UserAdapterCache:
-    """A bounded LRU with a TTL over built learner-keyed adapters."""
+class UserAdapterCache[AdapterT]:
+    """A bounded LRU with a TTL over built learner-keyed adapters (of type ``AdapterT``)."""
 
     def __init__(
         self,
@@ -55,7 +55,7 @@ class UserAdapterCache:
         self._max_entries = max_entries
         self._ttl_seconds = ttl_seconds
         self._clock = clock
-        self._entries: OrderedDict[UserAdapterKey, tuple[float, GenerationPort]] = OrderedDict()
+        self._entries: OrderedDict[UserAdapterKey, tuple[float, AdapterT]] = OrderedDict()
         self._lock = threading.Lock()
 
     def __len__(self) -> int:
@@ -68,8 +68,8 @@ class UserAdapterCache:
     def get_or_build(
         self,
         key: UserAdapterKey,
-        build: Callable[[], GenerationPort | None],
-    ) -> GenerationPort | None:
+        build: Callable[[], AdapterT | None],
+    ) -> AdapterT | None:
         """Return the live entry for ``key``, building (and caching) it on a miss.
 
         An entry older than the TTL counts as a miss and is rebuilt. ``build``
@@ -97,7 +97,7 @@ class UserAdapterCache:
                 self._entries.popitem(last=False)
         return adapter
 
-    def _live(self, key: UserAdapterKey, now: float) -> GenerationPort | None:
+    def _live(self, key: UserAdapterKey, now: float) -> AdapterT | None:
         """The unexpired entry for ``key``, marked recently used; the caller holds the lock."""
         cached = self._entries.get(key)
         if cached is None:
@@ -113,6 +113,20 @@ class UserAdapterCache:
         """The cached keys, least recently used first (introspection for tests)."""
         with self._lock:
             return tuple(self._entries)
+
+    def evict_fingerprint(self, fingerprint: str) -> int:
+        """Drop every entry built from the key write ``fingerprint`` names.
+
+        Called when a learner replaces or deletes a key: no live row can name
+        that fingerprint again, so its entries are unreachable, and dropping them
+        releases the plaintext key now rather than at the TTL. Returns how many
+        entries were dropped.
+        """
+        with self._lock:
+            stale = [key for key in self._entries if key.fingerprint == fingerprint]
+            for key in stale:
+                del self._entries[key]
+            return len(stale)
 
     def clear(self) -> None:
         """Drop every entry (settings redeclared, or a test boundary)."""

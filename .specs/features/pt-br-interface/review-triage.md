@@ -14,3 +14,54 @@ Fresh-context `pr-review` posted 6 inline comments plus a requirements review an
 | 8 | requirements review / summary | `backend/app/infrastructure/web/locale.py:7` | The docstring says `GET /api/me`; the route is `GET /api/auth/me` | real | fix | Docstring corrected. |
 
 Tally: 8 findings, 8 real, 0 false; 8 fixed (one by docstring only), 0 won't-fix.
+
+# pt-br-interface review triage — batch 2 of 4 (PR #79)
+
+Fresh-context `pr-review` posted 4 inline comments, a requirements review and a summary. Each finding was checked against the code at `51361cc` (branch head when the review ran). The PR comments are deleted after this triage, so this file is the surviving record.
+
+| # | Source | File:line | Finding | Verdict | Action | Rationale |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | inline, performance (4240610341) | `frontend/app/components/library-screen.tsx:723` | `AddedOn` builds an `Intl.DateTimeFormat` per card on every render | real (minor) | fix | Every title keystroke and poll tick re-renders the list. The formatter is now built once per locale with `useMemo` in `LibraryScreen` and passed to each card. |
+| 2 | inline, architecture (4240612799) | `frontend/messages/en.json:182` | The signed-out sentence lives under three keys (`account`, `library`, `reader`) and already drifted once | real | fix | It is one shared state. Moved to `common.signedOut`, dropped the three surface copies, and Account, Library and the reader read the shared key. Batch 3's three remaining literals should use it too (noted in the handoff). |
+| 3 | inline, tests (4240614842) | `frontend/tests/i18n-copy.ts:77` | The English-copy probe exempts any phrase found anywhere in pt-BR, and nothing proves it can fail | real | fix | The exemption is now an explicit `SHARED_PHRASES` list (brand, endonyms), and `tests/i18n-copy.test.ts` proves the probe rejects English, accepts the pt-BR render, and finds phrases in every namespace the render tests pass. A pt-BR value left in English now fails instead of exempting itself. |
+| 4 | inline, tests (4240614875) | `frontend/app/components/AuthForm.tsx:144` | `form.working` has no test in either locale | real | fix | Added an in-flight test: a never-settling login shows a disabled "Working…" in en and "Aguarde…" in pt-BR. It is a new describe block, so the existing English assertions stay unedited (C30). |
+| 5 | requirements review / summary (6106487954, 6106524959) | `frontend/components/ui/spinner.tsx` | `npm run build` unproven for the spinner calling `useTranslations` without `"use client"`; no green full frontend run | real (open at review time) | no change | CI's `frontend` job runs vitest, tsc and `npm run build`; it passed on PR #79 (run 38119872797), which closes both items. |
+| 6 | requirements review / summary | ADR-0034 Limits | The manual pt-BR browser walk is not done | real | deferred to owner | The overnight run skips screenshot passes by owner instruction; listed as deferred in the handoff. |
+
+Tally: 6 findings, 6 real, 0 false; 4 fixed, 1 closed by CI with no change, 1 deferred to the owner.
+
+# pt-br-interface review triage — batch 3 of 4 (PR #81)
+
+Fresh-context `pr-review` posted 5 inline comments (all suggestions), a requirements review and a summary. Each finding was checked against the code at `2ebda30` (branch head when the review ran). The PR comments are deleted after this triage, so this file is the surviving record.
+
+| # | Source | File:line | Finding | Verdict | Action | Rationale |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | inline, architecture (4240857938) | `frontend/app/components/review-screen.tsx:86` | The nine interval-bucket tokens are a wire contract but live inside the component | real (minor) | fix | `app/lib/quiz.ts` now exports `INTERVAL_BUCKETS` and the `IntervalBucket` type beside `intervalLabel`; the component's label map is a `Record<IntervalBucket, …>`, so a bucket added to the contract without a label fails `tsc`. |
+| 2 | inline, tests (4240860421) | `frontend/app/components/ask-panel.tsx:262` | No pt-BR test clicks a suggested prompt and checks the language it is sent in | real | fix | The pt-BR empty-state test now clicks a prompt and asserts the Portuguese text reaches the turn request (the tutor chips' fixed English is already pinned in the teach test). |
+| 3 | inline, tests (4240860467) | `frontend/app/components/review-screen.tsx:786` | The "unknown backend token shows as sent" fallback (interval bucket, `review.itemType` and `notes.anchorStatus` `other` branches) is untested | real | fix | New pt-BR assertions render an unknown interval bucket, item kind and anchor status and expect each verbatim; dropping an `other` branch now throws in the test binding. |
+| 4 | inline, tests (4240860505) | `frontend/components/ai-elements/conversation.tsx:66` | Nothing proves an explicit prop still beats the catalog default, or that `description=""` hides the paragraph | real | fix | The vendored-primitives test now renders explicit props (empty state title/description, command dialog title, prompt placeholder) and checks they win, and that an empty description renders no paragraph. |
+| 5 | inline, regression (4240863861) | `frontend/app/components/study-heatmap.tsx:531` | English counts of 1,000+ now show a thousands separator, contradicting "English renders as before" | real | fix (test + PR text) | Grouped digits are correct English; the change is intended, not reverted. An English assertion pins `1,234` in the dock, and the PR summary now says numbers are grouped for the locale in both languages. Recorded in `plan.md` Assumptions. |
+| 6 | requirements review (6107085094) | `.specs/project/ROADMAP.md` | The `pt-br-interface` row still says batches 3–4 are open | real | fix | Updated with the PR number before merge, as batch 2 did. |
+| 7 | requirements review | ADR-0034 Limits | The manual pt-BR browser and screen-reader walk is not done | real | deferred to owner | The overnight run skips screenshot and browser passes by owner instruction; listed in the handoff. |
+| 8 | requirements review | `plan.md` "Tutor card offer question" | The English tutor-card preview's follow-up has no roadmap row | real | won't-fix here | A roadmap row is authored when a cycle is chosen (CLAUDE.md); the follow-up is recorded as a candidate in the `STATE.md` handoff beside the backend-email localization follow-up. |
+| 9 | requirements review (Verifier B3-R3-F1) | `frontend/app/components/reader-panel.tsx:183` | The dock's Review tab badge shows a raw `1234` beside the body's `1.234` | real | fix | `TabCount` formats through `Intl.NumberFormat(locale)`; the dock test's 1234 case asserts the tab reads `1.234`. |
+| 10 | summary (6107112971) | — | Consolidated summary of the above | n/a | no change | Nothing beyond rows 1–9. |
+
+Tally: 9 findings (plus the summary), 9 real, 0 false; 7 fixed, 1 won't-fix (recorded as a candidate instead), 1 deferred to the owner.
+
+# pt-br-interface review triage — batch 4 of 4 (PR #82)
+
+Fresh-context `pr-review` posted 3 inline comments (architecture, regression, tests), a requirements review and a summary; the security and performance lanes found nothing at 80% confidence. Each finding was checked against the code at `1ca6a37`. The PR comments are deleted after this triage, so this file is the surviving record.
+
+| # | Source | File:line | Finding | Verdict | Action | Rationale |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | inline, architecture (4241027688) | `backend/tests/test_answering_routing.py:25` | The new root-level suites share basenames with `tests/infrastructure/test_answering_{routing,openai_compat}.py` and import those suites' private helpers | real | fix | The split existed only so the frozen C54/C56 proof paths ran verbatim for the Verifier, which has run (PASS at 845ecc1). The cases now live in the existing infrastructure suites under a response-language section and the root files are gone; the `plan.md` "Proof files for C54 and C56" row records where the proofs live now. |
+| 2 | inline, regression (4241028364) | `backend/tests/test_answering_openai_compat.py:1` | Same as row 1 (second same-named suite per adapter) | real | fix | Same fix as row 1. |
+| 3 | inline, tests (4241027831) | `backend/tests/golden_expected.py:208` | The Portuguese golden book has no grounded not-found case | real | fix | Added `PORTUGUESE_UNSUPPORTED_QUESTION`, its not-found twin in `test_golden_citations.py` and a fixture check that its content words occur nowhere in the book. |
+| 4 | requirements review (6107507955) | `.specs/project/ROADMAP.md`, `CLAUDE.md` | Feature close-out: the ROADMAP row still says batch 4 is open and the CLAUDE.md status paragraph says no row is open | real | fix | ROADMAP row marked Done with all four PR numbers and CLAUDE.md's current-state line updated, before merge. |
+| 5 | requirements review | — | No real-provider check of Portuguese answers | real | deferred | Needs the funded CI key; the plan's Out of scope defers the judged pt-BR eval. |
+| 6 | requirements review | `checks.md` header | Says 59 checks, defines 61 | real (cosmetic) | won't-fix | `checks.md` is frozen; recorded as V4-F5 in `verification.md`. |
+| 7 | requirements review | `plan.md` "Answer language for a cookie-only learner" | A cookie-only learner gets a pt-BR interface and English answers | real | won't-fix here | Follows AC 47 and ADR-0034 as written; recorded as a follow-up candidate in the STATE handoff. |
+| 8 | summary (6107526638) | — | Consolidated summary of the above | n/a | no change | Nothing beyond rows 1–7. |
+
+Tally: 7 findings (plus the summary), 7 real, 0 false; 4 fixed (rows 1–2 one fix), 2 won't-fix (recorded), 1 deferred.

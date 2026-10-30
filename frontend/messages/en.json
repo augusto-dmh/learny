@@ -5,13 +5,25 @@
   },
   "common": {
     "loading": "Loading…",
+    "signedOut": "You are signed out.",
     "locale": {
       "label": "Language",
       "names": {
         "en": "English",
         "pt-BR": "Português (Brasil)"
       }
-    }
+    },
+    "close": "Close",
+    "cancel": "Cancel",
+    "loadingLabel": "Loading",
+    "previousSlide": "Previous slide",
+    "nextSlide": "Next slide",
+    "command": {
+      "title": "Command Palette",
+      "description": "Search for a command to run..."
+    },
+    "carouselRole": "carousel",
+    "slideRole": "slide"
   },
   "errors": {
     "generic": "Something went wrong. Please try again.",
@@ -79,13 +91,16 @@
       "checkpointStart": "Could not start the checkpoint.",
       "checkpointRespond": "Could not save your answer.",
       "checkpointReveal": "Could not show the passage.",
-      "checkpointGrade": "Could not save your rating."
+      "checkpointGrade": "Could not save your rating.",
+      "providerKeysList": "Could not load your AI keys.",
+      "providerKeySave": "Could not save your key.",
+      "providerKeyTest": "Could not test your key.",
+      "providerKeyDelete": "Could not delete your key."
     }
   },
   "account": {
     "pageTitle": "Your account",
     "regionLabel": "account",
-    "signedOut": "You are signed out.",
     "signedInAs": "Signed in as <strong>{email}</strong>",
     "logout": "Log out",
     "language": {
@@ -109,6 +124,446 @@
         "teachOnly": "Works in Teach only.",
         "neither": "Currently works in neither Ask nor Teach."
       }
+    },
+    "providerKeys": {
+      "heading": "Your own AI keys",
+      "intro": "Paste an API key from a provider you already pay, and Learny uses it for your own requests.",
+      "disclosure": "Calls made with your key are billed by that provider to you, under your own agreement with them. Learny stores your key encrypted and can never show it again.",
+      "masked": "•••• {last4}",
+      "addedOn": "Added {date}",
+      "notConfigured": "No key saved.",
+      "powers": "Powers:",
+      "profileModes": {
+        "both": "{name}: Ask and Teach",
+        "askOnly": "{name}: Ask only",
+        "teachOnly": "{name}: Teach only",
+        "neither": "{name}: neither Ask nor Teach right now"
+      },
+      "cards": "Flashcards & decks",
+      "inputLabel": "API key for {provider}",
+      "placeholder": "Paste your key",
+      "save": "Save key",
+      "saving": "Saving…",
+      "replace": "Replace key",
+      "test": "Test key",
+      "testing": "Testing…",
+      "testResult": {
+        "ok": "Key works",
+        "rejected": "The provider rejected this key. Check it, then save it again.",
+        "rate_limited": "The provider is limiting requests on this key right now. Try again in a moment.",
+        "unavailable": "The provider could not be reached. Try again later."
+      },
+      "delete": "Delete key",
+      "confirmDelete": "Delete your {provider} key? Your requests go back to Learny's own AI.",
+      "confirmDeleteAction": "Yes, delete it"
+    }
+  },
+  "landing": {
+    "tagline": "Turn your books into cited answers and lasting recall."
+  },
+  "auth": {
+    "createAccount": "Create account",
+    "logIn": "Log in",
+    "login": {
+      "description": "Welcome back to Learny.",
+      "noAccount": "No account? <link>Create one</link>."
+    },
+    "register": {
+      "description": "Start learning with Learny.",
+      "haveAccount": "Already have an account? <link>Log in</link>."
+    },
+    "form": {
+      "label": "{mode, select, register {register form} other {login form}}",
+      "email": "Email",
+      "password": "Password",
+      "inviteCode": "Invite code",
+      "inviteHint": "(if you have one)",
+      "acceptTerms": "I agree to the <link>Terms of Service</link>",
+      "working": "Working…"
+    }
+  },
+  "shell": {
+    "nav": {
+      "home": "Home",
+      "library": "Library",
+      "review": "Review",
+      "notes": "Notes"
+    },
+    "account": "Account",
+    "toggleTheme": "Toggle theme",
+    "logOut": "Log out",
+    "sidebar": {
+      "title": "Sidebar",
+      "description": "Displays the mobile sidebar.",
+      "toggle": "Toggle Sidebar"
+    }
+  },
+  "chat": {
+    "notFound": {
+      "inScope": "That was not found in the part of the book this conversation covers. It may be answered elsewhere in the book.",
+      "inSource": "That was not found in this book."
+    },
+    "retry": "Retry",
+    "phase": {
+      "searching": "Searching the book…",
+      "reasoningLabel": "reasoning",
+      "thinking": "Thinking…",
+      "thoughtProcess": "Thought process"
+    },
+    "citations": {
+      "regionLabel": "citations",
+      "noteChip": "Your note: {title}",
+      "sectionChip": "Citation: {path}",
+      "noteTitled": "Your note — {title}",
+      "note": "Your note",
+      "closePassage": "Close passage",
+      "openNote": "Open note",
+      "showInBook": "Show in book",
+      "openInBook": "Open in book",
+      "mark": "Citation {index, number}"
+    },
+    "includeNotes": {
+      "label": "Search my notes too",
+      "description": "Your own notes on this book are searched alongside the book itself, so answers can be grounded in what you have written.",
+      "locked": "This conversation was started with this choice — start a new one to change it."
+    },
+    "saveToNote": {
+      "save": "Save to note",
+      "saving": "Saving…",
+      "saved": "Saved to notes.",
+      "failed": "Could not save this answer as a note. Please try again."
+    },
+    "conversations": {
+      "regionLabel": "conversations",
+      "heading": "Conversations",
+      "new": "New conversation",
+      "empty": "No conversations yet.",
+      "newTitle": "New title",
+      "saveTitle": "Save title",
+      "cancelRename": "Cancel rename",
+      "resume": "Resume {title}",
+      "turns": "({count, plural, one {# turn} other {# turns}})",
+      "rename": "Rename {title}",
+      "delete": "Delete {title}",
+      "showOlder": "Show older conversations"
+    },
+    "dockNotes": {
+      "loading": "Loading your notes…",
+      "empty": "Notes on this book only. Select a passage to start a new one — every note keeps the passage it came from.",
+      "listLabel": "Notes on this book",
+      "where": "{section} · p. {page}"
+    },
+    "dockReview": {
+      "nothingDue": "Nothing due from this book right now.",
+      "dueCaption": "{count, plural, one {card due from this book} other {cards due from this book}}"
+    },
+    "ask": {
+      "intro": "Answer is for questions about the book. Tutor walks you through a section.",
+      "suggestedLabel": "suggested prompts",
+      "prompts": {
+        "summarize": "Summarize the key ideas in this book.",
+        "arguments": "What are the main arguments the author makes?",
+        "difficult": "Explain a concept from this book I might find difficult."
+      },
+      "explainPrompt": "Explain this passage from the book:\n\n\"{quote}\"",
+      "aboutPrompt": "Regarding this passage:\n\n\"{quote}\"\n\n{question}",
+      "removeQuote": "Remove attached passage",
+      "placeholder": "Ask a question about this book…"
+    },
+    "teach": {
+      "regionLabel": "teach",
+      "intro": "Tutor walks you through a section. Answer is for questions about the book.",
+      "startLabel": "start session",
+      "target": "Target",
+      "start": "Start session",
+      "conversationLabel": "teach conversation",
+      "justExplain": "Just explain this.",
+      "dontKnow": "I don't know.",
+      "placeholder": "Send a message…",
+      "askAboutThis": "Ask about this",
+      "cardOffer": {
+        "label": "review card offer",
+        "accept": "Accept",
+        "dismiss": "Dismiss"
+      }
+    },
+    "promptInput": {
+      "addAttachments": "Add photos or files",
+      "takeScreenshot": "Take screenshot",
+      "uploadFiles": "Upload files",
+      "placeholder": "What would you like to know?",
+      "stop": "Stop",
+      "submit": "Submit",
+      "errors": {
+        "accept": "No files match the accepted types.",
+        "maxFileSize": "All files exceed the maximum size.",
+        "maxFiles": "Too many files. Some were not added."
+      }
+    },
+    "elements": {
+      "previous": "Previous",
+      "next": "Next",
+      "previousBranch": "Previous branch",
+      "nextBranch": "Next branch",
+      "branchPosition": "{current, number} of {total, number}",
+      "usedSources": "{count, plural, one {Used # source} other {Used # sources}}",
+      "emptyTitle": "No messages yet",
+      "emptyDescription": "Start a conversation to see messages here"
+    }
+  },
+  "home": {
+    "title": "Home",
+    "regionLabel": "home",
+    "continue": {
+      "label": "continue reading",
+      "title": "Continue reading",
+      "empty": "You have no book in progress yet.",
+      "ask": "Ask",
+      "pickBook": "Pick a book",
+      "percentRead": "{percent}% read",
+      "resume": "Resume"
+    },
+    "due": {
+      "label": "due reviews",
+      "title": "Reviews",
+      "count": "You have {count, plural, one {# card} other {# cards}} due.",
+      "review": "Review",
+      "done": "You’re all caught up for today."
+    }
+  },
+  "library": {
+    "title": "Library",
+    "regionLabel": "library",
+    "loadingSources": "Loading your sources…",
+    "empty": "No sources yet.",
+    "count": "{count, plural, one {# book} other {# books}}",
+    "added": "Added {date}",
+    "sampleReady": "The sample book is ready to use while you wait.",
+    "status": "{status, select, uploaded {uploaded} processing {processing} ready {ready} failed {failed} other {{status}}}",
+    "upload": {
+      "heading": "Add a book",
+      "formLabel": "upload source",
+      "title": "Title",
+      "file": "EPUB file",
+      "chooseFile": "Choose an EPUB file to upload.",
+      "submit": "Upload",
+      "uploading": "Uploading…"
+    },
+    "row": {
+      "open": "Open",
+      "moreActions": "More actions",
+      "ask": "Ask",
+      "tutor": "Tutor",
+      "review": "Review",
+      "reingest": "Re-ingest",
+      "reingestWarning": "Re-ingesting rebuilds this book's corpus with the current providers. Existing quiz items may go stale or orphaned.",
+      "confirmReingest": "Confirm re-ingest",
+      "reingesting": "Re-ingesting…",
+      "startIngestion": "Start ingestion",
+      "starting": "Starting…",
+      "restartIngestion": "Restart ingestion",
+      "restarting": "Restarting…",
+      "ingestionFailed": "Ingestion failed."
+    },
+    "quiz": {
+      "generate": "Generate quiz deck",
+      "generating": "Generating deck…",
+      "counts": "{items, plural, one {# item} other {# items}} · {due} due",
+      "sourceChanged": "source changed",
+      "sourceChangedHint": "Some items no longer match the book after re-ingestion and are paused until you review them.",
+      "review": "Review",
+      "exportAnki": "Export to Anki",
+      "noSection": "This book has no section long enough to quiz (a leaf chapter needs about 200+ characters). <link>Highlight a passage</link> instead.",
+      "noneSurvived": "Drafts were written but none survived quality checks ({discarded} discarded).",
+      "discardFootnote": "{discarded} discarded during generation.",
+      "partial": "Saved {saved}. {failed, plural, one {# section} other {# sections}} failed."
+    }
+  },
+  "reader": {
+    "notFound": "We couldn’t find that chapter.",
+    "backToLibrary": "Back to your library",
+    "tocToggle": "Table of contents",
+    "dockToggle": "Study dock",
+    "progress": "{percent}% read · {minutes} min left",
+    "returnChip": "Return to where you were",
+    "staleCapture": "The book changed while you were reading. Reload the page to capture this highlight.",
+    "toc": {
+      "label": "Table of contents",
+      "chapterNav": "Chapter navigation",
+      "previous": "← Previous chapter",
+      "next": "Next chapter →"
+    },
+    "rail": {
+      "label": "Chapter annotations",
+      "heading": "In this chapter",
+      "empty": "Nothing highlighted in this chapter yet."
+    },
+    "controls": {
+      "label": "Reading settings",
+      "typeSize": "Type size",
+      "typeSizeStep": "Type size {size}",
+      "lineSpacing": "Line spacing",
+      "lineSpacingStep": "Line spacing {step, number}",
+      "appearance": "Appearance",
+      "appearances": {
+        "default": "Default",
+        "paper": "Paper"
+      },
+      "darkNote": "Dark reading uses the night palette.",
+      "theme": "Theme",
+      "themes": {
+        "light": "Light",
+        "dark": "Dark",
+        "system": "System"
+      }
+    },
+    "dock": {
+      "tabsLabel": "Dock tabs",
+      "tabs": {
+        "chat": "Chat",
+        "notes": "Notes",
+        "review": "Review"
+      },
+      "panels": {
+        "chat": "Chat panel",
+        "notes": "Notes panel",
+        "review": "Review panel"
+      },
+      "closePanel": "Close panel",
+      "sheetDescription": "Study surfaces for this book, as a bottom sheet."
+    }
+  },
+  "review": {
+    "title": "Review",
+    "regionLabel": "review",
+    "summaryLabel": "review summary",
+    "retry": "Retry",
+    "tryAgain": "Try again",
+    "loadingDue": "Loading your due reviews…",
+    "nothingDue": "Nothing due right now.",
+    "backToLibrary": "Back to library",
+    "sessionComplete": "Session complete",
+    "reviewedTotal": "Reviewed {count, plural, one {# card} other {# cards}}.",
+    "shortTermRemaining": "{count, number} still in short-term review",
+    "doneForToday": "Done for today",
+    "doneForTodayBody": "You’ve finished this session. More cards are still due when you want them.",
+    "keepGoing": "Keep going",
+    "continueReading": "Continue reading {title}",
+    "itemType": "{type, select, cloze {cloze} free_recall {free_recall} other {{type}}}",
+    "openInBook": "Open in book",
+    "fromNote": "From “{title}”",
+    "noteChanged": "Your note changed",
+    "resetConfirm": "Reset this card’s schedule?",
+    "resetting": "Resetting…",
+    "confirmReset": "Confirm reset",
+    "resetSchedule": "Reset schedule",
+    "gradeLabel": "Grade your recall",
+    "reveal": "Reveal answer",
+    "grades": {
+      "again": "Again",
+      "hard": "Hard",
+      "good": "Good",
+      "easy": "Easy"
+    },
+    "intervals": {
+      "minute": "~1m",
+      "tenMinutes": "~10m",
+      "hour": "~1h",
+      "day": "~1d",
+      "fourDays": "~4d",
+      "twoWeeks": "~2w",
+      "month": "~1mo",
+      "fourMonths": "~4mo",
+      "year": "~1y"
+    },
+    "editor": {
+      "question": "Question",
+      "answer": "Answer",
+      "save": "Save",
+      "saving": "Saving…"
+    },
+    "heatmap": {
+      "groupLabel": "study activity heatmap, last {weeks, number} weeks",
+      "window": "Last {weeks, number} weeks",
+      "less": "Less",
+      "more": "More",
+      "activity": "{reviews, plural, one {# review} other {# reviews}} · {pages, plural, one {# page} other {# pages}}"
+    },
+    "stats": {
+      "label": "study stats",
+      "title": "Study activity",
+      "hide": "Hide stats",
+      "show": "Show stats",
+      "studied": "Studied <figure>{studied, number}</figure> of the last <window>{days, number}</window> days",
+      "reviews": "reviews",
+      "pages": "pages"
+    }
+  },
+  "notes": {
+    "title": "Notes",
+    "regionLabel": "notes",
+    "download": "Download notes",
+    "bookFilter": "Book",
+    "allBooks": "All books",
+    "filteredBy": "Filtered by",
+    "clearFilter": "Clear filter",
+    "loading": "Loading your notes…",
+    "empty": {
+      "tag": "No notes with that tag.",
+      "book": "No notes from this book yet.",
+      "all": "No notes yet. Open a book and select a passage to start one."
+    },
+    "filterByTag": "Filter by {tag}",
+    "anchorStatus": "{status, select, active {active} stale {stale} orphaned {orphaned} other {{status}}}",
+    "detail": {
+      "tooLong": "This note is too long to save.",
+      "backToNotes": "Back to your notes",
+      "loading": "Loading the note…",
+      "regionLabel": "note",
+      "titleLabel": "Title",
+      "body": "Body",
+      "edit": "Edit",
+      "preview": "Preview",
+      "tags": "Tags",
+      "tagsPlaceholder": "comma, separated, tags",
+      "save": "Save",
+      "saving": "Saving…",
+      "deleteConfirm": "Delete this note?",
+      "deleting": "Deleting…",
+      "confirmDelete": "Confirm delete",
+      "delete": "Delete",
+      "review": "Review",
+      "anchors": "Anchored passages",
+      "noAnchors": "No highlights anchored to this note.",
+      "orphaned": "This passage is no longer in the book.",
+      "jump": "Jump to passage",
+      "backlinks": "Backlinks",
+      "noBacklinks": "No notes link here yet."
+    },
+    "capture": {
+      "label": "Capture highlight",
+      "highlight": "Highlight",
+      "note": "Note",
+      "highlightNote": "Highlight + note",
+      "explain": "Explain",
+      "ask": "Ask",
+      "createCard": "Create card",
+      "more": "More capture actions"
+    },
+    "suggestions": {
+      "label": "Card suggestions",
+      "noneForPassage": "No cards for this passage.",
+      "allHandled": "All suggestions handled.",
+      "question": "Question",
+      "answer": "Answer",
+      "accept": "Accept",
+      "edit": "Edit",
+      "discard": "Discard",
+      "addToReview": "Add to review",
+      "generating": "Generating…",
+      "inReview": "{count, plural, one {# card} other {# cards}} in review from this note",
+      "alreadyInReview": "That card is already in review — re-promoting the same text never duplicates it.",
+      "noneForNote": "No cards could be grounded in this note."
     }
   },
   "checkpoint": {

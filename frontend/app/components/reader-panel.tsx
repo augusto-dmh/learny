@@ -24,6 +24,7 @@
  */
 
 import { X } from "lucide-react";
+import { useLocale, useTranslations } from "next-intl";
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 
 import {
@@ -59,17 +60,7 @@ export type DockTab = "chat" | "notes" | "review";
 /** Every value `?panel=` may write: strip tabs plus Ask/Teach aliases. */
 export type PanelQuery = DockTab | PanelMode;
 
-const TABS: { value: DockTab; label: string }[] = [
-  { value: "chat", label: "Chat" },
-  { value: "notes", label: "Notes" },
-  { value: "review", label: "Review" },
-];
-
-const TAB_TITLES: Record<DockTab, string> = {
-  chat: "Chat panel",
-  notes: "Notes panel",
-  review: "Review panel",
-};
+const TABS: readonly DockTab[] = ["chat", "notes", "review"];
 
 const LAST_CHAT_MODE_KEY = "learny.chat-mode.v1";
 
@@ -184,12 +175,13 @@ function panelFor(
  * tab, not a "0" — a zero here would be a scoreboard, and the dock keeps no score.
  */
 function TabCount({ value }: { value?: number | null }) {
+  const locale = useLocale();
   if (!value) {
     return null;
   }
   return (
     <span className="ml-1.5 rounded-4xl bg-secondary px-1.5 text-xs font-normal text-secondary-foreground">
-      {value}
+      {new Intl.NumberFormat(locale).format(value)}
     </span>
   );
 }
@@ -224,6 +216,8 @@ export function ReaderPanel({
   /** Section currently on screen; Tutor Start defaults the picker to it. */
   currentAnchor?: string | null;
 }) {
+  const t = useTranslations("reader.dock");
+  const tCommon = useTranslations("common");
   // Bumped per surface to tell a panel to re-read which conversation is active;
   // creating one mid-thread deliberately does not bump anything, or the panel
   // would remount in the middle of the message that created it.
@@ -367,8 +361,8 @@ export function ReaderPanel({
   const body = (
     <>
       <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
-        <div role="tablist" aria-label="Dock tabs" className="flex gap-1">
-          {TABS.map(({ value, label }) => (
+        <div role="tablist" aria-label={t("tabsLabel")} className="flex gap-1">
+          {TABS.map((value) => (
             <button
               key={value}
               type="button"
@@ -382,7 +376,7 @@ export function ReaderPanel({
                   : "text-muted-foreground hover:bg-accent/50",
               )}
             >
-              {label}
+              {t(`tabs.${value}`)}
               <TabCount value={counts[value]} />
             </button>
           ))}
@@ -392,7 +386,7 @@ export function ReaderPanel({
             type="button"
             variant="ghost"
             size="icon-sm"
-            aria-label="Close panel"
+            aria-label={t("closePanel")}
             onClick={onClose}
           >
             <X />
@@ -465,17 +459,15 @@ export function ReaderPanel({
           className="max-h-[85svh] gap-0 p-0 motion-reduce:animate-none motion-reduce:transition-none"
         >
           <SheetHeader className="sr-only">
-            <SheetTitle>{TAB_TITLES[tab]}</SheetTitle>
-            <SheetDescription>
-              Study surfaces for this book, as a bottom sheet.
-            </SheetDescription>
+            <SheetTitle>{t(`panels.${tab}`)}</SheetTitle>
+            <SheetDescription>{t("sheetDescription")}</SheetDescription>
           </SheetHeader>
           <Button
             type="button"
             variant="ghost"
             className="absolute top-3 right-3 z-10 size-11"
             style={readControlMinStyle}
-            aria-label="Close"
+            aria-label={tCommon("close")}
             onClick={onClose}
           >
             <X />
@@ -507,11 +499,12 @@ function ReaderPanelFrame({
   className: string;
   children: ReactNode;
 }) {
+  const t = useTranslations("reader.dock");
   return (
     <aside
       data-testid="reader-panel"
       data-tab={tab}
-      aria-label={TAB_TITLES[tab]}
+      aria-label={t(`panels.${tab}`)}
       className={className}
     >
       {children}

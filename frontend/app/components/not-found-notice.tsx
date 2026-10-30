@@ -9,6 +9,8 @@
  * reader who is told "not in this book" would wrongly stop looking.
  */
 
+import { useTranslations } from "next-intl";
+
 import { type AnswerStatus } from "@/app/lib/streaming";
 
 /** Whether a status is one of the two not-found outcomes. */
@@ -17,11 +19,10 @@ export function isNotFound(status: AnswerStatus | null): boolean {
 }
 
 export function NotFoundNotice({ status }: { status: AnswerStatus }) {
+  const t = useTranslations("chat.notFound");
   return (
     <p data-testid="not-found" className="text-muted-foreground">
-      {status === "not_found_in_scope"
-        ? "That was not found in the part of the book this conversation covers. It may be answered elsewhere in the book."
-        : "That was not found in this book."}
+      {status === "not_found_in_scope" ? t("inScope") : t("inSource")}
     </p>
   );
 }

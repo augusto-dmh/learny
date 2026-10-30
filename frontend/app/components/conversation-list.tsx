@@ -22,6 +22,7 @@
  */
 
 import { Check, Pencil, Trash2, X } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { useCallback, useEffect, useState } from "react";
 
 import {
@@ -55,6 +56,8 @@ export function ConversationList({
   onNew: () => void;
   onDeleted?: (conversationId: string) => void;
 }) {
+  const t = useTranslations("chat.conversations");
+  const tCommon = useTranslations("common");
   const errorMessage = useErrorMessage();
   const [rows, setRows] = useState<ConversationSummaryView[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -152,13 +155,13 @@ export function ConversationList({
   );
 
   return (
-    <section aria-label="conversations" className="space-y-2 border-b px-3 py-2">
+    <section aria-label={t("regionLabel")} className="space-y-2 border-b px-3 py-2">
       <div className="flex items-center justify-between gap-2">
         <h2 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-          Conversations
+          {t("heading")}
         </h2>
         <Button type="button" size="sm" variant="ghost" onClick={onNew}>
-          New conversation
+          {t("new")}
         </Button>
       </div>
 
@@ -169,9 +172,9 @@ export function ConversationList({
       ) : null}
 
       {rows === null ? (
-        <p className="text-xs text-muted-foreground">Loading…</p>
+        <p className="text-xs text-muted-foreground">{tCommon("loading")}</p>
       ) : rows.length === 0 ? (
-        <p className="text-xs text-muted-foreground">No conversations yet.</p>
+        <p className="text-xs text-muted-foreground">{t("empty")}</p>
       ) : (
         <ul className="space-y-1">
           {rows.map((row) => (
@@ -185,7 +188,7 @@ export function ConversationList({
               {renamingId === row.id ? (
                 <>
                   <input
-                    aria-label="New title"
+                    aria-label={t("newTitle")}
                     value={draftTitle}
                     onChange={(event) => setDraftTitle(event.target.value)}
                     className="min-w-0 flex-1 rounded-md border bg-background px-2 py-1 text-sm"
@@ -194,7 +197,7 @@ export function ConversationList({
                     type="button"
                     size="icon-sm"
                     variant="ghost"
-                    aria-label="Save title"
+                    aria-label={t("saveTitle")}
                     disabled={busyId === row.id || draftTitle.trim() === ""}
                     onClick={() => void handleRename(row.id)}
                   >
@@ -204,7 +207,7 @@ export function ConversationList({
                     type="button"
                     size="icon-sm"
                     variant="ghost"
-                    aria-label="Cancel rename"
+                    aria-label={t("cancelRename")}
                     onClick={() => setRenamingId(null)}
                   >
                     <X />
@@ -214,21 +217,21 @@ export function ConversationList({
                 <>
                   <button
                     type="button"
-                    aria-label={`Resume ${row.title}`}
+                    aria-label={t("resume", { title: row.title })}
                     aria-current={row.id === activeConversationId || undefined}
                     onClick={() => onResume(row)}
                     className="min-w-0 flex-1 truncate text-left hover:underline"
                   >
                     {row.title}{" "}
                     <span className="text-xs text-muted-foreground">
-                      ({row.turn_count} turns)
+                      {t("turns", { count: row.turn_count })}
                     </span>
                   </button>
                   <Button
                     type="button"
                     size="icon-sm"
                     variant="ghost"
-                    aria-label={`Rename ${row.title}`}
+                    aria-label={t("rename", { title: row.title })}
                     onClick={() => {
                       setRenamingId(row.id);
                       setDraftTitle(row.title);
@@ -240,7 +243,7 @@ export function ConversationList({
                     type="button"
                     size="icon-sm"
                     variant="ghost"
-                    aria-label={`Delete ${row.title}`}
+                    aria-label={t("delete", { title: row.title })}
                     disabled={busyId === row.id}
                     onClick={() => void handleDelete(row.id)}
                   >
@@ -262,7 +265,7 @@ export function ConversationList({
           disabled={loadingMore}
           onClick={() => void handleShowMore()}
         >
-          {loadingMore ? "Loading…" : "Show older conversations"}
+          {loadingMore ? tCommon("loading") : t("showOlder")}
         </Button>
       ) : null}
     </section>

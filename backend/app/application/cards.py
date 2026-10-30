@@ -74,7 +74,7 @@ from app.domain.entities import (
     QuizItemStatus,
     QuizItemType,
     QuizSection,
-    TokenUsage,
+    SuggestResult,
     User,
 )
 from app.domain.ports import (
@@ -140,7 +140,7 @@ def _validated_text(value: str, field: str, max_chars: int) -> str:
     return text
 
 
-def _debit_suggest(budget: DailyBudget | None, user_id: UUID, usage: TokenUsage | None) -> None:
+def _debit_suggest(budget: DailyBudget | None, user_id: UUID, result: SuggestResult) -> None:
     """Debit a completed suggest call's usage to the caller's day (AD-341/PRICE-03).
 
     Runs after the port returned — a refused or failed call debits nothing — and
@@ -148,11 +148,17 @@ def _debit_suggest(budget: DailyBudget | None, user_id: UUID, usage: TokenUsage 
     resolution). USD only: unlike the ask/teach free-tier kinds there is **no**
     integer counter here (AD-341 invents no suggest cap), so a call with no
     reported usage (the deterministic adapters) writes nothing. A ``budget`` of
-    ``None`` (compositions that never wired the ledger) debits nothing.
+    ``None`` (compositions that never wired the ledger) debits nothing, and a
+    call served on the learner's own key (``user_keyed``) prices at 0 USD
+    (ADR-0033).
     """
     if budget is None:
         return
-    budget.record(user_id, usd_micros=budget.usage_micros(usage), kind=KIND_GENERATION)
+    budget.record(
+        user_id,
+        usd_micros=budget.usage_micros(result.usage, user_keyed=result.user_keyed),
+        kind=KIND_GENERATION,
+    )
 
 
 class SuggestCards:
@@ -206,7 +212,7 @@ class SuggestCards:
         result = self._generation.suggest_cards(section, anchor.quote_exact, self._max_suggestions)
         # The provider call completed — its tokens are spent whether or not any
         # candidate survives the QC below, so the debit lands before filtering.
-        _debit_suggest(self._budget, user.id, result.usage)
+        _debit_suggest(self._budget, user.id, result)
         section_text = _section_text(section)
         survivors = [c for c in result.candidates if _passes_qc(c, section_text)]
         return survivors[: self._max_suggestions]
@@ -557,7 +563,7 @@ class SuggestNoteCards:
         )
         # Debit before QC for the same reason as the highlight path: the call's
         # tokens are spent whether or not a candidate survives (AD-341).
-        _debit_suggest(self._budget, user.id, result.usage)
+        _debit_suggest(self._budget, user.id, result)
         survivors = [c for c in result.candidates if note_card_passes_qc(c, note.body_markdown)]
         return survivors[: self._max_suggestions]
 
@@ -761,7 +767,7 @@ class RefreshNoteCards:
         )
         # The regeneration call completed; it debits like every other suggest call
         # (AD-341), to the note's owner — the worker runs with no user in hand.
-        _debit_suggest(self._budget, note.user_id, result.usage)
+        _debit_suggest(self._budget, note.user_id, result)
         candidates = result.candidates
         survivors = [c for c in candidates if note_card_passes_qc(c, note.body_markdown)]
         embeddings = (

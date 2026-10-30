@@ -17,6 +17,7 @@
  */
 
 import { useParams, useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { Suspense } from "react";
 
 import { ChapterReader } from "@/app/components/chapter-reader";
@@ -24,9 +25,10 @@ import { ChapterReader } from "@/app/components/chapter-reader";
 export default function ReadPage() {
   const router = useRouter();
   const params = useParams<{ id: string }>();
+  const t = useTranslations("common");
   return (
     <main className="flex h-svh flex-col overflow-y-auto p-4">
-      <Suspense fallback={<p className="text-muted-foreground">Loading…</p>}>
+      <Suspense fallback={<p className="text-muted-foreground">{t("loading")}</p>}>
         <ChapterReader
           sourceId={params.id}
           onRequireAuth={() => router.replace("/login")}

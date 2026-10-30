@@ -30,6 +30,7 @@
  */
 
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import { useMemo } from "react";
 
 import { AnchorStatusBadge } from "@/app/components/notes/anchor-status-badge";
@@ -50,6 +51,7 @@ export function MarginRail({
   chapterAnchors: string[];
   onJump: (anchor: string) => void;
 }) {
+  const t = useTranslations("reader.rail");
   const entries = useMemo(() => {
     // Position in the chapter, and membership of it, in one lookup.
     const order = new Map(chapterAnchors.map((anchor, index) => [anchor, index]));
@@ -67,17 +69,17 @@ export function MarginRail({
   return (
     <aside
       data-testid="margin-rail"
-      aria-label="Chapter annotations"
+      aria-label={t("label")}
       className="mt-6 lg:mt-0 lg:w-56 lg:shrink-0"
     >
       <details open>
         <summary className="cursor-pointer py-2 text-xs font-medium text-muted-foreground">
-          In this chapter
+          {t("heading")}
         </summary>
         {entries.length === 0 ? (
           // An empty column reads as a rendering bug; say so instead (CAP-23).
           <p className="px-1 py-2 text-xs text-muted-foreground">
-            Nothing highlighted in this chapter yet.
+            {t("empty")}
           </p>
         ) : (
           <ul className="flex flex-col gap-2 py-1">

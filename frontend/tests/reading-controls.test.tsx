@@ -22,6 +22,8 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { ChapterFlow } from "../app/components/chapter-reader";
 import { ReadingControls } from "../app/components/reading-controls";
 import type { ChapterView } from "../app/lib/reading";
+import { expectNoEnglishCopy } from "./i18n-copy";
+import { setTestLocale } from "./setup-intl";
 
 // next-themes is mocked with a controllable theme so the dark-mode branch and
 // the `setTheme` calls are observable without a real provider.
@@ -204,5 +206,48 @@ describe("Paper appearance on the reader container (RD-19/20)", () => {
     } finally {
       document.documentElement.classList.remove("dark");
     }
+  });
+});
+
+describe("ReadingControls in pt-BR", () => {
+  it("renders in pt-BR", () => {
+    setTestLocale("pt-BR");
+    theme.resolved = "dark";
+    const onSizeChange = vi.fn();
+    const onLeadingChange = vi.fn();
+    render(
+      <ReadingControls
+        size={19}
+        leading={1.6}
+        appearance="default"
+        onSizeChange={onSizeChange}
+        onLeadingChange={onLeadingChange}
+        onAppearanceChange={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Ajustes de leitura" }));
+
+    const popover = screen.getByRole("dialog");
+    for (const label of ["Tamanho do texto", "Espaçamento entre linhas", "Aparência", "Tema"]) {
+      expect(within(popover).getByText(label)).toBeTruthy();
+    }
+    for (const name of ["Padrão", "Papel", "Claro", "Escuro", "Sistema"]) {
+      expect(within(popover).getByRole("button", { name })).toBeTruthy();
+    }
+    expect(
+      within(popover).getByText("A leitura no modo escuro usa a paleta noturna."),
+    ).toBeTruthy();
+
+    // Steps are named and shown with the locale's number rules (decimal comma).
+    fireEvent.click(within(popover).getByRole("button", { name: "Tamanho do texto 23" }));
+    expect(onSizeChange).toHaveBeenCalledWith(23);
+    const spacing = within(popover).getByRole("button", {
+      name: "Espaçamento entre linhas 1,8",
+    });
+    expect(spacing.textContent).toBe("1,8");
+    fireEvent.click(spacing);
+    expect(onLeadingChange).toHaveBeenCalledWith(1.8);
+
+    expectNoEnglishCopy(popover.textContent ?? "", "reader.controls");
   });
 });

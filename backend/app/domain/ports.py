@@ -770,6 +770,15 @@ class GenerationPort(Protocol):
     turn. Adapters that interpolate them do so in the **user** turn, never the
     system prompt. Answer turns omit them even when the kwargs are passed.
 
+    ``response_language`` is the language the learner's interface asks the reply
+    to be written in (``"pt-BR"``), or ``None`` for English, which sends nothing
+    so the request stays byte-identical. An adapter that honors it appends a
+    fixed per-language instruction of its own to the **user** turn, never the
+    system prompt, and never interpolates caller text; an unknown value adds
+    nothing. Evidence and citations stay in the book's language, and the
+    whole-reply not-found sentinel is unaffected. Every caller passes it; an
+    adapter that cannot write prose (the extractive default) ignores it.
+
     ``model`` is the adapter's stable model identity. It must be readable
     without calling ``generate`` because the not-found short-circuit reports a
     model identity while never invoking generation (QA-04 + QA-13).
@@ -787,6 +796,7 @@ class GenerationPort(Protocol):
         target_section_path: tuple[str, ...] | None = None,
         tutor_phase: str | None = None,
         hint_level: str | None = None,
+        response_language: str | None = None,
     ) -> GeneratedAnswer:
         """Generate a response to ``message`` grounded in ``evidence``.
 
@@ -809,6 +819,7 @@ class GenerationPort(Protocol):
         target_section_path: tuple[str, ...] | None = None,
         tutor_phase: str | None = None,
         hint_level: str | None = None,
+        response_language: str | None = None,
     ) -> Iterator[AnswerStreamEvent]:
         """Stream the same response as :meth:`generate`, incrementally (GEN-12).
 

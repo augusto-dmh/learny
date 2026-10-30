@@ -77,6 +77,7 @@ from app.infrastructure.web.dependencies import (
     get_post_conversation_turn,
     get_read_conversation,
     get_rename_conversation,
+    get_response_language,
     get_start_conversation,
 )
 from app.infrastructure.web.rate_limit import rate_limit_conversations, rate_limit_quiz
@@ -488,6 +489,7 @@ def post_conversation_turn(
     conversation_id: UUID,
     user: Annotated[User, Depends(get_authenticated_user)],
     service: Annotated[PostConversationTurn, Depends(get_post_conversation_turn)],
+    response_language: Annotated[str | None, Depends(get_response_language)],
     body: TurnRequest,
 ) -> ConversationTurnView:
     """Run and persist one grounded turn (201); 404/409/422/429/502 per the ACs.
@@ -499,7 +501,8 @@ def post_conversation_turn(
     conversation's scope, and either composes a grounded answer or the explicit
     not-found outcome. A generation failure surfaces as ``AnswerGenerationFailed`` →
     502, with the question kept as a ``failed`` turn (AD-262), and a turn-index race
-    loses with ``ConversationTurnConflict`` → 409.
+    loses with ``ConversationTurnConflict`` → 409. The answer is requested in the
+    learner's language: the stored locale, else ``Accept-Language``, else English.
     """
     turn = service(
         user=user,
@@ -507,6 +510,7 @@ def post_conversation_turn(
         message=body.message,
         mode=body.mode,
         origin=body.origin,
+        response_language=response_language,
     )
     return ConversationTurnView.from_turn(turn)
 
@@ -523,6 +527,7 @@ def post_conversation_turn_stream(
     conversation_id: UUID,
     user: Annotated[User, Depends(get_authenticated_user)],
     service: Annotated[PostConversationTurn, Depends(get_post_conversation_turn)],
+    response_language: Annotated[str | None, Depends(get_response_language)],
     body: TurnRequest,
 ):
     """Stream one grounded turn as UI Message Stream v1 SSE frames (CONV-21).
@@ -544,6 +549,7 @@ def post_conversation_turn_stream(
         message=body.message,
         mode=body.mode,
         origin=body.origin,
+        response_language=response_language,
     )
     return to_sse_response(events)
 

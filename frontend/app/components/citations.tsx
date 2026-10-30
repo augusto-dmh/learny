@@ -35,6 +35,7 @@
 
 import Link from "next/link";
 import { BookOpenIcon, StickyNoteIcon, X } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 
 import { type Citation } from "@/app/lib/citations";
@@ -77,6 +78,7 @@ export function CitationList({
   const select = onSelect ?? setOwnSelected;
   const ownPassageId = useId();
   const passageId = passageIdProp ?? ownPassageId;
+  const t = useTranslations("chat.citations");
 
   if (citations.length === 0) {
     return null;
@@ -88,7 +90,7 @@ export function CitationList({
 
   return (
     <div className="mt-3 space-y-2">
-      <div aria-label="citations" className="flex flex-wrap gap-1.5">
+      <div aria-label={t("regionLabel")} className="flex flex-wrap gap-1.5">
         {citations.map((citation, index) => (
           <CitationChip
             key={citation.chunk_id}
@@ -127,10 +129,11 @@ function CitationChip({
   passageId: string;
   onToggle: () => void;
 }) {
+  const t = useTranslations("chat.citations");
   const isNote = citation.origin === "note";
   const label = isNote
-    ? `Your note: ${citation.note_title ?? ""}`
-    : `Citation: ${citation.section_path.join(" › ")}`;
+    ? t("noteChip", { title: citation.note_title ?? "" })
+    : t("sectionChip", { path: citation.section_path.join(" › ") });
   return (
     <button
       type="button"
@@ -201,12 +204,13 @@ function CitationPassage({
   // the rest of the time.
   useKeyShortcuts({ escape: dismiss }, true);
 
+  const t = useTranslations("chat.citations");
   const isNote = citation.origin === "note";
   const title = citation.note_title ?? "";
   const label = isNote
     ? title
-      ? `Your note — ${title}`
-      : "Your note"
+      ? t("noteTitled", { title })
+      : t("note")
     : citation.section_path.join(" › ");
 
   return (
@@ -222,7 +226,7 @@ function CitationPassage({
           type="button"
           variant="ghost"
           size="icon-sm"
-          aria-label="Close passage"
+          aria-label={t("closePassage")}
           onClick={dismiss}
         >
           <X />
@@ -239,7 +243,7 @@ function CitationPassage({
           className="inline-flex items-center gap-1.5 text-sm text-primary underline-offset-4 hover:underline"
         >
           <StickyNoteIcon className="size-3.5" />
-          Open note
+          {t("openNote")}
         </Link>
       ) : onShowInBook ? (
         <button
@@ -252,7 +256,7 @@ function CitationPassage({
           className="inline-flex items-center gap-1.5 text-sm text-primary underline-offset-4 hover:underline"
         >
           <BookOpenIcon className="size-3.5" />
-          Show in book
+          {t("showInBook")}
         </button>
       ) : (
         <Link
@@ -260,7 +264,7 @@ function CitationPassage({
           className="inline-flex items-center gap-1.5 text-sm text-primary underline-offset-4 hover:underline"
         >
           <BookOpenIcon className="size-3.5" />
-          Open in book
+          {t("openInBook")}
         </Link>
       )}
     </div>

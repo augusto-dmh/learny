@@ -67,6 +67,7 @@ function defaultHandlers(overrides: Record<string, Handler> = {}) {
     "GET /api/auth/me": () => authedMe.clone(),
     "GET /api/ai/profiles": () => jsonResponse(200, catalog),
     "GET /api/me/ai-profile": () => jsonResponse(200, { profile_id: null }),
+    "GET /api/me/provider-keys": () => jsonResponse(200, { enabled: false, providers: [] }),
     ...overrides,
   };
 }

@@ -16,6 +16,7 @@
  */
 
 import { ChevronDownIcon } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { useEffect, useRef, useState } from "react";
 
 import { Shimmer } from "@/components/ai-elements/shimmer";
@@ -34,9 +35,10 @@ import {
  * the request still in flight toward the same search.
  */
 export function AnswerPhaseIndicator() {
+  const t = useTranslations("chat.phase");
   return (
     <p role="status" className="text-sm">
-      <Shimmer as="span">Searching the book…</Shimmer>
+      <Shimmer as="span">{t("searching")}</Shimmer>
     </p>
   );
 }
@@ -58,6 +60,7 @@ export function ReasoningRegion({
   text: string;
   thinking: boolean;
 }) {
+  const t = useTranslations("chat.phase");
   const [open, setOpen] = useState(thinking);
 
   // Collapse exactly once, on the transition out of thinking (the first answer
@@ -71,15 +74,15 @@ export function ReasoningRegion({
   }, [thinking]);
 
   return (
-    <section aria-label="reasoning" className="mb-2">
+    <section aria-label={t("reasoningLabel")} className="mb-2">
       <Collapsible open={open} onOpenChange={setOpen}>
         <CollapsibleTrigger className="group inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground">
           {thinking ? (
             <Shimmer as="span" className="text-xs">
-              Thinking…
+              {t("thinking")}
             </Shimmer>
           ) : (
-            <span>Thought process</span>
+            <span>{t("thoughtProcess")}</span>
           )}
           <ChevronDownIcon
             aria-hidden

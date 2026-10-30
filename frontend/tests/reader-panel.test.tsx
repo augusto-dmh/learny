@@ -464,7 +464,7 @@ describe("ReaderPanel conversation list", () => {
     const rows = screen.getAllByRole("button", { name: /^Resume / });
     expect(rows.map((row) => row.textContent?.trim())).toEqual([
       "Chapter 2 (3 turns)",
-      "Ada Lovelace (1 turns)",
+      "Ada Lovelace (1 turn)",
     ]);
   });
 
