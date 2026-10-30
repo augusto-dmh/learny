@@ -18,7 +18,9 @@ from pydantic import ValidationError
 from app.core.config import Settings
 from app.infrastructure.providers.profiles import (
     LEGACY_PROFILE_ID,
+    USER_KEY_PROVIDERS,
     GenerationProfileSettings,
+    offered_providers,
     resolve_generation_profiles,
 )
 
@@ -502,3 +504,45 @@ def test_a_binding_that_matches_its_provider_resolves(overrides: dict[str, Any])
     ids = [profile.id for profile in resolve_generation_profiles(settings)]
 
     assert ids == ["house-local", "byok-claude"]
+
+
+# --- The hosted declaration never widens the offer ---------------------------------
+
+
+def test_hosted_flags_offer_only_the_canonical_providers(monkeypatch) -> None:
+    """With the hosted flags on, the registry offers exactly the three canonical
+    providers, each binding still pinned to its canonical host, and a lookalike
+    host still fails startup - the declaration changes whether keys are readable,
+    never what may be offered."""
+    monkeypatch.setenv("LEARNY_HOSTED_INSTANCE", "true")
+    monkeypatch.setenv("LEARNY_HOSTED_BYOK_ENABLED", "true")
+
+    bindings = [
+        dict(_USER_KEY_ONLY),
+        dict(
+            _USER_KEY_ONLY,
+            id="byok-gpt",
+            kind="openai-compatible",
+            grounding="prompt-cited",
+            user_key_provider="openai",
+            base_url="https://api.openai.com/v1",
+        ),
+        dict(
+            _USER_KEY_ONLY,
+            id="byok-gemini",
+            kind="openai-compatible",
+            grounding="prompt-cited",
+            user_key_provider="gemini",
+            base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+        ),
+    ]
+    resolved = resolve_generation_profiles(_settings_with_profiles([_HOUSE_LOCAL, *bindings]))
+
+    assert offered_providers(resolved) == ("anthropic", "openai", "gemini")
+    assert USER_KEY_PROVIDERS == ("anthropic", "openai", "gemini")
+
+    lookalike = dict(
+        bindings[2], base_url="https://generativelanguage.googleapis.com.evil.example/v1beta/"
+    )
+    with pytest.raises(ValueError, match="would send them elsewhere"):
+        resolve_generation_profiles(_settings_with_profiles([_HOUSE_LOCAL, lookalike]))

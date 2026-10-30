@@ -45,6 +45,7 @@ from app.infrastructure.web.dependencies import (
     build_provider_credential_repository,
     evict_learner_adapters,
     get_authenticated_user,
+    hosted_declaration,
     key_bound_profiles,
     offered_key_providers,
 )
@@ -107,9 +108,15 @@ class ProviderKeyView(BaseModel):
 
 
 class ProviderKeysView(BaseModel):
-    """The whole keys section: whether it exists here, and its provider rows."""
+    """The whole keys section: whether it exists here, and its provider rows.
+
+    ``hosted`` is the instance's own declaration (not secret: the section's
+    existence is already instance-visible) — the disclosure copy keys off it
+    wherever the section renders.
+    """
 
     enabled: bool
+    hosted: bool
     providers: list[ProviderKeyView]
 
 
@@ -173,10 +180,11 @@ def list_provider_keys(
     """
     repo = build_provider_credential_repository(conn)
     if repo is None:
-        return ProviderKeysView(enabled=False, providers=[])
+        return ProviderKeysView(enabled=False, hosted=hosted_declaration(), providers=[])
     stored = {credential.provider: credential for credential in repo.list_for_user(user.id)}
     return ProviderKeysView(
         enabled=True,
+        hosted=hosted_declaration(),
         providers=[_view(provider, stored.get(provider)) for provider in offered_key_providers()],
     )
 

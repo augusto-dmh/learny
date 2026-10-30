@@ -136,9 +136,136 @@ def test_disabled_feature(
     deleted = auth_client.delete(f"{_BASE}/anthropic", headers=headers)
 
     assert listed.status_code == 200
-    assert listed.json() == {"enabled": False, "providers": []}
+    assert listed.json() == {"enabled": False, "hosted": False, "providers": []}
     assert (put.status_code, tested.status_code, deleted.status_code) == (404, 404, 404)
     assert probe.calls == []
+
+
+# --- The hosted gate ---------------------------------------------------------------
+
+
+def test_hosted_without_optin_reads_nothing(
+    auth_client: TestClient,
+    db_conn: Connection,
+    monkeypatch: pytest.MonkeyPatch,
+    probe: _Probe,
+) -> None:
+    """Hosted and not opted in: the surface reads as off and no credential row is read."""
+    import app.infrastructure.learner_keys as learner_keys
+
+    monkeypatch.setenv("LEARNY_HOSTED_INSTANCE", "true")
+    monkeypatch.delenv("LEARNY_HOSTED_BYOK_ENABLED", raising=False)
+    _declare(monkeypatch, [_HOUSE, _CLAUDE])  # KEK set, a binding exists: only the gate is closed
+    built: list[int] = []
+    real_repo = learner_keys.SqlAlchemyProviderCredentialRepository
+
+    class _CountingRepo(real_repo):  # noqa: ANN401 — same signature, records construction
+        def __init__(self, *args: Any, **kwargs: Any) -> None:  # noqa: ANN401
+            built.append(1)
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(learner_keys, "SqlAlchemyProviderCredentialRepository", _CountingRepo)
+    _, headers = _learner(auth_client, "hosted-off@example.com")
+
+    listed = auth_client.get(_BASE)
+    put = _put(auth_client, headers, _KEY)
+    tested = auth_client.post(f"{_BASE}/anthropic/test", headers=headers)
+    deleted = auth_client.delete(f"{_BASE}/anthropic", headers=headers)
+
+    assert listed.status_code == 200
+    assert listed.json() == {"enabled": False, "hosted": True, "providers": []}
+    assert (put.status_code, tested.status_code, deleted.status_code) == (404, 404, 404)
+    assert probe.calls == []
+    assert built == []  # the gate closed before any credential row was read
+
+
+def test_hosted_optin_serves_like_selfhost(
+    auth_client: TestClient, monkeypatch: pytest.MonkeyPatch, probe: _Probe
+) -> None:
+    """Both hosted flags on, KEK + binding: the surface serves exactly as a self-host's."""
+    monkeypatch.setenv("LEARNY_HOSTED_INSTANCE", "true")
+    monkeypatch.setenv("LEARNY_HOSTED_BYOK_ENABLED", "true")
+    _declare(monkeypatch, [_HOUSE, _CLAUDE])
+    _, headers = _learner(auth_client, "hosted-on@example.com")
+
+    put = _put(auth_client, headers, _KEY)
+    body = auth_client.get(_BASE).json()
+    tested = auth_client.post(f"{_BASE}/anthropic/test", headers=headers)
+    deleted = auth_client.delete(f"{_BASE}/anthropic", headers=headers)
+
+    assert put.status_code == 200
+    assert body["enabled"] is True
+    assert body["hosted"] is True
+    assert [row["provider"] for row in body["providers"]] == ["anthropic"]
+    assert body["providers"][0]["configured"] is True
+    assert (tested.status_code, tested.json()) == (200, {"ok": True, "reason": None})
+    assert deleted.status_code == 204
+
+
+def test_byok_flag_needs_hosted_declaration(
+    auth_client: TestClient, monkeypatch: pytest.MonkeyPatch, probe: _Probe
+) -> None:
+    """``LEARNY_HOSTED_BYOK_ENABLED`` alone changes nothing: availability stays KEK + binding."""
+    monkeypatch.delenv("LEARNY_HOSTED_INSTANCE", raising=False)
+    monkeypatch.setenv("LEARNY_HOSTED_BYOK_ENABLED", "true")
+    _declare(monkeypatch, [_HOUSE, _CLAUDE])
+    _, headers = _learner(auth_client, "selfhost-flag@example.com")
+
+    put = _put(auth_client, headers, _KEY)
+    body = auth_client.get(_BASE).json()
+
+    assert put.status_code == 200
+    assert body["enabled"] is True
+    assert body["hosted"] is False
+    assert [row["provider"] for row in body["providers"]] == ["anthropic"]
+
+
+# --- A request body shapes nothing but the key ---------------------------------------
+
+
+def test_extra_body_fields_ignored(
+    auth_client: TestClient, db_conn: Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Extra PUT fields (`base_url`, `model`, ...) never touch what is stored.
+
+    The stored row equals a clean PUT's row in every key-derived column, and no
+    column anywhere carries a submitted value other than the key itself.
+    """
+    _declare(monkeypatch, [_HOUSE, _CLAUDE])
+    user_id, headers = _learner(auth_client, "keys-extra@example.com")
+
+    # The baseline: a clean PUT stores exactly the key. Then the same PUT with
+    # extra fields must store exactly the same thing.
+    plain = _put(auth_client, headers, _KEY)
+    clean_rows = _rows(db_conn, user_id)
+
+    evil_url = "http://169.254.169.254/v1"
+    extra = auth_client.put(
+        f"{_BASE}/anthropic",
+        json={"api_key": _KEY, "base_url": evil_url, "model": "evil-model"},
+        headers=headers,
+    )
+
+    assert plain.status_code == 200, plain.text
+    assert extra.status_code == 200, extra.text
+    assert extra.json()["last4"] == plain.json()["last4"] == _KEY[-4:]
+
+    extra_rows = _rows(db_conn, user_id)
+    assert len(extra_rows) == len(clean_rows) == 1
+    # The stored row holds exactly what a clean PUT stores: the same key comes
+    # back out of the envelope, and no column carries a submitted extra value.
+    repo = SqlAlchemyProviderCredentialRepository(db_conn, SecretsEnvelope(_KEK))
+    stored = repo.get(user_id, "anthropic")
+    assert stored is not None
+    assert stored.last4 == _KEY[-4:]
+    assert repo.reveal(stored) == _KEY
+    for row in extra_rows:
+        for column in row._mapping:
+            value = row._mapping[column]
+            if isinstance(value, (str, bytes)):
+                text = value.decode("utf-8", "ignore") if isinstance(value, bytes) else value
+                assert evil_url not in text
+                assert "evil-model" not in text
 
 
 # --- C9: the list -------------------------------------------------------------------

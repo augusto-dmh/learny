@@ -802,13 +802,36 @@ def _offered_providers() -> tuple[str, ...]:
     return offered_providers(_generation_profiles())
 
 
+@lru_cache
+def _hosted_byok_locked() -> bool:
+    """The hosted gate: declared hosted without the explicit opt-in.
+
+    ``LEARNY_HOSTED_INSTANCE`` declares this deployment hosted;
+    ``LEARNY_HOSTED_BYOK_ENABLED`` is the post-security-review opt-in. Hosted
+    and not opted in, learner keys read as feature-off everywhere; a self-host
+    ignores the opt-in entirely.
+    """
+    settings = get_settings()
+    return settings.hosted_instance and not settings.hosted_byok_enabled
+
+
+def hosted_declaration() -> bool:
+    """Whether this deployment declares itself hosted.
+
+    Not secret: the keys section exists (or not) for every visitor already, and
+    the disclosure copy keys off this boolean wherever it renders.
+    """
+    return get_settings().hosted_instance
+
+
 def offered_key_providers() -> tuple[str, ...]:
     """The providers a learner may store a key for here; empty when the feature is off.
 
-    Off means no KEK is configured, or no declared profile binds a provider
-    (ADR-0033). The key routes answer 404 for every provider outside this set.
+    Off means no KEK is configured, no declared profile binds a provider
+    (ADR-0033), or the hosted lock is engaged. The key routes answer 404 for
+    every provider outside this set.
     """
-    if _secrets_envelope() is None:
+    if _secrets_envelope() is None or _hosted_byok_locked():
         return ()
     return _offered_providers()
 
@@ -822,7 +845,12 @@ def build_provider_credential_repository(
     conn: Connection,
 ) -> SqlAlchemyProviderCredentialRepository | None:
     """The credential repository on ``conn``, or ``None`` when the feature is off."""
-    access = learner_key_access(conn, _secrets_envelope(), _generation_profiles())
+    access = learner_key_access(
+        conn,
+        _secrets_envelope(),
+        _generation_profiles(),
+        hosted_lock=_hosted_byok_locked(),
+    )
     return access.repo if access is not None else None
 
 
@@ -979,6 +1007,7 @@ def clear_generation_chain_caches() -> None:
     _user_generation_chains.clear()
     _secrets_envelope.cache_clear()
     _offered_providers.cache_clear()
+    _hosted_byok_locked.cache_clear()
     _user_adapters.clear()
     _user_quiz_adapters.clear()
 
