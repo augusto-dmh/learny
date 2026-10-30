@@ -137,7 +137,7 @@ class DailyBudget:
         self._profile_catalogs = profile_catalogs or {}
         self._resolve_serving_profile = resolve_serving_profile
 
-    def assert_generation(self, user_id: UUID, *, kind: str) -> None:
+    def assert_generation(self, user_id: UUID, *, kind: str, user_keyed: bool = False) -> None:
         """Refuse the call unless the operator's pause and the caller's day allow it.
 
         The kill switch short-circuits *before* the ledger is read: a paused
@@ -146,13 +146,21 @@ class DailyBudget:
         govern their own kinds (``ask``: so many turns a day, ``teach_start``: so
         many session starts). Whichever cap trips first refuses with the same
         honest copy — a learner is never told which meter was the one.
+
+        ``user_keyed`` marks a call the learner's own provider key would serve:
+        the house USD cap is then skipped — the operator's wallet is not what the
+        call spends — while the pause, the integer counters, and the route rate
+        limits all stay exactly as they are. They are the rails against abuse,
+        not the operator's spend, and the exemption never bypasses them. A call
+        the learner's key does *not* cover keeps the full assertion: it would
+        spend the operator's money.
         """
         if self._ai_paused:
             raise AiPaused(PAUSED_COPY)
         row = self._repo.get_for_day(user_id, self._clock.now().date())
         if row is None:
             return
-        if row.usd_micros >= self._daily_cap_micros:
+        if not user_keyed and row.usd_micros >= self._daily_cap_micros:
             raise DailyBudgetExhausted(EXHAUSTED_COPY)
         if kind == KIND_ASK and row.ask_count >= self._ask_daily_cap:
             raise DailyBudgetExhausted(EXHAUSTED_COPY)
@@ -181,9 +189,21 @@ class DailyBudget:
         A call served with the learner's own provider key (``user_keyed``) costs
         the house nothing, so it prices at 0 USD whatever it reported (ADR-0033).
         Its call counters still apply: :meth:`record` counts an ask or a teach
-        start whatever the amount.
+        start whatever the amount. The learner-facing estimate is
+        :meth:`estimate_micros` — the same resolution with the zeroing removed.
         """
-        if usage is None or user_keyed:
+        return 0 if user_keyed else self.estimate_micros(usage, profile_id)
+
+    def estimate_micros(self, usage: TokenUsage | None, profile_id: str | None = None) -> int:
+        """Price one call's reported usage for display, whatever the payer.
+
+        One catalog resolution — the serving profile's, through the same shared
+        resolver :meth:`usage_micros` uses — with none of the payer zeroing: this
+        is what a turn persists as its own ``cost_usd_micros`` and what the BYOK
+        policy debits to the learner's monthly ledger. The learner's estimate and
+        the operator's number are one price list seen twice; absent usage is 0.
+        """
+        if usage is None:
             return 0
         prices = self._prices
         if self._resolve_serving_profile is not None:

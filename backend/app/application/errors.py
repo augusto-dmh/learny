@@ -323,6 +323,36 @@ class AiPaused(Exception):
     """
 
 
+class ByokBudgetExhausted(Exception):
+    """The learner's own monthly budget has paused their key.
+
+    Raised by the BYOK policy *before* any provider call, and only for a call the
+    learner's own key would serve — a house-served call is the operator's money
+    and stays under the house rails. ``code`` is the machine-readable marker the
+    web layer carries beside the copy (the frontend renders catalog copy keyed on
+    it, never the English ``detail``); the copy says it is the learner's own
+    monthly budget and that Account is where it changes. The web layer maps this
+    to 429 without a ``Retry-After`` — raising or clearing the budget in Account
+    is the un-pause, and the next request serves.
+    """
+
+    code = "byok_budget"
+
+
+class ByokCorpusLimitExhausted(Exception):
+    """One book has reached the learner's monthly prompt-token ceiling.
+
+    Raised by the BYOK policy before any provider call, and only for a call the
+    learner's own key would serve. ``code`` is the machine-readable marker the
+    web layer carries beside the copy; the copy names the per-book monthly
+    limit. The web layer maps this to 429 without a ``Retry-After`` — the
+    ceiling is a calendar month, so the honest reset signal is the month
+    boundary in the copy, not a seconds hint.
+    """
+
+    code = "byok_corpus_limit"
+
+
 class SourceCountQuotaExceeded(Exception):
     """The caller already owns the maximum number of non-sample sources (DOOR-15).
 
