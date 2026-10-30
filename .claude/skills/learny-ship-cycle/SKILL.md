@@ -1,6 +1,6 @@
 ---
 name: learny-ship-cycle
-description: 'End-to-end orchestrator for one Learny roadmap PR: pick the next cycle from the roadmap, run a tlc-spec-driven cycle auto-selecting recommended options, publish the PR with learny-finalize, run pr-review in a fresh-context subagent, triage every review finding against the code, apply accepted fixes, delete all PR comments, and merge after a single user approval. Use when asked to "ship the next PR", "run the ship cycle", "do the next roadmap cycle end-to-end", or to resume a partially shipped cycle. Not for ad-hoc edits, standalone reviews (use pr-review), or publishing-only work (use learny-finalize).'
+description: 'End-to-end orchestrator for one Learny roadmap PR: pick the next cycle from the roadmap, run a vendored tlc-spec-lean cycle (profile `standard`, 150k budget) auto-selecting recommended options, publish the PR with learny-finalize, run pr-review in a fresh-context subagent, triage every review finding against the code, apply accepted fixes, delete all PR comments, and merge after a single user approval. Use when asked to "ship the next PR", "run the ship cycle", "do the next roadmap cycle end-to-end", or to resume a partially shipped cycle. Not for ad-hoc edits, standalone reviews (use pr-review), or publishing-only work (use learny-finalize).'
 license: CC-BY-4.0
 metadata:
   author: Learny contributors
@@ -9,7 +9,7 @@ metadata:
 
 # Learny Ship Cycle — Orchestration Protocol
 
-Runs one roadmap cycle from "what's the next PR?" to merged, replacing the previous three manual sessions (tlc build → pr-review → triage/cleanup/merge) with one orchestrated pipeline. This skill owns only the glue; the work itself is delegated to `tlc-spec-driven`, `learny-finalize`, and `pr-review` unchanged.
+Runs one roadmap cycle from "what's the next PR?" to merged, replacing the previous three manual sessions (tlc build → pr-review → triage/cleanup/merge) with one orchestrated pipeline. This skill owns only the glue; the work itself is delegated to the repo's vendored `tlc-spec-lean` (profile `standard`, budget 150k), `learny-finalize`, and `pr-review` unchanged.
 
 **Autonomy contract:** the pipeline runs without user prompts except at exactly one gate — merge approval (Stage 7) — plus the escalation rule in Stage 1. Everything else proceeds on the recommended option, logged for audit.
 
@@ -34,8 +34,9 @@ The pipeline is resumable. Check `.specs/.ship-status` first — if it shows an 
 | Observation | Resume at |
 |---|---|
 | Clean `main`, ROADMAP next phase "Not started" | Stage 0 |
-| Cycle branch exists, tlc Execute/Verifier incomplete (`.specs/features/<cycle>/`) | Stage 1 (tlc resume) |
-| Verifier PASS on branch, no open PR | Stage 2 |
+| The cycle's feature folder (`.specs/features/<cycle>/`) has `plan.md` but no `checks.md` | Stage 1 (lean Plan) |
+| The cycle's feature folder has `checks.md` but no `verification.md` | Stage 1 (lean Build/Verify) |
+| Verifier PASS on branch, no open PR — a PASS means `python <skill-dir>/tlc-spec-lean/scripts/validate_verification.py <cycle> --root <repo>` exits 0 | Stage 2 |
 | PR open, no `<!-- learny-review:` comments on it | Stage 3 |
 | PR has review comments, no `.specs/features/<cycle>/review-triage.md` | Stage 4 |
 | `review-triage.md` exists, accepted fixes not yet pushed | Stage 5 |
@@ -48,23 +49,28 @@ Announce the detected stage and the cycle/PR it applies to before proceeding.
 
 1. Require a clean working tree. If dirty, stop and report — never stash or discard.
 2. `git checkout main && git pull`.
-3. Read `.specs/project/ROADMAP.md` and the Handoff section of `.specs/project/STATE.md`. The next cycle is the first ROADMAP row not started; its scope comes from the mapped TDD phases in `docs/tdd/0001-mvp-architecture.md`.
-4. State the chosen cycle, its TDD phase(s), and the intended slice in one short paragraph, then continue — no approval needed.
+3. Read `.specs/project/ROADMAP.md` and the Handoff section of `.specs/project/STATE.md`. The next cycle is the first ROADMAP row not started.
+4. Choose the lane by rule, not by judgement: **Lane S** when the whole change fits in one sentence — about 3 files or fewer, no migration, no new ADR, no new route or screen, and no one-way door. **Lane F** for everything else, including every roadmap row. The cycle never downgrades a lane on its own; if a Lane S change turns out bigger while building, it continues as Lane F and the plan records the switch.
+5. State the chosen cycle, its lane, and the intended slice in one short paragraph, then continue — no approval needed.
 
-## Stage 1 — Plan & Build (tlc-spec-driven)
+## Stage 1 — Plan & Build (tlc-spec-lean, profile `standard`, budget 150k)
 
-Invoke `tlc-spec-driven` for the cycle (Specify → Design → Tasks → Execute per its auto-sizing).
+Invoke the vendored `tlc-spec-lean` for the cycle (Plan → Checks → Build → Verify per its phases). A Lane S change writes only `checks.md` with an `## Intent` paragraph, per the skill's small-change rule; Lane F gets the full plan.
 
-**Auto-decision rule** (replaces the human answering Discuss questions): at every decision point, formulate the options — each with why-recommend AND why-not — pick the recommended one, and record option set, choice, and rationale in the cycle's own plan (`plan.md` `## Assumptions`, or `context.md` for a spec-driven cycle). Only a decision that binds other cycles becomes an `AD-NNN` row under `## Open decisions` in `.specs/project/STATE.md`, which holds nothing per-cycle. The decision must be auditable later without the conversation.
+**Auto-decision rule** (replaces the human answering the skill's questions): at every decision point, formulate the options — each with why-recommend AND why-not — pick the recommended one, and record it in the cycle's `plan.md` `## Assumptions` with `Confirmed? n` (never `y`: `y` is the user's mark for a default they actually saw). One-way doors go in the plan's `## Landing` with their literal shape and the rejected alternative. Only a decision that binds other cycles additionally becomes an `AD-NNN` row under `## Open decisions` in `.specs/project/STATE.md`, which holds nothing per-cycle. The decision must be auditable later without the conversation.
+
+**Door gate (the lean Plan's one stop, owner decision D1).** When the plan is complete, stop once and ask the user one question listing the plan's one-way doors (`## Landing`) and its unconfirmed assumptions. In `auto`/`until` mode the gate is waived by the invocation's standing authorization: record the waiver in the plan itself (the `**Approved**` line quoting the user's standing words is the record) and continue. A Verifier FAIL, a dirty Stage 7 report, or a decision that meets the escalation rule still stops.
 
 **Escalation rule** — ask the user (AskUserQuestion) instead of auto-deciding only when:
 - the decision changes product direction or MVP scope beyond the cycle,
 - it locks in an external dependency/provider that CLAUDE.md or an ADR says needs its own decision, and no clear recommendation exists, or
 - no option is defensible as recommended.
 
-Execute honors the full tlc contract (tests from acceptance criteria, gate per task, atomic commits, mandatory fresh Verifier). A Verifier FAIL stops the pipeline with the report — do not continue to Stage 2.
+Build honors the lean contract: tests written from the checks' claims (never from the implementation), atomic commits, one coherent piece per commit with its check marked complete in `checks.md` in the same commit, and a mandatory fresh Verifier. A Verifier FAIL stops the pipeline with the report — do not continue to Stage 2.
 
-When Execute delegates a phase, set the worker's model per the **Cost discipline** table (build on Opus; Verifier on Opus; never Fable for a sub-agent), write each brief per **Worker briefs — state the goal, not the steps**, and give each worker scoped gate commands (affected module per commit, full suite at phase boundary).
+**Batches (over the budget, owner decision D2).** Lean asks what to do when the handoff arithmetic exceeds the budget; this cycle pre-answers "handoff": split the work at slice boundaries into sequential batches, each its own PR, and record the split in `checks.md`'s `## Handoff`. The Verifier runs scoped to each batch's checks before that batch's PR, and over every check before the last batch's PR.
+
+When Build delegates a phase, set the worker's model per the **Cost discipline** table (build on Opus; Verifier on Opus; never Fable for a sub-agent), write each brief per **Worker briefs — state the goal, not the steps**, and give each worker scoped gate commands (affected module per commit, full suite at phase boundary).
 
 ## Stage 2 — Publish (learny-finalize)
 
@@ -128,6 +134,8 @@ The model policy is the owner's real practice, recorded in the 2026-09-30 harnes
 | Sub-agents | Never Fable |
 
 **Delegation default: inline.** Spawn a sub-agent only for the Verifier, the review lanes, or work that would genuinely swamp the main context. Mechanical stages (0, 6, 8) run inline in the main thread — a sub-agent for a handful of `git`/`gh` calls costs more than it saves.
+
+**One coherent piece per commit.** Each commit carries one coherent piece of the build — a slice or a check's worth — and marks its check complete in `checks.md` in the same commit, so the obligation tracker and the code that satisfies it move together and every commit is reviewable against the claim it closes.
 
 **Fable on the main thread.** Two hard preconditions: the org must allow **30-day data retention** (a zero-retention org gets a 400 on every Fable request, with a valid payload — check this before diagnosing anything else), and Fable's safety classifiers target most cybersecurity content, so security-focused analysis stays on Opus.
 
