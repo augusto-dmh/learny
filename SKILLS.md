@@ -15,10 +15,10 @@ Learny uses skills as project-local playbooks for repeatable research, design, i
 
 **Workflow**
 
-- `tlc-spec-lean` (profile `standard`) plans and builds feature cycles: one reviewed plan with its one-way doors, proof-backed checks, the build, and an independent Verifier. It is a user-level skill today; the next harness cycle vendors it into the repo.
+- `tlc-spec-lean` (profile `standard`) plans and builds feature cycles: one reviewed plan with its one-way doors, proof-backed checks, the build, and an independent Verifier. It is vendored into `.claude/skills/tlc-spec-lean/` with two recorded project deviations: a per-batch Verifier scope and the required `Assisted-by: Claude Code` commit trailer (see `.claude/skills/README.md` for provenance).
 - `pr-review` runs a multi-agent pull-request review (security, requirements, tests, architecture, regression, performance) and posts inline + summary comments via `gh`. Use only when explicitly asked to review a PR.
 - `learny-finalize` applies Learny's branch, commit, verification, and PR conventions.
-- `learny-ship-cycle` orchestrates one full roadmap PR end-to-end: next cycle → Stage 1 plan and build (the skill text still names `tlc-spec-driven`; the next harness cycle rewires it to `tlc-spec-lean` with its door gate) → `learny-finalize` → fresh-context `pr-review` → finding triage (persisted to `review-triage.md`) → fixes → comment cleanup → user-gated merge.
+- `learny-ship-cycle` orchestrates one full roadmap PR end-to-end: next cycle → Stage 0 lane pick (Lane S one-sentence change, Lane F everything else) → Stage 1 plan and build on the vendored `tlc-spec-lean` (door gate before checks, batch splitting over the 150k budget) → `learny-finalize` → fresh-context `pr-review` → finding triage (persisted to `review-triage.md`) → fixes → comment cleanup → user-gated merge.
 
 ## Workflow Shape
 

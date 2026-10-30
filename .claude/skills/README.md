@@ -16,12 +16,37 @@ Source: `https://github.com/tech-leads-club/agent-skills`
 - `create-rfc`
 - `pr-review`
 - `learny-finalize` (Learny-specific publishing conventions)
+- `tlc-spec-lean` (vendored spec skill — provenance below)
 
 Install notes: the architecture/artifact skills were brought in from the Tech
-Leads Club installs used during the first research pass. Feature cycles are
-moving to the user-level `tlc-spec-lean` (the ship-cycle skill is rewired to it
-in the next harness cycle); the vendored spec-driven copy and the skills no
-cycle ever loaded were removed on 2026-10-02 (recoverable from git history).
+Leads Club installs used during the first research pass. `tlc-spec-lean` is
+vendored into this tree (next section); the vendored spec-driven copy and the
+skills no cycle ever loaded were removed on 2026-10-02 (recoverable from git
+history).
+
+### Vendored spec skill: `tlc-spec-lean`
+
+Vendored 2026-10-30 into `.claude/skills/tlc-spec-lean/` from the owner's
+user-level skills directory (source: `C:\Users\augus\.claude\skills\tlc-spec-lean`,
+version `2.1.0`, byte-identical apart from the deviations below). It replaces the
+removed driven copy as the feature-cycle skill; `learny-ship-cycle` Stage 1 and
+`CLAUDE.md` point at it.
+
+Recorded project deviations (in the vendored `SKILL.md` "Learny deviations"
+section):
+
+1. **Per-batch Verifier** — when the build splits over the token budget into
+   sequential batches, the Verifier runs scoped to each batch's checks before
+   that batch's PR, and over every check before the last batch's PR.
+2. **Attribution trailer** — every commit ends with the trailer
+   `Assisted-by: Claude Code`, this repo's recorded exception to the skill's
+   no-agent-trailer rule; CI's `commits` job enforces it.
+
+**Owner action that keeps this the copy that loads:** remove or rename the
+user-level `tlc-spec-lean` directory, then confirm from the client's
+`Base directory` line for the skill that it resolves under this repo's
+`.claude/skills/tlc-spec-lean/` — on this machine the same-named user-level
+copy shadowed the project copy (that is how the old vendored driven copy rotted).
 
 ## Vendored official stack skills
 
