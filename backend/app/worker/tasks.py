@@ -513,14 +513,18 @@ def _learner_quiz_adapter(
 ) -> QuizGenerationPort | None:
     """The quiz adapter built with ``user_id``'s own Anthropic key, or ``None``.
 
-    ``None`` when the feature is off (no KEK, or no profile binds Anthropic),
-    when the learner holds no usable Anthropic key, or when the key cannot be
-    opened. With ``pinned``, only the row with exactly that id may serve: a key
-    replaced since (a new row id) or deleted reads as ``None``.
+    ``None`` when the feature is off (no KEK, no profile binds Anthropic, or
+    the hosted lock is engaged), when the learner holds no usable Anthropic
+    key, or when the key cannot be opened. With ``pinned``, only the row with
+    exactly that id may serve: a key replaced since (a new row id) or deleted
+    reads as ``None``.
     """
     settings = get_settings()
     access = learner_key_access(
-        conn, envelope_from_settings(settings), tuple(settings.generation_profiles)
+        conn,
+        envelope_from_settings(settings),
+        tuple(settings.generation_profiles),
+        hosted_lock=settings.hosted_instance and not settings.hosted_byok_enabled,
     )
     if access is None:
         return None

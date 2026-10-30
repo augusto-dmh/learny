@@ -451,6 +451,23 @@ class Settings(BaseSettings):
     secrets_kek: SecretStr | None = None
     secrets_kek_previous: SecretStr | None = None
 
+    # Learner keys on a hosted instance. ``hosted_instance`` declares this
+    # deployment hosted (it is not secret — the account surface reports it, so
+    # the disclosure can render wherever the keys section exists);
+    # ``hosted_byok_enabled`` is the operator's explicit opt-in, taken only
+    # after the hosted security review, that lets learner keys run here. A
+    # hosted instance without the opt-in reads as feature-off everywhere, and
+    # a self-host ignores the opt-in entirely: availability stays
+    # KEK + bound profile, exactly as before these flags existed.
+    hosted_instance: bool = False
+    hosted_byok_enabled: bool = False
+
+    # Per-learner monthly prompt-token ceiling per source, bounding bulk pumping
+    # of one book through a learner's own key. ``0`` disables the ceiling. The
+    # default sits far above an honest heavy month on one book and far below a
+    # whole-book extraction run.
+    byok_corpus_prompt_token_cap: int = Field(default=4_000_000, ge=0)
+
     @field_validator("secrets_kek", "secrets_kek_previous", mode="before")
     @classmethod
     def _validate_secrets_kek(cls, value: object, info: object) -> object:
