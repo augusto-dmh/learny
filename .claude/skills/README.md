@@ -41,6 +41,9 @@ section):
 2. **Attribution trailer** — every commit ends with the trailer
    `Assisted-by: Claude Code`, this repo's recorded exception to the skill's
    no-agent-trailer rule; CI's `commits` job enforces it.
+3. **Commit contract authority** — the vendored commit gate carries the repo's 11
+   commit types (including `revert`); where it and CI's `commits` job disagree, the
+   repo's checker decides (its scope rule is stricter, kebab-case only).
 
 **Owner action that keeps this the copy that loads:** remove or rename the
 user-level `tlc-spec-lean` directory, then confirm from the client's

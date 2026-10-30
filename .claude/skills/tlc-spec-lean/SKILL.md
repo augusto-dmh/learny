@@ -75,7 +75,7 @@ These hold even if no reference file is read. Each one lives here; the reference
 
 ## Learny deviations
 
-This copy is vendored into the Learny repo so the harness it ships is the harness it runs. Two
+This copy is vendored into the Learny repo so the harness it ships is the harness it runs. The
 owner decisions, recorded in `.specs/project/STATE.md` under Open decisions, override the rules
 above where they say otherwise:
 
@@ -88,6 +88,11 @@ above where they say otherwise:
    ([build.md](references/build.md) "Commit"): CI's `commits` job rejects a commit without it.
    No other agent trailer (`Co-authored-by`, `Made-with`) is allowed, and PR titles, bodies and
    comments carry no attribution at all.
+3. **The repo's commit checker decides the commit contract (owner decision D3).** The vendored
+   gate at `scripts/check_commit.py` is the fast per-commit check; where it and the repo
+   disagree, CI's `backend/scripts/check_commits.py` is authoritative. This copy's type list
+   carries the repo's 11 types including `revert`; the repo checker's scope rule is stricter
+   than the gate's (kebab-case scopes only), so a header this gate passes can still fail CI.
 
 ## Configuration
 

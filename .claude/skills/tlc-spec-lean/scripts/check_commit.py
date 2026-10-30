@@ -33,7 +33,7 @@ import os
 import re
 import sys
 
-TYPES = ["feat", "fix", "refactor", "docs", "test", "style", "perf", "build", "ci", "chore"]
+TYPES = ["feat", "fix", "refactor", "docs", "test", "style", "perf", "build", "ci", "chore", "revert"]
 HEADER_RE = re.compile(r"^(?P<type>\w+)(?:\((?P<scope>[^)]+)\))?(?P<bang>!)?: (?P<desc>.+)$")
 
 
