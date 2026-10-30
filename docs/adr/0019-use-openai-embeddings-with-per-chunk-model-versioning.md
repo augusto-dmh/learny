@@ -1,7 +1,7 @@
 # ADR-019: Use OpenAI Embeddings With Per-Chunk Model Versioning
 
 - **Date**: 2026-07-15
-- **Status**: Accepted
+- **Status**: Accepted; amended 2026-10-29 — see Amendment below
 - **Deciders**: Augusto, Codex
 - **Tags**: architecture, ai, embeddings, retrieval, openai, voyage, versioning
 
@@ -123,6 +123,39 @@ Provider keys stay environment-only; no key is committed.
 - ✅ Zero dependency, zero cost, fully offline.
 - ❌ No semantics in any language — retrieval quality is capped; unacceptable as the
   product retrieval path. Retained only as the CI/local default.
+
+## Amendment (2026-10-29): Self-host local embeddings via OpenAI-compatible runtimes
+
+The OpenAI lock narrows, in place, along the boundary this ADR already drew. A fully
+offline self-host needs local embeddings; a hosted instance never serves them. The
+decision itself stands — per-chunk model versioning, the `EmbeddingPort` seam, the
+retrieval gate — only the provider scope widens, and only for an operator running
+Learny on their own host.
+
+**What changes.** `LEARNY_EMBEDDING_PROVIDER` accepts a third value,
+`openai-compatible`: the same `OpenAIEmbeddingAdapter`, pointed at a self-hosted
+OpenAI-compatible runtime (Ollama `http://localhost:11434/v1`, LM Studio
+`http://localhost:1234/v1`) via `LEARNY_EMBEDDING_BASE_URL`. It is a self-host-only
+wiring: on a hosted instance the setting stays unset, and the per-corpus identity
+guard below is what keeps a mis-set one from silently corrupting a shared corpus.
+
+**What stays.** The per-chunk `embedding_model` column is the recording mechanism —
+the local runtime's vectors are stamped `{model}@{dim}` exactly like OpenAI's. The
+compat kind never sends the OpenAI-only `dimensions` request parameter (local
+runtimes ignore or reject it); instead the runtime's native dimension is validated
+against `LEARNY_EMBEDDING_DIM` on every response, so a mismatched model fails loudly
+at the adapter instead of writing a wrong-shaped vector beside the corpus.
+
+**The guard is the forced re-embed.** The per-chunk stamp was always the promise;
+retrieval now enforces it: a chunk whose stamp differs from the active adapter's
+identity returns no semantic evidence, so a corpus whose vectors came from another
+model or dimension answers lexical-only until re-embedded. A corpus never fuses
+vectors of two identities, in flight or at rest. Changing dimension is an operator
+procedure, not a migration: `python -m app.cli.embedding_status` reports each
+source's state and, when the vector columns do not match the active dimension, prints
+the exact SQL (drop index, clear vectors, resize `corpus_chunks.embedding`,
+`notes.embedding`, `quiz_cards.embedding`, recreate index) and the `reembed.document`
+commands. The whole profile is documented in `docs/ops/local-models.md`.
 
 ## References
 

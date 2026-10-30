@@ -48,3 +48,33 @@ def test_unknown_provider_raises_value_error() -> None:
 
     with pytest.raises(ValueError, match="unknown embedding provider: voyage"):
         build_embedding_adapter(settings)
+
+
+def test_compat_provider_builds_openai_adapter() -> None:
+    # The self-host wiring (ADR-0019 amendment): the same adapter, pointed at the
+    # configured local runtime, with the response-dimension contract instead of the
+    # request parameter — identity stamps the configured model@dim.
+    settings = Settings(
+        _env_file=None,
+        embedding_provider="openai-compatible",
+        embedding_base_url="http://localhost:11434/v1",
+        embedding_model="nomic-embed-text",
+        embedding_dim=768,
+    )
+
+    adapter = build_embedding_adapter(settings)
+
+    assert isinstance(adapter, OpenAIEmbeddingAdapter)
+    assert adapter.model == "nomic-embed-text@768"
+    assert adapter.base_url == "http://localhost:11434/v1"
+
+
+def test_compat_provider_without_base_url_raises_naming_both_variables() -> None:
+    settings = Settings(_env_file=None, embedding_provider="openai-compatible")
+
+    with pytest.raises(ValueError) as excinfo:
+        build_embedding_adapter(settings)
+
+    message = str(excinfo.value)
+    assert "LEARNY_EMBEDDING_PROVIDER" in message
+    assert "LEARNY_EMBEDDING_BASE_URL" in message

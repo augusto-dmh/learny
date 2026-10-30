@@ -11,10 +11,15 @@ real API and is skipped unless ``LEARNY_OPENAI_API_KEY`` is set.
 from __future__ import annotations
 
 import os
+import re
+from types import SimpleNamespace
 
+import httpx
+import openai as openai_sdk
 import pytest
 
 from app.infrastructure.embeddings.openai import OpenAIEmbeddingAdapter
+from app.infrastructure.providers.errors import ProviderUnavailable
 
 _MODEL = "text-embedding-3-large"
 _DIM = 1536
@@ -31,22 +36,30 @@ class _FakeResponse:
 
 
 class _FakeEmbeddingsResource:
-    """Records each ``create`` call; returns one marked vector per input, in order.
+    """Records each ``create`` call verbatim; returns one marked vector per input.
 
     The marker (vector element 0) is ``float(int(text))`` when the input is a
     numeric string, so a caller can assert the returned order matches the input
-    order across concatenated sub-batches.
+    order across concatenated sub-batches. Calls are recorded exactly as passed —
+    a hosted request carries a ``dimensions`` key, a compat-kind request must not,
+    so the absence of the key is the assertable fact. A compat call (no
+    ``dimensions`` key) is served at the fake's native dimension.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, native_dim: int = 768) -> None:
+        self.native_dim = native_dim
         self.calls: list[dict[str, object]] = []
 
-    def create(self, *, model: str, input: list[str], dimensions: int) -> _FakeResponse:
-        self.calls.append({"model": model, "input": list(input), "dimensions": dimensions})
+    def create(self, **kwargs: object) -> _FakeResponse:
+        self.calls.append(kwargs)
+        dim = kwargs.get("dimensions", self.native_dim)
+        assert isinstance(dim, int), "fake needs dimensions or native_dim"
         data = []
-        for text in input:
-            marker = float(int(text)) if text.lstrip("-").isdigit() else 0.0
-            data.append(_FakeData([marker] + [0.0] * (dimensions - 1)))
+        for text in kwargs.get("input", []):
+            marker = (
+                float(int(text)) if isinstance(text, str) and text.lstrip("-").isdigit() else 0.0
+            )
+            data.append(_FakeData([marker] + [0.0] * (dim - 1)))
         return _FakeResponse(data)
 
 
@@ -147,3 +160,131 @@ def test_live_embeds_one_string() -> None:
 
     assert len(vector) == _DIM
     assert any(component != 0.0 for component in vector)
+
+
+# --- Compat kind (ADR-0019 amendment): self-hosted OpenAI-compatible runtimes ----
+
+
+class _ScriptedEmbeddingsResource:
+    """Serves a scripted response (or raises a scripted error) once per call."""
+
+    def __init__(
+        self,
+        *,
+        vectors: list[object] | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        self.vectors = vectors or []
+        self.error = error
+        self.calls: list[dict[str, object]] = []
+
+    def create(self, **kwargs: object) -> _FakeResponse:
+        self.calls.append(kwargs)
+        if self.error is not None:
+            raise self.error
+        return _FakeResponse([_FakeData(v) for v in self.vectors])  # type: ignore[arg-type]
+
+
+def _compat_adapter(
+    resource: _ScriptedEmbeddingsResource, *, base_url: str = "http://localhost:11434/v1"
+) -> OpenAIEmbeddingAdapter:
+    client = SimpleNamespace(embeddings=resource)
+    return OpenAIEmbeddingAdapter(
+        api_key="unused-fake",
+        model="nomic-embed-text",
+        dimensions=None,
+        expected_dim=768,
+        base_url=base_url,
+        client=client,
+    )
+
+
+def test_compat_construction_needs_exactly_one_dim_contract() -> None:
+    # dimensions and expected_dim are exclusive: neither (no contract) or both
+    # (two contracts) are construction errors.
+    with pytest.raises(ValueError, match="exactly one"):
+        OpenAIEmbeddingAdapter(api_key="k", model="m", dimensions=None)
+    with pytest.raises(ValueError, match="exactly one"):
+        OpenAIEmbeddingAdapter(api_key="k", model="m", dimensions=1536, expected_dim=768)
+
+
+def test_compat_identity_encodes_expected_dim() -> None:
+    adapter = OpenAIEmbeddingAdapter(
+        api_key="k", model="nomic-embed-text", dimensions=None, expected_dim=768
+    )
+
+    assert adapter.model == "nomic-embed-text@768"
+
+
+def test_compat_omits_dimensions_parameter() -> None:
+    # The OpenAI-only dimensions request parameter never enters a compat request;
+    # the fake serves its native 768 width instead.
+    resource = _ScriptedEmbeddingsResource(vectors=[[0.0] * 768 for _ in range(2)])
+
+    out = _compat_adapter(resource).embed_documents(["a", "b"])
+
+    assert out == [[0.0] * 768, [0.0] * 768]
+    assert len(resource.calls) == 1
+    assert "dimensions" not in resource.calls[0]
+
+
+def test_compat_validates_response_shape_passes_clean_response() -> None:
+    resource = _ScriptedEmbeddingsResource(vectors=[[0.5, 0.25] + [0.0] * 766])
+
+    out = _compat_adapter(resource).embed_query("q")
+
+    assert len(out) == 768
+
+
+@pytest.mark.parametrize(
+    ("vectors", "received"),
+    [
+        pytest.param([[0.0] * 768], "1 vectors for 2 inputs", id="wrong-count"),
+        pytest.param(
+            [[0.0] * 767 + ["oops"], [0.0] * 768],
+            "non-numeric vector for input 0",
+            id="non-numeric",
+        ),
+        pytest.param(
+            [[0.0] * 512, [0.0] * 768],
+            "512-dimension vector for input 0",
+            id="wrong-dim",
+        ),
+    ],
+)
+def test_unexpected_shape_raises_naming_model_and_dim(vectors: list[object], received: str) -> None:
+    resource = _ScriptedEmbeddingsResource(vectors=vectors)
+
+    with pytest.raises(ValueError, match=re.escape(received)) as excinfo:
+        _compat_adapter(resource).embed_documents(["a", "b"])
+
+    message = str(excinfo.value)
+    assert "nomic-embed-text" in message
+    assert "768" in message
+
+
+def test_transport_failure_names_host() -> None:
+    # An unreachable local runtime raises the Learny taxonomy error with the
+    # configured host in the message, so the operator reads which runtime is down.
+    request = httpx.Request("POST", "http://localhost:11434/v1/embeddings")
+    resource = _ScriptedEmbeddingsResource(error=openai_sdk.APIConnectionError(request=request))
+
+    with pytest.raises(ProviderUnavailable, match="localhost:11434"):
+        _compat_adapter(resource).embed_query("q")
+
+
+def test_hosted_kind_transport_failure_unchanged() -> None:
+    # Without a base_url the hosted path's behavior is exactly as before: the raw
+    # SDK exception propagates (Celery owns retries and classification).
+    request = httpx.Request("POST", "https://api.openai.com/v1/embeddings")
+    resource = _ScriptedEmbeddingsResource(error=openai_sdk.APIConnectionError(request=request))
+    client = SimpleNamespace(embeddings=resource)
+    adapter = OpenAIEmbeddingAdapter(
+        api_key="sk-test",
+        model=_MODEL,
+        dimensions=_DIM,
+        client=client,
+    )
+
+    with pytest.raises(openai_sdk.APIConnectionError):
+        adapter.embed_query("q")
