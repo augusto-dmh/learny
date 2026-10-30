@@ -154,7 +154,7 @@ vectors of two identities, in flight or at rest. Changing dimension is an operat
 procedure, not a migration: `python -m app.cli.embedding_status` reports each
 source's state and, when the vector columns do not match the active dimension, prints
 the exact SQL (drop index, clear vectors, resize `corpus_chunks.embedding`,
-`notes.embedding`, `quiz_cards.embedding`, recreate index) and the `reembed.document`
+`notes.embedding`, `quiz_items.embedding`, recreate index) and the `reembed.document`
 commands. The whole profile is documented in `docs/ops/local-models.md`.
 
 ## References

@@ -189,10 +189,14 @@ class RetrieveEvidence:
             not_past_anchor = None if position is None else position.anchor
         # The owner is always forwarded so the port can scope the note arms to this
         # user (NL-05); ``include_notes`` gates whether those arms run at all (NL-04).
+        # The active adapter's identity rides beside the query vector it produced:
+        # the semantic arms serve only rows stamped with it (ADR-0019's gate — a
+        # corpus embedded by another model or dimension answers lexical-only).
         return self._retrieval.search(
             source_id=source_id,
             query_text=query,
             query_vec=query_vec,
+            embedding_model=self._embeddings.model,
             top_k=top_k if top_k is not None else self._default_top_k,
             semantic_limit=self._semantic_limit,
             lexical_limit=self._lexical_limit,

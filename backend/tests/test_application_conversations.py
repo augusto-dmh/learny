@@ -3719,6 +3719,8 @@ def test_opening_teach_turn_is_position_bounded_like_any_other_turn() -> None:
 class _FixedEmbeddings:
     """``EmbeddingPort`` stub for the real-service turn tests: one fixed vector."""
 
+    model = "fixed-embedder@1"
+
     def embed_query(self, text: str) -> list[float]:
         return [1.0]
 

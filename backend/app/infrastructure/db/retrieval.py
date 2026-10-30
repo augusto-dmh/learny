@@ -11,8 +11,11 @@ leakage (RET-17). An optional reading-position bound (``not_past_anchor``)
 further restricts the CTE's book rows to sections at or before the bound
 anchor's section in document order (SPOILER-01/02); the note arms are never
 bounded (SPOILER-11). The semantic arm skips NULL-embedding chunks, so a
-not-yet-embedded corpus degrades to lexical-only results without error (RET-15).
-A query matching neither arm yields an empty result set (RET-16).
+not-yet-embedded corpus degrades to lexical-only results without error (RET-15),
+and serves only rows whose ``embedding_model`` stamp equals the caller-passed
+active adapter identity — a corpus embedded by another model or dimension
+degrades to lexical-only until re-embedded, never fused (ADR-0019 and its
+amendment). A query matching neither arm yields an empty result set (RET-16).
 
 The bound ``:query_vec`` is cast to ``vector`` in SQL (``CAST(... AS vector)`` —
 the ``::vector`` shorthand collides with ``text()`` colon-parameter parsing) so
@@ -57,6 +60,7 @@ _HYBRID_SQL_TEMPLATE = """
             cc.page_span AS page_span,
             cc.text AS snippet,
             cc.embedding AS embedding,
+            cc.embedding_model AS embedding_model,
             cc.search_vector AS search_vector,
             cc.search_config AS search_config
         FROM corpus_chunks cc
@@ -69,7 +73,7 @@ _HYBRID_SQL_TEMPLATE = """
             chunk_id,
             ROW_NUMBER() OVER (ORDER BY embedding <=> CAST(:query_vec AS vector)) AS rank
         FROM scoped
-        WHERE embedding IS NOT NULL
+        WHERE embedding IS NOT NULL AND embedding_model = :embedding_model
         ORDER BY embedding <=> CAST(:query_vec AS vector)
         LIMIT :semantic_limit
     ),
@@ -169,6 +173,7 @@ _HYBRID_WITH_NOTES_TEMPLATE = """
             cc.page_span AS page_span,
             cc.text AS snippet,
             cc.embedding AS embedding,
+            cc.embedding_model AS embedding_model,
             cc.search_vector AS search_vector,
             cc.search_config AS search_config
         FROM corpus_chunks cc
@@ -181,7 +186,7 @@ _HYBRID_WITH_NOTES_TEMPLATE = """
             chunk_id,
             ROW_NUMBER() OVER (ORDER BY embedding <=> CAST(:query_vec AS vector)) AS rank
         FROM scoped
-        WHERE embedding IS NOT NULL
+        WHERE embedding IS NOT NULL AND embedding_model = :embedding_model
         ORDER BY embedding <=> CAST(:query_vec AS vector)
         LIMIT :semantic_limit
     ),
@@ -214,6 +219,7 @@ _HYBRID_WITH_NOTES_TEMPLATE = """
             n.title AS note_title,
             n.body_markdown AS body,
             n.embedding AS embedding,
+            n.embedding_model AS embedding_model,
             n.search_vector AS search_vector
         FROM notes n
         WHERE n.user_id = :user_id AND n.body_markdown <> ''
@@ -223,7 +229,7 @@ _HYBRID_WITH_NOTES_TEMPLATE = """
             note_id,
             ROW_NUMBER() OVER (ORDER BY embedding <=> CAST(:query_vec AS vector)) AS rank
         FROM note_scoped
-        WHERE embedding IS NOT NULL
+        WHERE embedding IS NOT NULL AND embedding_model = :embedding_model
         ORDER BY embedding <=> CAST(:query_vec AS vector)
         LIMIT :notes_semantic_limit
     ),
@@ -326,6 +332,7 @@ class SqlAlchemyRetrievalRepository:
         source_id: UUID,
         query_text: str,
         query_vec: list[float],
+        embedding_model: str,
         top_k: int,
         semantic_limit: int,
         lexical_limit: int,
@@ -342,6 +349,10 @@ class SqlAlchemyRetrievalRepository:
         params: dict[str, object] = {
             "source_id": source_id,
             "query_vec": query_vec,
+            # The active adapter's identity: the semantic arms serve only rows
+            # stamped with it, so a corpus embedded by another model or dimension
+            # answers lexical-only until re-embedded (ADR-0019's enforced promise).
+            "embedding_model": embedding_model,
             "q": query_text,
             "semantic_limit": semantic_limit,
             "lexical_limit": lexical_limit,

@@ -58,6 +58,7 @@ New: nothing - no new entity, relation or column; the guard reads and the re-emb
 | existing behavior | `OpenAIEmbeddingAdapter` rejects a malformed runtime response (wrong count, non-numeric, wrong dimension) before any write; with `base_url` set, transport failures name the host |
 | existing docs | `backend/.env.example` and `backend/.env.production.example` gain the `openai-compatible` embedding wiring; ADR-0019 gains an amendment section; new `docs/ops/local-models.md` |
 | stored data | nothing to migrate: no new columns; per-chunk stamps (already on every vector-bearing row used by retrieval) are the source of truth |
+| existing behavior | the three embedding columns' SQLAlchemy type validates each write against `LEARNY_EMBEDDING_DIM` at bind time (the configured width, not a hardcoded 1536), so the dimension-change procedure is actually runnable — DDL stays the migrations' `vector(1536)` until the operator resizes |
 
 ## Surface
 
@@ -113,7 +114,7 @@ None - nothing consumed outside the operator's shell and the unchanged web API; 
 13. WHILE a corpus is mid-re-embed (some chunks stamped current, some stale) THE system SHALL fuse only current-stamped chunks in the semantic arm, never vectors from two identities.
 14. WHEN a note's `embedding_model` stamp differs from the active identity THEN the notes semantic arm SHALL apply the same rule against `notes.embedding_model`.
 15. IF an embed write would land beside vectors of a different length THEN the system SHALL reject it — every embed write stamps one identity per write, and the column's `vector(N)` typmod refuses a wrong-length insert — asserted at adapter level (criterion 7's validation) and at database level (a wrong-length insert raises).
-16. WHEN the embedding dimension changes THEN the operator procedure SHALL be: `embedding_status` reports the column/dimension mismatch and exits `1` printing the exact SQL (drop index, clear vectors, resize `corpus_chunks.embedding`, `notes.embedding`, `quiz_cards.embedding`, recreate index) and the `reembed.document` commands; no automatic resize or silent conversion SHALL exist.
+16. WHEN the embedding dimension changes THEN the operator procedure SHALL be: `embedding_status` reports the column/dimension mismatch and exits `1` printing the exact SQL (drop index, clear vectors, resize `corpus_chunks.embedding`, `notes.embedding`, `quiz_items.embedding`, recreate index) and the `reembed.document` commands; no automatic resize or silent conversion SHALL exist.
 17. WHEN the operator runs `embedding_status` THEN the system SHALL report, per source: total chunks, chunks current for the active identity, stale chunks, and the distinct stamps present (the per-corpus model/dimension tracking), plus the active identity and dimension; exit `0` when the vector columns match the active dimension, exit `1` when not.
 18. WHEN the re-embed task for a source completes THEN retrieval SHALL serve semantic evidence from that source again — proven end-to-end offline: embed with identity A, flip the adapter (still offline deterministic at a different dimension), observe lexical-only, run the re-embed body, observe the semantic arm restored with matching stamps.
 

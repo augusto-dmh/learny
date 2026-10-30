@@ -265,3 +265,80 @@ def test_reembed_recreates_hnsw_index_and_retrieval_serves(reembed_env, db_engin
     with db_engine.connect() as conn:
         results = retrieve(conn, source.id, "Introduction to part one")
     assert results  # retrieval succeeds against the rebuilt index
+
+
+def test_dimension_change_forces_reembed_and_restores_semantic_arm(
+    reembed_env,
+    db_engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The amendment's whole arc, end to end and offline: a corpus embedded at
+    # identity A (dim 1536) goes lexical-only the moment the active adapter flips
+    # to a different dimension (identity B, dim 768) — the stamp gate, not an
+    # error; the operator's clear + resize procedure runs (AC 16's exact SQL,
+    # abbreviated to the corpus table this task re-embeds); the re-embed body
+    # rewrites every chunk at identity B; and retrieval serves the semantic arm
+    # again, from one identity only.
+    source = reembed_env(valid_book())
+    from app.core.config import get_settings
+
+    identity_a = build_embedding_adapter(get_settings()).model
+    assert identity_a.endswith("@1536")
+
+    # Embed the whole corpus at identity A (the task body, as ops would).
+    _reembed(None, str(source.id))
+    assert _stale_count(db_engine, source.id, identity_a) == 0
+
+    def _semantic_top_score(source_id, query: str) -> float:
+        with db_engine.connect() as conn:
+            results = retrieve(conn, source_id, query)
+        return max((e.score for e in results), default=0.0)
+
+    query = "Chapter two content"
+    # Sanity at identity A: the corpus answers with both arms fused.
+    before = _semantic_top_score(source.id, query)
+    assert before > 1.0 / 61  # more than a single lexical RRF term
+
+    # Flip the deployment to a 768-dim local adapter (still offline determinstic).
+    monkeypatch.setenv("LEARNY_EMBEDDING_DIM", "768")
+    get_settings.cache_clear()
+    identity_b = build_embedding_adapter(get_settings()).model
+    assert identity_b == "local-deterministic@768"
+
+    # Stale now, and retrieval knows it: answers degrade to lexical-only (every
+    # score is a single RRF term at best), never fused across identities.
+    assert _stale_count(db_engine, source.id, identity_b) == len(_chunk_rows(db_engine, source.id))
+    stale_top = _semantic_top_score(source.id, query)
+    assert stale_top < before
+    assert stale_top <= 1.0 / 61 + 1e-12
+
+    # The operator procedure (AC 16) — here abbreviated to the corpus column the
+    # re-embed task owns; the CLI prints the notes/quiz steps too.
+    with db_engine.begin() as conn:
+        conn.execute(text("DROP INDEX IF EXISTS ix_corpus_chunks_embedding_hnsw"))
+        conn.execute(text("UPDATE corpus_chunks SET embedding = NULL"))
+        conn.execute(text("ALTER TABLE corpus_chunks ALTER COLUMN embedding TYPE vector(768)"))
+    try:
+        _reembed(None, str(source.id))
+
+        assert _stale_count(db_engine, source.id, identity_b) == 0
+        rows = _chunk_rows(db_engine, source.id)
+        assert rows
+        for row in rows:
+            assert row.embedding is not None
+            assert len(row.embedding) == 768
+            assert row.embedding_model == identity_b
+        _assert_hnsw_index_rebuilt(db_engine)
+
+        # The semantic arm serves again — fused scores above the lexical ceiling.
+        restored = _semantic_top_score(source.id, query)
+        assert restored > 1.0 / 61 + 1e-12
+    finally:
+        # Restore the shared column (and its vectors' width contract) for later
+        # tests: clear, resize back, rebuild the index, restore settings.
+        monkeypatch.setenv("LEARNY_EMBEDDING_DIM", "1536")
+        get_settings.cache_clear()
+        with db_engine.begin() as conn:
+            conn.execute(text("UPDATE corpus_chunks SET embedding = NULL"))
+            conn.execute(text("ALTER TABLE corpus_chunks ALTER COLUMN embedding TYPE vector(1536)"))
+            conn.execute(text(_CREATE_HNSW_INDEX))

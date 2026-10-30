@@ -187,6 +187,7 @@ def _search(
         source_id=source_id,
         query_text=query,
         query_vec=query_vec,
+        embedding_model=DeterministicEmbeddingAdapter().model,
         top_k=top_k,
         semantic_limit=_SEMANTIC_LIMIT,
         lexical_limit=_LEXICAL_LIMIT,
