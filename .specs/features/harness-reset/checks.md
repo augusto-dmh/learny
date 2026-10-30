@@ -256,6 +256,6 @@ Proof: `cd backend && uv run pytest -q tests/test_harness_skills.py -k proofs_po
 ## Handoff (PR B)
 
 - **Settled mid-build:** none - run mode auto; the door gate is waived by the standing authorization recorded on the plan's Approved line
-- **Dispatched:** Verifier at `<HEAD written before dispatch>` (pending)
-- **Boundary:** C25-C42 closed at `<sha>`
+- **Dispatched:** Verifier at `c0a08c5` (pending)
+- **Boundary:** C25-C42 closed at `c0a08c5`
 - **Abandoned:** none
