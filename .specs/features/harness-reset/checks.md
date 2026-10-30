@@ -256,7 +256,7 @@ Proof: `cd backend && uv run pytest -q tests/test_harness_skills.py -k proofs_po
 ## Handoff (PR B)
 
 - **Settled mid-build:** none - run mode auto; the door gate is waived by the standing authorization recorded on the plan's Approved line
-- **Dispatched:** Verifier (independent session) over every check at `b6f9f48` - FAIL: 6 findings, 3 mutations unkilled; closed by `6735bdf`, `00fe3f9`, `88c5a77`, proofs and mutations green at `88c5a77`
-- **Review:** fresh-context `pr-review` (six lanes) over `3510beb` - 18 inline findings + 2 summary comments; triaged in `review-triage-pr-b.md` (16 real, 14 fixed by `cc74e52`, `173ad57`, `5ba5c70`, 5 won't-fix with reasons); proofs re-run and 3 mutations killed at `5ba5c70` **through the vendored scripts**, selftest 79 killed
+- **Dispatched:** Verifier (independent session) over every check at `b6f9f48` - FAIL: 6 findings, 3 mutations unkilled; closed by `f9342a9`, `40b9515`, `b280ca2`, proofs and mutations green at `b280ca2`
+- **Review:** fresh-context `pr-review` (six lanes) over `f12b578` - 18 inline findings + 2 summary comments; triaged in `review-triage-pr-b.md` (16 real, 14 fixed by `1d7dc63`, `0bd3e60`, `9c47037`, 5 won't-fix with reasons); proofs re-run and 3 mutations killed at `9c47037` **through the vendored scripts**, selftest 79 killed
 - **Boundary:** C25-C42 closed at `c0a08c5`
 - **Abandoned:** none

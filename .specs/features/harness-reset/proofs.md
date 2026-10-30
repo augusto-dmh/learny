@@ -1,6 +1,6 @@
 # harness-reset proofs
 
-**HEAD**: 5ba5c70
+**HEAD**: 42fb59a
 **Tree**: clean
 **Result**: 45 pass, 0 fail; mutations 3 killed, 0 not
 
