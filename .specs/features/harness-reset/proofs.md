@@ -1,6 +1,6 @@
 # harness-reset proofs
 
-**HEAD**: 88c5a77
+**HEAD**: 5ba5c70
 **Tree**: clean
 **Result**: 45 pass, 0 fail; mutations 3 killed, 0 not
 
@@ -33,7 +33,7 @@
 | C25 | `cd backend && uv run pytest -q tests/test_harness_skills.py -k vendored_tree` | 1 | 1 | pass |
 | C26 | `cd backend && uv run pytest -q tests/test_harness_skills.py -k vendored_deviations` | 1 | 1 | pass |
 | C27 | `cd backend && uv run pytest -q tests/test_harness_skills.py -k vendored_build_override` | 1 | 1 | pass |
-| C28 | `cd backend && uv run pytest -q tests/test_harness_skills.py -k vendored_commit_gate` | 12 | 12 | pass |
+| C28 | `cd backend && uv run pytest -q tests/test_harness_skills.py -k vendored_commit_gate` | 14 | 14 | pass |
 | C29 | `cd backend && uv run pytest -q tests/test_harness_skills.py -k vendored_provenance` | 1 | 1 | pass |
 | C30 | `cd backend && uv run pytest -q tests/test_harness_skills.py -k shipcycle_lean` | 1 | 1 | pass |
 | C31 | `cd backend && uv run pytest -q tests/test_harness_skills.py -k shipcycle_stage_detection` | 1 | 1 | pass |

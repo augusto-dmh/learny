@@ -157,4 +157,6 @@ Observations that fail nothing:
 - C17's sensor checks 16 kept skills (it adds `create-rfc`), one more than the 15 in AC 16. It is stricter than the claim, which is fine.
 - C29 claims the README records the "source". The sensor asserts the version, deviations, owner action and `Base directory`, but not the source path. The source is present at `.claude/skills/README.md:30`.
 
+After the review round over `3510beb`, the proofs and the same 3 mutations re-ran green at `5ba5c70` through the vendored scripts (45 pass, 3 killed), and the vendored selftest killed 79 with the re-synced runners.
+
 Closed in one pass: `6735bdf` (the vendored commit gate carries the repo's commit types and the deviation is recorded in the vendored skill and skill index), `00fe3f9` (the sensors pin the stage mappings, the lane sentence, every gate type, the deviation and path portability) and `88c5a77` (the two claims now match the tree). proofs and the 3 mutations re-ran green at `88c5a77` (45 pass, 3 killed), all through the gate script.
