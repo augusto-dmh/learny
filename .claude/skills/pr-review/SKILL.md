@@ -99,8 +99,8 @@ Use a two-track approach to find requirements. Run both tracks; use whichever yi
 ### Track A — Feature Spec (`.specs/features/`)
 
 1. Use the feature slug derived in Step 1. Look for `.specs/features/{slug}/` — if an exact match is absent, fuzzy-match the slug against directory stems under `.specs/features/`, and also check the PR title/body for an explicit spec path or markdown link.
-2. For the matched feature, read `spec.md`, `tasks.md`, and `validation.md` with `cat {path}`.
-3. Extract: functional requirements (`FR-*` IDs), acceptance criteria, the task checklist, and stated goals / out-of-scope items.
+2. For the matched feature, read the artifact set the cycle actually wrote. A lean cycle (the vendored `tlc-spec-lean`) writes `plan.md`, `checks.md`, and `verification.md` — extract the numbered acceptance criteria and the `C`-id checks with their proofs. The legacy driven folders keep `spec.md`, `tasks.md`, and `validation.md` — extract the functional requirements (`FR-*` IDs), the task checklist, and the validation mapping. Read whichever set exists; a folder rewritten mid-life can hold both, and then both are read.
+3. Extract in every case: acceptance criteria, stated goals, and stated out-of-scope items.
 
 ### Track B — Accepted Decisions (ADR / TDD)
 
