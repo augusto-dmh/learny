@@ -91,19 +91,23 @@ def _workflow_refs(workflow: dict) -> list[str]:
     return refs
 
 
-def _all_refs() -> list[tuple[str, str]]:
+def _label(path: Path, root: Path) -> str:
     # Source labels are compared with forward-slash prefixes (".github/workflows/")
     # and shown in failure ids, so they are built with as_posix(): str() would
     # yield backslash separators on Windows and the workflow-source guard in the
     # scan-reaches test would find nothing.
+    return path.relative_to(root).as_posix()
+
+
+def _all_refs() -> list[tuple[str, str]]:
     found: list[tuple[str, str]] = []
     for path in _tracked("*Dockerfile*"):
-        found += [(path.relative_to(_ROOT).as_posix(), ref) for ref in _dockerfile_refs(path)]
+        found += [(_label(path, _ROOT), ref) for ref in _dockerfile_refs(path)]
     for path in _tracked("docker-compose*.yml", "docker-compose*.yaml", "compose*.y*ml"):
-        found += [(path.relative_to(_ROOT).as_posix(), ref) for ref in _compose_refs(path)]
+        found += [(_label(path, _ROOT), ref) for ref in _compose_refs(path)]
     for path in _tracked(".github/workflows/*.yml", ".github/workflows/*.yaml"):
         workflow = yaml.safe_load(path.read_text()) or {}
-        found += [(path.relative_to(_ROOT).as_posix(), ref) for ref in _workflow_refs(workflow)]
+        found += [(_label(path, _ROOT), ref) for ref in _workflow_refs(workflow)]
     return found
 
 
@@ -124,7 +128,14 @@ def test_the_scan_reaches_every_kind_of_image_reference() -> None:
 def test_the_scan_source_labels_are_posix_on_every_platform() -> None:
     # A label built with str() carries backslashes on Windows, so the
     # ".github/workflows/" prefix guard above matches nothing and the scan
-    # silently loses its workflow sources on Windows checkouts.
+    # silently loses its workflow sources on Windows checkouts. The
+    # PureWindowsPath case makes a revert to str() fail on any OS, so CI
+    # catches it too.
+    from pathlib import PureWindowsPath
+
+    assert _label(PureWindowsPath(r"C:\r\.github\workflows\ci.yml"), PureWindowsPath(r"C:\r")) == (
+        ".github/workflows/ci.yml"
+    )
     labels = {src for src, _ in _all_refs()}
     assert labels, "the scan found no image references at all"
     assert all("\\" not in src for src in labels), sorted(labels)

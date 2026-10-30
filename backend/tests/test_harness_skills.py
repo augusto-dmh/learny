@@ -11,6 +11,8 @@ reads lean artifacts with a legacy fallback, and every proof in the harness feat
 
 from __future__ import annotations
 
+import hashlib
+import importlib.util
 import json
 import re
 import subprocess
@@ -86,8 +88,23 @@ def _between(text: str, start: str, end: str) -> str:
     return text.split(start, 1)[1].split(end, 1)[0]
 
 
-def _git(args: list[str]) -> subprocess.CompletedProcess[bytes]:
-    return subprocess.run(["git", *args], cwd=_REPO_ROOT, capture_output=True)
+def _load_script(name: str, path: Path):
+    """Load a stdlib gate script as a module, the way its own tests drive it."""
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_REPO_CHECKER = _load_script(
+    "check_commits", _REPO_ROOT / "backend" / "scripts" / "check_commits.py"
+)
+_VENDORED_GATE = _load_script("vendored_check_commit", _LEAN / "scripts" / "check_commit.py")
+
+# The archived decision log is frozen content: pin it by digest so the equality runs in
+# every checkout, including the depth-1 clone CI merges from, where git history cannot
+# supply the pre-archive file.
+_ARCHIVE_SHA256 = "c6965e0fbd9eba0a84f79378ac602cc6ab7e80ae2a6763ae1db1f9fafa9d310b"
 
 
 # --- S5: the harness loads only what it uses (PR A claims, re-proven portably) ---
@@ -96,28 +113,10 @@ def _git(args: list[str]) -> subprocess.CompletedProcess[bytes]:
 def test_the_state_archive_is_intact_and_the_live_state_is_lean() -> None:
     archive = _REPO_ROOT / ".specs" / "project" / "archive" / "STATE-v1-v7.md"
     assert archive.is_file(), "the archived decision log is missing"
-    # The archive must stay byte-identical to the state file it replaced. That equality
-    # is frozen in the commit that created the archive, so compare against git history
-    # when the objects are local (a shallow CI checkout sees one commit and skips this
-    # half; the live-file structure below is the part that can still regress anywhere).
-    added = _git(
-        ["log", "--diff-filter=A", "--format=%H", "--", ".specs/project/archive/STATE-v1-v7.md"]
-    )
-    shas = added.stdout.decode().split()
-    if added.returncode == 0 and shas:
-        parent = _git(["rev-parse", f"{shas[0]}^"])
-        if parent.returncode == 0:
-            old = _git(["show", f"{parent.stdout.decode().strip()}:.specs/project/STATE.md"])
-            assert old.returncode == 0, "the pre-archive state file left git history"
-
-            # git show returns the stored blob (LF); a Windows checkout converts the
-            # working tree to CRLF, so compare content with line endings normalized.
-            def as_stored(raw: bytes) -> bytes:
-                return raw.replace(b"\r\n", b"\n")
-
-            assert as_stored(archive.read_bytes()) == as_stored(old.stdout), (
-                "the archive no longer matches the original"
-            )
+    # The archive must stay byte-identical to the state file it replaced. The digest is
+    # over the stored (LF) bytes, so a Windows checkout normalizes before hashing.
+    digest = hashlib.sha256(archive.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+    assert digest == _ARCHIVE_SHA256, "the archive no longer matches the original"
     live = (_REPO_ROOT / ".specs" / "project" / "STATE.md").read_text()
     sections = [line[3:].strip() for line in live.splitlines() if line.startswith("## ")]
     assert sections == ["Handoff", "Open decisions"], sections
@@ -204,16 +203,31 @@ def test_the_vendored_tree_is_complete() -> None:
     assert "name: tlc-spec-lean" in (_LEAN / "SKILL.md").read_text()
 
 
+def test_the_vendored_runners_carry_the_windows_launcher_fix() -> None:
+    # The vendored copy must keep the source's Windows fix: `.cmd`/`.bat` shims
+    # (`npx`, `pnpm`) cannot be CreateProcess'd directly, so the runner resolves
+    # through PATH/PATHEXT and goes through `cmd /c`.
+    runners = (_LEAN / "scripts" / "runners.py").read_text()
+    assert "_resolve(" in runners and "shutil.which" in runners, (
+        "the vendored runners lost the Windows launcher fix the README records"
+    )
+    assert "--testTimeout=120000" in runners, "grouped vitest runs keep the long timeouts"
+
+
 def test_the_vendored_deviations_are_declared() -> None:
     skill = (_LEAN / "SKILL.md").read_text()
-    section = skill.split("## Learny deviations", 1)[1]
+    section = _between(skill, "## Learny deviations", "## Configuration")
     assert "per-batch" in section and "Verifier" in section, "the batch-scoped Verifier deviation"
-    assert "D2" in section and "D3" in section, "both owner decisions named"
+    assert "D2" in section and "D3" in section, "the owner decisions named"
     assert "Assisted-by: Claude Code" in section, "the trailer deviation"
     assert "no-agent-trailer" in section, "the overridden lean rule named"
     assert "backend/scripts/check_commits.py" in section, "the repo checker named as the authority"
     assert "revert" in section, "the gate's type list matches the repo's 11 types"
-    assert "kebab-case" in section, "the scope difference between the gates is named"
+    assert "trailer" in section and "kebab-case" in section, (
+        "the rules the local gate does not enforce are named"
+    )
+    assert ".specs/project/STATE.md" in section, "the decisions location deviation recorded"
+    assert "waive" in section, "the plan-gate decisions lookup waiver recorded"
 
 
 def test_the_vendored_build_override_requires_the_trailer() -> None:
@@ -223,22 +237,13 @@ def test_the_vendored_build_override_requires_the_trailer() -> None:
     assert "exception" in build and "no-agent-trailer rule" in build
 
 
-_REPO_COMMIT_TYPES = (
-    "feat",
-    "fix",
-    "docs",
-    "refactor",
-    "test",
-    "chore",
-    "build",
-    "ci",
-    "perf",
-    "style",
-    "revert",
-)
+def test_the_vendored_commit_gate_types_match_the_repo_checker() -> None:
+    assert set(_VENDORED_GATE.TYPES) == set(_REPO_CHECKER.TYPES), (
+        "the vendored gate's type list drifted from the authoritative checker"
+    )
 
 
-@pytest.mark.parametrize("commit_type", _REPO_COMMIT_TYPES)
+@pytest.mark.parametrize("commit_type", sorted(_REPO_CHECKER.TYPES))
 def test_the_vendored_commit_gate_accepts_every_repo_type(commit_type: str) -> None:
     gate = _LEAN / "scripts" / "check_commit.py"
     good = subprocess.run(
@@ -248,6 +253,17 @@ def test_the_vendored_commit_gate_accepts_every_repo_type(commit_type: str) -> N
         text=True,
     )
     assert good.returncode == 0, good.stdout + good.stderr
+
+
+def test_the_vendored_commit_gate_leaves_the_trailer_to_ci() -> None:
+    # The recorded deviation: the local gate is a fast per-commit check and does not
+    # enforce the attribution rules; CI's commits job does. Pin the gap so the
+    # documentation cannot drift into claiming the gate enforces them.
+    trailerless = "feat(x): add validation\n"
+    assert _VENDORED_GATE.check(trailerless)[0] == [], (
+        "the gate passes a trailer-less message - that is the recorded gap"
+    )
+    assert _REPO_CHECKER.check_message(trailerless), "the repo checker rejects the same message"
 
 
 def test_the_vendored_commit_gate_rejects_a_disallowed_type() -> None:
@@ -321,14 +337,25 @@ def test_shipcycle_lanes_pick_by_rule() -> None:
 def test_shipcycle_door_gate_stops_stage_1() -> None:
     stage1 = _between(_SHIP_CYCLE, "## Stage 1", "## Stage 2")
     assert "Door gate" in stage1
+    gate = _between(stage1, "**Door gate", "**Escalation rule**")
     for token in (
         "one-way doors",
         "unconfirmed assumptions",
         "waived",
-        "auto",
+        "`auto`",
         "record the waiver in the plan",
     ):
-        assert token in stage1, f"the door gate lacks {token!r}"
+        assert token in gate, f"the door gate lacks {token!r}"
+    # The door gate is one of the two allowed stops: the contracts must say so, or the
+    # default mode's binding rules forbid the very stop Stage 1 has to make.
+    autonomy = _between(_SHIP_CYCLE, "**Autonomy contract:**", "**Continuation contract")
+    continuation = _between(_SHIP_CYCLE, "**Continuation contract", "**Heartbeat")
+    assert "two gates" in autonomy and "door gate" in autonomy, (
+        "the autonomy contract names both gates"
+    )
+    assert "Stage 1 door gate" in continuation, (
+        "the continuation contract allows the door-gate stop"
+    )
 
 
 def test_shipcycle_decisions_land_in_the_plan() -> None:
@@ -397,6 +424,9 @@ def test_skills_docs_describe_the_vendored_copy() -> None:
             "moving to the user-level",
         ):
             assert stale not in doc, f"stale wording: {stale!r}"
+    assert "three recorded project deviations" in _SKILLS_MD, (
+        "the index counts the recorded deviations"
+    )
 
 
 def test_claude_profile_pins_the_lean_block() -> None:
@@ -434,6 +464,6 @@ def test_the_proofs_portable_across_checkouts() -> None:
         for pattern, why in (
             (r"[A-Za-z]:[\\/]", "drive-letter path"),
             (r"(?:^|[\s=])~[\\/]", "home-relative path"),
-            (r"(?:^|\s)/(?:[A-Za-z0-9_.-]+)(?:\s|$)", "POSIX root path"),
+            (r"(?:^|[\s=\"'])/(?:[A-Za-z0-9_.-]+)", "POSIX root path"),
         ):
             assert not re.search(pattern, proof), f"{why} in proof: {proof}"
