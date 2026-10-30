@@ -121,23 +121,23 @@ def test_the_state_archive_is_intact_and_the_live_state_is_lean() -> None:
     assert sections == ["Handoff", "Open decisions"], sections
 
 
-def test_the_lessons_files_are_gone() -> None:
+def test_the_lessons_files_gone_stay_gone() -> None:
     for path in (".specs/LESSONS.md", ".specs/lessons.json"):
         assert not (_REPO_ROOT / path).exists(), f"{path} came back"
 
 
-def test_the_removed_skill_directories_are_absent() -> None:
+def test_the_removed_skills_absent_from_the_skills_tree() -> None:
     present = {p.name for p in (_REPO_ROOT / ".claude" / "skills").iterdir() if p.is_dir()}
     clash = present & set(_REMOVED_SKILLS)
     assert not clash, sorted(clash)
 
 
-def test_every_kept_skill_still_carries_a_skill_md() -> None:
+def test_the_kept_skills_present_with_a_skill_md() -> None:
     for name in _KEPT_SKILLS:
         assert (_REPO_ROOT / ".claude" / "skills" / name / "SKILL.md").is_file(), name
 
 
-def test_no_removed_skill_is_listed_in_the_skill_indexes() -> None:
+def test_the_removed_skills_unlisted_in_the_skill_indexes() -> None:
     indexed = _SKILLS_MD + _SKILLS_README + (_REPO_ROOT / "skills-lock.json").read_text()
     lock = _REPO_ROOT / ".agents" / ".skill-lock.json"
     if lock.is_file():
@@ -153,13 +153,13 @@ def test_the_ship_cycle_carries_the_synthesis_model_table() -> None:
     assert "Haiku" not in _SHIP_CYCLE
 
 
-def test_settings_pin_the_attribution_contract() -> None:
+def test_the_attribution_setting_pins_the_contract() -> None:
     settings = json.loads((_REPO_ROOT / ".claude" / "settings.json").read_text())
     assert settings.get("attribution") == {"commit": "Assisted-by: Claude Code", "pr": ""}
     assert "includeCoAuthoredBy" not in settings
 
 
-def test_finalize_requires_the_trailer_override() -> None:
+def test_the_finalize_trailer_rule_requires_the_override() -> None:
     assert "Assisted-by: Claude Code" in _FINALIZE
     assert "override of `tlc-spec-lean`'s rule" in _FINALIZE
     assert "Co-authored-by" in _FINALIZE and "Made-with" in _FINALIZE
@@ -167,7 +167,7 @@ def test_finalize_requires_the_trailer_override() -> None:
     assert "Never add authorship or tooling attribution to commits" not in _FINALIZE
 
 
-def test_the_roadmap_has_a_harness_section_with_both_pr_rows() -> None:
+def test_the_roadmap_harness_rows_cover_both_prs() -> None:
     roadmap = (_REPO_ROOT / ".specs" / "project" / "ROADMAP.md").read_text()
     section = roadmap.split("## Harness", 1)[1]
     # Both rows only: the PR B row's status is set by the wrap commit, so this proof
@@ -176,7 +176,7 @@ def test_the_roadmap_has_a_harness_section_with_both_pr_rows() -> None:
     assert "`harness-reset` PR B" in section
 
 
-def test_the_hygiene_rules_require_the_verifier_database() -> None:
+def test_the_hygiene_verifier_requires_db_and_infra() -> None:
     assert "LEARNY_REQUIRE_DB=1" in _SHIP_CYCLE
     assert "make infra" in _SHIP_CYCLE
 
@@ -184,7 +184,7 @@ def test_the_hygiene_rules_require_the_verifier_database() -> None:
 # --- S8: the lean spec skill is vendored with its deviations ---
 
 
-def test_the_vendored_lean_tree_is_complete() -> None:
+def test_the_vendored_tree_is_complete() -> None:
     files = [
         _LEAN / "SKILL.md",
         *(
@@ -202,7 +202,7 @@ def test_the_vendored_lean_tree_is_complete() -> None:
     assert "name: tlc-spec-lean" in (_LEAN / "SKILL.md").read_text()
 
 
-def test_the_vendored_skill_declares_the_learny_deviations() -> None:
+def test_the_vendored_deviations_are_declared() -> None:
     skill = (_LEAN / "SKILL.md").read_text()
     section = skill.split("## Learny deviations", 1)[1]
     assert "per-batch" in section and "Verifier" in section, "the batch-scoped Verifier deviation"
@@ -211,7 +211,7 @@ def test_the_vendored_skill_declares_the_learny_deviations() -> None:
     assert "no-agent-trailer" in section, "the overridden lean rule named"
 
 
-def test_the_vendored_build_reference_requires_the_trailer() -> None:
+def test_the_vendored_build_override_requires_the_trailer() -> None:
     build = (_LEAN / "references" / "build.md").read_text()
     assert "Assisted-by: Claude Code" in build
     assert "every commit" in build
@@ -247,7 +247,7 @@ def test_the_skills_readme_records_the_vendored_provenance() -> None:
 # --- S9: the ship cycle runs on the lean skill with two lanes and the door gate ---
 
 
-def test_the_ship_cycle_runs_on_the_vendored_lean_skill() -> None:
+def test_shipcycle_lean_names_the_vendored_skill() -> None:
     assert "tlc-spec-driven" not in _SHIP_CYCLE
     frontmatter = _SHIP_CYCLE.split("---")[1]
     for token in ("tlc-spec-lean", "standard", "150k"):
@@ -259,7 +259,7 @@ def test_the_ship_cycle_runs_on_the_vendored_lean_skill() -> None:
     assert "tlc-spec-lean" in stage1, stage1
 
 
-def test_stage_detection_maps_the_lean_artifact_states() -> None:
+def test_shipcycle_stage_detection_maps_lean_artifacts() -> None:
     table = _between(_SHIP_CYCLE, "## Stage Detection", "## Stage 0")
     assert "plan.md" in table and "Stage 1 (lean Plan)" in table
     assert "checks.md" in table and "Stage 1 (lean Build/Verify)" in table
@@ -269,7 +269,7 @@ def test_stage_detection_maps_the_lean_artifact_states() -> None:
     )
 
 
-def test_stage_0_picks_the_lane_by_rule() -> None:
+def test_shipcycle_lanes_pick_by_rule() -> None:
     stage0 = _between(_SHIP_CYCLE, "## Stage 0", "## Stage 1")
     for token in (
         "Lane S",
@@ -286,7 +286,7 @@ def test_stage_0_picks_the_lane_by_rule() -> None:
         assert token in stage0, f"the lane rule lacks {token!r}"
 
 
-def test_stage_1_stops_at_the_door_gate() -> None:
+def test_shipcycle_door_gate_stops_stage_1() -> None:
     stage1 = _between(_SHIP_CYCLE, "## Stage 1", "## Stage 2")
     assert "Door gate" in stage1
     for token in (
@@ -299,7 +299,7 @@ def test_stage_1_stops_at_the_door_gate() -> None:
         assert token in stage1, f"the door gate lacks {token!r}"
 
 
-def test_auto_decisions_land_in_the_plan_not_the_chat() -> None:
+def test_shipcycle_decisions_land_in_the_plan() -> None:
     stage1 = _between(_SHIP_CYCLE, "## Stage 1", "## Stage 2")
     for token in (
         "## Assumptions",
@@ -312,7 +312,7 @@ def test_auto_decisions_land_in_the_plan_not_the_chat() -> None:
         assert token in stage1, f"the auto-decision rule lacks {token!r}"
 
 
-def test_over_budget_work_splits_into_verifier_scoped_batches() -> None:
+def test_shipcycle_batches_split_over_budget() -> None:
     stage1 = _between(_SHIP_CYCLE, "## Stage 1", "## Stage 2")
     for token in (
         "handoff",
@@ -325,7 +325,7 @@ def test_over_budget_work_splits_into_verifier_scoped_batches() -> None:
         assert token in stage1, f"the batch rule lacks {token!r}"
 
 
-def test_the_cost_discipline_keeps_the_model_table_and_the_commit_rule() -> None:
+def test_shipcycle_cost_discipline_keeps_the_model_rows() -> None:
     discipline = _between(_SHIP_CYCLE, "## Cost discipline", "## Worker briefs")
     for row in _MODEL_ROWS:
         assert row in discipline, f"model row drifted: {row}"
@@ -336,7 +336,7 @@ def test_the_cost_discipline_keeps_the_model_table_and_the_commit_rule() -> None
 # --- S10: review and finalize speak lean, with a legacy fallback ---
 
 
-def test_pr_review_reads_the_lean_artifacts_with_a_legacy_path() -> None:
+def test_review_track_a_reads_lean_with_the_legacy_path() -> None:
     track_a = _between(_PR_REVIEW, "### Track A", "### Track B")
     for token in ("plan.md", "checks.md", "verification.md", "`C`-id"):
         assert token in track_a, f"the lean path lacks {token!r}"
@@ -344,14 +344,14 @@ def test_pr_review_reads_the_lean_artifacts_with_a_legacy_path() -> None:
         assert token in track_a, f"the legacy path lacks {token!r}"
 
 
-def test_finalize_forbids_slice_and_check_ids() -> None:
+def test_finalize_internal_refs_forbid_slice_and_check_ids() -> None:
     assert "slice and check IDs" in _FINALIZE
     assert "`S2`" in _FINALIZE and "`C4`" in _FINALIZE
     assert "checks.md" in _FINALIZE, "checks.md is where internal traceability lives"
     assert "tasks.md" not in _FINALIZE, "tasks.md is the retired driven artifact"
 
 
-def test_the_skill_indexes_describe_the_vendored_copy() -> None:
+def test_skills_docs_describe_the_vendored_copy() -> None:
     for doc in (_SKILLS_MD, _SKILLS_README):
         assert "tlc-spec-lean" in doc
         assert "vendored" in doc.lower()
@@ -367,7 +367,7 @@ def test_the_skill_indexes_describe_the_vendored_copy() -> None:
             assert stale not in doc, f"stale wording: {stale!r}"
 
 
-def test_claude_md_pins_the_lean_profile() -> None:
+def test_claude_profile_pins_the_lean_block() -> None:
     claude_md = (_REPO_ROOT / "CLAUDE.md").read_text()
     assert "## tlc-spec-lean" in claude_md
     block = _between(claude_md, "## tlc-spec-lean", "## ")
@@ -380,7 +380,7 @@ def test_claude_md_pins_the_lean_profile() -> None:
 # --- S11: local worktrees stop being noise ---
 
 
-def test_the_gitignore_ignores_local_worktrees() -> None:
+def test_the_gitignore_worktrees_entry_exists() -> None:
     ignore = (_REPO_ROOT / ".gitignore").read_text()
     assert any(line.strip() == ".worktrees/" for line in ignore.splitlines()), ignore
 
@@ -388,7 +388,7 @@ def test_the_gitignore_ignores_local_worktrees() -> None:
 # --- S12: the PR A checks re-run on any checkout ---
 
 
-def test_every_proof_in_the_harness_checks_is_machine_independent() -> None:
+def test_the_proofs_portable_across_checkouts() -> None:
     proofs = [
         line[len("Proof:") :].strip().strip("`")
         for line in _CHECKS_MD.splitlines()
