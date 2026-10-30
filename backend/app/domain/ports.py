@@ -1325,7 +1325,7 @@ class QuizItemRepository(Protocol):
     def active_checkpoint_card(
         self, user_id: UUID, source_id: UUID, anchor: str
     ) -> QuizItem | None:
-        """Return the caller's oldest active ``checkpoint`` card on that section."""
+        """Return the caller's oldest active, unflagged ``checkpoint`` card on that section."""
         ...
 
 

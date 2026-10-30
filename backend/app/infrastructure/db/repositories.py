@@ -2027,6 +2027,10 @@ class SqlAlchemyQuizItemRepository:
                 quiz_items.c.anchor == anchor,
                 quiz_items.c.origin == QuizItemOrigin.CHECKPOINT,
                 quiz_items.c.status == QuizItemStatus.ACTIVE,
+                # The learner hid this card from review; a hidden card is not
+                # the one a fresh explanation's grade should land on, so mint
+                # past it the way the recall selection does.
+                quiz_items.c.flagged_at.is_(None),
             )
             .order_by(quiz_items.c.created_at.asc(), quiz_items.c.id.asc())
             .limit(1)
