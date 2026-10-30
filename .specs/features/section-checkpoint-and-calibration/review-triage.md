@@ -19,3 +19,20 @@ Review: fresh-context `pr-review`, six lanes, 9 inline + 2 PR-level comments, 12
 | 13 | Requirements 6105971162 / summary 6105994397 | PR-level | n/a | none | DoD notes (manual stack pass, funded explain-back run) are already deferred to the owner in the PR body and plan Open question 1. Summary restates the above. |
 
 Counts: 13 entries (12 findings + summaries). Real: 12. Fixed: 10. Deferred: 1 (#9, batch 2). Won't fix: 1 (#12, by design). Every fix that adds a sensor was mutation-checked locally except #8 (unreachable branch) and #10.
+
+## Round 2 — re-review after the merge and the language threading (2026-10-30)
+
+Review: a second pass over the delta since the round-1 reviewed head — the generated-card decoy test, the interface-language threading on the explain-back, the hidden-card reuse fix, and the merge of `main`. Scope note: the work merged in from `main` (interface language, key routes, Portuguese interface) shipped through its own reviewed PRs and was not re-reviewed here; the merge itself was checked for dropped sides (every file touched from both sides differs from both parents).
+
+Degraded mode: the fresh-context reviewer sub-agent could not be dispatched (this environment's workflow runner typechecks only), so the lanes ran in the authoring session — reviewer == author for this round. The independent signal for merge is the script-run proof set (61 pass at the reviewed head), the six killed mutants, and CI green 5/5.
+
+| # | Source (lane, comment) | file:line | Verdict | Action | Rationale |
+|---|---|---|---|---|---|
+| 1 | Security (PR comment 6526805333, lane note) | `backend/app/infrastructure/web/checkpoints.py:158` | clean | none | The language value is server-resolved (stored locale → Accept-Language → None) and validated against the supported set before reaching the port; it is not client-body input. Session and CSRF guards on the four routes are unchanged and still covered by the route guard test. |
+| 2 | Requirements (PR comment 6526794709) | `backend/app/application/checkpoints.py` | real, already satisfied | none | The interface-language handoff requirement is met: the response route threads the resolved language into the explain-back, English reaches the port as None, and four web cases plus an application case pin the contract. The flagged-reuse member appended to the reuse obligation is implemented and tested. |
+| 3 | Tests (lane note) | `backend/tests/test_web_checkpoints.py:339` | clean | none | The language cases assert what the port received (`response_languages == [expected]`), not just status codes; the application case asserts `["pt-BR", None]`. Both corresponding mutants are killed in the round-6 record. |
+| 4 | Architecture (lane note) | `backend/app/domain/ports.py:1328` | clean | none | Port contract, adapter and service updated in the same commit; `active_checkpoint_card` has exactly one caller; `RespondToAttempt` is constructed only by the web dependency. |
+| 5 | Regression (lane note) | merge `d7ea1d0` | clean | none | No side dropped: all 11 two-sided files differ from both parents; backend and frontend suites green in CI at the reviewed commit; the chore commits touch only `.gitignore` and the feature's spec files. |
+| 6 | Performance (lane note) | `backend/app/infrastructure/db/repositories.py:2033` | clean | none | One added `flagged_at IS NULL` predicate on the single-card lookup; no new queries in loops. |
+
+Counts: 6 entries, 0 real defects needing a fix, 0 false positives (4 lanes recorded clean notes, 2 confirmed already-satisfied requirements). No fix commits this round; the merge gate stands on the existing head.
