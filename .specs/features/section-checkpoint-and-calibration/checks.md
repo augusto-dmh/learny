@@ -237,7 +237,7 @@ Cost: 3 new backend test modules plus additions to 3 existing ones, and 2 new fr
 
 ## Handoff
 
-**Dispatched:** verifier round 6 - independent sub-agent via a dynamic-workflow run (2026-10-30, after 5d087d3)
+**Dispatched:** verifier round 6 - no sub-agent mechanism was available in this session (the workflow runner typechecks only; no pane host), so the round ran inline and is recorded as self-verified degraded (2026-10-30, after 5d087d3)
 
 `wc -c` over the files each slice touches, divided by 4:
 

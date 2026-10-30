@@ -177,3 +177,35 @@ Notes, none of which fail the round:
 - The round-4 stale comment in `test_grade_on_a_deleted_card_is_404_and_leaves_the_attempt_ungraded` is fixed (`test_web_checkpoints.py:490-491`).
 - Carried from round 4: the M30 position-counter precision note; M8 and M9 are killed by a downstream crash rather than a clean 422; and C28's "keeps … confidence buttons" is asserted through `Sure` alone.
 - `origin/main` is still 8c11ad3, the feature base, so it has not moved since 9fcf165. GitHub reports #77 as `MERGEABLE` / `CLEAN`.
+
+## Round 6 - completed by the resuming session (2026-10-30)
+
+**Verdict**: PASS (batch-1 scope)
+**Profile**: standard
+**Diff range**: 9fcf165..0ed0280 (round 5 verified through 9fcf165; this range holds the generated-card decoy, the response-language threading, the merge of `main`, the runnable-proof chore and the hidden-card fix)
+**Round**: 6 - continued
+**Verifier**: the dispatched verifier session was cut off before it closed; the resuming session completed the round inline, so author == verifier for this round (degraded). The fresh-context `pr-review` over PR #77 after this round is the independent pass before merge.
+
+Batch scope: C1–C32 and C42. C33–C41 are batch 2 and out of scope; in `proofs.md` they read "no test ran" until batch 2 builds them, which is expected and is why `check_proofs.py` exits 1 and the completion gate (`validate_verification.py`) is owed at batch-2 completion.
+
+What this round verified:
+
+- The response-language threading (5d087d3) is proven and mutation-tested. C21's four proofs pass at HEAD, and four mutants over the new seam are each killed: dropping the caller's language from the explain-back call, dropping the response route's language resolution, letting `Accept-Language` beat the stored locale, and removing English as the uninstructed locale.
+- Round 5's gap (the reuse lookup's origin filter, M37) is closed: the generated-card decoy landed (108fcf1) and the mutant is now killed.
+- The round-6 finding is closed by 0ed0280: `active_checkpoint_card` minted past a hidden card only after the fix; grading an explanation could previously have landed on the caller's hidden checkpoint card instead of minting a fresh one. The fix skips flagged checkpoint cards in the reuse lookup and extends `reuse_skips_checkpoint_cards_that_are_not_the_callers_on_this_section`; the flagged-predicate mutant is killed.
+- `check_proofs.py` at HEAD 0ed0280 (clean tree, `LEARNY_REQUIRE_DB=1` against this lane's Postgres): 61 pass, 10 fail - the 10 are the batch-2 rows - and mutations 6 killed, 0 survived, 0 blocked.
+- CI on PR #77 at 0ed0280: `backend-test`, `commits`, `compose-smoke`, `frontend` and `lint` all pass.
+
+Deviations, recorded plainly:
+
+- This round ran inline (self-verified degraded), because the verifier session died on a provider limit and no sub-agent dispatch completed. Mitigation: every mechanical proof is script-run (`check_proofs.py`), and a fresh-context review runs on the PR before merge.
+- Running the script on this machine needed two local fixes to the lean skill's vitest runner: resolving `vitest.cmd`/`npx.cmd` shims through `cmd /c` (bare `subprocess` spawn fails on Windows), and a 120s per-test / 60s hook timeout on the grouped selection run only (the machine was concurrently running other suites; the default 5s timeout turned passing cases into timeout failures). The vitest groups also had to run under Node 24 (`nvm` v24.22.0): the machine's default Node 25 breaks jsdom's `localStorage` in vitest workers, which leaked a stored pt-BR locale across test describes and failed the English checkpoint-invitation tests. CI gates on Node 20 and is green at the same commit, so CI remains the authoritative frontend result. The proof commands in `checks.md` are unchanged.
+
+## Findings
+
+| Finding | Location | Verdict | Closed |
+| --- | --- | --- | --- |
+| A graded explanation could reuse the caller's hidden (flagged) checkpoint card instead of minting a fresh one | `backend/app/infrastructure/db/repositories.py` `active_checkpoint_card` | real - fixed with covering test | 0ed0280 |
+| The reuse lookup's origin filter was unproven (M37 survived; round 5 gap) | `backend/app/infrastructure/db/repositories.py:2028` | real - test-only | 108fcf1 |
+| Explain-back made no provider call in the learner's interface language | `backend/app/application/checkpoints.py`, `backend/app/infrastructure/web/checkpoints.py` | real - fixed with tests | 5d087d3 |
+
