@@ -88,7 +88,7 @@ Proof: `pytest tests/test_web_checkpoints.py -k "recall_grade_rating_bounds"`
 Proof: `pytest tests/test_application_checkpoints.py -k "minted_card_shape_and_owner_on_sample"`
 Proof: `pytest tests/test_application_checkpoints.py -k "minted_card_falls_back_to_first_chunk"`
 
-**C20** - When the caller already has an active checkpoint card on that source and anchor, grading a second checkpoint's explain attempt reviews that card. The count of checkpoint cards stays 1 and its question and answer are unchanged. Another learner's checkpoint card on the same section, and the caller's stale, other-anchor or other-book checkpoint cards, are never reused (AC 20)
+**C20** - When the caller already has an active checkpoint card on that source and anchor, grading a second checkpoint's explain attempt reviews that card. The count of checkpoint cards stays 1 and its question and answer are unchanged. Another learner's checkpoint card on the same section, the caller's stale, other-anchor or other-book checkpoint cards, and the caller's non-checkpoint card on that section, are never reused (AC 20)
 Proof: `pytest tests/test_application_checkpoints.py -k "second_checkpoint_reuses_existing_card"`
 Proof: `pytest tests/test_application_checkpoints.py -k "reuse_skips_checkpoint_cards_that_are_not_the_callers_on_this_section"`
 

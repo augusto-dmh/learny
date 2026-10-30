@@ -1,5 +1,7 @@
 # section-checkpoint-and-calibration
 
+**Approved**: 2026-10-29 - user: "Go autonomously until completing everything"
+
 ## Problem
 
 A learner who finishes a section of a book in Learny is never asked to retrieve it. The reader moves straight on (`ChapterNav`, `frontend/app/components/toc-panel.tsx:146`), retrieval happens only when a card is already due, and nothing records whether a success was earned unaided. `review_log` (`backend/app/infrastructure/db/metadata.py:610`) stores a rating and a time, so a card passed right after the tutor explained it is indistinguishable from an unaided recall. Learny also never asks how sure the learner was, so it cannot tell them when they are overconfident.

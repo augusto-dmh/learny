@@ -372,8 +372,9 @@ def test_reuse_skips_checkpoint_cards_that_are_not_the_callers_on_this_section(
     db_conn: Connection,
 ) -> None:
     # On the shared sample, another learner's checkpoint card sits on this very
-    # section, and the caller has checkpoint cards that are stale, on another anchor
-    # or on another book. None of them is the caller's active card here, so grading
+    # section, the caller has a generated quiz card here, and the caller has
+    # checkpoint cards that are stale, on another anchor or on another book.
+    # None of them is the caller's active checkpoint card here, so grading
     # mints a new one instead of reviewing (or 404ing on) somebody else's.
     user, source_id = _book(db_conn, is_sample=True)
     stranger = add_user(db_conn)
@@ -381,6 +382,7 @@ def test_reuse_skips_checkpoint_cards_that_are_not_the_callers_on_this_section(
     add_corpus(db_conn, other_source)
     decoys = [
         add_card(db_conn, source_id, user_id=stranger.id, origin=QuizItemOrigin.CHECKPOINT),
+        add_card(db_conn, source_id, user_id=user.id, origin=QuizItemOrigin.DECK),
         add_card(
             db_conn,
             source_id,
