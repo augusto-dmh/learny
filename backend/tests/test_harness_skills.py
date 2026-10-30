@@ -3,7 +3,7 @@
 PR A pruned the skill tree and rewired the attribution contract; PR B vendored the lean
 spec skill into ``.claude/skills/tlc-spec-lean/`` and put the ship cycle, the review
 lanes and the publishing conventions on it. These tests pin both at HEAD so a fresh
-clone keeps the promises: the vendored tree is complete and carries its two recorded
+clone keeps the promises: the vendored tree is complete and carries its recorded
 deviations, the ship cycle detects lean artifact states and picks a lane by rule, review
 reads lean artifacts with a legacy fallback, and every proof in the harness feature's
 ``checks.md`` runs wherever the repo is cloned.
@@ -16,6 +16,8 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _LEAN = _REPO_ROOT / ".claude" / "skills" / "tlc-spec-lean"
@@ -209,6 +211,9 @@ def test_the_vendored_deviations_are_declared() -> None:
     assert "D2" in section and "D3" in section, "both owner decisions named"
     assert "Assisted-by: Claude Code" in section, "the trailer deviation"
     assert "no-agent-trailer" in section, "the overridden lean rule named"
+    assert "backend/scripts/check_commits.py" in section, "the repo checker named as the authority"
+    assert "revert" in section, "the gate's type list matches the repo's 11 types"
+    assert "kebab-case" in section, "the scope difference between the gates is named"
 
 
 def test_the_vendored_build_override_requires_the_trailer() -> None:
@@ -218,15 +223,35 @@ def test_the_vendored_build_override_requires_the_trailer() -> None:
     assert "exception" in build and "no-agent-trailer rule" in build
 
 
-def test_the_vendored_commit_gate_runs_on_this_interpreter() -> None:
+_REPO_COMMIT_TYPES = (
+    "feat",
+    "fix",
+    "docs",
+    "refactor",
+    "test",
+    "chore",
+    "build",
+    "ci",
+    "perf",
+    "style",
+    "revert",
+)
+
+
+@pytest.mark.parametrize("commit_type", _REPO_COMMIT_TYPES)
+def test_the_vendored_commit_gate_accepts_every_repo_type(commit_type: str) -> None:
     gate = _LEAN / "scripts" / "check_commit.py"
     good = subprocess.run(
-        [sys.executable, str(gate), "--message", "feat(x): add validation"],
+        [sys.executable, str(gate), "--message", f"{commit_type}(x): add validation"],
         cwd=_REPO_ROOT,
         capture_output=True,
         text=True,
     )
     assert good.returncode == 0, good.stdout + good.stderr
+
+
+def test_the_vendored_commit_gate_rejects_a_disallowed_type() -> None:
+    gate = _LEAN / "scripts" / "check_commit.py"
     bad = subprocess.run(
         [sys.executable, str(gate), "--message", "foo(x): add validation"],
         cwd=_REPO_ROOT,
@@ -242,6 +267,7 @@ def test_the_skills_readme_records_the_vendored_provenance() -> None:
     assert "Per-batch Verifier" in _SKILLS_README and "Assisted-by: Claude Code" in _SKILLS_README
     assert "remove or rename" in _SKILLS_README, "the owner action that unshadows the copy"
     assert "Base directory" in _SKILLS_README, "how the owner confirms which copy loads"
+    assert "revert" in _SKILLS_README, "the commit-contract authority deviation recorded"
 
 
 # --- S9: the ship cycle runs on the lean skill with two lanes and the door gate ---
@@ -261,8 +287,14 @@ def test_shipcycle_lean_names_the_vendored_skill() -> None:
 
 def test_shipcycle_stage_detection_maps_lean_artifacts() -> None:
     table = _between(_SHIP_CYCLE, "## Stage Detection", "## Stage 0")
-    assert "plan.md" in table and "Stage 1 (lean Plan)" in table
-    assert "checks.md" in table and "Stage 1 (lean Build/Verify)" in table
+    mapping = {
+        "has `plan.md` but no `checks.md`": "Stage 1 (lean Plan)",
+        "has `checks.md` but no `verification.md`": "Stage 1 (lean Build/Verify)",
+    }
+    rows = [line for line in table.splitlines() if line.strip().startswith("|")]
+    for observation, stage in mapping.items():
+        row = next((line for line in rows if observation in line), None)
+        assert row is not None and stage in row, f"stage detection lost: {observation} -> {stage}"
     assert "verification.md" in table
     assert "validate_verification.py" in table and "--root" in table and "exits 0" in table, (
         "a Verifier PASS must be the gate script exiting 0"
@@ -280,7 +312,7 @@ def test_shipcycle_lanes_pick_by_rule() -> None:
         "no new route or screen",
         "no one-way door",
         "Lane F",
-        "every roadmap row",
+        "for everything else, including every roadmap row",
         "never downgrades",
     ):
         assert token in stage0, f"the lane rule lacks {token!r}"
@@ -399,6 +431,9 @@ def test_the_proofs_portable_across_checkouts() -> None:
         assert proof, "an empty Proof line"
         for bad in ("c:\\", "c:/", "/home/", "/users/", "/root/", "/tmp/", "/mnt/"):
             assert bad not in proof.lower(), f"absolute path in proof: {proof}"
-        assert not re.search(r"(?:^|\s)/(?:[A-Za-z0-9_.-]+/)+", proof), (
-            f"POSIX absolute path in proof: {proof}"
-        )
+        for pattern, why in (
+            (r"[A-Za-z]:[\\/]", "drive-letter path"),
+            (r"(?:^|[\s=])~[\\/]", "home-relative path"),
+            (r"(?:^|\s)/(?:[A-Za-z0-9_.-]+)(?:\s|$)", "POSIX root path"),
+        ):
+            assert not re.search(pattern, proof), f"{why} in proof: {proof}"
