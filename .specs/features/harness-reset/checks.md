@@ -173,7 +173,7 @@ Proof: `cd backend && uv run pytest -q tests/test_harness_skills.py -k vendored_
 **C27** - The vendored `references/build.md` requires the `Assisted-by: Claude Code` trailer on every commit and names it as this repo's exception to the skill's no-agent-trailer rule (AC 26)
 Proof: `cd backend && uv run pytest -q tests/test_harness_skills.py -k vendored_build_override`
 
-**C28** - The vendored commit gate runs on this interpreter: a Conventional header exits 0 and a disallowed type exits 1 (AC 27)
+**C28** - The vendored commit gate runs on this interpreter: each of the repo's 11 commit types exits 0 and a disallowed type exits 1 (AC 27)
 Proof: `cd backend && uv run pytest -q tests/test_harness_skills.py -k vendored_commit_gate`
 
 **C29** - The skills README records the vendored copy's source, version 2.1.0, the two deviations, and the owner action that makes the project copy load (remove/rename the user-level copy, then confirm from the client's `Base directory` line) (AC 28)
@@ -199,7 +199,7 @@ Proof: `cd backend && uv run pytest -q tests/test_harness_skills.py -k shipcycle
 **C35** - Over the 150k budget, Stage 1 pre-answers lean's mechanism ask with handoff and splits at slice boundaries into sequential batch PRs, with the Verifier scoped to each batch's checks before its PR and over every check before the last batch's PR (decision D2) (AC 34)
 Proof: `cd backend && uv run pytest -q tests/test_harness_skills.py -k shipcycle_batches`
 
-**C36** - The cost-discipline section keeps the five synthesis model rows verbatim, keeps the `LEARNY_REQUIRE_DB=1` + `make infra` Verifier rule, and asks for one coherent piece per commit with its check marked in `checks.md` in the same commit (AC 35)
+**C36** - The cost-discipline section keeps the five synthesis model rows verbatim and asks for one coherent piece per commit with its check marked in `checks.md` in the same commit; the `LEARNY_REQUIRE_DB=1` + `make infra` Verifier rule lives in the skill's Hygiene section, pinned by C23 (AC 35)
 Proof: `cd backend && uv run pytest -q tests/test_harness_skills.py -k shipcycle_cost_discipline`
 
 ### S10 - Review and finalize speak lean, with a legacy fallback · 4 files · ~2k
