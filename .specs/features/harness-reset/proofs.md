@@ -1,8 +1,8 @@
 # harness-reset proofs
 
-**HEAD**: c0a08c5
+**HEAD**: 88c5a77
 **Tree**: clean
-**Result**: 45 pass, 0 fail; mutations 0 killed, 0 not
+**Result**: 45 pass, 0 fail; mutations 3 killed, 0 not
 
 | Check | Proof | Ran | Passed | Result |
 | --- | --- | --- | --- | --- |
@@ -33,7 +33,7 @@
 | C25 | `cd backend && uv run pytest -q tests/test_harness_skills.py -k vendored_tree` | 1 | 1 | pass |
 | C26 | `cd backend && uv run pytest -q tests/test_harness_skills.py -k vendored_deviations` | 1 | 1 | pass |
 | C27 | `cd backend && uv run pytest -q tests/test_harness_skills.py -k vendored_build_override` | 1 | 1 | pass |
-| C28 | `cd backend && uv run pytest -q tests/test_harness_skills.py -k vendored_commit_gate` | 1 | 1 | pass |
+| C28 | `cd backend && uv run pytest -q tests/test_harness_skills.py -k vendored_commit_gate` | 12 | 12 | pass |
 | C29 | `cd backend && uv run pytest -q tests/test_harness_skills.py -k vendored_provenance` | 1 | 1 | pass |
 | C30 | `cd backend && uv run pytest -q tests/test_harness_skills.py -k shipcycle_lean` | 1 | 1 | pass |
 | C31 | `cd backend && uv run pytest -q tests/test_harness_skills.py -k shipcycle_stage_detection` | 1 | 1 | pass |
@@ -51,3 +51,11 @@
 | Build | `cd backend && uv run ruff check .` | - | - | pass |
 | Build | `cd backend && uv run ruff format --check .` | - | - | pass |
 | Build | `cd backend && python scripts/check_boundaries.py` | - | - | pass |
+
+## Mutations
+
+| Mutation | Location | Killed |
+| --- | --- | --- |
+| Stage Detection: lean Plan row condition plan.md-without-checks.md -> checks.md-without-plan.md | `.claude\skills\learny-ship-cycle\SKILL.md:37` | yes |
+| lane rule: roadmap rows included in Lane F -> excluded (run as Lane S) | `.claude\skills\learny-ship-cycle\SKILL.md:53` | yes |
+| vendored commit gate: allowed type list drops fix | `.claude\skills\tlc-spec-lean\scripts\check_commit.py:36` | yes |

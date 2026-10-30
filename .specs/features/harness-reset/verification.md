@@ -129,3 +129,32 @@ The round-2 faults ran only on the surfaces the fix created, and were verified a
 - **Targeted proofs at e1ce480:** 89 passed, 0 failed across the 5 proof modules. The C14-C23 shell proofs all exit 0. `python3 backend/scripts/check_commits.py d43402b..HEAD` reports 9 commits OK and exits 0, so the fix commit passes the new gate.
 - **Full backend suite:** the fix added one test file change and no production change, so I did not re-run the suite and carried this from a53464e. The orchestrator log at `LEARNY_REQUIRE_DB=1` shows 3048 passed, 12 skipped (none database-gated) and 2 failed. Both failures are in `tests/test_deploy_topology.py`, and that file passes 29/29 in a clean worktree at HEAD, which confirms the cause is the local skip-worktree edit to `docker-compose.override.yml`.
 - **Frontend:** 922 passed, as reported by the orchestrator and carried.
+
+---
+
+# harness-reset PR B verification
+
+**Verdict**: FAIL
+**Mutations**: 3 - probed C31 (Stage Detection mapping), C32 (lane rule), C28 (vendored commit gate type list)
+**Proofs**: `proofs.md` at 88c5a77
+**Verifier**: independent sub-agent (author != verifier)
+
+Round over every check, C1-C42 (last batch). Diff range `034c74a..b6f9f48`. The proofs are green at HEAD and none of the 3 mutations was killed. Own examples: the vendored commit gate on a `revert:` header and on an uppercase scope, and the C42 portability sensor fed absolute paths on drives other than `C:`.
+
+## Findings
+
+| Finding | Evidence | Fix | Closed |
+| --- | --- | --- | --- |
+| Stage Detection can map the wrong artifact state to lean Plan and no test fails (AC 30) | mutation `has plan.md but no checks.md -> has checks.md but no plan.md` on `learny-ship-cycle/SKILL.md:37` not killed; `test_shipcycle_stage_detection_maps_lean_artifacts` only checks that `plan.md`, `checks.md` and the two stage labels appear somewhere in the table | assert per row: the row whose observation is "has `plan.md` but no `checks.md`" resumes at `Stage 1 (lean Plan)`, and the row with "`checks.md` but no `verification.md`" resumes at `Stage 1 (lean Build/Verify)` | `00fe3f9` - `test_shipcycle_stage_detection_maps_lean_artifacts` asserts each observation-to-stage pair |
+| The lane rule can send every roadmap row to Lane S and no test fails (AC 31) | mutation `including every roadmap row -> excluding every roadmap row (those run as Lane S)` on `learny-ship-cycle/SKILL.md:53` not killed; `test_shipcycle_lanes_pick_by_rule` checks only that the token `every roadmap row` appears in Stage 0 | assert the rule itself, for example that the `**Lane F**` sentence includes "including every roadmap row" | `00fe3f9` - `test_shipcycle_lanes_pick_by_rule` pins the Lane F sentence |
+| C28 proves the vendored gate's type rule on 1 allowed type out of 10 | mutation `drop "fix" from TYPES` on `tlc-spec-lean/scripts/check_commit.py:36` not killed; `test_harness_skills.py` `test_the_vendored_commit_gate_runs_on_this_interpreter` runs only `feat(x): ...` and `foo(x): ...` | parametrize the passing case over every type the repo allows (the 11 in `backend/scripts/check_commits.py`) | `6735bdf` adds `revert` to the vendored gate, `00fe3f9` - `test_the_vendored_commit_gate_accepts_every_repo_type` runs all 11 |
+| The vendored commit gate contradicts the repo's commit contract (door 2), and the deviation is not recorded | own example at HEAD: `check_commit.py --message "revert: drop the stale lane rule"` exits 1 (`type 'revert' is not one of ...`, TYPES at `check_commit.py:36` has 10 types), while `check_commits.check_message` accepts it; `feat(Big Scope): add validation` exits 0 on the vendored gate but CI's checker rejects it. Vendored `SKILL.md:153` and `references/build.md:43` tell the builder to run this gate before each commit. Neither deviations section (`SKILL.md` "Learny deviations", `.claude/skills/README.md`) mentions it | add `revert` to the vendored TYPES and record it as a third deviation, or point lean's per-commit gate at `backend/scripts/check_commits.py`; pin either fix with a sensor that runs the vendored gate on `revert:` | `6735bdf` - the gate carries the repo's 11 types and the vendored skill and skill index record the commit-contract authority deviation; `00fe3f9` - the deviations and provenance sensors pin it, `test_the_vendored_commit_gate_accepts_every_repo_type` runs `revert` |
+| The C42 sensor accepts absolute paths that AC 41 forbids | own example: a throwaway test fed `test_the_proofs_portable_across_checkouts` 42 proofs each of `cd D:/dev/learny/backend && ...`, `cd E:\learny\backend && ...`, `cd ~/learny/backend && ...` and `cd /opt && ...`. All 4 passed. The deny-list at `test_harness_skills.py` only covers `c:\`/`c:/`, a few named POSIX roots, and multi-segment `/a/b/` paths. The current proofs are clean, so nothing is wrong today | match any drive letter (`[a-z]:` then a slash), a leading `~/`, and a single-segment POSIX root anchored at the start or after whitespace | `00fe3f9` - `test_the_proofs_portable_across_checkouts` adds the three patterns |
+| C36's claim does not match the tree: it says the cost-discipline section keeps the `LEARNY_REQUIRE_DB=1` + `make infra` Verifier rule | that rule is at `learny-ship-cycle/SKILL.md:167`, under `## Hygiene`, not under `## Cost discipline` (`:124-143`). `test_shipcycle_cost_discipline_keeps_the_model_rows` does not assert it, and C23 covers it file-wide | reword C36 to drop the clause (AC 35 does not require it), or assert the rule inside the section the claim names | `88c5a77` - the claim points the database rule at its own check (C23) and the hygiene section that holds it |
+
+Observations that fail nothing:
+
+- C17's sensor checks 16 kept skills (it adds `create-rfc`), one more than the 15 in AC 16. It is stricter than the claim, which is fine.
+- C29 claims the README records the "source". The sensor asserts the version, deviations, owner action and `Base directory`, but not the source path. The source is present at `.claude/skills/README.md:30`.
+
+Closed in one pass: `6735bdf` (the vendored commit gate carries the repo's commit types and the deviation is recorded in the vendored skill and skill index), `00fe3f9` (the sensors pin the stage mappings, the lane sentence, every gate type, the deviation and path portability) and `88c5a77` (the two claims now match the tree). proofs and the 3 mutations re-ran green at `88c5a77` (45 pass, 3 killed), all through the gate script.

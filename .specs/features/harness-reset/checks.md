@@ -256,6 +256,6 @@ Proof: `cd backend && uv run pytest -q tests/test_harness_skills.py -k proofs_po
 ## Handoff (PR B)
 
 - **Settled mid-build:** none - run mode auto; the door gate is waived by the standing authorization recorded on the plan's Approved line
-- **Dispatched:** Verifier at `c0a08c5` (pending)
+- **Dispatched:** Verifier (independent session) over every check at `b6f9f48` - FAIL: 6 findings, 3 mutations unkilled; closed by `6735bdf`, `00fe3f9`, `88c5a77`, proofs and mutations green at `88c5a77`
 - **Boundary:** C25-C42 closed at `c0a08c5`
 - **Abandoned:** none
