@@ -1,6 +1,6 @@
 ---
 name: learny-ship-cycle
-description: 'End-to-end orchestrator for one Learny roadmap PR: pick the next cycle from the roadmap, run a vendored tlc-spec-lean cycle (profile `standard`, 150k budget) auto-selecting recommended options, publish the PR with learny-finalize, run pr-review in a fresh-context subagent, triage every review finding against the code, apply accepted fixes, delete all PR comments, and merge after a single user approval. Use when asked to "ship the next PR", "run the ship cycle", "do the next roadmap cycle end-to-end", or to resume a partially shipped cycle. Not for ad-hoc edits, standalone reviews (use pr-review), or publishing-only work (use learny-finalize).'
+description: 'End-to-end orchestrator for one Learny roadmap PR: pick the next cycle from the roadmap, run a vendored tlc-spec-lean cycle (profile `standard`, 150k budget) auto-selecting recommended options, publish the PR with learny-finalize, run pr-review in a fresh-context subagent, triage every review finding against the code, apply accepted fixes, delete all PR comments, and merge after a single user approval; in `once` mode it also stops once at the Stage 1 door gate. Use when asked to "ship the next PR", "run the ship cycle", "do the next roadmap cycle end-to-end", or to resume a partially shipped cycle. Not for ad-hoc edits, standalone reviews (use pr-review), or publishing-only work (use learny-finalize).'
 license: CC-BY-4.0
 metadata:
   author: Learny contributors
@@ -11,9 +11,9 @@ metadata:
 
 Runs one roadmap cycle from "what's the next PR?" to merged, replacing the previous three manual sessions (tlc build → pr-review → triage/cleanup/merge) with one orchestrated pipeline. This skill owns only the glue; the work itself is delegated to the repo's vendored `tlc-spec-lean` (profile `standard`, budget 150k), `learny-finalize`, and `pr-review` unchanged.
 
-**Autonomy contract:** the pipeline runs without user prompts except at exactly one gate — merge approval (Stage 7) — plus the escalation rule in Stage 1. Everything else proceeds on the recommended option, logged for audit.
+**Autonomy contract:** the pipeline runs without user prompts except at two gates — the Stage 1 door gate (in `once` mode; waived in `auto`/`until` by the invocation's standing authorization) and merge approval (Stage 7) — plus the escalation rule in Stage 1. Everything else proceeds on the recommended option, logged for audit.
 
-**Continuation contract (binding):** never end a turn "standing by", "awaiting your call", or asking "want me to proceed?" between stages — finish the stage, update the heartbeat, and start the next stage in the same turn. Anything that needs the user's eyes (e.g. a browser check) is deferred to the Stage 7 report, not raised as a mid-cycle pause. The only allowed stops are: the Stage 7 gate, a Verifier FAIL, and a hard blocker only the user can clear (state which one when stopping).
+**Continuation contract (binding):** never end a turn "standing by", "awaiting your call", or asking "want me to proceed?" between stages — finish the stage, update the heartbeat, and start the next stage in the same turn. Anything that needs the user's eyes (e.g. a browser check) is deferred to the Stage 7 report, not raised as a mid-cycle pause. The only allowed stops are: the Stage 1 door gate (in `once` mode), the Stage 7 gate, a Verifier FAIL, and a hard blocker only the user can clear (state which one when stopping).
 
 **Heartbeat (`.specs/.ship-status`):** at every stage transition, overwrite `.specs/.ship-status` with a single line: `<cycle> | Stage <N> <name> | <branch or PR #> | <timestamp> | <one-line status>`. This is how the user (or a parallel session) answers "what is going on?" without archaeology. Also update it when parking on an outage or limit. Delete the file at Stage 8.
 
@@ -21,7 +21,7 @@ Runs one roadmap cycle from "what's the next PR?" to merged, replacing the previ
 
 ## Run modes (optional skill argument)
 
-- `once` (default) — stop at the Stage 7 merge gate for the single approval.
+- `once` (default) — stop at the Stage 1 door gate and at the Stage 7 merge gate for the single approval.
 - `auto` — this invocation is the user's standing merge approval: when the Stage 7 report is clean (Verifier PASS, gates green, comments cleaned), merge without asking, run Stage 8, and start the next cycle. Still stop for a Verifier FAIL, an escalation-rule decision, or a dirty report.
 - `until <roadmap row>` — like `auto`, but stop after the named row merges.
 
@@ -36,7 +36,7 @@ The pipeline is resumable. Check `.specs/.ship-status` first — if it shows an 
 | Clean `main`, ROADMAP next phase "Not started" | Stage 0 |
 | The cycle's feature folder (`.specs/features/<cycle>/`) has `plan.md` but no `checks.md` | Stage 1 (lean Plan) |
 | The cycle's feature folder has `checks.md` but no `verification.md` | Stage 1 (lean Build/Verify) |
-| Verifier PASS on branch, no open PR — a PASS means `python <skill-dir>/tlc-spec-lean/scripts/validate_verification.py <cycle> --root <repo>` exits 0 | Stage 2 |
+| Verifier PASS on branch, no open PR — a PASS means `python .claude/skills/tlc-spec-lean/scripts/validate_verification.py <cycle> --root <repo>` exits 0 at the commit `proofs.md` stamps, with only `.specs/` files changed after it (re-run at a later head it reads red by construction; check `git diff --name-only` from the stamped sha) | Stage 2 |
 | PR open, no `<!-- learny-review:` comments on it | Stage 3 |
 | PR has review comments, no `.specs/features/<cycle>/review-triage.md` | Stage 4 |
 | `review-triage.md` exists, accepted fixes not yet pushed | Stage 5 |
@@ -68,7 +68,7 @@ Invoke the vendored `tlc-spec-lean` for the cycle (Plan → Checks → Build →
 
 Build honors the lean contract: tests written from the checks' claims (never from the implementation), atomic commits, one coherent piece per commit with its check marked complete in `checks.md` in the same commit, and a mandatory fresh Verifier. A Verifier FAIL stops the pipeline with the report — do not continue to Stage 2.
 
-**Batches (over the budget, owner decision D2).** Lean asks what to do when the handoff arithmetic exceeds the budget; this cycle pre-answers "handoff": split the work at slice boundaries into sequential batches, each its own PR, and record the split in `checks.md`'s `## Handoff`. The Verifier runs scoped to each batch's checks before that batch's PR, and over every check before the last batch's PR.
+**Batches (over the budget, owner decision D2).** This cycle owns the trigger itself: Stage 1 appends a size estimate (`· ~Nk`) to each slice heading in `checks.md`, sums the estimates in `## Handoff`, and when the sum exceeds the 150k budget the lean mechanism ask is pre-answered with "handoff": split the work at slice boundaries into sequential batches, each its own PR, and record the split in `checks.md`'s `## Handoff`. The Verifier runs scoped to each batch's checks before that batch's PR, and over every check before the last batch's PR.
 
 When Build delegates a phase, set the worker's model per the **Cost discipline** table (build on Opus; Verifier on Opus; never Fable for a sub-agent), write each brief per **Worker briefs — state the goal, not the steps**, and give each worker scoped gate commands (affected module per commit, full suite at phase boundary).
 
@@ -101,7 +101,7 @@ Invoking this skill constitutes the user's standing instruction to delete review
 
 Re-fetch both endpoints and verify zero remain. If a submitted *review* (not a comment) exists, it cannot be deleted via the API — report it as a leftover artifact instead of retrying.
 
-## Stage 7 — Merge Gate (the one user prompt)
+## Stage 7 — Merge Gate (the second of the two prompts, after the Stage 1 door gate)
 
 Present a compact ship report: cycle, PR number, Verifier result, triage counts (real/false, fixed/won't-fix), fix commits, gate results, comment cleanup status. In `once` mode, ask the user (AskUserQuestion): merge now or hold. In `auto`/`until` mode with a clean report, merge without asking.
 

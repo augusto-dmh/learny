@@ -28,9 +28,11 @@ history).
 
 Vendored 2026-10-30 into `.claude/skills/tlc-spec-lean/` from the owner's
 user-level skills directory (source: `C:\Users\augus\.claude\skills\tlc-spec-lean`,
-version `2.1.0`, byte-identical apart from the deviations below). It replaces the
-removed driven copy as the feature-cycle skill; `learny-ship-cycle` Stage 1 and
-`CLAUDE.md` point at it.
+version `2.1.0`, byte-identical apart from the deviations below plus the Windows
+runner fix in `scripts/runners.py` — a launcher `_resolve()` through PATH/PATHEXT
+and longer vitest timeouts — ported from the source on 2026-10-30 after it changed
+post-vendoring). It replaces the removed driven copy as the feature-cycle skill;
+`learny-ship-cycle` Stage 1 and `CLAUDE.md` point at it.
 
 Recorded project deviations (in the vendored `SKILL.md` "Learny deviations"
 section):
@@ -42,8 +44,12 @@ section):
    `Assisted-by: Claude Code`, this repo's recorded exception to the skill's
    no-agent-trailer rule; CI's `commits` job enforces it.
 3. **Commit contract authority** — the vendored commit gate carries the repo's 11
-   commit types (including `revert`); where it and CI's `commits` job disagree, the
-   repo's checker decides (its scope rule is stricter, kebab-case only).
+   commit types (including `revert`) but does not enforce the required trailer,
+   the agent-trailer ban or the kebab-case scope rule; where it and CI's
+   `commits` job disagree, the repo's checker decides.
+4. **Decisions location** — owner decisions live in `.specs/project/STATE.md`
+   `## Open decisions` (every row active, no Status column); the vendored plan
+   gate's decisions lookup against `.specs/STATE.md` is waived by this deviation.
 
 **Owner action that keeps this the copy that loads:** remove or rename the
 user-level `tlc-spec-lean` directory, then confirm from the client's

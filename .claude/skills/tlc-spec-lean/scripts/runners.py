@@ -14,11 +14,25 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
 
 CD_RE = r"^(?:cd\s+(?P<cd>\S+)\s*&&\s*)?"
+
+
+def _resolve(cmd):
+    """Resolve the executable through PATH/PATHEXT so launchers that are only a
+    wrapper script on Windows (`npx`, `pnpm`, `yarn`) can be spawned. A resolved
+    `.cmd`/`.bat` shim cannot be CreateProcess'd directly; go through `cmd /c`."""
+    if cmd:
+        found = shutil.which(cmd[0])
+        if found:
+            if found.lower().endswith((".cmd", ".bat")):
+                return ["cmd", "/c", found, *cmd[1:]]
+            return [found, *cmd[1:]]
+    return cmd
 
 
 def _split(text):
@@ -119,8 +133,11 @@ class Vitest(Bun):
     def run(self, root, cwd, launcher, files):
         with tempfile.TemporaryDirectory() as tmp:
             out = os.path.join(tmp, "junit.xml")
-            cmd = [*launcher.split(), "vitest", "run", *sorted(files), "--reporter=junit", f"--outputFile={out}"]
-            subprocess.run(cmd, cwd=os.path.join(root, cwd), capture_output=True, text=True)
+            # The grouped run selects cases from the whole file, so a slow machine must not
+            # turn a passing case into a 5s-timeout failure (and a broken teardown after it).
+            cmd = [*launcher.split(), "vitest", "run", *sorted(files), "--testTimeout=120000",
+                   "--hookTimeout=60000", "--reporter=junit", f"--outputFile={out}"]
+            subprocess.run(_resolve(cmd), cwd=os.path.join(root, cwd), capture_output=True, text=True)
             if not os.path.exists(out):
                 return None
             # vitest joins describe and test with " > "; its -t matches them joined by a space
@@ -145,7 +162,7 @@ class Jest(Bun):
         with tempfile.TemporaryDirectory() as tmp:
             out = os.path.join(tmp, "report.json")
             cmd = [*launcher.split(), "jest", *sorted(files), "--json", f"--outputFile={out}"]
-            subprocess.run(cmd, cwd=os.path.join(root, cwd), capture_output=True, text=True)
+            subprocess.run(_resolve(cmd), cwd=os.path.join(root, cwd), capture_output=True, text=True)
             if not os.path.exists(out):
                 return None
             with open(out) as f:
@@ -176,7 +193,7 @@ class Pytest:
         with tempfile.TemporaryDirectory() as tmp:
             out = os.path.join(tmp, "junit.xml")
             cmd = [*launcher.split(), *sorted(files), f"--junitxml={out}", "-q"]
-            subprocess.run(cmd, cwd=os.path.join(root, cwd), capture_output=True, text=True)
+            subprocess.run(_resolve(cmd), cwd=os.path.join(root, cwd), capture_output=True, text=True)
             return _junit(out) if os.path.exists(out) else None
 
     @staticmethod
