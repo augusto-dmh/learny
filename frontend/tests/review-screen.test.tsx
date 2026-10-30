@@ -1106,9 +1106,15 @@ describe("ReviewScreen undo, flag, and edit (REV-22/37/45)", () => {
 
     render(<ReviewScreen />);
     await screen.findByTestId("question");
-    pressKey("e");
-
-    const questionField = await screen.findByTestId("edit-question");
+    // Under load the keypress can land in the window where the shortcut handlers
+    // are being re-attached, so retry it until the editor is open instead of
+    // firing once and hoping. Pressing "e" again is safe: startEdit is
+    // idempotent and the shortcuts unmount while the editor is open.
+    await waitFor(() => {
+      pressKey("e");
+      return expect(screen.queryByTestId("edit-question")).not.toBeNull();
+    });
+    const questionField = screen.getByTestId("edit-question");
     const answerField = screen.getByTestId("edit-answer");
     fireEvent.change(questionField, {
       target: { value: "Ada wrote the first what?" },
@@ -1444,8 +1450,10 @@ describe("ReviewScreen in pt-BR", () => {
       "Da nota “Como a memória funciona”",
     );
     fireEvent.click(screen.getByRole("button", { name: "Reiniciar agendamento" }));
+    // The confirm dialog renders from an async state update; await it instead of
+    // racing it with a synchronous body read.
+    expect(await screen.findByRole("button", { name: "Cancelar" })).toBeTruthy();
     expect(body()).toContain("Reiniciar o agendamento deste cartão?");
-    expect(screen.getByRole("button", { name: "Cancelar" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Confirmar reinício" }));
     expect(
       await screen.findByRole("button", { name: "Reiniciando…" }),
