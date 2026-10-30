@@ -416,6 +416,13 @@ conversation_turns = Table(
     Column("model", Text, nullable=False),
     Column("evidence_count", Integer, nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    # What the call cost and on whose key it ran (learner keys on a hosted
+    # instance). NULL tokens read as "the adapter reported nothing"; a NULL cost
+    # is a house-served turn - the learner pays nothing for those.
+    Column("usage_input_tokens", Integer, nullable=True),
+    Column("usage_output_tokens", Integer, nullable=True),
+    Column("cost_usd_micros", BigInteger, nullable=True),
+    Column("user_keyed", Boolean, nullable=False, server_default=text("false")),
     UniqueConstraint("conversation_id", "turn_index"),
 )
 
@@ -1000,4 +1007,59 @@ user_locale_preferences = Table(
     Column("locale", Text, nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+)
+
+
+# --- BYOK policy ledgers (learner keys on a hosted instance) -----------------------
+# The learner's own monthly ledger and per-corpus prompt ceiling, plus the
+# learner's own budget row. Both ledgers are upsert-incremented on their
+# composite primary keys (like ``ai_spend_days``), so N debits in one month
+# leave one row equal to the sum. ``period_month`` is the ``YYYY-MM`` UTC
+# calendar month. The FKs cascade: a deleted account (or book) leaves no
+# orphan rows.
+
+byok_month_usage = Table(
+    "byok_month_usage",
+    metadata,
+    Column(
+        "user_id",
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column("period_month", Text, nullable=False, primary_key=True),
+    Column("input_tokens", BigInteger, nullable=False, server_default="0"),
+    Column("output_tokens", BigInteger, nullable=False, server_default="0"),
+    Column("cost_usd_micros", BigInteger, nullable=False, server_default="0"),
+)
+
+byok_corpus_prompt_months = Table(
+    "byok_corpus_prompt_months",
+    metadata,
+    Column(
+        "user_id",
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column(
+        "source_id",
+        UUID(as_uuid=True),
+        ForeignKey("sources.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column("period_month", Text, nullable=False, primary_key=True),
+    Column("input_tokens", BigInteger, nullable=False, server_default="0"),
+)
+
+user_byok_settings = Table(
+    "user_byok_settings",
+    metadata,
+    Column(
+        "user_id",
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column("monthly_budget_usd_micros", BigInteger, nullable=True),
 )

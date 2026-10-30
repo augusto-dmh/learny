@@ -47,6 +47,8 @@ from app.domain.entities import (
     AnchorBlockSnapshot,
     AnchorSection,
     Backlink,
+    ByokCorpusPromptMonth,
+    ByokMonthUsage,
     CardProvenance,
     ChapterIndexRow,
     ChapterSection,
@@ -86,10 +88,13 @@ from app.domain.entities import (
     StudyDay,
     UndoableReview,
     User,
+    UserByokSettings,
 )
 from app.infrastructure.db.metadata import (
     activation_events,
     ai_spend_days,
+    byok_corpus_prompt_months,
+    byok_month_usage,
     conversation_turn_citations,
     conversation_turns,
     conversations,
@@ -115,6 +120,7 @@ from app.infrastructure.db.metadata import (
     study_days,
     tags,
     user_ai_preferences,
+    user_byok_settings,
     user_credentials,
     user_locale_preferences,
     users,
@@ -1255,6 +1261,10 @@ class SqlAlchemyConversationTurnRepository:
                     model=turn.model,
                     evidence_count=turn.evidence_count,
                     created_at=turn.created_at,
+                    usage_input_tokens=turn.usage_input_tokens,
+                    usage_output_tokens=turn.usage_output_tokens,
+                    cost_usd_micros=turn.cost_usd_micros,
+                    user_keyed=turn.user_keyed,
                 )
             )
         except IntegrityError as exc:
@@ -2680,6 +2690,162 @@ class SqlAlchemyAiSpendDayRepository:
         )
 
 
+class SqlAlchemyByokMonthRepository:
+    """Postgres ``byok_month_usage`` ledger: a learner's own monthly usage.
+
+    Same upsert-increment shape as the daily ledger, keyed
+    ``(user_id, period_month)`` — the soft monthly budget's read model.
+    """
+
+    def __init__(self, connection: Connection) -> None:
+        self._conn = connection
+
+    def record(
+        self,
+        user_id: UUID,
+        period_month: str,
+        *,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        cost_usd_micros: int = 0,
+    ) -> None:
+        stmt = pg_insert(byok_month_usage).values(
+            user_id=user_id,
+            period_month=period_month,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cost_usd_micros=cost_usd_micros,
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[byok_month_usage.c.user_id, byok_month_usage.c.period_month],
+            set_={
+                "input_tokens": byok_month_usage.c.input_tokens + stmt.excluded.input_tokens,
+                "output_tokens": byok_month_usage.c.output_tokens + stmt.excluded.output_tokens,
+                "cost_usd_micros": (
+                    byok_month_usage.c.cost_usd_micros + stmt.excluded.cost_usd_micros
+                ),
+            },
+        )
+        self._conn.execute(stmt)
+
+    def get_for_month(self, user_id: UUID, period_month: str) -> ByokMonthUsage | None:
+        row = self._conn.execute(
+            select(
+                byok_month_usage.c.user_id,
+                byok_month_usage.c.period_month,
+                byok_month_usage.c.input_tokens,
+                byok_month_usage.c.output_tokens,
+                byok_month_usage.c.cost_usd_micros,
+            )
+            .where(byok_month_usage.c.user_id == user_id)
+            .where(byok_month_usage.c.period_month == period_month)
+        ).first()
+        if row is None:
+            return None
+        return ByokMonthUsage(
+            user_id=row.user_id,
+            period_month=row.period_month,
+            input_tokens=row.input_tokens,
+            output_tokens=row.output_tokens,
+            cost_usd_micros=row.cost_usd_micros,
+        )
+
+
+class SqlAlchemyByokCorpusRepository:
+    """Postgres ``byok_corpus_prompt_months`` ledger: prompt tokens per book.
+
+    One row per ``(user_id, source_id, period_month)``; the per-corpus
+    ceiling's read model.
+    """
+
+    def __init__(self, connection: Connection) -> None:
+        self._conn = connection
+
+    def record(
+        self, user_id: UUID, source_id: UUID, period_month: str, *, input_tokens: int = 0
+    ) -> None:
+        stmt = pg_insert(byok_corpus_prompt_months).values(
+            user_id=user_id,
+            source_id=source_id,
+            period_month=period_month,
+            input_tokens=input_tokens,
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[
+                byok_corpus_prompt_months.c.user_id,
+                byok_corpus_prompt_months.c.source_id,
+                byok_corpus_prompt_months.c.period_month,
+            ],
+            set_={
+                "input_tokens": byok_corpus_prompt_months.c.input_tokens
+                + stmt.excluded.input_tokens
+            },
+        )
+        self._conn.execute(stmt)
+
+    def get_for_month(
+        self, user_id: UUID, source_id: UUID, period_month: str
+    ) -> ByokCorpusPromptMonth | None:
+        row = self._conn.execute(
+            select(
+                byok_corpus_prompt_months.c.user_id,
+                byok_corpus_prompt_months.c.source_id,
+                byok_corpus_prompt_months.c.period_month,
+                byok_corpus_prompt_months.c.input_tokens,
+            )
+            .where(byok_corpus_prompt_months.c.user_id == user_id)
+            .where(byok_corpus_prompt_months.c.source_id == source_id)
+            .where(byok_corpus_prompt_months.c.period_month == period_month)
+        ).first()
+        if row is None:
+            return None
+        return ByokCorpusPromptMonth(
+            user_id=row.user_id,
+            source_id=row.source_id,
+            period_month=row.period_month,
+            input_tokens=row.input_tokens,
+        )
+
+
+class SqlAlchemyUserByokSettingsRepository:
+    """Postgres ``user_byok_settings``: the learner's own preferences row.
+
+    ``set_budget`` is a full upsert (the row exists the first time a budget is
+    set), so clearing a budget and setting one share one statement.
+    """
+
+    def __init__(self, connection: Connection) -> None:
+        self._conn = connection
+
+    def get(self, user_id: UUID) -> UserByokSettings | None:
+        row = self._conn.execute(
+            select(
+                user_byok_settings.c.user_id,
+                user_byok_settings.c.monthly_budget_usd_micros,
+            ).where(user_byok_settings.c.user_id == user_id)
+        ).first()
+        if row is None:
+            return None
+        return UserByokSettings(
+            user_id=row.user_id,
+            monthly_budget_usd_micros=row.monthly_budget_usd_micros,
+        )
+
+    def set_budget(self, user_id: UUID, monthly_budget_usd_micros: int | None) -> UserByokSettings:
+        stmt = pg_insert(user_byok_settings).values(
+            user_id=user_id,
+            monthly_budget_usd_micros=monthly_budget_usd_micros,
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[user_byok_settings.c.user_id],
+            set_={"monthly_budget_usd_micros": stmt.excluded.monthly_budget_usd_micros},
+        )
+        self._conn.execute(stmt)
+        settings = self.get(user_id)
+        assert settings is not None  # the upsert above just wrote it
+        return settings
+
+
 def _to_user(row) -> User:  # noqa: ANN001 — Row is an internal SQLAlchemy type
     return User(
         id=row.id,
@@ -2812,6 +2978,10 @@ def _to_conversation_turn(row, citations: tuple[Evidence, ...]) -> ConversationT
         evidence_count=row.evidence_count,
         citations=citations,
         created_at=row.created_at,
+        usage_input_tokens=row.usage_input_tokens,
+        usage_output_tokens=row.usage_output_tokens,
+        cost_usd_micros=row.cost_usd_micros,
+        user_keyed=row.user_keyed,
     )
 
 
