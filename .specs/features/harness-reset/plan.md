@@ -222,7 +222,7 @@ Nothing else here is hard to reverse: the rewired skills and docs are git-tracke
 
 **Acceptance Criteria**
 
-24. The system SHALL contain `.claude/skills/tlc-spec-lean/` with `SKILL.md`, the six reference files (`build.md`, `checks.md`, `memory.md`, `plan.md`, `verify.md`, `verify-screens.md`), the eleven gate scripts (`check_commit.py`, `check_proofs.py`, `lean_config.py`, `lessons.py`, `mutate.py`, `runners.py`, `selftest.py`, `validate_checks.py`, `validate_plan.py`, `validate_verification.py`) and the four fixture files under `scripts/fixtures/`
+24. The system SHALL contain `.claude/skills/tlc-spec-lean/` with `SKILL.md`, the six reference files (`build.md`, `checks.md`, `memory.md`, `plan.md`, `verify.md`, `verify-screens.md`), the ten gate scripts (`check_commit.py`, `check_proofs.py`, `lean_config.py`, `lessons.py`, `mutate.py`, `runners.py`, `selftest.py`, `validate_checks.py`, `validate_plan.py`, `validate_verification.py`) and the four fixture files under `scripts/fixtures/`
 25. The vendored `SKILL.md` SHALL carry a Learny deviations section stating both recorded deviations: the per-batch Verifier scope (owner decision D2) and the `Assisted-by: Claude Code` trailer as the override of lean's no-trailer rule (owner decision D3)
 26. The vendored `references/build.md` SHALL state that this repo requires the `Assisted-by: Claude Code` trailer on every commit, naming it as the exception to the skill's no-agent-trailer rule
 27. WHEN run as `python .claude/skills/tlc-spec-lean/scripts/check_commit.py --message "feat(x): add validation"` THEN the vendored script SHALL exit 0, and WHERE the message has a disallowed type THEN it SHALL exit 1

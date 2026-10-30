@@ -9,7 +9,7 @@ Plan: `.specs/features/harness-reset/plan.md`
 
 ## Checks
 
-Commands run from `backend/` unless they start with `cd`. Database-backed proofs use `LEARNY_TEST_DATABASE_URL=postgresql+psycopg://learny:learny@localhost:5432/learny_test_harness`. PR B rewrote the PR A proofs to be machine-independent (pytest sensors in `tests/test_harness_skills.py` replace the Linux-worktree shell proofs; the claims are unchanged except C22, which no longer pins the PR B row's status).
+Commands run from `backend/` unless they start with `cd`. Database-backed proofs use `LEARNY_TEST_DATABASE_URL=postgresql+psycopg://learny:learny@localhost:5432/learny_test_harness`. PR B rewrote the PR A proofs to be machine-independent (pytest sensors in `tests/test_harness_skills.py` replace the Linux-worktree shell proofs; the claims are unchanged except C22, which no longer pins the PR B row's status, and C25, whose gate-script count now matches the ten scripts its criterion enumerates).
 
 ### S1 - A run that skips the database suite cannot pass · 3 files · 6 KB · ~2k
 
@@ -164,7 +164,7 @@ File-level lines live at the top of this file (`Mutations: 3`, the `Build:` lint
 
 ### S8 - The lean spec skill is vendored with its deviations · ~50 files · ~30 KB vendored · ~2k
 
-**C25** - The vendored tree is complete: `SKILL.md`, the 6 reference files, the 11 gate scripts and the 4 fixture files exist under `.claude/skills/tlc-spec-lean/`, and `SKILL.md` names the skill `tlc-spec-lean` (AC 24)
+**C25** - The vendored tree is complete: `SKILL.md`, the 6 reference files, the 10 gate scripts and the 4 fixture files exist under `.claude/skills/tlc-spec-lean/`, and `SKILL.md` names the skill `tlc-spec-lean` (AC 24)
 Proof: `cd backend && uv run pytest -q tests/test_harness_skills.py -k vendored_tree`
 
 **C26** - The vendored `SKILL.md` carries a Learny deviations section naming both recorded deviations: the per-batch Verifier (decision D2) and the `Assisted-by: Claude Code` trailer overriding lean's no-trailer rule (decision D3) (AC 25)
