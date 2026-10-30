@@ -467,6 +467,40 @@ def test_explain_drops_ungrounded_citations(db_conn: Connection) -> None:
     assert [c.quote for c in feedback.citations] == [CHUNKS[2]]
 
 
+def test_explain_asks_for_the_callers_language(db_conn: Connection) -> None:
+    # The explanation's feedback is requested in the learner's interface
+    # language, exactly as every other answer turn is; None means English and
+    # must reach the port as None so the request stays byte-identical.
+    user, source_id = _book(db_conn)
+    started = _start(db_conn)(user=user, source_id=source_id, anchor=ANCHOR, prediction=None)
+    attempt_id = _explain_attempt_id(started)
+    ids = _chunk_ids(db_conn, source_id)
+    generation = FakeAnswerGeneration(
+        answer=GeneratedAnswer(
+            text="Bom começo.", cited_chunk_ids=(ids[CHUNKS[1]],), model="m", found=True
+        )
+    )
+
+    pt = _respond(db_conn, generation)(
+        user=user,
+        attempt_id=attempt_id,
+        response="trabalhadores",
+        confidence=2,
+        response_language="pt-BR",
+    )
+    en_start = _start(db_conn)(user=user, source_id=source_id, anchor=ANCHOR, prediction=None)
+    en = _respond(db_conn, generation)(
+        user=user,
+        attempt_id=_explain_attempt_id(en_start),
+        response="workers",
+        confidence=2,
+    )
+
+    assert pt.feedback == "Bom começo."
+    assert en.feedback == "Bom começo."
+    assert generation.response_languages == ["pt-BR", None]
+
+
 @pytest.mark.parametrize("outcome", ["not_found", "raises", "ungrounded"])
 def test_explain_fallback_on_not_found_raise_or_ungrounded(
     db_conn: Connection, outcome: str

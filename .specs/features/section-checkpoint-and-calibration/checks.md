@@ -94,9 +94,11 @@ Proof: `pytest tests/test_application_checkpoints.py -k "reuse_skips_checkpoint_
 
 ### S4 - explain-back gets formative feedback · batch 1
 
-**C21** - A non-blank explanation triggers exactly one `generate` call with `mode='answer'` and evidence capped at 6, ordered fewest-shared-words first. The returned citations are exactly the cited evidence that `ground()` keeps (AC 21)
+**C21** - A non-blank explanation triggers exactly one `generate` call with `mode='answer'` and evidence capped at 6, ordered fewest-shared-words first. The returned citations are exactly the cited evidence that `ground()` keeps. The call also carries the learner's interface language (`response_language`: the stored locale, else `Accept-Language`, else `None` for English), like every other answer turn (AC 21; appended with the interface-language seam)
 Proof: `pytest tests/test_application_checkpoints.py -k "explain_calls_answer_mode_once_least_covered_first"`
 Proof: `pytest tests/test_application_checkpoints.py -k "explain_drops_ungrounded_citations"`
+Proof: `pytest tests/test_application_checkpoints.py -k "explain_asks_for_the_callers_language"`
+Proof: `pytest tests/test_web_checkpoints.py -k "explain_feedback_language_follows_the_learner"`
 
 **C22** - The explain response JSON has exactly the keys `feedback` and `citations` (each citation `anchor`, `section_path`, `quote`). The dialog's feedback step renders none of the words `score`, `grade`, `%`, `correct`, `incorrect`, `pass` or `fail` (AC 22)
 Proof: `pytest tests/test_web_checkpoints.py -k "explain_payload_keys_have_no_score"`

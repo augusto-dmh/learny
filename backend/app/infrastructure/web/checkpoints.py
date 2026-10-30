@@ -40,6 +40,7 @@ from app.infrastructure.web.dependencies import (
     get_authenticated_user,
     get_grade_attempt,
     get_respond_to_attempt,
+    get_response_language,
     get_reveal_passage,
     get_start_checkpoint,
 )
@@ -154,11 +155,20 @@ def respond_to_attempt(
     attempt_id: UUID,
     user: Annotated[User, Depends(get_authenticated_user)],
     service: Annotated[RespondToAttempt, Depends(get_respond_to_attempt)],
+    response_language: Annotated[str | None, Depends(get_response_language)],
     body: RespondRequest,
 ) -> RecallRevealView | ExplainFeedbackView:
-    """Store the attempt once, then return what it unlocks (200)."""
+    """Store the attempt once, then return what it unlocks (200).
+
+    The explanation's feedback is asked for in the learner's language: the
+    stored locale, else ``Accept-Language``, else English.
+    """
     result = service(
-        user=user, attempt_id=attempt_id, response=body.response, confidence=body.confidence
+        user=user,
+        attempt_id=attempt_id,
+        response=body.response,
+        confidence=body.confidence,
+        response_language=response_language,
     )
     if isinstance(result, ExplainFeedback):
         return ExplainFeedbackView(

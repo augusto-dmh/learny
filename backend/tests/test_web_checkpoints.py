@@ -16,7 +16,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import Connection, func, select
 
-from app.domain.entities import User
+from app.domain.entities import GeneratedAnswer, User
 from app.infrastructure.db.metadata import (
     checkpoint_attempts,
     quiz_items,
@@ -334,6 +334,59 @@ def test_explain_payload_keys_have_no_score(quiz_client: TestClient, db_conn: Co
     for citation in body["citations"]:
         assert set(citation) == {"anchor", "section_path", "quote"}
     assert _GRADE_WORDS.search(body["feedback"]) is None
+
+
+@pytest.mark.parametrize(
+    ("stored", "header", "expected"),
+    [
+        pytest.param("pt-BR", None, "pt-BR", id="stored-pt-BR"),
+        pytest.param(None, "pt-BR,pt;q=0.9,en;q=0.8", "pt-BR", id="unset-pt-header"),
+        pytest.param("en", "pt-BR,pt;q=0.9", None, id="stored-en-beats-pt-header"),
+        pytest.param(None, None, None, id="no-header"),
+    ],
+)
+def test_explain_feedback_language_follows_the_learner(
+    quiz_client: TestClient,
+    db_conn: Connection,
+    stored: str | None,
+    header: str | None,
+    expected: str | None,
+) -> None:
+    """Explain-back feedback is requested in the learner's interface language.
+
+    Same rule as every answer turn: the stored locale wins, else ``Accept-Language``
+    negotiation, else English — and English reaches the port as ``None`` so the
+    provider request stays byte-identical to the pre-language one.
+    """
+    from app.infrastructure.web.dependencies import get_explain_generation
+    from tests.fakes import FakeAnswerGeneration
+
+    _, csrf, source_id = _book(quiz_client, db_conn)
+    if stored is not None:
+        resp = quiz_client.put(
+            "/api/me/locale", json={"locale": stored}, headers={"X-CSRF-Token": csrf}
+        )
+        assert resp.status_code == 200, resp.text
+    attempt_id = _attempts(_create(quiz_client, source_id, csrf))[0]["attempt_id"]
+    port = FakeAnswerGeneration(
+        answer=GeneratedAnswer(text="ok", cited_chunk_ids=(), model="fake", found=True)
+    )
+    quiz_client.app.dependency_overrides[get_explain_generation] = lambda: port
+    try:
+        headers = {"X-CSRF-Token": csrf}
+        if header is not None:
+            headers["Accept-Language"] = header
+        resp = quiz_client.post(
+            f"/api/checkpoint-attempts/{attempt_id}/response",
+            json={"response": "Workers specialise.", "confidence": 2},
+            headers=headers,
+        )
+    finally:
+        quiz_client.app.dependency_overrides.pop(get_explain_generation, None)
+
+    assert resp.status_code == 200, resp.text
+    assert port.calls, "the explain-back generation port was never reached"
+    assert port.response_languages == [expected]
 
 
 def _spend_to_cap(db_conn: Connection, user: User) -> None:

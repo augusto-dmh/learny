@@ -348,14 +348,20 @@ class RespondToAttempt:
         self._budget = budget
 
     def __call__(
-        self, *, user: User, attempt_id: UUID, response: str, confidence: int
+        self,
+        *,
+        user: User,
+        attempt_id: UUID,
+        response: str,
+        confidence: int,
+        response_language: str | None = None,
     ) -> RecallReveal | ExplainFeedback:
         owned = _owned(self._checkpoints, user, attempt_id)
         if owned.attempt.responded_at is not None:
             raise CheckpointAttemptConflict("This attempt already has a response.")
         if owned.attempt.kind == CheckpointAttemptKind.RECALL:
             return self._recall(owned, response, confidence)
-        return self._explain(user, owned, response, confidence)
+        return self._explain(user, owned, response, confidence, response_language)
 
     def _claim(
         self,
@@ -394,7 +400,12 @@ class RespondToAttempt:
         )
 
     def _explain(
-        self, user: User, owned: OwnedAttempt, response: str, confidence: int
+        self,
+        user: User,
+        owned: OwnedAttempt,
+        response: str,
+        confidence: int,
+        response_language: str | None,
     ) -> ExplainFeedback:
         checkpoint = owned.checkpoint
         section = _section(self._items, checkpoint)
@@ -425,7 +436,10 @@ class RespondToAttempt:
         )
         try:
             generated = self._generation.generate(
-                message=message, mode=MODE_ANSWER, evidence=evidence
+                message=message,
+                mode=MODE_ANSWER,
+                evidence=evidence,
+                response_language=response_language,
             )
         except Exception:  # noqa: BLE001 - any port failure still owes the learner a passage
             logger.warning(
