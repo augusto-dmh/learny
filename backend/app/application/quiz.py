@@ -25,6 +25,7 @@ from datetime import datetime
 from uuid import UUID
 
 from app.application.budget import KIND_GENERATION, DailyBudget
+from app.application.byok import ByokPolicy
 from app.application.errors import QuizDeckConflict, SourceNotFound, SourceNotReady
 from app.application.identity import AuthorizeOwnership
 from app.application.ingestion import SOURCE_STATUS_READY, authorized_source, readable_source
@@ -109,6 +110,7 @@ class PlanDeckGeneration:
         clock: Clock,
         ids: Callable[[], UUID],
         budget: DailyBudget | None = None,
+        byok_policy: ByokPolicy | None = None,
     ) -> None:
         self._sources = sources
         self._jobs = jobs
@@ -116,8 +118,11 @@ class PlanDeckGeneration:
         self._clock = clock
         self._ids = ids
         self._budget = budget
+        self._byok_policy = byok_policy
 
-    def __call__(self, *, user: User, source_id: UUID) -> QuizGenerationJob:
+    def __call__(
+        self, *, user: User, source_id: UUID, user_keyed: bool = False
+    ) -> QuizGenerationJob:
         source = authorized_source(
             user=user,
             source_id=source_id,
@@ -134,9 +139,14 @@ class PlanDeckGeneration:
 
         # The daily-budget guard runs after authorization and before the job row is
         # committed, so an exhausted day refuses the POST having created nothing —
-        # no queued job, no enqueue, no worker pass.
+        # no queued job, no enqueue, no worker pass. The USD cap yields to a
+        # learner-keyed deck (their money, their key) while the learner-side rails
+        # assert on the same pre-commit path: a paused key or a book at its ceiling
+        # refuses the POST having created nothing.
         if self._budget is not None:
-            self._budget.assert_generation(user.id, kind=KIND_GENERATION)
+            self._budget.assert_generation(user.id, kind=KIND_GENERATION, user_keyed=user_keyed)
+        if self._byok_policy is not None:
+            self._byok_policy.assert_turn(user.id, user_keyed=user_keyed, source_id=source_id)
 
         now = self._clock.now()
         return self._jobs.add(

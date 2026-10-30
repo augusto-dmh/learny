@@ -29,6 +29,7 @@ from app.application.budget import (
     KIND_TEACH_START,
     DailyBudget,
 )
+from app.application.byok import ByokPolicy
 from app.application.errors import (
     AnswerGenerationFailed,
     ConversationClosed,
@@ -585,6 +586,7 @@ class PostConversationTurn:
         explain_generation: GenerationPort | None = None,
         record_activation: RecordActivation | None = None,
         budget: DailyBudget | None = None,
+        byok_policy: ByokPolicy | None = None,
     ) -> None:
         self._conversations = conversations
         self._turns = turns
@@ -601,6 +603,7 @@ class PostConversationTurn:
         self._tutor_check_after_turns = tutor_check_after_turns
         self._record_activation = record_activation
         self._budget = budget
+        self._byok_policy = byok_policy
 
     def _chain_for(self, origin: str | None) -> GenerationPort:
         """The generation chain the turn's origin selects (COST-04, AD-345).
@@ -625,10 +628,15 @@ class PostConversationTurn:
         mode: str,
         origin: str | None = None,
         response_language: str | None = None,
+        user_keyed: bool = False,
     ) -> ConversationTurn:
         generation = self._chain_for(origin)
         prep = self._preflight(
-            user=user, conversation_id=conversation_id, mode=mode, message=message
+            user=user,
+            conversation_id=conversation_id,
+            mode=mode,
+            message=message,
+            user_keyed=user_keyed,
         )
         if _is_closing_restatement(prep):
             return self._persist(
@@ -655,7 +663,13 @@ class PostConversationTurn:
                 self._persist_failed(plan, message, mode, generation)
                 raise AnswerGenerationFailed("Answer generation failed.") from exc
 
-            self._debit(plan.user_id, spend_kind(mode, plan.turn_index), generated)
+            self._debit(
+                plan.user_id,
+                spend_kind(mode, plan.turn_index),
+                generated,
+                source_id=plan.conversation.source_id,
+                user_keyed=user_keyed,
+            )
             turn = self._turn_from_generated(
                 plan=plan, message=message, mode=mode, generated=generated
             )
@@ -671,6 +685,7 @@ class PostConversationTurn:
         mode: str,
         origin: str | None = None,
         response_language: str | None = None,
+        user_keyed: bool = False,
     ) -> Iterator[TurnStreamEvent]:
         """Run one turn incrementally, persisting only on stream completion.
 
@@ -693,7 +708,11 @@ class PostConversationTurn:
         shows the question that was asked (AD-262).
         """
         prep = self._preflight(
-            user=user, conversation_id=conversation_id, mode=mode, message=message
+            user=user,
+            conversation_id=conversation_id,
+            mode=mode,
+            message=message,
+            user_keyed=user_keyed,
         )
         return self._turn_stream(
             user=user,
@@ -702,6 +721,7 @@ class PostConversationTurn:
             mode=mode,
             generation=self._chain_for(origin),
             response_language=response_language,
+            user_keyed=user_keyed,
         )
 
     def _turn_stream(
@@ -713,6 +733,7 @@ class PostConversationTurn:
         mode: str,
         generation: GenerationPort,
         response_language: str | None,
+        user_keyed: bool = False,
     ) -> Iterator[TurnStreamEvent]:
         if _is_closing_restatement(prep):
             yield self._stream_turn(
@@ -767,7 +788,13 @@ class PostConversationTurn:
         # criterion and is left to the retry cycle.
 
         turn = self._turn_from_generated(plan=plan, message=message, mode=mode, generated=answer)
-        self._debit(prep.user_id, spend_kind(mode, plan.turn_index), answer)
+        self._debit(
+            prep.user_id,
+            spend_kind(mode, plan.turn_index),
+            answer,
+            source_id=plan.conversation.source_id,
+            user_keyed=user_keyed,
+        )
         yield self._stream_turn(plan, turn, mode)
 
     def _preflight(
@@ -777,6 +804,7 @@ class PostConversationTurn:
         conversation_id: UUID,
         mode: str,
         message: str,
+        user_keyed: bool = False,
     ) -> _TurnPrep:
         """Run the shared turn guards, scope expansion, and history.
 
@@ -837,7 +865,16 @@ class PostConversationTurn:
         # conversation and its history untouched. The kind is the turn's own: an ask,
         # a teach session start, or a plain generation.
         if self._budget is not None:
-            self._budget.assert_generation(user.id, kind=spend_kind(mode, turn_index))
+            self._budget.assert_generation(
+                user.id, kind=spend_kind(mode, turn_index), user_keyed=user_keyed
+            )
+        # The learner-side rails run beside the daily budget, on the same
+        # eager guard path: a paused key or a book at its ceiling refuses
+        # before anything is retrieved, generated, or written.
+        if self._byok_policy is not None:
+            self._byok_policy.assert_turn(
+                user.id, user_keyed=user_keyed, source_id=conversation.source_id
+            )
 
         return _TurnPrep(
             conversation=conversation,
@@ -1025,7 +1062,15 @@ class PostConversationTurn:
             response_language=response_language,
         )
 
-    def _debit(self, user_id: UUID, kind: str, generated: GeneratedAnswer) -> None:
+    def _debit(
+        self,
+        user_id: UUID,
+        kind: str,
+        generated: GeneratedAnswer,
+        *,
+        source_id: UUID | None = None,
+        user_keyed: bool = False,
+    ) -> None:
         """Debit the successful call's actual usage to the caller's UTC day.
 
         Runs after the port returned — a refused or failed call debits nothing — and
@@ -1034,16 +1079,29 @@ class PostConversationTurn:
         counts even when the adapter recorded no USD); a generation call without
         reported usage writes nothing. A call the learner's own key paid for
         debits 0 USD and still counts.
+
+        ``user_keyed`` is the pre-flight coverage verdict (will the caller's key
+        serve), not the router's stamp: the ledger rules are decided before the
+        call, so a learner-keyed turn cannot be booked against the operator's
+        day even if the stamp were ever missing. The BYOK policy beside it
+        records the same call to the learner's own ledgers.
         """
-        if self._budget is None:
-            return
-        self._budget.record(
-            user_id,
-            usd_micros=self._budget.usage_micros(
-                generated.usage, generated.profile_id, user_keyed=generated.user_keyed
-            ),
-            kind=kind,
-        )
+        if self._budget is not None:
+            self._budget.record(
+                user_id,
+                usd_micros=self._budget.usage_micros(
+                    generated.usage, generated.profile_id, user_keyed=user_keyed
+                ),
+                kind=kind,
+            )
+        if self._byok_policy is not None:
+            self._byok_policy.record_turn(
+                user_id,
+                user_keyed=user_keyed,
+                source_id=source_id,
+                usage=generated.usage,
+                profile_id=generated.profile_id,
+            )
 
     def _turn_from_generated(
         self,
@@ -1069,12 +1127,48 @@ class PostConversationTurn:
                 grounded,
                 generated.model,
                 ground_spans(generated, grounded[1]),
+                usage=self._usage_fields(generated),
             )
         if mode == MODE_TEACH and generated.found and generated.text.strip():
             return self._answered_turn(
-                plan, message, mode, (generated.text, []), generated.model, ()
+                plan,
+                message,
+                mode,
+                (generated.text, []),
+                generated.model,
+                (),
+                usage=self._usage_fields(generated),
             )
-        return self._not_found_turn(plan, message, mode, len(plan.evidence), generated.model)
+        return self._not_found_turn(
+            plan,
+            message,
+            mode,
+            len(plan.evidence),
+            generated.model,
+            usage=self._usage_fields(generated),
+        )
+
+    def _usage_fields(self, generated: GeneratedAnswer) -> dict[str, object]:
+        """The turn's usage columns from the port result: what the call consumed.
+
+        The tokens are the adapter's report (``None`` when it reported none);
+        the cost is the learner's own estimate — the same usage priced by the
+        house rule — and is set for a user-keyed turn only, because a
+        house-served turn costs the learner nothing and ``None`` says exactly
+        that.
+        """
+        usage = generated.usage
+        estimate = (
+            self._budget.estimate_micros(usage, generated.profile_id)
+            if generated.user_keyed and self._budget is not None
+            else None
+        )
+        return {
+            "usage_input_tokens": usage.input_tokens if usage is not None else None,
+            "usage_output_tokens": usage.output_tokens if usage is not None else None,
+            "cost_usd_micros": estimate,
+            "user_keyed": generated.user_keyed,
+        }
 
     def _answered_turn(
         self,
@@ -1084,6 +1178,7 @@ class PostConversationTurn:
         grounded: tuple[str, list[Evidence]],
         model: str,
         spans: tuple[CitedSpan, ...],
+        usage: dict[str, object] | None = None,
     ) -> ConversationTurn:
         text, citations = grounded
         return ConversationTurn(
@@ -1098,6 +1193,7 @@ class PostConversationTurn:
             evidence_count=len(plan.evidence),
             citations=_with_spans(citations, spans),
             created_at=self._clock.now(),
+            **(usage or {}),
         )
 
     def _not_found_turn(
@@ -1107,6 +1203,7 @@ class PostConversationTurn:
         mode: str,
         evidence_count: int,
         model: str,
+        usage: dict[str, object] | None = None,
     ) -> ConversationTurn:
         # Persisted like an answered turn but with empty text and no citations. The
         # verdict names what was actually searched: the reader's scope, or the book.
@@ -1123,6 +1220,7 @@ class PostConversationTurn:
             evidence_count=evidence_count,
             citations=(),
             created_at=self._clock.now(),
+            **(usage or {}),
         )
 
     def _failed_turn(
