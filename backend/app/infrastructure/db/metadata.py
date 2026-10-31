@@ -81,18 +81,25 @@ NAMING_CONVENTION = {
 class SettingsDimVector(VECTOR):
     """A ``vector`` column whose write width is the configured embedding dimension.
 
-    The column DDL stays the migration's ``vector(1536)`` — this type governs only
-    the client-side write contract: every vector bind is validated against
-    ``LEARNY_EMBEDDING_DIM`` (the single source of truth for the vector width, per
-    the config), so an operator who ran the resize procedure and restarted with
-    the new dimension can actually write the new width (ADR-0019 amendment), while
-    a wrong-width write is still refused before it reaches the database — a corpus
-    never comes to hold two vector widths.
+    The declared DDL width is the migrations' ``vector(1536)`` (0005, 0008 and
+    0013) — stated right on the type so the metadata matches the shipped schema;
+    an unparameterized type would render bare ``VECTOR`` and a ``compare_type``
+    autogenerate would see a drift it would emit as a typmod-dropping ALTER. This
+    type governs only the client-side write contract: every vector bind is
+    validated against ``LEARNY_EMBEDDING_DIM`` (the single source of truth for
+    the vector width, per the config), so an operator who ran the resize
+    procedure and restarted with the new dimension can actually write the new
+    width (ADR-0019 amendment), while a wrong-width write is still refused before
+    it reaches the database — a corpus never comes to hold two vector widths.
     """
 
-    # The type carries no per-instance state (the configured dim is read at bind
-    # time from the cached settings), so statement caching is safe.
+    # The type's only per-instance state is the constant DDL width below; the
+    # configured dim is read at bind time from the cached settings, so statement
+    # caching is safe.
     cache_ok = True
+
+    def __init__(self) -> None:
+        super().__init__(1536)
 
     def bind_processor(self, dialect):  # noqa: ANN201 — matches the parent's shape
         from app.core.config import get_settings
