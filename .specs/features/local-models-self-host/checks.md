@@ -121,6 +121,6 @@ Proof: `cd backend && uv run pytest tests/test_ops_docs_local_models.py -k "capt
 ## Handoff
 
 - **Settled mid-build:** none yet
-- **Dispatched:** (Verifier to be recorded here before dispatch)
+- **Dispatched:** Verifier dispatched 2026-10-30 against PR #84 (fresh context, LEARNY_REQUIRE_DB=1, owner services postgres 5437 / redis 6383)
 - **Abandoned:** golden capture judged quality scores — recorded in plan `## Assumptions`, out of scope
 - **Operator gate (AC 22):** `ollama --version` returned command-not-found on this machine (2026-10-30), the owner's no-install policy applies, and a pt-BR-capable model is a multi-GB download — so the capture itself is NOT attempted; C19–C21 prove the runner offline, C22 proves the doc carries the procedure. Recorded here and to be restated in the STATE handoff at wrap.
