@@ -90,6 +90,9 @@ def test_migration_metadata_compiles() -> None:
         "user_ai_preferences",
         "user_provider_credentials",
         "user_locale_preferences",
+        "byok_month_usage",
+        "byok_corpus_prompt_months",
+        "user_byok_settings",
         "section_checkpoints",
         "checkpoint_attempts",
     }
@@ -4174,3 +4177,58 @@ def test_checkpoint_migration_leaves_existing_review_log_unrecorded(monkeypatch)
     finally:
         engine.dispose()
     command.upgrade(cfg, "head")
+
+
+@pytest.mark.skipif(TEST_DB_URL is None, reason="LEARNY_TEST_DATABASE_URL not set")
+def test_migration_0033_creates_byok_policy_ledgers(monkeypatch) -> None:
+    """0033 creates the two ledgers and the settings row, adds the turn usage
+    columns with cascading FKs, and a downgrade takes all of it back."""
+    monkeypatch.setenv("LEARNY_DATABASE_URL", TEST_DB_URL)
+    cfg = _alembic_config(TEST_DB_URL)
+
+    command.upgrade(cfg, "head")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        inspector = inspect(engine)
+        tables = set(inspector.get_table_names())
+        assert {"byok_month_usage", "byok_corpus_prompt_months", "user_byok_settings"} <= tables
+
+        assert inspector.get_pk_constraint("byok_month_usage")["constrained_columns"] == [
+            "user_id",
+            "period_month",
+        ]
+        assert inspector.get_pk_constraint("byok_corpus_prompt_months")["constrained_columns"] == [
+            "user_id",
+            "source_id",
+            "period_month",
+        ]
+        assert inspector.get_pk_constraint("user_byok_settings")["constrained_columns"] == [
+            "user_id"
+        ]
+
+        fks = inspector.get_foreign_keys("byok_corpus_prompt_months")
+        assert any(
+            fk["constrained_columns"] == ["source_id"]
+            and fk["referred_table"] == "sources"
+            and fk["options"].get("ondelete") == "CASCADE"
+            for fk in fks
+        )
+
+        turn_columns = {c["name"]: c for c in inspector.get_columns("conversation_turns")}
+        assert turn_columns["usage_input_tokens"]["nullable"] is True
+        assert turn_columns["usage_output_tokens"]["nullable"] is True
+        assert turn_columns["cost_usd_micros"]["nullable"] is True
+        assert turn_columns["user_keyed"]["nullable"] is False
+    finally:
+        engine.dispose()
+
+    command.downgrade(cfg, "0031_user_locale_preferences")
+    engine = create_engine(TEST_DB_URL)
+    try:
+        tables = set(inspect(engine).get_table_names())
+        assert not {"byok_month_usage", "byok_corpus_prompt_months", "user_byok_settings"} & tables
+        turn_columns = {c["name"] for c in inspect(engine).get_columns("conversation_turns")}
+        dropped = {"usage_input_tokens", "usage_output_tokens", "cost_usd_micros", "user_keyed"}
+        assert not dropped & turn_columns
+    finally:
+        engine.dispose()

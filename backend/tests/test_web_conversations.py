@@ -925,6 +925,10 @@ def test_read_returns_conversation_with_ordered_turns_and_modes(
         "evidence_count",
         "model",
         "created_at",
+        "usage_input_tokens",
+        "usage_output_tokens",
+        "cost_usd_micros",
+        "user_keyed",
     }
     assert turns[0]["mode"] == MODE_TEACH
     assert turns[0]["answer_status"] == ANSWERED
@@ -1227,6 +1231,10 @@ _TURN_FIELDS = {
     "evidence_count",
     "model",
     "created_at",
+    "usage_input_tokens",
+    "usage_output_tokens",
+    "cost_usd_micros",
+    "user_keyed",
 }
 
 
@@ -3308,3 +3316,67 @@ def test_no_mutating_conversation_route_answers_while_the_budget_is_spent(
         set_rate_limiter(previous)
         app.dependency_overrides.clear()
         get_settings.cache_clear()
+
+
+def test_restored_history_carries_usage(auth_client: TestClient, db_conn: Connection) -> None:
+    """A restored turn replays what its call consumed; a house turn shows a null cost.
+
+    The rows are seeded the way a served turn persists them (an adapter-reported
+    token pair; the estimated cost set on a learner-keyed turn only), so the read
+    path — the restored history view — is what this proves.
+    """
+    source_id, _csrf = _seed_ready_source(auth_client, db_conn, "history-usage@example.com")
+    conversation = _seed_conversation(db_conn, UUID(source_id))
+    now = datetime.now(UTC)
+    turns = SqlAlchemyConversationTurnRepository(db_conn)
+    turns.add(
+        ConversationTurn(
+            id=uuid4(),
+            conversation_id=conversation.id,
+            turn_index=0,
+            message="what is the photo?",
+            mode=MODE_ANSWER,
+            answer_status=ANSWERED,
+            answer_text="A grounded answer.",
+            model="claude-byok",
+            evidence_count=0,
+            citations=(),
+            created_at=now,
+            usage_input_tokens=1000,
+            usage_output_tokens=500,
+            cost_usd_micros=10_500,
+            user_keyed=True,
+        )
+    )
+    turns.add(
+        ConversationTurn(
+            id=uuid4(),
+            conversation_id=conversation.id,
+            turn_index=1,
+            message="and again",
+            mode=MODE_ANSWER,
+            answer_status=ANSWERED,
+            answer_text="The house answer.",
+            model=_MODEL,
+            evidence_count=0,
+            citations=(),
+            created_at=now,
+            usage_input_tokens=100,
+            usage_output_tokens=50,
+            user_keyed=False,
+        )
+    )
+
+    resp = auth_client.get(f"/api/conversations/{conversation.id}")
+
+    assert resp.status_code == 200, resp.text
+    first, second = resp.json()["turns"]
+    assert first["usage_input_tokens"] == 1000
+    assert first["usage_output_tokens"] == 500
+    assert first["cost_usd_micros"] == 10_500
+    assert first["user_keyed"] is True
+    # A house-served turn reports its tokens but never a cost: the learner pays nothing.
+    assert second["usage_input_tokens"] == 100
+    assert second["usage_output_tokens"] == 50
+    assert second["cost_usd_micros"] is None
+    assert second["user_keyed"] is False

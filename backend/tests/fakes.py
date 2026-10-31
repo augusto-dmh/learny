@@ -22,6 +22,8 @@ from app.domain.entities import (
     AnswerStreamEvent,
     AnswerTextDelta,
     Backlink,
+    ByokCorpusPromptMonth,
+    ByokMonthUsage,
     ChapterIndexRow,
     ChapterSection,
     ChunkToEmbed,
@@ -48,6 +50,7 @@ from app.domain.entities import (
     StructureSection,
     StudyDay,
     User,
+    UserByokSettings,
 )
 
 
@@ -1323,3 +1326,79 @@ class FakeRetrievalPort:
             if section_index is not None and section_index <= bound_index:
                 kept.append(evidence)
         return kept
+
+
+class FakeByokMonthRepository:
+    """In-memory ``ByokMonthLedger``: upsert-increment on the (user, month) key."""
+
+    def __init__(self) -> None:
+        self._rows: dict[tuple[UUID, str], ByokMonthUsage] = {}
+        self.record_calls: list[tuple[UUID, str, int, int, int]] = []
+
+    def record(
+        self,
+        user_id: UUID,
+        period_month: str,
+        *,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        cost_usd_micros: int = 0,
+    ) -> None:
+        self.record_calls.append(
+            (user_id, period_month, input_tokens, output_tokens, cost_usd_micros)
+        )
+        key = (user_id, period_month)
+        row = self._rows.get(key, ByokMonthUsage(user_id=user_id, period_month=period_month))
+        self._rows[key] = replace(
+            row,
+            input_tokens=row.input_tokens + input_tokens,
+            output_tokens=row.output_tokens + output_tokens,
+            cost_usd_micros=row.cost_usd_micros + cost_usd_micros,
+        )
+
+    def get_for_month(self, user_id: UUID, period_month: str) -> ByokMonthUsage | None:
+        return self._rows.get((user_id, period_month))
+
+
+class FakeByokCorpusRepository:
+    """In-memory ``ByokCorpusLedger``: upsert-increment per (user, source, month)."""
+
+    def __init__(self) -> None:
+        self._rows: dict[tuple[UUID, UUID, str], ByokCorpusPromptMonth] = {}
+        self.record_calls: list[tuple[UUID, UUID, str, int]] = []
+
+    def record(
+        self, user_id: UUID, source_id: UUID, period_month: str, *, input_tokens: int = 0
+    ) -> None:
+        self.record_calls.append((user_id, source_id, period_month, input_tokens))
+        key = (user_id, source_id, period_month)
+        row = self._rows.get(
+            key,
+            ByokCorpusPromptMonth(user_id=user_id, source_id=source_id, period_month=period_month),
+        )
+        self._rows[key] = replace(row, input_tokens=row.input_tokens + input_tokens)
+
+    def get_for_month(
+        self, user_id: UUID, source_id: UUID, period_month: str
+    ) -> ByokCorpusPromptMonth | None:
+        return self._rows.get((user_id, source_id, period_month))
+
+
+class FakeByokSettingsStore:
+    """In-memory ``ByokSettingsStore``: the learner's stored budget, or nothing."""
+
+    def __init__(self, monthly_budget_usd_micros: int | None = None) -> None:
+        self.budget = monthly_budget_usd_micros
+        self.writes: list[int | None] = []
+
+    def get(self, user_id: UUID) -> UserByokSettings | None:
+        if self.budget is None:
+            return None
+        return UserByokSettings(user_id=user_id, monthly_budget_usd_micros=self.budget)
+
+    def set_budget(self, user_id: UUID, monthly_budget_usd_micros: int | None) -> UserByokSettings:
+        self.budget = monthly_budget_usd_micros
+        self.writes.append(monthly_budget_usd_micros)
+        return UserByokSettings(
+            user_id=user_id, monthly_budget_usd_micros=monthly_budget_usd_micros
+        )

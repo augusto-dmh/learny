@@ -763,6 +763,15 @@ class ConversationTurn:
     evidence_count: int
     citations: tuple[Evidence, ...]
     created_at: datetime
+    # What this turn's call cost and on whose key it ran. ``usage_*`` are the
+    # adapter's report (``None`` when it reported nothing); ``cost_usd_micros``
+    # is the learner's own estimate and is set for a user-keyed turn only — a
+    # house-served turn costs the learner nothing. Existing rows read as
+    # "no usage reported", which is the truth about them.
+    usage_input_tokens: int | None = None
+    usage_output_tokens: int | None = None
+    cost_usd_micros: int | None = None
+    user_keyed: bool = False
 
 
 @dataclass(frozen=True)
@@ -1411,6 +1420,52 @@ class AiSpendDay:
     usd_micros: int = 0
     ask_count: int = 0
     teach_starts: int = 0
+
+
+@dataclass(frozen=True)
+class ByokMonthUsage:
+    """One calendar month of a learner's own-keyed AI usage.
+
+    ``period_month`` is ``YYYY-MM`` (UTC). The input/output tokens and the
+    estimated cost of every call the learner's own provider key paid for
+    accumulate here (upsert-incremented), so the soft monthly budget reads one
+    row. The house's ``ai_spend_days`` deliberately never carries these: its
+    user-keyed debits are 0 USD by design.
+    """
+
+    user_id: UUID
+    period_month: str
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost_usd_micros: int = 0
+
+
+@dataclass(frozen=True)
+class ByokCorpusPromptMonth:
+    """One calendar month of the prompt tokens a learner pushed through one book.
+
+    Per ``(user, source, month)``, counting the adapter-reported input tokens of
+    user-keyed calls only — the per-corpus ceiling's ledger. House-served turns
+    and other learners' calls never land here.
+    """
+
+    user_id: UUID
+    source_id: UUID
+    period_month: str
+    input_tokens: int = 0
+
+
+@dataclass(frozen=True)
+class UserByokSettings:
+    """The learner's own BYOK preferences: today, the soft monthly budget.
+
+    ``monthly_budget_usd_micros`` is ``None`` while no budget is set; the
+    learner's key pauses for the rest of the month when the month's estimated
+    cost reaches it, and the learner raises or clears it in Account.
+    """
+
+    user_id: UUID
+    monthly_budget_usd_micros: int | None = None
 
 
 @dataclass(frozen=True)

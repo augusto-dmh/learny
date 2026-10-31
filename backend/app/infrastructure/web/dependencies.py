@@ -33,6 +33,7 @@ from app.application.budget import (
     TokenPrices,
     usd_to_micros,
 )
+from app.application.byok import ByokPolicy
 from app.application.cards import (
     AcceptCard,
     AcceptNoteCard,
@@ -121,6 +122,7 @@ from app.infrastructure.answering import (
     build_learner_keyed_chain,
     build_user_generation_chain,
     build_user_keyed_adapter,
+    covers_mode,
     order_learner_profiles,
 )
 from app.infrastructure.answering.routing import ChainEntry
@@ -132,6 +134,8 @@ from app.infrastructure.db.repositories import (
     SqlAlchemyActivationEventRepository,
     SqlAlchemyAiPreferenceRepository,
     SqlAlchemyAiSpendDayRepository,
+    SqlAlchemyByokCorpusRepository,
+    SqlAlchemyByokMonthRepository,
     SqlAlchemyCheckpointRepository,
     SqlAlchemyConversationRepository,
     SqlAlchemyConversationTurnRepository,
@@ -149,6 +153,7 @@ from app.infrastructure.db.repositories import (
     SqlAlchemySessionRepository,
     SqlAlchemySourceRepository,
     SqlAlchemyStudyDayRepository,
+    SqlAlchemyUserByokSettingsRepository,
     SqlAlchemyUserRepository,
 )
 from app.infrastructure.db.retrieval import SqlAlchemyRetrievalRepository
@@ -267,6 +272,46 @@ def build_budget(conn: Connection) -> DailyBudget:
         profile_catalogs=_profile_catalogs(),
         resolve_serving_profile=_serving_profile_resolver(),
     )
+
+
+def build_byok_policy(conn: Connection) -> ByokPolicy:
+    """Wire the learner-side BYOK policy on ``conn`` (the caller's transaction).
+
+    The estimate is the daily budget's own pricing rule bound to this request's
+    composition — one price catalog serving both the operator's debits and the
+    learner's — and the ceiling comes from the *current* settings like every
+    other knob here.
+    """
+    settings = get_settings()
+    return ByokPolicy(
+        months=SqlAlchemyByokMonthRepository(conn),
+        corpus=SqlAlchemyByokCorpusRepository(conn),
+        settings=SqlAlchemyUserByokSettingsRepository(conn),
+        clock=_clock,
+        corpus_cap_tokens=settings.byok_corpus_prompt_token_cap,
+        estimate=build_budget(conn).estimate_micros,
+    )
+
+
+def learner_key_covers(credentials: LearnerCredentials, *, mode: str) -> bool:
+    """Whether the caller's own key would serve a call of ``mode``.
+
+    The pre-flight twin of the router's serving rule: the learner-keyed entries
+    their stored keys build lead the chain, and the walk serves them for every
+    mode one of them is eligible for. ``False`` — the feature off, no usable
+    key, or no bound profile enabled for the mode — means the house would serve,
+    so the house rails govern the call in full.
+    """
+    return covers_mode(_learner_entries(credentials, lead=None), mode)
+
+
+def learner_holds_quiz_key(credentials: LearnerCredentials) -> bool:
+    """Whether the caller's own Anthropic key would serve a deck or card call.
+
+    The quiz adapter is built from ``quiz_model`` on the caller's key when they
+    hold one (ADR-0033); every other caller gets the house generator.
+    """
+    return credentials.repo is not None and QUIZ_KEY_PROVIDER in credentials.by_provider
 
 
 def _build_profile_catalogs(
@@ -809,13 +854,36 @@ def _offered_providers() -> tuple[str, ...]:
     return offered_providers(_generation_profiles())
 
 
+@lru_cache
+def _hosted_byok_locked() -> bool:
+    """The hosted gate: declared hosted without the explicit opt-in.
+
+    ``LEARNY_HOSTED_INSTANCE`` declares this deployment hosted;
+    ``LEARNY_HOSTED_BYOK_ENABLED`` is the post-security-review opt-in. Hosted
+    and not opted in, learner keys read as feature-off everywhere; a self-host
+    ignores the opt-in entirely.
+    """
+    settings = get_settings()
+    return settings.hosted_instance and not settings.hosted_byok_enabled
+
+
+def hosted_declaration() -> bool:
+    """Whether this deployment declares itself hosted.
+
+    Not secret: the keys section exists (or not) for every visitor already, and
+    the disclosure copy keys off this boolean wherever it renders.
+    """
+    return get_settings().hosted_instance
+
+
 def offered_key_providers() -> tuple[str, ...]:
     """The providers a learner may store a key for here; empty when the feature is off.
 
-    Off means no KEK is configured, or no declared profile binds a provider
-    (ADR-0033). The key routes answer 404 for every provider outside this set.
+    Off means no KEK is configured, no declared profile binds a provider
+    (ADR-0033), or the hosted lock is engaged. The key routes answer 404 for
+    every provider outside this set.
     """
-    if _secrets_envelope() is None:
+    if _secrets_envelope() is None or _hosted_byok_locked():
         return ()
     return _offered_providers()
 
@@ -829,7 +897,12 @@ def build_provider_credential_repository(
     conn: Connection,
 ) -> SqlAlchemyProviderCredentialRepository | None:
     """The credential repository on ``conn``, or ``None`` when the feature is off."""
-    access = learner_key_access(conn, _secrets_envelope(), _generation_profiles())
+    access = learner_key_access(
+        conn,
+        _secrets_envelope(),
+        _generation_profiles(),
+        hosted_lock=_hosted_byok_locked(),
+    )
     return access.repo if access is not None else None
 
 
@@ -986,6 +1059,7 @@ def clear_generation_chain_caches() -> None:
     _user_generation_chains.clear()
     _secrets_envelope.cache_clear()
     _offered_providers.cache_clear()
+    _hosted_byok_locked.cache_clear()
     _user_adapters.clear()
     _user_quiz_adapters.clear()
 
@@ -1184,6 +1258,7 @@ def get_post_conversation_turn(
             clock=_clock,
         ),
         budget=build_budget(conn),
+        byok_policy=build_byok_policy(conn),
     )
 
 
@@ -1228,6 +1303,7 @@ def build_plan_deck_generation(conn: Connection) -> PlanDeckGeneration:
         clock=_clock,
         ids=uuid4,
         budget=build_budget(conn),
+        byok_policy=build_byok_policy(conn),
     )
 
 
@@ -1587,6 +1663,7 @@ def get_suggest_cards(conn: DbConnection, generation: UserCardGeneration) -> Sug
         authorize=AuthorizeOwnership(),
         max_suggestions=settings.quiz_max_suggestions,
         budget=build_budget(conn),
+        byok_policy=build_byok_policy(conn),
     )
 
 
@@ -1653,6 +1730,7 @@ def get_suggest_note_cards(conn: DbConnection, generation: UserCardGeneration) -
         generation=generation,
         max_suggestions=settings.quiz_max_suggestions,
         budget=build_budget(conn),
+        byok_policy=build_byok_policy(conn),
     )
 
 

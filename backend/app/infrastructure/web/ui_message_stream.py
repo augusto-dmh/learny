@@ -13,6 +13,9 @@ starting, e.g. searching the book) → ``reasoning-start`` → ``reasoning-delta
 ``text-delta``×N → ``text-end`` → ``data-citations`` (the grounded citations, same
 ``EvidenceView`` projection as the JSON endpoint) → ``data-answer-status``
 (``answered`` | ``not_found_in_scope`` | ``not_found_in_source``) →
+``data-answer-usage`` (only when the adapter reported usage: the input and output
+token counts, and — on a learner-keyed turn — the estimated cost; a house turn
+carries a null cost, and a turn with no reported usage carries no part at all) →
 ``data-tutor-state`` (only when the conversation carries a tutor ladder: phase,
 hint, and check text, matching the buffered conversation read) → ``finish`` →
 the terminal ``[DONE]``. The text part opens at its first delta rather than up
@@ -53,14 +56,17 @@ UI_MESSAGE_STREAM_HEADER_NAME = "x-vercel-ai-ui-message-stream"
 UI_MESSAGE_STREAM_PROTOCOL = "v1"
 
 
-def _terminal(event: StreamTurn) -> tuple[list[Evidence], str, dict[str, str | None] | None]:
-    """Read the grounded citations, answer status, and tutor ladder from the terminal.
+def _terminal(
+    event: StreamTurn,
+) -> tuple[list[Evidence], str, dict[str, str | None] | None, dict[str, object] | None]:
+    """Read the grounded citations, answer status, tutor ladder, and usage.
 
     A turn stream ends with a :class:`~app.application.streaming.StreamTurn` — the
     persisted ``ConversationTurn`` — carrying the citation snapshots and the status
     the buffered response reports, projected identically for the client. Tutor
     columns ride along only when the conversation has a ladder; Answer threads
-    leave them unset so the Ask frame sequence stays citation + status.
+    leave them unset so the Ask frame sequence stays citation + status. The usage
+    dict is ``None`` when the adapter reported nothing, so no usage part is sent.
     """
     tutor: dict[str, str | None] | None = None
     if event.tutor_phase is not None:
@@ -69,7 +75,16 @@ def _terminal(event: StreamTurn) -> tuple[list[Evidence], str, dict[str, str | N
             "hint_level": event.hint_level,
             "check_text": event.tutor_check_text,
         }
-    return list(event.turn.citations), event.turn.answer_status, tutor
+    turn = event.turn
+    usage: dict[str, object] | None = None
+    if turn.usage_input_tokens is not None:
+        usage = {
+            "input_tokens": turn.usage_input_tokens,
+            "output_tokens": turn.usage_output_tokens,
+            "cost_usd_micros": turn.cost_usd_micros,
+            "user_keyed": turn.user_keyed,
+        }
+    return list(turn.citations), turn.answer_status, tutor, usage
 
 
 def to_ui_message_stream(
@@ -86,6 +101,7 @@ def to_ui_message_stream(
     citations: list[Evidence] = []
     status = ""
     tutor: dict[str, str | None] | None = None
+    usage: dict[str, object] | None = None
     text_started = False
     try:
         for event in events:
@@ -109,8 +125,8 @@ def to_ui_message_stream(
                 yield ServerSentEvent(
                     data={"type": "text-delta", "id": text_id, "delta": event.text}
                 )
-            elif isinstance(event, StreamTurn):  # terminal — citations, status, tutor ladder
-                citations, status, tutor = _terminal(event)
+            elif isinstance(event, StreamTurn):  # terminal — citations, status, tutor, usage
+                citations, status, tutor, usage = _terminal(event)
     except AnswerGenerationFailed:
         # Provider failed after headers were sent: surface the generic error as a
         # protocol part (never the wrapped detail) and terminate the stream.
@@ -131,6 +147,8 @@ def to_ui_message_stream(
         }
     )
     yield ServerSentEvent(data={"type": "data-answer-status", "data": {"status": status}})
+    if usage is not None:
+        yield ServerSentEvent(data={"type": "data-answer-usage", "data": usage})
     if tutor is not None:
         yield ServerSentEvent(data={"type": "data-tutor-state", "data": tutor})
     yield ServerSentEvent(data={"type": "finish"})

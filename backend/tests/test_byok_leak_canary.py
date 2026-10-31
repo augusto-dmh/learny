@@ -449,3 +449,92 @@ def test_scanner_catches_deliberate_leak() -> None:
     # A handler on the emitting logger runs before the record propagates to the
     # masking handler: it is an unmasked path, and the scanner reports it.
     assert scan({"raw": raw.getvalue().splitlines()}, (canary,)) == [("raw", 0), ("raw", 1)]
+
+
+def test_kek_canary_never_reaches_the_account_surface(
+    cards_client: TestClient,  # noqa: F811
+    db_conn: Connection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No response of the whole account surface ever carries the configured KEK.
+
+    The canary KEK is set the way an operator sets it; every user-facing route the
+    keys section can touch is then driven — list, save (malformed and valid),
+    test, delete, the budget put, the profile choice, and the account read — and
+    every response body is scanned for the KEK in its three spellable forms.
+    """
+    import base64
+
+    from app.infrastructure.answering.probe import ProbeOutcome
+    from app.infrastructure.web.provider_keys import get_key_probe
+
+    canary_kek = secrets.token_bytes(32)
+    monkeypatch.setenv("LEARNY_GENERATION_PROFILES", json.dumps([_HOUSE, _BYOK]))
+    _set_kek(monkeypatch, canary_kek, None)
+
+    class _OkProbe:
+        def __call__(self, profile: Any, api_key: str) -> ProbeOutcome:  # noqa: ANN401
+            return ProbeOutcome(ok=True)
+
+    cards_client.app.dependency_overrides[get_key_probe] = lambda: _OkProbe()
+    try:
+        learner_ctx = _highlight(cards_client, db_conn, "kek-canary@example.com")
+        user_id, csrf = UUID(learner_ctx["user_id"]), learner_ctx["csrf"]
+        headers = {"X-CSRF-Token": csrf}
+
+        def _call(resp: Any) -> Any:  # noqa: ANN401
+            responses.append(resp.text)
+            return resp
+
+        responses: list[str] = []
+        canary_key = _canary("KEKCANARY")
+        # list (feature on, nothing stored), a malformed save, a valid save, test,
+        # delete, the budget put, the profile choice, and the account read.
+        _call(cards_client.get("/api/me/provider-keys"))
+        malformed = cards_client.put(
+            "/api/me/provider-keys/anthropic", json={"api_key": "short"}, headers=headers
+        )
+        assert malformed.status_code == 422, malformed.text
+        assert (
+            _call(
+                cards_client.put(
+                    "/api/me/provider-keys/anthropic", json={"api_key": canary_key}, headers=headers
+                )
+            ).status_code
+            == 200
+        )
+        tested = _call(cards_client.post("/api/me/provider-keys/anthropic/test", headers=headers))
+        assert tested.json() == {"ok": True, "reason": None}
+        budgeted = _call(
+            cards_client.put(
+                "/api/me/provider-keys/budget",
+                json={"monthly_budget_usd": 25},
+                headers=headers,
+            )
+        )
+        assert budgeted.status_code == 200, budgeted.text
+        chosen = _call(
+            cards_client.put("/api/me/ai-profile", json={"profile_id": "house"}, headers=headers)
+        )
+        assert chosen.status_code == 200, chosen.text
+        _call(cards_client.get("/api/auth/me"))
+        assert (
+            _call(
+                cards_client.delete("/api/me/provider-keys/anthropic", headers=headers)
+            ).status_code
+            == 204
+        )
+        _call(cards_client.get("/api/me/provider-keys"))
+        assert user_id  # the learner context is real; the scan below is the point
+    finally:
+        cards_client.app.dependency_overrides.pop(get_key_probe, None)
+
+    spellings = [
+        base64.b64encode(canary_kek).decode(),
+        base64.b64encode(canary_kek).decode().rstrip("="),
+        canary_kek.hex(),
+        canary_kek.hex().upper(),
+    ]
+    for spelling in spellings:
+        for index, body in enumerate(responses):
+            assert spelling not in body, ("response", index, spelling)

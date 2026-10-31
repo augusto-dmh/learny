@@ -964,3 +964,70 @@ def test_response_language_is_forwarded(stream: bool, language: str | None) -> N
 
     assert learner.languages == []
     assert house.languages == [language]
+
+
+# --- A learner-keyed adapter is built on the profile's host only --------------------
+
+
+def test_user_keyed_adapter_builds_on_the_profile_host_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The adapter a learner-keyed turn builds sends the key to the bound
+    profile's declared host and nothing else: construction takes the profile and
+    the key, so no request-supplied endpoint can enter."""
+    import anthropic
+    import openai
+
+    from app.core.config import Settings
+    from app.infrastructure.answering import build_user_keyed_adapter
+
+    built: list[dict[str, object]] = []
+
+    class _RecordingClient:
+        def __init__(self, **kwargs: object) -> None:
+            self.kwargs = kwargs
+            built.append(kwargs)
+
+    monkeypatch.setattr(anthropic, "Anthropic", _RecordingClient)
+    monkeypatch.setattr(openai, "OpenAI", _RecordingClient)
+
+    compat = GenerationProfileSettings(
+        id="byok-gpt",
+        kind="openai-compatible",
+        model="gpt-x",
+        base_url="https://api.openai.com/v1",
+        max_tokens=64,
+        price_input_usd_per_million_tokens=1.0,
+        price_output_usd_per_million_tokens=1.0,
+        price_cache_read_usd_per_million_tokens=0.1,
+        price_cache_creation_usd_per_million_tokens=1.25,
+        grounding="prompt-cited",
+        ask_enabled=True,
+        teach_enabled=False,
+        user_key_provider="openai",
+    )
+    adapter = build_user_keyed_adapter(compat, Settings(_env_file=None), api_key="sk-test-key")
+    assert adapter is not None
+    client = adapter._get_client()  # the lazily built SDK client, forced for the assertion
+    assert client.kwargs["base_url"] == "https://api.openai.com/v1"  # type: ignore[attr-defined]
+    assert client.kwargs["api_key"] == "sk-test-key"  # type: ignore[attr-defined]
+
+    native = GenerationProfileSettings(
+        id="byok-claude",
+        kind="anthropic",
+        model="claude-x",
+        max_tokens=64,
+        price_input_usd_per_million_tokens=3.0,
+        price_output_usd_per_million_tokens=15.0,
+        price_cache_read_usd_per_million_tokens=0.3,
+        price_cache_creation_usd_per_million_tokens=3.75,
+        grounding="verified-spans",
+        ask_enabled=True,
+        teach_enabled=True,
+        user_key_provider="anthropic",
+    )
+    adapter = build_user_keyed_adapter(native, Settings(_env_file=None), api_key="sk-ant-key")
+    assert adapter is not None
+    client = adapter._get_client()
+    assert client.kwargs["api_key"] == "sk-ant-key"  # type: ignore[attr-defined]
+    assert "base_url" not in client.kwargs  # the native host, never an override

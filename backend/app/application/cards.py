@@ -44,6 +44,7 @@ from collections.abc import Callable, Sequence
 from uuid import UUID
 
 from app.application.budget import KIND_GENERATION, DailyBudget
+from app.application.byok import ByokPolicy
 from app.application.conversations import authorized_conversation
 from app.application.errors import (
     CardAlreadyExists,
@@ -186,6 +187,7 @@ class SuggestCards:
         authorize: AuthorizeOwnership,
         max_suggestions: int,
         budget: DailyBudget | None = None,
+        byok_policy: ByokPolicy | None = None,
     ) -> None:
         self._sources = sources
         self._notes = notes
@@ -194,8 +196,11 @@ class SuggestCards:
         self._authorize = authorize
         self._max_suggestions = max_suggestions
         self._budget = budget
+        self._byok_policy = byok_policy
 
-    def __call__(self, *, user: User, source_id: UUID, note_anchor_id: UUID) -> list[QuizCandidate]:
+    def __call__(
+        self, *, user: User, source_id: UUID, note_anchor_id: UUID, user_keyed: bool = False
+    ) -> list[QuizCandidate]:
         authorized_source(
             user=user,
             source_id=source_id,
@@ -209,10 +214,23 @@ class SuggestCards:
             # The corpus was replaced under the highlight; nothing to generate from.
             raise StaleCaptureTarget("The selected passage no longer matches the source.")
 
+        # The learner-side rails run before the provider call: a paused key or a
+        # book at its ceiling refuses with nothing generated (and nothing spent).
+        if self._byok_policy is not None:
+            self._byok_policy.assert_turn(user.id, user_keyed=user_keyed, source_id=source_id)
+
         result = self._generation.suggest_cards(section, anchor.quote_exact, self._max_suggestions)
         # The provider call completed — its tokens are spent whether or not any
         # candidate survives the QC below, so the debit lands before filtering.
         _debit_suggest(self._budget, user.id, result)
+        if self._byok_policy is not None:
+            self._byok_policy.record_turn(
+                user.id,
+                user_keyed=user_keyed,
+                source_id=source_id,
+                usage=result.usage,
+                profile_id=getattr(result, "profile_id", None),
+            )
         section_text = _section_text(section)
         survivors = [c for c in result.candidates if _passes_qc(c, section_text)]
         return survivors[: self._max_suggestions]
@@ -548,15 +566,24 @@ class SuggestNoteCards:
         generation: QuizGenerationPort,
         max_suggestions: int,
         budget: DailyBudget | None = None,
+        byok_policy: ByokPolicy | None = None,
     ) -> None:
         self._notes = notes
         self._generation = generation
         self._max_suggestions = max_suggestions
         self._budget = budget
+        self._byok_policy = byok_policy
 
-    def __call__(self, *, user: User, note_id: UUID) -> list[QuizCandidate]:
+    def __call__(
+        self, *, user: User, note_id: UUID, user_keyed: bool = False
+    ) -> list[QuizCandidate]:
         note = _owned_note(self._notes, user, note_id)
         context = _note_context(self._notes.anchors_for_note(note_id))
+
+        # A note is not a book: the budget governs (source_id is None, so the
+        # per-corpus ceiling does not apply on this path), still before the call.
+        if self._byok_policy is not None:
+            self._byok_policy.assert_turn(user.id, user_keyed=user_keyed, source_id=None)
 
         result = self._generation.suggest_note_cards(
             note.body_markdown, context, self._max_suggestions
@@ -564,6 +591,14 @@ class SuggestNoteCards:
         # Debit before QC for the same reason as the highlight path: the call's
         # tokens are spent whether or not a candidate survives (AD-341).
         _debit_suggest(self._budget, user.id, result)
+        if self._byok_policy is not None:
+            self._byok_policy.record_turn(
+                user.id,
+                user_keyed=user_keyed,
+                source_id=None,
+                usage=result.usage,
+                profile_id=None,
+            )
         survivors = [c for c in result.candidates if note_card_passes_qc(c, note.body_markdown)]
         return survivors[: self._max_suggestions]
 
