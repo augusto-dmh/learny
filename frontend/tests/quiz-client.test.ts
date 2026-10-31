@@ -18,6 +18,7 @@ import {
   flagQuizItem,
   generateDeck,
   ensureStarterDeck,
+  getCalibration,
   getDueReviews,
   getQuizOverview,
   quizExportUrl,
@@ -25,6 +26,7 @@ import {
   submitReview,
   undoReview,
   updateQuizItem,
+  type CalibrationLevel,
   type DueItem,
   type DueQueue,
   type QuizJob,
@@ -264,6 +266,40 @@ describe("ensureStarterDeck", () => {
         fetchMock as unknown as typeof fetch,
       ),
     ).resolves.toBeUndefined();
+  });
+});
+
+describe("getCalibration", () => {
+  const levels: CalibrationLevel[] = [
+    { confidence: 1, attempts: 0, recalled: 0 },
+    { confidence: 2, attempts: 4, recalled: 1 },
+    { confidence: 3, attempts: 10, recalled: 8 },
+  ];
+
+  it("GETs the per-source calibration path (no CSRF) and passes the parsed levels through", async () => {
+    const fetchMock = fetchMockFn(async () => jsonResponse(200, { levels }));
+
+    const result = await getCalibration("s1", fetchMock as unknown as typeof fetch);
+
+    expect(result).toEqual(levels);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/sources/s1/calibration");
+    expect(init.method).toBe("GET");
+    expect(init.credentials).toBe("same-origin");
+    expect(new Headers(init.headers).get("X-CSRF-Token")).toBeNull();
+  });
+
+  it("rejects with the operation's ApiError on a 404 missing/non-owned response", async () => {
+    const fetchMock = fetchMockFn(async () =>
+      jsonResponse(404, { detail: "Source not found." }),
+    );
+
+    await expect(
+      getCalibration("s1", fetchMock as unknown as typeof fetch),
+    ).rejects.toMatchObject({
+      operation: "quizCalibration",
+      detail: "Source not found.",
+    });
   });
 });
 
