@@ -24,8 +24,8 @@ whose key it ran.
 deleted account (or book) leaves no orphan rows. Downgrade drops the tables
 and the columns; a re-upgrade restores them clean.
 
-Revision ID: 0032_byok_policy_ledgers
-Revises: 0031_user_locale_preferences
+Revision ID: 0033_byok_policy_ledgers
+Revises: 0032_section_checkpoints
 Create Date: 2026-10-30
 """
 
@@ -38,8 +38,8 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision: str = "0032_byok_policy_ledgers"
-down_revision: str | None = "0031_user_locale_preferences"
+revision: str = "0033_byok_policy_ledgers"
+down_revision: str | None = "0032_section_checkpoints"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
