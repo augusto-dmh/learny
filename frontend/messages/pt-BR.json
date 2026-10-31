@@ -61,6 +61,7 @@
       "quizGenerate": "Não foi possível iniciar a geração do baralho.",
       "quizStarters": "Não foi possível preparar os cartões iniciais.",
       "quizDue": "Não foi possível carregar suas revisões pendentes.",
+      "quizCalibration": "Não foi possível carregar a calibração deste livro.",
       "quizReview": "Não foi possível registrar sua revisão.",
       "quizReset": "Não foi possível reiniciar o agendamento deste cartão.",
       "quizUndo": "Não foi possível desfazer sua última revisão.",

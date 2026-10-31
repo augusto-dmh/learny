@@ -80,7 +80,7 @@ function useCalibration(
       setError(null);
     } catch (err) {
       setLevels(null);
-      setError(errorMessage(err, "quizDue"));
+      setError(errorMessage(err, "quizCalibration"));
     }
   }, [sourceId]);
 

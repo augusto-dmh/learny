@@ -243,7 +243,7 @@ export async function getCalibration(
     credentials: "same-origin",
   });
   if (!res.ok) {
-    throw await apiErrorFrom(res, "quizDue");
+    throw await apiErrorFrom(res, "quizCalibration");
   }
   const body = (await res.json()) as { levels: CalibrationLevel[] };
   return body.levels;

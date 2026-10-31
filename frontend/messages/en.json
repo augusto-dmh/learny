@@ -61,6 +61,7 @@
       "quizGenerate": "Could not start quiz deck generation.",
       "quizStarters": "Could not prepare starter cards.",
       "quizDue": "Could not load your due reviews.",
+      "quizCalibration": "Could not load this book's calibration.",
       "quizReview": "Could not submit your review.",
       "quizReset": "Could not reset this card's schedule.",
       "quizUndo": "Could not undo your last review.",
