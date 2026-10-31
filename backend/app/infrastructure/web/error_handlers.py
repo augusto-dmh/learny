@@ -29,6 +29,8 @@ from app.application.errors import (
     ByokCorpusLimitExhausted,
     CardAlreadyExists,
     CardNotEditable,
+    CheckpointAttemptConflict,
+    CheckpointAttemptNotFound,
     ConversationClosed,
     ConversationNotFound,
     ConversationTargetUnavailable,
@@ -39,6 +41,7 @@ from app.application.errors import (
     EnqueueFailed,
     IngestionNotFound,
     InvalidCardText,
+    InvalidCheckpointRating,
     InvalidConversationMode,
     InvalidConversationScope,
     InvalidConversationTitle,
@@ -120,6 +123,9 @@ _STATUS_BY_ERROR = {
     InvalidCardText: _HTTP_422,
     CardNotEditable: status.HTTP_409_CONFLICT,
     CardAlreadyExists: status.HTTP_409_CONFLICT,
+    CheckpointAttemptNotFound: status.HTTP_404_NOT_FOUND,
+    CheckpointAttemptConflict: status.HTTP_409_CONFLICT,
+    InvalidCheckpointRating: _HTTP_422,
     # The daily-budget refusal: 429 with the honest come-back-tomorrow copy carried
     # in the message, and deliberately no ``Retry-After`` — the reset signal is the
     # 00:00 UTC boundary in the copy, not a limiter-style seconds hint.

@@ -501,6 +501,9 @@ def submit_review(
         user=user,
         item_id=item_id,
         rating=body.rating,
+        # The review screen hides the answer until the learner reveals it, so a
+        # grade sent here was attempted before the answer was shown.
+        assisted=False,
         review_duration_ms=body.review_duration_ms,
         client_tz=client_tz,
     )

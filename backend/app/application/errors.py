@@ -387,3 +387,22 @@ class InvalidToken(Exception):
     expired one, and a token minted for the other purpose alike — the response
     never says which. The web layer maps this to 403.
     """
+
+
+class CheckpointAttemptNotFound(Exception):
+    """A checkpoint attempt is missing or belongs to another learner's checkpoint.
+
+    The two collapse to the same 404 so an attempt id discloses nothing.
+    """
+
+
+class CheckpointAttemptConflict(Exception):
+    """A checkpoint attempt was asked to take a step it is past, or not yet at.
+
+    A second response, a grade before any response, a second grade, or a reveal
+    after the response (or on a recall attempt). The web layer maps this to 409.
+    """
+
+
+class InvalidCheckpointRating(Exception):
+    """A grade outside its attempt kind's scale (explain takes 1–3). Maps to 422."""

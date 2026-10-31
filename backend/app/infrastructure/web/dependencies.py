@@ -42,6 +42,12 @@ from app.application.cards import (
     SuggestNoteCards,
     UpdateCard,
 )
+from app.application.checkpoints import (
+    GradeAttempt,
+    RespondToAttempt,
+    RevealPassage,
+    StartCheckpoint,
+)
 from app.application.conversations import (
     DeleteConversation,
     ListConversations,
@@ -130,6 +136,7 @@ from app.infrastructure.db.repositories import (
     SqlAlchemyAiSpendDayRepository,
     SqlAlchemyByokCorpusRepository,
     SqlAlchemyByokMonthRepository,
+    SqlAlchemyCheckpointRepository,
     SqlAlchemyConversationRepository,
     SqlAlchemyConversationTurnRepository,
     SqlAlchemyCorpusRepository,
@@ -1383,6 +1390,58 @@ def get_submit_review(conn: DbConnection) -> SubmitReview:
             activations=SqlAlchemyActivationEventRepository(conn),
             clock=_clock,
         ),
+    )
+
+
+def get_start_checkpoint(conn: DbConnection) -> StartCheckpoint:
+    """Wire ``StartCheckpoint`` on the request-scoped connection."""
+    return StartCheckpoint(
+        sources=SqlAlchemySourceRepository(conn),
+        items=SqlAlchemyQuizItemRepository(conn),
+        checkpoints=SqlAlchemyCheckpointRepository(conn),
+        authorize=AuthorizeOwnership(),
+        clock=_clock,
+        ids=uuid4,
+    )
+
+
+def get_reveal_passage(conn: DbConnection) -> RevealPassage:
+    """Wire ``RevealPassage`` ("Just explain") on the request-scoped connection."""
+    return RevealPassage(
+        checkpoints=SqlAlchemyCheckpointRepository(conn),
+        items=SqlAlchemyQuizItemRepository(conn),
+        clock=_clock,
+    )
+
+
+def get_respond_to_attempt(conn: DbConnection, generation: ExplainGeneration) -> RespondToAttempt:
+    """Wire ``RespondToAttempt`` on the request-scoped connection.
+
+    Explain-back feedback is served by the house Explain chain (a cost lever never
+    resolved per user, AD-345/AD-351). The budget rides along so the completed
+    call debits its usage to the caller's day in the same transaction (AD-341).
+    """
+    return RespondToAttempt(
+        checkpoints=SqlAlchemyCheckpointRepository(conn),
+        items=SqlAlchemyQuizItemRepository(conn),
+        generation=generation,
+        clock=_clock,
+        budget=build_budget(conn),
+    )
+
+
+def get_grade_attempt(conn: DbConnection, generation: ExplainGeneration) -> GradeAttempt:
+    """Wire ``GradeAttempt``: every grade goes through ``SubmitReview`` (FSRS + log)."""
+    settings = get_settings()
+    return GradeAttempt(
+        checkpoints=SqlAlchemyCheckpointRepository(conn),
+        items=SqlAlchemyQuizItemRepository(conn),
+        submit_review=get_submit_review(conn),
+        scheduling=build_scheduling_adapter(settings),
+        generation_model=generation.model,
+        clock=_clock,
+        ids=uuid4,
+        max_card_chars=settings.quiz_max_card_chars,
     )
 
 

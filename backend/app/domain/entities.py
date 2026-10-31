@@ -593,6 +593,8 @@ TUTOR_OPENING_MESSAGE = "(session start)"
 TUTOR_JUST_EXPLAIN_MESSAGE = "Just explain this."
 TUTOR_DONT_KNOW_MESSAGE = "I don't know."
 TUTOR_CARD_QUESTION = 'In your own words, what is "{title}" arguing?'
+# Frozen question of the card an end-of-section explanation is reviewed through.
+CHECKPOINT_CARD_QUESTION = 'Explain "{title}" in your own words.'
 
 
 # The inline mark a generation adapter writes into the answer text where a citation
@@ -862,6 +864,12 @@ class QuizItemOrigin:
     # learners can hold the same fingerprint without colliding, and so clones
     # never occupy the operator deck unique (which is per source, not per user).
     STARTER = "starter"
+    # ``checkpoint`` cards are the one free-recall card a learner's end-of-section
+    # explanation is reviewed through. Owned by the learner explicitly (the shared
+    # sample's source belongs to the operator); reused per (user, source, anchor) at
+    # the service level, with no unique index, because re-ingest reconciliation can
+    # move two cards onto one anchor.
+    CHECKPOINT = "checkpoint"
 
 
 class QuizJobStatus:
@@ -1087,6 +1095,12 @@ class ReviewLogEntry:
     review_duration_ms: int | None = None
     undone_at: datetime | None = None
     previous: SchedulingSnapshot | None = None
+    # The learner's one-tap confidence before the answer was shown (1–3), and
+    # whether the answer or passage was shown before the attempt. ``assisted`` is
+    # ``None`` only on rows written before it was recorded; the review service sets
+    # it on every new entry.
+    confidence: int | None = None
+    assisted: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -1600,3 +1614,72 @@ class AnchorSection:
     section_path: tuple[str, ...]
     anchor_aliases: tuple[str, ...]
     blocks: tuple[AnchorBlockSnapshot, ...]
+
+
+# --- End-of-section checkpoints -------------------------------------------------
+
+
+class CheckpointAttemptKind:
+    """What one checkpoint attempt retrieves.
+
+    ``recall`` is an existing card on the section, answered before its answer is
+    shown; ``explain`` is the learner's explanation of the whole section, reviewed
+    through the section's ``checkpoint`` card once graded.
+    """
+
+    RECALL = "recall"
+    EXPLAIN = "explain"
+
+
+@dataclass(frozen=True)
+class FeedbackCitation:
+    """One passage explain-back feedback quotes: where it is, and the words."""
+
+    anchor: str
+    section_path: tuple[str, ...]
+    quote: str
+
+
+@dataclass(frozen=True)
+class SectionCheckpoint:
+    """An optional end-of-section loop one learner takes on one section."""
+
+    id: UUID
+    user_id: UUID
+    source_id: UUID
+    anchor: str
+    section_title: str
+    prediction: int | None
+    created_at: datetime
+
+
+@dataclass(frozen=True)
+class CheckpointAttempt:
+    """One retrieval inside a checkpoint, with its once-only stamps.
+
+    ``quiz_item_id`` is the recalled card (``recall``) or, once graded, the
+    checkpoint card the explanation was reviewed through (``explain``). ``None``
+    on a recall attempt means the card has since been deleted.
+    """
+
+    id: UUID
+    checkpoint_id: UUID
+    kind: str
+    position: int
+    quiz_item_id: UUID | None = None
+    response: str | None = None
+    confidence: int | None = None
+    revealed_at: datetime | None = None
+    responded_at: datetime | None = None
+    graded_at: datetime | None = None
+    feedback: str | None = None
+    feedback_citations: tuple[FeedbackCitation, ...] = ()
+    review_log_id: UUID | None = None
+
+
+@dataclass(frozen=True)
+class OwnedAttempt:
+    """An attempt joined to the checkpoint that owns it (ownership + section)."""
+
+    attempt: CheckpointAttempt
+    checkpoint: SectionCheckpoint

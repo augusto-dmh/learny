@@ -749,7 +749,7 @@ def test_review_submit_leaves_the_ledger_untouched(db_conn: Connection) -> None:
         scheduling=FsrsSchedulingAdapter(fuzzing=False),
         clock=FakeClock(_NOW),
         study_days=SqlAlchemyStudyDayRepository(db_conn),
-    )(user=user, item_id=item.id, rating=3)
+    )(user=user, item_id=item.id, rating=3, assisted=False)
 
     row = _ledger(db_conn).get_for_day(user.id, _DAY)
     assert row is not None

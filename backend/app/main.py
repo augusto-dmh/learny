@@ -17,6 +17,7 @@ from app.core.logging import configure_logging
 from app.infrastructure.web.ai import router as ai_router
 from app.infrastructure.web.auth import router as auth_router
 from app.infrastructure.web.cards import router as cards_router
+from app.infrastructure.web.checkpoints import router as checkpoints_router
 from app.infrastructure.web.conversations import router as conversations_router
 from app.infrastructure.web.error_handlers import register_error_handlers
 from app.infrastructure.web.evals import router as evals_router
@@ -132,6 +133,7 @@ def create_app() -> FastAPI:
     app.include_router(quiz_router)
     app.include_router(notes_router)
     app.include_router(cards_router)
+    app.include_router(checkpoints_router)
     app.include_router(vault_router)
     app.include_router(study_router)
     # Mounted only when this process may expose the instrument, so with the flag
