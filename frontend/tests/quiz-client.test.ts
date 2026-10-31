@@ -347,6 +347,7 @@ describe("submitReview (E1)", () => {
     expect(JSON.parse(init.body as string)).toEqual({
       rating: 3,
       review_duration_ms: 4200,
+      assisted: false,
     });
 
     // The advanced schedule the screen surfaces survives the round-trip.
@@ -366,6 +367,7 @@ describe("submitReview (E1)", () => {
 
     expect(JSON.parse(fetchMock.mock.calls[0][1].body as string)).toEqual({
       rating: 1,
+      assisted: false,
     });
   });
 

@@ -117,6 +117,13 @@ class ReviewRequest(BaseModel):
 
     rating: int = Field(ge=1, le=4)
     review_duration_ms: int | None = Field(default=None, ge=0)
+    # The learner's one-tap confidence before the answer was shown (1 not sure,
+    # 2 fairly sure, 3 sure), absent when they revealed without rating it or
+    # used Space. Stored on the log row; never read by FSRS.
+    confidence: int | None = Field(default=None, ge=1, le=3)
+    # Whether the answer or the editor was opened before the attempt. Defaults
+    # to false so an older client that omits it still records a plain grade.
+    assisted: bool = False
 
 
 class FlagRequest(BaseModel):
@@ -491,9 +498,10 @@ def submit_review(
         user=user,
         item_id=item_id,
         rating=body.rating,
-        # The review screen hides the answer until the learner reveals it, so a
-        # grade sent here was attempted before the answer was shown.
-        assisted=False,
+        # The client states whether the answer or the editor was opened before
+        # the attempt; an older client that omits it grades as unaided.
+        assisted=body.assisted,
+        confidence=body.confidence,
         review_duration_ms=body.review_duration_ms,
         client_tz=client_tz,
     )

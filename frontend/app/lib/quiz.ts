@@ -260,7 +260,15 @@ export async function getDueReviews(
  */
 export async function submitReview(
   itemId: string,
-  body: { rating: number; review_duration_ms?: number },
+  body: {
+    rating: number;
+    review_duration_ms?: number;
+    /** The one-tap confidence taken before the answer was shown (1-3). Omitted
+     * from the body entirely when the learner revealed without rating it. */
+    confidence?: number;
+    /** Whether the answer or the editor was opened before the attempt. */
+    assisted?: boolean;
+  },
   csrfToken: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<Scheduling> {
@@ -272,11 +280,21 @@ export async function submitReview(
   if (tz) {
     headers["X-Client-Timezone"] = tz;
   }
+  // No confidence key when none was taken: the body distinguishes "revealed
+  // without rating it" (absent) from every taken level.
+  const payload: Record<string, unknown> = {
+    rating: body.rating,
+    review_duration_ms: body.review_duration_ms,
+    assisted: body.assisted ?? false,
+  };
+  if (body.confidence !== undefined) {
+    payload.confidence = body.confidence;
+  }
   const res = await fetchImpl(`/api/quiz-items/${itemId}/reviews`, {
     method: "POST",
     credentials: "same-origin",
     headers,
-    body: JSON.stringify(body),
+    body: JSON.stringify(payload),
   });
   if (!res.ok) {
     throw await apiErrorFrom(res, "quizReview");

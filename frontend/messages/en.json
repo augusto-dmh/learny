@@ -497,7 +497,8 @@
       "studied": "Studied <figure>{studied, number}</figure> of the last <window>{days, number}</window> days",
       "reviews": "reviews",
       "pages": "pages"
-    }
+    },
+    "confidenceLabel": "How sure were you?"
   },
   "notes": {
     "title": "Notes",

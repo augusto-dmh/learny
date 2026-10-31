@@ -497,7 +497,8 @@
       "studied": "Você estudou em <figure>{studied, number}</figure> dos últimos <window>{days, number}</window> dias",
       "reviews": "revisões",
       "pages": "páginas"
-    }
+    },
+    "confidenceLabel": "Quanta certeza você tinha?"
   },
   "notes": {
     "title": "Notas",

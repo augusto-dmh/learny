@@ -1147,6 +1147,143 @@ describe("ReviewScreen undo, flag, and edit (REV-22/37/45)", () => {
       ),
     ).toBe(false);
   });
+
+  it("confidence buttons reveal the answer beside Reveal answer", async () => {
+    const third = { ...recallCard, id: "i3", question: "What is spaced repetition?" };
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /api/auth/me": () => authedMe.clone(),
+        [`GET ${DUE}?source_id=s1`]: () =>
+          jsonResponse(200, dueQueue([clozeCard, recallCard, third])),
+        "POST /api/quiz-items/i1/reviews": () =>
+          jsonResponse(200, scheduling("2026-07-20T00:00:00Z")),
+        "POST /api/quiz-items/i2/reviews": () =>
+          jsonResponse(200, scheduling("2026-07-20T00:00:00Z")),
+        "POST /api/quiz-items/i3/reviews": () =>
+          jsonResponse(200, scheduling("2026-07-20T00:00:00Z")),
+      }),
+    );
+
+    render(<ReviewScreen sourceId="s1" />);
+    await screen.findByTestId("question");
+
+    // While hidden, the card offers the three confidence buttons beside Reveal
+    // answer, and the answer itself stays hidden.
+    const group = screen.getByRole("group", { name: "How sure were you?" });
+    expect([...group.querySelectorAll("button")].map((b) => b.textContent)).toEqual([
+      "Not sure",
+      "Fairly sure",
+      "Sure",
+    ]);
+    expect(screen.getByRole("button", { name: "Reveal answer" })).toBeTruthy();
+    expect(screen.queryByTestId("answer")).toBeNull();
+
+    // Each confidence button reveals the answer; grading moves to the next card.
+    fireEvent.click(screen.getByRole("button", { name: "Not sure" }));
+    expect(screen.getByTestId("answer").textContent).toBe("algorithm");
+    fireEvent.click(screen.getByRole("button", { name: "Good" }));
+    await screen.findByText("Who built the analytical engine?");
+    fireEvent.click(screen.getByRole("button", { name: "Fairly sure" }));
+    expect(screen.getByTestId("answer").textContent).toBe("Charles Babbage");
+    fireEvent.click(screen.getByRole("button", { name: "Good" }));
+    await screen.findByText("What is spaced repetition?");
+    fireEvent.click(screen.getByRole("button", { name: "Sure" }));
+    expect(screen.getByTestId("answer").textContent).toBe("Charles Babbage");
+  });
+
+  it("grade carries confidence only when revealed by a confidence tap", async () => {
+    const third = { ...recallCard, id: "i3", question: "What is spaced repetition?" };
+    const fetchMock = routedFetch({
+      "GET /api/auth/me": () => authedMe.clone(),
+      [`GET ${DUE}?source_id=s1`]: () =>
+        jsonResponse(200, dueQueue([clozeCard, recallCard, third])),
+      "POST /api/quiz-items/i1/reviews": () =>
+        jsonResponse(200, scheduling("2026-07-20T00:00:00Z")),
+      "POST /api/quiz-items/i2/reviews": () =>
+        jsonResponse(200, scheduling("2026-07-20T00:00:00Z")),
+      "POST /api/quiz-items/i3/reviews": () =>
+        jsonResponse(200, scheduling("2026-07-20T00:00:00Z")),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const bodyOf = (url: string) => {
+      const call = fetchMock.mock.calls.find(
+        ([called, init]) =>
+          called === url && (init as RequestInit | undefined)?.method === "POST",
+      );
+      expect(call).toBeTruthy();
+      return JSON.parse((call![1] as RequestInit).body as string);
+    };
+
+    render(<ReviewScreen sourceId="s1" />);
+    await screen.findByTestId("question");
+
+    // A grade after a confidence tap sends that confidence.
+    fireEvent.click(screen.getByRole("button", { name: "Sure" }));
+    fireEvent.click(screen.getByRole("button", { name: "Good" }));
+    await waitFor(() => expect(bodyOf("/api/quiz-items/i1/reviews").rating).toBe(3));
+    expect(bodyOf("/api/quiz-items/i1/reviews").confidence).toBe(3);
+    expect(bodyOf("/api/quiz-items/i1/reviews").assisted).toBe(false);
+
+    // Grading after Reveal answer sends a body with no confidence key at all.
+    await screen.findByText("Who built the analytical engine?");
+    fireEvent.click(screen.getByRole("button", { name: "Reveal answer" }));
+    fireEvent.click(screen.getByRole("button", { name: "Good" }));
+    await waitFor(() => expect(bodyOf("/api/quiz-items/i2/reviews").rating).toBe(3));
+    expect("confidence" in bodyOf("/api/quiz-items/i2/reviews")).toBe(false);
+
+    // Space reveals without a confidence tap: no confidence key either.
+    await screen.findByText("What is spaced repetition?");
+    pressKey(" ");
+    await waitFor(() => expect(screen.getByTestId("answer")).toBeTruthy());
+    pressKey("3");
+    await waitFor(() => expect(bodyOf("/api/quiz-items/i3/reviews").rating).toBe(3));
+    expect("confidence" in bodyOf("/api/quiz-items/i3/reviews")).toBe(false);
+  });
+
+  it("editor peek before reveal marks the grade assisted", async () => {
+    const fetchMock = routedFetch({
+      "GET /api/auth/me": () => authedMe.clone(),
+      [`GET ${DUE}?source_id=s1`]: () =>
+        jsonResponse(200, dueQueue([clozeCard, recallCard])),
+      "POST /api/quiz-items/i1/reviews": () =>
+        jsonResponse(200, scheduling("2026-07-20T00:00:00Z")),
+      "POST /api/quiz-items/i2/reviews": () =>
+        jsonResponse(200, scheduling("2026-07-20T00:00:00Z")),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ReviewScreen sourceId="s1" />);
+    await screen.findByTestId("question");
+
+    // The editor shows the answer beside the question, so opening it before the
+    // reveal is seeing the answer: the grade is recorded as assisted.
+    await waitFor(() => {
+      pressKey("e");
+      return expect(screen.queryByTestId("edit-question")).not.toBeNull();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reveal answer" }));
+    fireEvent.click(screen.getByRole("button", { name: "Good" }));
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(([url]) => url === "/api/quiz-items/i1/reviews");
+      expect(call).toBeTruthy();
+      const body = JSON.parse((call![1] as RequestInit).body as string);
+      expect(body.rating).toBe(3);
+      expect(body.assisted).toBe(true);
+    });
+
+    // Grading without ever opening the editor stays unaided.
+    await screen.findByText("Who built the analytical engine?");
+    fireEvent.click(screen.getByRole("button", { name: "Reveal answer" }));
+    fireEvent.click(screen.getByRole("button", { name: "Good" }));
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(([url]) => url === "/api/quiz-items/i2/reviews");
+      expect(call).toBeTruthy();
+      expect(JSON.parse((call![1] as RequestInit).body as string).assisted).toBe(false);
+    });
+  });
 });
 
 describe("ReviewScreen Done-for-today (REV-42/43)", () => {
