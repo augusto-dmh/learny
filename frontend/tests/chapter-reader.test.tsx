@@ -1024,6 +1024,16 @@ describe("ChapterFlow dock tabs (RA-01/02/03/06)", () => {
       if (url.startsWith("/api/reviews/due")) {
         return jsonResponse(200, { items: [due], total_due: 1 });
       }
+      if (url === "/api/sources/s1/calibration") {
+        // The Review tab's calibration mirror: zero-filled until graded.
+        return jsonResponse(200, {
+          levels: [
+            { confidence: 1, attempts: 0, recalled: 0 },
+            { confidence: 2, attempts: 0, recalled: 0 },
+            { confidence: 3, attempts: 0, recalled: 0 },
+          ],
+        });
+      }
       if (init?.method === "POST" && url.startsWith("/api/quiz-items/")) {
         return jsonResponse(200, { state: 2, step: null, due: "later" });
       }

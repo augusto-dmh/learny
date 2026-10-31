@@ -255,7 +255,10 @@
     },
     "dockReview": {
       "nothingDue": "Nada deste livro para revisar agora.",
-      "dueCaption": "{count, plural, =0 {cartões deste livro para revisar} one {cartão deste livro para revisar} other {cartões deste livro para revisar}}"
+      "dueCaption": "{count, plural, =0 {cartões deste livro para revisar} one {cartão deste livro para revisar} other {cartões deste livro para revisar}}",
+      "calibrationHeading": "Calibração",
+      "calibrationLine": "Quando você se sentiu {level}, lembrou de {recalled} de {attempts}",
+      "calibrationEmpty": "Nada para calibrar ainda neste livro. Toque o quanto tem certeza antes de mostrar a resposta, e aqui mostra com que frequência ter certeza significou lembrar."
     },
     "ask": {
       "intro": "Aqui você tira dúvidas sobre o livro. Para ser conduzido por uma seção, use Ensinar.",

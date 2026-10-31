@@ -52,6 +52,7 @@ from app.application.reviews import ReviewedSchedule, SubmitReview
 from app.domain.entities import (
     CHECKPOINT_CARD_QUESTION,
     MODE_ANSWER,
+    CalibrationLevel,
     CheckpointAttempt,
     CheckpointAttemptKind,
     Evidence,
@@ -599,3 +600,33 @@ class GradeAttempt:
         self._items.upsert(item, embedding=None)
         self._items.create_scheduling(item.id, self._scheduling.initial())
         return item
+
+
+class SourceCalibration:
+    """Per-book calibration for one readable source (S7).
+
+    For each of the learner's three confidence levels, how many of their
+    unaided, not-undone grades carried that confidence on this book's cards and
+    how many of those were recalled (FSRS pass, rating 2 or more). A missing or
+    unreadable source is the same 404 as everywhere else; a readable source
+    always answers with exactly three rows, zero-filled when a level has no
+    attempts. Rows are never another learner's: the query joins the caller's
+    own log rows to their own cards on this source.
+    """
+
+    def __init__(
+        self,
+        *,
+        sources: SourceRepository,
+        items: QuizItemRepository,
+        authorize: AuthorizeOwnership,
+    ) -> None:
+        self._sources = sources
+        self._items = items
+        self._authorize = authorize
+
+    def __call__(self, *, user: User, source_id: UUID) -> list[CalibrationLevel]:
+        readable_source(
+            user=user, source_id=source_id, sources=self._sources, authorize=self._authorize
+        )
+        return self._items.source_calibration(user.id, source_id)

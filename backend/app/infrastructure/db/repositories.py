@@ -23,6 +23,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import (
     Connection,
     bindparam,
+    case,
     exists,
     func,
     insert,
@@ -47,6 +48,7 @@ from app.domain.entities import (
     AnchorBlockSnapshot,
     AnchorSection,
     Backlink,
+    CalibrationLevel,
     CardProvenance,
     ChapterIndexRow,
     ChapterSection,
@@ -1823,6 +1825,40 @@ class SqlAlchemyQuizItemRepository:
         self._conn.execute(
             update(review_log).where(review_log.c.id == log_id).values(undone_at=undone_at)
         )
+
+    def source_calibration(self, user_id: UUID, source_id: UUID) -> list[CalibrationLevel]:
+        """Return the caller's per-book calibration on that source's cards.
+
+        One grouped query over the caller's review-log rows joined to the
+        source's cards; the three confidence levels are then filled in so the
+        response always carries exactly three rows, zero-filled when a level
+        has no attempts.
+        """
+        rows = self._conn.execute(
+            select(
+                review_log.c.confidence,
+                func.count().label("attempts"),
+                func.sum(case((review_log.c.rating >= 2, 1), else_=0)).label("recalled"),
+            )
+            .select_from(review_log.join(quiz_items, quiz_items.c.id == review_log.c.quiz_item_id))
+            .where(
+                quiz_items.c.user_id == user_id,
+                quiz_items.c.source_id == source_id,
+                review_log.c.undone_at.is_(None),
+                review_log.c.assisted.is_(False),
+                review_log.c.confidence.isnot(None),
+            )
+            .group_by(review_log.c.confidence)
+        ).all()
+        counted = {row.confidence: (row.attempts, int(row.recalled or 0)) for row in rows}
+        return [
+            CalibrationLevel(
+                confidence=level,
+                attempts=counted.get(level, (0, 0))[0],
+                recalled=counted.get(level, (0, 0))[1],
+            )
+            for level in (1, 2, 3)
+        ]
 
     def list_for_source(
         self,

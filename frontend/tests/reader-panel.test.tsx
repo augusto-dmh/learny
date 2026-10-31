@@ -98,9 +98,22 @@ function summary(
  * other tabs carry — this book's notes and due cards. Default all three to empty.
  */
 function stubList(rows: unknown[] = []) {
-  const fetchMock = vi.fn(async (url: string) =>
-    jsonResponse(200, url.startsWith("/api/conversations") ? rows : []),
-  );
+  const fetchMock = vi.fn(async (url: string) => {
+    if (url.startsWith("/api/conversations")) {
+      return jsonResponse(200, rows);
+    }
+    if (url.startsWith("/api/sources/") && url.endsWith("/calibration")) {
+      // The Review tab's calibration mirror: zero-filled until graded.
+      return jsonResponse(200, {
+        levels: [
+          { confidence: 1, attempts: 0, recalled: 0 },
+          { confidence: 2, attempts: 0, recalled: 0 },
+          { confidence: 3, attempts: 0, recalled: 0 },
+        ],
+      });
+    }
+    return jsonResponse(200, []);
+  });
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
 }
@@ -123,6 +136,16 @@ function stubServer(rows: ReturnType<typeof summary>[]) {
     if (url.startsWith("/api/notes") || url.startsWith("/api/reviews/due")) {
       // The tab counts, which every dock render loads.
       return jsonResponse(200, []);
+    }
+    if (url.startsWith("/api/sources/") && url.endsWith("/calibration")) {
+      // The Review tab's calibration mirror: zero-filled until graded.
+      return jsonResponse(200, {
+        levels: [
+          { confidence: 1, attempts: 0, recalled: 0 },
+          { confidence: 2, attempts: 0, recalled: 0 },
+          { confidence: 3, attempts: 0, recalled: 0 },
+        ],
+      });
     }
     if (!url.startsWith("/api/conversations?")) {
       throw new Error(`unexpected fetch: ${url}`);

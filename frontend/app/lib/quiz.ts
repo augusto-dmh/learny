@@ -222,6 +222,33 @@ export async function ensureStarterDeck(
   }
 }
 
+/** One calibration row: a confidence level, its attempts, how many recalled. */
+export type CalibrationLevel = {
+  confidence: number;
+  attempts: number;
+  recalled: number;
+};
+
+/**
+ * This book's per-book calibration (GET /api/sources/{id}/calibration, 200):
+ * always three rows, one per confidence level. 404 for a missing or unreadable
+ * source throws an `ApiError`.
+ */
+export async function getCalibration(
+  sourceId: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<CalibrationLevel[]> {
+  const res = await fetchImpl(`/api/sources/${sourceId}/calibration`, {
+    method: "GET",
+    credentials: "same-origin",
+  });
+  if (!res.ok) {
+    throw await apiErrorFrom(res, "quizDue");
+  }
+  const body = (await res.json()) as { levels: CalibrationLevel[] };
+  return body.levels;
+}
+
 /**
  * Fetch the caller's due review queue across their sources (optionally filtered
  * to one source, optionally capped by `limit`). Read-only GET, so no CSRF token.

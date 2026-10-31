@@ -45,6 +45,7 @@ from app.application.checkpoints import (
     GradeAttempt,
     RespondToAttempt,
     RevealPassage,
+    SourceCalibration,
     StartCheckpoint,
 )
 from app.application.conversations import (
@@ -1326,6 +1327,15 @@ def get_start_checkpoint(conn: DbConnection) -> StartCheckpoint:
         authorize=AuthorizeOwnership(),
         clock=_clock,
         ids=uuid4,
+    )
+
+
+def get_source_calibration(conn: DbConnection) -> SourceCalibration:
+    """Wire the per-book calibration on the request-scoped connection."""
+    return SourceCalibration(
+        sources=SqlAlchemySourceRepository(conn),
+        items=SqlAlchemyQuizItemRepository(conn),
+        authorize=AuthorizeOwnership(),
     )
 
 

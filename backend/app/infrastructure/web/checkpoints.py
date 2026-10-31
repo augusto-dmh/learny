@@ -11,6 +11,9 @@
 - ``POST /api/checkpoint-attempts/{attempt_id}/grade`` → 200 the reviewed card's
   new schedule. 409 before a response or on a second grade, 422 outside the
   attempt kind's scale.
+- ``GET /api/sources/{source_id}/calibration`` → 200 the per-book calibration:
+  always three rows, one per confidence level, counting the learner's unaided
+  not-undone grades and how many recalled. 404 for an unreadable source.
 
 Every route requires a session. The POSTs add origin + CSRF and the quiz rate
 limit, as the review routes do. A missing attempt and another learner's attempt
@@ -32,6 +35,7 @@ from app.application.checkpoints import (
     GradeAttempt,
     RespondToAttempt,
     RevealPassage,
+    SourceCalibration,
     StartCheckpoint,
 )
 from app.domain.entities import User
@@ -42,6 +46,7 @@ from app.infrastructure.web.dependencies import (
     get_respond_to_attempt,
     get_response_language,
     get_reveal_passage,
+    get_source_calibration,
     get_start_checkpoint,
 )
 from app.infrastructure.web.rate_limit import rate_limit_quiz
@@ -220,4 +225,41 @@ def grade_attempt(
         quiz_item_id=graded.quiz_item_id,
         due=snapshot.due.isoformat(),
         state=snapshot.state,
+    )
+
+
+class CalibrationLevelView(BaseModel):
+    """One confidence level's calibration: attempts and how many recalled."""
+
+    confidence: int
+    attempts: int
+    recalled: int
+
+
+class CalibrationView(BaseModel):
+    """The per-book calibration: exactly three rows, for confidence 1, 2 and 3."""
+
+    levels: list[CalibrationLevelView]
+
+
+@router.get("/api/sources/{source_id}/calibration")
+def source_calibration(
+    source_id: UUID,
+    user: Annotated[User, Depends(get_authenticated_user)],
+    service: Annotated[SourceCalibration, Depends(get_source_calibration)],
+) -> CalibrationView:
+    """How often feeling sure meant recalling on this book (200).
+
+    A missing or unreadable source is the same 404 as everywhere else. Rows are
+    never another learner's: the counts join the caller's own log rows to their
+    own cards on this source.
+    """
+    levels = service(user=user, source_id=source_id)
+    return CalibrationView(
+        levels=[
+            CalibrationLevelView(
+                confidence=level.confidence, attempts=level.attempts, recalled=level.recalled
+            )
+            for level in levels
+        ]
     )
