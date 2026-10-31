@@ -14,7 +14,9 @@ deterministic facts; judging faithfulness is a separate judge-owned study.
 
 Exit codes: ``0`` when the capture is recorded; ``2`` on a usage refusal
 (missing ``--base-url`` or ``--model``), raised by argument parsing before any
-network attempt or database write.
+network attempt or database write. The capture never reads
+``LEARNY_OPENAI_API_KEY``: every request carries the fixed placeholder key, so
+the environment's hosted key is never handed to the runtime ``--base-url`` names.
 
 The golden books and the case lists are the repo's canonical fixtures, owned by
 the test suite (``tests/golden_corpus*``, ``tests/eval/cases.yaml``,
@@ -78,9 +80,11 @@ _output_dir: Path = Path(__file__).resolve().parents[3] / "evals" / "local"
 # 2048 is the ops doc's recommended start for the documented profile.
 _CAPTURE_MAX_TOKENS = 2048
 
-# The API key placeholder sent when no ``LEARNY_OPENAI_API_KEY`` is configured:
-# the OpenAI SDK requires a non-empty string, and keyless local runtimes ignore
-# the value (the documented operator convention, ops/local-models.md).
+# The API key sent on every capture request — always this placeholder, never the
+# environment's ``LEARNY_OPENAI_API_KEY``: the documented targets are keyless
+# local runtimes that ignore the value entirely, so forwarding the real hosted
+# key would only leak it to whatever ``--base-url`` names (the ops runbook
+# records this). The OpenAI SDK still requires a non-empty string.
 _KEY_PLACEHOLDER = "local-capture"
 
 
@@ -268,7 +272,7 @@ def _capture(base_url: str, model: str) -> Path:
     settings = get_settings()
     embeddings = build_embedding_adapter(settings)
     generation = OpenAICompatibleGenerationAdapter(
-        api_key=settings.openai_api_key or _KEY_PLACEHOLDER,
+        api_key=_KEY_PLACEHOLDER,
         model=model,
         max_tokens=_CAPTURE_MAX_TOKENS,
         base_url=base_url,

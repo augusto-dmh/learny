@@ -8,6 +8,8 @@ Two facts, three proofs:
 - the provenance stamp is this checkout's HEAD, resolved at the repository root
   (the directory holding ``evals/``) — never one directory above it, which would
   name an outer repository's HEAD when the checkout sits inside another;
+- the hosted ``LEARNY_OPENAI_API_KEY`` is never forwarded: with the variable
+  set, the generation adapter still receives the fixed placeholder key;
 - the same runner an operator points at Ollama records one JSONL line per
   golden case under ``evals/local/`` — proven end-to-end against an
   in-process OpenAI-compatible fake server on a loopback ephemeral port with
@@ -162,6 +164,48 @@ def test_git_sha_falls_back_to_unknown_outside_a_repo(
 
     monkeypatch.setattr(capture, "_output_dir", tmp_path / "evals" / "local")
     assert capture._git_sha() == "unknown"
+
+
+def test_placeholder_key_sent_even_with_hosted_key_configured(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:  # noqa: ANN001 — tmp_path
+    # The capture never forwards the hosted OpenAI key: with the variable set,
+    # the generation adapter still receives the fixed placeholder — and the
+    # tripwire proves the construction happens before any database work.
+    import app.cli.capture_local_golden as capture
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("LEARNY_OPENAI_API_KEY", "sk-test-hosted-key")
+    get_settings.cache_clear()
+    try:
+        built: list[dict[str, object]] = []
+        real_adapter = capture.OpenAICompatibleGenerationAdapter
+
+        def _spy(**kwargs):  # noqa: ANN001, ANN003, ANN202
+            built.append(kwargs)
+            return real_adapter(**kwargs)
+
+        monkeypatch.setattr(capture, "OpenAICompatibleGenerationAdapter", _spy)
+
+        def _tripwire() -> AbstractContextManager:
+            raise AssertionError("key spy reached the database unit of work")
+
+        monkeypatch.setattr(capture, "_uow", _tripwire)
+        monkeypatch.setattr(capture, "_output_dir", tmp_path)
+
+        with pytest.raises(AssertionError, match="unit of work"):
+            capture.main(["--base-url", "http://localhost:11434/v1", "--model", _SCRIPTED_MODEL])
+    finally:
+        get_settings.cache_clear()
+
+    assert built == [
+        {
+            "api_key": capture._KEY_PLACEHOLDER,
+            "model": _SCRIPTED_MODEL,
+            "max_tokens": capture._CAPTURE_MAX_TOKENS,
+            "base_url": "http://localhost:11434/v1",
+        }
+    ]
 
 
 @requires_db
