@@ -682,8 +682,17 @@ def test_budget_route_stores_clears_and_validates(
     assert cleared.status_code == 200, cleared.text
     assert cleared.json()["budget_usd_micros"] is None
 
-    # Invalid input: 422 with fixed copy echoing no submitted value.
-    cases = [("zero", 0), ("negative", -5), ("too_big", 10_001), ("text", "ten"), ("bool", True)]
+    # Invalid input: 422 with fixed copy echoing no submitted value. The
+    # oversized integer overflows float() — the route must range-check the raw
+    # value, answering the same fixed-copy 422 and never a 500.
+    cases = [
+        ("zero", 0),
+        ("negative", -5),
+        ("too_big", 10_001),
+        ("text", "ten"),
+        ("bool", True),
+        ("oversized_int", 10**400),
+    ]
     for label, value in cases:
         bad = _budget_put(auth_client, headers, value)
         assert bad.status_code == 422, (label, bad.text)

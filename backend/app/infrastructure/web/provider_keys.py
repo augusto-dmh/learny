@@ -261,7 +261,11 @@ def put_budget(
         micros = None
     elif isinstance(value, bool) or not isinstance(value, (int, float)):
         raise HTTPException(status_code=HTTP_422, detail=_BUDGET_INVALID)
-    elif not 0 < float(value) <= 10_000:
+    # Range-check the raw value BEFORE any conversion: a huge JSON integer
+    # overflows ``float()`` (an unhandled OverflowError → 500), while this
+    # comparison answers the fixed-copy 422 for it and still rejects NaN
+    # (``nan > 0`` is False) whatever the value's precision.
+    elif not (value > 0 and value <= 10_000):
         raise HTTPException(status_code=HTTP_422, detail=_BUDGET_INVALID)
     else:
         micros = int(round(float(value) * MICROS_PER_USD))
