@@ -19,6 +19,8 @@ Exercises the owner-scoped quiz endpoints end-to-end through FastAPI's
 
 from __future__ import annotations
 
+import json
+import os
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
@@ -40,7 +42,7 @@ from app.domain.entities import (
     SchedulingSnapshot,
     Source,
 )
-from app.infrastructure.db.metadata import review_log, sources, study_days
+from app.infrastructure.db.metadata import review_log, sources, study_days, users
 from app.infrastructure.db.repositories import (
     SqlAlchemyNoteRepository,
     SqlAlchemyQuizItemRepository,
@@ -1335,3 +1337,173 @@ def test_review_confidence_out_of_range_422(quiz_client: TestClient, db_conn: Co
         ).scalar_one()
         == 0
     )
+
+
+# --- The learner-keyed deck rails (BYOK hosted policy) ------------------------------
+
+_KEK = os.urandom(32)
+_OWNER_KEY = "sk-ant-api03-deck-cap-owner-key-FFFFFFFFFFFF"
+
+_HOUSE = {
+    "id": "house",
+    "kind": "local",
+    "model": "local-extractive",
+    "max_tokens": 64,
+    "price_input_usd_per_million_tokens": 3.0,
+    "price_output_usd_per_million_tokens": 15.0,
+    "price_cache_read_usd_per_million_tokens": 0.3,
+    "price_cache_creation_usd_per_million_tokens": 3.75,
+    "grounding": "verified-spans",
+    "ask_enabled": True,
+    "teach_enabled": True,
+}
+_BYOK = {**_HOUSE, "id": "byok-claude", "kind": "anthropic", "user_key_provider": "anthropic"}
+
+_PERIOD = datetime.now(UTC).strftime("%Y-%m")
+
+
+def _declare_byok(monkeypatch: pytest.MonkeyPatch) -> None:
+    import base64
+
+    from tests.conftest import clear_settings_and_generation_caches
+
+    monkeypatch.setenv("LEARNY_GENERATION_PROFILES", json.dumps([_HOUSE, _BYOK]))
+    monkeypatch.setenv("LEARNY_SECRETS_KEK", base64.b64encode(_KEK).decode())
+    monkeypatch.delenv("LEARNY_SECRETS_KEK_PREVIOUS", raising=False)
+    clear_settings_and_generation_caches()
+
+
+def _store_anthropic_key(db_conn: Connection, user_email_account: str) -> None:
+    from app.infrastructure.db.provider_credentials import (
+        SqlAlchemyProviderCredentialRepository,
+    )
+    from app.infrastructure.security.secrets_envelope import SecretsEnvelope
+
+    user_id = db_conn.execute(
+        select(users.c.id).where(users.c.email == user_email_account)
+    ).scalar_one()
+    SqlAlchemyProviderCredentialRepository(db_conn, SecretsEnvelope(_KEK)).replace(
+        user_id, "anthropic", _OWNER_KEY
+    )
+
+
+def _day_at_cap(db_conn: Connection, email: str) -> None:
+    from app.core.config import get_settings
+    from app.infrastructure.db.repositories import SqlAlchemyAiSpendDayRepository
+
+    user_id = db_conn.execute(select(users.c.id).where(users.c.email == email)).scalar_one()
+    cap_micros = int(get_settings().daily_ai_spend_usd * 1_000_000)
+    SqlAlchemyAiSpendDayRepository(db_conn).record(
+        user_id, datetime.now(UTC).date(), usd_micros=cap_micros
+    )
+
+
+def test_deck_at_usd_cap_owner_key(
+    quiz_client: TestClient, db_conn: Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """At the house USD cap an owner's own key still gets a 202; a keyless learner is refused."""
+    _declare_byok(monkeypatch)
+    owner_email = "deck-cap-owner@example.com"
+    source_id, csrf = _seed_ready_source(quiz_client, db_conn, owner_email)
+    _store_anthropic_key(db_conn, owner_email)
+    _day_at_cap(db_conn, owner_email)
+
+    owners = _post_deck(quiz_client, source_id, csrf=csrf)
+    assert owners.status_code == 202, owners.text
+
+    # A learner without keys at the same exhausted ledger is still refused: their
+    # deck would spend the operator's money.
+    keyless_email = "deck-cap-keyless@example.com"
+    keyless_source, keyless_csrf = _seed_ready_source(quiz_client, db_conn, keyless_email)
+    _day_at_cap(db_conn, keyless_email)
+    keyless = _post_deck(quiz_client, keyless_source, csrf=keyless_csrf)
+    assert keyless.status_code == 429, keyless.text
+    assert "code" not in keyless.json()
+
+
+def test_deck_unopenable_key_reads_house_rails(
+    quiz_client: TestClient, db_conn: Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stored row that cannot be opened is no key: the house USD cap governs.
+
+    The submit's payer verdict comes from the resolved adapter, not row
+    presence — a row sealed under an unknown KEK reads as absent, so the deck
+    is refused at the cap exactly like a keyless learner's (and pins nothing).
+    """
+    from sqlalchemy import select
+
+    from app.infrastructure.db.metadata import users as users_table
+    from app.infrastructure.db.provider_credentials import (
+        SqlAlchemyProviderCredentialRepository,
+    )
+    from app.infrastructure.security.secrets_envelope import SecretsEnvelope
+
+    _declare_byok(monkeypatch)
+    owner_email = "deck-cap-orphan@example.com"
+    source_id, csrf = _seed_ready_source(quiz_client, db_conn, owner_email)
+    user_id = db_conn.execute(
+        select(users_table.c.id).where(users_table.c.email == owner_email)
+    ).scalar_one()
+    SqlAlchemyProviderCredentialRepository(db_conn, SecretsEnvelope(os.urandom(32))).replace(
+        user_id, "anthropic", _OWNER_KEY
+    )
+    _day_at_cap(db_conn, owner_email)
+
+    resp = _post_deck(quiz_client, source_id, csrf=csrf)
+
+    assert resp.status_code == 429, resp.text
+    assert "code" not in resp.json()
+    assert quiz_client.app.state.quiz_enqueuer.calls == []  # nothing created
+
+
+def test_deck_at_corpus_ceiling(
+    quiz_client: TestClient, db_conn: Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A deck submit for a source at the owner's ceiling refuses with the typed 429."""
+    from app.infrastructure.db.repositories import SqlAlchemyByokCorpusRepository
+
+    _declare_byok(monkeypatch)
+    owner_email = "deck-ceiling@example.com"
+    source_id, csrf = _seed_ready_source(quiz_client, db_conn, owner_email)
+    _store_anthropic_key(db_conn, owner_email)
+    user_id = db_conn.execute(select(users.c.id).where(users.c.email == owner_email)).scalar_one()
+    SqlAlchemyByokCorpusRepository(db_conn).record(
+        user_id, UUID(source_id), _PERIOD, input_tokens=4_000_000
+    )
+
+    resp = _post_deck(quiz_client, source_id, csrf=csrf)
+
+    assert resp.status_code == 429, resp.text
+    assert resp.json()["code"] == "byok_corpus_limit"
+    # Nothing was created: no queued job, no enqueue.
+    assert quiz_client.app.state.quiz_enqueuer.calls == []
+
+
+def test_deck_at_monthly_budget(
+    quiz_client: TestClient, db_conn: Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A deck submit when the owner's own budget has tripped refuses with the typed 429."""
+    from app.infrastructure.db.repositories import (
+        SqlAlchemyByokMonthRepository,
+        SqlAlchemyUserByokSettingsRepository,
+    )
+
+    _declare_byok(monkeypatch)
+    owner_email = "deck-budget@example.com"
+    source_id, csrf = _seed_ready_source(quiz_client, db_conn, owner_email)
+    _store_anthropic_key(db_conn, owner_email)
+    user_id = db_conn.execute(select(users.c.id).where(users.c.email == owner_email)).scalar_one()
+    SqlAlchemyUserByokSettingsRepository(db_conn).set_budget(user_id, 5_000_000)
+    SqlAlchemyByokMonthRepository(db_conn).record(
+        user_id,
+        _PERIOD,
+        input_tokens=1000,
+        output_tokens=500,
+        cost_usd_micros=5_000_000,
+    )
+
+    resp = _post_deck(quiz_client, source_id, csrf=csrf)
+
+    assert resp.status_code == 429, resp.text
+    assert resp.json()["code"] == "byok_budget"
+    assert quiz_client.app.state.quiz_enqueuer.calls == []

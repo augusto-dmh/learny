@@ -27,6 +27,8 @@ from app.domain.entities import (
     AnchorSection,
     AnswerStreamEvent,
     Backlink,
+    ByokCorpusPromptMonth,
+    ByokMonthUsage,
     CalibrationLevel,
     ChapterIndexRow,
     ChapterSection,
@@ -74,6 +76,7 @@ from app.domain.entities import (
     SuggestResult,
     UndoableReview,
     User,
+    UserByokSettings,
 )
 
 
@@ -1674,3 +1677,60 @@ class AiSpendDayRepository(Protocol):
 
     def get_for_day(self, user_id: UUID, day_utc: date) -> AiSpendDay | None:
         """Return the caller's ledger row for ``day_utc``, or ``None`` if nothing yet."""
+
+
+class ByokMonthLedger(Protocol):
+    """Persistence port for the learner's own monthly usage ledger.
+
+    ``record`` is an atomic upsert-increment on the ``(user_id, period_month)``
+    key, like the daily ledger; a month with no row has seen no user-keyed
+    call. Operates on the caller's ``Connection`` so a record shares the
+    triggering write's transaction.
+    """
+
+    def record(
+        self,
+        user_id: UUID,
+        period_month: str,
+        *,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        cost_usd_micros: int = 0,
+    ) -> None:
+        """Add the passed deltas to ``(user_id, period_month)``, inserting the row if absent."""
+
+    def get_for_month(self, user_id: UUID, period_month: str) -> ByokMonthUsage | None:
+        """Return the learner's ledger row for ``period_month``, or ``None`` if nothing yet."""
+
+
+class ByokCorpusLedger(Protocol):
+    """Persistence port for the per-corpus prompt-token ledger.
+
+    One row per ``(user, source, period_month)``: the adapter-reported input
+    tokens of the learner's user-keyed calls against one book. The per-corpus
+    ceiling reads it; the check-before-call assertion needs ``get_for_month``.
+    """
+
+    def record(
+        self, user_id: UUID, source_id: UUID, period_month: str, *, input_tokens: int = 0
+    ) -> None:
+        """Add the delta to ``(user_id, source_id, period_month)``, inserting the row if absent."""
+
+    def get_for_month(
+        self, user_id: UUID, source_id: UUID, period_month: str
+    ) -> ByokCorpusPromptMonth | None:
+        """Return the row for ``(user, source, month)``, or ``None`` if nothing yet."""
+
+
+class ByokSettingsStore(Protocol):
+    """Persistence port for the learner's own BYOK settings (today: the budget).
+
+    ``set_budget`` writes the whole preference row (``None`` clears the
+    budget); ``get`` reads it for the policy assertion and the account view.
+    """
+
+    def get(self, user_id: UUID) -> UserByokSettings | None:
+        """The learner's settings row, or ``None`` when nothing was ever set."""
+
+    def set_budget(self, user_id: UUID, monthly_budget_usd_micros: int | None) -> UserByokSettings:
+        """Store (or clear) the learner's monthly budget and return the row."""

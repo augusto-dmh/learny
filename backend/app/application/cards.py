@@ -44,6 +44,7 @@ from collections.abc import Callable, Sequence
 from uuid import UUID
 
 from app.application.budget import KIND_GENERATION, DailyBudget
+from app.application.byok import ByokPolicy
 from app.application.conversations import authorized_conversation
 from app.application.errors import (
     CardAlreadyExists,
@@ -186,6 +187,7 @@ class SuggestCards:
         authorize: AuthorizeOwnership,
         max_suggestions: int,
         budget: DailyBudget | None = None,
+        byok_policy: ByokPolicy | None = None,
     ) -> None:
         self._sources = sources
         self._notes = notes
@@ -194,8 +196,11 @@ class SuggestCards:
         self._authorize = authorize
         self._max_suggestions = max_suggestions
         self._budget = budget
+        self._byok_policy = byok_policy
 
-    def __call__(self, *, user: User, source_id: UUID, note_anchor_id: UUID) -> list[QuizCandidate]:
+    def __call__(
+        self, *, user: User, source_id: UUID, note_anchor_id: UUID, user_keyed: bool = False
+    ) -> list[QuizCandidate]:
         authorized_source(
             user=user,
             source_id=source_id,
@@ -209,10 +214,25 @@ class SuggestCards:
             # The corpus was replaced under the highlight; nothing to generate from.
             raise StaleCaptureTarget("The selected passage no longer matches the source.")
 
+        # The learner-side rails run before the provider call: a paused key or a
+        # book at its ceiling refuses with nothing generated (and nothing spent).
+        if self._byok_policy is not None:
+            self._byok_policy.assert_turn(user.id, user_keyed=user_keyed, source_id=source_id)
+
         result = self._generation.suggest_cards(section, anchor.quote_exact, self._max_suggestions)
         # The provider call completed — its tokens are spent whether or not any
         # candidate survives the QC below, so the debit lands before filtering.
         _debit_suggest(self._budget, user.id, result)
+        if self._byok_policy is not None:
+            self._byok_policy.record_turn(
+                user.id,
+                user_keyed=user_keyed,
+                source_id=source_id,
+                usage=result.usage,
+                # The quiz model is not a registry profile: the estimate prices
+                # the primary catalog, exactly as the note path below states.
+                profile_id=None,
+            )
         section_text = _section_text(section)
         survivors = [c for c in result.candidates if _passes_qc(c, section_text)]
         return survivors[: self._max_suggestions]
@@ -548,15 +568,24 @@ class SuggestNoteCards:
         generation: QuizGenerationPort,
         max_suggestions: int,
         budget: DailyBudget | None = None,
+        byok_policy: ByokPolicy | None = None,
     ) -> None:
         self._notes = notes
         self._generation = generation
         self._max_suggestions = max_suggestions
         self._budget = budget
+        self._byok_policy = byok_policy
 
-    def __call__(self, *, user: User, note_id: UUID) -> list[QuizCandidate]:
+    def __call__(
+        self, *, user: User, note_id: UUID, user_keyed: bool = False
+    ) -> list[QuizCandidate]:
         note = _owned_note(self._notes, user, note_id)
         context = _note_context(self._notes.anchors_for_note(note_id))
+
+        # A note is not a book: the budget governs (source_id is None, so the
+        # per-corpus ceiling does not apply on this path), still before the call.
+        if self._byok_policy is not None:
+            self._byok_policy.assert_turn(user.id, user_keyed=user_keyed, source_id=None)
 
         result = self._generation.suggest_note_cards(
             note.body_markdown, context, self._max_suggestions
@@ -564,6 +593,14 @@ class SuggestNoteCards:
         # Debit before QC for the same reason as the highlight path: the call's
         # tokens are spent whether or not a candidate survives (AD-341).
         _debit_suggest(self._budget, user.id, result)
+        if self._byok_policy is not None:
+            self._byok_policy.record_turn(
+                user.id,
+                user_keyed=user_keyed,
+                source_id=None,
+                usage=result.usage,
+                profile_id=None,
+            )
         survivors = [c for c in result.candidates if note_card_passes_qc(c, note.body_markdown)]
         return survivors[: self._max_suggestions]
 
@@ -728,6 +765,14 @@ class RefreshNoteCards:
     flagged only. Leftover suggestions are dropped — a refresh never creates or deletes a
     card. Scheduling and the review log are never touched (the cycle's core invariant): a
     note edit costs no card its memory history (ADR-0026 d5).
+
+    The regeneration call debits like every other suggest call (AD-341), and when the
+    owner's own key served it the pass is also recorded to their monthly BYOK ledger
+    beside that debit — a note is not a book, so the per-corpus ledger is out of scope
+    (``source_id=None``, the ``SuggestNoteCards`` shape). Record-only by design: the
+    refresh is worker-initiated (the learner's own edit triggered it), so the learner-side
+    pre-flight refusals do not gate it — but the spend on their key never vanishes from
+    the ledger their budget reads.
     """
 
     def __init__(
@@ -742,6 +787,7 @@ class RefreshNoteCards:
         excerpt_chars: int,
         match_threshold: float,
         budget: DailyBudget | None = None,
+        byok_policy: ByokPolicy | None = None,
     ) -> None:
         self._notes = notes
         self._items = items
@@ -752,6 +798,7 @@ class RefreshNoteCards:
         self._excerpt_chars = excerpt_chars
         self._match_threshold = match_threshold
         self._budget = budget
+        self._byok_policy = byok_policy
 
     def __call__(self, *, note_id: UUID) -> None:
         note = self._notes.get_by_id(note_id)
@@ -768,6 +815,18 @@ class RefreshNoteCards:
         # The regeneration call completed; it debits like every other suggest call
         # (AD-341), to the note's owner — the worker runs with no user in hand.
         _debit_suggest(self._budget, note.user_id, result)
+        if self._byok_policy is not None:
+            # A pass the owner's own key served is invisible to the house day
+            # (0 USD) — record it to their monthly ledger so their budget reads
+            # true (the result stamp is the payer's source of truth here, as in
+            # the deck settle). A note is not a book: no per-corpus record.
+            self._byok_policy.record_turn(
+                note.user_id,
+                user_keyed=result.user_keyed,
+                source_id=None,
+                usage=result.usage,
+                profile_id=None,
+            )
         candidates = result.candidates
         survivors = [c for c in candidates if note_card_passes_qc(c, note.body_markdown)]
         embeddings = (

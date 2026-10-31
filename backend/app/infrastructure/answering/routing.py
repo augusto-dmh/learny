@@ -177,6 +177,17 @@ def _eligible_entries(chain: tuple[ChainEntry, ...], mode: str) -> tuple[ChainEn
     raise ValueError(f"unknown conversation mode: {mode!r}")
 
 
+def covers_mode(chain: tuple[ChainEntry, ...], mode: str) -> bool:
+    """Whether any entry of ``chain`` is both user-keyed and eligible for ``mode``.
+
+    The pre-flight twin of :func:`_serving_entries`: the walk serves the
+    eligible user-keyed entries whenever they exist, so their existence is the
+    honest answer to "will this caller's own key serve this call?" — the same
+    eligibility rule, read before anything is retrieved or generated.
+    """
+    return any(entry.user_keyed for entry in _eligible_entries(chain, mode))
+
+
 def _serving_entries(chain: tuple[ChainEntry, ...], mode: str) -> tuple[ChainEntry, ...]:
     """The entries one call walks: the eligible user-keyed ones when any exist.
 

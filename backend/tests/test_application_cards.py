@@ -16,6 +16,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.application.budget import DailyBudget, TokenPrices
+from app.application.byok import ByokPolicy
 from app.application.cards import (
     AcceptCard,
     AcceptNoteCard,
@@ -62,6 +63,9 @@ from app.domain.entities import (
 )
 from tests.fakes import (
     FakeAiSpendDayRepository,
+    FakeByokCorpusRepository,
+    FakeByokMonthRepository,
+    FakeByokSettingsStore,
     FakeClock,
     FakeNoteRepository,
     FakeSourceRepository,
@@ -1577,6 +1581,8 @@ class _RefreshWorld:
         owner: User = _OWNER,
         budget: DailyBudget | None = None,
         note_usage: TokenUsage | None = None,
+        byok_policy: ByokPolicy | None = None,
+        generation: FakeSuggestGeneration | None = None,
     ) -> None:
         self.notes = FakeNoteRepository()
         self.note = Note(
@@ -1589,7 +1595,7 @@ class _RefreshWorld:
         )
         self.notes.add(self.note)
         self.items = FakeCardItemRepository()
-        self.generation = FakeSuggestGeneration(
+        self.generation = generation or FakeSuggestGeneration(
             note_candidates=note_candidates, note_usage=note_usage
         )
         self.embeddings = FakeCardEmbedding(suggestion_vector or _MATCH_VECTOR)
@@ -1604,6 +1610,7 @@ class _RefreshWorld:
             excerpt_chars=excerpt_chars,
             match_threshold=match_threshold,
             budget=budget,
+            byok_policy=byok_policy,
         )
 
     def seed_card(self, **kwargs) -> QuizItem:  # noqa: ANN003
@@ -1724,6 +1731,71 @@ def test_refresh_recomputes_the_excerpt_from_the_current_body() -> None:
 
     updated = world.items.get_by_id(card.id)
     assert len(updated.source_excerpt) == 10
+
+
+class _KeyedNoteGeneration(FakeSuggestGeneration):
+    """The learner-keyed adapter's stamp: every note result reads owner-key served."""
+
+    def suggest_note_cards(self, note_body, context, limit):  # noqa: ANN001, ANN201
+        result = super().suggest_note_cards(note_body, context, limit)
+        return replace(result, user_keyed=True)
+
+
+def _refresh_policy() -> tuple[ByokPolicy, FakeByokMonthRepository, FakeByokCorpusRepository]:
+    months, corpus = FakeByokMonthRepository(), FakeByokCorpusRepository()
+    policy = ByokPolicy(
+        months=months,
+        corpus=corpus,
+        settings=FakeByokSettingsStore(None),
+        clock=FakeClock(_NOW),
+        corpus_cap_tokens=4_000_000,
+        estimate=lambda usage, profile_id: 0 if usage is None else 12_345,
+    )
+    return policy, months, corpus
+
+
+def test_refresh_records_the_learner_ledger() -> None:
+    """A user-keyed refresh pass reaches the owner's monthly ledger, monthly only.
+
+    The result stamp is the payer's source of truth: a pass the owner's key
+    served books the month their budget reads, beside the 0-USD house debit. A
+    note is not a book — the per-corpus ledger sees nothing.
+    """
+    policy, months, corpus = _refresh_policy()
+    world = _RefreshWorld(
+        note_candidates=[_note_candidate(question="Reworded?", answer="X")],
+        note_usage=TokenUsage(input_tokens=1000, output_tokens=500),
+        byok_policy=policy,
+        generation=_KeyedNoteGeneration(
+            note_candidates=[_note_candidate(question="Reworded?", answer="X")],
+            note_usage=TokenUsage(input_tokens=1000, output_tokens=500),
+        ),
+    )
+    world.seed_card(question="Original?", answer="A", embedding=_MATCH_VECTOR)
+
+    world.refresh(note_id=world.note.id)
+
+    month = months.get_for_month(_OWNER.id, _NOW.strftime("%Y-%m"))
+    assert month is not None
+    assert (month.input_tokens, month.output_tokens) == (1000, 500)
+    assert month.cost_usd_micros == 12_345
+    assert corpus.record_calls == []  # a note is not a book
+
+
+def test_refresh_records_nothing_for_a_house_served_pass() -> None:
+    """A refresh the house served books nothing: the house rails carry its cost."""
+    policy, months, corpus = _refresh_policy()
+    world = _RefreshWorld(
+        note_candidates=[_note_candidate(question="Reworded?", answer="X")],
+        note_usage=TokenUsage(input_tokens=1000, output_tokens=500),
+        byok_policy=policy,
+    )
+    world.seed_card(question="Original?", answer="A", embedding=_MATCH_VECTOR)
+
+    world.refresh(note_id=world.note.id)
+
+    assert months.get_for_month(_OWNER.id, _NOW.strftime("%Y-%m")) is None
+    assert corpus.record_calls == []
 
 
 # --- AcceptTutorCard (TUTOR-35..38, TUTOR-42) -----------------------------------

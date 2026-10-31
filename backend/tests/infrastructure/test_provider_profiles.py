@@ -18,7 +18,9 @@ from pydantic import ValidationError
 from app.core.config import Settings
 from app.infrastructure.providers.profiles import (
     LEGACY_PROFILE_ID,
+    USER_KEY_PROVIDERS,
     GenerationProfileSettings,
+    offered_providers,
     resolve_generation_profiles,
 )
 
@@ -502,3 +504,87 @@ def test_a_binding_that_matches_its_provider_resolves(overrides: dict[str, Any])
     ids = [profile.id for profile in resolve_generation_profiles(settings)]
 
     assert ids == ["house-local", "byok-claude"]
+
+
+# --- The hosted declaration never widens the offer ---------------------------------
+
+
+def test_hosted_flags_offer_only_the_canonical_providers(monkeypatch) -> None:
+    """With the hosted flags on, the registry offers exactly the three canonical
+    providers, each binding still pinned to its canonical host, and a lookalike
+    host still fails startup - the declaration changes whether keys are readable,
+    never what may be offered."""
+    monkeypatch.setenv("LEARNY_HOSTED_INSTANCE", "true")
+    monkeypatch.setenv("LEARNY_HOSTED_BYOK_ENABLED", "true")
+
+    bindings = [
+        dict(_USER_KEY_ONLY),
+        dict(
+            _USER_KEY_ONLY,
+            id="byok-gpt",
+            kind="openai-compatible",
+            grounding="prompt-cited",
+            user_key_provider="openai",
+            base_url="https://api.openai.com/v1",
+        ),
+        dict(
+            _USER_KEY_ONLY,
+            id="byok-gemini",
+            kind="openai-compatible",
+            grounding="prompt-cited",
+            user_key_provider="gemini",
+            base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+        ),
+    ]
+    resolved = resolve_generation_profiles(_settings_with_profiles([_HOUSE_LOCAL, *bindings]))
+
+    assert offered_providers(resolved) == ("anthropic", "openai", "gemini")
+    assert USER_KEY_PROVIDERS == ("anthropic", "openai", "gemini")
+
+    lookalike = dict(
+        bindings[2], base_url="https://generativelanguage.googleapis.com.evil.example/v1beta/"
+    )
+    with pytest.raises(ValueError, match="would send them elsewhere"):
+        resolve_generation_profiles(_settings_with_profiles([_HOUSE_LOCAL, lookalike]))
+
+
+# --- The learner-keyed adapter is built from the profile's host and nothing else ----
+
+
+def test_user_keyed_adapter_host_from_profile_only(monkeypatch) -> None:
+    """``build_user_keyed_adapter`` reads the host from the bound profile alone.
+
+    The signature takes a profile, the settings, and the learner's key — there is
+    no parameter a request body could reach — and the built adapter targets the
+    profile's declared canonical host with that key and nothing else. Together
+    with the route storing a key and ignoring every other body field, no
+    learner-supplied endpoint can reach adapter construction.
+    """
+    from app.infrastructure.answering import build_user_keyed_adapter
+
+    monkeypatch.setenv("LEARNY_TEST_PROFILE_KEY", "sk-test")
+    host = "https://api.openai.com/v1"
+    profile = GenerationProfileSettings(
+        id="byok-gpt",
+        kind="openai-compatible",
+        model="gpt-byok",
+        base_url=host,
+        api_key_env="LEARNY_TEST_PROFILE_KEY",
+        effort_ask="low",
+        effort_teach="low",
+        max_tokens=4096,
+        price_input_usd_per_million_tokens=0.5,
+        price_output_usd_per_million_tokens=1.5,
+        price_cache_read_usd_per_million_tokens=0.1,
+        price_cache_creation_usd_per_million_tokens=0.1,
+        grounding="prompt-cited",
+        ask_enabled=True,
+        teach_enabled=False,
+        user_key_provider="openai",
+    )
+    settings = Settings(_env_file=None, generation_profiles=[profile])
+
+    adapter = build_user_keyed_adapter(profile, settings, "sk-proj-learner-key-QQQQQQQQ")
+
+    assert adapter._base_url == host
+    assert adapter._api_key == "sk-proj-learner-key-QQQQQQQQ"
