@@ -81,7 +81,7 @@ from app.infrastructure.web.dependencies import (
     get_reset_schedule,
     get_submit_review,
     get_undo_last_review,
-    learner_holds_quiz_key,
+    learner_quiz_credential_id,
 )
 from app.infrastructure.web.rate_limit import rate_limit_quiz
 
@@ -384,11 +384,16 @@ def generate_quiz_deck(
     (ADR-0033): the house USD cap yields to that deck — the learner's money, not
     the operator's — while the learner-side rails assert on the same pre-commit
     path, so a paused key or a book at its ceiling refuses having created nothing.
+    The resolved credential row's id rides the job: the worker serves the pass
+    with exactly that key or fails it, so a key deleted in the submit→run window
+    can never move a cap-exempted deck onto the house adapter.
     """
     # UoW1: create the queued job (ownership/readiness/single-in-flight enforced).
     with uow_factory() as conn:
         job = build_plan_deck_generation(conn)(
-            user=user, source_id=source_id, user_keyed=learner_holds_quiz_key(credentials)
+            user=user,
+            source_id=source_id,
+            credential_id=learner_quiz_credential_id(credentials),
         )
 
     # Enqueue only after the job is durably committed (AD-016).

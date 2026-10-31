@@ -121,7 +121,7 @@ class PlanDeckGeneration:
         self._byok_policy = byok_policy
 
     def __call__(
-        self, *, user: User, source_id: UUID, user_keyed: bool = False
+        self, *, user: User, source_id: UUID, credential_id: UUID | None = None
     ) -> QuizGenerationJob:
         source = authorized_source(
             user=user,
@@ -143,6 +143,7 @@ class PlanDeckGeneration:
         # learner-keyed deck (their money, their key) while the learner-side rails
         # assert on the same pre-commit path: a paused key or a book at its ceiling
         # refuses the POST having created nothing.
+        user_keyed = credential_id is not None
         if self._budget is not None:
             self._budget.assert_generation(user.id, kind=KIND_GENERATION, user_keyed=user_keyed)
         if self._byok_policy is not None:
@@ -161,6 +162,12 @@ class PlanDeckGeneration:
                 last_error=None,
                 created_at=now,
                 updated_at=now,
+                # The payer is decided once, here: the credential row the
+                # submit-time resolution served with rides the job, so the
+                # worker either serves the pass with exactly that key or fails
+                # the job — a key deleted in the window can never silently move
+                # a cap-exempted deck onto the house adapter (ADR-0033).
+                credential_id=credential_id,
             )
         )
 

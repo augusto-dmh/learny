@@ -309,9 +309,28 @@ def learner_holds_quiz_key(credentials: LearnerCredentials) -> bool:
     """Whether the caller's own Anthropic key would serve a deck or card call.
 
     The quiz adapter is built from ``quiz_model`` on the caller's key when they
-    hold one (ADR-0033); every other caller gets the house generator.
+    hold one (ADR-0033); every other caller gets the house generator. Answered
+    from the *resolved* adapter — the same resolution
+    :func:`get_card_generation_for_user` serves a card call with — never from
+    row presence: a stored row that cannot be opened reads as absent (the
+    module contract), so the house would serve and the house rails govern the
+    call in full.
     """
-    return credentials.repo is not None and QUIZ_KEY_PROVIDER in credentials.by_provider
+    return _learner_quiz_adapter_for_request(credentials) is not None
+
+
+def learner_quiz_credential_id(credentials: LearnerCredentials) -> UUID | None:
+    """The caller's own Anthropic credential row id when it would serve a deck.
+
+    The submit-time payer decision for a deck (ADR-0033): the 202 job pins this
+    row id, and the worker serves the pass with exactly that row or fails the
+    job — never the house key. ``None`` (no key, or one that cannot be opened)
+    means the house would serve and the house rails govern the submit in full.
+    """
+    credential = credentials.by_provider.get(QUIZ_KEY_PROVIDER)
+    if credential is None or _learner_quiz_adapter_for_request(credentials) is None:
+        return None
+    return credential.id
 
 
 def _build_profile_catalogs(
@@ -1593,18 +1612,21 @@ def get_card_generation() -> QuizGenerationPort:
     return build_quiz_adapter(get_settings())
 
 
-def get_card_generation_for_user(credentials: CallerCredentials) -> QuizGenerationPort:
-    """FastAPI dependency: the caller's card generator (ADR-0033).
+def _learner_quiz_adapter_for_request(
+    credentials: LearnerCredentials,
+) -> QuizGenerationPort | None:
+    """The caller's own quiz adapter, resolved exactly as a card call resolves it.
 
-    A learner holding an Anthropic key gets a quiz adapter built with it and
-    ``quiz_model``, cached per key write like the learner-keyed chains; its
-    results are stamped ``user_keyed`` so the suggest debit is 0 USD. Anyone
-    else, or a key that cannot be opened, gets the house card generator.
+    The one resolution the coverage predicate and the card generator both read,
+    so the two can never disagree: the adapter is built on the caller's stored
+    Anthropic row and ``quiz_model`` and cached per key write, and a row that
+    cannot be opened (an unknown KEK, a failed owner binding) resolves to
+    ``None`` — reads as absent, never as an error.
     """
     repo = credentials.repo
     credential = credentials.by_provider.get(QUIZ_KEY_PROVIDER)
     if repo is None or credential is None:
-        return get_card_generation()
+        return None
     settings = get_settings()
 
     def _build() -> QuizGenerationPort | None:
@@ -1613,7 +1635,7 @@ def get_card_generation_for_user(credentials: CallerCredentials) -> QuizGenerati
             return None
         return build_user_keyed_quiz_adapter(settings, api_key, credential_id=credential.id)
 
-    adapter = _user_quiz_adapters.get_or_build(
+    return _user_quiz_adapters.get_or_build(
         UserAdapterKey(
             provider=credential.provider,
             profile_id=_QUIZ_CACHE_SLOT,
@@ -1622,6 +1644,18 @@ def get_card_generation_for_user(credentials: CallerCredentials) -> QuizGenerati
         ),
         _build,
     )
+
+
+def get_card_generation_for_user(credentials: CallerCredentials) -> QuizGenerationPort:
+    """FastAPI dependency: the caller's card generator (ADR-0033).
+
+    A learner holding an Anthropic key gets a quiz adapter built with it and
+    ``quiz_model``, cached per key write like the learner-keyed chains; its
+    results are stamped ``user_keyed`` so the suggest debit is 0 USD. Anyone
+    else — or a learner whose stored row cannot be opened — gets the house
+    card generator, the same verdict :func:`learner_holds_quiz_key` reports.
+    """
+    adapter = _learner_quiz_adapter_for_request(credentials)
     return adapter if adapter is not None else get_card_generation()
 
 

@@ -2074,6 +2074,7 @@ class SqlAlchemyQuizJobRepository:
                 last_error=job.last_error,
                 created_at=job.created_at,
                 updated_at=job.updated_at,
+                credential_id=job.credential_id,
             )
         )
         return job
@@ -3105,6 +3106,7 @@ def _to_quiz_job(row) -> QuizGenerationJob:  # noqa: ANN001
         created_at=row.created_at,
         updated_at=row.updated_at,
         discard_reasons=dict(row.discard_reasons),
+        credential_id=row.credential_id,
     )
 
 

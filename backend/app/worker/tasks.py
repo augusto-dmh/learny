@@ -507,9 +507,10 @@ _DECK_KEY_GONE_ERROR = (
 #
 # A task carries ids only. The owner's key is resolved here, inside the task,
 # from the credential row: never from a task argument, and never placed in one.
-# A deck begun on a learner's key pins that key's row id on its handle, so the
-# poll collects with exactly that row or fails the job; it never falls back to
-# the house key or to a key added since.
+# A learner-keyed deck pins the credential row it was exempted on at submit
+# (the job row's ``credential_id``), so begin and poll alike collect with
+# exactly that row or fail the job; they never fall back to the house key or
+# to a key added since.
 
 
 def _learner_quiz_adapter(
@@ -717,13 +718,32 @@ def _generate_quiz_deck_body(self, jid, sid, job_id, log, start):  # noqa: ANN00
     # 2. Start the pass and collect once. A provider fault here retries the task.
     #    The inline collect is pinned to the provider the handle records — the one
     #    ``begin_deck`` just used — so the collect can never drift from the begin.
-    #    An owner holding an Anthropic key runs the pass on it, resolved here from
-    #    the credential row; the handle then pins that row's id (ADR-0033).
+    #    A deck the submit exempted on the owner's own key runs on exactly the
+    #    credential row pinned on the job, or fails terminally like the poll: a
+    #    key deleted in the submit→run window must never move a cap-exempted deck
+    #    onto the house adapter (ADR-0033). Any other deck resolves the owner's
+    #    current key at run time, exactly as before.
+    learner: QuizGenerationPort | None = None
+    pinned_gone = False
     try:
         with get_engine().begin() as conn:
             owner = _owner_of_source(conn, sid)
-            learner = _learner_quiz_adapter(conn, owner) if owner is not None else None
-            handle = _build_run_deck(conn, learner).begin_deck(sid)
+            if owner is not None:
+                learner = _learner_quiz_adapter(conn, owner, pinned=job.credential_id)
+            if job.credential_id is not None and learner is None:
+                # The pinned key is gone (deleted, replaced, unopenable): fail the
+                # exempted deck honestly — the house key never serves it.
+                _build_run_deck(conn).fail(jid, _DECK_KEY_GONE_ERROR)
+                pinned_gone = True
+            else:
+                handle = _build_run_deck(conn, learner).begin_deck(sid)
+        if pinned_gone:
+            logger.warning(
+                "quiz.generate_deck: the provider key this deck was exempted on is "
+                "gone; job failed terminally with no pass attempted",
+                extra={**log, "duration_ms": _elapsed_ms(start)},
+            )
+            return None
         collector = learner or build_quiz_adapter(get_settings(), provider=handle.provider)
         result = collector.collect_deck(handle)
     except Exception as exc:  # noqa: BLE001 — classified as retryable/terminal below
