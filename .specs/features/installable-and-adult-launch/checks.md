@@ -15,10 +15,10 @@ Build: cd backend && uv run ruff check . && uv run ruff format --check . ; cd fr
 ### S1 - installable, offline, low-bandwidth · batch A · ~70k
 
 **C1** - The app serves a web app manifest declaring `name`, `short_name`, `start_url: "/"`, `display: "standalone"`, icons at 192px and 512px with one `any` and one `maskable` purpose, and the document links it (AC 1)
-Proof: `cd frontend && npx vitest run tests/pwa-install.test.ts -t "manifest declares the installable shape and the document links it"`
+Proof: `cd frontend && npx vitest run tests/pwa-install.test.tsx -t "manifest declares the installable shape and the document links it"`
 
 **C2** - The app shell registers the service worker at `/sw.js` with `{ type: "module" }`, and `/sw.js` exists as a static asset (AC 2)
-Proof: `cd frontend && npx vitest run tests/pwa-install.test.ts -t "registers the service worker module at /sw.js"`
+Proof: `cd frontend && npx vitest run tests/pwa-install.test.tsx -t "registers the service worker module at /sw.js"`
 
 **C3** - A signed-in learner's 200 `GET /api/sources/{id}/chapter*` and `GET /api/sources/{id}/structure` responses are stored network-first in that learner's reader cache, and the cache names one user per name (AC 3)
 Proof: `cd frontend && npx vitest run tests/offline-cache-policy.test.ts -t "caches chapter and structure reads in the reading user's cache"`
@@ -37,7 +37,7 @@ Proof: `cd frontend && npx vitest run tests/offline-cache-policy.test.ts -t "pur
 Proof: `cd frontend && npx vitest run tests/data-saver.test.tsx -t "hides book figures and shows the notice while data saver is active"`
 
 **C8** - Toggling Data saver in the reading-controls popover applies immediately, persists device-local across reloads, and an explicit Off overrides a browser `Save-Data` signal (AC 8)
-Proof: `cd frontend && npx vitest run tests/data-saver.test.tsx -t "persists the toggle, applies it immediately, and Off overrides Save-Data"`
+Proof: `cd frontend && npx vitest run tests/data-saver.test.tsx -t "persists the toggle and applies it immediately, and Off overrides Save-Data"`
 
 ### S2 - adults only, legal in Portuguese, a capped guest Ask · batch B · ~85k
 

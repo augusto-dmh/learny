@@ -1,0 +1,23 @@
+[
+  {
+    "file": "frontend/public/sw.js",
+    "old": "    if (name === keep) {\n      continue;\n    }\n    await caches.delete(name);",
+    "new": "    if (true) {\n      continue;\n    }\n    await caches.delete(name);",
+    "proof": "cd frontend && npx vitest run tests/offline-cache-policy.test.ts -t \"purges every other learner's reader cache when the user changes\"",
+    "label": "user-change purge: foreign reader caches are kept instead of deleted"
+  },
+  {
+    "file": "frontend/public/sw.js",
+    "old": "  if (currentUserId === null || !isCacheableReaderRequest(request, origin)) {\n    return fetch(request);\n  }",
+    "new": "  if (!isCacheableReaderRequest(request, origin)) {\n    return fetch(request);\n  }",
+    "proof": "cd frontend && npx vitest run tests/offline-cache-policy.test.ts -t \"caches nothing until it knows the reading user\"",
+    "label": "unknown user: chapter reads are cached under an unattributed cache before any user id arrives"
+  },
+  {
+    "file": "frontend/public/sw.js",
+    "old": "  const url = new URL(request.url);\n  if (url.origin !== origin) {\n    return false;\n  }\n  return READER_PATH.test(url.pathname);",
+    "new": "  const url = new URL(request.url);\n  if (url.origin !== origin) {\n    return false;\n  }\n  return url.pathname.startsWith(\"/api/sources/\");",
+    "proof": "cd frontend && npx vitest run tests/offline-cache-policy.test.ts -t \"never caches writes, other api reads, or cross-origin requests\"",
+    "label": "cache scope: every source read (media, notes) becomes cacheable, not just chapter and structure"
+  }
+]
