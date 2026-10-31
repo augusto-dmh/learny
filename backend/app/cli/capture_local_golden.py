@@ -171,13 +171,19 @@ def _golden_books() -> tuple[_GoldenBook, _GoldenBook]:
 
 
 def _git_sha() -> str:
-    """The short commit sha stamped on every line (``unknown`` outside a repo)."""
+    """The short commit sha stamped on every line (``unknown`` outside a repo).
+
+    Resolved at the repository root — the directory that holds ``evals/`` — so
+    the stamp is this checkout's HEAD even when the checkout itself sits inside
+    another repository (a worktree under a parent clone, for instance); running
+    git above the repo root would name the outer repository's HEAD or nothing.
+    """
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],
             capture_output=True,
             text=True,
-            cwd=_output_dir.parents[2],
+            cwd=_output_dir.parents[1],
             check=True,
         )
     except (OSError, subprocess.CalledProcessError):
@@ -256,6 +262,9 @@ def _sanitize_model(model: str) -> str:
 
 def _capture(base_url: str, model: str) -> Path:
     """Run every golden case and record one JSONL line per case; return the path."""
+    # One resolution per run: the provenance stamp is a property of the checkout,
+    # not of a case — the same sha rides every line and the filename.
+    git_sha = _git_sha()
     settings = get_settings()
     embeddings = build_embedding_adapter(settings)
     generation = OpenAICompatibleGenerationAdapter(
@@ -305,13 +314,13 @@ def _capture(base_url: str, model: str) -> Path:
                         "generation_model": generated.model,
                         "base_url": base_url,
                         "ts": datetime.now(UTC).isoformat(),
-                        "git_sha": _git_sha(),
+                        "git_sha": git_sha,
                         "answer_text": generated.text,
                     }
                 )
     _output_dir.mkdir(parents=True, exist_ok=True)
     path = _output_dir / (
-        f"{datetime.now(UTC).strftime('%Y-%m-%d')}-{_git_sha()}-{_sanitize_model(model)}.jsonl"
+        f"{datetime.now(UTC).strftime('%Y-%m-%d')}-{git_sha}-{_sanitize_model(model)}.jsonl"
     )
     with path.open("w", encoding="utf-8") as handle:
         for record in records:

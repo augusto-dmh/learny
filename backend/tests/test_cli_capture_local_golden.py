@@ -5,6 +5,9 @@ Two facts, three proofs:
 - Invoked without ``--base-url`` or ``--model`` the runner refuses with exit
   ``2`` before any network attempt or database write — the seams that would
   touch either are replaced with tripwires first;
+- the provenance stamp is this checkout's HEAD, resolved at the repository root
+  (the directory holding ``evals/``) — never one directory above it, which would
+  name an outer repository's HEAD when the checkout sits inside another;
 - the same runner an operator points at Ollama records one JSONL line per
   golden case under ``evals/local/`` — proven end-to-end against an
   in-process OpenAI-compatible fake server on a loopback ephemeral port with
@@ -15,9 +18,11 @@ Two facts, three proofs:
 from __future__ import annotations
 
 import json
+import subprocess
 import threading
 from contextlib import AbstractContextManager
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 from types import TracebackType
 
 import pytest
@@ -127,6 +132,36 @@ def test_missing_args_exit_two_before_network_or_db(
     assert missing_both.value.code == 2
 
     assert not tmp_path.exists() or not any(tmp_path.iterdir())
+
+
+def test_git_sha_stamps_this_checkout_head() -> None:
+    # The provenance stamp is this checkout's HEAD — resolved at the repository
+    # root (the directory holding evals/), even when the checkout itself sits
+    # inside another repository, where a resolution above the root would name
+    # the outer repository's HEAD.
+    import app.cli.capture_local_golden as capture
+
+    repo_root = Path(__file__).resolve().parents[2]
+    try:
+        expected = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            cwd=repo_root,
+            check=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        expected = "unknown"
+    assert capture._git_sha() == expected
+
+
+def test_git_sha_falls_back_to_unknown_outside_a_repo(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:  # noqa: ANN001 — tmp_path
+    import app.cli.capture_local_golden as capture
+
+    monkeypatch.setattr(capture, "_output_dir", tmp_path / "evals" / "local")
+    assert capture._git_sha() == "unknown"
 
 
 @requires_db
