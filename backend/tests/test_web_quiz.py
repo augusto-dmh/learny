@@ -1293,7 +1293,6 @@ def test_flag_untrusted_origin_returns_403(quiz_client: TestClient, db_conn: Con
     assert resp.status_code == 403, resp.text
 
 
-
 def test_review_stores_confidence_and_assisted(
     quiz_client: TestClient, db_conn: Connection
 ) -> None:
@@ -1338,7 +1337,6 @@ def test_review_confidence_out_of_range_422(quiz_client: TestClient, db_conn: Co
         ).scalar_one()
         == 0
     )
-
 
 
 # --- The learner-keyed deck rails (BYOK hosted policy) ------------------------------

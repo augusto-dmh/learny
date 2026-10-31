@@ -466,7 +466,9 @@ def _build_refresh_note_cards(
     note's owner's current UTC day (AD-341) — the ledger row shares the task's
     transaction, so a rolled-back refresh un-does its debit with its writes.
     ``generation`` is the owner's own-key quiz adapter when they hold one
-    (ADR-0033); otherwise the house adapter serves.
+    (ADR-0033); otherwise the house adapter serves. The BYOK policy rides the
+    same transaction so a pass their own key served is recorded to the owner's
+    monthly ledger beside that debit — the ledger their budget reads stays true.
     """
     settings = get_settings()
     return RefreshNoteCards(
@@ -479,6 +481,7 @@ def _build_refresh_note_cards(
         excerpt_chars=settings.quiz_note_excerpt_chars,
         match_threshold=settings.quiz_note_match_threshold,
         budget=_build_budget(conn),
+        byok_policy=_build_byok_policy(conn),
     )
 
 

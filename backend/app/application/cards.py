@@ -766,6 +766,13 @@ class RefreshNoteCards:
     card. Scheduling and the review log are never touched (the cycle's core invariant): a
     note edit costs no card its memory history (ADR-0026 d5).
 
+    The regeneration call debits like every other suggest call (AD-341), and when the
+    owner's own key served it the pass is also recorded to their monthly BYOK ledger
+    beside that debit — a note is not a book, so the per-corpus ledger is out of scope
+    (``source_id=None``, the ``SuggestNoteCards`` shape). Record-only by design: the
+    refresh is worker-initiated (the learner's own edit triggered it), so the learner-side
+    pre-flight refusals do not gate it — but the spend on their key never vanishes from
+    the ledger their budget reads.
     """
 
     def __init__(
@@ -780,6 +787,7 @@ class RefreshNoteCards:
         excerpt_chars: int,
         match_threshold: float,
         budget: DailyBudget | None = None,
+        byok_policy: ByokPolicy | None = None,
     ) -> None:
         self._notes = notes
         self._items = items
@@ -790,6 +798,7 @@ class RefreshNoteCards:
         self._excerpt_chars = excerpt_chars
         self._match_threshold = match_threshold
         self._budget = budget
+        self._byok_policy = byok_policy
 
     def __call__(self, *, note_id: UUID) -> None:
         note = self._notes.get_by_id(note_id)
@@ -806,6 +815,18 @@ class RefreshNoteCards:
         # The regeneration call completed; it debits like every other suggest call
         # (AD-341), to the note's owner — the worker runs with no user in hand.
         _debit_suggest(self._budget, note.user_id, result)
+        if self._byok_policy is not None:
+            # A pass the owner's own key served is invisible to the house day
+            # (0 USD) — record it to their monthly ledger so their budget reads
+            # true (the result stamp is the payer's source of truth here, as in
+            # the deck settle). A note is not a book: no per-corpus record.
+            self._byok_policy.record_turn(
+                note.user_id,
+                user_keyed=result.user_keyed,
+                source_id=None,
+                usage=result.usage,
+                profile_id=None,
+            )
         candidates = result.candidates
         survivors = [c for c in candidates if note_card_passes_qc(c, note.body_markdown)]
         embeddings = (
