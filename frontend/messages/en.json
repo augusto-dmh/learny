@@ -391,6 +391,7 @@
     "progress": "{percent}% read · {minutes} min left",
     "returnChip": "Return to where you were",
     "staleCapture": "The book changed while you were reading. Reload the page to capture this highlight.",
+    "dataSaverNotice": "Data saver is on — book images are hidden to use less data.",
     "toc": {
       "label": "Table of contents",
       "chapterNav": "Chapter navigation",
@@ -419,7 +420,13 @@
         "light": "Light",
         "dark": "Dark",
         "system": "System"
-      }
+      },
+      "dataSaver": "Data saver",
+      "dataSaverChoices": {
+        "on": "On",
+        "off": "Off"
+      },
+      "dataSaverSystemNote": "Your browser asked to save data."
     },
     "dock": {
       "tabsLabel": "Dock tabs",

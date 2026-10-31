@@ -25,6 +25,7 @@ import {
   type ReadingLeading,
   type ReadingSize,
 } from "@/app/components/use-reading-settings";
+import type { DataSaverOverride } from "@/app/components/use-data-saver";
 import { Button } from "@/components/ui/button";
 import {
   Popover,
@@ -81,6 +82,10 @@ export function ReadingControls({
   onSizeChange,
   onLeadingChange,
   onAppearanceChange,
+  dataSaver = false,
+  dataSaverSystem = false,
+  dataSaverOverride = null,
+  onDataSaverChange,
 }: {
   size: ReadingSize;
   leading: ReadingLeading;
@@ -88,6 +93,14 @@ export function ReadingControls({
   onSizeChange: (size: ReadingSize) => void;
   onLeadingChange: (leading: ReadingLeading) => void;
   onAppearanceChange: (appearance: ReadingAppearance) => void;
+  /** The effective data-saver state, shown as the toggle's position. */
+  dataSaver?: boolean;
+  /** The browser's own Save-Data signal, explained when nothing overrides it. */
+  dataSaverSystem?: boolean;
+  /** The stored device choice; null means the browser signal decides. */
+  dataSaverOverride?: DataSaverOverride;
+  /** Persist the device choice; null clears it back to the browser signal. */
+  onDataSaverChange?: (value: "on" | "off" | null) => void;
 }) {
   const t = useTranslations("reader.controls");
   const format = useFormatter();
@@ -164,6 +177,40 @@ export function ReadingControls({
             </Segment>
           ))}
         </Field>
+
+        {onDataSaverChange ? (
+          <div className="flex flex-col gap-1.5">
+            <span className="text-xs font-medium text-muted-foreground">
+              {t("dataSaver")}
+            </span>
+            <div
+              role="group"
+              aria-label={t("dataSaver")}
+              className="flex gap-1.5"
+              data-testid="data-saver-control"
+            >
+              <Segment
+                selected={dataSaver}
+                onClick={() => onDataSaverChange("on")}
+                aria-pressed={dataSaver}
+              >
+                {t("dataSaverChoices.on")}
+              </Segment>
+              <Segment
+                selected={!dataSaver}
+                onClick={() => onDataSaverChange("off")}
+                aria-pressed={!dataSaver}
+              >
+                {t("dataSaverChoices.off")}
+              </Segment>
+            </div>
+            {dataSaverSystem && dataSaverOverride === null ? (
+              <p className="text-xs text-muted-foreground">
+                {t("dataSaverSystemNote")}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
       </PopoverContent>
     </Popover>
   );

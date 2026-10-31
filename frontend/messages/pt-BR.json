@@ -391,6 +391,7 @@
     "progress": "{percent}% lido · faltam {minutes} min",
     "returnChip": "Voltar para onde você estava",
     "staleCapture": "O livro mudou enquanto você lia. Recarregue a página para capturar este destaque.",
+    "dataSaverNotice": "Economia de dados ativada — as imagens do livro ficam ocultas para gastar menos dados.",
     "toc": {
       "label": "Sumário",
       "chapterNav": "Navegação entre capítulos",
@@ -419,7 +420,13 @@
         "light": "Claro",
         "dark": "Escuro",
         "system": "Sistema"
-      }
+      },
+      "dataSaver": "Economia de dados",
+      "dataSaverChoices": {
+        "on": "Ativar",
+        "off": "Desativar"
+      },
+      "dataSaverSystemNote": "Seu navegador pediu para economizar dados."
     },
     "dock": {
       "tabsLabel": "Abas do painel",

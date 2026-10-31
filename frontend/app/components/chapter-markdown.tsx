@@ -32,6 +32,7 @@ function chapterOrigin(explicit?: string): string {
 
 function chapterRehypePlugins(
   defaultOrigin: string,
+  dataSaver = false,
 ): NonNullable<StreamdownProps["rehypePlugins"]> {
   return [
     defaultRehypePlugins.raw,
@@ -39,7 +40,9 @@ function chapterRehypePlugins(
     [
       harden,
       {
-        allowedImagePrefixes: [...CHAPTER_IMAGE_PREFIXES],
+        // Data saver empties the allowlist: no same-origin figure survives the
+        // sanitize pass, so the browser never opens a media request.
+        allowedImagePrefixes: dataSaver ? [] : [...CHAPTER_IMAGE_PREFIXES],
         allowedLinkPrefixes: ["*"],
         allowedProtocols: ["*"],
         defaultOrigin,
@@ -53,19 +56,27 @@ export const ChapterMarkdown = memo(function ChapterMarkdown({
   children,
   className,
   origin,
+  dataSaver = false,
 }: {
   children: string;
   className?: string;
   origin?: string;
+  /**
+   * Data saver (low-bandwidth row): an empty image allowlist strips book
+   * figures in the sanitize pass, so a metered learner never pays for them.
+   * Everything else about the markdown renders identically.
+   */
+  dataSaver?: boolean;
 }) {
   return (
     <Streamdown
+      key={dataSaver ? "saver" : "figures"}
       className={cn(
         "size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
         className,
       )}
       plugins={streamdownPlugins}
-      rehypePlugins={chapterRehypePlugins(chapterOrigin(origin))}
+      rehypePlugins={chapterRehypePlugins(chapterOrigin(origin), dataSaver)}
     >
       {children}
     </Streamdown>
