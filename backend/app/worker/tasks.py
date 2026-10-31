@@ -528,7 +528,7 @@ def _learner_quiz_adapter(
         conn,
         envelope_from_settings(settings),
         tuple(settings.generation_profiles),
-        hosted_lock=settings.hosted_instance and not settings.hosted_byok_enabled,
+        hosted_lock=settings.hosted_byok_locked,
     )
     if access is None:
         return None

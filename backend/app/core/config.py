@@ -461,6 +461,20 @@ class Settings(BaseSettings):
     # whole-book extraction run.
     byok_corpus_prompt_token_cap: int = Field(default=4_000_000, ge=0)
 
+    @property
+    def hosted_byok_locked(self) -> bool:
+        """Whether the hosted lock is engaged: declared hosted without the opt-in.
+
+        The one owner of the hosted gate's boolean — both assemblies that read
+        learner keys (the API composition root and the worker tasks) pass this
+        to :func:`app.infrastructure.learner_keys.learner_key_access`, so the
+        API and the worker can never disagree about whether keys are readable.
+        A self-host reads ``False`` (the opt-in is ignored entirely); a hosted
+        instance that has not taken the post-security-review opt-in reads
+        ``True`` and reads as feature-off everywhere.
+        """
+        return self.hosted_instance and not self.hosted_byok_enabled
+
     @field_validator("secrets_kek", "secrets_kek_previous", mode="before")
     @classmethod
     def _validate_secrets_kek(cls, value: object, info: object) -> object:

@@ -48,6 +48,7 @@ from app.infrastructure.quiz.learner import QUIZ_KEY_PROVIDER
 from app.infrastructure.web.csrf import enforce_csrf
 from app.infrastructure.web.dependencies import (
     DbConnection,
+    build_budget,
     build_byok_policy,
     build_provider_credential_repository,
     evict_learner_adapters,
@@ -199,7 +200,10 @@ def _key_from_body(provider: str, body: Any) -> str:  # noqa: ANN401 — parsed 
 
 def _usage_view(conn: DbConnection, user_id: UUID) -> ByokUsageView:
     """The caller's month-to-date usage and stored budget (zeros when quiet)."""
-    policy = build_byok_policy(conn)
+    # The read path never prices anything, but the policy is one service: it is
+    # wired with the same request budget the generation paths use, so the
+    # catalog behind its (unused) estimate is the one true catalog.
+    policy = build_byok_policy(conn, build_budget(conn))
     period, tokens_in, tokens_out, cost = policy.month_usage(user_id)
     return ByokUsageView(
         period=period,

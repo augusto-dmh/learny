@@ -274,13 +274,13 @@ def build_budget(conn: Connection) -> DailyBudget:
     )
 
 
-def build_byok_policy(conn: Connection) -> ByokPolicy:
+def build_byok_policy(conn: Connection, budget: DailyBudget) -> ByokPolicy:
     """Wire the learner-side BYOK policy on ``conn`` (the caller's transaction).
 
-    The estimate is the daily budget's own pricing rule bound to this request's
+    The estimate is the request's own daily budget's pricing rule bound to this
     composition — one price catalog serving both the operator's debits and the
-    learner's — and the ceiling comes from the *current* settings like every
-    other knob here.
+    learner's, literally the instance the caller already built — and the ceiling
+    comes from the *current* settings like every other knob here.
     """
     settings = get_settings()
     return ByokPolicy(
@@ -289,7 +289,7 @@ def build_byok_policy(conn: Connection) -> ByokPolicy:
         settings=SqlAlchemyUserByokSettingsRepository(conn),
         clock=_clock,
         corpus_cap_tokens=settings.byok_corpus_prompt_token_cap,
-        estimate=build_budget(conn).estimate_micros,
+        estimate=budget.estimate_micros,
     )
 
 
@@ -854,19 +854,6 @@ def _offered_providers() -> tuple[str, ...]:
     return offered_providers(_generation_profiles())
 
 
-@lru_cache
-def _hosted_byok_locked() -> bool:
-    """The hosted gate: declared hosted without the explicit opt-in.
-
-    ``LEARNY_HOSTED_INSTANCE`` declares this deployment hosted;
-    ``LEARNY_HOSTED_BYOK_ENABLED`` is the post-security-review opt-in. Hosted
-    and not opted in, learner keys read as feature-off everywhere; a self-host
-    ignores the opt-in entirely.
-    """
-    settings = get_settings()
-    return settings.hosted_instance and not settings.hosted_byok_enabled
-
-
 def hosted_declaration() -> bool:
     """Whether this deployment declares itself hosted.
 
@@ -883,7 +870,7 @@ def offered_key_providers() -> tuple[str, ...]:
     (ADR-0033), or the hosted lock is engaged. The key routes answer 404 for
     every provider outside this set.
     """
-    if _secrets_envelope() is None or _hosted_byok_locked():
+    if _secrets_envelope() is None or get_settings().hosted_byok_locked:
         return ()
     return _offered_providers()
 
@@ -901,7 +888,7 @@ def build_provider_credential_repository(
         conn,
         _secrets_envelope(),
         _generation_profiles(),
-        hosted_lock=_hosted_byok_locked(),
+        hosted_lock=get_settings().hosted_byok_locked,
     )
     return access.repo if access is not None else None
 
@@ -1059,7 +1046,6 @@ def clear_generation_chain_caches() -> None:
     _user_generation_chains.clear()
     _secrets_envelope.cache_clear()
     _offered_providers.cache_clear()
-    _hosted_byok_locked.cache_clear()
     _user_adapters.clear()
     _user_quiz_adapters.clear()
 
@@ -1239,6 +1225,7 @@ def get_post_conversation_turn(
     evidence budget / history window come from the ``conversation_*`` settings.
     """
     settings = get_settings()
+    budget = build_budget(conn)
     return PostConversationTurn(
         conversations=SqlAlchemyConversationRepository(conn),
         turns=SqlAlchemyConversationTurnRepository(conn),
@@ -1257,8 +1244,8 @@ def get_post_conversation_turn(
             activations=SqlAlchemyActivationEventRepository(conn),
             clock=_clock,
         ),
-        budget=build_budget(conn),
-        byok_policy=build_byok_policy(conn),
+        budget=budget,
+        byok_policy=build_byok_policy(conn, budget),
     )
 
 
@@ -1296,14 +1283,15 @@ def get_quiz_deck_enqueuer() -> QuizDeckEnqueuer:
 
 def build_plan_deck_generation(conn: Connection) -> PlanDeckGeneration:
     """Wire ``PlanDeckGeneration`` on a deck-POST UoW connection (not request-scoped)."""
+    budget = build_budget(conn)
     return PlanDeckGeneration(
         sources=SqlAlchemySourceRepository(conn),
         jobs=SqlAlchemyQuizJobRepository(conn),
         authorize=AuthorizeOwnership(),
         clock=_clock,
         ids=uuid4,
-        budget=build_budget(conn),
-        byok_policy=build_byok_policy(conn),
+        budget=budget,
+        byok_policy=build_byok_policy(conn, budget),
     )
 
 
@@ -1655,6 +1643,7 @@ def get_suggest_cards(conn: DbConnection, generation: UserCardGeneration) -> Sug
     key (ADR-0033), else the house one.
     """
     settings = get_settings()
+    budget = build_budget(conn)
     return SuggestCards(
         sources=SqlAlchemySourceRepository(conn),
         notes=SqlAlchemyNoteRepository(conn),
@@ -1662,8 +1651,8 @@ def get_suggest_cards(conn: DbConnection, generation: UserCardGeneration) -> Sug
         generation=generation,
         authorize=AuthorizeOwnership(),
         max_suggestions=settings.quiz_max_suggestions,
-        budget=build_budget(conn),
-        byok_policy=build_byok_policy(conn),
+        budget=budget,
+        byok_policy=build_byok_policy(conn, budget),
     )
 
 
@@ -1725,12 +1714,13 @@ def get_suggest_note_cards(conn: DbConnection, generation: UserCardGeneration) -
     :func:`get_suggest_cards`.
     """
     settings = get_settings()
+    budget = build_budget(conn)
     return SuggestNoteCards(
         notes=SqlAlchemyNoteRepository(conn),
         generation=generation,
         max_suggestions=settings.quiz_max_suggestions,
-        budget=build_budget(conn),
-        byok_policy=build_byok_policy(conn),
+        budget=budget,
+        byok_policy=build_byok_policy(conn, budget),
     )
 
 
