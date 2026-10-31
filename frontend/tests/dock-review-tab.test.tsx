@@ -12,6 +12,10 @@
  * The figure is inventory: a queue length and nothing more. A book with nothing
  * due says so and offers no grading, and no surface here congratulates, warns, or
  * counts days.
+ *
+ * Beneath the inventory sits this book's calibration: per confidence level, how
+ * often feeling sure meant recalling. It is a mirror, not a score — levels with
+ * no attempts are omitted, and there is no overall percentage.
  */
 
 import {
@@ -72,11 +76,25 @@ function card(id: string, question: string, answer: string) {
   };
 }
 
+type Calibration = { confidence: number; attempts: number; recalled: number };
+
+function zeroCalibration(): Calibration[] {
+  return [
+    { confidence: 1, attempts: 0, recalled: 0 },
+    { confidence: 2, attempts: 0, recalled: 0 },
+    { confidence: 3, attempts: 0, recalled: 0 },
+  ];
+}
+
 /**
  * The dock against a book with `cards` due. Every other request the dock makes
- * settles empty; anything unrouted fails loudly.
+ * settles empty; anything unrouted fails loudly. `calibration` overrides the
+ * book's calibration rows when a test needs levels with attempts.
  */
-function stubBook(cards: ReturnType<typeof card>[]) {
+function stubBook(
+  cards: ReturnType<typeof card>[],
+  calibration: Calibration[] | null = null,
+) {
   const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
     if (url === "/api/auth/me") {
       return jsonResponse(200, authedMe);
@@ -86,6 +104,9 @@ function stubBook(cards: ReturnType<typeof card>[]) {
     }
     if (url.startsWith("/api/reviews/due")) {
       return jsonResponse(200, { items: cards, total_due: cards.length });
+    }
+    if (url === "/api/sources/s1/calibration") {
+      return jsonResponse(200, { levels: calibration ?? zeroCalibration() });
     }
     if (init?.method === "POST" && url.startsWith("/api/quiz-items/")) {
       return jsonResponse(200, { state: 2, step: null, due: "later" });
@@ -147,6 +168,9 @@ describe("the dock's Review tab", () => {
       if (url.startsWith("/api/reviews/due")) {
         return jsonResponse(200, { items: cards, total_due: remaining });
       }
+      if (url === "/api/sources/s1/calibration") {
+        return jsonResponse(200, { levels: zeroCalibration() });
+      }
       if (init?.method === "POST" && url.startsWith("/api/quiz-items/")) {
         remaining -= 1;
         return jsonResponse(200, { state: 2, step: null, due: "later" });
@@ -174,6 +198,58 @@ describe("the dock's Review tab", () => {
       ).toBe("Review1"),
     );
     expect(screen.getByTestId("due-count").textContent).toBe("1");
+  });
+
+  it("re-reads the calibration lines once a card has been graded", async () => {
+    // The mirror sits directly above the grading flow that feeds it, so the
+    // review the learner just submitted must move the lines without closing
+    // the tab — the same re-read the due count gets.
+    let graded = 0;
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/auth/me") return jsonResponse(200, authedMe);
+      if (url.startsWith("/api/notes")) return jsonResponse(200, []);
+      if (url.startsWith("/api/reviews/due")) {
+        return jsonResponse(200, {
+          items: [card("i1", "Who wrote the first algorithm?", "Ada Lovelace")],
+          total_due: 1,
+        });
+      }
+      if (url === "/api/sources/s1/calibration") {
+        return jsonResponse(200, {
+          levels:
+            graded === 0
+              ? zeroCalibration()
+              : [
+                  { confidence: 1, attempts: 0, recalled: 0 },
+                  { confidence: 2, attempts: 0, recalled: 0 },
+                  { confidence: 3, attempts: 1, recalled: 1 },
+                ],
+        });
+      }
+      if (init?.method === "POST" && url.startsWith("/api/quiz-items/")) {
+        graded += 1;
+        return jsonResponse(200, { state: 2, step: null, due: "later" });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderReviewTab();
+
+    // Nothing calibrated yet: the empty state, not the lines.
+    expect(await screen.findByTestId("calibration-empty")).toBeTruthy();
+
+    await screen.findByText("Who wrote the first algorithm?");
+    fireEvent.click(screen.getByRole("button", { name: "Reveal answer" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Good" }));
+    });
+
+    // The just-graded card is now in the mirror — the empty state gives way
+    // to the level line in place.
+    expect((await screen.findByTestId("calibration-lines")).textContent).toContain(
+      "When you felt Sure, you recalled 1 of 1",
+    );
+    expect(screen.queryByTestId("calibration-empty")).toBeNull();
   });
 
   it("grades a card in the dock, with the book's page never left behind", async () => {
@@ -234,6 +310,9 @@ describe("the dock's Review tab", () => {
       if (url.startsWith("/api/reviews/due")) {
         return jsonResponse(500, { detail: "Could not reach the scheduler." });
       }
+      if (url === "/api/sources/s1/calibration") {
+        return jsonResponse(200, { levels: zeroCalibration() });
+      }
       return jsonResponse(200, url === "/api/auth/me" ? authedMe : []);
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -243,5 +322,37 @@ describe("the dock's Review tab", () => {
     expect((await screen.findAllByRole("alert"))[0].textContent).toBe(
       "The server had a problem. Please try again.",
     );
+  });
+
+  it("calibration lines per level with attempts", async () => {
+    stubBook([card("i1", "Who wrote the first algorithm?", "Ada Lovelace")], [
+      { confidence: 1, attempts: 0, recalled: 0 },
+      { confidence: 2, attempts: 4, recalled: 1 },
+      { confidence: 3, attempts: 10, recalled: 8 },
+    ]);
+    renderReviewTab();
+
+    // One line per level that has attempts, each in the same plain words.
+    await screen.findByTestId("calibration-lines");
+    const lines = screen.getByTestId("calibration-lines").textContent ?? "";
+    expect(lines).toContain("When you felt Fairly sure, you recalled 1 of 4");
+    expect(lines).toContain("When you felt Sure, you recalled 8 of 10");
+    // Levels with zero attempts are omitted entirely.
+    expect(lines).not.toContain("Not sure");
+    // A mirror, not a score: no overall percentage anywhere on the tab.
+    expect(screen.getByText("Calibration")).toBeTruthy();
+    const dock = screen.getByTestId("reader-panel").textContent ?? "";
+    expect(dock).not.toContain("%");
+  });
+
+  it("calibration empty state", async () => {
+    stubBook([]);
+    renderReviewTab();
+
+    // All three levels at zero: the empty-state copy, no level lines.
+    expect((await screen.findByTestId("calibration-empty")).textContent).toBe(
+      "No confident grades here yet. Tap how sure you are before revealing an answer or when checking yourself on a section, and this shows how often feeling sure meant recalling.",
+    );
+    expect(screen.queryByTestId("calibration-lines")).toBeNull();
   });
 });

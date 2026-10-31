@@ -1,8 +1,8 @@
 # section-checkpoint-and-calibration proofs
 
-**HEAD**: 0ed0280
+**HEAD**: 3d8d97b
 **Tree**: clean
-**Result**: 61 pass, 10 fail; mutations 6 killed, 0 not
+**Result**: 71 pass, 0 fail; mutations 10 killed, 0 not
 
 | Check | Proof | Ran | Passed | Result |
 | --- | --- | --- | --- | --- |
@@ -64,16 +64,16 @@
 | C31 | `cd backend && uv run pytest tests/test_web_checkpoints.py -k "grade_refuses_a_client_assisted_field"` | 1 | 1 | pass |
 | C32 | `cd backend && uv run pytest tests/test_application_reviews.py -k "submit_review_requires_assisted_and_stores_i` | 1 | 1 | pass |
 | C32 | `cd backend && uv run pytest tests/test_migrations.py -k "checkpoint_migration_leaves_existing_review_log_unrec` | 1 | 1 | pass |
-| C33 | `cd frontend && vitest run tests/review-screen.test.tsx -t "confidence buttons reveal the answer beside Reveal ` | 0 | 0 | **no test ran** |
-| C34 | `cd frontend && vitest run tests/review-screen.test.tsx -t "grade carries confidence only when revealed by a co` | 0 | 0 | **no test ran** |
-| C35 | `cd backend && uv run pytest tests/test_web_quiz.py -k "review_stores_confidence_and_assisted"` | 0 | 0 | **no test ran** |
-| C35 | `cd backend && uv run pytest tests/test_web_quiz.py -k "review_confidence_out_of_range_422"` | 0 | 0 | **no test ran** |
-| C36 | `cd frontend && vitest run tests/review-screen.test.tsx -t "editor peek before reveal marks the grade assisted"` | 0 | 0 | **no test ran** |
-| C37 | `cd backend && uv run pytest tests/test_web_checkpoints.py -k "calibration_counts_unassisted_not_undone_by_leve` | 0 | 0 | **no test ran** |
-| C38 | `cd backend && uv run pytest tests/test_web_checkpoints.py -k "calibration_404_foreign_and_missing"` | 0 | 0 | **no test ran** |
-| C39 | `cd backend && uv run pytest tests/test_web_checkpoints.py -k "calibration_on_sample_is_per_learner"` | 0 | 0 | **no test ran** |
-| C40 | `cd frontend && vitest run tests/dock-review-tab.test.tsx -t "calibration lines per level with attempts"` | 0 | 0 | **no test ran** |
-| C41 | `cd frontend && vitest run tests/dock-review-tab.test.tsx -t "calibration empty state"` | 0 | 0 | **no test ran** |
+| C33 | `cd frontend && vitest run tests/review-screen.test.tsx -t "confidence buttons reveal the answer beside Reveal ` | 1 | 1 | pass |
+| C34 | `cd frontend && vitest run tests/review-screen.test.tsx -t "grade carries confidence only when revealed by a co` | 1 | 1 | pass |
+| C35 | `cd backend && uv run pytest tests/test_web_quiz.py -k "review_stores_confidence_and_assisted"` | 1 | 1 | pass |
+| C35 | `cd backend && uv run pytest tests/test_web_quiz.py -k "review_confidence_out_of_range_422"` | 1 | 1 | pass |
+| C36 | `cd frontend && vitest run tests/review-screen.test.tsx -t "editor peek before reveal marks the grade assisted"` | 1 | 1 | pass |
+| C37 | `cd backend && uv run pytest tests/test_web_checkpoints.py -k "calibration_counts_unassisted_not_undone_by_leve` | 1 | 1 | pass |
+| C38 | `cd backend && uv run pytest tests/test_web_checkpoints.py -k "calibration_404_foreign_and_missing"` | 1 | 1 | pass |
+| C39 | `cd backend && uv run pytest tests/test_web_checkpoints.py -k "calibration_on_sample_is_per_learner"` | 1 | 1 | pass |
+| C40 | `cd frontend && vitest run tests/dock-review-tab.test.tsx -t "calibration lines per level with attempts"` | 1 | 1 | pass |
+| C41 | `cd frontend && vitest run tests/dock-review-tab.test.tsx -t "calibration empty state"` | 1 | 1 | pass |
 | Build | `cd backend && uv run ruff check . && uv run ruff format --check .` | - | - | pass |
 | Build | `cd frontend && npx tsc --noEmit` | - | - | pass |
 | Build | `python backend/scripts/check_commits.py origin/main..HEAD` | - | - | pass |
@@ -82,9 +82,13 @@
 
 | Mutation | Location | Killed |
 | --- | --- | --- |
-| explain-back drops the caller's language | `backend\app\application\checkpoints.py:442` | yes |
-| the response route stops resolving the learner's language | `backend\app\infrastructure\web\checkpoints.py:171` | yes |
-| a stored locale loses to the Accept-Language header | `backend\app\infrastructure\web\dependencies.py:1067` | yes |
-| English stops being the uninstructed locale | `backend\app\domain\locale.py:85` | yes |
-| the reuse lookup drops the active-status predicate | `backend\app\infrastructure\db\repositories.py:2028` | yes |
-| the reuse lookup stops skipping flagged checkpoint cards | `backend\app\infrastructure\db\repositories.py:2029` | yes |
+| the review route accepts an out-of-range confidence | `backend\app\infrastructure\web\quiz.py:123` | yes |
+| the review route stores the rating as the confidence | `backend\app\infrastructure\web\quiz.py:504` | yes |
+| calibration counts assisted grades as unaided | `backend\app\infrastructure\db\repositories.py:1848` | yes |
+| calibration counts undone grades | `backend\app\infrastructure\db\repositories.py:1847` | yes |
+| calibration counts another learner's reviews | `backend\app\infrastructure\db\repositories.py:1845` | yes |
+| calibration counts another book's reviews | `backend\app\infrastructure\db\repositories.py:1846` | yes |
+| a lapse counts as recalled in calibration | `backend\app\infrastructure\db\repositories.py:1841` | yes |
+| the review client serializes an absent confidence as null | `frontend\app\lib\quiz.ts:317` | yes |
+| the dock shows levels with no attempts | `frontend\app\components\dock-review-panel.tsx:110` | yes |
+| every review grade is marked assisted | `frontend\app\components\review-screen.tsx:259` | yes |

@@ -16,14 +16,17 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import Connection, func, select
 
-from app.domain.entities import GeneratedAnswer, User
+from app.domain.entities import GeneratedAnswer, ReviewLogEntry, User
 from app.infrastructure.db.metadata import (
     checkpoint_attempts,
     quiz_items,
     review_log,
     section_checkpoints,
 )
-from app.infrastructure.db.repositories import SqlAlchemyAiSpendDayRepository
+from app.infrastructure.db.repositories import (
+    SqlAlchemyAiSpendDayRepository,
+    SqlAlchemyQuizItemRepository,
+)
 from tests.checkpoint_seed import ANCHOR, CHUNKS, add_card, add_corpus, add_source, add_user
 from tests.conftest import TEST_PASSWORD, requires_db
 
@@ -557,3 +560,108 @@ def test_grade_on_a_deleted_card_is_404_and_leaves_the_attempt_ungraded(
     ).scalar_one()
     assert graded is None
     assert _log_count(db_conn) == before
+
+
+# --- calibration -------------------------------------------------------------------
+
+
+def _log(conn: Connection, item_id: object, **entry) -> UUID:
+    """Append one review-log row with today's timestamp; return its id."""
+    return SqlAlchemyQuizItemRepository(conn).append_log(
+        UUID(str(item_id)),
+        ReviewLogEntry(rating=entry.pop("rating"), reviewed_at=datetime.now(UTC), **entry),
+    )
+
+
+def test_calibration_counts_unassisted_not_undone_by_level(
+    quiz_client: TestClient, db_conn: Connection
+) -> None:
+    user, csrf, source_id = _book(quiz_client, db_conn)
+    cards = [add_card(db_conn, source_id, user_id=user.id) for _ in range(5)]
+    _log(db_conn, cards[0].id, rating=1, confidence=1, assisted=False)
+    _log(db_conn, cards[1].id, rating=3, confidence=1, assisted=False)
+    _log(db_conn, cards[2].id, rating=2, confidence=2, assisted=False)
+    _log(db_conn, cards[3].id, rating=1, confidence=3, assisted=False)
+    # Excluded from every level: an undone row, an assisted row, a row with no
+    # confidence, and a row on the same learner's other source.
+    undone = _log(db_conn, cards[4].id, rating=3, confidence=3, assisted=False)
+    SqlAlchemyQuizItemRepository(db_conn).mark_log_undone(UUID(str(undone)), datetime.now(UTC))
+    _log(db_conn, cards[4].id, rating=3, confidence=3, assisted=True)
+    _log(db_conn, cards[4].id, rating=3, confidence=None, assisted=False)
+    other = add_source(db_conn, user.id)
+    _log(
+        db_conn,
+        add_card(db_conn, other, user_id=user.id).id,
+        rating=3,
+        confidence=3,
+        assisted=False,
+    )
+
+    resp = quiz_client.get(f"/api/sources/{source_id}/calibration")
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {
+        "levels": [
+            {"confidence": 1, "attempts": 2, "recalled": 1},
+            {"confidence": 2, "attempts": 1, "recalled": 1},
+            {"confidence": 3, "attempts": 1, "recalled": 0},
+        ]
+    }
+
+
+def test_calibration_404_foreign_and_missing(quiz_client: TestClient, db_conn: Connection) -> None:
+    _, csrf, source_id = _book(quiz_client, db_conn)
+    stranger = add_user(db_conn)
+    foreign = add_source(db_conn, stranger.id)
+
+    foreign_resp = quiz_client.get(f"/api/sources/{foreign}/calibration")
+    missing_resp = quiz_client.get(f"/api/sources/{uuid4()}/calibration")
+
+    assert foreign_resp.status_code == 404, foreign_resp.text
+    assert missing_resp.status_code == 404, missing_resp.text
+    assert foreign_resp.json() == missing_resp.json()
+
+    # Without a session the route is 401 before any source is resolved.
+    quiz_client.cookies.clear()
+    assert quiz_client.get(f"/api/sources/{source_id}/calibration").status_code == 401
+
+
+def test_calibration_on_sample_is_per_learner(
+    quiz_client: TestClient, auth_client: TestClient, db_conn: Connection
+) -> None:
+    learner_a, _ = _login(quiz_client)
+    learner_b, _ = _login(auth_client)
+    sample = add_source(db_conn, learner_a.id, is_sample=True)
+    repo = SqlAlchemyQuizItemRepository(db_conn)
+    now = datetime.now(UTC)
+    a_cards = [add_card(db_conn, sample, user_id=learner_a.id) for _ in range(3)]
+    b_card = add_card(db_conn, sample, user_id=learner_b.id)
+    repo.append_log(
+        a_cards[0].id, ReviewLogEntry(rating=3, reviewed_at=now, confidence=3, assisted=False)
+    )
+    repo.append_log(
+        a_cards[1].id, ReviewLogEntry(rating=1, reviewed_at=now, confidence=3, assisted=False)
+    )
+    repo.append_log(
+        b_card.id, ReviewLogEntry(rating=2, reviewed_at=now, confidence=2, assisted=False)
+    )
+
+    a_resp = quiz_client.get(f"/api/sources/{sample}/calibration")
+    b_resp = auth_client.get(f"/api/sources/{sample}/calibration")
+
+    assert a_resp.status_code == 200, a_resp.text
+    assert b_resp.status_code == 200, b_resp.text
+    assert a_resp.json() == {
+        "levels": [
+            {"confidence": 1, "attempts": 0, "recalled": 0},
+            {"confidence": 2, "attempts": 0, "recalled": 0},
+            {"confidence": 3, "attempts": 2, "recalled": 1},
+        ]
+    }
+    assert b_resp.json() == {
+        "levels": [
+            {"confidence": 1, "attempts": 0, "recalled": 0},
+            {"confidence": 2, "attempts": 1, "recalled": 1},
+            {"confidence": 3, "attempts": 0, "recalled": 0},
+        ]
+    }

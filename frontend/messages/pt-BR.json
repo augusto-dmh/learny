@@ -61,6 +61,7 @@
       "quizGenerate": "Não foi possível iniciar a geração do baralho.",
       "quizStarters": "Não foi possível preparar os cartões iniciais.",
       "quizDue": "Não foi possível carregar suas revisões pendentes.",
+      "quizCalibration": "Não foi possível carregar a calibração deste livro.",
       "quizReview": "Não foi possível registrar sua revisão.",
       "quizReset": "Não foi possível reiniciar o agendamento deste cartão.",
       "quizUndo": "Não foi possível desfazer sua última revisão.",
@@ -255,7 +256,10 @@
     },
     "dockReview": {
       "nothingDue": "Nada deste livro para revisar agora.",
-      "dueCaption": "{count, plural, =0 {cartões deste livro para revisar} one {cartão deste livro para revisar} other {cartões deste livro para revisar}}"
+      "dueCaption": "{count, plural, =0 {cartões deste livro para revisar} one {cartão deste livro para revisar} other {cartões deste livro para revisar}}",
+      "calibrationHeading": "Calibração",
+      "calibrationLine": "Quando você se sentiu {level}, lembrou de {recalled} de {attempts}",
+      "calibrationEmpty": "Nada para calibrar ainda neste livro. Toque o quanto tem certeza antes de mostrar a resposta ou no Teste-se de uma seção, e aqui mostra com que frequência ter certeza significou lembrar."
     },
     "ask": {
       "intro": "Aqui você tira dúvidas sobre o livro. Para ser conduzido por uma seção, use Ensinar.",
@@ -497,7 +501,8 @@
       "studied": "Você estudou em <figure>{studied, number}</figure> dos últimos <window>{days, number}</window> dias",
       "reviews": "revisões",
       "pages": "páginas"
-    }
+    },
+    "confidenceLabel": "Quanta certeza você tinha?"
   },
   "notes": {
     "title": "Notas",

@@ -164,6 +164,12 @@ export function ReviewScreen({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [index, setIndex] = useState(0);
   const [revealed, setRevealed] = useState(false);
+  // The one-tap confidence taken before the answer was shown (1-3), or null when
+  // the learner revealed without rating it. Feeds the review log's confidence.
+  const [confidence, setConfidence] = useState<1 | 2 | 3 | null>(null);
+  // Whether the editor was opened before the answer was shown: the editor shows
+  // the answer, so a peek there is not an unaided attempt (assisted).
+  const [peeked, setPeeked] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [resetting, setResetting] = useState(false);
@@ -228,6 +234,8 @@ export function ReviewScreen({
   // Each time a new card becomes current, restart it hidden and time it afresh.
   useEffect(() => {
     setRevealed(false);
+    setConfidence(null);
+    setPeeked(false);
     setSubmitError(null);
     setResetError(null);
     setDraft(null);
@@ -244,7 +252,12 @@ export function ReviewScreen({
     try {
       const scheduling = await submitReview(
         item.id,
-        { rating, review_duration_ms: Date.now() - questionShownAt.current },
+        {
+          rating,
+          review_duration_ms: Date.now() - questionShownAt.current,
+          confidence: confidence ?? undefined,
+          assisted: peeked,
+        },
         csrf,
       );
       const requeue = shouldRequeue(scheduling.due, requeueMinutes);
@@ -389,6 +402,11 @@ export function ReviewScreen({
       return;
     }
     const item = queue[index];
+    if (!revealed) {
+      // The editor shows the answer beside the question, so opening it before
+      // the reveal is seeing the answer: the grade is marked assisted.
+      setPeeked(true);
+    }
     setDraft({ question: item.question, answer: item.answer });
   }
 
@@ -531,6 +549,10 @@ export function ReviewScreen({
         item={item}
         revealed={revealed}
         onReveal={() => setRevealed(true)}
+        onConfidence={(level) => {
+          setConfidence(level);
+          setRevealed(true);
+        }}
         onGrade={handleGrade}
         submitting={submitting}
         onReset={handleReset}
@@ -635,6 +657,7 @@ function ReviewCard({
   item,
   revealed,
   onReveal,
+  onConfidence,
   onGrade,
   submitting,
   onReset,
@@ -644,6 +667,7 @@ function ReviewCard({
   item: DueItem;
   revealed: boolean;
   onReveal: () => void;
+  onConfidence: (level: 1 | 2 | 3) => void;
   onGrade: (rating: number) => void;
   submitting: boolean;
   onReset: () => void;
@@ -654,6 +678,7 @@ function ReviewCard({
   // confirm fires nothing (NL-12). Advancing to another card drops any open confirm
   // so it never carries forward onto the next card's badge.
   const t = useTranslations("review");
+  const tConfidence = useTranslations("checkpoint.confidence");
   const tCommon = useTranslations("common");
   const [confirmingReset, setConfirmingReset] = useState(false);
   useEffect(() => {
@@ -817,9 +842,28 @@ function ReviewCard({
             </div>
           </div>
         ) : (
-          <Button type="button" onClick={onReveal}>
-            {t("reveal")}
-          </Button>
+          <div className="space-y-2">
+            <div
+              role="group"
+              aria-label={t("confidenceLabel")}
+              className="flex flex-wrap gap-2"
+            >
+              {([1, 2, 3] as const).map((level) => (
+                <Button
+                  key={level}
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => onConfidence(level)}
+                >
+                  {tConfidence(level === 1 ? "notSure" : level === 2 ? "fairlySure" : "sure")}
+                </Button>
+              ))}
+            </div>
+            <Button type="button" onClick={onReveal}>
+              {t("reveal")}
+            </Button>
+          </div>
         )}
       </CardContent>
     </Card>

@@ -27,6 +27,7 @@ from app.domain.entities import (
     AnchorSection,
     AnswerStreamEvent,
     Backlink,
+    CalibrationLevel,
     ChapterIndexRow,
     ChapterSection,
     CheckpointAttempt,
@@ -1261,6 +1262,17 @@ class QuizItemRepository(Protocol):
 
     def mark_log_undone(self, log_id: UUID, undone_at: datetime) -> None:
         """Stamp ``undone_at`` on an existing log row. Never deletes the row (AD-306)."""
+        ...
+
+    def source_calibration(self, user_id: UUID, source_id: UUID) -> list[CalibrationLevel]:
+        """Return the caller's per-book calibration on that source's cards.
+
+        Exactly three rows, for confidence 1, 2 and 3. Each counts the caller's
+        not-undone, unassisted log rows carrying that confidence on the source's
+        cards, and how many of them were graded 2 or more (a recall). Undone
+        rows, assisted rows, rows without a confidence, and rows on another
+        source are all excluded.
+        """
         ...
 
     def list_for_source(

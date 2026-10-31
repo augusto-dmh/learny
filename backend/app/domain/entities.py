@@ -1110,6 +1110,21 @@ class UndoableReview:
 
 
 @dataclass(frozen=True)
+class CalibrationLevel:
+    """One calibration row for a book: how often feeling sure meant recalling.
+
+    ``attempts`` counts the learner's not-undone, unassisted log rows carrying
+    that one-tap ``confidence`` on the book's cards; ``recalled`` counts the
+    ones graded 2 or more (FSRS pass). Exactly three rows exist, for confidence
+    1, 2 and 3, even when a level has no attempts.
+    """
+
+    confidence: int
+    attempts: int
+    recalled: int
+
+
+@dataclass(frozen=True)
 class CardProvenance:
     """The origin note of a highlight- or note-derived card, for display at review.
 

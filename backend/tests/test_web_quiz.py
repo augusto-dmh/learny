@@ -1289,3 +1289,49 @@ def test_flag_untrusted_origin_returns_403(quiz_client: TestClient, db_conn: Con
         quiz_client, item.id, flagged=True, csrf=csrf, origin="http://evil.example.com"
     )
     assert resp.status_code == 403, resp.text
+
+
+def test_review_stores_confidence_and_assisted(
+    quiz_client: TestClient, db_conn: Connection
+) -> None:
+    source_id, csrf = _seed_ready_source(quiz_client, db_conn, "review-conf@example.com")
+    item = _seed_item(db_conn, UUID(source_id))
+
+    resp = _post_review(
+        quiz_client, item.id, {"rating": 3, "confidence": 2, "assisted": True}, csrf=csrf
+    )
+
+    assert resp.status_code == 200, resp.text
+    rows = db_conn.execute(
+        select(review_log.c.confidence, review_log.c.assisted).where(
+            review_log.c.quiz_item_id == item.id
+        )
+    ).all()
+    assert [(r.confidence, r.assisted) for r in rows] == [(2, True)]
+
+    # A body without the new fields keeps the plain shape: no confidence, unaided.
+    resp = _post_review(quiz_client, item.id, {"rating": 2}, csrf=csrf)
+
+    assert resp.status_code == 200, resp.text
+    rows = db_conn.execute(
+        select(review_log.c.confidence, review_log.c.assisted)
+        .where(review_log.c.quiz_item_id == item.id)
+        .order_by(review_log.c.reviewed_at, review_log.c.id)
+    ).all()
+    assert [(r.confidence, r.assisted) for r in rows] == [(2, True), (None, False)]
+
+
+def test_review_confidence_out_of_range_422(quiz_client: TestClient, db_conn: Connection) -> None:
+    source_id, csrf = _seed_ready_source(quiz_client, db_conn, "review-conf422@example.com")
+    item = _seed_item(db_conn, UUID(source_id))
+
+    for bad in (0, 4):
+        resp = _post_review(quiz_client, item.id, {"rating": 3, "confidence": bad}, csrf=csrf)
+        assert resp.status_code == 422, resp.text
+
+    assert (
+        db_conn.execute(
+            select(func.count()).select_from(review_log).where(review_log.c.quiz_item_id == item.id)
+        ).scalar_one()
+        == 0
+    )

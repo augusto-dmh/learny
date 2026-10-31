@@ -209,3 +209,87 @@ Deviations, recorded plainly:
 | The reuse lookup's origin filter was unproven (M37 survived; round 5 gap) | `backend/app/infrastructure/db/repositories.py:2028` | real - test-only | 108fcf1 |
 | Explain-back made no provider call in the learner's interface language | `backend/app/application/checkpoints.py`, `backend/app/infrastructure/web/checkpoints.py` | real - fixed with tests | 5d087d3 |
 
+
+## Round 7 - batch 2 (2026-10-31)
+
+**Verdict**: PASS (batch-2 scope)
+**Profile**: standard
+**Diff range**: origin/main..3d8d97b (e757a9e..3d8d97b: b511281 "record how sure the learner was before the answer showed" + 3d8d97b "show how often feeling sure meant recalling, per book"; 19 files, +749/-40)
+**Round**: 7 - batch 2 (S6-S7)
+**Verifier**: independent sub-agent (author != verifier)
+
+Batch scope: C33-C41 - confidence capture on review grades (S6) and the per-book calibration view (S7). C1-C32 and C42 are batch 1 (rounds 1-6) and out of scope; they re-ran green inside the same proof run, because `check_proofs.py` executes all of `checks.md`.
+
+Proofs re-derived fresh at HEAD 3d8d97b, real tree, lane Postgres 5434/learny_test with `LEARNY_REQUIRE_DB=1`:
+
+- `check_proofs.py` (with `--mutations`, see Faults): **71 pass, 0 fail**, Tree clean, exit 0. Every one of the 10 batch-2 proof rows ran with 1 test selected and 1 passed - no deselected or skipped selector.
+- Build rows from `checks.md`: `ruff check .` + `ruff format --check .` (repo-wide), `npx tsc --noEmit`, `check_commits.py origin/main..HEAD` (2 commits, OK) - all pass.
+- Run directly and clean: `uv run ruff check app tests`, `uv run ruff format --check app tests` (325 files already formatted), `python backend/scripts/check_boundaries.py` ("architecture boundaries clean").
+- Frontend full suite `npx vitest run`: **1080 passed, 2 failed of 1082** - both failures are the pre-existing `tests/i18n-typed-keys.test.ts` cases (environment note 1); the batch-2 files are green (`review-screen.test.tsx` 46 incl. 3 new, `dock-review-tab.test.tsx` 8 incl. 2 new, plus the touched `chapter-reader`, `reader-panel`, `quiz-client`).
+
+### Checks (C33-C41)
+
+| Check | Claim | Proof run | Evidence | Result |
+| --- | --- | --- | --- | --- |
+| C33 | While hidden, the review card shows Not sure / Fairly sure / Sure beside Reveal answer; each confidence button reveals the answer | vitest `confidence buttons reveal the answer beside Reveal answer` 1/1 at 3d8d97b | `frontend/tests/review-screen.test.tsx:1174-1177` the group's buttons are exactly the three labels; `:1179` Reveal answer present; `:1180` answer hidden; `:1184`, `:1188`, `:1192` each of the three taps reveals. Production: `frontend/app/components/review-screen.tsx:845-861` (role=group + three buttons + Reveal answer), `:552-555` (`onConfidence` sets confidence and reveals) | PASS |
+| C34 | Grading after `Sure` sends `confidence: 3`; grading after `Reveal answer` or Space sends a body with no `confidence` key | vitest `grade carries confidence only when revealed by a confidence tap` 1/1 | `frontend/tests/review-screen.test.tsx:1226` confidence `toBe(3)`; `:1234` `"confidence" in body` false after Reveal answer; `:1238-1242` Space reveals then grades, key still absent. Production: `frontend/app/lib/quiz.ts:312-319` (the key is added only when a confidence was taken), `frontend/app/components/review-screen.tsx:256-260` (`confidence ?? undefined`) | PASS |
+| C35 | The review route stores `confidence` 1-3 or NULL and `assisted` from the body (default false); 0 or 4 returns 422 with no log row | pytest `tests/test_web_quiz.py -k review_stores_confidence_and_assisted` 1/1 and `-k review_confidence_out_of_range_422` 1/1 | `backend/tests/test_web_quiz.py:1310` stored `[(2, True)]`; `:1321` a body without the fields stores `[(2, True), (None, False)]`; `:1330` 422 for 0 and 4; `:1332-1337` log count still 0. Production: `backend/app/infrastructure/web/quiz.py:123` (`Field(ge=1, le=3)`), `:126` (`assisted: bool = False`), `:503-504` (both reach `SubmitReview`; the comment notes the schedule never reads them) | PASS |
+| C36 | Grading after opening the editor before the reveal sends `assisted: true`; without it `assisted: false` | vitest `editor peek before reveal marks the grade assisted` 1/1 | `frontend/tests/review-screen.test.tsx:1274` editor-peek grade sends `assisted: true`; `:1284` a plain reveal-and-grade sends `false`. Production: `frontend/app/components/review-screen.tsx:402-409` (opening the editor while hidden peeks), `:259` (`assisted: peeked`) | PASS |
+| C37 | Calibration returns exactly 3 rows (confidence 1, 2, 3); each counts the caller's not-undone, `assisted=false` log rows with that confidence on the source's cards and how many graded 2+; undone, assisted, NULL-confidence and other-source rows are excluded | pytest `tests/test_web_checkpoints.py -k calibration_counts_unassisted_not_undone_by_level` 1/1 | `backend/tests/test_web_checkpoints.py:603-610` exact JSON `{1: 2/1, 2: 1/1, 3: 1/0}`; the four exclusions are each seeded: undone `:585-586`, assisted `:587`, NULL confidence `:588`, other source `:589-594`. Production: `backend/app/infrastructure/db/repositories.py:1841` (`rating >= 2` recalled), `:1845-1849` (owner, source, not-undone, unassisted, has-confidence), `:1854-1862` (zero-filled 3 rows); `backend/app/application/checkpoints.py:628-632` (`readable_source` then the query) | PASS |
+| C38 | Calibration on another learner's source or a missing one returns 404 (identical bodies); without a session 401 | pytest `-k calibration_404_foreign_and_missing` 1/1 | `backend/tests/test_web_checkpoints.py:620-621` both 404; `:622` identical JSON bodies; `:626` 401 after clearing cookies | PASS |
+| C39 | On the shared sample, learner A's calibration counts only A's reviews while B has graded sample cards too | pytest `-k calibration_on_sample_is_per_learner` 1/1 | `backend/tests/test_web_checkpoints.py:653-655` both 200; `:656-663` A sees `{1: 0, 2: 0, 3: 2/1}` - B's confidence-2 grade absent; `:664-671` B sees `{1: 0, 2: 1/1, 3: 0}` | PASS |
+| C40 | The dock Review tab renders "When you felt Sure, you recalled 8 of 10" per level with attempts, omits zero-attempt levels, and shows no overall percentage | vitest `tests/dock-review-tab.test.tsx -t "calibration lines per level with attempts"` 1/1 | `frontend/tests/dock-review-tab.test.tsx:286-287` both level lines; `:289` the zero-attempt level's words absent; `:293` no `%` anywhere on the tab. Production: `frontend/app/components/dock-review-panel.tsx:110` (filter `attempts > 0`), `:120-125` (the `calibrationLine` copy, `frontend/messages/en.json:260`) | PASS |
+| C41 | With all three levels at zero attempts, the tab shows the empty-state copy and no level lines | vitest `-t "calibration empty state"` 1/1 | `frontend/tests/dock-review-tab.test.tsx:301-303` the exact `calibrationEmpty` copy (`frontend/messages/en.json:261`); `:305` no `calibration-lines` node. Production: `frontend/app/components/dock-review-panel.tsx:111-118` | PASS |
+
+### Coverage (batch-2 rows recomputed at 3d8d97b)
+
+| Set (size) | Recomputed from | Member -> proof | Unproven |
+| --- | --- | --- | --- |
+| `POST /api/quiz-items/{id}/reviews` added-field statuses (2) | plan Surface (batch-2 addition); `web/quiz.py:117-126` | 200 C35 `test_web_quiz.py:1310` · 422 C35 `:1330` | - |
+| `GET /api/sources/{id}/calibration` statuses (3) | plan Surface; route `web/checkpoints.py:245-258` | 200 C37 `test_web_checkpoints.py:603` · 401 C38 `:626` · 404 C38 `:620-621` (foreign and missing) | - |
+| calibration exclusions (4) | the five predicates at `repositories.py:1845-1849`, plus the 3-row zero-fill `:1854-1862` and the `rating >= 2` recalled rule `:1841` | undone C37 `:585-586` · assisted C37 `:587` · NULL confidence C37 `:588` · other source C37 `:589-594` · per-learner on the shared sample C39 · recalled = rating 2+ C37 `:603-610` (mutant 7 killed) | - |
+| confidence values (5, shared row) | carried; C35 adds the review-route members | 1/2/3 stored on the review route C35 `test_web_quiz.py:1310`, `:1321` · 0/4 → 422 on the review route C35 `:1330` (checkpoint-surface members remain C9, C11, C14, C27) | - |
+| doors (6) | plan Landing door 6 | vocabulary C4, C27, C33 - C33 now covers the review card's Not sure / Fairly sure / Sure (`review-screen.test.tsx:1174-1177`) | - |
+
+No unproven member in any batch-2 row. One honesty note: the `confidence.isnot(None)` predicate (`repositories.py:1849`) has no behavior-changing mutant - `group_by(confidence)` keeps the NULL group out of the 1..3 rows even without it - so the member is proven by exclusion at the boundary (`test_web_checkpoints.py:588` seeded, `:603-610` excluded), not by a killed mutation.
+
+### Faults injected (batch-2 surface)
+
+Two layers: (a) manual exact-anchor edits in a detached scratch worktree (`git worktree add --detach .../wt-ver-r7 3d8d97b`, real `.venv` via `UV_PROJECT_ENVIRONMENT`, `node_modules` junctioned; baselines green first; each fault reverted with `git checkout --` and the scratch porcelain confirmed clean), and (b) the same spec run through `check_proofs.py --mutations` (mutate.py in the real tree with journal + byte-for-byte restore), which wrote the `## Mutations` table into `proofs.md`. The real tree ended clean apart from `.specs` artifacts.
+
+| Mutation | Location | Killed |
+| --- | --- | --- |
+| The review route accepts an out-of-range confidence (`ge=1, le=3` dropped) | `backend/app/infrastructure/web/quiz.py:123` | yes - `test_review_confidence_out_of_range_422` fails: 0/4 pass pydantic and die on `ck_review_log_confidence_range` (IntegrityError) instead of 422 (manual + script) |
+| The review route stores the rating as the confidence (`confidence=body.confidence` → `confidence=body.rating`) | `backend/app/infrastructure/web/quiz.py:504` | yes - `test_review_stores_confidence_and_assisted` fails at `test_web_quiz.py:1310`: `[(3, True)] != [(2, True)]` (manual + script) |
+| Calibration counts assisted grades as unaided (predicate → tautology) | `backend/app/infrastructure/db/repositories.py:1848` | yes - C37 fails at `test_web_checkpoints.py:603` (level 3 attempts 1 → 2) (script) |
+| Calibration counts undone grades (predicate → tautology) | `backend/app/infrastructure/db/repositories.py:1847` | yes - C37 fails at `:603` (script) |
+| Calibration counts another learner's reviews (`user_id` predicate dropped) | `backend/app/infrastructure/db/repositories.py:1845` | yes - `test_calibration_on_sample_is_per_learner` fails at `:656`: B's confidence-2 row appears in A's response (manual + script) |
+| Calibration counts another book's reviews (`source_id` predicate dropped) | `backend/app/infrastructure/db/repositories.py:1846` | yes - C37 fails at `:603` (level 3 attempts 1 → 2 from the other-source row) (script) |
+| A lapse counts as recalled (`rating >= 2` → `rating >= 1`) | `backend/app/infrastructure/db/repositories.py:1841` | yes - C37 fails at `:603` (level 1 recalled 1 → 2) (script) |
+| The review client serializes an absent confidence as `null` (key no longer conditional) | `frontend/app/lib/quiz.ts:316-318` | yes - `grade carries confidence only when revealed by a confidence tap` fails at `review-screen.test.tsx:1234`: `"confidence" in body` is true (manual + script) |
+| The dock shows levels with no attempts (filter dropped) | `frontend/app/components/dock-review-panel.tsx:110` | yes - `calibration lines per level with attempts` fails at `dock-review-tab.test.tsx:289` (a "Not sure" line renders) (manual + script) |
+| Every review grade is marked assisted (`assisted: peeked` → `assisted: true`) | `frontend/app/components/review-screen.tsx:259` | yes - `editor peek before reveal marks the grade assisted` fails at `review-screen.test.tsx:1284` (script) |
+
+`checks.md` declares `Mutations: 5`; 10 were injected because the batch-2 predicates are separate members (the round-5 precedent). 10 killed, 0 survived, 0 blocked (`proofs.md` `## Mutations`). One earlier manual variant - assigning `payload.confidence = body.confidence` unconditionally - survived, and rightly: `JSON.stringify` drops `undefined` keys, so the wire format is unchanged and no test can discriminate an equivalent mutant; it was replaced with the non-equivalent null-serialization fault above and is recorded here as an observation, not a sensor failure.
+
+### Environment notes (verified this round, not charged to batch 2)
+
+- i18n-typed-keys: the 2 failures reproduce identically on pristine `origin/main` (e757a9e, detached A/B worktree): `tsc rejects a key missing from en` and `tsc accepts a key that exists in en` fail with empty tsc output (`tests/i18n-typed-keys.test.ts:51`, `:58`). The harness spawns `execFileSync("npx", ...)`, a bare spawn that fails on this Windows machine. Not batch 2's; CI runs the same tests green on Linux.
+- `test_worker_task_duration.py::test_overlapping_tasks_each_report_their_own_duration` failed standalone on this machine (`assert 408.487 < 200.0`, a timing ceiling) **and** failed the same way on the pristine `origin/main` A/B worktree - confirmed environmental, not batch 2's.
+- `check_proofs.py` needed `frontend/node_modules/.bin` on PATH: the `cd frontend && vitest run ...` proof form cannot resolve `vitest` when the harness spawns it directly on Windows (WinError 2). Environment-only workaround; no repo file changed.
+- Suites on this lane ran while sibling lanes were also busy; wall-clock times are inflated, and the worker-duration result above is consistent with that load.
+
+### Observations
+
+- The DB CHECK `ck_review_log_confidence_range` is a second line of defense behind pydantic's `ge=1, le=3` (mutant 1 died on it, not on a clean 422). Defense in depth, already recorded as door 2's shape.
+- The dock now renders the calibration block even when `total === 0` (the panel restructured its `nothingDue` branch, `dock-review-panel.tsx:154-181`); C40/C41 exercise both shapes and the due-count behavior is covered by the pre-existing dock tests, which stayed green.
+- `source_calibration` joins the caller's log rows to `quiz_items.user_id == user_id`, so a review of a card the learner does not own cannot enter any count even before the source scoping; C39 pins the shared-sample case end to end.
+- The full backend suite (3476 tests) was not re-run this round; the brief's proof set for batch 2 is the named proofs plus the grouped files (`test_web_quiz.py`, `test_web_checkpoints.py`, `test_application_checkpoints.py`, `test_application_reviews.py`, `test_migrations.py`, `test_repositories_checkpoints.py`), which `check_proofs.py` ran in full. CI carries the complete suite.
+
+### Gate
+
+- `check_proofs.py` at 3d8d97b: 71 pass, 0 fail; mutations 10 killed, 0 survived, 0 blocked; Tree clean; exit 0.
+- `ruff check`, `ruff format --check`, `check_boundaries.py`, `tsc --noEmit`, `check_commits.py origin/main..HEAD`: all exit 0.
+- Frontend suite: 1080 passed, 2 failed (environment note 1), CI-authoritative for those 2.
+- Findings: none new this round - no surviving non-equivalent mutant, no unproven coverage member. The cumulative `## Findings` table above is unchanged.
+- `validate_verification.py` exits 0 with one WARN: it matches the word "self-verified" in the historical round-6 and Handoff records (that round ran inline). Round 7 itself is an independent sub-agent pass (author != verifier).

@@ -61,6 +61,7 @@
       "quizGenerate": "Could not start quiz deck generation.",
       "quizStarters": "Could not prepare starter cards.",
       "quizDue": "Could not load your due reviews.",
+      "quizCalibration": "Could not load this book's calibration.",
       "quizReview": "Could not submit your review.",
       "quizReset": "Could not reset this card's schedule.",
       "quizUndo": "Could not undo your last review.",
@@ -255,7 +256,10 @@
     },
     "dockReview": {
       "nothingDue": "Nothing due from this book right now.",
-      "dueCaption": "{count, plural, one {card due from this book} other {cards due from this book}}"
+      "dueCaption": "{count, plural, one {card due from this book} other {cards due from this book}}",
+      "calibrationHeading": "Calibration",
+      "calibrationLine": "When you felt {level}, you recalled {recalled} of {attempts}",
+      "calibrationEmpty": "No confident grades here yet. Tap how sure you are before revealing an answer or when checking yourself on a section, and this shows how often feeling sure meant recalling."
     },
     "ask": {
       "intro": "Answer is for questions about the book. Tutor walks you through a section.",
@@ -497,7 +501,8 @@
       "studied": "Studied <figure>{studied, number}</figure> of the last <window>{days, number}</window> days",
       "reviews": "reviews",
       "pages": "pages"
-    }
+    },
+    "confidenceLabel": "How sure were you?"
   },
   "notes": {
     "title": "Notes",
