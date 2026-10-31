@@ -115,3 +115,43 @@ None - every check C1-C22 has a green, actually-run proof with located evidence;
 - `cd backend && uv run ruff format --check app tests`: exit 0 ("325 files already formatted").
 - `python backend/scripts/check_boundaries.py`: exit 0 ("architecture boundaries clean").
 - `python .claude/skills/…/validate_verification.py --root <worktree> --strict local-models-self-host`: exit 0 (0 errors, 0 warnings) — script resolved from the user-level skill install; see Environment notes.
+
+## Addendum — review-triage fixes (2026-10-31)
+
+The independent review on PR #84 posted five findings, triaged in
+`review-triage.md` (same directory); four were fixed, one recorded as accepted.
+What changed after the round-1 verdict above, and why the affected checks still
+hold — re-proven at the post-fix head:
+
+- **The capture runner changed three ways.** The provenance sha resolves at the
+  repository root (`_output_dir.parents[1]`, the directory holding `evals/`)
+  instead of one directory above it — the round-1 observation calling that
+  field cosmetic was wrong: in this repo's worktree-under-a-clone layout the
+  old resolution stamped the outer checkout's HEAD (verified empirically:
+  `034c74a` instead of the branch's `ce5e4eb`), and a normal clone stamped
+  `"unknown"`. The sha is now resolved once per run (was one subprocess per
+  record). The runner now also refuses to overwrite an existing artifact
+  (exit `3`, checked before any network attempt or database write), growing the
+  door-4 exit contract from two exits to three: 0 recorded, 2 usage refusal,
+  3 overwrite refusal. And the capture never reads the hosted OpenAI key — the
+  fixed placeholder rides every request, recorded in the ops runbook.
+  Re-run at the new head with the DB env: the capture proof file (6 tests,
+  including two new stamp tests, a key-forwarding sensor that fails if the
+  hosted key reaches the adapter, and the overwrite refusal), the ops-doc drift
+  sensor, the stamp-guard and re-embed proofs, and the full backend suite —
+  3505 passed, 12 skipped, the single `test_worker_task_duration` failure being
+  the documented local-env-under-load artifact (untouched by this feature;
+  green on CI's Linux runner). C19/C20/C21's claims are unchanged by the fixes;
+  C3/C22 re-run green with the new runbook anchors.
+- **The metadata's settings-dim vector type now declares the migrations'
+  `vector(1536)` width** (it rendered bare `VECTOR`, disagreeing with the
+  shipped DDL of migrations 0005/0008/0013 and risking typmod-dropping
+  autogenerate ALTERs under `compare_type`). The write path is untouched — the
+  bind processor still validates every vector against the configured dimension —
+  so C15's typmod-refusal proof and the whole re-embed arc still hold: re-run
+  green, including a new test pinning the declared DDL width.
+- **One finding is won't-fix in code by recorded decision** (the stamp
+  predicate narrowing the arm served by the embedding-only HNSW index): the
+  predicate is the no-cross-identity-fusion guarantee itself, no schema-level
+  fix exists for HNSW, and the bounded transient cost is documented as accepted
+  in the ops runbook and pinned by the drift sensor (re-run green).
