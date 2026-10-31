@@ -25,7 +25,7 @@ deleted account (or book) leaves no orphan rows. Downgrade drops the tables
 and the columns; a re-upgrade restores them clean.
 
 Revision ID: 0033_byok_policy_ledgers
-Revises: 0031_user_locale_preferences
+Revises: 0032_section_checkpoints
 Create Date: 2026-10-30
 """
 

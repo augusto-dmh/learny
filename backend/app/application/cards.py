@@ -229,7 +229,9 @@ class SuggestCards:
                 user_keyed=user_keyed,
                 source_id=source_id,
                 usage=result.usage,
-                profile_id=getattr(result, "profile_id", None),
+                # The quiz model is not a registry profile: the estimate prices
+                # the primary catalog, exactly as the note path below states.
+                profile_id=None,
             )
         section_text = _section_text(section)
         survivors = [c for c in result.candidates if _passes_qc(c, section_text)]
@@ -763,6 +765,7 @@ class RefreshNoteCards:
     flagged only. Leftover suggestions are dropped — a refresh never creates or deletes a
     card. Scheduling and the review log are never touched (the cycle's core invariant): a
     note edit costs no card its memory history (ADR-0026 d5).
+
     """
 
     def __init__(

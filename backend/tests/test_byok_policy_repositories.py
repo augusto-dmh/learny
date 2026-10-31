@@ -185,7 +185,6 @@ def _turn(conversation_id: object, **overrides: object) -> ConversationTurn:  # 
 def test_turn_round_trips_usage_columns(db_conn: Connection) -> None:
     user = _user(db_conn)
     source = _source(db_conn, user.id)
-    datetime.now(UTC)
     conversation = SqlAlchemyConversationRepository(db_conn).add(
         Conversation(
             id=uuid4(),
