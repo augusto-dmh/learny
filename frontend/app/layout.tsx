@@ -7,10 +7,16 @@ import { getLocale, getMessages, getTranslations } from "next-intl/server";
 
 import "./globals.css";
 import { ThemeProvider } from "@/app/components/theme-provider";
+import { ServiceWorkerRegistrar } from "@/app/components/service-worker-registrar";
 
 export async function generateMetadata() {
   const t = await getTranslations("meta");
-  return { title: t("title"), description: t("description") };
+  return {
+    title: t("title"),
+    description: t("description"),
+    // The installable row: the web app manifest served by `app/manifest.ts`.
+    manifest: "/manifest.webmanifest",
+  };
 }
 
 // The reading serif (ADR-027): self-hosted at build time by next/font — no
@@ -46,6 +52,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
           <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
             {children}
           </ThemeProvider>
+          <ServiceWorkerRegistrar />
         </NextIntlClientProvider>
       </body>
     </html>

@@ -14,6 +14,7 @@
  */
 
 import { apiErrorFrom } from "./errors";
+import { notifyAuthChanged } from "./auth-events";
 
 export type UserSummary = {
   id: string;
@@ -92,6 +93,7 @@ export async function register(
   if (!res.ok) {
     throw await apiErrorFrom(res, "authRegister");
   }
+  notifyAuthChanged();
   return (await res.json()) as UserSummary;
 }
 
@@ -110,6 +112,7 @@ export async function login(
   if (!res.ok) {
     throw await apiErrorFrom(res, "authLogin");
   }
+  notifyAuthChanged();
   return (await res.json()) as UserSummary;
 }
 
@@ -142,4 +145,7 @@ export async function logout(
   if (!res.ok && res.status !== 401) {
     throw await apiErrorFrom(res, "authLogout");
   }
+  // Signed out (or the session was already gone): the device no longer holds
+  // this learner's session, so the service worker must drop their caches.
+  notifyAuthChanged();
 }
