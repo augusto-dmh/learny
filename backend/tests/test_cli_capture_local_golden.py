@@ -1,10 +1,10 @@
 """The golden-capture operator runner, proven offline (``capture_local_golden``).
 
-Two facts, three proofs:
-
 - Invoked without ``--base-url`` or ``--model`` the runner refuses with exit
   ``2`` before any network attempt or database write — the seams that would
   touch either are replaced with tripwires first;
+- an existing artifact for the same date/sha/model is refused with exit ``3``
+  the same way — a recorded run is never destroyed by a re-run;
 - the provenance stamp is this checkout's HEAD, resolved at the repository root
   (the directory holding ``evals/``) — never one directory above it, which would
   name an outer repository's HEAD when the checkout sits inside another;
@@ -206,6 +206,31 @@ def test_placeholder_key_sent_even_with_hosted_key_configured(
             "base_url": "http://localhost:11434/v1",
         }
     ]
+
+
+def test_refuses_to_overwrite_an_existing_capture_before_any_work(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:  # noqa: ANN001 — tmp_path
+    # A recorded run is never destroyed: an existing artifact for the same
+    # date/sha/model exits 3 naming the file — the UoW is never opened and the
+    # recorded bytes are untouched.
+    import app.cli.capture_local_golden as capture
+
+    def _tripwire() -> AbstractContextManager:
+        raise AssertionError("overwrite refusal reached the database unit of work")
+
+    monkeypatch.setattr(capture, "_uow", _tripwire)
+    monkeypatch.setattr(capture, "_output_dir", tmp_path)
+    existing = capture._artifact_path(capture._git_sha(), _SCRIPTED_MODEL)
+    existing.parent.mkdir(parents=True, exist_ok=True)
+    existing.write_text('{"recorded": "earlier"}\n', encoding="utf-8")
+
+    exit_code = capture.main(
+        ["--base-url", "http://localhost:11434/v1", "--model", _SCRIPTED_MODEL]
+    )
+
+    assert exit_code == 3
+    assert existing.read_text(encoding="utf-8") == '{"recorded": "earlier"}\n'
 
 
 @requires_db

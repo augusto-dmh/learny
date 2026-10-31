@@ -155,11 +155,13 @@ answers every golden case through your runtime, and writes one JSONL line per
 case to `evals/local/<date>-<git-sha>-<model>.jsonl` — found/not-found, cited
 chunk ids, and whether the citations resolve, plus the raw answer text. Commit
 the file (or attach it to an issue) so the claim and its evidence travel
-together. It refuses to run without `--base-url` and `--model`, and always
-sends a fixed placeholder key: your `LEARNY_OPENAI_API_KEY` is never forwarded
-to the runtime you point it at (local runtimes ignore the key; a runtime that
-requires a real one is not a local capture). It never fakes
-or scores anything — judging faithfulness is a separate, judge-owned study.
+together. It refuses to run without `--base-url` and `--model`, and refuses to
+overwrite an existing capture (exit `3`) — delete or move the earlier run
+explicitly to re-capture the same day. The capture always sends a fixed
+placeholder key: your `LEARNY_OPENAI_API_KEY` is never forwarded to the runtime
+you point it at (local runtimes ignore the key; a runtime that requires a real
+one is not a local capture). It never fakes or scores anything — judging
+faithfulness is a separate, judge-owned study.
 
 Status: **operator-gated** — the reference pt-BR capture has not been recorded
 (no local runtime on the development machine and a multi-GB model download

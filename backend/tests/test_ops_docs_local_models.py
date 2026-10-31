@@ -65,14 +65,16 @@ def test_pt_br_evidence_position() -> None:
 
 def test_capture_procedure_and_operator_gate() -> None:
     # The exact capture procedure an operator runs, the plainly stated reason
-    # the reference capture is not recorded (never faked), and the guarantee
-    # that the hosted key is never forwarded to the runtime the capture names.
+    # the reference capture is not recorded (never faked), and the two capture
+    # guarantees that protect the operator: a recorded run is never overwritten,
+    # and the hosted key is never forwarded to the runtime the capture names.
     text = _collapsed(_RUNBOOK.read_text(encoding="utf-8"))
     assert "--base-url http://localhost:11434/v1" in text
     assert "--model" in text
     assert "JSONL" in text
     assert "no local runtime on the development machine" in text
     assert "never fakes" in text
+    assert "refuses to overwrite an existing capture" in text
     assert "never forwarded" in text
 
 

@@ -14,9 +14,12 @@ deterministic facts; judging faithfulness is a separate judge-owned study.
 
 Exit codes: ``0`` when the capture is recorded; ``2`` on a usage refusal
 (missing ``--base-url`` or ``--model``), raised by argument parsing before any
-network attempt or database write. The capture never reads
-``LEARNY_OPENAI_API_KEY``: every request carries the fixed placeholder key, so
-the environment's hosted key is never handed to the runtime ``--base-url`` names.
+network attempt or database write; ``3`` on an overwrite refusal — the artifact
+file for today's date, sha and model already exists, and a recorded run is
+never destroyed by a re-run (refused before any network attempt or database
+write too). The capture never reads ``LEARNY_OPENAI_API_KEY``: every request
+carries the fixed placeholder key, so the environment's hosted key is never
+handed to the runtime ``--base-url`` names.
 
 The golden books and the case lists are the repo's canonical fixtures, owned by
 the test suite (``tests/golden_corpus*``, ``tests/eval/cases.yaml``,
@@ -264,11 +267,32 @@ def _sanitize_model(model: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "-", model).strip("-")
 
 
+class _CaptureExists(Exception):
+    """The artifact for this date/sha/model already exists (refused, exit ``3``)."""
+
+    def __init__(self, path: Path) -> None:
+        super().__init__(str(path))
+        self.path = path
+
+
+def _artifact_path(git_sha: str, model: str) -> Path:
+    """The run's artifact path: ``<date>-<sha>-<model>.jsonl`` under ``evals/local/``."""
+    return _output_dir / (
+        f"{datetime.now(UTC).strftime('%Y-%m-%d')}-{git_sha}-{_sanitize_model(model)}.jsonl"
+    )
+
+
 def _capture(base_url: str, model: str) -> Path:
     """Run every golden case and record one JSONL line per case; return the path."""
     # One resolution per run: the provenance stamp is a property of the checkout,
     # not of a case — the same sha rides every line and the filename.
     git_sha = _git_sha()
+    artifact = _artifact_path(git_sha, model)
+    if artifact.exists():
+        # Fail fast, before any network attempt or database write: the runbook's
+        # iterate-and-capture loop must never silently destroy a recorded run —
+        # the operator deletes or moves the earlier capture explicitly.
+        raise _CaptureExists(artifact)
     settings = get_settings()
     embeddings = build_embedding_adapter(settings)
     generation = OpenAICompatibleGenerationAdapter(
@@ -323,17 +347,14 @@ def _capture(base_url: str, model: str) -> Path:
                     }
                 )
     _output_dir.mkdir(parents=True, exist_ok=True)
-    path = _output_dir / (
-        f"{datetime.now(UTC).strftime('%Y-%m-%d')}-{git_sha}-{_sanitize_model(model)}.jsonl"
-    )
-    with path.open("w", encoding="utf-8") as handle:
+    with artifact.open("w", encoding="utf-8") as handle:
         for record in records:
             handle.write(json.dumps(record, sort_keys=True, ensure_ascii=False) + "\n")
 
     found = sum(1 for record in records if record["found"])
-    print(f"recorded {len(records)} golden cases ({found} found) -> {path}")
+    print(f"recorded {len(records)} golden cases ({found} found) -> {artifact}")
     print(f"generation: {model} @ {base_url}; embeddings: {embeddings.model}")
-    return path
+    return artifact
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -350,7 +371,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--model", required=True, help="the model id the runtime serves")
     args = parser.parse_args(argv)
-    _capture(args.base_url, args.model)
+    try:
+        _capture(args.base_url, args.model)
+    except _CaptureExists as existing:
+        print(
+            f"refusing to overwrite the existing capture {existing.path} — "
+            "delete or move it to re-capture",
+            file=sys.stderr,
+        )
+        return 3
     return 0
 
 
