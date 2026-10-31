@@ -200,6 +200,58 @@ describe("the dock's Review tab", () => {
     expect(screen.getByTestId("due-count").textContent).toBe("1");
   });
 
+  it("re-reads the calibration lines once a card has been graded", async () => {
+    // The mirror sits directly above the grading flow that feeds it, so the
+    // review the learner just submitted must move the lines without closing
+    // the tab — the same re-read the due count gets.
+    let graded = 0;
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/auth/me") return jsonResponse(200, authedMe);
+      if (url.startsWith("/api/notes")) return jsonResponse(200, []);
+      if (url.startsWith("/api/reviews/due")) {
+        return jsonResponse(200, {
+          items: [card("i1", "Who wrote the first algorithm?", "Ada Lovelace")],
+          total_due: 1,
+        });
+      }
+      if (url === "/api/sources/s1/calibration") {
+        return jsonResponse(200, {
+          levels:
+            graded === 0
+              ? zeroCalibration()
+              : [
+                  { confidence: 1, attempts: 0, recalled: 0 },
+                  { confidence: 2, attempts: 0, recalled: 0 },
+                  { confidence: 3, attempts: 1, recalled: 1 },
+                ],
+        });
+      }
+      if (init?.method === "POST" && url.startsWith("/api/quiz-items/")) {
+        graded += 1;
+        return jsonResponse(200, { state: 2, step: null, due: "later" });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderReviewTab();
+
+    // Nothing calibrated yet: the empty state, not the lines.
+    expect(await screen.findByTestId("calibration-empty")).toBeTruthy();
+
+    await screen.findByText("Who wrote the first algorithm?");
+    fireEvent.click(screen.getByRole("button", { name: "Reveal answer" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Good" }));
+    });
+
+    // The just-graded card is now in the mirror — the empty state gives way
+    // to the level line in place.
+    expect((await screen.findByTestId("calibration-lines")).textContent).toContain(
+      "When you felt Sure, you recalled 1 of 1",
+    );
+    expect(screen.queryByTestId("calibration-empty")).toBeNull();
+  });
+
   it("grades a card in the dock, with the book's page never left behind", async () => {
     const fetchMock = stubBook([
       card("i1", "Who wrote the first algorithm?", "Ada Lovelace"),

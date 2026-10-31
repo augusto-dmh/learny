@@ -66,10 +66,12 @@ export function useDueCount(sourceId: string): BookDue {
   return { total, error, refresh: () => void load() };
 }
 
-/** This book's calibration rows, or why they are missing. */
+/** This book's calibration rows, or why they are missing. `refresh` re-reads
+ * them — the mirror sits beside the grading that feeds it, so a grade re-reads
+ * it in place. */
 function useCalibration(
   sourceId: string,
-): { levels: CalibrationLevel[] | null; error: string | null } {
+): { levels: CalibrationLevel[] | null; error: string | null; refresh: () => void } {
   const errorMessage = useErrorMessage();
   const [levels, setLevels] = useState<CalibrationLevel[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -88,7 +90,7 @@ function useCalibration(
     void load();
   }, [load]);
 
-  return { levels, error };
+  return { levels, error, refresh: () => void load() };
 }
 
 /** The calibration block: a level line per confidence level that has attempts. */
@@ -174,7 +176,14 @@ export function DockReviewPanel({
         <Calibration levels={calibration.levels} error={calibration.error} />
       </div>
       {total > 0 ? (
-        <ReviewScreen sourceId={sourceId} onRequireAuth={onRequireAuth} onGraded={refresh} />
+        <ReviewScreen
+          sourceId={sourceId}
+          onRequireAuth={onRequireAuth}
+          onGraded={() => {
+            refresh();
+            calibration.refresh();
+          }}
+        />
       ) : null}
     </div>
   );
