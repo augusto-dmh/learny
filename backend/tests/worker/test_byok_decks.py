@@ -526,3 +526,73 @@ def test_begin_serves_the_pinned_key(
 
     assert [fake.api_key for fake in fakes] == [_KEY]
     assert payload["credential_id"] == str(credential_id)
+
+
+def test_refresh_records_the_owner_ledger(
+    byok: None, seed, db_engine: Engine, fakes: list[_KeyedQuizFake]
+) -> None:  # noqa: ANN001
+    """A refresh pass the owner's own key served lands in their monthly ledger.
+
+    The house day debits 0 (their key paid) and the policy wired beside the
+    debit records the pass to the month their budget reads. A note is not a
+    book: nothing reaches the per-corpus ledger.
+    """
+    from app.infrastructure.db.repositories import (
+        SqlAlchemyByokCorpusRepository,
+        SqlAlchemyByokMonthRepository,
+    )
+
+    ctx = seed()
+    _store(db_engine, ctx.user.id, _KEY)
+    note = SimpleNamespace(id=uuid4(), user_id=ctx.user.id, body_markdown="A note.")
+    captured: dict[str, Any] = {}
+
+    class _NoteRepo:
+        def __init__(self, _conn: Any) -> None:  # noqa: ANN401
+            pass
+
+        def get_by_id(self, note_id: UUID) -> SimpleNamespace | None:
+            return note if note_id == note.id else None
+
+    class _Refresh:
+        """Stands in for ``RefreshNoteCards``: makes the one provider call it makes."""
+
+        def __init__(
+            self, *, generation: Any, budget: Any, byok_policy: Any = None, **_kwargs: Any
+        ) -> None:  # noqa: ANN401
+            captured["generation"] = generation
+            captured["budget"] = budget
+            captured["policy"] = byok_policy
+
+        def __call__(self, *, note_id: UUID) -> None:
+            result = captured["generation"].suggest_note_cards(note.body_markdown, "", 3)
+            captured["budget"].record(
+                note.user_id,
+                usd_micros=captured["budget"].usage_micros(
+                    result.usage, user_keyed=result.user_keyed
+                ),
+                kind=KIND_GENERATION,
+            )
+            captured["policy"].record_turn(
+                note.user_id,
+                user_keyed=result.user_keyed,
+                source_id=None,
+                usage=result.usage,
+                profile_id=None,
+            )
+
+    with (
+        patch("app.worker.tasks.SqlAlchemyNoteRepository", _NoteRepo),
+        patch("app.worker.tasks.RefreshNoteCards", _Refresh),
+    ):
+        _refresh(SimpleNamespace(), str(note.id))
+
+    assert captured["policy"] is not None  # the task wired a real policy
+    period = datetime.now(UTC).strftime("%Y-%m")
+    with db_engine.connect() as conn:
+        month = SqlAlchemyByokMonthRepository(conn).get_for_month(ctx.user.id, period)
+        corpus = SqlAlchemyByokCorpusRepository(conn).get_for_month(ctx.user.id, uuid4(), period)
+    assert month is not None
+    assert (month.input_tokens, month.output_tokens) == (1000, 1000)
+    assert month.cost_usd_micros > 0
+    assert corpus is None  # a note is not a book
