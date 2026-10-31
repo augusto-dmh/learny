@@ -70,6 +70,7 @@ from app.domain.entities import (
 from app.infrastructure.web.cards import CardView
 from app.infrastructure.web.csrf import enforce_csrf, enforce_origin
 from app.infrastructure.web.dependencies import (
+    CallerCredentials,
     get_accept_tutor_card,
     get_authenticated_user,
     get_delete_conversation,
@@ -79,6 +80,7 @@ from app.infrastructure.web.dependencies import (
     get_rename_conversation,
     get_response_language,
     get_start_conversation,
+    learner_key_covers,
 )
 from app.infrastructure.web.rate_limit import rate_limit_conversations, rate_limit_quiz
 from app.infrastructure.web.retrieval import EvidenceView
@@ -267,6 +269,13 @@ class ConversationTurnView(BaseModel):
     (generation broke and the question was kept anyway, AD-262), with ``text`` and
     ``citations`` empty for all three non-answered outcomes. ``citations`` reuses the
     retrieval endpoint's ``EvidenceView`` citation-only projection.
+
+    The ``usage_*`` fields are what the turn's call consumed, as the adapter
+    reported it: null tokens mean nothing was reported (the deterministic local
+    adapter), and a null ``cost_usd_micros`` is a house-served turn — the learner
+    pays nothing for it, and only a turn on the learner's own key carries its
+    estimated cost. An older turn predating the columns reads as no usage
+    reported, which is the truth about it.
     """
 
     turn_index: int
@@ -278,6 +287,10 @@ class ConversationTurnView(BaseModel):
     evidence_count: int
     model: str
     created_at: datetime
+    usage_input_tokens: int | None = None
+    usage_output_tokens: int | None = None
+    cost_usd_micros: int | None = None
+    user_keyed: bool = False
 
     @classmethod
     def from_turn(cls, turn: ConversationTurn) -> ConversationTurnView:
@@ -291,6 +304,10 @@ class ConversationTurnView(BaseModel):
             evidence_count=turn.evidence_count,
             model=turn.model,
             created_at=turn.created_at,
+            usage_input_tokens=turn.usage_input_tokens,
+            usage_output_tokens=turn.usage_output_tokens,
+            cost_usd_micros=turn.cost_usd_micros,
+            user_keyed=turn.user_keyed,
         )
 
 
@@ -489,6 +506,7 @@ def post_conversation_turn(
     conversation_id: UUID,
     user: Annotated[User, Depends(get_authenticated_user)],
     service: Annotated[PostConversationTurn, Depends(get_post_conversation_turn)],
+    credentials: CallerCredentials,
     response_language: Annotated[str | None, Depends(get_response_language)],
     body: TurnRequest,
 ) -> ConversationTurnView:
@@ -503,6 +521,11 @@ def post_conversation_turn(
     502, with the question kept as a ``failed`` turn (AD-262), and a turn-index race
     loses with ``ConversationTurnConflict`` → 409. The answer is requested in the
     learner's language: the stored locale, else ``Accept-Language``, else English.
+
+    ``user_keyed`` is the pre-flight coverage verdict — will the caller's own key
+    serve this mode — so the budget assertion can exempt the house USD cap for a
+    call that spends the learner's money, and the learner-side rails can govern
+    exactly that call.
     """
     turn = service(
         user=user,
@@ -511,6 +534,7 @@ def post_conversation_turn(
         mode=body.mode,
         origin=body.origin,
         response_language=response_language,
+        user_keyed=learner_key_covers(credentials, mode=body.mode),
     )
     return ConversationTurnView.from_turn(turn)
 
@@ -527,6 +551,7 @@ def post_conversation_turn_stream(
     conversation_id: UUID,
     user: Annotated[User, Depends(get_authenticated_user)],
     service: Annotated[PostConversationTurn, Depends(get_post_conversation_turn)],
+    credentials: CallerCredentials,
     response_language: Annotated[str | None, Depends(get_response_language)],
     body: TurnRequest,
 ):
@@ -536,10 +561,11 @@ def post_conversation_turn_stream(
     auth/CSRF/Origin/rate-limit dependencies. ``PostConversationTurn.stream`` runs
     all guards **eagerly** here, so ownership (404), readiness / target-gone (409),
     validation (422) and rate-limit (429) surface as the same plain HTTP errors as
-    the JSON endpoint before any SSE byte is sent. An answered turn is persisted only
-    on stream completion, so a client disconnect persists nothing; a mid-stream
-    failure (rendered as a protocol ``error`` part) keeps the question as a ``failed``
-    turn instead (AD-262). The handler stays synchronous and
+    the JSON endpoint before any SSE byte is sent — including the learner-side
+    refusals for a call the caller's own key would serve. An answered turn is
+    persisted only on stream completion, so a client disconnect persists nothing; a
+    mid-stream failure (rendered as a protocol ``error`` part) keeps the question as
+    a ``failed`` turn instead (AD-262). The handler stays synchronous and
     returns the response instance so the frame generator runs in the threadpool —
     see the contract on ``to_sse_response``.
     """
@@ -550,6 +576,7 @@ def post_conversation_turn_stream(
         mode=body.mode,
         origin=body.origin,
         response_language=response_language,
+        user_keyed=learner_key_covers(credentials, mode=body.mode),
     )
     return to_sse_response(events)
 

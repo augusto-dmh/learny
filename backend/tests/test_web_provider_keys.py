@@ -33,6 +33,7 @@ _KEY = "sk-ant-api03-route-key-first-AAAAAAAAAAAAAAAA1234"
 _NEW_KEY = "sk-ant-api03-route-key-second-BBBBBBBBBBBBBBB5678"
 _OPENAI_KEY = "sk-proj-route-openai-key-CCCCCCCCCCCCCCCCC9012"
 _BASE = "/api/me/provider-keys"
+_BUDGET_INVALID_FRAGMENT = "between 0 (exclusive) and 10,000"
 
 
 def _profile(profile_id: str, **overrides: Any) -> dict[str, Any]:  # noqa: ANN401
@@ -136,7 +137,18 @@ def test_disabled_feature(
     deleted = auth_client.delete(f"{_BASE}/anthropic", headers=headers)
 
     assert listed.status_code == 200
-    assert listed.json() == {"enabled": False, "hosted": False, "providers": []}
+    assert listed.json() == {
+        "enabled": False,
+        "hosted": False,
+        "providers": [],
+        "usage": {
+            "period": listed.json()["usage"]["period"],
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cost_usd_micros": 0,
+            "budget_usd_micros": None,
+        },
+    }
     assert (put.status_code, tested.status_code, deleted.status_code) == (404, 404, 404)
     assert probe.calls == []
 
@@ -173,7 +185,18 @@ def test_hosted_without_optin_reads_nothing(
     deleted = auth_client.delete(f"{_BASE}/anthropic", headers=headers)
 
     assert listed.status_code == 200
-    assert listed.json() == {"enabled": False, "hosted": True, "providers": []}
+    assert listed.json() == {
+        "enabled": False,
+        "hosted": True,
+        "providers": [],
+        "usage": {
+            "period": listed.json()["usage"]["period"],
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cost_usd_micros": 0,
+            "budget_usd_micros": None,
+        },
+    }
     assert (put.status_code, tested.status_code, deleted.status_code) == (404, 404, 404)
     assert probe.calls == []
     assert built == []  # the gate closed before any credential row was read
@@ -618,3 +641,117 @@ def test_routes_require_session_401(
     ]
 
     assert [resp.status_code for resp in responses] == [401, 401, 401, 401]
+
+
+# --- The learner's own monthly budget ------------------------------------------------
+
+
+def _budget_put(
+    client: TestClient,
+    headers: dict[str, str],
+    value: Any,  # noqa: ANN401
+) -> Any:  # noqa: ANN401
+    return client.put(f"{_BASE}/budget", json={"monthly_budget_usd": value}, headers=headers)
+
+
+def test_budget_route_stores_clears_and_validates(
+    auth_client: TestClient,
+    db_conn: Connection,
+    monkeypatch: pytest.MonkeyPatch,
+    probe: _Probe,
+) -> None:
+    """The budget route: 200 store/clear, 422 without an echo, 404/403/429 like siblings."""
+    from app.infrastructure.web.rate_limit import InMemoryFixedWindowRateLimiter, set_rate_limiter
+    from tests.conftest import clear_settings_and_generation_caches
+
+    _declare(monkeypatch, [_HOUSE, _CLAUDE])
+    _, headers = _learner(auth_client, "budget-route@example.com")
+
+    stored = _budget_put(auth_client, headers, 25)
+    assert stored.status_code == 200, stored.text
+    assert stored.json()["budget_usd_micros"] == 25_000_000
+    # Storing twice is one row (a full upsert), not an increment.
+    again = _budget_put(auth_client, headers, 25)
+    assert again.json() == stored.json()
+    # A boundary store at the top of the range.
+    top = _budget_put(auth_client, headers, 10_000)
+    assert top.status_code == 200, top.text
+    assert top.json()["budget_usd_micros"] == 10_000_000_000
+
+    cleared = _budget_put(auth_client, headers, None)
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["budget_usd_micros"] is None
+
+    # Invalid input: 422 with fixed copy echoing no submitted value.
+    cases = [("zero", 0), ("negative", -5), ("too_big", 10_001), ("text", "ten"), ("bool", True)]
+    for label, value in cases:
+        bad = _budget_put(auth_client, headers, value)
+        assert bad.status_code == 422, (label, bad.text)
+        assert _BUDGET_INVALID_FRAGMENT in bad.json()["detail"]
+        if str(value) not in _BUDGET_INVALID_FRAGMENT:  # "0" itself is part of the copy
+            assert str(value) not in bad.json()["detail"]
+
+    # Feature off (no KEK): 404 like every other write.
+    _declare(monkeypatch, [_HOUSE, _CLAUDE], kek=False)
+    clear_settings_and_generation_caches()
+    off = _budget_put(auth_client, headers, 25)
+    assert off.status_code == 404, off.text
+
+    # CSRF: 403 like every sibling write.
+    _declare(monkeypatch, [_HOUSE, _CLAUDE])
+    no_csrf = _budget_put(auth_client, {}, 25)
+    assert no_csrf.status_code == 403
+
+    # Write rate limit: 429 like every sibling write.
+    set_rate_limiter(InMemoryFixedWindowRateLimiter(max_attempts=2, window_seconds=300))
+    first = _budget_put(auth_client, headers, 25).status_code
+    second = _budget_put(auth_client, headers, 25).status_code
+    third = _budget_put(auth_client, headers, 25).status_code
+    assert (first, second, third) == (200, 200, 429)
+
+
+def test_budget_requires_session_401(
+    auth_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _declare(monkeypatch, [_HOUSE, _CLAUDE])
+    auth_client.cookies.clear()
+
+    resp = auth_client.put(f"{_BASE}/budget", json={"monthly_budget_usd": 25})
+
+    assert resp.status_code == 401
+
+
+def test_list_reports_usage_and_budget(
+    auth_client: TestClient,
+    db_conn: Connection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The keys list carries the month-to-date usage row and the stored budget."""
+    from datetime import UTC, datetime
+
+    from app.infrastructure.db.repositories import (
+        SqlAlchemyByokMonthRepository,
+        SqlAlchemyUserByokSettingsRepository,
+    )
+
+    _declare(monkeypatch, [_HOUSE, _CLAUDE])
+    user_id, _headers = _learner(auth_client, "budget-list@example.com")
+    period = datetime.now(UTC).strftime("%Y-%m")
+    SqlAlchemyByokMonthRepository(db_conn).record(
+        user_id,
+        period,
+        input_tokens=1234,
+        output_tokens=567,
+        cost_usd_micros=8_900,
+    )
+    SqlAlchemyUserByokSettingsRepository(db_conn).set_budget(user_id, 2_500_000)
+
+    body = auth_client.get(_BASE).json()
+
+    assert body["usage"] == {
+        "period": period,
+        "input_tokens": 1234,
+        "output_tokens": 567,
+        "cost_usd_micros": 8_900,
+        "budget_usd_micros": 2_500_000,
+    }

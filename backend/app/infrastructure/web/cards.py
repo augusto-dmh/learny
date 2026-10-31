@@ -50,12 +50,14 @@ from app.application.cards import (
 from app.domain.entities import QuizCandidate, QuizItem, User
 from app.infrastructure.web.csrf import enforce_csrf, enforce_origin
 from app.infrastructure.web.dependencies import (
+    CallerCredentials,
     get_accept_card,
     get_accept_note_card,
     get_authenticated_user,
     get_suggest_cards,
     get_suggest_note_cards,
     get_update_card,
+    learner_holds_quiz_key,
 )
 from app.infrastructure.web.rate_limit import rate_limit_quiz
 
@@ -213,6 +215,7 @@ def suggest_cards(
     source_id: UUID,
     user: Annotated[User, Depends(get_authenticated_user)],
     service: Annotated[SuggestCards, Depends(get_suggest_cards)],
+    credentials: CallerCredentials,
     body: SuggestCardsRequest,
 ) -> CardSuggestionsView:
     """Return QC-passing card candidates for one owned highlight (200; 404/409).
@@ -222,8 +225,16 @@ def suggest_cards(
     → 404), then generates against the anchor's section and drops every candidate that
     is not quoted verbatim from it. A section the highlight no longer binds to →
     ``StaleCaptureTarget`` → 409. Nothing is persisted on this path.
+
+    ``user_keyed`` is whether the caller's own Anthropic key serves this call
+    (ADR-0033), so the learner-side rails govern it before anything is generated.
     """
-    candidates = service(user=user, source_id=source_id, note_anchor_id=body.note_anchor_id)
+    candidates = service(
+        user=user,
+        source_id=source_id,
+        note_anchor_id=body.note_anchor_id,
+        user_keyed=learner_holds_quiz_key(credentials),
+    )
     return CardSuggestionsView(
         suggestions=[CardSuggestionView.from_candidate(c) for c in candidates]
     )
@@ -303,6 +314,7 @@ def suggest_note_cards(
     note_id: UUID,
     user: Annotated[User, Depends(get_authenticated_user)],
     service: Annotated[SuggestNoteCards, Depends(get_suggest_note_cards)],
+    credentials: CallerCredentials,
 ) -> CardSuggestionsView:
     """Return QC-passing card candidates for one owned note (200; 404).
 
@@ -311,8 +323,11 @@ def suggest_note_cards(
     note's book-anchor context when it is anchored — and drops every candidate not quoted
     verbatim from the body. Nothing is persisted on this path; an empty list is a normal
     outcome ("no cards for this note").
+
+    ``user_keyed`` is whether the caller's own Anthropic key serves this call
+    (ADR-0033), so the learner-side budget governs it before anything is generated.
     """
-    candidates = service(user=user, note_id=note_id)
+    candidates = service(user=user, note_id=note_id, user_keyed=learner_holds_quiz_key(credentials))
     return CardSuggestionsView(
         suggestions=[CardSuggestionView.from_candidate(c) for c in candidates]
     )
