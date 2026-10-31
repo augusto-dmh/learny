@@ -281,3 +281,64 @@ def test_stored_budget_reads_none_while_unset() -> None:
     policy, _months, _corpus = _policy(budget=None)
 
     assert policy.stored_budget(_USER) is None
+
+
+# --- the monthly ledger's accumulation -----------------------------------------------
+
+
+def test_monthly_ledger_accumulates() -> None:
+    """Every user-keyed call kind lands in the same month row, incrementing it.
+
+    Turns, card suggestions, and deck passes all record through ``record_turn``:
+    the month row accumulates each call's reported tokens and estimated cost
+    (the upsert-increment makes the order and the batching irrelevant), and the
+    per-source rows accumulate the input tokens of the calls that targeted them.
+    A house-served call records nothing at all.
+    """
+    policy, months, corpus = _policy(corpus_cap=1_000_000)
+
+    # An ask turn and a card suggestion on the same book, then a deck pass on
+    # another, then a house-served call that must vanish.
+    policy.record_turn(
+        _USER,
+        user_keyed=True,
+        source_id=_SOURCE,
+        usage=TokenUsage(input_tokens=10_000, output_tokens=2_000),
+        profile_id="p1",
+    )
+    policy.record_turn(
+        _USER,
+        user_keyed=True,
+        source_id=_SOURCE,
+        usage=TokenUsage(input_tokens=5_000, output_tokens=1_000),
+        profile_id="p1",
+    )
+    policy.record_turn(
+        _USER,
+        user_keyed=True,
+        source_id=_OTHER_SOURCE,
+        usage=TokenUsage(input_tokens=100_000, output_tokens=50_000),
+        profile_id=None,
+    )
+    policy.record_turn(
+        _USER,
+        user_keyed=False,
+        source_id=_SOURCE,
+        usage=TokenUsage(input_tokens=999_999, output_tokens=999_999),
+        profile_id=None,
+    )
+
+    month = months.get_for_month(_USER, _MONTH)
+    assert month is not None
+    assert (month.input_tokens, month.output_tokens) == (115_000, 53_000)
+    # 10k+5k in x $1/M + 2k+1k out x $2/M + 100k in x $1/M + 50k out x $2/M
+    # = 0.015 + 0.006 + 0.1 + 0.1 USD = 221_000 micros.
+    assert month.cost_usd_micros == 221_000
+
+    this_book = corpus.get_for_month(_USER, _SOURCE, _MONTH)
+    other_book = corpus.get_for_month(_USER, _OTHER_SOURCE, _MONTH)
+    assert this_book is not None and this_book.input_tokens == 15_000
+    assert other_book is not None and other_book.input_tokens == 100_000
+
+    # The account view reads the same row back.
+    assert policy.month_usage(_USER) == (_MONTH, 115_000, 53_000, 221_000)

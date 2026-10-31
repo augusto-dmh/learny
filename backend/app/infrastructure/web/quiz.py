@@ -67,6 +67,7 @@ from app.infrastructure.export.anki import build_apkg
 from app.infrastructure.web.csrf import enforce_csrf, enforce_origin
 from app.infrastructure.web.dependencies import (
     AppSettings,
+    CallerCredentials,
     build_deck_compensate,
     build_plan_deck_generation,
     get_authenticated_user,
@@ -80,6 +81,7 @@ from app.infrastructure.web.dependencies import (
     get_reset_schedule,
     get_submit_review,
     get_undo_last_review,
+    learner_holds_quiz_key,
 )
 from app.infrastructure.web.rate_limit import rate_limit_quiz
 
@@ -368,6 +370,7 @@ def generate_quiz_deck(
     user: Annotated[User, Depends(get_authenticated_user)],
     uow_factory: UowFactory,
     enqueuer: DeckEnqueuer,
+    credentials: CallerCredentials,
 ) -> QuizJobView:
     """Create a queued deck job and enqueue it (202); 404/409/502 per the deck ACs.
 
@@ -376,10 +379,17 @@ def generate_quiz_deck(
     guards the single-in-flight invariant (``QuizDeckConflict`` → 409). The job is
     committed in UoW1 before the enqueue; an enqueue failure compensates the job to
     terminal ``failed`` in UoW2 and returns 502 (no phantom queued job).
+
+    ``user_keyed`` is whether the caller's own Anthropic key would serve the deck
+    (ADR-0033): the house USD cap yields to that deck — the learner's money, not
+    the operator's — while the learner-side rails assert on the same pre-commit
+    path, so a paused key or a book at its ceiling refuses having created nothing.
     """
     # UoW1: create the queued job (ownership/readiness/single-in-flight enforced).
     with uow_factory() as conn:
-        job = build_plan_deck_generation(conn)(user=user, source_id=source_id)
+        job = build_plan_deck_generation(conn)(
+            user=user, source_id=source_id, user_keyed=learner_holds_quiz_key(credentials)
+        )
 
     # Enqueue only after the job is durably committed (AD-016).
     try:

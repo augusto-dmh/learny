@@ -13,13 +13,16 @@ and every write answers 404, exactly as for a provider this instance does not
 offer.
 
 Contract (also consumed by the Next.js proxy):
-- ``GET    /api/me/provider-keys``                   → 200 ``{enabled, providers[]}``; auth.
+- ``GET    /api/me/provider-keys``                   → 200 ``{enabled, hosted, providers[],
+  usage}``; auth.
 - ``PUT    /api/me/provider-keys/{provider}``        → 200 the provider's row; auth + CSRF +
   rate limit; 404 when not offered; 422 for a malformed key (fixed copy).
 - ``POST   /api/me/provider-keys/{provider}/test``   → 200 ``{ok, reason}``; auth + CSRF +
   rate limit; 404 when not offered or no key is stored.
 - ``DELETE /api/me/provider-keys/{provider}``        → 204, also when no key was stored;
   auth + CSRF; 404 when not offered.
+- ``PUT    /api/me/provider-keys/budget``            → 200 the usage view; auth + CSRF +
+  rate limit; 404 when the feature is off; 422 for an out-of-range budget (fixed copy).
 """
 
 from __future__ import annotations
@@ -27,21 +30,25 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import datetime
 from typing import Annotated, Any
+from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Response, status
 from pydantic import BaseModel
 
+from app.application.budget import MICROS_PER_USD
 from app.domain.entities import ProviderCredential, User
 from app.infrastructure.answering.probe import ProbeOutcome, ProbeReason, probe_key
 from app.infrastructure.db.provider_credentials import (
     MIN_KEY_CHARS,
     SqlAlchemyProviderCredentialRepository,
 )
+from app.infrastructure.db.repositories import SqlAlchemyUserByokSettingsRepository
 from app.infrastructure.providers import GenerationProfileSettings
 from app.infrastructure.quiz.learner import QUIZ_KEY_PROVIDER
 from app.infrastructure.web.csrf import enforce_csrf
 from app.infrastructure.web.dependencies import (
     DbConnection,
+    build_byok_policy,
     build_provider_credential_repository,
     evict_learner_adapters,
     get_authenticated_user,
@@ -76,6 +83,10 @@ _MALFORMED = (
     "That does not look like a valid API key for this provider. Paste the whole key, "
     f"{MIN_KEY_CHARS} to {MAX_KEY_CHARS} characters with no spaces."
 )
+_BUDGET_INVALID = (
+    "That does not look like a valid monthly budget. Enter a dollar amount "
+    "between 0 (exclusive) and 10,000, or clear the budget."
+)
 
 #: Tests the stored key against a bound profile's host (overridable in tests).
 KeyProbe = Callable[[GenerationProfileSettings, str], ProbeOutcome]
@@ -107,17 +118,35 @@ class ProviderKeyView(BaseModel):
     powers_cards: bool
 
 
+class ByokUsageView(BaseModel):
+    """The caller's month-to-date own-key usage and their stored monthly budget.
+
+    Zeros are a quiet month; ``budget_usd_micros`` is ``None`` while no budget
+    is set. Cost is the learner's own estimate at the serving catalog — the
+    operator's number is never shown here.
+    """
+
+    period: str
+    input_tokens: int
+    output_tokens: int
+    cost_usd_micros: int
+    budget_usd_micros: int | None
+
+
 class ProviderKeysView(BaseModel):
     """The whole keys section: whether it exists here, and its provider rows.
 
     ``hosted`` is the instance's own declaration (not secret: the section's
     existence is already instance-visible) — the disclosure copy keys off it
-    wherever the section renders.
+    wherever the section renders. ``usage`` rides on every response so the
+    section's budget control and month-to-date line render wherever the
+    section does.
     """
 
     enabled: bool
     hosted: bool
     providers: list[ProviderKeyView]
+    usage: ByokUsageView
 
 
 class KeyTestView(BaseModel):
@@ -168,6 +197,19 @@ def _key_from_body(provider: str, body: Any) -> str:  # noqa: ANN401 — parsed 
     return api_key
 
 
+def _usage_view(conn: DbConnection, user_id: UUID) -> ByokUsageView:
+    """The caller's month-to-date usage and stored budget (zeros when quiet)."""
+    policy = build_byok_policy(conn)
+    period, tokens_in, tokens_out, cost = policy.month_usage(user_id)
+    return ByokUsageView(
+        period=period,
+        input_tokens=tokens_in,
+        output_tokens=tokens_out,
+        cost_usd_micros=cost,
+        budget_usd_micros=policy.stored_budget(user_id),
+    )
+
+
 @router.get("/api/me/provider-keys")
 def list_provider_keys(
     conn: DbConnection,
@@ -175,18 +217,56 @@ def list_provider_keys(
 ) -> ProviderKeysView:
     """The offered providers with the caller's key state (200; 401 if unauth).
 
-    ``enabled: false`` with no rows when the feature is off. Rows follow the
-    registry order of each provider's first binding.
+    ``enabled: false`` with no rows when the feature is off — the hosted
+    declaration and the usage row still answer, so the disclosure and the
+    budget control render wherever the section does. Rows follow the registry
+    order of each provider's first binding.
     """
+    usage = _usage_view(conn, user.id)
     repo = build_provider_credential_repository(conn)
     if repo is None:
-        return ProviderKeysView(enabled=False, hosted=hosted_declaration(), providers=[])
+        return ProviderKeysView(
+            enabled=False, hosted=hosted_declaration(), providers=[], usage=usage
+        )
     stored = {credential.provider: credential for credential in repo.list_for_user(user.id)}
     return ProviderKeysView(
         enabled=True,
         hosted=hosted_declaration(),
         providers=[_view(provider, stored.get(provider)) for provider in offered_key_providers()],
+        usage=usage,
     )
+
+
+@router.put(
+    "/api/me/provider-keys/budget",
+    dependencies=[Depends(enforce_csrf), Depends(rate_limit_provider_keys)],
+)
+def put_budget(
+    conn: DbConnection,
+    user: Annotated[User, Depends(get_authenticated_user)],
+    body: Annotated[Any, Body()] = None,
+) -> ByokUsageView:
+    """Store (or clear) the caller's own monthly budget; the usage view, never an echo.
+
+    A number greater than 0 and at most 10,000 stores its micros; ``null``
+    clears the budget, and the next request serves — that is what makes the
+    budget soft. Anything else is a 422 with fixed copy that echoes no
+    submitted value, exactly like a malformed key.
+    """
+    if build_provider_credential_repository(conn) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_NOT_OFFERED)
+    value = body.get("monthly_budget_usd") if isinstance(body, dict) else None
+    micros: int | None
+    if value is None:
+        micros = None
+    elif isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise HTTPException(status_code=HTTP_422, detail=_BUDGET_INVALID)
+    elif not 0 < float(value) <= 10_000:
+        raise HTTPException(status_code=HTTP_422, detail=_BUDGET_INVALID)
+    else:
+        micros = int(round(float(value) * MICROS_PER_USD))
+    SqlAlchemyUserByokSettingsRepository(conn).set_budget(user.id, micros)
+    return _usage_view(conn, user.id)
 
 
 @router.put(
