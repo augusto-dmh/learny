@@ -163,6 +163,14 @@ you point it at (local runtimes ignore the key; a runtime that requires a real
 one is not a local capture). It never fakes or scores anything — judging
 faithfulness is a separate, judge-owned study.
 
+One retrieval note while you wait on a re-embed: the semantic arms serve only
+vectors stamped with the active identity, and the HNSW index covers the vectors
+alone, so a mixed or fully stale corpus walks the whole index before answering
+lexical-only — a transient semantic underfill at operator scale, accepted
+because a foreign-stamped corpus must never be fused. There is no schema-level
+fix (a composite stamp-plus-vector HNSW index is not supported); the state
+clears when re-embedding completes.
+
 Status: **operator-gated** — the reference pt-BR capture has not been recorded
 (no local runtime on the development machine and a multi-GB model download
 against the owner's no-install policy). The runner itself is proven offline
