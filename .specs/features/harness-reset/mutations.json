@@ -1,0 +1,23 @@
+[
+  {
+    "file": ".claude/skills/learny-ship-cycle/SKILL.md",
+    "old": "has `plan.md` but no `checks.md` | Stage 1 (lean Plan) |",
+    "new": "has `checks.md` but no `plan.md` | Stage 1 (lean Plan) |",
+    "proof": "cd backend && uv run pytest -q tests/test_harness_skills.py -k shipcycle_stage_detection",
+    "label": "Stage Detection: lean Plan row condition plan.md-without-checks.md -> checks.md-without-plan.md"
+  },
+  {
+    "file": ".claude/skills/learny-ship-cycle/SKILL.md",
+    "old": "**Lane F** for everything else, including every roadmap row.",
+    "new": "**Lane F** for everything else, excluding every roadmap row (those run as Lane S).",
+    "proof": "cd backend && uv run pytest -q tests/test_harness_skills.py -k shipcycle_lanes",
+    "label": "lane rule: roadmap rows included in Lane F -> excluded (run as Lane S)"
+  },
+  {
+    "file": ".claude/skills/tlc-spec-lean/scripts/check_commit.py",
+    "old": "TYPES = [\"feat\", \"fix\", ",
+    "new": "TYPES = [\"feat\", ",
+    "proof": "cd backend && uv run pytest -q tests/test_harness_skills.py -k vendored_commit_gate",
+    "label": "vendored commit gate: allowed type list drops fix"
+  }
+]

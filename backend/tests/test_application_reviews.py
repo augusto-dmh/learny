@@ -269,8 +269,8 @@ def test_first_successful_review_inserts_first_review_once() -> None:
     activations = FakeActivationEventRepository()
     service = _submit_review(items, activations=activations)
 
-    service(user=user, item_id=item.id, rating=3)
-    service(user=user, item_id=item.id, rating=3)
+    service(user=user, item_id=item.id, rating=3, assisted=False)
+    service(user=user, item_id=item.id, rating=3, assisted=False)
 
     assert list(activations.rows) == [(user.id, ACTIVATION_FIRST_REVIEW)]
 
@@ -284,7 +284,7 @@ def test_rejected_review_does_not_insert_first_review() -> None:
     service = _submit_review(_ReviewItemRepo(item, snapshot), activations=activations)
 
     with pytest.raises(QuizItemNotReviewable):
-        service(user=user, item_id=item.id, rating=3)
+        service(user=user, item_id=item.id, rating=3, assisted=False)
 
     assert activations.rows == {}
 
@@ -385,7 +385,7 @@ def test_submit_review_advances_scheduling_and_appends_log(db_conn: Connection) 
     repo = SqlAlchemyQuizItemRepository(db_conn)
 
     advanced = _service(db_conn, now=_NOW)(
-        user=user, item_id=item.id, rating=3, review_duration_ms=4200
+        user=user, item_id=item.id, rating=3, assisted=False, review_duration_ms=4200
     )
 
     # Good schedules the next review after now — the due date advanced.
@@ -406,7 +406,7 @@ def test_submit_review_without_duration_logs_null(db_conn: Connection) -> None:
     user = SqlAlchemyUserRepository(db_conn).get_by_id(source.user_id)
     item = _seed_active_item(db_conn, source.id)
 
-    _service(db_conn, now=_NOW)(user=user, item_id=item.id, rating=2)
+    _service(db_conn, now=_NOW)(user=user, item_id=item.id, rating=2, assisted=False)
 
     rows = db_conn.execute(
         select(review_log.c.review_duration_ms).where(review_log.c.quiz_item_id == item.id)
@@ -421,7 +421,7 @@ def test_submit_review_allows_early_review_of_future_due_item(db_conn: Connectio
     user = SqlAlchemyUserRepository(db_conn).get_by_id(source.user_id)
     item = _seed_active_item(db_conn, source.id, due=_NOW + timedelta(days=3))
 
-    advanced = _service(db_conn, now=_NOW)(user=user, item_id=item.id, rating=3)
+    advanced = _service(db_conn, now=_NOW)(user=user, item_id=item.id, rating=3, assisted=False)
 
     assert advanced.snapshot.due > _NOW
 
@@ -435,7 +435,7 @@ def test_submit_review_rejects_non_active_item(db_conn: Connection, status: str)
     item = _seed_active_item(db_conn, source.id, status=status)
 
     with pytest.raises(QuizItemNotReviewable):
-        _service(db_conn, now=_NOW)(user=user, item_id=item.id, rating=3)
+        _service(db_conn, now=_NOW)(user=user, item_id=item.id, rating=3, assisted=False)
 
     logged = db_conn.execute(
         select(func.count()).select_from(review_log).where(review_log.c.quiz_item_id == item.id)
@@ -449,7 +449,7 @@ def test_submit_review_missing_item_raises_not_found(db_conn: Connection) -> Non
     user = SqlAlchemyUserRepository(db_conn).get_by_id(source.user_id)
 
     with pytest.raises(QuizItemNotFound):
-        _service(db_conn, now=_NOW)(user=user, item_id=uuid4(), rating=3)
+        _service(db_conn, now=_NOW)(user=user, item_id=uuid4(), rating=3, assisted=False)
 
 
 @requires_db
@@ -461,7 +461,7 @@ def test_submit_review_non_owner_raises_not_found(db_conn: Connection) -> None:
     item = _seed_active_item(db_conn, owner_source.id)
 
     with pytest.raises(QuizItemNotFound):
-        _service(db_conn, now=_NOW)(user=intruder, item_id=item.id, rating=3)
+        _service(db_conn, now=_NOW)(user=intruder, item_id=item.id, rating=3, assisted=False)
 
     logged = db_conn.execute(
         select(func.count()).select_from(review_log).where(review_log.c.quiz_item_id == item.id)
@@ -499,7 +499,7 @@ def test_submit_review_credits_a_study_day_in_the_same_transaction(
     item = _seed_active_item(db_conn, source.id)
 
     _service(db_conn, now=_NEAR_MIDNIGHT)(
-        user=user, item_id=item.id, rating=3, client_tz="Asia/Tokyo"
+        user=user, item_id=item.id, rating=3, assisted=False, client_tz="Asia/Tokyo"
     )
 
     logged = db_conn.execute(
@@ -527,7 +527,7 @@ def test_submit_review_study_day_falls_back_to_utc_on_garbage_timezone(
     item = _seed_active_item(db_conn, source.id)
 
     _service(db_conn, now=_NEAR_MIDNIGHT)(
-        user=user, item_id=item.id, rating=3, client_tz="Mars/Olympus"
+        user=user, item_id=item.id, rating=3, assisted=False, client_tz="Mars/Olympus"
     )
 
     day = db_conn.execute(
@@ -553,7 +553,7 @@ def test_submit_review_rolls_back_the_review_when_the_study_credit_fails(
     )
 
     with pytest.raises(RuntimeError), db_conn.begin_nested():
-        service(user=user, item_id=item.id, rating=3)
+        service(user=user, item_id=item.id, rating=3, assisted=False)
 
     logged = db_conn.execute(
         select(func.count()).select_from(review_log).where(review_log.c.quiz_item_id == item.id)
@@ -641,7 +641,7 @@ def test_submit_review_advances_a_source_less_note_card(db_conn: Connection) -> 
     # reviewable like any other card.
     user, item = _persisted_note_card(db_conn, "review-note@example.com")
 
-    advanced = _service(db_conn, now=_NOW)(user=user, item_id=item.id, rating=3)
+    advanced = _service(db_conn, now=_NOW)(user=user, item_id=item.id, rating=3, assisted=False)
 
     assert advanced.snapshot.due > _NOW
     assert SqlAlchemyQuizItemRepository(db_conn).get_scheduling(item.id) == advanced.snapshot
@@ -654,7 +654,7 @@ def test_submit_review_note_card_non_owner_is_404(db_conn: Connection) -> None:
     intruder = SqlAlchemyUserRepository(db_conn).get_by_id(intruder_source.user_id)
 
     with pytest.raises(QuizItemNotFound):
-        _service(db_conn, now=_NOW)(user=intruder, item_id=item.id, rating=3)
+        _service(db_conn, now=_NOW)(user=intruder, item_id=item.id, rating=3, assisted=False)
 
 
 @requires_db
@@ -760,7 +760,7 @@ def test_submit_review_stores_the_pre_grade_snapshot_on_the_log(db_conn: Connect
     repo = SqlAlchemyQuizItemRepository(db_conn)
     before = repo.get_scheduling(item.id)
 
-    _service(db_conn, now=_NOW)(user=user, item_id=item.id, rating=3)
+    _service(db_conn, now=_NOW)(user=user, item_id=item.id, rating=3, assisted=False)
 
     row = db_conn.execute(
         select(
@@ -795,7 +795,7 @@ def test_undo_restores_scheduling_and_keeps_the_log_row(db_conn: Connection) -> 
         scheduling=FsrsSchedulingAdapter(fuzzing=False),
         clock=clock,
         study_days=SqlAlchemyStudyDayRepository(db_conn),
-    )(user=user, item_id=item.id, rating=4)
+    )(user=user, item_id=item.id, rating=4, assisted=False)
     assert repo.get_scheduling(item.id) != before
 
     clock.advance(timedelta(seconds=5))
@@ -827,7 +827,7 @@ def test_second_undo_is_not_undoable(db_conn: Connection) -> None:
     source = _persisted_source(db_conn, "undo-twice@example.com")
     user = SqlAlchemyUserRepository(db_conn).get_by_id(source.user_id)
     item = _seed_active_item(db_conn, source.id)
-    _service(db_conn, now=_NOW)(user=user, item_id=item.id, rating=3)
+    _service(db_conn, now=_NOW)(user=user, item_id=item.id, rating=3, assisted=False)
     undo = _undo_service(db_conn, now=_NOW)
     undo(user=user)
 
@@ -863,7 +863,7 @@ def test_undo_decrements_the_credited_study_day(db_conn: Connection) -> None:
     user = SqlAlchemyUserRepository(db_conn).get_by_id(source.user_id)
     item = _seed_active_item(db_conn, source.id)
     _service(db_conn, now=_NEAR_MIDNIGHT)(
-        user=user, item_id=item.id, rating=3, client_tz="Asia/Tokyo"
+        user=user, item_id=item.id, rating=3, assisted=False, client_tz="Asia/Tokyo"
     )
 
     _undo_service(db_conn, now=_NEAR_MIDNIGHT)(user=user, client_tz="Asia/Tokyo")
@@ -881,7 +881,7 @@ def test_undo_floors_reviews_count_at_zero(db_conn: Connection) -> None:
     source = _persisted_source(db_conn, "undo-floor@example.com")
     user = SqlAlchemyUserRepository(db_conn).get_by_id(source.user_id)
     item = _seed_active_item(db_conn, source.id)
-    _service(db_conn, now=_NOW)(user=user, item_id=item.id, rating=3)
+    _service(db_conn, now=_NOW)(user=user, item_id=item.id, rating=3, assisted=False)
     db_conn.execute(
         update(study_days).where(study_days.c.user_id == user.id).values(reviews_count=0)
     )
@@ -899,7 +899,7 @@ def test_undo_does_not_insert_a_study_day_row(db_conn: Connection) -> None:
     source = _persisted_source(db_conn, "undo-noinsert@example.com")
     user = SqlAlchemyUserRepository(db_conn).get_by_id(source.user_id)
     item = _seed_active_item(db_conn, source.id)
-    _service(db_conn, now=_NOW)(user=user, item_id=item.id, rating=3)
+    _service(db_conn, now=_NOW)(user=user, item_id=item.id, rating=3, assisted=False)
     db_conn.execute(delete(study_days).where(study_days.c.user_id == user.id))
 
     _undo_service(db_conn, now=_NOW)(user=user)
@@ -925,10 +925,10 @@ def test_undo_targets_the_callers_latest_review_across_items(db_conn: Connection
         clock=clock,
         study_days=SqlAlchemyStudyDayRepository(db_conn),
     )
-    submit(user=user, item_id=first.id, rating=3)
+    submit(user=user, item_id=first.id, rating=3, assisted=False)
     first_after = repo.get_scheduling(first.id)
     clock.advance(timedelta(minutes=1))
-    submit(user=user, item_id=second.id, rating=4)
+    submit(user=user, item_id=second.id, rating=4, assisted=False)
 
     UndoLastReview(
         items=repo,
@@ -954,7 +954,7 @@ def test_undo_does_not_see_another_users_review(db_conn: Connection) -> None:
     owner_source = _persisted_source(db_conn, "undo-owner@example.com")
     owner = SqlAlchemyUserRepository(db_conn).get_by_id(owner_source.user_id)
     item = _seed_active_item(db_conn, owner_source.id)
-    _service(db_conn, now=_NOW)(user=owner, item_id=item.id, rating=3)
+    _service(db_conn, now=_NOW)(user=owner, item_id=item.id, rating=3, assisted=False)
     intruder_source = _persisted_source(db_conn, "undo-intruder@example.com")
     intruder = SqlAlchemyUserRepository(db_conn).get_by_id(intruder_source.user_id)
 
@@ -1091,3 +1091,26 @@ def test_flag_missing_and_non_owned_raise_not_found(db_conn: Connection) -> None
     with pytest.raises(QuizItemNotFound):
         flag(user=owner, item_id=uuid4(), flagged=True)
     assert SqlAlchemyQuizItemRepository(db_conn).get_by_id(item.id).flagged_at is None
+
+
+@requires_db
+def test_submit_review_requires_assisted_and_stores_it(db_conn: Connection) -> None:
+    # Whether the answer was shown before the attempt has no default: a caller that
+    # does not say cannot record a grade, so no grade is unaided by omission.
+    source = _persisted_source(db_conn, "review-assisted@example.com")
+    user = SqlAlchemyUserRepository(db_conn).get_by_id(source.user_id)
+    item = _seed_active_item(db_conn, source.id)
+    service = _service(db_conn, now=_NOW)
+
+    with pytest.raises(TypeError):
+        service(user=user, item_id=item.id, rating=3)  # type: ignore[call-arg]
+
+    service(user=user, item_id=item.id, rating=3, assisted=True, confidence=2)
+    service(user=user, item_id=item.id, rating=1, assisted=False)
+
+    rows = db_conn.execute(
+        select(review_log.c.rating, review_log.c.confidence, review_log.c.assisted)
+        .where(review_log.c.quiz_item_id == item.id)
+        .order_by(review_log.c.rating.desc())
+    ).all()
+    assert [tuple(r) for r in rows] == [(3, 2, True), (1, None, False)]

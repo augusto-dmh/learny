@@ -30,7 +30,7 @@ Learny is a learning application that starts as robust book teaching and may exp
 - Use RFCs for open proposals and trade-off analysis.
 - Use `docs/research/YYYY-MM-DD/` for durable research outputs and evidence archives.
 - Do not create a separate persistent `STATE.md` just to duplicate ADR/RFC content.
-- Do not create `.specs/` upfront. Let `tlc-spec-driven` create its own structure when it is intentionally invoked for a feature cycle.
+- Do not create `.specs/` upfront. Let `tlc-spec-lean` create its own structure when it is intentionally invoked for a feature cycle.
 
 ## Established Direction
 
@@ -54,10 +54,18 @@ Learny is a learning application that starts as robust book teaching and may exp
 - AI/RAG orchestration should be Learny-owned. Specialized libraries such as Docling or Ragas may be used at edges when they solve concrete parsing or evaluation problems; broad frameworks such as LlamaIndex or LangGraph should not become the core architecture without a follow-up decision.
 - Stack-specific implementation guidance and project-local skills should come from official or first-party framework/provider sources where practical.
 
+## tlc-spec-lean
+
+Feature cycles run on the repo's vendored copy at `.claude/skills/tlc-spec-lean/` (provenance and project deviations in `.claude/skills/README.md`):
+
+- profile: `standard`
+- budget: 150k tokens of handoff arithmetic — over it, split at slice boundaries into sequential batch PRs, Verifier scoped per batch
+- mutations: 3 (the lean default)
+
 ## Workflow
 
 - Use project-local skills from `.claude/skills` where available.
-- Use `tlc-spec-driven` for feature planning or implementation cycles when work is large enough to need specs/tasks.
+- Use the vendored `tlc-spec-lean` for feature planning or implementation cycles (Plan → Checks → Build → Verify).
 - Use ADR/RFC/TDD skills for architecture and design artifacts.
 - Use `learny-finalize` for commit metadata, PR body generation, and publishing conventions.
 - Use `learny-ship-cycle` to run one roadmap cycle end-to-end (plan → build → PR → review → triage → fix → cleanup → gated merge).
@@ -75,7 +83,7 @@ Only read documents relevant to the current task. Do not load all project docume
 - Open proposals and trade-offs: read the relevant file under `docs/rfc/`.
 - Research recovery: avoid reading archived research by default. Read `docs/research/YYYY-MM-DD/` only when the user explicitly asks to recover prior research evidence.
 - New research output: write durable research results under `docs/research/YYYY-MM-DD/<topic>.md`; materialize actionable conclusions into ADRs, RFCs, or feature artifacts.
-- Feature planning or implementation: invoke `tlc-spec-driven` and let it load or create its own files as needed.
+- Feature planning or implementation: invoke the vendored `tlc-spec-lean` and let it load or create its own files as needed.
 
 ## Current Constraints
 
