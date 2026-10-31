@@ -242,3 +242,41 @@ def test_budget_trips_cards(
     assert resp.status_code == 429, resp.text
     assert resp.json()["code"] == "byok_budget"
     assert all(fake.calls == 0 for fake in fakes)  # nothing was generated
+
+
+def test_unopenable_key_reads_house_rails(
+    cards_client: TestClient,  # noqa: F811
+    db_conn: Connection,
+    fakes: list[_KeyedQuizFake],
+) -> None:
+    """A stored row that cannot be opened is no key: the house rails govern.
+
+    The coverage predicate answers from the resolved adapter, not row presence:
+    a row sealed under an unknown KEK reads as absent, so the learner's own
+    budget never governs a house-served suggestion and nothing is booked on
+    their month — the ledger their budget reads stays true.
+    """
+    from app.infrastructure.db.repositories import (
+        SqlAlchemyByokMonthRepository,
+        SqlAlchemyUserByokSettingsRepository,
+    )
+
+    learner = _highlight(cards_client, db_conn, "cards-orphan@example.com")
+    # A row under a KEK nobody configured: metadata present, key unopenable.
+    SqlAlchemyProviderCredentialRepository(db_conn, SecretsEnvelope(os.urandom(32))).replace(
+        UUID(learner["user_id"]), "anthropic", _KEY
+    )
+    # A budget that would trip any user-keyed call instantly.
+    SqlAlchemyUserByokSettingsRepository(db_conn).set_budget(UUID(learner["user_id"]), 1)
+
+    resp = _post_suggestions(
+        cards_client, learner["source_id"], learner["anchor_id"], csrf=learner["csrf"]
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["suggestions"], "the house's deterministic adapter served"
+    assert fakes == []  # the learner's key never built an adapter
+    assert (
+        SqlAlchemyByokMonthRepository(db_conn).get_for_month(UUID(learner["user_id"]), _PERIOD)
+        is None
+    )  # nothing was booked on the learner's month

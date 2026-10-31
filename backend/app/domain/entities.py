@@ -1179,6 +1179,10 @@ class QuizGenerationJob:
     ``discarded_count``/``failed_sections`` are the terminal-success counts (QUIZ-09);
     ``discard_reasons`` is the reason-code → count map whose values sum to
     ``discarded_count`` (REV-01); ``last_error`` is the terminal-failure reason.
+    ``credential_id`` is the submit-time payer decision (ADR-0033): the learner
+    credential row a learner-keyed deck is exempted on, pinned once at submit —
+    the worker serves the pass with exactly that row or fails the job, and a
+    ``None`` marks a house deck under the house rails.
     """
 
     id: UUID
@@ -1192,6 +1196,7 @@ class QuizGenerationJob:
     created_at: datetime
     updated_at: datetime
     discard_reasons: dict[str, int] = field(default_factory=dict)
+    credential_id: UUID | None = None
 
     def started(self, now: datetime) -> QuizGenerationJob:
         """Begin an attempt: → ``running`` and increment ``attempts``."""

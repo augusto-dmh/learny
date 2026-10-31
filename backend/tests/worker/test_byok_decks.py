@@ -447,3 +447,82 @@ def test_task_payloads_carry_ids_only(
     assert set(poll_args[1]) == {"provider", "batch_id", "payload", "credential_id"}
     assert poll_args[1]["credential_id"] == str(credential_id)
     datetime.fromisoformat(poll_args[2])  # the deadline, and nothing else
+
+
+# --- C33: a deck exempted at submit never falls back to the house -----------------
+
+
+def _pin_job(db_engine: Engine, job_id: UUID, credential_id: UUID) -> None:
+    """Stamp the job row's submit-time payer pin (what ``PlanDeckGeneration`` writes)."""
+    from sqlalchemy import update as sa_update
+
+    from app.infrastructure.db.metadata import quiz_generation_jobs
+
+    with db_engine.begin() as conn:
+        conn.execute(
+            sa_update(quiz_generation_jobs)
+            .where(quiz_generation_jobs.c.id == job_id)
+            .values(credential_id=credential_id)
+        )
+
+
+@pytest.mark.parametrize("change", ["deleted", "replaced"])
+def test_begin_fails_when_the_exempting_key_is_gone(
+    change: str, byok: None, seed, db_engine: Engine, fakes: list[_KeyedQuizFake]
+) -> None:  # noqa: ANN001
+    """A deck exempted at submit on the owner's key fails honest when that key is gone.
+
+    The pinned job runs on exactly the pinned credential row or fails terminally
+    like the poll — the house key never serves a cap-exempted deck, whatever
+    happens to the key in the submit→run window.
+    """
+    ctx = seed()
+    credential_id = _store(db_engine, ctx.user.id, _KEY)
+    _pin_job(db_engine, ctx.job.id, credential_id)
+    if change == "deleted":
+        _delete(db_engine, ctx.user.id)
+    else:
+        _store(db_engine, ctx.user.id, _NEW_KEY)  # a new row id: the pin no longer matches
+    # The house adapter records its own serving calls: ``build_quiz_adapter`` is
+    # also invoked to wire ``RunDeckGeneration`` itself, so the factory's request
+    # log alone proves nothing — what must never happen is a house begin/collect.
+    house_calls: list[str] = []
+    house = _RecordingFactory(
+        SimpleNamespace(
+            model="house-quiz",
+            begin_deck=lambda sections: (
+                house_calls.append("begin"),
+                QuizDeckHandle(provider="local"),
+            )[1],
+            collect_deck=lambda handle: (house_calls.append("collect"), None)[1],
+        )
+    )
+    bound = FakeSelf()
+
+    with (
+        patch("app.worker.tasks.build_quiz_adapter", house),
+        patch("app.worker.tasks.poll_quiz_deck.apply_async") as apply_async,
+    ):
+        _generate(bound, str(ctx.source.id), str(ctx.job.id))
+
+    job = _job(db_engine, ctx.job.id)
+    assert job.status == QuizJobStatus.FAILED
+    assert job.last_error == _DECK_KEY_GONE
+    assert fakes == []  # no learner adapter built, so nothing ran on any key
+    assert house_calls == []  # the house adapter never began or collected the deck
+    apply_async.assert_not_called()
+    assert bound.retry_calls == []
+
+
+def test_begin_serves_the_pinned_key(
+    byok: None, seed, db_engine: Engine, fakes: list[_KeyedQuizFake]
+) -> None:  # noqa: ANN001
+    """The pinned job's begin runs on exactly the pinned row; the handle carries it."""
+    ctx = seed()
+    credential_id = _store(db_engine, ctx.user.id, _KEY)
+    _pin_job(db_engine, ctx.job.id, credential_id)
+
+    payload = _begin(ctx)
+
+    assert [fake.api_key for fake in fakes] == [_KEY]
+    assert payload["credential_id"] == str(credential_id)

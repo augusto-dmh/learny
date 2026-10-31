@@ -711,6 +711,11 @@ quiz_generation_jobs = Table(
     # conditional UPDATE in the same transaction that debits the pass's usage
     # and finalizes, so a redelivery observes the stamp and skips the debit.
     Column("spend_recorded_at", DateTime(timezone=True), nullable=True),
+    # The submit-time payer decision (ADR-0033): the learner credential row a
+    # learner-keyed deck is exempted on, pinned once at submit. Deliberately no
+    # FK — a pinned id whose row is deleted or replaced must read as gone (the
+    # worker fails the job honestly), never cascade to a house fallback.
+    Column("credential_id", UUID(as_uuid=True), nullable=True),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
 )

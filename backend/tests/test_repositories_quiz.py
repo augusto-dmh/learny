@@ -830,7 +830,9 @@ def test_section_for_anchor_is_scoped_to_its_own_source(db_conn: Connection) -> 
 # --- deck generation jobs (QUIZ-04/09) ------------------------------------------
 
 
-def _job(source_id: UUID, *, status: str = QuizJobStatus.QUEUED) -> QuizGenerationJob:
+def _job(
+    source_id: UUID, *, status: str = QuizJobStatus.QUEUED, credential_id: UUID | None = None
+) -> QuizGenerationJob:
     now = datetime.now(UTC)
     return QuizGenerationJob(
         id=uuid4(),
@@ -843,13 +845,15 @@ def _job(source_id: UUID, *, status: str = QuizJobStatus.QUEUED) -> QuizGenerati
         last_error=None,
         created_at=now,
         updated_at=now,
+        credential_id=credential_id,
     )
 
 
 def test_job_add_and_get_roundtrip(db_conn: Connection) -> None:
     source = _persisted_source(db_conn, "quiz-job-add@example.com")
     jobs = SqlAlchemyQuizJobRepository(db_conn)
-    job = _job(source.id)
+    credential_id = uuid4()
+    job = _job(source.id, credential_id=credential_id)
 
     jobs.add(job)
 
@@ -857,7 +861,21 @@ def test_job_add_and_get_roundtrip(db_conn: Connection) -> None:
     assert stored is not None
     assert stored.status == QuizJobStatus.QUEUED
     assert stored.generated_count == 0
+    assert stored.credential_id == credential_id  # the payer pin survives the row
     assert jobs.get_by_id(uuid4()) is None
+
+
+def test_job_defaults_to_a_house_deck(db_conn: Connection) -> None:
+    """A job planned without a credential pin reads as the house deck it is."""
+    source = _persisted_source(db_conn, "quiz-job-house@example.com")
+    jobs = SqlAlchemyQuizJobRepository(db_conn)
+    job = _job(source.id)
+    jobs.add(job)
+
+    stored = jobs.get_by_id(job.id)
+
+    assert stored is not None
+    assert stored.credential_id is None
 
 
 def test_get_active_for_source_returns_queued_or_running(db_conn: Connection) -> None:

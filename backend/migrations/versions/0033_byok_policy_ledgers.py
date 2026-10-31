@@ -19,6 +19,9 @@ whose key it ran.
   learner's own key served the turn. ``NULL`` tokens read as "the adapter
   reported nothing", which is true of every existing row; nothing is
   backfilled.
+- ``quiz_generation_jobs`` gains a nullable ``credential_id``: the learner
+  credential row a learner-keyed deck is exempted on, pinned at submit so the
+  worker serves the pass with exactly that row or fails the job (ADR-0033).
 
 ``user_id`` and ``source_id`` reference their tables ON DELETE CASCADE, so a
 deleted account (or book) leaves no orphan rows. Downgrade drops the tables
@@ -88,9 +91,18 @@ def upgrade() -> None:
         "conversation_turns",
         sa.Column("user_keyed", sa.Boolean(), nullable=False, server_default=sa.text("false")),
     )
+    # The deck payer's submit-time pin (ADR-0033): a learner-keyed deck stores
+    # the credential row it is exempted on, and the worker serves the pass with
+    # exactly that row or fails the job. No FK on purpose — a pinned id whose
+    # row is deleted or replaced must read as gone (fail honest), never cascade.
+    op.add_column(
+        "quiz_generation_jobs",
+        sa.Column("credential_id", postgresql.UUID(as_uuid=True), nullable=True),
+    )
 
 
 def downgrade() -> None:
+    op.drop_column("quiz_generation_jobs", "credential_id")
     op.drop_column("conversation_turns", "user_keyed")
     op.drop_column("conversation_turns", "cost_usd_micros")
     op.drop_column("conversation_turns", "usage_output_tokens")

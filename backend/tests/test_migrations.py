@@ -4219,6 +4219,12 @@ def test_migration_0032_creates_byok_policy_ledgers(monkeypatch) -> None:
         assert turn_columns["usage_output_tokens"]["nullable"] is True
         assert turn_columns["cost_usd_micros"]["nullable"] is True
         assert turn_columns["user_keyed"]["nullable"] is False
+        # The deck payer's submit-time pin: a nullable column on the jobs table,
+        # deliberately FK-less (a pinned id whose row is gone must fail honest).
+        job_columns = {c["name"]: c for c in inspector.get_columns("quiz_generation_jobs")}
+        assert job_columns["credential_id"]["nullable"] is True
+        job_fks = inspector.get_foreign_keys("quiz_generation_jobs")
+        assert not any("credential_id" in fk["constrained_columns"] for fk in job_fks)
     finally:
         engine.dispose()
 
@@ -4230,5 +4236,8 @@ def test_migration_0032_creates_byok_policy_ledgers(monkeypatch) -> None:
         turn_columns = {c["name"] for c in inspect(engine).get_columns("conversation_turns")}
         dropped = {"usage_input_tokens", "usage_output_tokens", "cost_usd_micros", "user_keyed"}
         assert not dropped & turn_columns
+        assert "credential_id" not in {
+            c["name"] for c in inspect(engine).get_columns("quiz_generation_jobs")
+        }
     finally:
         engine.dispose()

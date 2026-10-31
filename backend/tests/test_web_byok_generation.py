@@ -526,6 +526,36 @@ def test_unknown_kek_serves_house_chain(
     assert _by_key(fakes, _KEY_A) == []  # never even decrypted into an adapter
 
 
+def test_unopenable_row_reads_absent_for_cards_and_decks(
+    auth_client: TestClient,
+    db_conn: Connection,
+    monkeypatch: pytest.MonkeyPatch,
+    fakes: list[_KeyedFake],
+) -> None:
+    """A row that exists but cannot be opened reads as absent for the quiz paths too.
+
+    The coverage predicate answers from the resolved adapter — the very one
+    ``get_card_generation_for_user`` serves a card call with — never from row
+    presence, so a stored row whose key cannot serve reads as absent and the
+    house rails govern the call in full.
+    """
+    from app.infrastructure.web import dependencies
+
+    _declare(monkeypatch, [_HOUSE, _BYOK])
+    client = auth_client
+    user_id, _csrf, _conversation = _learner(client, db_conn, "byok-orphan-quiz@example.com")
+    _store_key(db_conn, user_id, _KEY_A, kek=os.urandom(32))  # a KEK nobody configured
+
+    credentials = dependencies.get_learner_credentials(db_conn, _domain_user(user_id))
+
+    assert dependencies.learner_holds_quiz_key(credentials) is False
+    assert dependencies.learner_quiz_credential_id(credentials) is None
+    assert (
+        dependencies.get_card_generation_for_user(credentials) is dependencies.get_card_generation()
+    )
+    assert _by_key(fakes, _KEY_A) == []  # never even decrypted into an adapter
+
+
 # --- Off by default: no KEK means stored rows are never read -------------------------
 
 

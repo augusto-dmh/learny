@@ -1423,6 +1423,41 @@ def test_deck_at_usd_cap_owner_key(
     assert "code" not in keyless.json()
 
 
+def test_deck_unopenable_key_reads_house_rails(
+    quiz_client: TestClient, db_conn: Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stored row that cannot be opened is no key: the house USD cap governs.
+
+    The submit's payer verdict comes from the resolved adapter, not row
+    presence — a row sealed under an unknown KEK reads as absent, so the deck
+    is refused at the cap exactly like a keyless learner's (and pins nothing).
+    """
+    from sqlalchemy import select
+
+    from app.infrastructure.db.metadata import users as users_table
+    from app.infrastructure.db.provider_credentials import (
+        SqlAlchemyProviderCredentialRepository,
+    )
+    from app.infrastructure.security.secrets_envelope import SecretsEnvelope
+
+    _declare_byok(monkeypatch)
+    owner_email = "deck-cap-orphan@example.com"
+    source_id, csrf = _seed_ready_source(quiz_client, db_conn, owner_email)
+    user_id = db_conn.execute(
+        select(users_table.c.id).where(users_table.c.email == owner_email)
+    ).scalar_one()
+    SqlAlchemyProviderCredentialRepository(db_conn, SecretsEnvelope(os.urandom(32))).replace(
+        user_id, "anthropic", _OWNER_KEY
+    )
+    _day_at_cap(db_conn, owner_email)
+
+    resp = _post_deck(quiz_client, source_id, csrf=csrf)
+
+    assert resp.status_code == 429, resp.text
+    assert "code" not in resp.json()
+    assert quiz_client.app.state.quiz_enqueuer.calls == []  # nothing created
+
+
 def test_deck_at_corpus_ceiling(
     quiz_client: TestClient, db_conn: Connection, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1473,4 +1508,4 @@ def test_deck_at_monthly_budget(
 
     assert resp.status_code == 429, resp.text
     assert resp.json()["code"] == "byok_budget"
-    assert quiz_client.app.state.quiz_enqueuer.calls == []
+    assert quiz_client.app.state.quiz_enqueuer.calls == []
