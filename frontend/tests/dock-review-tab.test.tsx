@@ -351,7 +351,7 @@ describe("the dock's Review tab", () => {
 
     // All three levels at zero: the empty-state copy, no level lines.
     expect((await screen.findByTestId("calibration-empty")).textContent).toBe(
-      "No confident grades here yet. Tap how sure you are before revealing an answer, and this shows how often feeling sure meant recalling.",
+      "No confident grades here yet. Tap how sure you are before revealing an answer or when checking yourself on a section, and this shows how often feeling sure meant recalling.",
     );
     expect(screen.queryByTestId("calibration-lines")).toBeNull();
   });

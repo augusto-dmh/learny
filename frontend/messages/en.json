@@ -259,7 +259,7 @@
       "dueCaption": "{count, plural, one {card due from this book} other {cards due from this book}}",
       "calibrationHeading": "Calibration",
       "calibrationLine": "When you felt {level}, you recalled {recalled} of {attempts}",
-      "calibrationEmpty": "No confident grades here yet. Tap how sure you are before revealing an answer, and this shows how often feeling sure meant recalling."
+      "calibrationEmpty": "No confident grades here yet. Tap how sure you are before revealing an answer or when checking yourself on a section, and this shows how often feeling sure meant recalling."
     },
     "ask": {
       "intro": "Answer is for questions about the book. Tutor walks you through a section.",
