@@ -203,11 +203,18 @@ class Settings(BaseSettings):
     # migration's ``vector(1536)`` column literal must match it (A-1).
     # ``embedding_provider`` selects the adapter at the composition root (``local``
     # default → deterministic, network-free; ``openai`` → the OpenAI adapter built
-    # from the key/model/dim below). ``embedding_model`` names the *provider* model —
-    # the deterministic adapter ignores it and reports its own identity, so the
-    # default is unaffected.
+    # from the key/model/dim below; ``openai-compatible`` → the same adapter pointed
+    # at a self-hosted OpenAI-compatible runtime — Ollama/LM Studio — via
+    # ``embedding_base_url``; self-host only, never on a hosted instance, because a
+    # shared corpus's vectors must keep one identity, and the retrieval gate plus the
+    # re-embed procedure are the guard, ADR-0019 amendment). ``embedding_model``
+    # names the *provider* model — the deterministic adapter ignores it and reports
+    # its own identity, so the default is unaffected. The compat kind never sends the
+    # OpenAI-only ``dimensions`` request parameter: the runtime's native dimension is
+    # validated against ``embedding_dim`` on every response instead.
     embedding_dim: int = 1536
     embedding_provider: str = "local"
+    embedding_base_url: str = ""
     openai_api_key: str = ""
     embedding_model: str = "text-embedding-3-large"
     embedding_batch_size: int = 128

@@ -77,6 +77,41 @@ NAMING_CONVENTION = {
     "pk": "pk_%(table_name)s",
 }
 
+
+class SettingsDimVector(VECTOR):
+    """A ``vector`` column whose write width is the configured embedding dimension.
+
+    The declared DDL width is the migrations' ``vector(1536)`` (0005, 0008 and
+    0013) — stated right on the type so the metadata matches the shipped schema;
+    an unparameterized type would render bare ``VECTOR`` and a ``compare_type``
+    autogenerate would see a drift it would emit as a typmod-dropping ALTER. This
+    type governs only the client-side write contract: every vector bind is
+    validated against ``LEARNY_EMBEDDING_DIM`` (the single source of truth for
+    the vector width, per the config), so an operator who ran the resize
+    procedure and restarted with the new dimension can actually write the new
+    width (ADR-0019 amendment), while a wrong-width write is still refused before
+    it reaches the database — a corpus never comes to hold two vector widths.
+    """
+
+    # The type's only per-instance state is the constant DDL width below; the
+    # configured dim is read at bind time from the cached settings, so statement
+    # caching is safe.
+    cache_ok = True
+
+    def __init__(self) -> None:
+        super().__init__(1536)
+
+    def bind_processor(self, dialect):  # noqa: ANN201 — matches the parent's shape
+        from app.core.config import get_settings
+
+        def process(value):  # noqa: ANN001, ANN202
+            from pgvector.utils import Vector
+
+            return Vector._to_db(value, get_settings().embedding_dim)
+
+        return process
+
+
 metadata = MetaData(naming_convention=NAMING_CONVENTION)
 
 users = Table(
@@ -314,7 +349,7 @@ corpus_chunks = Table(
     # Async-populated semantic vector for the retrieval semantic arm (RET-01); the
     # deterministic local adapter emits 1536-dim vectors. NULL until (re-)ingestion
     # embeds the chunk. The matching HNSW index is created in 0005 via raw SQL.
-    Column("embedding", VECTOR(1536), nullable=True),
+    Column("embedding", SettingsDimVector(), nullable=True),
     # Provider@dims identity written alongside each vector (EMB-14); NULL until the
     # chunk is embedded. Enables idempotent re-embedding when the model changes.
     Column("embedding_model", Text, nullable=True),
@@ -531,7 +566,7 @@ quiz_items = Table(
     Column("content_key", Text, nullable=False),
     Column("status", Text, nullable=False, server_default="active"),  # active|stale|orphaned
     # Near-duplicate detection identity; NULL until embedded (vector ext from 0005).
-    Column("embedding", VECTOR(1536), nullable=True),
+    Column("embedding", SettingsDimVector(), nullable=True),
     Column("generation_meta", JSONB, nullable=False, server_default="{}"),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
@@ -700,7 +735,7 @@ notes = Table(
     # recall during embedding lag (NL-06). The HNSW index is created in 0013 via raw
     # SQL. ``embedding_model`` records the ``<model>@<dims>`` identity that produced it
     # (idempotent re-embedding when the model changes), NULL until embedded.
-    Column("embedding", VECTOR(1536), nullable=True),
+    Column("embedding", SettingsDimVector(), nullable=True),
     Column("embedding_model", Text, nullable=True),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),

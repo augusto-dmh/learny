@@ -198,6 +198,9 @@ class _StubEmbeddings:
     on the retrieval path.
     """
 
+    #: The identity ``RetrieveEvidence`` forwards to the port beside the vector.
+    model = "stub-embedder@8"
+
     def __init__(self) -> None:
         self.queries: list[str] = []
 
@@ -334,6 +337,7 @@ def test_retrieve_evidence_forwards_vector_and_settings_and_returns_results() ->
         "source_id": source.id,
         "query_text": query,
         "query_vec": [float(len(query)), 42.0],
+        "embedding_model": "stub-embedder@8",
         "top_k": 3,
         "semantic_limit": _SEMANTIC_LIMIT,
         "lexical_limit": _LEXICAL_LIMIT,
@@ -615,6 +619,7 @@ def _port_search(
         source_id=source_id,
         query_text="photosynthesis",
         query_vec=[1.0],
+        embedding_model="stub-embedder@8",
         top_k=5,
         semantic_limit=7,
         lexical_limit=9,

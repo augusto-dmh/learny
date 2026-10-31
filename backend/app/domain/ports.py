@@ -710,6 +710,7 @@ class RetrievalPort(Protocol):
         source_id: UUID,
         query_text: str,
         query_vec: list[float],
+        embedding_model: str,
         top_k: int,
         semantic_limit: int,
         lexical_limit: int,
@@ -721,6 +722,13 @@ class RetrievalPort(Protocol):
         not_past_anchor: str | None = None,
     ) -> list[Evidence]:
         """Return up to ``top_k`` fused ``Evidence`` for ``source_id``, RRF-ordered.
+
+        ``embedding_model`` is the active adapter's stable identity (the caller
+        reads it off the same ``EmbeddingPort`` that embedded ``query_vec``). The
+        semantic arms serve only chunks/notes stamped with that identity, so a
+        corpus whose vectors were produced by another model or dimension degrades
+        to lexical-only answers until re-embedded — a query never fuses vectors
+        from two vector spaces (ADR-0019 and its amendment).
 
         When ``anchors`` is given, both book arms are restricted to chunks whose section
         ``anchor`` is in the set — the target-subtree scope for teaching (TEACH-09,

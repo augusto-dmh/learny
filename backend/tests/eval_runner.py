@@ -199,11 +199,13 @@ def retrieve(
     reproducible; per-arm limits / RRF k / HNSW ef come from ``LEARNY_`` settings.
     """
     settings = get_settings()
-    query_vec = build_embedding_adapter(settings).embed_query(query)
+    adapter = build_embedding_adapter(settings)
+    query_vec = adapter.embed_query(query)
     return SqlAlchemyRetrievalRepository(db_conn).search(
         source_id=source_id,
         query_text=query,
         query_vec=query_vec,
+        embedding_model=adapter.model,
         top_k=top_k if top_k is not None else settings.retrieval_top_k,
         semantic_limit=settings.retrieval_semantic_limit,
         lexical_limit=settings.retrieval_lexical_limit,
