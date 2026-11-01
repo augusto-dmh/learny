@@ -1,102 +1,81 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { getTranslations } from "next-intl/server";
+
+import { LegalParagraphs, LegalSection } from "@/app/components/legal";
 
 /**
- * Public Terms of Service (DOOR-27).
+ * Public Terms of Service (DOOR-27), in the negotiated locale.
  *
- * A signed-out server page with short, honest copy committed here rather than
- * generated per request: a policy that shifts under the reader is worse than a
- * short one. Styling follows the public landing page (Iron Gall tokens, no
- * client JavaScript).
+ * A signed-out server page with short, honest copy committed to the catalogs
+ * rather than generated per request: a policy that shifts under the reader is
+ * worse than a short one. The 18-or-older requirement is stated here — the
+ * register form attests it, and the backend enforces the attestation.
  */
-export const metadata: Metadata = { title: "Terms of Service" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations("legal.terms");
+  return { title: t("title") };
+}
 
-export default function TermsPage() {
+export default async function TermsPage() {
+  const t = await getTranslations("legal.terms");
   return (
-    <main lang="en" className="mx-auto max-w-2xl px-6 py-12 text-foreground">
+    <main className="mx-auto max-w-2xl px-6 py-12 text-foreground">
       <h1 className="text-3xl font-semibold tracking-tight text-primary">
-        Terms of Service
+        {t("title")}
       </h1>
-      <p className="mt-2 text-sm text-muted-foreground">
-        These terms govern your use of Learny. By creating an account you agree
-        to them.
-      </p>
+      <p className="mt-2 text-sm text-muted-foreground">{t("subtitle")}</p>
 
       <div className="prose-reading mt-8 space-y-6 text-base leading-relaxed">
-        <section>
-          <h2 className="text-lg font-semibold">Your account</h2>
-          <p>
-            You need an account to store books and study. Keep your credentials
-            private; you are responsible for activity under your account. Some
-            instances are invite-only: an invitation is a revocable permission,
-            not an entitlement.
-          </p>
-        </section>
+        <LegalSection title={t("accountTitle")}>
+          <LegalParagraphs body={t("accountBody")} />
+        </LegalSection>
 
-        <section>
-          <h2 className="text-lg font-semibold">Uploads and copyright</h2>
+        <LegalSection title={t("uploadsTitle")}>
           <p>
-            You may upload books you have the right to use privately. You keep
-            your rights; Learny does not grant you any additional copyright. You
-            warrant that your uploads do not infringe others&apos; rights.
-            Learny will not publish, sell, or share your files, and will disable
-            access to material identified in a valid copyright notice (see{" "}
-            <Link href="/copyright" className="text-primary underline-offset-4 hover:underline">
-              Copyright / DMCA
-            </Link>
-            ). Accounts that repeatedly infringe may be terminated.
+            {t.rich("uploadsBody", {
+              link: (chunks) => (
+                <Link
+                  href="/copyright"
+                  className="text-primary underline-offset-4 hover:underline"
+                >
+                  {chunks}
+                </Link>
+              ),
+            })}
           </p>
-        </section>
+        </LegalSection>
 
-        <section>
-          <h2 className="text-lg font-semibold">Acceptable use</h2>
-          <p>
-            Do not abuse the service: no attacking other users or the
-            infrastructure, no scraping, no reselling access, and no presenting
-            generated output as the book itself. Rate and storage limits apply.
-          </p>
-        </section>
+        <LegalSection title={t("useTitle")}>
+          <LegalParagraphs body={t("useBody")} />
+        </LegalSection>
 
-        <section>
-          <h2 className="text-lg font-semibold">AI answers</h2>
-          <p>
-            Answers are generated and can be wrong, incomplete, or misleading —
-            even when they cite a passage. Check the citation before relying on
-            an answer. Learny provides study tooling, not professional advice.
-          </p>
-        </section>
+        <LegalSection title={t("aiTitle")}>
+          <LegalParagraphs body={t("aiBody")} />
+        </LegalSection>
 
-        <section>
-          <h2 className="text-lg font-semibold">Termination and deletion</h2>
-          <p>
-            You can delete your account at any time; deleting removes your
-            stored files and account data. We may suspend or terminate accounts
-            that violate these terms, including for repeated copyright
-            infringement.
-          </p>
-        </section>
+        <LegalSection title={t("terminationTitle")}>
+          <LegalParagraphs body={t("terminationBody")} />
+        </LegalSection>
 
-        <section>
-          <h2 className="text-lg font-semibold">Disclaimers and liability</h2>
-          <p>
-            The service is provided &ldquo;as is&rdquo; without warranties of
-            any kind. To the extent permitted by law, Learny is not liable for
-            indirect or consequential damages arising from your use of the
-            service.
-          </p>
-        </section>
+        <LegalSection title={t("disclaimersTitle")}>
+          <LegalParagraphs body={t("disclaimersBody")} />
+        </LegalSection>
 
-        <section>
-          <h2 className="text-lg font-semibold">Governing law</h2>
+        <LegalSection title={t("lawTitle")}>
           <p>
-            These terms are governed by the laws of the Federative Republic of
-            Brazil. See our{" "}
-            <Link href="/privacy" className="text-primary underline-offset-4 hover:underline">
-              Privacy Policy
-            </Link>{" "}
-            for how your data is handled.
+            {t.rich("lawBody", {
+              link: (chunks) => (
+                <Link
+                  href="/privacy"
+                  className="text-primary underline-offset-4 hover:underline"
+                >
+                  {chunks}
+                </Link>
+              ),
+            })}
           </p>
-        </section>
+        </LegalSection>
       </div>
     </main>
   );

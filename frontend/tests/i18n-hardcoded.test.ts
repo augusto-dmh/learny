@@ -14,8 +14,8 @@
  * Two lists keep it honest:
  *
  * - `ALLOWED_TEXT` / `EXEMPT_PATHS` — copy that is not interface language: the
- *   brand, keyboard key names, the operator-only eval page, and the legal pages
- *   (English with `lang="en"` until the legal pass).
+ *   brand, keyboard key names, and the operator-only eval page. (The legal
+ *   pages lost their exemption when they moved to the catalogs.)
  * - `PENDING_MIGRATION` — the ratchet: files whose surface has not migrated to
  *   the catalogs yet. A listed file that is already clean fails, so the list can
  *   only shrink; it is empty once every surface speaks through the catalogs.
@@ -63,10 +63,6 @@ const ALLOWED_TEXT = new Set([
 
 /** Path prefixes (relative to `frontend/`, `/`-separated) outside the sensor. */
 const EXEMPT_PATHS = [
-  // Legal pages stay English (with lang="en") until the LGPD legal pass.
-  "app/terms/",
-  "app/privacy/",
-  "app/copyright/",
   // The operator-only eval dashboard is not a learner surface.
   "app/(app)/dev/evals/",
   "app/components/eval-dashboard.tsx",
