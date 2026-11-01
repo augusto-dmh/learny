@@ -25,6 +25,8 @@ from app.application.errors import (
     ActiveIngestionExists,
     AiPaused,
     AnswerGenerationFailed,
+    ByokBudgetExhausted,
+    ByokCorpusLimitExhausted,
     CardAlreadyExists,
     CardNotEditable,
     CheckpointAttemptConflict,
@@ -182,9 +184,25 @@ async def _answer_generation_failed_handler(
     )
 
 
+async def _byok_policy_handler(
+    _request: Request, exc: ByokBudgetExhausted | ByokCorpusLimitExhausted
+) -> JSONResponse:  # noqa: E501
+    # The learner-side refusals: 429 like the daily-budget one, and deliberately no
+    # ``Retry-After`` — the un-pause is the learner raising or clearing their budget
+    # in Account, or the month boundary for the per-book ceiling, not a seconds
+    # hint. The machine ``code`` rides beside the copy because the frontend renders
+    # catalog copy keyed on it and never the backend English ``detail``.
+    return JSONResponse(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        content={"detail": str(exc), "code": exc.code},
+    )
+
+
 def register_error_handlers(app: FastAPI) -> None:
     """Attach the identity + source-storage exception handlers to the FastAPI app."""
     for error_type, status_code in _STATUS_BY_ERROR.items():
         app.add_exception_handler(error_type, _make_handler(status_code))
     app.add_exception_handler(InvalidSourceUpload, _invalid_source_upload_handler)
     app.add_exception_handler(AnswerGenerationFailed, _answer_generation_failed_handler)
+    app.add_exception_handler(ByokBudgetExhausted, _byok_policy_handler)
+    app.add_exception_handler(ByokCorpusLimitExhausted, _byok_policy_handler)

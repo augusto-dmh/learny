@@ -249,3 +249,31 @@ def test_resolution_of_an_unknown_stamp_returns_primary_with_a_warning(
 
 def test_resolution_of_an_empty_registry_returns_none() -> None:
     assert resolve_serving_profile((), None) is None
+
+
+# --- The learner-facing estimate is the same catalog, zeroing removed ---------------
+
+
+def test_estimate_matches_house_rule() -> None:
+    """``estimate_micros`` resolves the serving profile's catalog exactly as the
+    house debit does, and never returns 0 for reported usage whatever the payer.
+
+    One catalog resolution, two views of it: a house call's ``usage_micros`` and
+    the learner's ``estimate_micros`` differ by the payer zeroing alone, so the
+    learner's displayed cost is the operator's own number.
+    """
+    budget = _budget(
+        profile_catalogs={"economy": _ECONOMY_PRICES},
+        profiles=(_profile("primary", "claude-sonnet-5"), _profile("economy", "claude-haiku-4-5")),
+    )
+
+    for stamp in ("primary", "economy", None):
+        assert budget.estimate_micros(_USAGE, profile_id=stamp) == budget.usage_micros(
+            _USAGE, profile_id=stamp, user_keyed=False
+        )
+    # The learner-keyed view of the same calls is the estimate, never the zeroed debit.
+    assert budget.estimate_micros(_USAGE, profile_id="primary") == 6400
+    assert budget.usage_micros(_USAGE, profile_id="primary", user_keyed=True) == 0
+    assert budget.estimate_micros(_USAGE, profile_id="primary") != 0
+    # Absent usage is 0 for both views.
+    assert budget.estimate_micros(None, profile_id="primary") == 0

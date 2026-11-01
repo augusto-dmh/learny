@@ -663,3 +663,49 @@ def test_secrets_kek_variables_are_documented_in_both_env_examples() -> None:
     # The hosted guard is an operator rule, so the production example states it.
     production = _ENV_PRODUCTION_EXAMPLE.read_text()
     assert "byok-hosted-policy" in production
+
+
+# --- Hosted-instance policy (learner keys on a hosted deployment) ------------------
+
+
+def test_hosted_policy_settings_defaults(monkeypatch) -> None:
+    monkeypatch.delenv("LEARNY_HOSTED_INSTANCE", raising=False)
+    monkeypatch.delenv("LEARNY_HOSTED_BYOK_ENABLED", raising=False)
+    monkeypatch.delenv("LEARNY_BYOK_CORPUS_PROMPT_TOKEN_CAP", raising=False)
+    settings = Settings(_env_file=None)
+
+    assert settings.hosted_instance is False
+    assert settings.hosted_byok_enabled is False
+    assert settings.byok_corpus_prompt_token_cap == 4_000_000
+
+
+def test_hosted_policy_settings_env_overrides(monkeypatch) -> None:
+    monkeypatch.setenv("LEARNY_HOSTED_INSTANCE", "true")
+    monkeypatch.setenv("LEARNY_HOSTED_BYOK_ENABLED", "true")
+    monkeypatch.setenv("LEARNY_BYOK_CORPUS_PROMPT_TOKEN_CAP", "500000")
+    settings = Settings(_env_file=None)
+
+    assert settings.hosted_instance is True
+    assert settings.hosted_byok_enabled is True
+    assert settings.byok_corpus_prompt_token_cap == 500_000
+
+
+def test_hosted_byok_optin_without_the_declaration_is_ignored(monkeypatch) -> None:
+    # The opt-in alone must never unlock anything: a self-host's availability
+    # stays KEK + bound profile, whatever the second flag says.
+    monkeypatch.delenv("LEARNY_HOSTED_INSTANCE", raising=False)
+    monkeypatch.setenv("LEARNY_HOSTED_BYOK_ENABLED", "true")
+    settings = Settings(_env_file=None)
+
+    assert settings.hosted_instance is False
+    assert settings.hosted_byok_enabled is True
+
+
+def test_corpus_prompt_cap_zero_disables_and_negative_fails_startup(monkeypatch) -> None:
+    monkeypatch.setenv("LEARNY_BYOK_CORPUS_PROMPT_TOKEN_CAP", "0")
+    assert Settings(_env_file=None).byok_corpus_prompt_token_cap == 0
+
+    monkeypatch.setenv("LEARNY_BYOK_CORPUS_PROMPT_TOKEN_CAP", "-1")
+    with pytest.raises(ValidationError) as excinfo:
+        Settings(_env_file=None)
+    assert "byok_corpus_prompt_token_cap" in str(excinfo.value)

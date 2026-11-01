@@ -33,6 +33,7 @@ from app.application.budget import (
     TokenPrices,
     usd_to_micros,
 )
+from app.application.byok import ByokPolicy
 from app.application.cards import (
     AcceptCard,
     AcceptNoteCard,
@@ -122,6 +123,7 @@ from app.infrastructure.answering import (
     build_learner_keyed_chain,
     build_user_generation_chain,
     build_user_keyed_adapter,
+    covers_mode,
     order_learner_profiles,
 )
 from app.infrastructure.answering.routing import ChainEntry
@@ -133,6 +135,8 @@ from app.infrastructure.db.repositories import (
     SqlAlchemyActivationEventRepository,
     SqlAlchemyAiPreferenceRepository,
     SqlAlchemyAiSpendDayRepository,
+    SqlAlchemyByokCorpusRepository,
+    SqlAlchemyByokMonthRepository,
     SqlAlchemyCheckpointRepository,
     SqlAlchemyConversationRepository,
     SqlAlchemyConversationTurnRepository,
@@ -150,6 +154,7 @@ from app.infrastructure.db.repositories import (
     SqlAlchemySessionRepository,
     SqlAlchemySourceRepository,
     SqlAlchemyStudyDayRepository,
+    SqlAlchemyUserByokSettingsRepository,
     SqlAlchemyUserRepository,
 )
 from app.infrastructure.db.retrieval import SqlAlchemyRetrievalRepository
@@ -268,6 +273,65 @@ def build_budget(conn: Connection) -> DailyBudget:
         profile_catalogs=_profile_catalogs(),
         resolve_serving_profile=_serving_profile_resolver(),
     )
+
+
+def build_byok_policy(conn: Connection, budget: DailyBudget) -> ByokPolicy:
+    """Wire the learner-side BYOK policy on ``conn`` (the caller's transaction).
+
+    The estimate is the request's own daily budget's pricing rule bound to this
+    composition — one price catalog serving both the operator's debits and the
+    learner's, literally the instance the caller already built — and the ceiling
+    comes from the *current* settings like every other knob here.
+    """
+    settings = get_settings()
+    return ByokPolicy(
+        months=SqlAlchemyByokMonthRepository(conn),
+        corpus=SqlAlchemyByokCorpusRepository(conn),
+        settings=SqlAlchemyUserByokSettingsRepository(conn),
+        clock=_clock,
+        corpus_cap_tokens=settings.byok_corpus_prompt_token_cap,
+        estimate=budget.estimate_micros,
+    )
+
+
+def learner_key_covers(credentials: LearnerCredentials, *, mode: str) -> bool:
+    """Whether the caller's own key would serve a call of ``mode``.
+
+    The pre-flight twin of the router's serving rule: the learner-keyed entries
+    their stored keys build lead the chain, and the walk serves them for every
+    mode one of them is eligible for. ``False`` — the feature off, no usable
+    key, or no bound profile enabled for the mode — means the house would serve,
+    so the house rails govern the call in full.
+    """
+    return covers_mode(_learner_entries(credentials, lead=None), mode)
+
+
+def learner_holds_quiz_key(credentials: LearnerCredentials) -> bool:
+    """Whether the caller's own Anthropic key would serve a deck or card call.
+
+    The quiz adapter is built from ``quiz_model`` on the caller's key when they
+    hold one (ADR-0033); every other caller gets the house generator. Answered
+    from the *resolved* adapter — the same resolution
+    :func:`get_card_generation_for_user` serves a card call with — never from
+    row presence: a stored row that cannot be opened reads as absent (the
+    module contract), so the house would serve and the house rails govern the
+    call in full.
+    """
+    return _learner_quiz_adapter_for_request(credentials) is not None
+
+
+def learner_quiz_credential_id(credentials: LearnerCredentials) -> UUID | None:
+    """The caller's own Anthropic credential row id when it would serve a deck.
+
+    The submit-time payer decision for a deck (ADR-0033): the 202 job pins this
+    row id, and the worker serves the pass with exactly that row or fails the
+    job — never the house key. ``None`` (no key, or one that cannot be opened)
+    means the house would serve and the house rails govern the submit in full.
+    """
+    credential = credentials.by_provider.get(QUIZ_KEY_PROVIDER)
+    if credential is None or _learner_quiz_adapter_for_request(credentials) is None:
+        return None
+    return credential.id
 
 
 def _build_profile_catalogs(
@@ -810,13 +874,23 @@ def _offered_providers() -> tuple[str, ...]:
     return offered_providers(_generation_profiles())
 
 
+def hosted_declaration() -> bool:
+    """Whether this deployment declares itself hosted.
+
+    Not secret: the keys section exists (or not) for every visitor already, and
+    the disclosure copy keys off this boolean wherever it renders.
+    """
+    return get_settings().hosted_instance
+
+
 def offered_key_providers() -> tuple[str, ...]:
     """The providers a learner may store a key for here; empty when the feature is off.
 
-    Off means no KEK is configured, or no declared profile binds a provider
-    (ADR-0033). The key routes answer 404 for every provider outside this set.
+    Off means no KEK is configured, no declared profile binds a provider
+    (ADR-0033), or the hosted lock is engaged. The key routes answer 404 for
+    every provider outside this set.
     """
-    if _secrets_envelope() is None:
+    if _secrets_envelope() is None or get_settings().hosted_byok_locked:
         return ()
     return _offered_providers()
 
@@ -830,7 +904,12 @@ def build_provider_credential_repository(
     conn: Connection,
 ) -> SqlAlchemyProviderCredentialRepository | None:
     """The credential repository on ``conn``, or ``None`` when the feature is off."""
-    access = learner_key_access(conn, _secrets_envelope(), _generation_profiles())
+    access = learner_key_access(
+        conn,
+        _secrets_envelope(),
+        _generation_profiles(),
+        hosted_lock=get_settings().hosted_byok_locked,
+    )
     return access.repo if access is not None else None
 
 
@@ -1166,6 +1245,7 @@ def get_post_conversation_turn(
     evidence budget / history window come from the ``conversation_*`` settings.
     """
     settings = get_settings()
+    budget = build_budget(conn)
     return PostConversationTurn(
         conversations=SqlAlchemyConversationRepository(conn),
         turns=SqlAlchemyConversationTurnRepository(conn),
@@ -1184,7 +1264,8 @@ def get_post_conversation_turn(
             activations=SqlAlchemyActivationEventRepository(conn),
             clock=_clock,
         ),
-        budget=build_budget(conn),
+        budget=budget,
+        byok_policy=build_byok_policy(conn, budget),
     )
 
 
@@ -1222,13 +1303,15 @@ def get_quiz_deck_enqueuer() -> QuizDeckEnqueuer:
 
 def build_plan_deck_generation(conn: Connection) -> PlanDeckGeneration:
     """Wire ``PlanDeckGeneration`` on a deck-POST UoW connection (not request-scoped)."""
+    budget = build_budget(conn)
     return PlanDeckGeneration(
         sources=SqlAlchemySourceRepository(conn),
         jobs=SqlAlchemyQuizJobRepository(conn),
         authorize=AuthorizeOwnership(),
         clock=_clock,
         ids=uuid4,
-        budget=build_budget(conn),
+        budget=budget,
+        byok_policy=build_byok_policy(conn, budget),
     )
 
 
@@ -1539,18 +1622,21 @@ def get_card_generation() -> QuizGenerationPort:
     return build_quiz_adapter(get_settings())
 
 
-def get_card_generation_for_user(credentials: CallerCredentials) -> QuizGenerationPort:
-    """FastAPI dependency: the caller's card generator (ADR-0033).
+def _learner_quiz_adapter_for_request(
+    credentials: LearnerCredentials,
+) -> QuizGenerationPort | None:
+    """The caller's own quiz adapter, resolved exactly as a card call resolves it.
 
-    A learner holding an Anthropic key gets a quiz adapter built with it and
-    ``quiz_model``, cached per key write like the learner-keyed chains; its
-    results are stamped ``user_keyed`` so the suggest debit is 0 USD. Anyone
-    else, or a key that cannot be opened, gets the house card generator.
+    The one resolution the coverage predicate and the card generator both read,
+    so the two can never disagree: the adapter is built on the caller's stored
+    Anthropic row and ``quiz_model`` and cached per key write, and a row that
+    cannot be opened (an unknown KEK, a failed owner binding) resolves to
+    ``None`` — reads as absent, never as an error.
     """
     repo = credentials.repo
     credential = credentials.by_provider.get(QUIZ_KEY_PROVIDER)
     if repo is None or credential is None:
-        return get_card_generation()
+        return None
     settings = get_settings()
 
     def _build() -> QuizGenerationPort | None:
@@ -1559,7 +1645,7 @@ def get_card_generation_for_user(credentials: CallerCredentials) -> QuizGenerati
             return None
         return build_user_keyed_quiz_adapter(settings, api_key, credential_id=credential.id)
 
-    adapter = _user_quiz_adapters.get_or_build(
+    return _user_quiz_adapters.get_or_build(
         UserAdapterKey(
             provider=credential.provider,
             profile_id=_QUIZ_CACHE_SLOT,
@@ -1568,6 +1654,18 @@ def get_card_generation_for_user(credentials: CallerCredentials) -> QuizGenerati
         ),
         _build,
     )
+
+
+def get_card_generation_for_user(credentials: CallerCredentials) -> QuizGenerationPort:
+    """FastAPI dependency: the caller's card generator (ADR-0033).
+
+    A learner holding an Anthropic key gets a quiz adapter built with it and
+    ``quiz_model``, cached per key write like the learner-keyed chains; its
+    results are stamped ``user_keyed`` so the suggest debit is 0 USD. Anyone
+    else — or a learner whose stored row cannot be opened — gets the house
+    card generator, the same verdict :func:`learner_holds_quiz_key` reports.
+    """
+    adapter = _learner_quiz_adapter_for_request(credentials)
     return adapter if adapter is not None else get_card_generation()
 
 
@@ -1589,6 +1687,7 @@ def get_suggest_cards(conn: DbConnection, generation: UserCardGeneration) -> Sug
     key (ADR-0033), else the house one.
     """
     settings = get_settings()
+    budget = build_budget(conn)
     return SuggestCards(
         sources=SqlAlchemySourceRepository(conn),
         notes=SqlAlchemyNoteRepository(conn),
@@ -1596,7 +1695,8 @@ def get_suggest_cards(conn: DbConnection, generation: UserCardGeneration) -> Sug
         generation=generation,
         authorize=AuthorizeOwnership(),
         max_suggestions=settings.quiz_max_suggestions,
-        budget=build_budget(conn),
+        budget=budget,
+        byok_policy=build_byok_policy(conn, budget),
     )
 
 
@@ -1658,11 +1758,13 @@ def get_suggest_note_cards(conn: DbConnection, generation: UserCardGeneration) -
     :func:`get_suggest_cards`.
     """
     settings = get_settings()
+    budget = build_budget(conn)
     return SuggestNoteCards(
         notes=SqlAlchemyNoteRepository(conn),
         generation=generation,
         max_suggestions=settings.quiz_max_suggestions,
-        budget=build_budget(conn),
+        budget=budget,
+        byok_policy=build_byok_policy(conn, budget),
     )
 
 

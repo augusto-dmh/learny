@@ -23,6 +23,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import Connection, text
 
 from app.application.budget import KIND_GENERATION, DailyBudget, TokenPrices, usd_to_micros
+from app.application.byok import ByokPolicy
 from app.application.cards import RefreshNoteCards
 from app.application.corpus import BuildCorpus
 from app.application.ingestion import INGESTION_FAILURE_ERROR, RunIngestion
@@ -37,6 +38,8 @@ from app.infrastructure.clock import SystemClock
 from app.infrastructure.db.engine import get_engine
 from app.infrastructure.db.repositories import (
     SqlAlchemyAiSpendDayRepository,
+    SqlAlchemyByokCorpusRepository,
+    SqlAlchemyByokMonthRepository,
     SqlAlchemyCorpusRepository,
     SqlAlchemyEmbeddingIndexRepository,
     SqlAlchemyIngestionEventRepository,
@@ -45,6 +48,7 @@ from app.infrastructure.db.repositories import (
     SqlAlchemyQuizItemRepository,
     SqlAlchemyQuizJobRepository,
     SqlAlchemySourceRepository,
+    SqlAlchemyUserByokSettingsRepository,
 )
 from app.infrastructure.embeddings import build_embedding_adapter
 from app.infrastructure.ingestion.factory import (
@@ -462,7 +466,9 @@ def _build_refresh_note_cards(
     note's owner's current UTC day (AD-341) — the ledger row shares the task's
     transaction, so a rolled-back refresh un-does its debit with its writes.
     ``generation`` is the owner's own-key quiz adapter when they hold one
-    (ADR-0033); otherwise the house adapter serves.
+    (ADR-0033); otherwise the house adapter serves. The BYOK policy rides the
+    same transaction so a pass their own key served is recorded to the owner's
+    monthly ledger beside that debit — the ledger their budget reads stays true.
     """
     settings = get_settings()
     return RefreshNoteCards(
@@ -475,6 +481,7 @@ def _build_refresh_note_cards(
         excerpt_chars=settings.quiz_note_excerpt_chars,
         match_threshold=settings.quiz_note_match_threshold,
         budget=_build_budget(conn),
+        byok_policy=_build_byok_policy(conn),
     )
 
 
@@ -503,9 +510,10 @@ _DECK_KEY_GONE_ERROR = (
 #
 # A task carries ids only. The owner's key is resolved here, inside the task,
 # from the credential row: never from a task argument, and never placed in one.
-# A deck begun on a learner's key pins that key's row id on its handle, so the
-# poll collects with exactly that row or fails the job; it never falls back to
-# the house key or to a key added since.
+# A learner-keyed deck pins the credential row it was exempted on at submit
+# (the job row's ``credential_id``), so begin and poll alike collect with
+# exactly that row or fail the job; they never fall back to the house key or
+# to a key added since.
 
 
 def _learner_quiz_adapter(
@@ -513,14 +521,18 @@ def _learner_quiz_adapter(
 ) -> QuizGenerationPort | None:
     """The quiz adapter built with ``user_id``'s own Anthropic key, or ``None``.
 
-    ``None`` when the feature is off (no KEK, or no profile binds Anthropic),
-    when the learner holds no usable Anthropic key, or when the key cannot be
-    opened. With ``pinned``, only the row with exactly that id may serve: a key
-    replaced since (a new row id) or deleted reads as ``None``.
+    ``None`` when the feature is off (no KEK, no profile binds Anthropic, or
+    the hosted lock is engaged), when the learner holds no usable Anthropic
+    key, or when the key cannot be opened. With ``pinned``, only the row with
+    exactly that id may serve: a key replaced since (a new row id) or deleted
+    reads as ``None``.
     """
     settings = get_settings()
     access = learner_key_access(
-        conn, envelope_from_settings(settings), tuple(settings.generation_profiles)
+        conn,
+        envelope_from_settings(settings),
+        tuple(settings.generation_profiles),
+        hosted_lock=settings.hosted_byok_locked,
     )
     if access is None:
         return None
@@ -565,12 +577,35 @@ def _build_budget(conn: Connection) -> DailyBudget:
     )
 
 
+def _build_byok_policy(conn: Connection) -> ByokPolicy:
+    """Wire the learner-side BYOK policy on ``conn`` (the worker's composition).
+
+    Mirrors the web layer's builder — built per call from the settings this task
+    run actually sees — so the settle debit reads the same ledgers the HTTP
+    pre-flight asserted against. The deck model is not a registry profile, so a
+    deck pass prices at the operator's primary catalog: the daily budget's
+    ``estimate_micros`` with no profile stamp is exactly that resolution.
+    """
+    settings = get_settings()
+    return ByokPolicy(
+        months=SqlAlchemyByokMonthRepository(conn),
+        corpus=SqlAlchemyByokCorpusRepository(conn),
+        settings=SqlAlchemyUserByokSettingsRepository(conn),
+        clock=_clock,
+        corpus_cap_tokens=settings.byok_corpus_prompt_token_cap,
+        estimate=_build_budget(conn).estimate_micros,
+    )
+
+
 def _record_deck_spend(conn: Connection, source_id: UUID, result: QuizDeckResult) -> None:
     """Debit a completed deck pass's actual usage to its owner's current UTC day.
 
     Runs on the caller's transaction (the settle unit of work claims the spend
     marker, debits, and finalizes atomically). An adapter that reports no usage
-    (the deterministic local one) debits 0, which writes nothing.
+    (the deterministic local one) debits 0, which writes nothing. A pass the
+    owner's own key served debits 0 USD to the house day and, beside that,
+    records its actual usage and estimated cost to the owner's own monthly and
+    per-book ledgers — the soft budget and the per-corpus ceiling's read models.
     """
     source = SqlAlchemySourceRepository(conn).get_by_id(source_id)
     if source is None:
@@ -580,6 +615,13 @@ def _record_deck_spend(conn: Connection, source_id: UUID, result: QuizDeckResult
         source.user_id,
         usd_micros=budget.usage_micros(result.usage, user_keyed=result.user_keyed),
         kind=KIND_GENERATION,
+    )
+    _build_byok_policy(conn).record_turn(
+        source.user_id,
+        user_keyed=result.user_keyed,
+        source_id=source_id,
+        usage=result.usage,
+        profile_id=None,
     )
 
 
@@ -679,13 +721,32 @@ def _generate_quiz_deck_body(self, jid, sid, job_id, log, start):  # noqa: ANN00
     # 2. Start the pass and collect once. A provider fault here retries the task.
     #    The inline collect is pinned to the provider the handle records — the one
     #    ``begin_deck`` just used — so the collect can never drift from the begin.
-    #    An owner holding an Anthropic key runs the pass on it, resolved here from
-    #    the credential row; the handle then pins that row's id (ADR-0033).
+    #    A deck the submit exempted on the owner's own key runs on exactly the
+    #    credential row pinned on the job, or fails terminally like the poll: a
+    #    key deleted in the submit→run window must never move a cap-exempted deck
+    #    onto the house adapter (ADR-0033). Any other deck resolves the owner's
+    #    current key at run time, exactly as before.
+    learner: QuizGenerationPort | None = None
+    pinned_gone = False
     try:
         with get_engine().begin() as conn:
             owner = _owner_of_source(conn, sid)
-            learner = _learner_quiz_adapter(conn, owner) if owner is not None else None
-            handle = _build_run_deck(conn, learner).begin_deck(sid)
+            if owner is not None:
+                learner = _learner_quiz_adapter(conn, owner, pinned=job.credential_id)
+            if job.credential_id is not None and learner is None:
+                # The pinned key is gone (deleted, replaced, unopenable): fail the
+                # exempted deck honestly — the house key never serves it.
+                _build_run_deck(conn).fail(jid, _DECK_KEY_GONE_ERROR)
+                pinned_gone = True
+            else:
+                handle = _build_run_deck(conn, learner).begin_deck(sid)
+        if pinned_gone:
+            logger.warning(
+                "quiz.generate_deck: the provider key this deck was exempted on is "
+                "gone; job failed terminally with no pass attempted",
+                extra={**log, "duration_ms": _elapsed_ms(start)},
+            )
+            return None
         collector = learner or build_quiz_adapter(get_settings(), provider=handle.provider)
         result = collector.collect_deck(handle)
     except Exception as exc:  # noqa: BLE001 — classified as retryable/terminal below

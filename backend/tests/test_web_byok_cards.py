@@ -172,3 +172,111 @@ def test_a_learner_without_a_key_keeps_the_house_generator(
     assert resp.status_code == 200, resp.text
     assert resp.json()["suggestions"], "the house's deterministic adapter served"
     assert fakes == []
+
+
+# --- The learner-side rails at the cards surface -------------------------------------
+
+_PERIOD = datetime.now(UTC).strftime("%Y-%m")
+
+
+def test_ceiling_refuses_cards(
+    cards_client: TestClient,  # noqa: F811
+    db_conn: Connection,
+    fakes: list[_KeyedQuizFake],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A highlight on a source at the month's prompt-token ceiling refuses pre-flight."""
+    from app.infrastructure.db.repositories import SqlAlchemyByokCorpusRepository
+    from tests.conftest import clear_settings_and_generation_caches
+
+    monkeypatch.setenv("LEARNY_BYOK_CORPUS_PROMPT_TOKEN_CAP", "1000")
+    clear_settings_and_generation_caches()
+    learner = _highlight(cards_client, db_conn, "cards-ceiling@example.com")
+    SqlAlchemyProviderCredentialRepository(db_conn, SecretsEnvelope(_KEK)).replace(
+        UUID(learner["user_id"]), "anthropic", _KEY
+    )
+    SqlAlchemyByokCorpusRepository(db_conn).record(
+        UUID(learner["user_id"]),
+        learner["source_id"],
+        _PERIOD,
+        input_tokens=1000,
+    )
+
+    resp = _post_suggestions(
+        cards_client, learner["source_id"], learner["anchor_id"], csrf=learner["csrf"]
+    )
+
+    assert resp.status_code == 429, resp.text
+    assert resp.json()["code"] == "byok_corpus_limit"
+    assert all(fake.calls == 0 for fake in fakes)  # nothing was generated
+
+
+def test_budget_trips_cards(
+    cards_client: TestClient,  # noqa: F811
+    db_conn: Connection,
+    fakes: list[_KeyedQuizFake],
+) -> None:
+    """The learner's own monthly budget pauses their key at the cards surface too."""
+    from app.infrastructure.db.repositories import (
+        SqlAlchemyByokMonthRepository,
+        SqlAlchemyUserByokSettingsRepository,
+    )
+
+    learner = _highlight(cards_client, db_conn, "cards-budget@example.com")
+    SqlAlchemyProviderCredentialRepository(db_conn, SecretsEnvelope(_KEK)).replace(
+        UUID(learner["user_id"]), "anthropic", _KEY
+    )
+    SqlAlchemyUserByokSettingsRepository(db_conn).set_budget(UUID(learner["user_id"]), 5_000_000)
+    SqlAlchemyByokMonthRepository(db_conn).record(
+        UUID(learner["user_id"]),
+        _PERIOD,
+        input_tokens=200_000,
+        output_tokens=100_000,
+        cost_usd_micros=5_000_000,
+    )
+
+    resp = _post_suggestions(
+        cards_client, learner["source_id"], learner["anchor_id"], csrf=learner["csrf"]
+    )
+
+    assert resp.status_code == 429, resp.text
+    assert resp.json()["code"] == "byok_budget"
+    assert all(fake.calls == 0 for fake in fakes)  # nothing was generated
+
+
+def test_unopenable_key_reads_house_rails(
+    cards_client: TestClient,  # noqa: F811
+    db_conn: Connection,
+    fakes: list[_KeyedQuizFake],
+) -> None:
+    """A stored row that cannot be opened is no key: the house rails govern.
+
+    The coverage predicate answers from the resolved adapter, not row presence:
+    a row sealed under an unknown KEK reads as absent, so the learner's own
+    budget never governs a house-served suggestion and nothing is booked on
+    their month — the ledger their budget reads stays true.
+    """
+    from app.infrastructure.db.repositories import (
+        SqlAlchemyByokMonthRepository,
+        SqlAlchemyUserByokSettingsRepository,
+    )
+
+    learner = _highlight(cards_client, db_conn, "cards-orphan@example.com")
+    # A row under a KEK nobody configured: metadata present, key unopenable.
+    SqlAlchemyProviderCredentialRepository(db_conn, SecretsEnvelope(os.urandom(32))).replace(
+        UUID(learner["user_id"]), "anthropic", _KEY
+    )
+    # A budget that would trip any user-keyed call instantly.
+    SqlAlchemyUserByokSettingsRepository(db_conn).set_budget(UUID(learner["user_id"]), 1)
+
+    resp = _post_suggestions(
+        cards_client, learner["source_id"], learner["anchor_id"], csrf=learner["csrf"]
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["suggestions"], "the house's deterministic adapter served"
+    assert fakes == []  # the learner's key never built an adapter
+    assert (
+        SqlAlchemyByokMonthRepository(db_conn).get_for_month(UUID(learner["user_id"]), _PERIOD)
+        is None
+    )  # nothing was booked on the learner's month

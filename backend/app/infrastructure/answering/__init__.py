@@ -22,7 +22,11 @@ from typing import TYPE_CHECKING
 from app.infrastructure.answering.anthropic import AnthropicGenerationAdapter
 from app.infrastructure.answering.local import DeterministicGenerationAdapter
 from app.infrastructure.answering.openai_compat import OpenAICompatibleGenerationAdapter
-from app.infrastructure.answering.routing import ChainEntry, RoutingGenerationAdapter
+from app.infrastructure.answering.routing import (
+    ChainEntry,
+    RoutingGenerationAdapter,
+    covers_mode,
+)
 from app.infrastructure.providers import resolve_house_profiles
 
 if TYPE_CHECKING:
@@ -40,6 +44,7 @@ __all__ = [
     "build_generation_adapter",
     "build_generation_chain",
     "build_learner_keyed_chain",
+    "covers_mode",
     "build_user_generation_chain",
     "build_user_keyed_adapter",
     "order_learner_profiles",

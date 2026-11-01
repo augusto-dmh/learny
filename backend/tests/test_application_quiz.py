@@ -410,6 +410,25 @@ def test_plan_hides_non_owner_and_missing_as_not_found() -> None:
         _plan(sources, jobs)(user=_OWNER, source_id=uuid4())
 
 
+def test_plan_pins_the_submitted_credential_on_the_job() -> None:
+    """A learner-keyed submit pins the resolved credential row on the queued job.
+
+    The pin is the payer's durable decision (ADR-0033): the worker serves the
+    pass with exactly that row or fails the job, never the house key.
+    """
+    sources, jobs = FakeSourceRepository(), FakeQuizJobRepository()
+    source = _source(_OWNER.id, status="ready")
+    sources.add(source)
+
+    credential_id = uuid4()
+    job = _plan(sources, jobs)(user=_OWNER, source_id=source.id, credential_id=credential_id)
+
+    assert job.credential_id == credential_id
+    stored = jobs.get_by_id(job.id)
+    assert stored is not None
+    assert stored.credential_id == credential_id
+
+
 # --- RunDeckGeneration lifecycle -------------------------------------------------
 
 
