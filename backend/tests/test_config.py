@@ -709,3 +709,58 @@ def test_corpus_prompt_cap_zero_disables_and_negative_fails_startup(monkeypatch)
     with pytest.raises(ValidationError) as excinfo:
         Settings(_env_file=None)
     assert "byok_corpus_prompt_token_cap" in str(excinfo.value)
+
+
+def test_production_boot_tightens_the_trusted_proxy_default(monkeypatch) -> None:
+    # A production boot that never set LEARNY_TRUSTED_PROXY_HOSTS falls back to
+    # loopback + the test client, not the wide RFC1918 dev default: the per-IP
+    # limiter keys (auth rails, guest sample ask) inherit this trust, and a
+    # wide default lets any private-range peer rotate X-Real-IP into fresh
+    # identities. Local boot keeps the wide default for the compose proxy.
+    monkeypatch.delenv("LEARNY_TRUSTED_PROXY_HOSTS", raising=False)
+    monkeypatch.delenv("LEARNY_ENVIRONMENT", raising=False)
+
+    production = Settings(_env_file=None, environment="production")
+    assert production.trusted_proxy_host_list() == ("127.0.0.1", "::1", "testclient")
+
+    local = Settings(_env_file=None)
+    assert "10.0.0.0/8" in local.trusted_proxy_host_list()
+
+
+def test_an_explicit_trusted_proxy_list_survives_production(monkeypatch) -> None:
+    # The prod compose overlay pins the stack's own subnet; wherever the
+    # variable was set (env, env file, init kwarg), the explicit choice wins.
+    monkeypatch.delenv("LEARNY_TRUSTED_PROXY_HOSTS", raising=False)
+    monkeypatch.delenv("LEARNY_ENVIRONMENT", raising=False)
+
+    settings = Settings(
+        _env_file=None, environment="production", trusted_proxy_hosts="10.28.0.0/16"
+    )
+    assert settings.trusted_proxy_host_list() == ("10.28.0.0/16",)
+
+
+def test_a_hosted_declaration_warns_when_a_broad_private_range_is_trusted(
+    monkeypatch, caplog
+) -> None:
+    # Hosted + a whole RFC1918 range trusted = every private peer can mint
+    # rate-limit identities: boot continues, but the warning names the
+    # variable. A narrow subnet (the compose overlay's shape) and a non-hosted
+    # instance stay quiet.
+    monkeypatch.delenv("LEARNY_TRUSTED_PROXY_HOSTS", raising=False)
+    monkeypatch.delenv("LEARNY_ENVIRONMENT", raising=False)
+
+    with caplog.at_level(logging.WARNING, logger="app.core.config"):
+        Settings(_env_file=None, hosted_instance=True, trusted_proxy_hosts="192.168.0.0/16")
+    assert any(
+        "LEARNY_TRUSTED_PROXY_HOSTS" in r.getMessage()
+        for r in caplog.records
+        if r.name == "app.core.config"
+    )
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="app.core.config"):
+        Settings(_env_file=None, hosted_instance=True, trusted_proxy_hosts="10.28.0.0/16")
+        Settings(_env_file=None, hosted_instance=False, trusted_proxy_hosts="192.168.0.0/16")
+    assert not [
+        r for r in caplog.records if r.name == "app.core.config" and r.levelno >= logging.WARNING
+    ]

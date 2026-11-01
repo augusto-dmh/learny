@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import ipaddress
 import logging
 import os
 from contextvars import ContextVar
@@ -37,6 +38,22 @@ _RETIRED_KNOBS = {
     "LEARNY_TEACHING_MESSAGE_MAX_CHARS": "conversation_message_max_chars",
 }
 
+# The trust list a production boot falls back to when the operator has not set
+# ``LEARNY_TRUSTED_PROXY_HOSTS`` anywhere: loopback plus the Starlette TestClient
+# host. The wide RFC1918 dev default on the field stays local-only — a production
+# process that trusted every private-range peer would let any of them stamp
+# ``X-Real-IP`` and mint fresh per-IP rate-limit identities (the guest sample ask
+# keys its limiter on exactly that value). A deployment that does sit behind a
+# proxy names its real CIDR via the variable (the prod compose overlay pins its
+# own subnet).
+_TRUSTED_PROXY_HOSTS_PRODUCTION = "127.0.0.1,::1,testclient"
+
+# The RFC1918 supernets. Trusting any of these whole in a hosted deployment is
+# the "every private peer can mint rate-limit identities" posture, so it earns
+# the startup warning below; a subnet of one (the compose overlay's /16, a
+# single address) is a deliberate narrow choice and stays quiet.
+_BROAD_PRIVATE_RANGES = ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
+
 # The variable names the env file of the settings instance currently being built
 # carries. Set while its sources are assembled and read back by the retired-knob
 # warning, which runs later in the same instantiation: the env file resolved for an
@@ -47,6 +64,25 @@ _env_file_vars: ContextVar[frozenset[str]] = ContextVar("_env_file_vars", defaul
 
 #: How many bytes a learner-key KEK must decode to (AES-256).
 SECRETS_KEK_BYTES = 32
+
+
+def _covers_broad_private_range(entry: str) -> bool:
+    """Whether one trusted-proxy entry covers a whole RFC1918 range.
+
+    A single address, a link-local, or a subnet *inside* a private range (the
+    prod overlay's /16) is a deliberate narrow choice; an entry that contains
+    an entire ``10/8``-class block is the wide dev default leaking into a
+    real deployment.
+    """
+    try:
+        network = ipaddress.ip_network(entry, strict=False)
+    except ValueError:
+        return False
+    for range_text in _BROAD_PRIVATE_RANGES:
+        private = ipaddress.ip_network(range_text)
+        if network.version == private.version and network.supernet_of(private):
+            return True
+    return False
 
 
 class SecretsKekInvalid(RuntimeError):
@@ -107,8 +143,14 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     celery_broker_url: str = ""
     celery_result_backend: str = ""
-    # Peers allowed to set ``X-Real-IP`` for auth rate-limit keys. Includes the
-    # Starlette TestClient host (``testclient``) and RFC1918 Docker networks.
+    # Peers allowed to set ``X-Real-IP`` for rate-limit keys. The local default
+    # includes the Starlette TestClient host (``testclient``) and RFC1918 Docker
+    # networks — a local-network convenience. In production (``LEARNY_ENVIRONMENT=
+    # production``) an unset variable falls back to loopback + the test client
+    # only (see ``_TRUSTED_PROXY_HOSTS_PRODUCTION``): the per-IP limiter keys —
+    # the auth rails and the guest sample ask — inherit whatever trust lives
+    # here, so a wide production default would let any private-range peer
+    # rotate ``X-Real-IP`` and mint fresh budgets.
     trusted_proxy_hosts: str = "127.0.0.1,::1,testclient,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
 
     def broker_url(self) -> str:
@@ -583,6 +625,47 @@ class Settings(BaseSettings):
                     successor,
                     getattr(self, successor),
                     successor.upper(),
+                )
+        return self
+
+    @model_validator(mode="after")
+    def _harden_trusted_proxies(self) -> Settings:
+        """Tighten the trusted-proxy default in production; warn on broad trust.
+
+        The per-IP rate-limit keys — the auth rails and, since the guest sample
+        ask, the first anonymous surface — are only as honest as the trust list
+        behind ``X-Real-IP``. Two startup behaviors follow from that:
+
+        A production boot that never set ``LEARNY_TRUSTED_PROXY_HOSTS`` gets
+        loopback + the test client instead of the wide RFC1918 dev default: a
+        deployment without a reverse proxy needs no proxy trust at all, and one
+        with a proxy must name its CIDR explicitly (the prod compose overlay
+        pins its own subnet; ``.env.production.example`` documents the choice).
+        Local boot keeps the wide default, where the compose proxy genuinely is
+        a private-range peer. Reading ``model_fields_set`` (not a string
+        compare against the default) is what makes an explicitly configured
+        value survive untouched, wherever it was set.
+
+        A hosted declaration that still trusts a whole RFC1918 range keeps
+        booting — an operator may genuinely sit behind such a network — but
+        says so at startup: any peer in that range could stamp ``X-Real-IP``
+        and mint fresh per-IP rate-limit identities.
+        """
+        if self.environment == "production" and "trusted_proxy_hosts" not in self.model_fields_set:
+            self.trusted_proxy_hosts = _TRUSTED_PROXY_HOSTS_PRODUCTION
+        if self.hosted_instance:
+            broad = [
+                entry
+                for entry in self.trusted_proxy_host_list()
+                if _covers_broad_private_range(entry)
+            ]
+            if broad:
+                logger.warning(
+                    "LEARNY_TRUSTED_PROXY_HOSTS trusts the broad private range(s) %s; "
+                    "any peer inside them can stamp X-Real-IP and mint fresh per-IP "
+                    "rate-limit identities. Set it to this deployment's real proxy "
+                    "CIDR instead.",
+                    ", ".join(broad),
                 )
         return self
 
