@@ -193,7 +193,6 @@ def test_guest_askes_the_sample_grounded_without_an_account() -> None:
     assert result.found is True
     assert result.answer == "Deception precedes every battle."
     assert len(result.citations) == 1
-    assert result.model == "local-extractive"
     # The language reached the port; the mode is a plain ask with no history.
     assert generation.response_languages == ["pt-BR"]
     assert generation.calls[0]["mode"] == "answer"
@@ -225,7 +224,6 @@ def test_answers_the_honest_outcomes_for_a_missing_sample_or_nothing_grounded() 
     assert result.found is False
     assert result.answer is None
     assert result.citations == []
-    assert result.model == "m"
     # The call ran and costs the sample's day even when it grounded nothing —
     # the same call-costs-when-it-ran rule an authenticated turn follows.
     assert len(spend.record_calls) == 1
@@ -304,7 +302,7 @@ class _RecordingService:
 
     def __init__(self, result=None, error: Exception | None = None) -> None:
         self.result = result or _GuestAnswerStub(
-            found=True, answer="A grounded answer.", citations=[_evidence()], model="m"
+            found=True, answer="A grounded answer.", citations=[_evidence()]
         )
         self.error = error
         self.questions: list[str] = []
@@ -423,7 +421,6 @@ def test_guest_askes_the_sample_grounded_without_an_account_web(
             found=True,
             answer="Deception precedes every battle.",
             citations=[evidence],
-            model="local-extractive",
         )
     )
     client = _client(grounded, monkeypatch)
@@ -452,8 +449,7 @@ def test_guest_askes_the_sample_grounded_without_an_account_web(
 
 
 class _GuestAnswerStub:
-    def __init__(self, *, found, answer, citations, model) -> None:
+    def __init__(self, *, found, answer, citations) -> None:
         self.found = found
         self.answer = answer
         self.citations = citations
-        self.model = model

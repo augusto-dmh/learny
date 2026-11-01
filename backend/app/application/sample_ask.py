@@ -54,16 +54,14 @@ logger = logging.getLogger(__name__)
 class GuestAnswer:
     """One guest ask's outcome: a grounded answer with citations, or not-found.
 
-    ``model`` records which serving profile answered (the same single-type model
-    identity an authenticated turn records); it is ``None`` when the port was
-    never invoked or the answer grounded nothing. ``citations`` are empty unless
-    ``found`` is true.
+    ``citations`` are empty unless ``found`` is true. The serving profile's
+    identity stays internal — the guest response shape is exactly
+    ``{found, answer, citations, sample}``.
     """
 
     found: bool
     answer: str | None
     citations: list[Evidence]
-    model: str | None
 
 
 class GuestSampleAsk:
@@ -105,7 +103,7 @@ class GuestSampleAsk:
             # Nothing in the sample to answer from: the explicit not-found
             # outcome — the port is never invoked, so nothing is spent.
             logger.info("guest sample ask answered (found=false, no evidence)")
-            return GuestAnswer(found=False, answer=None, citations=[], model=None)
+            return GuestAnswer(found=False, answer=None, citations=[])
 
         try:
             generated: GeneratedAnswer = self._generation.generate(
@@ -137,9 +135,9 @@ class GuestSampleAsk:
             # The same grounding contract as every Ask (AD-027): nothing survives,
             # the answer is the explicit not-found — honest, not degraded.
             logger.info("guest sample ask answered (found=false, nothing grounded)")
-            return GuestAnswer(found=False, answer=None, citations=[], model=generated.model)
+            return GuestAnswer(found=False, answer=None, citations=[])
         text, citations = grounded
         # Exactly one content-free log line per completed ask, mirroring the
         # conversation-turn convention — no question or answer text ever logged.
         logger.info("guest sample ask answered (found=true)")
-        return GuestAnswer(found=True, answer=text, citations=citations, model=generated.model)
+        return GuestAnswer(found=True, answer=text, citations=citations)

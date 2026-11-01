@@ -18,7 +18,6 @@ export type SampleAskResult = {
   citations: Citation[];
   /** Always true on this route: the answer is the shared sample's. */
   sample: boolean;
-  model: string | null;
 };
 
 /** Ask the shared sample one question; backend rate limit + budget apply. */
