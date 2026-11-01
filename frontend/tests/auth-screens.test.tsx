@@ -69,7 +69,7 @@ describe("AuthForm (D2)", () => {
     expect(onAuthenticated).not.toHaveBeenCalled();
   });
 
-  it("register collects the invite code and ToS consent and posts both", async () => {
+  it("register collects the invite code, the consents, and posts all three", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValue(jsonResponse(201, { id: "u1", email: "a@b.c", created_at: "now" }));
@@ -82,18 +82,21 @@ describe("AuthForm (D2)", () => {
     fireEvent.change(screen.getByLabelText("Password"), { target: { value: "pw" } });
     fireEvent.change(screen.getByLabelText(/Invite code/), { target: { value: "WELCOME" } });
     fireEvent.click(screen.getByLabelText(/Terms of Service/));
+    fireEvent.click(screen.getByLabelText("I confirm I am 18 or older"));
     fireEvent.click(screen.getByRole("button", { name: "Create account" }));
 
     await waitFor(() => expect(onAuthenticated).toHaveBeenCalledTimes(1));
     const [, init] = fetchMock.mock.calls[0];
     expect(init.credentials).toBe("same-origin");
-    // Exact payload: the invite and consent ride along — and the exact key set
-    // proves no captcha/Turnstile token field is ever posted.
+    // Exact payload: the invite, the consent, and the 18+ attestation ride
+    // along — and the exact key set proves no captcha/Turnstile token field is
+    // ever posted.
     expect(JSON.parse(init.body as string)).toEqual({
       email: "a@b.c",
       password: "pw",
       invite_code: "WELCOME",
       accepted_tos: true,
+      age_attested: true,
     });
   });
 
@@ -107,6 +110,24 @@ describe("AuthForm (D2)", () => {
 
     const termsLink = screen.getByRole("link", { name: "Terms of Service" });
     expect(termsLink.getAttribute("href")).toBe("/terms");
+  });
+
+  it("register requires the 18-or-older confirmation in both locales", () => {
+    render(<AuthForm mode="register" />);
+
+    const age = screen.getByLabelText("I confirm I am 18 or older") as HTMLInputElement;
+    expect(age.type).toBe("checkbox");
+    // Native `required` blocks submit until the learner attests; the backend
+    // refusal stays the invariant regardless of the form.
+    expect(age.required).toBe(true);
+
+    cleanup();
+    setTestLocale("pt-BR");
+    render(<AuthForm mode="register" />);
+    const agePt = screen.getByLabelText(
+      "Confirmo que tenho 18 anos ou mais",
+    ) as HTMLInputElement;
+    expect(agePt.required).toBe(true);
   });
 });
 

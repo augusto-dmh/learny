@@ -42,6 +42,7 @@
     },
     "operation": {
       "authRegister": "Não foi possível criar a conta.",
+      "sampleAsk": "A amostra não pôde responder agora.",
       "authLogin": "E-mail ou senha inválidos.",
       "authLogout": "Não foi possível sair.",
       "sourcesList": "Não foi possível carregar seus livros.",
@@ -160,7 +161,17 @@
     }
   },
   "landing": {
-    "tagline": "Transforme seus livros em respostas com citações e em conhecimento que fica."
+    "tagline": "Transforme seus livros em respostas com citações e em conhecimento que fica.",
+    "sampleAsk": {
+      "label": "Experimente a amostra compartilhada — sem precisar de conta",
+      "capNote": "Algumas perguntas por dia",
+      "formLabel": "Pergunte à amostra",
+      "suggestedQuestion": "O que Sun Tzu quer dizer com “toda guerra se baseia no engano”?",
+      "ask": "Perguntar à amostra",
+      "working": "Pensando…",
+      "notFound": "A amostra não tem passagem que responda isso. Tente outra pergunta.",
+      "exhausted": "A amostra atingiu o limite de hoje. Crie uma conta gratuita para continuar aprendendo."
+    }
   },
   "auth": {
     "createAccount": "Criar conta",
@@ -180,7 +191,64 @@
       "inviteCode": "Código de convite",
       "inviteHint": "(se você tiver um)",
       "acceptTerms": "Concordo com os <link>Termos de Serviço</link>",
+      "confirmAge": "Confirmo que tenho 18 anos ou mais",
       "working": "Aguarde…"
+    }
+  },
+  "legal": {
+    "privacy": {
+      "title": "Política de Privacidade",
+      "subtitle": "O que o Learny coleta, por que, e o que acontece com isso.",
+      "dataTitle": "Dados que guardamos",
+      "dataBody": "O e-mail da sua conta e um hash da senha (nunca a senha em si); os livros enviados por você e o texto, embeddings e materiais de estudo derivados deles; suas conversas, quizzes, notas, destaques e progresso de leitura; e cookies de sessão que mantêm você conectado.",
+      "whyTitle": "Por que guardamos",
+      "whyBody": "Para operar sua biblioteca e os recursos de estudo (para executar o serviço que você contratou), para manter o serviço seguro (limitação de ritmo e prevenção de abuso) e para responder a pedidos de suporte e exigências legais.",
+      "subprocessorsTitle": "Subprocessadores de IA",
+      "subprocessorsBody": "Dois provedores de IA processam conteúdo no caminho ativo. A OpenAI recebe trechos curtos de texto para calcular embeddings; a Anthropic recebe passagens recuperadas e suas perguntas para gerar respostas. Nenhum dos dois está autorizado a usar esse tráfego para treinar seus modelos, mas ambos o retêm por um período limitado do próprio monitoramento de abuso — não fazemos nenhuma declaração de retenção zero em nome deles. O texto do livro é enviado apenas até onde a recuperação exige, e os corpos dos prompts ficam fora dos registros do próprio Learny.",
+      "transfersTitle": "Transferências internacionais",
+      "transfersBody": "O Learny roda em infraestrutura e provedores de IA que podem processar seus dados fora do Brasil. Quando isso acontece, a transferência se apoia nas garantias que a LGPD reconhece para transferências internacionais, e as subprocessadores de IA acima são nomeadas para que você saiba exatamente o que trafega: trechos curtos de texto para embeddings, e passagens recuperadas com suas perguntas para respostas.",
+      "retentionTitle": "Retenção e exclusão",
+      "retentionBody": "Guardamos os dados acima enquanto sua conta estiver ativa. Quando você exclui sua conta, seus arquivos armazenados e dados da conta são removidos. Os backups expiram segundo seu próprio cronograma.",
+      "sharingTitle": "Compartilhamento",
+      "sharingBody": "Não vendemos seus dados e não compartilhamos seus livros, notas ou conversas publicamente. Além das subprocessadores de IA nomeadas acima e dos provedores de hospedagem e armazenamento que operam o serviço, os dados saem do Learny apenas quando a lei exigir.",
+      "rightsTitle": "Seus direitos pela LGPD",
+      "rightsIntro": "Pela Lei Geral de Proteção de Dados (LGPD), você tem o direito de:",
+      "rightsList": "- confirmar a existência de tratamento dos seus dados;\n- acessar os dados que guardamos sobre você;\n- corrigir dados incompletos, inexatos ou desatualizados;\n- pedir a anonimização, o bloqueio ou a eliminação de dados desnecessários ou excessivos;\n- pedir a portabilidade dos seus dados;\n- eliminar dados pessoais tratados com base no consentimento;\n- saber com quem seus dados foram compartilhados;\n- saber as consequências de não fornecer o consentimento;\n- revogar o consentimento.",
+      "rightsContact": "Você pode exercer acesso, portabilidade e eliminação diretamente no produto — a exportação da biblioteca e a exclusão completa da conta já estão no aplicativo. Para qualquer outro direito, fale com o operador pelo endereço na <link>página de copyright</link>.",
+      "anpdBody": "Você também pode registrar uma reclamação junto à Autoridade Nacional de Proteção de Dados (ANPD).",
+      "securityTitle": "Segurança e idade",
+      "securityBody": "As sessões usam cookies HTTP-only; as senhas são guardadas com hash; o tráfego é criptografado em trânsito. O Learny é para adultos: criar uma conta exige confirmar que você tem 18 anos ou mais, e não tratamos sabidamente dados de ninguém mais jovem."
+    },
+    "terms": {
+      "title": "Termos de Serviço",
+      "subtitle": "Estes termos regem seu uso do Learny. Ao criar uma conta, você concorda com eles.",
+      "accountTitle": "Sua conta",
+      "accountBody": "Você precisa de uma conta para guardar livros e estudar. É preciso ter pelo menos 18 anos para criar uma — pedimos que você ateste isso no cadastro. Mantenha suas credenciais em segredo; você é responsável pela atividade na sua conta. Algumas instâncias são apenas por convite: um convite é uma permissão revogável, não um direito adquirido.",
+      "uploadsTitle": "Envios e copyright",
+      "uploadsBody": "Você pode enviar livros que tem o direito de usar privadamente. Os direitos continuam seus; o Learny não concede nenhum copyright adicional. Você declara que seus envios não violam direitos de terceiros. O Learny não publicará, venderá nem compartilhará seus arquivos, e desativará o acesso a material identificado em notificação de copyright válida (veja <link>Copyright / DMCA</link>). Contas que infringem repetidamente podem ser encerradas.",
+      "useTitle": "Uso aceitável",
+      "useBody": "Não abuse do serviço: nada de atacar outros usuários ou a infraestrutura, nada de raspagem de dados, revenda de acesso ou apresentar saídas geradas como se fossem o próprio livro. Limites de ritmo e armazenamento se aplicam.",
+      "aiTitle": "Respostas de IA",
+      "aiBody": "As respostas são geradas e podem estar erradas, incompletas ou enganosas — mesmo quando citam uma passagem. Confira a citação antes de confiar em uma resposta. O Learny oferece ferramentas de estudo, não aconselhamento profissional.",
+      "terminationTitle": "Encerramento e exclusão",
+      "terminationBody": "Você pode excluir sua conta a qualquer momento; a exclusão remove seus arquivos armazenados e dados da conta. Podemos suspender ou encerrar contas que violem estes termos, inclusive por violação repetida de copyright.",
+      "disclaimersTitle": "Ressalvas e responsabilidade",
+      "disclaimersBody": "O serviço é fornecido “no estado em que se encontra”, sem garantias de qualquer tipo. Na extensão permitida pela lei, o Learny não responde por danos indiretos ou consequentes decorrentes do seu uso do serviço.",
+      "lawTitle": "Lei aplicável",
+      "lawBody": "Estes termos são regidos pelas leis da República Federativa do Brasil. Veja nossa <link>Política de Privacidade</link> para saber como seus dados são tratados."
+    },
+    "copyright": {
+      "title": "Copyright / DMCA",
+      "subtitle": "Como denunciar violação de copyright nesta instância.",
+      "agentTitle": "Agente designado",
+      "agentBody": "Notificações de copyright desta instância são tratadas pelo agente designado. Envie notificações para",
+      "agentMissing": "(caixa do agente não configurada)",
+      "filingTitle": "Como registrar uma notificação",
+      "filingBody": "Se você acredita que material nesta instância viola seu copyright, envie ao agente uma notificação que inclua:\n\n- a identificação da obra protegida;\n- a identificação do material infrator (a conta ou o conteúdo envolvido) e detalhe suficiente para que o localizemos;\n- suas informações de contato;\n- uma declaração de sua crença de boa-fé de que o uso não é autorizado;\n- uma declaração, sob pena de perjúrio, de que as informações da notificação são exatas e de que você é o titular dos direitos ou está autorizado a agir em seu nome;\n- sua assinatura.",
+      "actionTitle": "O que fazemos",
+      "actionBody": "Para uma notificação válida, removemos ou desativamos o acesso ao material identificado e podemos avisar quem enviou. Infratores reincidentes perdem a conta. Se seu material foi removido por engano ou identificação errada, você pode enviar uma contranotificação ao mesmo endereço com a identificação do material removido, suas informações de contato e uma declaração sob pena de perjúrio de que a remoção resultou de engano ou identificação errada.",
+      "uploadsTitle": "Envios",
+      "uploadsBody": "O Learny guarda cópias privadas de estudo. Quem envia declara ter o direito de usar as obras que envia; veja os <link>Termos de Serviço</link>. Esta página não é aconselhamento jurídico e não limita nenhum direito seu sob a lei aplicável."
     }
   },
   "shell": {

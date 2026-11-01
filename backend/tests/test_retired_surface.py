@@ -133,7 +133,12 @@ def test_every_retired_path_answers_404_to_its_owner(
     # one the caller owns and could still ask about through /api/conversations.
     registered = auth_client.post(
         "/api/auth/register",
-        json={"email": "retired@example.com", "password": TEST_PASSWORD, "accepted_tos": True},
+        json={
+            "email": "retired@example.com",
+            "password": TEST_PASSWORD,
+            "accepted_tos": True,
+            "age_attested": True,
+        },
     )
     assert registered.status_code == 201, registered.text
     user_id = registered.json()["id"]

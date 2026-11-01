@@ -82,7 +82,12 @@ def reading_client(db_conn: Connection, monkeypatch: pytest.MonkeyPatch):  # noq
 def _register(client: TestClient, email: str) -> str:
     resp = client.post(
         "/api/auth/register",
-        json={"email": email, "password": "correct horse battery staple", "accepted_tos": True},
+        json={
+            "email": email,
+            "password": "correct horse battery staple",
+            "accepted_tos": True,
+            "age_attested": True,
+        },
     )
     assert resp.status_code == 201, resp.text
     return resp.json()["id"]

@@ -40,7 +40,12 @@ pytestmark = requires_db
 def _register(client: TestClient, email: str) -> None:
     resp = client.post(
         "/api/auth/register",
-        json={"email": email, "password": TEST_PASSWORD, "accepted_tos": True},
+        json={
+            "email": email,
+            "password": TEST_PASSWORD,
+            "accepted_tos": True,
+            "age_attested": True,
+        },
     )
     assert resp.status_code == 201, resp.text
 
@@ -55,7 +60,12 @@ def _csrf_token(client: TestClient) -> str:
 def test_register_sets_httponly_cookie_and_returns_summary(auth_client: TestClient) -> None:
     resp = auth_client.post(
         "/api/auth/register",
-        json={"email": "reg@example.com", "password": TEST_PASSWORD, "accepted_tos": True},
+        json={
+            "email": "reg@example.com",
+            "password": TEST_PASSWORD,
+            "accepted_tos": True,
+            "age_attested": True,
+        },
     )
     assert resp.status_code == 201, resp.text
     body = resp.json()
@@ -134,7 +144,12 @@ def test_duplicate_registration_returns_409(auth_client: TestClient) -> None:
     auth_client.cookies.clear()
     resp = auth_client.post(
         "/api/auth/register",
-        json={"email": "dupe@example.com", "password": TEST_PASSWORD, "accepted_tos": True},
+        json={
+            "email": "dupe@example.com",
+            "password": TEST_PASSWORD,
+            "accepted_tos": True,
+            "age_attested": True,
+        },
     )
     assert resp.status_code == 409, resp.text
 
@@ -143,7 +158,12 @@ def test_session_cookie_attributes_match_settings(auth_client: TestClient) -> No
     settings = get_settings()
     resp = auth_client.post(
         "/api/auth/register",
-        json={"email": "attrs@example.com", "password": TEST_PASSWORD, "accepted_tos": True},
+        json={
+            "email": "attrs@example.com",
+            "password": TEST_PASSWORD,
+            "accepted_tos": True,
+            "age_attested": True,
+        },
     )
     set_cookie = resp.headers.get("set-cookie", "").lower()
     assert f"path={settings.session_cookie_path}".lower() in set_cookie
@@ -177,6 +197,7 @@ def test_register_with_listed_disposable_domain_is_422_generic(
             "email": "throwaway@mailinator.com",
             "password": TEST_PASSWORD,
             "accepted_tos": True,
+            "age_attested": True,
         },
     )
     assert resp.status_code == 422, resp.text
@@ -196,11 +217,17 @@ def test_disposable_and_malformed_rejections_share_one_body(auth_client: TestCli
             "email": "throwaway@yopmail.com",
             "password": TEST_PASSWORD,
             "accepted_tos": True,
+            "age_attested": True,
         },
     )
     malformed = auth_client.post(
         "/api/auth/register",
-        json={"email": "not-an-email", "password": TEST_PASSWORD, "accepted_tos": True},
+        json={
+            "email": "not-an-email",
+            "password": TEST_PASSWORD,
+            "accepted_tos": True,
+            "age_attested": True,
+        },
     )
     assert disposable.status_code == malformed.status_code == 422
     assert disposable.json() == malformed.json() == {"detail": GENERIC_EMAIL_COPY}
@@ -210,7 +237,12 @@ def test_register_allows_duck_dot_com_alias(auth_client: TestClient) -> None:
     # duck.com is a documented privacy alias, never rejected as disposable (DOOR-24).
     resp = auth_client.post(
         "/api/auth/register",
-        json={"email": "reader@duck.com", "password": TEST_PASSWORD, "accepted_tos": True},
+        json={
+            "email": "reader@duck.com",
+            "password": TEST_PASSWORD,
+            "accepted_tos": True,
+            "age_attested": True,
+        },
     )
     assert resp.status_code == 201, resp.text
     assert resp.json()["email"] == "reader@duck.com"
@@ -247,7 +279,12 @@ def test_register_with_tos_false_is_422(auth_client: TestClient) -> None:
 def test_register_with_tos_stamps_the_account(auth_client: TestClient, db_conn: Connection) -> None:
     resp = auth_client.post(
         "/api/auth/register",
-        json={"email": "consenting@example.com", "password": TEST_PASSWORD, "accepted_tos": True},
+        json={
+            "email": "consenting@example.com",
+            "password": TEST_PASSWORD,
+            "accepted_tos": True,
+            "age_attested": True,
+        },
     )
     assert resp.status_code == 201, resp.text
     stamped = db_conn.execute(
@@ -276,7 +313,12 @@ def test_register_without_invite_code_is_403_and_creates_nothing(
 ) -> None:
     resp = invite_client.post(
         "/api/auth/register",
-        json={"email": "gate@example.com", "password": TEST_PASSWORD, "accepted_tos": True},
+        json={
+            "email": "gate@example.com",
+            "password": TEST_PASSWORD,
+            "accepted_tos": True,
+            "age_attested": True,
+        },
     )
     assert resp.status_code == 403, resp.text
     assert resp.json() == {"detail": INVITE_COPY}
@@ -298,6 +340,7 @@ def test_register_with_unknown_invite_code_is_403(
             "password": TEST_PASSWORD,
             "invite_code": "not-a-code",
             "accepted_tos": True,
+            "age_attested": True,
         },
     )
     assert resp.status_code == 403, resp.text
@@ -319,6 +362,7 @@ def test_register_with_exhausted_invite_code_is_403(
             "password": TEST_PASSWORD,
             "invite_code": "spent",
             "accepted_tos": True,
+            "age_attested": True,
         },
     )
     assert resp.status_code == 403, resp.text
@@ -344,6 +388,7 @@ def test_register_with_expired_invite_code_is_403(
             "password": TEST_PASSWORD,
             "invite_code": "stale",
             "accepted_tos": True,
+            "age_attested": True,
         },
     )
     assert resp.status_code == 403, resp.text
@@ -364,6 +409,7 @@ def test_register_with_valid_invite_returns_201_with_session(
             "password": TEST_PASSWORD,
             "invite_code": "WELCOME",
             "accepted_tos": True,
+            "age_attested": True,
         },
     )
     assert resp.status_code == 201, resp.text
@@ -394,6 +440,7 @@ def test_valid_invite_consumes_one_use_per_register_then_refuses(
                 "password": TEST_PASSWORD,
                 "invite_code": "TWICE",
                 "accepted_tos": True,
+                "age_attested": True,
             },
         )
         assert resp.status_code == 201, resp.text
@@ -407,6 +454,7 @@ def test_valid_invite_consumes_one_use_per_register_then_refuses(
             "password": TEST_PASSWORD,
             "invite_code": "TWICE",
             "accepted_tos": True,
+            "age_attested": True,
         },
     )
     assert third.status_code == 403, third.text
@@ -462,7 +510,12 @@ def test_delete_account_erases_objects_rows_and_leaves_the_sample(
     auth_client.cookies.clear()
     login = auth_client.post(
         "/api/auth/login",
-        json={"email": "deleteme@example.com", "password": TEST_PASSWORD, "accepted_tos": True},
+        json={
+            "email": "deleteme@example.com",
+            "password": TEST_PASSWORD,
+            "accepted_tos": True,
+            "age_attested": True,
+        },
     )
     assert login.status_code == 200, login.text
     resp = auth_client.delete(
@@ -475,7 +528,12 @@ def test_delete_account_erases_objects_rows_and_leaves_the_sample(
     auth_client.cookies.clear()
     relogin = auth_client.post(
         "/api/auth/login",
-        json={"email": "deleteme@example.com", "password": TEST_PASSWORD, "accepted_tos": True},
+        json={
+            "email": "deleteme@example.com",
+            "password": TEST_PASSWORD,
+            "accepted_tos": True,
+            "age_attested": True,
+        },
     )
     assert relogin.status_code == 401, relogin.text
 
@@ -503,6 +561,7 @@ def test_delete_account_erases_objects_rows_and_leaves_the_sample(
             "email": "sample-operator@example.com",
             "password": TEST_PASSWORD,
             "accepted_tos": True,
+            "age_attested": True,
         },
     )
     assert survivor.status_code == 200, survivor.text
@@ -532,7 +591,12 @@ def test_delete_account_erases_provider_keys(auth_client: TestClient, db_conn: C
     auth_client.cookies.clear()
     login = auth_client.post(
         "/api/auth/login",
-        json={"email": "keyholder@example.com", "password": TEST_PASSWORD, "accepted_tos": True},
+        json={
+            "email": "keyholder@example.com",
+            "password": TEST_PASSWORD,
+            "accepted_tos": True,
+            "age_attested": True,
+        },
     )
     assert login.status_code == 200, login.text
     resp = auth_client.delete(
@@ -588,6 +652,11 @@ def test_delete_account_storage_failure_is_502_and_user_remains(
     auth_client.cookies.clear()
     relogin = auth_client.post(
         "/api/auth/login",
-        json={"email": "deletefail@example.com", "password": TEST_PASSWORD, "accepted_tos": True},
+        json={
+            "email": "deletefail@example.com",
+            "password": TEST_PASSWORD,
+            "accepted_tos": True,
+            "age_attested": True,
+        },
     )
     assert relogin.status_code == 200, relogin.text

@@ -42,6 +42,7 @@
     },
     "operation": {
       "authRegister": "Registration failed.",
+      "sampleAsk": "The sample could not answer right now.",
       "authLogin": "Invalid email or password.",
       "authLogout": "Logout failed.",
       "sourcesList": "Could not load your sources.",
@@ -160,7 +161,17 @@
     }
   },
   "landing": {
-    "tagline": "Turn your books into cited answers and lasting recall."
+    "tagline": "Turn your books into cited answers and lasting recall.",
+    "sampleAsk": {
+      "label": "Try the shared sample — no account needed",
+      "capNote": "A few questions a day",
+      "formLabel": "Ask the sample a question",
+      "suggestedQuestion": "What does Sun Tzu mean by “all warfare is based on deception”?",
+      "ask": "Ask the sample",
+      "working": "Thinking…",
+      "notFound": "The sample has no passage that answers that. Try another question.",
+      "exhausted": "The sample has reached today's limit. Create a free account to keep learning."
+    }
   },
   "auth": {
     "createAccount": "Create account",
@@ -180,7 +191,64 @@
       "inviteCode": "Invite code",
       "inviteHint": "(if you have one)",
       "acceptTerms": "I agree to the <link>Terms of Service</link>",
+      "confirmAge": "I confirm I am 18 or older",
       "working": "Working…"
+    }
+  },
+  "legal": {
+    "privacy": {
+      "title": "Privacy Policy",
+      "subtitle": "What Learny collects, why, and what happens to it.",
+      "dataTitle": "Data we hold",
+      "dataBody": "Your account email and a password hash (never the password itself); your uploaded books and the text, embeddings, and study materials derived from them; your conversations, quizzes, notes, highlights, and reading progress; and session cookies that keep you signed in.",
+      "whyTitle": "Why we hold it",
+      "whyBody": "To operate your library and study features (to perform the service you signed up for), to keep the service secure (rate limiting and abuse prevention), and to answer support and legal requests.",
+      "subprocessorsTitle": "AI subprocessors",
+      "subprocessorsBody": "Two AI providers process content on the live path. OpenAI receives short text chunks to compute embeddings; Anthropic receives retrieved passages and your questions to generate answers. Neither provider is authorized to use this traffic to train its models, but both retain it for a limited period of their own abuse monitoring — we make no zero-retention claim on their behalf. Book text is sent only as far as retrieval requires, and prompt bodies are kept out of Learny's own logs.",
+      "transfersTitle": "International transfers",
+      "transfersBody": "Learny runs on infrastructure and AI providers that may process your data outside Brazil. Where that happens, the transfer relies on the safeguards the LGPD recognizes for international transfers, and the AI subprocessors above are named so you know exactly what travels: short text chunks for embeddings, and retrieved passages with your questions for answers.",
+      "retentionTitle": "Retention and deletion",
+      "retentionBody": "We keep the data above while your account is active. When you delete your account, your stored files and account data are removed. Backups expire on their own schedule.",
+      "sharingTitle": "Sharing",
+      "sharingBody": "We do not sell your data and do not share your books, notes, or conversations publicly. Beyond the AI subprocessors named above and the hosting and storage providers that run the service, data leaves Learny only when the law requires it.",
+      "rightsTitle": "Your rights under the LGPD",
+      "rightsIntro": "Under Brazil's General Data Protection Law (LGPD), you have the right to:",
+      "rightsList": "- confirm the existence of processing of your data;\n- access the data we hold about you;\n- correct incomplete, inaccurate, or outdated data;\n- ask for the anonymization, blocking, or deletion of unnecessary or excessive data;\n- ask for the portability of your data;\n- delete personal data processed on the basis of consent;\n- know with whom your data has been shared;\n- know the consequences of not providing consent;\n- revoke consent.",
+      "rightsContact": "You can exercise access, portability, and deletion directly in the product — library export and full account deletion are built in. For any other right, contact the operator through the address on the <link>copyright page</link>.",
+      "anpdBody": "You may also file a complaint with Brazil's national data protection authority (ANPD).",
+      "securityTitle": "Security and age",
+      "securityBody": "Sessions are HTTP-only cookies; passwords are hashed; traffic is encrypted in transit. Learny is for adults: creating an account requires confirming you are 18 or older, and we do not knowingly process the data of anyone younger."
+    },
+    "terms": {
+      "title": "Terms of Service",
+      "subtitle": "These terms govern your use of Learny. By creating an account you agree to them.",
+      "accountTitle": "Your account",
+      "accountBody": "You need an account to store books and study. You must be at least 18 years old to create one — we ask you to attest this at signup. Keep your credentials private; you are responsible for activity under your account. Some instances are invite-only: an invitation is a revocable permission, not an entitlement.",
+      "uploadsTitle": "Uploads and copyright",
+      "uploadsBody": "You may upload books you have the right to use privately. You keep your rights; Learny does not grant you any additional copyright. You warrant that your uploads do not infringe others' rights. Learny will not publish, sell, or share your files, and will disable access to material identified in a valid copyright notice (see <link>Copyright / DMCA</link>). Accounts that repeatedly infringe may be terminated.",
+      "useTitle": "Acceptable use",
+      "useBody": "Do not abuse the service: no attacking other users or the infrastructure, no scraping, no reselling access, and no presenting generated output as the book itself. Rate and storage limits apply.",
+      "aiTitle": "AI answers",
+      "aiBody": "Answers are generated and can be wrong, incomplete, or misleading — even when they cite a passage. Check the citation before relying on an answer. Learny provides study tooling, not professional advice.",
+      "terminationTitle": "Termination and deletion",
+      "terminationBody": "You can delete your account at any time; deleting removes your stored files and account data. We may suspend or terminate accounts that violate these terms, including for repeated copyright infringement.",
+      "disclaimersTitle": "Disclaimers and liability",
+      "disclaimersBody": "The service is provided “as is” without warranties of any kind. To the extent permitted by law, Learny is not liable for indirect or consequential damages arising from your use of the service.",
+      "lawTitle": "Governing law",
+      "lawBody": "These terms are governed by the laws of the Federative Republic of Brazil. See our <link>Privacy Policy</link> for how your data is handled."
+    },
+    "copyright": {
+      "title": "Copyright / DMCA",
+      "subtitle": "How to report copyright infringement on this instance.",
+      "agentTitle": "Designated agent",
+      "agentBody": "Copyright notices for this instance are handled by its designated agent. Send notices to",
+      "agentMissing": "(agent mailbox not configured)",
+      "filingTitle": "Filing a notice",
+      "filingBody": "If you believe material on this instance infringes your copyright, send the agent a notice that includes:\n\n- identification of the copyrighted work;\n- identification of the infringing material (the account or content involved) and enough detail for us to locate it;\n- your contact information;\n- a statement of your good-faith belief that the use is unauthorized;\n- a statement, under penalty of perjury, that the information in your notice is accurate and that you are the rights holder or authorized to act for them;\n- your signature.",
+      "actionTitle": "What we do",
+      "actionBody": "For a valid notice we remove or disable access to the identified material and may notify the uploader. Repeat infringers lose their accounts. If your material was removed by mistake or misidentification, you may send a counter-notice to the same address with the removed material's identification, your contact information, and a statement under penalty of perjury that the removal resulted from mistake or misidentification.",
+      "uploadsTitle": "Uploads",
+      "uploadsBody": "Learny stores private study copies. Uploaders warrant they have the right to use the works they upload; see the <link>Terms of Service</link>. This page is not legal advice and does not limit any rights you have under applicable law."
     }
   },
   "shell": {

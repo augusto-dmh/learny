@@ -32,6 +32,7 @@ export function AuthForm({
   const [password, setPassword] = useState("");
   const [inviteCode, setInviteCode] = useState("");
   const [acceptedTos, setAcceptedTos] = useState(false);
+  const [ageAttested, setAgeAttested] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
 
@@ -45,6 +46,7 @@ export function AuthForm({
       if (mode === "register") {
         const user = await register(email, password, {
           acceptedTos,
+          ageAttested,
           inviteCode: inviteCode.trim() || undefined,
         });
         onAuthenticated?.(user);
@@ -131,6 +133,20 @@ export function AuthForm({
                   </Link>
                 ),
               })}
+            </label>
+          </div>
+          <div className="flex items-start gap-2">
+            <input
+              id="auth-age"
+              type="checkbox"
+              name="age_attested"
+              checked={ageAttested}
+              onChange={(e) => setAgeAttested(e.target.checked)}
+              required
+              className="mt-1 size-4 accent-primary"
+            />
+            <label htmlFor="auth-age" className="text-sm">
+              {t("form.confirmAge")}
             </label>
           </div>
         </>

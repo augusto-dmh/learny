@@ -68,6 +68,8 @@ export async function fetchAuthState(
 export type RegisterOptions = {
   /** The backend refuses any register without an explicit ToS acceptance. */
   acceptedTos: boolean;
+  /** The backend refuses any register without an explicit 18-or-older attestation. */
+  ageAttested: boolean;
   /** Optional invite code (required only where the instance runs invite-only). */
   inviteCode?: string;
 };
@@ -76,7 +78,7 @@ export type RegisterOptions = {
 export async function register(
   email: string,
   password: string,
-  { acceptedTos, inviteCode }: RegisterOptions,
+  { acceptedTos, ageAttested, inviteCode }: RegisterOptions,
   fetchImpl: typeof fetch = fetch,
 ): Promise<UserSummary> {
   const res = await fetchImpl("/api/auth/register", {
@@ -88,6 +90,7 @@ export async function register(
       password,
       invite_code: inviteCode || null,
       accepted_tos: acceptedTos,
+      age_attested: ageAttested,
     }),
   });
   if (!res.ok) {
