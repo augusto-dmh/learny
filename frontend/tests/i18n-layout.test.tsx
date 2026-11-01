@@ -36,11 +36,14 @@ describe("root layout", () => {
     expect(await generateMetadata()).toEqual({
       title: ptBR.meta.title,
       description: ptBR.meta.description,
+      // The static manifest link rides along; it is not locale-dependent.
+      manifest: "/manifest.webmanifest",
     });
     setTestLocale("en");
     expect(await generateMetadata()).toEqual({
       title: en.meta.title,
       description: en.meta.description,
+      manifest: "/manifest.webmanifest",
     });
   });
 });
