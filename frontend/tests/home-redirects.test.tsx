@@ -61,12 +61,16 @@ describe("auth redirects (HOME-17)", () => {
     fireEvent.change(screen.getByLabelText("Password"), {
       target: { value: "pw" },
     });
-    // A successful registration now includes ToS consent (DOOR-25): the
-    // required checkbox gates submit and the consent rides the register body.
+    // A successful registration now includes ToS consent (DOOR-25) and the
+    // 18-or-older attestation: both required checkboxes gate submit and both
+    // ride the register body.
     fireEvent.click(screen.getByLabelText(/Terms of Service/));
+    fireEvent.click(screen.getByLabelText("I confirm I am 18 or older"));
     fireEvent.click(screen.getByRole("button", { name: "Create account" }));
 
     await waitFor(() => expect(push).toHaveBeenCalledWith("/home"));
-    expect(JSON.parse(fetchMock.mock.calls[0][1].body as string).accepted_tos).toBe(true);
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(body.accepted_tos).toBe(true);
+    expect(body.age_attested).toBe(true);
   });
 });
