@@ -23,7 +23,7 @@
  */
 
 import { type Citation } from "./citations";
-import { ApiError, readDetail, type ApiOperation } from "./errors";
+import { ApiError, readErrorBody, type ApiOperation } from "./errors";
 import { StreamRequestError } from "./streaming";
 
 /** How a single turn is answered. Conversations are not typed by mode. */
@@ -62,6 +62,12 @@ export type ConversationView = {
  * One grounded turn, mirroring the backend `ConversationTurnView`. `text` is
  * `""` and `citations` is empty for both not-found outcomes; `model` and
  * `evidence_count` diagnostics are present on every outcome.
+ *
+ * The usage fields are what the turn's call consumed, as the adapter reported
+ * it: `usage_input_tokens`/`usage_output_tokens` are `null` when nothing was
+ * reported (the deterministic local adapter, or a turn stored before the usage
+ * columns existed), and `cost_usd_micros` is `null` unless the learner's own
+ * key paid the call — a house-served turn costs the learner nothing.
  */
 export type ConversationTurnView = {
   turn_index: number;
@@ -73,6 +79,10 @@ export type ConversationTurnView = {
   evidence_count: number;
   model: string;
   created_at: string;
+  usage_input_tokens?: number | null;
+  usage_output_tokens?: number | null;
+  cost_usd_micros?: number | null;
+  user_keyed?: boolean;
 };
 
 /** A conversation with its ordered, cited history (`turn_index` ascending). */
@@ -93,15 +103,21 @@ export type ConversationSummaryView = ConversationView & {
 };
 
 /**
- * A failed management call, carrying the operation, the status that produced it
- * and the backend `detail` as data. Callers key off `status` to tell an absent
- * conversation (404 — a pointer that outlived its thread) from anything else.
+ * A failed management call, carrying the operation, the status that produced it,
+ * the backend `detail` as data and the machine `code` when the body carries one.
+ * Callers key off `status` to tell an absent conversation (404 — a pointer that
+ * outlived its thread) from anything else.
  */
 export class ConversationRequestError extends ApiError {
   declare readonly status: number;
 
-  constructor(operation: ApiOperation, status: number, detail: string | null = null) {
-    super(operation, status, detail);
+  constructor(
+    operation: ApiOperation,
+    status: number,
+    detail: string | null = null,
+    code: string | null = null,
+  ) {
+    super(operation, status, detail, code);
     this.name = "ConversationRequestError";
   }
 }
@@ -140,7 +156,8 @@ export async function startConversation(
     }),
   });
   if (!res.ok) {
-    throw new StreamRequestError(res.status, "conversationsStart", await readDetail(res));
+    const { detail, code } = await readErrorBody(res);
+    throw new StreamRequestError(res.status, "conversationsStart", detail, code);
   }
   return (await res.json()) as ConversationView;
 }
@@ -230,5 +247,6 @@ async function toConversationError(
   res: Response,
   operation: ApiOperation,
 ): Promise<ConversationRequestError> {
-  return new ConversationRequestError(operation, res.status, await readDetail(res));
+  const { detail, code } = await readErrorBody(res);
+  return new ConversationRequestError(operation, res.status, detail, code);
 }

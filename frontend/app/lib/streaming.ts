@@ -20,7 +20,7 @@ import { DefaultChatTransport, type UIMessage } from "ai";
 
 import type { ConversationAnswerStatus, ConversationMode } from "./conversations";
 import { type Citation } from "./citations";
-import { ApiError, readDetail, type ApiErrorStatus, type ApiOperation } from "./errors";
+import { ApiError, readErrorBody, type ApiErrorStatus, type ApiOperation } from "./errors";
 
 /**
  * The origin marker a capture-popover Explain turn carries (COST-04, AD-340).
@@ -50,10 +50,27 @@ export type AnswerStatus = ConversationAnswerStatus;
 export type AnswerPhase = "searching";
 
 /**
+ * What one answer's provider call consumed, as the adapter reported it —
+ * the payload of the stream's terminal `data-answer-usage` part and of a
+ * restored turn's usage fields. The backend sends the part only when the
+ * adapter reported usage, so an absent part is "nothing was reported", not a
+ * zero. `cost_usd_micros` is the estimated price at the serving profile's
+ * catalog and is set only when the learner's own key paid; a house-served
+ * turn costs the learner nothing and reads `null`.
+ */
+export type AnswerUsage = {
+  input_tokens: number;
+  output_tokens: number;
+  cost_usd_micros: number | null;
+  user_keyed: boolean;
+};
+
+/**
  * The typed data parts Learny's stream carries alongside the streamed text,
  * matching `ui_message_stream.py`: `data-citations` (the grounded citation
- * snapshots), `data-answer-status`, `data-tutor-state` (the live tutor ladder,
- * only on Teach turns), and `data-phase`. The model's thinking rides
+ * snapshots), `data-answer-status`, `data-answer-usage` (the terminal usage
+ * report, only when the adapter reported one), `data-tutor-state` (the live
+ * tutor ladder, only on Teach turns), and `data-phase`. The model's thinking rides
  * on the protocol's own `reasoning` parts, so it needs no entry here.
  *
  * `phase` is declared because the backend sends it, not because a component reads
@@ -65,6 +82,7 @@ export type AnswerPhase = "searching";
 export type LearnyDataParts = {
   citations: Citation[];
   "answer-status": { status: AnswerStatus };
+  "answer-usage": AnswerUsage;
   phase: { phase: AnswerPhase };
   "tutor-state": {
     phase: string;
@@ -85,14 +103,19 @@ export function messageText(message: LearnyUIMessage): string {
 }
 
 /**
- * Read a message's collected text, citations, answer status, and reasoning from
- * its parts.
+ * Read a message's collected text, citations, answer status, usage, and
+ * reasoning from its parts.
  *
  * `reasoning` is the model's streamed thinking, concatenated the same way the
  * answer text is; it is empty whenever the turn carried none — the provider chose
  * not to think, the local adapter is answering, or the turn is a restored one
  * (reasoning is never persisted, AD-220). Callers key the reasoning region off
  * that emptiness, so a turn without thinking shows no empty shell.
+ *
+ * `usage` is the turn's terminal usage report, or `null` when the adapter
+ * reported nothing — the deterministic local adapter, or an older restored turn
+ * predating the usage columns. Callers key the usage line off that null the same
+ * way: nothing reported means nothing to show.
  *
  * The announced phase is deliberately not projected: the panels read "searching"
  * off a turn that is in flight with nothing to show yet, which is the same fact
@@ -103,11 +126,13 @@ export function assistantView(message: LearnyUIMessage): {
   citations: Citation[] | null;
   status: AnswerStatus | null;
   reasoning: string;
+  usage: AnswerUsage | null;
 } {
   let text = "";
   let citations: Citation[] | null = null;
   let status: AnswerStatus | null = null;
   let reasoning = "";
+  let usage: AnswerUsage | null = null;
   for (const part of message.parts) {
     if (part.type === "text") {
       text += part.text;
@@ -117,9 +142,11 @@ export function assistantView(message: LearnyUIMessage): {
       citations = part.data;
     } else if (part.type === "data-answer-status") {
       status = part.data.status;
+    } else if (part.type === "data-answer-usage") {
+      usage = part.data;
     }
   }
-  return { text, citations, status, reasoning };
+  return { text, citations, status, reasoning, usage };
 }
 
 /** The tutor ladder a live Teach stream echoed on the terminal frame, or null. */
@@ -163,7 +190,8 @@ export type StreamErrorKind = ApiErrorStatus;
 
 /**
  * A pre-stream request failure: an `ApiError` for a chat operation, carrying the
- * originating status (or `"network"`). Surfaces read it through
+ * originating status (or `"network"`) and, when the guard's body carries one,
+ * the backend's machine refusal code. Surfaces read it through
  * `useErrorMessage`, which gives the chat guards (403/404/409/422) their own copy
  * and the shared status classes (401, 429, 5xx, network) theirs; a 401 is keyed
  * off `status` to redirect to login (FE-05).
@@ -177,8 +205,9 @@ export class StreamRequestError extends ApiError {
     status: StreamErrorKind,
     operation: ApiOperation = "chatTurn",
     detail: string | null = null,
+    code: string | null = null,
   ) {
-    super(operation, status, detail);
+    super(operation, status, detail, code);
     this.name = "StreamRequestError";
   }
 }
@@ -204,7 +233,8 @@ const streamingFetch: typeof fetch = async (input, init) => {
     throw new StreamRequestError("network");
   }
   if (!response.ok) {
-    throw new StreamRequestError(response.status, "chatTurn", await readDetail(response));
+    const { detail, code } = await readErrorBody(response);
+    throw new StreamRequestError(response.status, "chatTurn", detail, code);
   }
   return response;
 };
@@ -283,6 +313,17 @@ export type PersistedTurn = {
   answer_status: AnswerStatus;
   text: string;
   citations: Citation[];
+  /**
+   * What the turn's call consumed, as the adapter reported it (the backend
+   * `ConversationTurnView`'s usage fields). `null` — or absent, on a turn
+   * stored before the usage columns existed — reads exactly as "no usage
+   * reported": the replay emits no usage part and the answer shows no usage
+   * line.
+   */
+  usage_input_tokens?: number | null;
+  usage_output_tokens?: number | null;
+  cost_usd_micros?: number | null;
+  user_keyed?: boolean;
 };
 
 /**
@@ -290,7 +331,9 @@ export type PersistedTurn = {
  * identically to live-streamed turns (FE-12). Each turn becomes a user message
  * (its prompt) followed by an assistant message carrying the response text, the
  * citation snapshots, and the answer status — the same part shape the live
- * stream assembles.
+ * stream assembles. A turn whose adapter reported usage replays the same
+ * `data-answer-usage` part the live stream's terminal frame carried, so the
+ * usage line renders identically either way.
  *
  * No reasoning or phase parts are replayed: thinking is transient (AD-220) and a
  * stored turn has no phase left to announce. The answer text keeps whatever
@@ -305,6 +348,24 @@ export function turnsToUIMessages(turns: PersistedTurn[]): LearnyUIMessage[] {
       role: "user",
       parts: [{ type: "text", text: turn.message }],
     });
+    // The backend emits its usage part only when the adapter reported usage;
+    // both token counts ride together, so replaying on the pair is the same
+    // rule the backend applies.
+    const usagePart =
+      typeof turn.usage_input_tokens === "number" &&
+      typeof turn.usage_output_tokens === "number"
+        ? [
+            {
+              type: "data-answer-usage" as const,
+              data: {
+                input_tokens: turn.usage_input_tokens,
+                output_tokens: turn.usage_output_tokens,
+                cost_usd_micros: turn.cost_usd_micros ?? null,
+                user_keyed: turn.user_keyed ?? false,
+              },
+            },
+          ]
+        : [];
     messages.push({
       id: `turn-${turn.turn_index}-assistant`,
       role: "assistant",
@@ -312,6 +373,7 @@ export function turnsToUIMessages(turns: PersistedTurn[]): LearnyUIMessage[] {
         { type: "text", text: turn.text },
         { type: "data-citations", data: turn.citations },
         { type: "data-answer-status", data: { status: turn.answer_status } },
+        ...usagePart,
       ],
     });
   }

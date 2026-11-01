@@ -13,6 +13,9 @@
  * - `detail` — the backend's `detail`, kept as data for logs and debugging. It is
  *   never shown: the backend explains failures in English, and showing that text
  *   would leak English into every other locale.
+ * - `code` — the backend's machine code beside the `detail` on the typed
+ *   refusals (the learner-side BYOK rails). Also data, never shown; a refusal
+ *   code maps to its own catalog copy below.
  *
  * What the learner reads is chosen by {@link errorMessageKey}: a status class
  * that means the same thing whatever was being done (an expired session, rate
@@ -46,18 +49,30 @@ export type ErrorMessageKey =
  */
 export type ErrorFallback = ApiOperation | ErrorMessageKey;
 
-/** A failed request: the operation, the status and the backend detail, as data. */
+/** A failed request: the operation, the status, the backend detail and the machine code. */
 export class ApiError extends Error {
   readonly operation: ApiOperation;
   readonly status: ApiErrorStatus;
   readonly detail: string | null;
+  /**
+   * The backend's machine code beside the `detail` (`{"detail", "code"}`), or
+   * `null` when the body carries none. Like `detail` it is data, never copy:
+   * the learner reads catalog text keyed off it.
+   */
+  readonly code: string | null;
 
-  constructor(operation: ApiOperation, status: ApiErrorStatus, detail: string | null = null) {
+  constructor(
+    operation: ApiOperation,
+    status: ApiErrorStatus,
+    detail: string | null = null,
+    code: string | null = null,
+  ) {
     super(operation);
     this.name = "ApiError";
     this.operation = operation;
     this.status = status;
     this.detail = detail;
+    this.code = code;
   }
 }
 
@@ -67,21 +82,39 @@ export class ApiError extends Error {
  * detail is serialized rather than dropped. Never throws.
  */
 export async function readDetail(res: Response): Promise<string | null> {
+  return (await readErrorBody(res)).detail;
+}
+
+/**
+ * The backend body of a non-OK response, read as data: the `detail` string and
+ * the machine `code` beside it (`{"detail", "code"}` — the typed refusals).
+ * Either is null when the body is not JSON or carries none; a list-shaped
+ * validation detail is serialized rather than dropped. Never throws.
+ */
+export async function readErrorBody(
+  res: Response,
+): Promise<{ detail: string | null; code: string | null }> {
   try {
-    const body = (await res.json()) as { detail?: unknown } | null;
+    const body = (await res.json()) as { detail?: unknown; code?: unknown } | null;
     const detail = body?.detail;
-    if (detail === undefined || detail === null) {
-      return null;
-    }
-    return typeof detail === "string" ? detail : JSON.stringify(detail);
+    return {
+      detail:
+        detail === undefined || detail === null
+          ? null
+          : typeof detail === "string"
+            ? detail
+            : JSON.stringify(detail),
+      code: typeof body?.code === "string" ? body.code : null,
+    };
   } catch {
-    return null;
+    return { detail: null, code: null };
   }
 }
 
 /** Build the `ApiError` for a non-OK response to `operation`. */
 export async function apiErrorFrom(res: Response, operation: ApiOperation): Promise<ApiError> {
-  return new ApiError(operation, res.status, await readDetail(res));
+  const { detail, code } = await readErrorBody(res);
+  return new ApiError(operation, res.status, detail, code);
 }
 
 /**
@@ -116,6 +149,18 @@ export function statusClassOf(status: ApiErrorStatus): StatusClass | null {
   return null;
 }
 
+/**
+ * The backend's machine refusal codes (`{"detail", "code"}`) that carry their
+ * own catalog copy, winning over the status classes: a learner-side BYOK rail
+ * pausing their own key is a different fact from the shared "too many
+ * requests", whatever surface it refused. Only these two codes exist today;
+ * an unrecognized code falls through to the ordinary mapping.
+ */
+const TYPED_REFUSALS: Readonly<Record<string, ErrorMessageKey>> = {
+  byok_budget: "stream.byokBudget",
+  byok_corpus_limit: "stream.byokCorpusLimit",
+};
+
 function fallbackKey(fallback: ErrorFallback): ErrorMessageKey {
   return fallback === "generic" || fallback.includes(".")
     ? (fallback as ErrorMessageKey)
@@ -123,13 +168,18 @@ function fallbackKey(fallback: ErrorFallback): ErrorMessageKey {
 }
 
 /**
- * The `errors.*` key a caught value reads as. An `ApiError` maps by status class
- * first, then by the chat guards' status copy, then by its operation; any other
- * value reads as `fallback`. The backend `detail` never takes part.
+ * The `errors.*` key a caught value reads as. An `ApiError` maps by a typed
+ * refusal code first, then by status class, then by the chat guards' status
+ * copy, then by its operation; any other value reads as `fallback`. The
+ * backend `detail` never takes part.
  */
 export function errorMessageKey(error: unknown, fallback: ErrorFallback): ErrorMessageKey {
   if (!(error instanceof ApiError)) {
     return fallbackKey(fallback);
+  }
+  const typed = error.code !== null ? TYPED_REFUSALS[error.code] : undefined;
+  if (typed) {
+    return typed;
   }
   const { operation, status } = error;
   if (typeof status === "number" && OWN_STATUSES[operation]?.includes(status)) {

@@ -38,7 +38,9 @@
       "notFound": "This book could not be found.",
       "notReady": "This book is still processing. Try again once it is ready.",
       "unprocessable": "That request could not be processed. Please revise it and try again.",
-      "generationFailed": "Answer generation failed. Please try again."
+      "generationFailed": "Answer generation failed. Please try again.",
+      "byokBudget": "Your own monthly budget for AI keys has been reached, so your own keys pause. Raise or clear the budget in Account to continue.",
+      "byokCorpusLimit": "This book has reached its monthly limit of prompt tokens on your own key. Try again next month, or ask Learny's own AI instead."
     },
     "operation": {
       "authRegister": "Registration failed.",
@@ -313,6 +315,10 @@
       "usedSources": "{count, plural, one {Used # source} other {Used # sources}}",
       "emptyTitle": "No messages yet",
       "emptyDescription": "Start a conversation to see messages here"
+    },
+    "usage": {
+      "tokens": "{input, plural, one {# input token} other {# input tokens}} · {output, plural, one {# output token} other {# output tokens}}",
+      "ownKey": "about {cost} on your own key"
     }
   },
   "home": {
