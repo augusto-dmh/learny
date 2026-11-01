@@ -29,9 +29,13 @@ from app.infrastructure.web.middleware import RequestContextMiddleware
 from app.infrastructure.web.notes import router as notes_router
 from app.infrastructure.web.provider_keys import router as provider_keys_router
 from app.infrastructure.web.quiz import router as quiz_router
-from app.infrastructure.web.rate_limit import set_rate_limiter
-from app.infrastructure.web.redis_rate_limit import make_redis_limiter
+from app.infrastructure.web.rate_limit import set_rate_limiter, set_sample_ask_limiter
+from app.infrastructure.web.redis_rate_limit import (
+    make_redis_limiter,
+    make_redis_sample_ask_limiter,
+)
 from app.infrastructure.web.retrieval import router as retrieval_router
+from app.infrastructure.web.sample_ask import router as sample_ask_router
 from app.infrastructure.web.sources import router as sources_router
 from app.infrastructure.web.study import router as study_router
 from app.infrastructure.web.vault import router as vault_router
@@ -101,6 +105,14 @@ def create_app() -> FastAPI:
     configure_logging()
     settings = get_settings()
     set_rate_limiter(make_redis_limiter(settings.redis_url))
+    # The guest sample ask throttles on its own per-day window; same Redis, its
+    # own shape (the operator's per-IP daily cap), so it never borrows the auth
+    # limiter's window.
+    set_sample_ask_limiter(
+        make_redis_sample_ask_limiter(
+            settings.redis_url, max_attempts=settings.guest_sample_ask_per_ip_per_day
+        )
+    )
     app = FastAPI(title=settings.app_name)
     # The instrument's bounds are configuration, so the recorder the process uses
     # is built here rather than left at its module defaults — otherwise
@@ -130,6 +142,7 @@ def create_app() -> FastAPI:
     app.include_router(ingestion_router)
     app.include_router(retrieval_router)
     app.include_router(conversations_router)
+    app.include_router(sample_ask_router)
     app.include_router(quiz_router)
     app.include_router(notes_router)
     app.include_router(cards_router)

@@ -311,6 +311,16 @@ class Settings(BaseSettings):
     price_embed_usd_per_million_tokens: float = 0.13
     daily_ask_cap: int = Field(default=8, ge=0)
     daily_teach_start_cap: int = Field(default=1, ge=0)
+
+    # Guest sample ask. The visitor surface debits the seeded sample operator's
+    # ledger row through a dedicated DailyBudget with its own knobs: the
+    # sample's per-UTC-day USD ceiling and ask-count ceiling, the per-client-IP
+    # asks inside the limiter's fixed window, and the question length ceiling
+    # the boundary refuses with a 422 before anything runs.
+    guest_sample_daily_budget_usd: float = 0.5
+    guest_sample_daily_ask_cap: int = Field(default=50, ge=0)
+    guest_sample_ask_per_ip_per_day: int = Field(default=5, ge=0)
+    guest_sample_question_max_chars: int = Field(default=400, ge=1)
     # The operator pause (DOOR-12): while true, every generation surface — and the
     # embedding-producing ingest step — refuses before any provider SDK is touched,
     # with the honest pause copy. Reads and review grading are untouched.
