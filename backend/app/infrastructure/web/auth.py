@@ -78,13 +78,16 @@ class Credentials(BaseModel):
     ``LEARNY_INVITE_REQUIRED`` is on, the application service demands a live code
     and answers the uniform 403 itself (DOOR-20); with the flag off it is ignored.
     ``accepted_tos`` defaults to False here — an omitted consent never registers
-    (DOOR-25) — which is the boundary that gives the default its force.
+    (DOOR-25) — which is the boundary that gives the default its force. So does
+    ``age_attested``: an account is created only behind an explicit 18-or-older
+    attestation, refused by the application service before anything is written.
     """
 
     email: str
     password: str
     invite_code: str | None = None
     accepted_tos: bool = False
+    age_attested: bool = False
 
 
 class UserSummary(BaseModel):
@@ -154,6 +157,7 @@ def register(
         password=body.password,
         invite_code=body.invite_code,
         accepted_tos=body.accepted_tos,
+        age_attested=body.age_attested,
     )
     set_session_cookie(response, raw_token=result.issued.raw_token, settings=settings)
     return UserSummary.from_entity(result.user)

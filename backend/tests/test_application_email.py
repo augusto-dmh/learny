@@ -470,7 +470,12 @@ def test_register_is_201_and_mails_a_hashed_token_even_when_smtp_raises(
     with caplog.at_level(logging.ERROR, logger="app.application.identity"):
         resp = auth_client.post(
             "/api/auth/register",
-            json={"email": "raised@example.com", "password": TEST_PASSWORD, "accepted_tos": True},
+            json={
+                "email": "raised@example.com",
+                "password": TEST_PASSWORD,
+                "accepted_tos": True,
+                "age_attested": True,
+            },
         )
     assert resp.status_code == 201, resp.text
 
@@ -520,7 +525,12 @@ def test_confirm_sets_email_verified_then_replay_and_cross_purpose_are_403(
     _override_sender(auth_client, emails)
     registered = auth_client.post(
         "/api/auth/register",
-        json={"email": "confirm@example.com", "password": TEST_PASSWORD, "accepted_tos": True},
+        json={
+            "email": "confirm@example.com",
+            "password": TEST_PASSWORD,
+            "accepted_tos": True,
+            "age_attested": True,
+        },
     )
     assert registered.status_code == 201, registered.text
     token = _token_from_body(emails.sent[0]["body"])
@@ -553,7 +563,12 @@ def test_unknown_reset_email_is_204_with_no_mail_like_the_known_one(
     _override_sender(auth_client, emails)
     registered = auth_client.post(
         "/api/auth/register",
-        json={"email": "known@example.com", "password": TEST_PASSWORD, "accepted_tos": True},
+        json={
+            "email": "known@example.com",
+            "password": TEST_PASSWORD,
+            "accepted_tos": True,
+            "age_attested": True,
+        },
     )
     assert registered.status_code == 201, registered.text
     emails.sent.clear()
@@ -584,7 +599,12 @@ def test_reset_with_valid_token_sets_a_new_password_exactly_once(
     _override_sender(auth_client, emails)
     registered = auth_client.post(
         "/api/auth/register",
-        json={"email": "resetter@example.com", "password": TEST_PASSWORD, "accepted_tos": True},
+        json={
+            "email": "resetter@example.com",
+            "password": TEST_PASSWORD,
+            "accepted_tos": True,
+            "age_attested": True,
+        },
     )
     assert registered.status_code == 201, registered.text
     auth_client.cookies.clear()
@@ -643,7 +663,12 @@ def test_reset_request_and_resend_consume_auth_limiter_budget(
     _override_sender(auth_client, FakeEmailSender())
     registered = auth_client.post(
         "/api/auth/register",
-        json={"email": "throttleme@example.com", "password": TEST_PASSWORD, "accepted_tos": True},
+        json={
+            "email": "throttleme@example.com",
+            "password": TEST_PASSWORD,
+            "accepted_tos": True,
+            "age_attested": True,
+        },
     )
     assert registered.status_code == 201, registered.text
 

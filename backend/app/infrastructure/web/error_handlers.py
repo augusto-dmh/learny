@@ -57,6 +57,7 @@ from app.application.errors import (
     QuizItemNotFound,
     QuizItemNotReviewable,
     QuizReviewNotUndoable,
+    SampleUnavailable,
     SourceCountQuotaExceeded,
     SourceNotFound,
     SourceNotReady,
@@ -133,6 +134,9 @@ _STATUS_BY_ERROR = {
     # The operator kill switch: 503 with the honest pause copy; reads and reviews
     # are untouched and never route through this error.
     AiPaused: status.HTTP_503_SERVICE_UNAVAILABLE,
+    # The guest sample cannot serve (seed missing, sample not ready, no ledger
+    # identity): one honest 503, never a fake answer or a silent fallback.
+    SampleUnavailable: status.HTTP_503_SERVICE_UNAVAILABLE,
     # Library quotas: count → 403 (delete a book), stored bytes → 413 (smaller
     # file). Both are raised before ``put_object``, so neither orphans storage.
     SourceCountQuotaExceeded: status.HTTP_403_FORBIDDEN,

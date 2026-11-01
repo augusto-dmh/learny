@@ -95,10 +95,30 @@ def get_rate_limiter() -> RateLimiter:
     return _limiter
 
 
-def _hit(key: str) -> None:
-    """Record one attempt; 429 when the window is exceeded, 503 if Redis is down."""
+# The guest sample ask carries its own limiter: a per-day window and cap that
+# would starve the auth/quiz budgets if they shared one instance's shape, keyed
+# like the auth rails on the trusted client IP (AD-330) since a visitor has no
+# user id to key on. Swapped via set_sample_ask_limiter (composition root/tests).
+_sample_ask_limiter: RateLimiter = InMemoryFixedWindowRateLimiter(
+    max_attempts=5, window_seconds=86400
+)
+
+
+def set_sample_ask_limiter(limiter: RateLimiter) -> None:
+    """Replace the guest sample ask limiter (composition root / tests)."""
+    global _sample_ask_limiter
+    _sample_ask_limiter = limiter
+
+
+def get_sample_ask_limiter() -> RateLimiter:
+    """Return the guest sample ask limiter."""
+    return _sample_ask_limiter
+
+
+def _hit_limiter(limiter: RateLimiter, key: str) -> None:
+    """Record one attempt against ``limiter``; 429 on breach, 503 if it is down."""
     try:
-        allowed, retry_after = get_rate_limiter().hit(key)
+        allowed, retry_after = limiter.hit(key)
     except LimiterUnavailable:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -110,6 +130,11 @@ def _hit(key: str) -> None:
             detail="Too many attempts. Please try again later.",
             headers={"Retry-After": str(retry_after)},
         )
+
+
+def _hit(key: str) -> None:
+    """Record one attempt; 429 when the window is exceeded, 503 if Redis is down."""
+    _hit_limiter(get_rate_limiter(), key)
 
 
 def _peer_is_trusted(peer: str, trusted: tuple[str, ...]) -> bool:
@@ -247,3 +272,19 @@ def rate_limit_notes(request: Request) -> None:
     cannot flood the note writes or the corpus resolution capture does (NF-09).
     """
     _hit(_client_key(request))
+
+
+def rate_limit_sample_ask(request: Request) -> None:
+    """FastAPI dependency: throttle the guest sample ask per client IP.
+
+    The one surface with no authenticated caller, so the key is the trusted-proxy
+    client IP + route (the auth rails' policy, AD-330) against the dedicated
+    per-day limiter: one visitor cannot spend the sample's whole daily budget,
+    and header tricks mint nothing because the key comes from the trusted proxy.
+    Two learners behind one shared proxy IP share the visitor budget — accepted:
+    the surface exists to convert strangers, not to serve a household.
+    """
+    _hit_limiter(
+        get_sample_ask_limiter(),
+        f"sample-ask:{trusted_client_ip(request)}:{request.url.path}",
+    )

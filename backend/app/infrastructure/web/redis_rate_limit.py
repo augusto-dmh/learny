@@ -87,3 +87,15 @@ class RedisFixedWindowRateLimiter:
 def make_redis_limiter(url: str) -> RateLimiter:
     """Composition-root helper: pooled Redis limiter with the in-memory defaults."""
     return RedisFixedWindowRateLimiter.from_url(url)
+
+
+def make_redis_sample_ask_limiter(url: str, *, max_attempts: int) -> RateLimiter:
+    """Composition-root helper: the guest sample ask's per-day window in Redis.
+
+    One shared pool shape with the main limiter, but its own fixed 24h window
+    and the operator's per-IP daily cap — a shape the shared auth limiter must
+    not inherit.
+    """
+    return RedisFixedWindowRateLimiter.from_url(
+        url, max_attempts=max_attempts, window_seconds=86400
+    )

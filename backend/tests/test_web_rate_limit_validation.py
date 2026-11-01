@@ -95,12 +95,18 @@ def test_repeated_register_attempts_hit_rate_limit(throttled_client: TestClient)
                 "email": f"rl{i}@example.com",
                 "password": TEST_PASSWORD,
                 "accepted_tos": True,
+                "age_attested": True,
             },
         )
         assert resp.status_code == 201, resp.text
     throttled = throttled_client.post(
         "/api/auth/register",
-        json={"email": "rl-final@example.com", "password": TEST_PASSWORD, "accepted_tos": True},
+        json={
+            "email": "rl-final@example.com",
+            "password": TEST_PASSWORD,
+            "accepted_tos": True,
+            "age_attested": True,
+        },
     )
     assert throttled.status_code == 429, throttled.text
 
@@ -108,7 +114,12 @@ def test_repeated_register_attempts_hit_rate_limit(throttled_client: TestClient)
 def test_register_rejects_malformed_email(auth_client: TestClient) -> None:
     resp = auth_client.post(
         "/api/auth/register",
-        json={"email": "not-an-email", "password": TEST_PASSWORD, "accepted_tos": True},
+        json={
+            "email": "not-an-email",
+            "password": TEST_PASSWORD,
+            "accepted_tos": True,
+            "age_attested": True,
+        },
     )
     assert resp.status_code == 422, resp.text
 
@@ -116,7 +127,12 @@ def test_register_rejects_malformed_email(auth_client: TestClient) -> None:
 def test_register_rejects_weak_password(auth_client: TestClient) -> None:
     resp = auth_client.post(
         "/api/auth/register",
-        json={"email": "weakpw@example.com", "password": "short", "accepted_tos": True},
+        json={
+            "email": "weakpw@example.com",
+            "password": "short",
+            "accepted_tos": True,
+            "age_attested": True,
+        },
     )
     assert resp.status_code == 422, resp.text
     # No session was issued for the rejected registration.
@@ -253,7 +269,13 @@ class _UnavailableLimiter:
 
 def _register(client: TestClient, email: str) -> str:
     resp = client.post(
-        "/api/auth/register", json={"email": email, "password": TEST_PASSWORD, "accepted_tos": True}
+        "/api/auth/register",
+        json={
+            "email": email,
+            "password": TEST_PASSWORD,
+            "accepted_tos": True,
+            "age_attested": True,
+        },
     )
     assert resp.status_code == 201, resp.text
     return resp.json()["id"]

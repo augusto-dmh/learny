@@ -42,7 +42,13 @@ _GRADE_WORDS = re.compile(
 def _login(client: TestClient, email: str | None = None) -> tuple[User, str]:
     email = email or f"{uuid4()}@example.test"
     resp = client.post(
-        "/api/auth/register", json={"email": email, "password": TEST_PASSWORD, "accepted_tos": True}
+        "/api/auth/register",
+        json={
+            "email": email,
+            "password": TEST_PASSWORD,
+            "accepted_tos": True,
+            "age_attested": True,
+        },
     )
     assert resp.status_code == 201, resp.text
     me = client.get("/api/auth/me").json()

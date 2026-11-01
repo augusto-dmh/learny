@@ -32,6 +32,7 @@ from app.application.errors import (
 from app.application.invites import INVITE_REQUIRED_MESSAGE, InviteRepository
 from app.application.media import media_object_key
 from app.application.validation import (
+    AGE_ATTESTATION_MESSAGE,
     SAMPLE_OPERATOR_EMAIL,
     TOS_ACCEPTANCE_MESSAGE,
     is_disposable_email,
@@ -165,6 +166,7 @@ class RegisterUser:
         password: str,
         invite_code: str | None = None,
         accepted_tos: bool = True,
+        age_attested: bool = True,
     ) -> AuthResult:
         # Consent first (DOOR-25): without an explicit acceptance nothing else is
         # validated — no user material is created and no invite is consumed. The
@@ -173,6 +175,11 @@ class RegisterUser:
         # concern they satisfy upstream.
         if not accepted_tos:
             raise ValidationError(TOS_ACCEPTANCE_MESSAGE)
+        # The adult-only gate sits beside it: an account is created only behind
+        # an explicit 18-or-older attestation, refused before any write (the
+        # boundary defaults it False exactly like the consent flag).
+        if not age_attested:
+            raise ValidationError(AGE_ATTESTATION_MESSAGE)
 
         normalized_email = validate_email(email)
         if is_disposable_email(normalized_email):

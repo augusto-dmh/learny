@@ -24,6 +24,12 @@ MAX_PASSWORD_LENGTH = 128  # bound work / avoid DoS on the hasher
 # rails added together — so the register copy has one home.
 TOS_ACCEPTANCE_MESSAGE = "You must accept the Terms of Service to create an account."
 
+# The adult-only launch posture: the account creator must attest they are 18 or
+# older, and the backend — not the form — is what refuses. Same shape as the ToS
+# rail: an explicit boolean the HTTP boundary defaults to False, so an omitted
+# attestation is a refusal with no user material written.
+AGE_ATTESTATION_MESSAGE = "You must confirm you are 18 or older to create an account."
+
 # Documented privacy-alias domains (rq09): an address here is a real relay to
 # the user's own inbox, never a throwaway, so the allow-list wins over the
 # deny-list (DOOR-24). ``duck.com`` is the spec-named member.

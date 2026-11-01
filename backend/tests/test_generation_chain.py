@@ -503,7 +503,12 @@ def _seed_turn_world(client, db_conn, email: str) -> tuple[UUID, UUID, str]:
 
     resp = client.post(
         "/api/auth/register",
-        json={"email": email, "password": TEST_PASSWORD, "accepted_tos": True},
+        json={
+            "email": email,
+            "password": TEST_PASSWORD,
+            "accepted_tos": True,
+            "age_attested": True,
+        },
     )
     assert resp.status_code == 201, resp.text
     user_id = UUID(resp.json()["id"])

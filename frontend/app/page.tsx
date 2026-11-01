@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { useTranslations } from "next-intl";
 
+import { GuestSampleAsk } from "@/app/components/guest-sample-ask";
 import { LocaleSwitcher } from "@/app/components/locale-switcher";
 import { Button } from "@/components/ui/button";
 
@@ -9,9 +10,10 @@ import { Button } from "@/components/ui/button";
  *
  * A minimal, identity-styled front door for anonymous visitors: the product
  * name, a one-line value proposition, a static cited-answer proof from
- * *The Art of War*, and the two entry CTAs. It is a server component styled
- * entirely with the Iron Gall tokens (ADR-027) so it renders in both light and
- * dark without client JavaScript. No marketing sections and no generation fetch.
+ * *The Art of War*, the capped guest sample ask (the AD-320 thaw — a
+ * no-account taste of the real, citation-grounded product), and the two entry
+ * CTAs. The static proof stays a server render in both light and dark; the
+ * sample ask is the page's one client island.
  *
  * The proof is book text, so it stays verbatim in the book's language (`lang`)
  * in every interface locale — the same rule citations follow everywhere else.
@@ -26,7 +28,7 @@ const PROOF = {
 export default function LandingPage() {
   const t = useTranslations();
   return (
-    <main className="relative flex min-h-svh flex-col items-center justify-center gap-8 bg-background px-6 text-center text-foreground">
+    <main className="relative flex min-h-svh flex-col items-center justify-center gap-8 bg-background px-6 py-12 text-center text-foreground">
       <LocaleSwitcher className="absolute right-4 top-4" />
       <div className="space-y-4">
         <h1 className="text-5xl font-semibold tracking-tight text-primary">
@@ -56,6 +58,7 @@ export default function LandingPage() {
           <span lang={PROOF.lang}>{PROOF.section}</span>
         </figcaption>
       </figure>
+      <GuestSampleAsk />
       <div className="flex flex-wrap items-center justify-center gap-3">
         <Button asChild size="lg">
           <Link href="/register">{t("auth.createAccount")}</Link>

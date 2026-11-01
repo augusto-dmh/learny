@@ -353,6 +353,16 @@ class ByokCorpusLimitExhausted(Exception):
     code = "byok_corpus_limit"
 
 
+class SampleUnavailable(Exception):
+    """The shared sample cannot serve a guest ask right now.
+
+    Raised when the seeded sample source (or its operator account, which carries
+    the guest ledger) is missing, or the sample is not ready. The honest answer
+    for a stranger is "unavailable, try later" — never a fake answer, never a
+    silent fallback. The web layer maps this to 503.
+    """
+
+
 class SourceCountQuotaExceeded(Exception):
     """The caller already owns the maximum number of non-sample sources (DOOR-15).
 

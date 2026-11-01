@@ -101,6 +101,7 @@ from app.application.reviews import (
     SubmitReview,
     UndoLastReview,
 )
+from app.application.sample_ask import GuestSampleAsk
 from app.application.sources import CreateSource, GetSource, ListSources, ReadSourceMedia
 from app.application.study import ContinueReading, GetStudySummary
 from app.application.vault import ExportVault
@@ -1147,6 +1148,27 @@ def get_response_language(
     return response_language_for(effective_locale(stored, accept_language))
 
 
+#: The render-time locale cookie (`frontend/i18n/config.ts` ``LOCALE_COOKIE``):
+#: an anonymous visitor's only language choice, written by the locale switcher.
+GUEST_LOCALE_COOKIE = "learny_locale"
+
+
+def get_guest_response_language(
+    request: Request,
+    accept_language: Annotated[str | None, Header()] = None,
+) -> str | None:
+    """FastAPI dependency: the language a *visitor's* answer is requested in.
+
+    A guest has no stored choice to read (the authenticated dependency 401s on
+    purpose), so the negotiation is: the locale cookie the switcher writes for
+    anonymous visitors, else ``Accept-Language``, else English — never a
+    session read, never a 401.
+    """
+    cookie = request.cookies.get(GUEST_LOCALE_COOKIE)
+    stored = cookie if is_supported_locale(cookie) else None
+    return response_language_for(effective_locale(stored, accept_language))
+
+
 def get_set_locale_choice(
     conn: DbConnection, user: Annotated[User, Depends(get_authenticated_user)]
 ) -> Callable[[str], str]:
@@ -1786,4 +1808,81 @@ def get_accept_note_card(conn: DbConnection, generation: UserCardGeneration) -> 
         ids=uuid4,
         max_card_chars=settings.quiz_max_card_chars,
         excerpt_chars=settings.quiz_note_excerpt_chars,
+    )
+
+
+# --- Guest sample ask (AD-320 thaw) ---------------------------------------------
+
+
+def build_guest_budget(conn: Connection) -> DailyBudget:
+    """Wire the sample's own daily AI budget on ``conn``.
+
+    The same ledger and service as the per-learner budget — one
+    ``ai_spend_days`` row per UTC day, checked before any provider call — with
+    the sample-scoped knobs: the guest surface debits the seeded sample
+    operator's row (see the guest ask service), so its cap and ask count are
+    the operator's guest settings, not the per-learner ones.
+    """
+    settings = get_settings()
+    return DailyBudget(
+        repo=SqlAlchemyAiSpendDayRepository(conn),
+        clock=_clock,
+        daily_cap_micros=usd_to_micros(settings.guest_sample_daily_budget_usd),
+        prices=TokenPrices(
+            input_micros_per_million=usd_to_micros(settings.price_input_usd_per_million_tokens),
+            output_micros_per_million=usd_to_micros(settings.price_output_usd_per_million_tokens),
+            embed_micros_per_million=usd_to_micros(settings.price_embed_usd_per_million_tokens),
+        ),
+        ask_daily_cap=settings.guest_sample_daily_ask_cap,
+        teach_start_daily_cap=0,
+        ai_paused=settings.ai_kill_switch,
+        profile_catalogs=_profile_catalogs(),
+        resolve_serving_profile=_serving_profile_resolver(),
+    )
+
+
+def get_guest_retrieve_evidence(conn: DbConnection) -> RetrieveEvidence:
+    """Wire the guest retrieval pass over the sample source.
+
+    Identical rails to ``get_retrieve_evidence`` — same repos, adapters, and
+    per-arm limits — with one deliberate difference: no activation recorder.
+    A visitor owns no ``activation_events`` row and the foreign key would
+    refuse one, so the sample-opened activation stays an account-holder's
+    event (the authenticated sample reads keep theirs).
+    """
+    settings = get_settings()
+    return RetrieveEvidence(
+        sources=SqlAlchemySourceRepository(conn),
+        retrieval=SqlAlchemyRetrievalRepository(conn),
+        embeddings=build_embedding_adapter(settings),
+        positions=SqlAlchemyReadingPositionRepository(conn),
+        authorize=AuthorizeOwnership(),
+        semantic_limit=settings.retrieval_semantic_limit,
+        lexical_limit=settings.retrieval_lexical_limit,
+        rrf_k=settings.retrieval_rrf_k,
+        ef_search=settings.hnsw_ef_search,
+        default_top_k=settings.retrieval_top_k,
+        activations=None,
+        clock=None,
+    )
+
+
+def get_guest_sample_ask(
+    conn: DbConnection,
+    generation: Generation,
+) -> GuestSampleAsk:
+    """Wire ``GuestSampleAsk`` on the request-scoped connection.
+
+    The visitor has no stored profile choice and holds no provider key, so the
+    generation port is the house default chain — the same one a signed-in
+    learner without a preference gets — and the budget is the sample's own
+    (``build_guest_budget``), asserted before and debited after the call.
+    """
+    return GuestSampleAsk(
+        sources=SqlAlchemySourceRepository(conn),
+        users=SqlAlchemyUserRepository(conn),
+        retrieve=get_guest_retrieve_evidence(conn),
+        generation=generation,
+        budget=build_guest_budget(conn),
+        clock=_clock,
     )
