@@ -1453,3 +1453,42 @@ describe("TeachPanel in pt-BR", () => {
     expectNoEnglishCopy(document.body.textContent ?? "", ...TEACH_NAMESPACES);
   });
 });
+
+describe("TeachPanel answer usage line (S4)", () => {
+  it("a taught turn whose adapter reported usage renders the same usage line as Ask", async () => {
+    const { fetchMock, streams } = tutorNetwork();
+
+    render(<TeachPanel sourceId="s1" csrf="csrf-xyz" />);
+    await startSession(fetchMock, streams);
+    await sendMessage("Explain this chapter.");
+    await waitFor(() => expect(streams).toHaveLength(2));
+
+    await streams[1].push({ type: "start", messageId: "m1" });
+    await streams[1].push({ type: "text-start", id: "t1" });
+    await streams[1].push({ type: "text-delta", id: "t1", delta: "A lesson." });
+    await streams[1].push({ type: "text-end", id: "t1" });
+    await streams[1].push({ type: "data-citations", data: [] });
+    await streams[1].push({
+      type: "data-answer-status",
+      data: { status: "answered" },
+    });
+    await streams[1].push({
+      type: "data-answer-usage",
+      data: {
+        input_tokens: 1000,
+        output_tokens: 500,
+        cost_usd_micros: 10500,
+        user_keyed: true,
+      },
+    });
+    await streams[1].push({ type: "finish" });
+    await streams[1].done();
+
+    // The Teach surface renders the shared AnswerUsageLine from the same
+    // terminal part Ask does: one line, tokens plus the learner-keyed cost.
+    const line = await screen.findByTestId("answer-usage");
+    expect(line.textContent).toBe(
+      "1,000 input tokens · 500 output tokens · about $0.0105 on your own key",
+    );
+  });
+});

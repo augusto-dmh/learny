@@ -10,7 +10,9 @@
  *
  * Both paths the line reaches are covered: the live stream's terminal
  * `data-answer-usage` part (AskPanel streaming) and the restored history's
- * replayed usage fields (a conversation re-read from the server).
+ * replayed usage fields (a conversation re-read from the server). The Teach
+ * surface renders the same shared component through its own wiring; that
+ * wiring is proven in `tests/teach-panel.test.tsx`.
  */
 
 import {
