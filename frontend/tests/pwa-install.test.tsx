@@ -131,4 +131,46 @@ describe("service worker registration", () => {
     });
     expect(AUTH_CHANGED_EVENT).toBe("learny:auth-changed");
   });
+
+  it("purges to the signed-out state when the auth probe fails, and logs once", async () => {
+    const worker = { postMessage: vi.fn() };
+    const registration = { active: worker };
+    const register = vi.fn().mockResolvedValue(registration);
+    const getRegistration = vi.fn().mockResolvedValue(registration);
+    Object.defineProperty(navigator, "serviceWorker", {
+      value: { register, getRegistration },
+      configurable: true,
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("network down");
+      }),
+    );
+
+    render(<ServiceWorkerRegistrar />);
+
+    // A failed probe answers the honest signed-out state: the worker deletes
+    // every reader cache instead of keeping its previous attribution.
+    await waitFor(() => {
+      expect(worker.postMessage).toHaveBeenCalledWith({
+        type: "learny:sw-user",
+        userId: null,
+      });
+    });
+
+    // A user switch whose probe fails again fails honest too — and the
+    // warning stays at one per page load.
+    worker.postMessage.mockClear();
+    notifyAuthChanged();
+    await waitFor(() => {
+      expect(worker.postMessage).toHaveBeenCalledWith({
+        type: "learny:sw-user",
+        userId: null,
+      });
+    });
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
 });
