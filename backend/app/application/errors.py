@@ -323,7 +323,6 @@ class AiPaused(Exception):
     """
 
 
-
 class ByokBudgetExhausted(Exception):
     """The learner's own monthly budget has paused their key.
 
@@ -352,7 +351,6 @@ class ByokCorpusLimitExhausted(Exception):
     """
 
     code = "byok_corpus_limit"
-
 
 
 class SampleUnavailable(Exception):
