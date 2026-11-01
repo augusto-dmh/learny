@@ -47,6 +47,18 @@ import { Button } from "@/components/ui/button";
 
 import { formatUsdMicros } from "@/app/lib/money";
 
+/**
+ * The budget draft parses in the interface's own decimal separator:
+ * `inputMode="decimal"` invites a pt-BR learner's `7,5`, so in the pt
+ * catalogs every comma normalizes to a dot before `Number()` — a comma is
+ * never thousands grouping there, so `1,000` reads as 1. In en a comma
+ * stays a grouping separator the field never accepts, and a stray
+ * separator in either catalog (`1,5.5`) is still `NaN` and invalid.
+ */
+function parseBudgetDraft(draft: string, locale: string): number {
+  return Number(locale.startsWith("pt") ? draft.replace(/,/g, ".") : draft);
+}
+
 /** Where a powered profile applies, as a key of `account.providerKeys.profileModes`. */
 function modesKey(profile: PoweredProfile) {
   if (profile.ask && profile.teach) {
@@ -372,9 +384,9 @@ function UsageAndBudget({
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const parsed = parseBudgetDraft(draft, locale);
   const invalid =
-    draft.trim() !== "" &&
-    (Number.isNaN(Number(draft)) || Number(draft) <= 0 || Number(draft) > 10_000);
+    draft.trim() !== "" && (Number.isNaN(parsed) || parsed <= 0 || parsed > 10_000);
 
   async function put(value: number | null) {
     setError(null);
@@ -410,7 +422,7 @@ function UsageAndBudget({
           if (draft.trim() === "" || invalid) {
             return;
           }
-          void put(Number(draft));
+          void put(parsed);
         }}
       >
         <input

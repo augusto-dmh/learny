@@ -275,6 +275,61 @@ describe("provider keys section: usage and budget", () => {
     expect(fetchMock.mock.calls.filter(([url]) => url === BUDGET_URL)).toHaveLength(0);
   });
 
+  it("usage: a pt-BR comma decimal budget saves as the number it spells", async () => {
+    // `inputMode="decimal"` on a pt-BR keyboard produces "7,5"; the wire
+    // carries 7.5 and the line re-renders from the PUT's response.
+    setTestLocale("pt-BR");
+    const sent: unknown[] = [];
+    const fetchMock = routedFetch({
+      [`GET ${LIST_URL}`]: () => jsonResponse(200, listBody()),
+      [`PUT ${BUDGET_URL}`]: (init) => {
+        const body = JSON.parse(String(init?.body));
+        sent.push(body.monthly_budget_usd);
+        return jsonResponse(
+          200,
+          usageRow({
+            budget_usd_micros: Math.round(Number(body.monthly_budget_usd) * 1_000_000),
+          }),
+        );
+      },
+    });
+    await renderSection(fetchMock, "pt-BR");
+    const input = screen.getByLabelText("Limite mensal em dólares americanos");
+
+    fireEvent.change(input, { target: { value: "7,5" } });
+    fireEvent.click(screen.getByRole("button", { name: "Salvar limite" }));
+    await waitFor(() =>
+      expect(budgetBlock("pt-BR").textContent).toContain("US$\u00A07,5"),
+    );
+
+    // A comma is never thousands grouping in pt-BR, so "1,000" reads as 1.
+    fireEvent.change(input, { target: { value: "1,000" } });
+    fireEvent.click(screen.getByRole("button", { name: "Salvar limite" }));
+    await waitFor(() =>
+      expect(budgetBlock("pt-BR").textContent).toContain("US$\u00A01"),
+    );
+
+    expect(sent).toEqual([7.5, 1]);
+  });
+
+  it("usage: in en a comma stays a grouping separator the field rejects", async () => {
+    const fetchMock = routedFetch({
+      [`GET ${LIST_URL}`]: () => jsonResponse(200, listBody()),
+    });
+    await renderSection(fetchMock);
+
+    fireEvent.change(screen.getByLabelText("Monthly budget in US dollars"), {
+      target: { value: "1,000" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save budget" }));
+    expect(
+      await screen.findByText(
+        "Enter a dollar amount above 0 and at most 10,000, or clear the budget.",
+      ),
+    ).toBeTruthy();
+    expect(fetchMock.mock.calls.filter(([url]) => url === BUDGET_URL)).toHaveLength(0);
+  });
+
   it("usage: a failed save shows the operation's copy and keeps the stored budget", async () => {
     const fetchMock = routedFetch({
       [`GET ${LIST_URL}`]: () =>
