@@ -65,6 +65,7 @@ import { ChapterNav, TocPanel } from "@/app/components/toc-panel";
 import { readUrl } from "@/app/lib/read-url";
 import { useKeyShortcuts } from "@/app/components/use-key-shortcuts";
 import { useReadingSettings } from "@/app/components/use-reading-settings";
+import { useDataSaver } from "@/app/components/use-data-saver";
 import { useRecedingChrome } from "@/app/components/use-receding-chrome";
 import { useSectionProgress } from "@/app/components/use-section-progress";
 import {
@@ -357,6 +358,10 @@ export function ChapterFlow({
   // Device-local reading surface: type size, spacing, and Default/Paper (RD-18).
   const reading = useReadingSettings();
   const { size, leading, appearance } = reading;
+  // Low-bandwidth budget: the browser's Save-Data signal or the popover's
+  // Data saver control. While active, book figures are never requested and a
+  // notice explains the missing images.
+  const { dataSaver, override: dataSaverOverride, system: dataSaverSystem, setOverride: setDataSaverOverride } = useDataSaver();
   // Group the caller's highlights by section anchor so each section paints only
   // its own (RD-28). The grouped arrays stay referentially stable while
   // `highlights` is unchanged, so a re-render (scroll/progress) never triggers a
@@ -890,6 +895,10 @@ export function ChapterFlow({
               onSizeChange={reading.setSize}
               onLeadingChange={reading.setLeading}
               onAppearanceChange={reading.setAppearance}
+              dataSaver={dataSaver}
+              dataSaverSystem={dataSaverSystem}
+              dataSaverOverride={dataSaverOverride}
+              onDataSaverChange={setDataSaverOverride}
             />
           </div>
         </div>
@@ -918,6 +927,14 @@ export function ChapterFlow({
           <h1 data-testid="reading-chapter-title" className="chapter-running-title">
             {chapter.chapter_title}
           </h1>
+          {dataSaver ? (
+            <p
+              data-testid="data-saver-notice"
+              className="text-sm text-muted-foreground"
+            >
+              {t("dataSaverNotice")}
+            </p>
+          ) : null}
           {chapter.sections.map((section, index) => (
             <Fragment key={section.anchor}>
               <FlowSection
@@ -927,6 +944,7 @@ export function ChapterFlow({
                 flashing={flashAnchor === section.anchor}
                 highlights={highlightsWithSpan.get(section.anchor) ?? NO_HIGHLIGHTS}
                 onSelectionRelease={() => handleSelectionRelease(section)}
+                dataSaver={dataSaver}
               />
               {csrf && section.word_count >= CHECKPOINT_MIN_WORDS ? (
                 <CheckpointInvite
@@ -1073,6 +1091,7 @@ function FlowSection({
   flashing,
   highlights,
   onSelectionRelease,
+  dataSaver = false,
 }: {
   section: ChapterSectionView;
   wordsBefore: number;
@@ -1080,6 +1099,8 @@ function FlowSection({
   flashing: boolean;
   highlights: SourceHighlightView[];
   onSelectionRelease: () => void;
+  /** While on, this section's book figures are never requested. */
+  dataSaver?: boolean;
 }) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const breadcrumb = section.section_path.join(" › ");
@@ -1120,7 +1141,7 @@ function FlowSection({
       <div ref={bodyRef} className="book-prose">
         {runs.map((run, index) => (
           <Fragment key={index}>
-            <ChapterMarkdown>{run.markdown}</ChapterMarkdown>
+            <ChapterMarkdown dataSaver={dataSaver}>{run.markdown}</ChapterMarkdown>
             {run.pageAfter === null ? null : <PageRule page={run.pageAfter} />}
           </Fragment>
         ))}
