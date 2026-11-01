@@ -2,10 +2,11 @@
  * Browser-side client for the learner's own provider keys (ADR-0033).
  *
  * The account page's keys section lists the providers this instance offers,
- * saves (or replaces) a key, tests a stored key and deletes it. Every call goes
- * through the same-origin Next.js proxy (`/api/...`, ADR-017); the HttpOnly
- * session cookie rides along, and the mutating calls echo the session-bound
- * CSRF token in `X-CSRF-Token`.
+ * saves (or replaces) a key, tests a stored key, deletes it, and shows the
+ * learner's month-to-date own-key usage beside the monthly budget they can
+ * set or clear. Every call goes through the same-origin Next.js proxy
+ * (`/api/...`, ADR-017); the HttpOnly session cookie rides along, and the
+ * mutating calls echo the session-bound CSRF token in `X-CSRF-Token`.
  *
  * A key travels in exactly one request body (the save) and never comes back:
  * every response carries the provider row with `last4` and the date added. This
@@ -41,10 +42,32 @@ export type ProviderKeyRow = {
   powers_cards: boolean;
 };
 
+/**
+ * The caller's month-to-date own-key usage and their stored monthly budget,
+ * as the backend reports it. Zeros are a quiet month; `budget_usd_micros` is
+ * `null` while no budget is set. The cost is the learner's own estimate at
+ * the serving catalog — the operator's number is never shown here.
+ */
+export type ByokUsageView = {
+  period: string;
+  input_tokens: number;
+  output_tokens: number;
+  cost_usd_micros: number;
+  budget_usd_micros: number | null;
+};
+
 /** The keys section: whether it exists on this instance, and its rows. */
 export type ProviderKeys = {
   enabled: boolean;
+  /**
+   * The instance's own hosted declaration — not secret, and reported even
+   * while the feature is off, so the hosted disclosure can render wherever
+   * the section does.
+   */
+  hosted: boolean;
   providers: ProviderKeyRow[];
+  /** The caller's month-to-date usage and budget, riding every response. */
+  usage: ByokUsageView;
 };
 
 /** Why a key test failed. */
@@ -98,6 +121,29 @@ export async function testProviderKey(
     throw await apiErrorFrom(res, "providerKeyTest");
   }
   return (await res.json()) as KeyTestResult;
+}
+
+/**
+ * Store (or clear) the caller's own monthly budget. A USD amount greater than
+ * 0 and at most 10,000 sets it; `null` clears it, and their key serves the
+ * next request — that is what makes the budget soft. The response is the
+ * refreshed usage view, never an echo of the submitted value.
+ */
+export async function putProviderKeyBudget(
+  monthlyBudgetUsd: number | null,
+  csrfToken: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<ByokUsageView> {
+  const res = await fetchImpl(`${BASE}/budget`, {
+    method: "PUT",
+    credentials: "same-origin",
+    headers: { "content-type": "application/json", "X-CSRF-Token": csrfToken },
+    body: JSON.stringify({ monthly_budget_usd: monthlyBudgetUsd }),
+  });
+  if (!res.ok) {
+    throw await apiErrorFrom(res, "providerKeyBudget");
+  }
+  return (await res.json()) as ByokUsageView;
 }
 
 /** Delete the caller's key for `provider`. Idempotent: 204 even when none was stored. */

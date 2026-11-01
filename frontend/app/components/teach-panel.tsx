@@ -74,6 +74,7 @@ import {
 } from "@/components/ai-elements/prompt-input";
 
 import { AnswerPhaseIndicator, ReasoningRegion } from "./answer-phase";
+import { AnswerUsageLine } from "./answer-usage";
 import { CitedAnswer } from "./cited-answer";
 import { FailedTurn } from "./failed-turn";
 import { IncludeNotesToggle } from "./include-notes-toggle";
@@ -574,7 +575,7 @@ function TeachChat({
                 </Fragment>
               );
             }
-            const { text, citations, status: answerStatus, reasoning } =
+            const { text, citations, status: answerStatus, reasoning, usage } =
               assistantView(message);
             const notFound = isNotFound(answerStatus);
             const restoredFailed = answerStatus === "failed";
@@ -605,6 +606,9 @@ function TeachChat({
                       onShowInBook={onShowInBook}
                     />
                   )}
+                  {usage && !notFound && !restoredFailed ? (
+                    <AnswerUsageLine usage={usage} />
+                  ) : null}
                   {notFound && answerStatus ? (
                     <NotFoundNotice status={answerStatus} />
                   ) : null}

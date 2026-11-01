@@ -38,7 +38,9 @@
       "notFound": "This book could not be found.",
       "notReady": "This book is still processing. Try again once it is ready.",
       "unprocessable": "That request could not be processed. Please revise it and try again.",
-      "generationFailed": "Answer generation failed. Please try again."
+      "generationFailed": "Answer generation failed. Please try again.",
+      "byokBudget": "Your own monthly budget for AI keys has been reached, so your own keys pause. Raise or clear the budget in Account to continue.",
+      "byokCorpusLimit": "This book has reached its monthly limit of prompt tokens on your own key. Try again next month, or ask Learny's own AI instead."
     },
     "operation": {
       "authRegister": "Registration failed.",
@@ -97,7 +99,8 @@
       "providerKeysList": "Could not load your AI keys.",
       "providerKeySave": "Could not save your key.",
       "providerKeyTest": "Could not test your key.",
-      "providerKeyDelete": "Could not delete your key."
+      "providerKeyDelete": "Could not delete your key.",
+      "providerKeyBudget": "Could not save your monthly budget."
     }
   },
   "account": {
@@ -157,7 +160,25 @@
       },
       "delete": "Delete key",
       "confirmDelete": "Delete your {provider} key? Your requests go back to Learny's own AI.",
-      "confirmDeleteAction": "Yes, delete it"
+      "confirmDeleteAction": "Yes, delete it",
+      "privacy": {
+        "anthropic": "Anthropic does not use content sent over its API to train its models.",
+        "openai": "OpenAI does not use content sent over its API to train its models.",
+        "gemini": "Google may use content sent with an unpaid-tier Gemini key to improve its products."
+      },
+      "hostedDisclosure": "This is a hosted Learny: your key is stored encrypted on this server — not on your computer — every call still runs under your own agreement with the provider, and there are no custom endpoints here: your key is sent only to the provider itself.",
+      "usage": {
+        "heading": "Your usage and budget",
+        "line": "This month on your own keys: about {cost} — {input, plural, one {# input token} other {# input tokens}} and {output, plural, one {# output token} other {# output tokens}}.",
+        "budgetSet": "Your monthly budget is {budget}.",
+        "budgetNone": "No monthly budget is set.",
+        "budgetHint": "When this month's spending reaches your budget, your own keys pause — nothing else changes. Raise or clear the budget and they serve your next request.",
+        "budgetLabel": "Monthly budget in US dollars",
+        "budgetPlaceholder": "Dollars per month",
+        "budgetSave": "Save budget",
+        "budgetClear": "Clear budget",
+        "budgetInvalid": "Enter a dollar amount above 0 and at most 10,000, or clear the budget."
+      }
     }
   },
   "landing": {
@@ -381,6 +402,10 @@
       "usedSources": "{count, plural, one {Used # source} other {Used # sources}}",
       "emptyTitle": "No messages yet",
       "emptyDescription": "Start a conversation to see messages here"
+    },
+    "usage": {
+      "tokens": "{input, plural, one {# input token} other {# input tokens}} · {output, plural, one {# output token} other {# output tokens}}",
+      "ownKey": "about {cost} on your own key"
     }
   },
   "home": {

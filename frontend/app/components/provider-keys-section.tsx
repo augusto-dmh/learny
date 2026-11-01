@@ -14,6 +14,17 @@
  * renders a key again, because nothing ever returns one. Every action is
  * confirmed-then-moved: a failed save, test or delete shows an inline error and
  * leaves the row as it was. Delete asks first, inline, without a browser dialog.
+ *
+ * The hosted policy (ADR-0035) rides the same surface: each provider row
+ * carries its privacy badge — what that provider does with the content the key
+ * sends — read from the catalogs, never the network. On an instance declared
+ * hosted the section adds the hosted disclosure: the key sits encrypted on
+ * someone else's server, the calls still run under the learner's own provider
+ * agreement, and no custom endpoint exists anywhere in the feature. Below the
+ * rows the learner sees their month-to-date own-key usage beside the soft
+ * monthly budget control; the budget PUT's response is the refreshed usage
+ * view, so the line always reads the stored truth, and a cleared or raised
+ * budget un-pauses their key with no operator action.
  */
 
 import { useLocale, useTranslations } from "next-intl";
@@ -23,7 +34,9 @@ import {
   deleteProviderKey,
   listProviderKeys,
   putProviderKey,
+  putProviderKeyBudget,
   testProviderKey,
+  type ByokUsageView,
   type KeyProvider,
   type KeyTestResult,
   type PoweredProfile,
@@ -31,6 +44,20 @@ import {
 } from "@/app/lib/provider-keys";
 import { useErrorMessage } from "@/app/components/use-error-message";
 import { Button } from "@/components/ui/button";
+
+import { formatUsdMicros } from "@/app/lib/money";
+
+/**
+ * The budget draft parses in the interface's own decimal separator:
+ * `inputMode="decimal"` invites a pt-BR learner's `7,5`, so in the pt
+ * catalogs every comma normalizes to a dot before `Number()` — a comma is
+ * never thousands grouping there, so `1,000` reads as 1. In en a comma
+ * stays a grouping separator the field never accepts, and a stray
+ * separator in either catalog (`1,5.5`) is still `NaN` and invalid.
+ */
+function parseBudgetDraft(draft: string, locale: string): number {
+  return Number(locale.startsWith("pt") ? draft.replace(/,/g, ".") : draft);
+}
 
 /** Where a powered profile applies, as a key of `account.providerKeys.profileModes`. */
 function modesKey(profile: PoweredProfile) {
@@ -49,6 +76,8 @@ function modesKey(profile: PoweredProfile) {
 export function ProviderKeysSection({ csrfToken }: { csrfToken: string }) {
   const t = useTranslations("account.providerKeys");
   const [rows, setRows] = useState<ProviderKeyRow[] | null>(null);
+  const [hosted, setHosted] = useState(false);
+  const [usage, setUsage] = useState<ByokUsageView | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -56,6 +85,8 @@ export function ProviderKeysSection({ csrfToken }: { csrfToken: string }) {
       .then((keys) => {
         if (!cancelled) {
           setRows(keys.enabled ? keys.providers : null);
+          setHosted(keys.hosted === true);
+          setUsage(keys.usage ?? null);
         }
       })
       .catch((error: unknown) => {
@@ -83,6 +114,11 @@ export function ProviderKeysSection({ csrfToken }: { csrfToken: string }) {
       <h2 className="text-sm font-medium">{t("heading")}</h2>
       <p className="text-sm text-muted-foreground">{t("intro")}</p>
       <p className="text-sm text-muted-foreground">{t("disclosure")}</p>
+      {hosted ? (
+        <p className="rounded-md border border-border bg-muted/40 p-2 text-sm text-muted-foreground">
+          {t("hostedDisclosure")}
+        </p>
+      ) : null}
       <ul className="space-y-4">
         {rows.map((row) => (
           <ProviderKeyItem
@@ -93,6 +129,9 @@ export function ProviderKeysSection({ csrfToken }: { csrfToken: string }) {
           />
         ))}
       </ul>
+      {usage ? (
+        <UsageAndBudget usage={usage} csrfToken={csrfToken} onUsage={setUsage} />
+      ) : null}
     </section>
   );
 }
@@ -174,6 +213,7 @@ function ProviderKeyItem({
   return (
     <li className="space-y-2" data-provider={provider}>
       <p className="text-sm font-medium">{row.label}</p>
+      <p className="text-xs text-muted-foreground">{t(`privacy.${provider}`)}</p>
       {row.configured ? (
         <p className="text-sm">
           <span className="font-mono">{t("masked", { last4: row.last4 ?? "" })}</span>
@@ -310,5 +350,118 @@ function ProviderKeyItem({
         </p>
       ) : null}
     </li>
+  );
+}
+
+/**
+ * The month-to-date own-key usage line beside the soft monthly budget control.
+ *
+ * The line reads the stored usage view; the control PUTs the budget and the
+ * response *is* the refreshed view, so every change updates the line from the
+ * stored truth rather than from an optimistic guess. A cleared or raised
+ * budget takes effect on the learner's next request with no operator action —
+ * that is what makes the budget soft — and the copy says so, because a pause
+ * with no visible way out would read as a hard block.
+ *
+ * Input bounds are checked client-side (a number above 0 and at most 10,000)
+ * so an out-of-range value never makes the round trip; the backend answers
+ * its own fixed-copy 422 for anything a crafted request slips past, which the
+ * section renders as the operation's catalog copy.
+ */
+function UsageAndBudget({
+  usage,
+  csrfToken,
+  onUsage,
+}: {
+  usage: ByokUsageView;
+  csrfToken: string;
+  onUsage: (next: ByokUsageView) => void;
+}) {
+  const t = useTranslations("account.providerKeys.usage");
+  const locale = useLocale();
+  const errorMessage = useErrorMessage();
+  const [draft, setDraft] = useState("");
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const parsed = parseBudgetDraft(draft, locale);
+  const invalid =
+    draft.trim() !== "" && (Number.isNaN(parsed) || parsed <= 0 || parsed > 10_000);
+
+  async function put(value: number | null) {
+    setError(null);
+    setPending(true);
+    try {
+      onUsage(await putProviderKeyBudget(value, csrfToken));
+      setDraft("");
+    } catch (caught) {
+      setError(errorMessage(caught, "providerKeyBudget"));
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <div role="group" aria-label={t("heading")} className="space-y-2 rounded-md border border-border p-2">
+      <p className="text-sm font-medium">{t("heading")}</p>
+      <p className="text-sm text-muted-foreground">
+        {t("line", {
+          cost: formatUsdMicros(usage.cost_usd_micros, locale),
+          input: usage.input_tokens,
+          output: usage.output_tokens,
+        })}{" "}
+        {usage.budget_usd_micros !== null
+          ? t("budgetSet", { budget: formatUsdMicros(usage.budget_usd_micros, locale) })
+          : t("budgetNone")}
+      </p>
+      <p className="text-xs text-muted-foreground">{t("budgetHint")}</p>
+      <form
+        className="flex flex-wrap items-center gap-2"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (draft.trim() === "" || invalid) {
+            return;
+          }
+          void put(parsed);
+        }}
+      >
+        <input
+          type="text"
+          inputMode="decimal"
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          aria-label={t("budgetLabel")}
+          placeholder={t("budgetPlaceholder")}
+          disabled={pending}
+          className="w-36 min-w-0 rounded-md border border-input bg-background px-2 py-1 text-sm"
+        />
+        <Button
+          type="submit"
+          size="sm"
+          disabled={pending || draft.trim() === "" || invalid}
+        >
+          {t("budgetSave")}
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          disabled={pending}
+          onClick={() => void put(null)}
+        >
+          {t("budgetClear")}
+        </Button>
+      </form>
+      {invalid ? (
+        <p role="alert" className="text-sm text-destructive">
+          {t("budgetInvalid")}
+        </p>
+      ) : null}
+      {error ? (
+        <p role="alert" className="text-sm text-destructive">
+          {error}
+        </p>
+      ) : null}
+    </div>
   );
 }
