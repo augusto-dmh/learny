@@ -4,7 +4,7 @@ Profile: standard
 Plan: `.specs/features/byok-hosted-policy/plan.md`
 
 Mutations: 3
-Build: `uv run ruff check .` / `uv run ruff format --check .` / `python scripts/check_boundaries.py` (backend, from `backend/`); `npx tsc --noEmit` / `npm run build` (frontend, from `frontend/`)
+Build: cd backend && uv run ruff check . && uv run ruff format --check . && python scripts/check_boundaries.py ; cd frontend && npx tsc --noEmit ; cd frontend && npm run build ; python backend/scripts/check_commits.py origin/main..HEAD
 
 31 checks in 7 slices · 7 one-way doors · 0 open, of which 0 block
 
@@ -131,7 +131,7 @@ Proof: `python -c "from pathlib import Path; t = Path('docs/ops/hosted-byok-secu
 Proof: `python -c "from pathlib import Path; t = Path('docs/adr/0035-learner-keys-on-a-hosted-instance.md').read_text(encoding='utf-8'); assert 'Accepted' in t and 'supersede' in t.lower() and all(s in t for s in ('LEARNY_HOSTED_INSTANCE', 'LEARNY_HOSTED_BYOK_ENABLED', 'anthropic', 'openai', 'gemini'))  # docs content proof"`
 
 **C30** - Both environment example files document the two hosted flags and the ceiling, and the production example replaces "leave the KEK unset on a hosted instance" with the checklist-gated opt-in (AC 30)
-Proof: `python -c "from pathlib import Path; a = Path('.env.example').read_text(encoding='utf-8'); p = Path('.env.production.example').read_text(encoding='utf-8'); assert all(s in a for s in ('LEARNY_HOSTED_INSTANCE', 'LEARNY_HOSTED_BYOK_ENABLED', 'LEARNY_BYOK_CORPUS_PROMPT_TOKEN_CAP')); assert all(s in p for s in ('LEARNY_HOSTED_INSTANCE', 'LEARNY_HOSTED_BYOK_ENABLED', 'LEARNY_BYOK_CORPUS_PROMPT_TOKEN_CAP', 'security-review'))  # docs content proof"`
+Proof: `python -c "from pathlib import Path; a = Path('backend/.env.example').read_text(encoding='utf-8'); p = Path('backend/.env.production.example').read_text(encoding='utf-8'); assert all(s in a for s in ('LEARNY_HOSTED_INSTANCE', 'LEARNY_HOSTED_BYOK_ENABLED', 'LEARNY_BYOK_CORPUS_PROMPT_TOKEN_CAP')); assert all(s in p for s in ('LEARNY_HOSTED_INSTANCE', 'LEARNY_HOSTED_BYOK_ENABLED', 'LEARNY_BYOK_CORPUS_PROMPT_TOKEN_CAP', 'security-review'))  # docs content proof"`
 
 ## Coverage
 
@@ -213,3 +213,4 @@ Size, from `wc -c` on the files each slice reads or writes, divided by four (new
 **Dispatched:**
 
 - Batch A (this PR): S1, S2, S3 and the backend half of S4/S5 built — C1-C18, C20-C23, C31. Proof commands above were corrected to the built tests' names (C4's hosted-canonical sensor, C5's adapter-host sensor moved to the builder's own test file); C12's claim now says what the web test asserts (no provider call, nothing recorded). Batch B (S4/S5 render, S6, S7) is not built.
+- Batch B (this PR): S4/S5 render, S6 and S7 built — C19, C24-C30. C30's proof paths were corrected to the built files' names (the operator's env examples live at `backend/.env.example` and `backend/.env.production.example`; the proof ran from the worktree root, where no root-level example exists).
