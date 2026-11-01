@@ -41,7 +41,6 @@ const GROUNDED = {
     },
   ],
   sample: true,
-  model: "local-extractive",
 };
 
 afterEach(() => {

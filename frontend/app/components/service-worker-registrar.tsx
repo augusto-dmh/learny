@@ -31,6 +31,7 @@ export function ServiceWorkerRegistrar() {
     }
 
     let cancelled = false;
+    let warned = false;
 
     const postUser = async () => {
       try {
@@ -46,8 +47,30 @@ export function ServiceWorkerRegistrar() {
         // attribute), so a re-post is the only way it relearns the current user.
         worker?.postMessage({ type: "learny:sw-user", userId });
       } catch {
-        // A failed auth probe must never break the page; the worker simply
-        // keeps its previous attribution until the next broadcast.
+        // A failed auth probe must never break the page — and must not leave
+        // the worker keeping its previous attribution either: a probe failing
+        // exactly at a user switch would let the new learner's chapter reads
+        // cache under the previous learner's cache name until the next
+        // successful probe. Fail honest instead: post the signed-out state, so
+        // the worker deletes every reader cache (they repopulate on the next
+        // read) — the same answer a 5xx probe already produces. One warning
+        // per page load; the purge itself is best-effort.
+        if (!warned) {
+          warned = true;
+          console.warn("learny: the auth probe failed; purging the reader caches to the signed-out state");
+        }
+        if (cancelled) {
+          return;
+        }
+        try {
+          const reg = await registration.getRegistration();
+          (reg?.active ?? reg?.waiting ?? reg?.installing)?.postMessage({
+            type: "learny:sw-user",
+            userId: null,
+          });
+        } catch {
+          // No worker to purge — there is nothing left to do.
+        }
       }
     };
 

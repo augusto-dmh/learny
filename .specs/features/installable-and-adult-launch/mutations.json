@@ -22,8 +22,8 @@
   },
   {
     "file": "backend/app/application/identity.py",
-    "old": "        if not age_attested:\r\n            raise ValidationError(AGE_ATTESTATION_MESSAGE)",
-    "new": "        if False and not age_attested:\r\n            raise ValidationError(AGE_ATTESTATION_MESSAGE)",
+    "old": "        if not age_attested:\n            raise ValidationError(AGE_ATTESTATION_MESSAGE)",
+    "new": "        if False and not age_attested:\n            raise ValidationError(AGE_ATTESTATION_MESSAGE)",
     "proof": "cd backend && uv run pytest tests/test_web_auth_age.py -k \"refuses_register_without_the_age_attestation\"",
     "label": "attestation gate: a register without the 18+ confirmation goes through"
   },

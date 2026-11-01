@@ -60,7 +60,6 @@ class SampleAskResponse(BaseModel):
     answer: str | None
     citations: list[EvidenceView]
     sample: bool = True
-    model: str | None = None
 
     @classmethod
     def from_guest_answer(cls, result: GuestAnswer) -> SampleAskResponse:
@@ -68,7 +67,6 @@ class SampleAskResponse(BaseModel):
             found=result.found,
             answer=result.answer,
             citations=[EvidenceView.from_evidence(c) for c in result.citations],
-            model=result.model,
         )
 
 

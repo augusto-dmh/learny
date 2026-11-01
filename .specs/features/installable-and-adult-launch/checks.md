@@ -7,7 +7,7 @@ Plan: `.specs/features/installable-and-adult-launch/plan.md`
 
 Proof commands run from the worktree root and are written below in their runnable form; backend DB proofs read `LEARNY_TEST_DATABASE_URL` and `LEARNY_REQUIRE_DB` from the environment (this lane's Postgres on 5438 hosts `learny_test`, Redis on 6384); the backend proofs inherit `LEARNY_REQUIRE_DB=1` and `LEARNY_TEST_DATABASE_URL` from the invoking shell — never an inline POSIX env prefix, which Windows cmd cannot run. Frontend proofs must run under Node 24 (the machine default 25 breaks jsdom `localStorage` in vitest workers; CI on Node 20 is unaffected). Vitest proofs may name shared test files with `-t` filters.
 
-Mutations: 3
+Mutations: 5
 Build: cd backend && uv run ruff check . && uv run ruff format --check . ; cd frontend && npx tsc --noEmit ; cd frontend && npx vitest run tests/i18n-copy.test.ts ; python backend/scripts/check_commits.py origin/main..HEAD
 
 ## Checks

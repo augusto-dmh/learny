@@ -1,6 +1,6 @@
 # installable-and-adult-launch proofs
 
-**HEAD**: 23435f5
+**HEAD**: b5b1089
 **Tree**: clean
 **Result**: 26 pass, 0 fail; mutations 5 killed, 0 not
 
@@ -41,4 +41,4 @@
 | unknown user: chapter reads are cached under an unattributed cache before any user id arrives | `frontend\public\sw.js:70` | yes |
 | cache scope: every source read (media, notes) becomes cacheable, not just chapter and structure | `frontend\public\sw.js:48` | yes |
 | attestation gate: a register without the 18+ confirmation goes through | `backend\app\application\identity.py:181` | yes |
-| sample budget: an exhausted sample day no longer refuses before generation | `backend\app\application\sample_ask.py:97` | yes |
+| sample budget: an exhausted sample day no longer refuses before generation | `backend\app\application\sample_ask.py:95` | yes |
