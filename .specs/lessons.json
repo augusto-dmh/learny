@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "promote_threshold": 2,
+  "window_days": 45,
+  "quarantine_threshold": 2,
+  "next_id": 2,
+  "lessons": [
+    {
+      "id": "L-001",
+      "key": "gate_fail::on windows subprocess shell true is cmd exe a posix env x prefix in a proof or mutation command is refused and a db marked pytest then skips green proof mutation commands take their environment from the invoking shell never inline",
+      "text": "On Windows, subprocess shell=True is cmd.exe: a POSIX ENV=x prefix in a proof or mutation command is refused, and a DB-marked pytest then skips green — proof/mutation commands take their environment from the invoking shell, never inline.",
+      "signal": "gate_fail",
+      "scope": "windows/proofs",
+      "status": "candidate",
+      "features": [
+        "installable-and-adult-launch"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        ".claude/skills/tlc-spec-lean/scripts/mutate.py (windows/proofs)"
+      ],
+      "created": "2026-11-01T00:54:08Z",
+      "last_seen": "2026-11-01T00:54:08Z"
+    }
+  ]
+}

@@ -5,7 +5,7 @@ Plan: `.specs/features/installable-and-adult-launch/plan.md`
 
 20 checks in 2 slices · 2 one-way doors · 0 open
 
-Proof commands run from the worktree root and are written below in their runnable form; backend DB proofs read `LEARNY_TEST_DATABASE_URL` and `LEARNY_REQUIRE_DB` from the environment (this lane's Postgres on 5438 hosts `learny_test`, Redis on 6384). Frontend proofs must run under Node 24 (the machine default 25 breaks jsdom `localStorage` in vitest workers; CI on Node 20 is unaffected). Vitest proofs may name shared test files with `-t` filters.
+Proof commands run from the worktree root and are written below in their runnable form; backend DB proofs read `LEARNY_TEST_DATABASE_URL` and `LEARNY_REQUIRE_DB` from the environment (this lane's Postgres on 5438 hosts `learny_test`, Redis on 6384); the backend proofs inherit `LEARNY_REQUIRE_DB=1` and `LEARNY_TEST_DATABASE_URL` from the invoking shell — never an inline POSIX env prefix, which Windows cmd cannot run. Frontend proofs must run under Node 24 (the machine default 25 breaks jsdom `localStorage` in vitest workers; CI on Node 20 is unaffected). Vitest proofs may name shared test files with `-t` filters.
 
 Mutations: 3
 Build: cd backend && uv run ruff check . && uv run ruff format --check . ; cd frontend && npx tsc --noEmit ; cd frontend && npx vitest run tests/i18n-copy.test.ts ; python backend/scripts/check_commits.py origin/main..HEAD
@@ -42,35 +42,36 @@ Proof: `cd frontend && npx vitest run tests/data-saver.test.tsx -t "persists the
 ### S2 - adults only, legal in Portuguese, a capped guest Ask · batch B · ~85k
 
 **C9** - A register request without `age_attested` (absent or false) is refused with 422 and creates no user, credential, session, or invite consumption - even with a valid email, a valid password, and `accepted_tos: true` (AC 9)
-Proof: `cd backend && LEARNY_REQUIRE_DB=1 LEARNY_TEST_DATABASE_URL="postgresql+psycopg://learny:learny@localhost:5438/learny_test" uv run pytest tests/test_web_auth_age.py -k "refuses_register_without_the_age_attestation"`
+Proof: `cd backend && uv run pytest tests/test_web_auth_age.py -k "refuses_register_without_the_age_attestation"`
 
 **C10** - A register request with `accepted_tos: true` and `age_attested: true` creates the account and session exactly as before (AC 10)
-Proof: `cd backend && LEARNY_REQUIRE_DB=1 LEARNY_TEST_DATABASE_URL="postgresql+psycopg://learny:learny@localhost:5438/learny_test" uv run pytest tests/test_web_auth_age.py -k "registers_with_the_attestation_as_before"`
+Proof: `cd backend && uv run pytest tests/test_web_auth_age.py -k "registers_with_the_attestation_as_before"`
 
 **C11** - The register form shows a required 18-or-older confirmation beside the terms checkbox, with copy from both catalogs (AC 11)
-Proof: `cd frontend && npx vitest run tests/auth-screens.test.tsx -t "register shows a required age confirmation in both locales"`
+Proof: `cd frontend && npx vitest run tests/auth-screens.test.tsx -t "register requires the 18-or-older confirmation in both locales"`
 
 **C12** - `/privacy`, `/terms` and `/copyright` render their full content from the catalogs in the negotiated locale (both catalogs carry every section), the legal-pages exemption in the hard-coded-string sensor is removed, the privacy page carries the LGPD data-subject-rights section and an international-transfer note, and the terms state the 18+ requirement (AC 12)
-Proof: `cd frontend && npx vitest run tests/legal-pages.test.tsx -t "renders every legal page from the catalogs in both locales"`
-Proof: `cd frontend && npx vitest run tests/i18n-hardcoded.test.ts -t "hard-coded string sensor"`
+Proof: `cd frontend && npx vitest run tests/legal-pages.test.tsx -t "carries the LGPD rights list, the transfer note, and the ANPD route"`
+Proof: `cd frontend && npx vitest run tests/legal-pages.test.tsx -t "render the pt-BR catalogs: headings, the rights list, and the age line"`
+Proof: `cd frontend && npx vitest run tests/i18n-hardcoded.test.ts -t "the source tree is clean"`
 
 **C13** - A signed-out visitor posting a question to `POST /api/sample/ask` gets 200 with a grounded answer, citations, and `sample: true`, with no user, session, conversation, turn, or activation-event row created; the requested language reaches the generation port while citations stay verbatim; a generation failure answers 502 with the generic body (AC 13)
-Proof: `cd backend && LEARNY_REQUIRE_DB=1 LEARNY_TEST_DATABASE_URL="postgresql+psycopg://learny:learny@localhost:5438/learny_test" uv run pytest tests/test_web_sample_ask.py -k "guest_askes_the_sample_grounded_without_an_account"`
+Proof: `cd backend && uv run pytest tests/test_web_sample_ask.py -k "guest_askes_the_sample_grounded_without_an_account"`
 
 **C14** - An empty or over-ceiling guest question is refused 422 before any retrieval, generation, or budget spend (AC 14)
-Proof: `cd backend && LEARNY_REQUIRE_DB=1 LEARNY_TEST_DATABASE_URL="postgresql+psycopg://learny:learny@localhost:5438/learny_test" uv run pytest tests/test_web_sample_ask.py -k "refuses_an_empty_or_oversized_question_before_any_spend"`
+Proof: `cd backend && uv run pytest tests/test_web_sample_ask.py -k "refuses_an_empty_or_oversized_question_before_any_spend"`
 
 **C15** - When the per-IP guest ask cap for the window is spent, the endpoint answers 429 with `Retry-After`, keyed on the trusted-proxy client IP + route so different visitors get separate budgets and header tricks mint nothing (AC 15)
-Proof: `cd backend && LEARNY_REQUIRE_DB=1 LEARNY_TEST_DATABASE_URL="postgresql+psycopg://learny:learny@localhost:5438/learny_test" uv run pytest tests/test_web_sample_ask.py -k "rate_limits_guest_asks_per_client_ip"`
+Proof: `cd backend && uv run pytest tests/test_web_sample_ask.py -k "rate_limits_guest_asks_per_client_ip"`
 
 **C16** - When the sample's daily budget is spent (USD at cap or ask count reached), the refusal is the honest 429 exhausted outcome before generation; with the operator kill switch on it is 503 (AC 16)
-Proof: `cd backend && LEARNY_REQUIRE_DB=1 LEARNY_TEST_DATABASE_URL="postgresql+psycopg://learny:learny@localhost:5438/learny_test" uv run pytest tests/test_web_sample_ask.py -k "refuses_honestly_when_the_sample_budget_is_gone"`
+Proof: `cd backend && uv run pytest tests/test_web_sample_ask.py -k "refuses_honestly_when_the_sample_budget_is_gone"`
 
 **C17** - A missing sample source answers 503; a generation that grounds nothing answers 200 with `found: false` and no citations - the same grounding contract as every Ask (AC 17)
-Proof: `cd backend && LEARNY_REQUIRE_DB=1 LEARNY_TEST_DATABASE_URL="postgresql+psycopg://learny:learny@localhost:5438/learny_test" uv run pytest tests/test_web_sample_ask.py -k "answers_the_honest_outcomes_for_a_missing_sample_or_nothing_grounded"`
+Proof: `cd backend && uv run pytest tests/test_web_sample_ask.py -k "answers_the_honest_outcomes_for_a_missing_sample_or_nothing_grounded"`
 
 **C18** - A successful guest ask debits the sample's own daily ledger row (assert before, record after: USD at the serving profile's prices plus the ask count) and writes nothing else; a refused call debits nothing (AC 18)
-Proof: `cd backend && LEARNY_REQUIRE_DB=1 LEARNY_TEST_DATABASE_URL="postgresql+psycopg://learny:learny@localhost:5438/learny_test" uv run pytest tests/test_web_sample_ask.py -k "debits_the_sample_ledger_only_after_success"`
+Proof: `cd backend && uv run pytest tests/test_web_sample_ask.py -k "debits_the_sample_ledger_only_after_success"`
 
 **C19** - The landing page offers the sample ask to a signed-out visitor: question input prefilled with the sample's suggested question, a visible shared-sample label, the submit gesture rendering the cited answer, and catalog copy for the refusals in en and pt-BR (AC 19)
 Proof: `cd frontend && npx vitest run tests/landing-sample-ask.test.tsx -t "offers the sample ask and labels the answer as the shared sample"`

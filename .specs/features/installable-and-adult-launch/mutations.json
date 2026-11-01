@@ -19,5 +19,19 @@
     "new": "  const url = new URL(request.url);\n  if (url.origin !== origin) {\n    return false;\n  }\n  return url.pathname.startsWith(\"/api/sources/\");",
     "proof": "cd frontend && npx vitest run tests/offline-cache-policy.test.ts -t \"never caches writes, other api reads, or cross-origin requests\"",
     "label": "cache scope: every source read (media, notes) becomes cacheable, not just chapter and structure"
+  },
+  {
+    "file": "backend/app/application/identity.py",
+    "old": "        if not age_attested:\r\n            raise ValidationError(AGE_ATTESTATION_MESSAGE)",
+    "new": "        if False and not age_attested:\r\n            raise ValidationError(AGE_ATTESTATION_MESSAGE)",
+    "proof": "cd backend && uv run pytest tests/test_web_auth_age.py -k \"refuses_register_without_the_age_attestation\"",
+    "label": "attestation gate: a register without the 18+ confirmation goes through"
+  },
+  {
+    "file": "backend/app/application/sample_ask.py",
+    "old": "        # Budget before anything: an exhausted sample day refuses with nothing\n        # retrieved, generated, or spent — the fail-honest cap.\n        self._budget.assert_generation(operator.id, kind=KIND_ASK)",
+    "new": "        pass  # the budget assertion is gone: an exhausted day never refuses",
+    "proof": "cd backend && uv run pytest tests/test_web_sample_ask.py -k \"refuses_honestly_when_the_sample_budget_is_gone\"",
+    "label": "sample budget: an exhausted sample day no longer refuses before generation"
   }
 ]
